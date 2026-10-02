@@ -61,7 +61,6 @@ export const agentRulesMovedContentGate: DeclarativeGateDefinition = {
         'docs/browser-gpt-turn-runbook.md',
         'docs/coworker-delegation.md',
         'docs/tiering.md',
-        'docs/script-owned-review-pipeline.md',
         'docs/orchestration-runbook.md',
         'docs/repository_policy.md',
         '.cursor/skills/investigate-root-cause/SKILL.md',
@@ -156,15 +155,6 @@ export const agentRulesMovedContentGate: DeclarativeGateDefinition = {
             '### Binding T3 test — both prongs required',
             '### T1/T2 split',
             '### L4 within T3',
-          ],
-        },
-        {
-          path: 'docs/script-owned-review-pipeline.md',
-          contains: [
-            '## Event-driven review trigger',
-            '## Orchestrator review-run coverage',
-            '## Head ready for review',
-            'event-driven review trigger',
           ],
         },
       ],

@@ -1,5 +1,5 @@
 /**
- * Canonical PR scope-guard contracts for issue links and spec-only docs PRs.
+ * Canonical PR scope-guard contracts for issue links and no-ceremony docs PRs.
  * TypeScript is the single source of truth; retired shell wrappers do not own parsing.
  * See docs/repository_policy.md § Spec-only docs PRs.
  */
@@ -17,7 +17,7 @@ export const ISSUE_LINK_PATTERN = new RegExp(
   'gi',
 );
 
-/** Non-closing issue references accepted on spec-only PRs (no GitHub auto-close). */
+/** Non-closing issue references are detected so no-ceremony PRs can reject all Issue links. */
 export const NON_CLOSING_ISSUE_REF_PATTERN = new RegExp(
   '\\b(?:ref|refs|see|related\\s+to)\\s+#(\\d+)\\b',
   'gi',
@@ -30,64 +30,36 @@ export const GITHUB_ISSUE_URL_PATTERN =
 /** Bare `#123` issue autolink (after start-of-string or non-word/non-#). */
 export const BARE_ISSUE_HASH_PATTERN = /(?:^|[^\w#/])#(\d+)\b/g;
 
-/**
- * Machine-detectable spec-only PR signal. Place on its own line near the top of the PR body.
- * Documented in docs/repository_policy.md.
- */
-export const SPEC_ONLY_SIGNAL_LITERAL = '<!-- pr-type: spec-only -->';
+/** Canonical skill instruction surface (markdown only; see NO_CEREMONY_SKILL_MARKDOWN_GLOBS). */
+export const NO_CEREMONY_SKILL_CANONICAL_ROOT = '.cursor/skills';
 
-/** Whole-line signal (policy: HTML comment on its own line). */
-export const SPEC_ONLY_SIGNAL_LINE_PATTERN = /^<!--\s*pr-type:\s*spec-only\s*-->\s*$/i;
+/** Generated pointer skill surfaces (markdown only; see NO_CEREMONY_SKILL_MARKDOWN_GLOBS). */
+export const NO_CEREMONY_SKILL_POINTER_ROOTS: readonly string[] = ['.claude/skills'] as const;
 
 /**
- * Runtime spec-docs allowlist for spec-only PRs (narrow docs-only; not issue allowed-roots).
- * Enumerated in docs/repository_policy.md.
- */
-/** Canonical skill instruction surface (markdown only; see SPEC_SKILL_MARKDOWN_GLOBS). */
-export const SPEC_SKILL_CANONICAL_ROOT = '.cursor/skills';
-
-/** Generated pointer skill surfaces (markdown only; see SPEC_SKILL_MARKDOWN_GLOBS). */
-export const SPEC_SKILL_POINTER_ROOTS: readonly string[] = ['.claude/skills'] as const;
-
-/**
- * Markdown-only skill paths admitted on spec-only PRs (conjunctive with docs entries).
+ * Markdown-only skill paths admitted on no-ceremony PRs (conjunctive with docs entries).
  * Non-markdown files under skill directories stay on the implementation path.
  */
-export const SPEC_SKILL_MARKDOWN_GLOBS: readonly string[] = [
-  `${SPEC_SKILL_CANONICAL_ROOT}/**/*.md`,
-  ...SPEC_SKILL_POINTER_ROOTS.map((root) => `${root}/**/*.md`),
-] as const;
-
-/** Docs-only entries on the spec-only allowlist (excludes skill markdown globs). */
-export const SPEC_DOCS_ONLY_GLOBS: readonly string[] = [
-  'docs/issues_drafts/**',
-  'docs/issue_queue_index.md',
-  'docs/architecture.md',
-  'docs/issues_drafts/00-architecture-decisions.md',
+export const NO_CEREMONY_SKILL_MARKDOWN_GLOBS: readonly string[] = [
+  `${NO_CEREMONY_SKILL_CANONICAL_ROOT}/**/*.md`,
+  ...NO_CEREMONY_SKILL_POINTER_ROOTS.map((root) => `${root}/**/*.md`),
 ] as const;
 
 /**
- * Markdown-only spec-docs paths for no-ceremony PRs (docs portion of SPEC_DOCS_ALLOWLIST).
+ * Markdown-only documentation paths admitted on no-ceremony PRs.
  */
-export const SPEC_DOCS_MARKDOWN_GLOBS: readonly string[] = [
-  'docs/issues_drafts/**/*.md',
-  'docs/issue_queue_index.md',
+export const NO_CEREMONY_DOC_MARKDOWN_GLOBS: readonly string[] = [
   'docs/architecture.md',
-  'docs/issues_drafts/00-architecture-decisions.md',
 ] as const;
 
 /**
  * Union surface for diff-content no-ceremony PRs (skill instruction + spec-docs markdown).
  */
 export const NO_CEREMONY_MARKDOWN_GLOBS: readonly string[] = [
-  ...SPEC_DOCS_MARKDOWN_GLOBS,
-  ...SPEC_SKILL_MARKDOWN_GLOBS,
+  ...NO_CEREMONY_DOC_MARKDOWN_GLOBS,
+  ...NO_CEREMONY_SKILL_MARKDOWN_GLOBS,
 ] as const;
 
-export const SPEC_DOCS_ALLOWLIST: readonly string[] = [
-  ...SPEC_DOCS_ONLY_GLOBS,
-  ...SPEC_SKILL_MARKDOWN_GLOBS,
-] as const;
 
 export function normalizePrBody(prBody: string): string {
   return prBody.replace(/^\uFEFF/, '').trim();
@@ -98,15 +70,6 @@ export function stripMarkdownFencedCodeBlocks(text: string): string {
   return text.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, '');
 }
 
-export function hasSpecOnlySignal(prBody: string): boolean {
-  const scannable = stripMarkdownFencedCodeBlocks(normalizePrBody(prBody));
-  for (const line of scannable.split(/\r?\n/)) {
-    if (SPEC_ONLY_SIGNAL_LINE_PATTERN.test(line.trim())) {
-      return true;
-    }
-  }
-  return false;
-}
 
 export function hasClosingIssueReference(prBody: string): boolean {
   const normalized = normalizePrBody(prBody);
@@ -132,21 +95,6 @@ export function extractClosingIssueNumber(prBody: string): number | null {
   return issueNumber;
 }
 
-export function extractNonClosingIssueNumber(prBody: string): number | null {
-  const normalized = normalizePrBody(prBody);
-  NON_CLOSING_ISSUE_REF_PATTERN.lastIndex = 0;
-  const matches = [...normalized.matchAll(NON_CLOSING_ISSUE_REF_PATTERN)];
-  if (matches.length === 0) {
-    return null;
-  }
-
-  const issueNumber = Number(matches[matches.length - 1]![1]);
-  if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
-    return null;
-  }
-
-  return issueNumber;
-}
 
 /** PR body text scanned for issue links (fenced code blocks omitted). */
 export function prBodyScannableForIssueLinks(prBody: string): string {
@@ -262,51 +210,11 @@ export function classifySkillDocPaths(prPaths: string[]): {
   };
 }
 
-export function classifySpecDocsPaths(prPaths: string[]): {
-  ok: true;
-  checkedPaths: string[];
-} | {
-  ok: false;
-  outOfAllowlist: string[];
-  invalidPaths: Array<{ path: string; reason: string }>;
-  checkedPaths: string[];
-} {
-  const outOfAllowlist: string[] = [];
-  const invalidPaths: Array<{ path: string; reason: string }> = [];
-  const checkedPaths: string[] = [];
-
-  for (const rawPath of prPaths) {
-    const normalized = normalizePath(rawPath);
-    if (!normalized.ok) {
-      invalidPaths.push({ path: rawPath, reason: normalized.reason });
-      continue;
-    }
-
-    checkedPaths.push(normalized.path);
-
-    if (!pathMatchesAnyPattern(normalized.path, [...SPEC_DOCS_ALLOWLIST])) {
-      outOfAllowlist.push(normalized.path);
-    }
-  }
-
-  if (invalidPaths.length > 0) {
-    return { ok: false, outOfAllowlist, invalidPaths, checkedPaths };
-  }
-
-  if (outOfAllowlist.length > 0) {
-    return { ok: false, outOfAllowlist, invalidPaths: [], checkedPaths };
-  }
-
-  return { ok: true, checkedPaths };
-}
 
 /** @deprecated Use extractClosingIssueNumber — kept for callers that mean closing refs only. */
 export const extractLinkedIssueNumber = extractClosingIssueNumber;
 
 /** Issue number to load for implementation scope validation (null when not yet resolved). */
 export function resolveIssueNumberForFetch(prBody: string): number | null {
-  if (hasSpecOnlySignal(prBody)) {
-    return extractNonClosingIssueNumber(prBody);
-  }
   return extractClosingIssueNumber(prBody);
 }

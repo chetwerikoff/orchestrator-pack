@@ -1,6 +1,6 @@
 /**
  * LLM-orchestrator review-loop predicates (Issue #189).
- * Coverage identity matches docs/review-trigger-reconcile.mjs (Issue #163).
+ * Coverage identity matches the canonical TypeScript review-trigger owner.
  * Vitest: scripts/review-orchestrator-loop.test.ts
  */
 import {
@@ -9,14 +9,14 @@ import {
   isHeadCovered,
   isRunCoveringHead,
   normalizeSha,
-} from './review-trigger-reconcile.mjs';
-import { evaluateHeadReadyForReview } from './review-head-ready.mjs';
+} from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
+import { evaluateHeadReadyForReview } from '../scripts/pr2-foundation/terminalized/review-head-ready.ts';
 
 export {
   evaluateHeadReadyForReview,
   hasReadyForReviewForHead,
   preRunHeadReadyRecheck,
-} from './review-head-ready.mjs';
+} from '../scripts/pr2-foundation/terminalized/review-head-ready.ts';
 
 /** @typedef {{ id?: string, prNumber?: number | null, targetSha?: string, status?: string, prReviewStatus?: string, findingCount?: number, linkedSessionId?: string, reviewerSessionId?: string, body?: string, deliveredAt?: string | null, deliveredFindingCount?: number }} ReviewRun */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, status?: string }} RuntimeWorker */
@@ -28,7 +28,7 @@ export {
   isHeadCovered,
   isRunCoveringHead,
   normalizeSha,
-} from './review-trigger-reconcile.mjs';
+} from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
 
 /**
  * Plain uncovered path: no covered/in-flight run; not failed/cancelled discipline.

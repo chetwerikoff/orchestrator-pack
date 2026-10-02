@@ -46,9 +46,8 @@ The committed declaration at
 hand-edit it, copy a stale declaration, or broaden it to make an unrelated diff
 pass.
 
-Pre-existing tracked drafts and indexes are historical publishing inputs only.
-New task authoring does not create them unless the direct user explicitly requests
-the governed publishing flow for an existing artifact.
+Task authoring uses the published GitHub Issue directly. There is no tracked draft
+or queue-index publishing path in the current repository.
 
 ## Agent skills
 
@@ -131,11 +130,6 @@ under the explicitly allowed documentation or skill surfaces and the PR body doe
 not link an implementation Issue. One code, workflow, declaration, root policy, or
 non-Markdown path moves the PR into the implementation flow.
 
-A governed historical draft publication may use the explicit spec-only marker and a
-non-closing Issue reference. It must remain within the narrow historical draft,
-architecture, and skill Markdown allowlist and must not close the implementation
-Issue.
-
 These lighter paths never authorize runtime effects, generated declaration edits,
 secrets, implementation code, or bypass of skill-pointer drift checks.
 
@@ -171,9 +165,8 @@ check into a claim that the code passed.
 - When a scope check reports a mismatch, fix the artifact or the diff; do not
   broaden scope merely to silence the check.
 
-Pre-existing queued-task artifacts are historical inputs only. New tasks do not
-create a tracked draft or queue-index row unless the user explicitly requests the
-legacy publishing flow for an already-existing artifact.
+New tasks are authored and tracked as live GitHub Issues; repository-local draft
+or queue-index artifacts are not part of the current task flow.
 
 ## Build the minimum
 

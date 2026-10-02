@@ -60,7 +60,6 @@ const movedClean = {
   ].join('\n'),
   'docs/coworker-delegation.md': 'PR diff recipe\ngit diff <base-ref>...HEAD > /tmp/review.diff\nRoot-cause work must read ~900 lines',
   'docs/tiering.md': '## Task complexity tier rubric\n### Binding T3 test — both prongs required\n### T1/T2 split\n### L4 within T3',
-  'docs/script-owned-review-pipeline.md': '## Event-driven review trigger\n## Orchestrator review-run coverage\n## Head ready for review\nevent-driven review trigger',
   'docs/orchestration-runbook.md': '## Worker lifecycle\n',
   'docs/repository_policy.md': [
     '## Plan-first execution',

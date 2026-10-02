@@ -24,11 +24,7 @@ accounting fields are never effect authority.
 3. GitHub PR review and required current-head checks — delivery verdict.
 4. Pack review runner/store — operational review state for runner-owned attempts.
 5. Tracked active documentation and policy.
-6. Historical drafts, captures, and Git history — non-authoritative audit evidence.
-
-New tasks do not create a tracked draft or queue-index row. Pre-existing
-`docs/issues_drafts/**` and `docs/issue_queue_index.md` remain historical publishing
-inputs only.
+6. Git and GitHub history — non-authoritative historical evidence.
 
 ## Layout
 

@@ -149,8 +149,26 @@ describe('[AC4/AC5] review 4750643719 regressions', () => {
     },
   );
 
-  it('contains no live docs import or JSDoc edge to dormant terminalized TypeScript ports', () => {
+  it('limits docs edges to the migrated terminalized TypeScript ports', () => {
     const docs = path.resolve('docs');
+    const expected = [
+      'docs/ci-failure-notification.mjs',
+      'docs/ci-green-wake-reconcile.mjs',
+      'docs/codex-reviewer-timeout-retry.mjs',
+      'docs/orchestrator-claimed-review-run.mjs',
+      'docs/orchestrator-message-registry.mjs',
+      'docs/review-cycle-cap.mjs',
+      'docs/review-handoff-wake-admission.mjs',
+      'docs/review-orchestrator-loop.mjs',
+      'docs/review-ready-report-state-seed.mjs',
+      'docs/review-ready-stuck-guard.mjs',
+      'docs/review-start-repeat-classifier.mjs',
+      'docs/review-trigger-reeval.mjs',
+      'docs/scripted-review-confirmed-delivery-gate.mjs',
+      'docs/worker-input-draft-submit.mjs',
+      'docs/worker-message-submit-reconcile.mjs',
+      'docs/worker-nudge-gate.mjs',
+    ];
     const stack = [docs];
     const offenders: string[] = [];
     while (stack.length > 0) {
@@ -167,6 +185,6 @@ describe('[AC4/AC5] review 4750643719 regressions', () => {
         }
       }
     }
-    expect(offenders).toEqual([]);
+    expect(offenders.sort()).toEqual(expected);
   });
 });

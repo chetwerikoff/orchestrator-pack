@@ -77,12 +77,6 @@
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
-      "path": "docs/issues_drafts/239-ci-vitest-wallclock-e2e-separate-stage.md",
-      "class": "precut-inventory",
-      "reason": "Historical Issue draft preserves superseded command text for audit context; it is not a living operator procedure.",
-      "owningReference": "Issue #1419 r17; Issue #1415 C5"
-    },
-    {
       "path": "docs/issues_drafts/240-ci-vitest-self-balancing-shard-topology.md",
       "class": "precut-inventory",
       "reason": "Historical Issue draft preserves superseded command text for audit context; it is not a living operator procedure.",
@@ -236,12 +230,6 @@
       "path": "scripts/cutover/issue-928.test.ts",
       "class": "negative-history-fixture",
       "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
-      "owningReference": "Issue #1419 r17; Issue #1415 C5"
-    },
-    {
-      "path": "scripts/cutover/mutation-runner.ts",
-      "class": "precut-migration-classifier",
-      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
@@ -497,18 +485,6 @@
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
-      "path": "scripts/json-producers/wave-b-inventory.json",
-      "class": "precut-migration-classifier",
-      "reason": "Migration/census/capture/foundation-proof source preserves or detects legacy PowerShell surface names as evidence; it is not a current production PowerShell caller.",
-      "owningReference": "Issue #1419 r17; Issue #1415 C5"
-    },
-    {
-      "path": "scripts/json-producers/wave-b-reconciliation.ts",
-      "class": "precut-migration-classifier",
-      "reason": "Migration/census/capture/foundation-proof source preserves or detects legacy PowerShell surface names as evidence; it is not a current production PowerShell caller.",
-      "owningReference": "Issue #1419 r17; Issue #1415 C5"
-    },
-    {
       "path": "scripts/launch-argv-test-exclusions.manifest.json",
       "class": "precut-migration-classifier",
       "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
@@ -725,31 +701,7 @@
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {
-      "path": "scripts/pr2a/closed-world-scanner.ts",
-      "class": "precut-migration-classifier",
-      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
-      "owningReference": "Issue #1419 r17; Issue #1415 C5"
-    },
-    {
-      "path": "scripts/pr2a/closure-receipt.ts",
-      "class": "precut-migration-classifier",
-      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
-      "owningReference": "Issue #1419 r17; Issue #1415 C5"
-    },
-    {
       "path": "scripts/pr2a/contracts.ts",
-      "class": "precut-migration-classifier",
-      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
-      "owningReference": "Issue #1419 r17; Issue #1415 C5"
-    },
-    {
-      "path": "scripts/pr2a/execution-root-registry.json",
-      "class": "precut-migration-classifier",
-      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
-      "owningReference": "Issue #1419 r17; Issue #1415 C5"
-    },
-    {
-      "path": "scripts/pr2a/final-conformance-precutover.ts",
       "class": "precut-migration-classifier",
       "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
@@ -764,24 +716,6 @@
       "path": "scripts/pr2a/final-conformance.ts",
       "class": "precut-migration-classifier",
       "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
-      "owningReference": "Issue #1419 r17; Issue #1415 C5"
-    },
-    {
-      "path": "scripts/pr2a/mutation-runner.ts",
-      "class": "precut-migration-classifier",
-      "reason": "Migration/census/policy classifier names legacy PowerShell surfaces as evidence or detection input; it does not own current PowerShell behavior.",
-      "owningReference": "Issue #1419 r17; Issue #1415 C5"
-    },
-    {
-      "path": "scripts/pr2a/planning-manifest.json",
-      "class": "byte-bound-migration-evidence",
-      "reason": "Pinned migration/evidence artifact preserves historical path vocabulary and is not a current execution authority.",
-      "owningReference": "Issue #1419 r17; Issue #1415 C5"
-    },
-    {
-      "path": "scripts/pr2a/planning.test.ts",
-      "class": "negative-history-fixture",
-      "reason": "Regression/fixture source preserves or probes legacy PowerShell vocabulary as test evidence; it is not a current production caller.",
       "owningReference": "Issue #1419 r17; Issue #1415 C5"
     },
     {

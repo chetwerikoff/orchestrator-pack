@@ -97,22 +97,18 @@ operator never authorized. There is no amendment budget.
 
 ## PR body issue reference
 
-Three shapes exist, and the diff decides which one you are in —
+Two shapes exist, and the diff decides which one you are in —
 [`docs/repository_policy.md`](../../../docs/repository_policy.md) is the authority.
 
 - **Implementation** — any path outside the markdown union (`CLAUDE.md`,
   `scripts/**`, `.github/**`, `docs/declarations/**`). Needs a declaration
   snapshot and a closing reference the guard parses: `Closes #N`, `Fixes #N`, or
   `Resolves #N` (case-insensitive, `#` required).
-- **Spec-only docs** — whole diff inside the markdown union, signalled with
-  `<!-- pr-type: spec-only -->` alone on one line plus a non-closing `Refs #N`.
-  No snapshot; the issue stays open. Closing keywords are forbidden.
 - **No-ceremony markdown** — whole diff inside the markdown union, detected from
   diff content alone. No snapshot, no signal, and the body must reference **no**
   issue at all; any issue link fails the guard.
 
-The markdown union is `docs/issues_drafts/**/*.md`, `docs/issue_queue_index.md`,
-`docs/architecture.md`, `.claude/skills/**/*.md`, and `.cursor/skills/**/*.md`.
+The markdown union is `docs/architecture.md`, `.claude/skills/**/*.md`, and `.cursor/skills/**/*.md`.
 A single path outside it drops the whole PR to the implementation shape.
 
 ## Pre-push local self-check

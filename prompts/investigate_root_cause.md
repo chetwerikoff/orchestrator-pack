@@ -148,9 +148,7 @@ Before listing anything under **§3 Already done** or **§4 Planned**:
 
 0. Resolve the selected project card with `node --experimental-strip-types scripts/lib/target-context.ts check`. Treat its `repository` and `defaultBranch` as the only target repository/branch authority; do not infer either from cwd/origin or hard-code the pack repository.
 
-1. Consult [`docs/issue_queue_index.md`](../docs/issue_queue_index.md) to map each
-   cited `docs/issues_drafts/NN-<slug>.md` path to its GitHub Issue number (never
-   treat the draft filename prefix as the GitHub `#`).
+1. Find candidate Issues through live GitHub topic/number search and use their GitHub Issue numbers directly.
 2. For each candidate issue, read live metadata (at minimum):
    `gh issue view <N> --repo <selected-repository> --json state,title,body,closedAt`
    (or the same `--json` field set without `--repo` when the checkout is already
@@ -191,9 +189,7 @@ issue state.
 
 ### Search existing mitigations
 
-- Open and closed GitHub Issues (via registry-resolved numbers and `gh issue view`);
-  `docs/issues_drafts/`; [`docs/issue_queue_index.md`](../docs/issue_queue_index.md);
-  `docs/architecture.md` and `docs/issues_drafts/00-architecture-decisions.md`.
+- Open and closed GitHub Issues (via live topic/number search and `gh issue view`), plus `docs/architecture.md`.
 - Read-only scan of `prompts/`, `AGENTS.md`, runtime configuration documentation,
   and relevant plugins/scripts **as evidence** — do not edit them during
   investigation unless the user authorized **`direct-fix-checklist`** for a
@@ -203,8 +199,7 @@ Record what was tried, whether it worked, partially worked, or failed / was wron
 
 ### Search planned work (for §4 only)
 
-- Find *candidates* via registry + topic search in open issues and
-  `docs/issues_drafts/`.
+- Find *candidates* via live topic search in open GitHub Issues.
 - Run **Verify §4 (planned) — ship check** on every candidate before writing §4.
 - Include in §4 **only** survivors: open issues whose scoped work is **not** already
   on `selected default branch`. One line each: `#N` + what remains outstanding (not the full issue

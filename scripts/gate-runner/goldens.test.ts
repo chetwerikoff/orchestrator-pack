@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 1
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -54,7 +56,6 @@ const movedClean = {
   'docs/browser-gpt-turn-runbook.md': '## Start-of-shift preflight\n## Prepare one turn\n## Launch\n## Observe and settle\n## Publication and tab lifecycle\n## Incident handling\n## One-shot diagnosis\n## Shift handoff/close',
   'docs/coworker-delegation.md': 'PR diff recipe\ngit diff <base-ref>...HEAD > /tmp/review.diff\nRoot-cause work must read ~900 lines',
   'docs/tiering.md': '## Task complexity tier rubric\n### Binding T3 test — both prongs required\n### T1/T2 split\n### L4 within T3',
-  'docs/script-owned-review-pipeline.md': '## Event-driven review trigger\n## Orchestrator review-run coverage\n## Head ready for review\nevent-driven review trigger',
   'docs/orchestration-runbook.md': '## Worker lifecycle',
   'docs/repository_policy.md': [
     '## Plan-first execution',

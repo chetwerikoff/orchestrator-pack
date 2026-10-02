@@ -74,7 +74,7 @@ export interface RuntimeCallerCensusRow {
   readonly note: string;
 }
 
-/** Current runtime caller census. Keep docs/orca-runtime-caller-census.md in lockstep. */
+/** Current runtime caller census. */
 export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
   {
     surface: 'scripts/launch-watch/watch.ts',

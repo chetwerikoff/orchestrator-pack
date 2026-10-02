@@ -3,10 +3,7 @@ export type GuardDecision = 'allow' | 'deny';
 export type GuardRule =
   | 'fail-open'
   | 'unchanged-allowlist'
-  | 'review-subtree'
-  | 'draft-override'
   | 'direct-edit-override'
-  | 'gated-draft'
   | 'direct-edit-deny';
 
 export interface GuardResult {
@@ -30,9 +27,7 @@ export declare function resolveProjectRelativePath(
 
 export declare function isUnchangedAllowlisted(relativePosix: string): boolean;
 
-export declare function isReviewSubtree(relativePosix: string): boolean;
 
-export declare function isGatedDraftFile(relativePosix: string): boolean;
 
 export declare function evaluateDirectEditGuard(input: {
   filePath?: string;

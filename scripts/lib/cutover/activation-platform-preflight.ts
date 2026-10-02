@@ -15,7 +15,7 @@ export interface PlatformPreflightInput {
 }
 
 export interface PlatformPreflightResult {
-  result: 'node22-linux-wsl2-preflight-pass';
+  result: 'node-major-linux-wsl2-preflight-pass';
   repoRoot: string;
   oldInstalledRevisionRoot: string;
   platform: 'linux';
@@ -35,7 +35,7 @@ export function runActivationPlatformPreflight(input: PlatformPreflightInput): P
   if (platform !== 'linux') throw new Error('unsupported_platform');
   const version = input.nodeVersion ?? process.versions.node;
   const major = Number(version.split('.')[0]);
-  if (major !== SUPPORTED_NODE_MAJOR) throw new Error('node22_required');
+  if (major !== SUPPORTED_NODE_MAJOR) throw new Error('node_major_required');
   if (!existsSync(input.repoRoot) || !existsSync(input.oldInstalledRevisionRoot)) throw new Error('installed_revision_missing');
   const repoRoot = requireCanonicalExistingDirectory(input.repoRoot, 'repo_root');
   const oldInstalledRevisionRoot = requireCanonicalExistingDirectory(input.oldInstalledRevisionRoot, 'old_installed_revision_root');
@@ -66,7 +66,7 @@ export function runActivationPlatformPreflight(input: PlatformPreflightInput): P
     rmSync(probeRoot, { recursive: true, force: true });
   }
 
-  return { result: 'node22-linux-wsl2-preflight-pass', repoRoot, oldInstalledRevisionRoot, platform: 'linux', nodeMajor: SUPPORTED_NODE_MAJOR };
+  return { result: 'node-major-linux-wsl2-preflight-pass', repoRoot, oldInstalledRevisionRoot, platform: 'linux', nodeMajor: SUPPORTED_NODE_MAJOR };
 }
 
 export function localHostId(): string {

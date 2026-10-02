@@ -45,5 +45,4 @@ You remain responsible for verifying coworker output, scope, commits, and AO tra
 For the broader cost ladder beyond coworker, see
 [`docs/first_principles_5_operational_framework.md`](first_principles_5_operational_framework.md).
 
-Architecture: §S in
-[`docs/issues_drafts/00-architecture-decisions.md`](issues_drafts/00-architecture-decisions.md).
+Architecture authority: [`docs/architecture.md`](architecture.md).

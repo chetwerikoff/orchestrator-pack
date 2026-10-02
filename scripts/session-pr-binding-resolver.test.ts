@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 1
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -503,12 +505,12 @@ describe('session-pr-binding sole-path contract', () => {
   const consumerModules = [
     'docs/ci-failure-notification.mjs',
     'docs/ci-green-wake-reconcile.mjs',
-    'docs/review-trigger-reconcile.mjs',
+    'scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts',
     'docs/review-trigger-reeval.mjs',
     'docs/review-ready-report-state-seed.mjs',
     'docs/review-ready-stuck-guard.mjs',
-    'docs/review-finding-delivery-confirm.mjs',
-    'docs/review-wake-trigger.mjs',
+    'scripts/pr2-foundation/terminalized/review-finding-delivery-confirm.ts',
+    'scripts/pr2-foundation/terminalized/review-wake-trigger.ts',
     'docs/worker-nudge-gate.mjs',
   ];
 

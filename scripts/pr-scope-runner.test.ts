@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 1
 import {
   existsSync,
   mkdirSync,
@@ -297,19 +299,7 @@ describe('trusted PR scope runner', () => {
     expect(fixture.issueReads()).toBe(1);
   });
 
-  it('preserves spec-only and no-ceremony modes without inventing Issue reads', () => {
-    const specRoot = makeRepo();
-    const spec = fakeDependencies({
-      prBody: `<!-- pr-type: spec-only -->\n\nRefs #${ISSUE_NUMBER}`,
-      issueBody: 'fixture issue',
-      diff: fixedDiff(['docs/issues_drafts/example.json']),
-    });
-    expect(runPrScopeRunner(runnerEnv(specRoot), spec.deps).result).toMatchObject({
-      ok: true,
-      mode: 'spec-only',
-    });
-    expect(spec.issueReads()).toBe(1);
-
+  it('preserves no-ceremony mode without inventing Issue reads', () => {
     const docsRoot = makeRepo();
     const docs = fakeDependencies({
       prBody: 'Documentation only',

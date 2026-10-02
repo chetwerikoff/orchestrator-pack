@@ -2,9 +2,6 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const DRAFT_AUTHOR_DENY_REASON =
-  'Task draft authoring is delegated to an isolated Cursor draft-author session from the architect brief (Issue #579). Set OPK_DRAFT_AUTHOR_FALLBACK_REASON to record a legitimate architect-as-author override per #579.';
-
 const DIRECT_EDIT_DENY_REASON =
   'Architect direct edits to tracked implementation surfaces are blocked. Use the runtime-backed worker workflow instead, or set OPK_DIRECT_EDIT_REASON to record an authorized override (see direct-fix-checklist skill).';
 
@@ -16,7 +13,7 @@ const DIRECT_EDIT_DENY_REASON =
  * @typedef {object} GuardResult
  * @property {GuardDecision} decision
  * @property {string} [reason]
- * @property {'fail-open' | 'unchanged-allowlist' | 'review-subtree' | 'draft-override' | 'direct-edit-override' | 'gated-draft' | 'direct-edit-deny'} [rule]
+ * @property {'fail-open' | 'unchanged-allowlist' | 'direct-edit-override' | 'direct-edit-deny'} [rule]
  */
 
 /**
@@ -44,8 +41,7 @@ export function resolveProjectRelativePath(filePath, projectDir) {
 export function isUnchangedAllowlisted(relativePosix) {
   if (
     relativePosix === 'CLAUDE.md' ||
-    relativePosix === 'docs/architecture.md' ||
-    relativePosix === 'docs/issue_queue_index.md'
+    relativePosix === 'docs/architecture.md'
   ) {
     return true;
   }
@@ -56,23 +52,6 @@ export function isUnchangedAllowlisted(relativePosix) {
     relativePosix === '.orchestrator-pack' ||
     relativePosix.startsWith('.orchestrator-pack/')
   );
-}
-
-/**
- * @param {string} relativePosix
- */
-export function isReviewSubtree(relativePosix) {
-  return (
-    relativePosix === 'docs/issues_drafts/.review' ||
-    relativePosix.startsWith('docs/issues_drafts/.review/')
-  );
-}
-
-/**
- * @param {string} relativePosix
- */
-export function isGatedDraftFile(relativePosix) {
-  return /^docs\/issues_drafts\/[^/]+\.md$/.test(relativePosix);
 }
 
 /**
@@ -100,21 +79,6 @@ export function evaluateDirectEditGuard(input) {
 
   if (isUnchangedAllowlisted(relative)) {
     return { decision: 'allow', rule: 'unchanged-allowlist' };
-  }
-
-  if (isReviewSubtree(relative)) {
-    return { decision: 'allow', rule: 'review-subtree' };
-  }
-
-  if (isGatedDraftFile(relative)) {
-    if (trimmedEnv(env, 'OPK_DRAFT_AUTHOR_FALLBACK_REASON')) {
-      return { decision: 'allow', rule: 'draft-override' };
-    }
-    return {
-      decision: 'deny',
-      reason: DRAFT_AUTHOR_DENY_REASON,
-      rule: 'gated-draft',
-    };
   }
 
   if (trimmedEnv(env, 'OPK_DIRECT_EDIT_REASON')) {
