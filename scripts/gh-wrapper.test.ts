@@ -125,6 +125,21 @@ describe('gh inventory matcher', () => {
       'api', 'repos/example/beta/branches/trunk/protection/required_status_checks',
     ], target).route).toBeNull();
 
+    const beta = { targetAuthorization: { repository: 'example/beta', defaultBranch: 'stable' } };
+    expect(classifyArgv([
+      'api', 'repos/example/beta/branches/stable/protection/required_status_checks',
+    ], beta).route).toMatchObject({
+      id: 'target-required-status-checks',
+      repoSlug: 'example/beta',
+      branch: 'stable',
+    });
+    expect(classifyArgv([
+      'api', 'repos/example/beta/branches/trunk/protection/required_status_checks',
+    ], beta).route).toBeNull();
+    expect(classifyArgv([
+      'api', 'repos/example/alpha/branches/stable/protection/required_status_checks',
+    ], beta).route).toBeNull();
+
     expect(classifyArgv([
       'api', 'repos/chetwerikoff/orchestrator-pack/branches/main/protection/required_status_checks',
     ]).route?.id).toBe('runtime-history-main-required-status-checks');
