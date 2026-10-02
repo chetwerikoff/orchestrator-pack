@@ -54,6 +54,54 @@ function makeBoundary() {
 }
 
 describe('Issue #2250 scheduler post-review smoke starter retirement', () => {
+  it('defers pending shared CI and starts exactly once when the same head becomes green', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'scheduler-2346-required-ci-'));
+    try {
+      const { boundary, start, readChecks } = makeBoundary();
+      const headSha = 'c'.repeat(40);
+      let covered = false;
+      start.mockImplementation(async () => {
+        covered = true;
+        return { ok: true };
+      });
+      boundary.listReviewRuns = () => covered
+        ? [{ targetSha: headSha, status: 'reviewing' }] as ReturnType<SchedulerBoundary['listReviewRuns']>
+        : [];
+      boundary.resolveRequiredCi = vi.fn()
+        .mockResolvedValueOnce({
+          state: 'pending',
+          green: false,
+          source: 'project_card',
+          reason: 'required_selector_pending',
+          expectedHeadSha: headSha,
+          postProjectionHeadSha: headSha,
+          headBinding: 'inferred_current',
+          selectors: [{ kind: 'actions', workflow: 'CI', job: 'checks' }],
+          diagnostics: ['required_selector_pending'],
+        })
+        .mockResolvedValue({
+          state: 'green',
+          green: true,
+          source: 'project_card',
+          reason: 'green',
+          expectedHeadSha: headSha,
+          postProjectionHeadSha: headSha,
+          headBinding: 'inferred_current',
+          selectors: [{ kind: 'actions', workflow: 'CI', job: 'checks' }],
+          diagnostics: [],
+        });
+
+      expect(await runSchedulerTick(boundary, epochEnv(root)))
+        .toMatchObject({ attempted: 1, started: 0, skipped: 1 });
+      expect(await runSchedulerTick(boundary, epochEnv(root)))
+        .toMatchObject({ attempted: 1, started: 1, skipped: 0 });
+      expect(await runSchedulerTick(boundary, epochEnv(root)))
+        .toMatchObject({ attempted: 1, started: 0, skipped: 1 });
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(readChecks).not.toHaveBeenCalled();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('continues ordinary pack-review scheduling with no smoke reconciliation phase', async () => {
     const root = mkdtempSync(path.join(tmpdir(), 'scheduler-2250-'));
     try {
