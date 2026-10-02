@@ -176,7 +176,7 @@ no per-project copy of any of them:
 | `~/.local/state/create-issue-draft/briefs/manager-preamble.md` | every manager | pasted first into each manager spec |
 | `.../briefs/worker-preamble.md` | every worker | pasted into each worker dispatch |
 | `.../briefs/fm-prompt-universal-existing-issue.md`, `fm-prompt-universal-brief-only.md` | authoring managers | by path, after the project line |
-| `.../briefs/ff-prompt-universal.md` | pack firefighter only | not used by a target seat |
+| `.../briefs/ff-prompt-universal.md` | every seat's firefighter (defect home: the pack or the seat's own project) | pasted after the manager preamble; the project line names the defect home |
 
 Before the first target task, check that each file still resolves project values
 from the spec's project line or the card and runs pack tools from `{PACK_ROOT}`
