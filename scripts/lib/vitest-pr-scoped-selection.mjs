@@ -377,7 +377,7 @@ function resolveLocalModulePath(repoRoot, fromFile, specifier, missingSourcePath
       return candidate;
     }
   }
-  for (const candidate of candidates) {
+  for (const candidate of resolveModuleCandidates(base)) {
     const relCandidate = normalizePath(relative(repoRoot, candidate));
     if (relCandidate && !relCandidate.startsWith('..') && missingSourcePaths.has(relCandidate)) {
       return candidate;
