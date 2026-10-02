@@ -2,7 +2,8 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 2334,
   "declared_paths": [
-    "AGENTS.md"
+    "AGENTS.md",
+    "docs/target_repo_setup.md"
   ],
   "denylist": [
     "credentials/",
@@ -12,7 +13,8 @@
   ],
   "allowed_roots": [
     "AGENTS.md",
-    "docs/declarations/"
+    "docs/declarations/",
+    "docs/target_repo_setup.md"
   ],
-  "source_revision": "bc80d12801b00725b825b11e00d13a74ae529bf6"
+  "source_revision": "7c7eef5ed000622ff3b95f46296511f5d858b124"
 }
