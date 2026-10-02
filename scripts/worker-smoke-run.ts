@@ -178,8 +178,14 @@ function readIssueBody(path: string): string {
   return readFileSync(path, 'utf8');
 }
 
-function requireProcessOutput(label: string, result: ReturnType<typeof runProcessSync>): string {
-  if (!result.ok) {
+function requireProcessOutput(
+  label: string,
+  result: ReturnType<typeof runProcessSync>,
+  acceptedExitCodes: readonly number[] = [0],
+): string {
+  const accepted = result.ok
+    || (result.outcome === 'exit' && acceptedExitCodes.includes(result.exitCode ?? -1));
+  if (!accepted) {
     const detail = scrubSmokeOutput(scrubForwardedGhSecrets(
       result.stderr || result.error || 'non-zero exit',
       buildSmokeGhChildEnv(),
@@ -198,11 +204,14 @@ export function runSmokeGhProcess(
   cwd: string,
   env: Readonly<NodeJS.ProcessEnv>,
   timeoutMs = SMOKE_GH_TIMEOUT_MS,
+  acceptedExitCodes: readonly number[] = [0],
 ): ReturnType<typeof runProcessSync> {
   let result: ReturnType<typeof runProcessSync> | undefined;
   for (let attempt = 0; attempt <= SMOKE_GH_RETRY_COUNT; attempt += 1) {
     result = runProcessSync({ command, args: [...args], cwd, env, timeoutMs });
-    if (result.ok) return result;
+    if (result.ok || (result.outcome === 'exit' && acceptedExitCodes.includes(result.exitCode ?? -1))) {
+      return result;
+    }
   }
   return result!;
 }
@@ -211,8 +220,16 @@ export function runSmokeGhSync(
   args: readonly string[],
   cwd: string,
   extraEnv: Readonly<NodeJS.ProcessEnv> = {},
+  acceptedExitCodes: readonly number[] = [0],
 ): ReturnType<typeof runProcessSync> {
-  return runSmokeGhProcess(resolveTrackedGhWrapper(), args, cwd, { ...buildSmokeGhChildEnv(), ...extraEnv });
+  return runSmokeGhProcess(
+    resolveTrackedGhWrapper(),
+    args,
+    cwd,
+    { ...buildSmokeGhChildEnv(), ...extraEnv },
+    SMOKE_GH_TIMEOUT_MS,
+    acceptedExitCodes,
+  );
 }
 
 function gitPorcelain(cwd: string): string[] {
@@ -381,11 +398,23 @@ export function fetchPrComments(prNumber: number, repositorySlug: string, repoRo
   throw new Error('comment_census: pagination completeness unprovable');
 }
 
-export function fetchLivePrHead(prNumber: number, repositorySlug: string, repoRoot: string): string {
-  const pr = githubApiObject('pr-view-head', `repos/${repositorySlug}/pulls/${prNumber}`, repoRoot);
+export function fetchLivePrBinding(
+  prNumber: number,
+  repositorySlug: string,
+  repoRoot: string,
+): { headSha: string; baseRef: string } {
+  const pr = githubApiObject('pr-view-head-base', `repos/${repositorySlug}/pulls/${prNumber}`, repoRoot);
   const head = pr.head && typeof pr.head === 'object' && !Array.isArray(pr.head) ? pr.head as Record<string, unknown> : {};
+  const base = pr.base && typeof pr.base === 'object' && !Array.isArray(pr.base) ? pr.base as Record<string, unknown> : {};
   if (positiveInteger(pr.number) !== prNumber || String(pr.state ?? '').toLowerCase() !== 'open') throw new Error('trusted_target: live PR binding changed');
-  return String(head.sha ?? '').trim().toLowerCase();
+  return {
+    headSha: String(head.sha ?? '').trim().toLowerCase(),
+    baseRef: String(base.ref ?? '').trim(),
+  };
+}
+
+export function fetchLivePrHead(prNumber: number, repositorySlug: string, repoRoot: string): string {
+  return fetchLivePrBinding(prNumber, repositorySlug, repoRoot).headSha;
 }
 
 export function publishPrComment(
@@ -466,10 +495,17 @@ export async function resolveRequiredCiForCurrentHead(
     expectedHeadSha: headSha,
     prBaseRef: baseRef,
     readProtection,
-    readChecks: async () => JSON.parse(requireProcessOutput('required-ci-checks', runSmokeGhSync(
-      ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'], repoRoot,
-    ))) as Array<{ name?: string; workflow?: string; state?: string; conclusion?: string; status?: string; bucket?: string }>,
-    readCurrentHead: async () => fetchLivePrHead(prNumber, repositorySlug, repoRoot),
+    readChecks: async () => JSON.parse(requireProcessOutput(
+      'required-ci-checks',
+      runSmokeGhSync(
+        ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'],
+        repoRoot,
+        {},
+        [0, 1, 8],
+      ),
+      [0, 1, 8],
+    )) as Array<{ name?: string; workflow?: string; state?: string; conclusion?: string; status?: string; bucket?: string }>,
+    readCurrentPr: async () => fetchLivePrBinding(prNumber, repositorySlug, repoRoot),
   });
 }
 
