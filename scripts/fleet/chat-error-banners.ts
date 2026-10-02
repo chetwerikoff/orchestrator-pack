@@ -1,6 +1,7 @@
 import {
   ASSISTANT_MESSAGE_STYLE,
   ASSISTANT_TURN_ACTION_SELECTOR,
+  CONNECTION_RECOVERY_STATUS_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
   STOP_BUTTON_SELECTOR,
 } from '../chatgpt-browser-turn/product-page-selectors.ts';
@@ -67,6 +68,10 @@ const redBannerExpression = (repository: string): string => `(() => {
   const pull = pullDigits ? Number(pullDigits) : undefined;
   const review = firstText.includes(${JSON.stringify(REVIEW_PROMPT_HEADING.toLowerCase())});
   const chat = (rows) => ({ issue, pull, review, generating, rows });
+  const recovery = [...document.querySelectorAll(${JSON.stringify(CONNECTION_RECOVERY_STATUS_SELECTOR)})].find(rendered);
+  if (recovery) {
+    return { issue, pull, review, generating: false, rows: [{ kind: 'error_banner', text: (recovery.innerText || '').trim().slice(0, 160), retry: false }] };
+  }
   if (generating) return chat([]);
   const red = (c) => {
     let m = c.match(/oklab\\(\\s*[\\d.]+%?\\s+([-\\d.]+)\\s+([-\\d.]+)/);
