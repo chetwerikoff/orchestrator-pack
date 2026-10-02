@@ -986,7 +986,7 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     const payload = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
     expect(payload).toMatchObject({ ok: false, outcome: 'review_target_unavailable', prNumber: 1111 });
     expect(String(payload.reason)).not.toContain('missing-selection');
-    expect(String(payload.reason)).toContain('not open');
+    expect(String(payload.reason)).toContain('gh api PR read 1111');
   });
 
   it('resolves a PR-only target, binds GPT above persistent layers, and emits one start indication', async () => {
