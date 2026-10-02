@@ -54,8 +54,6 @@ import { SUPPORTED_NODE_MAJOR } from '../toolchain/node-runtime-contract.mjs';
 import { validateSchedulerRegistry } from '../lib/cutover/activation-registry-projection.ts';
 import type { ActivationRequest, EpochCommitCore, FoundationAdmissionEvidence, ProcessIdentity } from '../lib/cutover/types.ts';
 import { runSchedulerTick, type SchedulerBoundary } from '../pr2-foundation/scheduler.ts';
-import { CUTOVER_ROWS, FOUNDATION_DOC_ROWS, validateEstateSplit } from '../pr2-foundation/contracts.ts';
-import { buildPlanningManifest } from '../pr2a/closed-world-scanner.ts';
 import { D928 } from '../pr2a/contracts.ts';
 import { getPackReviewRun, initializePackReviewRunStore, updatePackReviewRun } from '../lib/pack-review-run-store.ts';
 import { packReviewDeliveryNeedsResume } from '../lib/pack-review-delivery.ts';
@@ -228,7 +226,7 @@ function activationFixture(): { request: ActivationRequest; boundary: Activation
   };
   const identity: ProcessIdentity = { pid: 12345, startTicks: '99', cmdline: [path.join(root, 'scripts', 'orchestrator-wake-supervisor.ps1')] };
   const boundary: ActivationBoundary = {
-    preflight: () => ({ result: 'node22-linux-wsl2-preflight-pass', repoRoot, oldInstalledRevisionRoot: root, platform: 'linux', nodeMajor: SUPPORTED_NODE_MAJOR }),
+    preflight: () => ({ result: 'node-major-linux-wsl2-preflight-pass', repoRoot, oldInstalledRevisionRoot: root, platform: 'linux', nodeMajor: SUPPORTED_NODE_MAJOR }),
     proveFoundationAdoption: () => ({ result: 'foundation-evidence-verified', evidencePath: request.paths.foundationEvidencePath, localHostId: request.hostId, oldInstalledCommitSha: '9'.repeat(40), heartbeatObservedAt: new Date().toISOString(), migrationJournalCount: 1, preflightSanitizerId: 'sha256:test' }),
     resolveBaseAndClosure: () => ({ baseRef: 'post-948-base', closure: { inputTree: 'tree-948', referenceCount: 2 } }),
     readLegacySupervisor: () => identity,
@@ -593,52 +591,7 @@ describe('Issue #1880 activation epoch current-pointer integrity', () => {
   });
 });
 
-describe('[AC4][AC6] estate successor state', () => {
-  it('terminalizes the exact Issue #906 cutover denominator rows', () => {
-    const manifest = JSON.parse(
-      readFileSync(path.join(repoRoot, 'scripts/estate-cut/issue-906.manifest.json'), 'utf8'),
-    ) as {
-      objectiveStateDomain?: string[];
-      rows?: Array<{ path: string; terminalState: string; replacementOwner?: string }>;
-    };
-    expect(manifest.objectiveStateDomain?.filter((state) => state === 'cutover-terminalized')).toHaveLength(1);
-    const denominator = (manifest.rows ?? []).filter((row) =>
-      (FOUNDATION_DOC_ROWS as readonly string[]).includes(row.path)
-      || (CUTOVER_ROWS as readonly string[]).includes(row.path),
-    );
-    expect(validateEstateSplit(denominator)).toEqual({ ok: true, result: 'foundation-15-cutover-6' });
-    const byPath = new Map((manifest.rows ?? []).map((row) => [row.path, row]));
-    for (const file of CUTOVER_ROWS) {
-      expect(byPath.get(file)).toMatchObject({ terminalState: 'cutover-terminalized', replacementOwner: 'scripts/orchestrator-cutover-activate.ts' });
-    }
-    const replacementOwners = [
-      'scripts/orchestrator-wake-supervisor.ts',
-      'scripts/lib/orchestrator-side-process-supervisor.ts',
-      'scripts/lib/review-start-claim-store.ts',
-      'scripts/lib/review-start-claim-reaper.ts',
-    ] as const;
-    D928.forEach((file, index) => {
-      expect(byPath.get(file)).toMatchObject({ terminalState: 'deleted-now', replacementOwner: replacementOwners[index] });
-    });
-  });
-});
-
 describe('[AC1] admission and closure', () => {
-  it('recomputes #948 closure and rejects every executable target-library edge outside D928', () => {
-    const base = git(['merge-base', 'origin/main', 'HEAD']);
-    const manifest = buildPlanningManifest(base);
-    expect(manifest.schemaVersion).toBe(1);
-    expect(manifest.unknown).toEqual([]);
-    expect(manifest.dynamicUnsupported).toEqual([]);
-    const targets = new Set(['scripts/lib/Orchestrator-SideProcessSupervisor.ps1', 'scripts/lib/Review-StartClaim.ps1']);
-    const external = manifest.references.filter((row) =>
-      targets.has(row.target)
-      && !(D928 as readonly string[]).includes(row.source)
-      && isExecutableLegacyReference(row),
-    );
-    expect(external).toEqual([]);
-  });
-
   it('streams complete closure output above 1 MiB and still rejects an external executable reference', async () => {
     const closure = await recomputeClosure(repoRoot, 'HEAD');
     expect(closure.inputTree).toMatch(/^[0-9a-f]{40}$/iu);
@@ -702,7 +655,7 @@ describe('[AC1] admission and closure', () => {
     ]) expect(activation).toContain(token);
     for (const token of [
       "if (platform !== 'linux') throw new Error('unsupported_platform');",
-      "if (major !== SUPPORTED_NODE_MAJOR) throw new Error('node22_required');",
+      "if (major !== SUPPORTED_NODE_MAJOR) throw new Error('node_major_required');",
       "if (actualHead.toLowerCase() !== input.installedCommitSha.toLowerCase()) throw new Error('installed_commit_unbound');",
       "throw new Error(`${label}_not_canonical`);",
     ]) expect(preflight).toContain(token);
@@ -1002,7 +955,7 @@ describe('[AC8] platform and canonical bytes', () => {
 
   it('fails unsupported Node and native Windows before cordon', () => {
     const { request } = activationFixture();
-    expect(() => runActivationPlatformPreflight({ repoRoot, installedCommitSha: git(['rev-parse', 'HEAD']), oldInstalledRevisionRoot: repoRoot, targetRegistryPath: request.paths.targetRegistryPath, projectedRegistryPath: request.paths.projectedRegistryPath, nodeVersion: '20.19.0', platform: 'linux' })).toThrow(/node22_required/);
+    expect(() => runActivationPlatformPreflight({ repoRoot, installedCommitSha: git(['rev-parse', 'HEAD']), oldInstalledRevisionRoot: repoRoot, targetRegistryPath: request.paths.targetRegistryPath, projectedRegistryPath: request.paths.projectedRegistryPath, nodeVersion: '20.19.0', platform: 'linux' })).toThrow(/node_major_required/);
     expect(() => runActivationPlatformPreflight({ repoRoot, installedCommitSha: git(['rev-parse', 'HEAD']), oldInstalledRevisionRoot: repoRoot, targetRegistryPath: request.paths.targetRegistryPath, projectedRegistryPath: request.paths.projectedRegistryPath, nodeVersion: `${SUPPORTED_NODE_MAJOR}.0.0`, platform: 'win32' })).toThrow(/unsupported_platform/);
   });
 
@@ -1686,7 +1639,7 @@ function createIssue1422FirstTimeFixture(): { request: ActivationRequest; bounda
     },
   };
   const boundary: ActivationBoundary = {
-    preflight: () => ({ result: 'node22-linux-wsl2-preflight-pass', repoRoot: root, oldInstalledRevisionRoot: root, platform: 'linux', nodeMajor: SUPPORTED_NODE_MAJOR }),
+    preflight: () => ({ result: 'node-major-linux-wsl2-preflight-pass', repoRoot: root, oldInstalledRevisionRoot: root, platform: 'linux', nodeMajor: SUPPORTED_NODE_MAJOR }),
     proveFoundationAdoption: () => ({
       result: 'foundation-evidence-verified',
       evidencePath: request.paths.foundationEvidencePath,

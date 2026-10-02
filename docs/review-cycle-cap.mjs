@@ -12,7 +12,7 @@ import {
   toArray,
 } from './review-reconcile-primitives.mjs';
 import { isPrMergedOnGitHub } from './review-orchestrator-loop.mjs';
-import { resolveCurrentPrHeadSha } from './review-head-ready.mjs';
+import { resolveCurrentPrHeadSha } from '../scripts/pr2-foundation/terminalized/review-head-ready.ts';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 
 export const REVIEW_CYCLE_CAP_SCHEMA_VERSION = 2;

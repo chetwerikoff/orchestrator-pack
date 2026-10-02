@@ -25,8 +25,6 @@ const runtimeDiscoveryExcludedFiles = new Set([
   'scripts/runtime/caller-census.ts',
   'scripts/orca-runtime/adapter.ts',
   'scripts/orca-runtime/task-adapter.ts',
-  'scripts/estate-cut/task-311-tests/task-311-claim.test-support.ts',
-  'scripts/pr2a/final-conformance-precutover.ts',
   'scripts/supervisor-fault-boundary.shared.ts',
   'scripts/supervisor-recovery.test-helpers.ts',
 ]);

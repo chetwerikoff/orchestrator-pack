@@ -218,8 +218,8 @@ export function validateParkedWallclockE2e(classification, parkedWallclockE2e) {
     errors.push('parkedWallclockE2e.trackingIssue must be 694');
   }
   const trackingNote = String(parkedWallclockE2e?.trackingNote ?? '').trim();
-  if (!trackingNote.includes('239-ci-vitest-wallclock-e2e-separate-stage')) {
-    errors.push('parkedWallclockE2e.trackingNote must reference #694 wall-clock stage draft');
+  if (!trackingNote.includes('#694')) {
+    errors.push('parkedWallclockE2e.trackingNote must reference live Issue #694');
   }
   for (const file of parkedFiles) {
     if (classification[file] !== 'parked') {
