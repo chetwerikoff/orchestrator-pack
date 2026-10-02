@@ -1,5 +1,6 @@
 #!/usr/bin/env -S node --experimental-strip-types
 import '../toolchain/native-entrypoint-preflight.ts';
+import { createHash } from 'node:crypto';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
@@ -53,8 +54,7 @@ export interface FleetWakeStateStore extends FleetPollingStore {
   writeBannerSignature?(signature: string): void;
   readStalledSeen?(): string | null;
   writeStalledSeen?(urls: string): void;
-  hasParkedWakeEvent(key: string): boolean;
-  writeParkedWakeEvent(key: string): void;
+  claimParkedWakeEvent(key: string): boolean;
 }
 
 export class FileFleetWakeStateStore extends FileFleetStateStore implements FleetWakeStateStore {
@@ -113,29 +113,20 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
     writeFileSync(this.stalledSeenPath(), `${urls}\n`, 'utf8');
   }
 
-  private parkedWakeEventsPath(): string {
-    return join(this.root, 'parked-wake.events');
+  private parkedWakeEventPath(key: string): string {
+    const digest = createHash('sha256').update(key).digest('hex').slice(0, 32);
+    return join(this.root, `parked-wake-${digest}.mark`);
   }
 
-  private readParkedWakeEvents(): Set<string> {
-    try {
-      const body = existsSync(this.parkedWakeEventsPath()) ? readFileSync(this.parkedWakeEventsPath(), 'utf8') : '';
-      return new Set(body.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean));
-    } catch {
-      return new Set();
-    }
-  }
-
-  hasParkedWakeEvent(key: string): boolean {
-    return this.readParkedWakeEvents().has(key);
-  }
-
-  writeParkedWakeEvent(key: string): void {
-    const events = this.readParkedWakeEvents();
-    if (events.has(key)) return;
-    events.add(key);
+  claimParkedWakeEvent(key: string): boolean {
     mkdirSync(this.root, { recursive: true });
-    writeFileSync(this.parkedWakeEventsPath(), `${[...events].sort().join('\n')}\n`, 'utf8');
+    try {
+      writeFileSync(this.parkedWakeEventPath(key), `${key}\n`, { encoding: 'utf8', flag: 'wx' });
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw error;
+    }
   }
 }
 
@@ -412,7 +403,7 @@ function wakeParkedPanes(
   const checkRunsCompleted = options.checkRunsCompleted ?? allCheckRunsCompleted;
   for (const pane of observations) {
     const event = parkedWakeEvent(pane);
-    if (!event || store.hasParkedWakeEvent(event.key)) continue;
+    if (!event) continue;
 
     let message: string | undefined;
     if (event.kind === 'gpt') {
@@ -424,13 +415,12 @@ function wakeParkedPanes(
         message = `Wake: CI on ${event.sha} finished`;
       }
     }
-    if (!message) continue;
+    if (!message || !store.claimParkedWakeEvent(event.key)) continue;
 
     if (!sendCoordinator(executor, pane.handle, message)) {
-      log(`${pane.handle} parked wake send failed: ${event.key}`);
+      log(`${pane.handle} parked wake send failed after claim: ${event.key}`);
       continue;
     }
-    store.writeParkedWakeEvent(event.key);
     log(`sent parked wake to ${pane.handle}: ${event.key}`);
   }
 }
