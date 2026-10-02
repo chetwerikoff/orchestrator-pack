@@ -237,7 +237,15 @@ export async function resolveRequiredCi(input: ResolveRequiredCiInput): Promise<
     try {
       protection = await input.readProtection();
     } catch {
-      protection = { kind: 'unavailable', httpStatus: 404 };
+      return result(input, {
+        state: 'pending',
+        source: 'lookup_unavailable',
+        reason: 'lookup_unavailable',
+        postProjectionHeadSha: '',
+        headBinding: 'unavailable',
+        selectors: [],
+        diagnostics: ['lookup_unavailable:transport_error'],
+      });
     }
     if (protection.kind === 'unavailable') {
       return result(input, {
