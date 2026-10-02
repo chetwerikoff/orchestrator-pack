@@ -14,12 +14,16 @@ export type InventoryRoute = {
   includeAppId?: boolean;
 };
 
-export function classifyArgv(argv: string[]): {
+export interface InventoryMatchOptions {
+  targetAuthorization?: { repository: string; defaultBranch: string };
+}
+
+export function classifyArgv(argv: string[], options?: InventoryMatchOptions): {
   parsed: ParsedGhArgv;
   route: InventoryRoute | null;
 };
 
-export function matchInventoryRoute(parsed: ParsedGhArgv): InventoryRoute | null;
+export function matchInventoryRoute(parsed: ParsedGhArgv, options?: InventoryMatchOptions): InventoryRoute | null;
 
 export function hasOnlyAllowedFlags(parsed: ParsedGhArgv, allowed: string[]): boolean;
 

@@ -435,12 +435,20 @@ function assertRuntimeHistoryRepo(route, repo) {
   }
 }
 
-export function routeRuntimeHistoryMainRequiredStatusChecks(realGh, repo, cwd) {
+export function routeTargetRequiredStatusChecks(realGh, repo, branch, cwd) {
+  const targetBranch = String(branch ?? '').trim();
+  if (!targetBranch) {
+    throw new Error(`${REST_ERROR_MARKER}: target required-status branch is empty`);
+  }
   return ghApiJson(
     realGh,
-    `repos/${repo.slug}/branches/main/protection/required_status_checks`,
+    `repos/${repo.slug}/branches/${encodeURIComponent(targetBranch)}/protection/required_status_checks`,
     { hostname: repo.host, cwd },
   );
+}
+
+export function routeRuntimeHistoryMainRequiredStatusChecks(realGh, repo, cwd) {
+  return routeTargetRequiredStatusChecks(realGh, repo, 'main', cwd);
 }
 
 export function routeRuntimeHistoryActionsRun(realGh, repo, runId, cwd) {
@@ -632,6 +640,11 @@ export function executeRestRoute(routeId, ctx) {
         };
         return applyListedJq(repoView, parsed.jq);
       }
+      case 'target-required-status-checks':
+        if (String(route.repoSlug ?? '').trim().toLowerCase() !== String(repo.slug ?? '').trim().toLowerCase()) {
+          throw new Error(`${REST_ERROR_MARKER}: target required-status repository mismatch`);
+        }
+        return routeTargetRequiredStatusChecks(realGh, repo, route.branch, cwd);
       case 'runtime-history-main-required-status-checks':
         assertRuntimeHistoryRepo(route, repo);
         return routeRuntimeHistoryMainRequiredStatusChecks(realGh, repo, cwd);

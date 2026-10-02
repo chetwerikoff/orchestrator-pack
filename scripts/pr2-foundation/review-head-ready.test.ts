@@ -15,6 +15,17 @@ const session = {
   ownedHeadSha: headSha,
   reports: [{ reportState: 'ready_for_review', headRefOid: headSha }],
 };
+const sharedGreen = {
+  state: 'green',
+  green: true,
+  source: 'project_card',
+  reason: 'green',
+  expectedHeadSha: headSha,
+  postProjectionHeadSha: headSha,
+  headBinding: 'inferred_current',
+  selectors: [{ kind: 'actions', workflow: 'CI', job: 'checks' }],
+  diagnostics: [],
+} as const;
 
 describe('[AC1] TypeScript head-ready liveness contract', () => {
   it('starts review for one live exact-head handoff with all required checks green', () => {
@@ -25,6 +36,26 @@ describe('[AC1] TypeScript head-ready liveness contract', () => {
       session,
       ciChecks: greenChecks,
     })).toEqual({ eligible: true, route: 'start_review', reason: 'ready_for_review' });
+  });
+
+  it('uses the shared typed required-CI fact in production-shaped calls without a local check-name list', () => {
+    expect(evaluateHeadReadyForReview({
+      reviewRuns: [],
+      prNumber: 923,
+      headSha,
+      session,
+      ciChecks: [],
+      requiredCi: sharedGreen,
+    })).toEqual({ eligible: true, route: 'start_review', reason: 'ready_for_review' });
+
+    expect(evaluateHeadReadyForReview({
+      reviewRuns: [],
+      prNumber: 923,
+      headSha,
+      session,
+      ciChecks: greenChecks,
+      requiredCi: { ...sharedGreen, state: 'pending', green: false, reason: 'required_selector_pending' },
+    })).toMatchObject({ eligible: false, reason: 'required_ci_not_green' });
   });
 
   it('fails closed for stale ownership, missing required CI, or a covering run', () => {

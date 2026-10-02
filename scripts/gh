@@ -10,8 +10,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The helper reuses resolveTargetContext, rejects mismatched repo/host ingress, and prints
 # the exact repository that all implicit gh routing must use.
 if [[ -n "${OPK_PROJECT_ID:-}" ]]; then
-  target_repo="$(node --no-warnings --experimental-strip-types "${SCRIPT_DIR}/lib/gh-target-authorization.ts" -- "$@")"
+  target_authorization="$(node --no-warnings --experimental-strip-types "${SCRIPT_DIR}/lib/gh-target-authorization.ts" -- "$@")"
+  read -r target_repo target_default_branch <<< "$target_authorization"
+  if [[ -z "$target_repo" || -z "$target_default_branch" ]]; then
+    echo "target gh authorization returned incomplete repository/default-branch binding" >&2
+    exit 1
+  fi
   export OPK_TARGET_REPOSITORY="$target_repo"
+  export OPK_TARGET_DEFAULT_BRANCH="$target_default_branch"
   export GH_REPO="$target_repo"
   export GH_HOST="github.com"
 fi

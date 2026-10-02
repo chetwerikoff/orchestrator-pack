@@ -153,7 +153,13 @@ import {
   parseComplexityTierFromIssueBody,
   resolveTierAndCap,
 } from '../docs/review-cycle-cap.mjs';
-import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
+import {
+  requiredStatusChecksEndpoint,
+  resolveRequiredCi,
+  type RequiredCiCheckRow,
+  type RequiredCiProtectionRead,
+} from './lib/required-ci.ts';
+export { requiredStatusChecksEndpoint } from './lib/required-ci.ts';
 import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import type { ResolvedScopeContext } from '../plugins/codex-pr-reviewer/lib/scope_context.ts';
 export { resolveRepositorySlug };
@@ -189,13 +195,17 @@ interface StartInput {
     timeoutSeconds: number;
   }) => void | Promise<void>;
   fixtureCurrentPrHeadSha?: string;
-  fixtureRequiredCiChecks?: Array<{ name?: string; state?: string; conclusion?: string; status?: string }> | null;
+  fixtureRequiredCi?: readonly string[];
+  fixtureRequiredCiChecks?: Array<{ name?: string; workflow?: string; state?: string; conclusion?: string; status?: string }> | null;
   fixtureRequiredCiPolicy?: {
     contexts?: unknown[];
     checks?: Array<string | { context?: string }>;
   } | null;
   fixtureRequiredCiPolicyHttpStatus?: number;
+  fixtureRequiredCiPostProjectionHead?: string;
+  fixtureRequiredCiPostProjectionBase?: string;
   fixtureRequiredCiHeadAfterGate?: string;
+  fixtureRequiredCiBaseAfterGate?: string;
   fixturePrState?: string;
   fixturePrBody?: string;
   fixturePrBodyAfterClaim?: string;
@@ -329,6 +339,7 @@ interface OperatorPackReviewStart {
 }
 
 const directCliOperatorStarts = new WeakMap<StartInput, OperatorPackReviewStart>();
+const directCliStarts = new WeakSet<StartInput>();
 const OPERATOR_START_FIELDS = [
   'operatorRepository',
   'operatorIssueNumber',
@@ -729,73 +740,28 @@ export async function resolveCurrentPrTarget(
   return { headSha: headSha.toLowerCase(), body: row.body, baseRef };
 }
 
-type ManualPackReviewCiCheck = { name?: string; state?: string; conclusion?: string; status?: string };
-
-function branchRequiredCheckNames(policy: Record<string, unknown>): string[] {
-  const seen = new Set<string>();
-  const names: string[] = [];
-  const add = (value: unknown): void => {
-    const name = trim(value);
-    if (!name) return;
-    const key = name.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    names.push(name);
-  };
-  if (Array.isArray(policy.contexts)) {
-    for (const context of policy.contexts) add(context);
-  }
-  if (Array.isArray(policy.checks)) {
-    for (const check of policy.checks) {
-      if (check && typeof check === 'object' && !Array.isArray(check)) {
-        add((check as Record<string, unknown>).context);
-      } else {
-        add(check);
-      }
-    }
-  }
-  return names;
-}
-
-function reviewIndependentRequiredCheckNames(policy: Record<string, unknown>): {
-  all: string[];
-  reviewIndependent: string[];
-} {
-  const all = branchRequiredCheckNames(policy);
-  const reviewContext = PACK_REVIEW_REQUIRED_STATUS_CONTEXT.toLowerCase();
-  return {
-    all,
-    reviewIndependent: all.filter((name) => name.toLowerCase() !== reviewContext),
-  };
-}
-
-export function requiredStatusChecksEndpoint(repoSlug: string, baseRef: string): string {
-  const branch = trim(baseRef);
-  if (!branch) throw new Error('required status checks branch is empty');
-  return `repos/${repoSlug}/branches/${encodeURIComponent(branch)}/protection/required_status_checks`;
-}
-
 export async function manualPackReviewRequiredCiGreen(input: {
   startInput: StartInput;
   target: { prNumber: number; headSha: string; repoSlug: string; sourceRepoRoot: string; prBaseRef: string };
+  targetContext?: Pick<TargetContext, 'projectId' | 'repository' | 'defaultBranch' | 'requiredCi'> | null;
 }): Promise<boolean> {
   const harness = process.env.OPK_VITEST_HARNESS === '1';
-  let policy: Record<string, unknown> | null = null;
-  let checks: ManualPackReviewCiCheck[];
+  const targetContext = input.targetContext ?? {
+    projectId: trim(input.startInput.projectId) || DEFAULT_PROJECT_ID,
+    repository: input.target.repoSlug,
+    defaultBranch: input.target.prBaseRef,
+    ...(input.startInput.fixtureRequiredCi ? { requiredCi: input.startInput.fixtureRequiredCi } : {}),
+  };
 
-  if (harness) {
-    const fixturePolicy = input.startInput.fixtureRequiredCiPolicy;
-    const fixturePolicyHttpStatus = input.startInput.fixtureRequiredCiPolicyHttpStatus;
-    const fixtureChecks = input.startInput.fixtureRequiredCiChecks;
-    if (!Array.isArray(fixtureChecks)) return false;
-    if (fixturePolicyHttpStatus !== undefined) {
-      if (fixturePolicyHttpStatus !== 403 && fixturePolicyHttpStatus !== 404) return false;
-    } else {
-      if (!fixturePolicy) return false;
-      policy = fixturePolicy as Record<string, unknown>;
+  const readProtection = async (): Promise<RequiredCiProtectionRead> => {
+    if (harness) {
+      const status = input.startInput.fixtureRequiredCiPolicyHttpStatus;
+      if (status === 403 || status === 404) return { kind: 'unavailable', httpStatus: status };
+      if (!input.startInput.fixtureRequiredCiPolicy) {
+        return { kind: 'unavailable', httpStatus: 404 };
+      }
+      return { kind: 'ok', policy: input.startInput.fixtureRequiredCiPolicy };
     }
-    checks = fixtureChecks;
-  } else {
     const policyResult = await runProcess({
       command: resolveTrackedGhWrapper(),
       args: ['api', requiredStatusChecksEndpoint(input.target.repoSlug, input.target.prBaseRef)],
@@ -806,17 +772,24 @@ export async function manualPackReviewRequiredCiGreen(input: {
     });
     if (!policyResult.ok) {
       const policyFailure = `${policyResult.stderr}\n${policyResult.stdout}`;
-      if (!/\bHTTP\s+(?:403|404)\b/i.test(policyFailure)) return false;
-    } else {
-      try {
-        const parsed = JSON.parse(policyResult.stdout) as unknown;
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
-        policy = parsed as Record<string, unknown>;
-      } catch {
-        return false;
-      }
+      const match = policyFailure.match(/\bHTTP\s+(403|404)\b/i);
+      if (match) return { kind: 'unavailable', httpStatus: Number(match[1]) as 403 | 404 };
+      throw new Error('required CI protection lookup failed');
     }
+    const parsed = JSON.parse(policyResult.stdout) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('required CI protection lookup returned invalid JSON');
+    }
+    return { kind: 'ok', policy: parsed as Record<string, unknown> };
+  };
 
+  const readChecks = async (): Promise<readonly RequiredCiCheckRow[]> => {
+    if (harness) {
+      if (!Array.isArray(input.startInput.fixtureRequiredCiChecks)) {
+        throw new Error('required CI fixture checks are unavailable');
+      }
+      return input.startInput.fixtureRequiredCiChecks;
+    }
     const checksResult = await runProcess({
       command: resolveTrackedGhWrapper(),
       args: [
@@ -829,32 +802,53 @@ export async function manualPackReviewRequiredCiGreen(input: {
       allowEmptyStdout: false,
       timeoutMs: 30_000,
     });
-    if (checksResult.outcome !== 'exit' || ![0, 1, 8].includes(checksResult.exitCode ?? -1)) return false;
-    try {
-      const parsed = JSON.parse(checksResult.stdout) as unknown;
-      if (!Array.isArray(parsed)) return false;
-      checks = parsed as ManualPackReviewCiCheck[];
-    } catch {
-      return false;
+    if (checksResult.outcome !== 'exit' || ![0, 1, 8].includes(checksResult.exitCode ?? -1)) {
+      throw new Error('required CI check projection failed');
     }
-  }
+    const parsed = JSON.parse(checksResult.stdout) as unknown;
+    if (!Array.isArray(parsed)) throw new Error('required CI check projection returned invalid JSON');
+    return parsed as RequiredCiCheckRow[];
+  };
 
-  const required = policy
-    ? reviewIndependentRequiredCheckNames(policy)
-    : { all: ['checks'], reviewIndependent: ['checks'] };
-  const level = required.all.length > 0 && required.reviewIndependent.length === 0
-    ? 'green'
-    : classifyRequiredCiLevel(checks, { requiredCheckNames: required.reviewIndependent });
-  if (level !== 'green') return false;
-
-  const headAfterGate = harness
-    ? trim(input.startInput.fixtureRequiredCiHeadAfterGate || input.target.headSha).toLowerCase()
-    : await resolveCurrentPrHead(
+  const resolution = await resolveRequiredCi({
+    target: targetContext,
+    prNumber: input.target.prNumber,
+    expectedHeadSha: input.target.headSha,
+    prBaseRef: input.target.prBaseRef,
+    readProtection,
+    readChecks,
+    readCurrentPr: async () => {
+      if (harness) {
+        return {
+          headSha: trim(input.startInput.fixtureRequiredCiPostProjectionHead || input.target.headSha).toLowerCase(),
+          baseRef: trim(input.startInput.fixtureRequiredCiPostProjectionBase || input.target.prBaseRef),
+        };
+      }
+      const current = await resolveCurrentPrTarget(
         input.target.sourceRepoRoot,
         input.target.repoSlug,
         input.target.prNumber,
       );
-  return headAfterGate === input.target.headSha;
+      return { headSha: current.headSha, baseRef: current.baseRef };
+    },
+  });
+  if (!resolution.green) return false;
+
+  // Keep the existing later guard in addition to the resolver's immediate
+  // post-projection witness. It catches head or base movement after the shared
+  // gate itself and before a production review can start.
+  const targetAfterGate = harness
+    ? {
+        headSha: trim(input.startInput.fixtureRequiredCiHeadAfterGate || input.target.headSha).toLowerCase(),
+        baseRef: trim(input.startInput.fixtureRequiredCiBaseAfterGate || input.target.prBaseRef),
+      }
+    : await resolveCurrentPrTarget(
+        input.target.sourceRepoRoot,
+        input.target.repoSlug,
+        input.target.prNumber,
+      );
+  return targetAfterGate.headSha === input.target.headSha
+    && targetAfterGate.baseRef === targetContext.defaultBranch;
 }
 
 async function resolveCurrentIssueBody(
@@ -4060,12 +4054,33 @@ async function commitAtCapTriage(input: {
 }
 
 export async function startPackReview(input: StartInput): Promise<Record<string, unknown>> {
+  const requestedProjectId = trim(input.projectId);
+  const bindCanonicalProject = process.env.OPK_VITEST_HARNESS !== '1'
+    && trim(input.surface) === 'pack-gpt-review'
+    && Boolean(requestedProjectId)
+    && !trim(process.env.OPK_PROJECT_ID);
+  if (!bindCanonicalProject) return startPackReviewImpl(input);
+
+  const previousProjectId = process.env.OPK_PROJECT_ID;
+  process.env.OPK_PROJECT_ID = requestedProjectId;
+  try {
+    return await startPackReviewImpl(input);
+  } finally {
+    if (previousProjectId === undefined) delete process.env.OPK_PROJECT_ID;
+    else process.env.OPK_PROJECT_ID = previousProjectId;
+  }
+}
+
+async function startPackReviewImpl(input: StartInput): Promise<Record<string, unknown>> {
   const operatorStart = directCliOperatorStarts.get(input);
   const harnessWithoutSelectedProject = process.env.OPK_VITEST_HARNESS === '1'
     && !trim(process.env.OPK_PROJECT_ID);
   const selectedTarget = harnessWithoutSelectedProject
     ? null
-    : resolveTargetContext({ env: process.env });
+    : resolveTargetContext({
+        ...(trim(input.projectId) ? { projectId: trim(input.projectId) } : {}),
+        env: process.env,
+      });
   if (selectedTarget) {
     const requestedProjectId = trim(input.projectId);
     if (requestedProjectId && requestedProjectId !== selectedTarget.projectId) {
@@ -4103,9 +4118,35 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       `pack review PR base ${target.prBaseRef} does not match selected target default branch ${selectedTarget.defaultBranch}`,
     );
   }
-  if (trim(input.surface) === 'pack-gpt-review') {
+  const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
+  const productionRequiredCiStart = directCliStarts.has(input)
+    || trim(input.surface) === 'pack-gpt-review'
+    || trim(input.surface) === 'pr2-scheduler';
+  const existingAuthorityBeforeCi = productionRequiredCiStart
+    ? readPackReviewAuthority(target.prNumber, { storeRoot })
+    : null;
+  const existingStateCannotStartReviewer = Boolean(
+    existingAuthorityBeforeCi?.cycle?.reviewStageComplete === true
+    || existingAuthorityBeforeCi?.cycle?.state === 'at_cap_open_findings'
+    || existingAuthorityBeforeCi?.cycle?.state === 'at_cap_continuation_required',
+  );
+  const harnessRequiredCiOptIn = process.env.OPK_VITEST_HARNESS === '1' && (
+    input.fixtureRequiredCi !== undefined
+    || input.fixtureRequiredCiChecks !== undefined
+    || input.fixtureRequiredCiPolicy !== undefined
+    || input.fixtureRequiredCiPolicyHttpStatus !== undefined
+    || input.fixtureRequiredCiPostProjectionHead !== undefined
+    || input.fixtureRequiredCiPostProjectionBase !== undefined
+    || input.fixtureRequiredCiHeadAfterGate !== undefined
+    || input.fixtureRequiredCiBaseAfterGate !== undefined
+  );
+  const requiredCiGateApplies = productionRequiredCiStart
+    && !existingStateCannotStartReviewer
+    && (process.env.OPK_VITEST_HARNESS !== '1' || harnessRequiredCiOptIn);
+  if (requiredCiGateApplies) {
     const requiredCiGreen = await manualPackReviewRequiredCiGreen({
       startInput: input,
+      targetContext: selectedTarget,
       target: {
         prNumber: target.prNumber,
         headSha: target.headSha,
@@ -4125,7 +4166,6 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       };
     }
   }
-  const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
   const resolveSlug = input.fixtureResolveRepositorySlug
     ?? (process.env.OPK_VITEST_HARNESS === '1'
       ? async () => target.repoSlug
@@ -5759,6 +5799,7 @@ async function main(): Promise<void> {
   if (subcommand === 'start') {
     const startInput = input as DirectCliStartInput;
     applyCliTargetProject(startInput);
+    directCliStarts.add(startInput);
     const operatorStart = resolveOperatorPackReviewStart(startInput);
     if (operatorStart) directCliOperatorStarts.set(startInput, operatorStart);
     const result = await startPackReview(startInput);

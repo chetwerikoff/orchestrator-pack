@@ -1,6 +1,8 @@
 import { jsonFieldsEqual, parseGhArgv } from './gh-parse-argv.mjs';
 
-/** @typedef {'pr-list-open' | 'pr-list-head' | 'pr-list-merged-closes' | 'pr-view' | 'pr-checks' | 'pr-diff-name-only' | 'issue-view-body' | 'issue-view-json' | 'repo-view-name-with-owner' | 'runtime-history-main-required-status-checks' | 'runtime-history-actions-run' | 'runtime-history-status-history' | 'run-view-log-failed' | 'actions-job-log'} InventoryRouteId */
+/** @typedef {'pr-list-open' | 'pr-list-head' | 'pr-list-merged-closes' | 'pr-view' | 'pr-checks' | 'pr-diff-name-only' | 'issue-view-body' | 'issue-view-json' | 'repo-view-name-with-owner' | 'target-required-status-checks' | 'runtime-history-main-required-status-checks' | 'runtime-history-actions-run' | 'runtime-history-status-history' | 'run-view-log-failed' | 'actions-job-log'} InventoryRouteId */
+/** @typedef {{ repository: string, defaultBranch: string }} TargetAuthorization */
+/** @typedef {{ targetAuthorization?: TargetAuthorization }} InventoryMatchOptions */
 
 const RUNTIME_HISTORY_REPO = 'chetwerikoff/orchestrator-pack';
 
@@ -76,7 +78,45 @@ export function hasOnlyAllowedFlags(parsed, allowed) {
   return Object.keys(parsed.flags).every((key) => allowedSet.has(key));
 }
 
-function matchRuntimeHistoryApiRoute(parsed) {
+function matchTargetRequiredStatusChecks(parsed, targetAuthorization) {
+  if (!targetAuthorization) return null;
+  const endpoint = parsed.subcommand[1] ?? '';
+  if (
+    !endpoint
+    || parsed.positionals.length > 0
+    || parsed.jq
+    || parsed.jsonFields
+    || parsed.repo
+    || parsed.hostname
+    || !hasOnlyAllowedFlags(parsed, [])
+  ) {
+    return null;
+  }
+  const match = endpoint.match(/^repos\/([^/]+\/[^/]+)\/branches\/(.+)\/protection\/required_status_checks$/u);
+  if (!match) return null;
+  let branch;
+  try {
+    branch = decodeURIComponent(match[2]);
+  } catch {
+    return null;
+  }
+  const repository = String(targetAuthorization.repository ?? '').trim();
+  const defaultBranch = String(targetAuthorization.defaultBranch ?? '').trim();
+  if (!repository || !defaultBranch
+    || match[1].toLowerCase() !== repository.toLowerCase()
+    || branch !== defaultBranch) {
+    return null;
+  }
+  return {
+    id: 'target-required-status-checks',
+    repoSlug: repository,
+    branch: defaultBranch,
+  };
+}
+
+function matchRuntimeHistoryApiRoute(parsed, targetAuthorization) {
+  const targetRoute = matchTargetRequiredStatusChecks(parsed, targetAuthorization);
+  if (targetRoute) return targetRoute;
   const endpoint = parsed.subcommand[1] ?? '';
   if (
     !endpoint
@@ -130,7 +170,7 @@ function matchRuntimeHistoryApiRoute(parsed) {
  * @param {ReturnType<typeof parseGhArgv>} parsed
  * @returns {{ id: InventoryRouteId, prNumber?: number, prRef?: string, branch?: string, repoSlug?: string, runId?: number, jobId?: number, headSha?: string, includeAppId?: boolean } | null}
  */
-export function matchInventoryRoute(parsed) {
+export function matchInventoryRoute(parsed, options = {}) {
   const [root, sub] = parsed.subcommand;
   if (!root) {
     return null;
@@ -146,7 +186,7 @@ export function matchInventoryRoute(parsed) {
         return { id: 'actions-job-log', repoSlug: jobLog[1], jobId };
       }
     }
-    return matchRuntimeHistoryApiRoute(parsed);
+    return matchRuntimeHistoryApiRoute(parsed, options.targetAuthorization);
   }
 
   // gh-parse-argv currently leaves 'view' in positionals for the 'run' root.
@@ -406,8 +446,8 @@ export function isUnsupportedHighLevelRead(parsed) {
 /**
  * @param {string[]} argv
  */
-export function classifyArgv(argv) {
+export function classifyArgv(argv, options = {}) {
   const parsed = parseGhArgv(argv);
-  const route = matchInventoryRoute(parsed);
+  const route = matchInventoryRoute(parsed, options);
   return { parsed, route };
 }
