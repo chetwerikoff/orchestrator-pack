@@ -29,6 +29,7 @@ function deps(input: {
   protection?: RequiredCiProtectionRead;
   checks?: RequiredCiCheckRow[];
   postHead?: string;
+  postBase?: string;
 }) {
   return {
     target: input.target ?? target({ requiredCi: ['CI / checks'] }),
@@ -37,7 +38,10 @@ function deps(input: {
     prBaseRef: input.prBaseRef ?? 'main',
     readProtection: vi.fn(async () => input.protection ?? ({ kind: 'unavailable', httpStatus: 403 } as const)),
     readChecks: vi.fn(async () => input.checks ?? [{ workflow: 'CI', name: 'checks', state: 'SUCCESS' }]),
-    readCurrentHead: vi.fn(async () => input.postHead ?? H1),
+    readCurrentPr: vi.fn(async () => ({
+      headSha: input.postHead ?? H1,
+      baseRef: input.postBase ?? input.prBaseRef ?? 'main',
+    })),
   };
 }
 
@@ -56,7 +60,7 @@ describe('shared required CI resolver', () => {
     });
     expect(input.readProtection).not.toHaveBeenCalled();
     expect(input.readChecks).toHaveBeenCalledTimes(1);
-    expect(input.readCurrentHead).toHaveBeenCalledTimes(1);
+    expect(input.readCurrentPr).toHaveBeenCalledTimes(1);
   });
 
   it('refuses missing workflow identity, wrong workflow, and any non-success surviving match', async () => {
@@ -93,13 +97,27 @@ describe('shared required CI resolver', () => {
     expect(result.diagnostics).toContain('evidence_stale');
   });
 
+  it('discards projected rows when the PR is retargeted with the same head', async () => {
+    const result = await resolveRequiredCi(deps({ postBase: 'release' }));
+    expect(result).toMatchObject({
+      green: false,
+      state: 'failure',
+      reason: 'base_branch_mismatch',
+      expectedHeadSha: H1,
+      postProjectionHeadSha: H1,
+      headBinding: 'inferred_current',
+    });
+    expect(result.diagnostics).toContain('base_branch_mismatch:expected=main:observed=release');
+    expect(result.diagnostics).toContain('evidence_stale');
+  });
+
   it('fails closed on a base/default mismatch before selector discovery or projection', async () => {
     const input = deps({ prBaseRef: 'develop' });
     const result = await resolveRequiredCi(input);
     expect(result).toMatchObject({ green: false, state: 'failure', reason: 'base_branch_mismatch' });
     expect(input.readProtection).not.toHaveBeenCalled();
     expect(input.readChecks).not.toHaveBeenCalled();
-    expect(input.readCurrentHead).not.toHaveBeenCalled();
+    expect(input.readCurrentPr).not.toHaveBeenCalled();
   });
 
   it('uses readable non-empty branch protection when the card omits requiredCi', async () => {
