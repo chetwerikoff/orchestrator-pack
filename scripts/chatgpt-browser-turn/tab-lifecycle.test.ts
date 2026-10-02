@@ -9,6 +9,7 @@ import {
   __testConversationPageSelection,
   __testFinalizeTurn,
   __testPublishStateLightReply,
+  __testSendDelivery,
   type CompactTurnResult,
   recordChatBindings,
   runStateLightTurn,
