@@ -4054,6 +4054,23 @@ async function commitAtCapTriage(input: {
 }
 
 export async function startPackReview(input: StartInput): Promise<Record<string, unknown>> {
+  const requestedProjectId = trim(input.projectId);
+  const bindCanonicalProject = trim(input.surface) === 'pack-gpt-review'
+    && Boolean(requestedProjectId)
+    && !trim(process.env.OPK_PROJECT_ID);
+  if (!bindCanonicalProject) return startPackReviewImpl(input);
+
+  const previousProjectId = process.env.OPK_PROJECT_ID;
+  process.env.OPK_PROJECT_ID = requestedProjectId;
+  try {
+    return await startPackReviewImpl(input);
+  } finally {
+    if (previousProjectId === undefined) delete process.env.OPK_PROJECT_ID;
+    else process.env.OPK_PROJECT_ID = previousProjectId;
+  }
+}
+
+async function startPackReviewImpl(input: StartInput): Promise<Record<string, unknown>> {
   const operatorStart = directCliOperatorStarts.get(input);
   const harnessWithoutSelectedProject = process.env.OPK_VITEST_HARNESS === '1'
     && !trim(process.env.OPK_PROJECT_ID);
