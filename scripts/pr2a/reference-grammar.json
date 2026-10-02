@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "issue": 948,
+  "targetIndependent": true,
+  "primitiveClasses": [
+    "powershell-dot-source",
+    "powershell-call-operator",
+    "powershell-process-argv",
+    "javascript-static-import",
+    "javascript-dynamic-import",
+    "javascript-require",
+    "node-child-process",
+    "workflow-run",
+    "package-script",
+    "config-executable-reference",
+    "actionable-policy-reference",
+    "test-literal-dependency"
+  ],
+  "literalPathPrefixes": ["scripts/", "tests/", ".github/", "docs/", "plugins/"],
+  "executableExtensions": [".ps1", ".psm1", ".ts", ".mts", ".cts", ".js", ".mjs", ".cjs", ".sh"],
+  "commandBearingExtensions": [".json", ".yaml", ".yml", ".md"]
+}
