@@ -198,7 +198,7 @@ function runCli(): number {
   const normalizedArgv = argv[0] === '--' ? argv.slice(1) : argv;
   try {
     const authorized = requireTargetGhAuthorization(normalizedArgv, process.env);
-    process.stdout.write(`${authorized.repository}\t${authorized.defaultBranch}\n`);
+    process.stdout.write(`${authorized.repository} ${authorized.defaultBranch}\n`);
     return 0;
   } catch (error) {
     const code = error instanceof TargetGhAuthorizationError ? error.code : 'target-gh-repository-invalid';
