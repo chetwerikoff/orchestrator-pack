@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="380" viewBox="0 0 1200 380" role="img" aria-labelledby="title desc">
+  <title id="title">orchestrator-pack</title>
+  <desc id="desc">Runtime-neutral governance for automated software work, with a tracked path from GitHub Issue and scope through worker execution, pull request evidence, review and CI, smoke, and operator-authorized merge.</desc>
+
+  <rect width="1200" height="380" rx="28" fill="#09090b"/>
+  <rect x="1" y="1" width="1198" height="378" rx="27" fill="none" stroke="#27272a" stroke-width="2"/>
+
+  <g transform="translate(64 52)">
+    <text x="0" y="0" fill="#a1a1aa" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="2">GOVERNED SOFTWARE WORK / RUNTIME-NEUTRAL</text>
+    <text x="0" y="82" fill="#fafafa" font-size="64" font-weight="700" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">orchestrator-pack</text>
+    <text x="0" y="128" fill="#d4d4d8" font-size="26" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">Scope · identity · review · evidence</text>
+
+    <line x1="0" y1="168" x2="500" y2="168" stroke="#3f3f46" stroke-width="1"/>
+
+    <text x="0" y="210" fill="#a1a1aa" font-size="20" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">Keep automation governable without patching</text>
+    <text x="0" y="240" fill="#a1a1aa" font-size="20" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">the orchestration core.</text>
+
+    <g transform="translate(0 278)">
+      <rect width="208" height="38" rx="19" fill="#18181b" stroke="#3f3f46"/>
+      <text x="104" y="25" text-anchor="middle" fill="#e4e4e7" font-size="17" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">exact identity</text>
+      <rect x="220" width="232" height="38" rx="19" fill="#18181b" stroke="#3f3f46"/>
+      <text x="336" y="25" text-anchor="middle" fill="#e4e4e7" font-size="17" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">current-head proof</text>
+    </g>
+  </g>
+
+  <g transform="translate(670 48)">
+    <text x="0" y="0" fill="#71717a" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.5">THE GOVERNED PATH</text>
+
+    <g transform="translate(0 28)">
+      <rect x="0" y="0" width="202" height="66" rx="12" fill="#18181b" stroke="#52525b"/>
+      <text x="18" y="27" fill="#fafafa" font-size="22" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">ISSUE</text>
+      <text x="18" y="50" fill="#a1a1aa" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">live specification</text>
+
+      <line x1="202" y1="33" x2="238" y2="33" stroke="#71717a" stroke-width="2"/>
+      <path d="M232 27 L238 33 L232 39" fill="none" stroke="#71717a" stroke-width="2"/>
+
+      <rect x="240" y="0" width="202" height="66" rx="12" fill="#18181b" stroke="#52525b"/>
+      <text x="258" y="27" fill="#fafafa" font-size="22" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">SCOPE</text>
+      <text x="258" y="50" fill="#a1a1aa" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">deny / allow roots</text>
+    </g>
+
+    <line x1="221" y1="94" x2="221" y2="116" stroke="#71717a" stroke-width="2"/>
+    <path d="M215 110 L221 116 L227 110" fill="none" stroke="#71717a" stroke-width="2"/>
+
+    <g transform="translate(0 118)">
+      <rect x="0" y="0" width="202" height="66" rx="12" fill="#18181b" stroke="#52525b"/>
+      <text x="18" y="27" fill="#fafafa" font-size="22" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">WORKER</text>
+      <text x="18" y="50" fill="#a1a1aa" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">runtime + id + gen</text>
+
+      <line x1="202" y1="33" x2="238" y2="33" stroke="#71717a" stroke-width="2"/>
+      <path d="M232 27 L238 33 L232 39" fill="none" stroke="#71717a" stroke-width="2"/>
+
+      <rect x="240" y="0" width="202" height="66" rx="12" fill="#18181b" stroke="#52525b"/>
+      <text x="258" y="27" fill="#fafafa" font-size="22" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">PR HEAD</text>
+      <text x="258" y="50" fill="#a1a1aa" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">delivery authority</text>
+    </g>
+
+    <line x1="221" y1="184" x2="221" y2="206" stroke="#71717a" stroke-width="2"/>
+    <path d="M215 200 L221 206 L227 200" fill="none" stroke="#71717a" stroke-width="2"/>
+
+    <g transform="translate(0 208)">
+      <rect x="0" y="0" width="202" height="66" rx="12" fill="#18181b" stroke="#52525b"/>
+      <text x="18" y="27" fill="#fafafa" font-size="22" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">REVIEW + CI</text>
+      <text x="18" y="50" fill="#a1a1aa" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">exact-head evidence</text>
+
+      <line x1="202" y1="33" x2="238" y2="33" stroke="#71717a" stroke-width="2"/>
+      <path d="M232 27 L238 33 L232 39" fill="none" stroke="#71717a" stroke-width="2"/>
+
+      <rect x="240" y="0" width="202" height="66" rx="12" fill="#18181b" stroke="#52525b"/>
+      <text x="258" y="27" fill="#fafafa" font-size="22" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">SMOKE</text>
+      <text x="258" y="50" fill="#a1a1aa" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">when declared</text>
+    </g>
+
+    <g transform="translate(92 300)">
+      <line x1="0" y1="0" x2="0" y2="22" stroke="#71717a" stroke-width="2"/>
+      <path d="M-6 16 L0 22 L6 16" fill="none" stroke="#71717a" stroke-width="2"/>
+      <text x="20" y="25" fill="#d4d4d8" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">operator-authorized merge</text>
+    </g>
+  </g>
+</svg>
