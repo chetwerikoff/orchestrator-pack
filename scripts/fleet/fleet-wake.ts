@@ -140,6 +140,7 @@ export interface FleetAlarmTickOptions {
   readonly listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
   readonly listOpenPulls?: (repository: string) => readonly OpenPullHead[];
   readonly checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
+  readonly supervisedPullOwner?: (pull: OpenPullHead, panes: readonly FleetPaneObservation[]) => FleetPaneObservation | undefined;
 }
 
 export type FleetAlarmTickResult =
@@ -446,10 +447,64 @@ function envelopeOwner(cwd: string, panes: readonly FleetPaneObservation[]): Fle
 }
 
 function pullOwner(pull: OpenPullHead, panes: readonly FleetPaneObservation[]): FleetPaneObservation | undefined {
-  const onBranch = onlyPane(panes.filter((pane) => pane.branch === `refs/heads/${pull.ref}`));
-  if (onBranch || !pull.issue) return onBranch;
-  const name = new RegExp(`^[a-z][a-z0-9-]*-${pull.issue}$`, 'iu');
-  return onlyPane(panes.filter((pane) => pane.worktreePath && name.test(basename(pane.worktreePath))));
+  return onlyPane(panes.filter((pane) => pane.branch === `refs/heads/${pull.ref}`));
+}
+
+type OrcaReceipt = { readonly ok?: boolean; readonly result?: Record<string, unknown> };
+function orcaReceipt(executor: OrcaExecutor, args: string[]): Record<string, unknown> | undefined {
+  const result = executor(args);
+  if (!result.ok) return undefined;
+  try {
+    const receipt = JSON.parse(result.stdout) as OrcaReceipt;
+    return receipt.ok === true && receipt.result ? receipt.result : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function supervisedOwnerForPull(
+  pull: OpenPullHead,
+  panes: readonly FleetPaneObservation[],
+  executor: OrcaExecutor,
+): FleetPaneObservation | undefined {
+  if (!pull.issue) return undefined;
+  const runs = orcaReceipt(executor, ['orchestration', 'run-list', '--json'])?.runs;
+  if (!Array.isArray(runs)) return undefined;
+  const candidates: Array<{ taskId: string }> = [];
+  for (const value of runs) {
+    if (!value || typeof value !== 'object') continue;
+    const run = value as { id?: unknown; objective?: unknown };
+    if (typeof run.id !== 'string' || typeof run.objective !== 'string') continue;
+    if (!new RegExp(`(?:#${pull.issue}\\b|issues/${pull.issue}\\b)`, 'iu').test(run.objective)) continue;
+    const tasks = orcaReceipt(executor, ['orchestration', 'task-list', '--run', run.id, '--json'])?.tasks;
+    if (!Array.isArray(tasks)) continue;
+    for (const taskValue of tasks) {
+      if (!taskValue || typeof taskValue !== 'object') continue;
+      const task = taskValue as { id?: unknown; spec?: unknown; status?: unknown };
+      if (typeof task.id !== 'string' || typeof task.spec !== 'string' || task.status !== 'dispatched') continue;
+      if (new RegExp(`(?:#${pull.issue}\\b|issues/${pull.issue}\\b)`, 'iu').test(task.spec)) {
+        candidates.push({ taskId: task.id });
+      }
+    }
+  }
+  const owners: FleetPaneObservation[] = [];
+  for (const candidate of candidates) {
+    const dispatch = orcaReceipt(executor, ['orchestration', 'dispatch-show', '--task', candidate.taskId, '--json'])?.dispatch as
+      { id?: unknown; status?: unknown; assignee_handle?: unknown } | undefined;
+    if (dispatch?.status !== 'dispatched' || typeof dispatch.id !== 'string') continue;
+    const worker = orcaReceipt(executor, ['orchestration', 'worker-show', '--dispatch', dispatch.id, '--json']);
+    if (!worker) continue;
+    const workerDispatch = worker.dispatch as { taskId?: unknown; status?: unknown } | undefined;
+    const terminal = worker.terminal as { handle?: unknown; worktreePath?: unknown; branch?: unknown } | undefined;
+    const observation = worker.observation as { status?: unknown; exactWorker?: unknown } | undefined;
+    if (workerDispatch?.taskId !== candidate.taskId || workerDispatch.status !== 'dispatched'
+      || observation?.status !== 'live' || observation.exactWorker !== true
+      || typeof terminal?.handle !== 'string' || terminal.handle !== dispatch.assignee_handle) continue;
+    const pane = panes.find((item) => item.handle === terminal.handle
+      && item.worktreePath === terminal.worktreePath && item.branch === terminal.branch);
+    if (pane) owners.push(pane);
+  }
+  return owners.length === 1 ? owners[0] : undefined;
 }
 
 /**
@@ -476,11 +531,12 @@ async function wakePanesOnEvents(
   const repository = options.config.chatScope?.repository;
   if (repository && observations.some(idlePane)) {
     const finishedAt = options.checkRunsFinishedAt ?? checkRunsFinishedAt;
+    const ownerForPull = options.supervisedPullOwner ?? ((candidate, panes) => supervisedOwnerForPull(candidate, panes, executor));
     for (const pull of (options.listOpenPulls ?? listOpenPullHeads)(repository)) {
-      const pane = pullOwner(pull, observations);
-      if (!pane || !idlePane(pane)) continue;
       const at = finishedAt(repository, pull.sha);
       if (at === undefined) continue;
+      const pane = pull.issue ? ownerForPull(pull, observations) : pullOwner(pull, observations);
+      if (!pane || !idlePane(pane)) continue;
       // A re-run of failed checks on the same head is a new event.
       const key = `ci:${pull.number}:${pull.sha}:${at}`;
       if (store.hasParkedWakeEvent(key)) continue;

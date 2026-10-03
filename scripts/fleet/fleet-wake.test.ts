@@ -16,7 +16,7 @@ import {
   type OpenPullHead,
   type TerminalEnvelopeEvent,
 } from './fleet-wake.ts';
-import { FileFleetStateStore, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
+import { FileFleetStateStore, type FleetPaneObservation, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
 
 class MemoryWakeStore implements FleetWakeStateStore {
   readonly root = '/xdg/fleet-sweep/project';
@@ -85,23 +85,27 @@ async function tick(input: {
   store?: MemoryWakeStore;
   config?: FleetWakeConfig;
   terminals?: readonly FleetTerminal[];
+  executor?: OrcaExecutor;
   listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
   listOpenPulls?: (repository: string) => readonly OpenPullHead[];
   checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
+  supervisedPullOwner?: (pull: OpenPullHead, panes: readonly FleetPaneObservation[]) => FleetPaneObservation | undefined;
 }) {
   const calls: string[][] = [];
   const logs: string[] = [];
   const sleeps: number[] = [];
   const store = input.store ?? new MemoryWakeStore();
+  const baseExecutor = input.executor ?? fakeOrca(input.screens, [], input.terminals);
   const result = await runFleetAlarmTick({
     config: input.config ?? config(),
-    executor: fakeOrca(input.screens, calls, input.terminals),
+    executor: (args) => { calls.push([...args]); return baseExecutor(args); },
     store,
     sleepMs: async (ms) => { sleeps.push(ms); },
     log: (line) => { logs.push(line); },
     listTerminalEnvelopes: input.listTerminalEnvelopes ?? (() => []),
     ...(input.listOpenPulls ? { listOpenPulls: input.listOpenPulls } : {}),
     ...(input.checkRunsFinishedAt ? { checkRunsFinishedAt: input.checkRunsFinishedAt } : {}),
+    ...(input.supervisedPullOwner ? { supervisedPullOwner: input.supervisedPullOwner } : {}),
   });
   return { result, calls, logs, sleeps, store };
 }
@@ -301,35 +305,77 @@ describe('fleet alarm', () => {
       { handle: 'one', title: 'OpenCode manager one', worktreePath: `${workerBase}/one`, branch: 'refs/heads/fix/a' },
       { handle: 'mgr', title: 'OpenCode manager', worktreePath: `${workerBase}/leopoker-mgr-2317`, branch: 'refs/heads/chetwerikoff/mgr-2317' },
     ];
-    const wakeConfig = config({
-      chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'chetwerikoff/orchestrator-pack' },
-    });
+    const wakeConfig = config({ chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'chetwerikoff/orchestrator-pack' } });
     const listOpenPulls = () => [
       { number: 7, ref: 'fix/a', sha: headA },
       { number: 8, ref: 'issue-2317-split', sha: headB, issue: 2317 },
     ];
     const screens = { coord: 'idle', one: 'PARKED on any text', mgr: 'done for now' };
+    const supervisedPullOwner = (pull: OpenPullHead): FleetPaneObservation | undefined => pull.issue === 2317
+      ? { handle: 'mgr', title: 'OpenCode manager', state: 'PARKED', lines: ['PARKED'], worktreePath: `${workerBase}/leopoker-mgr-2317`, branch: 'refs/heads/chetwerikoff/mgr-2317' }
+      : undefined;
 
-    const first = await tick({
-      screens, store, config: wakeConfig, terminals: owned, listOpenPulls,
-      checkRunsFinishedAt: (_repository, sha) => sha === headA ? now - 60_000 : undefined,
-    });
+    const first = await tick({ screens, store, config: wakeConfig, terminals: owned, listOpenPulls, supervisedPullOwner,
+      checkRunsFinishedAt: (_repository, sha) => sha === headA ? now - 60_000 : undefined });
     expect(sendsTo(first.calls, 'one')[0]).toContain(`Wake: CI on ${headA} finished for PR #7`);
     expect(sendsTo(first.calls, 'mgr')).toHaveLength(0);
 
-    const second = await tick({
-      screens, store, config: wakeConfig, terminals: owned, listOpenPulls,
-      checkRunsFinishedAt: () => now - 60_000,
-    });
+    const second = await tick({ screens, store, config: wakeConfig, terminals: owned, listOpenPulls, supervisedPullOwner,
+      checkRunsFinishedAt: () => now - 60_000 });
     expect(sendsTo(second.calls, 'one')).toHaveLength(0);
     expect(sendsTo(second.calls, 'mgr')[0]).toContain(`Wake: CI on ${headB} finished for PR #8`);
 
-    const rerun = await tick({
-      screens, store, config: wakeConfig, terminals: owned, listOpenPulls,
-      checkRunsFinishedAt: (_repository, sha) => sha === headA ? now : now - 60_000,
-    });
+    const rerun = await tick({ screens, store, config: wakeConfig, terminals: owned, listOpenPulls, supervisedPullOwner,
+      checkRunsFinishedAt: (_repository, sha) => sha === headA ? now : now - 60_000 });
     expect(sendsTo(rerun.calls, 'one')[0]).toContain(`Wake: CI on ${headA} finished for PR #7`);
     expect(sendsTo(rerun.calls, 'mgr')).toHaveLength(0);
+  });
+
+  it('wakes only the exact Issue manager when the PR ref and manager worktree/branch differ', async () => {
+    const manager: FleetTerminal = {
+      handle: 'mgr', title: 'OpenCode manager', worktreePath: `${workerBase}/issue-145-r08-manager`,
+      branch: 'refs/heads/chetwerikoff/issue-145-r08-manager', agentIdentity: 'opencode',
+    };
+    const foreign: FleetTerminal = {
+      handle: 'foreign', title: 'OpenCode foreign manager', worktreePath: `${workerBase}/other-work`,
+      branch: 'refs/heads/agent/issue-145-bulk-import-passes', agentIdentity: 'opencode',
+    };
+    const pull = { number: 150, ref: 'agent/issue-145-bulk-import-passes', sha: 'c'.repeat(40), issue: 145 };
+    const baseExecutor = fakeOrca({ coord: 'idle', mgr: 'PARKED on CI', foreign: 'working\\nesc interrupt' }, [], [terminals[0]!, manager, foreign]);
+    const executor: OrcaExecutor = (args) => {
+      if (args[0] !== 'orchestration') return baseExecutor(args);
+      if (args[1] === 'run-list') return commandResult(JSON.stringify({ ok: true, result: { runs: [{ id: 'run-145', objective: 'Execute Issue #145' }] } }));
+      if (args[1] === 'task-list') return commandResult(JSON.stringify({ ok: true, result: { tasks: [{ id: 'task-145', spec: 'Issue #145 https://github.com/chetwerikoff/LeoPoker/issues/145', status: 'dispatched' }] } }));
+      if (args[1] === 'dispatch-show') return commandResult(JSON.stringify({ ok: true, result: { dispatch: { id: 'ctx-manager', status: 'dispatched', assignee_handle: 'mgr' } } }));
+      if (args[1] === 'worker-show') return commandResult(JSON.stringify({ ok: true, result: {
+        dispatch: { id: 'ctx-manager', taskId: 'task-145', status: 'dispatched' },
+        terminal: { handle: 'mgr', worktreePath: manager.worktreePath, branch: manager.branch },
+        observation: { status: 'live', exactWorker: true },
+      } }));
+      return commandResult('', false);
+    };
+    const observed = await tick({
+      terminals: [terminals[0]!, manager, foreign], executor,
+      screens: { coord: 'idle', mgr: 'PARKED on CI', foreign: 'working\\nesc interrupt' },
+      config: config({ chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'chetwerikoff/LeoPoker' } }),
+      listOpenPulls: () => [pull],
+      checkRunsFinishedAt: () => Date.parse('2026-10-03T18:00:00Z'),
+    });
+    expect(sendsTo(observed.calls, 'mgr')[0]).toContain(`Wake: CI on ${pull.sha} finished for PR #150`);
+    expect(sendsTo(observed.calls, 'foreign')).toHaveLength(0);
+    expect(observed.calls).toContainEqual(['orchestration', 'dispatch-show', '--task', 'task-145', '--json']);
+    expect(observed.calls).toContainEqual(['orchestration', 'worker-show', '--dispatch', 'ctx-manager', '--json']);
+  });
+
+  it('does not wake a pane when CI check-runs remain pending regardless of later review status', async () => {
+    const observed = await tick({
+      terminals: [terminals[0]!, terminals[1]!],
+      screens: { coord: 'idle', one: 'PARKED on CI' },
+      config: config({ chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'chetwerikoff/LeoPoker' } }),
+      listOpenPulls: () => [{ number: 150, ref: 'agent/issue-145-bulk-import-passes', sha: 'd'.repeat(40), issue: 145 }],
+      checkRunsFinishedAt: () => undefined,
+    });
+    expect(sendsTo(observed.calls, 'one')).toHaveLength(0);
   });
 
   it('honors ORCH_HANDLE, reports no coordinator when unresolved, and skips a failed screen read without throwing', async () => {
