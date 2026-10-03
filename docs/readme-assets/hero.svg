@@ -91,8 +91,8 @@
     </g>
 
     <!-- Completion/recovery wakes the owning manager workflow -->
-    <path d="M422 138 H500 V82 H486 V76" fill="none" stroke="#71717a" stroke-width="1.5" stroke-dasharray="5 5"/>
-    <path d="M480 82 L486 76 L492 82" fill="none" stroke="#71717a" stroke-width="1.5"/>
+    <path d="M422 138 L486 76" fill="none" stroke="#71717a" stroke-width="1.5" stroke-dasharray="5 5"/>
+    <path d="M477 77 L486 76 L485 85" fill="none" stroke="#71717a" stroke-width="1.5"/>
 
     <text x="0" y="208" fill="#71717a" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.4">TASK CREATION</text>
     <text x="0" y="236" fill="#e4e4e7" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">BRIEF  &gt;  GPT AUTHOR  &gt;  INDEPENDENT REVIEWS</text>
