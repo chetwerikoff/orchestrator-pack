@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
   <title id="title">orchestrator-pack</title>
-  <desc id="desc">A role-separated, ChatGPT-centered control plane. Operator intent flows through an architect into orchestrator and manager supervision, then into tracked ChatGPT turns. Task creation moves through GPT authoring and independent reviews to an accepted GitHub Issue; tracked GPT turns wake their owning workflow on completion or error.</desc>
+  <desc id="desc">A role-separated, ChatGPT-centered control plane. Operator intent flows through an architect into the orchestrator. The orchestrator supervises managers, and managers own tracked GPT turns. Task creation moves through GPT authoring and independent reviews to an accepted GitHub Issue; tracked GPT turns wake their owning workflow on completion or error.</desc>
 
   <rect width="1200" height="500" rx="28" fill="#09090b"/>
   <rect x="1" y="1" width="1198" height="498" rx="27" fill="none" stroke="#27272a" stroke-width="2"/>
@@ -13,7 +13,7 @@
     <line x1="0" y1="146" x2="480" y2="146" stroke="#3f3f46"/>
 
     <text x="0" y="184" fill="#a1a1aa" font-size="18" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">Orchestrator keeps whole-task continuity.</text>
-    <text x="0" y="214" fill="#a1a1aa" font-size="18" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">Manager owns resumable workflows.</text>
+    <text x="0" y="214" fill="#a1a1aa" font-size="18" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">Managers own resumable workflows.</text>
     <text x="0" y="244" fill="#a1a1aa" font-size="18" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">Tracked GPT turns wake owners on end / error.</text>
 
     <text x="0" y="292" fill="#71717a" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.4">ROLE SYSTEM</text>
@@ -26,7 +26,7 @@
       <text x="196" y="23" text-anchor="middle" fill="#fafafa" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">ORCHESTRATOR</text>
 
       <rect x="280" y="0" width="104" height="36" rx="18" fill="#18181b" stroke="#52525b"/>
-      <text x="332" y="23" text-anchor="middle" fill="#fafafa" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">MANAGER</text>
+      <text x="332" y="23" text-anchor="middle" fill="#fafafa" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">MANAGERS</text>
 
       <rect x="0" y="48" width="92" height="36" rx="18" fill="#18181b" stroke="#3f3f46"/>
       <text x="46" y="71" text-anchor="middle" fill="#e4e4e7" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">WORKER</text>
@@ -41,44 +41,47 @@
   <g transform="translate(610 30)">
     <text x="0" y="0" fill="#71717a" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.4">CONTROL FLOW</text>
 
+    <!-- Row 1: Operator -> Architect -> Orchestrator -->
     <g transform="translate(0 20)">
-      <rect x="0" y="0" width="96" height="56" rx="11" fill="#18181b" stroke="#52525b"/>
-      <text x="48" y="24" text-anchor="middle" fill="#fafafa" font-size="15" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">OPERATOR</text>
-      <text x="48" y="43" text-anchor="middle" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">intent</text>
+      <rect x="34" y="0" width="102" height="56" rx="11" fill="#18181b" stroke="#52525b"/>
+      <text x="85" y="24" text-anchor="middle" fill="#fafafa" font-size="15" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">OPERATOR</text>
+      <text x="85" y="43" text-anchor="middle" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">intent</text>
 
-      <line x1="96" y1="28" x2="116" y2="28" stroke="#71717a" stroke-width="2"/>
-      <path d="M110 22 L116 28 L110 34" fill="none" stroke="#71717a" stroke-width="2"/>
+      <line x1="136" y1="28" x2="158" y2="28" stroke="#71717a" stroke-width="2"/>
+      <path d="M152 22 L158 28 L152 34" fill="none" stroke="#71717a" stroke-width="2"/>
 
-      <rect x="118" y="0" width="108" height="56" rx="11" fill="#18181b" stroke="#71717a"/>
-      <text x="172" y="24" text-anchor="middle" fill="#fafafa" font-size="15" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">ARCHITECT</text>
-      <text x="172" y="43" text-anchor="middle" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">draft / spec</text>
+      <rect x="160" y="0" width="116" height="56" rx="11" fill="#18181b" stroke="#71717a"/>
+      <text x="218" y="24" text-anchor="middle" fill="#fafafa" font-size="15" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">ARCHITECT</text>
+      <text x="218" y="43" text-anchor="middle" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">draft / spec</text>
 
-      <line x1="226" y1="28" x2="246" y2="28" stroke="#71717a" stroke-width="2"/>
-      <path d="M240 22 L246 28 L240 34" fill="none" stroke="#71717a" stroke-width="2"/>
+      <line x1="276" y1="28" x2="298" y2="28" stroke="#71717a" stroke-width="2"/>
+      <path d="M292 22 L298 28 L292 34" fill="none" stroke="#71717a" stroke-width="2"/>
 
-      <rect x="248" y="0" width="146" height="56" rx="11" fill="#18181b" stroke="#a1a1aa"/>
-      <text x="321" y="24" text-anchor="middle" fill="#fafafa" font-size="15" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">ORCHESTRATOR</text>
-      <text x="321" y="43" text-anchor="middle" fill="#a1a1aa" font-size="11" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">continuity / recovery</text>
-
-      <line x1="394" y1="28" x2="414" y2="28" stroke="#71717a" stroke-width="2"/>
-      <path d="M408 22 L414 28 L408 34" fill="none" stroke="#71717a" stroke-width="2"/>
-
-      <rect x="416" y="0" width="108" height="56" rx="11" fill="#18181b" stroke="#a1a1aa"/>
-      <text x="470" y="24" text-anchor="middle" fill="#fafafa" font-size="15" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">MANAGER</text>
-      <text x="470" y="43" text-anchor="middle" fill="#a1a1aa" font-size="11" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">workflow</text>
+      <rect x="300" y="0" width="190" height="56" rx="11" fill="#18181b" stroke="#a1a1aa"/>
+      <text x="395" y="24" text-anchor="middle" fill="#fafafa" font-size="15" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">ORCHESTRATOR</text>
+      <text x="395" y="43" text-anchor="middle" fill="#a1a1aa" font-size="11" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">continuity / recovery</text>
     </g>
 
-    <path d="M470 76 V96 H364 V108" fill="none" stroke="#71717a" stroke-width="2"/>
-    <path d="M358 102 L364 108 L370 102" fill="none" stroke="#71717a" stroke-width="2"/>
+    <!-- Row 2: Managers -> Tracked GPT Turns -->
+    <path d="M395 76 V94 H150 V108" fill="none" stroke="#71717a" stroke-width="2"/>
+    <path d="M144 102 L150 108 L156 102" fill="none" stroke="#71717a" stroke-width="2"/>
 
-    <g transform="translate(204 108)">
-      <rect width="320" height="60" rx="12" fill="#18181b" stroke="#d4d4d8"/>
-      <text x="160" y="25" text-anchor="middle" fill="#fafafa" font-size="20" font-weight="650" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">TRACKED CHATGPT TURN</text>
-      <text x="160" y="46" text-anchor="middle" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">invocation · envelope · recover · wake</text>
+    <g transform="translate(0 108)">
+      <rect x="70" y="0" width="160" height="60" rx="12" fill="#18181b" stroke="#a1a1aa"/>
+      <text x="150" y="25" text-anchor="middle" fill="#fafafa" font-size="18" font-weight="650" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">MANAGERS</text>
+      <text x="150" y="46" text-anchor="middle" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">resumable workflows</text>
+
+      <line x1="230" y1="30" x2="252" y2="30" stroke="#71717a" stroke-width="2"/>
+      <path d="M246 24 L252 30 L246 36" fill="none" stroke="#71717a" stroke-width="2"/>
+
+      <rect x="254" y="0" width="270" height="60" rx="12" fill="#18181b" stroke="#d4d4d8"/>
+      <text x="389" y="25" text-anchor="middle" fill="#fafafa" font-size="19" font-weight="650" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">TRACKED GPT TURNS</text>
+      <text x="389" y="46" text-anchor="middle" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">invocation · envelope · recover · wake</text>
     </g>
 
-    <path d="M524 138 H544 V82 H486 V76" fill="none" stroke="#71717a" stroke-width="1.5" stroke-dasharray="5 5"/>
-    <path d="M480 82 L486 76 L492 82" fill="none" stroke="#71717a" stroke-width="1.5"/>
+    <!-- Terminal turn result wakes the owning manager workflow -->
+    <path d="M524 138 H544 V92 H206 V108" fill="none" stroke="#71717a" stroke-width="1.5" stroke-dasharray="5 5"/>
+    <path d="M200 102 L206 108 L212 102" fill="none" stroke="#71717a" stroke-width="1.5"/>
 
     <text x="0" y="208" fill="#71717a" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.4">TASK CREATION</text>
     <text x="0" y="236" fill="#e4e4e7" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">BRIEF  &gt;  GPT AUTHOR  &gt;  INDEPENDENT REVIEWS</text>
