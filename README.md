@@ -19,7 +19,8 @@ The concrete agent runtime can be replaced; the task, review, and evidence contr
 ## Why it is different
 
 - **Reviewed tasks.** Every task is a GitHub Issue that passes independent GPT review before anyone implements it ([how](#from-an-idea-to-an-accepted-issue)).
-- **Separate roles.** Orchestrator, manager, worker, and reviewer each own a distinct part of the work instead of one agent doing everything.
+- **Multiple agents, different lenses.** A spec is challenged by several independent GPT reviewers, a Claude architectural lens, and optionally Codex — not by the agent that wrote it ([how](#architect-and-review-lenses)).
+- **Separate roles.** Architect, orchestrator, manager, worker, and reviewer each own a distinct part of the work instead of one agent doing everything.
 - **ChatGPT as a tracked transport.** Each GPT turn is recorded, can be resumed after a failure, and is never blindly re-sent.
 - **Automatic wakeups.** When a GPT turn finishes or stalls, the workflow that owns it is woken up — no human needs to watch the browser.
 - **GitHub is the truth.** What the chat says is advisory; progress is decided by the live Issue/PR state, current-head CI, and review.
@@ -33,7 +34,7 @@ The concrete agent runtime can be replaced; the task, review, and evidence contr
 | **Manager** | Owns one resumable workflow end to end: create an Issue, execute it, or review a PR. |
 | **Worker** | Implements one bounded change within the declared scope. |
 | **Reviewer** | Independently reviews the task or the PR and publishes findings. |
-| **Architect** | One-off design and specification help. |
+| **Architect** | Decides what must be true, in what order, at which boundaries, and how success is proved; read-only unless explicitly authorized to edit. |
 
 ## From an idea to an accepted Issue
 
@@ -50,6 +51,21 @@ Task creation is a workflow of its own, not a note written before the real work:
 - **Review depth scales with complexity.** A simple task gets one review; a complex one gets several parallel GPT reviews plus a Claude review ([tiers](docs/tiering.md)).
 - **Acceptance is a label.** Only when the required reviews and answers line up does the Issue get `spec-review:accepted` and become ready to execute.
 
+## Architect and review lenses
+
+The architect designs the task, not the code. Before proposing a non-trivial contract it lays out at least three materially different options, picks the cheapest one that is sufficient, and names its risks. Implementation details — names, file layout, libraries, tests — are left to the implementer within the published constraints.
+
+A spec is never judged only by its author. Each lens comes from a separate agent in a fresh context:
+
+| Lens | Agent | When |
+| --- | --- | --- |
+| Independent architectural reviews, run in parallel | GPT, each in a new chat | complex tasks (T2, T3) |
+| Architectural lens from a different model family | Claude | the most complex tasks (T3) |
+| Final architectural review | GPT | every task |
+| Adversarial challenge of a draft | Codex ([`adversarial-draft-review`](.cursor/skills/adversarial-draft-review/SKILL.md)) or GPT ([`discuss-with-gpt`](.cursor/skills/discuss-with-gpt/SKILL.md)) | on request, before publishing |
+
+Reviewers publish their own findings on the Issue; nobody merges, rewrites, or silently drops another reviewer's findings.
+
 ## Main workflows
 
 | Skill | Use it to |
@@ -57,7 +73,7 @@ Task creation is a workflow of its own, not a note written before the real work:
 | [`create-issue-draft`](.cursor/skills/create-issue-draft/SKILL.md) | Turn a brief into an accepted Issue (GPT author + independent reviews, depth by [tier](docs/tiering.md)). |
 | [`execute-issue-with-gpt`](.cursor/skills/execute-issue-with-gpt/SKILL.md) | Implement an accepted Issue through GPT, then drive the PR through review, CI, and smoke. |
 | [`review-pr-with-gpt`](.cursor/skills/review-pr-with-gpt/SKILL.md) | Review an existing PR on its current head. |
-| [`discuss-with-gpt`](.cursor/skills/discuss-with-gpt/SKILL.md) | Challenge a draft or idea with GPT. |
+| [`discuss-with-gpt`](.cursor/skills/discuss-with-gpt/SKILL.md) / [`adversarial-draft-review`](.cursor/skills/adversarial-draft-review/SKILL.md) | Challenge a draft or idea with GPT or Codex. |
 
 Merge is never the implementer's decision: it requires operator authority.
 
