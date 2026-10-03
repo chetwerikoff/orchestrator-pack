@@ -8,6 +8,7 @@ export interface ChatBinding {
   readonly schema: 'chat-binding/v1';
   readonly conversation_url: string;
   readonly worktree: string;
+  readonly terminal_handle?: string;
   readonly updated_at: string;
 }
 
@@ -28,6 +29,12 @@ export function chatBindingWorktree(env: NodeJS.ProcessEnv = process.env): strin
   return env[CHAT_BINDING_WORKTREE_ENV]?.trim() || process.cwd();
 }
 
+// Routing data only: the Orca terminal of the launching agent, which may run
+// its turns with --cwd on another worktree.
+export function launchingTerminalHandle(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.ORCA_TERMINAL_HANDLE?.trim() || undefined;
+}
+
 export function conversationIdFromUrl(url: string): string | undefined {
   return CONVERSATION_ID_RE.exec(url)?.[1]?.toLowerCase();
 }
@@ -41,10 +48,12 @@ export function writeChatBinding(
   if (!id) return;
   const root = chatBindingsRoot(env);
   mkdirSync(root, { recursive: true });
+  const handle = launchingTerminalHandle(env);
   const binding: ChatBinding = {
     schema: 'chat-binding/v1',
     conversation_url: conversationUrl.split(/[?#]/)[0]!,
     worktree: resolve(worktree),
+    ...(handle ? { terminal_handle: handle } : {}),
     updated_at: new Date().toISOString(),
   };
   const target = join(root, `${id}.json`);

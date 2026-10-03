@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   FileFleetWakeStateStore,
+  bannerOwnerPane,
   listTerminalEnvelopes,
   fleetAlarmMessage,
   managerBannerMessage,
@@ -251,6 +252,26 @@ describe('fleet alarm', () => {
       listTerminalEnvelopes,
     });
     expect(sendsTo(repeated.calls, 'one')).toHaveLength(0);
+  });
+
+  it('routes a chat banner to the launching pane named by its binding, whatever worktree the turn ran in', () => {
+    const fixWorktree = `${workerBase}/issue-132-ruff-format-fix`;
+    const terminals: FleetTerminal[] = [
+      { handle: 'coord', title: 'Cursor coordinator', worktreePath: primary },
+      { handle: 'mgr', title: 'OpenCode manager', worktreePath: `${workerBase}/leopoker-mgr-132`, agentIdentity: 'opencode' },
+      { handle: 'sh1', title: 'shell', worktreePath: fixWorktree },
+      { handle: 'sh2', title: 'shell', worktreePath: fixWorktree },
+    ];
+    const url = 'https://chatgpt.com/c/6ac03300-098c-83ec-a6d5-f9d0cec30a5f';
+    const binding = { schema: 'chat-binding/v1' as const, conversation_url: url, worktree: fixWorktree, updated_at: '2026-10-03T01:46:20Z' };
+    expect(bannerOwnerPane({ url }, terminals, config(), () => binding)).toBeUndefined();
+    expect(bannerOwnerPane({ url }, terminals, config(), () => ({ ...binding, terminal_handle: 'mgr' }))?.handle).toBe('mgr');
+  });
+
+  it('wakes the launching pane named by a GPT terminal envelope even when the turn ran in another worktree', async () => {
+    const listTerminalEnvelopes = () => [{ path: '/tmp/opencode/fix-terminal.json', invocationId: 'inv-h', cwd: '/elsewhere/fix', terminalHandle: 'one' }];
+    const observed = await tick({ screens: { coord: 'idle', one: 'PARKED on anything', two: 'working\nesc interrupt' }, listTerminalEnvelopes });
+    expect(sendsTo(observed.calls, 'one')[0]).toContain('Wake: GPT turn inv-h ended, read /tmp/opencode/fix-terminal.json');
   });
 
   it('lists launcher terminal envelopes that name their worktree', () => {

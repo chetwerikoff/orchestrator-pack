@@ -488,9 +488,11 @@ describe('Issue #2359 review chat binding', () => {
     const manager = join(root, 'leopoker-mgr-134');
     vi.stubEnv('HOME', join(root, 'home'));
     vi.stubEnv('OPK_CHAT_BINDING_WORKTREE', manager);
+    vi.stubEnv('ORCA_TERMINAL_HANDLE', 'term_manager');
     try {
       recordChatBindings(`${JSON.stringify({ schema: 'turn-result/v1', conversation_id: chatUrl })}\n`);
       expect(readChatBinding(chatUrl)?.worktree).toBe(manager);
+      expect(readChatBinding(chatUrl)?.terminal_handle).toBe('term_manager');
     } finally {
       vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });

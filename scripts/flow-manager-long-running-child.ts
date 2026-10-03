@@ -26,6 +26,7 @@ import {
   type BrowserTurnCancellationReceipt,
 } from './chatgpt-browser-turn/state-light-cancellation.ts';
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
+import { launchingTerminalHandle } from './chatgpt-browser-turn/chat-bindings.ts';
 import {
   parseObservationHeartbeatLine,
   resolveBrowserTurnLivenessTiming,
@@ -77,8 +78,9 @@ export interface TerminalEnvelope {
   readonly recovery_available: boolean;
   readonly conversation_locator?: string;
   readonly diagnostics?: Record<string, unknown>;
-  // Launching worktree; fleet-wake wakes that worktree's pane on this envelope.
+  // Launching worktree and agent terminal; fleet-wake wakes that pane on this envelope.
   readonly cwd?: string;
+  readonly terminal_handle?: string;
 }
 
 const DEFAULT_CANDIDATE_GRACE_MS = 5_000;
@@ -638,7 +640,8 @@ function scanArtifactForCanaries(path: string, canaries: readonly string[]): str
 
 async function publishEnvelope(config: LaunchConfig, envelope: TerminalEnvelope): Promise<boolean> {
   try {
-    const routed: TerminalEnvelope = { ...envelope, cwd: resolve(config.cwd) };
+    const handle = launchingTerminalHandle();
+    const routed: TerminalEnvelope = { ...envelope, cwd: resolve(config.cwd), ...(handle ? { terminal_handle: handle } : {}) };
     atomicCreateJson(config.terminalEnvelopePath, routed as unknown as Record<string, unknown>, 'envelope');
     return true;
   } catch {
