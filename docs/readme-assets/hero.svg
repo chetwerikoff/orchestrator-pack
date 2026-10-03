@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
   <title id="title">orchestrator-pack</title>
-  <desc id="desc">A role-separated, ChatGPT-centered control plane. Operator intent flows through an architect into the orchestrator. The orchestrator supervises managers, and managers own tracked GPT turns. Task creation moves through GPT authoring and independent reviews to an accepted GitHub Issue; tracked GPT turns wake their owning workflow on completion or error.</desc>
+  <desc id="desc">A role-separated, ChatGPT-centered control plane. A user provides intent to an architect, then the orchestrator supervises managers, and managers own tracked GPT turns. Task creation moves through GPT authoring and independent reviews to an accepted GitHub Issue; tracked GPT turns wake their owning workflow on completion or error.</desc>
 
   <rect width="1200" height="500" rx="28" fill="#09090b"/>
   <rect x="1" y="1" width="1198" height="498" rx="27" fill="none" stroke="#27272a" stroke-width="2"/>
@@ -38,73 +38,66 @@
     <text x="0" y="426" fill="#71717a" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">distinct ownership · shared evidence · no role collapse</text>
   </g>
 
-  <g transform="translate(610 30)">
+  <g transform="translate(560 30)">
     <text x="0" y="0" fill="#71717a" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.4">CONTROL FLOW</text>
 
-    <!-- Row 1: Operator -> Architect -> Orchestrator -->
-    <g transform="translate(0 20)">
-      <rect x="34" y="0" width="102" height="56" rx="11" fill="#18181b" stroke="#52525b"/>
-      <text x="85" y="24" text-anchor="middle" fill="#fafafa" font-size="15" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">OPERATOR</text>
-      <text x="85" y="43" text-anchor="middle" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">intent</text>
+    <!-- User -> Architect -> Orchestrator -> Managers -> Tracked GPT Turns -->
+    <g transform="translate(0 24)">
+      <rect x="0" y="0" width="72" height="64" rx="11" fill="#18181b" stroke="#52525b"/>
+      <text x="36" y="37" text-anchor="middle" fill="#fafafa" font-size="18" font-weight="650" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">USER</text>
 
-      <line x1="136" y1="28" x2="158" y2="28" stroke="#71717a" stroke-width="2"/>
-      <path d="M152 22 L158 28 L152 34" fill="none" stroke="#71717a" stroke-width="2"/>
+      <line x1="72" y1="32" x2="82" y2="32" stroke="#71717a" stroke-width="2"/>
+      <path d="M77 27 L82 32 L77 37" fill="none" stroke="#71717a" stroke-width="2"/>
 
-      <rect x="160" y="0" width="116" height="56" rx="11" fill="#18181b" stroke="#71717a"/>
-      <text x="218" y="24" text-anchor="middle" fill="#fafafa" font-size="15" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">ARCHITECT</text>
-      <text x="218" y="43" text-anchor="middle" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">draft / spec</text>
+      <rect x="84" y="0" width="100" height="64" rx="11" fill="#18181b" stroke="#71717a"/>
+      <text x="134" y="37" text-anchor="middle" fill="#fafafa" font-size="18" font-weight="650" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">ARCHITECT</text>
 
-      <line x1="276" y1="28" x2="298" y2="28" stroke="#71717a" stroke-width="2"/>
-      <path d="M292 22 L298 28 L292 34" fill="none" stroke="#71717a" stroke-width="2"/>
+      <line x1="184" y1="32" x2="194" y2="32" stroke="#71717a" stroke-width="2"/>
+      <path d="M189 27 L194 32 L189 37" fill="none" stroke="#71717a" stroke-width="2"/>
 
-      <rect x="300" y="0" width="190" height="56" rx="11" fill="#18181b" stroke="#a1a1aa"/>
-      <text x="395" y="24" text-anchor="middle" fill="#fafafa" font-size="15" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">ORCHESTRATOR</text>
-      <text x="395" y="43" text-anchor="middle" fill="#a1a1aa" font-size="11" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">continuity / recovery</text>
-    </g>
+      <rect x="196" y="0" width="142" height="64" rx="11" fill="#18181b" stroke="#a1a1aa"/>
+      <text x="267" y="37" text-anchor="middle" fill="#fafafa" font-size="18" font-weight="650" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">ORCHESTRATOR</text>
 
-    <!-- Row 2: Managers -> Tracked GPT Turns -->
-    <path d="M395 76 V94 H150 V108" fill="none" stroke="#71717a" stroke-width="2"/>
-    <path d="M144 102 L150 108 L156 102" fill="none" stroke="#71717a" stroke-width="2"/>
+      <line x1="338" y1="32" x2="348" y2="32" stroke="#71717a" stroke-width="2"/>
+      <path d="M343 27 L348 32 L343 37" fill="none" stroke="#71717a" stroke-width="2"/>
 
-    <g transform="translate(0 108)">
-      <rect x="70" y="0" width="160" height="60" rx="12" fill="#18181b" stroke="#a1a1aa"/>
-      <text x="150" y="25" text-anchor="middle" fill="#fafafa" font-size="18" font-weight="650" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">MANAGERS</text>
-      <text x="150" y="46" text-anchor="middle" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">resumable workflows</text>
+      <rect x="350" y="0" width="104" height="64" rx="11" fill="#18181b" stroke="#a1a1aa"/>
+      <text x="402" y="37" text-anchor="middle" fill="#fafafa" font-size="18" font-weight="650" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">MANAGERS</text>
 
-      <line x1="230" y1="30" x2="252" y2="30" stroke="#71717a" stroke-width="2"/>
-      <path d="M246 24 L252 30 L246 36" fill="none" stroke="#71717a" stroke-width="2"/>
+      <line x1="454" y1="32" x2="464" y2="32" stroke="#71717a" stroke-width="2"/>
+      <path d="M459 27 L464 32 L459 37" fill="none" stroke="#71717a" stroke-width="2"/>
 
-      <rect x="254" y="0" width="270" height="60" rx="12" fill="#18181b" stroke="#d4d4d8"/>
-      <text x="389" y="25" text-anchor="middle" fill="#fafafa" font-size="19" font-weight="650" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">TRACKED GPT TURNS</text>
-      <text x="389" y="46" text-anchor="middle" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">invocation · envelope · recover · wake</text>
+      <rect x="466" y="0" width="118" height="64" rx="11" fill="#18181b" stroke="#d4d4d8"/>
+      <text x="525" y="27" text-anchor="middle" fill="#fafafa" font-size="17" font-weight="650" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">TRACKED GPT</text>
+      <text x="525" y="47" text-anchor="middle" fill="#fafafa" font-size="17" font-weight="650" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">TURNS</text>
     </g>
 
     <!-- Terminal turn result wakes the owning manager workflow -->
-    <path d="M524 138 H544 V92 H206 V108" fill="none" stroke="#71717a" stroke-width="1.5" stroke-dasharray="5 5"/>
-    <path d="M200 102 L206 108 L212 102" fill="none" stroke="#71717a" stroke-width="1.5"/>
+    <path d="M584 86 H598 V104 H402 V88" fill="none" stroke="#71717a" stroke-width="1.5" stroke-dasharray="5 5"/>
+    <path d="M396 94 L402 88 L408 94" fill="none" stroke="#71717a" stroke-width="1.5"/>
 
-    <text x="0" y="208" fill="#71717a" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.4">TASK CREATION</text>
-    <text x="0" y="236" fill="#e4e4e7" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">BRIEF  &gt;  GPT AUTHOR  &gt;  INDEPENDENT REVIEWS</text>
-    <text x="0" y="260" fill="#e4e4e7" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">DISPOSITION  &gt;  TERMINAL REVIEW  &gt;  ACCEPTED ISSUE</text>
-    <text x="0" y="284" fill="#71717a" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">tiered topology · substantive floor · live GitHub authority</text>
+    <text x="0" y="152" fill="#71717a" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.4">TASK CREATION</text>
+    <text x="0" y="180" fill="#e4e4e7" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">BRIEF  &gt;  GPT AUTHOR  &gt;  INDEPENDENT REVIEWS</text>
+    <text x="0" y="204" fill="#e4e4e7" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">DISPOSITION  &gt;  TERMINAL REVIEW  &gt;  ACCEPTED ISSUE</text>
+    <text x="0" y="228" fill="#71717a" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">tiered topology · substantive floor · live GitHub authority</text>
 
-    <line x1="0" y1="310" x2="524" y2="310" stroke="#3f3f46"/>
+    <line x1="0" y1="254" x2="584" y2="254" stroke="#3f3f46"/>
 
-    <text x="0" y="338" fill="#71717a" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.4">DURABLE AUTHORITY + EXECUTION</text>
+    <text x="0" y="282" fill="#71717a" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.4">DURABLE AUTHORITY + EXECUTION</text>
 
-    <g transform="translate(0 356)">
-      <rect x="0" y="0" width="250" height="78" rx="12" fill="#18181b" stroke="#52525b"/>
-      <text x="18" y="27" fill="#fafafa" font-size="18" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">GITHUB EVIDENCE</text>
-      <text x="18" y="50" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Issue · PR head · review · CI</text>
-      <text x="18" y="67" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">smoke · merge state</text>
+    <g transform="translate(0 300)">
+      <rect x="0" y="0" width="278" height="84" rx="12" fill="#18181b" stroke="#52525b"/>
+      <text x="18" y="29" fill="#fafafa" font-size="18" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">GITHUB EVIDENCE</text>
+      <text x="18" y="54" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Issue · PR head · review · CI</text>
+      <text x="18" y="72" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">smoke · merge state</text>
 
-      <line x1="250" y1="39" x2="276" y2="39" stroke="#71717a" stroke-width="2"/>
-      <path d="M270 33 L276 39 L270 45" fill="none" stroke="#71717a" stroke-width="2"/>
+      <line x1="278" y1="42" x2="304" y2="42" stroke="#71717a" stroke-width="2"/>
+      <path d="M298 36 L304 42 L298 48" fill="none" stroke="#71717a" stroke-width="2"/>
 
-      <rect x="278" y="0" width="246" height="78" rx="12" fill="#18181b" stroke="#52525b"/>
-      <text x="296" y="27" fill="#fafafa" font-size="18" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">RUNTIME / WORKERS</text>
-      <text x="296" y="50" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">declared scope</text>
-      <text x="296" y="67" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">{ runtime, id, generation }</text>
+      <rect x="306" y="0" width="278" height="84" rx="12" fill="#18181b" stroke="#52525b"/>
+      <text x="324" y="29" fill="#fafafa" font-size="18" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">RUNTIME / WORKERS</text>
+      <text x="324" y="54" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">declared scope</text>
+      <text x="324" y="72" fill="#a1a1aa" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">{ runtime, id, generation }</text>
     </g>
   </g>
 </svg>
