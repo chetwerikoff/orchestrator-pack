@@ -2,178 +2,60 @@
   <img src="./docs/readme-assets/hero.svg" width="100%" alt="orchestrator-pack role-separated control plane: architect, orchestrator, manager, worker, and reviewer have distinct responsibilities; task creation flows from brief through GPT authoring and independent review to an accepted GitHub Issue; tracked ChatGPT turns wake their owning workflow">
 </p>
 
-`orchestrator-pack` is the governance and control layer around autonomous software work — including a **tracked, resumable wrapper around ChatGPT** rather than a fire-and-forget prompt loop.
+`orchestrator-pack` is a governance layer for autonomous software work. It turns a task idea into a reviewed GitHub Issue, drives implementation and review through tracked ChatGPT turns, and treats only GitHub evidence (Issue, PR head, review, CI, smoke) as proof that the work is done.
 
-Its current workflows are **role-separated, manager-driven, and ChatGPT-centered**:
+The concrete agent runtime can be replaced; the task, review, and evidence contracts stay the same.
 
-**Operator → Orchestrator → Manager → tracked ChatGPT turn → GitHub evidence**
+```text
+[Operator] --> [Orchestrator] --> [Manager] --> [ChatGPT turn]
+                keeps the task     owns one         authors, reviews,
+                alive, recovers    workflow         implements
+                                       |
+                                       v
+                              [GitHub evidence]
+                     Issue - PR head - review - CI - smoke
+```
 
-The **orchestrator/supervisor** keeps whole-task continuity and supervises manager Tasks. A **manager** owns one concrete resumable workflow — task authoring, Issue execution, PR review, or another GPT-driven job. **ChatGPT** performs the author/reviewer/implementation turns through a tracked Browser-GPT transport. Runtime adapters and workers sit underneath that control plane and execute only under exact identity and scope.
+## Why it is different
 
-The concrete runtime can change. The task, supervision, ChatGPT transport, and evidence contracts should not have to.
+- **Separate roles.** Orchestrator, manager, worker, and reviewer each own a distinct part of the work instead of one agent doing everything.
+- **Reviewed tasks.** Every task is a GitHub Issue that passes independent GPT review before anyone implements it.
+- **ChatGPT as a tracked transport.** Each GPT turn is recorded, can be resumed after a failure, and is never blindly re-sent.
+- **Automatic wakeups.** When a GPT turn finishes or stalls, the workflow that owns it is woken up — no human needs to watch the browser.
+- **GitHub is the truth.** What the chat says is advisory; progress is decided by the live Issue/PR state, current-head CI, and review.
+- **Runtime-neutral.** Effects go through a registered runtime adapter (Orca today) and an exact runtime identity.
 
-## What makes the pack different
+## Roles
 
-| Feature | What it provides |
+| Role | Responsibility |
 | --- | --- |
-| **Role-separated orchestration** | Architect, orchestrator, manager, worker, and reviewer have different ownership boundaries instead of collapsing into one “agent”. |
-| **Governed task creation** | A brief or draft is turned into an accepted live GitHub Issue through GPT authoring, tier classification, independent architecture review, author dispositions, substantive-floor validation, and terminal review. |
-| **ChatGPT as managed transport** | Each tracked Browser-GPT turn has an input snapshot, invocation identity, owned conversation/output, and an authoritative `turn-result/v1` projected into a terminal envelope. |
-| **Turn-completion wakeups** | When a tracked GPT turn launched from a worktree ends, `fleet-wake` can wake the idle pane that owns that worktree so the workflow continues without waiting for a human to notice the browser finished. |
-| **Error/stall routing** | A stalled or product-error ChatGPT conversation is routed directly to its unambiguous owning manager; if no single owner can be resolved, the coordinator/orchestrator receives the fleet alarm and recovery context. |
-| **No blind resend** | Possible or proven prompt delivery preserves the same invocation/conversation and enters observation/harvest recovery; transport timeout or child exit alone never authorizes a duplicate send. |
-| **Durable truth outside chat** | ChatGPT status text is advisory. Live Issue/PR state, current head, review, CI, smoke, and exact runtime identity decide progression and completion. |
-| **Runtime-neutral effects** | Concrete effects go through a registered adapter and exact `{ runtime, id, generation }` identity instead of being coupled to one agent runtime. |
+| **Orchestrator** | Keeps the whole task alive, launches managers, recovers from failures. |
+| **Manager** | Owns one resumable workflow end to end: create an Issue, execute it, or review a PR. |
+| **Worker** | Implements one bounded change within the declared scope. |
+| **Reviewer** | Independently reviews the task or the PR and publishes findings. |
+| **Architect** | One-off design and specification help. |
 
-The result is not one autonomous bot. It is a **supervised software-delivery system with explicit roles, reviewed task specifications, resumable GPT work, and repository-grounded completion**.
+## Main workflows
 
-## Role model
-
-| Role | Owns |
+| Skill | Use it to |
 | --- | --- |
-| **Architect** | One-shot architecture/specification work. It can resolve or sharpen design, but it is not a fleet observer, scheduler, retry service, or lifecycle owner. |
-| **Orchestrator / supervisor** | Top-level ambiguity, whole-task continuity, recovery, reassignment, termination, and architect/operator escalation. It supervises manager Tasks and keeps the parent task alive through recoverable failures. |
-| **Manager** | One complete resumable workflow, not one LLM turn: task creation/review, GPT Issue execution, PR review convergence, CI, required smoke, and truthful handoff. |
-| **Worker** | One bounded implementation through scoped changes, local verification, PR/head publication, required CI, review fixes, required smoke when applicable, and completion handoff. |
-| **Reviewer** | Independent evaluation of the task or implementation. Reviewers own their findings/clean verdicts and do not become implementers unless separately authorized. |
+| [`create-issue-draft`](.cursor/skills/create-issue-draft/SKILL.md) | Turn a brief into an accepted Issue (GPT author + independent reviews, depth by [tier](docs/tiering.md)). |
+| [`execute-issue-with-gpt`](.cursor/skills/execute-issue-with-gpt/SKILL.md) | Implement an accepted Issue through GPT, then drive the PR through review, CI, and smoke. |
+| [`review-pr-with-gpt`](.cursor/skills/review-pr-with-gpt/SKILL.md) | Review an existing PR on its current head. |
+| [`discuss-with-gpt`](.cursor/skills/discuss-with-gpt/SKILL.md) | Challenge a draft or idea with GPT. |
 
-ChatGPT is the reasoning/authoring/implementation transport used inside these workflows; **role ownership remains separate from the model or runtime that happens to execute a turn**.
-
-## From an idea to an accepted Issue
-
-Task creation is a first-class workflow, not a pre-work note-taking step:
-
-**Brief / draft → GPT author → tier classification → independent reviews → author dispositions + revision → substantive floor → terminal review → `spec-review:accepted`**
-
-The live GitHub Issue is the sole task specification and queue entry. The GPT author owns substantive Issue edits and finding dispositions; independent reviewers publish their own revision-named review comments; the manager/orchestrator launches the required review topology, checks live comments and dispositions, runs the substantive floor, and applies `spec-review:accepted` only when the current Issue satisfies the contract.
-
-The review topology scales with task complexity:
-
-| Tier | Create-Issue review topology |
-| --- | --- |
-| **T1** | One independent GPT terminal architectural review. |
-| **T2** | Three independent GPT architectural reviews in parallel, then one GPT terminal architectural review. |
-| **T3** | Three independent GPT architectural reviews, an independent Claude architectural lens, then one GPT terminal architectural review. |
-
-Findings are not silently absorbed by the manager: the **author** accepts them with a correction in a new Issue revision or rejects them with a substantive reason. Only after the required reviews, dispositions, substantive floor, and accepted revision line up does the Issue receive `spec-review:accepted` and become ready for downstream execution.
-
-## How execution flows
-
-1. The **operator** supplies intent or points at an accepted live Issue.
-2. The **orchestrator** resolves top-level ambiguity and launches/resumes the appropriate supervised workflow.
-3. A **manager** owns the complete resumable workflow and selects the required GPT/worker/reviewer path from live repository state.
-4. An **architect** may be used as a one-shot specification/architecture role when the workflow needs that separate design decision.
-5. Implementation is owned either by a bounded **worker** or by the manager-controlled GPT execution path, depending on the selected workflow.
-6. Independent **reviewers** inspect the task or current PR/head and publish their own findings or clean verdicts.
-7. Tracked ChatGPT turns settle through terminal envelopes; completion can wake the owning pane, while stalls/product errors route to the owning manager or, when ambiguous, the orchestrator.
-8. The owning manager/worker reconciles chat output against **live GitHub state**, current-head CI, review authority, and smoke requirements.
-9. The orchestrator keeps whole-task continuity through recoverable failures and escalation boundaries.
-10. Merge remains separately operator-controlled.
-
-## GPT-centered workflows
-
-### Discuss with GPT
-
-[`discuss-with-gpt`](.cursor/skills/discuss-with-gpt/SKILL.md) is the explicit GPT consultation entry point.
-
-It has two different modes:
-
-- **Standalone adversarial review** challenges an existing local artifact through the custom ChatGPT project and keeps its own durable PASS/SHA validation contract.
-- **Tracked create/review work** routes into the canonical manager + Browser-GPT workflows instead of inventing a second transport or retry model.
-
-Brief-only “create a task with GPT” requests route to `create-issue-draft`; ordinary artifact challenge stays in the standalone discuss flow.
-
-### Create or refine an Issue with GPT
-
-[`create-issue-draft`](.cursor/skills/create-issue-draft/SKILL.md) owns GPT-assisted task authoring and acceptance.
-
-- the live GitHub Issue is the only task specification and queue entry;
-- the supervised manager owns the author/reviewer lifecycle;
-- the GPT author owns substantive Issue edits and finding dispositions;
-- independent GPT reviewers publish revision-named review comments;
-- the manager launches review rounds, checks live comments/dispositions, enforces the substantive floor, and applies `spec-review:accepted` only when the current contract is satisfied.
-
-### Execute an Issue through GPT
-
-[`execute-issue-with-gpt`](.cursor/skills/execute-issue-with-gpt/SKILL.md) is the canonical path for explicit “execute / continue this Issue” requests.
-
-The orchestrator/supervisor owns **completion continuity**, not implementation. It launches or resumes the existing manager Task and keeps the parent task alive until current GitHub evidence reaches the workflow's verified terminal state or a genuine external top-level stop exists.
-
-The manager owns one resumable external GPT Issue-execution session, re-reads live Issue state at every turn, drives implementation through ChatGPT, then continues through PR review, CI, required smoke, and handoff.
-
-### Review a PR with GPT
-
-[`review-pr-with-gpt`](.cursor/skills/review-pr-with-gpt/SKILL.md) routes explicit PR review through the same supervised manager model. The pack-owned review runner owns current-head review execution and reconciliation; review chats do not become implementation chats.
-
-## Durable authorities
-
-The conversational hierarchy does not replace repository authority.
-
-| Surface | Authority |
-| --- | --- |
-| **Task** | A published GitHub Issue is the live specification and queue entry. |
-| **Scope** | `denylist` / `allowed-roots` plus task declaration and scope guard bound what may change. |
-| **Runtime effect** | An adapter-produced exact `{ runtime, id, generation }` identity is required. |
-| **Delivery** | The pull request and its current head are the delivery authority. |
-| **Review + CI** | Required review and required CI are evaluated against the exact current PR head. |
-| **Smoke** | When the Issue declares a scenario-bearing smoke plan, the owning workflow publishes the existing same-PR smoke report. |
-| **Merge** | Merge remains operator-controlled; green CI or manager completion does not imply merge authority. |
-
-## What the pack provides
-
-### Supervision and GPT transport
-
-- [`docs/orchestration-runbook.md`](docs/orchestration-runbook.md) defines supervised Tasks, manager/worker lifecycle, recovery, handoff, and completion rules.
-- [`docs/browser-gpt-turn-runbook.md`](docs/browser-gpt-turn-runbook.md) owns one tracked Browser-GPT turn: launch, observation, attribution, terminal result, same-invocation recovery, send/no-resend, and publication mechanics.
-- [`docs/chatgpt-task-execution-runbook.md`](docs/chatgpt-task-execution-runbook.md) composes multiple GPT turns into one managed Issue-execution workflow.
-- [`scripts/fleet/fleet-wake.ts`](scripts/fleet/fleet-wake.ts) turns terminal-envelope completion, CI completion, and ChatGPT stall/error observations into targeted wakes for the owning pane or coordinator.
-- [`scripts/lib/orchestrator-side-process-supervisor.ts`](scripts/lib/orchestrator-side-process-supervisor.ts) supervises the bounded scheduler child and its restart/backoff lifecycle; it is separate from the ChatGPT wake-routing path.
-- [`.cursor/skills/discuss-with-gpt/`](.cursor/skills/discuss-with-gpt) provides the explicit GPT consultation route.
-
-### Task and scope governance
-
-- [`plugins/task-declaration`](plugins/task-declaration) validates Issue scope and declaration contracts (`pack-declare`).
-- [`plugins/scope-guard`](plugins/scope-guard) enforces declared paths before commit and in PR CI.
-- [`plugins/token-chain-ledger`](plugins/token-chain-ledger) records chain/session/token/cost evidence when accounting is enabled.
-
-### Runtime-neutral execution
-
-- [`scripts/runtime/contracts.ts`](scripts/runtime/contracts.ts) defines runtime identities and operations.
-- [`scripts/runtime/registry.ts`](scripts/runtime/registry.ts) owns concrete adapter selection. The current production loader registers Orca as the default adapter.
-- [`scripts/runtime/runtime-cli.ts`](scripts/runtime/runtime-cli.ts) exposes the tracked runtime-neutral command surface.
-- Business logic acts on exact composite runtime identity, not a display name, path, short ID, or stale record.
-
-### Review, CI, and lifecycle evidence
-
-- [`scripts/pack-review-runner.ts`](scripts/pack-review-runner.ts) starts and reconciles pack-owned review runs.
-- [`plugins/codex-pr-reviewer`](plugins/codex-pr-reviewer) provides bounded structured Codex PR review where that reviewer source is selected.
-- [`scripts/pack-worker-report`](scripts/pack-worker-report) is the public worker lifecycle report command.
-- Required CI and review authority stay current-head bound; an existing same-PR smoke PASS may remain reusable across later heads under the current smoke contract.
-
-## Typical managed task
-
-1. The **operator** gives the orchestrator a task or an existing Issue.
-2. The **orchestrator** resolves the exact task and launches/resumes the supervised **manager** Task.
-3. The **manager** reads authoritative GitHub state and selects the owning GPT workflow.
-4. **ChatGPT** authors, reviews, implements, or fixes through tracked turns owned by that workflow.
-5. When a tracked turn ends, its terminal envelope can wake the idle owning pane; stalls/product errors are routed to the owning manager when unambiguous, otherwise to the orchestrator/coordinator.
-6. The manager reconciles the turn against **live Issue/PR state**, not chat self-report; uncertain delivery is recovered on the same invocation rather than blindly resent.
-7. Runtime effects are performed only through declared scope and exact runtime identity.
-8. The manager drives the PR through current-head review and required CI.
-9. If the Issue requires smoke, the owning workflow executes and publishes it.
-10. The orchestrator keeps whole-task continuity until the manager produces a truthful terminal handoff.
-11. Merge happens only when the **operator** separately has the authority and requests it.
+Merge is never the implementer's decision: it requires operator authority.
 
 ## Start here
 
-### Requirements
+Requirements:
 
-- Node **24.x** and npm **11.x** as declared by [`scripts/toolchain/node-version.json`](scripts/toolchain/node-version.json) and `package.json`
+- Node **24.x** and npm **11.x** as declared by [`scripts/toolchain/node-version.json`](scripts/toolchain/node-version.json)
 - Git 2.25+
-- authenticated GitHub transport for repository operations
-- the runtime, agent, reviewer, and Browser-GPT capabilities required by the workflow you select
+- authenticated GitHub transport
+- the runtime, agent, reviewer, and Browser-GPT capabilities your workflow needs
 
-Install from the frozen lockfile and verify the checkout:
+Install and verify:
 
 ```bash
 npm ci --include=dev
@@ -183,7 +65,7 @@ node --experimental-strip-types scripts/verify.ts --strict-prereqs
 node --experimental-strip-types scripts/verify.ts --reusable-only
 ```
 
-For a full development verification pass:
+Full development check:
 
 ```bash
 npm run typecheck:foundation
@@ -194,44 +76,19 @@ node --experimental-strip-types scripts/runtime-retirement/retired-surface-selft
 node --experimental-strip-types scripts/verify.ts
 ```
 
-Run affected plugin suites and task-specific focused tests in addition to the repository-wide checks.
-
-## Deploy into another repository
-
-`orchestrator-pack` can run from a stable pack checkout while a project card supplies the selected target repository, primary checkout, default branch, Browser-GPT project, and target-owned verification commands.
-
-Start with [`docs/target_repo_setup.md`](docs/target_repo_setup.md). For policy embedding and coexistence with target-owned rules, read [`AGENTS.md`](AGENTS.md#target-repository-embedding-and-coexistence).
-
-## Repository map
-
-| Path | Purpose |
-| --- | --- |
-| [`AGENTS.md`](AGENTS.md) | Canonical repository and execution policy. |
-| [`.cursor/skills/`](.cursor/skills) | Manager-facing GPT authoring, execution, review, consultation, and support skills. |
-| [`docs/`](docs) | Browser-GPT, task execution, orchestration, setup, tiering, migration, and operator runbooks. |
-| [`scripts/pr2-foundation/`](scripts/pr2-foundation) | Supervised Task/scheduler/foundation orchestration surfaces. |
-| [`scripts/runtime/`](scripts/runtime) | Runtime-neutral contracts, registry, identity, and lifecycle primitives. |
-| [`plugins/`](plugins) | Task declaration, scope, accounting, and review plugins. |
-| [`.github/workflows/`](.github/workflows) | CI and reusable repository gates. |
-
-## Non-negotiable boundaries
-
-- **Do not collapse the hierarchy.** Orchestrator, manager, GPT turn, GitHub authority, and runtime effect are different roles/surfaces.
-- **Do not patch the upstream orchestration core.** Pack behavior lives in repository-owned extension surfaces.
-- **Do not invent runtime authority.** Effects require the registered adapter and exact composite identity.
-- **Do not treat chat self-report as durable completion.** Reconcile against the owning GitHub/runtime evidence.
-- **Do not treat stale evidence as current.** Required CI and review conclusions bind to the exact PR head they observed.
-- **Do not commit machine state or secrets.** Credentials, private logs, generated runtime state, local worktrees, and user-machine configuration stay out of the repository.
-- **Do not turn README prose into policy.** `AGENTS.md` and the owning runbooks remain authoritative.
+To use the pack with another repository, see [`docs/target_repo_setup.md`](docs/target_repo_setup.md).
 
 ## Documentation
 
-- [`AGENTS.md`](AGENTS.md) — canonical policy and edit/merge authority
-- [`docs/orchestration-runbook.md`](docs/orchestration-runbook.md) — orchestrator, manager, worker, recovery, CI, smoke, and handoff lifecycle
-- [`docs/browser-gpt-turn-runbook.md`](docs/browser-gpt-turn-runbook.md) — one tracked Browser-GPT turn
-- [`docs/chatgpt-task-execution-runbook.md`](docs/chatgpt-task-execution-runbook.md) — managed multi-turn GPT Issue execution
-- [`docs/tiering.md`](docs/tiering.md) — task complexity rubric
+README is an overview; the documents below are authoritative.
+
+- [`AGENTS.md`](AGENTS.md) — project policy, edit boundaries, merge rules
+- [`docs/orchestration-runbook.md`](docs/orchestration-runbook.md) — orchestrator, manager, and worker lifecycle
+- [`docs/browser-gpt-turn-runbook.md`](docs/browser-gpt-turn-runbook.md) — one tracked ChatGPT turn
+- [`docs/chatgpt-task-execution-runbook.md`](docs/chatgpt-task-execution-runbook.md) — multi-turn Issue execution through GPT
+- [`docs/tiering.md`](docs/tiering.md) — task complexity tiers
 - [`docs/repository_policy.md`](docs/repository_policy.md) — scope and reusable-content policy
-- [`docs/chat-executor-rules.md`](docs/chat-executor-rules.md) — connected chat executor behavior
-- [`docs/target_repo_setup.md`](docs/target_repo_setup.md) — target-project deployment
-- [`docs/migration_notes.md`](docs/migration_notes.md) — operator adoption and migration notes
+- [`docs/target_repo_setup.md`](docs/target_repo_setup.md) — deploying into a target repository
+- [`docs/migration_notes.md`](docs/migration_notes.md) — operator adoption notes
+
+Code: [`plugins/`](plugins) (task declaration, scope guard, accounting, review), [`scripts/runtime/`](scripts/runtime) (runtime adapter contracts), [`scripts/fleet/`](scripts/fleet) (wakeups), [`.github/workflows/`](.github/workflows) (CI).
