@@ -1,25 +1,39 @@
 <p align="center">
-  <img src="./docs/readme-assets/hero.svg" width="100%" alt="orchestrator-pack control plane: operator intent is supervised by an orchestrator, delegated to managers, carried through ChatGPT turns, and grounded in GitHub evidence plus exact runtime identity">
+  <img src="./docs/readme-assets/hero.svg" width="100%" alt="orchestrator-pack control plane: operator intent flows through an orchestrator and resumable managers into tracked ChatGPT turns; turn completion or failure wakes the owning workflow, while GitHub evidence and exact runtime identity ground execution">
 </p>
 
-`orchestrator-pack` is the governance and control layer around autonomous software work.
+`orchestrator-pack` is the governance and control layer around autonomous software work — including a **tracked, resumable wrapper around ChatGPT** rather than a fire-and-forget prompt loop.
 
-Its current tracked GPT workflows are **manager-driven and ChatGPT-centered**:
+Its current GPT workflows are **manager-driven and ChatGPT-centered**:
 
-**Operator → Orchestrator → Manager → ChatGPT → GitHub evidence**
+**Operator → Orchestrator → Manager → tracked ChatGPT turn → GitHub evidence**
 
-The **orchestrator/supervisor** keeps whole-task continuity and supervises manager Tasks. A **manager** owns one concrete resumable workflow — task authoring, Issue execution, PR review, or another GPT-driven job. **ChatGPT** performs the author/reviewer/implementation turns. Runtime adapters and workers sit underneath that control plane and execute only under exact identity and scope.
+The **orchestrator/supervisor** keeps whole-task continuity and supervises manager Tasks. A **manager** owns one concrete resumable workflow — task authoring, Issue execution, PR review, or another GPT-driven job. **ChatGPT** performs the author/reviewer/implementation turns through a tracked Browser-GPT transport. Runtime adapters and workers sit underneath that control plane and execute only under exact identity and scope.
 
-The concrete runtime can change. The task, supervision, and evidence contracts should not have to.
+The concrete runtime can change. The task, supervision, ChatGPT transport, and evidence contracts should not have to.
+
+## What makes the pack different
+
+| Feature | What it provides |
+| --- | --- |
+| **ChatGPT as managed transport** | Each tracked Browser-GPT turn has an input snapshot, invocation identity, owned conversation/output, and an authoritative `turn-result/v1` projected into a terminal envelope. |
+| **Turn-completion wakeups** | When a tracked GPT turn launched from a worktree ends, `fleet-wake` can wake the idle pane that owns that worktree so the manager continues instead of waiting for a human to notice the browser finished. |
+| **Error/stall routing** | A stalled or product-error ChatGPT conversation is routed directly to its unambiguous owning manager; if no single owner can be resolved, the coordinator/orchestrator receives the fleet alarm and recovery context. |
+| **No blind resend** | Possible or proven prompt delivery preserves the same invocation/conversation and enters observation/harvest recovery; transport timeout or child exit alone never authorizes a duplicate send. |
+| **Resumable supervision** | The manager owns the multi-turn GPT workflow; the orchestrator owns whole-task continuity across manager, GPT, runtime, CI, and recovery boundaries. |
+| **Durable truth outside chat** | ChatGPT status text is advisory. Live Issue/PR state, current head, review, CI, smoke, and exact runtime identity decide progression and completion. |
+| **Runtime-neutral effects** | Concrete effects go through a registered adapter and exact `{ runtime, id, generation }` identity instead of being coupled to one agent runtime. |
+
+In other words, the project wraps ChatGPT in **identity, observation, wakeup, recovery, and durable-evidence contracts**, then places that transport inside a supervised software-delivery workflow.
 
 ## How work actually flows
 
 | Layer | Responsibility |
 | --- | --- |
 | **Operator** | Supplies intent and retains final authority for actions such as merge. |
-| **Orchestrator / supervisor** | Owns whole-task continuity, launches or resumes the existing supervised `work-class=manager` Task, watches manager progress, and keeps the parent task alive through recoverable manager/GPT/runtime failures. |
-| **Manager** | Owns one resumable workflow and its continuation: live Issue/PR state, GPT turns, review convergence, CI, smoke when required, and truthful handoff. |
-| **ChatGPT** | Performs the substantive Browser-GPT turns: authoring/revising Issues, implementation conversations, architectural reviews, fix conversations, and other workflow-specific reasoning. |
+| **Orchestrator / supervisor** | Owns whole-task continuity, launches or resumes the existing supervised `work-class=manager` Task, watches manager progress, receives unresolved fleet alarms, and keeps the parent task alive through recoverable manager/GPT/runtime failures. |
+| **Manager** | Owns one resumable workflow and its continuation: live Issue/PR state, tracked GPT turns, completion/error wakes, review convergence, CI, smoke when required, and truthful handoff. |
+| **ChatGPT transport** | Performs the substantive Browser-GPT turns with invocation identity, terminal-envelope settlement, observation/recovery, and no-blind-resend semantics. |
 | **GitHub** | Holds the durable authorities: live Issue specification, review/disposition comments, PR/current head, CI results, smoke records, and merge state. |
 | **Runtime / workers** | Execute effects through a registered runtime adapter using exact `{ runtime, id, generation }` identity and the task's declared scope. |
 
@@ -79,8 +93,10 @@ The conversational hierarchy does not replace repository authority.
 ### Supervision and GPT transport
 
 - [`docs/orchestration-runbook.md`](docs/orchestration-runbook.md) defines supervised Tasks, manager/worker lifecycle, recovery, handoff, and completion rules.
-- [`docs/browser-gpt-turn-runbook.md`](docs/browser-gpt-turn-runbook.md) owns one tracked Browser-GPT turn: launch, observation, attribution, recovery, send/no-resend, and publication mechanics.
+- [`docs/browser-gpt-turn-runbook.md`](docs/browser-gpt-turn-runbook.md) owns one tracked Browser-GPT turn: launch, observation, attribution, terminal result, same-invocation recovery, send/no-resend, and publication mechanics.
 - [`docs/chatgpt-task-execution-runbook.md`](docs/chatgpt-task-execution-runbook.md) composes multiple GPT turns into one managed Issue-execution workflow.
+- [`scripts/fleet/fleet-wake.ts`](scripts/fleet/fleet-wake.ts) turns terminal-envelope completion, CI completion, and ChatGPT stall/error observations into targeted wakes for the owning pane or coordinator.
+- [`scripts/lib/orchestrator-side-process-supervisor.ts`](scripts/lib/orchestrator-side-process-supervisor.ts) supervises the bounded scheduler child and its restart/backoff lifecycle; it is separate from the ChatGPT wake-routing path.
 - [`.cursor/skills/discuss-with-gpt/`](.cursor/skills/discuss-with-gpt) provides the explicit GPT consultation route.
 
 ### Task and scope governance
@@ -109,12 +125,13 @@ The conversational hierarchy does not replace repository authority.
 2. The **orchestrator** resolves the exact task and launches/resumes the supervised **manager** Task.
 3. The **manager** reads authoritative GitHub state and selects the owning GPT workflow.
 4. **ChatGPT** authors, reviews, implements, or fixes through tracked turns owned by that workflow.
-5. The manager reconciles those turns against **live Issue/PR state**, not chat self-report.
-6. Runtime effects are performed only through declared scope and exact runtime identity.
-7. The manager drives the PR through current-head review and required CI.
-8. If the Issue requires smoke, the owning workflow executes and publishes it.
-9. The orchestrator keeps whole-task continuity until the manager produces a truthful terminal handoff.
-10. Merge happens only when the **operator** separately has the authority and requests it.
+5. When a tracked turn ends, its terminal envelope can wake the idle owning pane; stalls/product errors are routed to the owning manager when unambiguous, otherwise to the orchestrator/coordinator.
+6. The manager reconciles the turn against **live Issue/PR state**, not chat self-report; uncertain delivery is recovered on the same invocation rather than blindly resent.
+7. Runtime effects are performed only through declared scope and exact runtime identity.
+8. The manager drives the PR through current-head review and required CI.
+9. If the Issue requires smoke, the owning workflow executes and publishes it.
+10. The orchestrator keeps whole-task continuity until the manager produces a truthful terminal handoff.
+11. Merge happens only when the **operator** separately has the authority and requests it.
 
 ## Start here
 
