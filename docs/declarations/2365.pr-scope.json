@@ -1,0 +1,34 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2365,
+  "declared_paths": [
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/declarations/2365.pr-scope.json",
+    "scripts/chatgpt-browser-turn/chat-bindings.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/json-producers/retired-runtime-surfaces.json",
+    "scripts/runtime-retirement/retired-surface-guard.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/declarations/",
+    "scripts/chatgpt-browser-turn/chat-bindings.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/fleet/",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/json-producers/retired-runtime-surfaces.json",
+    "scripts/runtime-retirement/retired-surface-guard.test.ts"
+  ],
+  "source_revision": "8f2b7efaf574ba4a89a26dd244201f6f2437d7a6"
+}

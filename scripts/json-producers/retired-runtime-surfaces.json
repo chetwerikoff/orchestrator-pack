@@ -10,10 +10,10 @@
     },
     {
       "id": "legacy-runtime-selector",
-      "sourceCommandPattern": "\\b(?:AO|ORCA)_[A-Z0-9_]+\\b",
+      "sourceCommandPattern": "\\b(?:AO_[A-Z0-9_]+|ORCA_(?!TERMINAL_HANDLE\\b)[A-Z0-9_]+)\\b",
       "pathPattern": "$a",
       "reason": "Runtime identity and task bindings are explicit; pack tuning uses only approved pack selectors.",
-      "owningReference": "Issue #1352 AO-11"
+      "owningReference": "Issue #1352 AO-11; ORCA_TERMINAL_HANDLE routing-data exception: Issue #2365"
     },
     {
       "id": "legacy-runtime-command",

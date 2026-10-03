@@ -233,6 +233,10 @@ export function bannerOwnerPane(
   headRef: typeof readPrHeadRef = readPrHeadRef,
 ): FleetTerminal | undefined {
   const binding = readBinding(banner.url);
+  const launcher = binding?.terminal_handle
+    ? terminals.find((terminal) => terminal.handle === binding.terminal_handle && isWorkerPane(terminal, config))
+    : undefined;
+  if (launcher) return launcher;
   if (binding) {
     const bound = resolve(binding.worktree).replaceAll('\\', '/');
     const owners = terminals.filter((terminal) => {
@@ -334,7 +338,8 @@ const TERMINAL_ENVELOPE_SCHEMA = 'flow-manager-long-running-child-terminal/v1';
 export interface TerminalEnvelopeEvent {
   readonly path: string;
   readonly invocationId: string;
-  readonly cwd: string;
+  readonly cwd?: string;
+  readonly terminalHandle?: string;
 }
 
 export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeEvent[] {
@@ -357,11 +362,13 @@ export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeE
       if (!entry.isFile() || !entry.name.endsWith('terminal.json')) continue;
       try {
         const envelope = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
-        if (envelope.schema !== TERMINAL_ENVELOPE_SCHEMA || typeof envelope.cwd !== 'string') continue;
+        const cwd = typeof envelope.cwd === 'string' ? envelope.cwd : undefined;
+        const terminalHandle = typeof envelope.terminal_handle === 'string' ? envelope.terminal_handle : undefined;
+        if (envelope.schema !== TERMINAL_ENVELOPE_SCHEMA || (!cwd && !terminalHandle)) continue;
         const invocationId = typeof envelope.observed_invocation_id === 'string'
           ? envelope.observed_invocation_id
           : String(envelope.attempt_identity ?? basename(path));
-        events.push({ path, invocationId, cwd: envelope.cwd });
+        events.push({ path, invocationId, ...(cwd ? { cwd } : {}), ...(terminalHandle ? { terminalHandle } : {}) });
       } catch {
         // A partial or unrelated terminal artifact is not completion evidence.
       }
@@ -461,7 +468,8 @@ async function wakePanesOnEvents(
   const wakes: Array<{ pane: FleetPaneObservation; key: string; message: string }> = [];
   for (const envelope of (options.listTerminalEnvelopes ?? listTerminalEnvelopes)()) {
     const key = `gpt:${envelope.path}`;
-    const pane = envelopeOwner(envelope.cwd, observations);
+    const pane = observations.find((candidate) => envelope.terminalHandle && candidate.handle === envelope.terminalHandle)
+      ?? (envelope.cwd ? envelopeOwner(envelope.cwd, observations) : undefined);
     if (!pane || !idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
     wakes.push({ pane, key, message: `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}` });
   }

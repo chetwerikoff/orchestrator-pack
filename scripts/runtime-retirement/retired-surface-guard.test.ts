@@ -35,6 +35,10 @@ describe('runtime retirement closed-world scanner', () => {
     expect(scanRetiredRuntimeSurfaces({ repoRoot: fixture('pack review list') }).violations).toEqual([]);
   });
 
+  it('accepts the launching terminal handle as routing data only', () => {
+    expect(scanRetiredRuntimeSurfaces({ repoRoot: fixture('const handle = process.env.ORCA_TERMINAL_HANDLE;') }).violations).toEqual([]);
+  });
+
   it('keeps exact source identities case-sensitive', () => {
     const root = fixture('const status = "orca_smoke_control_plane_codes";\nAO STATUS is descriptive prose');
     expect(scanRetiredRuntimeSurfaces({ repoRoot: root }).violations).toEqual([]);
@@ -42,6 +46,7 @@ describe('runtime retirement closed-world scanner', () => {
 
   it.each([
     ['env authority', 'const value = process.env.AO_SESSION_ID;', 'scripts/active.ts', 'legacy-runtime-selector'],
+    ['orca env authority', 'const value = process.env.ORCA_WORKTREE_ID;', 'scripts/active.ts', 'legacy-runtime-selector'],
     ['status command', 'ao status --json', 'scripts/active.ts', 'legacy-runtime-command'],
     ['spawn command', 'ao spawn worker --json', 'scripts/active.ts', 'legacy-runtime-command'],
     ['orchestrator command', 'ao orchestrator ls --json', 'scripts/active.ts', 'legacy-runtime-command'],
