@@ -1,80 +1,81 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="380" viewBox="0 0 1200 380" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
   <title id="title">orchestrator-pack</title>
-  <desc id="desc">Runtime-neutral governance for automated software work, with a tracked path from GitHub Issue and scope through worker execution, pull request evidence, review and CI, smoke, and operator-authorized merge.</desc>
+  <desc id="desc">A manager-driven, ChatGPT-centered software automation control plane. Operator intent flows through an orchestrator that supervises managers, managers drive ChatGPT turns, GitHub holds durable evidence, and runtime adapters execute exact scoped effects.</desc>
 
-  <rect width="1200" height="380" rx="28" fill="#09090b"/>
-  <rect x="1" y="1" width="1198" height="378" rx="27" fill="none" stroke="#27272a" stroke-width="2"/>
+  <rect width="1200" height="420" rx="28" fill="#09090b"/>
+  <rect x="1" y="1" width="1198" height="418" rx="27" fill="none" stroke="#27272a" stroke-width="2"/>
 
-  <g transform="translate(64 52)">
-    <text x="0" y="0" fill="#a1a1aa" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="2">GOVERNED SOFTWARE WORK / RUNTIME-NEUTRAL</text>
-    <text x="0" y="82" fill="#fafafa" font-size="64" font-weight="700" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">orchestrator-pack</text>
-    <text x="0" y="128" fill="#d4d4d8" font-size="26" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">Scope · identity · review · evidence</text>
+  <g transform="translate(60 48)">
+    <text x="0" y="0" fill="#a1a1aa" font-size="17" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="2">MANAGER-DRIVEN · CHATGPT-CENTERED · RUNTIME-NEUTRAL</text>
+    <text x="0" y="76" fill="#fafafa" font-size="61" font-weight="700" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">orchestrator-pack</text>
+    <text x="0" y="120" fill="#d4d4d8" font-size="24" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">Supervision above. Durable evidence below.</text>
 
-    <line x1="0" y1="168" x2="500" y2="168" stroke="#3f3f46" stroke-width="1"/>
+    <line x1="0" y1="155" x2="470" y2="155" stroke="#3f3f46"/>
 
-    <text x="0" y="210" fill="#a1a1aa" font-size="20" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">Keep automation governable without patching</text>
-    <text x="0" y="240" fill="#a1a1aa" font-size="20" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">the orchestration core.</text>
+    <text x="0" y="194" fill="#a1a1aa" font-size="19" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">Orchestrators keep whole-task continuity.</text>
+    <text x="0" y="224" fill="#a1a1aa" font-size="19" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">Managers own resumable GPT workflows.</text>
+    <text x="0" y="254" fill="#a1a1aa" font-size="19" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">GitHub and exact runtime identity ground truth.</text>
 
-    <g transform="translate(0 278)">
-      <rect width="208" height="38" rx="19" fill="#18181b" stroke="#3f3f46"/>
-      <text x="104" y="25" text-anchor="middle" fill="#e4e4e7" font-size="17" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">exact identity</text>
-      <rect x="220" width="232" height="38" rx="19" fill="#18181b" stroke="#3f3f46"/>
-      <text x="336" y="25" text-anchor="middle" fill="#e4e4e7" font-size="17" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">current-head proof</text>
+    <g transform="translate(0 292)">
+      <rect width="210" height="38" rx="19" fill="#18181b" stroke="#3f3f46"/>
+      <text x="105" y="25" text-anchor="middle" fill="#e4e4e7" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">discuss-with-gpt</text>
+      <rect x="222" width="200" height="38" rx="19" fill="#18181b" stroke="#3f3f46"/>
+      <text x="322" y="25" text-anchor="middle" fill="#e4e4e7" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">execute-with-gpt</text>
     </g>
   </g>
 
-  <g transform="translate(670 48)">
-    <text x="0" y="0" fill="#71717a" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.5">THE GOVERNED PATH</text>
+  <g transform="translate(610 36)">
+    <text x="0" y="0" fill="#71717a" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.5">CONTROL PLANE</text>
 
-    <g transform="translate(0 28)">
-      <rect x="0" y="0" width="202" height="66" rx="12" fill="#18181b" stroke="#52525b"/>
-      <text x="18" y="27" fill="#fafafa" font-size="22" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">ISSUE</text>
-      <text x="18" y="50" fill="#a1a1aa" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">live specification</text>
+    <g transform="translate(0 22)">
+      <rect x="0" y="0" width="150" height="58" rx="11" fill="#18181b" stroke="#52525b"/>
+      <text x="75" y="25" text-anchor="middle" fill="#fafafa" font-size="18" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">OPERATOR</text>
+      <text x="75" y="45" text-anchor="middle" fill="#a1a1aa" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">intent / authority</text>
 
-      <line x1="202" y1="33" x2="238" y2="33" stroke="#71717a" stroke-width="2"/>
-      <path d="M232 27 L238 33 L232 39" fill="none" stroke="#71717a" stroke-width="2"/>
+      <line x1="150" y1="29" x2="178" y2="29" stroke="#71717a" stroke-width="2"/>
+      <path d="M172 23 L178 29 L172 35" fill="none" stroke="#71717a" stroke-width="2"/>
 
-      <rect x="240" y="0" width="202" height="66" rx="12" fill="#18181b" stroke="#52525b"/>
-      <text x="258" y="27" fill="#fafafa" font-size="22" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">SCOPE</text>
-      <text x="258" y="50" fill="#a1a1aa" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">deny / allow roots</text>
+      <rect x="180" y="0" width="180" height="58" rx="11" fill="#18181b" stroke="#a1a1aa"/>
+      <text x="270" y="25" text-anchor="middle" fill="#fafafa" font-size="18" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">ORCHESTRATOR</text>
+      <text x="270" y="45" text-anchor="middle" fill="#a1a1aa" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">supervises managers</text>
+
+      <line x1="360" y1="29" x2="388" y2="29" stroke="#71717a" stroke-width="2"/>
+      <path d="M382 23 L388 29 L382 35" fill="none" stroke="#71717a" stroke-width="2"/>
+
+      <rect x="390" y="0" width="150" height="58" rx="11" fill="#18181b" stroke="#a1a1aa"/>
+      <text x="465" y="25" text-anchor="middle" fill="#fafafa" font-size="18" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">MANAGER</text>
+      <text x="465" y="45" text-anchor="middle" fill="#a1a1aa" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">resumable workflow</text>
     </g>
 
-    <line x1="221" y1="94" x2="221" y2="116" stroke="#71717a" stroke-width="2"/>
-    <path d="M215 110 L221 116 L227 110" fill="none" stroke="#71717a" stroke-width="2"/>
+    <line x1="465" y1="80" x2="465" y2="106" stroke="#71717a" stroke-width="2"/>
+    <path d="M459 100 L465 106 L471 100" fill="none" stroke="#71717a" stroke-width="2"/>
 
-    <g transform="translate(0 118)">
-      <rect x="0" y="0" width="202" height="66" rx="12" fill="#18181b" stroke="#52525b"/>
-      <text x="18" y="27" fill="#fafafa" font-size="22" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">WORKER</text>
-      <text x="18" y="50" fill="#a1a1aa" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">runtime + id + gen</text>
-
-      <line x1="202" y1="33" x2="238" y2="33" stroke="#71717a" stroke-width="2"/>
-      <path d="M232 27 L238 33 L232 39" fill="none" stroke="#71717a" stroke-width="2"/>
-
-      <rect x="240" y="0" width="202" height="66" rx="12" fill="#18181b" stroke="#52525b"/>
-      <text x="258" y="27" fill="#fafafa" font-size="22" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">PR HEAD</text>
-      <text x="258" y="50" fill="#a1a1aa" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">delivery authority</text>
+    <g transform="translate(220 108)">
+      <rect width="320" height="68" rx="12" fill="#18181b" stroke="#d4d4d8"/>
+      <text x="160" y="28" text-anchor="middle" fill="#fafafa" font-size="23" font-weight="650" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">CHATGPT</text>
+      <text x="160" y="51" text-anchor="middle" fill="#a1a1aa" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">author · implement · review · fix</text>
     </g>
 
-    <line x1="221" y1="184" x2="221" y2="206" stroke="#71717a" stroke-width="2"/>
-    <path d="M215 200 L221 206 L227 200" fill="none" stroke="#71717a" stroke-width="2"/>
+    <line x1="380" y1="176" x2="380" y2="202" stroke="#71717a" stroke-width="2"/>
+    <path d="M374 196 L380 202 L386 196" fill="none" stroke="#71717a" stroke-width="2"/>
 
-    <g transform="translate(0 208)">
-      <rect x="0" y="0" width="202" height="66" rx="12" fill="#18181b" stroke="#52525b"/>
-      <text x="18" y="27" fill="#fafafa" font-size="22" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">REVIEW + CI</text>
-      <text x="18" y="50" fill="#a1a1aa" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">exact-head evidence</text>
+    <text x="0" y="218" fill="#71717a" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.5">DURABLE AUTHORITY + EXECUTION</text>
 
-      <line x1="202" y1="33" x2="238" y2="33" stroke="#71717a" stroke-width="2"/>
-      <path d="M232 27 L238 33 L232 39" fill="none" stroke="#71717a" stroke-width="2"/>
+    <g transform="translate(0 236)">
+      <rect x="0" y="0" width="258" height="82" rx="12" fill="#18181b" stroke="#52525b"/>
+      <text x="20" y="28" fill="#fafafa" font-size="19" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">GITHUB EVIDENCE</text>
+      <text x="20" y="52" fill="#a1a1aa" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Issue · PR head · review · CI</text>
+      <text x="20" y="70" fill="#a1a1aa" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">smoke · merge state</text>
 
-      <rect x="240" y="0" width="202" height="66" rx="12" fill="#18181b" stroke="#52525b"/>
-      <text x="258" y="27" fill="#fafafa" font-size="22" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">SMOKE</text>
-      <text x="258" y="50" fill="#a1a1aa" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">when declared</text>
+      <line x1="258" y1="41" x2="286" y2="41" stroke="#71717a" stroke-width="2"/>
+      <path d="M280 35 L286 41 L280 47" fill="none" stroke="#71717a" stroke-width="2"/>
+
+      <rect x="288" y="0" width="252" height="82" rx="12" fill="#18181b" stroke="#52525b"/>
+      <text x="308" y="28" fill="#fafafa" font-size="19" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">RUNTIME / WORKERS</text>
+      <text x="308" y="52" fill="#a1a1aa" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">declared scope</text>
+      <text x="308" y="70" fill="#a1a1aa" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">{ runtime, id, generation }</text>
     </g>
 
-    <g transform="translate(92 300)">
-      <line x1="0" y1="0" x2="0" y2="22" stroke="#71717a" stroke-width="2"/>
-      <path d="M-6 16 L0 22 L6 16" fill="none" stroke="#71717a" stroke-width="2"/>
-      <text x="20" y="25" fill="#d4d4d8" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">operator-authorized merge</text>
-    </g>
+    <text x="0" y="356" fill="#71717a" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">conversation is not authority · exact state is</text>
   </g>
 </svg>
