@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="./docs/readme-assets/hero.svg" width="100%" alt="orchestrator-pack control plane: operator intent flows through an orchestrator and resumable managers into tracked ChatGPT turns; turn completion or failure wakes the owning workflow, while GitHub evidence and exact runtime identity ground execution">
+  <img src="./docs/readme-assets/hero.svg" width="100%" alt="orchestrator-pack role-separated control plane: architect, orchestrator, manager, worker, and reviewer have distinct responsibilities; task creation flows from brief through GPT authoring and independent review to an accepted GitHub Issue; tracked ChatGPT turns wake their owning workflow">
 </p>
 
 `orchestrator-pack` is the governance and control layer around autonomous software work — including a **tracked, resumable wrapper around ChatGPT** rather than a fire-and-forget prompt loop.
 
-Its current GPT workflows are **manager-driven and ChatGPT-centered**:
+Its current workflows are **role-separated, manager-driven, and ChatGPT-centered**:
 
 **Operator → Orchestrator → Manager → tracked ChatGPT turn → GitHub evidence**
 
