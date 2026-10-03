@@ -70,6 +70,14 @@
       <rect x="416" y="0" width="108" height="56" rx="11" fill="#18181b" stroke="#a1a1aa"/>
       <text x="470" y="24" text-anchor="middle" fill="#fafafa" font-size="15" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">MANAGERS</text>
       <text x="470" y="43" text-anchor="middle" fill="#a1a1aa" font-size="11" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">workflows</text>
+
+      <!-- Feedback: Managers -> Orchestrator -->
+      <path d="M416 10 H394" fill="none" stroke="#71717a" stroke-width="1.5" stroke-dasharray="5 5"/>
+      <path d="M400 4 L394 10 L400 16" fill="none" stroke="#71717a" stroke-width="1.5"/>
+
+      <!-- Feedback: Orchestrator -> Architect -->
+      <path d="M248 10 H226" fill="none" stroke="#71717a" stroke-width="1.5" stroke-dasharray="5 5"/>
+      <path d="M232 4 L226 10 L232 16" fill="none" stroke="#71717a" stroke-width="1.5"/>
     </g>
 
     <!-- Managers own tracked GPT turns -->
@@ -83,7 +91,7 @@
     </g>
 
     <!-- Completion/recovery wakes the owning manager workflow -->
-    <path d="M422 138 H544 V82 H486 V76" fill="none" stroke="#71717a" stroke-width="1.5" stroke-dasharray="5 5"/>
+    <path d="M422 138 H500 V82 H486 V76" fill="none" stroke="#71717a" stroke-width="1.5" stroke-dasharray="5 5"/>
     <path d="M480 82 L486 76 L492 82" fill="none" stroke="#71717a" stroke-width="1.5"/>
 
     <text x="0" y="208" fill="#71717a" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.4">TASK CREATION</text>
