@@ -1,0 +1,19 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2367,
+  "declared_paths": [
+    "docs/declarations/2367.pr-scope.json",
+    "scripts/lib/operator-primary-target.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/lib/operator-primary-target.test.ts"
+  ],
+  "source_revision": "6b4f2f0d9aa0c27c2c138034d9e3c966205045c5"
+}
