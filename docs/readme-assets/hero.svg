@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
   <title id="title">orchestrator-pack</title>
-  <desc id="desc">A manager-driven, ChatGPT-centered software automation control plane. Operator intent flows through an orchestrator that supervises managers, managers drive ChatGPT turns, GitHub holds durable evidence, and runtime adapters execute exact scoped effects.</desc>
+  <desc id="desc">A manager-driven, ChatGPT-centered software automation control plane with tracked and resumable ChatGPT turns. Operator intent flows through an orchestrator to managers; turn completion or error wakes the owning workflow; GitHub holds durable evidence and runtime adapters execute exact scoped effects.</desc>
 
   <rect width="1200" height="420" rx="28" fill="#09090b"/>
   <rect x="1" y="1" width="1198" height="418" rx="27" fill="none" stroke="#27272a" stroke-width="2"/>
@@ -8,19 +8,20 @@
   <g transform="translate(60 48)">
     <text x="0" y="0" fill="#a1a1aa" font-size="17" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="2">MANAGER-DRIVEN · CHATGPT-CENTERED · RUNTIME-NEUTRAL</text>
     <text x="0" y="76" fill="#fafafa" font-size="61" font-weight="700" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">orchestrator-pack</text>
-    <text x="0" y="120" fill="#d4d4d8" font-size="24" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">Supervision above. Durable evidence below.</text>
+    <text x="0" y="120" fill="#d4d4d8" font-size="24" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">Supervision above. Tracked ChatGPT in the loop.</text>
 
     <line x1="0" y1="155" x2="470" y2="155" stroke="#3f3f46"/>
 
     <text x="0" y="194" fill="#a1a1aa" font-size="19" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">Orchestrators keep whole-task continuity.</text>
     <text x="0" y="224" fill="#a1a1aa" font-size="19" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">Managers own resumable GPT workflows.</text>
-    <text x="0" y="254" fill="#a1a1aa" font-size="19" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">GitHub and exact runtime identity ground truth.</text>
+    <text x="0" y="254" fill="#a1a1aa" font-size="19" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">Turn end / error wakes the owning workflow.</text>
+    <text x="0" y="282" fill="#71717a" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">same invocation · no blind resend</text>
 
-    <g transform="translate(0 292)">
-      <rect width="210" height="38" rx="19" fill="#18181b" stroke="#3f3f46"/>
-      <text x="105" y="25" text-anchor="middle" fill="#e4e4e7" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">discuss-with-gpt</text>
-      <rect x="222" width="200" height="38" rx="19" fill="#18181b" stroke="#3f3f46"/>
-      <text x="322" y="25" text-anchor="middle" fill="#e4e4e7" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">execute-with-gpt</text>
+    <g transform="translate(0 310)">
+      <rect width="212" height="38" rx="19" fill="#18181b" stroke="#3f3f46"/>
+      <text x="106" y="25" text-anchor="middle" fill="#e4e4e7" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">tracked GPT turns</text>
+      <rect x="224" width="178" height="38" rx="19" fill="#18181b" stroke="#3f3f46"/>
+      <text x="313" y="25" text-anchor="middle" fill="#e4e4e7" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">fleet wake</text>
     </g>
   </g>
 
@@ -51,17 +52,21 @@
     <path d="M459 100 L465 106 L471 100" fill="none" stroke="#71717a" stroke-width="2"/>
 
     <g transform="translate(220 108)">
-      <rect width="320" height="68" rx="12" fill="#18181b" stroke="#d4d4d8"/>
-      <text x="160" y="28" text-anchor="middle" fill="#fafafa" font-size="23" font-weight="650" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">CHATGPT</text>
-      <text x="160" y="51" text-anchor="middle" fill="#a1a1aa" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">author · implement · review · fix</text>
+      <rect width="320" height="82" rx="12" fill="#18181b" stroke="#d4d4d8"/>
+      <text x="160" y="26" text-anchor="middle" fill="#fafafa" font-size="23" font-weight="650" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">CHATGPT</text>
+      <text x="160" y="49" text-anchor="middle" fill="#a1a1aa" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">tracked turn · envelope · recover</text>
+      <text x="160" y="69" text-anchor="middle" fill="#d4d4d8" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">end / error → wake owner</text>
     </g>
 
-    <line x1="380" y1="176" x2="380" y2="202" stroke="#71717a" stroke-width="2"/>
-    <path d="M374 196 L380 202 L386 196" fill="none" stroke="#71717a" stroke-width="2"/>
+    <path d="M540 149 H558 V94 H510 V80" fill="none" stroke="#71717a" stroke-width="1.5" stroke-dasharray="5 5"/>
+    <path d="M504 86 L510 80 L516 86" fill="none" stroke="#71717a" stroke-width="1.5"/>
 
-    <text x="0" y="218" fill="#71717a" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.5">DURABLE AUTHORITY + EXECUTION</text>
+    <line x1="380" y1="190" x2="380" y2="210" stroke="#71717a" stroke-width="2"/>
+    <path d="M374 204 L380 210 L386 204" fill="none" stroke="#71717a" stroke-width="2"/>
 
-    <g transform="translate(0 236)">
+    <text x="0" y="226" fill="#71717a" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.5">DURABLE AUTHORITY + EXECUTION</text>
+
+    <g transform="translate(0 244)">
       <rect x="0" y="0" width="258" height="82" rx="12" fill="#18181b" stroke="#52525b"/>
       <text x="20" y="28" fill="#fafafa" font-size="19" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">GITHUB EVIDENCE</text>
       <text x="20" y="52" fill="#a1a1aa" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Issue · PR head · review · CI</text>
@@ -76,6 +81,6 @@
       <text x="308" y="70" fill="#a1a1aa" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">{ runtime, id, generation }</text>
     </g>
 
-    <text x="0" y="356" fill="#71717a" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">conversation is not authority · exact state is</text>
+    <text x="0" y="364" fill="#71717a" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">conversation is not authority · exact state is</text>
   </g>
 </svg>
