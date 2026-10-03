@@ -1,88 +1,102 @@
-# orchestrator-pack
+<p align="center">
+  <img src="./docs/readme-assets/hero.svg" width="100%" alt="orchestrator-pack role-separated control plane: architect, orchestrator, manager, worker, and reviewer have distinct responsibilities; task creation flows from brief through GPT authoring and independent review to an accepted GitHub Issue; tracked ChatGPT turns wake their owning workflow">
+</p>
 
-`orchestrator-pack` is a runtime-neutral safety and governance pack for automated
-software work. It keeps task scope, review, accounting, publication, and worker
-lifecycle contracts in tracked repository surfaces rather than patching a concrete
-orchestration runtime.
+`orchestrator-pack` is a governance layer for autonomous software work. It turns a task idea into a reviewed GitHub Issue, drives implementation and review through tracked ChatGPT turns, and treats only GitHub evidence (Issue, PR head, review, CI, smoke) as proof that the work is done.
 
-The pack is designed to survive runtime upgrades and replacements:
+The concrete agent runtime can be replaced; the task, review, and evidence contracts stay the same.
 
-- business logic depends on `RuntimeAdapter` and exact composite identities;
-- Orca is the currently registered concrete adapter, not an imported business-logic
-  dependency;
-- GitHub Issues are the live task specification and queue;
-- GitHub pull requests and current-head checks are the delivery authority;
-- no removed command-line client, daemon, configuration database, or state directory
-  is required for normal operation, migration, rollback, or evidence.
+```text
+[Operator] --> [Orchestrator] --> [Manager] --> [ChatGPT turn]
+                keeps the task     owns one         authors, reviews,
+                alive, recovers    workflow         implements
+                                       |
+                                       v
+                              [GitHub evidence]
+                     Issue - PR head - review - CI - smoke
+```
 
-## What the pack provides
+## Why it is different
 
-### Governed task and scope plugins
+- **Reviewed tasks.** Every task is a GitHub Issue that passes independent GPT review before anyone implements it ([how](#from-an-idea-to-an-accepted-issue)).
+- **Multiple agents, different lenses.** A spec is challenged by several independent GPT reviewers, a Claude architectural lens, and optionally Codex — not by the agent that wrote it ([how](#architect-and-review-lenses)).
+- **Separate roles.** Architect, orchestrator, manager, worker, and reviewer each own a distinct part of the work instead of one agent doing everything.
+- **ChatGPT as a tracked transport.** Each GPT turn is recorded, can be resumed after a failure, and is never blindly re-sent.
+- **Automatic wakeups.** When a GPT turn finishes or stalls, the workflow that owns it is woken up — no human needs to watch the browser.
+- **GitHub is the truth.** What the chat says is advisory; progress is decided by the live Issue/PR state, current-head CI, and review.
+- **Runtime-neutral.** Effects go through a registered runtime adapter (Orca today) and an exact runtime identity.
 
-- [`plugins/task-declaration`](plugins/task-declaration) — validates Issue scope,
-  denylist, baseline, and one-amendment contracts. Command: `pack-declare`.
-- [`plugins/scope-guard`](plugins/scope-guard) — enforces declared paths before
-  commit and in PR CI. Commands: `scope-check`, `agent-wrap`.
-- [`plugins/token-chain-ledger`](plugins/token-chain-ledger) — records chain,
-  session, token, cost, and convergence evidence. Command: `pack-ledger`.
-- [`plugins/codex-pr-reviewer`](plugins/codex-pr-reviewer) — runs bounded Codex PR
-  review with structured terminal output. Command: `pack-codex-review`.
+## Roles
 
-### Runtime-neutral execution contracts
+| Role | Responsibility |
+| --- | --- |
+| **Orchestrator** | Keeps the whole task alive, launches managers, recovers from failures. |
+| **Manager** | Drives ChatGPT through one resumable workflow — create an Issue, execute it, or review a PR. It only steers the chat and checks GitHub, so it runs on a cheap model; the heavy reasoning happens in ChatGPT. |
+| **Worker** | Implements one bounded change within the declared scope. It can be ChatGPT (driven by a manager) or a local coding agent. |
+| **Reviewer** | Independently reviews the task or the PR and publishes findings. |
+| **Architect** | Decides what must be true, in what order, at which boundaries, and how success is proved; read-only unless explicitly authorized to edit. |
 
-- [`scripts/runtime/contracts.ts`](scripts/runtime/contracts.ts) defines runtime
-  identities and operations.
-- [`scripts/runtime/registry.ts`](scripts/runtime/registry.ts) owns concrete adapter
-  registration.
-- [`scripts/runtime/runtime-cli.ts`](scripts/runtime/runtime-cli.ts) exposes the
-  tracked runtime-neutral command surface.
-- [`scripts/lib/operator-publication.ts`](scripts/lib/operator-publication.ts)
-  publishes one bounded operator message with zero or one dispatch attempt.
-- [`scripts/lib/worker-degraded-ci-handoff.ts`](scripts/lib/worker-degraded-ci-handoff.ts)
-  performs exact-composite degraded-CI handoff without short-ID discovery.
+## From an idea to an accepted Issue
 
-### Review and lifecycle contracts
+Task creation is a workflow of its own, not a note written before the real work:
 
-- [`scripts/pack-review-runner.ts`](scripts/pack-review-runner.ts) starts and
-  reconciles pack-owned review runs.
-- The pack review store and claim authority preserve active, terminal, duplicate,
-  concurrent, stale-head, malformed-state, and launch-failure outcomes.
-- [`scripts/pack-worker-report`](scripts/pack-worker-report) is the public worker
-  lifecycle report command and executes the native TypeScript implementation under the declared Node runtime
-  in [`scripts/pack-worker-report.ts`](scripts/pack-worker-report.ts). The retired
-  legacy shell implementation is not a compatibility or fallback path.
-- Required CI, review findings, and handoff must bind to the current PR head;
-  a same-PR smoke PASS remains sufficient across later heads.
+```text
+[Brief] --> [GPT author] --> [Independent reviews] --> [Author answers findings] --> [Final review] --> [Accepted Issue]
+                 ^                                              |
+                 +------------- new Issue revision -------------+
+```
 
-### Repository guards
+- **The Issue is the spec.** The live GitHub Issue is the only task specification and queue entry.
+- **The author answers every finding.** Each review finding is either fixed in a new Issue revision or rejected with a reason — nothing is silently dropped.
+- **Review depth scales with complexity.** A simple task gets one review; a complex one gets several parallel GPT reviews plus a Claude review ([tiers](docs/tiering.md)).
+- **Acceptance is a label.** Only when the required reviews and answers line up does the Issue get `spec-review:accepted` and become ready to execute.
 
-- [`scripts/runtime-retirement/retired-surface-guard.ts`](scripts/runtime-retirement/retired-surface-guard.ts)
-  rejects reintroduced removed-runtime commands, HTTP clients, selectors, package
-  identities, configuration roots, aliases, and adapter symbols.
-- [`scripts/gate-runner`](scripts/gate-runner) hosts the TypeScript gate runner and
-  preserved parity contracts.
-- [`scripts/verify.ts`](scripts/verify.ts) owns active structural verification and
-  reusable-pack publishing checks (`--reusable-only`).
-- [`scripts/runtime-retirement/retired-surface-selftest.ts`](scripts/runtime-retirement/retired-surface-selftest.ts)
-  keeps retired runtime and shell surfaces from returning.
+## Architect and review lenses
 
-## Requirements
+The architect designs the task, not the code. Before proposing a non-trivial contract it lays out at least three materially different options, picks the cheapest one that is sufficient, and names its risks. Implementation details — names, file layout, libraries, tests — are left to the implementer within the published constraints.
 
-- Node/npm majors declared in `scripts/toolchain/node-version.json`
+A spec is never judged only by its author. Each lens comes from a separate agent in a fresh context:
+
+| Lens | Agent | When |
+| --- | --- | --- |
+| Independent architectural reviews, run in parallel | GPT, each in a new chat | complex tasks (T2, T3) |
+| Architectural lens from a different model family | Claude | the most complex tasks (T3) |
+| Final architectural review | GPT | every task |
+| Adversarial challenge of a draft | Codex ([`adversarial-draft-review`](.cursor/skills/adversarial-draft-review/SKILL.md)) or GPT ([`discuss-with-gpt`](.cursor/skills/discuss-with-gpt/SKILL.md)) | on request, before publishing |
+
+Reviewers publish their own findings on the Issue; nobody merges, rewrites, or silently drops another reviewer's findings.
+
+## Main workflows
+
+| Skill | Use it to |
+| --- | --- |
+| [`create-issue-draft`](.cursor/skills/create-issue-draft/SKILL.md) | Turn a brief into an accepted Issue (GPT author + independent reviews, depth by [tier](docs/tiering.md)). |
+| [`execute-issue-with-gpt`](.cursor/skills/execute-issue-with-gpt/SKILL.md) | Implement an accepted Issue through GPT, then drive the PR through review, CI, and smoke. |
+| [`review-pr-with-gpt`](.cursor/skills/review-pr-with-gpt/SKILL.md) | Review an existing PR on its current head. |
+| [`discuss-with-gpt`](.cursor/skills/discuss-with-gpt/SKILL.md) / [`adversarial-draft-review`](.cursor/skills/adversarial-draft-review/SKILL.md) | Challenge a draft or idea with GPT or Codex. |
+
+Merge is never the implementer's decision: it requires operator authority.
+
+## Start here
+
+Requirements:
+
+- Node **24.x** and npm **11.x** as declared by [`scripts/toolchain/node-version.json`](scripts/toolchain/node-version.json)
 - Git 2.25+
-- authenticated GitHub transport for repository operations
-- the configured agent and reviewer CLIs required by the selected workflow
+- authenticated GitHub transport
+- the runtime, agent, reviewer, and Browser-GPT capabilities your workflow needs
 
-Install dependencies from the frozen lockfile:
+Install and verify:
 
 ```bash
 npm ci --include=dev
 npm run check:node-major
+npm run check:npm-major
+node --experimental-strip-types scripts/verify.ts --strict-prereqs
+node --experimental-strip-types scripts/verify.ts --reusable-only
 ```
 
-## Verification
-
-Run the active repository checks from the current head:
+Full development check:
 
 ```bash
 npm run typecheck:foundation
@@ -91,41 +105,21 @@ npm run test:foundation
 npm run gate-runner-selftest
 node --experimental-strip-types scripts/runtime-retirement/retired-surface-selftest.ts
 node --experimental-strip-types scripts/verify.ts
-node --experimental-strip-types scripts/verify.ts --reusable-only
 ```
 
-Run affected plugin suites and task-specific focused tests in addition to these
-repository-wide checks. A success from an earlier commit is not current-head
-evidence.
+To use the pack with another repository, see [`docs/target_repo_setup.md`](docs/target_repo_setup.md).
 
-## Task workflow
+## Documentation
 
-1. Use a published GitHub Issue as the live specification.
-2. Record exact `denylist` and, when useful, `allowed-roots` blocks.
-3. Create a branch linked to the Issue.
-4. Implement the minimum behavior against runtime-neutral boundaries.
-5. Run local scope, tests, typecheck, lint, retirement scan, and verification.
-6. Open a PR whose first lines contain `Closes #N`, `Fixes #N`, or `Resolves #N`.
-7. Address findings and required CI on the same current head.
-8. Merge only under direct operator authority.
+README is an overview; the documents below are authoritative.
 
-See:
+- [`AGENTS.md`](AGENTS.md) — project policy, edit boundaries, merge rules
+- [`docs/orchestration-runbook.md`](docs/orchestration-runbook.md) — orchestrator, manager, and worker lifecycle
+- [`docs/browser-gpt-turn-runbook.md`](docs/browser-gpt-turn-runbook.md) — one tracked ChatGPT turn
+- [`docs/chatgpt-task-execution-runbook.md`](docs/chatgpt-task-execution-runbook.md) — multi-turn Issue execution through GPT
+- [`docs/tiering.md`](docs/tiering.md) — task complexity tiers
+- [`docs/repository_policy.md`](docs/repository_policy.md) — scope and reusable-content policy
+- [`docs/target_repo_setup.md`](docs/target_repo_setup.md) — deploying into a target repository
+- [`docs/migration_notes.md`](docs/migration_notes.md) — operator adoption notes
 
-- [`AGENTS.md`](AGENTS.md) for execution policy;
-- [`docs/tiering.md`](docs/tiering.md) for task complexity;
-- [`docs/repository_policy.md`](docs/repository_policy.md) for reusable content;
-- [`docs/chat-executor-rules.md`](docs/chat-executor-rules.md) for connected executor
-  behavior;
-- [`docs/target_repo_setup.md`](docs/target_repo_setup.md) for deploying the pack into a target project;
-- [`docs/migration_notes.md`](docs/migration_notes.md) for current operator adoption.
-
-## Security and state
-
-Do not commit credentials, private logs, generated runtime state, local worktrees,
-third-party private data, or user-machine configuration. Exact runtime effects
-require an adapter-produced `{ runtime, id, generation }` identity; names, paths,
-short IDs, stale records, and accounting values are not authority.
-
-Host cleanup of software or state from a removed runtime is optional operator work
-after merge. It is not a repository acceptance dependency and must not be used as a
-fallback execution path.
+Code: [`plugins/`](plugins) (task declaration, scope guard, accounting, review), [`scripts/runtime/`](scripts/runtime) (runtime adapter contracts), [`scripts/fleet/`](scripts/fleet) (wakeups), [`.github/workflows/`](.github/workflows) (CI).
