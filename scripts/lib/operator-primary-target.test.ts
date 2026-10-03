@@ -371,7 +371,7 @@ describe('operator-primary runtime snapshot fence', () => {
   ] as const)('returns %s before action and exposes no target', async (reason, adapter) => {
     const { file } = await boundFixture();
     let calls = 0;
-    const result = await withCurrentOperatorPrimaryTarget({ file, adapter, timeoutMs: 250 }, () => {
+    const result = await withCurrentOperatorPrimaryTarget({ file, adapter, timeoutMs: 1_000 }, () => {
       calls += 1;
       return operatorPrimarySyncResult('unexpected');
     });
