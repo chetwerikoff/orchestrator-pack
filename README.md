@@ -18,8 +18,8 @@ The concrete agent runtime can be replaced; the task, review, and evidence contr
 
 ## Why it is different
 
+- **Reviewed tasks.** Every task is a GitHub Issue that passes independent GPT review before anyone implements it ([how](#from-an-idea-to-an-accepted-issue)).
 - **Separate roles.** Orchestrator, manager, worker, and reviewer each own a distinct part of the work instead of one agent doing everything.
-- **Reviewed tasks.** Every task is a GitHub Issue that passes independent GPT review before anyone implements it.
 - **ChatGPT as a tracked transport.** Each GPT turn is recorded, can be resumed after a failure, and is never blindly re-sent.
 - **Automatic wakeups.** When a GPT turn finishes or stalls, the workflow that owns it is woken up — no human needs to watch the browser.
 - **GitHub is the truth.** What the chat says is advisory; progress is decided by the live Issue/PR state, current-head CI, and review.
@@ -34,6 +34,21 @@ The concrete agent runtime can be replaced; the task, review, and evidence contr
 | **Worker** | Implements one bounded change within the declared scope. |
 | **Reviewer** | Independently reviews the task or the PR and publishes findings. |
 | **Architect** | One-off design and specification help. |
+
+## From an idea to an accepted Issue
+
+Task creation is a workflow of its own, not a note written before the real work:
+
+```text
+[Brief] --> [GPT author] --> [Independent reviews] --> [Author answers findings] --> [Final review] --> [Accepted Issue]
+                 ^                                              |
+                 +------------- new Issue revision -------------+
+```
+
+- **The Issue is the spec.** The live GitHub Issue is the only task specification and queue entry.
+- **The author answers every finding.** Each review finding is either fixed in a new Issue revision or rejected with a reason — nothing is silently dropped.
+- **Review depth scales with complexity.** A simple task gets one review; a complex one gets several parallel GPT reviews plus a Claude review ([tiers](docs/tiering.md)).
+- **Acceptance is a label.** Only when the required reviews and answers line up does the Issue get `spec-review:accepted` and become ready to execute.
 
 ## Main workflows
 
