@@ -31,8 +31,8 @@ The concrete agent runtime can be replaced; the task, review, and evidence contr
 | Role | Responsibility |
 | --- | --- |
 | **Orchestrator** | Keeps the whole task alive, launches managers, recovers from failures. |
-| **Manager** | Owns one resumable workflow end to end: create an Issue, execute it, or review a PR. |
-| **Worker** | Implements one bounded change within the declared scope. |
+| **Manager** | Drives ChatGPT through one resumable workflow — create an Issue, execute it, or review a PR. It only steers the chat and checks GitHub, so it runs on a cheap model; the heavy reasoning happens in ChatGPT. |
+| **Worker** | Implements one bounded change within the declared scope. It can be ChatGPT (driven by a manager) or a local coding agent. |
 | **Reviewer** | Independently reviews the task or the PR and publishes findings. |
 | **Architect** | Decides what must be true, in what order, at which boundaries, and how success is proved; read-only unless explicitly authorized to edit. |
 
