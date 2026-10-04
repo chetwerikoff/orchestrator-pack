@@ -49,8 +49,12 @@ A proved assertion FAIL enters the existing fixer continuation and an explicit s
 on the corrected head without reopening the settled pack-review stage.
 
 The manager starts pack review with
-`npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER>` and never manufactures
-scheduler, WorkerStatus, WorkerReport, or review-candidate state.
+`npm run --silent pack-gpt-review -- --project <PROJECT_ID> --session-id <MANAGER_SESSION_ID> --pr-number <PR_NUMBER>`
+when it will park on the existing review-completion notification. The session id is the exact
+already-owned supervised session identity, never inferred from branch/worktree/title/PID. If no
+such binding is available, omit `--session-id`, keep the review command foregrounded/observed,
+consume its terminal result directly, and do not park waiting for `workerNotification`.
+The manager never manufactures scheduler, WorkerStatus, WorkerReport, or review-candidate state.
 
 ### Worker
 
@@ -307,9 +311,11 @@ Only the merge agent updates a branch from `origin/main`, once, immediately befo
 merge. Workers and coordinators never merge `main` merely to clear BEHIND.
 
 A new manual review
-`npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER>` starts only when
-review-independent required CI is green on the exact current head;
-`orchestrator-pack/pack-review` itself is excluded from that check.
+`npm run --silent pack-gpt-review -- --project <PROJECT_ID> [--session-id <SESSION_ID>] --pr-number <PR_NUMBER>`
+starts only when review-independent required CI is green on the exact current head;
+`orchestrator-pack/pack-review` itself is excluded from that check. A supervised caller that will
+park on completion supplies its exact owned session id; an unbound caller omits the option and
+keeps the command foregrounded/observed instead of waiting for a notification target that does not exist.
 
 For a frozen three-source review round, 3/3 settles normally. After the existing
 stale/grace threshold, 2/3 may settle once as
@@ -487,17 +493,18 @@ authority.
 Local Codex PR review is active through the pack-owned review runner. GitHub PR
 review is the authoritative verdict; the pack run store is operational state.
 
-- the canonical prescriptive review entrypoint is `npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER>`; scheduler/internal starts remain implementation details;
+- the canonical prescriptive review entrypoint is `npm run --silent pack-gpt-review -- --project <PROJECT_ID> [--session-id <SESSION_ID>] --pr-number <PR_NUMBER>`; a supervised caller that will park supplies its exact already-owned session id, while an unbound caller omits it and keeps the command foregrounded/observed; scheduler/internal starts remain implementation details;
 - the live PR supplies the current head and its closing reference supplies the Issue;
 - session-binding cache data is advisory correlation only and cannot veto a valid
   PR-led start or substitute a different repository, head, or Issue;
 - a missing exact bound Issue snapshot is captured only after the existing start
   claim is acquired, so concurrent first starts freeze one durable Issue body;
 - manual Browser-GPT review uses
-  `npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER>`; a new manual
-  review starts only when review-independent required CI is green for the exact
-  current PR head, with `orchestrator-pack/pack-review` itself excluded from
-  that precondition;
+  `npm run --silent pack-gpt-review -- --project <PROJECT_ID> [--session-id <SESSION_ID>] --pr-number <PR_NUMBER>`;
+  a supervised manager/worker supplies the exact already-owned session id before parking on completion,
+  while an unbound invocation stays foregrounded/observed and consumes its terminal result directly;
+  a new manual review starts only when review-independent required CI is green for the exact current
+  PR head, with `orchestrator-pack/pack-review` itself excluded from that precondition;
 - review start/list/status use the pack runner, run store, and claim authority;
 - no concrete runtime transport is a fallback review path;
 - terminal review JSON on stdout must be non-empty and valid;
