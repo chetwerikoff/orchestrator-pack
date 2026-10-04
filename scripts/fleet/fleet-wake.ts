@@ -141,6 +141,7 @@ export interface FleetAlarmTickOptions {
   readonly listOpenPulls?: (repository: string) => readonly OpenPullHead[];
   readonly checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
   readonly supervisedPullOwner?: (pull: OpenPullHead, panes: readonly FleetPaneObservation[]) => FleetPaneObservation | undefined;
+  readonly readWorktreeHead?: (worktreePath: string) => string | undefined;
 }
 
 export type FleetAlarmTickResult =
@@ -446,8 +447,27 @@ function envelopeOwner(cwd: string, panes: readonly FleetPaneObservation[]): Fle
   }));
 }
 
-function pullOwner(pull: OpenPullHead, panes: readonly FleetPaneObservation[]): FleetPaneObservation | undefined {
-  return onlyPane(panes.filter((pane) => pane.branch === `refs/heads/${pull.ref}`));
+export function readWorktreeHead(worktreePath: string): string | undefined {
+  const result = runProcessSync({
+    command: 'git',
+    args: ['rev-parse', 'HEAD'],
+    cwd: worktreePath,
+    timeoutMs: 5_000,
+    inheritParentEnv: true,
+  });
+  const sha = result.ok ? result.stdout.trim() : '';
+  return /^[0-9a-f]{40}$/u.test(sha) ? sha : undefined;
+}
+
+// A branch pushed under another name still owns the PR when its worktree sits on the PR head.
+function pullOwner(
+  pull: OpenPullHead,
+  panes: readonly FleetPaneObservation[],
+  headOf: (worktreePath: string) => string | undefined,
+): FleetPaneObservation | undefined {
+  const onBranch = onlyPane(panes.filter((pane) => pane.branch === `refs/heads/${pull.ref}`));
+  if (onBranch) return onBranch;
+  return onlyPane(panes.filter((pane) => pane.worktreePath && headOf(pane.worktreePath) === pull.sha));
 }
 
 type OrcaReceipt = { readonly ok?: boolean; readonly result?: Record<string, unknown> };
@@ -532,13 +552,28 @@ async function wakePanesOnEvents(
   if (repository && observations.some(idlePane)) {
     const finishedAt = options.checkRunsFinishedAt ?? checkRunsFinishedAt;
     const ownerForPull = options.supervisedPullOwner ?? ((candidate, panes) => supervisedOwnerForPull(candidate, panes, executor));
+    const readHead = options.readWorktreeHead ?? readWorktreeHead;
+    const heads = new Map<string, string | undefined>();
+    const headOf = (worktreePath: string): string | undefined => {
+      if (!heads.has(worktreePath)) heads.set(worktreePath, readHead(worktreePath));
+      return heads.get(worktreePath);
+    };
     for (const pull of (options.listOpenPulls ?? listOpenPullHeads)(repository)) {
       const at = finishedAt(repository, pull.sha);
       if (at === undefined) continue;
-      const pane = pull.issue ? ownerForPull(pull, observations) : pullOwner(pull, observations);
-      if (!pane || !idlePane(pane)) continue;
+      // An exact supervised manager wins; a manager started outside orchestration owns the PR by its head.
+      const pane = (pull.issue ? ownerForPull(pull, observations) : undefined) ?? pullOwner(pull, observations, headOf);
       // A re-run of failed checks on the same head is a new event.
       const key = `ci:${pull.number}:${pull.sha}:${at}`;
+      if (!pane) {
+        const unowned = `ci-unowned:${pull.number}:${pull.sha}:${at}`;
+        if (!store.hasParkedWakeEvent(unowned)) {
+          store.markParkedWakeEvent(unowned);
+          log(`no owner pane for PR #${pull.number}: CI finished on ${pull.sha}`);
+        }
+        continue;
+      }
+      if (!idlePane(pane)) continue;
       if (store.hasParkedWakeEvent(key)) continue;
       wakes.push({ pane, key, message: `Wake: CI on ${pull.sha} finished for PR #${pull.number}` });
     }
