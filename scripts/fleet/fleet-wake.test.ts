@@ -90,6 +90,7 @@ async function tick(input: {
   listOpenPulls?: (repository: string) => readonly OpenPullHead[];
   checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
   supervisedPullOwner?: (pull: OpenPullHead, panes: readonly FleetPaneObservation[]) => FleetPaneObservation | undefined;
+  readWorktreeHead?: (worktreePath: string) => string | undefined;
 }) {
   const calls: string[][] = [];
   const logs: string[] = [];
@@ -106,6 +107,7 @@ async function tick(input: {
     ...(input.listOpenPulls ? { listOpenPulls: input.listOpenPulls } : {}),
     ...(input.checkRunsFinishedAt ? { checkRunsFinishedAt: input.checkRunsFinishedAt } : {}),
     ...(input.supervisedPullOwner ? { supervisedPullOwner: input.supervisedPullOwner } : {}),
+    readWorktreeHead: input.readWorktreeHead ?? (() => undefined),
   });
   return { result, calls, logs, sleeps, store };
 }
@@ -365,6 +367,46 @@ describe('fleet alarm', () => {
     expect(sendsTo(observed.calls, 'foreign')).toHaveLength(0);
     expect(observed.calls).toContainEqual(['orchestration', 'dispatch-show', '--task', 'task-145', '--json']);
     expect(observed.calls).toContainEqual(['orchestration', 'worker-show', '--dispatch', 'ctx-manager', '--json']);
+  });
+
+  it('falls back to the pane on the PR head when no supervised dispatch owns the Issue', async () => {
+    const head = 'e'.repeat(40);
+    const manager: FleetTerminal = {
+      handle: 'mgr', title: 'OpenCode manager', worktreePath: `${workerBase}/leopoker-mgr-148`,
+      branch: 'refs/heads/chetwerikoff/leopoker-mgr-148', agentIdentity: 'opencode',
+    };
+    const observed = await tick({
+      terminals: [terminals[0]!, manager],
+      screens: { coord: 'idle', mgr: 'PARKED on CI' },
+      config: config({ chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'chetwerikoff/LeoPoker' } }),
+      listOpenPulls: () => [{ number: 153, ref: 'leopoker-mgr-148', sha: head, issue: 148 }],
+      checkRunsFinishedAt: () => Date.parse('2026-10-04T13:21:06Z'),
+      supervisedPullOwner: () => undefined,
+      readWorktreeHead: (worktreePath) => worktreePath === manager.worktreePath ? head : undefined,
+    });
+    expect(sendsTo(observed.calls, 'mgr')[0]).toContain(`Wake: CI on ${head} finished for PR #153`);
+  });
+
+  it('logs a finished-CI PR without an owner pane once per CI event', async () => {
+    const store = new MemoryWakeStore();
+    const head = 'f'.repeat(40);
+    const input = {
+      store,
+      terminals: [terminals[0]!, terminals[1]!],
+      screens: { coord: 'idle', one: 'PARKED on CI' },
+      config: config({ chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'chetwerikoff/LeoPoker' } }),
+      listOpenPulls: () => [{ number: 160, ref: 'nobody-here', sha: head, issue: 159 }],
+      supervisedPullOwner: () => undefined,
+    };
+    const first = await tick({ ...input, checkRunsFinishedAt: () => Date.parse('2026-10-04T13:00:00Z') });
+    expect(first.logs).toContain(`no owner pane for PR #160: CI finished on ${head}`);
+    expect(sendsTo(first.calls, 'one')).toHaveLength(0);
+
+    const repeated = await tick({ ...input, checkRunsFinishedAt: () => Date.parse('2026-10-04T13:00:00Z') });
+    expect(repeated.logs.filter((line) => line.startsWith('no owner pane'))).toHaveLength(0);
+
+    const rerun = await tick({ ...input, checkRunsFinishedAt: () => Date.parse('2026-10-04T14:00:00Z') });
+    expect(rerun.logs).toContain(`no owner pane for PR #160: CI finished on ${head}`);
   });
 
   it('does not wake a pane when CI check-runs remain pending regardless of later review status', async () => {
