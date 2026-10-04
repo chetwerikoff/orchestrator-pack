@@ -1,0 +1,27 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2372,
+  "declared_paths": [
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/declarations/2372.pr-scope.json",
+    "docs/orchestration-runbook.md",
+    "scripts/pack-gpt-review.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/declarations/2372.pr-scope.json",
+    "docs/orchestration-runbook.md",
+    "scripts/pack-gpt-review.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.ts"
+  ],
+  "source_revision": "30ef38d461ea70722a81bce88b2213199e9317e2"
+}

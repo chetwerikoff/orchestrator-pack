@@ -99,7 +99,11 @@ candidate-complete current PR/head with required CI green, the manager enters th
 shared review phase; it does not report overall `VERIFIED_COMPLETE`.
 
 The shared review phase invokes only the canonical
-`npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER>` runner. Required
+`npm run --silent pack-gpt-review -- --project <PROJECT_ID> --session-id <MANAGER_SESSION_ID> --pr-number <PR_NUMBER>`
+runner when the supervised manager will park on review completion. The session id is the manager's
+exact already-owned supervised identity; never infer it from branch/worktree/title/PID. If that
+binding is unavailable, omit `--session-id`, keep the runner foregrounded/observed, consume its
+terminal result directly, and do not park waiting for `workerNotification`. Required
 reviewer sources are fresh project chats owned by that runner. A findings-bearing
 logical round gets one fresh GPT fixer conversation distinct from the
 implementation conversation and every reviewer conversation; after a
