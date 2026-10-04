@@ -906,12 +906,23 @@ describe('programmatic pack-review project binding', () => {
 });
 
 describe('canonical Browser-GPT PR command (Issue #1111)', () => {
-  it('accepts PR number only and rejects caller-supplied head SHA', () => {
+  it('accepts PR number with optional project/session binding and rejects caller-supplied head SHA', () => {
     expect(parsePackGptReviewArgs(['--pr-number', '1111'])).toEqual({
       prNumber: 1111,
       timeoutSeconds: undefined,
     });
+    expect(parsePackGptReviewArgs([
+      '--project', 'leopoker',
+      '--session-id', 'leopoker-mgr-145',
+      '--pr-number', '1111',
+    ])).toEqual({
+      prNumber: 1111,
+      projectId: 'leopoker',
+      sessionId: 'leopoker-mgr-145',
+      timeoutSeconds: undefined,
+    });
     expect(() => parsePackGptReviewArgs([])).toThrow('--pr-number is required');
+    expect(() => parsePackGptReviewArgs(['--session-id'])).toThrow('--session-id requires a value');
     expect(() => parsePackGptReviewArgs([
       '--pr-number', '1111', '--head-sha', HEAD_A,
     ])).toThrow("unknown argument '--head-sha'");
@@ -991,6 +1002,97 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     expect(String(payload.reason)).toContain(
       'target gh host mismatch from GH_HOST: expected github.com, got git.example.test',
     );
+  });
+
+  it('forwards only an explicit launch-session binding to the review start', async () => {
+    const starts: Array<Parameters<typeof startPackReview>[0]> = [];
+    const startReview = async (input: Parameters<typeof startPackReview>[0]) => {
+      starts.push(input);
+      return {
+        ok: true,
+        created: true,
+        reused: false,
+        prNumber: 1111,
+        headSha: HEAD_A,
+        runId: `prr-session-${starts.length}`,
+        status: 'up_to_date',
+      };
+    };
+
+    const bound = await runPackGptReviewCommand({
+      prNumber: 1111,
+      sessionId: 'leopoker-mgr-145',
+      timeoutSeconds: 37,
+    }, {
+      env: {},
+      stderr: { write: () => undefined },
+      startReview,
+    });
+    const unbound = await runPackGptReviewCommand({
+      prNumber: 1111,
+      timeoutSeconds: 37,
+    }, {
+      env: {},
+      stderr: { write: () => undefined },
+      startReview,
+    });
+
+    expect(bound.exitCode).toBe(0);
+    expect(unbound.exitCode).toBe(0);
+    expect(starts[0]).toMatchObject({
+      prNumber: 1111,
+      sessionId: 'leopoker-mgr-145',
+      startReason: 'manual-browser-gpt',
+      surface: 'pack-gpt-review',
+    });
+    expect(starts[1]).not.toHaveProperty('sessionId');
+  });
+
+  it('delivers a cross-project manual review notification to the launching session', async () => {
+    const storeRoot = tempRoot('opk-issue-2372-cross-project-');
+    const reviewCapture = path.join(storeRoot, 'github-review.json');
+    const notificationCapture = path.join(storeRoot, 'worker-notification.json');
+    harnessEnv(storeRoot, reviewCapture);
+    process.env.OPK_REVIEW_CLAIM_DIR = path.join(
+      storeRoot,
+      'ao-base',
+      'projects',
+      'leopoker',
+      'review-start-claims',
+    );
+    process.env.PACK_REVIEW_WORKER_NOTIFICATION_CAPTURE_FILE = notificationCapture;
+
+    const result = await startPackReview({
+      projectId: 'leopoker',
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      sessionId: 'leopoker-mgr-145',
+      prNumber: 1111,
+      headSha: HEAD_A,
+      startReason: 'manual-browser-gpt',
+      surface: 'pack-gpt-review',
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixturePrState: 'OPEN',
+      fixtureRepoSlug: 'chetwerikoff/LeoPoker',
+      fixturePostReviewHeadSha: HEAD_A,
+      fixtureReviewStdout: cleanTerminalPayload(),
+      fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      fixtureIssueNumber: 2372,
+    });
+
+    expect(result).toMatchObject({ ok: true, created: true });
+    const runs = listPackReviewRuns({ projectId: 'leopoker', storeRoot });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      projectId: 'leopoker',
+      linkedSessionId: 'leopoker-mgr-145',
+      deliveryOutcomes: {
+        workerNotification: { state: 'succeeded' },
+      },
+    });
+    expect(JSON.parse(readFileSync(notificationCapture, 'utf8'))).toMatchObject({
+      workerId: 'leopoker-mgr-145',
+    });
   });
 
   it('resolves a PR-only target, binds GPT above persistent layers, and emits one start indication', async () => {
