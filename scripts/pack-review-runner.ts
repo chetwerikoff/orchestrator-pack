@@ -3003,6 +3003,8 @@ async function resumeRecoveredGptDelivery(options: {
     notifyWorker: options.input.fixtureWorkerNotifier ?? ((request) => sendPackReviewWorkerNotification({
       trustedPackRoot: options.run.trustedPackRoot,
       sessionId: options.run.linkedSessionId,
+      projectId: options.projectId,
+      storeRoot: options.storeRoot,
       request,
     })),
   });
@@ -4797,6 +4799,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         notifyWorker: input.fixtureWorkerNotifier ?? ((request) => sendPackReviewWorkerNotification({
           trustedPackRoot: trusted.trustedPackRoot,
           sessionId: target.sessionId || resumeCandidate.linkedSessionId,
+          projectId,
+          storeRoot,
           request,
         })),
       });
@@ -5484,6 +5488,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       notifyWorker: input.fixtureWorkerNotifier ?? ((request) => sendPackReviewWorkerNotification({
         trustedPackRoot: trusted.trustedPackRoot,
         sessionId: target.sessionId,
+        projectId,
+        storeRoot,
         request,
       })),
     });
