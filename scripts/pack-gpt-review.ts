@@ -18,6 +18,7 @@ type TextWriter = {
 export interface PackGptReviewOptions {
   prNumber: number;
   projectId?: string;
+  sessionId?: string;
   timeoutSeconds?: number;
 }
 
@@ -60,7 +61,7 @@ export function packGptReviewUsage(): string {
     'Canonical Browser-GPT pack review (Issue #1111)',
     '',
     'Usage:',
-    '  npm run --silent pack-gpt-review -- [--project <id>] --pr-number <n> [--timeout-seconds <n>]',
+    '  npm run --silent pack-gpt-review -- [--project <id>] [--session-id <id>] --pr-number <n> [--timeout-seconds <n>]',
     '  or select the card with OPK_PROJECT_ID for this invocation.',
     '',
     'The command resolves the selected project card and live OPEN PR head, binds GPT for this invocation,',
@@ -72,6 +73,7 @@ export function packGptReviewUsage(): string {
 export function parsePackGptReviewArgs(argv: readonly string[]): PackGptReviewOptions {
   let prNumber: number | undefined;
   let projectId: string | undefined;
+  let sessionId: string | undefined;
   let timeoutSeconds: number | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index]!;
@@ -79,6 +81,10 @@ export function parsePackGptReviewArgs(argv: readonly string[]): PackGptReviewOp
       case '--project':
         projectId = trim(argv[++index]);
         if (!projectId) throw new Error('--project requires a value');
+        break;
+      case '--session-id':
+        sessionId = trim(argv[++index]);
+        if (!sessionId) throw new Error('--session-id requires a value');
         break;
       case '--pr-number':
         prNumber = positiveInteger(argv[++index], '--pr-number');
@@ -94,7 +100,12 @@ export function parsePackGptReviewArgs(argv: readonly string[]): PackGptReviewOp
   if (!prNumber) {
     throw new Error(`--pr-number is required\n${packGptReviewUsage()}`);
   }
-  return { prNumber, ...(projectId ? { projectId } : {}), timeoutSeconds };
+  return {
+    prNumber,
+    ...(projectId ? { projectId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    timeoutSeconds,
+  };
 }
 
 export async function runPackGptReviewCommand(
@@ -114,6 +125,7 @@ export async function runPackGptReviewCommand(
     const result = await startReview({
       prNumber: positiveInteger(options.prNumber, 'prNumber'),
       ...(target ? { projectId: target.projectId, sourceRepoRoot: target.primaryRoot } : {}),
+      ...(options.sessionId ? { sessionId: options.sessionId } : {}),
       timeoutSeconds: options.timeoutSeconds ?? resolvePackGptReviewTimeoutSeconds(),
       startReason: 'manual-browser-gpt',
       surface: 'pack-gpt-review',
