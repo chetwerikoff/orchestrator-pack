@@ -1075,7 +1075,11 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
       fixturePrState: 'OPEN',
       fixtureRepoSlug: 'chetwerikoff/LeoPoker',
       fixturePostReviewHeadSha: HEAD_A,
-      fixtureReviewStdout: cleanTerminalPayload(),
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-2372-source-01') }],
+        'source-02': [{ stdout: successfulCleanReviewPayload('inv-2372-source-02') }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-2372-source-03') }],
+      },
       fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
       fixtureIssueNumber: 2372,
     });
