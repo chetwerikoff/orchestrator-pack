@@ -578,7 +578,7 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
     expect(invocationLogCount(invocationLog)).toBe(3);
     const runId = String(first.runId);
     const beforeRecovery = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
-    expect(beforeRecovery?.status).toBe('running');
+    expect(beforeRecovery?.status).toBe('preparing');
     expect(beforeRecovery?.reviewVerdict).toBeUndefined();
 
     const second = await startPackReview(common);
