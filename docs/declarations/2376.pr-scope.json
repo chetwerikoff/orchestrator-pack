@@ -1,0 +1,22 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2376,
+  "declared_paths": [
+    "docs/declarations/2376.pr-scope.json",
+    "scripts/pack-review-runner.ts",
+    "tests/agents-md-pack-review-2376.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/execute-issue-manager-boundary.ts",
+    "scripts/pack-review-runner.ts",
+    "tests/"
+  ],
+  "source_revision": "6288388e2a2f0e34876170f21b7a1cb80faa1c9f"
+}
