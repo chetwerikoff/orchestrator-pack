@@ -282,6 +282,8 @@ export interface ReconcileStalePackReviewRunsInput {
   storeRoot?: string;
   prNumber?: number;
   immediate?: boolean;
+  /** Internal pre-start switch: recover active GPT sources without public --immediate final-cap semantics. */
+  recoverActiveGptSources?: boolean;
   /**
    * Controls whether this reconciliation invocation may create a new degraded
    * partial settlement after grace. Production entrypoints set this explicitly:
@@ -913,7 +915,7 @@ export async function resolvePackReviewReconcileRepository(input: {
         `pack review reconcile repository ${explicitRepository} does not match selected target ${input.selectedTarget.repository}`,
       );
     }
-    return explicitRepository;
+    return input.selectedTarget?.repository ?? explicitRepository;
   }
 
   const observedRepository = await (input.resolveRepository ?? resolveRepositorySlug)(input.sourceRepoRoot);
@@ -3508,10 +3510,10 @@ export async function reconcileStalePackReviewRuns(
   for (const candidate of records) {
     const activeStale = isPackReviewRunStale(candidate);
     const unfinishedTerminal = isPackReviewUnfinishedTerminalRun(candidate);
-    const immediateActive = input.immediate === true
+    const activeGptRecovery = (input.immediate === true || input.recoverActiveGptSources === true)
       && PACK_REVIEW_ACTIVE_STATUSES.has(candidate.status)
       && candidate.reviewRound?.reviewer === 'gpt';
-    if (!activeStale && !unfinishedTerminal && !immediateActive) continue;
+    if (!activeStale && !unfinishedTerminal && !activeGptRecovery) continue;
 
     const unresolvedIdentity = await findUnresolvedSameHeadRepositoryIdentity({
       projectId,
@@ -3628,7 +3630,7 @@ export async function reconcileStalePackReviewRuns(
       }
     }
 
-    if (activeStale || immediateActive || needsGptSourceRecovery) {
+    if (activeStale || activeGptRecovery || needsGptSourceRecovery) {
       const recovery = await recoverStaleGptSourceComments({
         run,
         input,
@@ -3696,7 +3698,7 @@ export async function reconcileStalePackReviewRuns(
         });
         continue;
       }
-      if (immediateActive
+      if (activeGptRecovery
           && recoveryCoverage?.kind === 'partial'
           && recovery.graceExpired
           && recovery.reason.startsWith('gpt_sources_incomplete_after_grace:')) {
@@ -3737,7 +3739,7 @@ export async function reconcileStalePackReviewRuns(
         });
         continue;
       }
-      if (immediateActive && !activeStale) {
+      if (activeGptRecovery && !activeStale) {
         results.push({
           runId: run.id,
           terminalized: false,
@@ -4251,7 +4253,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     projectId,
     storeRoot,
     prNumber: target.prNumber,
-    immediate: true,
+    recoverActiveGptSources: true,
     fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
     fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
     ...(recoverableGptFixture ? {
