@@ -977,6 +977,31 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(projectSurfaceUrlsEquivalent(SHARED_CONV, canonical)).toBe(false);
   });
 
+  it('binds every launcher-chain goto to the shared navigation timeout', () => {
+    expect(STATE_LIGHT_NAVIGATION_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
+    const sources = [
+      ['state-light-session.ts', 1],
+      ['state-light-fresh-conversation.ts', 2],
+      ['state-light-turn-base.ts', 3],
+    ] as const;
+
+    for (const [file, expectedCallsites] of sources) {
+      const source = readFileSync(
+        join(process.cwd(), 'scripts', 'chatgpt-browser-turn', file),
+        'utf8',
+      );
+      const gotoCallsites = source.match(
+        /(?:state\.page|page|successor)\.goto\([\s\S]*?\n\s*\}\);/gu,
+      ) ?? [];
+      expect(gotoCallsites, file).toHaveLength(expectedCallsites);
+      for (const callsite of gotoCallsites) {
+        expect(callsite, file).toContain(
+          'timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS',
+        );
+      }
+    }
+  });
+
   it('reloads the project surface when the current URL still carries a conversation id', async () => {
     const navigation = new StateLightNavigationCounter();
     let url = SHARED_CONV;
