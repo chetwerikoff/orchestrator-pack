@@ -533,7 +533,7 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
     expect(recovered?.deliveryOutcomes.workerNotification?.state).toBe('delivered');
   });
 
-  it('restarts after credentialed publication before slot persistence without reviewer resend and preserves a finding plus lost browser return', async () => {
+  it('settles an active all-slots-credentialed crash without reviewer resend and preserves a lost browser finding', async () => {
     const storeRoot = tempRoot();
     const invocationLog = join(storeRoot, 'invocations.jsonl');
     process.env.OPK_VITEST_HARNESS = '1';
@@ -574,17 +574,16 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
     });
     expect(first.ok).toBe(false);
     expect(first.reason).toBe('fixture_crash_after_gpt_source_comment_credentialed');
+    expect(publications.size).toBe(3);
     expect(invocationLogCount(invocationLog)).toBe(3);
     const runId = String(first.runId);
-    const staleAt = new Date('2026-08-16T00:00:00Z');
-    updatePackReviewRun(runId, {
-      status: 'running',
-      latestRunStatus: 'running',
-      runnerPid: 2147483647,
-    }, { projectId: 'orchestrator-pack', storeRoot, now: staleAt });
+    const beforeRecovery = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+    expect(beforeRecovery?.status).toBe('running');
+    expect(beforeRecovery?.reviewVerdict).toBeUndefined();
 
     const second = await startPackReview(common);
     expect(second.ok).toBe(true);
+    expect(String(second.reason ?? '')).not.toBe('reply_recovery_required');
     expect(invocationLogCount(invocationLog)).toBe(3);
     expect(review.posts).toBe(1);
     expect(statusWrites.length).toBeGreaterThanOrEqual(1);
@@ -593,6 +592,8 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
     expect(recovered?.id).toBe(runId);
     expect(recovered?.reviewVerdict).toBe('findings');
     expect(recovered?.findingCount).toBe(1);
+    expect(recovered?.journalOutcome?.state).toBe('persisted');
+    expect(recovered?.deliveryOutcomes.requiredStatus?.state).toBe('succeeded');
     expect(recovered?.reviewRound?.sourceSlots.every((slot) => slot.terminalClass === 'complete_clean'
       || slot.terminalClass === 'complete_findings')).toBe(true);
   });
