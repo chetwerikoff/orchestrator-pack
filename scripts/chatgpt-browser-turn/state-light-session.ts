@@ -30,6 +30,7 @@ import {
 } from './owned-prompt-marker.ts';
 import {
   STATE_LIGHT_MAX_TIMEOUT_MS,
+  STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
   StateLightNavigationCounter,
   acquireStateLightNewChatSendSlot,
   conversationUuidFromUrl,
@@ -1132,7 +1133,7 @@ async function setupOwnedPage(
     state.navigation.recordGoto();
     await state.page.goto(target, {
       waitUntil: 'domcontentloaded',
-      timeout: Math.min(MAX_LOCAL_READ_WAIT_MS * 6, Math.max(1, remainingMs(state, deps))),
+      timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
     });
     if (!deadlineOpen(state, deps)) throw new Error('whole_session_deadline_exhausted');
     if (!state.config.browser.newChat) {

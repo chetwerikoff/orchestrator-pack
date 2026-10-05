@@ -154,6 +154,7 @@ import {
   StateLightNavigationCounter,
   STATE_LIGHT_ADVISORY_WALL_TTL_MS,
   STATE_LIGHT_MAX_NAVIGATIONS_PER_INVOCATION,
+  STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
   tryClaimStateLightFreshConversation,
   verifyStateLightSendSlotOwnerFence,
   verifyStateLightFreshClaimOwnerFence,
@@ -987,10 +988,14 @@ describe('state-light fresh conversation collision recovery', () => {
       locator: vi.fn(() => scalarLocator({ count: vi.fn(async () => 0) })),
     };
 
-    await openBlankProjectChatSurface(page, PROJECT_URL, 5_000, navigation);
+    await openBlankProjectChatSurface(page, PROJECT_URL, navigation);
 
     expect(page.goto).toHaveBeenCalledTimes(1);
-    expect(page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), expect.any(Object));
+    expect(STATE_LIGHT_NAVIGATION_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
+    expect(page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), {
+      waitUntil: 'domcontentloaded',
+      timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
+    });
     expect(navigation.snapshotGoto()).toBe(1);
   });
 
@@ -1032,9 +1037,9 @@ describe('state-light fresh conversation collision recovery', () => {
       url: vi.fn(() => url),
       locator: vi.fn(() => scalarLocator({ count: vi.fn(async () => 0) })),
     };
-    await openBlankProjectChatSurface(page, PROJECT_URL, 5_000, navigation);
+    await openBlankProjectChatSurface(page, PROJECT_URL, navigation);
     url = SHARED_CONV;
-    await expect(openBlankProjectChatSurface(page, PROJECT_URL, 5_000, navigation)).rejects.toThrow(
+    await expect(openBlankProjectChatSurface(page, PROJECT_URL, navigation)).rejects.toThrow(
       'state_light_navigation_budget_exhausted',
     );
   });
@@ -1106,6 +1111,10 @@ describe('state-light fresh conversation collision recovery', () => {
 
     expect(outcome.code).toBe(0);
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), {
+      waitUntil: 'domcontentloaded',
+      timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
+    });
     expect(outcome.result.incidents).toContain('send_observation_deferred');
     expect(outcome.result.state).not.toBe('send_failed');
   });
@@ -1118,8 +1127,11 @@ describe('state-light fresh conversation collision recovery', () => {
       goto: vi.fn(async (target: string) => { url = target; }),
       url: vi.fn(() => url),
     };
-    await navigateToProjectConversationIfNeeded(page, conversation, navigation, 5_000);
-    expect(page.goto).toHaveBeenCalledWith(conversation, expect.any(Object));
+    await navigateToProjectConversationIfNeeded(page, conversation, navigation);
+    expect(page.goto).toHaveBeenCalledWith(conversation, {
+      waitUntil: 'domcontentloaded',
+      timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
+    });
     expect(url).toBe(conversation);
   });
 

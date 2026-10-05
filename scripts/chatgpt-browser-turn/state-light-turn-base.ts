@@ -48,6 +48,7 @@ import {
   StateLightNavigationCounter,
   STATE_LIGHT_FRESH_RECOVERY_ATTEMPTS,
   STATE_LIGHT_MAX_TIMEOUT_MS,
+  STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
   tryClaimStateLightFreshConversation,
   navigateToProjectConversationIfNeeded,
   readProjectConversationUrl,
@@ -134,8 +135,6 @@ const STABILITY_READ_DELAY_MS = 1_000;
 const COMPLETION_CONFIRM_POLL_MS = 1_000;
 const DIAGNOSTIC_HEAD_CHARS = 300;
 export const MAX_LOCAL_READ_WAIT_MS = 5_000;
-/** Long existing conversations can need well over 30 s to reach domcontentloaded. */
-const EXISTING_CONVERSATION_NAVIGATION_TIMEOUT_MS = 120_000;
 const EXISTING_GENERATION_RESUME_WINDOW_MS = 30_000;
 const EXISTING_GENERATION_WAIT_ROUND_MS = 10 * 60_000;
 const EXISTING_GENERATION_WAIT_ROUNDS = 2;
@@ -2143,10 +2142,7 @@ async function navigateOwnedTurnPage(
   navigation.recordGoto();
   await page.goto(target, {
     waitUntil: 'domcontentloaded',
-    timeout: Math.min(
-      config.newChat ? MAX_LOCAL_READ_WAIT_MS * 6 : EXISTING_CONVERSATION_NAVIGATION_TIMEOUT_MS,
-      config.timeoutMs,
-    ),
+    timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
   });
   if (!config.newChat && !ownedConversationIdentityMatches(page.url(), target)) {
     throw new Error('ui_contract_mismatch:conversation_redirect');
@@ -3139,7 +3135,6 @@ async function runTurn(
         page,
         ownedConversationUrl,
         navigation,
-        Math.min(MAX_LOCAL_READ_WAIT_MS * 6, config.timeoutMs),
       );
     }
 
@@ -3292,10 +3287,7 @@ async function runTurn(
             navigation.recordGoto();
             await successor.goto(immutableConversationUrl, {
               waitUntil: 'domcontentloaded',
-              timeout: Math.min(
-                MAX_LOCAL_READ_WAIT_MS * 6,
-                Math.max(1, hardExhaustionDeadline - Date.now()),
-              ),
+              timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
             });
             return successor;
           },
@@ -3395,7 +3387,6 @@ async function runTurn(
           page,
           ownedConversationUrl,
           navigation,
-          Math.min(MAX_LOCAL_READ_WAIT_MS * 6, config.timeoutMs),
         );
       }
       if (targetChatUrl) {
@@ -3918,10 +3909,7 @@ async function runTurn(
             navigation.recordGoto();
             await page.goto(durableConversationUrl, {
               waitUntil: 'domcontentloaded',
-              timeout: Math.min(
-                MAX_LOCAL_READ_WAIT_MS * 6,
-                Math.max(1, hardExhaustionDeadline - Date.now()),
-              ),
+              timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
             });
           } catch (error) {
             if (isPostSendTargetCrash(error)) throw error;

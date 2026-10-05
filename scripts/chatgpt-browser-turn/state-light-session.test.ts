@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { InputSnapshot } from './input.ts';
+import { STATE_LIGHT_NAVIGATION_TIMEOUT_MS } from './state-light-fresh-conversation.ts';
 import {
   COMPOSER_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR,
@@ -47,6 +48,7 @@ interface Harness {
   readonly dependencies: Partial<StateLightSessionDependencies>;
   readonly metrics: { sends: number; pages: number; gotos: number; closes: number; releases: number };
   readonly messages: Array<{ role: 'user' | 'assistant'; text: string }>;
+  readonly gotoTimeouts: Array<number | undefined>;
   nowMs: number;
   composerText: string;
 }
@@ -67,6 +69,7 @@ function makeHarness(
   } = {},
 ): Harness {
   const metrics = { sends: 0, pages: 0, gotos: 0, closes: 0, releases: 0 };
+  const gotoTimeouts: Array<number | undefined> = [];
   const messages: Array<{ role: 'user' | 'assistant'; text: string }> = [];
   const snapshots = new Map<string, InputSnapshot>();
   payloads.forEach((text, index) => {
@@ -87,7 +90,7 @@ function makeHarness(
   const page = {
     __fakeBrowserGptPage: true,
     url: () => options.pageUrl?.() ?? 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111',
-    goto: async () => { metrics.gotos += 1; },
+    goto: async (_target: string, options?: { timeout?: number }) => { metrics.gotos += 1; gotoTimeouts.push(options?.timeout); },
     close: async () => { metrics.closes += 1; },
     waitForTimeout: async (ms: number) => { nowMs += ms; },
     locator: (selector: string) => {
@@ -218,6 +221,7 @@ function makeHarness(
     dependencies,
     metrics,
     messages,
+    gotoTimeouts,
     get nowMs() { return nowMs; },
     set nowMs(value: number) { nowMs = value; },
     get composerText() { return composerText; },
@@ -240,6 +244,8 @@ describe('state-light explicit session mode', () => {
 
     expect(exit).toBe(0);
     expect(harness.metrics).toEqual({ sends: 3, pages: 1, gotos: 1, closes: 1, releases: 1 });
+    expect(STATE_LIGHT_NAVIGATION_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
+    expect(harness.gotoTimeouts).toEqual([STATE_LIGHT_NAVIGATION_TIMEOUT_MS]);
     const payloadRecords = records(harness.stream);
     expect(payloadRecords.map((record) => [record.ordinal, record.phase])).toEqual([
       [1, 'dispatch-latched'], [1, 'delivery-bound'], [1, 'terminal'],
