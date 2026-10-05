@@ -22,10 +22,16 @@ import {
   parseArgs,
   reconcileStalePackReviewRuns,
   resolveCurrentPrHead,
+  resolvePackReviewReconcileRepository,
   startPackReview,
 } from './pack-review-runner.js';
 import type { CarryoverReplayResult } from './pack-review-carryover.js';
-import { initializePackReviewAuthority, readPackReviewAuthority } from './pack-review-state.js';
+import {
+  PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+  commitPackReviewTerminal,
+  initializePackReviewAuthority,
+  readPackReviewAuthority,
+} from './pack-review-state.js';
 import { packReviewDeliveryNeedsResume } from './lib/pack-review-delivery.js';
 import {
   createPackReviewRun,
@@ -894,6 +900,164 @@ describe('pack-review runner target selection CLI', () => {
 
     expect(input).toMatchObject({ targetProjectId: 'orchestrator-pack', projectId: 'orchestrator-pack' });
     expect(process.env.OPK_PROJECT_ID).toBe('orchestrator-pack');
+  });
+
+  it('canonicalizes mixed-case explicit reconcile repository before run identity matching', async () => {
+    const storeRoot = tempRoot('opk-issue-2376-repo-case-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    const canonicalRepository = 'chetwerikoff/LeoPoker';
+    const run = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 160,
+      headSha: HEAD_A,
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository,
+    }).run;
+    setPackReviewRunTerminal(run.id, 'failed', {
+      failureReason: 'fixture-unfinished',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+
+    const input = parseArgs([
+      '--source-repo-root', '/fixture/leopoker',
+      '--repo-slug', 'chetwerikoff/leopoker',
+      '--pr-number', '160',
+      '--immediate',
+    ]);
+    let observedReads = 0;
+    const repository = await resolvePackReviewReconcileRepository({
+      sourceRepoRoot: String(input.sourceRepoRoot),
+      explicitRepoSlug: String(input.repoSlug),
+      selectedTarget: { repository: canonicalRepository },
+      resolveRepository: async () => {
+        observedReads += 1;
+        return 'chetwerikoff/orchestrator-pack';
+      },
+    });
+
+    expect(repository).toBe(canonicalRepository);
+    expect(observedReads).toBe(0);
+
+    const reconciliation = await reconcileStalePackReviewRuns({
+      repoSlug: repository,
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 160,
+      fixtureRequiredStatusWriter: async () => {},
+    });
+    expect(reconciliation.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ runId: run.id }),
+    ]));
+    expect(reconciliation.results).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ runId: run.id, reason: 'repository_mismatch' }),
+    ]));
+  });
+});
+
+describe('Issue #2376 pre-start credentialed recovery isolation', () => {
+  it('leaves unrelated final-cap authority unchanged before an ordinary start claim refusal', async () => {
+    const storeRoot = tempRoot('opk-issue-2376-prestart-final-cap-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    const prNumber = 2376;
+    const logicalRoundOrdinal = 1;
+    const issueBody = '```complexity-tier\ntier: T1\n```';
+    const authorityOptions = { storeRoot };
+    let authority = initializePackReviewAuthority({
+      prNumber,
+      headSha: HEAD_A,
+      tier: 'T1',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options: authorityOptions,
+    });
+    const run = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber,
+      headSha: HEAD_A,
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal,
+      logicalRoundCap: 1,
+      resolvedReviewer: 'gpt',
+      automaticBudgetDisposition: 'consume',
+    }).run;
+    setPackReviewRunTerminal(run.id, 'changes_requested', {
+      reviewVerdict: 'findings',
+      findingCount: 1,
+      findings: [{ severity: 'blocking', title: 'unrelated final-cap finding' }],
+      automaticBudgetDisposition: 'consume',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    authority = commitPackReviewTerminal({
+      prNumber,
+      expectedTransitionSeq: authority.transitionSeq,
+      terminal: {
+        schemaVersion: 1,
+        terminalContractVersion: 2,
+        terminalSource: 'normal',
+        runId: run.id,
+        targetSha: HEAD_A,
+        reviewVerdict: 'findings',
+        findingCount: 1,
+        findingsDigest: 'issue-2376-unrelated-final-cap',
+        automaticBudgetDisposition: 'consume',
+        logicalRoundOrdinal,
+      },
+      status: 'changes_requested',
+      findingCount: 1,
+      options: authorityOptions,
+    });
+    expect(authority.cycle).toMatchObject({
+      state: 'at_cap_open_findings',
+      consumedRoundOrdinals: [logicalRoundOrdinal],
+    });
+
+    const claim = acquireReviewStartClaim({
+      projectId: 'orchestrator-pack',
+      prNumber,
+      headSha: HEAD_B,
+      surface: 'fixture-existing-claim',
+      startReason: 'fixture-existing-claim',
+      reviewRuns: listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot }),
+    });
+    expect(claim.acquired, JSON.stringify(claim)).toBe(true);
+
+    const result = await startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      prNumber,
+      headSha: HEAD_B,
+      fixtureCurrentPrHeadSha: HEAD_B,
+      fixturePrState: 'OPEN',
+      fixturePrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueBody: issueBody,
+      fixtureIssueNumber: prNumber,
+      fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
+      fixtureBoundIssueSnapshotBytes: issueBody,
+      fixtureRequiredStatusWriter: async () => {},
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      created: false,
+      reused: true,
+      reason: 'claimed',
+    });
+    const after = readPackReviewAuthority(prNumber, authorityOptions);
+    expect(after?.currentHeadSha).toBe(HEAD_A);
+    expect(after?.cycle).toMatchObject({
+      state: 'at_cap_open_findings',
+      consumedRoundOrdinals: [logicalRoundOrdinal],
+    });
+    expect(after?.cycle?.reviewStageComplete).not.toBe(true);
   });
 });
 

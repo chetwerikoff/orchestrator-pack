@@ -182,6 +182,7 @@ interface StartInput {
   headSha?: string;
   repoRoot?: string;
   sourceRepoRoot?: string;
+  repoSlug?: string;
   baseRef?: string;
   startReason?: string;
   surface?: string;
@@ -281,6 +282,8 @@ export interface ReconcileStalePackReviewRunsInput {
   storeRoot?: string;
   prNumber?: number;
   immediate?: boolean;
+  /** Internal pre-start switch: recover active GPT sources without public --immediate final-cap semantics. */
+  recoverActiveGptSources?: boolean;
   /**
    * Controls whether this reconciliation invocation may create a new degraded
    * partial settlement after grace. Production entrypoints set this explicitly:
@@ -893,6 +896,36 @@ export async function resolvePackReviewSelectedRepository(input: {
     );
   }
   return input.selectedTarget.repository;
+}
+
+export async function resolvePackReviewReconcileRepository(input: {
+  sourceRepoRoot: string;
+  explicitRepoSlug?: string;
+  selectedTarget?: Pick<TargetContext, 'repository'> | null;
+  resolveRepository?: (repoRoot: string) => Promise<string>;
+}): Promise<string> {
+  const explicitRepository = trim(input.explicitRepoSlug);
+  if (explicitRepository) {
+    if (!/^[^/\s]+\/[^/\s]+$/u.test(explicitRepository)) {
+      throw new Error(`pack review reconcile --repo-slug must be owner/name, got '${explicitRepository}'`);
+    }
+    if (input.selectedTarget
+        && explicitRepository.toLowerCase() !== input.selectedTarget.repository.toLowerCase()) {
+      throw new Error(
+        `pack review reconcile repository ${explicitRepository} does not match selected target ${input.selectedTarget.repository}`,
+      );
+    }
+    return input.selectedTarget?.repository ?? explicitRepository;
+  }
+
+  const observedRepository = await (input.resolveRepository ?? resolveRepositorySlug)(input.sourceRepoRoot);
+  if (input.selectedTarget
+      && observedRepository.toLowerCase() !== input.selectedTarget.repository.toLowerCase()) {
+    throw new Error(
+      `pack review reconcile source repository ${observedRepository} does not match selected target ${input.selectedTarget.repository}`,
+    );
+  }
+  return input.selectedTarget?.repository ?? observedRepository;
 }
 
 async function resolveTarget(
@@ -3477,10 +3510,10 @@ export async function reconcileStalePackReviewRuns(
   for (const candidate of records) {
     const activeStale = isPackReviewRunStale(candidate);
     const unfinishedTerminal = isPackReviewUnfinishedTerminalRun(candidate);
-    const immediateActive = input.immediate === true
+    const activeGptRecovery = (input.immediate === true || input.recoverActiveGptSources === true)
       && PACK_REVIEW_ACTIVE_STATUSES.has(candidate.status)
       && candidate.reviewRound?.reviewer === 'gpt';
-    if (!activeStale && !unfinishedTerminal && !immediateActive) continue;
+    if (!activeStale && !unfinishedTerminal && !activeGptRecovery) continue;
 
     const unresolvedIdentity = await findUnresolvedSameHeadRepositoryIdentity({
       projectId,
@@ -3597,7 +3630,7 @@ export async function reconcileStalePackReviewRuns(
       }
     }
 
-    if (activeStale || immediateActive || needsGptSourceRecovery) {
+    if (activeStale || activeGptRecovery || needsGptSourceRecovery) {
       const recovery = await recoverStaleGptSourceComments({
         run,
         input,
@@ -3665,7 +3698,7 @@ export async function reconcileStalePackReviewRuns(
         });
         continue;
       }
-      if (immediateActive
+      if (activeGptRecovery
           && recoveryCoverage?.kind === 'partial'
           && recovery.graceExpired
           && recovery.reason.startsWith('gpt_sources_incomplete_after_grace:')) {
@@ -3706,7 +3739,7 @@ export async function reconcileStalePackReviewRuns(
         });
         continue;
       }
-      if (immediateActive && !activeStale) {
+      if (activeGptRecovery && !activeStale) {
         results.push({
           runId: run.id,
           terminalized: false,
@@ -4202,9 +4235,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     throw new Error('pack review reviewer selector did not resolve');
   }
 
-  const recoverableStaleGptFixture = process.env.OPK_VITEST_HARNESS === '1'
+  const recoverableGptFixture = process.env.OPK_VITEST_HARNESS === '1'
     && listPackReviewRunRecordsRaw({ projectId, storeRoot }).some((candidate) => (
-      (isPackReviewRunStale(candidate)
+      ((isPackReviewRunStale(candidate) || PACK_REVIEW_ACTIVE_STATUSES.has(candidate.status))
         && candidate.reviewRound?.reviewer === 'gpt'
         && candidate.reviewRound.sourceSlots.some((slot) => (
           slot.lifecycle === 'invocation_started' && Boolean(trim(slot.invocationId))
@@ -4220,9 +4253,10 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     projectId,
     storeRoot,
     prNumber: target.prNumber,
+    recoverActiveGptSources: true,
     fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
     fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
-    ...(recoverableStaleGptFixture ? {
+    ...(recoverableGptFixture ? {
       fixtureGithubReviewId: input.fixtureGithubReviewId,
       fixtureGithubReviewTransport: input.fixtureGithubReviewTransport,
       fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
@@ -5670,7 +5704,7 @@ export function parseArgs(argv: string[]): Record<string, unknown> {
     '--store-root': 'storeRoot',
     '--timeout-seconds': 'timeoutSeconds',
     '--claim-mode': 'claimMode',
-    '--repo-slug': 'fixtureRepoSlug',
+    '--repo-slug': 'repoSlug',
     '--tier': 'tier',
     '--actor': 'actor',
     '--reason': 'reason',
@@ -5771,16 +5805,11 @@ async function main(): Promise<void> {
     }
     const baseRef = selectedTarget ? selectedBaseRef : (requestedBaseRef || DEFAULT_BASE_REF);
     const sourceRepoRoot = resolve(trim(input.sourceRepoRoot || input.repoRoot) || trusted.trustedPackRoot);
-    const harnessExplicit = process.env.OPK_VITEST_HARNESS === '1' && Boolean(trim(input.fixtureRepoSlug));
-    const observedRepository = harnessExplicit ? '' : await resolveRepositorySlug(sourceRepoRoot);
-    const repoSlug = harnessExplicit
-      ? trim(input.fixtureRepoSlug)
-      : selectedTarget?.repository ?? (trim(input.fixtureRepoSlug) || observedRepository);
-    if (selectedTarget && observedRepository.toLowerCase() !== selectedTarget.repository.toLowerCase()) {
-      throw new Error(
-        `pack review reconcile source repository ${observedRepository} does not match selected target ${selectedTarget.repository}`,
-      );
-    }
+    const repoSlug = await resolvePackReviewReconcileRepository({
+      sourceRepoRoot,
+      explicitRepoSlug: trim(input.repoSlug),
+      selectedTarget,
+    });
     const result = await reconcileStalePackReviewRuns({
       repoSlug,
       sourceRepoRoot,
