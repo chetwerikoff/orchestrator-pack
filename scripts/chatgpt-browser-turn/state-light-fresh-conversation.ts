@@ -31,6 +31,8 @@ export const STATE_LIGHT_MAX_NAVIGATIONS_PER_INVOCATION = 10;
 export const STATE_LIGHT_ADVISORY_WALL_TTL_MS = 5 * 60 * 1000;
 export const STATE_LIGHT_FRESH_PREPARE_BACKOFF_BASE_MS = 250;
 export const STATE_LIGHT_MAX_TIMEOUT_MS = 1_800_000;
+/** Shared Playwright navigation budget for launcher-chain ChatGPT page loads. */
+export const STATE_LIGHT_NAVIGATION_TIMEOUT_MS = 120_000;
 export const STATE_LIGHT_SEND_SLOT_TTL_MS = 2_100_000;
 export const STATE_LIGHT_FRESH_CLAIM_GRACE_MS = 300_000;
 export const STATE_LIGHT_PASSIVE_FRESH_CLAIM_TTL_MS = 3_900_000;
@@ -611,10 +613,8 @@ async function probeProductWall(page: any): Promise<{ state: TurnState; cause: s
 export async function openBlankProjectChatSurface(
   page: any,
   projectUrl: string,
-  timeoutMs: number,
   navigation?: StateLightNavigationCounter,
 ): Promise<void> {
-  const waitMs = Math.min(30_000, timeoutMs);
   const projectPrefix = projectConversationPrefix(projectUrl);
   let currentUrl = '';
   try {
@@ -626,7 +626,7 @@ export async function openBlankProjectChatSurface(
     navigation?.recordGoto();
     await page.goto(projectPrefix, {
       waitUntil: 'domcontentloaded',
-      timeout: waitMs,
+      timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
     });
   }
   for (const selector of NEW_CHAT_CONTROL_SELECTORS) {
@@ -664,7 +664,7 @@ export async function prepareStateLightFreshConversation(
     }
     const needsSurface = !currentUrl || !isBlankProjectSurfaceUrl(currentUrl, config.projectUrl);
     if (needsSurface) {
-      await openBlankProjectChatSurface(page, config.projectUrl, config.timeoutMs, navigation);
+      await openBlankProjectChatSurface(page, config.projectUrl, navigation);
       const wall = await probeProductWall(page);
       if (wall) return { state: 'wall', wallState: wall.state, cause: wall.cause };
       try {
@@ -734,7 +734,6 @@ export async function navigateToProjectConversationIfNeeded(
   page: any,
   conversationUrl: string,
   navigation: StateLightNavigationCounter,
-  gotoTimeoutMs: number,
 ): Promise<void> {
   const target = normalizeConversationUrl(conversationUrl);
   if (!conversationUuidFromUrl(target)) return;
@@ -748,6 +747,6 @@ export async function navigateToProjectConversationIfNeeded(
   navigation.recordGoto();
   await page.goto(target, {
     waitUntil: 'domcontentloaded',
-    timeout: gotoTimeoutMs,
+    timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
   });
 }
