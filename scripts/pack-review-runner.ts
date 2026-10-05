@@ -182,6 +182,7 @@ interface StartInput {
   headSha?: string;
   repoRoot?: string;
   sourceRepoRoot?: string;
+  repoSlug?: string;
   baseRef?: string;
   startReason?: string;
   surface?: string;
@@ -893,6 +894,36 @@ export async function resolvePackReviewSelectedRepository(input: {
     );
   }
   return input.selectedTarget.repository;
+}
+
+export async function resolvePackReviewReconcileRepository(input: {
+  sourceRepoRoot: string;
+  explicitRepoSlug?: string;
+  selectedTarget?: Pick<TargetContext, 'repository'> | null;
+  resolveRepository?: (repoRoot: string) => Promise<string>;
+}): Promise<string> {
+  const explicitRepository = trim(input.explicitRepoSlug);
+  if (explicitRepository) {
+    if (!/^[^/\s]+\/[^/\s]+$/u.test(explicitRepository)) {
+      throw new Error(`pack review reconcile --repo-slug must be owner/name, got '${explicitRepository}'`);
+    }
+    if (input.selectedTarget
+        && explicitRepository.toLowerCase() !== input.selectedTarget.repository.toLowerCase()) {
+      throw new Error(
+        `pack review reconcile repository ${explicitRepository} does not match selected target ${input.selectedTarget.repository}`,
+      );
+    }
+    return explicitRepository;
+  }
+
+  const observedRepository = await (input.resolveRepository ?? resolveRepositorySlug)(input.sourceRepoRoot);
+  if (input.selectedTarget
+      && observedRepository.toLowerCase() !== input.selectedTarget.repository.toLowerCase()) {
+    throw new Error(
+      `pack review reconcile source repository ${observedRepository} does not match selected target ${input.selectedTarget.repository}`,
+    );
+  }
+  return input.selectedTarget?.repository ?? observedRepository;
 }
 
 async function resolveTarget(
@@ -4220,6 +4251,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     projectId,
     storeRoot,
     prNumber: target.prNumber,
+    immediate: true,
     fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
     fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
     ...(recoverableStaleGptFixture ? {
@@ -5670,7 +5702,7 @@ export function parseArgs(argv: string[]): Record<string, unknown> {
     '--store-root': 'storeRoot',
     '--timeout-seconds': 'timeoutSeconds',
     '--claim-mode': 'claimMode',
-    '--repo-slug': 'fixtureRepoSlug',
+    '--repo-slug': 'repoSlug',
     '--tier': 'tier',
     '--actor': 'actor',
     '--reason': 'reason',
@@ -5771,16 +5803,11 @@ async function main(): Promise<void> {
     }
     const baseRef = selectedTarget ? selectedBaseRef : (requestedBaseRef || DEFAULT_BASE_REF);
     const sourceRepoRoot = resolve(trim(input.sourceRepoRoot || input.repoRoot) || trusted.trustedPackRoot);
-    const harnessExplicit = process.env.OPK_VITEST_HARNESS === '1' && Boolean(trim(input.fixtureRepoSlug));
-    const observedRepository = harnessExplicit ? '' : await resolveRepositorySlug(sourceRepoRoot);
-    const repoSlug = harnessExplicit
-      ? trim(input.fixtureRepoSlug)
-      : selectedTarget?.repository ?? (trim(input.fixtureRepoSlug) || observedRepository);
-    if (selectedTarget && observedRepository.toLowerCase() !== selectedTarget.repository.toLowerCase()) {
-      throw new Error(
-        `pack review reconcile source repository ${observedRepository} does not match selected target ${selectedTarget.repository}`,
-      );
-    }
+    const repoSlug = await resolvePackReviewReconcileRepository({
+      sourceRepoRoot,
+      explicitRepoSlug: trim(input.repoSlug),
+      selectedTarget,
+    });
     const result = await reconcileStalePackReviewRuns({
       repoSlug,
       sourceRepoRoot,
