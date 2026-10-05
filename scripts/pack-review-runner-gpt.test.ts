@@ -22,6 +22,7 @@ import {
   parseArgs,
   reconcileStalePackReviewRuns,
   resolveCurrentPrHead,
+  resolvePackReviewReconcileRepository,
   startPackReview,
 } from './pack-review-runner.js';
 import type { CarryoverReplayResult } from './pack-review-carryover.js';
@@ -894,6 +895,28 @@ describe('pack-review runner target selection CLI', () => {
 
     expect(input).toMatchObject({ targetProjectId: 'orchestrator-pack', projectId: 'orchestrator-pack' });
     expect(process.env.OPK_PROJECT_ID).toBe('orchestrator-pack');
+  });
+
+  it('keeps explicit reconcile repo selection authoritative without observing checkout origin', async () => {
+    const input = parseArgs([
+      '--source-repo-root', '/fixture/leopoker',
+      '--repo-slug', 'chetwerikoff/leopoker',
+      '--pr-number', '160',
+      '--immediate',
+    ]);
+    let observedReads = 0;
+    const repository = await resolvePackReviewReconcileRepository({
+      sourceRepoRoot: String(input.sourceRepoRoot),
+      explicitRepoSlug: String(input.repoSlug),
+      selectedTarget: { repository: 'chetwerikoff/leopoker' },
+      resolveRepository: async () => {
+        observedReads += 1;
+        return 'chetwerikoff/orchestrator-pack';
+      },
+    });
+
+    expect(repository).toBe('chetwerikoff/leopoker');
+    expect(observedReads).toBe(0);
   });
 });
 
