@@ -3,10 +3,12 @@
   "issue_number": 2376,
   "declared_paths": [
     "docs/declarations/2376.pr-scope.json",
-    "scripts/pack-review-runner-issue-2376.test.ts",
+    "scripts/lib/pack-gpt-source-comment-runner.cases.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts"
   ],
   "denylist": [
+    ".github/",
     "credentials/",
     "packages/core/",
     "secrets/",
@@ -15,8 +17,9 @@
   "allowed_roots": [
     "docs/declarations/",
     "scripts/execute-issue-manager-boundary.ts",
-    "scripts/pack-review-runner-issue-2376.test.ts",
+    "scripts/lib/pack-gpt-source-comment-runner.cases.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.ts"
   ],
-  "source_revision": "a3f5a125b9579cc2f7b9bdf471849a7613772e33"
+  "source_revision": "c34b721c53974f208efb0ffb9f79bfe458cfb4bc"
 }
