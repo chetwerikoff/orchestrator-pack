@@ -10,7 +10,7 @@ import {
   isWakeableTerminalEnvelopePath,
   parseFlagArgv,
   readHandoffReceipt,
-  TERMINAL_ENVELOPE_NAME_SUFFIX,
+  unwakeableTerminalEnvelopeHint,
 } from './flow-manager-long-running-child.ts';
 import {
   inspectManagerCliInvocation,
@@ -139,7 +139,7 @@ export async function runBrowserAdapter(
   const invocationId = requiredOption(options, 'invocation-id');
   const terminalEnvelope = requiredOption(options, 'terminal-envelope');
   if (!isWakeableTerminalEnvelopePath(terminalEnvelope)) {
-    return refuse('terminal_envelope_name_not_wakeable: name must end in ' + TERMINAL_ENVELOPE_NAME_SUFFIX);
+    return refuse('terminal_envelope_name_not_wakeable: ' + unwakeableTerminalEnvelopeHint(terminalEnvelope).hint);
   }
   const browserOutput = requiredOption(options, 'output');
   const profile = requiredOption(options, 'profile');

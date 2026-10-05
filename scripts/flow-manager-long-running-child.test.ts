@@ -286,6 +286,7 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(code).toBe(2);
     expect(refusal).toContain('terminal_envelope_name_not_wakeable');
     expect(refusal).toContain(TERMINAL_ENVELOPE_NAME_SUFFIX);
+    expect(refusal).toContain(join(root, 'unwakeable', 'issue-2376-envelope-terminal.json'));
     expect(existsSync(paths.receipt)).toBe(false);
     expect(existsSync(envelope)).toBe(false);
   });
@@ -309,6 +310,7 @@ describe('flow-manager long-running child (#1164)', () => {
     stderr.mockRestore();
     expect(code).toBe(2);
     expect(refusal).toContain('terminal_envelope_name_not_wakeable');
+    expect(refusal).toContain('--terminal-envelope ' + join(root, 'envelope-terminal.json'));
     expect(spawnLauncher).not.toHaveBeenCalled();
   });
 

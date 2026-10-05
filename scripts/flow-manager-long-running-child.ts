@@ -44,6 +44,17 @@ export function isWakeableTerminalEnvelopePath(path: string): boolean {
   return basename(path).endsWith(TERMINAL_ENVELOPE_NAME_SUFFIX);
 }
 
+/** Actionable refusal text: tells the caller exactly which path to pass instead. */
+export function unwakeableTerminalEnvelopeHint(path: string): { suggested_path: string; hint: string } {
+  const suggested = path.replace(/\.json$/, '') + '-' + TERMINAL_ENVELOPE_NAME_SUFFIX;
+  return {
+    suggested_path: suggested,
+    hint: `fleet-wake discovers terminal envelopes only by a file name ending in ${TERMINAL_ENVELOPE_NAME_SUFFIX}; `
+      + `with this name the turn would finish and nobody would wake you. Nothing was sent to GPT and no file was written. `
+      + `Re-run the same command unchanged except --terminal-envelope ${suggested}`,
+  };
+}
+
 export type DeliveryState = 'not-sent' | 'POSSIBLY_DELIVERED' | 'landed';
 
 export type ChildExitDiagnostic = 'exited_within_grace' | 'retained_after_result';
@@ -766,6 +777,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     refuse('terminal_envelope_name_not_wakeable', {
       path: config.terminalEnvelopePath,
       required_suffix: TERMINAL_ENVELOPE_NAME_SUFFIX,
+      ...unwakeableTerminalEnvelopeHint(config.terminalEnvelopePath),
     });
     return 2;
   }

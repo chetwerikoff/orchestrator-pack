@@ -77,7 +77,9 @@ engine fixes; it is not the trusted engine.
    and refuse (`terminal_envelope_name_not_wakeable`) an envelope whose file name
    does not end in `terminal.json`: fleet-wake discovers envelopes only by that
    suffix, so any other name parks the caller with no wake. The adapter applies
-   the same check before spawning the launcher.
+   the same check before spawning the launcher. Nothing is sent and no file is
+   written; the refusal carries `suggested_path` and a `hint` — re-run the same
+   command with `--terminal-envelope <suggested_path>`.
 3. Atomically create one `flow-manager-long-running-child-handoff/v1` receipt
    (`completion_mode: browser-turn-result-v1` fixed constant).
 4. Start the Browser-GPT child with stdin closed, stdout parsed in-process, stderr
