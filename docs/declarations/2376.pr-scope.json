@@ -3,8 +3,8 @@
   "issue_number": 2376,
   "declared_paths": [
     "docs/declarations/2376.pr-scope.json",
-    "scripts/pack-review-runner.ts",
-    "tests/agents-md-pack-review-2376.test.ts"
+    "scripts/pack-review-runner-issue-2376.test.ts",
+    "scripts/pack-review-runner.ts"
   ],
   "denylist": [
     "credentials/",
@@ -15,8 +15,8 @@
   "allowed_roots": [
     "docs/declarations/",
     "scripts/execute-issue-manager-boundary.ts",
-    "scripts/pack-review-runner.ts",
-    "tests/"
+    "scripts/pack-review-runner-issue-2376.test.ts",
+    "scripts/pack-review-runner.ts"
   ],
-  "source_revision": "6288388e2a2f0e34876170f21b7a1cb80faa1c9f"
+  "source_revision": "a3f5a125b9579cc2f7b9bdf471849a7613772e33"
 }
