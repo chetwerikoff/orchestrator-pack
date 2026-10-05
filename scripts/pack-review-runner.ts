@@ -4233,9 +4233,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     throw new Error('pack review reviewer selector did not resolve');
   }
 
-  const recoverableStaleGptFixture = process.env.OPK_VITEST_HARNESS === '1'
+  const recoverableGptFixture = process.env.OPK_VITEST_HARNESS === '1'
     && listPackReviewRunRecordsRaw({ projectId, storeRoot }).some((candidate) => (
-      (isPackReviewRunStale(candidate)
+      ((isPackReviewRunStale(candidate) || PACK_REVIEW_ACTIVE_STATUSES.has(candidate.status))
         && candidate.reviewRound?.reviewer === 'gpt'
         && candidate.reviewRound.sourceSlots.some((slot) => (
           slot.lifecycle === 'invocation_started' && Boolean(trim(slot.invocationId))
@@ -4254,7 +4254,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     immediate: true,
     fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
     fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
-    ...(recoverableStaleGptFixture ? {
+    ...(recoverableGptFixture ? {
       fixtureGithubReviewId: input.fixtureGithubReviewId,
       fixtureGithubReviewTransport: input.fixtureGithubReviewTransport,
       fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
