@@ -7,8 +7,10 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { runProcess } from './kernel/subprocess.ts';
 import {
   HANDOFF_SCHEMA,
+  isWakeableTerminalEnvelopePath,
   parseFlagArgv,
   readHandoffReceipt,
+  TERMINAL_ENVELOPE_NAME_SUFFIX,
 } from './flow-manager-long-running-child.ts';
 import {
   inspectManagerCliInvocation,
@@ -136,6 +138,9 @@ export async function runBrowserAdapter(
 
   const invocationId = requiredOption(options, 'invocation-id');
   const terminalEnvelope = requiredOption(options, 'terminal-envelope');
+  if (!isWakeableTerminalEnvelopePath(terminalEnvelope)) {
+    return refuse('terminal_envelope_name_not_wakeable: name must end in ' + TERMINAL_ENVELOPE_NAME_SUFFIX);
+  }
   const browserOutput = requiredOption(options, 'output');
   const profile = requiredOption(options, 'profile');
   const cdp = requiredOption(options, 'cdp');

@@ -28,7 +28,7 @@ npm run --silent flow-manager-browser-gpt-long-run -- \
   --attempt-identity <opaque-attempt-id> \
   --invocation-id <caller-owned-invocation-id> \
   --handoff-receipt /absolute/path/handoff-receipt.json \
-  --terminal-envelope /absolute/path/terminal-envelope.json \
+  --terminal-envelope /absolute/path/<attempt>-terminal.json \
   --output /absolute/path/reply.txt \
   --profile /absolute/path/to/automation-profile \
   --cdp http://127.0.0.1:9222 \
@@ -73,7 +73,11 @@ engine fixes; it is not the trusted engine.
 
 1. The Browser-GPT adapter validates the caller-owned invocation identity before
    starting this launcher or acknowledging handoff.
-2. Validate pairwise-distinct receipt, envelope, and Browser `--output` destinations.
+2. Validate pairwise-distinct receipt, envelope, and Browser `--output` destinations,
+   and refuse (`terminal_envelope_name_not_wakeable`) an envelope whose file name
+   does not end in `terminal.json`: fleet-wake discovers envelopes only by that
+   suffix, so any other name parks the caller with no wake. The adapter applies
+   the same check before spawning the launcher.
 3. Atomically create one `flow-manager-long-running-child-handoff/v1` receipt
    (`completion_mode: browser-turn-result-v1` fixed constant).
 4. Start the Browser-GPT child with stdin closed, stdout parsed in-process, stderr
@@ -97,7 +101,7 @@ npm run --silent flow-manager-long-running-child -- wait \
   --run-identity <id> \
   --attempt-identity <id> \
   --handoff-receipt /path/handoff.json \
-  --terminal-envelope /path/envelope.json \
+  --terminal-envelope /path/<attempt>-terminal.json \
   --deadline-ms 5000
 ```
 

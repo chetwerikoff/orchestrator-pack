@@ -37,6 +37,12 @@ export const HANDOFF_SCHEMA = 'flow-manager-long-running-child-handoff/v1' as co
 export const TERMINAL_SCHEMA = 'flow-manager-long-running-child-terminal/v1' as const;
 export const WAIT_SCHEMA = 'flow-manager-long-running-child-wait/v1' as const;
 export const REFUSAL_SCHEMA = 'flow-manager-long-running-child-refusal/v1' as const;
+// fleet-wake discovers terminal envelopes by file name; a launch must not write one it cannot see.
+export const TERMINAL_ENVELOPE_NAME_SUFFIX = 'terminal.json' as const;
+
+export function isWakeableTerminalEnvelopePath(path: string): boolean {
+  return basename(path).endsWith(TERMINAL_ENVELOPE_NAME_SUFFIX);
+}
 
 export type DeliveryState = 'not-sent' | 'POSSIBLY_DELIVERED' | 'landed';
 
@@ -754,6 +760,13 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
   const canaries = config.secretCanaries ?? [];
   if (!existsSync(config.cwd) || !statSync(config.cwd).isDirectory()) {
     refuse('invalid_cwd', { cwd: config.cwd });
+    return 2;
+  }
+  if (!isWakeableTerminalEnvelopePath(config.terminalEnvelopePath)) {
+    refuse('terminal_envelope_name_not_wakeable', {
+      path: config.terminalEnvelopePath,
+      required_suffix: TERMINAL_ENVELOPE_NAME_SUFFIX,
+    });
     return 2;
   }
   const launcherArtifacts = [
