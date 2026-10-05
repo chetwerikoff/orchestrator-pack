@@ -33,6 +33,7 @@ import {
   type ProjectChat,
 } from './chat-error-banners.ts';
 import { readChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
+import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath } from '../flow-manager-long-running-child.ts';
 
 export interface FleetWakeConfig {
   readonly projectId: string;
@@ -335,7 +336,6 @@ export function fleetAlarmMessage(
   return `Fleet alarm (${coordinatorState}):${paneText}${bannerText}${unloadableText}`;
 }
 
-const TERMINAL_ENVELOPE_SCHEMA = 'flow-manager-long-running-child-terminal/v1';
 
 export interface TerminalEnvelopeEvent {
   readonly path: string;
@@ -361,12 +361,12 @@ export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeE
         pending.push(path);
         continue;
       }
-      if (!entry.isFile() || !entry.name.endsWith('terminal.json')) continue;
+      if (!entry.isFile() || !isWakeableTerminalEnvelopePath(entry.name)) continue;
       try {
         const envelope = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
         const cwd = typeof envelope.cwd === 'string' ? envelope.cwd : undefined;
         const terminalHandle = typeof envelope.terminal_handle === 'string' ? envelope.terminal_handle : undefined;
-        if (envelope.schema !== TERMINAL_ENVELOPE_SCHEMA || (!cwd && !terminalHandle)) continue;
+        if (envelope.schema !== TERMINAL_SCHEMA || (!cwd && !terminalHandle)) continue;
         const invocationId = typeof envelope.observed_invocation_id === 'string'
           ? envelope.observed_invocation_id
           : String(envelope.attempt_identity ?? basename(path));

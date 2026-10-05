@@ -18,8 +18,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   COMPLETION_MODE,
   HANDOFF_SCHEMA,
+  TERMINAL_ENVELOPE_NAME_SUFFIX,
   TERMINAL_SCHEMA,
   deriveDelivery,
+  isWakeableTerminalEnvelopePath,
   pathsAlias,
   readHandoffReceipt,
   readTerminalEnvelope,
@@ -117,7 +119,7 @@ function launchPaths(root: string, id: string): {
   const attempt = join(root, id);
   return {
     receipt: join(attempt, 'handoff-receipt.json'),
-    envelope: join(attempt, 'terminal-envelope.json'),
+    envelope: join(attempt, 'turn-terminal.json'),
     output: join(attempt, 'browser-output.txt'),
   };
 }
@@ -252,15 +254,70 @@ describe('flow-manager long-running child (#1164)', () => {
     const code = await runLaunch({
       runIdentity: 'run',
       attemptIdentity: 'attempt',
-      handoffReceiptPath: paths.receipt,
-      terminalEnvelopePath: paths.receipt,
+      handoffReceiptPath: paths.envelope,
+      terminalEnvelopePath: paths.envelope,
       browserOutputPath: paths.output,
       cwd: repoRoot,
       childCommand: fixture.command,
       childArgs: fixture.args,
     });
     expect(code).toBe(2);
+    expect(existsSync(paths.envelope)).toBe(false);
+  });
+
+  it('refuses an envelope name fleet-wake cannot discover before any effect (#2378)', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'unwakeable');
+    const envelope = join(root, 'unwakeable', 'issue-2376-envelope.json');
+    const fixture = nodeFixture('process.exit(0)');
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const code = await runLaunch({
+      runIdentity: 'run',
+      attemptIdentity: 'attempt',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    });
+    const refusal = stderr.mock.calls.map((call) => String(call[0])).join('');
+    stderr.mockRestore();
+    expect(code).toBe(2);
+    expect(refusal).toContain('terminal_envelope_name_not_wakeable');
+    expect(refusal).toContain(TERMINAL_ENVELOPE_NAME_SUFFIX);
+    expect(refusal).toContain(join(root, 'unwakeable', 'issue-2376-envelope-terminal.json'));
     expect(existsSync(paths.receipt)).toBe(false);
+    expect(existsSync(envelope)).toBe(false);
+  });
+
+  it('adapter refuses an unwakeable envelope name without spawning the launcher (#2378)', async () => {
+    const root = tempDir();
+    const spawnLauncher = vi.fn(async () => 1);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const code = await runBrowserAdapter([
+      '--run-identity', 'r',
+      '--attempt-identity', 'a',
+      '--handoff-receipt', join(root, 'handoff.json'),
+      '--invocation-id', 'inv',
+      '--terminal-envelope', join(root, 'envelope.json'),
+      '--output', join(root, 'reply.txt'),
+      '--profile', 'p',
+      '--cdp', 'http://127.0.0.1:9222',
+      '--input', join(root, 'prompt.txt'),
+    ], { spawnLauncher });
+    const refusal = stderr.mock.calls.map((call) => String(call[0])).join('');
+    stderr.mockRestore();
+    expect(code).toBe(2);
+    expect(refusal).toContain('terminal_envelope_name_not_wakeable');
+    expect(refusal).toContain('--terminal-envelope ' + join(root, 'envelope-terminal.json'));
+    expect(spawnLauncher).not.toHaveBeenCalled();
+  });
+
+  it('wakeable envelope rule matches fleet-wake discovery names (#2378)', () => {
+    expect(isWakeableTerminalEnvelopePath('/tmp/opencode/issue-2376-inv-terminal.json')).toBe(true);
+    expect(isWakeableTerminalEnvelopePath('/tmp/opencode/issue-2376-envelope.json')).toBe(false);
+    expect(isWakeableTerminalEnvelopePath('/tmp/opencode/terminal-envelope.json')).toBe(false);
   });
 
   it('refuses when receipt create fails after preflight', async () => {
