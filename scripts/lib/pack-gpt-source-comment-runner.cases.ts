@@ -7,6 +7,7 @@ import {
   reconcileStalePackReviewRuns,
   startPackReview,
 } from '../pack-review-runner.ts';
+import { runExecuteIssueManagerBoundaryCli } from '../execute-issue-manager-boundary.ts';
 import { initializePackReviewAuthority } from '../pack-review-state.ts';
 import {
   createPackReviewRun,
@@ -596,6 +597,36 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
     expect(recovered?.deliveryOutcomes.requiredStatus?.state).toBe('succeeded');
     expect(recovered?.reviewRound?.sourceSlots.every((slot) => slot.terminalClass === 'complete_clean'
       || slot.terminalClass === 'complete_findings')).toBe(true);
+    const boundaryOutput: string[] = [];
+    const boundaryErrors: string[] = [];
+    const boundaryExit = runExecuteIssueManagerBoundaryCli([
+      'classify',
+      '--record', '/fixture/recovered-review.json',
+      '--repo', REPO,
+      '--issue-number', '1435',
+      '--source-revision', 'r02',
+      '--phase', 'review',
+      '--production-argv-json', JSON.stringify([
+        'node', '--experimental-strip-types', 'scripts/pack-review-runner.ts', 'reconcile',
+        '--source-repo-root', process.cwd(), '--repo-slug', REPO,
+        '--pr-number', '1436', '--immediate',
+      ]),
+      '--pr-number', '1436',
+      '--head-sha', HEAD,
+    ], {
+      readFile: () => JSON.stringify(second),
+      stdout: { write: (value) => boundaryOutput.push(String(value)) },
+      stderr: { write: (value) => boundaryErrors.push(String(value)) },
+      currentArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
+    });
+    expect(boundaryExit).toBe(0);
+    expect(boundaryErrors).toEqual([]);
+    expect(boundaryOutput).toHaveLength(1);
+    expect(JSON.parse(boundaryOutput[0]!)).toMatchObject({
+      ok: true,
+      cause: 'execute_review_runner_completed',
+      nextAction: null,
+    });
   });
 
   it('binds zero-send retry proof to the persisted invocation and treats mismatched terminal identity as census-only ambiguity', async () => {
