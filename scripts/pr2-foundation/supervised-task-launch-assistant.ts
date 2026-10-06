@@ -64,17 +64,10 @@ export interface LaunchResources {
 
 export interface NextAction {
   readonly kind: 'repair_preflight' | 'repair_executor_profile' | 'reconcile_manager_run'
-    | 'reconcile_manager_task' | 'retry_manager_task_create' | 'reconcile_dispatch'
-    | 'reconcile_worktree_setup' | 'remediate_terminal' | 'retry_supervised_start'
-    | 'reconcile_supervised_start';
+    | 'reconcile_manager_task' | 'reconcile_dispatch' | 'reconcile_worktree_setup' | 'remediate_terminal'
+    | 'retry_supervised_start' | 'reconcile_supervised_start';
   readonly requestId?: string;
   readonly command?: string;
-  readonly replay?: {
-    readonly operation: 'orca_orchestration_task_create';
-    readonly runId: string;
-    readonly requestId: string;
-    readonly inputSource: 'caller_held_manager_brief';
-  };
   readonly note?: string;
 }
 
@@ -204,7 +197,7 @@ const sameIdentity = (a: RuntimeWorkerIdentity, b: RuntimeWorkerIdentity): boole
   a.runtime === b.runtime && a.id === b.id && a.generation === b.generation;
 
 const MANAGER_BRIEFS_DIRECTORY = join(homedir(), '.local', 'state', 'create-issue-draft', 'briefs');
-const FIREFIGHTER_BRIEF_MARKER = /\bfirefighter\s*:/iu;
+const FIREFIGHTER_BRIEF_MARKER = /\bfirefighter\b/iu;
 
 function markdownHeadingText(markdown: string): string {
   for (const line of markdown.split(/\r?\n/u)) {
@@ -966,15 +959,9 @@ export async function createManagerTaskWithOrca(
   return requestId ? {
     status: 'continue', cause: 'manager_task_create_outcome_unknown', actor: 'provider', evidence: { requestId },
     nextAction: {
-      kind: 'retry_manager_task_create',
+      kind: 'reconcile_manager_task',
       requestId,
-      replay: {
-        operation: 'orca_orchestration_task_create',
-        runId,
-        requestId,
-        inputSource: 'caller_held_manager_brief',
-      },
-      note: 'replay the exact original Task-create with the caller-held original brief and this exact --retry-request id; the brief payload is intentionally not echoed',
+      note: 'reconcile this outcome-unknown Task-create through current Orca Task authority; do not replay the transformed manager brief',
     },
   } : {
     status: 'continue', cause: 'manager_task_create_failed_or_unknown', actor: 'provider', evidence: {},
