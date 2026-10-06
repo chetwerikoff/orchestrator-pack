@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync, type Dirent } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import {
   runtimeFailure,
@@ -109,9 +109,13 @@ function isLaunchAssistantTaskTitle(title: string): boolean {
   return LAUNCH_ASSISTANT_TASK_TITLE.test(title);
 }
 
+function launchTaskTerminalOwnershipDirectory(stateRoot: string): string {
+  return join(stateRoot, 'launch-task-terminals');
+}
+
 function launchTaskTerminalOwnershipPath(title: string, stateRoot: string): string {
   const key = createHash('sha256').update(title).digest('hex');
-  return join(stateRoot, 'launch-task-terminals', `${key}.json`);
+  return join(launchTaskTerminalOwnershipDirectory(stateRoot), `${key}.json`);
 }
 
 function parseOpenCodeControlBinding(value: unknown): OpenCodeControlBinding | null | undefined {
@@ -153,6 +157,35 @@ function readLaunchTaskTerminalOwnership(path: string): OwnershipRead {
   } catch {
     return { ok: false };
   }
+}
+
+function readLaunchTaskTerminalOwnershipForIdentity(
+  stateRoot: string,
+  worker: RuntimeWorkerIdentity,
+): OwnershipRead {
+  let entries: Dirent<string>[];
+  try {
+    entries = readdirSync(launchTaskTerminalOwnershipDirectory(stateRoot), { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { ok: true, value: null };
+    return { ok: false };
+  }
+
+  let match: LaunchTaskTerminalOwnership | null = null;
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const persisted = readLaunchTaskTerminalOwnership(
+      join(launchTaskTerminalOwnershipDirectory(stateRoot), entry.name),
+    );
+    if (!persisted.ok) return { ok: false };
+    const ownership = persisted.value;
+    if (!ownership) continue;
+    if (!isLaunchAssistantTaskTitle(ownership.title)) return { ok: false };
+    if (!sameRuntimeWorker(ownership.identity, worker)) continue;
+    if (match) return { ok: false };
+    match = ownership;
+  }
+  return { ok: true, value: match };
 }
 
 function persistLaunchTaskTerminalOwnership(path: string, ownership: LaunchTaskTerminalOwnership): boolean {
@@ -378,20 +411,17 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     current: RuntimeWorker,
   ): OpenCodeControlBinding | undefined {
     if (!sameRuntimeWorker(worker, current.identity)) return undefined;
-    const title = current.title?.trim() ?? '';
-    if (!title || !isLaunchAssistantTaskTitle(title)) return undefined;
-    const persisted = readLaunchTaskTerminalOwnership(
-      launchTaskTerminalOwnershipPath(
-        title,
-        resolveWakeSupervisorStateRoot({ env: this.#options.env }),
-      ),
+    const persisted = readLaunchTaskTerminalOwnershipForIdentity(
+      resolveWakeSupervisorStateRoot({ env: this.#options.env }),
+      worker,
     );
     if (!persisted.ok || !persisted.value?.openCodeControl) return undefined;
     const ownership = persisted.value;
+    const currentTitle = current.title?.trim() ?? '';
     if (
-      ownership.title !== title
-      || ownership.workspacePath !== current.workspacePath
+      ownership.workspacePath !== current.workspacePath
       || !sameRuntimeWorker(ownership.identity, worker)
+      || (currentTitle && currentTitle !== ownership.title)
     ) return undefined;
     return ownership.openCodeControl;
   }
