@@ -37,20 +37,30 @@ export const HANDOFF_SCHEMA = 'flow-manager-long-running-child-handoff/v1' as co
 export const TERMINAL_SCHEMA = 'flow-manager-long-running-child-terminal/v1' as const;
 export const WAIT_SCHEMA = 'flow-manager-long-running-child-wait/v1' as const;
 export const REFUSAL_SCHEMA = 'flow-manager-long-running-child-refusal/v1' as const;
-// fleet-wake discovers terminal envelopes by file name; a launch must not write one it cannot see.
+// fleet-wake scans terminal envelopes under this root by file name.
 export const TERMINAL_ENVELOPE_NAME_SUFFIX = 'terminal.json' as const;
+export const TERMINAL_ENVELOPE_ROOT = '/tmp/opencode' as const;
 
-export function isWakeableTerminalEnvelopePath(path: string): boolean {
-  return basename(path).endsWith(TERMINAL_ENVELOPE_NAME_SUFFIX);
+export function isWakeableTerminalEnvelopePath(
+  path: string,
+  root: string = TERMINAL_ENVELOPE_ROOT,
+): boolean {
+  const absolute = resolve(path);
+  return absolute.startsWith(`${resolve(root)}/`)
+    && basename(path).endsWith(TERMINAL_ENVELOPE_NAME_SUFFIX);
 }
 
 /** Actionable refusal text: tells the caller exactly which path to pass instead. */
 export function unwakeableTerminalEnvelopeHint(path: string): { suggested_path: string; hint: string } {
-  const suggested = path.replace(/\.json$/, '') + '-' + TERMINAL_ENVELOPE_NAME_SUFFIX;
+  const name = basename(path);
+  const wakeableName = name.endsWith(TERMINAL_ENVELOPE_NAME_SUFFIX)
+    ? name
+    : `${name.replace(/\.json$/u, '')}-${TERMINAL_ENVELOPE_NAME_SUFFIX}`;
+  const suggested = join(TERMINAL_ENVELOPE_ROOT, wakeableName);
   return {
     suggested_path: suggested,
-    hint: `fleet-wake discovers terminal envelopes only by a file name ending in ${TERMINAL_ENVELOPE_NAME_SUFFIX}; `
-      + `with this name the turn would finish and nobody would wake you. Nothing was sent to GPT and no file was written. `
+    hint: `fleet-wake scans only ${TERMINAL_ENVELOPE_ROOT}/ and discovers terminal envelopes by a file name ending in ${TERMINAL_ENVELOPE_NAME_SUFFIX}; `
+      + `with this location or name the turn would finish and nobody would wake you. Nothing was sent to GPT and no file was written. `
       + `Re-run the same command unchanged except --terminal-envelope ${suggested}`,
   };
 }

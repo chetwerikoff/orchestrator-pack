@@ -87,6 +87,7 @@ async function tick(input: {
   terminals?: readonly FleetTerminal[];
   executor?: OrcaExecutor;
   listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
+  listUnreadRunMessages?: () => readonly { id: string; subject: string; toHandle: string; fromHandle: string }[];
   listOpenPulls?: (repository: string) => readonly OpenPullHead[];
   checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
   supervisedPullOwner?: (pull: OpenPullHead, panes: readonly FleetPaneObservation[]) => FleetPaneObservation | undefined;
@@ -104,6 +105,7 @@ async function tick(input: {
     sleepMs: async (ms) => { sleeps.push(ms); },
     log: (line) => { logs.push(line); },
     listTerminalEnvelopes: input.listTerminalEnvelopes ?? (() => []),
+    ...(input.listUnreadRunMessages ? { listUnreadRunMessages: input.listUnreadRunMessages } : {}),
     ...(input.listOpenPulls ? { listOpenPulls: input.listOpenPulls } : {}),
     ...(input.checkRunsFinishedAt ? { checkRunsFinishedAt: input.checkRunsFinishedAt } : {}),
     ...(input.supervisedPullOwner ? { supervisedPullOwner: input.supervisedPullOwner } : {}),
@@ -224,6 +226,29 @@ describe('fleet alarm', () => {
     expect(observed.store.signature).toBeNull();
     expect(sends(observed.calls)).toHaveLength(0);
     expect(observed.logs).toContain('nothing stopped');
+  });
+  it('wakes the orchestrator once for each FLEET pane parked on an orchestrator answer', async () => {
+    const store = new MemoryWakeStore();
+    const fleetTerminal: FleetTerminal = { handle: 'fleet-unit', title: 'OpenCode manager', worktreePath: `${workerBase}/unit` };
+    const fleetTerminals = [terminals[0]!, fleetTerminal];
+    const first = await tick({ terminals: fleetTerminals, screens: { coord: 'idle', 'fleet-unit': 'work\nPARKED on orchestrator answer: approve deployment' }, store });
+    expect(sendsTo(first.calls, 'coord')[0]?.join(' ')).toContain('fleet-unit');
+    expect(sendsTo(first.calls, 'coord')[0]?.join(' ')).toContain('approve deployment');
+    const repeated = await tick({ terminals: fleetTerminals, screens: { coord: 'idle', 'fleet-unit': 'work\nPARKED on orchestrator answer: approve deployment' }, store });
+    expect(sendsTo(repeated.calls, 'coord')).toHaveLength(0);
+  });
+
+  it('wakes the orchestrator once per unread run message addressed to it, naming unit and subject', async () => {
+    const store = new MemoryWakeStore();
+    const fleetTerminal: FleetTerminal = { handle: 'fleet-unit', title: 'OpenCode manager', worktreePath: `${workerBase}/unit` };
+    const fleetTerminals = [terminals[0]!, fleetTerminal];
+    const listUnreadRunMessages = () => [{ id: 'msg-question-1', subject: 'Need approval', toHandle: 'run:run-1', fromHandle: 'fleet-unit' }];
+    const first = await tick({ terminals: fleetTerminals, screens: { coord: 'idle', 'fleet-unit': 'working\nesc interrupt' }, listUnreadRunMessages, store });
+    const message = sendsTo(first.calls, 'coord')[0]?.join(' ');
+    expect(message).toContain('fleet-unit');
+    expect(message).toContain('Need approval');
+    const repeated = await tick({ terminals: fleetTerminals, screens: { coord: 'idle', 'fleet-unit': 'working\nesc interrupt' }, listUnreadRunMessages, store });
+    expect(sendsTo(repeated.calls, 'coord')).toHaveLength(0);
   });
 
   it('wakes the idle pane of the launching worktree once per GPT terminal envelope, whatever its park line says', async () => {
@@ -497,12 +522,25 @@ describe('fleet alarm', () => {
     expect(unit).not.toContain('${PRIMARY}');
   });
 
-  it('never invokes orchestration, git, or gh and mutates Orca only through terminal send to the resolved coordinator', async () => {
-    const observed = await tick({ screens: { coord: 'idle', one: 'done', two: 'working\nesc to interrupt' } });
-    expect(observed.calls.some((call) => call[0] === 'orchestration' || call[0] === 'git' || call[0] === 'gh')).toBe(false);
-    const mutating = observed.calls.filter((call) => call[1] === 'send');
-    expect(mutating).toHaveLength(2);
-    expect(mutating.every((call) => call[0] === 'terminal' && call[call.indexOf('--terminal') + 1] === 'coord')).toBe(true);
+  it('reads the coordinator Run inbox and mutates Orca only through terminal send to the resolved coordinator', async () => {
+    const executor: OrcaExecutor = (args) => {
+      if (args[0] === 'orchestration' && args[1] === 'run-list') {
+        return commandResult(JSON.stringify({ ok: true, result: { runs: [{ id: 'run-1', coordinator_handle: 'coord' }] } }));
+      }
+      if (args[0] === 'orchestration' && args[1] === 'inbox' && args.includes('run:run-1')) {
+        return commandResult(JSON.stringify({ ok: true, result: { messages: [{
+          id: 'msg-1', subject: 'Need approval', read: 0, to_handle: 'run:run-1', from_handle: 'one',
+        }] } }));
+      }
+      return fakeOrca({ coord: 'idle', one: 'done', two: 'working\nesc to interrupt' }, [], terminals)(args);
+    };
+    const observed = await tick({ executor, screens: { coord: 'idle', one: 'done', two: 'working\nesc to interrupt' } });
+    expect(observed.calls).toContainEqual(['orchestration', 'run-list', '--json']);
+    expect(observed.calls).toContainEqual(['orchestration', 'inbox', '--terminal', 'run:run-1', '--json', '--limit', '1000']);
+    expect(sendsTo(observed.calls, 'coord')[0]?.join(' ')).toContain('Need approval');
+    expect(sendsTo(observed.calls, 'coord')[0]?.join(' ')).toContain('one');
+    expect(observed.calls.some((call) => call[0] === 'git' || call[0] === 'gh')).toBe(false);
+    expect(sendsTo(observed.calls, 'one')).toHaveLength(0);
   });
 });
 

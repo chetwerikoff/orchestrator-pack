@@ -130,6 +130,13 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
   }
 }
 
+export interface RunMailWakeEvent {
+  readonly id: string;
+  readonly subject: string;
+  readonly toHandle: string;
+  readonly fromHandle: string;
+}
+
 export interface FleetAlarmTickOptions {
   readonly config: FleetWakeConfig;
   readonly executor?: OrcaExecutor;
@@ -139,6 +146,7 @@ export interface FleetAlarmTickOptions {
   readonly readChats?: (cdpUrl: string, scope: ChatBannerScope) => Promise<ProjectChat[]>;
   readonly closeChat?: (cdpUrl: string, targetId: string) => Promise<boolean>;
   readonly listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
+  readonly listUnreadRunMessages?: (coordinatorHandle: string) => readonly RunMailWakeEvent[];
   readonly listOpenPulls?: (repository: string) => readonly OpenPullHead[];
   readonly checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
   readonly supervisedPullOwner?: (pull: OpenPullHead, panes: readonly FleetPaneObservation[]) => FleetPaneObservation | undefined;
@@ -361,7 +369,7 @@ export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeE
         pending.push(path);
         continue;
       }
-      if (!entry.isFile() || !isWakeableTerminalEnvelopePath(entry.name)) continue;
+      if (!entry.isFile() || !isWakeableTerminalEnvelopePath(path, root)) continue;
       try {
         const envelope = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
         const cwd = typeof envelope.cwd === 'string' ? envelope.cwd : undefined;
@@ -471,6 +479,33 @@ function pullOwner(
 }
 
 type OrcaReceipt = { readonly ok?: boolean; readonly result?: Record<string, unknown> };
+function listUnreadRunMessages(coordinatorHandle: string, executor: OrcaExecutor): RunMailWakeEvent[] {
+  const runs = orcaReceipt(executor, ['orchestration', 'run-list', '--json'])?.runs;
+  if (!Array.isArray(runs)) return [];
+  const events: RunMailWakeEvent[] = [];
+  for (const value of runs) {
+    if (!value || typeof value !== 'object') continue;
+    const run = value as Record<string, unknown>;
+    if (run.coordinator_handle !== coordinatorHandle || typeof run.id !== 'string') continue;
+    const messages = orcaReceipt(executor, [
+      'orchestration', 'inbox', '--terminal', `run:${run.id}`, '--json', '--limit', '1000',
+    ])?.messages;
+    if (!Array.isArray(messages)) continue;
+    for (const item of messages) {
+      if (!item || typeof item !== 'object') continue;
+      const message = item as Record<string, unknown>;
+      if (message.read !== 0 || typeof message.id !== 'string' || typeof message.subject !== 'string'
+        || message.to_handle !== `run:${run.id}` || typeof message.from_handle !== 'string') continue;
+      events.push({
+        id: message.id,
+        subject: message.subject,
+        toHandle: message.to_handle,
+        fromHandle: message.from_handle,
+      });
+    }
+  }
+  return events;
+}
 function orcaReceipt(executor: OrcaExecutor, args: string[]): Record<string, unknown> | undefined {
   const result = executor(args);
   if (!result.ok) return undefined;
@@ -528,25 +563,46 @@ function supervisedOwnerForPull(
 }
 
 /**
- * Wakes an idle pane once per event of its own: a GPT turn launched from its
- * worktree ended, or CI finished on the head of a PR it owns. The pane's own
- * park-line wording is not consulted.
+ * Wakes idle panes for their own completed events and wakes the coordinator
+ * for parked FLEET units or unread Run mail. The event marks suppress repeat wakes.
  */
 async function wakePanesOnEvents(
   options: FleetAlarmTickOptions,
+  coordinator: FleetTerminal,
   observations: readonly FleetPaneObservation[],
   executor: OrcaExecutor,
   store: FleetWakeStateStore,
   log: (line: string) => void,
   sleepMs: (milliseconds: number) => void | Promise<void>,
 ): Promise<void> {
-  const wakes: Array<{ pane: FleetPaneObservation; key: string; message: string }> = [];
+  const wakes: Array<{ pane: FleetTerminal | FleetPaneObservation; key: string; message: string }> = [];
   for (const envelope of (options.listTerminalEnvelopes ?? listTerminalEnvelopes)()) {
     const key = `gpt:${envelope.path}`;
     const pane = observations.find((candidate) => envelope.terminalHandle && candidate.handle === envelope.terminalHandle)
       ?? (envelope.cwd ? envelopeOwner(envelope.cwd, observations) : undefined);
     if (!pane || !idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
     wakes.push({ pane, key, message: `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}` });
+  }
+  for (const pane of observations) {
+    if (!pane.worktreePath) continue;
+    const lastLine = pane.lines.at(-1)?.trim() ?? '';
+    const parked = /^PARKED on orchestrator answer:\s*(.+)$/iu.exec(lastLine);
+    if (!parked) continue;
+    const key = `parked:${pane.handle}:${lastLine}`;
+    if (!store.hasParkedWakeEvent(key)) {
+      wakes.push({ pane: coordinator, key, message: `Wake: FLEET unit ${pane.handle} parked on orchestrator answer: ${parked[1]}` });
+    }
+  }
+  const unread = options.listUnreadRunMessages
+    ? options.listUnreadRunMessages(coordinator.handle)
+    : listUnreadRunMessages(coordinator.handle, executor);
+  for (const event of unread) {
+    if (event.toHandle === coordinator.handle || !event.toHandle.startsWith('run:')) continue;
+    const sender = observations.find((pane) => pane.handle === event.fromHandle);
+    if (!sender) continue;
+    const key = `mail:${sender.handle}:${event.id}`;
+    if (store.hasParkedWakeEvent(key)) continue;
+    wakes.push({ pane: coordinator, key, message: `Wake: FLEET unit ${sender.handle} sent Run message: ${event.subject}` });
   }
   const repository = options.config.chatScope?.repository;
   if (repository && observations.some(idlePane)) {
@@ -573,8 +629,7 @@ async function wakePanesOnEvents(
         }
         continue;
       }
-      if (!idlePane(pane)) continue;
-      if (store.hasParkedWakeEvent(key)) continue;
+      if (!idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
       wakes.push({ pane, key, message: `Wake: CI on ${pull.sha} finished for PR #${pull.number}` });
     }
   }
@@ -648,7 +703,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     return { state: 'unreadable', handle: 'fleet-sweep' };
   }
 
-  await wakePanesOnEvents(options, observations, executor, store, log, sleepMs);
+  await wakePanesOnEvents(options, coordinator, observations, executor, store, log, sleepMs);
 
   const chats = config.chatCdpUrl && config.chatScope
     ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])

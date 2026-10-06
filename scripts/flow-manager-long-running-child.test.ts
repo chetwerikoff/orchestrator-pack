@@ -19,6 +19,7 @@ import {
   COMPLETION_MODE,
   HANDOFF_SCHEMA,
   TERMINAL_ENVELOPE_NAME_SUFFIX,
+  TERMINAL_ENVELOPE_ROOT,
   TERMINAL_SCHEMA,
   deriveDelivery,
   isWakeableTerminalEnvelopePath,
@@ -61,8 +62,9 @@ beforeEach(() => {
   process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '150';
 });
 
-function tempDir(prefix = 'opk-fm-long-child-'): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+function tempDir(prefix = 'opk-fm-long-child-', base: string = TERMINAL_ENVELOPE_ROOT): string {
+  mkdirSync(base, { recursive: true });
+  const dir = mkdtempSync(join(base, prefix));
   cleanupDirs.push(dir);
   return dir;
 }
@@ -286,7 +288,7 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(code).toBe(2);
     expect(refusal).toContain('terminal_envelope_name_not_wakeable');
     expect(refusal).toContain(TERMINAL_ENVELOPE_NAME_SUFFIX);
-    expect(refusal).toContain(join(root, 'unwakeable', 'issue-2376-envelope-terminal.json'));
+    expect(refusal).toContain('/tmp/opencode/issue-2376-envelope-terminal.json');
     expect(existsSync(paths.receipt)).toBe(false);
     expect(existsSync(envelope)).toBe(false);
   });
@@ -310,7 +312,7 @@ describe('flow-manager long-running child (#1164)', () => {
     stderr.mockRestore();
     expect(code).toBe(2);
     expect(refusal).toContain('terminal_envelope_name_not_wakeable');
-    expect(refusal).toContain('--terminal-envelope ' + join(root, 'envelope-terminal.json'));
+    expect(refusal).toContain('--terminal-envelope /tmp/opencode/envelope-terminal.json');
     expect(spawnLauncher).not.toHaveBeenCalled();
   });
 
@@ -318,6 +320,31 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(isWakeableTerminalEnvelopePath('/tmp/opencode/issue-2376-inv-terminal.json')).toBe(true);
     expect(isWakeableTerminalEnvelopePath('/tmp/opencode/issue-2376-envelope.json')).toBe(false);
     expect(isWakeableTerminalEnvelopePath('/tmp/opencode/terminal-envelope.json')).toBe(false);
+  });
+  it('rejects wakeable envelope names outside fleet-wake discovery root and suggests the scanned location', async () => {
+    const root = tempDir('outside-root-', tmpdir());
+    const paths = launchPaths(root, 'outside-root');
+    const envelope = join(root, 'outside-root', 'issue-terminal.json');
+    const fixture = nodeFixture('process.exit(0)');
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const code = await runLaunch({
+      runIdentity: 'run',
+      attemptIdentity: 'attempt',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    });
+    const refusal = stderr.mock.calls.map((call) => String(call[0])).join('');
+    stderr.mockRestore();
+    expect(code).toBe(2);
+    expect(isWakeableTerminalEnvelopePath(envelope)).toBe(false);
+    expect(refusal).toContain('terminal_envelope_name_not_wakeable');
+    expect(refusal).toContain('/tmp/opencode/issue-terminal.json');
+    expect(existsSync(paths.receipt)).toBe(false);
+    expect(existsSync(envelope)).toBe(false);
   });
 
   it('refuses when receipt create fails after preflight', async () => {
