@@ -8,12 +8,12 @@
   ],
   "denylist": [
     "credentials/",
+    "docs/declarations/",
     "packages/core/",
     "secrets/",
     "vendor/"
   ],
   "allowed_roots": [
-    "docs/declarations/",
     "scripts/orca-runtime/",
     "scripts/pr2-foundation/"
   ],
