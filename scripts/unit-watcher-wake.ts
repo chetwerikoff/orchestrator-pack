@@ -7,10 +7,18 @@ import {
   type ProcessResult,
   type RunProcessSyncOptions,
 } from './kernel/subprocess.ts';
+import {
+  sameRuntimeWorker,
+  type RuntimeAdapter,
+  type RuntimeComposerFamilyObservation,
+  type RuntimeDispatchResult,
+  type RuntimeWorkerIdentity,
+} from './runtime/contracts.ts';
+import { selectRuntimeAdapter } from './runtime/registry.ts';
 import { resolveOrcaExecutable } from './orca-runtime/native.ts';
 
 const DEFAULT_WAIT_TIMEOUT_MS = 24 * 60 * 60 * 1_000;
-const SEND_TIMEOUT_MS = 10_000;
+const RUNTIME_TIMEOUT_MS = 10_000;
 
 export interface UnitWatcherWakeConfig {
   readonly watchTerminal: string;
@@ -27,6 +35,12 @@ export interface UnitWatcherWakeResult {
 
 export type WatcherCommandRunner = (options: RunProcessSyncOptions) => ProcessResult;
 
+export interface UnitWatcherWakeDependencies {
+  readonly run?: WatcherCommandRunner;
+  readonly executable?: string;
+  readonly adapter?: RuntimeAdapter;
+}
+
 interface OrcaEnvelope {
   readonly ok?: unknown;
   readonly result?: {
@@ -35,9 +49,6 @@ interface OrcaEnvelope {
       readonly satisfied?: unknown;
       readonly status?: unknown;
       readonly exitCode?: unknown;
-    };
-    readonly send?: {
-      readonly accepted?: unknown;
     };
   };
   readonly error?: unknown;
@@ -51,9 +62,10 @@ function usage(): string {
     '    --target-terminal <unit-terminal> \\',
     '    --wake-text <text> [--wait-timeout-ms <ms>]',
     '',
-    'The helper waits for the watched Orca terminal to exit, then sends the wake text',
-    'to the target terminal with --enter. Submission is confirmed only by',
-    'result.send.accepted === true in Orca JSON output.',
+    'The helper snapshots the target through the registered RuntimeAdapter, waits',
+    'for the watched Orca terminal to exit, revalidates the same exact runtime',
+    'generation, then makes one adapter dispatch. Raw Orca accepted:true is not',
+    'a confirmed submission witness.',
     '',
   ].join('\n');
 }
@@ -122,7 +134,11 @@ function commandOutput(label: string, result: ProcessResult): string {
     + '\nstderr:\n' + result.stderr + runnerError;
 }
 
-function failed(label: string, result: ProcessResult, reason: string): UnitWatcherWakeResult {
+function adapterOutput(label: string, value: unknown): string {
+  return label + ':\n' + JSON.stringify(value);
+}
+
+function failedCommand(label: string, result: ProcessResult, reason: string): UnitWatcherWakeResult {
   return {
     exitCode: 1,
     stdout: '',
@@ -131,15 +147,170 @@ function failed(label: string, result: ProcessResult, reason: string): UnitWatch
   };
 }
 
-export function runUnitWatcherWake(
-  config: UnitWatcherWakeConfig,
-  dependencies: {
-    readonly run?: WatcherCommandRunner;
-    readonly executable?: string;
-  } = {},
+function failedAdapter(label: string, value: unknown, reason: string): UnitWatcherWakeResult {
+  return {
+    exitCode: 1,
+    stdout: '',
+    stderr: 'unit watcher wake failed: ' + reason + '\n'
+      + adapterOutput(label, value) + '\n',
+  };
+}
+
+function exactTargetIdentity(
+  adapter: RuntimeAdapter,
+  targetTerminal: string,
+): { readonly identity: RuntimeWorkerIdentity } | { readonly failure: UnitWatcherWakeResult } {
+  const resolved = adapter.findWorkerById(
+    targetTerminal,
+    { timeoutMs: RUNTIME_TIMEOUT_MS },
+  );
+  if (resolved.status !== 'ok') {
+    return {
+      failure: failedAdapter(
+        'runtime target resolution',
+        resolved,
+        'target runtime identity could not be resolved',
+      ),
+    };
+  }
+  if (!resolved.value) {
+    return {
+      failure: failedAdapter(
+        'runtime target resolution',
+        resolved,
+        'target runtime identity is missing',
+      ),
+    };
+  }
+  const identity = resolved.value.identity;
+  if (
+    identity.runtime !== adapter.id
+    || identity.id !== targetTerminal
+    || !identity.generation.trim()
+  ) {
+    return {
+      failure: failedAdapter(
+        'runtime target resolution',
+        resolved,
+        'target runtime identity is invalid or mismatched',
+      ),
+    };
+  }
+  return { identity };
+}
+
+function targetBindingFailure(
+  adapter: RuntimeAdapter,
+  identity: RuntimeWorkerIdentity,
+): UnitWatcherWakeResult | null {
+  const current = adapter.findWorker(identity, { timeoutMs: RUNTIME_TIMEOUT_MS });
+  if (current.status !== 'ok') {
+    return failedAdapter(
+      'runtime target revalidation',
+      current,
+      'target runtime identity could not be revalidated',
+    );
+  }
+  if (!current.value || !sameRuntimeWorker(current.value.identity, identity)) {
+    return failedAdapter(
+      'runtime target revalidation',
+      current,
+      'target runtime identity is stale or reused',
+    );
+  }
+
+  if (!adapter.observeComposerFamily) {
+    return failedAdapter(
+      'runtime composer binding',
+      { status: 'unsupported', reason: 'runtime_composer_observer_unavailable' },
+      'target composer binding cannot be proven',
+    );
+  }
+  const family: RuntimeComposerFamilyObservation = adapter.observeComposerFamily(
+    identity,
+    { timeoutMs: RUNTIME_TIMEOUT_MS },
+  );
+  if (family.status !== 'known') {
+    return failedAdapter(
+      'runtime composer binding',
+      family,
+      'target composer binding cannot be proven',
+    );
+  }
+  if (family.family === 'opencode') {
+    const control = adapter.composerControl?.(identity, { timeoutMs: RUNTIME_TIMEOUT_MS });
+    if (control?.kind !== 'opencode-http') {
+      return failedAdapter(
+        'runtime composer control',
+        { kind: control?.kind ?? null, reason: 'opencode_control_unbound' },
+        'OpenCode target control is unbound',
+      );
+    }
+  }
+  return null;
+}
+
+function confirmedDispatch(
+  identity: RuntimeWorkerIdentity,
+  dispatch: RuntimeDispatchResult,
 ): UnitWatcherWakeResult {
+  if (dispatch.status === 'dispatched') {
+    return {
+      exitCode: 0,
+      stdout: 'watcher wake submission confirmed: runtime='
+        + identity.runtime
+        + ' target=' + identity.id
+        + ' generation=' + identity.generation
+        + ' dispatch=dispatched\n',
+      stderr: '',
+    };
+  }
+  if (dispatch.status === 'dispatch_unknown') {
+    return failedAdapter(
+      'runtime dispatch result',
+      dispatch,
+      'delivery-unknown: ' + dispatch.reason,
+    );
+  }
+  if (dispatch.status === 'send_failed') {
+    return failedAdapter(
+      'runtime dispatch result',
+      dispatch,
+      'dispatch refused: ' + dispatch.reason,
+    );
+  }
+  return failedAdapter(
+    'runtime dispatch result',
+    dispatch,
+    'dispatch result was not confirmed',
+  );
+}
+
+export async function runUnitWatcherWake(
+  config: UnitWatcherWakeConfig,
+  dependencies: UnitWatcherWakeDependencies = {},
+): Promise<UnitWatcherWakeResult> {
   const run = dependencies.run ?? runProcessSync;
   const executable = dependencies.executable ?? resolveOrcaExecutable();
+
+  let adapter: RuntimeAdapter;
+  try {
+    adapter = dependencies.adapter ?? await selectRuntimeAdapter();
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'unit watcher wake failed: runtime adapter selection failed: '
+        + (error instanceof Error ? error.message : String(error))
+        + '\n',
+    };
+  }
+
+  const target = exactTargetIdentity(adapter, config.targetTerminal);
+  if ('failure' in target) return target.failure;
+
+  const initialBindingFailure = targetBindingFailure(adapter, target.identity);
+  if (initialBindingFailure) return initialBindingFailure;
 
   const waitResult = run({
     command: executable,
@@ -160,48 +331,24 @@ export function runUnitWatcherWake(
     || waitEnvelope.result?.wait?.condition !== 'exit'
     || waitEnvelope.result?.wait?.satisfied !== true
   ) {
-    return failed('orca terminal wait', waitResult, 'watched terminal exit was not confirmed');
-  }
-
-  const sendResult = run({
-    command: executable,
-    args: [
-      'terminal', 'send',
-      '--terminal', config.targetTerminal,
-      '--text', config.wakeText,
-      '--enter',
-      '--json',
-    ],
-    inheritParentEnv: true,
-    timeoutMs: SEND_TIMEOUT_MS,
-  });
-  const sendEnvelope = parseEnvelope(sendResult.stdout);
-
-  if (
-    sendResult.ok
-    && sendEnvelope?.ok === true
-    && sendEnvelope.result?.send?.accepted === true
-  ) {
-    return {
-      exitCode: 0,
-      stdout: 'watcher wake submission confirmed: accepted:true target='
-        + config.targetTerminal + '\n',
-      stderr: '',
-    };
-  }
-
-  if (sendResult.ok && sendEnvelope?.ok === true) {
-    return failed(
-      'orca terminal send',
-      sendResult,
-      'delivery-unknown: result.send.accepted was not true',
+    return failedCommand(
+      'orca terminal wait',
+      waitResult,
+      'watched terminal exit was not confirmed',
     );
   }
 
-  return failed('orca terminal send', sendResult, 'terminal send was not accepted');
+  const finalBindingFailure = targetBindingFailure(adapter, target.identity);
+  if (finalBindingFailure) return finalBindingFailure;
+
+  const dispatch = adapter.dispatchInput(
+    { worker: target.identity, text: config.wakeText },
+    { timeoutMs: RUNTIME_TIMEOUT_MS },
+  );
+  return confirmedDispatch(target.identity, dispatch);
 }
 
-export function main(argv: readonly string[] = process.argv.slice(2)): number {
+export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   if (argv.includes('--help') || argv.includes('-h')) {
     process.stdout.write(usage());
     return 0;
@@ -220,7 +367,7 @@ export function main(argv: readonly string[] = process.argv.slice(2)): number {
     return 1;
   }
 
-  const result = runUnitWatcherWake(config);
+  const result = await runUnitWatcherWake(config);
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   return result.exitCode;
@@ -228,5 +375,17 @@ export function main(argv: readonly string[] = process.argv.slice(2)): number {
 
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : undefined;
 if (invokedPath === import.meta.url) {
-  process.exitCode = main();
+  main().then(
+    (exitCode) => {
+      process.exitCode = exitCode;
+    },
+    (error) => {
+      process.stderr.write(
+        'unit watcher wake failed: '
+        + (error instanceof Error ? error.message : String(error))
+        + '\n',
+      );
+      process.exitCode = 1;
+    },
+  );
 }

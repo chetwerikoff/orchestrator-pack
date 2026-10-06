@@ -5,6 +5,11 @@ watcher terminal to wake the unit pane after that detached terminal exits. It is
 only a one-shot wake helper; it is not a scheduler, retry loop, queue, or durable
 coordination service.
 
+The wake target is generation-bound. The helper resolves the target through the
+registered `RuntimeAdapter` before it begins waiting, retains that exact
+`{runtime,id,generation}` identity, revalidates the same identity after the watched
+job exits, and performs at most one adapter dispatch.
+
 ## Canonical arm
 
 The watched terminal is the detached job. The target terminal is the unit pane
@@ -25,7 +30,12 @@ orca terminal create \
   --json
 ```
 
-The helper waits for the watched terminal's `exit` condition. Its default wait
+The helper first resolves `<unit-terminal>` through the registered runtime adapter.
+If it cannot obtain an exact generation-bound identity, or a known OpenCode target
+does not have its required `opencode-http` control binding, it exits non-zero
+without waiting and without attempting a wake.
+
+The helper then waits for the watched terminal's `exit` condition. Its default wait
 timeout is 24 hours; use `--wait-timeout-ms <ms>` only when the job has a known
 shorter bound.
 
@@ -37,34 +47,56 @@ Keep the wake text explicit about the watched terminal and the action to resume:
 WATCHER: <detached-job-terminal> exited; resume <unit-purpose> and inspect its result
 ```
 
-The helper passes that text to exactly one Orca command of this shape:
+After the watched job exits, the helper revalidates the exact target generation.
+A closed target, a reused terminal handle, or a changed generation fails closed
+before dispatch.
+
+The helper then calls the registered runtime adapter exactly once:
 
 ```text
-orca terminal send --terminal <unit-terminal> --text <wake-text> --enter --json
+dispatchInput({ worker: <exact-runtime-identity>, text: <wake-text> })
 ```
 
-Do not hand-write a second send path or omit `--enter`.
+The adapter owns provider-specific submission. For a bound OpenCode target this
+uses the existing `opencode-http` prompt submission path. A raw Orca fallback still
+uses the adapter-owned text-plus-Enter shape, but its `accepted:true` response is
+not a submit witness and therefore remains `dispatch_unknown`.
+
+Do not add a second send path and do not retry an ambiguous dispatch.
 
 ## Submission confirmation
 
-A successful process exit from Orca is not enough. The helper confirms submission
-only when the send command's own JSON output contains:
+The helper exits 0 only when the canonical adapter returns:
 
 ```json
-{"ok":true,"result":{"send":{"accepted":true}}}
+{"status":"dispatched"}
 ```
 
-On that exact witness it exits 0 and prints:
+For the current bound OpenCode path, that result is produced only after the
+OpenCode prompt submit operation is accepted by the existing runtime control
+surface. The helper prints:
 
 ```text
-watcher wake submission confirmed: accepted:true target=<unit-terminal>
+watcher wake submission confirmed: runtime=<runtime> target=<unit-terminal> generation=<generation> dispatch=dispatched
 ```
 
-If Orca returns `ok:true` without `result.send.accepted === true`, the helper
-classifies the result as `delivery-unknown`, exits non-zero, and prints the exact
-send-command stdout/stderr. Structured failures such as
-`terminal_not_found` are also non-zero and include the exact command output.
-The helper does not automatically resend an unconfirmed wake.
+A raw Orca `terminal send --text ... --enter` response containing
+`result.send.accepted === true` is deliberately **not** promoted to success. The
+current adapter classifies that combined raw send as:
+
+```json
+{"status":"dispatch_unknown","reason":"submit_witness_unavailable"}
+```
+
+The helper exits non-zero for that result and prints the exact adapter dispatch
+result. Known OpenCode targets with no bound control fail non-zero with
+`opencode_control_unbound` before sending. Stale/reused target generations fail
+non-zero before sending as well.
+
+Watched-terminal wait failures still include the exact Orca command stdout/stderr.
+Target-resolution and wake-delivery failures include the exact canonical
+`RuntimeAdapter` result, because the helper does not bypass that boundary to inspect
+or reinterpret provider-native send output.
 
 ## Cleanup
 
@@ -75,6 +107,6 @@ if it still remains visible:
 orca terminal close --terminal <watcher-terminal> --json
 ```
 
-If the helper failed, inspect the surfaced Orca output and re-observe the current
-target before deciding whether another wake is safe. Do not treat an unconfirmed
-submission as permission for an automatic duplicate send.
+If the helper failed, inspect the surfaced wait/adapter result and re-observe the
+current target before deciding whether another wake is safe. An unconfirmed or
+ambiguous dispatch is not permission for an automatic duplicate send.

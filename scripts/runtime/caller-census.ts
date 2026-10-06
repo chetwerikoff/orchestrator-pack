@@ -259,6 +259,13 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     note: 'Publishes one operator-primary message through RuntimeAdapter.dispatchInput and preserves ambiguous delivery.',
   },
   {
+    surface: 'scripts/unit-watcher-wake.ts',
+    operations: ['runtime-composition', 'find', 'send'],
+    kind: 'runtime-port',
+    disposition: 'already-runtime-neutral',
+    note: 'Resolves and revalidates one exact generation-bound target through RuntimeAdapter before one no-resend dispatch; OpenCode submission remains adapter-owned.',
+  },
+  {
     surface: 'scripts/lib/worker-degraded-ci-handoff.ts',
     operations: ['find', 'send'],
     kind: 'runtime-port',
