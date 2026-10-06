@@ -31,6 +31,9 @@ import {
 } from '../executor-profile-policy.ts';
 import { overlayExecutorProfileEnv, readExecutorProfileStore } from '../executor-profile-store.ts';
 
+const MANAGER_PREAMBLE_FIXTURE = "# Manager launch preamble\\nManager rules.";
+const FIREFIGHTER_PROMPT_FIXTURE = "# Firefighter universal\\nFirefighter rules.";
+
 const worker: RuntimeWorker = {
   identity: { runtime: 'orca', id: 'terminal-fresh', generation: 'pty-1' },
   workspacePath: '/tmp/exact-worktree',
@@ -152,7 +155,11 @@ function deps(input: {
   onWorktree?: () => void;
   managerRun?: EdgeResult<{ readonly runId: string }>;
   managerMembership?: EdgeResult<{ readonly taskId: string }>;
+  managerTemplate?: EdgeResult<string>;
+  firefighterTemplate?: EdgeResult<string>;
+  managerIssueTitle?: EdgeResult<string>;
   managerCreate?: EdgeResult<{ readonly taskId: string; readonly status: string }>;
+  onManagerCreate?: (brief: string) => void;
   supervised?: SupervisedWorkerStartResult;
   onSupervised?: () => void;
   clock?: number[];
@@ -167,7 +174,14 @@ function deps(input: {
     resolveProfile: (workClass, env, startMode) => resolveExecutorProfile(workClass, env, startMode),
     observeManagerRun: async () => input.managerRun ?? ({ status: 'ok', value: { runId: 'run-1' } }),
     proveManagerTaskMembership: async () => input.managerMembership ?? ({ status: 'ok', value: { taskId: 'task-1' } }),
-    createManagerTask: async () => input.managerCreate ?? ({ status: 'ok', value: { taskId: 'task-created', status: 'ready' } }),
+    readManagerBriefTemplate: async (name) => name === 'manager-preamble.md'
+      ? input.managerTemplate ?? ({ status: 'ok', value: MANAGER_PREAMBLE_FIXTURE })
+      : input.firefighterTemplate ?? ({ status: 'ok', value: FIREFIGHTER_PROMPT_FIXTURE }),
+    readIssueTitle: async () => input.managerIssueTitle ?? ({ status: 'ok', value: 'ordinary issue' }),
+    createManagerTask: async (_runId, brief) => {
+      input.onManagerCreate?.(brief);
+      return input.managerCreate ?? ({ status: 'ok', value: { taskId: 'task-created', status: 'ready' } });
+    },
     observeDispatch: async () => { input.onDispatch?.(); return { status: 'ok', value: dispatch.shift() ?? { kind: 'absent' } }; },
     prepareWorktree: async () => { input.onWorktree?.(); return { status: 'ok', value: {
       id: 'repo::exact-worktree', selector: 'id:repo::exact-worktree', path: '/tmp/exact-worktree', setupWitness: 'same_invocation_complete',
@@ -703,6 +717,84 @@ describe('supervised Task launch assistant', () => {
     }));
     expect(result).toMatchObject({ outcome: 'continue', stage: 'manager_task', observedCause: 'manager_task_membership_absent' });
     expect(worktrees).toBe(0);
+  });
+
+  it('prepends the canonical manager preamble to a fresh manager brief', async () => {
+    let createdBrief = '';
+    await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: 'ordinary delta',
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({ onManagerCreate: (brief) => { createdBrief = brief; } }));
+    expect(createdBrief).toBe(`${MANAGER_PREAMBLE_FIXTURE}\n\nordinary delta`);
+  });
+
+  it('orders manager preamble then firefighter prompt for firefighter title or delta detection', async () => {
+    const created: string[] = [];
+    const base: LaunchInput = {
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: 'delta only',
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    };
+    await runSupervisedTaskLaunchAssistant({ ...base, issueNumber: 2385 }, deps({
+      managerIssueTitle: { status: 'ok', value: 'firefighter: repair launch' },
+      onManagerCreate: (brief) => { created.push(brief); },
+    }));
+    await runSupervisedTaskLaunchAssistant({ ...base, managerBrief: 'firefighter: repair launch' }, deps({
+      onManagerCreate: (brief) => { created.push(brief); },
+    }));
+    expect(created).toEqual([
+      `${MANAGER_PREAMBLE_FIXTURE}\n\n${FIREFIGHTER_PROMPT_FIXTURE}\n\ndelta only`,
+      `${MANAGER_PREAMBLE_FIXTURE}\n\n${FIREFIGHTER_PROMPT_FIXTURE}\n\nfirefighter: repair launch`,
+    ]);
+  });
+
+  it('does not duplicate manager or firefighter templates that are already present', async () => {
+    const alreadyPrepared = `${MANAGER_PREAMBLE_FIXTURE}\n\n${FIREFIGHTER_PROMPT_FIXTURE}\n\nfirefighter: existing delta`;
+    let createdBrief = '';
+    await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: alreadyPrepared,
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({ onManagerCreate: (brief) => { createdBrief = brief; } }));
+    expect(createdBrief).toBe(alreadyPrepared);
+  });
+
+  it('fails closed before Task-create when a required canonical template is unavailable', async () => {
+    let taskCreates = 0;
+    const result = await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: 'ordinary delta',
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({
+      managerTemplate: {
+        status: 'continue',
+        cause: 'manager_brief_template_unavailable',
+        actor: 'operator',
+        evidence: { template: 'manager-preamble.md', errorCode: 'ENOENT' },
+        nextAction: { kind: 'reconcile_manager_task', note: 'restore canonical template' },
+      },
+      onManagerCreate: () => { taskCreates += 1; },
+    }));
+    expect(result).toMatchObject({
+      outcome: 'continue',
+      stage: 'manager_task',
+      observedCause: 'manager_brief_template_unavailable',
+      evidence: { template: 'manager-preamble.md', errorCode: 'ENOENT' },
+    });
+    expect(taskCreates).toBe(0);
   });
 
   it('manager brief uses exactly one Task-create edge and preserves provider retry identity without echoing brief', async () => {

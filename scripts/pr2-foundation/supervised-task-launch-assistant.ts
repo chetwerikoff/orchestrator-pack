@@ -156,6 +156,8 @@ export interface WorktreePreparationRequest {
 export type DispatchObservation = { readonly kind: 'absent' }
   | { readonly kind: 'present'; readonly dispatchId?: string };
 
+export type ManagerBriefTemplateName = 'manager-preamble.md' | 'ff-prompt-universal.md';
+
 export interface LaunchInput {
   readonly repository: string;
   readonly projectId?: string;
@@ -184,6 +186,8 @@ export interface LaunchDependencies {
   ) => Promise<EdgeResult<ExecutorProfile>> | EdgeResult<ExecutorProfile>;
   readonly observeManagerRun: (runId: string) => Promise<EdgeResult<{ readonly runId: string }>>;
   readonly proveManagerTaskMembership: (runId: string, taskId: string) => Promise<EdgeResult<{ readonly taskId: string }>>;
+  readonly readManagerBriefTemplate: (name: ManagerBriefTemplateName) => Promise<EdgeResult<string>> | EdgeResult<string>;
+  readonly readIssueTitle: (repository: string, issueNumber: number) => Promise<EdgeResult<string>>;
   readonly createManagerTask: (runId: string, brief: string) => Promise<EdgeResult<{ readonly taskId: string; readonly status: string }>>;
   readonly observeDispatch: (taskId: string) => Promise<EdgeResult<DispatchObservation>>;
   readonly prepareWorktree: (input: WorktreePreparationRequest) => Promise<EdgeResult<PreparedWorktree>>;
@@ -198,6 +202,112 @@ const text = (value: unknown): string => typeof value === 'string' ? value.trim(
 const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 const sameIdentity = (a: RuntimeWorkerIdentity, b: RuntimeWorkerIdentity): boolean =>
   a.runtime === b.runtime && a.id === b.id && a.generation === b.generation;
+
+const MANAGER_BRIEFS_DIRECTORY = join(homedir(), '.local', 'state', 'create-issue-draft', 'briefs');
+const FIREFIGHTER_BRIEF_MARKER = /\bfirefighter\s*:/iu;
+
+function markdownHeadingText(markdown: string): string {
+  for (const line of markdown.split(/\r?\n/u)) {
+    const match = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/u);
+    if (match?.[1]) return match[1].trim();
+  }
+  return '';
+}
+
+function normalizedHeadingLine(line: string): string {
+  const match = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/u);
+  return (match?.[1] ?? line).trim();
+}
+
+function startsWithHeadingText(value: string, heading: string): boolean {
+  const firstLine = value.trimStart().split(/\r?\n/u, 1)[0] ?? '';
+  return normalizedHeadingLine(firstLine) === heading;
+}
+
+function containsHeadingText(value: string, heading: string): boolean {
+  return value.split(/\r?\n/u).some((line) => normalizedHeadingLine(line) === heading);
+}
+
+function prependFullTemplate(template: string, body: string): string {
+  if (!body) return template;
+  if (template.endsWith('\n\n')) return `${template}${body}`;
+  if (template.endsWith('\n')) return `${template}\n${body}`;
+  return `${template}\n\n${body}`;
+}
+
+function invalidTemplateHeading(name: ManagerBriefTemplateName): EdgeResult<string> {
+  return {
+    status: 'continue',
+    cause: 'manager_brief_template_heading_missing',
+    actor: 'operator',
+    evidence: { template: name },
+    nextAction: {
+      kind: 'reconcile_manager_task',
+      note: `restore a Markdown heading in the canonical ${name} before creating a manager Task`,
+    },
+  };
+}
+
+async function prepareFreshManagerBrief(
+  input: { readonly repository: string; readonly issueNumber?: number; readonly brief: string },
+  deps: Pick<LaunchDependencies, 'readManagerBriefTemplate' | 'readIssueTitle'>,
+): Promise<EdgeResult<string>> {
+  const managerTemplate = await deps.readManagerBriefTemplate('manager-preamble.md');
+  if (managerTemplate.status !== 'ok') return managerTemplate;
+  const managerHeading = markdownHeadingText(managerTemplate.value);
+  if (!managerHeading) return invalidTemplateHeading('manager-preamble.md');
+
+  const managerAlreadyPresent = startsWithHeadingText(input.brief, managerHeading);
+  let firefighter = FIREFIGHTER_BRIEF_MARKER.test(input.brief);
+  if (!firefighter && input.issueNumber) {
+    const issueTitle = await deps.readIssueTitle(input.repository, input.issueNumber);
+    if (issueTitle.status !== 'ok') return issueTitle;
+    firefighter = FIREFIGHTER_BRIEF_MARKER.test(issueTitle.value);
+  }
+
+  if (!firefighter) {
+    return {
+      status: 'ok',
+      value: managerAlreadyPresent ? input.brief : prependFullTemplate(managerTemplate.value, input.brief),
+    };
+  }
+
+  const firefighterTemplate = await deps.readManagerBriefTemplate('ff-prompt-universal.md');
+  if (firefighterTemplate.status !== 'ok') return firefighterTemplate;
+  const firefighterHeading = markdownHeadingText(firefighterTemplate.value);
+  if (!firefighterHeading) return invalidTemplateHeading('ff-prompt-universal.md');
+
+  const firefighterAlreadyPresent = containsHeadingText(input.brief, firefighterHeading);
+  if (!managerAlreadyPresent) {
+    const body = firefighterAlreadyPresent
+      ? input.brief
+      : prependFullTemplate(firefighterTemplate.value, input.brief);
+    return { status: 'ok', value: prependFullTemplate(managerTemplate.value, body) };
+  }
+  if (firefighterAlreadyPresent) return { status: 'ok', value: input.brief };
+
+  if (input.brief.startsWith(managerTemplate.value)) {
+    const rest = input.brief.slice(managerTemplate.value.length).replace(/^(?:\r?\n){1,2}/u, '');
+    return {
+      status: 'ok',
+      value: prependFullTemplate(
+        managerTemplate.value,
+        prependFullTemplate(firefighterTemplate.value, rest),
+      ),
+    };
+  }
+
+  return {
+    status: 'continue',
+    cause: 'manager_brief_existing_preamble_not_canonical',
+    actor: 'manager',
+    evidence: { template: 'manager-preamble.md' },
+    nextAction: {
+      kind: 'reconcile_manager_task',
+      note: 'start the already-prefixed firefighter brief with the exact canonical manager preamble so the firefighter prompt can be inserted after it without duplication',
+    },
+  };
+}
 
 function supportedStartMode(value: WorkerStartMode | undefined): value is ExecutorRoute | undefined {
   return value === undefined || value === 'provider_new_top_level' || value === 'exact_terminal_worktree';
@@ -407,7 +517,15 @@ export async function runSupervisedTaskLaunchAssistant(
         nextAction: { kind: 'reconcile_manager_task', note: 'prove exact Task membership in the exact requested Run' },
       }, resources, startedAtMs, timings, deps.now);
     } else {
-      const created = await checkpoint('manager_task', timings, deps.now, () => deps.createManagerTask(runId, brief));
+      const preparedBrief = await prepareFreshManagerBrief({
+        repository: resources.repository,
+        ...(input.issueNumber ? { issueNumber: input.issueNumber } : {}),
+        brief,
+      }, deps);
+      if (preparedBrief.status !== 'ok') {
+        return continued(input, 'manager_task', preparedBrief, resources, startedAtMs, timings, deps.now);
+      }
+      const created = await checkpoint('manager_task', timings, deps.now, () => deps.createManagerTask(runId, preparedBrief.value));
       if (created.status !== 'ok') return continued(input, 'manager_task', created, resources, startedAtMs, timings, deps.now);
       taskId = created.value.taskId.trim();
       if (!taskId || !created.value.status.trim()) return continued(input, 'manager_task', {
@@ -1333,6 +1451,67 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
         status: 'continue', cause: matches.length ? 'manager_task_membership_ambiguous' : 'manager_task_membership_absent',
         actor: 'manager', evidence: { matchCount: matches.length },
         nextAction: { kind: 'reconcile_manager_task', note: 'prove exactly one requested Task in the exact Run' },
+      };
+    },
+    readManagerBriefTemplate: (name) => {
+      const templatePath = join(MANAGER_BRIEFS_DIRECTORY, name);
+      try {
+        const value = readFileSync(templatePath, 'utf8');
+        return value ? { status: 'ok', value } : {
+          status: 'continue',
+          cause: 'manager_brief_template_unavailable',
+          actor: 'operator',
+          evidence: { template: name, path: templatePath, errorCode: 'empty' },
+          nextAction: {
+            kind: 'reconcile_manager_task',
+            note: `restore a readable non-empty canonical ${name} before creating a manager Task`,
+          },
+        };
+      } catch (error) {
+        const errorCode = record(error) && typeof error.code === 'string' ? error.code : 'read_failed';
+        return {
+          status: 'continue',
+          cause: 'manager_brief_template_unavailable',
+          actor: 'operator',
+          evidence: { template: name, path: templatePath, errorCode },
+          nextAction: {
+            kind: 'reconcile_manager_task',
+            note: `restore a readable canonical ${name} before creating a manager Task`,
+          },
+        };
+      }
+    },
+    readIssueTitle: async (repository, issueNumber) => {
+      const issueRead = await child([
+        'gh', 'issue', 'view', String(issueNumber), '--repo', repository,
+        '--json', 'state,title,body,closedAt',
+      ], cwd, env);
+      if (!issueRead.ok) return {
+        status: 'continue',
+        cause: 'manager_issue_title_unavailable',
+        actor: 'provider',
+        evidence: { repository, issueNumber },
+        nextAction: {
+          kind: 'reconcile_manager_task',
+          note: 'restore the tracked GitHub Issue read before creating a manager Task whose firefighter classification is unknown',
+        },
+      };
+      try {
+        const issue: unknown = JSON.parse(issueRead.stdout);
+        const title = record(issue) ? text(issue.title) : '';
+        if (title) return { status: 'ok', value: title };
+      } catch {
+        // Structured refusal below owns malformed output.
+      }
+      return {
+        status: 'continue',
+        cause: 'manager_issue_title_unavailable',
+        actor: 'provider',
+        evidence: { repository, issueNumber },
+        nextAction: {
+          kind: 'reconcile_manager_task',
+          note: 'restore the tracked GitHub Issue read before creating a manager Task whose firefighter classification is unknown',
+        },
       };
     },
     createManagerTask: (runId, brief) => createManagerTaskWithOrca(
