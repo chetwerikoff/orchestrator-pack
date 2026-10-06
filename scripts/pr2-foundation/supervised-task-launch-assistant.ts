@@ -277,17 +277,16 @@ async function prepareFreshManagerBrief(
   const firefighterHeading = markdownHeadingText(firefighterTemplate.value);
   if (!firefighterHeading) return invalidTemplateHeading('ff-prompt-universal.md');
 
-  const firefighterAlreadyPresent = containsHeadingText(input.brief, firefighterHeading);
   if (!managerAlreadyPresent) {
-    const body = firefighterAlreadyPresent
+    const body = startsWithHeadingText(input.brief, firefighterHeading)
       ? input.brief
       : prependFullTemplate(firefighterTemplate.value, input.brief);
     return { status: 'ok', value: prependFullTemplate(managerTemplate.value, body) };
   }
-  if (firefighterAlreadyPresent) return { status: 'ok', value: input.brief };
 
   if (input.brief.startsWith(managerTemplate.value)) {
     const rest = input.brief.slice(managerTemplate.value.length).replace(/^(?:\r?\n){1,2}/u, '');
+    if (startsWithHeadingText(rest, firefighterHeading)) return { status: 'ok', value: input.brief };
     return {
       status: 'ok',
       value: prependFullTemplate(
@@ -297,15 +296,17 @@ async function prepareFreshManagerBrief(
     };
   }
 
+  if (containsHeadingText(input.brief, firefighterHeading)) return { status: 'ok', value: input.brief };
+  const firstLineBreak = input.brief.match(/\r?\n/u);
+  if (!firstLineBreak?.index) {
+    return { status: 'ok', value: prependFullTemplate(input.brief, firefighterTemplate.value) };
+  }
+  const boundary = firstLineBreak.index + firstLineBreak[0].length;
+  const managerHeadingPrefix = input.brief.slice(0, boundary);
+  const rest = input.brief.slice(boundary).replace(/^(?:\r?\n){1,2}/u, '');
   return {
-    status: 'continue',
-    cause: 'manager_brief_existing_preamble_not_canonical',
-    actor: 'manager',
-    evidence: { template: 'manager-preamble.md' },
-    nextAction: {
-      kind: 'reconcile_manager_task',
-      note: 'start the already-prefixed firefighter brief with the exact canonical manager preamble so the firefighter prompt can be inserted after it without duplication',
-    },
+    status: 'ok',
+    value: `${managerHeadingPrefix}${prependFullTemplate(firefighterTemplate.value, rest)}`,
   };
 }
 
