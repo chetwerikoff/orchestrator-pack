@@ -181,7 +181,10 @@ function readLaunchTaskTerminalOwnershipForIdentity(
     const ownership = persisted.value;
     if (!ownership) continue;
     if (!isLaunchAssistantTaskTitle(ownership.title)) return { ok: false };
-    if (!sameRuntimeWorker(ownership.identity, worker)) continue;
+    if (
+      ownership.identity.runtime !== worker.runtime
+      || ownership.identity.id !== worker.id
+    ) continue;
     if (match) return { ok: false };
     match = ownership;
   }
@@ -420,7 +423,8 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     const currentTitle = current.title?.trim() ?? '';
     if (
       ownership.workspacePath !== current.workspacePath
-      || !sameRuntimeWorker(ownership.identity, worker)
+      || ownership.identity.runtime !== worker.runtime
+      || ownership.identity.id !== worker.id
       || (currentTitle && currentTitle !== ownership.title)
     ) return undefined;
     return ownership.openCodeControl;

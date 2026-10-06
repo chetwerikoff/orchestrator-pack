@@ -32,13 +32,15 @@ orca terminal create \
 
 The helper first resolves `<unit-terminal>` through the registered runtime adapter.
 For launch-assistant targets, a fresh helper process recovers the OpenCode control
-from the existing persisted launch-terminal ownership record by exact
-`{runtime,id,generation}` identity; it does not depend on another adapter instance's
-in-process ownership memory. The persisted workspace must match the live target,
-and a live title, when present, must match the persisted launch title. Missing,
-stale, malformed, duplicate, or mismatched records remain unbound. If the helper
-cannot obtain an exact generation-bound identity or the required `opencode-http`
-control binding, it exits non-zero without waiting and without attempting a wake.
+from the existing persisted launch-terminal ownership record by exact runtime plus
+the globally unique terminal id. The persisted spawn-receipt generation is not a
+live pty-generation authority and may differ from the adapter's current generation.
+The persisted workspace must match the live target, and a live title, when present,
+must match the persisted launch title. Missing, stale, malformed, duplicate, or
+mismatched records remain unbound. The helper still retains and revalidates the
+exact live `{runtime,id,generation}` identity for runtime dispatch. If it cannot
+obtain that exact live identity or the required `opencode-http` control binding,
+it exits non-zero without waiting and without attempting a wake.
 
 The helper then waits for the watched terminal's `exit` condition. Its default wait
 timeout is 24 hours; use `--wait-timeout-ms <ms>` only when the job has a known

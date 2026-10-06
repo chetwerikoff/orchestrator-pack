@@ -163,13 +163,14 @@ describe('unit watcher wake', () => {
     const persistedIdentity: RuntimeWorkerIdentity = {
       runtime: 'orca',
       id: 'term_unit_persisted',
-      generation: 'inc_unit_persisted_1',
+      generation: '668996d0-1f28-470c-b008-32b126c1540e',
     };
+    const liveGeneration = 'b713fba9';
     const command = 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-unit-watcher';
     let created = false;
-    const terminal = (withTitle: boolean): OrcaTerminalSummary => ({
+    const terminal = (generation: string, withTitle: boolean): OrcaTerminalSummary => ({
       handle: persistedIdentity.id,
-      incarnationId: persistedIdentity.generation,
+      incarnationId: generation,
       worktreePath: workspacePath,
       ...(withTitle ? { title } : {}),
       command,
@@ -179,16 +180,18 @@ describe('unit watcher wake', () => {
       const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
       if (operation === 'terminal create') {
         created = true;
-        return { ok: true, result: { terminal: terminal(true) } };
+        return { ok: true, result: { terminal: terminal(persistedIdentity.generation, true) } };
       }
-      if (operation === 'terminal show') return { ok: true, result: { terminal: terminal(false) } };
+      if (operation === 'terminal show') {
+        return { ok: true, result: { terminal: terminal(liveGeneration, false) } };
+      }
       if (operation === 'terminal list') {
         return {
           ok: true,
           result: {
             totalCount: created ? 1 : 0,
             truncated: false,
-            terminals: created ? [terminal(false)] : [],
+            terminals: created ? [terminal(liveGeneration, false)] : [],
           },
         };
       }
@@ -197,7 +200,7 @@ describe('unit watcher wake', () => {
           ok: true,
           result: {
             terminal: {
-              ...terminal(false),
+              ...terminal(liveGeneration, false),
               tail: ['┃', '╹▀▀▀▀▀▀'],
               nextCursor: null,
               source: 'screen',
@@ -231,6 +234,7 @@ describe('unit watcher wake', () => {
       const launched = launcher.spawnWorker({ title, command, workspace: workspacePath });
       expect(launched.status).toBe('ok');
       if (launched.status !== 'ok') return;
+      expect(launched.value.identity).toEqual(persistedIdentity);
 
       const helperAdapter = new OrcaTaskRuntimeAdapter({
         runJson: runJson as never,
@@ -248,7 +252,7 @@ describe('unit watcher wake', () => {
 
       expect(output.exitCode).toBe(0);
       expect(output.stdout).toContain(
-        'target=term_unit_persisted generation=inc_unit_persisted_1 dispatch=dispatched',
+        `target=term_unit_persisted generation=${liveGeneration} dispatch=dispatched`,
       );
       expect(requests).toContain('http://127.0.0.1:18891/tui/append-prompt');
       expect(requests).toContain('http://127.0.0.1:18891/tui/submit-prompt');
