@@ -7,6 +7,14 @@ import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetContext } from '../lib/target-context.ts';
 import {
+  ORCHESTRATION_RUN_PANE_KEY_PATH,
+  createAdapterSubmitDeps,
+  createOrcaMessageSubmitDeps,
+} from '../cursor-unsent-composer-submit.ts';
+import { OrcaRuntimeAdapter } from '../orca-runtime/adapter.ts';
+import { parseOrcaJsonOutput, resolveOrcaOperation, type OrcaJsonResponse } from '../orca-runtime/native.ts';
+import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
+import {
   DEFAULT_BUSY_RE,
   DEFAULT_ORCHESTRATOR_TITLE_RE,
   FileFleetStateStore,
@@ -57,6 +65,7 @@ export interface FleetWakeStateStore extends FleetPollingStore {
   writeStalledSeen?(urls: string): void;
   hasParkedWakeEvent(key: string): boolean;
   markParkedWakeEvent(key: string): void;
+  rearmParkedWakeEvents(observedKeys: ReadonlyMap<string, string | null>): void;
 }
 
 export class FileFleetWakeStateStore extends FileFleetStateStore implements FleetWakeStateStore {
@@ -128,6 +137,36 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
     mkdirSync(this.root, { recursive: true });
     writeFileSync(this.parkedWakeEventPath(key), `${key}\n`, 'utf8');
   }
+
+  rearmParkedWakeEvents(observedKeys: ReadonlyMap<string, string | null>): void {
+    let entries;
+    try {
+      entries = readdirSync(this.root, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.startsWith('parked-wake-') || !entry.name.endsWith('.mark')) continue;
+      const path = join(this.root, entry.name);
+      try {
+        const key = readFileSync(path, 'utf8').trim();
+        for (const [handle, activeKey] of observedKeys) {
+          if (!key.startsWith(`parked:${handle}:`)) continue;
+          if (key !== activeKey) rmSync(path, { force: true });
+          break;
+        }
+      } catch {
+        // A partial state file is not an active PARKED episode.
+      }
+    }
+  }
+}
+
+export interface RunMailWakeEvent {
+  readonly id: string;
+  readonly subject: string;
+  readonly toHandle: string;
+  readonly fromHandle: string;
 }
 
 export interface FleetAlarmTickOptions {
@@ -139,6 +178,7 @@ export interface FleetAlarmTickOptions {
   readonly readChats?: (cdpUrl: string, scope: ChatBannerScope) => Promise<ProjectChat[]>;
   readonly closeChat?: (cdpUrl: string, targetId: string) => Promise<boolean>;
   readonly listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
+  readonly listUnreadRunMessages?: (coordinatorHandle: string) => readonly RunMailWakeEvent[];
   readonly listOpenPulls?: (repository: string) => readonly OpenPullHead[];
   readonly checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
   readonly supervisedPullOwner?: (pull: OpenPullHead, panes: readonly FleetPaneObservation[]) => FleetPaneObservation | undefined;
@@ -361,7 +401,7 @@ export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeE
         pending.push(path);
         continue;
       }
-      if (!entry.isFile() || !isWakeableTerminalEnvelopePath(entry.name)) continue;
+      if (!entry.isFile() || !isWakeableTerminalEnvelopePath(path, root)) continue;
       try {
         const envelope = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
         const cwd = typeof envelope.cwd === 'string' ? envelope.cwd : undefined;
@@ -471,6 +511,77 @@ function pullOwner(
 }
 
 type OrcaReceipt = { readonly ok?: boolean; readonly result?: Record<string, unknown> };
+
+function executorRunJson(executor: OrcaExecutor) {
+  return <T>(args: readonly string[]): OrcaJsonResponse<T> => {
+    const result = executor([...args, '--json']);
+    const operation = resolveOrcaOperation(args);
+    if (result.stdout.trim()) return parseOrcaJsonOutput<T>(result.stdout, operation);
+    return {
+      ok: false,
+      operation,
+      outcomeCategory: 'supported_operation_failure',
+      error: { code: 'orca_process_exit_without_output', message: result.stderr || `orca ${args.join(' ')} failed` },
+    };
+  };
+}
+
+function listUnreadRunMessages(
+  coordinatorHandle: string,
+  executor: OrcaExecutor,
+  projectId: string,
+): RunMailWakeEvent[] {
+  const runJson = executorRunJson(executor);
+  const adapter = new OrcaRuntimeAdapter({ runJson });
+  const runPaneKeyPath = join(
+    resolveWakeSupervisorStateRoot({ projectId }),
+    basename(ORCHESTRATION_RUN_PANE_KEY_PATH),
+  );
+  const mail = createOrcaMessageSubmitDeps(
+    adapter,
+    createAdapterSubmitDeps(adapter),
+    runJson,
+    runPaneKeyPath,
+  );
+  const inbox = mail.readInbox?.();
+  if (!inbox?.ok) return [];
+
+  const byRun = new Map<string, Array<{ id: string; toHandle: string; subject: string; fromHandle: string }>>();
+  for (const row of inbox.result?.messages ?? []) {
+    const message = row as typeof row & { readonly subject?: unknown; readonly from_handle?: unknown };
+    const id = message.id?.trim() ?? '';
+    const runId = message.run_id?.trim() ?? '';
+    const toHandle = message.to_handle?.trim() ?? '';
+    const subject = typeof message.subject === 'string' ? message.subject.trim() : '';
+    const fromHandle = typeof message.from_handle === 'string' ? message.from_handle.trim() : '';
+    if (!id || !runId || !subject || !fromHandle || toHandle !== `run:${runId}`
+      || message.read === 1 || message.read === true) continue;
+    const rows = byRun.get(runId) ?? [];
+    rows.push({ id, toHandle, subject, fromHandle });
+    byRun.set(runId, rows);
+  }
+
+  const events: RunMailWakeEvent[] = [];
+  for (const [runId, rows] of byRun) {
+    const resolved = mail.resolveWorker({
+      id: rows[0]!.id,
+      runId,
+      recipient: `run:${runId}`,
+      consumed: false,
+    });
+    if (!resolved.ok || !resolved.worker || resolved.worker.identity.id !== coordinatorHandle) continue;
+
+    for (const message of rows) {
+      events.push({
+        id: message.id,
+        subject: message.subject,
+        toHandle: message.toHandle,
+        fromHandle: message.fromHandle,
+      });
+    }
+  }
+  return events;
+}
 function orcaReceipt(executor: OrcaExecutor, args: string[]): Record<string, unknown> | undefined {
   const result = executor(args);
   if (!result.ok) return undefined;
@@ -528,25 +639,53 @@ function supervisedOwnerForPull(
 }
 
 /**
- * Wakes an idle pane once per event of its own: a GPT turn launched from its
- * worktree ended, or CI finished on the head of a PR it owns. The pane's own
- * park-line wording is not consulted.
+ * Wakes idle panes for their own completed events and wakes the coordinator
+ * for parked FLEET units or unread Run mail. The event marks suppress repeat wakes.
  */
 async function wakePanesOnEvents(
   options: FleetAlarmTickOptions,
+  coordinator: FleetTerminal,
   observations: readonly FleetPaneObservation[],
   executor: OrcaExecutor,
   store: FleetWakeStateStore,
   log: (line: string) => void,
   sleepMs: (milliseconds: number) => void | Promise<void>,
 ): Promise<void> {
-  const wakes: Array<{ pane: FleetPaneObservation; key: string; message: string }> = [];
+  const wakes: Array<{ pane: FleetTerminal | FleetPaneObservation; key: string; message: string }> = [];
   for (const envelope of (options.listTerminalEnvelopes ?? listTerminalEnvelopes)()) {
     const key = `gpt:${envelope.path}`;
     const pane = observations.find((candidate) => envelope.terminalHandle && candidate.handle === envelope.terminalHandle)
       ?? (envelope.cwd ? envelopeOwner(envelope.cwd, observations) : undefined);
     if (!pane || !idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
     wakes.push({ pane, key, message: `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}` });
+  }
+  const parkedEpisodes = observations.flatMap((pane) => {
+    if (!pane.worktreePath) return [];
+    const lastLine = pane.lines.at(-1)?.trim() ?? '';
+    const parked = /^PARKED on orchestrator answer:\s*(.+)$/iu.exec(lastLine);
+    return parked ? [{ pane, parked, key: `parked:${pane.handle}:${lastLine}` }] : [];
+  });
+  const activeParkedKeyByHandle = new Map(
+    parkedEpisodes.map(({ pane, key }) => [pane.handle, key] as const),
+  );
+  const observedParkedKeys = new Map<string, string | null>();
+  for (const pane of observations) {
+    observedParkedKeys.set(pane.handle, activeParkedKeyByHandle.get(pane.handle) ?? null);
+  }
+  store.rearmParkedWakeEvents(observedParkedKeys);
+  for (const { pane, parked, key } of parkedEpisodes) {
+    if (!store.hasParkedWakeEvent(key)) {
+      wakes.push({ pane: coordinator, key, message: `Wake: FLEET unit ${pane.handle} parked on orchestrator answer: ${parked[1]}` });
+    }
+  }
+  const unread = options.listUnreadRunMessages
+    ? options.listUnreadRunMessages(coordinator.handle)
+    : listUnreadRunMessages(coordinator.handle, executor, options.config.projectId);
+  for (const event of unread) {
+    if (event.toHandle === coordinator.handle || !event.toHandle.startsWith('run:')) continue;
+    const key = `mail:${event.fromHandle}:${event.id}`;
+    if (store.hasParkedWakeEvent(key)) continue;
+    wakes.push({ pane: coordinator, key, message: `Wake: FLEET unit ${event.fromHandle} sent Run message: ${event.subject}` });
   }
   const repository = options.config.chatScope?.repository;
   if (repository && observations.some(idlePane)) {
@@ -573,8 +712,7 @@ async function wakePanesOnEvents(
         }
         continue;
       }
-      if (!idlePane(pane)) continue;
-      if (store.hasParkedWakeEvent(key)) continue;
+      if (!idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
       wakes.push({ pane, key, message: `Wake: CI on ${pull.sha} finished for PR #${pull.number}` });
     }
   }
@@ -648,7 +786,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     return { state: 'unreadable', handle: 'fleet-sweep' };
   }
 
-  await wakePanesOnEvents(options, observations, executor, store, log, sleepMs);
+  await wakePanesOnEvents(options, coordinator, observations, executor, store, log, sleepMs);
 
   const chats = config.chatCdpUrl && config.chatScope
     ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])
