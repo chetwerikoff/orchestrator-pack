@@ -199,6 +199,16 @@ const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 const sameIdentity = (a: RuntimeWorkerIdentity, b: RuntimeWorkerIdentity): boolean =>
   a.runtime === b.runtime && a.id === b.id && a.generation === b.generation;
 
+function nativeRuntimeError(
+  failure: { readonly reason: string },
+): { readonly code: string; readonly message: string } | null {
+  const candidate = (failure as typeof failure & { readonly nativeError?: unknown }).nativeError;
+  if (!record(candidate)) return null;
+  const code = text(candidate.code);
+  const message = text(candidate.message);
+  return code || message ? { code, message } : null;
+}
+
 function supportedStartMode(value: WorkerStartMode | undefined): value is ExecutorRoute | undefined {
   return value === undefined || value === 'provider_new_top_level' || value === 'exact_terminal_worktree';
 }
@@ -481,6 +491,7 @@ export async function runSupervisedTaskLaunchAssistant(
       command: profile.launchCommand,
       workspace: prepared.value.path,
     });
+    const spawnNativeError = spawn.status !== 'ok' ? nativeRuntimeError(spawn) : null;
     if (spawn.status !== 'ok') terminalCause = `terminal_spawn_${spawn.status}`;
     else if (!text(spawn.value.identity.runtime) || !text(spawn.value.identity.id) || !text(spawn.value.identity.generation)) terminalCause = 'terminal_identity_invalid';
     else {
@@ -501,7 +512,11 @@ export async function runSupervisedTaskLaunchAssistant(
     if (terminalCause || !terminal) return continued(input, 'terminal_prepare', {
       cause: terminalCause || 'terminal_unavailable', actor: 'orchestrator', evidence: {
         liveness: liveness?.status ?? 'not_observed',
-        ...(spawn.status !== 'ok' ? { spawnError: spawn.reason } : {}),
+        ...(spawn.status !== 'ok' ? {
+          spawnReason: spawn.reason,
+          spawnError: spawnNativeError?.message || spawnNativeError?.code || spawn.reason,
+          ...(spawnNativeError?.code ? { spawnErrorCode: spawnNativeError.code } : {}),
+        } : {}),
       },
       nextAction: { kind: 'remediate_terminal', note: 'reuse only the exact owned terminal identity after a bounded startup refusal; never reuse a foreign, replaced, or mismatched target' },
     }, resources, startedAtMs, timings, deps.now);

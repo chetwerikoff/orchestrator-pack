@@ -1,6 +1,11 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { runProcess } from '../kernel/subprocess.ts';
+import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
+import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import type { SupervisedWorkerStartResult } from './supervised-worker-start.ts';
 import {
@@ -798,25 +803,58 @@ describe('supervised Task launch assistant', () => {
     });
   });
 
-  it('preserves the RuntimeAdapter spawn failure reason in terminal_prepare evidence', async () => {
-    const adapter: RuntimeAdapter = {
-      ...runtimeAdapter(),
-      spawnWorker: () => ({
-        status: 'failed',
-        operation: 'spawn_worker',
-        reason: 'fixture spawn permission denied',
-      }),
+  it('preserves bounded scrubbed native Orca terminal-create detail in terminal_prepare evidence', async () => {
+    const stateRoot = mkdtempSync(join(tmpdir(), 'opk-2387-spawn-detail-'));
+    const operations: string[] = [];
+    const nativeMessage = `spawn permission denied token=fixture-secret ${'x'.repeat(700)}`;
+    const runJson = (args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      operations.push(operation);
+      if (operation === 'terminal list') {
+        return { ok: true, result: { totalCount: 0, truncated: false, terminals: [] } };
+      }
+      if (operation === 'terminal create') {
+        return {
+          ok: false,
+          operation: 'terminal_create',
+          outcomeCategory: 'supported_operation_failure',
+          error: { code: 'terminal_create_failed', message: nativeMessage },
+        };
+      }
+      return {
+        ok: false,
+        outcomeCategory: 'supported_operation_failure',
+        error: { code: 'unexpected_operation', message: operation },
+      };
     };
-    const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ adapter }));
-    expect(result).toMatchObject({
-      outcome: 'continue',
-      stage: 'terminal_prepare',
-      observedCause: 'terminal_spawn_failed',
-      evidence: {
-        liveness: 'not_observed',
-        spawnError: 'fixture spawn permission denied',
-      },
-    });
+
+    try {
+      const adapter = new OrcaTaskRuntimeAdapter({
+        runJson: runJson as never,
+        env: { OPK_WAKE_SUPERVISOR_STATE_DIR: stateRoot },
+      });
+      const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ adapter }));
+      expect(operations).toEqual(['terminal list', 'terminal create']);
+      expect(result).toMatchObject({
+        outcome: 'continue',
+        stage: 'terminal_prepare',
+        observedCause: 'terminal_spawn_failed',
+        evidence: {
+          liveness: 'not_observed',
+          spawnReason: 'runtime_operation_failed',
+          spawnErrorCode: 'terminal_create_failed',
+        },
+      });
+      if (result.outcome === 'continue') {
+        const spawnError = String(result.evidence.spawnError ?? '');
+        expect(spawnError).toContain('spawn permission denied token=[REDACTED]');
+        expect(spawnError).not.toContain('fixture-secret');
+        expect(spawnError).toHaveLength(512);
+        expect(spawnError.endsWith('…')).toBe(true);
+      }
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
   });
   it('uses the bounded startup window to reach ready when the TUI settles within it', async () => {
     let spawns = 0;
