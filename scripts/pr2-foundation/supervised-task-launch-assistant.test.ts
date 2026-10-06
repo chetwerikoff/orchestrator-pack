@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { runProcess } from '../kernel/subprocess.ts';
@@ -5,6 +8,7 @@ import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import type { SupervisedWorkerStartResult } from './supervised-worker-start.ts';
 import {
   createManagerTaskWithOrca,
+  readManagerBriefTemplateFromDisk,
   parseLaunchAssistantCli,
   prepareWorktreeWithOrca,
   resolveExecutorProfile,
@@ -31,8 +35,12 @@ import {
 } from '../executor-profile-policy.ts';
 import { overlayExecutorProfileEnv, readExecutorProfileStore } from '../executor-profile-store.ts';
 
-const MANAGER_PREAMBLE_FIXTURE = "# Manager launch preamble\\nManager rules.";
-const FIREFIGHTER_PROMPT_FIXTURE = "# Firefighter universal\\nFirefighter rules.";
+const MANAGER_PREAMBLE_FIXTURE = `# Manager launch preamble
+
+Manager work may hand a correction to the firefighter role when required.
+Do not classify an ordinary manager launch as firefighter work from the preamble alone.`;
+const FIREFIGHTER_PROMPT_FIXTURE = `# Firefighter universal
+Firefighter rules.`;
 
 const worker: RuntimeWorker = {
   identity: { runtime: 'orca', id: 'terminal-fresh', generation: 'pty-1' },
@@ -732,6 +740,82 @@ describe('supervised Task launch assistant', () => {
     expect(createdBrief).toBe(`${MANAGER_PREAMBLE_FIXTURE}\n\nordinary delta`);
   });
 
+  it('classifies only the delta after an exact manager preamble that itself names firefighter twice', async () => {
+    expect(MANAGER_PREAMBLE_FIXTURE.match(/\bfirefighter\b/giu)).toHaveLength(2);
+    const alreadyPrepared = `${MANAGER_PREAMBLE_FIXTURE}\n\nordinary delta`;
+    let createdBrief = '';
+    await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      issueNumber: 2385,
+      runId: 'run-1',
+      managerBrief: alreadyPrepared,
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({
+      managerIssueTitle: { status: 'ok', value: 'ordinary manager issue' },
+      onManagerCreate: (brief) => { createdBrief = brief; },
+    }));
+    expect(createdBrief).toBe(alreadyPrepared);
+  });
+
+  it('inserts a missing firefighter prompt after an exact canonical manager preamble', async () => {
+    const delta = 'firefighter repair launch';
+    let createdBrief = '';
+    await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: `${MANAGER_PREAMBLE_FIXTURE}\n\n${delta}`,
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({ onManagerCreate: (brief) => { createdBrief = brief; } }));
+    expect(createdBrief).toBe(
+      `${MANAGER_PREAMBLE_FIXTURE}\n\n${FIREFIGHTER_PROMPT_FIXTURE}\n\n${delta}`,
+    );
+  });
+
+  it.each([
+    ['heading trailing whitespace', MANAGER_PREAMBLE_FIXTURE.replace(
+      '# Manager launch preamble',
+      '# Manager launch preamble   ',
+    )],
+    ['CRLF preamble', MANAGER_PREAMBLE_FIXTURE.replaceAll('\n', '\r\n')],
+    ['edited whitespace', MANAGER_PREAMBLE_FIXTURE.replace('Manager work', 'Manager  work')],
+    ['older preamble content', '# Manager launch preamble\n\nOlder manager rules.'],
+  ] as const)('fails closed for firefighter composition with a noncanonical manager preamble: %s', async (_label, preamble) => {
+    let taskCreates = 0;
+    const result = await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: `${preamble}\n\nfirefighter repair launch`,
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({ onManagerCreate: () => { taskCreates += 1; } }));
+    expect(result).toMatchObject({
+      outcome: 'continue',
+      stage: 'manager_task',
+      observedCause: 'manager_brief_preamble_noncanonical',
+      evidence: { template: 'manager-preamble.md' },
+    });
+    expect(taskCreates).toBe(0);
+  });
+
+  it('prepends the canonical manager preamble when the existing first heading is different', async () => {
+    const brief = '# Different manager heading\n\nordinary delta';
+    let createdBrief = '';
+    await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: brief,
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({ onManagerCreate: (created) => { createdBrief = created; } }));
+    expect(createdBrief).toBe(`${MANAGER_PREAMBLE_FIXTURE}\n\n${brief}`);
+  });
+
   it('orders manager preamble then firefighter prompt for firefighter title or delta detection', async () => {
     const created: string[] = [];
     const base: LaunchInput = {
@@ -792,6 +876,93 @@ describe('supervised Task launch assistant', () => {
       env: profileEnv(),
     }, deps({ onManagerCreate: (brief) => { createdBrief = brief; } }));
     expect(createdBrief).toBe(alreadyPrepared);
+  });
+
+
+  it('fails closed before Task-create when the firefighter template is unavailable', async () => {
+    let taskCreates = 0;
+    const result = await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: 'firefighter repair launch',
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({
+      firefighterTemplate: {
+        status: 'continue',
+        cause: 'manager_brief_template_unavailable',
+        actor: 'operator',
+        evidence: { template: 'ff-prompt-universal.md', errorCode: 'ENOENT' },
+        nextAction: { kind: 'reconcile_manager_task', note: 'restore canonical firefighter template' },
+      },
+      onManagerCreate: () => { taskCreates += 1; },
+    }));
+    expect(result).toMatchObject({
+      outcome: 'continue',
+      stage: 'manager_task',
+      observedCause: 'manager_brief_template_unavailable',
+      evidence: { template: 'ff-prompt-universal.md', errorCode: 'ENOENT' },
+    });
+    expect(taskCreates).toBe(0);
+  });
+
+  it('blocks Task-create when live Issue title classification cannot be read', async () => {
+    let taskCreates = 0;
+    const result = await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      issueNumber: 2385,
+      runId: 'run-1',
+      managerBrief: 'ordinary delta',
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({
+      managerIssueTitle: {
+        status: 'continue',
+        cause: 'manager_issue_title_unavailable',
+        actor: 'provider',
+        evidence: { repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2385 },
+        nextAction: { kind: 'reconcile_manager_task', note: 'restore Issue title read' },
+      },
+      onManagerCreate: () => { taskCreates += 1; },
+    }));
+    expect(result).toMatchObject({
+      outcome: 'continue',
+      stage: 'manager_task',
+      observedCause: 'manager_issue_title_unavailable',
+    });
+    expect(taskCreates).toBe(0);
+  });
+
+  it('production template reader fails closed for ENOENT and empty files', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'opk-manager-brief-'));
+    try {
+      const missing = readManagerBriefTemplateFromDisk('manager-preamble.md', directory);
+      expect(missing).toMatchObject({
+        status: 'continue',
+        cause: 'manager_brief_template_unavailable',
+        evidence: {
+          template: 'manager-preamble.md',
+          path: join(directory, 'manager-preamble.md'),
+          errorCode: 'ENOENT',
+        },
+      });
+
+      writeFileSync(join(directory, 'manager-preamble.md'), '', 'utf8');
+      const empty = readManagerBriefTemplateFromDisk('manager-preamble.md', directory);
+      expect(empty).toMatchObject({
+        status: 'continue',
+        cause: 'manager_brief_template_unavailable',
+        evidence: {
+          template: 'manager-preamble.md',
+          path: join(directory, 'manager-preamble.md'),
+          errorCode: 'empty',
+        },
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('fails closed before Task-create when a required canonical template is unavailable', async () => {

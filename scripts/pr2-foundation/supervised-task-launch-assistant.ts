@@ -217,8 +217,8 @@ function startsWithHeadingText(value: string, heading: string): boolean {
   return normalizedHeadingLine(firstLine) === heading;
 }
 
-function containsHeadingText(value: string, heading: string): boolean {
-  return value.split(/\r?\n/u).some((line) => normalizedHeadingLine(line) === heading);
+function stripTemplateSeparator(value: string): string {
+  return value.replace(/^(?:\r?\n){1,2}/u, '');
 }
 
 function prependFullTemplate(template: string, body: string): string {
@@ -241,6 +241,51 @@ function invalidTemplateHeading(name: ManagerBriefTemplateName): EdgeResult<stri
   };
 }
 
+function noncanonicalManagerPreamble(): EdgeResult<string> {
+  return {
+    status: 'continue',
+    cause: 'manager_brief_preamble_noncanonical',
+    actor: 'manager',
+    evidence: { template: 'manager-preamble.md' },
+    nextAction: {
+      kind: 'reconcile_manager_task',
+      note: 'replace the leading manager preamble with the exact current canonical bytes before firefighter composition',
+    },
+  };
+}
+
+export function readManagerBriefTemplateFromDisk(
+  name: ManagerBriefTemplateName,
+  directory: string = MANAGER_BRIEFS_DIRECTORY,
+): EdgeResult<string> {
+  const templatePath = join(directory, name);
+  try {
+    const value = readFileSync(templatePath, 'utf8');
+    return value ? { status: 'ok', value } : {
+      status: 'continue',
+      cause: 'manager_brief_template_unavailable',
+      actor: 'operator',
+      evidence: { template: name, path: templatePath, errorCode: 'empty' },
+      nextAction: {
+        kind: 'reconcile_manager_task',
+        note: `restore a readable non-empty canonical ${name} before creating a manager Task`,
+      },
+    };
+  } catch (error) {
+    const errorCode = record(error) && typeof error.code === 'string' ? error.code : 'read_failed';
+    return {
+      status: 'continue',
+      cause: 'manager_brief_template_unavailable',
+      actor: 'operator',
+      evidence: { template: name, path: templatePath, errorCode },
+      nextAction: {
+        kind: 'reconcile_manager_task',
+        note: `restore a readable canonical ${name} before creating a manager Task`,
+      },
+    };
+  }
+}
+
 async function prepareFreshManagerBrief(
   input: { readonly repository: string; readonly issueNumber?: number; readonly brief: string },
   deps: Pick<LaunchDependencies, 'readManagerBriefTemplate' | 'readIssueTitle'>,
@@ -250,18 +295,32 @@ async function prepareFreshManagerBrief(
   const managerHeading = markdownHeadingText(managerTemplate.value);
   if (!managerHeading) return invalidTemplateHeading('manager-preamble.md');
 
-  const managerAlreadyPresent = startsWithHeadingText(input.brief, managerHeading);
-  let firefighter = FIREFIGHTER_BRIEF_MARKER.test(input.brief);
-  if (!firefighter && input.issueNumber) {
-    const issueTitle = await deps.readIssueTitle(input.repository, input.issueNumber);
-    if (issueTitle.status !== 'ok') return issueTitle;
-    firefighter = FIREFIGHTER_BRIEF_MARKER.test(issueTitle.value);
+  const managerHeadingPresent = startsWithHeadingText(input.brief, managerHeading);
+  const exactManagerPrefix = input.brief.startsWith(managerTemplate.value);
+  const managerTail = exactManagerPrefix
+    ? stripTemplateSeparator(input.brief.slice(managerTemplate.value.length))
+    : input.brief;
+
+  let issueTitle = '';
+  if (input.issueNumber) {
+    const issueTitleEdge = await deps.readIssueTitle(input.repository, input.issueNumber);
+    if (issueTitleEdge.status !== 'ok') return issueTitleEdge;
+    issueTitle = issueTitleEdge.value;
+  }
+  const issueNamesFirefighter = FIREFIGHTER_BRIEF_MARKER.test(issueTitle);
+
+  if (managerHeadingPresent && !exactManagerPrefix) {
+    if (issueNamesFirefighter || FIREFIGHTER_BRIEF_MARKER.test(input.brief)) {
+      return noncanonicalManagerPreamble();
+    }
+    return { status: 'ok', value: input.brief };
   }
 
-  if (!firefighter) {
+  const deltaNamesFirefighter = FIREFIGHTER_BRIEF_MARKER.test(managerTail);
+  if (!issueNamesFirefighter && !deltaNamesFirefighter) {
     return {
       status: 'ok',
-      value: managerAlreadyPresent ? input.brief : prependFullTemplate(managerTemplate.value, input.brief),
+      value: exactManagerPrefix ? input.brief : prependFullTemplate(managerTemplate.value, input.brief),
     };
   }
 
@@ -270,37 +329,15 @@ async function prepareFreshManagerBrief(
   const firefighterHeading = markdownHeadingText(firefighterTemplate.value);
   if (!firefighterHeading) return invalidTemplateHeading('ff-prompt-universal.md');
 
-  if (!managerAlreadyPresent) {
-    const body = startsWithHeadingText(input.brief, firefighterHeading)
-      ? input.brief
-      : prependFullTemplate(firefighterTemplate.value, input.brief);
-    return { status: 'ok', value: prependFullTemplate(managerTemplate.value, body) };
-  }
-
-  if (input.brief.startsWith(managerTemplate.value)) {
-    const rest = input.brief.slice(managerTemplate.value.length).replace(/^(?:\r?\n){1,2}/u, '');
-    if (startsWithHeadingText(rest, firefighterHeading)) return { status: 'ok', value: input.brief };
+  if (startsWithHeadingText(managerTail, firefighterHeading)) {
     return {
       status: 'ok',
-      value: prependFullTemplate(
-        managerTemplate.value,
-        prependFullTemplate(firefighterTemplate.value, rest),
-      ),
+      value: exactManagerPrefix ? input.brief : prependFullTemplate(managerTemplate.value, input.brief),
     };
   }
 
-  if (containsHeadingText(input.brief, firefighterHeading)) return { status: 'ok', value: input.brief };
-  const firstLineBreak = input.brief.match(/\r?\n/u);
-  if (firstLineBreak?.index === undefined) {
-    return { status: 'ok', value: prependFullTemplate(input.brief, firefighterTemplate.value) };
-  }
-  const boundary = firstLineBreak.index + firstLineBreak[0].length;
-  const managerHeadingPrefix = input.brief.slice(0, boundary);
-  const rest = input.brief.slice(boundary).replace(/^(?:\r?\n){1,2}/u, '');
-  return {
-    status: 'ok',
-    value: `${managerHeadingPrefix}${prependFullTemplate(firefighterTemplate.value, rest)}`,
-  };
+  const body = prependFullTemplate(firefighterTemplate.value, managerTail);
+  return { status: 'ok', value: prependFullTemplate(managerTemplate.value, body) };
 }
 
 function supportedStartMode(value: WorkerStartMode | undefined): value is ExecutorRoute | undefined {
@@ -1441,34 +1478,7 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
         nextAction: { kind: 'reconcile_manager_task', note: 'prove exactly one requested Task in the exact Run' },
       };
     },
-    readManagerBriefTemplate: (name) => {
-      const templatePath = join(MANAGER_BRIEFS_DIRECTORY, name);
-      try {
-        const value = readFileSync(templatePath, 'utf8');
-        return value ? { status: 'ok', value } : {
-          status: 'continue',
-          cause: 'manager_brief_template_unavailable',
-          actor: 'operator',
-          evidence: { template: name, path: templatePath, errorCode: 'empty' },
-          nextAction: {
-            kind: 'reconcile_manager_task',
-            note: `restore a readable non-empty canonical ${name} before creating a manager Task`,
-          },
-        };
-      } catch (error) {
-        const errorCode = record(error) && typeof error.code === 'string' ? error.code : 'read_failed';
-        return {
-          status: 'continue',
-          cause: 'manager_brief_template_unavailable',
-          actor: 'operator',
-          evidence: { template: name, path: templatePath, errorCode },
-          nextAction: {
-            kind: 'reconcile_manager_task',
-            note: `restore a readable canonical ${name} before creating a manager Task`,
-          },
-        };
-      }
-    },
+    readManagerBriefTemplate: (name) => readManagerBriefTemplateFromDisk(name),
     readIssueTitle: async (repository, issueNumber) => {
       const issueRead = await child([
         'gh', 'issue', 'view', String(issueNumber), '--repo', repository,
