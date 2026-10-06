@@ -16,6 +16,7 @@ import {
   type OpenPullHead,
   type TerminalEnvelopeEvent,
 } from './fleet-wake.ts';
+import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
 import { FileFleetStateStore, type FleetPaneObservation, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
 
 class MemoryWakeStore implements FleetWakeStateStore {
@@ -31,6 +32,15 @@ class MemoryWakeStore implements FleetWakeStateStore {
   clearLastSentSignature(): void { this.signature = null; }
   hasParkedWakeEvent(key: string): boolean { return this.parkedWakeEvents.has(key); }
   markParkedWakeEvent(key: string): void { this.parkedWakeEvents.add(key); }
+  rearmParkedWakeEvents(observedKeys: ReadonlyMap<string, string | null>): void {
+    for (const key of this.parkedWakeEvents) {
+      for (const [handle, activeKey] of observedKeys) {
+        if (!key.startsWith(`parked:${handle}:`)) continue;
+        if (key !== activeKey) this.parkedWakeEvents.delete(key);
+        break;
+      }
+    }
+  }
 }
 
 function commandResult(stdout = '', ok = true): OrcaCommandResult {
@@ -227,15 +237,47 @@ describe('fleet alarm', () => {
     expect(sends(observed.calls)).toHaveLength(0);
     expect(observed.logs).toContain('nothing stopped');
   });
-  it('wakes the orchestrator once for each FLEET pane parked on an orchestrator answer', async () => {
+  it('wakes once per PARKED episode and re-arms identical text after the pane resumes', async () => {
     const store = new MemoryWakeStore();
     const fleetTerminal: FleetTerminal = { handle: 'fleet-unit', title: 'OpenCode manager', worktreePath: `${workerBase}/unit` };
     const fleetTerminals = [terminals[0]!, fleetTerminal];
-    const first = await tick({ terminals: fleetTerminals, screens: { coord: 'idle', 'fleet-unit': 'work\nPARKED on orchestrator answer: approve deployment' }, store });
+    const parked = { coord: 'idle', 'fleet-unit': 'work\nPARKED on orchestrator answer: approve deployment' };
+    const first = await tick({ terminals: fleetTerminals, screens: parked, store });
     expect(sendsTo(first.calls, 'coord')[0]?.join(' ')).toContain('fleet-unit');
     expect(sendsTo(first.calls, 'coord')[0]?.join(' ')).toContain('approve deployment');
-    const repeated = await tick({ terminals: fleetTerminals, screens: { coord: 'idle', 'fleet-unit': 'work\nPARKED on orchestrator answer: approve deployment' }, store });
+
+    const repeated = await tick({ terminals: fleetTerminals, screens: parked, store });
     expect(sendsTo(repeated.calls, 'coord')).toHaveLength(0);
+
+    const temporarilyMissing = await tick({
+      terminals: [terminals[0]!],
+      screens: { coord: 'idle' },
+      store,
+    });
+    expect(sendsTo(temporarilyMissing.calls, 'coord')).toHaveLength(0);
+
+    const sameEpisodeAfterMissing = await tick({ terminals: fleetTerminals, screens: parked, store });
+    expect(sendsTo(sameEpisodeAfterMissing.calls, 'coord')).toHaveLength(0);
+
+    const changedPark = await tick({
+      terminals: fleetTerminals,
+      screens: { coord: 'idle', 'fleet-unit': 'work\nPARKED on orchestrator answer: use staging' },
+      store,
+    });
+    expect(sendsTo(changedPark.calls, 'coord')[0]?.join(' ')).toContain('use staging');
+
+    const originalParkAgain = await tick({ terminals: fleetTerminals, screens: parked, store });
+    expect(sendsTo(originalParkAgain.calls, 'coord')[0]?.join(' ')).toContain('approve deployment');
+
+    const resumed = await tick({
+      terminals: fleetTerminals,
+      screens: { coord: 'idle', 'fleet-unit': 'working\nesc to interrupt' },
+      store,
+    });
+    expect(sendsTo(resumed.calls, 'coord')).toHaveLength(0);
+
+    const parkedAgain = await tick({ terminals: fleetTerminals, screens: parked, store });
+    expect(sendsTo(parkedAgain.calls, 'coord')[0]?.join(' ')).toContain('approve deployment');
   });
 
   it('wakes the orchestrator once per unread run message addressed to it, naming unit and subject', async () => {
@@ -485,6 +527,12 @@ describe('fleet alarm', () => {
       expect(store.hasParkedWakeEvent('gpt:inv-2351')).toBe(false);
       store.markParkedWakeEvent('gpt:inv-2351');
       expect(store.hasParkedWakeEvent('gpt:inv-2351')).toBe(true);
+      const parkedKey = 'parked:one:PARKED on orchestrator answer: approve deployment';
+      store.markParkedWakeEvent(parkedKey);
+      expect(store.hasParkedWakeEvent(parkedKey)).toBe(true);
+      store.rearmParkedWakeEvents(new Map([['one', null]]));
+      expect(store.hasParkedWakeEvent(parkedKey)).toBe(false);
+      expect(store.hasParkedWakeEvent('gpt:inv-2351')).toBe(true);
       expect(store.root).toBe(join(xdg, 'fleet-sweep', 'orchestrator-pack'));
       const files = readdirSync(store.root).sort();
       expect(files).toContain('last-sent.signature');
@@ -522,25 +570,88 @@ describe('fleet alarm', () => {
     expect(unit).not.toContain('${PRIMARY}');
   });
 
-  it('reads the coordinator Run inbox and mutates Orca only through terminal send to the resolved coordinator', async () => {
-    const executor: OrcaExecutor = (args) => {
-      if (args[0] === 'orchestration' && args[1] === 'run-list') {
-        return commandResult(JSON.stringify({ ok: true, result: { runs: [{ id: 'run-1', coordinator_handle: 'coord' }] } }));
-      }
-      if (args[0] === 'orchestration' && args[1] === 'inbox' && args.includes('run:run-1')) {
-        return commandResult(JSON.stringify({ ok: true, result: { messages: [{
-          id: 'msg-1', subject: 'Need approval', read: 0, to_handle: 'run:run-1', from_handle: 'one',
-        }] } }));
-      }
-      return fakeOrca({ coord: 'idle', one: 'done', two: 'working\nesc to interrupt' }, [], terminals)(args);
+  it('uses production inbox/check contracts, resolves a stale Run coordinator from the project pane-key memory, and wakes even when the sender is gone', async () => {
+    const previousStateHome = process.env.XDG_STATE_HOME;
+    const previousWakeStateDir = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+    const stateHome = mkdtempSync(join(tmpdir(), 'fleet-wake-run-pane-key-'));
+    process.env.XDG_STATE_HOME = stateHome;
+    delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+    const runPaneKeyRoot = resolveWakeSupervisorStateRoot({ projectId: 'leopoker' });
+    mkdirSync(runPaneKeyRoot, { recursive: true });
+    writeFileSync(
+      join(runPaneKeyRoot, 'orchestration-run-pane-keys.json'),
+      JSON.stringify({ 'run-1': { handle: 'term_coord_old', paneKey: 'tab-coord:leaf-coord' } }) + '\n',
+      'utf8',
+    );
+
+    const currentCoordinator: FleetTerminal = { handle: 'term_coord_new', title: 'Cursor coordinator', worktreePath: primary };
+    const currentTerminals = [currentCoordinator];
+    const currentTerminalJson = {
+      handle: 'term_coord_new',
+      title: 'Cursor coordinator',
+      worktreePath: primary,
+      incarnationId: 'generation-coord-new',
     };
-    const observed = await tick({ executor, screens: { coord: 'idle', one: 'done', two: 'working\nesc to interrupt' } });
-    expect(observed.calls).toContainEqual(['orchestration', 'run-list', '--json']);
-    expect(observed.calls).toContainEqual(['orchestration', 'inbox', '--terminal', 'run:run-1', '--json', '--limit', '1000']);
-    expect(sendsTo(observed.calls, 'coord')[0]?.join(' ')).toContain('Need approval');
-    expect(sendsTo(observed.calls, 'coord')[0]?.join(' ')).toContain('one');
-    expect(observed.calls.some((call) => call[0] === 'git' || call[0] === 'gh')).toBe(false);
-    expect(sendsTo(observed.calls, 'one')).toHaveLength(0);
+    const executor: OrcaExecutor = (args) => {
+      if (args[0] === 'terminal' && args[1] === 'list' && args.includes('--include-visual-layouts')) {
+        return commandResult(JSON.stringify({
+          ok: true,
+          result: { visualLayouts: [{ root: { handle: 'term_coord_new', tabId: 'tab-coord', leafId: 'leaf-coord' } }] },
+        }));
+      }
+      if (args[0] === 'terminal' && args[1] === 'show' && args.includes('term_coord_new')) {
+        return commandResult(JSON.stringify({ ok: true, result: { terminal: currentTerminalJson } }));
+      }
+      if (args[0] === 'orchestration' && args[1] === 'run-show') {
+        return commandResult(JSON.stringify({
+          ok: true,
+          result: { run: { id: 'run-1', coordinator_handle: 'term_coord_old' } },
+        }));
+      }
+      if (args[0] === 'orchestration' && args[1] === 'inbox' && args.includes('--full')) {
+        return commandResult(JSON.stringify({
+          ok: true,
+          result: { messages: [{ id: 'msg-1', run_id: 'run-1', to_handle: 'run:run-1', read: 0, created_at: '2026-10-06T10:00:00Z' }] },
+        }));
+      }
+      if (args[0] === 'orchestration' && args[1] === 'check' && args.includes('run-1')) {
+        return commandResult(JSON.stringify({
+          ok: true,
+          result: {
+            runId: 'run-1',
+            messages: [{ id: 'msg-1', type: 'question', from_handle: 'gone-sender', subject: 'Need approval', body: 'Please decide.' }],
+            count: 1,
+            acknowledged: null,
+          },
+        }));
+      }
+      return fakeOrca({ 'term_coord_new': 'idle' }, [], currentTerminals)(args);
+    };
+
+    try {
+      const observed = await tick({
+        executor,
+        terminals: currentTerminals,
+        config: config({ projectId: 'leopoker', orchestratorHandle: 'term_coord_new' }),
+        screens: { 'term_coord_new': 'idle' },
+      });
+
+      expect(observed.calls).toContainEqual(['orchestration', 'inbox', '--full', '--limit', '5000', '--json']);
+      expect(observed.calls).toContainEqual(['orchestration', 'run-show', '--id', 'run-1', '--json']);
+      expect(observed.calls).toContainEqual([
+        'orchestration', 'check', '--run', 'run-1', '--terminal', 'term_coord_new', '--peek', '--json',
+      ]);
+      expect(sendsTo(observed.calls, 'term_coord_new')[0]?.join(' ')).toContain('Need approval');
+      expect(sendsTo(observed.calls, 'term_coord_new')[0]?.join(' ')).toContain('gone-sender');
+      expect(observed.calls.some((call) => call[0] === 'git' || call[0] === 'gh')).toBe(false);
+      expect(sendsTo(observed.calls, 'gone-sender')).toHaveLength(0);
+    } finally {
+      if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = previousStateHome;
+      if (previousWakeStateDir === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+      else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousWakeStateDir;
+      rmSync(stateHome, { recursive: true, force: true });
+    }
   });
 });
 
