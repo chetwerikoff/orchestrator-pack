@@ -18,6 +18,7 @@ import {
   type RuntimeInboxMessage,
   type RuntimeLivenessResult,
   type RuntimeObservationToken,
+  type RuntimeOperationFailure,
   type RuntimeReadiness,
   type RuntimeResult,
   type RuntimeOpenCodeHealth,
@@ -360,6 +361,65 @@ export function neutralFailureReason(response: OrcaJsonResponse): string {
     default:
       return 'runtime_operation_failed';
   }
+}
+
+type RuntimeFailureWithNativeError = RuntimeOperationFailure & {
+  readonly nativeError?: Readonly<{
+    readonly code: string;
+    readonly message: string;
+  }>;
+};
+
+export function attachRuntimeNativeError(
+  failure: RuntimeOperationFailure,
+  detail: Readonly<{ readonly code: string; readonly message: string }>,
+): RuntimeOperationFailure {
+  if (!detail.code && !detail.message) return failure;
+  Object.defineProperty(failure as RuntimeFailureWithNativeError, 'nativeError', {
+    value: Object.freeze({ code: detail.code, message: detail.message }),
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return failure;
+}
+
+const NATIVE_ERROR_INPUT_LIMIT = 4_096;
+const NATIVE_ERROR_CODE_LIMIT = 128;
+const NATIVE_ERROR_MESSAGE_LIMIT = 512;
+
+function scrubNativeRuntimeErrorField(value: unknown, limit: number): string {
+  let text = typeof value === 'string' ? value.slice(0, NATIVE_ERROR_INPUT_LIMIT) : '';
+  text = text.replace(
+    /-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:RSA |OPENSSH |EC )?PRIVATE KEY-----|$)/gu,
+    '[REDACTED_PRIVATE_KEY]',
+  );
+  text = text.replace(/Authorization:\s*Bearer\s+\S+/giu, 'Authorization: Bearer [REDACTED]');
+  text = text.replace(/Bearer\s+\S+/giu, 'Bearer [REDACTED]');
+  text = text.replace(
+    /((?:api[_-]?key|token|secret|password|authorization|cookie|private[_-]?key)\s*[:=]\s*)\S+/giu,
+    '$1[REDACTED]',
+  );
+  text = text.replace(/\b(?:sk|ghp|gho|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{4,}\b/gu, '[REDACTED]');
+  text = text.replace(/\bAKIA[0-9A-Z]{16}\b/gu, 'AKIA[REDACTED]');
+  text = text.replace(/[\u0000-\u001F\u007F]/gu, (character) => {
+    if (character === '\n') return '\\n';
+    if (character === '\r') return '\\r';
+    if (character === '\t') return '\\t';
+    return `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`;
+  });
+  text = text.trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+function attachSpawnNativeError(
+  failure: RuntimeOperationFailure,
+  response: OrcaJsonResponse,
+): RuntimeOperationFailure {
+  const code = scrubNativeRuntimeErrorField(response.error?.code, NATIVE_ERROR_CODE_LIMIT);
+  const message = scrubNativeRuntimeErrorField(response.error?.message, NATIVE_ERROR_MESSAGE_LIMIT);
+  return attachRuntimeNativeError(failure, { code, message });
 }
 
 function nativeGeneration(terminal: OrcaTerminalSummary | OrcaTerminalHandle): string | null {
@@ -1414,7 +1474,10 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       options,
     );
     if (!response.ok) {
-      return runtimeFailure('spawn_worker', neutralFailureReason(response));
+      return attachSpawnNativeError(
+        runtimeFailure('spawn_worker', neutralFailureReason(response)),
+        response,
+      );
     }
     const terminal = response.result?.terminal;
     const handle = terminal?.handle?.trim();
