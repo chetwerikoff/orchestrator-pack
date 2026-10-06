@@ -298,7 +298,7 @@ async function prepareFreshManagerBrief(
 
   if (containsHeadingText(input.brief, firefighterHeading)) return { status: 'ok', value: input.brief };
   const firstLineBreak = input.brief.match(/\r?\n/u);
-  if (!firstLineBreak?.index) {
+  if (firstLineBreak?.index === undefined) {
     return { status: 'ok', value: prependFullTemplate(input.brief, firefighterTemplate.value) };
   }
   const boundary = firstLineBreak.index + firstLineBreak[0].length;
