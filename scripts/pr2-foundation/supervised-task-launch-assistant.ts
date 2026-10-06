@@ -499,7 +499,10 @@ export async function runSupervisedTaskLaunchAssistant(
     timings.push({ stage: 'terminal_prepare', startedAtMs: terminalStartedAt, finishedAtMs: terminalFinishedAt,
       elapsedMs: Math.max(0, terminalFinishedAt - terminalStartedAt), outcome: terminalCause ? 'continued' : 'passed' });
     if (terminalCause || !terminal) return continued(input, 'terminal_prepare', {
-      cause: terminalCause || 'terminal_unavailable', actor: 'orchestrator', evidence: { liveness: liveness?.status ?? 'not_observed' },
+      cause: terminalCause || 'terminal_unavailable', actor: 'orchestrator', evidence: {
+        liveness: liveness?.status ?? 'not_observed',
+        ...(spawn.status !== 'ok' ? { spawnError: spawn.reason } : {}),
+      },
       nextAction: { kind: 'remediate_terminal', note: 'reuse only the exact owned terminal identity after a bounded startup refusal; never reuse a foreign, replaced, or mismatched target' },
     }, resources, startedAtMs, timings, deps.now);
   }

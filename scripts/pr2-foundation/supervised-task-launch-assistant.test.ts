@@ -798,6 +798,26 @@ describe('supervised Task launch assistant', () => {
     });
   });
 
+  it('preserves the RuntimeAdapter spawn failure reason in terminal_prepare evidence', async () => {
+    const adapter: RuntimeAdapter = {
+      ...runtimeAdapter(),
+      spawnWorker: () => ({
+        status: 'failed',
+        operation: 'spawn_worker',
+        reason: 'fixture spawn permission denied',
+      }),
+    };
+    const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ adapter }));
+    expect(result).toMatchObject({
+      outcome: 'continue',
+      stage: 'terminal_prepare',
+      observedCause: 'terminal_spawn_failed',
+      evidence: {
+        liveness: 'not_observed',
+        spawnError: 'fixture spawn permission denied',
+      },
+    });
+  });
   it('uses the bounded startup window to reach ready when the TUI settles within it', async () => {
     let spawns = 0;
     const windows: number[] = [];
