@@ -179,6 +179,7 @@
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.test.ts": "light",
     "scripts/toolchain/create-issue-authoring-contract.test.ts": "light",
+    "scripts/unit-watcher-wake.test.ts": "light",
     "scripts/verify.test.ts": "light",
     "scripts/vitest-ci-runner-control-flow.test.ts": "light",
     "scripts/vitest-ci-runner.test.ts": "light",
