@@ -370,6 +370,20 @@ type RuntimeFailureWithNativeError = RuntimeOperationFailure & {
   }>;
 };
 
+export function attachRuntimeNativeError(
+  failure: RuntimeOperationFailure,
+  detail: Readonly<{ readonly code: string; readonly message: string }>,
+): RuntimeOperationFailure {
+  if (!detail.code && !detail.message) return failure;
+  Object.defineProperty(failure as RuntimeFailureWithNativeError, 'nativeError', {
+    value: Object.freeze({ code: detail.code, message: detail.message }),
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return failure;
+}
+
 const NATIVE_ERROR_INPUT_LIMIT = 4_096;
 const NATIVE_ERROR_CODE_LIMIT = 128;
 const NATIVE_ERROR_MESSAGE_LIMIT = 512;
@@ -405,14 +419,7 @@ function attachSpawnNativeError(
 ): RuntimeOperationFailure {
   const code = scrubNativeRuntimeErrorField(response.error?.code, NATIVE_ERROR_CODE_LIMIT);
   const message = scrubNativeRuntimeErrorField(response.error?.message, NATIVE_ERROR_MESSAGE_LIMIT);
-  if (!code && !message) return failure;
-  Object.defineProperty(failure as RuntimeFailureWithNativeError, 'nativeError', {
-    value: Object.freeze({ code, message }),
-    enumerable: false,
-    configurable: false,
-    writable: false,
-  });
-  return failure;
+  return attachRuntimeNativeError(failure, { code, message });
 }
 
 function nativeGeneration(terminal: OrcaTerminalSummary | OrcaTerminalHandle): string | null {
