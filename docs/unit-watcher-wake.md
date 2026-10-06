@@ -21,7 +21,7 @@ Arm one disposable watcher terminal with the helper as its command:
 ```bash
 orca terminal create \
   --title "{WATCHER} <detached-job-terminal>" \
-  --command "node --experimental-strip-types <PACK_ROOT>/scripts/unit-watcher-wake.ts --watch-terminal <detached-job-terminal> --target-terminal <unit-terminal> --wake-text 'WATCHER: <detached-job-terminal> exited; resume and inspect its result'" \
+  --command "node --experimental-strip-types <PACK_ROOT>/scripts/lib/Invoke-TypeScriptCli.ts --repo-root <PACK_ROOT> --script <PACK_ROOT>/scripts/unit-watcher-wake.ts -- --watch-terminal <detached-job-terminal> --target-terminal <unit-terminal> --wake-text 'WATCHER: <detached-job-terminal> exited; resume and inspect its result'" \
   --json
 ```
 
