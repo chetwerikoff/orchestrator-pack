@@ -217,6 +217,13 @@ function startsWithHeadingText(value: string, heading: string): boolean {
   return normalizedHeadingLine(firstLine) === heading;
 }
 
+function containsMarkdownHeadingText(value: string, heading: string): boolean {
+  return value.split(/\r?\n/u).some((line) => {
+    const match = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/u);
+    return match?.[1]?.trim() === heading;
+  });
+}
+
 function stripTemplateSeparator(value: string): string {
   return value.replace(/^(?:\r?\n){1,2}/u, '');
 }
@@ -257,6 +264,12 @@ function recognizedManagerPrefix(
   return { exact: false, tail: stripTemplateSeparator(candidate.tail) };
 }
 
+function noncanonicalManagerTail(brief: string, canonical: string): string {
+  const canonicalCore = canonical.replace(/(?:\r?\n)+$/u, '');
+  const candidate = leadingLinePrefix(brief, canonicalCore.split(/\r?\n/u).length);
+  return candidate ? stripTemplateSeparator(candidate.tail) : '';
+}
+
 function prependFullTemplate(template: string, body: string): string {
   if (!body) return template;
   if (template.endsWith('\n\n')) return `${template}${body}`;
@@ -285,7 +298,7 @@ function noncanonicalManagerPreamble(): EdgeResult<string> {
     evidence: { template: 'manager-preamble.md' },
     nextAction: {
       kind: 'reconcile_manager_task',
-      note: 'replace the leading manager preamble with the exact current canonical bytes before firefighter composition',
+      note: 'provide the exact current canonical manager preamble when a firefighter brief cannot be safely composed from noncanonical preamble bytes',
     },
   };
 }
@@ -347,7 +360,11 @@ async function prepareFreshManagerBrief(
   const issueNamesFirefighter = FIREFIGHTER_BRIEF_MARKER.test(issueTitle);
 
   if (managerHeadingPresent && !managerPrefix) {
-    return noncanonicalManagerPreamble();
+    const deltaNamesFirefighter = FIREFIGHTER_BRIEF_MARKER.test(
+      noncanonicalManagerTail(input.brief, managerTemplate.value),
+    );
+    if (issueNamesFirefighter || deltaNamesFirefighter) return noncanonicalManagerPreamble();
+    return { status: 'ok', value: input.brief };
   }
 
   const deltaNamesFirefighter = FIREFIGHTER_BRIEF_MARKER.test(managerTail);
@@ -368,7 +385,7 @@ async function prepareFreshManagerBrief(
   const firefighterHeading = markdownHeadingText(firefighterTemplate.value);
   if (!firefighterHeading) return invalidTemplateHeading('ff-prompt-universal.md');
 
-  if (startsWithHeadingText(managerTail, firefighterHeading)) {
+  if (containsMarkdownHeadingText(managerTail, firefighterHeading)) {
     return {
       status: 'ok',
       value: exactManagerPrefix ? input.brief : prependFullTemplate(managerTemplate.value, input.brief),

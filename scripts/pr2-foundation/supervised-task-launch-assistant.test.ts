@@ -38,9 +38,16 @@ import { overlayExecutorProfileEnv, readExecutorProfileStore } from '../executor
 const MANAGER_PREAMBLE_FIXTURE = `# Manager launch preamble
 
 Manager work may hand a correction to the firefighter role when required.
-Do not classify an ordinary manager launch as firefighter work from the preamble alone.`;
+Do not classify an ordinary manager launch as firefighter work from the preamble alone.
+`;
 const FIREFIGHTER_PROMPT_FIXTURE = `# Firefighter universal
-Firefighter rules.`;
+Firefighter rules.
+`;
+const OLDER_MANAGER_PREAMBLE_FIXTURE = `# Manager launch preamble
+
+Older manager work rules differ from the current canonical body.
+Older manager body remains ordinary unless the Issue title or delta says firefighter.
+`;
 
 const worker: RuntimeWorker = {
   identity: { runtime: 'orca', id: 'terminal-fresh', generation: 'pty-1' },
@@ -727,7 +734,9 @@ describe('supervised Task launch assistant', () => {
     expect(worktrees).toBe(0);
   });
 
-  it('prepends the canonical manager preamble to a fresh manager brief', async () => {
+  it('prepends the newline-terminated canonical manager preamble to a fresh manager brief', async () => {
+    expect(MANAGER_PREAMBLE_FIXTURE.endsWith('\n')).toBe(true);
+    expect(MANAGER_PREAMBLE_FIXTURE.endsWith('\n\n')).toBe(false);
     let createdBrief = '';
     await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
@@ -737,12 +746,12 @@ describe('supervised Task launch assistant', () => {
       worktreeName: 'manager-worktree',
       env: profileEnv(),
     }, deps({ onManagerCreate: (brief) => { createdBrief = brief; } }));
-    expect(createdBrief).toBe(`${MANAGER_PREAMBLE_FIXTURE}\n\nordinary delta`);
+    expect(createdBrief).toBe(`${MANAGER_PREAMBLE_FIXTURE}\nordinary delta`);
   });
 
-  it('classifies only the delta after an exact manager preamble that itself names firefighter twice', async () => {
+  it('leaves an exact newline-terminated manager preamble unchanged for ordinary work', async () => {
     expect(MANAGER_PREAMBLE_FIXTURE.match(/\bfirefighter\b/giu)).toHaveLength(2);
-    const alreadyPrepared = `${MANAGER_PREAMBLE_FIXTURE}\n\nordinary delta`;
+    const alreadyPrepared = `${MANAGER_PREAMBLE_FIXTURE}\nordinary delta`;
     let createdBrief = '';
     await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
@@ -759,19 +768,21 @@ describe('supervised Task launch assistant', () => {
     expect(createdBrief).toBe(alreadyPrepared);
   });
 
-  it('inserts a missing firefighter prompt after an exact canonical manager preamble', async () => {
+  it('inserts the newline-terminated firefighter prompt after an exact canonical manager preamble', async () => {
+    expect(FIREFIGHTER_PROMPT_FIXTURE.endsWith('\n')).toBe(true);
+    expect(FIREFIGHTER_PROMPT_FIXTURE.endsWith('\n\n')).toBe(false);
     const delta = 'firefighter repair launch';
     let createdBrief = '';
     await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
       workClass: 'manager',
       runId: 'run-1',
-      managerBrief: `${MANAGER_PREAMBLE_FIXTURE}\n\n${delta}`,
+      managerBrief: `${MANAGER_PREAMBLE_FIXTURE}\n${delta}`,
       worktreeName: 'manager-worktree',
       env: profileEnv(),
     }, deps({ onManagerCreate: (brief) => { createdBrief = brief; } }));
     expect(createdBrief).toBe(
-      `${MANAGER_PREAMBLE_FIXTURE}\n\n${FIREFIGHTER_PROMPT_FIXTURE}\n\n${delta}`,
+      `${MANAGER_PREAMBLE_FIXTURE}\n${FIREFIGHTER_PROMPT_FIXTURE}\n${delta}`,
     );
   });
 
@@ -782,21 +793,22 @@ describe('supervised Task launch assistant', () => {
     )],
     ['CRLF preamble', MANAGER_PREAMBLE_FIXTURE.replaceAll('\n', '\r\n')],
     ['edited whitespace', MANAGER_PREAMBLE_FIXTURE.replace('Manager work', 'Manager  work')],
-  ] as const)('ignores firefighter mentions inside a recognizable noncanonical preamble for ordinary delta: %s', async (_label, preamble) => {
+    ['older preamble body', OLDER_MANAGER_PREAMBLE_FIXTURE],
+  ] as const)('passes an already-headed ordinary noncanonical manager brief through unchanged: %s', async (_label, preamble) => {
     let createdBrief = '';
     await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
       workClass: 'manager',
       issueNumber: 2385,
       runId: 'run-1',
-      managerBrief: `${preamble}\n\nordinary delta`,
+      managerBrief: `${preamble}\nordinary delta`,
       worktreeName: 'manager-worktree',
       env: profileEnv(),
     }, deps({
       managerIssueTitle: { status: 'ok', value: 'ordinary manager issue' },
       onManagerCreate: (brief) => { createdBrief = brief; },
     }));
-    expect(createdBrief).toBe(`${preamble}\n\nordinary delta`);
+    expect(createdBrief).toBe(`${preamble}\nordinary delta`);
   });
 
   it.each([
@@ -806,14 +818,14 @@ describe('supervised Task launch assistant', () => {
     )],
     ['CRLF preamble', MANAGER_PREAMBLE_FIXTURE.replaceAll('\n', '\r\n')],
     ['edited whitespace', MANAGER_PREAMBLE_FIXTURE.replace('Manager work', 'Manager  work')],
-    ['older preamble content', '# Manager launch preamble\n\nOlder manager rules.'],
+    ['older preamble content', OLDER_MANAGER_PREAMBLE_FIXTURE],
   ] as const)('fails closed for firefighter composition with a noncanonical manager preamble: %s', async (_label, preamble) => {
     let taskCreates = 0;
     const result = await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
       workClass: 'manager',
       runId: 'run-1',
-      managerBrief: `${preamble}\n\nfirefighter repair launch`,
+      managerBrief: `${preamble}\nfirefighter repair launch`,
       worktreeName: 'manager-worktree',
       env: profileEnv(),
     }, deps({ onManagerCreate: () => { taskCreates += 1; } }));
@@ -837,7 +849,7 @@ describe('supervised Task launch assistant', () => {
       worktreeName: 'manager-worktree',
       env: profileEnv(),
     }, deps({ onManagerCreate: (created) => { createdBrief = created; } }));
-    expect(createdBrief).toBe(`${MANAGER_PREAMBLE_FIXTURE}\n\n${brief}`);
+    expect(createdBrief).toBe(`${MANAGER_PREAMBLE_FIXTURE}\n${brief}`);
   });
 
   it('orders manager preamble then firefighter prompt for firefighter title or delta detection', async () => {
@@ -858,8 +870,8 @@ describe('supervised Task launch assistant', () => {
       onManagerCreate: (brief) => { created.push(brief); },
     }));
     expect(created).toEqual([
-      `${MANAGER_PREAMBLE_FIXTURE}\n\n${FIREFIGHTER_PROMPT_FIXTURE}\n\ndelta only`,
-      `${MANAGER_PREAMBLE_FIXTURE}\n\n${FIREFIGHTER_PROMPT_FIXTURE}\n\nfirefighter repair launch`,
+      `${MANAGER_PREAMBLE_FIXTURE}\n${FIREFIGHTER_PROMPT_FIXTURE}\ndelta only`,
+      `${MANAGER_PREAMBLE_FIXTURE}\n${FIREFIGHTER_PROMPT_FIXTURE}\nfirefighter repair launch`,
     ]);
   });
 
@@ -885,11 +897,11 @@ describe('supervised Task launch assistant', () => {
     }));
     expect(result.outcome).toBe('ready');
     expect(input.issueNumber).toBe(2385);
-    expect(createdBrief).toBe(`${MANAGER_PREAMBLE_FIXTURE}\n\n${FIREFIGHTER_PROMPT_FIXTURE}\n\nordinary delta`);
+    expect(createdBrief).toBe(`${MANAGER_PREAMBLE_FIXTURE}\n${FIREFIGHTER_PROMPT_FIXTURE}\nordinary delta`);
   });
 
-  it('does not duplicate manager or firefighter templates that are already present', async () => {
-    const alreadyPrepared = `${MANAGER_PREAMBLE_FIXTURE}\n\n${FIREFIGHTER_PROMPT_FIXTURE}\n\nfirefighter: existing delta`;
+  it('leaves an already-present newline-terminated firefighter prompt unchanged', async () => {
+    const alreadyPrepared = `${MANAGER_PREAMBLE_FIXTURE}\n${FIREFIGHTER_PROMPT_FIXTURE}\nfirefighter: existing delta`;
     let createdBrief = '';
     await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
@@ -900,6 +912,42 @@ describe('supervised Task launch assistant', () => {
       env: profileEnv(),
     }, deps({ onManagerCreate: (brief) => { createdBrief = brief; } }));
     expect(createdBrief).toBe(alreadyPrepared);
+  });
+
+  it('leaves a complete firefighter prompt section anywhere in the recognized delta unchanged', async () => {
+    const delta = `firefighter repair context before the existing section
+
+${FIREFIGHTER_PROMPT_FIXTURE}
+context after the existing section`;
+    const alreadyPrepared = `${MANAGER_PREAMBLE_FIXTURE}\n${delta}`;
+    let createdBrief = '';
+    await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: alreadyPrepared,
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({ onManagerCreate: (brief) => { createdBrief = brief; } }));
+    expect(createdBrief).toBe(alreadyPrepared);
+  });
+
+  it('does not mistake an incidental firefighter prompt phrase for its Markdown heading', async () => {
+    const delta = `firefighter repair launch
+
+The words Firefighter universal appear here only as prose.`;
+    let createdBrief = '';
+    await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: `${MANAGER_PREAMBLE_FIXTURE}\n${delta}`,
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({ onManagerCreate: (brief) => { createdBrief = brief; } }));
+    expect(createdBrief).toBe(
+      `${MANAGER_PREAMBLE_FIXTURE}\n${FIREFIGHTER_PROMPT_FIXTURE}\n${delta}`,
+    );
   });
 
 
@@ -1029,7 +1077,7 @@ describe('supervised Task launch assistant', () => {
         evidence: { requestId: 'req-1' }, nextAction: { kind: 'reconcile_manager_task', requestId: 'req-1', note: 'reconcile unknown create' } },
       onManagerCreate: (brief) => { sentBrief = brief; },
     }));
-    expect(sentBrief).toBe(`${MANAGER_PREAMBLE_FIXTURE}\n\n${FIREFIGHTER_PROMPT_FIXTURE}\n\nprivate brief payload`);
+    expect(sentBrief).toBe(`${MANAGER_PREAMBLE_FIXTURE}\n${FIREFIGHTER_PROMPT_FIXTURE}\nprivate brief payload`);
     expect(result).toMatchObject({ outcome: 'continue', stage: 'manager_task', observedCause: 'manager_task_create_outcome_unknown',
       nextAction: { kind: 'reconcile_manager_task', requestId: 'req-1' } });
     expect(JSON.stringify(result)).not.toContain('private brief payload');
