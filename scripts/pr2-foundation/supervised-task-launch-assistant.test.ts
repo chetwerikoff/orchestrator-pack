@@ -782,6 +782,30 @@ describe('supervised Task launch assistant', () => {
     )],
     ['CRLF preamble', MANAGER_PREAMBLE_FIXTURE.replaceAll('\n', '\r\n')],
     ['edited whitespace', MANAGER_PREAMBLE_FIXTURE.replace('Manager work', 'Manager  work')],
+  ] as const)('ignores firefighter mentions inside a recognizable noncanonical preamble for ordinary delta: %s', async (_label, preamble) => {
+    let createdBrief = '';
+    await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      issueNumber: 2385,
+      runId: 'run-1',
+      managerBrief: `${preamble}\n\nordinary delta`,
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({
+      managerIssueTitle: { status: 'ok', value: 'ordinary manager issue' },
+      onManagerCreate: (brief) => { createdBrief = brief; },
+    }));
+    expect(createdBrief).toBe(`${preamble}\n\nordinary delta`);
+  });
+
+  it.each([
+    ['heading trailing whitespace', MANAGER_PREAMBLE_FIXTURE.replace(
+      '# Manager launch preamble',
+      '# Manager launch preamble   ',
+    )],
+    ['CRLF preamble', MANAGER_PREAMBLE_FIXTURE.replaceAll('\n', '\r\n')],
+    ['edited whitespace', MANAGER_PREAMBLE_FIXTURE.replace('Manager work', 'Manager  work')],
     ['older preamble content', '# Manager launch preamble\n\nOlder manager rules.'],
   ] as const)('fails closed for firefighter composition with a noncanonical manager preamble: %s', async (_label, preamble) => {
     let taskCreates = 0;

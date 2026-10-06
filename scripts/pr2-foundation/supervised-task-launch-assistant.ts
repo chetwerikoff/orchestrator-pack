@@ -221,6 +221,42 @@ function stripTemplateSeparator(value: string): string {
   return value.replace(/^(?:\r?\n){1,2}/u, '');
 }
 
+function normalizedTemplateStructure(value: string): string {
+  return value
+    .replace(/\r\n/gu, '\n')
+    .split('\n')
+    .map((line) => line.trimEnd().replace(/[ \t]+/gu, ' '))
+    .join('\n');
+}
+
+function leadingLinePrefix(value: string, lineCount: number): { readonly prefix: string; readonly tail: string } | null {
+  let offset = 0;
+  for (let line = 1; line < lineCount; line += 1) {
+    const lineBreak = value.slice(offset).match(/\r?\n/u);
+    if (!lineBreak || lineBreak.index === undefined) return null;
+    offset += lineBreak.index + lineBreak[0].length;
+  }
+  const nextLineBreak = value.slice(offset).match(/\r?\n/u);
+  const end = nextLineBreak?.index === undefined ? value.length : offset + nextLineBreak.index;
+  return { prefix: value.slice(0, end), tail: value.slice(end) };
+}
+
+function recognizedManagerPrefix(
+  brief: string,
+  canonical: string,
+): { readonly exact: boolean; readonly tail: string } | null {
+  if (brief.startsWith(canonical)) {
+    return { exact: true, tail: stripTemplateSeparator(brief.slice(canonical.length)) };
+  }
+
+  const canonicalCore = canonical.replace(/(?:\r?\n)+$/u, '');
+  const canonicalLineCount = canonicalCore.split(/\r?\n/u).length;
+  const candidate = leadingLinePrefix(brief, canonicalLineCount);
+  if (!candidate) return null;
+  if (normalizedTemplateStructure(candidate.prefix) !== normalizedTemplateStructure(canonicalCore)) return null;
+  return { exact: false, tail: stripTemplateSeparator(candidate.tail) };
+}
+
 function prependFullTemplate(template: string, body: string): string {
   if (!body) return template;
   if (template.endsWith('\n\n')) return `${template}${body}`;
@@ -296,10 +332,11 @@ async function prepareFreshManagerBrief(
   if (!managerHeading) return invalidTemplateHeading('manager-preamble.md');
 
   const managerHeadingPresent = startsWithHeadingText(input.brief, managerHeading);
-  const exactManagerPrefix = input.brief.startsWith(managerTemplate.value);
-  const managerTail = exactManagerPrefix
-    ? stripTemplateSeparator(input.brief.slice(managerTemplate.value.length))
-    : input.brief;
+  const managerPrefix = managerHeadingPresent
+    ? recognizedManagerPrefix(input.brief, managerTemplate.value)
+    : null;
+  const exactManagerPrefix = managerPrefix?.exact === true;
+  const managerTail = managerPrefix?.tail ?? input.brief;
 
   let issueTitle = '';
   if (input.issueNumber) {
@@ -309,14 +346,16 @@ async function prepareFreshManagerBrief(
   }
   const issueNamesFirefighter = FIREFIGHTER_BRIEF_MARKER.test(issueTitle);
 
-  if (managerHeadingPresent && !exactManagerPrefix) {
-    if (issueNamesFirefighter || FIREFIGHTER_BRIEF_MARKER.test(input.brief)) {
-      return noncanonicalManagerPreamble();
-    }
-    return { status: 'ok', value: input.brief };
+  if (managerHeadingPresent && !managerPrefix) {
+    return noncanonicalManagerPreamble();
   }
 
   const deltaNamesFirefighter = FIREFIGHTER_BRIEF_MARKER.test(managerTail);
+  if (managerPrefix && !managerPrefix.exact) {
+    if (issueNamesFirefighter || deltaNamesFirefighter) return noncanonicalManagerPreamble();
+    return { status: 'ok', value: input.brief };
+  }
+
   if (!issueNamesFirefighter && !deltaNamesFirefighter) {
     return {
       status: 'ok',
