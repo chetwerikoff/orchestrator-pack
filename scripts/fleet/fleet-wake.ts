@@ -511,15 +511,6 @@ function pullOwner(
 }
 
 type OrcaReceipt = { readonly ok?: boolean; readonly result?: Record<string, unknown> };
-type OrcaCheckMessage = {
-  readonly id?: unknown;
-  readonly from_handle?: unknown;
-  readonly subject?: unknown;
-};
-type OrcaCheckResult = {
-  readonly messages?: readonly OrcaCheckMessage[];
-  readonly delivery?: { readonly messages?: readonly OrcaCheckMessage[] };
-};
 
 function executorRunJson(executor: OrcaExecutor) {
   return <T>(args: readonly string[]): OrcaJsonResponse<T> => {
@@ -555,14 +546,18 @@ function listUnreadRunMessages(
   const inbox = mail.readInbox?.();
   if (!inbox?.ok) return [];
 
-  const byRun = new Map<string, Array<{ id: string; toHandle: string }>>();
+  const byRun = new Map<string, Array<{ id: string; toHandle: string; subject: string; fromHandle: string }>>();
   for (const row of inbox.result?.messages ?? []) {
-    const id = row.id?.trim() ?? '';
-    const runId = row.run_id?.trim() ?? '';
-    const toHandle = row.to_handle?.trim() ?? '';
-    if (!id || !runId || toHandle !== `run:${runId}` || row.read === 1 || row.read === true) continue;
+    const message = row as typeof row & { readonly subject?: unknown; readonly from_handle?: unknown };
+    const id = message.id?.trim() ?? '';
+    const runId = message.run_id?.trim() ?? '';
+    const toHandle = message.to_handle?.trim() ?? '';
+    const subject = typeof message.subject === 'string' ? message.subject.trim() : '';
+    const fromHandle = typeof message.from_handle === 'string' ? message.from_handle.trim() : '';
+    if (!id || !runId || !subject || !fromHandle || toHandle !== `run:${runId}`
+      || message.read === 1 || message.read === true) continue;
     const rows = byRun.get(runId) ?? [];
-    rows.push({ id, toHandle });
+    rows.push({ id, toHandle, subject, fromHandle });
     byRun.set(runId, rows);
   }
 
@@ -576,23 +571,13 @@ function listUnreadRunMessages(
     });
     if (!resolved.ok || !resolved.worker || resolved.worker.identity.id !== coordinatorHandle) continue;
 
-    const checked = runJson<OrcaCheckResult>([
-      'orchestration', 'check', '--run', runId,
-      '--terminal', resolved.worker.identity.id,
-      '--peek',
-    ]);
-    if (!checked.ok) continue;
-    const messages = checked.result?.delivery?.messages ?? checked.result?.messages ?? [];
-    const byId = new Map(messages.flatMap((message) => {
-      const id = typeof message.id === 'string' ? message.id.trim() : '';
-      return id ? [[id, message] as const] : [];
-    }));
-    for (const row of rows) {
-      const message = byId.get(row.id);
-      const subject = typeof message?.subject === 'string' ? message.subject.trim() : '';
-      const fromHandle = typeof message?.from_handle === 'string' ? message.from_handle.trim() : '';
-      if (!subject || !fromHandle) continue;
-      events.push({ id: row.id, subject, toHandle: row.toHandle, fromHandle });
+    for (const message of rows) {
+      events.push({
+        id: message.id,
+        subject: message.subject,
+        toHandle: message.toHandle,
+        fromHandle: message.fromHandle,
+      });
     }
   }
   return events;

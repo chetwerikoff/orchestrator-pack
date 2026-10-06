@@ -570,7 +570,7 @@ describe('fleet alarm', () => {
     expect(unit).not.toContain('${PRIMARY}');
   });
 
-  it('uses production inbox/check contracts, resolves a stale Run coordinator from the project pane-key memory, and wakes even when the sender is gone', async () => {
+  it('uses inbox message fields directly when the coordinator Run consumer is fenced, resolves a stale Run coordinator, and wakes even when the sender is gone', async () => {
     const previousStateHome = process.env.XDG_STATE_HOME;
     const previousWakeStateDir = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
     const stateHome = mkdtempSync(join(tmpdir(), 'fleet-wake-run-pane-key-'));
@@ -611,19 +611,14 @@ describe('fleet alarm', () => {
       if (args[0] === 'orchestration' && args[1] === 'inbox' && args.includes('--full')) {
         return commandResult(JSON.stringify({
           ok: true,
-          result: { messages: [{ id: 'msg-1', run_id: 'run-1', to_handle: 'run:run-1', read: 0, created_at: '2026-10-06T10:00:00Z' }] },
+          result: { messages: [{
+            id: 'msg-1', run_id: 'run-1', to_handle: 'run:run-1', read: 0,
+            subject: 'Need approval', from_handle: 'gone-sender', created_at: '2026-10-06T10:00:00Z',
+          }] },
         }));
       }
       if (args[0] === 'orchestration' && args[1] === 'check' && args.includes('run-1')) {
-        return commandResult(JSON.stringify({
-          ok: true,
-          result: {
-            runId: 'run-1',
-            messages: [{ id: 'msg-1', type: 'question', from_handle: 'gone-sender', subject: 'Need approval', body: 'Please decide.' }],
-            count: 1,
-            acknowledged: null,
-          },
-        }));
+        return commandResult(JSON.stringify({ ok: false, error: { code: 'consumer_fenced' } }), false);
       }
       return fakeOrca({ 'term_coord_new': 'idle' }, [], currentTerminals)(args);
     };
@@ -635,12 +630,9 @@ describe('fleet alarm', () => {
         config: config({ projectId: 'leopoker', orchestratorHandle: 'term_coord_new' }),
         screens: { 'term_coord_new': 'idle' },
       });
-
       expect(observed.calls).toContainEqual(['orchestration', 'inbox', '--full', '--limit', '5000', '--json']);
       expect(observed.calls).toContainEqual(['orchestration', 'run-show', '--id', 'run-1', '--json']);
-      expect(observed.calls).toContainEqual([
-        'orchestration', 'check', '--run', 'run-1', '--terminal', 'term_coord_new', '--peek', '--json',
-      ]);
+      expect(observed.calls.some((call) => call[0] === 'orchestration' && call[1] === 'check')).toBe(false);
       expect(sendsTo(observed.calls, 'term_coord_new')[0]?.join(' ')).toContain('Need approval');
       expect(sendsTo(observed.calls, 'term_coord_new')[0]?.join(' ')).toContain('gone-sender');
       expect(observed.calls.some((call) => call[0] === 'git' || call[0] === 'gh')).toBe(false);
