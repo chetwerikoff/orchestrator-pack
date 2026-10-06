@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { runProcess } from '../kernel/subprocess.ts';
@@ -5,6 +8,7 @@ import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import type { SupervisedWorkerStartResult } from './supervised-worker-start.ts';
 import {
   createManagerTaskWithOrca,
+  readManagerBriefTemplateFromDisk,
   parseLaunchAssistantCli,
   prepareWorktreeWithOrca,
   resolveExecutorProfile,
@@ -30,6 +34,20 @@ import {
   resolveSemanticExecutorProfile,
 } from '../executor-profile-policy.ts';
 import { overlayExecutorProfileEnv, readExecutorProfileStore } from '../executor-profile-store.ts';
+
+const MANAGER_PREAMBLE_FIXTURE = `# Manager launch preamble
+
+Manager work may hand a correction to the firefighter role when required.
+Do not classify an ordinary manager launch as firefighter work from the preamble alone.
+`;
+const FIREFIGHTER_PROMPT_FIXTURE = `# Firefighter universal
+Firefighter rules.
+`;
+const OLDER_MANAGER_PREAMBLE_FIXTURE = `# Manager launch preamble
+
+Older manager work rules differ from the current canonical body.
+Older manager body remains ordinary unless the Issue title or delta says firefighter.
+`;
 
 const worker: RuntimeWorker = {
   identity: { runtime: 'orca', id: 'terminal-fresh', generation: 'pty-1' },
@@ -152,7 +170,11 @@ function deps(input: {
   onWorktree?: () => void;
   managerRun?: EdgeResult<{ readonly runId: string }>;
   managerMembership?: EdgeResult<{ readonly taskId: string }>;
+  managerTemplate?: EdgeResult<string>;
+  firefighterTemplate?: EdgeResult<string>;
+  managerIssueTitle?: EdgeResult<string>;
   managerCreate?: EdgeResult<{ readonly taskId: string; readonly status: string }>;
+  onManagerCreate?: (brief: string) => void;
   supervised?: SupervisedWorkerStartResult;
   onSupervised?: () => void;
   clock?: number[];
@@ -167,7 +189,14 @@ function deps(input: {
     resolveProfile: (workClass, env, startMode) => resolveExecutorProfile(workClass, env, startMode),
     observeManagerRun: async () => input.managerRun ?? ({ status: 'ok', value: { runId: 'run-1' } }),
     proveManagerTaskMembership: async () => input.managerMembership ?? ({ status: 'ok', value: { taskId: 'task-1' } }),
-    createManagerTask: async () => input.managerCreate ?? ({ status: 'ok', value: { taskId: 'task-created', status: 'ready' } }),
+    readManagerBriefTemplate: async (name) => name === 'manager-preamble.md'
+      ? input.managerTemplate ?? ({ status: 'ok', value: MANAGER_PREAMBLE_FIXTURE })
+      : input.firefighterTemplate ?? ({ status: 'ok', value: FIREFIGHTER_PROMPT_FIXTURE }),
+    readIssueTitle: async () => input.managerIssueTitle ?? ({ status: 'ok', value: 'ordinary issue' }),
+    createManagerTask: async (_runId, brief) => {
+      input.onManagerCreate?.(brief);
+      return input.managerCreate ?? ({ status: 'ok', value: { taskId: 'task-created', status: 'ready' } });
+    },
     observeDispatch: async () => { input.onDispatch?.(); return { status: 'ok', value: dispatch.shift() ?? { kind: 'absent' } }; },
     prepareWorktree: async () => { input.onWorktree?.(); return { status: 'ok', value: {
       id: 'repo::exact-worktree', selector: 'id:repo::exact-worktree', path: '/tmp/exact-worktree', setupWitness: 'same_invocation_complete',
@@ -705,21 +734,356 @@ describe('supervised Task launch assistant', () => {
     expect(worktrees).toBe(0);
   });
 
-  it('manager brief uses exactly one Task-create edge and preserves provider retry identity without echoing brief', async () => {
-    const input: LaunchInput = { repository: 'chetwerikoff/orchestrator-pack', workClass: 'manager', runId: 'run-1',
-      managerBrief: 'private brief payload', worktreeName: 'manager-worktree', env: profileEnv() };
-    const result = await runSupervisedTaskLaunchAssistant(input, deps({
-      managerCreate: { status: 'continue', cause: 'manager_task_create_outcome_unknown', actor: 'provider', evidence: { requestId: 'req-1' },
-        nextAction: { kind: 'retry_manager_task_create', requestId: 'req-1', replay: {
-          operation: 'orca_orchestration_task_create', runId: 'run-1', requestId: 'req-1', inputSource: 'caller_held_manager_brief',
-        } } },
+  it('prepends the newline-terminated canonical manager preamble to a fresh manager brief', async () => {
+    expect(MANAGER_PREAMBLE_FIXTURE.endsWith('\n')).toBe(true);
+    expect(MANAGER_PREAMBLE_FIXTURE.endsWith('\n\n')).toBe(false);
+    let createdBrief = '';
+    await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: 'ordinary delta',
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({ onManagerCreate: (brief) => { createdBrief = brief; } }));
+    expect(createdBrief).toBe(`${MANAGER_PREAMBLE_FIXTURE}\nordinary delta`);
+  });
+
+  it('leaves an exact newline-terminated manager preamble unchanged for ordinary work', async () => {
+    expect(MANAGER_PREAMBLE_FIXTURE.match(/\bfirefighter\b/giu)).toHaveLength(2);
+    const alreadyPrepared = `${MANAGER_PREAMBLE_FIXTURE}\nordinary delta`;
+    let createdBrief = '';
+    await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      issueNumber: 2385,
+      runId: 'run-1',
+      managerBrief: alreadyPrepared,
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({
+      managerIssueTitle: { status: 'ok', value: 'ordinary manager issue' },
+      onManagerCreate: (brief) => { createdBrief = brief; },
     }));
+    expect(createdBrief).toBe(alreadyPrepared);
+  });
+
+  it('inserts the newline-terminated firefighter prompt after an exact canonical manager preamble', async () => {
+    expect(FIREFIGHTER_PROMPT_FIXTURE.endsWith('\n')).toBe(true);
+    expect(FIREFIGHTER_PROMPT_FIXTURE.endsWith('\n\n')).toBe(false);
+    const delta = 'firefighter repair launch';
+    let createdBrief = '';
+    await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: `${MANAGER_PREAMBLE_FIXTURE}\n${delta}`,
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({ onManagerCreate: (brief) => { createdBrief = brief; } }));
+    expect(createdBrief).toBe(
+      `${MANAGER_PREAMBLE_FIXTURE}\n${FIREFIGHTER_PROMPT_FIXTURE}\n${delta}`,
+    );
+  });
+
+  it.each([
+    ['heading trailing whitespace', MANAGER_PREAMBLE_FIXTURE.replace(
+      '# Manager launch preamble',
+      '# Manager launch preamble   ',
+    )],
+    ['CRLF preamble', MANAGER_PREAMBLE_FIXTURE.replaceAll('\n', '\r\n')],
+    ['edited whitespace', MANAGER_PREAMBLE_FIXTURE.replace('Manager work', 'Manager  work')],
+    ['older preamble body', OLDER_MANAGER_PREAMBLE_FIXTURE],
+  ] as const)('passes an already-headed ordinary noncanonical manager brief through unchanged: %s', async (_label, preamble) => {
+    let createdBrief = '';
+    await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      issueNumber: 2385,
+      runId: 'run-1',
+      managerBrief: `${preamble}\nordinary delta`,
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({
+      managerIssueTitle: { status: 'ok', value: 'ordinary manager issue' },
+      onManagerCreate: (brief) => { createdBrief = brief; },
+    }));
+    expect(createdBrief).toBe(`${preamble}\nordinary delta`);
+  });
+
+  it.each([
+    ['heading trailing whitespace', MANAGER_PREAMBLE_FIXTURE.replace(
+      '# Manager launch preamble',
+      '# Manager launch preamble   ',
+    )],
+    ['CRLF preamble', MANAGER_PREAMBLE_FIXTURE.replaceAll('\n', '\r\n')],
+    ['edited whitespace', MANAGER_PREAMBLE_FIXTURE.replace('Manager work', 'Manager  work')],
+    ['older preamble content', OLDER_MANAGER_PREAMBLE_FIXTURE],
+  ] as const)('fails closed for firefighter composition with a noncanonical manager preamble: %s', async (_label, preamble) => {
+    let taskCreates = 0;
+    const result = await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: `${preamble}\nfirefighter repair launch`,
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({ onManagerCreate: () => { taskCreates += 1; } }));
+    expect(result).toMatchObject({
+      outcome: 'continue',
+      stage: 'manager_task',
+      observedCause: 'manager_brief_preamble_noncanonical',
+      evidence: { template: 'manager-preamble.md' },
+    });
+    expect(taskCreates).toBe(0);
+  });
+
+  it('prepends the canonical manager preamble when the existing first heading is different', async () => {
+    const brief = '# Different manager heading\n\nordinary delta';
+    let createdBrief = '';
+    await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: brief,
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({ onManagerCreate: (created) => { createdBrief = created; } }));
+    expect(createdBrief).toBe(`${MANAGER_PREAMBLE_FIXTURE}\n${brief}`);
+  });
+
+  it('orders manager preamble then firefighter prompt for firefighter title or delta detection', async () => {
+    const created: string[] = [];
+    const base: LaunchInput = {
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: 'delta only',
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    };
+    await runSupervisedTaskLaunchAssistant({ ...base, issueNumber: 2385 }, deps({
+      managerIssueTitle: { status: 'ok', value: 'firefighter repair launch' },
+      onManagerCreate: (brief) => { created.push(brief); },
+    }));
+    await runSupervisedTaskLaunchAssistant({ ...base, managerBrief: 'firefighter repair launch' }, deps({
+      onManagerCreate: (brief) => { created.push(brief); },
+    }));
+    expect(created).toEqual([
+      `${MANAGER_PREAMBLE_FIXTURE}\n${FIREFIGHTER_PROMPT_FIXTURE}\ndelta only`,
+      `${MANAGER_PREAMBLE_FIXTURE}\n${FIREFIGHTER_PROMPT_FIXTURE}\nfirefighter repair launch`,
+    ]);
+  });
+
+  it('canonical manager CLI carries the existing Issue into title-based firefighter classification', async () => {
+    const parsedInput = parseLaunchAssistantCli([
+      '--project', 'orchestrator-pack',
+      '--work-class', 'manager',
+      '--issue-number', '2385',
+      '--run', 'run-1',
+      '--manager-brief', 'ordinary delta',
+      '--worktree-name', 'manager-worktree',
+    ], {}, () => ({
+      projectId: 'orchestrator-pack',
+      repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: '/fixture/target-root',
+      defaultBranch: 'main',
+    } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>));
+    const input: LaunchInput = { ...parsedInput, env: profileEnv(), startMode: 'exact_terminal_worktree' };
+    let createdBrief = '';
+    const result = await runSupervisedTaskLaunchAssistant(input, deps({
+      managerIssueTitle: { status: 'ok', value: 'repair firefighter launch' },
+      onManagerCreate: (brief) => { createdBrief = brief; },
+    }));
+    expect(result.outcome).toBe('ready');
+    expect(input.issueNumber).toBe(2385);
+    expect(createdBrief).toBe(`${MANAGER_PREAMBLE_FIXTURE}\n${FIREFIGHTER_PROMPT_FIXTURE}\nordinary delta`);
+  });
+
+  it('leaves an already-present newline-terminated firefighter prompt unchanged', async () => {
+    const alreadyPrepared = `${MANAGER_PREAMBLE_FIXTURE}\n${FIREFIGHTER_PROMPT_FIXTURE}\nfirefighter: existing delta`;
+    let createdBrief = '';
+    await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: alreadyPrepared,
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({ onManagerCreate: (brief) => { createdBrief = brief; } }));
+    expect(createdBrief).toBe(alreadyPrepared);
+  });
+
+  it('leaves a complete firefighter prompt section anywhere in the recognized delta unchanged', async () => {
+    const delta = `firefighter repair context before the existing section
+
+${FIREFIGHTER_PROMPT_FIXTURE}
+context after the existing section`;
+    const alreadyPrepared = `${MANAGER_PREAMBLE_FIXTURE}\n${delta}`;
+    let createdBrief = '';
+    await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: alreadyPrepared,
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({ onManagerCreate: (brief) => { createdBrief = brief; } }));
+    expect(createdBrief).toBe(alreadyPrepared);
+  });
+
+  it('does not mistake an incidental firefighter prompt phrase for its Markdown heading', async () => {
+    const delta = `firefighter repair launch
+
+The words Firefighter universal appear here only as prose.`;
+    let createdBrief = '';
+    await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: `${MANAGER_PREAMBLE_FIXTURE}\n${delta}`,
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({ onManagerCreate: (brief) => { createdBrief = brief; } }));
+    expect(createdBrief).toBe(
+      `${MANAGER_PREAMBLE_FIXTURE}\n${FIREFIGHTER_PROMPT_FIXTURE}\n${delta}`,
+    );
+  });
+
+
+  it('fails closed before Task-create when the firefighter template is unavailable', async () => {
+    let taskCreates = 0;
+    const result = await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: 'firefighter repair launch',
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({
+      firefighterTemplate: {
+        status: 'continue',
+        cause: 'manager_brief_template_unavailable',
+        actor: 'operator',
+        evidence: { template: 'ff-prompt-universal.md', errorCode: 'ENOENT' },
+        nextAction: { kind: 'reconcile_manager_task', note: 'restore canonical firefighter template' },
+      },
+      onManagerCreate: () => { taskCreates += 1; },
+    }));
+    expect(result).toMatchObject({
+      outcome: 'continue',
+      stage: 'manager_task',
+      observedCause: 'manager_brief_template_unavailable',
+      evidence: { template: 'ff-prompt-universal.md', errorCode: 'ENOENT' },
+    });
+    expect(taskCreates).toBe(0);
+  });
+
+  it('blocks Task-create when live Issue title classification cannot be read', async () => {
+    let taskCreates = 0;
+    const result = await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      issueNumber: 2385,
+      runId: 'run-1',
+      managerBrief: 'ordinary delta',
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({
+      managerIssueTitle: {
+        status: 'continue',
+        cause: 'manager_issue_title_unavailable',
+        actor: 'provider',
+        evidence: { repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2385 },
+        nextAction: { kind: 'reconcile_manager_task', note: 'restore Issue title read' },
+      },
+      onManagerCreate: () => { taskCreates += 1; },
+    }));
+    expect(result).toMatchObject({
+      outcome: 'continue',
+      stage: 'manager_task',
+      observedCause: 'manager_issue_title_unavailable',
+    });
+    expect(taskCreates).toBe(0);
+  });
+
+  it('production template reader fails closed for ENOENT and empty files', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'opk-manager-brief-'));
+    try {
+      const missing = readManagerBriefTemplateFromDisk('manager-preamble.md', directory);
+      expect(missing).toMatchObject({
+        status: 'continue',
+        cause: 'manager_brief_template_unavailable',
+        evidence: {
+          template: 'manager-preamble.md',
+          path: join(directory, 'manager-preamble.md'),
+          errorCode: 'ENOENT',
+        },
+      });
+
+      writeFileSync(join(directory, 'manager-preamble.md'), '', 'utf8');
+      const empty = readManagerBriefTemplateFromDisk('manager-preamble.md', directory);
+      expect(empty).toMatchObject({
+        status: 'continue',
+        cause: 'manager_brief_template_unavailable',
+        evidence: {
+          template: 'manager-preamble.md',
+          path: join(directory, 'manager-preamble.md'),
+          errorCode: 'empty',
+        },
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed before Task-create when a required canonical template is unavailable', async () => {
+    let taskCreates = 0;
+    const result = await runSupervisedTaskLaunchAssistant({
+      repository: 'chetwerikoff/orchestrator-pack',
+      workClass: 'manager',
+      runId: 'run-1',
+      managerBrief: 'ordinary delta',
+      worktreeName: 'manager-worktree',
+      env: profileEnv(),
+    }, deps({
+      managerTemplate: {
+        status: 'continue',
+        cause: 'manager_brief_template_unavailable',
+        actor: 'operator',
+        evidence: { template: 'manager-preamble.md', errorCode: 'ENOENT' },
+        nextAction: { kind: 'reconcile_manager_task', note: 'restore canonical template' },
+      },
+      onManagerCreate: () => { taskCreates += 1; },
+    }));
+    expect(result).toMatchObject({
+      outcome: 'continue',
+      stage: 'manager_task',
+      observedCause: 'manager_brief_template_unavailable',
+      evidence: { template: 'manager-preamble.md', errorCode: 'ENOENT' },
+    });
+    expect(taskCreates).toBe(0);
+  });
+
+  it('reconciles an unknown creation without replaying a transformed fresh manager brief', async () => {
+    const input: LaunchInput = {
+      repository: 'chetwerikoff/orchestrator-pack', workClass: 'manager', issueNumber: 2385, runId: 'run-1',
+      managerBrief: 'private brief payload', worktreeName: 'manager-worktree', env: profileEnv(),
+    };
+    let sentBrief = '';
+    const result = await runSupervisedTaskLaunchAssistant(input, deps({
+      managerIssueTitle: { status: 'ok', value: 'repair firefighter launch' },
+      managerCreate: { status: 'continue', cause: 'manager_task_create_outcome_unknown', actor: 'provider',
+        evidence: { requestId: 'req-1' }, nextAction: { kind: 'reconcile_manager_task', requestId: 'req-1', note: 'reconcile unknown create' } },
+      onManagerCreate: (brief) => { sentBrief = brief; },
+    }));
+    expect(sentBrief).toBe(`${MANAGER_PREAMBLE_FIXTURE}\n${FIREFIGHTER_PROMPT_FIXTURE}\nprivate brief payload`);
     expect(result).toMatchObject({ outcome: 'continue', stage: 'manager_task', observedCause: 'manager_task_create_outcome_unknown',
-      nextAction: { kind: 'retry_manager_task_create', requestId: 'req-1', replay: { inputSource: 'caller_held_manager_brief' } } });
+      nextAction: { kind: 'reconcile_manager_task', requestId: 'req-1' } });
     expect(JSON.stringify(result)).not.toContain('private brief payload');
   });
 
-  it('represents Task-create uncertainty as structured caller-held replay without a fake command', async () => {
+  it('represents outcome-unknown Task-create as reconciliation without replay authority', async () => {
     const calls: string[][] = [];
     const result = await createManagerTaskWithOrca('run-1', 'private brief payload', async (args) => {
       calls.push([...args]);
@@ -731,24 +1095,20 @@ describe('supervised Task launch assistant', () => {
       'orca', 'orchestration', 'task-create', '--spec', 'private brief payload', '--run', 'run-1', '--json',
     ]]);
     expect(result).toMatchObject({
-      status: 'continue', cause: 'manager_task_create_outcome_unknown',
-      nextAction: {
-        kind: 'retry_manager_task_create', requestId: 'req-1',
-        replay: {
-          operation: 'orca_orchestration_task_create', runId: 'run-1', requestId: 'req-1', inputSource: 'caller_held_manager_brief',
-        },
-      },
+      status: 'continue', cause: 'manager_task_create_outcome_unknown', evidence: { requestId: 'req-1' },
+      nextAction: { kind: 'reconcile_manager_task', requestId: 'req-1' },
     });
-    if (result.status === 'continue') expect(result.nextAction.command).toBeUndefined();
+    if (result.status === 'continue') {
+      expect(result.nextAction.command).toBeUndefined();
+    }
     expect(JSON.stringify(result)).not.toContain('private brief payload');
-    expect(JSON.stringify(result)).not.toContain('<same-manager-brief>');
   });
 
   it.each([
     ['mixed malformed orchestration alias', { orchestrationRequestId: 123, requestId: 'req-1' }],
     ['empty orchestration alias', { orchestrationRequestId: '', requestId: 'req-1' }],
     ['conflicting aliases', { orchestrationRequestId: 'req-2', requestId: 'req-1' }],
-  ] as const)('does not authorize manager Task-create retry for %s', async (_label, recoveryData) => {
+  ] as const)('retains generic reconciliation for malformed request-id aliases: %s', async (_label, recoveryData) => {
     const result = await createManagerTaskWithOrca('run-1', 'private brief payload', async () => ({
       ok: false,
       stdout: JSON.stringify({ ok: false, error: { code: 'operation_unknown', data: recoveryData } }),
@@ -759,7 +1119,6 @@ describe('supervised Task launch assistant', () => {
     });
     if (result.status === 'continue') {
       expect(result.nextAction.requestId).toBeUndefined();
-      expect(result.nextAction.replay).toBeUndefined();
     }
   });
 
