@@ -112,6 +112,7 @@ export interface TerminalEnvelope {
 
 const DEFAULT_CANDIDATE_GRACE_MS = 5_000;
 const DEFAULT_NO_CANDIDATE_GRACE_MS = 5_000;
+const DEFAULT_HARD_DEADLINE_MS = 60 * 60 * 1_000;
 const DIAGNOSTICS_BYTE_CAP = 4_096;
 const FAILURE_SCOPES: readonly FailureScope[] = [
   'none',
@@ -143,6 +144,10 @@ function candidateGraceMs(): number {
 
 function noCandidateGraceMs(): number {
   return envMs('OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS', DEFAULT_NO_CANDIDATE_GRACE_MS);
+}
+
+function hardDeadlineMs(): number {
+  return envMs('OPK_FM_LONG_CHILD_HARD_DEADLINE_MS', DEFAULT_HARD_DEADLINE_MS);
 }
 
 function nowIso(): string {
@@ -857,7 +862,8 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
   let childExitedBeforeCandidate = false;
   let watchdogExpiredAt: number | null = null;
   let lastStdoutObservedAt: number | null = null;
-  let deadline = Date.now() + livenessTiming.startupAllowanceMs;
+  const hardDeadline = Date.now() + hardDeadlineMs();
+  let deadline = Math.min(Date.now() + livenessTiming.startupAllowanceMs, hardDeadline);
 
   const observeDeadline = (observedAt: number): boolean => {
     if (observedAt < deadline) return false;
@@ -880,7 +886,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
         ...heartbeat,
         accepted_at: new Date(observedAt).toISOString(),
       });
-      deadline = observedAt + livenessTiming.liveChildIdleWindowMs;
+      deadline = Math.min(observedAt + livenessTiming.liveChildIdleWindowMs, hardDeadline);
       return;
     }
     const candidate = parseTurnResult(line);
