@@ -5,6 +5,7 @@ import { runProcess } from './kernel/subprocess.ts';
 import {
   isSchedulerOperational,
   readSupervisorStatus,
+  resetStallLoopRefusal,
   runSupervisor,
   type SupervisorOptions,
 } from './lib/orchestrator-side-process-supervisor.ts';
@@ -100,7 +101,12 @@ async function main(): Promise<void> {
     process.exitCode = isSchedulerOperational(status) ? 0 : 1;
     return;
   }
-  if (command !== 'run') throw new Error('usage: orchestrator-wake-supervisor.ts run|status ...');
+  if (command === 'reset-stall-refusal') {
+    const status = resetStallLoopRefusal(options(args));
+    process.stdout.write(`${JSON.stringify({ status, reset: true })}\n`);
+    return;
+  }
+  if (command !== 'run') throw new Error('usage: orchestrator-wake-supervisor.ts run|status|reset-stall-refusal ...');
   if (args.detach === true && process.env.OPK_CUTOVER_SUPERVISOR_DAEMON !== '1') {
     const pid = await detachSelf(args);
     process.stdout.write(`${JSON.stringify({ pid, detached: true })}\n`);

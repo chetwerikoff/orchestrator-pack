@@ -114,6 +114,28 @@ export function readSupervisorStatus(options: Pick<SupervisorOptions, 'stateDir'
   return JSON.parse(readFileSync(file, 'utf8')) as SupervisorStatusRecord;
 }
 
+export function resetStallLoopRefusal(options: SupervisorOptions): SupervisorStatus {
+  const verified = verifyEpochAndProjection(options);
+  const status = readSupervisorStatus(options);
+  if (!status || status.schemaVersion !== 2) throw new Error('supervisor_status_not_resettable');
+  if (processIdentityMatches(status.supervisorPid, status.supervisorStartTicks)) throw new Error('supervisor_refusal_reset_live_process');
+  if (status.refusalReason !== 'scheduler_child_stall_loop') throw new Error('supervisor_refusal_reset_reason_mismatch');
+  const reset: SupervisorStatus = {
+    ...status,
+    registryHash: verified.registryHash,
+    registrySource: path.resolve(options.targetRegistryPath),
+    childPid: null,
+    childStartTicks: null,
+    restartState: 'starting',
+    refusalReason: null,
+    crashBackoff: EMPTY_CRASH_BACKOFF_STATE,
+    consecutiveStallTerminations: 0,
+    lastTerminationReason: null,
+  };
+  writeStatus(options, reset);
+  return reset;
+}
+
 export function processIdentityMatches(pid: number, startTicks: string | null | undefined): boolean {
   if (!Number.isInteger(pid) || pid <= 1 || typeof startTicks !== 'string' || !startTicks.trim()) return false;
   try {

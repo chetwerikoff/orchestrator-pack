@@ -633,6 +633,10 @@ The implementation PR carries the reusable operator handoff rule in
 `### Operator adoption handoff`; one-time rollout history does not belong in this
 runbook.
 
+## Wake supervisor stall diagnostics and refusal reset
+A scheduler tick appends JSONL phase timings to `scheduler-tick-phases.jsonl` under `OPK_SIDE_PROCESS_STATE_DIR` (or the OS-specific supervisor state directory); set `OPK_SCHEDULER_TICK_PHASE_LOG` only when an explicit diagnostic path is needed. Preserve this log when investigating a stall.
+
+For a persisted `scheduler_child_stall_loop`, first repair the measured phase and verify one `scheduler.ts tick`. Then use `orchestrator-wake-supervisor.ts reset-stall-refusal` with the same project, state directory, repo root, epoch authority/id/nonce, target registry, and projected registry arguments as `run`. The command validates the current epoch and registry, refuses to reset a live supervisor or any other refusal reason, and updates the existing status file in place; it does not delete status or establish health. Start the supervisor only after the reset and confirm generation progress with `status`.
 ## Worker lifecycle (concise reference)
 
 Workers, orchestrators, and managers read this section before the first side effect.

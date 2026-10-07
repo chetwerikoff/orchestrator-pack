@@ -6,7 +6,13 @@ migration procedures belong in Git history and their GitHub Issues/PRs.
 
 ## Current state
 
-No standing operator migration is required by the current default branch.
+LeoPoker wake supervisor: after this repair is on the default branch, clear a persisted
+`scheduler_child_stall_loop` with `scripts/orchestrator-wake-supervisor.ts reset-stall-refusal`
+using the same project, state directory, repo root, epoch, and registry arguments as `run`,
+then start the supervisor from that default branch. Do not reset or start it from an unmerged
+worktree. Remove this paragraph once that start is healthy.
+
+No other standing operator migration is required by the current default branch.
 
 When a change modifies runtime registration, supervised processes, operator-owned inputs, or
 tracked policy delivery, record the exact target-specific post-merge actions here and in the PR
