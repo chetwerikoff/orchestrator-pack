@@ -1836,16 +1836,13 @@ The words Firefighter universal appear here only as prose.`;
 });
 
 describe('machine-local executor profile store', () => {
-  it('overlays fenced values once, with store values winning in task resolution', () => {
+  it('overlays the store once, with explicit env values winning and absent keys filled from the store', () => {
     let reads = 0;
     const env = {
       PATH: '/operator/bin',
       PACK_EXECUTOR_T2_AGENT: 'cursor-agent',
       PACK_EXECUTOR_T2_MODEL: 'live-task-model',
       PACK_EXECUTOR_T2_EFFORT: 'live-task-effort',
-      PACK_EXECUTOR_SMOKE_ROUTINE_AGENT: 'cursor',
-      PACK_EXECUTOR_SMOKE_ROUTINE_MODEL: 'live-smoke-model',
-      PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT: 'live-smoke-effort',
     };
     const effectiveEnv = overlayExecutorProfileEnv(env, {
       storePath: '/operator/executor-profiles.env',
@@ -1865,11 +1862,70 @@ describe('machine-local executor profile store', () => {
 
     expect(reads).toBe(1);
     expect(effectiveEnv.PATH).toBe('/operator/bin');
+    expect(effectiveEnv.PACK_EXECUTOR_SMOKE_ROUTINE_MODEL).toBe('store-smoke-model');
     expect(resolveExecutorProfile('t2', effectiveEnv, 'exact_terminal_worktree')).toMatchObject({
       status: 'ok',
-      value: { launchCommand: "cursor-agent --model 'store-task-model-store-task-effort'" },
+      value: { launchCommand: "cursor-agent --model 'live-task-model-live-task-effort'" },
     });
 
+  });
+
+  it('resolves a local-route manager launch to cursor-agent grok-4.7 high over the stored profile', () => {
+    const env = {
+      PATH: '/operator/bin',
+      PACK_EXECUTOR_FF_LOCAL_AGENT: 'cursor-agent',
+      PACK_EXECUTOR_FF_LOCAL_MODEL: 'grok-4.7',
+      PACK_EXECUTOR_FF_LOCAL_EFFORT: 'high',
+      PACK_EXECUTOR_MANAGER_AGENT: 'cursor-agent',
+      PACK_EXECUTOR_MANAGER_MODEL: 'grok-4.7',
+      PACK_EXECUTOR_MANAGER_EFFORT: 'high',
+    };
+    const effectiveEnv = overlayExecutorProfileEnv(env, {
+      storePath: '/operator/executor-profiles.env',
+      readFile: () => [
+        'PACK_EXECUTOR_MANAGER_AGENT=opencode',
+        'PACK_EXECUTOR_MANAGER_MODEL=openai/gpt-6-luna',
+        'PACK_EXECUTOR_MANAGER_EFFORT=medium',
+      ].join('\n'),
+    });
+
+    expect(effectiveEnv.PACK_EXECUTOR_MANAGER_AGENT).toBe('cursor-agent');
+    expect(effectiveEnv.PACK_EXECUTOR_MANAGER_MODEL).toBe('grok-4.7');
+    expect(effectiveEnv.PACK_EXECUTOR_MANAGER_EFFORT).toBe('high');
+    expect(resolveExecutorProfile('manager', effectiveEnv, 'exact_terminal_worktree')).toMatchObject({
+      status: 'ok',
+      value: { family: 'cursor', launchCommand: "cursor-agent --model 'grok-4.7-high'" },
+    });
+  });
+
+  it('applies the stored manager profile when the launch sets no PACK_EXECUTOR_MANAGER_* override', () => {
+    const env = {
+      PATH: '/operator/bin',
+      PACK_EXECUTOR_FF_LOCAL_AGENT: 'cursor-agent',
+      PACK_EXECUTOR_FF_LOCAL_MODEL: 'grok-4.7',
+      PACK_EXECUTOR_FF_LOCAL_EFFORT: 'high',
+    };
+    const effectiveEnv = overlayExecutorProfileEnv(env, {
+      storePath: '/operator/executor-profiles.env',
+      readFile: () => [
+        'PACK_EXECUTOR_MANAGER_AGENT=opencode',
+        'PACK_EXECUTOR_MANAGER_MODEL=openai/gpt-6-luna',
+        'PACK_EXECUTOR_MANAGER_EFFORT=medium',
+      ].join('\n'),
+    });
+
+    expect(effectiveEnv.PACK_EXECUTOR_MANAGER_AGENT).toBe('opencode');
+    expect(effectiveEnv.PACK_EXECUTOR_MANAGER_MODEL).toBe('openai/gpt-6-luna');
+    expect(effectiveEnv.PACK_EXECUTOR_MANAGER_EFFORT).toBe('medium');
+    const semantic = resolveSemanticExecutorProfile({
+      surface: 'task',
+      names: profileNamesForTask('manager'),
+      env: effectiveEnv,
+    });
+    expect(semantic).toMatchObject({
+      ok: true,
+      profile: { family: 'opencode', model: 'openai/gpt-6-luna', effort: 'medium' },
+    });
   });
 
   it('rejects a foreign key before applying any store values and never changes PATH', () => {

@@ -63,5 +63,6 @@ export function overlayExecutorProfileEnv(
 ): Readonly<NodeJS.ProcessEnv> {
   const stored = readExecutorProfileStore(options);
   if (Object.keys(stored).length === 0) return env;
-  return { ...env, ...stored };
+  // A value already set on the command is an explicit override. The store fills only absent keys.
+  return { ...stored, ...env };
 }
