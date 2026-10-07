@@ -1,3 +1,4 @@
+import { closeSync, fsyncSync, mkdirSync, openSync, writeSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -151,6 +152,27 @@ export const SCHEDULER_RUN_TICK_PHASE_INVENTORY = Object.freeze([
 ] as const);
 
 // An active Orca lifecycle observation can issue worker-show plus terminal-show.
+const tickPhaseLogPath = (): string => {
+  const explicit = String(process.env.OPK_SCHEDULER_TICK_PHASE_LOG ?? '').trim();
+  if (explicit) return explicit;
+  const stateDir = String(process.env.OPK_SIDE_PROCESS_STATE_DIR ?? '').trim();
+  return stateDir ? path.join(stateDir, 'scheduler-tick-phases.jsonl') : '';
+};
+function writeTickPhase(phase: string, startedAt: number, outcome: 'completed' | 'failed'): void {
+  const file = tickPhaseLogPath();
+  if (!file) return;
+  mkdirSync(path.dirname(file), { recursive: true });
+  const fd = openSync(file, 'a', 0o600);
+  try {
+    writeSync(fd, `${JSON.stringify({ projectId: process.env.OPK_PROJECT_ID ?? null, phase, startedAt: new Date(startedAt).toISOString(), durationMs: Date.now() - startedAt, outcome })}\n`);
+    fsyncSync(fd);
+  } finally { closeSync(fd); }
+}
+async function measuredPhase<T>(phase: string, run: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+  try { const value = await run(); writeTickPhase(phase, startedAt, 'completed'); return value; }
+  catch (error) { writeTickPhase(phase, startedAt, 'failed'); throw error; }
+}
 // Two assignments at 2 s per call cap serialized time before the mail turn at 8 s.
 const ASSIGNMENT_RESOLUTION_CALL_TIMEOUT_MS = 2_000;
 const ASSIGNMENT_LIFECYCLE_BATCH_SIZE = 2;
@@ -472,7 +494,8 @@ function startOrchestrationMailReconcileLoop(
     stop: async () => {
       stopped = true;
       if (timer !== undefined) clearTimeout(timer);
-      await inFlight;
+      // A periodic mail reconciliation is best-effort work; joining it here
+      // must not extend the scheduler child beyond its supervisor deadline.
     },
   };
 }
@@ -510,7 +533,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
       .then(() => observerBoundary.tick({ schedulerIntervalMs, tickSequence: requestedTickSequence, phaseStartMs: observerStartMs }))
       .then((value) => ({ status: 'complete' as const, value }))
       .catch(() => ({ status: 'failed' as const }));
-    const completed = await Promise.race([attempt, timeout]);
+    const completed = await measuredPhase('fleet-observer', () => Promise.race([attempt, timeout]));
     if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
     if (completed.status !== 'complete') {
       observerBoundary.cancel?.();
@@ -544,7 +567,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     const acceptedTickSequence = acceptObserverTickSequence(boundary, requestedTickSequence, observer);
     try {
       assertSchedulerEpoch(env);
-      fleetNudge = await boundary.fleetNudgeActuator.tick({ observer, schedulerIntervalMs, tickSequence: acceptedTickSequence, phaseStartMs: Date.now() });
+      fleetNudge = await measuredPhase('fleet-nudge', () => boundary.fleetNudgeActuator!.tick({ observer, schedulerIntervalMs, tickSequence: acceptedTickSequence, phaseStartMs: Date.now() }));
     } catch {
       fleetNudge = {
         result: 'observer-untrusted', status: 'failed', schedulerGeneration: observer.schedulerGeneration,
@@ -570,27 +593,28 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     }
   }
   if (boundary.dispatchTerminalMailPulse) dispatchTerminalMailPulse = boundary.dispatchTerminalMailPulse();
-  if (boundary.orchestrationMailReconcile) orchestrationMailReconcile = await boundary.orchestrationMailReconcile();
+  if (boundary.orchestrationMailReconcile) orchestrationMailReconcile = await measuredPhase('orchestration-mail-reconcile', () => boundary.orchestrationMailReconcile!());
   const mailReconcileLoop = boundary.orchestrationMailReconcile
     ? startOrchestrationMailReconcileLoop(boundary.orchestrationMailReconcile, schedulerIntervalMs)
     : undefined;
   try {
     let attempted = 0; let started = 0; let skipped = 0;
-    for (const candidate of boundary.listCandidates()) {
-      attempted += 1; assertSchedulerEpoch(env); const fresh = await boundary.readCurrentPr(candidate); const freshHead = String(fresh.headRefOid ?? '').trim().toLowerCase();
+    const candidates = await measuredPhase('list-candidates', async () => boundary.listCandidates());
+    for (const candidate of candidates) {
+      attempted += 1; assertSchedulerEpoch(env); const fresh = await measuredPhase('read-current-pr', () => boundary.readCurrentPr(candidate)); const freshHead = String(fresh.headRefOid ?? '').trim().toLowerCase();
       if (fresh.state !== 'OPEN' && String(fresh.state).toLowerCase() !== 'open') { skipped += 1; continue; }
       if (fresh.isDraft === true || freshHead !== candidate.boundHeadSha.toLowerCase()) { skipped += 1; continue; }
       let checks: Awaited<ReturnType<SchedulerBoundary['readChecks']>> = [];
       let requiredCi: RequiredCiResult | undefined;
       if (boundary.resolveRequiredCi) {
         try {
-          requiredCi = await boundary.resolveRequiredCi(candidate, fresh, freshHead);
+          requiredCi = await measuredPhase('resolve-required-ci', () => boundary.resolveRequiredCi!(candidate, fresh, freshHead));
         } catch {
           skipped += 1;
           continue;
         }
       } else {
-        checks = await boundary.readChecks(candidate);
+        checks = await measuredPhase('read-checks', () => boundary.readChecks(candidate));
       }
       const runs = boundary.listReviewRuns();
       const decision = evaluateHeadReadyForReview({
@@ -602,7 +626,7 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
         reviewRuns: runs,
       });
       if (!decision.eligible) { skipped += 1; continue; }
-      assertSchedulerEpoch(env); const result = await boundary.start(candidate, freshHead); if (result.ok) started += 1; else skipped += 1;
+      assertSchedulerEpoch(env); const result = await measuredPhase('start-pack-review', () => boundary.start(candidate, freshHead)); if (result.ok) started += 1; else skipped += 1;
     }
     return {
       attempted,
@@ -733,17 +757,19 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   let mailReconcileLoop: { stop: () => Promise<void> } | undefined;
   try {
     const runtime = await selectRuntimeAdapter({ env });
-    await runSerializedMailTurn();
+    await measuredPhase('startup-mail-reconcile', runSerializedMailTurn);
     mailReconcileLoop = startOrchestrationMailReconcileLoop(executeOrchestrationMailReconcile, cadence);
-    assignmentLifecycleSweep = await reconcileWorkerAssignments({
+    // The cadence loop services mail while the assignment sweep runs. A second
+    // synchronous mail turn every two assignments multiplied LeoPoker's sweep
+    // latency without adding work beyond that already serviced loop.
+    assignmentLifecycleSweep = await measuredPhase('assignment-lifecycle-reconciliation', () => reconcileWorkerAssignments({
       file: assignmentStorePath,
       repository,
       adapter: runtime,
       timeoutMs: ASSIGNMENT_RESOLUTION_CALL_TIMEOUT_MS,
       batchSize: ASSIGNMENT_LIFECYCLE_BATCH_SIZE,
       terminalMailDeps: { env },
-      betweenBatches: runSerializedMailTurn,
-    });
+    }));
     const built = assignmentLifecycleSweep.status === 'ok'
       ? buildFleetAssignmentBindings(assignmentLifecycleSweep.bindings)
       : null;
@@ -887,8 +913,8 @@ export function writeSchedulerTickResult(
 }
 
 async function runSingleTick(): Promise<void> {
-  const { boundary } = await loadProductionBoundary();
-  const result = await runSchedulerTick(boundary);
+  const { boundary } = await measuredPhase('load-production-boundary', loadProductionBoundary);
+  const result = await measuredPhase('scheduler-tick', () => runSchedulerTick(boundary));
   writeSchedulerTickResult(result);
   const failure = schedulerFleetPhaseFailure(result);
   if (failure) throw new Error(failure);

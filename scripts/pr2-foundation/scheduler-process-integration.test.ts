@@ -256,7 +256,7 @@ async function runTickProcess(env: NodeJS.ProcessEnv) {
 
 async function runTick(env: NodeJS.ProcessEnv): Promise<Record<string, unknown>> {
   const result = await runTickProcess(env);
-  expect(result.ok, result.stderr || result.stdout || result.error).toBe(true);
+  expect(result.ok, [result.stderr, result.stdout, result.error].filter(Boolean).join('\n')).toBe(true);
   const line = result.stdout.trim().split(/\r?\n/u).at(-1) ?? '';
   expect(line).not.toBe('');
   return JSON.parse(line) as Record<string, unknown>;
@@ -408,6 +408,67 @@ async function publishLocal(
 }
 
 describe('scheduler bounded-child production composition', () => {
+  it('does not let an in-flight periodic mail reconciliation hold scheduler tick completion', async () => {
+    const root = makeRoot();
+    const fixturePath = path.join(root, 'fixture.json');
+    const epochPath = path.join(root, 'epoch.json');
+    const configPath = path.join(root, 'fleet-config.json');
+    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
+    writeFileSync(fixturePath, JSON.stringify({ workers: [], dispatches: [] }));
+    writeEpoch(epochPath, 'epoch-mail-drain', 'nonce-mail-drain');
+    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-mail-drain', 'nonce-mail-drain');
+    let reconcileCalls = 0;
+    const boundary: SchedulerBoundary = {
+      listCandidates: () => [{ sessionId: 'mail-drain', repoSlug: 'chetwerikoff/orchestrator-pack', prNumber: 1, boundHeadSha: 'a'.repeat(40) }],
+      readCurrentPr: async () => { await new Promise((resolve) => setTimeout(resolve, 25)); return { number: 1, headRefOid: 'a'.repeat(40), state: 'CLOSED', isDraft: false }; },
+      readChecks: async () => [],
+      listReviewRuns: () => [],
+      start: async () => ({ ok: true }),
+      schedulerIntervalMs: 1,
+      orchestrationMailReconcile: async () => {
+        reconcileCalls += 1;
+        if (reconcileCalls > 1) return await new Promise(() => {});
+        return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [], deliveryEvidence: [] };
+      },
+    };
+    await expect(Promise.race([
+      runSchedulerTick(boundary, env),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('scheduler_tick_waited_for_periodic_mail')), 250)),
+    ])).resolves.toMatchObject({ attempted: 1, skipped: 1 });
+    expect(reconcileCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  it('records every scheduler tick phase under the 70s stall deadline', async () => {
+    const root = makeRoot();
+    const fixturePath = path.join(root, 'fixture.json');
+    const epochPath = path.join(root, 'epoch.json');
+    const configPath = path.join(root, 'fleet-config.json');
+    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
+    writeFileSync(fixturePath, JSON.stringify({ workers: [], dispatches: [] }));
+    writeEpoch(epochPath, 'epoch-phase-log', 'nonce-phase-log');
+    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-phase-log', 'nonce-phase-log');
+    const result = await runTick(env);
+    expect(observerResult(result)).toMatchObject({ status: 'complete' });
+    const logPath = path.join(String(env.OPK_SIDE_PROCESS_STATE_DIR), 'scheduler-tick-phases.jsonl');
+    expect(existsSync(logPath)).toBe(true);
+    const rows = readFileSync(logPath, 'utf8').trim().split(/\r?\n/u).map((line) => JSON.parse(line) as {
+      phase: string;
+      durationMs: number;
+      outcome: string;
+      startedAt: string;
+    });
+    const phases = new Set(rows.map((row) => row.phase));
+    for (const phase of ['load-production-boundary', 'assignment-lifecycle-reconciliation', 'startup-mail-reconcile', 'scheduler-tick']) {
+      expect(phases.has(phase), `missing phase ${phase}`).toBe(true);
+    }
+    for (const row of rows) {
+      expect(row.outcome).toBe('completed');
+      expect(row.durationMs).toBeGreaterThanOrEqual(0);
+      expect(row.durationMs).toBeLessThan(70_000);
+      expect(row.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    }
+  });
+
   it('publishes an empty census when no current assignment is available', async () => {
     const root = makeRoot();
     const fixturePath = path.join(root, 'fixture.json');

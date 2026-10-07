@@ -17,6 +17,7 @@ import { sha256Bytes } from './lib/cutover/stable-stringify.ts';
 import {
   isLiveRunningSupervisorChild,
   isSchedulerOperational,
+  resetStallLoopRefusal,
   supervisorChildExitTransition,
   type SupervisorStatus,
 } from './lib/orchestrator-side-process-supervisor.ts';
@@ -562,6 +563,102 @@ describe('Issue #1484 truthful supervisor status', () => {
       expect(closes[0]!.at - signals[0]!.at).toBeGreaterThanOrEqual(80);
       expect(starts[1]!.at - closes[0]!.at).toBeGreaterThanOrEqual(900);
       expect(starts[0]!.pid).not.toBe(starts[1]!.pid);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('clears a persisted scheduler_child_stall_loop refusal in place', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-2391-reset-stall-'));
+    try {
+      const stateDir = path.join(root, 'state');
+      const targetRegistryPath = path.join(root, 'target-registry.json');
+      const projectedRegistryPath = path.join(stateDir, 'projected-registry.json');
+      const epochAuthorityPath = path.join(root, 'epoch-authority.json');
+      const statusFile = path.join(stateDir, 'typescript-supervisor-status.json');
+      mkdirSync(stateDir, { recursive: true });
+      const registry = {
+        schemaVersion: 2,
+        requiredChildIds: ['pr2-scheduler'],
+        children: [{
+          id: 'pr2-scheduler',
+          runtime: 'node',
+          script: 'pr2-foundation/scheduler.ts',
+          sideEffecting: true,
+          cadenceSeconds: 5,
+          stallGraceMultiplier: 14,
+        }],
+      };
+      writeFileSync(targetRegistryPath, `${JSON.stringify(registry)}\n`, 'utf8');
+      const epochId = 'epoch-2391-reset';
+      const nonce = 'nonce-2391-reset';
+      new FileEpochAuthority(epochAuthorityPath).commit(null, {
+        epochId,
+        nonce,
+        hostId: 'test-host',
+        repoRoot: root,
+        installedCommitSha: 'a'.repeat(40),
+        snapshotDigests: { reconcile: 'snapshot-r', reevaluation: 'snapshot-e', reportStateSeed: 'snapshot-s' },
+        importDigests: { reconcile: 'import-r', reevaluation: 'import-e', reportStateSeed: 'import-s' },
+        registryHash: sha256Bytes(readFileSync(targetRegistryPath)),
+        preCommitLogDigest: 'phase-one-fixture',
+        commitAt: new Date().toISOString(),
+      });
+      const options = {
+        stateDir,
+        repoRoot: root,
+        epochAuthorityPath,
+        epochId,
+        nonce,
+        targetRegistryPath,
+        projectedRegistryPath,
+      };
+      const refused = {
+        schemaVersion: 2 as const,
+        epochId,
+        nonce,
+        supervisorPid: 2_147_483_646,
+        supervisorStartTicks: 'dead-ticks',
+        registryHash: null,
+        registrySource: targetRegistryPath,
+        childId: 'pr2-scheduler' as const,
+        childPid: null,
+        childStartTicks: null,
+        childGeneration: 127,
+        childRestarts: 12,
+        restartState: 'refused' as const,
+        startedAt: '2026-10-06T05:42:14.225Z',
+        lastChildStartAt: '2026-10-06T05:42:14.225Z',
+        cordonReason: 'post-cas-epoch-owner' as const,
+        refusalReason: 'scheduler_child_stall_loop',
+        crashBackoff: { ...EMPTY_CRASH_BACKOFF_STATE },
+        consecutiveStallTerminations: 12,
+        lastTerminationReason: 'stall_terminated',
+      };
+      writeFileSync(statusFile, `${JSON.stringify(refused)}\n`);
+      const reset = resetStallLoopRefusal(options);
+      expect(reset).toMatchObject({
+        refusalReason: null,
+        consecutiveStallTerminations: 0,
+        lastTerminationReason: null,
+        restartState: 'starting',
+        childGeneration: 127,
+      });
+      expect(existsSync(statusFile)).toBe(true);
+      expect(JSON.parse(readFileSync(statusFile, 'utf8'))).toMatchObject({
+        schemaVersion: 2,
+        refusalReason: null,
+        consecutiveStallTerminations: 0,
+      });
+
+      writeFileSync(statusFile, `${JSON.stringify({ ...refused, refusalReason: 'supervisor_child_terminal_crash_loop' })}\n`);
+      expect(() => resetStallLoopRefusal(options)).toThrow(/supervisor_refusal_reset_reason_mismatch/);
+      expect(JSON.parse(readFileSync(statusFile, 'utf8')).refusalReason).toBe('supervisor_child_terminal_crash_loop');
+
+      const liveTicks = readProcessIdentity(process.pid).startTicks;
+      writeFileSync(statusFile, `${JSON.stringify({ ...refused, supervisorPid: process.pid, supervisorStartTicks: liveTicks })}\n`);
+      expect(() => resetStallLoopRefusal(options)).toThrow(/supervisor_refusal_reset_live_process/);
+      expect(JSON.parse(readFileSync(statusFile, 'utf8')).refusalReason).toBe('scheduler_child_stall_loop');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
