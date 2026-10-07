@@ -7,6 +7,7 @@
     "scripts/lib/orchestrator-side-process-supervisor.ts",
     "scripts/orchestrator-wake-supervisor.test.ts",
     "scripts/orchestrator-wake-supervisor.ts",
+    "scripts/pr2-foundation/post-review-smoke-race.test.ts",
     "scripts/pr2-foundation/scheduler-composer-concurrency.test.ts",
     "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/pr2-foundation/scheduler.ts"
@@ -22,5 +23,5 @@
     "docs/",
     "scripts/"
   ],
-  "source_revision": "a2ae77fe539b9548138d58f185096bcddb7b4c39"
+  "source_revision": "bdfdb1dd986e17eaa646c4e2e91f4ffd391abf96"
 }
