@@ -12,6 +12,7 @@ import {
   type RuntimeWorkerIdentity,
 } from '../runtime/contracts.ts';
 import {
+  attachRuntimeNativeError,
   neutralFailureReason,
   openCodeControlFromCommand,
   OrcaRuntimeAdapter,
@@ -39,13 +40,6 @@ import {
 function usesNativePtyFallback(generation: string): boolean {
   return generation.includes('@@');
 }
-
-type RuntimeFailureWithNativeError = RuntimeOperationFailure & {
-  readonly nativeError?: Readonly<{
-    code: string;
-    message: string;
-  }>;
-};
 
 type UnprovenOwnedPresence = Readonly<{
   identity: RuntimeWorkerIdentity;
@@ -211,16 +205,10 @@ function attachNativeRuntimeError(
   failure: RuntimeOperationFailure,
   response: OrcaJsonResponse,
 ): RuntimeOperationFailure {
-  const code = String(response.error?.code ?? '');
-  const message = String(response.error?.message ?? '');
-  if (!code && !message) return failure;
-  Object.defineProperty(failure as RuntimeFailureWithNativeError, 'nativeError', {
-    value: Object.freeze({ code, message }),
-    enumerable: false,
-    configurable: false,
-    writable: false,
+  return attachRuntimeNativeError(failure, {
+    code: String(response.error?.code ?? ''),
+    message: String(response.error?.message ?? ''),
   });
-  return failure;
 }
 
 function isRetryableTabNotFound(response: OrcaJsonResponse): boolean {
