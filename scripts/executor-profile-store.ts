@@ -57,11 +57,22 @@ export function readExecutorProfileStore(
   return parsed;
 }
 
+const EXPLICIT_MANAGER_OVERRIDE_KEYS = [
+  'PACK_EXECUTOR_MANAGER_AGENT',
+  'PACK_EXECUTOR_MANAGER_MODEL',
+  'PACK_EXECUTOR_MANAGER_EFFORT',
+] as const;
+
 export function overlayExecutorProfileEnv(
   env: Readonly<NodeJS.ProcessEnv>,
   options: ExecutorProfileStoreReadOptions = {},
 ): Readonly<NodeJS.ProcessEnv> {
   const stored = readExecutorProfileStore(options);
   if (Object.keys(stored).length === 0) return env;
-  return { ...env, ...stored };
+  const overlaid: NodeJS.ProcessEnv = { ...env, ...stored };
+  for (const key of EXPLICIT_MANAGER_OVERRIDE_KEYS) {
+    const explicit = env[key];
+    if (typeof explicit === 'string' && explicit.trim() !== '') overlaid[key] = explicit;
+  }
+  return overlaid;
 }

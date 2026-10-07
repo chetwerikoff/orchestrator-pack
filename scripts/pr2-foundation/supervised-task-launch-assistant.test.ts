@@ -1872,6 +1872,34 @@ describe('machine-local executor profile store', () => {
 
   });
 
+  it('keeps explicit PACK_EXECUTOR_MANAGER_AGENT, MODEL, and EFFORT through the launch overlay', () => {
+    const env = {
+      PATH: '/operator/bin',
+      PACK_EXECUTOR_FF_LOCAL_AGENT: 'cursor-agent',
+      PACK_EXECUTOR_FF_LOCAL_MODEL: 'grok-4.7',
+      PACK_EXECUTOR_FF_LOCAL_EFFORT: 'high',
+      PACK_EXECUTOR_MANAGER_AGENT: 'cursor-agent',
+      PACK_EXECUTOR_MANAGER_MODEL: 'grok-4.7',
+      PACK_EXECUTOR_MANAGER_EFFORT: 'high',
+    };
+    const effectiveEnv = overlayExecutorProfileEnv(env, {
+      storePath: '/operator/executor-profiles.env',
+      readFile: () => [
+        'PACK_EXECUTOR_MANAGER_AGENT=opencode',
+        'PACK_EXECUTOR_MANAGER_MODEL=openai/gpt-6-luna',
+        'PACK_EXECUTOR_MANAGER_EFFORT=medium',
+      ].join('\n'),
+    });
+
+    expect(effectiveEnv.PACK_EXECUTOR_MANAGER_AGENT).toBe('cursor-agent');
+    expect(effectiveEnv.PACK_EXECUTOR_MANAGER_MODEL).toBe('grok-4.7');
+    expect(effectiveEnv.PACK_EXECUTOR_MANAGER_EFFORT).toBe('high');
+    expect(resolveExecutorProfile('manager', effectiveEnv, 'exact_terminal_worktree')).toMatchObject({
+      status: 'ok',
+      value: { family: 'cursor', launchCommand: "cursor-agent --model 'grok-4.7-high'" },
+    });
+  });
+
   it('rejects a foreign key before applying any store values and never changes PATH', () => {
     const env = { PATH: '/operator/bin', PACK_EXECUTOR_T2_MODEL: 'live-model' };
     expect(() => overlayExecutorProfileEnv(env, {
