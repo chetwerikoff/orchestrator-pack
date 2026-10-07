@@ -79,6 +79,7 @@ afterEach(() => {
   delete process.env.OPK_FM_LONG_CHILD_DISABLE_DETACH;
   delete process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS;
   delete process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS;
+  delete process.env.OPK_FM_LONG_CHILD_HARD_DEADLINE_MS;
   delete process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS;
   vi.unstubAllEnvs();
   delete process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS;
@@ -770,6 +771,83 @@ describe('flow-manager long-running child (#1164)', () => {
       lifecycle_outcome: 'incident',
       incident: 'child_liveness_timeout',
       child_exit_code: null,
+    });
+  });
+
+  it('accepts an already-complete reply when the browser completion signal was not detected', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'complete-without-signal');
+    const result = makeTurnResult({ cause: 'completed_page_only', witness: undefined });
+    const heartbeat = {
+      schema: 'observation-heartbeat/v1',
+      phase: 'post_send_observation',
+      poll_count: 1,
+      observation_state: 'busy',
+      stable_reads: 0,
+      completion_ready: false,
+    };
+    const fixture = nodeFixture(`
+      process.stdout.write(JSON.stringify(${JSON.stringify(heartbeat)}) + '\\n');
+      process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n');
+      setInterval(() => {}, 1000);
+    `);
+    process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '30';
+    process.env.OPK_FM_LONG_CHILD_HARD_DEADLINE_MS = '300';
+    const code = await runLaunch({
+      runIdentity: 'run-complete-without-signal',
+      attemptIdentity: 'attempt-complete-without-signal',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    });
+    expect(code).toBe(0);
+    expect(readTerminalEnvelope(paths.envelope)).toMatchObject({
+      lifecycle_outcome: 'success',
+      turn_result_cause: 'completed_page_only',
+      diagnostics: { completion_ready: false },
+    });
+  });
+
+  it('publishes a timeout envelope when ongoing heartbeats never produce a completion signal', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'hard-timeout');
+    const heartbeat = {
+      schema: 'observation-heartbeat/v1',
+      phase: 'post_send_observation',
+      poll_count: 1,
+      observation_state: 'busy',
+      stable_reads: 0,
+      completion_ready: false,
+    };
+    const fixture = nodeFixture(`
+      let pollCount = 0;
+      setInterval(() => process.stdout.write(JSON.stringify({ ...${JSON.stringify(heartbeat)}, poll_count: ++pollCount }) + '\\n'), 10);
+    `);
+    process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS = '100';
+    process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '50';
+    process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '100';
+    process.env.OPK_FM_LONG_CHILD_HARD_DEADLINE_MS = '160';
+    const startedAt = Date.now();
+    const code = await runLaunch({
+      runIdentity: 'run-hard-timeout',
+      attemptIdentity: 'attempt-hard-timeout',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    });
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(code).toBe(1);
+    expect(readTerminalEnvelope(paths.envelope)).toMatchObject({
+      lifecycle_outcome: 'incident',
+      incident: 'child_liveness_timeout',
+      child_exit_code: null,
+      delivery: 'POSSIBLY_DELIVERED',
     });
   });
 
