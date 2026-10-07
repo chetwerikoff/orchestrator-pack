@@ -2,6 +2,7 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 2391,
   "declared_paths": [
+    "docs/migration_notes.md",
     "docs/orchestration-runbook.md",
     "scripts/lib/orchestrator-side-process-supervisor.ts",
     "scripts/orchestrator-wake-supervisor.test.ts",
@@ -21,5 +22,5 @@
     "docs/",
     "scripts/"
   ],
-  "source_revision": "8c2cb7ebf2badf2527c4577f214131d55d3ab7ff"
+  "source_revision": "a2ae77fe539b9548138d58f185096bcddb7b4c39"
 }
