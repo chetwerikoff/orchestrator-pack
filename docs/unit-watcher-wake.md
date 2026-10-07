@@ -35,9 +35,8 @@ For launch-assistant targets, a fresh helper process recovers the OpenCode contr
 from the existing persisted launch-terminal ownership record by exact runtime plus
 the globally unique terminal id. The persisted spawn-receipt generation is not a
 live pty-generation authority and may differ from the adapter's current generation.
-The persisted workspace must match the live target, and a live title, when present,
-must match the persisted launch title. Missing, stale, malformed, duplicate, or
-mismatched records remain unbound. The helper still retains and revalidates the
+The persisted workspace must match the live target. Missing, stale, malformed,
+duplicate, or mismatched records remain unbound. The helper still retains and revalidates the
 exact live `{runtime,id,generation}` identity for runtime dispatch. If it cannot
 obtain that exact live identity or the required `opencode-http` control binding,
 it exits non-zero without waiting and without attempting a wake.

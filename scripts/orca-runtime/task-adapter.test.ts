@@ -283,13 +283,14 @@ describe('OpenCode durable launch control', () => {
     const handle = 'term_opencode_2150';
     const command = 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-2150';
     let liveGeneration = 'generation-opencode-2150';
+    let liveTitle = title;
     let submitted = false;
     let created = false;
     const currentTerminal = () => ({
       handle,
       incarnationId: liveGeneration,
       worktreePath: workspacePath,
-      title,
+      title: liveTitle,
       command,
       status: 'running' as const,
     });
@@ -351,6 +352,8 @@ describe('OpenCode durable launch control', () => {
           agent: 'pack-opk-2150',
         },
       });
+
+      liveTitle = 'renamed-live-opencode-pane';
 
       const healthAdapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env, openCodeHttpRequest });
       expect(healthAdapter.openCodeHealth(launched.value.identity)).toEqual({

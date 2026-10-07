@@ -420,12 +420,10 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     );
     if (!persisted.ok || !persisted.value?.openCodeControl) return undefined;
     const ownership = persisted.value;
-    const currentTitle = current.title?.trim() ?? '';
     if (
       ownership.workspacePath !== current.workspacePath
       || ownership.identity.runtime !== worker.runtime
       || ownership.identity.id !== worker.id
-      || (currentTitle && currentTitle !== ownership.title)
     ) return undefined;
     return ownership.openCodeControl;
   }

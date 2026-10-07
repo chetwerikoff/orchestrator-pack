@@ -155,7 +155,7 @@ describe('unit watcher wake', () => {
     }]);
   });
 
-  it('recovers a registered OpenCode control from persisted launch ownership in a separate helper adapter', async () => {
+  it('recovers persisted OpenCode control for a renamed live pane in a separate helper adapter', async () => {
     const stateRoot = mkdtempSync(join(tmpdir(), 'opk-unit-watcher-persisted-control-'));
     const env = { OPK_WAKE_SUPERVISOR_STATE_DIR: stateRoot };
     const title = 'opk-t2-task_unit_watcher';
@@ -166,13 +166,14 @@ describe('unit watcher wake', () => {
       generation: '668996d0-1f28-470c-b008-32b126c1540e',
     };
     const liveGeneration = 'b713fba9';
+    const liveTitle = 'renamed-live-unit-pane';
     const command = 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-unit-watcher';
     let created = false;
-    const terminal = (generation: string, withTitle: boolean): OrcaTerminalSummary => ({
+    const terminal = (generation: string, currentTitle: string): OrcaTerminalSummary => ({
       handle: persistedIdentity.id,
       incarnationId: generation,
       worktreePath: workspacePath,
-      ...(withTitle ? { title } : {}),
+      title: currentTitle,
       command,
       status: 'running',
     });
@@ -180,10 +181,10 @@ describe('unit watcher wake', () => {
       const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
       if (operation === 'terminal create') {
         created = true;
-        return { ok: true, result: { terminal: terminal(persistedIdentity.generation, true) } };
+        return { ok: true, result: { terminal: terminal(persistedIdentity.generation, title) } };
       }
       if (operation === 'terminal show') {
-        return { ok: true, result: { terminal: terminal(liveGeneration, false) } };
+        return { ok: true, result: { terminal: terminal(liveGeneration, liveTitle) } };
       }
       if (operation === 'terminal list') {
         return {
@@ -191,7 +192,7 @@ describe('unit watcher wake', () => {
           result: {
             totalCount: created ? 1 : 0,
             truncated: false,
-            terminals: created ? [terminal(liveGeneration, false)] : [],
+            terminals: created ? [terminal(liveGeneration, liveTitle)] : [],
           },
         };
       }
@@ -200,7 +201,7 @@ describe('unit watcher wake', () => {
           ok: true,
           result: {
             terminal: {
-              ...terminal(liveGeneration, false),
+              ...terminal(liveGeneration, liveTitle),
               tail: ['┃', '╹▀▀▀▀▀▀'],
               nextCursor: null,
               source: 'screen',
