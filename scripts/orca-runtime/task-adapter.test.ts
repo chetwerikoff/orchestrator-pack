@@ -274,7 +274,7 @@ describe('Orca task terminal ownership persistence', () => {
 });
 
 describe('OpenCode durable launch control', () => {
-  it('recovers exact launch control across adapter instances and keeps stale or absent records unbound', async () => {
+  it('recovers launch control across persisted/live generation shapes and keeps stale live or absent records unbound', async () => {
     const stateRoot = mkdtempSync(join(tmpdir(), 'opk-task-open-code-control-'));
     const emptyStateRoot = mkdtempSync(join(tmpdir(), 'opk-task-open-code-control-empty-'));
     const env = { OPK_WAKE_SUPERVISOR_STATE_DIR: stateRoot };
@@ -283,13 +283,14 @@ describe('OpenCode durable launch control', () => {
     const handle = 'term_opencode_2150';
     const command = 'opencode --hostname 127.0.0.1 --port 18891 --agent pack-opk-2150';
     let liveGeneration = 'generation-opencode-2150';
+    let liveTitle = title;
     let submitted = false;
     let created = false;
     const currentTerminal = () => ({
       handle,
       incarnationId: liveGeneration,
       worktreePath: workspacePath,
-      title,
+      title: liveTitle,
       command,
       status: 'running' as const,
     });
@@ -352,6 +353,8 @@ describe('OpenCode durable launch control', () => {
         },
       });
 
+      liveTitle = 'renamed-live-opencode-pane';
+
       const healthAdapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env, openCodeHttpRequest });
       expect(healthAdapter.openCodeHealth(launched.value.identity)).toEqual({
         status: 'ok',
@@ -382,16 +385,15 @@ describe('OpenCode durable launch control', () => {
 
       liveGeneration = 'generation-opencode-2150-next';
       const currentIdentity = { ...launched.value.identity, generation: liveGeneration };
-      const staleRecordAdapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env, openCodeHttpRequest });
-      expect(staleRecordAdapter.composerControl?.(currentIdentity)).toBeUndefined();
-      expect(staleRecordAdapter.openCodeHealth(currentIdentity)).toMatchObject({
-        status: 'unsupported',
-        reason: 'runtime_opencode_control_unavailable',
+      const generationShapeAdapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env, openCodeHttpRequest });
+      expect(generationShapeAdapter.composerControl?.(currentIdentity)?.kind).toBe('opencode-http');
+      expect(generationShapeAdapter.openCodeHealth(currentIdentity)).toEqual({
+        status: 'ok',
+        value: { healthy: true, version: '1.18.25' },
       });
-      expect(staleRecordAdapter.dispatchInput({ worker: currentIdentity, submitOnly: true })).toEqual({
-        status: 'send_failed',
-        reason: 'opencode_control_unbound',
-      });
+
+      const staleLiveAdapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env, openCodeHttpRequest });
+      expect(staleLiveAdapter.composerControl?.(launched.value.identity)).toBeUndefined();
 
       const noRecordAdapter = new OrcaTaskRuntimeAdapter({
         runJson: runJson as never,
