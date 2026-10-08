@@ -42,10 +42,20 @@ systemctl --user enable --now fleet-wake@my-project
 ```
 
 Set `PRIMARY` to the absolute primary checkout path. Optional keys are
-`WORKSPACE_RE`, `ORCH_TITLE_RE` (default `Cursor`), `ORCH_HANDLE`, `BUSY_RE`, and
-`FLEET_WAKE_INTERVAL` (default `300` seconds). The service invokes the pack's
+`WORKSPACE_RE`, `ORCH_TITLE_RE` (default `Cursor`), `ORCH_HANDLE`,
+`ARCHITECT_HANDLE`, `BUSY_RE`, and `FLEET_WAKE_INTERVAL` (default `300` seconds). The service invokes the pack's
 canonical TypeScript wrapper from `PRIMARY` and appends logs to
 `~/.local/state/orchestrator-fleet/my-project.fleet-wake.log`.
+
+`ARCHITECT_HANDLE` optionally excludes one exact Orca terminal handle from fleet
+units. Both fleet-wake and the one-off sweep consume this environment key; export
+it for the one-off command as well. The excluded pane is not screen-read or
+classified, named as a unit in fleet alarms, or directly woken for GPT/CI events
+or chat banners. No title or pattern identifies an architect: another pane with
+the same title remains eligible. Leaving the key unset preserves normal behavior
+and coordinator selection. The operator supplies the handle in local configuration
+and performs any service restart after merge/adoption; the public example contains
+no machine-specific values.
 
 Check the service and log:
 
