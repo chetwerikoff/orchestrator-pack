@@ -62,6 +62,9 @@ async function waitForFile(filePath: string, timeoutMs = 10_000): Promise<void> 
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
+async function waitForWatchDelivery(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 50));
+}
 
 function runHarnessedVitest(testPath: string, env: NodeJS.ProcessEnv): Promise<{
   exitCode: number | null;
@@ -157,9 +160,9 @@ describe('parent live-store guard', () => {
     expect(child.exitCode, child.stderr).toBe(0);
   });
 
-  it('settles only known wake-state paths for the explicit or default project', () => {
+  it('settles exact wake-state paths and only newly created allowed ancestors', () => {
     const projectId = DEFAULT_WAKE_SUPERVISOR_PROJECT_ID;
-    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+    const allowedPaths = [
       'supervisor/typescript-supervisor-status.json',
       'supervisor/projected-registry.json',
       'orchestration-mail-reconcile.json',
@@ -171,23 +174,154 @@ describe('parent live-store guard', () => {
       `${projectId}/fleet-observer-snapshot.json`,
       `${projectId}/.tmp-1234-1700000000000-deadbeef`,
       `${projectId}/supervisor/.typescript-supervisor-status.json.1234.00000000-0000-4000-8000-000000000000.tmp`,
+      `${projectId}/scheduler-tick-phases.jsonl`,
+    ];
+    expect(isExternalWakeSupervisorSnapshotOnlyChange(allowedPaths)).toBe(true);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      '.typescript-supervisor-status.json.1234.00000000-0000-4000-8000-000000000000.tmp',
     ])).toBe(true);
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
-      `${projectId}/fleet-observer-snapshot.json`,
-    ], 'another-project')).toBe(false);
+      `${projectId}/supervisor/supervisor/.typescript-supervisor-status.json.1234.00000000-0000-4000-8000-000000000000.tmp`,
+    ])).toBe(false);
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
-      'another-project/fleet-observer-snapshot.json',
-    ], projectId)).toBe(false);
+      `${projectId}/nested/scheduler-tick-phases.jsonl`,
+    ])).toBe(false);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      `${projectId}/scheduler-tick-phases.jsonl.tmp`,
+    ])).toBe(false);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      'scheduler-tick-phases.jsonl',
+    ])).toBe(false);
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
       `${projectId}/unrelated-live-store-leak.json`,
-    ], projectId)).toBe(false);
+    ])).toBe(false);
+    const beforeCreated = new Map<string, string>();
+    const afterCreated = new Map([
+      [`${projectId}`, 'directory'],
+      [`${projectId}/supervisor`, 'directory'],
+      ...allowedPaths.map((path) => [path, 'file'] as [string, string]),
+    ]);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange(
+      [...allowedPaths, projectId, `${projectId}/supervisor`],
+      '',
+      beforeCreated,
+      afterCreated,
+    )).toBe(true);
+    const beforeDeleted = new Map([[`${projectId}/supervisor`, 'directory']]);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange(
+      [`${projectId}/supervisor`, `${projectId}/supervisor/typescript-supervisor-status.json`],
+      '',
+      beforeDeleted,
+      new Map(),
+    )).toBe(false);
   });
+
+  it('allows existing cadence paths under a newly created non-selected project after watcher delivery', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-foreign-cadence-'));
+    temporaryRoots.push(root);
+    const env = productionEnvironment(join(root, 'production'));
+    env.OPK_PROJECT_ID = 'selected-project';
+    const foreignProjectRoot = join(env.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'foreign-project');
+    const foreignSupervisorRoot = join(foreignProjectRoot, 'supervisor');
+    const guard = startParentLiveStoreGuard(env);
+    mkdirSync(foreignSupervisorRoot, { recursive: true });
+    const status = join(foreignSupervisorRoot, 'typescript-supervisor-status.json');
+    const temporary = join(
+      foreignSupervisorRoot,
+      '.typescript-supervisor-status.json.1234.00000000-0000-4000-8000-000000000000.tmp',
+    );
+    writeFileSync(temporary, '{"restartState":"running"}\n', 'utf8');
+    renameSync(temporary, status);
+    writeFileSync(join(foreignProjectRoot, 'worker-report-store.json'), '{}\n', 'utf8');
+    writeFileSync(join(foreignProjectRoot, 'worker-report-store.lock'), 'lock', 'utf8');
+    writeFileSync(join(foreignProjectRoot, 'worker-report-store.json.tmp'), '{}\n', 'utf8');
+    writeFileSync(join(foreignProjectRoot, 'orchestration-mail-reconcile.json'), '{}\n', 'utf8');
+    writeFileSync(join(foreignProjectRoot, 'orchestration-mail-reconcile.lock'), 'lock', 'utf8');
+    writeFileSync(join(foreignProjectRoot, 'fleet-observer-snapshot.json'), '{}\n', 'utf8');
+    writeFileSync(join(foreignProjectRoot, '.tmp-1234-5678-abcdef12'), 'temporary', 'utf8');
+    writeFileSync(join(foreignProjectRoot, 'scheduler-tick-phases.jsonl'), '{"phase":"scheduler-tick"}\n', 'utf8');
+    writeFileSync(join(foreignSupervisorRoot, 'projected-registry.json'), '{}\n', 'utf8');
+    writeFileSync(
+      join(foreignSupervisorRoot, '.projected-registry.json.1234.00000000-0000-4000-8000-000000000000.tmp'),
+      '{}\n',
+      'utf8',
+    );
+    await waitForWatchDelivery();
+
+    expect(() => guard.stop()).not.toThrow();
+  });
+
+  it('still rejects a doubled supervisor sidecar path in a non-selected project', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-foreign-nested-sidecar-'));
+    temporaryRoots.push(root);
+    const env = productionEnvironment(join(root, 'production'));
+    env.OPK_PROJECT_ID = 'selected-project';
+    const nestedSupervisorRoot = join(
+      env.OPK_VITEST_PRODUCTION_WAKE_ROOT!,
+      'foreign-project',
+      'supervisor',
+      'supervisor',
+    );
+    mkdirSync(nestedSupervisorRoot, { recursive: true });
+    const guard = startParentLiveStoreGuard(env);
+    writeFileSync(
+      join(nestedSupervisorRoot, '.typescript-supervisor-status.json.1234.00000000-0000-4000-8000-000000000000.tmp'),
+      'unsupported',
+      'utf8',
+    );
+
+    expect(() => guard.stop()).toThrow(/OPK_VITEST_LIVE_STORE_GUARD_FAILED/);
+  });
+
+  it('rejects deletion of a pre-existing foreign supervisor subtree', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-foreign-delete-'));
+    temporaryRoots.push(root);
+    const env = productionEnvironment(join(root, 'production'));
+    env.OPK_PROJECT_ID = 'selected-project';
+    const foreignSupervisorRoot = join(env.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'foreign-project', 'supervisor');
+    mkdirSync(foreignSupervisorRoot, { recursive: true });
+    writeFileSync(join(foreignSupervisorRoot, 'typescript-supervisor-status.json'), '{"state":"before"}', 'utf8');
+    const guard = startParentLiveStoreGuard(env);
+    rmSync(foreignSupervisorRoot, { recursive: true });
+
+    expect(() => guard.stop()).toThrow(/OPK_VITEST_LIVE_STORE_GUARD_FAILED/);
+  });
+
+  it('rejects nested and temporary scheduler phase log variants in a non-selected project', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-foreign-scheduler-log-'));
+    temporaryRoots.push(root);
+    const env = productionEnvironment(join(root, 'production'));
+    env.OPK_PROJECT_ID = 'selected-project';
+    const foreignProjectRoot = join(env.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'foreign-project');
+    mkdirSync(foreignProjectRoot, { recursive: true });
+    const guard = startParentLiveStoreGuard(env);
+    mkdirSync(join(foreignProjectRoot, 'nested'), { recursive: true });
+    writeFileSync(join(foreignProjectRoot, 'nested', 'scheduler-tick-phases.jsonl'), '{"phase":"unsupported"}\n', 'utf8');
+    writeFileSync(join(foreignProjectRoot, 'scheduler-tick-phases.jsonl.tmp'), '{"phase":"unsupported"}\n', 'utf8');
+
+    expect(() => guard.stop()).toThrow(/OPK_VITEST_LIVE_STORE_GUARD_FAILED/);
+  });
+
+  it('still rejects non-cadence writes under a new non-selected project after watcher delivery', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-foreign-leak-'));
+    temporaryRoots.push(root);
+    const env = productionEnvironment(join(root, 'production'));
+    env.OPK_PROJECT_ID = 'selected-project';
+    const foreignRoot = join(env.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'foreign-project');
+    const guard = startParentLiveStoreGuard(env);
+    mkdirSync(foreignRoot, { recursive: true });
+    writeFileSync(join(foreignRoot, 'unrelated-live-store-leak.json'), 'leak\n', 'utf8');
+    await waitForWatchDelivery();
+
+    expect(() => guard.stop()).toThrow(/OPK_VITEST_LIVE_STORE_GUARD_FAILED/);
+  });
+
+
   it('settles an external selected-project worker report-store transaction', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-worker-report-'));
     temporaryRoots.push(root);
     const projectId = 'orchestrator-pack';
     const changedPaths = [
-      projectId,
       `${projectId}/worker-report-store.json`,
       `${projectId}/worker-report-store.lock`,
       `${projectId}/worker-report-store.json.tmp`,
@@ -195,7 +329,7 @@ describe('parent live-store guard', () => {
     expect(isExternalWakeSupervisorSnapshotOnlyChange(changedPaths, projectId)).toBe(true);
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
       'another-project/worker-report-store.json',
-    ], projectId)).toBe(false);
+    ], projectId)).toBe(true);
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
       `${projectId}/unrelated-live-store-leak.json`,
     ], projectId)).toBe(false);
