@@ -29,7 +29,7 @@ const EXTERNALLY_MUTABLE_JOURNAL_STORE_ID = 'wake-supervisor-runtime-state';
 const EXTERNALLY_MUTABLE_JOURNAL_PATH = 'worker-message-dispatch-journal.json';
 const JOURNAL_ATOMIC_TEMP_PATH = /^\.[0-9a-f]{32}\.tmp$/i;
 // writeDurableFile temp name: `.<basename>.<pid>.<uuid>.tmp` beside the target.
-const SUPERVISOR_STATUS_ATOMIC_TEMP_PATH = /^(?:supervisor\/)?\.(?:typescript-supervisor-status|projected-registry)\.json\.\d+\.[0-9a-f-]{36}\.tmp$/i;
+const SUPERVISOR_STATUS_ATOMIC_TEMP_PATH = /^\.(?:typescript-supervisor-status|projected-registry)\.json\.\d+\.[0-9a-f-]{36}\.tmp$/i;
 const FLEET_OBSERVER_ATOMIC_TEMP_PATH = /^\.(?:tmp|restore)-\d+-\d+-[0-9a-f]{8}$/i;
 function projectScopedPath(relativePath) {
   const separator = relativePath.indexOf('/');
@@ -63,6 +63,11 @@ function isExternallyMutableWakeSidecarPath(relativePath) {
 function isParentOfAllowedWakePath(path, candidates) {
   return candidates.some((candidate) => candidate.startsWith(`${path}/`)
     && (isExternallyMutableWakePath(candidate) || isExternallyMutableWakeSidecarPath(candidate)));
+}
+function isNewAllowedWakeDirectory(path, candidates, beforeSnapshot, afterSnapshot) {
+  return beforeSnapshot?.get(path) === undefined
+    && afterSnapshot?.get(path) === 'directory'
+    && isParentOfAllowedWakePath(path, candidates);
 }
 function pathIsSameOrWithin(candidate, root) {
   const rel = relative(root, candidate);
@@ -141,6 +146,9 @@ function changedSnapshotPaths(before, after) {
   const paths = new Set([...before.keys(), ...after.keys()]);
   return [...paths].filter((path) => before.get(path) !== after.get(path));
 }
+function relativeSnapshot(store, snapshot) {
+  return new Map([...snapshot].map(([path, value]) => [storeRelativePath(store, path), value]));
+}
 
 export function isExternalJournalSnapshotOnlyChange(changedPaths, observedPaths = new Set()) {
   const changed = [...changedPaths];
@@ -148,12 +156,17 @@ export function isExternalJournalSnapshotOnlyChange(changedPaths, observedPaths 
   return journalOnly && (observedPaths.has(EXTERNALLY_MUTABLE_JOURNAL_PATH) || changed.length > 0);
 }
 
-export function isExternalWakeSupervisorSnapshotOnlyChange(changedPaths, _projectId = '') {
+export function isExternalWakeSupervisorSnapshotOnlyChange(
+  changedPaths,
+  _projectId = '',
+  beforeSnapshot = new Map(),
+  afterSnapshot = new Map(),
+) {
   const changed = [...changedPaths].filter((path) => path !== '');
   return changed.length > 0 && changed.every((path) =>
     isExternallyMutableWakePath(path)
       || isExternallyMutableWakeSidecarPath(path)
-      || isParentOfAllowedWakePath(path, changed),
+      || isNewAllowedWakeDirectory(path, changed, beforeSnapshot, afterSnapshot),
   );
 }
 
@@ -244,13 +257,25 @@ export function startParentLiveStoreGuard(env = process.env) {
         baselineFailures = Array.isArray(error.failures) ? [...error.failures] : [];
       }
 
+      const afterSnapshots = new Map(
+        stores.map((store) => [store.id, snapshotTree(store.defaultPath)]),
+      );
+      const relativeBeforeSnapshots = new Map(
+        stores.map((store) => [
+          store.id,
+          relativeSnapshot(store, beforeSnapshots.get(store.id) ?? new Map()),
+        ]),
+      );
+      const relativeAfterSnapshots = new Map(
+        stores.map((store) => [store.id, relativeSnapshot(store, afterSnapshots.get(store.id) ?? new Map())]),
+      );
       const changedPathsByStore = new Map(
         stores.map((store) => [
           store.id,
           changedSnapshotPaths(
-            beforeSnapshots.get(store.id) ?? new Map(),
-            snapshotTree(store.defaultPath),
-          ).map((path) => storeRelativePath(store, path)),
+            relativeBeforeSnapshots.get(store.id) ?? new Map(),
+            relativeAfterSnapshots.get(store.id) ?? new Map(),
+          ),
         ]),
       );
       const externallySettledStores = new Set();
@@ -259,9 +284,26 @@ export function startParentLiveStoreGuard(env = process.env) {
         const changed = changedPathsByStore.get(store.id) ?? [];
         if (store.id === EXTERNALLY_MUTABLE_JOURNAL_STORE_ID
           && (isExternalJournalSnapshotOnlyChange(changed, observed ?? new Set())
-            || isExternalWakeSupervisorSnapshotOnlyChange(changed, env.OPK_PROJECT_ID))) {
+            || isExternalWakeSupervisorSnapshotOnlyChange(
+              changed,
+              env.OPK_PROJECT_ID,
+              relativeBeforeSnapshots.get(store.id),
+              relativeAfterSnapshots.get(store.id),
+            ))) {
           externallySettledStores.add(store.id);
         }
+      }
+      for (const store of stores) {
+        if (!externallySettledStores.has(store.id)) continue;
+        const touches = exactTouches.get(store.id);
+        if (!touches) continue;
+        const changed = changedPathsByStore.get(store.id) ?? [];
+        const before = relativeBeforeSnapshots.get(store.id);
+        const after = relativeAfterSnapshots.get(store.id);
+        for (const path of touches) {
+          if (isNewAllowedWakeDirectory(path, changed, before, after)) touches.delete(path);
+        }
+        if (touches.size === 0) exactTouches.delete(store.id);
       }
       for (const [storeId, sidecars] of observedJournalSidecars) {
         if (!externallySettledStores.has(storeId)) {
