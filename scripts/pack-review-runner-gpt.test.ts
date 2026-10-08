@@ -1758,6 +1758,92 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     };
   }
 
+  it.each(['early-send', 'late-send', 'pre-send-terminal', 'possible-delivery'] as const)(
+    'paces three exact source admissions with parallel generation (%s)', async (mode) => {
+      const storeRoot = tempRoot('opk-gpt-admission-2426-');
+      const capture = path.join(storeRoot, 'github-review.json');
+      harnessEnv(storeRoot, capture);
+      selectProjectCard(storeRoot);
+      delete process.env.PACK_GPT_BROWSER_PROJECT_URL;
+      process.env.PACK_GPT_BROWSER_PROFILE = path.join(storeRoot, 'browser-profile');
+      process.env.PACK_GPT_BROWSER_CDP = 'http://127.0.0.1:9222';
+      delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+      vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+      const trace: Array<{ slotId: string; invocationId: string; at: number }> = [];
+      const witnesses = new Map<string, number>();
+      const releases: Array<() => void> = [];
+      const fixtures: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+      const readObservation = vi.fn((profileKey: string, invocationId: string) => ({
+        profile_key: profileKey, invocation_id: invocationId,
+        send_count: witnesses.get(invocationId), phase: 'sent_unharvested',
+      }));
+      const pending = startPackReview(pluralStart(storeRoot, capture, {
+        fixtureGptAdmissionReadObservation: readObservation,
+        fixtureReviewBySourceSlot: fixtures,
+        fixtureAfterGptInvocationBound: async ({ slotId, invocationId }: { slotId: string; invocationId: string }) => {
+          trace.push({ slotId, invocationId, at: Date.now() });
+          fixtures[slotId] = [{ stdout: successfulCleanReviewPayload(invocationId), exitCode: 0 }];
+          if (slotId === 'source-01' && (mode === 'pre-send-terminal' || mode === 'possible-delivery')) {
+            fixtures[slotId] = [{ stdout: JSON.stringify({
+              schema: 'turn-result/v1', state: 'driver_error', scope: 'invocation',
+              cause: mode === 'possible-delivery' ? 'send_delivery_unproven' : 'pre_send_refused',
+              invocation_id: invocationId, send_count: 0, send_attempted: mode === 'possible-delivery',
+            }), exitCode: 1 }];
+            return;
+          }
+          await new Promise<void>((resolve) => releases.push(resolve));
+        },
+      }));
+      await vi.waitFor(() => expect(trace.length).toBeGreaterThan(0));
+      expect(trace).toHaveLength(1);
+      const first = trace[0]!;
+      if (mode === 'early-send') witnesses.set(first.invocationId, 1);
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(trace).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      if (mode === 'late-send') {
+        expect(trace).toHaveLength(1);
+        // Foreign profile/invocation and non-exact numeric counts cannot open the gate.
+        readObservation.mockImplementation((profileKey, invocationId) => ({
+          profile_key: `${profileKey}-foreign`, invocation_id: invocationId, send_count: 1, phase: 'sent_unharvested',
+        }));
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(trace).toHaveLength(1);
+        readObservation.mockImplementation((profileKey, invocationId) => ({
+          profile_key: profileKey, invocation_id: invocationId, send_count: 2, phase: 'sent_unharvested',
+        }));
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(trace).toHaveLength(1);
+        readObservation.mockImplementation((profileKey, invocationId) => ({
+          profile_key: profileKey, invocation_id: invocationId, send_count: witnesses.get(invocationId), phase: 'sent_unharvested',
+        }));
+        witnesses.set(first.invocationId, 1);
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      await vi.waitFor(() => expect(trace).toHaveLength(2));
+      // Neither bound callback has completed: the sent source is still generating.
+      expect(releases).toHaveLength(mode.endsWith('terminal') || mode === 'possible-delivery' ? 1 : 2);
+      const second = trace[1]!;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(trace).toHaveLength(2);
+      witnesses.set(second.invocationId, 1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => expect(trace).toHaveLength(3));
+      expect(trace.map((entry) => entry.slotId)).toEqual(['source-01', 'source-02', 'source-03']);
+      expect(new Set(trace.map((entry) => entry.invocationId)).size).toBe(3);
+      expect(trace[1]!.at - first.at).toBeGreaterThanOrEqual(30_000);
+      expect(trace[2]!.at - second.at).toBeGreaterThanOrEqual(30_000);
+      releases.forEach((release) => release());
+      const result = await pending;
+      const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+      expect(run?.reviewRound?.sourceSlots.map((slot) => slot.attemptOrdinal)).toEqual([1, 1, 1]);
+      if (mode === 'possible-delivery') {
+        expect(run?.reviewRound?.sourceSlots[0]?.terminalClass).toBe('possible_delivery');
+        expect(run?.reviewRound?.sourceSlots[0]?.terminalResult).toMatchObject({ send_count: 0, send_attempted: true });
+      }
+    },
+  );
+
   it.each([true, false].flatMap((published) => [true, false].map((sendAttempted) => ({ published, sendAttempted }))))(
     'censuses attempted zero-count sources without a second send (published $published, attempt flag $sendAttempted)', async ({ published, sendAttempted }) => {
     const storeRoot = tempRoot('opk-gpt-attempted-zero-census-');
