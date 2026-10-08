@@ -1,0 +1,30 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2418,
+  "declared_paths": [
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "docs/declarations/2418.pr-scope.json",
+    "scripts/merge-adoption-effect.test.ts",
+    "scripts/merge-adoption-effect.ts",
+    "scripts/sync-ops-wiki.test.ts",
+    "scripts/sync-ops-wiki.ts"
+  ],
+  "denylist": [
+    "AGENTS.md",
+    "credentials/",
+    "packages/core/",
+    "scripts/orchestrator-side-process-registry.json",
+    "scripts/target-context.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "docs/declarations/",
+    "scripts/merge-adoption-effect.test.ts",
+    "scripts/merge-adoption-effect.ts",
+    "scripts/sync-ops-wiki.test.ts",
+    "scripts/sync-ops-wiki.ts"
+  ],
+  "source_revision": "8ccf98141b9e18c71551a54324fe2140e490e2c9"
+}

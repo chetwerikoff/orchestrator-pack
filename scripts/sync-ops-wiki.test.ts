@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runProcessSync } from './kernel/subprocess.ts';
 import {
   applyOpsWiki,
@@ -46,6 +46,26 @@ function tempDir(prefix: string): string {
   return dir;
 }
 
+it('refuses target-root wiki calls before Git, corpus writes, or index effects', async () => {
+  const repoRoot = tempDir('target-wiki-');
+  write(repoRoot, 'AGENTS.md', '# Target merge-time adoption\n');
+  const corpusRoot = join(tempDir('target-wiki-parent-'), 'untouched-corpus');
+  const git = vi.fn<GitRunner>(() => ({ ok: true, stdout: 'a'.repeat(40), stderr: '' }));
+  const read = vi.fn<WikiOpsClient['read']>();
+  const search = vi.fn<WikiOpsClient['search']>();
+  const reindex = vi.fn<NonNullable<WikiOpsClient['reindex']>>();
+  const options = { repoRoot, commitRef: 'a'.repeat(40), corpusRoot, git, client: { read, search, reindex } };
+  const refusal = /pack-only adoption.*PRIMARY_ROOT.*AGENTS\.md.*merge-time adoption.*named live check/u;
+  expect(() => checkRepositoryMode(options)).toThrow(refusal);
+  await expect(applyOpsWiki(options)).rejects.toThrow(refusal);
+  expect(git).not.toHaveBeenCalled();
+  expect(read).not.toHaveBeenCalled();
+  expect(search).not.toHaveBeenCalled();
+  expect(reindex).not.toHaveBeenCalled();
+  expect(existsSync(corpusRoot)).toBe(false);
+});
+
+
 function git(cwd: string, args: readonly string[]): string {
   const result = runProcessSync({
     command: 'git',
@@ -86,6 +106,7 @@ function initRepo(files: Record<string, string>): { repoRoot: string; commit: st
 
 function fixtureFiles(body = 'worker must pass pre-flight before implementation.\n'): Record<string, string> {
   return {
+    'scripts/orchestrator-side-process-registry.json': JSON.stringify({ children: [] }),
     'AGENTS.md': [
       '# AGENTS.md',
       '',

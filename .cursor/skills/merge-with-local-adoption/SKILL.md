@@ -166,6 +166,11 @@ lose it.
 
 Before resolving any PR/Issue, resolve the selected project card with `node --experimental-strip-types scripts/lib/target-context.ts check`. Bind its exact `repository` as `TARGET_REPOSITORY` and its exact `defaultBranch` as `TARGET_DEFAULT_BRANCH`. Missing selection or any explicit repository/base mismatch is terminal; do not infer target identity from cwd/origin.
 
+Bind that same card's `projectId` and `primaryRoot` as `PROJECT_ID` and `PRIMARY_ROOT`;
+`REPO` is exactly that selected `PRIMARY_ROOT` for primary-checkout adoption. Run pack
+tools from `{PACK_ROOT}` with `OPK_PROJECT_ID` selected, never from a target checkout.
+Do not infer another project from the presence of scripts or use a pack registry fallback.
+
 Resolve the concrete PR with `gh pr view` or an exact `Closes/Fixes/Resolves #N` link. Zero or
 multiple plausible PRs is unresolved target ambiguity and requires the user to identify one;
 never guess.
@@ -256,11 +261,17 @@ Read the PR body, changed paths/content, linked Issue, applicable migration note
 environment docs, runbooks, and rules-channel files. State the local post-merge work. Do not
 invent secrets, ports, or machine-local values.
 
-Also identify the smallest executable live check required by the linked Issue's current
-`Fixed means` / `smoke-test-plan` and express it as one or more exact argv arrays in
-`LIVE_CHECK_JSON`. The check must run from the primary checkout after adoption. If the
-Issue does not provide enough information to bind an executable live check, do not substitute
-Git ancestry, process existence, or prose inspection: the Verify-effect step must end `effect_unverified`.
+For `PROJECT_ID=orchestrator-pack`, identify the smallest executable live check required by
+the linked Issue's current `Fixed means` / `smoke-test-plan` and express it as one or more
+exact argv arrays in `LIVE_CHECK_JSON`. It runs from `PRIMARY_ROOT` after adoption. If the
+Issue cannot bind an executable check, the pack Verify-effect step ends `effect_unverified`;
+Git ancestry, process existence, and prose inspection are not substitutes.
+
+For every non-pack selected card, read exactly `{PRIMARY_ROOT}/AGENTS.md` and collect its
+target-owned merge-time adoption instructions and named target live check, if any. Steps 6,
+7, and Verify effect follow that authority exclusively; do not import pack runtime adoption,
+pack verifier, pack wiki sync, or unrelated verification/database commands into this route.
+Keep target-specific commands and environment limits in the target's rules, not this skill.
 
 Set `RULES_TOUCHED=yes` when the diff includes any of:
 
@@ -296,8 +307,8 @@ Immediately before updating the primary checkout, record the local adoption boun
 ADOPTION_STARTED_AT_UTC=$(node -e 'process.stdout.write(new Date().toISOString())')
 ```
 
-Fetch and update the primary checkout without discarding its pre-existing changes. After adoption
-verify:
+Fetch and update the selected `PRIMARY_ROOT` without discarding pre-existing changes, using
+the target-owned update/adoption instructions collected in Step 4 for non-pack cards. Verify:
 
 ```bash
 git merge-base --is-ancestor "$MERGE_SHA" HEAD
@@ -307,13 +318,15 @@ git log -1 --oneline
 
 The selected default branch may move beyond `MERGE_SHA`; equality is not required.
 
-After that adoption read-back, read the actual primary-checkout `HEAD` once as a
-40-hex value and pass that literal value to one bounded operational-wiki sync.
-Do not pass the PR merge SHA or a moving default-branch name:
+**Pack only (`PROJECT_ID=orchestrator-pack`):** after adoption read-back, read the actual
+pack `PRIMARY_ROOT` `HEAD` once as a 40-hex value and pass that literal to one bounded
+operational-wiki sync from `{PACK_ROOT}` with `--repo-root "$PRIMARY_ROOT"`. Do not pass
+the PR merge SHA or a moving default-branch name. Non-pack cards skip this wiki block:
 
 ```bash
-COMMIT=$(git rev-parse HEAD)
+COMMIT=$(git -C "$PRIMARY_ROOT" rev-parse HEAD)
 node --experimental-strip-types scripts/sync-ops-wiki.ts apply \
+  --repo-root "$PRIMARY_ROOT" \
   --commit "$COMMIT" \
   --corpus-root "$PACK_OPS_WIKI_CORPUS_ROOT"
 ```
@@ -327,9 +340,10 @@ optional `--reindex incremental|full`. See
 
 ## Step 7 — Apply local adoption
 
-Apply the instructions identified in Step 4. Keep edits surgical and report remaining manual
-action. Never commit secrets or machine-local values unless the same direct user message
-explicitly requested it.
+Apply the instructions identified in Step 4 in the selected `PRIMARY_ROOT`; for non-pack
+cards these are exclusively the target's own merge-time adoption instructions. Keep edits
+surgical and report remaining manual action. Never commit secrets or machine-local values
+unless the same direct user message explicitly requested it.
 
 ## Verify effect — mandatory after Step 7
 
@@ -337,12 +351,22 @@ This step is mandatory for **every** merge mode. Step 6 ancestry proves only tha
 present in repository history; it is never evidence that a long-lived consumer is running the
 adopted code.
 
-Run the pack-owned verifier from the primary checkout, using the exact Issue live check selected
-in Step 4:
+**Non-pack selected cards:** execute only the named target live check, if any, from
+`{PRIMARY_ROOT}/AGENTS.md` after its adoption instructions. Read back and report the
+target-prescribed effect; if no live check is named, report that fact without inventing one
+or claiming an executable check passed. A failed required target check is
+`operationally_incomplete`: send its exact refusal and target-owned next action to the
+coordinator. Do not run the pack verifier or substitute pack process/registry evidence.
+Then continue to Step 8 and the unchanged exact-target cleanup in Step 9, subject to the
+existing delegated fail-closed rule.
+
+**Pack only (`PROJECT_ID=orchestrator-pack`):** run the pack-owned verifier from
+`{PACK_ROOT}` against the pack `PRIMARY_ROOT`, using the exact Issue live check selected
+in Step 4. The remainder of this verifier block applies only to this pack route:
 
 ```bash
 node --experimental-strip-types scripts/merge-adoption-effect.ts verify \
-  --repo-root REPO \
+  --repo-root "$PRIMARY_ROOT" \
   --merge-sha "$MERGE_SHA" \
   --adopted-at "$ADOPTION_STARTED_AT_UTC" \
   --live-check-json "$LIVE_CHECK_JSON"
@@ -476,10 +500,12 @@ Report in the user's language:
 - for any waiver, the source of the direct operator authorization (channel/reference only,
   with private data omitted), plus the waiver status description and POST/read-back result;
 - operator-checkout adoption and preservation of existing changes;
-- the merge-effect receipt: mapped consumers, before/after start-time read-back, the exact
-  primary-checkout Issue live check, `effect_verified|effect_unverified(<reason>)`, and exactly
+- for pack cards, the merge-effect receipt: mapped consumers, before/after start-time read-back,
+  the exact primary-checkout Issue live check, `effect_verified|effect_unverified(<reason>)`, and exactly
   one `operationally_complete|operationally_incomplete` outcome; for an unverified effect,
   include the coordinator message/blocker;
+- for non-pack cards, the target-owned `{PRIMARY_ROOT}/AGENTS.md` adoption source, actions,
+  named live check and its read-back (or no named check), residual blocker and next action;
 - target absolute path and why it was the selected non-primary worktree;
 - every lifecycle disagreement/blocked condition that was overridden;
 - terminal/process quiescence and residual counts;

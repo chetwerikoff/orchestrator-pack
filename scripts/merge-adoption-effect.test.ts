@@ -1,10 +1,11 @@
 // @vitest-ci-lane heavy
 // @vitest-pre-topology-seconds 20
 import { runProcess, runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as subprocess from './kernel/subprocess.ts';
 import { canonicalFoundationPaths } from './lib/cutover/foundation-observation.ts';
 import {
   defaultSupervisorStateDir,
@@ -81,6 +82,42 @@ async function startFixture(): Promise<FixtureProcess> {
 }
 
 describe('Issue #2145 merge adoption effect verification', () => {
+  it('refuses a target root before Git, restart controls, or live checks and names target-owned adoption', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'target-adoption-'));
+    const effects = vi.spyOn(subprocess, 'runProcessSync');
+    const marker = path.join(root, 'effect-ran');
+    const effectArgv = [process.execPath, '-e', 'require("node:fs").writeFileSync(process.argv[1], "ran")', marker];
+    try {
+      write(root, 'AGENTS.md', '# Target merge-time adoption\nUse the target live check.\n');
+      const git = (...args: string[]) => {
+        const result = runProcessSync({ command: 'git', args: ['-C', root, ...args], inheritParentEnv: true });
+        if (!result.ok) throw new Error(result.stderr || result.error || 'target git fixture failed');
+        return result.stdout.trim();
+      };
+      git('init', '-q');
+      git('config', 'user.name', 'fixture');
+      git('config', 'user.email', 'fixture@example.invalid');
+      git('add', 'AGENTS.md');
+      git('commit', '-qm', 'target baseline');
+      write(root, 'target.txt', 'target change\n');
+      git('add', 'target.txt');
+      git('commit', '-qm', 'target adoption');
+      const mergeSha = git('rev-parse', 'HEAD');
+      effects.mockClear();
+      await expect(runCli([
+        'verify', '--repo-root', root, '--merge-sha', mergeSha,
+        '--adopted-at', new Date().toISOString(),
+        '--live-check-json', JSON.stringify(effectArgv),
+        '--restart-control-json', JSON.stringify({ 'orchestrator-side-process-supervisor': effectArgv }),
+      ])).rejects.toThrow(/pack-only adoption.*PRIMARY_ROOT.*AGENTS\.md.*merge-time adoption.*named live check/u);
+      expect(effects).not.toHaveBeenCalled();
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      effects.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('maps changed code to the supervisor, registry scheduler, fleet-wake unit, and agent hooks', () => {
     const root = mappingFixture();
     try {
@@ -220,5 +257,14 @@ describe('Issue #2145 merge adoption effect verification', () => {
     expect(skill).toContain('effect_verified');
     expect(skill).toContain('effect_unverified(<reason>)');
     expect(skill).toContain('operationally_incomplete');
+    const adoption = skill.split('## Step 4 — Collect local adoption instructions')[1]!.split('## Step 8 — Sibling advisory')[0]!;
+    expect(adoption).toContain('For every non-pack selected card, read exactly `{PRIMARY_ROOT}/AGENTS.md`');
+    expect(adoption).toContain('target-owned merge-time adoption instructions and named target live check, if any');
+    expect(adoption).toContain('Non-pack cards skip this wiki block');
+    expect(adoption).toContain('**Non-pack selected cards:** execute only the named target live check, if any');
+    expect(adoption.match(/\*\*Pack only \(`PROJECT_ID=orchestrator-pack`\):\*\*/gu)).toHaveLength(2);
+    expect(adoption).toContain('--repo-root "$PRIMARY_ROOT"');
+    expect(adoption).toContain('Do not run the pack verifier or substitute pack process/registry evidence');
+    expect(skill).toContain('`REPO` is exactly that selected `PRIMARY_ROOT`');
   });
 });
