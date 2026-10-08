@@ -103,6 +103,8 @@ export interface TurnResultV1 {
   scope: FailureScope;
   cause: string;
   composer_mutation_diagnostic?: ComposerMutationDiagnosticV1;
+  /** Dispatch was attempted; zero observed sends does not prove non-delivery. */
+  send_attempted?: boolean;
   invocation_id: string;
   configured_profile_key: string;
   legacy_configured_profile_key?: string;

@@ -1917,12 +1917,23 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
   readonly sendWaitMs: number;
   readonly invocationDeadlineMs: number;
   readonly deliveryProofWaitMs?: number;
-}): Promise<{ sendCount: 0 | 1; witness: StateLightSendDeliveryWitness }> {
+  readonly onDispatch?: () => void;
+  readonly onActionError?: (diagnostic: string) => void;
+}): Promise<{ sendCount: 0 | 1; witness: StateLightSendDeliveryWitness; actionError?: string }> {
   await markPreSendAlerts(input.page, Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs));
-  if (input.hasSendButton) {
-    await input.sendButton.click({ timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs) });
-  } else {
-    await input.composer.press('Enter', { timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs) });
+  input.onDispatch?.();
+  let actionError: string | undefined;
+  try {
+    if (input.hasSendButton) {
+      await input.sendButton.click({ timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs) });
+    } else {
+      await input.composer.press('Enter', { timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs) });
+    }
+  } catch (error) {
+    // Action completion is not delivery evidence. Observe once, under the
+    // existing deadline, even when Playwright throws after dispatch.
+    actionError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    input.onActionError?.(actionError);
   }
 
   const witness = await observeStateLightSendDelivery(
@@ -1937,6 +1948,7 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
   return {
     sendCount: witness === 'unproven' ? 0 : 1,
     witness,
+    ...(actionError ? { actionError } : {}),
   };
 }
 
@@ -2367,6 +2379,7 @@ async function runTurn(
   let journalWriteFailed = false;
   const incidents: BrowserIncident[] = [];
   let afterSend = false;
+  let sendAttempted = false;
   let deliveryProofPendingRecovery = false;
   let ownershipForfeited = false;
   let cancellationReceiptEmitted = false;
@@ -2604,12 +2617,6 @@ async function runTurn(
       if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       const sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
-      transitionStateLightTurnObservation({
-        profileKey,
-        invocationId,
-        phase: 'dispatching',
-        reason: 'dispatch_boundary_entered',
-      });
       const delivery = await dispatchStateLightSendAndObserveDelivery({
         page,
         browser,
@@ -2620,6 +2627,13 @@ async function runTurn(
         baselineUserNodeCount,
         sendWaitMs,
         invocationDeadlineMs,
+        onDispatch: () => {
+          transitionStateLightTurnObservation({
+            profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
+          });
+          sendAttempted = true;
+        },
+        onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_resend'),
       });
       if (delivery.sendCount === 0) {
         if (browserOrPageDefinitelyLost(page, browser)) {
@@ -2627,21 +2641,22 @@ async function runTurn(
           ownedConversationUrl = pageConversationUrl(page) ?? ownedConversationUrl;
           return null;
         }
-        incident('send_observation_error', 'send_delivery_unproven', 'return_local_error');
+        incident('send_observation_error', 'send_delivery_unproven', 'retain_owned_page_no_resend');
         return {
+          cleanupAction: 'preserve',
           page,
           browser,
           result: compactResult(
             'send_failed',
             'invocation',
-            'send_delivery_unproven',
+            delivery.actionError ?? 'send_delivery_unproven',
             invocationId,
             profileKey,
             sendCount,
             pollCount,
             navigation,
             incidents,
-            { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+            { send_attempted: true, ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
             journalWriteFailed,
           ),
         };
@@ -4432,7 +4447,7 @@ async function runTurn(
           profileKey,
           sendCount,
           pollCount, navigation, incidents,
-          { ...(page && pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+          { ...(sendAttempted ? { send_attempted: true } : {}), ...(page && pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
           journalWriteFailed,
         ),
         ...(retirementCleanupRequired ? { retirement_cleanup_required: true } : {}),
@@ -4448,10 +4463,8 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   const incidents = [...outcome.result.incidents];
   const pageLost = browserOrPageDefinitelyLost(outcome.page, outcome.browser);
 
-  // A normal pre-send terminal may close prepared observation state. A
-  // dispatching record becomes not_sent only for send_delivery_unproven, where
-  // click/Enter returned but neither allowed delivery witness appeared. Other
-  // dispatching terminals remain untouched because delivery may still be unknown.
+  // Only prepared state proves no dispatch. A dispatching record is possible
+  // delivery even with a zero observed count; preserve its recovery identity.
   if (
     outcome.result.send_count === 0
     && outcome.result.invocation_id.length > 0
@@ -4462,18 +4475,22 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
         outcome.result.configured_profile_key,
         outcome.result.invocation_id,
       );
-      const dispatchProvenNotDelivered = observation.phase === 'dispatching'
-        && outcome.result.state === 'send_failed'
-        && outcome.result.cause === 'send_delivery_unproven';
-      if (observation.phase === 'prepared' || dispatchProvenNotDelivered) {
+      if (observation.phase === 'prepared') {
         transitionStateLightTurnObservation({
           profileKey: outcome.result.configured_profile_key,
           invocationId: outcome.result.invocation_id,
           phase: 'not_sent',
-          reason: dispatchProvenNotDelivered ? 'send_delivery_unproven' : 'terminal_pre_send',
+          reason: 'terminal_pre_send',
           sendCount: 0,
           sendWitness: 'numeric_send_count',
         });
+      }
+      if (observation.phase === 'dispatching') {
+        outcome = {
+          ...outcome,
+          cleanupAction: 'preserve',
+          result: { ...outcome.result, send_attempted: true },
+        };
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -4513,7 +4530,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     pagePresent: cleanupAuthorityProven,
     pageLost,
   });
-  const pageAction = outcome.result.send_count >= 1 && outcome.result.state !== 'ok'
+  const pageAction = (outcome.result.send_count >= 1 || outcome.result.send_attempted === true) && outcome.result.state !== 'ok'
     ? 'preserve'
     : requestedPageAction;
   if (pageAction === 'close') {

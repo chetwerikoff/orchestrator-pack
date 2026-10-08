@@ -1,9 +1,31 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
-import { describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE } from './product-page-selectors.ts';
-import { __testSendDelivery } from './state-light-turn-base.ts';
+const mocks = vi.hoisted(() => ({
+  browserQueue: [] as any[],
+  cleanupOutcome: 'confirmed' as const,
+  releaseBrowser: vi.fn(async () => undefined),
+  verifyProfile: vi.fn(async () => ({ state: 'verified' })),
+}));
+vi.mock('./browser-session.ts', () => createBrowserSessionModuleMock(mocks));
+vi.mock('./coordination.ts', () => createCoordinationModuleMock());
+vi.mock('./input.ts', () => ({ readStableInput: vi.fn(() => stableTurnInput('PROMPT')) }));
+vi.mock('./ui-adapter.ts', async (original) => buildUiAdapterTestMock(
+  await original<typeof import('./ui-adapter.ts')>(), mocks,
+));
+
+import { buildUiAdapterTestMock, collectionLocator, createBrowserSessionModuleMock, createCoordinationModuleMock, enqueueBrowserForTurn, runStateLightTurnWithStdoutCapture, scalarLocator, stableTurnInput } from './state-light-turn.test-fixtures.ts';
+import { COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR, MESSAGE_NODE_SELECTOR, MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE } from './product-page-selectors.ts';
+import { __testSendDelivery, runStateLightTurn } from './state-light-turn-base.ts';
+import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
+import { configuredProfileKey } from './storage-common.ts';
+import { readTerminalEnvelope, runLaunch } from '../flow-manager-long-running-child.ts';
+import { authoritativePreSend } from '../pack-review-no-review-reconcile.ts';
 
 const MARKER = `OPKTURNV1${'ab'.repeat(16)}`;
 const MARKED_PROMPT = `${MARKER}\n\nPROMPT`;
@@ -11,7 +33,7 @@ const MARKED_PROMPT = `${MARKER}\n\nPROMPT`;
 type Transport = 'click' | 'enter';
 type DeliveryEffect = 'none' | 'owned_user_node' | 'composer_cleared' | 'both';
 
-function createHarness(transport: Transport, effect: DeliveryEffect) {
+function createHarness(transport: Transport, effect: DeliveryEffect, actionThrows = false) {
   let composerText = MARKED_PROMPT;
   const userTexts = ['historical user'];
   const applyDeliveryEffect = vi.fn(async () => {
@@ -21,6 +43,7 @@ function createHarness(transport: Transport, effect: DeliveryEffect) {
     if (effect === 'composer_cleared' || effect === 'both') {
       composerText = '';
     }
+    if (actionThrows) throw Object.assign(new Error('locator.click: Timeout 5000ms exceeded after dispatch'), { name: 'TimeoutError' });
   });
 
   const composer = {
@@ -75,26 +98,34 @@ async function dispatch(harness: ReturnType<typeof createHarness>) {
 
 describe('state-light send delivery accounting', () => {
   it.each<Transport>(['click', 'enter'])(
-    '%s keeps send_count at 0 when the prompt remains and no owned user node appears, so retry stays allowed',
+    '%s attempts exactly once when delivery is unwitnessed',
     async (transport) => {
       const harness = createHarness(transport, 'none');
 
       expect(await dispatch(harness)).toEqual({ sendCount: 0, witness: 'unproven' });
       expect(harness.getComposerText()).toBe(MARKED_PROMPT);
 
-      // A second invocation of the same dispatch boundary is still allowed because
-      // the first attempt produced no delivery witness and therefore no send count.
-      expect(await dispatch(harness)).toEqual({ sendCount: 0, witness: 'unproven' });
-
       if (transport === 'click') {
-        expect(harness.sendButton.click).toHaveBeenCalledTimes(2);
+        expect(harness.sendButton.click).toHaveBeenCalledTimes(1);
         expect(harness.composer.press).not.toHaveBeenCalled();
       } else {
-        expect(harness.composer.press).toHaveBeenCalledTimes(2);
+        expect(harness.composer.press).toHaveBeenCalledTimes(1);
         expect(harness.sendButton.click).not.toHaveBeenCalled();
       }
     },
   );
+
+  it.each<Transport>(['click', 'enter'])('%s observes an owned node after a transport TimeoutError', async (transport) => {
+    const harness = createHarness(transport, 'owned_user_node', true);
+    expect(await dispatch(harness)).toMatchObject({ sendCount: 1, witness: 'owned_user_node', actionError: expect.stringContaining('Timeout 5000ms') });
+    expect(harness.sendButton.click.mock.calls.length + harness.composer.press.mock.calls.length).toBe(1);
+  });
+
+  it.each<Transport>(['click', 'enter'])('%s observes uncertainty after a transport TimeoutError without manufacturing a count', async (transport) => {
+    const harness = createHarness(transport, 'none', true);
+    expect(await dispatch(harness)).toMatchObject({ sendCount: 0, witness: 'unproven', actionError: expect.stringContaining('Timeout 5000ms') });
+    expect(harness.sendButton.click.mock.calls.length + harness.composer.press.mock.calls.length).toBe(1);
+  });
 
   it('counts a newly appearing owned live-user node exactly once even when the composer still contains the prompt', async () => {
     const harness = createHarness('click', 'owned_user_node');
@@ -117,5 +148,105 @@ describe('state-light send delivery accounting', () => {
 
     expect((await dispatch(harness)).sendCount).toBe(1);
     expect(harness.sendButton.click).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('production attempted-send result and durable envelope', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'attempted-send-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    mocks.browserQueue.length = 0;
+  });
+
+  it.each((['click', 'enter'] as const).flatMap((transport) =>
+    (['witness_then_throw', 'throw_no_witness', 'return_no_witness', 'pre_dispatch'] as const)
+      .map((scenario) => ({ transport, scenario })),
+  ))('preserves $transport dispatch authority: $scenario', async ({ transport, scenario }) => {
+      const invocationId = randomUUID();
+      const profile = join(root, 'profile');
+      const cdp = 'http://127.0.0.1:9222';
+      const chatUrl = 'https://chatgpt.com/c/synthetic-owned-turn';
+      let now = 10_000;
+      let text = '';
+      let attempts = 0;
+      const users = [{ role: 'user' as const, text: 'historical user' }];
+      const send = vi.fn(async () => {
+        attempts++;
+        if (scenario === 'witness_then_throw') users.push({ role: 'user', text });
+        if (scenario.includes('throw')) throw Object.assign(new Error('locator.click: Timeout 5000ms exceeded after dispatch'), { name: 'TimeoutError' });
+      });
+      const composer = scalarLocator({
+        count: vi.fn(async () => 1),
+        fill: vi.fn(async (value: string) => { text = value; }),
+        innerText: vi.fn(async () => text),
+        press: send,
+      });
+      const page = {
+        __fakeBrowserGptPage: true,
+        url: () => chatUrl,
+        isClosed: () => false,
+        goto: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+        waitForTimeout: vi.fn(async (ms: number) => { now += ms; }),
+        locator: vi.fn((selector: string) => {
+          if (selector === COMPOSER_SELECTOR) return composer;
+          if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => transport === 'click' ? 1 : 0, click: send });
+          if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(users);
+          return scalarLocator();
+        }),
+      };
+      enqueueBrowserForTurn(mocks, page);
+      if (scenario === 'pre_dispatch') mocks.verifyProfile.mockImplementationOnce(async () => ({ state: 'mismatch', cause: 'profile_mismatch' }));
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        '--profile', profile, '--cdp', cdp, '--input', join(root, 'synthetic-input'),
+        '--output', join(root, `${invocationId}.txt`), '--chat-url', chatUrl,
+        '--invocation-id', invocationId, '--timeout-ms', '1000',
+      ]);
+      clock.mockRestore();
+      const observation = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId);
+      const witnessed = scenario === 'witness_then_throw';
+      const preDispatch = scenario === 'pre_dispatch';
+      expect(attempts).toBe(preDispatch ? 0 : 1);
+      expect(result.send_count).toBe(witnessed ? 1 : 0);
+      expect(observation.phase).toBe(preDispatch ? 'not_sent' : witnessed ? 'sent_unharvested' : 'dispatching');
+      if (!preDispatch) {
+        expect(page.close).not.toHaveBeenCalled();
+        if (!witnessed) {
+          expect(result.send_attempted).toBe(true);
+          expect(observation.send_count).toBeUndefined();
+          expect(observation.send_witness).toBe('none');
+        }
+      }
+      if (scenario === 'throw_no_witness') expect(result.cause).toContain('Timeout 5000ms');
+
+      // Consume the real finalized production result through the unchanged
+      // child settlement producer and the launcher's actual JSON parser.
+      const envelopePath = join(root, `${invocationId}-terminal.json`);
+      await runLaunch({
+        runIdentity: `run-${invocationId}`, attemptIdentity: invocationId, cwd: root,
+        handoffReceiptPath: join(root, `${invocationId}-handoff.json`), terminalEnvelopePath: envelopePath,
+        terminalEnvelopeRoot: root,
+        browserOutputPath: join(root, `${invocationId}-output.txt`),
+        conversationLocator: chatUrl,
+        childCommand: process.execPath, childArgs: ['-e', `process.stdout.write(${JSON.stringify(JSON.stringify(result) + '\n')})`],
+      });
+      expect(readTerminalEnvelope(envelopePath)).toMatchObject({
+        delivery: preDispatch ? 'not-sent' : 'POSSIBLY_DELIVERED',
+        send_count: witnessed ? 1 : 0, observed_invocation_id: invocationId,
+        ...(preDispatch ? {} : { recovery_available: true, conversation_locator: chatUrl }),
+      });
+      for (const terminalResult of [result, readTerminalEnvelope(envelopePath)!]) {
+        expect(authoritativePreSend({
+          slotId: 'source-01', ordinal: 1, lifecycle: 'terminal', invocationId,
+          launchProfileKey: configuredProfileKey(profile, cdp), launchCdpUrl: cdp, terminalResult,
+        }, observation)).toBe(preDispatch);
+      }
   });
 });

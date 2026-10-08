@@ -371,6 +371,7 @@ function parseTurnResult(line: string): ParsedTurnResult | null {
       configured_profile_key: body.configured_profile_key,
     };
 
+    if (body.send_attempted === true) result.send_attempted = true;
     if (typeof body.legacy_configured_profile_key === 'string') {
       result.legacy_configured_profile_key = body.legacy_configured_profile_key;
     }
@@ -476,6 +477,7 @@ export function deriveDelivery(result: ParsedTurnResult | null, childStartFailed
   if (childStartFailed) return 'not-sent';
   if (!result) return 'not-sent';
   const sendCount = result.resolved_send_count;
+  if (sendCount === 0 && result.send_attempted === true) return 'POSSIBLY_DELIVERED';
   if (result.state === 'output_conflict') {
     return sendCount === 0 ? 'not-sent' : 'POSSIBLY_DELIVERED';
   }

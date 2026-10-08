@@ -578,8 +578,8 @@ function validateGptTerminalEvidence(slot: PackReviewSourceSlotRecord, path: str
       return;
     }
     if (terminalClass === 'possible_delivery') {
-      if (sendCount < 1 || state === 'ok') {
-        throw new Error(`corrupt pack review run record at ${path}: possible_delivery requires a non-ok sent terminalResult`);
+      if ((sendCount < 1 && result.send_attempted !== true) || state === 'ok') {
+        throw new Error(`corrupt pack review run record at ${path}: possible_delivery requires a non-ok sent terminalResult (or a non-ok explicitly attempted zero-count terminalResult)`);
       }
       return;
     }

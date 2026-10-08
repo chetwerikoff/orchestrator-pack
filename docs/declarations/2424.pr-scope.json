@@ -1,0 +1,48 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2424,
+  "declared_paths": [
+    "docs/declarations/2424.pr-scope.json",
+    "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-review-no-review-reconcile.test.ts",
+    "scripts/pack-review-no-review-reconcile.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts"
+  ],
+  "denylist": [
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.test",
+    "credentials/",
+    "packages/core/",
+    "scripts/orchestrator-side-process-registry.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/chatgpt-browser-turn/fixtures/",
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-observation.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-recovery.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-review-no-review-reconcile.test.ts",
+    "scripts/pack-review-no-review-reconcile.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts"
+  ],
+  "source_revision": "7b7bf9d28e45ef0d0c302f11d6bc3b7b5967b736"
+}

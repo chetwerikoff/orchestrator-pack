@@ -26,7 +26,7 @@ import {
   type ProbeDependencies,
 } from './browser-gpt-page-probe.ts';
 import { readStateLightTurnObservation } from './chatgpt-browser-turn/state-light-turn-observation.ts';
-import { authoritativePreSend } from './pack-review-no-review-reconcile.ts';
+import { authoritativePreSend, terminalHasPossibleDelivery } from './pack-review-no-review-reconcile.ts';
 import {
   deriveMergeTriageEvidenceTuple,
   produceMergeTriageEvidence,
@@ -1766,6 +1766,14 @@ export async function observeGptPackReviewAttempt(
       rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
       continue;
     }
+    if (observation.profile_key !== profileKey || observation.invocation_id !== slot.invocationId) {
+      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+      continue;
+    }
+    if (authoritativePreSend(slot, observation)) {
+      replacementEligibleSlotIds.push(slot.slotId);
+      continue;
+    }
     const marker = trim(observation.marker);
     if (!marker.startsWith('OPKTURNV1')) {
       rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
@@ -2182,6 +2190,7 @@ export function isRetryablePackReviewZeroSendCollision(
 ): boolean {
   const terminal = parseLastGptTerminalTurnResult(result.stdout);
   if (result.ok || terminal?.send_count !== 0) return false;
+  if (terminalHasPossibleDelivery(terminal)) return false;
   if (expectedInvocationId && trim(terminal.invocation_id) !== trim(expectedInvocationId)) return false;
   return (terminal.state === 'driver_error'
       && terminal.cause === 'state_light_new_chat_send_slot_timeout')
@@ -2225,7 +2234,7 @@ function terminalClassForGptResult(result: ProcessResult, terminal: GptTerminalT
   if (terminal && terminal.send_count >= 1 && GPT_HARVEST_CLASSES.has(harvestClass)) {
     return harvestClass;
   }
-  if (terminal?.send_count !== undefined && terminal.send_count >= 1) {
+  if (terminal && terminalHasPossibleDelivery(terminal)) {
     return terminal.state === 'ok' ? 'reviewer_output_malformed' : 'possible_delivery';
   }
   if (terminal) return `${terminal.state}:${terminal.cause}`;
@@ -2555,9 +2564,14 @@ async function runGptSourceBatch(options: {
     let terminalClass: string;
     let terminalResult: Record<string, unknown>;
     const terminalBoundToInvocation = browserTerminal?.invocation_id === invocationId;
+    const terminalProvesPreSend = browserTerminal && authoritativePreSend({
+      ...currentSlot, lifecycle: 'terminal', terminalResult: browserTerminal,
+      terminalClass: attemptOrdinal >= 2 && isRetryablePackReviewZeroSendCollision(invocation.result, invocationId)
+        ? 'explicit_refusal:zero_send_collision_exhausted' : undefined,
+    });
     const sourceMayHaveBeenPublished = !browserTerminal
       || !terminalBoundToInvocation
-      || browserTerminal.send_count >= 1;
+      || !terminalProvesPreSend;
     if (sourceMayHaveBeenPublished) {
       let resolution: PackGptSourceCommentResolution;
       try {
