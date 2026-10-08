@@ -138,6 +138,27 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Keep this deterministic light suite within the pre-topology bound until
   // the ordinary runtime-history lifecycle records its measurement.
   'scripts/target-portability-sinks.test.ts': 120,
+  // Issue #2413: light files are not measured by the heavy-shard runtime-history refresh.
+  'scripts/bootstrap.test.ts': 120,
+  'scripts/chatgpt-browser-turn/ui-adapter.test.ts': 120,
+  'scripts/delegated-integration-contract.test.ts': 120,
+  'scripts/direct-pack-review-status.test.ts': 120,
+  'scripts/fleet/fleet-sweep.test.ts': 120,
+  'scripts/fleet/fleet-wake.test.ts': 120,
+  'scripts/lib/required-ci.test.ts': 120,
+  'scripts/lib/worker-smoke-bounded-create.test.ts': 120,
+  'scripts/lib/worker-smoke-selective-carry.test.ts': 120,
+  'scripts/orca-runtime/dispatch-terminal-mail.test.ts': 120,
+  'scripts/pack-review-no-review-reconcile.test.ts': 120,
+  'scripts/pack-review-runner-issue-1591.test.ts': 120,
+  'scripts/pack-review-runner.test.ts': 120,
+  'scripts/pr2-foundation/fleet-escalation-delivery.test.ts': 120,
+  'scripts/pr2-foundation/readiness-evaluator.test.ts': 120,
+  'scripts/pr2-foundation/scheduler-assignment-lifecycle.test.ts': 120,
+  'scripts/replay-fixture-import.test.ts': 120,
+  'scripts/skill-pointers.test.ts': 120,
+  'scripts/sync-ops-wiki.test.ts': 120,
+  'scripts/unit-watcher-wake.test.ts': 120,
   // Issue #1498: restore #1418 fixed estimates without changing 32-file bound.
   ...ISSUE_1498_PRE_TOPOLOGY_MEASUREMENT_ESTIMATES,
 });

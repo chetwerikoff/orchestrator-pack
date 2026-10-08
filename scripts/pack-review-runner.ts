@@ -1101,6 +1101,13 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
       if (!(harness && input.fixtureIssueBody === undefined)) {
         const observedBody = input.fixtureIssueBody
           ?? await resolveCurrentIssueBody(target.sourceRepoRoot, target.repoSlug, issueNumber);
+        try {
+          parseAuthoritativeTier(observedBody);
+        } catch {
+          throw new Error(
+            `authoritative Issue #${issueNumber} tier is invalid; correct its complexity-tier block to tier: T1|T2|T3 and retry review start`,
+          );
+        }
         const captured = captureBoundIssueSnapshot({
           projectId,
           prNumber: target.prNumber,
