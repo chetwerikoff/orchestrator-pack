@@ -43,6 +43,10 @@ import {
   resolveBrowserTurnLivenessTiming,
   validateBrowserTurnLivenessTiming,
 } from './chatgpt-browser-turn/liveness-contract.ts';
+import {
+  admitStateLightTurnObservation,
+  transitionStateLightTurnObservation,
+} from './chatgpt-browser-turn/state-light-turn-observation.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const launcherPath = join(repoRoot, 'scripts/flow-manager-long-running-child.ts');
@@ -187,6 +191,154 @@ async function launchReceiptScenario(input: {
   expect(code).toBe(1);
   return readTerminalEnvelope(paths.envelope);
 }
+
+describe('observable post-send exits (#2416)', () => {
+  it.each(['throw', 'SIGTERM', 'SIGKILL', 'timeout', 'launcher-SIGTERM'] as const)('preserves persisted sent_unbound evidence after %s', async (exit) => {
+    const root = tempDir('opk-2416-', tmpdir());
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+    const paths = launchPaths(root, exit);
+    const profile = join(root, 'profile');
+    const cdp = 'http://127.0.0.1:1';
+    const invocation = `inv-2416-${exit}`;
+    const profileKey = configuredProfileKey(profile, cdp);
+    const observationUrl = pathToFileURL(join(repoRoot, 'scripts/chatgpt-browser-turn/state-light-turn-observation.ts')).href;
+    const terminate = exit === 'throw' ? 'throw new Error("post_send_fixture_throw");'
+      : exit === 'timeout' ? 'setInterval(() => {}, 1000);'
+      : exit === 'launcher-SIGTERM' ? 'process.kill(process.ppid, "SIGTERM"); setInterval(() => {}, 1000);'
+      : `process.kill(process.pid, '${exit}');`;
+    const fixture = nodeFixture(`(async () => {
+      const { admitStateLightTurnObservation, transitionStateLightTurnObservation } = await import(${JSON.stringify(observationUrl)});
+      const profileKey = ${JSON.stringify(profileKey)}; const invocationId = ${JSON.stringify(invocation)};
+      admitStateLightTurnObservation({ profileKey, invocationId, marker: 'OPKTURNV1a97e3f70e9c07fa75c0f03840c0528a2' });
+      transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'dispatching', reason: 'fixture_dispatch' });
+      transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'sent_unbound', reason: 'send_observed_fresh_chat', sendCount: 1, sendWitness: 'numeric_send_count' });
+      ${terminate}
+    })();`);
+    const config = {
+      runIdentity: 'run-2416', attemptIdentity: `attempt-${exit}`,
+      handoffReceiptPath: paths.receipt, terminalEnvelopePath: paths.envelope,
+      terminalEnvelopeRoot: root, browserOutputPath: paths.output, cwd: repoRoot,
+      childCommand: fixture.command, childArgs: [...fixture.args, '--', '--profile', profile, '--cdp', cdp, '--invocation-id', invocation],
+    };
+    if (exit === 'launcher-SIGTERM') {
+      const wrapper = join(root, 'launcher.mjs');
+      const launcherUrl = pathToFileURL(launcherPath).href;
+      writeFileSync(wrapper, `import { runLaunch } from ${JSON.stringify(launcherUrl)}; process.exitCode = await runLaunch(${JSON.stringify(config)});`);
+      const result = await runProcess({ command: process.execPath, args: ['--experimental-strip-types', wrapper],
+        inheritParentEnv: true, allowEmptyStdout: true, timeoutMs: 10_000 });
+      expect(result.exitCode).toBe(1);
+    } else {
+      expect(await runLaunch(config)).toBe(1);
+    }
+    expect(readTerminalEnvelope(paths.envelope)).toMatchObject({
+      schema: TERMINAL_SCHEMA, lifecycle_outcome: 'incident', delivery: 'POSSIBLY_DELIVERED',
+      send_count: 1, observed_invocation_id: invocation, recovery_available: false,
+      diagnostics: { persisted_observation: { phase: 'sent_unbound', send_count: 1 } },
+    });
+  });
+
+  it.each(['unique', 'unrelated', 'duplicate', 'closed', 'incomplete', 'launcher-exception'])('recovery requires unique exact owned-tab proof: %s', async (mode) => {
+    const owned = mode === 'unique' || mode === 'launcher-exception';
+    const root = tempDir('opk-2416-owned-', tmpdir());
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+    const paths = launchPaths(root, 'owned');
+    const profile = join(root, 'profile');
+    const cdp = 'http://127.0.0.1:1';
+    const invocationId = 'inv-owned';
+    const profileKey = configuredProfileKey(profile, cdp);
+    const marker = 'OPKTURNV1a97e3f70e9c07fa75c0f03840c0528a2';
+    admitStateLightTurnObservation({ profileKey, invocationId, marker });
+    transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'dispatching', reason: 'fixture' });
+    transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'sent_unbound', reason: 'fixture', sendCount: 1, sendWitness: 'numeric_send_count' });
+    const url = 'https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc';
+    const stop = vi.fn();
+    const releaseBrowser = vi.fn(async () => {});
+    const fixture = nodeFixture('throw new Error("post-send");');
+    await runLaunch({ runIdentity: 'run', attemptIdentity: 'attempt', handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope, terminalEnvelopeRoot: root, browserOutputPath: paths.output,
+      cwd: repoRoot, childCommand: mode === 'launcher-exception' ? '' : fixture.command,
+      childArgs: [...fixture.args, '--', '--profile', profile, '--cdp', cdp, '--invocation-id', invocationId],
+      conversationLocator: url, cancellationDependencies: {
+        connect: async () => ({ contexts: () => [] }), releaseBrowser, stop,
+        enumeratePages: async () => Array.from({ length: mode === 'duplicate' ? 2 : 1 }, () => ({ url: () => url, isClosed: () => mode === 'closed' })),
+        readUserMessages: async () => ({ messages: [{ role: 'user', text: mode === 'unrelated' ? 'unrelated' : marker }], incomplete: mode === 'incomplete' }),
+      },
+    });
+    const envelope = readTerminalEnvelope(paths.envelope);
+    expect(envelope?.recovery_available).toBe(owned);
+    expect(envelope?.conversation_locator).toBe(owned ? url : undefined);
+    expect(envelope?.incident).toBe(mode === 'launcher-exception' ? 'launcher_exception' : 'child_terminal_result_missing');
+    expect(envelope).toMatchObject({ delivery: 'POSSIBLY_DELIVERED', send_count: 1, diagnostics: { persisted_observation: { phase: 'sent_unbound' } } });
+    expect(stop).not.toHaveBeenCalled();
+    expect(releaseBrowser).toHaveBeenCalledOnce();
+  });
+
+  it('preserves an authoritative result completing across launcher SIGTERM (review race)', async () => {
+    const root = tempDir('opk-2416-race-', tmpdir());
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+    vi.stubEnv('OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS', '300');
+    vi.stubEnv('OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS', '300');
+    const paths = launchPaths(root, 'signal-race');
+    const profile = join(root, 'profile');
+    const cdp = 'http://127.0.0.1:1';
+    const invocationId = 'inv-signal-race';
+    const profileKey = configuredProfileKey(profile, cdp);
+    admitStateLightTurnObservation({ profileKey, invocationId, marker: 'OPKTURNV1a97e3f70e9c07fa75c0f03840c0528a2' });
+    transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'dispatching', reason: 'fixture' });
+    transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'sent_unbound', reason: 'fixture', sendCount: 1, sendWitness: 'numeric_send_count' });
+    const result = makeTurnResult({ invocation_id: invocationId });
+    const fixture = nodeFixture(`
+      setTimeout(() => process.kill(process.ppid, 'SIGTERM'), 200);
+      setTimeout(() => { process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n'); process.exit(0); }, 260);
+    `);
+    const config = { runIdentity: 'run-race', attemptIdentity: 'attempt-race', handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope, terminalEnvelopeRoot: root, browserOutputPath: paths.output, cwd: repoRoot,
+      childCommand: fixture.command, childArgs: [...fixture.args, '--', '--profile', profile, '--cdp', cdp, '--invocation-id', invocationId] };
+    const wrapper = join(root, 'launcher.mjs');
+    writeFileSync(wrapper, `
+      import { runLaunch } from ${JSON.stringify(pathToFileURL(launcherPath).href)};
+      process.exitCode = await runLaunch({ ...${JSON.stringify(config)}, cancellationDependencies: {
+        connect: async () => { await new Promise(done => setTimeout(done, 150)); return { contexts: () => [] }; },
+        releaseBrowser: async () => {}, enumeratePages: async () => [],
+      } });
+    `);
+    const launched = await runProcess({ command: process.execPath, args: ['--experimental-strip-types', wrapper],
+      inheritParentEnv: true, allowEmptyStdout: true, timeoutMs: 10_000 });
+    expect(launched.exitCode).toBe(0);
+    expect(readTerminalEnvelope(paths.envelope)).toMatchObject({
+      lifecycle_outcome: 'success', delivery: 'landed', turn_result_state: 'ok', observed_invocation_id: invocationId,
+    });
+  });
+
+  it('retains cancellation and heartbeat witnesses alongside the exact persisted phase', async () => {
+    const root = tempDir('opk-2416-combined-', tmpdir());
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+    const paths = launchPaths(root, 'combined');
+    const profile = join(root, 'profile');
+    const cdp = 'http://127.0.0.1:1';
+    const invocationId = 'inv-combined';
+    const profileKey = configuredProfileKey(profile, cdp);
+    const marker = 'OPKTURNV1a97e3f70e9c07fa75c0f03840c0528a2';
+    const conversationUrl = 'https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc';
+    admitStateLightTurnObservation({ profileKey, invocationId, marker });
+    transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'dispatching', reason: 'fixture' });
+    transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'sent_unharvested', reason: 'fixture', sendCount: 1, sendWitness: 'numeric_send_count', conversationUrl });
+    const receipt = buildBrowserTurnCancellationReceipt({ invocationId, profileKey, marker, conversationUrl, sendCount: 1 });
+    const heartbeat = { schema: 'observation-heartbeat/v1', phase: 'post_send_observation', poll_count: 1, observation_state: 'busy', stable_reads: 0, completion_ready: false };
+    const fixture = nodeFixture(`process.stdout.write(${JSON.stringify(JSON.stringify(receipt) + '\n' + JSON.stringify(heartbeat) + '\n')});`);
+    await runLaunch({ runIdentity: 'run', attemptIdentity: 'attempt', handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope, terminalEnvelopeRoot: root, browserOutputPath: paths.output, cwd: repoRoot,
+      childCommand: fixture.command, childArgs: [...fixture.args, '--', '--profile', profile, '--cdp', cdp, '--invocation-id', invocationId] });
+    expect(readTerminalEnvelope(paths.envelope)).toMatchObject({
+      delivery: 'POSSIBLY_DELIVERED', send_count: 1, recovery_available: false,
+      turn_result_cause: 'child_terminal_result_missing_cancellation_authority_absent',
+      diagnostics: { persisted_observation: { phase: 'sent_unharvested', send_count: 1 },
+        last_heartbeat: { phase: 'post_send_observation' },
+        cancellation: { stop_outcome: 'not_attempted_authority_absent', identity_proven: false } },
+    });
+  });
+
+});
 
 describe('flow-manager long-running child (#1164)', () => {
   it('validates the shared startup/heartbeat/idle relation fail-closed (#1752)', () => {
@@ -1513,9 +1665,9 @@ describe('Issue #1377 long-running child abandonment proof', () => {
       turn_result_state: 'driver_error',
       turn_result_cause: 'child_liveness_timeout_cancellation_authority_absent',
       send_count: 1,
-      recovery_available: true,
-      conversation_locator: conversationUrl,
+      recovery_available: false,
     });
+    expect(envelope).not.toHaveProperty('conversation_locator');
     expect(envelope?.diagnostics).toMatchObject({
       last_heartbeat: { phase: 'post_send_observation' },
       cancellation: {
@@ -1552,10 +1704,10 @@ describe('Issue #1377 long-running child abandonment proof', () => {
       delivery: 'POSSIBLY_DELIVERED',
       turn_result_cause: 'child_terminal_result_missing_cancellation_authority_absent',
       send_count: 1,
-      recovery_available: true,
-      conversation_locator: conversationUrl,
+      recovery_available: false,
       child_exit_code: 0,
     });
+    expect(envelope).not.toHaveProperty('conversation_locator');
     expect(envelope?.diagnostics).toMatchObject({
       cancellation: {
         stop_outcome: 'not_attempted_authority_absent',

@@ -21,6 +21,8 @@ import { TURN_STATES, type FailureScope, type TurnResultV1, type TurnState } fro
 import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
 import {
   parseBrowserTurnCancellationReceipt,
+  isSupportedChatGptConversationUrl,
+  readRecoveryAuthoritativeUserMessages,
   type BrowserTurnCancellationAttempt,
   type BrowserTurnCancellationDependencies,
   type BrowserTurnCancellationReceipt,
@@ -31,6 +33,10 @@ import {
   parseObservationHeartbeatLine,
   resolveBrowserTurnLivenessTiming,
 } from './chatgpt-browser-turn/liveness-contract.ts';
+import { readStateLightTurnObservation, type StateLightTurnObservationRecord } from './chatgpt-browser-turn/state-light-turn-observation.ts';
+import { loadChromium, normalizeConversationUrl } from './chatgpt-browser-turn/ui-adapter.ts';
+import { releaseCdpBrowser } from './chatgpt-browser-turn/browser-session.ts';
+import { recoveryMarkerCardinality } from './chatgpt-browser-turn/state-light-turn-recovery.ts';
 
 export const COMPLETION_MODE = 'browser-turn-result-v1' as const;
 export const HANDOFF_SCHEMA = 'flow-manager-long-running-child-handoff/v1' as const;
@@ -591,19 +597,110 @@ function cancellationDiagnostics(
   });
 }
 
-function terminalNoResultEvidence(
+function childOption(config: LaunchConfig, flag: string): string | undefined {
+  const index = config.childArgs.lastIndexOf(flag);
+  const value = index >= 0 ? config.childArgs[index + 1] : undefined;
+  return value && !value.startsWith('--') ? value : undefined;
+}
+
+async function provenOwnedTab(
+  config: LaunchConfig, record: StateLightTurnObservationRecord, cdp: string,
+): Promise<string | undefined> {
+  // Read-only: reconnect to the retained endpoint, never open/reset/stop a page.
+  const deps = config.cancellationDependencies ?? {};
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const probe = async (): Promise<string | undefined> => {
+    let browser: any;
+    try {
+      browser = deps.connect ? await deps.connect(cdp)
+        : await loadChromium().connectOverCDP(cdp, { timeout: candidateGraceMs() });
+      const contexts = browser.contexts();
+      const pages = deps.enumeratePages ? await deps.enumeratePages(browser)
+        : Array.isArray(contexts) && contexts.length === 1 ? contexts[0].pages() : [];
+      const matches: string[] = [];
+      for (const page of pages) {
+        if (typeof page.isClosed !== 'function' || page.isClosed()) continue;
+        const url = normalizeConversationUrl(String(page.url()));
+        if (!isSupportedChatGptConversationUrl(url)) continue;
+        if (record.conversation_url && url !== normalizeConversationUrl(record.conversation_url)) continue;
+        const observed = deps.readUserMessages ? await deps.readUserMessages(page)
+          : await readRecoveryAuthoritativeUserMessages(page);
+        if (observed.incomplete) return undefined;
+        const count = recoveryMarkerCardinality(observed.messages, record.marker);
+        if (count.matchingUserCarrierCount === 1 && count.exactMarkerTokenCount === 1) matches.push(url);
+        else if (count.exactMarkerTokenCount > 0) return undefined;
+      }
+      return matches.length === 1 ? matches[0] : undefined;
+    } catch {
+      return undefined;
+    } finally {
+      if (browser) {
+        try {
+          if (deps.releaseBrowser) await deps.releaseBrowser(browser);
+          else await releaseCdpBrowser(browser);
+        } catch { /* Disconnect is not tab cleanup or delivery proof. */ }
+      }
+    }
+  };
+  try {
+    return await Promise.race([probe(), new Promise<undefined>((done) => {
+      timer = setTimeout(() => done(undefined), candidateGraceMs());
+    })]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function persistedTerminalEvidence(config: LaunchConfig): Promise<Partial<TerminalEnvelope> | null> {
+  const invocation = childOption(config, '--invocation-id');
+  const profile = childOption(config, '--profile');
+  const cdp = childOption(config, '--cdp');
+  if (!invocation || !profile || !cdp) return null;
+  let record: StateLightTurnObservationRecord;
+  try {
+    record = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocation);
+  } catch {
+    return null;
+  }
+  const locator = (record.send_count ?? 0) >= 1 ? await provenOwnedTab(config, record, cdp) : undefined;
+  return {
+    observed_invocation_id: record.invocation_id,
+    ...(record.send_count !== undefined ? { send_count: record.send_count } : {}),
+    delivery: (record.send_count ?? 0) >= 1 || record.phase === 'dispatching' ? 'POSSIBLY_DELIVERED' : 'not-sent',
+    recovery_available: Boolean(locator),
+    ...(locator ? { conversation_locator: locator } : {}),
+    diagnostics: { persisted_observation: {
+      phase: record.phase, ...(record.send_count !== undefined ? { send_count: record.send_count } : {}),
+      profile_key: record.profile_key,
+    } },
+  };
+}
+
+async function terminalNoResultEvidence(
   config: LaunchConfig,
   capture: CandidateCapture,
   incident: 'child_startup_timeout' | 'child_liveness_timeout' | 'child_terminal_result_missing',
   spawnFailed: boolean,
   heartbeatDiagnostics: Record<string, unknown> | undefined,
-): Partial<TerminalEnvelope> & Pick<TerminalEnvelope, 'delivery' | 'recovery_available'> {
+): Promise<Partial<TerminalEnvelope> & Pick<TerminalEnvelope, 'delivery' | 'recovery_available'>> {
   const receiptEvidence = receiptEvidenceForTerminalIncident(config, capture, incident);
+  const persisted = await persistedTerminalEvidence(config);
+  if (persisted) return {
+    delivery: deliveryWithoutTurnResult(spawnFailed), recovery_available: false, ...persisted,
+    ...(receiptEvidence ? { turn_result_state: receiptEvidence.state, turn_result_cause: receiptEvidence.cause } : {}),
+    diagnostics: boundedDiagnostics({
+      ...persisted.diagnostics,
+      ...(receiptEvidence ? cancellationDiagnostics(receiptEvidence, heartbeatDiagnostics)
+        : heartbeatDiagnostics ? { last_heartbeat: heartbeatDiagnostics } : {}),
+    }),
+  };
+  const invocationId = childOption(config, '--invocation-id');
   if (!receiptEvidence) {
     const postSendObserved = heartbeatDiagnostics?.phase === 'post_send_observation';
     return {
       delivery: deliveryWithoutTurnResult(spawnFailed),
-      ...conversationLocatorFields(config),
+      recovery_available: false,
+      ...(invocationId ? { observed_invocation_id: invocationId } : {}),
       ...(postSendObserved ? { send_count: 1 as const } : {}),
       ...(heartbeatDiagnostics
         ? { diagnostics: boundedDiagnostics({ last_heartbeat: heartbeatDiagnostics }) }
@@ -614,6 +711,9 @@ function terminalNoResultEvidence(
     turn_result_state: receiptEvidence.state,
     turn_result_cause: receiptEvidence.cause,
     ...cancellationEnvelopeFields(receiptEvidence, spawnFailed),
+    recovery_available: false,
+    conversation_locator: undefined,
+    ...(invocationId ? { observed_invocation_id: invocationId } : {}),
     diagnostics: cancellationDiagnostics(receiptEvidence, heartbeatDiagnostics),
   };
 }
@@ -655,6 +755,8 @@ export interface LaunchConfig {
   readonly attemptIdentity: string;
   readonly handoffReceiptPath: string;
   readonly terminalEnvelopePath: string;
+  /** Disposable caller root; the CLI always uses the canonical production root. */
+  readonly terminalEnvelopeRoot?: string;
   readonly browserOutputPath: string;
   readonly cwd: string;
   readonly childCommand: string;
@@ -788,7 +890,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     refuse('invalid_cwd', { cwd: config.cwd });
     return 2;
   }
-  if (!isWakeableTerminalEnvelopePath(config.terminalEnvelopePath)) {
+  if (!isWakeableTerminalEnvelopePath(config.terminalEnvelopePath, config.terminalEnvelopeRoot)) {
     refuse('terminal_envelope_name_not_wakeable', {
       path: config.terminalEnvelopePath,
       required_suffix: TERMINAL_ENVELOPE_NAME_SUFFIX,
@@ -918,6 +1020,43 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
   };
   capture.drainStdoutBuffer = () => drainStdoutBuffer();
 
+  let launcherSignal: NodeJS.Signals | undefined;
+  let cleanupProcess: Promise<ProcessResult> | undefined;
+  const onSignal = (signal: NodeJS.Signals): void => { launcherSignal ??= signal; };
+  const onTerm = (): void => onSignal('SIGTERM');
+  const onInt = (): void => onSignal('SIGINT');
+  process.on('SIGTERM', onTerm);
+  process.on('SIGINT', onInt);
+  const publishAbnormal = async (incident: string): Promise<number> => {
+    const existing = readTerminalEnvelope(config.terminalEnvelopePath, { runIdentity: config.runIdentity, attemptIdentity: config.attemptIdentity });
+    if (cleanupProcess && !existing) {
+      // Use the existing exit grace before abort; a completed result still wins.
+      try { await waitForProcessCompletion(cleanupProcess, noCandidateGraceMs()); } catch { /* Rejected process is already terminal. */ }
+      capture.drainStdoutBuffer();
+      ingestTrailingCandidate();
+      if (!capture.firstCandidate) {
+        await abortManagedProcess(controller, cleanupProcess);
+        capture.drainStdoutBuffer();
+        ingestTrailingCandidate();
+      }
+      if (capture.firstCandidate) {
+        return await finalizeCandidatePath(config, receipt, launcherStartedAt, capture, cleanupProcess, controller, childExitCode, lastHeartbeatDiagnostics);
+      }
+    }
+    if (!existing) {
+      await publishEnvelope(config, {
+        schema: TERMINAL_SCHEMA, run_identity: config.runIdentity, attempt_identity: config.attemptIdentity,
+        completion_mode: COMPLETION_MODE, handoff_receipt_path: config.handoffReceiptPath,
+        launcher_started_at: launcherStartedAt, handoff_committed_at: receipt.handoff_committed_at,
+        terminal_at: nowIso(), lifecycle_outcome: 'incident', incident, child_exit_code: childExitCode,
+        ...await terminalNoResultEvidence(config, capture, 'child_terminal_result_missing', false, lastHeartbeatDiagnostics),
+      });
+    }
+    if (cleanupProcess) await abortManagedProcess(controller, cleanupProcess);
+    return existing?.lifecycle_outcome === 'success' ? 0 : 1;
+  };
+  try {
+
   const runPromise = runProcess({
     command: config.childCommand,
     args: [...config.childArgs],
@@ -938,6 +1077,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     if (!capture.firstCandidate && !observeDeadline(observedAt)) childExitedBeforeCandidate = true;
     return result;
   });
+  cleanupProcess = runPromise;
 
   const spawnProbeWaitMs = Math.max(1, Math.min(100, deadline - Date.now()));
   const spawnProbe = await Promise.race([
@@ -963,7 +1103,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     return 1;
   }
 
-  while (!capture.firstCandidate && !childExitedBeforeCandidate) {
+  while (!capture.firstCandidate && !childExitedBeforeCandidate && !launcherSignal) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
       observeDeadline(Date.now());
@@ -986,9 +1126,14 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
       lastHeartbeatDiagnostics,
     );
   }
+  if (launcherSignal) return await publishAbnormal(`launcher_signal:${launcherSignal}`);
 
   const timeoutIncident = acceptedHeartbeat ? 'child_liveness_timeout' : 'child_startup_timeout';
   const publishWatchdogTimeout = async (): Promise<number> => {
+    // Quiesce before reading final send evidence; never classify a live pre-send snapshot.
+    await abortManagedProcess(controller, runPromise);
+    capture.drainStdoutBuffer();
+    ingestTrailingCandidate();
     await publishEnvelope(config, {
       schema: TERMINAL_SCHEMA,
       run_identity: config.runIdentity,
@@ -1001,7 +1146,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
       lifecycle_outcome: 'incident',
       incident: timeoutIncident,
       child_exit_code: null,
-      ...terminalNoResultEvidence(
+      ...await terminalNoResultEvidence(
         config,
         capture,
         timeoutIncident,
@@ -1036,6 +1181,9 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     }
     const spawnFailed = completion.result?.outcome === 'spawn-failure';
     const incident = spawnFailed ? 'child_start_failed' : 'child_terminal_result_missing';
+    const evidence = spawnFailed
+      ? { delivery: deliveryWithoutTurnResult(true), ...conversationLocatorFields(config) }
+      : await terminalNoResultEvidence(config, capture, 'child_terminal_result_missing', false, lastHeartbeatDiagnostics);
     await publishEnvelope(config, {
       schema: TERMINAL_SCHEMA,
       run_identity: config.runIdentity,
@@ -1048,24 +1196,25 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
       lifecycle_outcome: 'incident',
       incident,
       child_exit_code: childExitCode,
-      ...(spawnFailed
-        ? {
-            delivery: deliveryWithoutTurnResult(true),
-            ...conversationLocatorFields(config),
-          }
-        : terminalNoResultEvidence(
-            config,
-            capture,
-            'child_terminal_result_missing',
-            false,
-            lastHeartbeatDiagnostics,
-          )),
+      ...evidence,
+      diagnostics: boundedDiagnostics({
+        ...evidence.diagnostics,
+        child_exit: { outcome: completion.result?.outcome, signal: completion.result?.signal },
+      }),
     });
     await abortManagedProcess(controller, runPromise);
     return 1;
   }
 
   return await publishWatchdogTimeout();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`flow-manager-long-running-child: ${message}\n`);
+    return await publishAbnormal('launcher_exception');
+  } finally {
+    process.removeListener('SIGTERM', onTerm);
+    process.removeListener('SIGINT', onInt);
+  }
 }
 
 export function readTerminalEnvelope(
