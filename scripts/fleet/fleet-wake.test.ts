@@ -19,6 +19,9 @@ import {
 } from './fleet-wake.ts';
 import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
 import { FileFleetStateStore, type FleetPaneObservation, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
+import { runLaunch, readTerminalEnvelope } from '../flow-manager-long-running-child.ts';
+import { configuredProfileKey } from '../chatgpt-browser-turn/storage-common.ts';
+import { admitStateLightTurnObservation, transitionStateLightTurnObservation } from '../chatgpt-browser-turn/state-light-turn-observation.ts';
 
 class MemoryWakeStore implements FleetWakeStateStore {
   readonly root = '/xdg/fleet-sweep/project';
@@ -578,6 +581,38 @@ describe('fleet alarm', () => {
       listTerminalEnvelopes,
     });
     expect(sendsTo(repeated.calls, 'one')).toHaveLength(0);
+  });
+
+  it.each(['throw', 'SIGTERM', 'SIGKILL'])('wakes the fake owner once for a real post-send %s envelope (#2416)', async (exit) => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-wake-2416-'));
+    try {
+      vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+      vi.stubEnv('ORCA_TERMINAL_HANDLE', 'one');
+      const profile = join(root, 'profile');
+      const cdp = 'http://127.0.0.1:1';
+      const invocationId = `inv-wake-${exit}`;
+      const profileKey = configuredProfileKey(profile, cdp);
+      admitStateLightTurnObservation({ profileKey, invocationId, marker: 'OPKTURNV1a97e3f70e9c07fa75c0f03840c0528a2' });
+      transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'dispatching', reason: 'fixture' });
+      transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'sent_unbound', reason: 'send_observed_fresh_chat', sendCount: 1, sendWitness: 'numeric_send_count' });
+      const envelope = join(root, 'turn-terminal.json');
+      const source = exit === 'throw' ? 'throw new Error("post-send");' : `process.kill(process.pid, '${exit}');`;
+      expect(await runLaunch({ runIdentity: 'run-wake', attemptIdentity: `attempt-${exit}`,
+        handoffReceiptPath: join(root, 'handoff.json'), terminalEnvelopePath: envelope, terminalEnvelopeRoot: root,
+        browserOutputPath: join(root, 'output.txt'), cwd: process.cwd(), childCommand: process.execPath,
+        childArgs: ['-e', source, '--', '--profile', profile, '--cdp', cdp, '--invocation-id', invocationId],
+      })).toBe(1);
+      expect(readTerminalEnvelope(envelope)).toMatchObject({ delivery: 'POSSIBLY_DELIVERED', send_count: 1, terminal_handle: 'one' });
+      const store = new MemoryWakeStore();
+      const input = { store, screens: { coord: 'idle', one: `PARKED on GPT turn ${invocationId}`, two: 'working\nesc interrupt' },
+        listTerminalEnvelopes: () => listTerminalEnvelopes(root) };
+      const first = await tick(input);
+      expect(sendsTo(first.calls, 'one').filter((args) => args.includes('--text'))).toHaveLength(1);
+      expect(sendsTo((await tick(input)).calls, 'one')).toHaveLength(0);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('routes a chat banner to the launching pane named by its binding, whatever worktree the turn ran in', () => {
