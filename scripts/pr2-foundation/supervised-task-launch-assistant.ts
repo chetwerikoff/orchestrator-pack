@@ -1525,11 +1525,18 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       (args, timeoutMs, envOverride) => child(args, cwd, env, timeoutMs, envOverride),
     ),
     observeManagerRun: async (runId) => {
-      const result = resultRecord(envelope(await child(['orca', 'orchestration', 'run-current', '--json'], cwd, env)));
-      const observed = result && record(result.run) ? text(result.run.id) : '';
-      return observed ? { status: 'ok', value: { runId: observed } } : {
+      const args = runId
+        ? ['orca', 'orchestration', 'run-show', '--id', runId, '--json']
+        : ['orca', 'orchestration', 'run-current', '--json'];
+      const execution = await child(args, cwd, env);
+      const result = execution.ok ? resultRecord(envelope(execution)) : null;
+      const run = result && record(result.run) ? result.run : null;
+      const observed = text(run?.id);
+      const coordinator = text(env.ORCA_TERMINAL_HANDLE);
+      return observed && (!runId || observed === runId) && coordinator && text(run?.coordinator_handle) === coordinator
+        ? { status: 'ok', value: { runId: observed } } : {
         status: 'continue', cause: 'manager_run_observation_unavailable', actor: 'provider', evidence: {},
-        nextAction: { kind: 'reconcile_manager_run', note: `reconcile the current Run before using ${runId}` },
+        nextAction: { kind: 'reconcile_manager_run', note: `reconcile the exact Run ${runId || 'selected by run-current'} and its coordinator with the selected caller terminal before continuing` },
       };
     },
     proveManagerTaskMembership: async (runId, taskId) => {

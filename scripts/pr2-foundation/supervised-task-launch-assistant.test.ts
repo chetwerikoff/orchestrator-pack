@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as subprocess from '../kernel/subprocess.ts';
 import { runProcess } from '../kernel/subprocess.ts';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
 import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
@@ -10,6 +11,7 @@ import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import type { SupervisedWorkerStartResult } from './supervised-worker-start.ts';
 import {
   createManagerTaskWithOrca,
+  createProductionLaunchDependencies,
   readManagerBriefTemplateFromDisk,
   parseLaunchAssistantCli,
   prepareWorktreeWithOrca,
@@ -36,6 +38,68 @@ import {
   resolveSemanticExecutorProfile,
 } from '../executor-profile-policy.ts';
 import { overlayExecutorProfileEnv, readExecutorProfileStore } from '../executor-profile-store.ts';
+
+describe('production manager Run observation command seam', () => {
+  it.each([
+    { name: 'bound coordinator', runId: 'run-1', run: { id: 'run-1', coordinator_handle: 'term-selected' }, bound: true, ok: true },
+    { name: 'unbound caller with exact id', runId: 'run-1', run: { id: 'run-1', coordinator_handle: 'term-selected' }, bound: false, ok: true },
+    { name: 'foreign coordinator', runId: 'run-1', run: { id: 'run-1', coordinator_handle: 'term-foreign' }, bound: true, ok: false },
+    { name: 'unknown Run', runId: 'run-unknown', run: null, bound: true, ok: false },
+    { name: 'missing Run id', runId: 'run-1', run: { coordinator_handle: 'term-selected' }, bound: true, ok: false },
+    { name: 'mismatched Run id', runId: 'run-1', run: { id: 'run-other', coordinator_handle: 'term-selected' }, bound: true, ok: false },
+    { name: 'missing coordinator', runId: 'run-1', run: { id: 'run-1' }, bound: true, ok: false },
+    { name: 'missing selected caller', runId: 'run-1', run: { id: 'run-1', coordinator_handle: 'term-selected' }, bound: true, ok: false },
+    { name: 'unreadable Run', runId: 'run-1', run: { id: 'run-1', coordinator_handle: 'term-selected' }, bound: true, ok: false },
+    { name: 'no-id fallback', runId: '', run: { id: 'run-1', coordinator_handle: 'term-selected' }, bound: true, ok: true },
+  ])('$name', async ({ name, runId, run, bound, ok }) => {
+    const config = mkdtempSync(join(tmpdir(), 'manager-run-seam-'));
+    const cards = join(config, 'orchestrator-pack', 'projects');
+    mkdirSync(cards, { recursive: true });
+    writeFileSync(join(cards, 'orchestrator-pack.json'), JSON.stringify({
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: process.cwd(), defaultBranch: 'main', orcaWorkspacePattern: '.*',
+      orchestratorTitlePattern: '.*', browserGpt: { projectUrl: 'https://example.test/project' },
+    }));
+    const commands: string[][] = [];
+    const execute = vi.spyOn(subprocess, 'runProcess').mockImplementation(async (options) => {
+      const argv = [options.command, ...(options.args ?? [])];
+      commands.push(argv);
+      const observed = argv.includes('run-current') && !bound ? null : run;
+      const result = argv.includes('task-list')
+        ? { runId, tasks: [{ id: 'task-1' }] } : { run: observed };
+      return { outcome: 'exit', ok: name !== 'unreadable Run', exitCode: name === 'unreadable Run' ? 1 : 0, signal: null, stdout: JSON.stringify({ ok: true, result }), stderr: '', timedOut: false, cancelled: false };
+    });
+    try {
+      const production = await createProductionLaunchDependencies({
+        ...launchInput(), projectId: 'orchestrator-pack',
+        env: { ...profileEnv(), XDG_CONFIG_HOME: config, ORCA_TERMINAL_HANDLE: name === 'missing selected caller' ? '' : 'term-selected' },
+      });
+      const result = await production.observeManagerRun(runId);
+      expect(result.status).toBe(ok ? 'ok' : 'continue');
+      if (ok) expect(result).toMatchObject({ status: 'ok', value: { runId: 'run-1' } });
+      else expect(result).toMatchObject({ status: 'continue', cause: 'manager_run_observation_unavailable', nextAction: { kind: 'reconcile_manager_run', note: expect.any(String) } });
+      expect(commands).toEqual([runId
+        ? ['orca', 'orchestration', 'run-show', '--id', runId, '--json']
+        : ['orca', 'orchestration', 'run-current', '--json']]);
+      if (runId) {
+        commands.length = 0;
+        let artifacts = 0;
+        const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), runId }, {
+          ...deps({ onWorktree: () => { artifacts += 1; }, onSupervised: () => { artifacts += 1; } }),
+          observeManagerRun: production.observeManagerRun,
+          proveManagerTaskMembership: production.proveManagerTaskMembership,
+        });
+        expect(result.outcome).toBe(ok ? 'ready' : 'continue');
+        expect(artifacts).toBe(ok ? 2 : 0);
+        if (!ok) expect(result).toMatchObject({ observedCause: 'manager_run_observation_unavailable', nextAction: { kind: 'reconcile_manager_run' } });
+        expect(commands).toEqual([
+          ['orca', 'orchestration', 'run-show', '--id', runId, '--json'],
+          ...(ok ? [['orca', 'orchestration', 'task-list', '--run', runId, '--json']] : []),
+        ]);
+      }
+    } finally { execute.mockRestore(); rmSync(config, { recursive: true, force: true }); }
+  });
+});
 
 const MANAGER_PREAMBLE_FIXTURE = `# Manager launch preamble
 
