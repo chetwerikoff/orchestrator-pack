@@ -118,6 +118,8 @@ import {
 } from './state-light-turn.test-fixtures.ts';
 import { classifyPageObservation, classifySendLandingEvidence, runStateLightTurn } from './state-light-turn.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
+import { deriveComposerInsertionBudgetMs } from './state-light-turn-base.ts';
+import { wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
   EXPLICIT_CANCELLATION_AUTHORITY,
   readRecoveryAuthoritativeUserMessages,
@@ -907,6 +909,95 @@ describe('state-light fresh conversation collision recovery', () => {
       phase: 'not_sent',
       send_witness: 'numeric_send_count',
     });
+  });
+
+  it('records privacy-safe diagnostics for each composer mutation budget exit', async () => {
+    const prompt = 'PROMPT-2405-SENTINEL';
+    const markedPrompt = wrapOwnedPromptPayload(TEST_OWNED_MARKER, prompt);
+    const insertionBudgetMs = deriveComposerInsertionBudgetMs(markedPrompt);
+    const deadlineMs = 15_000;
+    type BranchScenario = {
+      branch: 'readiness_before_click' | 'budget_before_click' | 'after_click'
+        | 'budget_before_fill' | 'readiness_before_fill' | 'budget_before_fill2';
+      ready: boolean[];
+      expireAfterEvaluate?: number;
+      expireAfterClick?: boolean;
+      expireOnNextClockRead?: boolean;
+    };
+    const scenarios: BranchScenario[] = [
+      { branch: 'readiness_before_click', ready: [true, false] },
+      { branch: 'budget_before_click', ready: [true, true], expireAfterEvaluate: 2 },
+      { branch: 'after_click', ready: [true, true], expireAfterClick: true },
+      { branch: 'budget_before_fill', ready: [true, true], expireAfterClick: true, expireOnNextClockRead: true },
+      { branch: 'readiness_before_fill', ready: [true, true, false] },
+      { branch: 'budget_before_fill2', ready: [true, true, true], expireAfterEvaluate: 3 },
+    ];
+    const priorHome = process.env.HOME;
+    process.env.HOME = stateDir;
+    try {
+      for (const scenario of scenarios) {
+        mocks.nowMs = 10_000;
+        mocks.appendFileSync.mockClear();
+        let evaluateCount = 0;
+        let expireCountdown = 0;
+        vi.spyOn(Date, 'now').mockImplementation(() => {
+          if (expireCountdown > 0 && --expireCountdown === 0) mocks.nowMs = deadlineMs;
+          return mocks.nowMs;
+        });
+        const { page, composer, getSends } = makeLoserPage(prompt, 'unused');
+        composer.evaluate = vi.fn(async () => {
+          evaluateCount++;
+          if (scenario.expireAfterEvaluate === evaluateCount) expireCountdown = 3;
+          const ready = scenario.ready[evaluateCount - 1] ?? true;
+          return { visible: ready, enabled: ready, contentEditable: ready };
+        });
+        composer.click = vi.fn(async () => {
+          if (scenario.expireAfterClick) {
+            expireCountdown = scenario.expireOnNextClockRead ? 2 : 0;
+            if (!scenario.expireOnNextClockRead) mocks.nowMs = deadlineMs;
+          }
+        });
+        mocks.readStableInput.mockReturnValue(stableTurnInput(prompt));
+        const invocationId = randomUUID();
+        const { result } = await runNewChatTurn(
+          page,
+          join(stateDir, `${scenario.branch}.json`),
+          '5000',
+          invocationId,
+        );
+        expect(composer.evaluate).toHaveBeenCalled();
+        expect(evaluateCount).toBe(scenario.ready.length);
+        expect(composer.click).toHaveBeenCalledTimes(scenario.branch === 'readiness_before_click' || scenario.branch === 'budget_before_click' ? 0 : 1);
+        expect(result).toMatchObject({
+          state: 'driver_error',
+          cause: 'composer_mutation_budget_exhausted',
+          send_count: 0,
+        });
+        expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+          phase: 'not_sent',
+          send_count: 0,
+        });
+        expect(getSends()).toBe(0);
+        const expectedElapsed = scenario.branch === 'readiness_before_click'
+          || scenario.branch === 'readiness_before_fill' ? 0 : 5_000;
+        const diagnostic = {
+          branch: scenario.branch,
+          insertionBudgetMs,
+          textLength: markedPrompt.length,
+          elapsedMs: expectedElapsed,
+          remainingInvocationMs: expectedElapsed === 0 ? 5_000 : 0,
+        };
+        expect(result.composer_mutation_diagnostic).toEqual(diagnostic);
+        expect(JSON.stringify(result.composer_mutation_diagnostic)).not.toContain(prompt);
+        const recurrenceRecord = mocks.appendFileSync.mock.calls
+          .map((call: unknown[]) => JSON.parse(String(call[1])))
+          .find((record: any) => record.invocation === invocationId);
+        expect(recurrenceRecord?.composer_mutation_diagnostic).toEqual(diagnostic);
+      }
+    } finally {
+      if (priorHome === undefined) delete process.env.HOME;
+      else process.env.HOME = priorHome;
+    }
   });
 
   it('classifies send landing evidence from page state', async () => {
