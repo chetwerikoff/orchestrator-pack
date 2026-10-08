@@ -3801,17 +3801,9 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
 
-    if (!packReviewRequiredStatusNeedsStaleReconciliation(run)) {
-      results.push({
-        runId: run.id,
-        terminalized,
-        statusReconciled: false,
-        reason: 'status_already_reconciled',
-      });
-      continue;
-    }
+    const needsStaleStatus = packReviewRequiredStatusNeedsStaleReconciliation(run);
 
-    if (input.beforeStaleStatusWrite) await input.beforeStaleStatusWrite(run);
+    if (needsStaleStatus && input.beforeStaleStatusWrite) await input.beforeStaleStatusWrite(run);
 
     const recordsBeforeStaleStatusWrite = await readBoundRecords();
     const orderBeforeStaleStatusWrite = resolvePackReviewRunOrder(recordsBeforeStaleStatusWrite, run);
@@ -3848,6 +3840,13 @@ export async function reconcileStalePackReviewRuns(
       projectId,
       storeRoot,
       writeRequiredStatus: statusWriter,
+      notifyWorker: input.fixtureWorkerNotifier ?? ((request) => sendPackReviewWorkerNotification({
+        trustedPackRoot: run.trustedPackRoot,
+        sessionId: run.linkedSessionId,
+        projectId,
+        storeRoot,
+        request,
+      })),
       authorizeWrite: authorizeStaleWrite,
       repairSupersededWrite: repairSupersededStaleWrite,
       pauseBeforeWrite: input.fixturePauseBeforeStaleStatusWrite,
@@ -3857,8 +3856,8 @@ export async function reconcileStalePackReviewRuns(
     results.push({
       runId: run.id,
       terminalized,
-      statusReconciled: outcome.state === 'succeeded',
-      reason: outcome.reason,
+      statusReconciled: needsStaleStatus && outcome.state === 'succeeded',
+      reason: needsStaleStatus ? outcome.reason : 'status_already_reconciled',
     });
   }
 
