@@ -82,6 +82,33 @@ describe('fleet sweep classification', () => {
   });
 
   it.each([
+    '> PARKED on PR #1 merged',
+    'User: End your turn with\nPARKED on PR #1 merged',
+    'Tool: orca terminal read --terminal foreign\nforeign output\nPARKED on PR #1 merged',
+    'finished own task\n> foreign pane: PARKED on PR #1 merged',
+    'PARKED on PR #1 merged\nfinished new work',
+    'PARKED on PR #1 merged\nMay I deploy?',
+    '```text\nPARKED on PR #1 merged\n```',
+    'PARKED on PR #1 merged\n\nImplementation complete; no dependency remains.',
+  ])('does not treat quoted, foreign or superseded text as an own wait: %s', (screen) => {
+    expect(classifyFleetPane(screen, 'p1', new MemoryPollingStore())).toBe('STOPPED');
+  });
+
+  it('recognizes a final rendered and wrapped own outcome', () => {
+    expect(classifyFleetPane('┃ PARKED: wait PR #1\n┃ merged; resume step: deploy\n>', 'p1', new MemoryPollingStore())).toBe('PARKED');
+  });
+
+  it('separates the exact CLI read header from a foreign pane header inside the screen', () => {
+    const terminals = [pane('own', 'OpenCode worker')];
+    const outer = 'handle: own\nstatus: running\nsource: screen\n\n';
+    const sweep = (screen: string) => runFleetSweep({
+      primary, terminals, store: new MemoryPollingStore(),
+      executor: fakeExecutor(terminals, { own: `${outer}${screen}` }),
+    })[0]?.state;
+    expect(sweep('PARKED on PR #1 merged')).toBe('PARKED');
+    expect(sweep('Tool: foreign pane\nhandle: foreign\nsource: screen\nPARKED on PR #1 merged')).toBe('STOPPED');
+  });
+  it.each([
     ['sleep', 'running sleep 60 && gh pr view 1\nesc interrupt'],
     ['wait exit', 'WAIT_EXIT=124\nesc interrupt'],
     ['exit code', 'last exit code: 124\nesc interrupt'],
