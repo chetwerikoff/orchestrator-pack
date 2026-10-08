@@ -683,10 +683,18 @@ async function terminalNoResultEvidence(
   spawnFailed: boolean,
   heartbeatDiagnostics: Record<string, unknown> | undefined,
 ): Promise<Partial<TerminalEnvelope> & Pick<TerminalEnvelope, 'delivery' | 'recovery_available'>> {
-  const persisted = await persistedTerminalEvidence(config);
-  if (persisted) return { delivery: deliveryWithoutTurnResult(spawnFailed), recovery_available: false, ...persisted };
-  const invocationId = childOption(config, '--invocation-id');
   const receiptEvidence = receiptEvidenceForTerminalIncident(config, capture, incident);
+  const persisted = await persistedTerminalEvidence(config);
+  if (persisted) return {
+    delivery: deliveryWithoutTurnResult(spawnFailed), recovery_available: false, ...persisted,
+    ...(receiptEvidence ? { turn_result_state: receiptEvidence.state, turn_result_cause: receiptEvidence.cause } : {}),
+    diagnostics: boundedDiagnostics({
+      ...persisted.diagnostics,
+      ...(receiptEvidence ? cancellationDiagnostics(receiptEvidence, heartbeatDiagnostics)
+        : heartbeatDiagnostics ? { last_heartbeat: heartbeatDiagnostics } : {}),
+    }),
+  };
+  const invocationId = childOption(config, '--invocation-id');
   if (!receiptEvidence) {
     const postSendObserved = heartbeatDiagnostics?.phase === 'post_send_observation';
     return {
@@ -1021,6 +1029,20 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
   process.on('SIGINT', onInt);
   const publishAbnormal = async (incident: string): Promise<number> => {
     const existing = readTerminalEnvelope(config.terminalEnvelopePath, { runIdentity: config.runIdentity, attemptIdentity: config.attemptIdentity });
+    if (cleanupProcess && !existing) {
+      // Use the existing exit grace before abort; a completed result still wins.
+      try { await waitForProcessCompletion(cleanupProcess, noCandidateGraceMs()); } catch { /* Rejected process is already terminal. */ }
+      capture.drainStdoutBuffer();
+      ingestTrailingCandidate();
+      if (!capture.firstCandidate) {
+        await abortManagedProcess(controller, cleanupProcess);
+        capture.drainStdoutBuffer();
+        ingestTrailingCandidate();
+      }
+      if (capture.firstCandidate) {
+        return await finalizeCandidatePath(config, receipt, launcherStartedAt, capture, cleanupProcess, controller, childExitCode, lastHeartbeatDiagnostics);
+      }
+    }
     if (!existing) {
       await publishEnvelope(config, {
         schema: TERMINAL_SCHEMA, run_identity: config.runIdentity, attempt_identity: config.attemptIdentity,
@@ -1108,6 +1130,10 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
 
   const timeoutIncident = acceptedHeartbeat ? 'child_liveness_timeout' : 'child_startup_timeout';
   const publishWatchdogTimeout = async (): Promise<number> => {
+    // Quiesce before reading final send evidence; never classify a live pre-send snapshot.
+    await abortManagedProcess(controller, runPromise);
+    capture.drainStdoutBuffer();
+    ingestTrailingCandidate();
     await publishEnvelope(config, {
       schema: TERMINAL_SCHEMA,
       run_identity: config.runIdentity,
