@@ -12,7 +12,7 @@ export const PACK_REVIEW_LEGACY_CAP_MAP_VERSION = 'legacy-frozen';
 export const PACK_REVIEW_CAPS = Object.freeze({ T1: 1, T2: 2, T3: 4 });
 export const PACK_REVIEW_LOGICAL_CAPS = Object.freeze({ T1: 1, T2: 1, T3: 2 });
 export const PACK_REVIEW_DISTINCT_HEAD_CAPS = PACK_REVIEW_CAPS;
-export const PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS = 10_000;
+export const PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS = 30_000;
 export const PACK_REVIEW_AUTHORITY_PHASES = Object.freeze([
   'head_observed',
   'claim_acquired',

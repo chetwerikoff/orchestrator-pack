@@ -1,0 +1,32 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2426,
+  "declared_paths": [
+    "docs/declarations/2426.pr-scope.json",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.ts"
+  ],
+  "denylist": [
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.test",
+    "config/",
+    "credentials/",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.ts"
+  ],
+  "source_revision": "bb7fffdaa0f90cd1c91fdd4393fb158e2d6a226d"
+}

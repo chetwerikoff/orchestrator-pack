@@ -217,6 +217,7 @@ interface StartInput {
   fixtureReviewTimedOut?: boolean;
   fixtureReviewBySourceSlot?: FixtureReviewBySourceSlot;
   fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
+  fixtureGptAdmissionReadObservation?: typeof readStateLightTurnObservation;
   fixtureAfterGptInvocationBound?: (event: {
     slotId: string;
     attemptOrdinal: number;
@@ -2407,23 +2408,56 @@ async function runGptSourceBatch(options: {
   frozenScope: ResolvedScopeContext;
   sameRoundEligibleSlotIds?: ReadonlySet<string>;
 }): Promise<ReviewPayload> {
-  const admissionInterval = process.env.OPK_VITEST_HARNESS === '1'
+  const harness = process.env.OPK_VITEST_HARNESS === '1';
+  const admissionInterval = harness && !options.input.fixtureGptAdmissionReadObservation
     ? 0
     : PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS;
-  let nextAdmissionAt = 0;
+  const readObservation = options.input.fixtureGptAdmissionReadObservation ?? readStateLightTurnObservation;
+  // Resume the same gate from the last retained admission, including recovered slots.
+  let previousAdmission = options.round.sourceSlots
+    .filter((slot) => slot.invocationId && slot.admissionStartedAtUtc)
+    .sort((a, b) => Date.parse(b.admissionStartedAtUtc!) - Date.parse(a.admissionStartedAtUtc!))[0];
+  const terminalInvocations = new Set<string>();
   let admissionTail = Promise.resolve();
   let credentialedSourceCount = 0;
-  const admit = async (): Promise<number> => {
+  const admit = async (slotId: string, invocationId: string): Promise<number> => {
     let release!: () => void;
     const predecessor = admissionTail;
     admissionTail = new Promise<void>((resolveRelease) => { release = resolveRelease; });
     await predecessor;
-    const remaining = nextAdmissionAt - Date.now();
-    if (remaining > 0) await new Promise<void>((resolveWait) => setTimeout(resolveWait, remaining));
-    const startedAt = Date.now();
-    nextAdmissionAt = startedAt + admissionInterval;
-    release();
-    return startedAt;
+    try {
+      while (previousAdmission && admissionInterval > 0) {
+        const previous = previousAdmission;
+        const retained = getPackReviewRun(options.run.id, {
+          projectId: options.projectId, storeRoot: options.storeRoot,
+        })?.reviewRound?.sourceSlots.find((slot) => slot.slotId === previous.slotId
+          && slot.invocationId === previous.invocationId);
+        let sendSettled = terminalInvocations.has(previous.invocationId!)
+          || (retained?.lifecycle === 'terminal' && retained.terminalResult !== undefined);
+        if (!sendSettled && previous.launchProfileKey) {
+          try {
+            const observation = readObservation(previous.launchProfileKey, previous.invocationId!);
+            sendSettled = observation.profile_key === previous.launchProfileKey
+              && observation.invocation_id === previous.invocationId
+              && observation.send_count === 1;
+          } catch { /* Missing evidence keeps admission closed; it never authorizes a resend. */ }
+        }
+        const remaining = Date.parse(previous.admissionStartedAtUtc!) + admissionInterval - Date.now();
+        if (sendSettled && remaining <= 0) break;
+        await new Promise<void>((resolveWait) => setTimeout(resolveWait,
+          remaining > 0 ? Math.min(remaining, 1_000) : 1_000));
+      }
+      const startedAt = Date.now();
+      previousAdmission = {
+        slotId, invocationId, lifecycle: 'invocation_started',
+        ordinal: options.round.sourceSlots.find((slot) => slot.slotId === slotId)!.ordinal,
+        admissionStartedAtUtc: new Date(startedAt).toISOString(),
+        ...(resolveLaunchBinding() ?? {}),
+      };
+      return startedAt;
+    } finally {
+      release();
+    }
   };
   const sourceTransport = options.input.fixtureGptSourceCommentTransport
     ?? (process.env.OPK_VITEST_HARNESS === '1'
@@ -2491,7 +2525,7 @@ async function runGptSourceBatch(options: {
         await options.input.fixtureAfterGptInvocationBound({ slotId, attemptOrdinal, invocationId, round });
       }
     };
-    await markInvocationStarted(await admit());
+    await markInvocationStarted(await admit(slotId, invocationId));
     let invocation: { result: ProcessResult; resolvedReviewer: PackReviewer | null };
     while (true) {
       try {
@@ -2543,11 +2577,13 @@ async function runGptSourceBatch(options: {
           result: bindHarnessFixtureTerminalInvocation(invocation.result, invocationId),
         };
       }
+      const terminal = parseLastGptTerminalTurnResult(invocation.result.stdout);
+      if (terminal?.invocation_id === invocationId) terminalInvocations.add(invocationId);
       if (!(attemptOrdinal === 1
         && isRetryablePackReviewZeroSendCollision(invocation.result, invocationId))) break;
       attemptOrdinal = 2;
       invocationId = randomUUID();
-      await markInvocationStarted(await admit());
+      await markInvocationStarted(await admit(slotId, invocationId));
     }
 
     const browserTerminal = parseLastGptTerminalTurnResult(invocation.result.stdout);
