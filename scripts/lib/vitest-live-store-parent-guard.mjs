@@ -47,7 +47,8 @@ function isExternallyMutableWakePath(relativePath) {
     || projectPath === 'orchestration-mail-reconcile.lock'
     || projectPath === 'supervisor/typescript-supervisor-status.json'
     || projectPath === 'supervisor/projected-registry.json'
-    || projectPath === 'fleet-observer-snapshot.json';
+    || projectPath === 'fleet-observer-snapshot.json'
+    || projectPath === 'scheduler-tick-phases.jsonl';
 }
 function isExternallyMutableWakeSidecarPath(relativePath) {
   const projectPath = projectScopedPath(relativePath);

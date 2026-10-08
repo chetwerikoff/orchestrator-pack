@@ -174,6 +174,7 @@ describe('parent live-store guard', () => {
       `${projectId}/fleet-observer-snapshot.json`,
       `${projectId}/.tmp-1234-1700000000000-deadbeef`,
       `${projectId}/supervisor/.typescript-supervisor-status.json.1234.00000000-0000-4000-8000-000000000000.tmp`,
+      `${projectId}/scheduler-tick-phases.jsonl`,
     ];
     expect(isExternalWakeSupervisorSnapshotOnlyChange(allowedPaths)).toBe(true);
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
@@ -181,6 +182,15 @@ describe('parent live-store guard', () => {
     ])).toBe(true);
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
       `${projectId}/supervisor/supervisor/.typescript-supervisor-status.json.1234.00000000-0000-4000-8000-000000000000.tmp`,
+    ])).toBe(false);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      `${projectId}/nested/scheduler-tick-phases.jsonl`,
+    ])).toBe(false);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      `${projectId}/scheduler-tick-phases.jsonl.tmp`,
+    ])).toBe(false);
+    expect(isExternalWakeSupervisorSnapshotOnlyChange([
+      'scheduler-tick-phases.jsonl',
     ])).toBe(false);
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
       `${projectId}/unrelated-live-store-leak.json`,
@@ -229,6 +239,7 @@ describe('parent live-store guard', () => {
     writeFileSync(join(foreignProjectRoot, 'orchestration-mail-reconcile.lock'), 'lock', 'utf8');
     writeFileSync(join(foreignProjectRoot, 'fleet-observer-snapshot.json'), '{}\n', 'utf8');
     writeFileSync(join(foreignProjectRoot, '.tmp-1234-5678-abcdef12'), 'temporary', 'utf8');
+    writeFileSync(join(foreignProjectRoot, 'scheduler-tick-phases.jsonl'), '{"phase":"scheduler-tick"}\n', 'utf8');
     writeFileSync(join(foreignSupervisorRoot, 'projected-registry.json'), '{}\n', 'utf8');
     writeFileSync(
       join(foreignSupervisorRoot, '.projected-registry.json.1234.00000000-0000-4000-8000-000000000000.tmp'),
@@ -272,6 +283,21 @@ describe('parent live-store guard', () => {
     writeFileSync(join(foreignSupervisorRoot, 'typescript-supervisor-status.json'), '{"state":"before"}', 'utf8');
     const guard = startParentLiveStoreGuard(env);
     rmSync(foreignSupervisorRoot, { recursive: true });
+
+    expect(() => guard.stop()).toThrow(/OPK_VITEST_LIVE_STORE_GUARD_FAILED/);
+  });
+
+  it('rejects nested and temporary scheduler phase log variants in a non-selected project', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-foreign-scheduler-log-'));
+    temporaryRoots.push(root);
+    const env = productionEnvironment(join(root, 'production'));
+    env.OPK_PROJECT_ID = 'selected-project';
+    const foreignProjectRoot = join(env.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'foreign-project');
+    mkdirSync(foreignProjectRoot, { recursive: true });
+    const guard = startParentLiveStoreGuard(env);
+    mkdirSync(join(foreignProjectRoot, 'nested'), { recursive: true });
+    writeFileSync(join(foreignProjectRoot, 'nested', 'scheduler-tick-phases.jsonl'), '{"phase":"unsupported"}\n', 'utf8');
+    writeFileSync(join(foreignProjectRoot, 'scheduler-tick-phases.jsonl.tmp'), '{"phase":"unsupported"}\n', 'utf8');
 
     expect(() => guard.stop()).toThrow(/OPK_VITEST_LIVE_STORE_GUARD_FAILED/);
   });
