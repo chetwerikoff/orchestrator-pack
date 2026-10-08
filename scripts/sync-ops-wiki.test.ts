@@ -1,8 +1,9 @@
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runProcessSync } from './kernel/subprocess.ts';
+import { readOriginUrlFromGitConfig } from './lib/git-origin-slug.mjs';
 import {
   applyOpsWiki,
   buildEscalationQueries,
@@ -46,6 +47,28 @@ function tempDir(prefix: string): string {
   return dir;
 }
 
+it.each([false, true])('refuses target-root wiki calls (copied registry=%s) before Git, corpus writes, or index effects', async (copiedRegistry) => {
+  const repoRoot = tempDir('target-wiki-');
+  write(repoRoot, 'AGENTS.md', '# Target merge-time adoption\n');
+  write(repoRoot, '.git/config', '[remote "origin"]\n  url = https://github.com/fixture/target.git\n');
+  if (copiedRegistry) write(repoRoot, 'scripts/orchestrator-side-process-registry.json', JSON.stringify({ children: [] }));
+  const corpusRoot = join(tempDir('target-wiki-parent-'), 'untouched-corpus');
+  const git = vi.fn<GitRunner>(() => ({ ok: true, stdout: 'a'.repeat(40), stderr: '' }));
+  const read = vi.fn<WikiOpsClient['read']>();
+  const search = vi.fn<WikiOpsClient['search']>();
+  const reindex = vi.fn<NonNullable<WikiOpsClient['reindex']>>();
+  const options = { repoRoot, commitRef: 'a'.repeat(40), corpusRoot, git, client: { read, search, reindex } };
+  const refusal = /pack-only adoption.*PRIMARY_ROOT.*AGENTS\.md.*merge-time adoption.*named live check/u;
+  expect(() => checkRepositoryMode(options)).toThrow(refusal);
+  await expect(applyOpsWiki(options)).rejects.toThrow(refusal);
+  expect(git).not.toHaveBeenCalled();
+  expect(read).not.toHaveBeenCalled();
+  expect(search).not.toHaveBeenCalled();
+  expect(reindex).not.toHaveBeenCalled();
+  expect(existsSync(corpusRoot)).toBe(false);
+});
+
+
 function git(cwd: string, args: readonly string[]): string {
   const result = runProcessSync({
     command: 'git',
@@ -78,6 +101,7 @@ function initRepo(files: Record<string, string>): { repoRoot: string; commit: st
   const repoRoot = tempDir('ops-wiki-repo-');
   git(repoRoot, ['init']);
   git(repoRoot, ['checkout', '-b', 'main']);
+  git(repoRoot, ['remote', 'add', 'origin', readOriginUrlFromGitConfig(process.cwd())!]);
   for (const [path, content] of Object.entries(files)) write(repoRoot, path, content);
   git(repoRoot, ['add', '-A']);
   git(repoRoot, ['commit', '-m', 'fixture']);
@@ -86,6 +110,7 @@ function initRepo(files: Record<string, string>): { repoRoot: string; commit: st
 
 function fixtureFiles(body = 'worker must pass pre-flight before implementation.\n'): Record<string, string> {
   return {
+    'scripts/orchestrator-side-process-registry.json': JSON.stringify({ children: [] }),
     'AGENTS.md': [
       '# AGENTS.md',
       '',
