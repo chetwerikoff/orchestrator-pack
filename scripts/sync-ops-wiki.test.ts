@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runProcessSync } from './kernel/subprocess.ts';
+import { readOriginUrlFromGitConfig } from './lib/git-origin-slug.mjs';
 import {
   applyOpsWiki,
   buildEscalationQueries,
@@ -46,9 +47,11 @@ function tempDir(prefix: string): string {
   return dir;
 }
 
-it('refuses target-root wiki calls before Git, corpus writes, or index effects', async () => {
+it.each([false, true])('refuses target-root wiki calls (copied registry=%s) before Git, corpus writes, or index effects', async (copiedRegistry) => {
   const repoRoot = tempDir('target-wiki-');
   write(repoRoot, 'AGENTS.md', '# Target merge-time adoption\n');
+  write(repoRoot, '.git/config', '[remote "origin"]\n  url = https://github.com/fixture/target.git\n');
+  if (copiedRegistry) write(repoRoot, 'scripts/orchestrator-side-process-registry.json', JSON.stringify({ children: [] }));
   const corpusRoot = join(tempDir('target-wiki-parent-'), 'untouched-corpus');
   const git = vi.fn<GitRunner>(() => ({ ok: true, stdout: 'a'.repeat(40), stderr: '' }));
   const read = vi.fn<WikiOpsClient['read']>();
@@ -98,6 +101,7 @@ function initRepo(files: Record<string, string>): { repoRoot: string; commit: st
   const repoRoot = tempDir('ops-wiki-repo-');
   git(repoRoot, ['init']);
   git(repoRoot, ['checkout', '-b', 'main']);
+  git(repoRoot, ['remote', 'add', 'origin', readOriginUrlFromGitConfig(process.cwd())!]);
   for (const [path, content] of Object.entries(files)) write(repoRoot, path, content);
   git(repoRoot, ['add', '-A']);
   git(repoRoot, ['commit', '-m', 'fixture']);

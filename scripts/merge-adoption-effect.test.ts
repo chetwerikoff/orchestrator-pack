@@ -7,6 +7,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import * as subprocess from './kernel/subprocess.ts';
 import { canonicalFoundationPaths } from './lib/cutover/foundation-observation.ts';
+import { readOriginUrlFromGitConfig } from './lib/git-origin-slug.mjs';
 import {
   defaultSupervisorStateDir,
   linuxProcessStartTimeMs,
@@ -26,6 +27,7 @@ function write(root: string, relative: string, content: string): void {
 
 function mappingFixture(): string {
   const root = mkdtempSync(path.join(tmpdir(), 'merge-adoption-map-'));
+  write(root, '.git/config', '[remote "origin"]\n  url = ' + readOriginUrlFromGitConfig(process.cwd()) + '\n');
   write(root, 'package.json', JSON.stringify({ imports: { '#opk-kernel/*': './scripts/kernel/*.ts' } }));
   write(root, 'scripts/orchestrator-side-process-registry.json', JSON.stringify({ children: [{ id: 'pr2-scheduler', script: 'pr2-foundation/scheduler.ts' }] }));
   write(root, 'scripts/orchestrator-wake-supervisor.ts', "import './lib/supervisor-core.ts';\nimport '#opk-kernel/shared';\n");
@@ -82,7 +84,7 @@ async function startFixture(): Promise<FixtureProcess> {
 }
 
 describe('Issue #2145 merge adoption effect verification', () => {
-  it('refuses a target root before Git, restart controls, or live checks and names target-owned adoption', async () => {
+  it.each([false, true])('refuses a target root (copied registry=%s) before Git, restart controls, or live checks and names target-owned adoption', async (copiedRegistry) => {
     const root = mkdtempSync(path.join(tmpdir(), 'target-adoption-'));
     const effects = vi.spyOn(subprocess, 'runProcessSync');
     const marker = path.join(root, 'effect-ran');
@@ -97,6 +99,8 @@ describe('Issue #2145 merge adoption effect verification', () => {
       git('init', '-q');
       git('config', 'user.name', 'fixture');
       git('config', 'user.email', 'fixture@example.invalid');
+      git('remote', 'add', 'origin', 'https://github.com/fixture/target.git');
+      if (copiedRegistry) write(root, 'scripts/orchestrator-side-process-registry.json', JSON.stringify({ children: [] }));
       git('add', 'AGENTS.md');
       git('commit', '-qm', 'target baseline');
       write(root, 'target.txt', 'target change\n');
@@ -262,9 +266,16 @@ describe('Issue #2145 merge adoption effect verification', () => {
     expect(adoption).toContain('target-owned merge-time adoption instructions and named target live check, if any');
     expect(adoption).toContain('Non-pack cards skip this wiki block');
     expect(adoption).toContain('**Non-pack selected cards:** execute only the named target live check, if any');
-    expect(adoption.match(/\*\*Pack only \(`PROJECT_ID=orchestrator-pack`\):\*\*/gu)).toHaveLength(2);
+    expect(adoption.match(/\*\*Pack only \(`TARGET_REPOSITORY=PACK_REPOSITORY`\):\*\*/gu)).toHaveLength(2);
     expect(adoption).toContain('--repo-root "$PRIMARY_ROOT"');
     expect(adoption).toContain('Do not run the pack verifier or substitute pack process/registry evidence');
     expect(skill).toContain('`REPO` is exactly that selected `PRIMARY_ROOT`');
+    expect(skill).not.toContain('PROJECT_ID=orchestrator-pack');
+    expect(skill).toContain('A pack card named `pack-local` still takes the pack route');
+    expect(skill).toContain('a foreign card named `orchestrator-pack` still takes the target route');
+    expect(skill.indexOf('resolve the selected project card')).toBeLessThan(skill.indexOf('Snapshot the operator checkout'));
+    for (const command of ['rev-parse --show-toplevel', 'branch --show-current', 'status --short', 'diff --stat', 'diff --cached --stat', 'stash list', 'merge-base --is-ancestor "$MERGE_SHA" HEAD', 'log -1 --oneline']) {
+      expect(skill).toContain('git -C "$PRIMARY_ROOT" ' + command);
+    }
   });
 });

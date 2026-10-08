@@ -4,6 +4,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveWakeSupervisorStateRoot } from './pr2-foundation/wake-supervisor-state-root.ts';
+import { originSlugFromGitConfig } from './lib/git-origin-slug.mjs';
 
 export type ConsumerState = 'running' | 'not_running' | 'ephemeral' | 'unknown';
 export interface ConsumerObservation { readonly state: ConsumerState; readonly startedAtMs?: number; readonly identity?: string; readonly reason?: string; }
@@ -71,10 +72,13 @@ const AGENT_HOOK_ENTRYPOINTS = [
 const IMPORT_RE = /(?:\b(?:import|export)\s+(?:[^'";]+?\s+from\s+)?|\bimport\s*\()\s*['"]([^'"]+)['"]/gu;
 const FULL_SHA = /^[0-9a-f]{40}$/iu;
 
-/** Pack registry admission; target adoption is owned by the selected target's rules. */
+/** Pack origin is read from this trusted tool checkout, never from the selected target card id. */
 export function assertPackAdoptionRoot(repoRoot: string): void {
-  if (!existsSync(path.join(repoRoot, REGISTRY_PATH))) {
-    throw new Error('pack-only adoption requires ' + REGISTRY_PATH + ' in repo-root; use the selected target {PRIMARY_ROOT}/AGENTS.md merge-time adoption and its named live check instead. Do not substitute a pack registry.');
+  const packRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const packRepository = originSlugFromGitConfig(packRoot)?.toLowerCase();
+  if (!existsSync(path.join(repoRoot, REGISTRY_PATH)) || !packRepository
+    || originSlugFromGitConfig(repoRoot)?.toLowerCase() !== packRepository) {
+    throw new Error('pack-only adoption requires the trusted pack repository origin and ' + REGISTRY_PATH + ' in repo-root; use the selected target {PRIMARY_ROOT}/AGENTS.md merge-time adoption and its named live check instead. Do not substitute a pack registry.');
   }
 }
 

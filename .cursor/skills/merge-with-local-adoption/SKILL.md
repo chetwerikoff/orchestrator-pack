@@ -144,18 +144,33 @@ resolved repository and absolute path before effects.
 - Never signal PID 1, a negative PID, process-group zero, or a process selected by name.
   Process selection is the exact target CWD plus descendants only.
 
-## Step 1 — Snapshot the operator checkout
+## Step 1 — Resolve the selected project and snapshot its operator checkout
 
-Record:
+Before resolving any PR/Issue, resolve the selected project card with `node --experimental-strip-types scripts/lib/target-context.ts check`. Bind its exact `repository` as `TARGET_REPOSITORY` and its exact `defaultBranch` as `TARGET_DEFAULT_BRANCH`. Missing selection or any explicit repository/base mismatch is terminal; do not infer target identity from cwd/origin.
+
+Bind that same card's `projectId` and `primaryRoot` as `PROJECT_ID` and `PRIMARY_ROOT`;
+`REPO` is exactly that selected `PRIMARY_ROOT` for primary-checkout adoption. Run pack
+tools from `{PACK_ROOT}` with `OPK_PROJECT_ID` selected, never from a target checkout.
+Bind `PACK_REPOSITORY` from the trusted `{PACK_ROOT}` checkout using the existing
+`originSlugFromGitConfig` helper in `scripts/lib/git-origin-slug.mjs`; missing pack origin
+is unresolved identity, so repair that checkout's origin before proceeding. Compare the
+exact canonical `TARGET_REPOSITORY` with `PACK_REPOSITORY` for all adoption routing.
+A pack card named `pack-local` still takes the pack route;
+a foreign card named `orchestrator-pack` still takes the target route. Project ids and
+registry presence do not authorize pack effects; do not use a pack registry fallback.
+
+### Snapshot the operator checkout
+
+Record the selected primary checkout explicitly, regardless of the shell's current directory:
 
 ```bash
-git rev-parse --show-toplevel
-git branch --show-current
-git status --short
-git diff --stat
-git diff --cached --stat
-git stash list
-orca worktree current --json
+git -C "$PRIMARY_ROOT" rev-parse --show-toplevel
+git -C "$PRIMARY_ROOT" branch --show-current
+git -C "$PRIMARY_ROOT" status --short
+git -C "$PRIMARY_ROOT" diff --stat
+git -C "$PRIMARY_ROOT" diff --cached --stat
+git -C "$PRIMARY_ROOT" stash list
+orca worktree show --worktree "path:$PRIMARY_ROOT" --json
 ```
 
 Preserve every pre-existing operator-checkout change. If a Git operation cannot proceed
@@ -163,13 +178,6 @@ without discarding unrelated work, report that external/technical limitation; do
 lose it.
 
 ## Step 2 — Resolve the PR and target
-
-Before resolving any PR/Issue, resolve the selected project card with `node --experimental-strip-types scripts/lib/target-context.ts check`. Bind its exact `repository` as `TARGET_REPOSITORY` and its exact `defaultBranch` as `TARGET_DEFAULT_BRANCH`. Missing selection or any explicit repository/base mismatch is terminal; do not infer target identity from cwd/origin.
-
-Bind that same card's `projectId` and `primaryRoot` as `PROJECT_ID` and `PRIMARY_ROOT`;
-`REPO` is exactly that selected `PRIMARY_ROOT` for primary-checkout adoption. Run pack
-tools from `{PACK_ROOT}` with `OPK_PROJECT_ID` selected, never from a target checkout.
-Do not infer another project from the presence of scripts or use a pack registry fallback.
 
 Resolve the concrete PR with `gh pr view` or an exact `Closes/Fixes/Resolves #N` link. Zero or
 multiple plausible PRs is unresolved target ambiguity and requires the user to identify one;
@@ -261,7 +269,7 @@ Read the PR body, changed paths/content, linked Issue, applicable migration note
 environment docs, runbooks, and rules-channel files. State the local post-merge work. Do not
 invent secrets, ports, or machine-local values.
 
-For `PROJECT_ID=orchestrator-pack`, identify the smallest executable live check required by
+For `TARGET_REPOSITORY=PACK_REPOSITORY`, identify the smallest executable live check required by
 the linked Issue's current `Fixed means` / `smoke-test-plan` and express it as one or more
 exact argv arrays in `LIVE_CHECK_JSON`. It runs from `PRIMARY_ROOT` after adoption. If the
 Issue cannot bind an executable check, the pack Verify-effect step ends `effect_unverified`;
@@ -311,14 +319,14 @@ Fetch and update the selected `PRIMARY_ROOT` without discarding pre-existing cha
 the target-owned update/adoption instructions collected in Step 4 for non-pack cards. Verify:
 
 ```bash
-git merge-base --is-ancestor "$MERGE_SHA" HEAD
-git status --short
-git log -1 --oneline
+git -C "$PRIMARY_ROOT" merge-base --is-ancestor "$MERGE_SHA" HEAD
+git -C "$PRIMARY_ROOT" status --short
+git -C "$PRIMARY_ROOT" log -1 --oneline
 ```
 
 The selected default branch may move beyond `MERGE_SHA`; equality is not required.
 
-**Pack only (`PROJECT_ID=orchestrator-pack`):** after adoption read-back, read the actual
+**Pack only (`TARGET_REPOSITORY=PACK_REPOSITORY`):** after adoption read-back, read the actual
 pack `PRIMARY_ROOT` `HEAD` once as a 40-hex value and pass that literal to one bounded
 operational-wiki sync from `{PACK_ROOT}` with `--repo-root "$PRIMARY_ROOT"`. Do not pass
 the PR merge SHA or a moving default-branch name. Non-pack cards skip this wiki block:
@@ -360,7 +368,7 @@ coordinator. Do not run the pack verifier or substitute pack process/registry ev
 Then continue to Step 8 and the unchanged exact-target cleanup in Step 9, subject to the
 existing delegated fail-closed rule.
 
-**Pack only (`PROJECT_ID=orchestrator-pack`):** run the pack-owned verifier from
+**Pack only (`TARGET_REPOSITORY=PACK_REPOSITORY`):** run the pack-owned verifier from
 `{PACK_ROOT}` against the pack `PRIMARY_ROOT`, using the exact Issue live check selected
 in Step 4. The remainder of this verifier block applies only to this pack route:
 
