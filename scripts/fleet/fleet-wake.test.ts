@@ -133,6 +133,74 @@ function sendsTo(calls: readonly string[][], handle: string): string[][] {
 }
 
 describe('fleet alarm', () => {
+  // Scrubbed OpenCode pane shapes and acknowledgment excerpts from the architect's live audit.
+  it.each(['Принял смену архитектора…', 'Audit: … Keep PARKED…'])(
+    'retains an unbound failed-dispatch manager after %s, then invalidates new work', async (acknowledgment) => {
+      const root = mkdtempSync(join(tmpdir(), 'fleet-2398-unbound-'));
+      const store = new FileFleetWakeStateStore('unbound', { XDG_RUNTIME_DIR: root });
+      const unit = { ...terminals[1]!, incarnationId: 'unbound-inc-one', status: 'running', branch: 'manager' };
+      const fleet = [terminals[0]!, unit];
+      const screens = { coord: 'working\nctrl+c to stop', one: 'PARKED on orchestrator answer: external gate' };
+      const base = fakeOrca(screens, [], fleet);
+      const executor: OrcaExecutor = (args) => args[0] === 'orchestration' && args[1] === 'worker-list'
+        ? commandResult(JSON.stringify({ ok: true, result: { workers: [
+          { agentTerminalHandle: 'one', dispatchId: 'old-failed', taskId: 'old-task', dispatchStatus: 'failed' },
+        ], page: { hasMore: false } } })) : base(args);
+      let projectId = config().projectId;
+      const step = () => tick({ screens, store, terminals: fleet, executor, config: config({ projectId }) });
+      const park = async () => {
+        screens.one = '┃ PARKED: wait orchestrator answer:\n┃ external gate\n>';
+        await step();
+        screens.one = `┃ ${acknowledgment}\n>\n╹▀▀▀▀▀▀▀▀`;
+      };
+      try {
+        await step();
+        screens.one += '\n> Audit: keep the same external wait; no new step is assigned.';
+        await step();
+        screens.one += `\n${acknowledgment}`;
+        await step();
+        screens.coord = 'idle prompt';
+        screens.one = `${Array.from({ length: 31 }, () => '╹▀▀▀▀▀▀▀▀').join('\n')}\n┃ ${acknowledgment}\n>`;
+        for (let index = 0; index < 3; index += 1) {
+          const observed = await step();
+          expect(observed.result.state).toBe('nothing_stopped');
+          expect(sends(observed.calls)).toHaveLength(0);
+        }
+        screens.one = '$ gh pr view 1\nTool: completed inspection\n\nAssistant: Audit summary: the inspection is complete.';
+        expect((await step()).result.state).toBe('sent');
+        expect(store.readPaneWait('one')).toBeUndefined();
+        await park();
+        screens.one = 'Можно продолжать?';
+        expect((await step()).result.state).toBe('sent');
+        for (const outcome of ['STOPPED', 'done', 'finished', 'handed-off', 'worker_done', 'error', 'one\n\ntwo\n\nthree\n\nfour']) {
+          await park();
+          screens.one = outcome;
+          expect((await step()).result.state).toBe('sent');
+          expect(store.readPaneWait('one')).toBeUndefined();
+        }
+        await park();
+        screens.one = 'Проверка без изменений.\nLa condition reste identique.\n依存条件は変わっていません。';
+        expect((await step()).result.state).toBe('nothing_stopped');
+        screens.one = 'PARKED on orchestrator answer: a different gate';
+        expect(sendsTo((await step()).calls, 'coord')[0]?.join(' ')).toContain('a different gate');
+        for (const change of ['branch', 'worktree', 'project']) {
+          await park();
+          if (change === 'branch') unit.branch = 'replacement-manager';
+          if (change === 'worktree') unit.worktreePath = '/home/che/orca/workspaces/project/replacement';
+          if (change === 'project') projectId = 'replacement-project';
+          expect((await step()).result.state).toBe('sent');
+          expect(store.readPaneWait('one')).toBeUndefined();
+        }
+        await park();
+        unit.incarnationId = 'unbound-inc-two';
+        expect((await step()).result.state).toBe('sent');
+        expect(store.readPaneWait('one')).toBeUndefined();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.each(['unchanged', 'wrapped', 'question', 'resume', 'task', 'incarnation', 'exited', 'busy', 'polling', 'mail', 'ci', 'gpt-completed', 'gpt-failed', 'gpt-dead', 'task-stale', 'incarnation-stale', 'new-blocker', 'removed'])(
     'retains correction/acknowledgment/redraw across three idle ticks, then handles %s', async (next) => {
     const root = mkdtempSync(join(tmpdir(), 'fleet-2398-sequence-'));

@@ -335,17 +335,25 @@ export function ownPaneOutcome(screen: string): { wait?: string; acknowledgment:
   const paragraphs = screen.split(/\r?\n\s*(?:[┃│]\s*)?\r?\n/u).map((part) => nonChromeLines(part)
     .filter((line) => !/^(?:>|→ Add a follow-up|\d+ tasks?)\s*$/u.test(line))).filter((part) => part.length > 0);
   const lines = paragraphs.at(-1) ?? [];
-  let start = lines.length - 1;
-  while (start >= 0 && !/^(?:PARKED(?: on\b|:)|Assistant:|Acknowledged\b|Understood\b|Принято\b|Понял\b)/iu.test(lines[start]!)) start -= 1;
-  const response = lines.slice(Math.max(0, start)).join(' ').replace(/^Assistant:\s*/iu, '').trim();
-  const before = lines.slice(0, Math.max(0, start));
-  const context = [...before].reverse().find((line) => /^(?:Assistant:|>|User:|Tool:|\$|```|===|handle:|source:)/iu.test(line)) ?? '';
-  const foreign = /^(?:>|User:|Tool:|\$|```|===|handle:|source:)/iu.test(context)
-    && !/^>\s*Correction:.*\bunchanged wait\b/iu.test(context);
-  const superseded = lines.slice(Math.max(0, start) + 1).some((line) => /^(?:>|User:|Tool:|\$|```|STOPPED\b|(?:finished|done)\b)|\?\s*$/iu.test(line));
+  const boundary = lines.findLastIndex((line) => /^(?:>\s+|User:|Assistant:)/iu.test(line));
+  const own = boundary < 0 ? lines : /^Assistant:/iu.test(lines[boundary]!)
+    ? [lines[boundary]!.replace(/^Assistant:\s*/iu, ''), ...lines.slice(boundary + 1)].filter(Boolean)
+    : lines.slice(boundary + 1);
+  const start = own.findLastIndex((line) => /^PARKED(?: on\b|:)/iu.test(line));
+  const response = own.slice(Math.max(0, start)).join(' ').trim();
+  const context = own.slice(0, Math.max(0, start));
+  const toolLine = /^(?:Tool:|\$|```|===|handle:|source:|(?:[┌└├]\s*)?(?:Bash|Shell|Read|Write|Edit|Grep|Glob)\b|(?:orca|gh|git|node|npm|mise|python|curl|bash|sh)\s)/iu;
+  const newOutcome = /\?\s*$|\b(?:STOPPED|done|finished|handed[- ]off|worker_done|error)\b/iu;
+  const foreign = (boundary >= 0 && /^User:/iu.test(lines[boundary]!)) || context.some((line) => toolLine.test(line));
+  const superseded = own.slice(Math.max(0, start) + 1).some((line) => toolLine.test(line) || newOutcome.test(line));
   const wait = !foreign && !superseded && /^PARKED(?: on\s+|:\s*(?:wait\s+)?)(.+)$/iu.exec(response)?.[1];
-  const acknowledgment = lines.length === 0 || /^>\s*Correction:.*\bunchanged wait\b/iu.test(lines.at(-1) ?? '') || (!foreign
-    && /^(?:Acknowledged|Understood|Принято|Понял)[.!]?(?:\s+(?:The external gate is unchanged[.!]?|Dependency unchanged[.!]?))?$/iu.test(response));
+  // The turn, including tool paragraphs before its final summary, must be a short own
+  // response with no work or new outcome. Its natural language does not authorize parking.
+  const turn = paragraphs.flat();
+  const turnBoundary = turn.findLastIndex((line) => /^(?:>\s+|User:|PARKED(?: on\b|:))/iu.test(line));
+  const turnLines = turn.slice(turnBoundary + 1).map((line) => line.replace(/^Assistant:\s*/iu, '')).filter(Boolean);
+  const acknowledgment = !foreign && turnLines.length <= 3
+    && !turnLines.some((line) => toolLine.test(line) || newOutcome.test(line));
   return { ...(wait ? { wait: `PARKED on ${wait}` } : {}), acknowledgment };
 }
 
@@ -442,7 +450,9 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
     }
     const outcome = ownPaneOutcome(screen);
     const binding = terminal.incarnationId && terminal.status !== 'exited'
-      ? liveTaskBinding(terminal, options.projectId ?? '', bindingExecutor) : undefined;
+      ? liveTaskBinding(terminal, options.projectId ?? '', bindingExecutor)
+        ?? JSON.stringify([options.projectId ?? '', terminal.handle, terminal.incarnationId, terminal.worktreePath, terminal.branch])
+      : undefined;
     const previous = store.readPaneWait?.(terminal.handle);
     const retained = binding && previous?.binding === binding && outcome.acknowledgment ? previous.wait : undefined;
     const state = classifyFleetPane(screen, terminal.handle, store, busyRe);
@@ -451,7 +461,7 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
       ? outcome.wait ?? retained : undefined;
     if (binding && wait) store.writePaneWait?.(terminal.handle, { binding, wait });
     // Keep a mismatched old outcome only as rejection evidence until it leaves the screen.
-    else if (!stale && !(state === 'busy' && outcome.acknowledgment && previous?.binding === binding)) {
+    else if (!stale) {
       store.clearPaneWait?.(terminal.handle);
     }
     return {
