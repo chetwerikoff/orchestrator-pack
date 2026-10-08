@@ -4,7 +4,9 @@
   "declared_paths": [
     "docs/declarations/2403.pr-scope.json",
     "scripts/gh-wrapper.test.ts",
-    "scripts/lib/gh-repo-resolve.mjs"
+    "scripts/lib/gh-repo-resolve.d.mts",
+    "scripts/lib/gh-repo-resolve.mjs",
+    "scripts/lib/gh-rest-routes.mjs"
   ],
   "denylist": [
     ".env",
@@ -21,7 +23,9 @@
   "allowed_roots": [
     "docs/declarations/",
     "scripts/gh-wrapper.test.ts",
-    "scripts/lib/gh-repo-resolve.mjs"
+    "scripts/lib/gh-repo-resolve.d.mts",
+    "scripts/lib/gh-repo-resolve.mjs",
+    "scripts/lib/gh-rest-routes.mjs"
   ],
-  "source_revision": "ba68f34f84847a0b9ffb34d9f94d43a8db4092df"
+  "source_revision": "18409e4cdd52b83ae3cd487dfe9a9ea30015230b"
 }

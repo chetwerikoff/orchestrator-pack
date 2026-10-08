@@ -90,7 +90,7 @@ function parseRepoFlag(repoFlag) {
 }
 
 /**
- * @param {{ cwd?: string, repoFlag?: string | null, realGh: string, hostname?: string | null }} options
+ * @param {{ cwd?: string, cwdIsExplicit?: boolean, repoFlag?: string | null, realGh: string, hostname?: string | null }} options
  * @returns {{ slug: string, host: string }}
  */
 export function resolveRepoContext(options) {
@@ -103,8 +103,9 @@ export function resolveRepoContext(options) {
   const top = gitToplevel(cwd);
   const gitSlug = top ? gitOriginSlug(top) : null;
 
-  // Supplied cwd is checkout authority; an omitted cwd is only CLI context.
-  const explicitRepo = flagRepo ?? (options.cwd !== undefined ? gitSlug : null);
+  // REST transports retain execution cwd but mark it as incidental context.
+  const checkoutRepo = options.cwd !== undefined && options.cwdIsExplicit !== false ? gitSlug : null;
+  const explicitRepo = flagRepo ?? checkoutRepo;
   for (const authority of [explicitRepo, selectedRepo]) {
     if (envRepo && authority && envRepo.toLowerCase() !== authority.toLowerCase()) {
       throw new Error(
@@ -113,7 +114,7 @@ export function resolveRepoContext(options) {
     }
   }
 
-  const slug = flagRepo ?? (options.cwd !== undefined ? gitSlug : null) ?? selectedRepo ?? envRepo ?? gitSlug;
+  const slug = flagRepo ?? checkoutRepo ?? selectedRepo ?? envRepo ?? gitSlug;
   if (!slug) {
     throw new Error('gh-wrapper: could not resolve repository slug');
   }
@@ -123,7 +124,7 @@ export function resolveRepoContext(options) {
 
 /**
  * Local derivation for gh repo view --json nameWithOwner (no network).
- * @param {{ cwd?: string, repoFlag?: string | null, realGh: string, hostname?: string | null }} options
+ * @param {{ cwd?: string, cwdIsExplicit?: boolean, repoFlag?: string | null, realGh: string, hostname?: string | null }} options
  */
 export function resolveNameWithOwner(options) {
   return resolveRepoContext(options).slug;

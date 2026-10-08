@@ -434,10 +434,15 @@ describe('Issue #2403 production repository admission', () => {
       defaultBranch: 'main', orcaWorkspacePattern: 'fixture', orchestratorTitlePattern: 'fixture',
       browserGpt: { projectUrl: 'https://chatgpt.com/g/fixture/project' },
     }));
+    const packCheckout = join(root, 'pack');
+    mkdirSync(packCheckout);
+    for (const args of [['init', '-q'], ['remote', 'add', 'origin', 'https://github.com/chetwerikoff/orchestrator-pack.git']]) {
+      expect(runProcessSync({ command: 'git', args, cwd: packCheckout }).exitCode).toBe(0);
+    }
     vi.stubEnv('XDG_CONFIG_HOME', root);
     vi.stubEnv('OPK_PROJECT_ID', '');
     vi.stubEnv('GH_REPO', 'chetwerikoff/orchestrator-pack');
-    return { root, checkout };
+    return { root, checkout, packCheckout };
   }
 
   it('rejects the witnessed selected LeoPoker resolver input and accepts only matching GH_REPO', async () => {
@@ -467,6 +472,37 @@ describe('Issue #2403 production repository admission', () => {
       expect(resolveRepoContext({ ...options, cwd: checkout, repoFlag: 'flag/priority' }).slug).toBe('flag/priority');
       expect(resolveRepoContext(options).slug).toBe('chetwerikoff/orchestrator-pack');
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.each(['leopoker', ''])('keeps REST execution cwd incidental with project selection %j', (project) => {
+    const { root, packCheckout } = fixture();
+    const api = vi.spyOn(repoResolve, 'ghApiJson');
+    const call = (argv: string[]) => {
+      const { parsed, route } = classifyArgv(argv);
+      expect(route).not.toBeNull();
+      return executeRestRoute(route!.id, { realGh: '/bin/false', parsed, route: route!, cwd: packCheckout });
+    };
+    try {
+      vi.stubEnv('OPK_PROJECT_ID', project);
+      vi.stubEnv('GH_REPO', 'chetwerikoff/LeoPoker');
+      api.mockImplementation((_realGh, endpoint, options) => {
+        expect(endpoint.toLowerCase()).toBe('repos/chetwerikoff/leopoker/issues/2403');
+        expect(options?.cwd).toBe(packCheckout);
+        return { body: 'offline fixture' };
+      });
+      const issue = call(['issue', 'view', '2403', '--json', 'body']);
+      expect(issue).toEqual({ body: 'offline fixture' });
+      expect(api).toHaveBeenCalledTimes(1);
+      const repo = call(['repo', 'view', '--json', 'nameWithOwner']);
+      expect((repo as { nameWithOwner: string }).nameWithOwner.toLowerCase()).toBe('chetwerikoff/leopoker');
+      if (project) {
+        api.mockClear();
+        vi.stubEnv('GH_REPO', 'chetwerikoff/orchestrator-pack');
+        expect(() => call(['issue', 'view', '2403', '--json', 'body']))
+          .toThrow(/chetwerikoff\/orchestrator-pack.*chetwerikoff\/leopoker/i);
+        expect(api).not.toHaveBeenCalled();
+      }
+    } finally { api.mockRestore(); rmSync(root, { recursive: true, force: true }); }
   });
 });
 
