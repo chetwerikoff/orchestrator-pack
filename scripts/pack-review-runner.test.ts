@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -21,6 +21,10 @@ import {
 } from './lib/pack-review-run-store.ts';
 import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 import { runProcess } from './kernel/subprocess.ts';
+import {
+  boundIssueSnapshotArtifactPaths,
+  resolveBoundIssueSnapshot,
+} from './lib/reverify-bound-issue-snapshot.ts';
 import {
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   commitPackReviewTerminal,
@@ -1071,6 +1075,66 @@ describe('Issue #1826 logical-round smoke independence', () => {
     expect(result.runId).not.toBe(prior.run.id);
   });
 });
+
+describe('Issue #2412 first bound snapshot tier admission', () => {
+  it('captures nothing for bare T2, admits its correction, and preserves the valid snapshot', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'pack-review-2412-tier-admission-'));
+    roots.push(parent);
+    const storeRoot = join(parent, 'store');
+    setupHarness(storeRoot);
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'codex';
+    const head = '68beb271cd2332928f0e74dafb6e9ea837d513a4';
+    const binding = {
+      projectId: 'orchestrator-pack',
+      prNumber: 2411,
+      prHeadSha: head,
+      issueNumber: 2408,
+      storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+    };
+    const paths = boundIssueSnapshotArtifactPaths(binding);
+    const common = {
+      projectId: binding.projectId,
+      storeRoot,
+      sourceRepoRoot: process.cwd(),
+      prNumber: binding.prNumber,
+      headSha: head,
+      fixtureCurrentPrHeadSha: head,
+      fixturePostReviewHeadSha: head,
+      fixturePrState: 'OPEN' as const,
+      fixturePrBody: 'Closes #2408',
+      fixturePostReviewPrBody: 'Closes #2408',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: binding.issueNumber,
+      fixtureReviewStdout: cleanPayload(),
+      fixtureGithubReviewId: 241201,
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    };
+    const malformedBody = '```complexity-tier\nT2\n```';
+    const rejected = await startPackReview({ ...common, fixtureIssueBody: malformedBody });
+    expect(rejected).toMatchObject({ ok: false, created: false });
+    expect(existsSync(paths.snapshotPath)).toBe(false);
+    expect(existsSync(paths.metadataPath)).toBe(false);
+    expect(resolveBoundIssueSnapshot(binding).status).toBe('missing');
+    expect(rejected.reason).toContain('Issue #2408');
+    expect(rejected.reason).toContain('tier: T1|T2|T3');
+
+    const correctedBody = '```complexity-tier\ntier: T2\n```';
+    const admitted = await startPackReview({ ...common, fixtureIssueBody: correctedBody });
+    expect(admitted).toMatchObject({ ok: true, created: true });
+    const snapshot = resolveBoundIssueSnapshot(binding);
+    expect(snapshot.status).toBe('found');
+    expect(readFileSync(paths.snapshotPath, 'utf8')).toBe(correctedBody);
+    const metadataBytes = readFileSync(paths.metadataPath, 'utf8');
+
+    const reused = await startPackReview({ ...common, fixtureIssueBody: malformedBody });
+    expect(reused).toMatchObject({ ok: true, created: false, reused: true });
+    expect(readFileSync(paths.snapshotPath, 'utf8')).toBe(correctedBody);
+    expect(readFileSync(paths.metadataPath, 'utf8')).toBe(metadataBytes);
+    expect(resolveBoundIssueSnapshot(binding).snapshotHash).toBe(snapshot.snapshotHash);
+  });
+});
+
 describe('Issue #1647 authoritative tier resolution', () => {
   it('uses the canonical default for a legal Issue without a complexity-tier fence', () => {
     expect(parseAuthoritativeTier('# Firefighter repair\n\nNo tier is required.')).toBe('T2');
