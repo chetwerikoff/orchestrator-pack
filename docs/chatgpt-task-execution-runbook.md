@@ -599,10 +599,12 @@ finding code/signature, name the live Issue revision and corrected root, and
 explicitly state that no code or behavior change was made for that disposition.
 Earlier rounds' FIXED entries and a non-blocking DEFER cannot answer a blocker.
 Credentialed source `scope` and `scope-violation` findings use the same eligibility
-predicate. Corrected paths use the existing scope guard's normalized glob/prefix
-matcher: an effective live allowed root must admit the path, and neither the
-live Issue denylist nor the repository denylist may deny it. SHA-green CI does
-not supersede a denylist retained in a later live Issue revision.
+predicate, based on the persisted typed category and canonical fingerprint,
+never scope/signature lines quoted in free-form reviewer prose. Corrected paths
+use the existing scope guard's normalized glob/prefix matcher: an effective live
+allowed root must admit the path, and neither the live Issue denylist nor the
+repository denylist may deny it. SHA-green CI does not supersede a denylist
+retained in a later live Issue revision.
 
 The registered `issue-body-edit-evidence` query in the tracked GitHub inventory
 provides the latest undeleted content-edit body and timestamp; that body must

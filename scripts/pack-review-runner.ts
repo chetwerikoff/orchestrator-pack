@@ -370,6 +370,8 @@ interface ReviewPayloadFinding {
   severity?: string;
   filePath?: string;
   sourceSlotId?: string;
+  category?: string;
+  fingerprint?: string;
 }
 
 interface GptHarvestIncident {
@@ -3399,9 +3401,9 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
     if (sections.length !== 1) return false;
     const bullets = sections[0]!.split(/(?=^-\s)/m).slice(1);
     return blockers.every((finding) => {
-      const code = finding.body?.match(/^code: (.+)$/m)?.[1];
-      const signature = finding.body?.match(/^signature: ([a-f0-9]{64})$/m)?.[1];
-      if (!code || !signature || !/^type: (scope|scope-violation)$/m.test(finding.body ?? '')) return false;
+      const code = finding.body?.match(/^type: [^\n]+\ncode: ([^\n]+)\nseverity:/)?.[1];
+      const signature = trim(finding.fingerprint);
+      if (!code || !/^[a-f0-9]{64}$/.test(signature) || !['scope', 'scope-violation'].includes(trim(finding.category))) return false;
       const matches = bullets.filter((bullet) => bullet.includes(`\`${code}\``) && bullet.includes(`\`${signature}\``));
       if (matches.length !== 1) return false;
       const bullet = matches[0]!;

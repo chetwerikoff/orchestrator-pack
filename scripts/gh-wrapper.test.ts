@@ -1424,6 +1424,9 @@ tryGraphqlDegradedPassthrough(argv, fakeGh, { env: process.env });`;
     const inventory = JSON.parse(readFileSync(join(wrapperDir, 'lib/graphql-quota-github-read-inventory.json'), 'utf8')) as { rows: Array<{ id: string; ownerClass: string; query?: string }> };
     const row = inventory.rows.find((entry) => entry.id === 'issue-body-edit-evidence')!;
     expect(row.ownerClass).toBe('graphql_fail_fast');
+    // Live Issue2428 calibration: first is r01/latest; last was r00/creation.
+    expect(row.query).toContain('userContentEdits(first: 1)');
+    expect(row.query).not.toContain('userContentEdits(last:');
     const argv = ['api', 'graphql', '-f', `query=${row.query}`, '-f', 'owner=example', '-f', 'name=target', '-F', 'number=228'];
     const harness = buildGraphqlDegradedHarness({ initialRemaining: 5000, forceGraphqlQuotaError: true });
     try {
