@@ -120,6 +120,7 @@ export interface PackReviewCycle {
   atCapHash?: string;
   reviewStageComplete?: boolean;
   reviewStageCompletedAtUtc?: string;
+  settlementKind?: 'same_head_issue_resolution';
   reviewStartConsumed?: boolean;
   resetProvenance?: PackReviewResetProvenance;
 }
@@ -1159,11 +1160,14 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
   reviewedHeadSha: string;
   currentHeadSha: string;
   reviewedHeadIsAncestor: boolean;
+  /** Validated by scoped reconcile from live Issue/disposition/source/CI evidence. */
+  sameHeadIssueResolution?: { runId: string; cycleId: string; logicalRoundOrdinal: number };
   options: PackReviewAuthorityOptions;
 }): PackReviewAuthorityDocument {
   const reviewedHeadSha = normalizeSha(input.reviewedHeadSha, 'reviewedHeadSha');
   const currentHeadSha = normalizeSha(input.currentHeadSha, 'currentHeadSha');
-  if (!packReviewFindingsSatisfiedByStrictDescendant({
+  const sameHead = input.sameHeadIssueResolution;
+  if (!(sameHead && reviewedHeadSha === currentHeadSha) && !packReviewFindingsSatisfiedByStrictDescendant({
     reviewedHeadSha,
     currentHeadSha,
     reviewedHeadIsAncestor: input.reviewedHeadIsAncestor,
@@ -1195,6 +1199,15 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
       }
 
       const consumedCount = cycleConsumedCount(cycle);
+      if (sameHead && (reviewedHeadSha !== currentHeadSha
+          || current.terminal.runId !== sameHead.runId
+          || cycle.cycleId !== sameHead.cycleId
+          || current.terminal.logicalRoundOrdinal !== sameHead.logicalRoundOrdinal
+          || sameHead.logicalRoundOrdinal !== cycle.frozenCap
+          || consumedCount !== cycle.frozenCap
+          || !['at_cap_open_findings', 'at_cap_continuation_required'].includes(cycle.state))) {
+        throw new PackReviewAuthorityError('findings_settlement_invalid', 'same-head Issue resolution is not the exact final capped terminal');
+      }
       if (cycle.state === 'open_findings' && consumedCount < cycle.frozenCap) {
         cycle.state = 'open';
         cycle.closedAtUtc = undefined;
@@ -1207,6 +1220,7 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
         cycle.closedAtUtc = nowIso(input.options);
         cycle.atCapHash = undefined;
         markReviewStageComplete(current, cycle.closedAtUtc);
+        if (sameHead) cycle.settlementKind = 'same_head_issue_resolution';
       } else {
         throw new PackReviewAuthorityError(
           'findings_settlement_invalid',
