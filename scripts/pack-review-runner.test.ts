@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -67,6 +67,15 @@ describe('Issue #1887 GitHub compare ancestry normalization', () => {
 function setupHarness(storeRoot: string): void {
   process.env.OPK_VITEST_HARNESS = '1';
   process.env.PACK_REVIEWER = 'codex';
+  process.env.XDG_CONFIG_HOME = join(storeRoot, 'test-config');
+  const projects = join(process.env.XDG_CONFIG_HOME, 'orchestrator-pack', 'projects');
+  mkdirSync(projects, { recursive: true });
+  writeFileSync(join(projects, 'orchestrator-pack.json'), JSON.stringify({
+    projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+    primaryRoot: process.cwd(), defaultBranch: 'main',
+    orcaWorkspacePattern: '^test-only$', orchestratorTitlePattern: '^test-only$',
+    browserGpt: { projectUrl: 'https://example.invalid/test-only' },
+  }));
   process.env.OPK_BASE_DIR = join(storeRoot, 'base');
   process.env.OPK_REVIEW_CLAIM_DIR = join(storeRoot, 'base', 'projects', 'orchestrator-pack', 'review-start-claims');
   process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR = join(storeRoot, 'bound-issue-snapshots');
@@ -1276,5 +1285,119 @@ describe('Issue #1887 immediate final-cap descendant reconciliation', () => {
       consumedRoundOrdinals: [1],
       reviewStageComplete: true,
     });
+  });
+});
+
+describe('Issue #2420 stale reconciliation linked-owner notification', () => {
+  function fixture(linkedSessionId: string | undefined = 'synthetic-owner-2420') {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2420-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const options = { projectId: 'orchestrator-pack', storeRoot };
+    const create = () => createPackReviewRun({
+      ...options, prNumber: 2420, headSha: HEAD, linkedSessionId,
+      trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack', resolvedReviewer: 'codex',
+    }).run;
+    const run = create();
+    updatePackReviewRun(run.id, {
+      status: 'running', runnerPid: 99999999,
+    }, { ...options, now: new Date('2026-01-01T00:00:00.000Z') });
+    const notifications: Array<{ message: string; idempotencyKey: string; reviewRunId?: string }> = [];
+    const statuses: string[] = [];
+    const input = {
+      ...options, prNumber: 2420, sourceRepoRoot: process.cwd(),
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureRequiredStatusWriter: async (request: { state: string }) => { statuses.push(request.state); },
+      fixtureWorkerNotifier: async (request: typeof notifications[number]) => {
+        notifications.push(request);
+        return { state: 'delivered' as const, reason: 'intercepted' };
+      },
+    };
+    return { options, run, create, input, notifications, statuses };
+  }
+
+  it('terminalizes the authoritative stale run and wakes its exact linked owner', async () => {
+    const f = fixture();
+    await reconcileStalePackReviewRuns(f.input);
+    expect(getPackReviewRun(f.run.id, f.options)).toMatchObject({
+      status: 'failed', failureReason: 'runner_disappeared_stale',
+      linkedSessionId: 'synthetic-owner-2420',
+      deliveryOutcomes: { workerNotification: { state: 'delivered', reason: 'intercepted' } },
+    });
+    expect(f.statuses).toEqual(['error']);
+    expect(f.notifications).toHaveLength(1);
+    expect(f.notifications[0]).toMatchObject({
+      reviewRunId: f.run.id, idempotencyKey: `worker-notification:${f.run.id}:${HEAD}`,
+    });
+    expect(f.notifications[0].message).toContain('runner_disappeared_stale');
+    expect(f.notifications[0].message).toContain('GitHub-first');
+    expect(f.notifications[0].message).toContain('docs/orchestration-runbook.md');
+  });
+
+  it('preserves persisted notification evidence on repeated reconciliation', async () => {
+    const f = fixture();
+    await reconcileStalePackReviewRuns(f.input);
+    const before = getPackReviewRun(f.run.id, f.options)?.deliveryOutcomes;
+    await reconcileStalePackReviewRuns(f.input);
+    expect(f.notifications).toHaveLength(1);
+    expect(getPackReviewRun(f.run.id, f.options)?.deliveryOutcomes).toEqual(before);
+    expect(f.statuses).toEqual(['error']);
+  });
+
+  it('does not wake a superseded stale owner or overwrite newer authority', async () => {
+    const f = fixture();
+    const newer = f.create();
+    await reconcileStalePackReviewRuns(f.input);
+    expect(f.notifications).toEqual([]);
+    expect(f.statuses).toEqual(['pending']);
+    expect(getPackReviewRun(newer.id, f.options)?.status).toBe('queued');
+  });
+
+  it('does not invent an owner for an unlinked stale run', async () => {
+    const f = fixture('');
+    await reconcileStalePackReviewRuns(f.input);
+    expect(f.notifications).toEqual([]);
+    expect(f.statuses).toEqual(['error']);
+  });
+
+  it('does not notify when newer authority appears during the status write', async () => {
+    const f = fixture();
+    let newer: PackReviewRunRecord | undefined;
+    await reconcileStalePackReviewRuns({
+      ...f.input, fixturePauseAfterStaleStatusWrite: () => { newer = f.create(); },
+    });
+    expect(f.notifications).toEqual([]);
+    expect(f.statuses).toEqual(['error', 'pending']);
+    expect(getPackReviewRun(newer!.id, f.options)?.status).toBe('queued');
+  });
+
+  it('preserves notification failure without retrying or pretending it was delivered', async () => {
+    const f = fixture();
+    let attempts = 0;
+    const input = { ...f.input, fixtureWorkerNotifier: async () => {
+      attempts += 1;
+      throw new Error('intercepted notification failure');
+    } };
+    await reconcileStalePackReviewRuns(input);
+    const before = getPackReviewRun(f.run.id, f.options)?.deliveryOutcomes;
+    await reconcileStalePackReviewRuns(input);
+    expect(attempts).toBe(1);
+    expect(before?.workerNotification).toMatchObject({
+      state: 'failed', reason: 'intercepted notification failure',
+    });
+    expect(getPackReviewRun(f.run.id, f.options)?.deliveryOutcomes).toEqual(before);
+  });
+
+  it('recovers a missing notification after stale status was already journaled', async () => {
+    const f = fixture('');
+    await reconcileStalePackReviewRuns(f.input);
+    const before = getPackReviewRun(f.run.id, f.options)?.deliveryOutcomes.requiredStatus;
+    updatePackReviewRun(f.run.id, { linkedSessionId: 'synthetic-owner-2420' }, f.options);
+    await reconcileStalePackReviewRuns(f.input);
+    expect(f.notifications).toHaveLength(1);
+    expect(f.statuses).toEqual(['error']);
+    expect(getPackReviewRun(f.run.id, f.options)?.deliveryOutcomes.requiredStatus).toEqual(before);
   });
 });

@@ -384,6 +384,7 @@ interface RestoreAuthoritativeRequiredStatusOptions extends RecordPendingReviewO
 }
 
 interface RecordStaleRequiredStatusOptions extends RecordPendingReviewOptions {
+  notifyWorker?: PackReviewWorkerNotifier;
   authorizeWrite?: () => boolean | Promise<boolean>;
   repairSupersededWrite?: () => { reason: string } | Promise<{ reason: string }>;
   pauseBeforeWrite?: () => void | Promise<void>;
@@ -872,22 +873,7 @@ export async function deliverPackReviewVerdict(
         idempotencyKey: workerKey,
         reviewRunId: options.run.id,
       });
-      if (notified.state === 'delivered' || notified.state === 'failed' || notified.state === 'escalated') {
-        recordChannelOutcome('workerNotification', outcome(notified.state, notified.reason, workerKey, options.clock));
-      } else {
-        const submitted = notified.state === 'submitted';
-        const durableState: PackReviewDeliveryOutcome['state'] = submitted
-          ? 'succeeded'
-          : notified.state === 'pre_dispatch_failure'
-            ? notified.reason === 'worker_generation_mismatch'
-              ? 'escalated'
-              : 'failed'
-            : 'escalated';
-        recordChannelOutcome(
-          'workerNotification',
-          outcome(durableState, notified.reason, workerKey, options.clock),
-        );
-      }
+      recordChannelOutcome('workerNotification', workerNotificationOutcome(notified, workerKey, options.clock));
     } catch (error) {
       recordChannelOutcome('workerNotification', outcome('failed', describeError(error), workerKey, options.clock));
     }
@@ -1037,6 +1023,21 @@ export async function restorePackReviewAuthoritativeRequiredStatus(
   return null;
 }
 
+function workerNotificationOutcome(
+  notified: PackReviewWorkerNotificationResult | PackReviewWorkerSubmissionResult,
+  key: string,
+  clock?: () => Date,
+): PackReviewDeliveryOutcome {
+  const state = notified.state === 'delivered' || notified.state === 'failed' || notified.state === 'escalated'
+    ? notified.state
+    : notified.state === 'submitted'
+      ? 'succeeded'
+      : notified.state === 'pre_dispatch_failure' && notified.reason !== 'worker_generation_mismatch'
+        ? 'failed'
+        : 'escalated';
+  return outcome(state, notified.reason, key, clock);
+}
+
 export async function recordPackReviewStaleRequiredStatus(
   options: RecordStaleRequiredStatusOptions,
 ): Promise<PackReviewDeliveryOutcome> {
@@ -1047,31 +1048,57 @@ export async function recordPackReviewStaleRequiredStatus(
   if (options.authorizeWrite && !(await options.authorizeWrite())) {
     return outcome('failed', 'newer_run_authoritative', idempotencyKey, options.clock);
   }
-  let statusOutcome: PackReviewDeliveryOutcome;
-  try {
-    await options.writeRequiredStatus({
-      state: 'error',
-      context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-      description,
-      idempotencyKey,
-    });
-    statusOutcome = outcome(
-      'succeeded',
-      failureReason === 'runner_disappeared_stale' ? 'status_stale_runner_disappeared' : 'status_unfinished_execution',
-      idempotencyKey,
-      options.clock,
-    );
-  } catch (error) {
-    statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
+  const needsStatus = !packReviewRequiredStatusStaleReconciliationComplete(options.run);
+  let statusOutcome = options.run.deliveryOutcomes.requiredStatus!;
+  if (needsStatus) {
+    try {
+      await options.writeRequiredStatus({
+        state: 'error',
+        context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+        description,
+        idempotencyKey,
+      });
+      statusOutcome = outcome(
+        'succeeded',
+        failureReason === 'runner_disappeared_stale' ? 'status_stale_runner_disappeared' : 'status_unfinished_execution',
+        idempotencyKey,
+        options.clock,
+      );
+    } catch (error) {
+      statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
+    }
+    if (options.pauseAfterWrite) await options.pauseAfterWrite();
   }
-  if (options.pauseAfterWrite) await options.pauseAfterWrite();
   if (options.authorizeWrite && !(await options.authorizeWrite())) {
     const repair = options.repairSupersededWrite
       ? await options.repairSupersededWrite()
       : undefined;
     return outcome('failed', repair?.reason ?? 'newer_run_authoritative', idempotencyKey, options.clock);
   }
-  persistRequiredStatusOutcome(options.run.id, statusOutcome, options);
+  if (needsStatus) persistRequiredStatusOutcome(options.run.id, statusOutcome, options);
+  const current = safeGetPackReviewRun(options.run.id, options) ?? options.run;
+  const workerKey = workerNotificationIdempotencyKey(current);
+  if (failureReason === 'runner_disappeared_stale' && trim(current.linkedSessionId)
+    && options.notifyWorker && !completedResumeChannelOutcome(current, 'workerNotification', workerKey)) {
+    let notificationOutcome: PackReviewDeliveryOutcome;
+    try {
+      const notified = await options.notifyWorker({
+        message: [
+          `Pack review failed for PR #${current.prNumber}: runner_disappeared_stale.`,
+          `Run: ${current.id}`,
+          `Head: ${current.targetSha}`,
+          'Next: GitHub-first recovery for this exact run through the Pack-review recovery recipe in docs/orchestration-runbook.md.',
+          'This notification does not authorize a resend, replacement, or new review round.',
+        ].join('\n'),
+        idempotencyKey: workerKey,
+        reviewRunId: current.id,
+      });
+      notificationOutcome = workerNotificationOutcome(notified, workerKey, options.clock);
+    } catch (error) {
+      notificationOutcome = outcome('failed', describeError(error), workerKey, options.clock);
+    }
+    persistChannelOutcome(current.id, 'workerNotification', notificationOutcome, options);
+  }
   return statusOutcome;
 }
 
