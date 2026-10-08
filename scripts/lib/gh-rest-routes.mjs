@@ -576,6 +576,7 @@ export function executeRestRoute(routeId, ctx) {
     ? { slug: route.repoSlug, host: parsed.hostname ?? process.env.GH_HOST ?? 'github.com' }
     : resolveRepoContext({
       cwd,
+      cwdIsExplicit: false,
       repoFlag: parsed.repo,
       realGh,
       hostname: parsed.hostname,
@@ -633,6 +634,7 @@ export function executeRestRoute(routeId, ctx) {
         const repoView = {
           nameWithOwner: resolveNameWithOwner({
             cwd,
+            cwdIsExplicit: false,
             repoFlag: parsed.repo,
             realGh,
             hostname: parsed.hostname,

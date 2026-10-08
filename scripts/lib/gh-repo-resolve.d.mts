@@ -12,12 +12,14 @@ export function mapIssueStateReason(issue: Record<string, unknown>): string | nu
 export function mapIssueToGhJson(issue: Record<string, unknown>, fields: string[]): Record<string, unknown>;
 export function resolveRepoContext(options: {
   cwd?: string;
+  cwdIsExplicit?: boolean;
   repoFlag?: string | null;
   realGh: string;
   hostname?: string | null;
 }): { slug: string; host: string };
 export function resolveNameWithOwner(options: {
   cwd?: string;
+  cwdIsExplicit?: boolean;
   repoFlag?: string | null;
   realGh: string;
   hostname?: string | null;
