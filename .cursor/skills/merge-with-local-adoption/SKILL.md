@@ -144,8 +144,6 @@ resolved repository and absolute path before effects.
 - Never signal PID 1, a negative PID, process-group zero, or a process selected by name.
   Process selection is the exact target CWD plus descendants only.
 
-## Step 1 — Resolve the selected project and snapshot its operator checkout
-
 Before resolving any PR/Issue, resolve the selected project card with `node --experimental-strip-types scripts/lib/target-context.ts check`. Bind its exact `repository` as `TARGET_REPOSITORY` and its exact `defaultBranch` as `TARGET_DEFAULT_BRANCH`. Missing selection or any explicit repository/base mismatch is terminal; do not infer target identity from cwd/origin.
 
 Bind that same card's `projectId` and `primaryRoot` as `PROJECT_ID` and `PRIMARY_ROOT`;
@@ -159,7 +157,7 @@ A pack card named `pack-local` still takes the pack route;
 a foreign card named `orchestrator-pack` still takes the target route. Project ids and
 registry presence do not authorize pack effects; do not use a pack registry fallback.
 
-### Snapshot the operator checkout
+## Step 1 — Snapshot the operator checkout
 
 Record the selected primary checkout explicitly, regardless of the shell's current directory:
 
