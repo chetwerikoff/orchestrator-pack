@@ -225,7 +225,7 @@ export function actionablePanes(observations: readonly FleetPaneObservation[]): 
 
 export function stoppedSignature(observations: readonly FleetPaneObservation[]): string {
   return actionablePanes(observations)
-    .map((pane) => `${pane.state} ${pane.handle}`)
+    .map((pane) => JSON.stringify([pane.state, pane.handle, pane.incarnationId, pane.taskBinding, pane.branch, pane.lines]))
     .sort((left, right) => left.localeCompare(right))
     .join('\n');
 }
@@ -661,9 +661,9 @@ async function wakePanesOnEvents(
   }
   const parkedEpisodes = observations.flatMap((pane) => {
     if (!pane.worktreePath) return [];
-    const lastLine = pane.lines.at(-1)?.trim() ?? '';
-    const parked = /^PARKED on orchestrator answer:\s*(.+)$/iu.exec(lastLine);
-    return parked ? [{ pane, parked, key: `parked:${pane.handle}:${lastLine}` }] : [];
+    const lastLine = pane.wait ?? '';
+    const parked = pane.state === 'PARKED' ? /^PARKED on orchestrator answer:\s*(.+)$/iu.exec(lastLine) : null;
+    return parked ? [{ pane, parked, key: `parked:${pane.handle}:${pane.taskBinding ?? pane.incarnationId ?? ''}:${lastLine}` }] : [];
   });
   const activeParkedKeyByHandle = new Map(
     parkedEpisodes.map(({ pane, key }) => [pane.handle, key] as const),
@@ -724,6 +724,7 @@ async function wakePanesOnEvents(
       continue;
     }
     store.markParkedWakeEvent(key);
+    if (pane.handle !== coordinator.handle) store.clearPaneWait?.(pane.handle);
     log(`sent event wake to ${pane.handle}: ${key}`);
   }
 }
@@ -769,6 +770,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   try {
     observations = runFleetSweep({
       primary: config.primary,
+      projectId: config.projectId,
       workspaceRe: config.workspaceRe,
       coordinatorHandle: coordinator.handle,
       coordinatorTitleRe: config.orchestratorTitleRe,

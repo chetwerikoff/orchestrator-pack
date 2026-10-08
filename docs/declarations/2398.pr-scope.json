@@ -1,0 +1,28 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2398,
+  "declared_paths": [
+    "docs/declarations/2398.pr-scope.json",
+    "scripts/fleet/fleet-sweep.test.ts",
+    "scripts/fleet/fleet-sweep.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts"
+  ],
+  "denylist": [
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.test",
+    "credentials/",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/pack-review-runner.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/fleet/"
+  ],
+  "source_revision": "238766140c4b202192337e482d020fd771e7cf96"
+}
