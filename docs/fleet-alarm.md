@@ -37,15 +37,17 @@ mkdir -p ~/.config/orchestrator-fleet ~/.config/systemd/user ~/.local/state/orch
 cp scripts/fleet/fleet-wake@.service ~/.config/systemd/user/
 cp scripts/fleet/fleet-wake.env.example ~/.config/orchestrator-fleet/my-project.env
 $EDITOR ~/.config/orchestrator-fleet/my-project.env
+systemctl --user edit fleet-wake@my-project # per-instance drop-in shown below
 systemctl --user daemon-reload
 systemctl --user enable --now fleet-wake@my-project
 ```
 
 Set `PRIMARY` to the absolute primary checkout path. Optional keys are
 `WORKSPACE_RE`, `ORCH_TITLE_RE` (default `Cursor`), `ORCH_HANDLE`,
-`ARCHITECT_HANDLE`, `BUSY_RE`, and `FLEET_WAKE_INTERVAL` (default `300` seconds). The service invokes the pack's
-canonical TypeScript wrapper from `PRIMARY` and appends logs to
-`~/.local/state/orchestrator-fleet/my-project.fleet-wake.log`.
+`ARCHITECT_HANDLE`, `BUSY_RE`, and `FLEET_WAKE_INTERVAL` (default `300` seconds).
+The selected project card remains the checkout/matching authority. Render the
+service's `{PACK_ROOT}` placeholders with the trusted pack path before installing
+it; logs append to `~/.local/state/orchestrator-fleet/my-project.fleet-wake.log`.
 
 `ARCHITECT_HANDLE` optionally excludes one exact Orca terminal handle from fleet
 units. Both fleet-wake and the one-off sweep consume this environment key; export
@@ -53,9 +55,39 @@ it for the one-off command as well. The excluded pane is not screen-read or
 classified, named as a unit in fleet alarms, or directly woken for GPT/CI events
 or chat banners. No title or pattern identifies an architect: another pane with
 the same title remains eligible. Leaving the key unset preserves normal behavior
-and coordinator selection. The operator supplies the handle in local configuration
-and performs any service restart after merge/adoption; the public example contains
-no machine-specific values.
+and coordinator selection. An explicit chat binding to the excluded handle also
+stops ownership lookup; it cannot fall through to another worker.
+
+### Operator-owned environment ingress and activation
+
+The tracked unit does not load a local env file. Editing that file and restarting
+alone does not supply `ARCHITECT_HANDLE`. The operator must ensure that the selected
+instance has a per-instance drop-in. In `systemctl --user edit fleet-wake@my-project`,
+save the following service settings (the default override location is
+`~/.config/systemd/user/fleet-wake@my-project.service.d/override.conf`):
+
+```ini
+[Service]
+EnvironmentFile=%h/.config/orchestrator-fleet/%i.env
+```
+
+`%h` is the user's home and `%i` is the selected instance name. Keep the file
+operator-owned and populate only intended public fleet settings locally. For an
+existing instance, activation happens after remote merge and local filesystem
+adoption: the operator updates its selected env file, ensures the drop-in above
+exists, then runs:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user restart fleet-wake@my-project
+```
+
+Workers and integration actors do not edit local env files, install the drop-in,
+or restart the service. Notify the operator after merge/adoption and await its
+activation before invoking any verifier that could automatically restart the
+service. Runtime readback follows activation and must exercise the linked Issue's
+fleet regression; a clean-checkout pointer check is implementation proof only.
+The public example contains no machine-specific values.
 
 Check the service and log:
 

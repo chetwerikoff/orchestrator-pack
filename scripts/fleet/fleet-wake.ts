@@ -278,6 +278,7 @@ export function bannerOwnerPane(
   headRef: typeof readPrHeadRef = readPrHeadRef,
 ): FleetTerminal | undefined {
   const binding = readBinding(banner.url);
+  if (config.architectHandle && binding?.terminal_handle === config.architectHandle) return undefined;
   const launcher = binding?.terminal_handle
     ? terminals.find((terminal) => terminal.handle === binding.terminal_handle && isWorkerPane(terminal, config))
     : undefined;

@@ -4,12 +4,15 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parseEnv } from 'node:util';
+import * as targetContext from '../lib/target-context.ts';
 import { describe, expect, it, vi } from 'vitest';
 import {
   FileFleetWakeStateStore,
   bannerOwnerPane,
   listTerminalEnvelopes,
   fleetAlarmMessage,
+  fleetWakeConfigFromEnv,
   managerBannerMessage,
   runFleetAlarmTick,
   type FleetWakeConfig,
@@ -215,8 +218,50 @@ describe('fleet alarm', () => {
     const settings = config({ architectHandle, chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'test/project' } });
     expect(bannerOwnerPane(banner, [owned], settings, readBinding, () => 'fix/architect')).toBeUndefined();
     const other = { ...owned, handle: 'ordinary-worker' };
-    expect(bannerOwnerPane(banner, [other], settings, readBinding, () => 'fix/architect')?.handle).toBe('ordinary-worker');
+    const ordinaryBinding = () => route === 'launcher' ? { ...binding, terminal_handle: other.handle } : readBinding();
+    expect(bannerOwnerPane(banner, [other], settings, ordinaryBinding, () => 'fix/architect')?.handle).toBe('ordinary-worker');
   });
+
+  it.each(['worktree', 'branch', 'issue'])('does not reassign an excluded explicit banner owner through %s fallback (#2422 review)', (route) => {
+    const url = 'https://chatgpt.com/c/fixture-excluded-launcher';
+    const other = { ...terminals[1]!, worktreePath: `${workerBase}/issue-2422`, branch: 'refs/heads/fix/worker' };
+    const binding = { schema: 'chat-binding/v1' as const, conversation_url: url,
+      terminal_handle: architectHandle, worktree: route === 'worktree' ? other.worktreePath : '/elsewhere', updated_at: '2026-10-08T00:00:00Z' };
+    expect(bannerOwnerPane({ url, issue: 2422, ...(route === 'branch' ? { pull: 1 } : {}) },
+      [architect, other], config({ architectHandle, chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'test/project' } }),
+      () => binding, () => 'fix/worker')).toBeUndefined();
+  });
+
+  it.each([true, false])('passes the operator env file through config to an intercepted tick: %s (#2422 r01)', async (exclude) => {
+    // Systemd owns EnvironmentFile loading; no local file, service, browser or GitHub is touched.
+    const docs = readFileSync(new URL('../../docs/fleet-alarm.md', import.meta.url), 'utf8');
+    expect(docs).toContain('[Service]\nEnvironmentFile=%h/.config/orchestrator-fleet/%i.env');
+    const publicTemplate = readFileSync(new URL('./fleet-wake.env.example', import.meta.url), 'utf8');
+    const env = parseEnv(`${publicTemplate}\nORCH_HANDLE=coord\n${exclude ? `ARCHITECT_HANDLE= ${architectHandle} ` : ''}\n`);
+    const target = vi.spyOn(targetContext, 'resolveTargetContext').mockReturnValue({
+      projectId: 'fixture', repository: 'test/project', primaryRoot: primary, defaultBranch: 'main',
+      orcaWorkspacePattern: '/home/user/', orchestratorTitlePattern: 'Cursor',
+      browserGpt: { projectUrl: 'https://chatgpt.com/g/g-p/project/test' }, packRoot: '/pack', cardPath: '/fixture/card.json',
+    });
+    try {
+      const settings = fleetWakeConfigFromEnv(env, ['--project', 'fixture']);
+      expect(settings.architectHandle).toBe(exclude ? architectHandle : undefined);
+      expect(settings.orchestratorHandle).toBe('coord');
+      const calls: string[][] = [];
+      const result = await runFleetAlarmTick({
+        config: settings, executor: fakeOrca({ coord: 'idle', [architectHandle]: 'Ready.\n>' }, calls, [terminals[0]!, architect]),
+        store: new MemoryWakeStore(), sleepMs: async () => {}, log: () => {},
+        readChats: async () => [], closeChat: async () => { throw new Error('unexpected close'); },
+        listTerminalEnvelopes: () => [{ path: '/tmp/opencode/architect-terminal.json', invocationId: 'fixture', terminalHandle: architectHandle }],
+        listUnreadRunMessages: () => [], listOpenPulls: () => [], readWorktreeHead: () => undefined,
+      });
+      expect(result.state).toBe(exclude ? 'nothing_stopped' : 'sent');
+      expect(calls.some((call) => call[1] === 'read' && call.includes(architectHandle))).toBe(!exclude);
+      expect(sendsTo(calls, architectHandle)).toHaveLength(exclude ? 0 : 2);
+      if (!exclude) expect(sendsTo(calls, 'coord')[0]?.join(' ')).toContain(architectHandle);
+    } finally { target.mockRestore(); }
+  });
+
 
   it.each(['idle acknowledgment', 'busy mid-answer', 'polling mid-answer', 'tool summary', 'raw tool gutter', 'gear tool',
     'gutter # Running inspection', 'gutter → Read scripts/example.ts', 'gutter ⚙ hashline_edit scripts/example.ts',
