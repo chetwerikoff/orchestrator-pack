@@ -1,0 +1,27 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2403,
+  "declared_paths": [
+    "docs/declarations/2403.pr-scope.json",
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-repo-resolve.mjs"
+  ],
+  "denylist": [
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.test",
+    "credentials/",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/fleet/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-repo-resolve.mjs"
+  ],
+  "source_revision": "ba68f34f84847a0b9ffb34d9f94d43a8db4092df"
+}

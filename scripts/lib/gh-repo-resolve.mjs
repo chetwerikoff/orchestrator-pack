@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseRemoteSlug, RESOLVER_GIT_ARGV } from './git-origin-slug.mjs';
+import { resolveTargetContext } from './target-context.ts';
 
 export { RESOLVER_GIT_ARGV };
 
@@ -94,25 +95,30 @@ function parseRepoFlag(repoFlag) {
  */
 export function resolveRepoContext(options) {
   const cwd = options.cwd ?? process.cwd();
-  const host = readGhHostname(options.realGh, options.hostname ?? null);
-
   const flagRepo = parseRepoFlag(options.repoFlag ?? null);
-  if (flagRepo) {
-    return { slug: flagRepo, host };
-  }
-
   const envRepo = process.env.GH_REPO ? parseRepoFlag(process.env.GH_REPO) : null;
-  if (envRepo) {
-    return { slug: envRepo, host };
-  }
-
+  const selectedRepo = String(process.env.OPK_PROJECT_ID ?? '').trim()
+    ? resolveTargetContext().repository
+    : null;
   const top = gitToplevel(cwd);
   const gitSlug = top ? gitOriginSlug(top) : null;
-  if (gitSlug) {
-    return { slug: gitSlug, host };
+
+  // Supplied cwd is checkout authority; an omitted cwd is only CLI context.
+  const explicitRepo = flagRepo ?? (options.cwd !== undefined ? gitSlug : null);
+  for (const authority of [explicitRepo, selectedRepo]) {
+    if (envRepo && authority && envRepo.toLowerCase() !== authority.toLowerCase()) {
+      throw new Error(
+        `gh-wrapper: inherited GH_REPO ${envRepo} conflicts with explicit/selected repository ${authority}; unset GH_REPO or set it to ${authority}`,
+      );
+    }
   }
 
-  throw new Error('gh-wrapper: could not resolve repository slug');
+  const slug = flagRepo ?? (options.cwd !== undefined ? gitSlug : null) ?? selectedRepo ?? envRepo ?? gitSlug;
+  if (!slug) {
+    throw new Error('gh-wrapper: could not resolve repository slug');
+  }
+  const host = readGhHostname(options.realGh, options.hostname ?? null);
+  return { slug, host };
 }
 
 /**

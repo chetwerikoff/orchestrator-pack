@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { classifyArgv, hasOnlyAllowedFlags, isUnsupportedHighLevelRead, PR_INFO_FROM_VIEW_FIELDS } from './lib/gh-inventory-match.mjs';
 import {
   aggregateChecks,
@@ -57,6 +57,12 @@ import { fetchIssueBodyFromGitHub } from './invoke-reviewer-contract-mapping.ts'
 import { resolveIssueNumber } from '../plugins/codex-pr-reviewer/lib/scope_context.ts';
 import { runSmokeGhSync } from './worker-smoke-run.ts';
 
+// Resolver fixtures select their own repositories, independent of the invoking seat.
+beforeEach(() => {
+  vi.stubEnv('OPK_PROJECT_ID', '');
+  vi.stubEnv('GH_REPO', '');
+});
+afterEach(() => vi.unstubAllEnvs());
 
 describe('gh inventory matcher', () => {
   it('routes open pr list with listed json fields', () => {
@@ -399,7 +405,7 @@ describe('gh repo resolution precedence', () => {
     const prev = process.env.GH_REPO;
     process.env.GH_REPO = 'env-owner/env-repo';
     try {
-      const ctx = resolveRepoContext({ realGh, cwd: process.cwd() });
+      const ctx = resolveRepoContext({ realGh });
       expect(ctx.slug).toBe('env-owner/env-repo');
     } finally {
       if (prev === undefined) {
@@ -408,6 +414,59 @@ describe('gh repo resolution precedence', () => {
         process.env.GH_REPO = prev;
       }
     }
+  });
+});
+
+describe('Issue #2403 production repository admission', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  function fixture() {
+    const root = mkdtempSync(join(tmpdir(), 'gh-repo-2403-'));
+    const checkout = join(root, 'LeoPoker');
+    const cards = join(root, 'orchestrator-pack', 'projects');
+    mkdirSync(checkout);
+    mkdirSync(cards, { recursive: true });
+    for (const args of [['init', '-q'], ['remote', 'add', 'origin', 'https://github.com/chetwerikoff/LeoPoker.git']]) {
+      expect(runProcessSync({ command: 'git', args, cwd: checkout }).exitCode).toBe(0);
+    }
+    writeFileSync(join(cards, 'leopoker.json'), JSON.stringify({
+      projectId: 'leopoker', repository: 'chetwerikoff/LeoPoker', primaryRoot: checkout,
+      defaultBranch: 'main', orcaWorkspacePattern: 'fixture', orchestratorTitlePattern: 'fixture',
+      browserGpt: { projectUrl: 'https://chatgpt.com/g/fixture/project' },
+    }));
+    vi.stubEnv('XDG_CONFIG_HOME', root);
+    vi.stubEnv('OPK_PROJECT_ID', '');
+    vi.stubEnv('GH_REPO', 'chetwerikoff/orchestrator-pack');
+    return { root, checkout };
+  }
+
+  it('rejects the witnessed selected LeoPoker resolver input and accepts only matching GH_REPO', async () => {
+    const { root, checkout } = fixture();
+    try {
+      vi.stubEnv('OPK_PROJECT_ID', 'leopoker');
+      await expect(resolveRepositorySlug(checkout)).rejects.toThrow(/chetwerikoff\/orchestrator-pack.*chetwerikoff\/leopoker/i);
+      vi.stubEnv('GH_REPO', 'chetwerikoff/LeoPoker');
+      await expect(resolveRepositorySlug(checkout)).resolves.toBe('chetwerikoff/LeoPoker');
+      expect(resolveRepoContext({ realGh: '/bin/false', hostname: 'github.com' }).slug.toLowerCase()).toBe('chetwerikoff/leopoker');
+      vi.stubEnv('GH_REPO', '');
+      await expect(resolveRepositorySlug(checkout)).resolves.toBe('chetwerikoff/LeoPoker');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('rejects explicit checkout and flag conflicts while preserving incidental cwd defaults', () => {
+    const { root, checkout } = fixture();
+    const options = { realGh: '/bin/false', hostname: 'github.com' };
+    try {
+      expect(() => resolveRepoContext({ ...options, cwd: checkout })).toThrow(/chetwerikoff\/orchestrator-pack.*chetwerikoff\/LeoPoker/i);
+      expect(() => resolveRepoContext({ ...options, repoFlag: 'chetwerikoff/LeoPoker' })).toThrow(/chetwerikoff\/orchestrator-pack.*chetwerikoff\/LeoPoker/i);
+      expect(resolveRepoContext(options).slug).toBe('chetwerikoff/orchestrator-pack');
+      expect(resolveRepoContext({ ...options, repoFlag: 'chetwerikoff/orchestrator-pack' }).slug).toBe('chetwerikoff/orchestrator-pack');
+      vi.stubEnv('GH_REPO', 'chetwerikoff/LeoPoker');
+      expect(resolveRepoContext({ ...options, cwd: checkout }).slug).toBe('chetwerikoff/LeoPoker');
+      vi.stubEnv('GH_REPO', '');
+      expect(resolveRepoContext({ ...options, cwd: checkout, repoFlag: 'flag/priority' }).slug).toBe('flag/priority');
+      expect(resolveRepoContext(options).slug).toBe('chetwerikoff/orchestrator-pack');
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
 
