@@ -1,0 +1,28 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2408,
+  "declared_paths": [
+    "docs/declarations/2408.pr-scope.json",
+    "scripts/lib/vitest-live-store-parent-guard.mjs",
+    "scripts/vitest-live-store-parent-guard.test.ts"
+  ],
+  "denylist": [
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.test",
+    "credentials/",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/lib/gh-repo-resolve.mjs",
+    "scripts/pack-review-runner.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/lib/vitest-live-store-parent-guard.mjs",
+    "scripts/vitest-live-store-parent-guard.test.ts"
+  ],
+  "source_revision": "59127bef07d9a76ba3858cd0797c9b68c8b4f869"
+}

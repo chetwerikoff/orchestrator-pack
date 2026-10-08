@@ -157,7 +157,7 @@ describe('parent live-store guard', () => {
     expect(child.exitCode, child.stderr).toBe(0);
   });
 
-  it('settles only known wake-state paths for the explicit or default project', () => {
+  it('settles exact wake-state paths for explicit/default and foreign projects', () => {
     const projectId = DEFAULT_WAKE_SUPERVISOR_PROJECT_ID;
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
       'supervisor/typescript-supervisor-status.json',
@@ -174,14 +174,47 @@ describe('parent live-store guard', () => {
     ])).toBe(true);
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
       `${projectId}/fleet-observer-snapshot.json`,
-    ], 'another-project')).toBe(false);
+    ], 'another-project')).toBe(true);
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
       'another-project/fleet-observer-snapshot.json',
-    ], projectId)).toBe(false);
+    ], projectId)).toBe(true);
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
       `${projectId}/unrelated-live-store-leak.json`,
     ], projectId)).toBe(false);
   });
+  it('allows only known cadence writes under a non-selected project in the actual parent guard', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-foreign-cadence-'));
+    temporaryRoots.push(root);
+    const env = productionEnvironment(join(root, 'production'));
+    env.OPK_PROJECT_ID = 'selected-project';
+    const foreignRoot = join(env.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'foreign-project', 'supervisor');
+    const guard = startParentLiveStoreGuard(env);
+    mkdirSync(foreignRoot, { recursive: true });
+    const status = join(foreignRoot, 'typescript-supervisor-status.json');
+    const temporary = join(
+      foreignRoot,
+      '.typescript-supervisor-status.json.1234.00000000-0000-4000-8000-000000000000.tmp',
+    );
+    writeFileSync(temporary, '{"restartState":"running"}\n', 'utf8');
+    renameSync(temporary, status);
+
+    expect(() => guard.stop()).not.toThrow();
+  });
+
+  it('still rejects non-cadence writes under a non-selected project in the actual parent guard', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-foreign-leak-'));
+    temporaryRoots.push(root);
+    const env = productionEnvironment(join(root, 'production'));
+    env.OPK_PROJECT_ID = 'selected-project';
+    const foreignRoot = join(env.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'foreign-project');
+    const guard = startParentLiveStoreGuard(env);
+    mkdirSync(foreignRoot, { recursive: true });
+    writeFileSync(join(foreignRoot, 'unrelated-live-store-leak.json'), 'leak\n', 'utf8');
+
+    expect(() => guard.stop()).toThrow(/OPK_VITEST_LIVE_STORE_GUARD_FAILED/);
+  });
+
+
   it('settles an external selected-project worker report-store transaction', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-worker-report-'));
     temporaryRoots.push(root);
@@ -195,7 +228,7 @@ describe('parent live-store guard', () => {
     expect(isExternalWakeSupervisorSnapshotOnlyChange(changedPaths, projectId)).toBe(true);
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
       'another-project/worker-report-store.json',
-    ], projectId)).toBe(false);
+    ], projectId)).toBe(true);
     expect(isExternalWakeSupervisorSnapshotOnlyChange([
       `${projectId}/unrelated-live-store-leak.json`,
     ], projectId)).toBe(false);

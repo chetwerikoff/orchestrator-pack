@@ -10,12 +10,11 @@ import {
   resolvedLiveStores,
   startLiveStoreGuard,
 } from './vitest-live-store-harness.mjs';
-import { DEFAULT_WAKE_SUPERVISOR_PROJECT_ID } from '../pr2-foundation/wake-supervisor-state-constants.mjs';
 
 const MAX_PARENT_WATCHERS = 512;
 // Residual: pathname-only exemption; fs.watch cannot prove writer provenance,
 // so same-path child bypass of these files is accepted. The list covers live
-// supervisor cadence writes and selected-project report/reconcile/observer state.
+// supervisor cadence writes and exact report/reconcile/observer state paths.
 const EXTERNALLY_MUTABLE_STORE_PATHS = new Map([
   ['wake-supervisor-runtime-state', new Set([
     'worker-message-dispatch-journal.json',
@@ -32,38 +31,38 @@ const JOURNAL_ATOMIC_TEMP_PATH = /^\.[0-9a-f]{32}\.tmp$/i;
 // writeDurableFile temp name: `.<basename>.<pid>.<uuid>.tmp` beside the target.
 const SUPERVISOR_STATUS_ATOMIC_TEMP_PATH = /^(?:supervisor\/)?\.(?:typescript-supervisor-status|projected-registry)\.json\.\d+\.[0-9a-f-]{36}\.tmp$/i;
 const FLEET_OBSERVER_ATOMIC_TEMP_PATH = /^\.(?:tmp|restore)-\d+-\d+-[0-9a-f]{8}$/i;
-function projectScopedRelativePath(projectId, basename) {
-  const selected = String(projectId ?? '').trim() || DEFAULT_WAKE_SUPERVISOR_PROJECT_ID;
-  if (selected.includes('/') || selected.includes('\\')) return '';
-  return `${selected}/${basename}`;
+function projectScopedPath(relativePath) {
+  const separator = relativePath.indexOf('/');
+  if (separator <= 0) return '';
+  const projectId = relativePath.slice(0, separator);
+  if (projectId === '.' || projectId === '..' || projectId.includes(String.fromCharCode(92))) return '';
+  return relativePath.slice(separator + 1);
 }
-function isExternallyMutableWakePath(relativePath, projectId) {
+function isExternallyMutableWakePath(relativePath) {
   const allowed = EXTERNALLY_MUTABLE_STORE_PATHS.get(EXTERNALLY_MUTABLE_JOURNAL_STORE_ID) ?? new Set();
-  const reportPrefix = projectScopedRelativePath(projectId, '');
+  const projectPath = projectScopedPath(relativePath);
   return allowed.has(relativePath)
-    || (reportPrefix !== '' && relativePath === reportPrefix.slice(0, -1))
-    || relativePath === projectScopedRelativePath(projectId, 'worker-report-store.json')
-    || relativePath === projectScopedRelativePath(projectId, 'orchestration-mail-reconcile.json')
-    || relativePath === projectScopedRelativePath(projectId, 'orchestration-mail-reconcile.lock')
-    || relativePath === projectScopedRelativePath(projectId, 'supervisor/typescript-supervisor-status.json')
-    || relativePath === projectScopedRelativePath(projectId, 'supervisor/projected-registry.json')
-    || relativePath === projectScopedRelativePath(projectId, 'fleet-observer-snapshot.json');
+    || projectPath === 'worker-report-store.json'
+    || projectPath === 'orchestration-mail-reconcile.json'
+    || projectPath === 'orchestration-mail-reconcile.lock'
+    || projectPath === 'supervisor/typescript-supervisor-status.json'
+    || projectPath === 'supervisor/projected-registry.json'
+    || projectPath === 'fleet-observer-snapshot.json';
 }
-function isExternallyMutableWakeSidecarPath(relativePath, projectId) {
-  const reportPrefix = projectScopedRelativePath(projectId, '');
-  const supervisorPrefix = projectScopedRelativePath(projectId, 'supervisor/');
+function isExternallyMutableWakeSidecarPath(relativePath) {
+  const projectPath = projectScopedPath(relativePath);
   return relativePath === `${EXTERNALLY_MUTABLE_JOURNAL_PATH}.lock`
     || JOURNAL_ATOMIC_TEMP_PATH.test(relativePath)
     || SUPERVISOR_STATUS_ATOMIC_TEMP_PATH.test(relativePath)
-    || (reportPrefix !== '' && (
-      relativePath === `${reportPrefix}worker-report-store.lock`
-      || relativePath === `${reportPrefix}worker-report-store.json.tmp`
-      || (relativePath.startsWith(reportPrefix)
-        && FLEET_OBSERVER_ATOMIC_TEMP_PATH.test(relativePath.slice(reportPrefix.length)))
-    ))
-    || (supervisorPrefix !== ''
-      && relativePath.startsWith(supervisorPrefix)
-      && SUPERVISOR_STATUS_ATOMIC_TEMP_PATH.test(relativePath.slice(supervisorPrefix.length)));
+    || projectPath === 'worker-report-store.lock'
+    || projectPath === 'worker-report-store.json.tmp'
+    || (projectPath !== '' && FLEET_OBSERVER_ATOMIC_TEMP_PATH.test(projectPath))
+    || (projectPath.startsWith('supervisor/')
+      && SUPERVISOR_STATUS_ATOMIC_TEMP_PATH.test(projectPath.slice('supervisor/'.length)));
+}
+function isParentOfAllowedWakePath(path, candidates) {
+  return candidates.some((candidate) => candidate.startsWith(`${path}/`)
+    && (isExternallyMutableWakePath(candidate) || isExternallyMutableWakeSidecarPath(candidate)));
 }
 function pathIsSameOrWithin(candidate, root) {
   const rel = relative(root, candidate);
@@ -149,11 +148,12 @@ export function isExternalJournalSnapshotOnlyChange(changedPaths, observedPaths 
   return journalOnly && (observedPaths.has(EXTERNALLY_MUTABLE_JOURNAL_PATH) || changed.length > 0);
 }
 
-export function isExternalWakeSupervisorSnapshotOnlyChange(changedPaths, projectId = '') {
+export function isExternalWakeSupervisorSnapshotOnlyChange(changedPaths, _projectId = '') {
   const changed = [...changedPaths].filter((path) => path !== '');
   return changed.length > 0 && changed.every((path) =>
-    isExternallyMutableWakePath(path, projectId)
-      || isExternallyMutableWakeSidecarPath(path, projectId),
+    isExternallyMutableWakePath(path)
+      || isExternallyMutableWakeSidecarPath(path)
+      || isParentOfAllowedWakePath(path, changed),
   );
 }
 
