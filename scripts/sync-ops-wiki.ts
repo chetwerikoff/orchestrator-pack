@@ -14,6 +14,7 @@ import {
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { isDirectExecution } from '#opk-toolchain/baseline-io';
 import { runProcessSync } from '#opk-kernel/subprocess';
+import { assertPackAdoptionRoot } from './merge-adoption-effect.ts';
 
 export const OPS_WIKI_MANIFEST_RELATIVE = 'scripts/data/ops-wiki-manifest.json';
 export const OPS_WIKI_GOLDEN_RELATIVE = 'scripts/fixtures/ops-wiki-golden-queries.json';
@@ -940,6 +941,7 @@ function loadTrackedInputs(options: SyncOptions, commit: string, git: GitRunner)
 }
 
 export function checkRepositoryMode(options: SyncOptions): OpsWikiResult {
+  assertPackAdoptionRoot(options.repoRoot);
   const git = options.git ?? defaultGitRunner;
   const commit = resolveCommit(options.repoRoot, options.commitRef, git);
   const { manifest } = loadTrackedInputs(options, commit, git);
@@ -968,6 +970,7 @@ function degraded(
 }
 
 export async function applyOpsWiki(options: SyncOptions): Promise<OpsWikiResult> {
+  assertPackAdoptionRoot(options.repoRoot);
   const git = options.git ?? defaultGitRunner;
   const commit = resolveCommit(options.repoRoot, options.commitRef, git);
   const corpusRoot = options.corpusRoot;
@@ -1279,6 +1282,12 @@ export async function main(argv: readonly string[]): Promise<number> {
     return 2;
   }
   const repoRoot = resolve(value('--repo-root') ?? process.cwd());
+  try {
+    assertPackAdoptionRoot(repoRoot);
+  } catch (error) {
+    process.stderr.write(`[FAIL] ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
   const options: SyncOptions = {
     repoRoot,
     commitRef: value('--commit') ?? '',

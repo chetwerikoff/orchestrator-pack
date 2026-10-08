@@ -4,6 +4,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveWakeSupervisorStateRoot } from './pr2-foundation/wake-supervisor-state-root.ts';
+import { originSlugFromGitConfig } from './lib/git-origin-slug.mjs';
 
 export type ConsumerState = 'running' | 'not_running' | 'ephemeral' | 'unknown';
 export interface ConsumerObservation { readonly state: ConsumerState; readonly startedAtMs?: number; readonly identity?: string; readonly reason?: string; }
@@ -71,6 +72,16 @@ const AGENT_HOOK_ENTRYPOINTS = [
 const IMPORT_RE = /(?:\b(?:import|export)\s+(?:[^'";]+?\s+from\s+)?|\bimport\s*\()\s*['"]([^'"]+)['"]/gu;
 const FULL_SHA = /^[0-9a-f]{40}$/iu;
 
+/** Pack origin is read from this trusted tool checkout, never from the selected target card id. */
+export function assertPackAdoptionRoot(repoRoot: string): void {
+  const packRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const packRepository = originSlugFromGitConfig(packRoot)?.toLowerCase();
+  if (!existsSync(path.join(repoRoot, REGISTRY_PATH)) || !packRepository
+    || originSlugFromGitConfig(repoRoot)?.toLowerCase() !== packRepository) {
+    throw new Error('pack-only adoption requires the trusted pack repository origin and ' + REGISTRY_PATH + ' in repo-root; use the selected target {PRIMARY_ROOT}/AGENTS.md merge-time adoption and its named live check instead. Do not substitute a pack registry.');
+  }
+}
+
 function normalizeRepoPath(value: string): string {
   let normalized = value.trim().replaceAll('\\', '/');
   while (normalized.startsWith('./')) normalized = normalized.slice(2);
@@ -110,7 +121,7 @@ function resolvePackageImport(repoRoot: string, specifier: string): string | nul
       const candidate = normalizeRepoPath(targetValue);
       return existsSync(path.join(repoRoot, candidate)) ? candidate : null;
     }
-    const [prefix, suffix = ''] = pattern.split('*');
+    const [prefix = '', suffix = ''] = pattern.split('*');
     if (!specifier.startsWith(prefix) || !specifier.endsWith(suffix)) continue;
     const wildcard = specifier.slice(prefix.length, specifier.length - suffix.length);
     const target = targetValue.replace('*', wildcard);
@@ -149,6 +160,7 @@ export function staticDependencyClosure(repoRootValue: string, entrypoints: read
 }
 
 function consumerDefinitions(repoRoot: string): ConsumerDefinition[] {
+  assertPackAdoptionRoot(repoRoot);
   const registry = readJsonObject(path.join(repoRoot, REGISTRY_PATH));
   if (!Array.isArray(registry.children)) throw new TypeError('side-process registry omitted children[]');
   const children = registry.children.map((value, index) => {
@@ -420,6 +432,7 @@ function parseArgv(argv: readonly string[]): CliOptions {
   const mergeSha = String(values.get('merge-sha') ?? '').trim();
   const adoptedAt = String(values.get('adopted-at') ?? '').trim();
   if (!existsSync(repoRoot)) throw new Error('repo-root is missing');
+  assertPackAdoptionRoot(repoRoot);
   if (!FULL_SHA.test(mergeSha)) throw new Error('merge-sha must be 40 hex');
   if (!Number.isFinite(Date.parse(adoptedAt))) throw new Error('adopted-at must be an ISO timestamp');
   const rawChecks = JSON.parse(values.get('live-check-json') ?? 'null') as unknown;
