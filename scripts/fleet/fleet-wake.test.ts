@@ -600,6 +600,47 @@ describe('fleet alarm', () => {
     expect(sendsTo(observed.calls, 'one')[0]).toContain('Wake: GPT turn inv-h ended, read /tmp/opencode/fix-terminal.json');
   });
 
+  it('does not use cwd to wake an unrelated pane when the explicit GPT owner is unobserved', async () => {
+    const store = new MemoryWakeStore();
+    const envelope = {
+      path: '/tmp/opencode/unobserved-owner-terminal.json',
+      invocationId: 'inv-explicit-owner',
+      cwd: `${workerBase}/one/scripts`,
+      terminalHandle: 'two',
+    };
+    const listTerminalEnvelopes = () => [envelope];
+    const screens = {
+      coord: 'working\nesc interrupt',
+      one: 'PARKED on unrelated turn',
+      two: 'PARKED on owner turn',
+    };
+    const absent = await tick({
+      terminals: [terminals[0]!, terminals[1]!],
+      screens,
+      store,
+      listTerminalEnvelopes,
+    });
+    expect(sends(absent.calls)).toHaveLength(0);
+    expect(store.hasParkedWakeEvent(`gpt:${envelope.path}`)).toBe(false);
+
+    const withOwner = {
+      terminals: [terminals[0]!, terminals[1]!, terminals[2]!],
+      screens,
+      store,
+      listTerminalEnvelopes,
+    };
+    const delivered = await tick(withOwner);
+    expect(sends(delivered.calls)).toEqual([[
+      'terminal', 'send', '--terminal', 'two',
+      '--text', `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}`,
+      '--enter',
+    ], ['terminal', 'send', '--terminal', 'two', '--enter']]);
+    expect(store.hasParkedWakeEvent(`gpt:${envelope.path}`)).toBe(true);
+
+    const repeated = await tick(withOwner);
+    expect(sends(repeated.calls)).toHaveLength(0);
+  });
+
   it('lists launcher terminal envelopes that name their worktree', () => {
     const root = mkdtempSync(join(tmpdir(), 'fleet-wake-terminal-'));
     try {
