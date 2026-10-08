@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mapGptReplyToReviewPayload } from './lib/pack-gpt-reviewer.ts';
 import {
   observeGptPackReviewAttempt,
   observeNativePackReviewAttempt,
@@ -1447,8 +1448,19 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   const editedAt = '2026-10-08T20:50:00Z';
   const terminalAt = '2026-10-08T20:40:00Z';
   const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  // Captured raw source payload, PR245 comment6068701751, updated_at2026-10-08T20:44:03Z.
+  // Map through the same production source parser/emit seam rather than inventing a runtime finding.
+  const witnessSource = { findings: [
+    { type: 'scope', code, severity: 'blocking', path: 'tests/spot/test_field_benchmark_r13.py',
+      summary: 'FIX_NOW: PR #245 modifies this r13 golden-test file although it is absent from the explicitly bound allowed-roots fence in both the review request and Issue #228. The r12 A8 amendment does specifically authorize switching its evaluator-entering cases to evaluate_field_adjustment_v1, but it did not amend the fenced path scope. This is a concrete scope mismatch, not an objection to that small test correction; merging as-is either violates the declared file boundary or requires bypassing its enforcement. Have the operator reconcile the r12 exception with the authoritative allowed-roots/runner declaration (add this one exact test path) and re-run the ordinary scope check; alternatively remove the out-of-scope edit and resolve A8 within an expressly authorized boundary. No new machinery is needed.', source: 'gpt-browser' },
+    { type: 'quality', code: 'field:ambiguous-complete-window-undercount', severity: 'non-blocking', path: 'src/leopoker/spot/field.py',
+      summary: 'DEFER: _quality_summary_v2 sets per-month and aggregate complete_response_windows to eligible-parent count minus ambiguous_response_parents. Trigger: 120 already-admitted parents, one legal complete direct SB-call/BB-raise or SB-first-aggression prefix. It reports 119 complete windows and zero incomplete_eligible_windows even though all 120 #180 direct windows passed response_window_outcome; ambiguity is the unobserved later continuation, not a missing/invalid direct window. This makes operator source-completeness diagnostics misleading, but the count-qualified ambiguous cell already refuses before frequencies or EV, so it need not block merge. Cheap correction: retain structural complete-window count N and report the ambiguous-parent count separately, as /1 does for structurally valid unsupported prefixes; no new state or gate.', source: 'gpt-browser' },
+  ] };
 
-  function fixture() {
+  function fixture(settings: { scopeType?: string; scopePath?: string; allowedRoot?: string; denylist?: string[] } = {}) {
+    const scopePath = settings.scopePath ?? witnessSource.findings[0]!.path;
+    const allowedRoot = settings.allowedRoot ?? scopePath;
+    const liveBody = `<!-- source-revision: r12 -->\n\`\`\`allowed-roots\n${allowedRoot}\n\`\`\`\n\`\`\`denylist\n${(settings.denylist ?? ['vendor/**', 'packages/core/**']).join('\n')}\n\`\`\`\n`;
     const root = mkdtempSync(join(tmpdir(), 'pack-review-2428-'));
     roots.push(root);
     const storeRoot = join(root, 'store');
@@ -1465,11 +1477,12 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
         targetSha: reviewedHead, reviewVerdict: 'clean', findingCount: 0, findingsDigest: fingerprint([]),
         automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 1 },
     });
-    const blocker = { severity: 'blocking', title: 'Scope fence omits reviewed test path',
-      body: `type: scope-violation\ncode: ${code}\nseverity: blocking\npath: tests/spot/test_field_benchmark_r13.py\nsummary: scope fence\nsource: gpt-browser\nsignature: ${signature}`,
-      fingerprint: signature, filePath: 'tests/spot/test_field_benchmark_r13.py', category: 'scope-violation' };
-    const deferred = { severity: 'non-blocking', title: 'Ambiguous complete window',
-      body: 'code: field:ambiguous-complete-window-undercount', fingerprint: 'e0be8a68'.padEnd(64, '0') };
+    const mapped = mapGptReplyToReviewPayload(JSON.stringify({ findings: [
+      { ...witnessSource.findings[0], type: settings.scopeType ?? 'scope', path: scopePath }, witnessSource.findings[1],
+    ] }));
+    const [blocker, deferred] = mapped.findings;
+    if (!blocker || !deferred) throw new Error('observed source payload lost its two findings');
+    const sourceSignature = blocker.fingerprint;
     const run = createPackReviewRun({ ...options, prNumber, headSha: reviewedHead, trustedPackRoot: process.cwd(),
       sourceRepoRoot: process.cwd(), canonicalRepository: repository, resolvedReviewer: 'gpt',
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, reviewCycleId: authority.cycle!.cycleId,
@@ -1502,12 +1515,12 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     const comment = { id: 6068301792, issue_url: `https://api.github.com/repos/${repository}/issues/${prNumber}`,
       html_url: `https://github.com/${repository}/pull/${prNumber}#issuecomment-6068301792`,
       user: { login: 'chetwerikoff' }, author_association: 'OWNER', created_at: '2026-10-08T20:19:17Z', updated_at: '2026-10-08T20:51:48Z',
-      body: `R1 FIXED in code.\n\n## R2 dispositions — run \`${run.id}\`, head \`${reviewedHead}\`\n\n- **FIXED — blocking scope finding \`${code}\`** (source signature \`${signature}\`). The live r12 Issue now includes only \`tests/spot/test_field_benchmark_r13.py\` in \`allowed-roots\`, under the operator amendment note. No code or behavior change was made for this disposition.\n- **DEFER — non-blocking \`field:ambiguous-complete-window-undercount\`**.`,
+      body: `R1 FIXED in code.\n\n## R2 dispositions — run \`${run.id}\`, head \`${reviewedHead}\`\n\n- **FIXED — blocking scope finding \`${code}\`** (source signature \`${sourceSignature}\`). The live r12 Issue now includes only \`${allowedRoot}\` in \`allowed-roots\`, under the operator amendment note.${allowedRoot === scopePath ? '' : ` This root covers \`${scopePath}\`.`} No code or behavior change was made for this disposition.\n- **DEFER — non-blocking \`field:ambiguous-complete-window-undercount\`**.`,
     };
     const issue = { node_id: 'fixture-issue-node', number: issueNumber, html_url: `https://github.com/${repository}/issues/${issueNumber}`,
-      repository_url: `https://api.github.com/repos/${repository}`, body: revisedBody };
-    const graphIssue = { id: issue.node_id, number: issueNumber, url: issue.html_url, body: revisedBody, lastEditedAt: editedAt,
-      userContentEdits: { totalCount: 2, nodes: [{ editedAt, deletedAt: null, diff: revisedBody }] } };
+      repository_url: `https://api.github.com/repos/${repository}`, body: liveBody };
+    const graphIssue = { id: issue.node_id, number: issueNumber, url: issue.html_url, body: liveBody, lastEditedAt: editedAt,
+      userContentEdits: { totalCount: 2, nodes: [{ editedAt, deletedAt: null, diff: liveBody }] } };
     const statuses: Array<{ state: string; context: string }> = [];
     const transports = { issue, graphIssue, comment, pr: { number: prNumber, url: `https://api.github.com/repos/${repository}/pulls/${prNumber}`,
       head: { sha: reviewedHead }, base: { ref: 'main' }, state: 'open', body: `Closes #${issueNumber}` } };
@@ -1537,6 +1550,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   it('settles the observed final R2 same-head Issue-only scope correction and publishes status', async () => {
     const f = fixture();
     const before = getPackReviewRun(f.run.id, f.options);
+    expect(before?.findings[0]).toMatchObject({ category: 'scope', fingerprint: signature, body: expect.stringContaining('type: scope\n') });
     const result = await reconcileStalePackReviewRuns(f.input);
     expect(result.results).toContainEqual(expect.objectContaining({ settled: true, reason: 'final_cap_same_head_issue_resolution_settled' }));
     expect(readPackReviewAuthority(prNumber, f.options)).toMatchObject({
@@ -1549,6 +1563,40 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     const settled = readPackReviewAuthority(prNumber, f.options);
     await reconcileStalePackReviewRuns(f.input);
     expect(readPackReviewAuthority(prNumber, f.options)?.transitionSeq).toBe(settled?.transitionSeq);
+  });
+
+  it('R1 findings regression: accepts the observed raw type scope source through mapping and production reconcile', async () => {
+    const f = fixture();
+    expect(getPackReviewRun(f.run.id, f.options)?.findings[0]).toMatchObject({ category: 'scope', fingerprint: signature });
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: true, reason: 'final_cap_same_head_issue_resolution_settled' }));
+  });
+  it.each(['tests/spot/**', 'tests/spot/'])('R1 findings regression: accepts an effective wildcard/prefix root %s', async (allowedRoot) => {
+    const f = fixture({ scopeType: 'scope-violation', allowedRoot });
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: true }));
+    expect(f.statuses).toContainEqual(expect.objectContaining({ state: 'success' }));
+  });
+  it.each([
+    ['config/prod.json', ['config/**']],
+    ['tests/spot/test_field_benchmark_r13.py', ['tests/spot/**']],
+    ['packages/core/file.ts', ['config/**']],
+    ['vendor/file.ts', ['config/**']],
+    ['credentials/file.json', ['config/**']],
+    ['secrets/file.json', ['config/**']],
+  ] as Array<[string, string[]]>)('R1 findings regression: denylist overrides literal allowed-root %s', async (scopePath, denylist) => {
+    const f = fixture({ scopeType: 'scope-violation', scopePath, denylist });
+    const before = readPackReviewAuthority(prNumber, f.options);
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required' }));
+    expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
+    expect(f.statuses).toEqual([]);
+  });
+  it('refuses a genuine quality/code finding even with scope-like author prose', async () => {
+    const f = fixture({ scopeType: 'quality' });
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required' }));
+    expect(f.statuses).toEqual([]);
   });
 
   const unsafeCases: Array<[string, (f: ReturnType<typeof fixture>) => void]> = [

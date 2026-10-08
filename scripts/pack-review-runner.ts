@@ -16,6 +16,9 @@ import {
   createReviewerBudgetLedger,
   type ReviewerBudgetLedger,
 } from '../plugins/codex-pr-reviewer/lib/reviewer_budget.ts';
+import { normalizePath } from '@orchestrator-pack/shared/lib/normalize.js';
+import { pathMatchesAnyPattern } from '../plugins/task-declaration/lib/glob_match.ts';
+import { REPOSITORY_DENYLIST } from './pr-scope-declaration.ts';
 import { observePosixProcessGroup, runProcess, type ProcessResult } from './kernel/subprocess.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import {
@@ -3398,17 +3401,20 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
     return blockers.every((finding) => {
       const code = finding.body?.match(/^code: (.+)$/m)?.[1];
       const signature = finding.body?.match(/^signature: ([a-f0-9]{64})$/m)?.[1];
-      if (!code || !signature || !finding.body?.startsWith('type: scope-violation\n')) return false;
+      if (!code || !signature || !/^type: (scope|scope-violation)$/m.test(finding.body ?? '')) return false;
       const matches = bullets.filter((bullet) => bullet.includes(`\`${code}\``) && bullet.includes(`\`${signature}\``));
       if (matches.length !== 1) return false;
       const bullet = matches[0]!;
+      const path = normalizePath(finding.filePath ?? '');
+      const scope = parseIssueBody(revision.body);
+      if (!path.ok || pathMatchesAnyPattern(path.path, [...REPOSITORY_DENYLIST, ...scope.denylist])
+          || !pathMatchesAnyPattern(path.path, scope.allowed_roots ?? [])) return false;
       // The captured ordinary scope correction names its live body revision and exact corrected root.
       return /^- \*\*FIXED — blocking scope finding /i.test(bullet)
         && bullet.includes(`The live ${revision.revision} Issue now includes`)
         && bullet.includes('No code or behavior change was made for this disposition.')
         && !!finding.filePath && bullet.includes(`\`${finding.filePath}\``)
-        && bullet.includes('`allowed-roots`')
-        && parseIssueBody(revision.body).allowed_roots?.includes(finding.filePath) === true;
+        && bullet.includes('`allowed-roots`');
     });
   });
   if (candidates.length !== 1) throw new Error('every blocker requires one trusted exact-run Issue-only disposition');
