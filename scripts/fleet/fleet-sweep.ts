@@ -335,11 +335,11 @@ export function ownPaneOutcome(screen: string): { wait?: string; acknowledgment:
   const paragraphs = screen.split(/\r?\n\s*(?:[┃│]\s*)?\r?\n/u).map((part) => nonChromeLines(part)
     .filter((line) => !/^(?:>|→ Add a follow-up|\d+ tasks?)\s*$/u.test(line))).filter((part) => part.length > 0);
   const lines = paragraphs.at(-1) ?? [];
-  const boundary = lines.findLastIndex((line) => /^(?:>\s+|User:|Assistant:)/iu.test(line));
+  const boundary = lines.reduce((last, line, index) => /^(?:>\s+|User:|Assistant:)/iu.test(line) ? index : last, -1);
   const own = boundary < 0 ? lines : /^Assistant:/iu.test(lines[boundary]!)
     ? [lines[boundary]!.replace(/^Assistant:\s*/iu, ''), ...lines.slice(boundary + 1)].filter(Boolean)
     : lines.slice(boundary + 1);
-  const start = own.findLastIndex((line) => /^PARKED(?: on\b|:)/iu.test(line));
+  const start = own.reduce((last, line, index) => /^PARKED(?: on\b|:)/iu.test(line) ? index : last, -1);
   const response = own.slice(Math.max(0, start)).join(' ').trim();
   const context = own.slice(0, Math.max(0, start));
   const toolLine = /^(?:Tool:|\$|```|===|handle:|source:|(?:[┌└├]\s*)?(?:Bash|Shell|Read|Write|Edit|Grep|Glob)\b|(?:orca|gh|git|node|npm|mise|python|curl|bash|sh)\s)/iu;
@@ -350,7 +350,7 @@ export function ownPaneOutcome(screen: string): { wait?: string; acknowledgment:
   // The turn, including tool paragraphs before its final summary, must be a short own
   // response with no work or new outcome. Its natural language does not authorize parking.
   const turn = paragraphs.flat();
-  const turnBoundary = turn.findLastIndex((line) => /^(?:>\s+|User:|PARKED(?: on\b|:))/iu.test(line));
+  const turnBoundary = turn.reduce((last, line, index) => /^(?:>\s+|User:|PARKED(?: on\b|:))/iu.test(line) ? index : last, -1);
   const turnLines = turn.slice(turnBoundary + 1).map((line) => line.replace(/^Assistant:\s*/iu, '')).filter(Boolean);
   const acknowledgment = !foreign && turnLines.length <= 3
     && !turnLines.some((line) => toolLine.test(line) || newOutcome.test(line));
