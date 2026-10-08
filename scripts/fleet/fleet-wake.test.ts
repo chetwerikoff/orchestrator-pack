@@ -3,7 +3,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   FileFleetWakeStateStore,
   bannerOwnerPane,
@@ -133,6 +133,53 @@ function sendsTo(calls: readonly string[][], handle: string): string[][] {
 }
 
 describe('fleet alarm', () => {
+  it.each(['idle acknowledgment', 'busy mid-answer', 'polling mid-answer', 'tool summary'])(
+    'attributes the exact real OpenCode fixture across %s', async (mode) => {
+      const fixture = readFileSync(new URL('./fixtures/opencode-external-wait-ack.screen.txt', import.meta.url), 'utf8');
+      const root = mkdtempSync(join(tmpdir(), 'fleet-2398-real-pane-'));
+      const store = new FileFleetWakeStateStore('real-pane', { XDG_RUNTIME_DIR: root });
+      const unit = { ...terminals[1]!, incarnationId: 'real-incarnation', status: 'running', branch: 'manager' };
+      const fleet = [terminals[0]!, unit];
+      const screens = { coord: 'working\nctrl+c to stop', one: fixture.split('\n').slice(0, 7).join('\n') };
+      const executor = fakeOrca(screens, [], fleet);
+      const step = () => tick({ screens, store, terminals: fleet, executor });
+      try {
+        await step();
+        const before = store.readPaneWait('one');
+        expect(before?.wait).toContain('PARKED on #222 merged');
+        if (mode.includes('mid-answer')) {
+          const writes = vi.spyOn(store, 'writePaneWait');
+          const clears = vi.spyOn(store, 'clearPaneWait');
+          screens.one = `${fixture.split('\n').slice(0, 12).join('\n')}\n${mode === 'polling mid-answer' ? 'sleep 60\n' : ''}esc interrupt`;
+          await step();
+          if (mode === 'polling mid-answer') await step();
+          expect(store.readPaneWait('one')).toEqual(before);
+          expect(writes).not.toHaveBeenCalled();
+          expect(clears).not.toHaveBeenCalled();
+          writes.mockRestore();
+          clears.mockRestore();
+        }
+        screens.coord = 'idle prompt';
+        screens.one = mode === 'tool summary' ? fixture.replace(
+          '     Принял: park на merge #222 без изменений.',
+          '     → Read scripts/example.ts\n     $ gh pr view 225\n     Inspection summary: the gate was inspected.',
+        ) : fixture;
+        for (let index = 0; index < 3; index += 1) {
+          const observed = await step();
+          expect(observed.result.state).toBe(mode === 'tool summary' ? 'sent' : 'nothing_stopped');
+          if (mode !== 'tool summary') expect(sends(observed.calls)).toHaveLength(0);
+        }
+        if (mode.includes('mid-answer')) {
+          screens.one = fixture.replace('     Принял: park на merge #222 без изменений.', '     finished new step');
+          expect((await step()).result.state).toBe('sent');
+          expect(store.readPaneWait('one')).toBeUndefined();
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   // Scrubbed OpenCode pane shapes and acknowledgment excerpts from the architect's live audit.
   it.each(['Принял смену архитектора…', 'Audit: … Keep PARKED…'])(
     'retains an unbound failed-dispatch manager after %s, then invalidates new work', async (acknowledgment) => {
@@ -263,7 +310,8 @@ describe('fleet alarm', () => {
         screens.one = next === 'question' ? 'May I deploy to staging?' : 'Working on the new step\nesc interrupt';
         const observed = await step();
         expect(observed.result.state).toBe(next === 'question' ? 'sent' : 'nothing_stopped');
-        screens.one = 'Acknowledged.';
+        // Busy alone is not a resume; the idle own outcome must supply that evidence.
+        screens.one = next === 'resume' ? 'finished new step' : 'Acknowledged.';
         expect((await step()).result.state).toBe('sent');
       } else if (next === 'task' || next === 'incarnation' || next === 'exited') {
         if (next === 'task') { taskId = 'task-two'; dispatchId = 'ctx-two'; }

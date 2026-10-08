@@ -69,7 +69,7 @@ export interface FleetSweepOptions {
 const DEFAULT_AGENT_TITLE_RE = /(?:\bOpenCode\b|\bCursor\b|\bClaude\b|\bOC\s*\||✳|…\s*Agent|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏])/iu;
 export const DEFAULT_BUSY_RE = /(?:esc\s+(?:to\s+)?interrupt|ctrl\+c\s+to\s+stop)/iu;
 const POLLING_RE = /(?:\bsleep\s+\d+(?:\.\d+)?\b|\bWAIT_EXIT\s*=\s*124\b|\bexit(?:[_ -]?code)?\s*[:=]?\s*124\b)/iu;
-const CHROME_LINE_RE = /^(?:Cursor Agent|OpenCode|Claude Code)(?:\s|$)|^(?:model|context|tokens?)\s*:/iu;
+const CHROME_LINE_RE = /^(?:Cursor Agent|OpenCode|Claude Code)(?:\s|$)|^(?:model|context|tokens?)\s*:|^(?:\+\s*)?Thought\s*[·:]/iu;
 // Agent TUIs frame content with box glyphs and add a model line and a status bar; none of it is
 // pane content. OpenCode: `┃  …`, `╹▀▀▀…`, `▣  Pack-Opk-… · GPT-… · medium`, `⬝⬝■■ esc interrupt  175K (64%)  ctrl+p commands`.
 const TUI_FRAME_PREFIX_RE = /^[\s┃│╹╻▀▄█▌▐⬝■▣◆●•·]+/u;
@@ -332,6 +332,12 @@ export function selectAgentTerminals(
 // Only the final own response is an outcome. A park quoted in a tool result, instruction,
 // table or older response does not authorize waiting. Wrapped outcome lines are joined.
 export function ownPaneOutcome(screen: string): { wait?: string; acknowledgment: boolean } {
+  // OpenCode's incoming-message gutter has two spaces after ┃. Identify its last
+  // content line before stripping frame prefixes; empty composer/model gutters are chrome.
+  const rawLines = screen.split(/\r?\n/u);
+  const incoming = rawLines.reduce((last, raw, index) => /^\s*┃[ \t]{2,}/u.test(raw)
+    && nonChromeLines(raw).length > 0 ? index : last, -1);
+  screen = rawLines.slice(incoming + 1).join('\n');
   const paragraphs = screen.split(/\r?\n\s*(?:[┃│]\s*)?\r?\n/u).map((part) => nonChromeLines(part)
     .filter((line) => !/^(?:>|→ Add a follow-up|\d+ tasks?)\s*$/u.test(line))).filter((part) => part.length > 0);
   const lines = paragraphs.at(-1) ?? [];
@@ -342,7 +348,7 @@ export function ownPaneOutcome(screen: string): { wait?: string; acknowledgment:
   const start = own.reduce((last, line, index) => /^PARKED(?: on\b|:)/iu.test(line) ? index : last, -1);
   const response = own.slice(Math.max(0, start)).join(' ').trim();
   const context = own.slice(0, Math.max(0, start));
-  const toolLine = /^(?:Tool:|\$|```|===|handle:|source:|(?:[┌└├]\s*)?(?:Bash|Shell|Read|Write|Edit|Grep|Glob)\b|(?:orca|gh|git|node|npm|mise|python|curl|bash|sh)\s)/iu;
+  const toolLine = /^(?:Tool:|\$|```|===|handle:|source:|(?:[┌└├→]\s*)?(?:Bash|Shell|Read|Write|Edit|Grep|Glob)\b|(?:orca|gh|git|node|npm|mise|python|curl|bash|sh)\s)/iu;
   const newOutcome = /\?\s*$|\b(?:STOPPED|done|finished|handed[- ]off|worker_done|error)\b/iu;
   const foreign = (boundary >= 0 && /^User:/iu.test(lines[boundary]!)) || context.some((line) => toolLine.test(line));
   const superseded = own.slice(Math.max(0, start) + 1).some((line) => toolLine.test(line) || newOutcome.test(line));
@@ -459,10 +465,10 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
     const stale = previous && previous.binding !== binding && previous.wait === outcome.wait;
     const wait = terminal.status !== 'exited' && state !== 'busy' && state !== 'POLLING' && !stale
       ? outcome.wait ?? retained : undefined;
-    if (binding && wait) store.writePaneWait?.(terminal.handle, { binding, wait });
-    // Keep a mismatched old outcome only as rejection evidence until it leaves the screen.
-    else if (!stale) {
-      store.clearPaneWait?.(terminal.handle);
+    if (state !== 'busy' && state !== 'POLLING') {
+      if (binding && wait) store.writePaneWait?.(terminal.handle, { binding, wait });
+      // Keep a mismatched old outcome only as rejection evidence until it leaves the screen.
+      else if (!stale) store.clearPaneWait?.(terminal.handle);
     }
     return {
       ...terminal,
