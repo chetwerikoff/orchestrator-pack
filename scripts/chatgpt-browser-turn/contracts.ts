@@ -31,6 +31,22 @@ export const PRE_SEND_COMPOSER_FAILURE_CAUSES = [
 ] as const;
 export type PreSendComposerFailureCause = (typeof PRE_SEND_COMPOSER_FAILURE_CAUSES)[number];
 
+export type ComposerMutationDiagnosticBranchV1 =
+  | 'readiness_before_click'
+  | 'budget_before_click'
+  | 'after_click'
+  | 'budget_before_fill'
+  | 'readiness_before_fill'
+  | 'budget_before_fill2';
+
+export interface ComposerMutationDiagnosticV1 {
+  branch: ComposerMutationDiagnosticBranchV1;
+  insertionBudgetMs: number;
+  textLength: number;
+  elapsedMs: number;
+  remainingInvocationMs: number;
+}
+
 export interface CommonIncidentRecordV1 {
   schema: typeof RECORD_SCHEMA;
   version: typeof RECORD_VERSION;
@@ -86,6 +102,7 @@ export interface TurnResultV1 {
   state: TurnState;
   scope: FailureScope;
   cause: string;
+  composer_mutation_diagnostic?: ComposerMutationDiagnosticV1;
   invocation_id: string;
   configured_profile_key: string;
   legacy_configured_profile_key?: string;

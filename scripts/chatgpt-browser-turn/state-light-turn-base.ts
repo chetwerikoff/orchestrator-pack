@@ -25,6 +25,7 @@ import {
 import { destinationIdentity } from './coordination.ts';
 import {
   turnExitCode,
+  type ComposerMutationDiagnosticV1,
   type FailureScope,
   type PreSendComposerFailureCause,
   type TurnResultV1,
@@ -347,6 +348,7 @@ interface BrowserIncident {
   readonly symptom: string;
   readonly action?: string;
   readonly uncertaintyDiagnostics?: ObservationUncertaintyDiagnostics;
+  readonly composerMutationDiagnostic?: ComposerMutationDiagnosticV1;
 }
 
 export interface CompactTurnResult extends TurnResultV1 {
@@ -1324,6 +1326,9 @@ function appendIncident(
       event_class: incident.eventClass,
       observed_symptom: incident.symptom,
       ...(incident.action ? { action: incident.action } : {}),
+      ...(incident.composerMutationDiagnostic ? {
+        composer_mutation_diagnostic: incident.composerMutationDiagnostic,
+      } : {}),
       ...(incident.uncertaintyDiagnostics ? {
         observation_uncertainty: incident.uncertaintyDiagnostics,
       } : {}),
@@ -1988,29 +1993,46 @@ async function mutateComposerOrCause(
   page: any,
   text: string,
   invocationDeadlineMs: number,
-  insertionContext?: { insertionDeadlineMs?: number },
+  insertionContext?: {
+    insertionDeadlineMs?: number;
+    diagnostic?: ComposerMutationDiagnosticV1;
+  },
 ): Promise<PreSendComposerFailureCause | null> {
   const composer = page.locator(COMPOSER_SELECTOR);
   const insertionStart = Date.now();
-  const insertionDeadlineMs = Math.min(insertionStart + deriveComposerInsertionBudgetMs(text), invocationDeadlineMs);
+  const insertionBudgetMs = deriveComposerInsertionBudgetMs(text);
+  const insertionDeadlineMs = Math.min(insertionStart + insertionBudgetMs, invocationDeadlineMs);
   if (insertionContext) insertionContext.insertionDeadlineMs = insertionDeadlineMs;
-  if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
+  const exhausted = (branch: ComposerMutationDiagnosticV1['branch']): PreSendComposerFailureCause => {
+    if (insertionContext) {
+      const now = Date.now();
+      insertionContext.diagnostic = {
+        branch,
+        insertionBudgetMs,
+        textLength: text.length,
+        elapsedMs: Math.max(0, now - insertionStart),
+        remainingInvocationMs: Math.max(0, invocationDeadlineMs - now),
+      };
+    }
     return 'composer_mutation_budget_exhausted';
+  };
+  if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
+    return exhausted('readiness_before_click');
   }
 
   try {
     let actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-    if (actionBudgetMs <= 0) return 'composer_mutation_budget_exhausted';
+    if (actionBudgetMs <= 0) return exhausted('budget_before_click');
     await composer.click({ timeout: actionBudgetMs });
-    if (Date.now() >= insertionDeadlineMs) return 'composer_mutation_budget_exhausted';
+    if (Date.now() >= insertionDeadlineMs) return exhausted('after_click');
 
     actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-    if (actionBudgetMs <= 0) return 'composer_mutation_budget_exhausted';
+    if (actionBudgetMs <= 0) return exhausted('budget_before_fill');
     if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
-      return 'composer_mutation_budget_exhausted';
+      return exhausted('readiness_before_fill');
     }
     actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-    if (actionBudgetMs <= 0) return 'composer_mutation_budget_exhausted';
+    if (actionBudgetMs <= 0) return exhausted('budget_before_fill2');
     await composer.fill(text, { timeout: actionBudgetMs });
     if (Date.now() >= insertionDeadlineMs) return 'composer_mutation_budget_exhausted';
     return null;
@@ -2360,10 +2382,20 @@ async function runTurn(
     if (pulse) heartbeatScheduler?.pulse();
   };
 
-  const incident = (eventClass: string, symptom: string, action?: string): void => {
+  const incident = (
+    eventClass: string,
+    symptom: string,
+    action?: string,
+    composerMutationDiagnostic?: ComposerMutationDiagnosticV1,
+  ): void => {
     const ok = recordIncident(
       incidents,
-      { eventClass, symptom, ...(action ? { action } : {}) },
+      {
+        eventClass,
+        symptom,
+        ...(action ? { action } : {}),
+        ...(composerMutationDiagnostic ? { composerMutationDiagnostic } : {}),
+      },
       invocationId,
       navigation.snapshot(),
     );
@@ -2469,8 +2501,9 @@ async function runTurn(
 
     const returnComposerMutationFailure = (
       cause: PreSendComposerFailureCause,
+      diagnostic?: ComposerMutationDiagnosticV1,
     ): TurnRunOutcome => {
-      incident('invocation_blocker', cause, 'return_local_error');
+      incident('invocation_blocker', cause, 'return_local_error', diagnostic);
       return {
         page,
         browser,
@@ -2482,7 +2515,7 @@ async function runTurn(
           profileKey,
           sendCount,
           pollCount, navigation, incidents,
-          {},
+          { ...(diagnostic ? { composer_mutation_diagnostic: diagnostic } : {}) },
           journalWriteFailed,
         ),
       };
@@ -2540,14 +2573,14 @@ async function runTurn(
 
     const sendOwnedPrompt = async (): Promise<TurnRunOutcome | null> => {
       setHeartbeatPhase('composer_dispatch');
-      const insertionContext: { insertionDeadlineMs?: number } = {};
+      const insertionContext: { insertionDeadlineMs?: number; diagnostic?: ComposerMutationDiagnosticV1 } = {};
       const mutationFailure = await mutateComposerOrCause(
         page,
         markedPayload,
         invocationDeadlineMs,
         insertionContext,
       );
-      if (mutationFailure) return returnComposerMutationFailure(mutationFailure);
+      if (mutationFailure) return returnComposerMutationFailure(mutationFailure, insertionContext.diagnostic);
       const insertionDeadlineMs = insertionContext.insertionDeadlineMs ?? invocationDeadlineMs;
       let remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
