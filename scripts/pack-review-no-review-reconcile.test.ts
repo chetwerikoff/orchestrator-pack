@@ -137,6 +137,46 @@ describe('pack-review no-review reconciliation', () => {
     expect(authoritativePreSend(slot(1, { lifecycle: 'planned', terminalResult: { send_count: 0 } }))).toBe(false);
   });
 
+  it.each([
+    { send_count: 0, send_attempted: true },
+    { send_count: 0, delivery: 'POSSIBLY_DELIVERED' },
+    { send_count: 0, diagnostics: { persisted_observation: { phase: 'dispatching' } } },
+  ])('never calls zero-count attempted/possible delivery pre-send: %j', (terminalResult) => {
+    expect(authoritativePreSend(slot(1, { lifecycle: 'terminal', terminalResult }))).toBe(false);
+  });
+
+  it.each([
+    { sendAttempted: true, phase: 'dispatching' as const },
+    { sendAttempted: false, phase: 'dispatching' as const },
+    { sendAttempted: true, phase: 'not_sent' as const },
+  ])('keeps zero-count possible delivery from replacement ($phase, $sendAttempted)', async ({ sendAttempted, phase }) => {
+    const invocationId = '11111111-1111-4111-8111-111111111111';
+    const profileKey = 'attempted-profile';
+    const pending = run(round([
+      slot(1, { lifecycle: 'terminal', invocationId, launchProfileKey: profileKey,
+        launchCdpUrl: 'http://127.0.0.1:9222',
+        terminalResult: { state: 'send_failed', send_count: 0, send_attempted: sendAttempted, configured_profile_key: profileKey },
+      }),
+      slot(2), slot(3),
+    ]));
+    const probe = vi.fn(async () => ({ status: 'not_found' }));
+    const readObservation = vi.fn(() => ({
+      schema: 'state-light-turn-observation/v1' as const, version: 1 as const,
+      profile_key: profileKey, invocation_id: invocationId, marker: 'OPKTURNV1' + 'ab'.repeat(16),
+      phase, send_count: 0, send_witness: 'none' as const,
+      conversation_url: 'https://chatgpt.com/c/synthetic-owned-turn',
+      transitioned_at: NOW.toISOString(), transition_reason: 'dispatch_boundary_entered',
+    }));
+    const result = await reconcilePackReviewNoReview(INPUT, deps({ listRuns: () => [pending], readObservation, probe }));
+    expect(result).toMatchObject({ workflowAuthority: 'none',
+      disposition: phase === 'not_sent' ? 'contradiction' : 'unavailable/inconclusive',
+      reason: phase === 'not_sent' ? 'attempted_send_contradicts_pre_send_observation' : 'owned_turn_inspection_inconclusive',
+    });
+    expect(readObservation).toHaveBeenCalledWith(profileKey, invocationId);
+    expect(probe).toHaveBeenCalledTimes(phase === 'not_sent' ? 0 : 1);
+    expect(result.operationalFacts).not.toEqual(expect.arrayContaining([expect.objectContaining({ state: 'closed-pre-send' })]));
+  });
+
   it('does not create a missing run-store root while proving the no-local-run path inconclusive', async () => {
     const storeRoot = join(tmpdir(), `opk-no-review-missing-${process.pid}-${Date.now()}`);
     expect(existsSync(storeRoot)).toBe(false);
