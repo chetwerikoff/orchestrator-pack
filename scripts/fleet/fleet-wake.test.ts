@@ -133,7 +133,9 @@ function sendsTo(calls: readonly string[][], handle: string): string[][] {
 }
 
 describe('fleet alarm', () => {
-  it.each(['idle acknowledgment', 'busy mid-answer', 'polling mid-answer', 'tool summary'])(
+  it.each(['idle acknowledgment', 'busy mid-answer', 'polling mid-answer', 'tool summary', 'raw tool gutter', 'gear tool',
+    'gutter # Running inspection', 'gutter → Read scripts/example.ts', 'gutter ⚙ hashline_edit scripts/example.ts',
+    'gutter Click to expand', 'gutter { "state": "closed" }'])(
     'attributes the exact real OpenCode fixture across %s', async (mode) => {
       const fixture = readFileSync(new URL('./fixtures/opencode-external-wait-ack.screen.txt', import.meta.url), 'utf8');
       const root = mkdtempSync(join(tmpdir(), 'fleet-2398-real-pane-'));
@@ -160,14 +162,23 @@ describe('fleet alarm', () => {
           clears.mockRestore();
         }
         screens.coord = 'idle prompt';
-        screens.one = mode === 'tool summary' ? fixture.replace(
-          '     Принял: park на merge #222 без изменений.',
-          '     → Read scripts/example.ts\n     $ gh pr view 225\n     Inspection summary: the gate was inspected.',
-        ) : fixture;
+        const toolWork = ['tool summary', 'raw tool gutter', 'gear tool'].includes(mode) || mode.startsWith('gutter ');
+        screens.one = mode === 'raw tool gutter'
+          ? readFileSync(new URL('./fixtures/opencode-external-wait-toolwork.screen.txt', import.meta.url), 'utf8')
+          : toolWork ? fixture.replace(
+            '     Принял: park на merge #222 без изменений.',
+            mode === 'gear tool' ? '     ⚙ hashline_edit scripts/example.ts\n     Patch summary: applied.'
+              : '     → Read scripts/example.ts\n     $ gh pr view 225\n     Inspection summary: the gate was inspected.',
+          ) : fixture;
+        if (mode.startsWith('gutter ')) {
+          const rawTool = readFileSync(new URL('./fixtures/opencode-external-wait-toolwork.screen.txt', import.meta.url), 'utf8').split('\n');
+          screens.one = [...rawTool.slice(0, 14), `  ┃  ${mode.slice(7)}`, '  ┃', ...rawTool.slice(20)].join('\n');
+        }
         for (let index = 0; index < 3; index += 1) {
           const observed = await step();
-          expect(observed.result.state).toBe(mode === 'tool summary' ? 'sent' : 'nothing_stopped');
-          if (mode !== 'tool summary') expect(sends(observed.calls)).toHaveLength(0);
+          expect(observed.result.state).toBe(toolWork ? 'sent' : 'nothing_stopped');
+          if (!toolWork) expect(sends(observed.calls)).toHaveLength(0);
+          else expect(store.readPaneWait('one')).toBeUndefined();
         }
         if (mode.includes('mid-answer')) {
           screens.one = fixture.replace('     Принял: park на merge #222 без изменений.', '     finished new step');

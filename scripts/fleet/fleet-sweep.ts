@@ -332,11 +332,22 @@ export function selectAgentTerminals(
 // Only the final own response is an outcome. A park quoted in a tool result, instruction,
 // table or older response does not authorize waiting. Wrapped outcome lines are joined.
 export function ownPaneOutcome(screen: string): { wait?: string; acknowledgment: boolean } {
-  // OpenCode's incoming-message gutter has two spaces after ┃. Identify its last
-  // content line before stripping frame prefixes; empty composer/model gutters are chrome.
+  const toolLine = /^(?:Tool:|\$|#\s*Running\b|[→⚙]\s|Click to expand\b|[\[{]|"[^"]+"\s*:|```|===|handle:|source:|(?:[┌└├]\s*)?(?:Bash|Shell|Read|Write|Edit|Grep|Glob)\b|(?:orca|gh|git|node|npm|mise|python|curl|bash|sh)\s)/iu;
+  // Raw OpenCode gutters render both incoming messages and own tools. Only a
+  // non-tool block advances the incoming boundary; subsequent tool blocks stay own work.
   const rawLines = screen.split(/\r?\n/u);
-  const incoming = rawLines.reduce((last, raw, index) => /^\s*┃[ \t]{2,}/u.test(raw)
-    && nonChromeLines(raw).length > 0 ? index : last, -1);
+  let incoming = -1;
+  let toolBlock = false;
+  for (let index = 0; index < rawLines.length;) {
+    if (!/^\s*┃/u.test(rawLines[index]!)) { index += 1; continue; }
+    const start = index;
+    while (index < rawLines.length && /^\s*┃/u.test(rawLines[index]!)) index += 1;
+    const block = rawLines.slice(start, index);
+    const first = block.find((raw) => raw.replace(TUI_FRAME_PREFIX_RE, '').trim());
+    if (!first || !/^\s*┃[ \t]{2,}/u.test(first)) continue;
+    if (toolLine.test(first.replace(TUI_FRAME_PREFIX_RE, '').trim())) toolBlock = true;
+    else if (nonChromeLines(block.join('\n')).length > 0) { incoming = index - 1; toolBlock = false; }
+  }
   screen = rawLines.slice(incoming + 1).join('\n');
   const paragraphs = screen.split(/\r?\n\s*(?:[┃│]\s*)?\r?\n/u).map((part) => nonChromeLines(part)
     .filter((line) => !/^(?:>|→ Add a follow-up|\d+ tasks?)\s*$/u.test(line))).filter((part) => part.length > 0);
@@ -348,7 +359,6 @@ export function ownPaneOutcome(screen: string): { wait?: string; acknowledgment:
   const start = own.reduce((last, line, index) => /^PARKED(?: on\b|:)/iu.test(line) ? index : last, -1);
   const response = own.slice(Math.max(0, start)).join(' ').trim();
   const context = own.slice(0, Math.max(0, start));
-  const toolLine = /^(?:Tool:|\$|```|===|handle:|source:|(?:[┌└├→]\s*)?(?:Bash|Shell|Read|Write|Edit|Grep|Glob)\b|(?:orca|gh|git|node|npm|mise|python|curl|bash|sh)\s)/iu;
   const newOutcome = /\?\s*$|\b(?:STOPPED|done|finished|handed[- ]off|worker_done|error)\b/iu;
   const foreign = (boundary >= 0 && /^User:/iu.test(lines[boundary]!)) || context.some((line) => toolLine.test(line));
   const superseded = own.slice(Math.max(0, start) + 1).some((line) => toolLine.test(line) || newOutcome.test(line));
@@ -358,7 +368,7 @@ export function ownPaneOutcome(screen: string): { wait?: string; acknowledgment:
   const turn = paragraphs.flat();
   const turnBoundary = turn.reduce((last, line, index) => /^(?:>\s+|User:|PARKED(?: on\b|:))/iu.test(line) ? index : last, -1);
   const turnLines = turn.slice(turnBoundary + 1).map((line) => line.replace(/^Assistant:\s*/iu, '')).filter(Boolean);
-  const acknowledgment = !foreign && turnLines.length <= 3
+  const acknowledgment = !foreign && !toolBlock && turnLines.length <= 3
     && !turnLines.some((line) => toolLine.test(line) || newOutcome.test(line));
   return { ...(wait ? { wait: `PARKED on ${wait}` } : {}), acknowledgment };
 }
