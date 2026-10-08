@@ -3,8 +3,7 @@
   "issue_number": 2398,
   "declared_paths": [
     "docs/declarations/2398.pr-scope.json",
-    "scripts/fleet/fixtures/opencode-external-wait-ack.screen.txt",
-    "scripts/fleet/fixtures/opencode-external-wait-toolwork.screen.txt",
+    "scripts/fleet/fixtures/opencode-external-wait.collection.json",
     "scripts/fleet/fleet-sweep.test.ts",
     "scripts/fleet/fleet-sweep.ts",
     "scripts/fleet/fleet-wake.test.ts",
@@ -26,5 +25,5 @@
     "docs/declarations/",
     "scripts/fleet/"
   ],
-  "source_revision": "19353f53ce6ec44a536756950108852b04ef6d5c"
+  "source_revision": "35c86c748d226c77f8b33438c1774c55aff53150"
 }

@@ -1,5 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -132,12 +133,27 @@ function sendsTo(calls: readonly string[][], handle: string): string[][] {
   return sends(calls).filter((call) => call[call.indexOf('--terminal') + 1] === handle);
 }
 
+// One owning shared prefix/footer; reconstruction preserves each observed UTF-8 byte.
+function realOpenCodePane(kind: 'ack' | 'tool'): string {
+  const collection = JSON.parse(readFileSync(new URL('./fixtures/opencode-external-wait.collection.json', import.meta.url), 'utf8')) as {
+    prefix: string[]; responses: Record<'ack' | 'tool', string[]>; suffix: string[];
+  };
+  const pane = [...collection.prefix, ...collection.responses[kind], ...collection.suffix].join('\n') + '\n';
+  const original = {
+    ack: { bytes: 1270, sha256: '275c7961e5a0bb8ee345fd0186343a2df034636610c79e57f7523a41e65f88e6' },
+    tool: { bytes: 1428, sha256: 'df19e9185526b71d992aa20133b7a1933c0369b10c4698c245c54f1ee0f73909' },
+  }[kind];
+  expect(Buffer.byteLength(pane, 'utf8')).toBe(original.bytes);
+  expect(createHash('sha256').update(pane, 'utf8').digest('hex')).toBe(original.sha256);
+  return pane;
+}
+
 describe('fleet alarm', () => {
   it.each(['idle acknowledgment', 'busy mid-answer', 'polling mid-answer', 'tool summary', 'raw tool gutter', 'gear tool',
     'gutter # Running inspection', 'gutter → Read scripts/example.ts', 'gutter ⚙ hashline_edit scripts/example.ts',
     'gutter Click to expand', 'gutter { "state": "closed" }'])(
     'attributes the exact real OpenCode fixture across %s', async (mode) => {
-      const fixture = readFileSync(new URL('./fixtures/opencode-external-wait-ack.screen.txt', import.meta.url), 'utf8');
+      const fixture = realOpenCodePane('ack');
       const root = mkdtempSync(join(tmpdir(), 'fleet-2398-real-pane-'));
       const store = new FileFleetWakeStateStore('real-pane', { XDG_RUNTIME_DIR: root });
       const unit = { ...terminals[1]!, incarnationId: 'real-incarnation', status: 'running', branch: 'manager' };
@@ -164,14 +180,14 @@ describe('fleet alarm', () => {
         screens.coord = 'idle prompt';
         const toolWork = ['tool summary', 'raw tool gutter', 'gear tool'].includes(mode) || mode.startsWith('gutter ');
         screens.one = mode === 'raw tool gutter'
-          ? readFileSync(new URL('./fixtures/opencode-external-wait-toolwork.screen.txt', import.meta.url), 'utf8')
+          ? realOpenCodePane('tool')
           : toolWork ? fixture.replace(
             '     Принял: park на merge #222 без изменений.',
             mode === 'gear tool' ? '     ⚙ hashline_edit scripts/example.ts\n     Patch summary: applied.'
               : '     → Read scripts/example.ts\n     $ gh pr view 225\n     Inspection summary: the gate was inspected.',
           ) : fixture;
         if (mode.startsWith('gutter ')) {
-          const rawTool = readFileSync(new URL('./fixtures/opencode-external-wait-toolwork.screen.txt', import.meta.url), 'utf8').split('\n');
+          const rawTool = realOpenCodePane('tool').split('\n');
           screens.one = [...rawTool.slice(0, 14), `  ┃  ${mode.slice(7)}`, '  ┃', ...rawTool.slice(20)].join('\n');
         }
         for (let index = 0; index < 3; index += 1) {
