@@ -49,6 +49,7 @@ export interface FleetWakeConfig {
   readonly workspaceRe: RegExp;
   readonly orchestratorTitleRe: RegExp;
   readonly orchestratorHandle?: string;
+  readonly architectHandle?: string;
   readonly busyRe: RegExp;
   readonly intervalSeconds: number;
   readonly chatCdpUrl?: string;
@@ -231,6 +232,7 @@ export function stoppedSignature(observations: readonly FleetPaneObservation[]):
 }
 
 function isWorkerPane(terminal: FleetTerminal, config: FleetWakeConfig): boolean {
+  if (terminal.handle === config.architectHandle) return false;
   if (!terminal.worktreePath || samePath(terminal.worktreePath, config.primary)) return false;
   config.workspaceRe.lastIndex = 0;
   return config.workspaceRe.test(terminal.worktreePath.replaceAll('\\', '/'));
@@ -276,6 +278,7 @@ export function bannerOwnerPane(
   headRef: typeof readPrHeadRef = readPrHeadRef,
 ): FleetTerminal | undefined {
   const binding = readBinding(banner.url);
+  if (config.architectHandle && binding?.terminal_handle === config.architectHandle) return undefined;
   const launcher = binding?.terminal_handle
     ? terminals.find((terminal) => terminal.handle === binding.terminal_handle && isWorkerPane(terminal, config))
     : undefined;
@@ -299,12 +302,8 @@ export function bannerOwnerPane(
   if (!banner.issue) return undefined;
   const name = new RegExp(`^[a-z][a-z0-9-]*-${banner.issue}$`, 'i');
   const matches = terminals.filter((terminal) => {
-    if (!terminal.worktreePath) return false;
-    const worktree = terminal.worktreePath.replaceAll('\\', '/');
-    config.workspaceRe.lastIndex = 0;
-    return !samePath(terminal.worktreePath, config.primary)
-      && config.workspaceRe.test(worktree)
-      && name.test(basename(worktree));
+    return isWorkerPane(terminal, config)
+      && name.test(basename(terminal.worktreePath.replaceAll('\\', '/')));
   });
   return singleOwner(matches);
 }
@@ -778,6 +777,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       workspaceRe: config.workspaceRe,
       coordinatorHandle: coordinator.handle,
       coordinatorTitleRe: config.orchestratorTitleRe,
+      architectHandle: config.architectHandle,
       busyRe: config.busyRe,
       executor,
       store,
@@ -909,6 +909,7 @@ export function fleetWakeConfigFromEnv(
     workspaceRe: compileRegex(target.orcaWorkspacePattern, defaultWorkspaceRegex(target.primaryRoot)),
     orchestratorTitleRe: compileRegex(target.orchestratorTitlePattern, DEFAULT_ORCHESTRATOR_TITLE_RE),
     ...(env.ORCH_HANDLE?.trim() ? { orchestratorHandle: env.ORCH_HANDLE.trim() } : {}),
+    ...(env.ARCHITECT_HANDLE?.trim() ? { architectHandle: env.ARCHITECT_HANDLE.trim() } : {}),
     busyRe: compileRegex(env.BUSY_RE, DEFAULT_BUSY_RE),
     intervalSeconds,
     chatCdpUrl: env.PACK_GPT_BROWSER_CDP?.trim() || DEFAULT_CHAT_CDP_URL,

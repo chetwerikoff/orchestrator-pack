@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   classifyFleetPane,
   defaultWorkspaceRegex,
@@ -185,6 +185,23 @@ describe('fleet sweep on real OpenCode screens', () => {
 });
 
 describe('fleet sweep pane selection and reads', () => {
+  it.each([true, false])('one-off sweep consumes the exact optional ARCHITECT_HANDLE: %s (#2422)', (exclude) => {
+    const handle = 'term_721dce76-e932-460a-8ebe-e9f80da9f056';
+    const census = [pane(handle, 'Claude Code architect', primary), pane('worker', 'OpenCode worker'), pane('other', 'Claude Code architect')];
+    const calls: string[][] = [];
+    try {
+      vi.stubEnv('ARCHITECT_HANDLE', exclude ? ` ${handle} ` : '');
+      const observed = runFleetSweep({
+        primary, workspaceRe: /\/home\/user\//u, terminals: census, store: new MemoryPollingStore(),
+        executor: fakeExecutor(census, { [handle]: 'Ready.\n>', worker: 'done', other: 'Ready.\n>' }, calls),
+      });
+      expect(observed.map((item) => [item.handle, item.state])).toEqual([
+        ...(!exclude ? [[handle, 'STOPPED']] : []), ['worker', 'STOPPED'], ['other', 'STOPPED'],
+      ]);
+      expect(calls.some((call) => call[1] === 'read' && call.includes(handle))).toBe(!exclude);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it('includes primary-worktree agents while excluding the coordinator, outside worktrees, and plain shells', () => {
     const workspacePrimary = '/home/user/orca/workspaces/project/primary';
     const terminals = [

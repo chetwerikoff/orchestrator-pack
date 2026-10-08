@@ -58,6 +58,7 @@ export interface FleetSweepOptions {
   readonly workspaceRe?: RegExp;
   readonly coordinatorHandle?: string;
   readonly coordinatorTitleRe?: RegExp;
+  readonly architectHandle?: string;
   readonly busyRe?: RegExp;
   readonly lines?: number;
   readonly json?: boolean;
@@ -315,11 +316,12 @@ export function selectAgentTerminals(
   workspaceRe: RegExp = defaultWorkspaceRegex(primary),
   coordinatorHandle?: string,
   coordinatorTitleRe: RegExp = DEFAULT_ORCHESTRATOR_TITLE_RE,
+  architectHandle?: string,
 ): FleetTerminal[] {
   const primaryPath = normalizedPath(primary);
   return terminals.filter((terminal) => {
     if (!terminal.worktreePath) return false;
-    if (terminal.handle === coordinatorHandle) return false;
+    if (terminal.handle === coordinatorHandle || terminal.handle === architectHandle) return false;
     coordinatorTitleRe.lastIndex = 0;
     if (normalizedPath(terminal.worktreePath) === primaryPath && coordinatorTitleRe.test(terminal.title)) return false;
     const worktree = terminal.worktreePath.replaceAll('\\', '/');
@@ -443,6 +445,7 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
     options.workspaceRe ?? defaultWorkspaceRegex(options.primary),
     options.coordinatorHandle ?? process.env.ORCH_HANDLE?.trim(),
     options.coordinatorTitleRe ?? compileRegex(process.env.ORCH_TITLE_RE, DEFAULT_ORCHESTRATOR_TITLE_RE),
+    options.architectHandle ?? process.env.ARCHITECT_HANDLE?.trim(),
   );
   const lineCount = options.lines ?? 4;
   store.prunePaneWaits?.(new Set(selected.map((terminal) => terminal.handle)));
