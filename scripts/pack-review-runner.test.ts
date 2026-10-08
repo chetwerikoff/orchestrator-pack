@@ -3,7 +3,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   observeGptPackReviewAttempt,
   observeNativePackReviewAttempt,
@@ -260,6 +260,37 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
     expect(observationReads).toBe(0);
     expect(cdpReads).toBe(0);
   });
+
+  it.each(['dispatching', 'unreadable', 'unbound', 'wrong_identity', 'not_sent'] as const)(
+    'requires affirmative exact pre-dispatch evidence for legacy zero-count terminals: %s', async (mode) => {
+      const run = gptRun('2026-08-30T00:00:00.000Z');
+      const slot = run.reviewRound!.sourceSlots[0]!;
+      slot.lifecycle = 'terminal';
+      slot.terminalClass = 'driver_error:locator_timeout';
+      slot.terminalResult = { state: 'driver_error', cause: 'locator_timeout', send_count: 0 };
+      if (mode === 'unbound') delete slot.launchProfileKey;
+      const deps = gptObservationDeps({ markerPresent: true, generating: true });
+      const readObservation = vi.fn(() => {
+        if (mode === 'unreadable') throw new Error('fixture_observation_unavailable');
+        return {
+          schema: 'state-light-turn-observation/v1', version: 1, profile_key: 'profile-01',
+          marker: `OPKTURNV1${'a'.repeat(32)}`, conversation_url: 'https://chatgpt.com/c/one',
+          transitioned_at: '2026-08-30T00:00:00.000Z', transition_reason: 'fixture',
+          phase: mode === 'not_sent' ? 'not_sent' : 'dispatching', send_count: 0, send_witness: 'none',
+          invocation_id: mode === 'wrong_identity' ? 'foreign-invocation' : slot.invocationId,
+        };
+      });
+      const observed = await observeGptPackReviewAttempt(run, Date.parse('2026-08-30T00:01:00.000Z'), {
+        ...deps, readObservation: readObservation as never,
+      });
+      expect(observed).toMatchObject({
+        state: mode === 'not_sent' ? 'replacement_eligible' : mode === 'dispatching' ? 'generating' : 'observation_unavailable',
+        replacementEligible: mode === 'not_sent',
+      });
+      expect(observed?.replacementEligibleSlotIds).toEqual(mode === 'not_sent' ? ['slot-01'] : []);
+      if (mode !== 'unbound') expect(readObservation).toHaveBeenCalledWith('profile-01', 'invocation-01');
+    },
+  );
 
   it('lets exact GitHub publication override authoritative zero-send replacement', async () => {
     const run = gptRun('2026-08-30T00:00:00.000Z');

@@ -7,8 +7,12 @@
     "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
     "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-review-no-review-reconcile.test.ts",
-    "scripts/pack-review-no-review-reconcile.ts"
+    "scripts/pack-review-no-review-reconcile.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts"
   ],
   "denylist": [
     ".env",
@@ -33,8 +37,12 @@
     "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
     "scripts/flow-manager-long-running-child.test.ts",
     "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-review-no-review-reconcile.test.ts",
-    "scripts/pack-review-no-review-reconcile.ts"
+    "scripts/pack-review-no-review-reconcile.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts"
   ],
-  "source_revision": "a615294764cd7a9abc4c8b224900cdca0579e8fc"
+  "source_revision": "7b7bf9d28e45ef0d0c302f11d6bc3b7b5967b736"
 }

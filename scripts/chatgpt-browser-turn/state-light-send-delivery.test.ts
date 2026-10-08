@@ -2,6 +2,7 @@
 // @vitest-pre-topology-seconds 1
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -153,7 +154,7 @@ describe('state-light send delivery accounting', () => {
 describe('production attempted-send result and durable envelope', () => {
   let root: string;
   beforeEach(() => {
-    root = mkdtempSync(join('/tmp/opencode/', 'attempted-send-'));
+    root = mkdtempSync(join(tmpdir(), 'attempted-send-'));
     vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
   });
   afterEach(() => {
@@ -231,6 +232,7 @@ describe('production attempted-send result and durable envelope', () => {
       await runLaunch({
         runIdentity: `run-${invocationId}`, attemptIdentity: invocationId, cwd: root,
         handoffReceiptPath: join(root, `${invocationId}-handoff.json`), terminalEnvelopePath: envelopePath,
+        terminalEnvelopeRoot: root,
         browserOutputPath: join(root, `${invocationId}-output.txt`),
         conversationLocator: chatUrl,
         childCommand: process.execPath, childArgs: ['-e', `process.stdout.write(${JSON.stringify(JSON.stringify(result) + '\n')})`],

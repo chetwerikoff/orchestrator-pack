@@ -129,7 +129,7 @@ function deps(overrides: Partial<NoReviewReconciliationDependencies> = {}): Part
 
 describe('pack-review no-review reconciliation', () => {
   it('keeps authoritative pre-send classification in one exported predicate', () => {
-    expect(authoritativePreSend(slot(1, { lifecycle: 'terminal', terminalResult: { send_count: 0 } }))).toBe(true);
+    expect(authoritativePreSend(slot(1, { lifecycle: 'terminal', terminalResult: { send_count: 0 } }))).toBe(false);
     expect(authoritativePreSend(slot(1, { lifecycle: 'terminal', terminalResult: { state: 'not_sent' } }))).toBe(true);
     expect(authoritativePreSend(slot(1, { lifecycle: 'terminal', terminalClass: 'pre_launch_interrupted' }))).toBe(true);
     expect(authoritativePreSend(slot(1, { lifecycle: 'terminal', terminalClass: 'explicit_refusal:zero_send_collision_exhausted' }))).toBe(true);
@@ -149,6 +149,7 @@ describe('pack-review no-review reconciliation', () => {
     { sendAttempted: true, phase: 'dispatching' as const },
     { sendAttempted: false, phase: 'dispatching' as const },
     { sendAttempted: true, phase: 'not_sent' as const },
+    { sendAttempted: false, phase: 'not_sent' as const },
   ])('keeps zero-count possible delivery from replacement ($phase, $sendAttempted)', async ({ sendAttempted, phase }) => {
     const invocationId = '11111111-1111-4111-8111-111111111111';
     const profileKey = 'attempted-profile';
@@ -165,16 +166,34 @@ describe('pack-review no-review reconciliation', () => {
       profile_key: profileKey, invocation_id: invocationId, marker: 'OPKTURNV1' + 'ab'.repeat(16),
       phase, send_count: 0, send_witness: 'none' as const,
       conversation_url: 'https://chatgpt.com/c/synthetic-owned-turn',
-      transitioned_at: NOW.toISOString(), transition_reason: 'dispatch_boundary_entered',
+      transitioned_at: NOW.toISOString(), transition_reason: phase === 'not_sent' && !sendAttempted ? 'send_delivery_unproven' : 'fixture',
     }));
     const result = await reconcilePackReviewNoReview(INPUT, deps({ listRuns: () => [pending], readObservation, probe }));
+    const contradictory = phase === 'not_sent' && sendAttempted;
     expect(result).toMatchObject({ workflowAuthority: 'none',
-      disposition: phase === 'not_sent' ? 'contradiction' : 'unavailable/inconclusive',
-      reason: phase === 'not_sent' ? 'attempted_send_contradicts_pre_send_observation' : 'owned_turn_inspection_inconclusive',
+      disposition: contradictory ? 'contradiction' : 'unavailable/inconclusive',
+      reason: contradictory ? 'attempted_send_contradicts_pre_send_observation' : 'owned_turn_inspection_inconclusive',
     });
     expect(readObservation).toHaveBeenCalledWith(profileKey, invocationId);
-    expect(probe).toHaveBeenCalledTimes(phase === 'not_sent' ? 0 : 1);
+    expect(probe).toHaveBeenCalledTimes(contradictory ? 0 : 1);
     expect(result.operationalFacts).not.toEqual(expect.arrayContaining([expect.objectContaining({ state: 'closed-pre-send' })]));
+  });
+
+  it.each(['unreadable', 'unbound'] as const)('does not close a legacy zero-count send failure when observation is %s', async (mode) => {
+    const pending = run(round([1, 2, 3].map((ordinal) => slot(ordinal, {
+      lifecycle: 'terminal', invocationId: `legacy-${ordinal}`,
+      ...(mode === 'unbound' ? {} : { launchProfileKey: 'profile-fixture', launchCdpUrl: 'http://127.0.0.1:9222' }),
+      terminalResult: { state: 'driver_error', send_count: 0 },
+    }))));
+    const result = await reconcilePackReviewNoReview(INPUT, deps({
+      listRuns: () => [pending],
+      readObservation: () => { throw new Error('fixture_observation_unreadable'); },
+    }));
+    expect(result).toMatchObject({
+      disposition: 'unavailable/inconclusive', workflowAuthority: 'none',
+      reason: mode === 'unbound' ? 'possible_delivery_profile_or_cdp_unproven' : 'owned_turn_observation_unavailable',
+    });
+    expect(result.evidence).not.toEqual(expect.arrayContaining([expect.objectContaining({ state: 'closed-pre-send' })]));
   });
 
   it('does not create a missing run-store root while proving the no-local-run path inconclusive', async () => {

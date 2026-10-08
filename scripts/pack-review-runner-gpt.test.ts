@@ -523,6 +523,12 @@ describe('GPT zero-send collision retry tuples (Issue #1276 AC20)', () => {
       failedTurn('ui_contract_mismatch', 'composer_unavailable', 1),
     )).toBe(false);
   });
+
+  it('never retries a collision tuple contradicted by attempted-send evidence', () => {
+    const result = failedTurn('profile_busy', 'profile_busy', 0);
+    result.stdout = JSON.stringify({ ...JSON.parse(result.stdout), send_attempted: true });
+    expect(isRetryablePackReviewZeroSendCollision(result, 'collision-test')).toBe(false);
+  });
 });
 
 describe('GPT stale-head guard (Issue #1031 AC10)', () => {
@@ -1752,6 +1758,62 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     };
   }
 
+  it.each([true, false].flatMap((published) => [true, false].map((sendAttempted) => ({ published, sendAttempted }))))(
+    'censuses attempted zero-count sources without a second send (published $published, attempt flag $sendAttempted)', async ({ published, sendAttempted }) => {
+    const storeRoot = tempRoot('opk-gpt-attempted-zero-census-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    const invocationLog = path.join(storeRoot, 'invocations.jsonl');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = invocationLog;
+    const comments: PackGptSourceGithubComment[] = [];
+    const fixtures: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+    const sourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async () => comments,
+      getComment: async (id) => comments.find((comment) => comment.id === id)!,
+    };
+    const censusSlots: string[] = [];
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureReviewBySourceSlot: fixtures,
+      fixtureAfterGptInvocationBound: ({ slotId, invocationId }: { slotId: string; invocationId: string }) => {
+        fixtures[slotId] = [{ stdout: JSON.stringify({
+          schema: 'turn-result/v1', state: 'send_failed', scope: 'invocation',
+          cause: 'send_delivery_unproven', invocation_id: invocationId, send_count: 0,
+          ...(sendAttempted ? { send_attempted: true } : {}),
+        }), exitCode: 1 }];
+        if (published) {
+          const id = 2424000 + comments.length;
+          const identity: PackGptSourceIdentity = {
+            repository: 'chetwerikoff/orchestrator-pack', prNumber: 1276, headSha: HEAD_A,
+            runId: listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })[0]!.id, slotId, invocationId,
+          };
+          comments.push({ id, body: formatPackGptSourceCommentEnvelope(identity, 'NO_FINDINGS'),
+            actorLogin: 'browser-gpt-bot', createdAt: '2026-08-29T03:01:00.000Z', updatedAt: '2026-08-29T03:01:00.000Z',
+            url: `https://github.com/chetwerikoff/orchestrator-pack/pull/1276#issuecomment-${id}`,
+            issueUrl: 'https://api.github.com/repos/chetwerikoff/orchestrator-pack/issues/1276',
+          });
+        }
+      },
+      fixtureBeforeGptSourceCommentCensus: ({ slotId }: { slotId: string }) => { censusSlots.push(slotId); },
+    }));
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    expect(censusSlots).toEqual(['source-01', 'source-02', 'source-03']);
+    expect(engagementCount(invocationLog)).toBe(3);
+    expect(run?.reviewRound?.sourceSlots.map((slot) => slot.attemptOrdinal)).toEqual([1, 1, 1]);
+    expect(run?.reviewRound?.sourceSlots.map((slot) => slot.terminalClass), JSON.stringify(result)).toEqual(
+      Array(3).fill(published ? 'complete_clean' : sendAttempted ? 'possible_delivery' : 'send_failed:send_delivery_unproven'),
+    );
+    expect(run?.reviewRound?.sourceSlots.every((slot) => {
+      const terminal = slot.terminalResult as any;
+      return (published ? terminal.browser_terminal?.send_count : terminal.send_count) === 0;
+    })).toBe(true);
+    if (published) expect(result).toMatchObject({ status: 'up_to_date', coverage: { completedSourceCount: 3 } });
+    },
+  );
+
   it('fails plural fixed-chat configuration before invoking any source', async () => {
     const storeRoot = tempRoot('opk-gpt-fixed-chat-');
     const capture = path.join(storeRoot, 'github-review.json');
@@ -2624,6 +2686,43 @@ function terminalClassOnlyStoredGptRound(): PackReviewGptRoundRecord {
 }
 
 describe('GPT run-store terminal evidence validation (Issue #1276 r08)', () => {
+  it.each(['attempted_zero', 'positive_count', 'bare_zero', 'foreign_invocation', 'ok_state', 'with_payload', 'complete_zero'] as const)(
+    'persists only bound truthful possible-delivery evidence: %s', (scenario) => {
+      const storeRoot = tempRoot('opk-gpt-attempted-durable-');
+      const options = { projectId: 'orchestrator-pack', storeRoot };
+      const created = createPackReviewRun({
+        ...options, prNumber: 1276, headSha: HEAD_A, trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+        reviewRound: plannedStoredGptRound(),
+      }).run;
+      const round = plannedStoredGptRound();
+      round.sourceSlots[0] = {
+        slotId: 'source-01', ordinal: 1, lifecycle: 'terminal', invocationId: 'inv-1', attemptOrdinal: 1,
+        terminalClass: scenario === 'complete_zero' ? 'complete_clean' : 'possible_delivery',
+        terminalResult: storedTerminalTurnResult(scenario === 'foreign_invocation' ? 'inv-foreign' : 'inv-1', {
+          state: scenario === 'ok_state' || scenario === 'complete_zero' ? 'ok' : 'send_failed',
+          cause: 'send_delivery_unproven', send_count: scenario === 'positive_count' ? 1 : 0,
+          ...(scenario === 'bare_zero' || scenario === 'positive_count' ? {} : { send_attempted: true }),
+        }),
+        ...(scenario === 'with_payload' || scenario === 'complete_zero' ? { payload: { verdict: 'clean', findingCount: 0, findings: [] } } : {}),
+      };
+      const write = () => updatePackReviewRun(created.id, { reviewRound: round }, options);
+      if (scenario === 'attempted_zero' || scenario === 'positive_count') {
+        expect(write).not.toThrow();
+        expect(getPackReviewRun(created.id, options)?.reviewRound?.sourceSlots[0]).toMatchObject({
+          lifecycle: 'terminal', invocationId: 'inv-1', terminalClass: 'possible_delivery',
+          terminalResult: { state: 'send_failed', send_count: scenario === 'positive_count' ? 1 : 0 },
+        });
+      } else {
+        const error = scenario === 'foreign_invocation' ? /invocation_id is not bound/
+          : scenario === 'with_payload' ? /non-complete terminal class cannot carry payload/
+          : scenario === 'complete_zero' ? /complete_clean requires successful sent/
+          : /possible_delivery requires a non-ok/;
+        expect(write).toThrow(error);
+        expect(getPackReviewRun(created.id, options)?.reviewRound?.sourceSlots[0].lifecycle).toBe('planned');
+      }
+    },
+  );
+
   it('rejects terminal-class-only slots across create, update, settlement, journal, and read', () => {
     const createRoot = tempRoot('opk-gpt-terminal-evidence-create-');
     expect(() => createPackReviewRun({

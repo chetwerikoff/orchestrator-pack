@@ -136,13 +136,21 @@ function slotFact(slot: PackReviewSourceSlotRecord): Record<string, unknown> {
   };
 }
 
-function terminalHasPossibleDelivery(terminal: Record<string, unknown>): boolean {
+export function terminalHasPossibleDelivery(terminal: Record<string, unknown>): boolean {
   const diagnostics = terminal.diagnostics as { persisted_observation?: { phase?: unknown } } | undefined;
   const phase = diagnostics?.persisted_observation?.phase;
   return terminal.send_attempted === true
     || terminal.delivery === 'POSSIBLY_DELIVERED' || terminal.delivery === 'landed'
     || (typeof terminal.send_count === 'number' && terminal.send_count > 0)
     || ['dispatching', 'sent_unbound', 'sent_unharvested', 'harvested'].includes(String(phase));
+}
+
+function observationProvesPreDispatch(observation: ReturnType<typeof readStateLightTurnObservation>): boolean {
+  // Older returned-send incidents incorrectly wrote not_sent from dispatching.
+  // Their retained reason still proves an attempt, not pre-dispatch failure.
+  return (observation.phase === 'prepared' || observation.phase === 'not_sent')
+    && observation.transition_reason !== 'send_delivery_unproven'
+    && !(typeof observation.send_count === 'number' && observation.send_count > 0);
 }
 
 export function authoritativePreSend(
@@ -156,9 +164,9 @@ export function authoritativePreSend(
     const binding = profileAndCdp(slot);
     if (binding.kind !== 'bound' || observation.profile_key !== binding.profileKey
       || observation.invocation_id !== slot.invocationId) return false;
-    if (observation.phase !== 'prepared' && observation.phase !== 'not_sent') return false;
+    if (!observationProvesPreDispatch(observation)) return false;
   }
-  if (terminal.send_count === 0) return true;
+  if (terminal.send_count === 0 && observation) return true;
   if (terminal.state === 'not_sent') return true;
   if (slot.terminalClass === 'pre_launch_interrupted') return true;
   if ((slot.terminalClass ?? '').startsWith('explicit_refusal:zero_send_')) return true;
@@ -343,8 +351,7 @@ async function reconcilePossibleDelivery(
       },
     };
   }
-  if (observation.phase === 'not_sent'
-    || (observation.phase === 'prepared' && observation.send_count === 0)) {
+  if (observationProvesPreDispatch(observation)) {
     if (terminalHasPossibleDelivery(terminalRecord(slot))) {
       return {
         disposition: 'contradiction', reason: 'attempted_send_contradicts_pre_send_observation',
@@ -825,15 +832,7 @@ export async function reconcilePackReviewNoReview(
   for (const candidateRun of targetRows) {
     if (!candidateRun.reviewRound) continue;
     for (const slot of candidateRun.reviewRound.sourceSlots) {
-      let observation: ReturnType<typeof readStateLightTurnObservation> | undefined;
       if (authoritativePreSend(slot)) {
-        const binding = profileAndCdp(slot);
-        if (binding.kind === 'bound' && slot.invocationId) {
-          try { observation = deps.readObservation(binding.profileKey, slot.invocationId); }
-          catch { /* Retain terminal pre-dispatch evidence when no record is available. */ }
-        }
-      }
-      if (authoritativePreSend(slot, observation)) {
         evidence.push({
           kind: 'slot-closure',
           runId: candidateRun.id,
