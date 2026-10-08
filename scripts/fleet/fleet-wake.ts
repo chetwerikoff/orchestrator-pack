@@ -654,8 +654,12 @@ async function wakePanesOnEvents(
   const wakes: Array<{ pane: FleetTerminal | FleetPaneObservation; key: string; message: string }> = [];
   for (const envelope of (options.listTerminalEnvelopes ?? listTerminalEnvelopes)()) {
     const key = `gpt:${envelope.path}`;
-    const pane = observations.find((candidate) => envelope.terminalHandle && candidate.handle === envelope.terminalHandle)
-      ?? (envelope.cwd ? envelopeOwner(envelope.cwd, observations) : undefined);
+    const pane = envelope.terminalHandle !== undefined
+      ? observations.find((candidate) =>
+        candidate.handle === envelope.terminalHandle)
+      : envelope.cwd
+        ? envelopeOwner(envelope.cwd, observations)
+        : undefined;
     if (!pane || !idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
     wakes.push({ pane, key, message: `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}` });
   }
