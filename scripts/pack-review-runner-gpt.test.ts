@@ -3950,7 +3950,7 @@ describe('Issue #2451 three-source no-judgment delivery', () => {
         tier: 'T2', fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
         fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
         fixturePrState: 'OPEN',
-        fixtureIssueBody: ' ```complexity-tier\\ntier: T2\\n```'.trim().replaceAll('\\n', '\n'),
+        fixtureIssueBody: '```complexity-tier\\ntier: T2\\n```',
         fixtureIssueNumber: 2451,
         fixtureReviewBySourceSlot: slots,
         fixtureAfterGptInvocationBound: ({ slotId, invocationId }) => {
@@ -3966,7 +3966,7 @@ describe('Issue #2451 three-source no-judgment delivery', () => {
               generation: 'fixture-generation', workspacePath: '/fixture/worktree',
               headSha: HEAD_A,
             },
-          }, options);
+          } as unknown as Parameters<typeof updatePackReviewRun>[1], options);
         },
         fixtureRequiredStatusWriter: async (request) => { statusStates.push(request.state); },
         fixtureWorkerNotifier: async (request) => {
