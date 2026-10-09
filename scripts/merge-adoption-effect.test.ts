@@ -35,16 +35,24 @@ function mappingFixture(): string {
     const result = runProcessSync({ command: 'git', args, inheritParentEnv: true });
     if (!result.ok) throw new Error('synthetic fixture git repository initialization failed');
   }
-  write(root, 'package.json', JSON.stringify({ imports: { '#opk-kernel/*': './scripts/kernel/*.ts' } }));
+  const packManifest = JSON.parse(readFileSync('package.json', 'utf8')) as { engines: { node: string; npm: string } };
+  write(root, 'package.json', JSON.stringify({
+    type: 'module', engines: packManifest.engines,
+    imports: { '#opk-kernel/*': './scripts/kernel/*.ts' },
+  }));
+  // Exercise the tracked launcher itself, with the real Node runtime contract but an inert synthetic target.
+  write(root, 'scripts/toolchain/node-version.json', readFileSync('scripts/toolchain/node-version.json', 'utf8'));
+  write(root, 'scripts/toolchain/node-runtime-contract.mjs', readFileSync('scripts/toolchain/node-runtime-contract.mjs', 'utf8'));
   write(root, 'scripts/orchestrator-side-process-registry.json', JSON.stringify({ children: [{ id: 'pr2-scheduler', script: 'pr2-foundation/scheduler.ts' }] }));
   write(root, 'scripts/orchestrator-wake-supervisor.ts', "import './lib/supervisor-core.ts';\nimport '#opk-kernel/shared';\n");
   write(root, 'scripts/lib/supervisor-core.ts', 'export const supervisor = true;\n');
   write(root, 'scripts/kernel/shared.ts', 'export const shared = true;\n');
   write(root, 'scripts/pr2-foundation/scheduler.ts', "import './scheduler-core.ts';\n");
   write(root, 'scripts/pr2-foundation/scheduler-core.ts', 'export const scheduler = true;\n');
-  write(root, 'scripts/fleet/fleet-wake.ts', "import './wake-library.ts';\nexport const wake = true;\n");
+  write(root, 'scripts/fleet/fleet-wake.ts', "import './wake-library.ts';\nsetInterval(() => {}, 1000);\nexport const wake = true;\n");
   write(root, 'scripts/fleet/wake-library.ts', 'export const wakeLibrary = true;\n');
-  write(root, 'scripts/lib/Invoke-TypeScriptCli.ts', 'export const invoke = true;\n');
+  write(root, 'scripts/lib/Invoke-TypeScriptCli.ts', readFileSync('scripts/lib/Invoke-TypeScriptCli.ts', 'utf8'));
+  write(root, 'scripts/lib/unrelated.ts', 'setInterval(() => {}, 1000);\n');
   write(root, 'scripts/fleet/fleet-wake@.service', '[Service]\n');
   write(root, 'scripts/invoke-read-delegation-audit-stop.ts', 'export const hook = true;\n');
   return root;
@@ -119,7 +127,9 @@ function fixtureMerge(root: string, changed: string): string {
   git('config', 'user.email', 'fixture@example.invalid');
   git('add', '.');
   git('commit', '-qm', 'baseline');
-  write(root, changed, 'export const newer = true;\n');
+  write(root, changed, changed === 'scripts/fleet/fleet-wake.ts'
+    ? 'setInterval(() => {}, 1000);\nexport const newer = true;\n'
+    : 'export const newer = true;\n');
   git('add', changed);
   git('commit', '-qm', 'adopt code');
   return git('rev-parse', 'HEAD');
@@ -189,17 +199,12 @@ function fakeSystemctl(units: Map<string, MockFleetUnit>) {
   return { commandLog, restore: () => spy.mockRestore() };
 }
 
-async function startFleetFixture(root: string, projectId: string, argsOverride?: string[]): Promise<FixtureProcess> {
+async function startFleetProcess(args: readonly string[]): Promise<FixtureProcess> {
   const abort = new AbortController();
   let pid = 0;
-  const args = argsOverride ?? [
-    '--repo-root', root,
-    '--script', path.join(root, 'scripts/fleet/fleet-wake.ts'),
-    '--project', projectId,
-  ];
   const done = runProcess({
     command: process.execPath,
-    args: ['-e', 'setInterval(() => {}, 1000)', '--', ...args],
+    args,
     inheritParentEnv: true,
     signal: abort.signal,
     onSpawn: (spawnedPid) => { pid = spawnedPid; },
@@ -209,6 +214,29 @@ async function startFleetFixture(root: string, projectId: string, argsOverride?:
   if (pid === 0) { abort.abort(); await done; throw new Error('fleet synthetic child did not start'); }
   await waitForProcessStart(pid);
   return { pid, abort, done };
+}
+
+/** The tracked systemd ExecStart runs Node against this exact launcher and forwards --project after --. */
+async function startFleetFixture(root: string, projectId: string, argsOverride?: string[]): Promise<FixtureProcess> {
+  return startFleetProcess([
+    '--experimental-strip-types', path.join(root, 'scripts/lib/Invoke-TypeScriptCli.ts'),
+    ...(argsOverride ?? [
+      '--repo-root', root,
+      '--script', path.join(root, 'scripts/fleet/fleet-wake.ts'),
+      '--', '--project', projectId,
+    ]),
+  ]);
+}
+
+async function startUnrelatedFleetFixture(root: string, projectId: string, kind: 'node-e' | 'other-launcher'): Promise<FixtureProcess> {
+  const flags = [
+    '--repo-root', root,
+    '--script', path.join(root, 'scripts/fleet/fleet-wake.ts'),
+    '--', '--project', projectId,
+  ];
+  return startFleetProcess(kind === 'node-e'
+    ? ['-e', 'setInterval(() => {}, 1000)', '--', ...flags]
+    : ['--experimental-strip-types', path.join(root, 'scripts/lib/unrelated.ts'), ...flags]);
 }
 
 describe('Issue #2145 merge adoption effect verification', () => {
@@ -526,7 +554,7 @@ describe('Issue #2145 merge adoption effect verification', () => {
       process.env.OPK_PROJECT_ID = env.OPK_PROJECT_ID;
       const mergeSha = fixtureMerge(root, 'scripts/fleet/fleet-wake.ts');
       const wrong = await startFleetFixture(other, 'leopoker');
-      const invalid = await startFleetFixture(root, 'sample-target', ['--repo-root', root, '--script', path.join(root, 'scripts/fleet/fleet-wake.ts'), '--project', 'unexpected']);
+      const invalid = await startFleetFixture(root, 'sample-target', ['--repo-root', root, '--script', path.join(root, 'scripts/fleet/fleet-wake.ts'), '--', '--project', 'unexpected']);
       children.push(wrong, invalid);
       await delay(100);
       const fleetAt = Date.now();
@@ -560,6 +588,52 @@ describe('Issue #2145 merge adoption effect verification', () => {
     }
   });
 
+
+  it.skipIf(process.platform !== 'linux')('Issue #2445: unrelated executable with matching fleet flags gets zero try-restart and v1 incomplete', async () => {
+    const root = mappingFixture();
+    const config = mkdtempSync(path.join(tmpdir(), 'fleet-wrong-launcher-'));
+    const oldXdg = process.env.XDG_CONFIG_HOME;
+    const oldProject = process.env.OPK_PROJECT_ID;
+    let fake: ReturnType<typeof fakeSystemctl> | undefined;
+    const children: FixtureProcess[] = [];
+    try {
+      const env = registeredCards(root, config);
+      process.env.XDG_CONFIG_HOME = env.XDG_CONFIG_HOME;
+      process.env.OPK_PROJECT_ID = env.OPK_PROJECT_ID;
+      const mergeSha = fixtureMerge(root, 'scripts/fleet/fleet-wake.ts');
+      for (const kind of ['node-e', 'other-launcher'] as const) {
+        const child = await startUnrelatedFleetFixture(root, 'leopoker', kind);
+        children.push(child);
+        await delay(120);
+        const fleetAt = Date.now();
+        const units = new Map<string, MockFleetUnit>([
+          ['fleet-wake@orchestrator-pack.service', { state: 'inactive' }],
+          ['fleet-wake@leopoker.service', { state: 'active', pid: child.pid, failRestart: true }],
+          ['fleet-wake@sample-target.service', { state: 'inactive' }],
+        ]);
+        fake = fakeSystemctl(units);
+        const report = await runCli(fixtureVerifyArgv(root, mergeSha, fleetAt - 100, fleetAt));
+        const result = report.consumers.find((row) => row.id === 'fleet-wake@leopoker.service');
+        expect(report.schema).toBe('orchestrator-pack/merge-adoption-effect/v1');
+        expect(report.effect).toContain('effect_unverified');
+        expect(report.operationalOutcome).toBe('operationally_incomplete');
+        expect(result?.before).toEqual({ state: 'unknown', reason: 'fleet_wake_invocation_or_checkout_mismatch' });
+        expect(result?.action).toBe('none');
+        expect(fake.commandLog.filter((args) => args[1] === 'try-restart')).toEqual([]);
+        fake.restore();
+        fake = undefined;
+        await stopFixture(child);
+        children.pop();
+      }
+    } finally {
+      fake?.restore();
+      for (const child of children) await stopFixture(child);
+      if (oldXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = oldXdg;
+      if (oldProject === undefined) delete process.env.OPK_PROJECT_ID; else process.env.OPK_PROJECT_ID = oldProject;
+      rmSync(root, { recursive: true, force: true });
+      rmSync(config, { recursive: true, force: true });
+    }
+  });
 
   it.skipIf(process.platform !== 'linux')('Issue #2445: active-to-inactive pre-control race, changed MainPID and unreadable proc refuse control', async () => {
     const root = mappingFixture();
