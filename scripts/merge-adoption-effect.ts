@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 import { runProcessSync } from './kernel/subprocess.ts';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveWakeSupervisorStateRoot } from './pr2-foundation/wake-supervisor-state-root.ts';
 import { originSlugFromGitConfig } from './lib/git-origin-slug.mjs';
+import { projectCardPath, resolveTargetContext } from './lib/target-context.ts';
 
 export type ConsumerState = 'running' | 'not_running' | 'ephemeral' | 'unknown';
 export interface ConsumerObservation { readonly state: ConsumerState; readonly startedAtMs?: number; readonly identity?: string; readonly reason?: string; }
-export interface ConsumerController { observe(): Promise<ConsumerObservation> | ConsumerObservation; restart?(): Promise<void> | void; }
+export interface ConsumerController { observe(): Promise<ConsumerObservation> | ConsumerObservation; restart?(before?: ConsumerObservation): Promise<void> | void; }
 export interface AdoptionConsumer { readonly id: string; readonly matchedPaths: readonly string[]; }
 export interface LiveCheckResult { readonly ok: boolean; readonly reason?: string; }
 export interface VerifyAdoptionEffectInput {
@@ -17,6 +18,7 @@ export interface VerifyAdoptionEffectInput {
   readonly controllers: Readonly<Record<string, ConsumerController | undefined>>;
   readonly runLiveCheck: () => Promise<LiveCheckResult> | LiveCheckResult;
   readonly restartStaleConsumers?: boolean;
+  readonly fleetAdoptedAtMs?: number;
 }
 export interface ConsumerEffectResult {
   readonly id: string;
@@ -53,6 +55,7 @@ interface CliOptions {
   readonly repoRoot: string;
   readonly mergeSha: string;
   readonly adoptedAt: string;
+  readonly fleetAdoptedAt?: string;
   readonly liveChecks: readonly string[][];
   readonly supervisorStateDir: string;
   readonly restartControls: Readonly<Record<string, readonly string[]>>;
@@ -62,7 +65,9 @@ const REGISTRY_PATH = 'scripts/orchestrator-side-process-registry.json';
 const SUPERVISOR_ENTRYPOINT = 'scripts/orchestrator-wake-supervisor.ts';
 const FLEET_WAKE_ENTRYPOINT = 'scripts/fleet/fleet-wake.ts';
 const FLEET_WAKE_UNIT = 'scripts/fleet/fleet-wake@.service';
-const FLEET_WAKE_SERVICE = 'fleet-wake@orchestrator-pack.service';
+const FLEET_TEMPLATE_CONSUMER = 'fleet-wake-template';
+const FLEET_INVENTORY_CONSUMER = 'fleet-wake-inventory';
+const FLEET_CONSUMER_RE = /^fleet-wake@([A-Za-z0-9][A-Za-z0-9._-]*)\.service$/u;
 const TYPESCRIPT_CLI_ENTRYPOINT = 'scripts/lib/Invoke-TypeScriptCli.ts';
 const AGENT_HOOK_ENTRYPOINTS = [
   'scripts/invoke-read-delegation-audit-stop.ts',
@@ -179,20 +184,61 @@ function consumerDefinitions(repoRoot: string): ConsumerDefinition[] {
   return [
     { id: 'orchestrator-side-process-supervisor', entrypoints: [SUPERVISOR_ENTRYPOINT], extraPaths: [REGISTRY_PATH], control: 'supervisor' },
     ...children,
-    { id: FLEET_WAKE_SERVICE, entrypoints: [FLEET_WAKE_ENTRYPOINT, TYPESCRIPT_CLI_ENTRYPOINT], extraPaths: [FLEET_WAKE_UNIT], control: 'systemd-user' },
     { id: 'agent-hooks', entrypoints: AGENT_HOOK_ENTRYPOINTS, control: 'agent-hook' },
   ];
 }
 
-export function mapChangedPathsToConsumers(repoRootValue: string, changedPaths: readonly string[]): AdoptionConsumer[] {
+/** Cards are the only fleet inventory. An invalid relevant inventory is a v1 consumer failure, never a singleton fallback. */
+function fleetConsumersForChangedPaths(repoRoot: string, changed: readonly string[], env: Readonly<NodeJS.ProcessEnv>): AdoptionConsumer[] {
+  const closure = staticDependencyClosure(repoRoot, [FLEET_WAKE_ENTRYPOINT, TYPESCRIPT_CLI_ENTRYPOINT]);
+  const matchedPaths = changed.filter((item) => item === FLEET_WAKE_UNIT || closure.has(item));
+  if (matchedPaths.length === 0) return [];
+  // The tracked template must be installed and activated by the operator; code+template is no exception.
+  if (matchedPaths.includes(FLEET_WAKE_UNIT)) return [{ id: FLEET_TEMPLATE_CONSUMER, matchedPaths }];
+  const directory = path.dirname(projectCardPath('inventory-probe', env));
+  try {
+    const directoryStat = lstatSync(directory);
+    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) throw new Error('inventory_directory_invalid');
+    const files = readdirSync(directory, { withFileTypes: true })
+      .filter((entry) => entry.name.endsWith('.json'))
+      .sort((left, right) => left.name.localeCompare(right.name));
+    if (files.length === 0) throw new Error('inventory_empty');
+    const selectedEnv: NodeJS.ProcessEnv = { ...env };
+    delete selectedEnv.OPK_PROJECT_ID;
+    const identities = new Set<string>();
+    return files.map((entry) => {
+      const fullPath = path.join(directory, entry.name);
+      const stat = lstatSync(fullPath);
+      if (!entry.isFile() || !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('card_alias');
+      const projectId = entry.name.slice(0, -'.json'.length);
+      const context = resolveTargetContext({ projectId, env: selectedEnv });
+      if (context.projectId !== projectId || path.resolve(context.cardPath) !== path.resolve(fullPath)) throw new Error('card_identity');
+      const unit = 'fleet-wake@' + context.projectId + '.service';
+      // Case aliases cannot silently select two spellings of one unit on another host.
+      if (!FLEET_CONSUMER_RE.test(unit) || identities.has(unit.toLowerCase())) throw new Error('unit_alias');
+      identities.add(unit.toLowerCase());
+      return { id: unit, matchedPaths };
+    });
+  } catch {
+    // Never place card paths, local values, parser errors or operator configuration in the v1 report.
+    return [{ id: FLEET_INVENTORY_CONSUMER, matchedPaths }];
+  }
+}
+
+export function mapChangedPathsToConsumers(
+  repoRootValue: string,
+  changedPaths: readonly string[],
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+): AdoptionConsumer[] {
   const repoRoot = realpathSync(repoRootValue);
   const changed = [...new Set(changedPaths.map(normalizeRepoPath))].sort();
-  return consumerDefinitions(repoRoot).flatMap((definition) => {
+  const otherConsumers = consumerDefinitions(repoRoot).flatMap((definition) => {
     const closure = staticDependencyClosure(repoRoot, definition.entrypoints);
     for (const extra of definition.extraPaths ?? []) closure.add(normalizeRepoPath(extra));
     const matchedPaths = changed.filter((item) => closure.has(item));
     return matchedPaths.length > 0 ? [{ id: definition.id, matchedPaths }] : [];
   });
+  return [...otherConsumers, ...fleetConsumersForChangedPaths(repoRoot, changed, env)];
 }
 
 function runCommand(command: string, args: readonly string[], cwd?: string, timeout = 30_000) {
@@ -293,27 +339,88 @@ function schedulerController(stateDir: string, adoptionStartedAtMs: number): Con
   };
 }
 
-function fleetWakeController(): ConsumerController {
-  const observe = (): ConsumerObservation => {
-    const active = runCommand('systemctl', ['--user', 'is-active', FLEET_WAKE_SERVICE]);
-    if (!active.ok) {
-      const state = active.stdout.trim();
-      if (state === 'inactive' || state === 'failed' || state === 'unknown') return { state: 'not_running' };
-      return { state: 'unknown', reason: 'fleet_wake_unit_state_unavailable' };
-    }
-    const pidResult = runCommand('systemctl', ['--user', 'show', FLEET_WAKE_SERVICE, '--property=MainPID', '--value']);
-    const pid = Number(pidResult.stdout.trim());
-    if (!pidResult.ok || !Number.isInteger(pid) || pid <= 1) return { state: 'unknown', reason: 'fleet_wake_main_pid_unavailable' };
+interface FleetProcessIdentity {
+  readonly startTicks: string;
+  readonly startedAtMs: number;
+  readonly cmdline: Buffer;
+}
+interface FleetWakeIO {
+  systemctl(args: readonly string[]): { readonly ok: boolean; readonly stdout: string; readonly status?: number | null };
+  processIdentity(pid: number): FleetProcessIdentity | null;
+}
+const systemFleetIO: FleetWakeIO = {
+  systemctl: (args) => runCommand('systemctl', args, undefined, 120_000),
+  processIdentity(pid) {
+    if (process.platform !== 'linux') return null;
+    const first = procStartTicks(pid);
     const startedAtMs = linuxProcessStartTimeMs(pid);
-    const ticks = procStartTicks(pid);
-    if (startedAtMs === null || !ticks) return { state: 'unknown', reason: 'fleet_wake_process_identity_unavailable' };
-    return { state: 'running', startedAtMs, identity: String(pid) + ':' + ticks };
+    if (!first || startedAtMs === null || !Number.isFinite(startedAtMs) || procStartTicks(pid) !== first) return null;
+    try {
+      const cmdline = readFileSync('/proc/' + String(pid) + '/cmdline');
+      if (procStartTicks(pid) !== first) return null;
+      return { startTicks: first, startedAtMs, cmdline };
+    } catch { return null; }
+  },
+};
+
+/** Validate the installed fleet ExecStart's Node -> launcher -> -- forwarding shape, not loose argv flags. */
+function matchesFleetInvocation(raw: Buffer, projectId: string, adoptedRoot: string): boolean {
+  if (raw.length === 0 || raw.length > 65_536 || raw[raw.length - 1] !== 0) return false;
+  const argv = raw.toString('utf8').split('\0').slice(0, -1);
+  // systemd's /usr/bin/env execs node; /proc/cmdline then starts with node (or its resolved path).
+  // The template has no optional arguments: --project belongs only after the launcher '--'.
+  if (argv.length !== 10) return false;
+  const [node, stripTypes, launcher, repoFlag, root, scriptFlag, script, separator, projectFlag, runningProject] = argv;
+  if (!node || path.basename(node) !== 'node'
+    || stripTypes !== '--experimental-strip-types'
+    || repoFlag !== '--repo-root' || scriptFlag !== '--script'
+    || separator !== '--' || projectFlag !== '--project' || runningProject !== projectId
+    || !launcher || !root || !script
+    || !path.isAbsolute(launcher) || !path.isAbsolute(root) || !path.isAbsolute(script)) return false;
+  try {
+    const adopted = realpathSync(adoptedRoot);
+    return realpathSync(root) === adopted
+      && realpathSync(launcher) === realpathSync(path.join(adopted, TYPESCRIPT_CLI_ENTRYPOINT))
+      && realpathSync(script) === realpathSync(path.join(adopted, FLEET_WAKE_ENTRYPOINT));
+  } catch { return false; }
+}
+
+function fleetWakeController(projectId: string, adoptedRoot: string, io: FleetWakeIO = systemFleetIO): ConsumerController {
+  const unit = 'fleet-wake@' + projectId + '.service';
+  const unknown = (reason: string): ConsumerObservation => ({ state: 'unknown', reason });
+  const observe = (): ConsumerObservation => {
+    const active = io.systemctl(['--user', 'is-active', unit]);
+    const state = active.stdout.trim();
+    if (state === 'inactive') return { state: 'not_running' };
+    if (state === 'unknown' || state === 'not-found') {
+      const loadState = io.systemctl(['--user', 'show', unit, '--property=LoadState', '--value']);
+      return loadState.ok && loadState.stdout.trim() === 'not-found'
+        ? { state: 'not_running' } : unknown('fleet_wake_unit_state_unavailable');
+    }
+    if (!active.ok || state !== 'active') return unknown(state === 'failed' ? 'fleet_wake_unit_failed' : 'fleet_wake_unit_state_unavailable');
+    const currentPid = (): number | null => {
+      const result = io.systemctl(['--user', 'show', unit, '--property=MainPID', '--value']);
+      const pid = Number(result.stdout.trim());
+      return result.ok && /^\d+$/u.test(result.stdout.trim()) && Number.isSafeInteger(pid) && pid > 1 ? pid : null;
+    };
+    const pid = currentPid();
+    if (pid === null) return unknown('fleet_wake_main_pid_unavailable');
+    const identity = io.processIdentity(pid);
+    if (!identity || !identity.startTicks || !Number.isFinite(identity.startedAtMs)) return unknown('fleet_wake_process_identity_unavailable');
+    if (!matchesFleetInvocation(identity.cmdline, projectId, adoptedRoot)) return unknown('fleet_wake_invocation_or_checkout_mismatch');
+    if (currentPid() !== pid) return unknown('fleet_wake_main_pid_changed');
+    return { state: 'running', startedAtMs: identity.startedAtMs, identity: String(pid) + ':' + identity.startTicks };
   };
   return {
     observe,
-    restart() {
-      const result = runCommand('systemctl', ['--user', 'restart', FLEET_WAKE_SERVICE], undefined, 120_000);
-      if (!result.ok) throw new Error('fleet-wake normal control failed:' + String(result.status ?? 'unknown'));
+    restart(before) {
+      // Pre-control re-observation narrows the race without claiming atomicity with systemd.
+      const current = observe();
+      if (!before?.identity || current.state !== 'running' || current.identity !== before.identity) {
+        throw new Error('fleet_wake_precontrol_identity_changed');
+      }
+      const result = io.systemctl(['--user', 'try-restart', unit]);
+      if (!result.ok) throw new Error('fleet_wake_try_restart_failed');
     },
   };
 }
@@ -322,11 +429,23 @@ function controllersFor(repoRoot: string, consumers: readonly AdoptionConsumer[]
   const definitions = new Map(consumerDefinitions(repoRoot).map((row) => [row.id, row]));
   const output: Record<string, ConsumerController | undefined> = {};
   for (const consumer of consumers) {
+    if (consumer.id === FLEET_TEMPLATE_CONSUMER) {
+      output[consumer.id] = { observe: () => ({ state: 'unknown', reason: 'template_operator_activation_pending_install_render_daemon-reload_restart_effective-unit_readback' }) };
+      continue;
+    }
+    if (consumer.id === FLEET_INVENTORY_CONSUMER) {
+      output[consumer.id] = { observe: () => ({ state: 'unknown', reason: 'fleet_inventory_invalid_or_missing_repair_registered_cards' }) };
+      continue;
+    }
+    const fleet = FLEET_CONSUMER_RE.exec(consumer.id);
+    if (fleet) {
+      output[consumer.id] = fleetWakeController(fleet[1]!, repoRoot);
+      continue;
+    }
     const definition = definitions.get(consumer.id);
     if (!definition) continue;
     if (definition.control === 'supervisor') output[consumer.id] = supervisorController(options.supervisorStateDir, options.restartControls[consumer.id]);
     else if (definition.control === 'scheduler') output[consumer.id] = schedulerController(options.supervisorStateDir, adoptionStartedAtMs);
-    else if (definition.control === 'systemd-user') output[consumer.id] = fleetWakeController();
     else if (definition.control === 'agent-hook') output[consumer.id] = { observe: () => ({ state: 'ephemeral' }) };
   }
   return output;
@@ -352,6 +471,20 @@ export async function verifyAdoptionEffect(input: VerifyAdoptionEffectInput): Pr
   if (!Number.isFinite(input.adoptionStartedAtMs) || input.adoptionStartedAtMs <= 0) throw new TypeError('adoptionStartedAtMs must be a positive timestamp');
   const results: ConsumerEffectResult[] = [];
   const failures: string[] = [];
+  // Observe all registered fleet instances first: an aliased MainPID must not cause either unit to be controlled.
+  const initialFleet = new Map<string, ConsumerObservation>();
+  const fleetIdentities = new Map<string, string>();
+  for (const consumer of input.consumers) {
+    if (!FLEET_CONSUMER_RE.test(consumer.id) || !input.controllers[consumer.id]) continue;
+    const before = await input.controllers[consumer.id]!.observe();
+    initialFleet.set(consumer.id, before);
+    if (before.state !== 'running' || !before.identity) continue;
+    const previous = fleetIdentities.get(before.identity);
+    if (previous) {
+      initialFleet.set(previous, { state: 'unknown', reason: 'fleet_wake_shared_process_identity' });
+      initialFleet.set(consumer.id, { state: 'unknown', reason: 'fleet_wake_shared_process_identity' });
+    } else fleetIdentities.set(before.identity, consumer.id);
+  }
   for (const consumer of input.consumers) {
     const controller = input.controllers[consumer.id];
     if (!controller) {
@@ -360,7 +493,15 @@ export async function verifyAdoptionEffect(input: VerifyAdoptionEffectInput): Pr
       results.push({ id: consumer.id, matchedPaths: consumer.matchedPaths, before: { state: 'unknown', reason }, action: 'restart_unavailable', verified: false, reason });
       continue;
     }
-    const before = await controller.observe();
+    const isFleet = FLEET_CONSUMER_RE.test(consumer.id);
+    const cutoff = isFleet ? input.fleetAdoptedAtMs : input.adoptionStartedAtMs;
+    if (isFleet && (!Number.isFinite(cutoff) || (cutoff ?? 0) <= 0)) {
+      const reason = consumer.id + ':fleet_adopted_at_missing_or_invalid';
+      failures.push(reason);
+      results.push({ id: consumer.id, matchedPaths: consumer.matchedPaths, before: initialFleet.get(consumer.id) ?? { state: 'unknown', reason }, action: 'none', verified: false, reason });
+      continue;
+    }
+    const before = initialFleet.get(consumer.id) ?? await controller.observe();
     if (before.state === 'ephemeral') {
       results.push({ id: consumer.id, matchedPaths: consumer.matchedPaths, before, action: 'fresh_invocation', verified: true });
       continue;
@@ -375,7 +516,7 @@ export async function verifyAdoptionEffect(input: VerifyAdoptionEffectInput): Pr
       results.push({ id: consumer.id, matchedPaths: consumer.matchedPaths, before, action: 'none', verified: false, reason });
       continue;
     }
-    if ((before.startedAtMs ?? 0) > input.adoptionStartedAtMs) {
+    if ((before.startedAtMs ?? 0) > cutoff!) {
       results.push({ id: consumer.id, matchedPaths: consumer.matchedPaths, before, action: 'none', verified: true });
       continue;
     }
@@ -385,16 +526,17 @@ export async function verifyAdoptionEffect(input: VerifyAdoptionEffectInput): Pr
       results.push({ id: consumer.id, matchedPaths: consumer.matchedPaths, before, action: 'restart_unavailable', verified: false, reason });
       continue;
     }
-    try { await controller.restart(); }
+    try { await controller.restart(before); }
     catch (error) {
       const reason = 'restart_failed:' + consumer.id + ':' + (error instanceof Error ? error.message : String(error));
       failures.push(reason);
       results.push({ id: consumer.id, matchedPaths: consumer.matchedPaths, before, action: 'restart', verified: false, reason });
       continue;
     }
-    const after = await observeFresh(controller, input.adoptionStartedAtMs, before.identity);
-    const fresh = after.state === 'running' && Number.isFinite(after.startedAtMs) && (after.startedAtMs ?? 0) > input.adoptionStartedAtMs
-      && (!before.identity || !after.identity || before.identity !== after.identity);
+    const after = await observeFresh(controller, cutoff!, before.identity);
+    const fresh = after.state === 'running' && Number.isFinite(after.startedAtMs) && (after.startedAtMs ?? 0) > cutoff!
+      && (isFleet ? Boolean(before.identity && after.identity && before.identity !== after.identity)
+        : (!before.identity || !after.identity || before.identity !== after.identity));
     if (!fresh) {
       const reason = 'restart_not_observed:' + consumer.id;
       failures.push(reason);
@@ -402,6 +544,23 @@ export async function verifyAdoptionEffect(input: VerifyAdoptionEffectInput): Pr
       continue;
     }
     results.push({ id: consumer.id, matchedPaths: consumer.matchedPaths, before, action: 'restart', after, verified: true });
+  }
+  // A shared post-control MainPID/start-ticks across distinct units cannot verify either consumer.
+  const postFleet = new Map<string, number>();
+  for (let index = 0; index < results.length; index++) {
+    const row = results[index]!;
+    if (!FLEET_CONSUMER_RE.test(row.id)) continue;
+    const observed = row.after ?? row.before;
+    if (observed.state !== 'running' || !observed.identity) continue;
+    const previous = postFleet.get(observed.identity);
+    if (previous !== undefined) {
+      for (const position of [previous, index]) {
+        const conflicting = results[position]!;
+        const reason = conflicting.id + ':fleet_wake_shared_post_control_identity';
+        failures.push(reason);
+        results[position] = { ...conflicting, verified: false, reason };
+      }
+    } else postFleet.set(observed.identity, index);
   }
   let liveCheck: LiveCheckResult;
   try { liveCheck = await input.runLiveCheck(); }
@@ -415,12 +574,18 @@ export async function verifyAdoptionEffect(input: VerifyAdoptionEffectInput): Pr
     liveCheck,
     effect,
     operationalOutcome: uniqueFailures.length === 0 ? 'operationally_complete' : 'operationally_incomplete',
-    coordinatorMessage: uniqueFailures.length === 0 ? null : 'Merge adoption effect remains unverified: ' + uniqueFailures.join('; ') + '. Keep the unit operationally_incomplete and reconcile through the supported normal control before claiming completion.',
+    coordinatorMessage: uniqueFailures.length === 0 ? null
+      : 'Merge adoption effect remains unverified: ' + uniqueFailures.join('; ') + '. Keep operationally_incomplete. '
+        + (input.consumers.some((row) => row.id === FLEET_TEMPLATE_CONSUMER)
+          ? 'Operator must install/render the tracked fleet template, daemon-reload, activate and read back the effective installed unit.'
+          : input.consumers.some((row) => row.id === FLEET_INVENTORY_CONSUMER)
+            ? 'Repair the registered project-card inventory and rerun this verifier without starting any fleet units.'
+            : 'Reconcile the named unit through the supported normal control before claiming completion.'),
   };
 }
 
 function parseArgv(argv: readonly string[]): CliOptions {
-  if (argv[0] !== 'verify') throw new Error('usage: merge-adoption-effect.ts verify --repo-root <path> --merge-sha <sha> --adopted-at <iso> --live-check-json <json> [--supervisor-state-dir <path>] [--restart-control-json <json>]');
+  if (argv[0] !== 'verify') throw new Error('usage: merge-adoption-effect.ts verify --repo-root <path> --merge-sha <sha> --adopted-at <iso> --live-check-json <json> [--fleet-adopted-at <iso>] [--supervisor-state-dir <path>] [--restart-control-json <json>]');
   const values = new Map<string, string>();
   for (let index = 1; index < argv.length; index += 2) {
     const key = argv[index];
@@ -431,6 +596,7 @@ function parseArgv(argv: readonly string[]): CliOptions {
   const repoRoot = path.resolve(values.get('repo-root') ?? '');
   const mergeSha = String(values.get('merge-sha') ?? '').trim();
   const adoptedAt = String(values.get('adopted-at') ?? '').trim();
+  const fleetAdoptedAt = values.get('fleet-adopted-at');
   if (!existsSync(repoRoot)) throw new Error('repo-root is missing');
   assertPackAdoptionRoot(repoRoot);
   if (!FULL_SHA.test(mergeSha)) throw new Error('merge-sha must be 40 hex');
@@ -451,6 +617,7 @@ function parseArgv(argv: readonly string[]): CliOptions {
     repoRoot,
     mergeSha: mergeSha.toLowerCase(),
     adoptedAt,
+    ...(fleetAdoptedAt === undefined ? {} : { fleetAdoptedAt }),
     liveChecks,
     supervisorStateDir: path.resolve(values.get('supervisor-state-dir') ?? defaultSupervisorStateDir()),
     restartControls,
@@ -479,7 +646,11 @@ export async function runCli(argv: readonly string[]): Promise<AdoptionEffectRep
   const consumers = mapChangedPathsToConsumers(options.repoRoot, changedPaths);
   const adoptionStartedAtMs = Date.parse(options.adoptedAt);
   const controllers = controllersFor(options.repoRoot, consumers, options, adoptionStartedAtMs);
-  return verifyAdoptionEffect({ adoptionStartedAtMs, consumers, controllers, runLiveCheck: () => runLiveChecks(options.repoRoot, options.liveChecks) });
+  return verifyAdoptionEffect({
+    adoptionStartedAtMs, consumers, controllers,
+    fleetAdoptedAtMs: options.fleetAdoptedAt === undefined ? undefined : Date.parse(options.fleetAdoptedAt),
+    runLiveCheck: () => runLiveChecks(options.repoRoot, options.liveChecks),
+  });
 }
 
 function isDirectExecution(): boolean {

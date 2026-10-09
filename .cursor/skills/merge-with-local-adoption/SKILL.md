@@ -273,6 +273,11 @@ exact argv arrays in `LIVE_CHECK_JSON`. It runs from `PRIMARY_ROOT` after adopti
 Issue cannot bind an executable check, the pack Verify-effect step ends `effect_unverified`;
 Git ancestry, process existence, and prose inspection are not substitutes.
 
+For the #2445 fleet-wake pack merge class, the Issue binds the pack-only offline executable
+check to exactly `LIVE_CHECK_JSON='["npm","test","--","--maxWorkers=1","scripts/merge-adoption-effect.test.ts"]'`.
+This check alone is not installed-process evidence; the verifier still reads actual user-systemd
+unit/process identity after the adopted checkout is complete.
+
 For every non-pack selected card, read exactly `{PRIMARY_ROOT}/AGENTS.md` and collect its
 target-owned merge-time adoption instructions and named target live check, if any. Steps 6,
 7, and Verify effect follow that authority exclusively; do not import pack runtime adoption,
@@ -353,6 +358,16 @@ unless the same direct user message explicitly requested it.
 
 ## Verify effect — mandatory after Step 7
 
+Immediately after Step 7 finishes, before invoking the pack verifier, capture the separate
+pack fleet completed-checkout cutoff (without moving or replacing the pre-Step-6
+`ADOPTION_STARTED_AT_UTC` for supervisor, scheduler, and hooks):
+
+```bash
+if [ "$TARGET_REPOSITORY" = "$PACK_REPOSITORY" ]; then
+  FLEET_ADOPTED_AT_UTC=$(node -e 'process.stdout.write(new Date().toISOString())')
+fi
+```
+
 This step is mandatory for **every** merge mode. Step 6 ancestry proves only that the merge is
 present in repository history; it is never evidence that a long-lived consumer is running the
 adopted code.
@@ -375,20 +390,46 @@ node --experimental-strip-types scripts/merge-adoption-effect.ts verify \
   --repo-root "$PRIMARY_ROOT" \
   --merge-sha "$MERGE_SHA" \
   --adopted-at "$ADOPTION_STARTED_AT_UTC" \
+  --fleet-adopted-at "$FLEET_ADOPTED_AT_UTC" \
   --live-check-json "$LIVE_CHECK_JSON"
 ```
 
 The script, rather than merge prose, maps changed paths through the static import closures of
 the supervisor entrypoint, every child named by
-`scripts/orchestrator-side-process-registry.json`, the
-`fleet-wake@orchestrator-pack.service` entrypoint/unit, and the tracked agent-hook
-entrypoint. Registry and unit files are explicit mapping inputs.
+`scripts/orchestrator-side-process-registry.json`, the fleet-wake executable entrypoint
+and TypeScript launcher, and tracked agent-hook entrypoints. For fleet paths only, it
+validates all registered project cards from the existing configured directory and maps
+one exact `fleet-wake@<projectId>.service` per card. A missing/invalid fleet inventory is
+reported as existing-v1 operationally_incomplete, not replaced by the pack singleton.
+Unrelated pack changes do not consult the fleet inventory.
 
-For a mapped running consumer whose observed start time is not later than
-`ADOPTION_STARTED_AT_UTC`, the verifier must use that consumer's existing normal control and
-then read back a new post-adoption process start. The registered `pr2-scheduler` uses its
-supervisor-owned normal cadence; `fleet-wake@orchestrator-pack.service` uses
-`systemctl --user restart`. When the current supervisor installation has an existing
+The original `ADOPTION_STARTED_AT_UTC` continues to govern supervisor and scheduler normal
+control/cadence and ephemeral hooks. Fleet process freshness uses only
+`FLEET_ADOPTED_AT_UTC` recorded **after** Step 7. A missing fleet cutoff never falls
+back to the earlier adoption-start time.
+
+For #2445 pack-code-only merges, the direct operator-ordered brief authorizes a narrow
+exception to the general integration-actor restart rule of `docs/fleet-alarm.md`:
+**only** an already-active registered stale fleet unit whose currently observed
+MainPID/start-ticks and safely parsed `--repo-root`, `--script`, and `--project`
+point to the just-adopted canonical `PRIMARY_ROOT` can receive the exact
+`systemctl --user try-restart fleet-wake@<projectId>.service`. A wrong or unobservable
+checkout/invocation has **no fleet control** and a named unverified residual.
+The verifier performs separate exact-unit PID/invocation readback after the completed
+checkout cutoff, without asserting a loaded Git SHA. Initially inactive/uninstalled
+and failed units are never started. `try-restart` uses the **already-installed**
+unit/drop-in; on re-execution systemd can load pending, locally edited
+`EnvironmentFile=` values. That inherent effect is included in the direct #2445
+restart order, **not** prevented/detected/approved by the Git changed-path check.
+Neither verifier nor skill reads/discloses those values, installs templates/drop-ins,
+executes daemon-reload, or edits machine-local configuration. Any change touching
+`scripts/fleet/fleet-wake@.service` (including mixed code+template) performs
+**no automatic fleet restart** and stays `effect_unverified` pending operator
+render/install, daemon-reload, activation and effective-unit readback.
+
+For other mapped running consumers, normal control remains anchored to
+`ADOPTION_STARTED_AT_UTC`. The registered `pr2-scheduler` keeps its
+supervisor-owned normal cadence. When the current supervisor installation has an existing
 supported normal restart command identified in Step 4, pass that exact argv (never shell text)
 through `--restart-control-json`, for example an object keyed by
 `orchestrator-side-process-supervisor`. If no supported supervisor restart control can be
