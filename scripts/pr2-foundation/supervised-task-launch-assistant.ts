@@ -786,6 +786,13 @@ export async function runSupervisedTaskLaunchAssistant(
       actor: 'provider',
       evidence: {
         ...(supervised.errorCode ? { errorCode: supervised.errorCode } : {}),
+        // Assignment-side native causes are not always surfaced. Only expose a known
+        // safe admission reason; never forward arbitrary provider error strings.
+        ...(supervised.reason === 'target_unresolved' ? {
+          admissionDiagnostic: supervised.errorMessage === 'terminal_reuse_unauthorized'
+            ? 'terminal_reuse_unauthorized'
+            : 'native cause unavailable',
+        } : {}),
         ...(requestId ? { requestId } : {}),
         ...(safeDispatchId ? { dispatchId: safeDispatchId } : {}),
       },
