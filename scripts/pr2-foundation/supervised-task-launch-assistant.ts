@@ -144,6 +144,8 @@ export interface WorktreePreparationRequest {
   readonly defaultBranch?: string;
   readonly providerTopLevel?: boolean;
   readonly managerRefresh?: boolean;
+  /** Only populated after native Run/Task membership was proven for an existing manager. */
+  readonly managerTaskRunId?: string;
 }
 
 export type DispatchObservation = { readonly kind: 'absent' }
@@ -657,6 +659,7 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(input.defaultBranch ? { defaultBranch: input.defaultBranch } : {}),
     ...(providerMode ? { providerTopLevel: true } : {}),
     ...(input.workClass === 'manager' ? { managerRefresh: true } : {}),
+    ...(input.workClass === 'manager' && input.taskId?.trim() ? { managerTaskRunId: input.runId?.trim() } : {}),
   }));
   if (prepared.status !== 'ok') return continued(input, 'worktree_prepare', prepared, resources, startedAtMs, timings, deps.now);
   resources = {
@@ -783,6 +786,13 @@ export async function runSupervisedTaskLaunchAssistant(
       actor: 'provider',
       evidence: {
         ...(supervised.errorCode ? { errorCode: supervised.errorCode } : {}),
+        // Assignment-side native causes are not always surfaced. Only expose a known
+        // safe admission reason; never forward arbitrary provider error strings.
+        ...(supervised.reason === 'target_unresolved' ? {
+          admissionDiagnostic: supervised.errorMessage === 'terminal_reuse_unauthorized'
+            ? 'terminal_reuse_unauthorized'
+            : 'native cause unavailable',
+        } : {}),
         ...(requestId ? { requestId } : {}),
         ...(safeDispatchId ? { dispatchId: safeDispatchId } : {}),
       },
@@ -1226,6 +1236,134 @@ async function observeManagerWorktreeIdentity(
   return { status: 'ok', value: { branch }, evidence: { worktreeId: id, branch } };
 }
 
+
+/** A closing line in a live PR body, not a search hit/title or quoted/code example. */
+function prBodyClosesIssue(body: string, issueNumber: number): boolean {
+  const closing = new RegExp('^(?:Closes|Fixes|Resolves)[ \\t]+#' + issueNumber + '(?=$|[ \\t.,;!])', 'iu');
+  // Mask comments while preserving newlines and word boundaries; examples are not operative links.
+  const visibleBody = body.replace(/<!--[\s\S]*?(?:-->|$)/gu,
+    (comment) => comment.replace(/[^\r\n]/gu, ' '));
+  let fence: string | null = null;
+  for (const raw of visibleBody.split(/\r?\n/u)) {
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(raw);
+    if (marker) {
+      const delimiter = marker[1]!;
+      if (!fence) {
+        fence = delimiter;
+        continue;
+      }
+      if (delimiter[0] === fence[0] && delimiter.length >= fence.length && !marker[2]?.trim()) {
+        fence = null;
+        continue;
+      }
+    }
+    if (!fence && closing.test(raw)) return true;
+  }
+  return false;
+}
+
+function githubJson(execution: ChildResult): unknown {
+  if (!execution.ok) return null;
+  try { return JSON.parse(execution.stdout) as unknown; }
+  catch { return null; }
+}
+
+/** Non-ancestor reuse is admitted by the current exact Issue-linked PR, never by ancestry alone. */
+async function resumeManagerAtOpenPrHead(
+  request: WorktreePreparationRequest,
+  id: string,
+  path: string,
+  branch: string,
+  head: string,
+  originMain: string,
+  execute: ChildExecutor,
+): Promise<EdgeResult<PreparedWorktree>> {
+  const refused = (cause: string, extra: Readonly<Record<string, unknown>> = {}): EdgeResult<PreparedWorktree> =>
+    worktreeContinue(
+      cause,
+      { worktreeId: id, branch, head, originMain, ...extra },
+      'reconcile the exact Run/Task, clean worktree and unique live Issue-closing open PR; never move the manager PR branch',
+    );
+
+  if (!request.issueNumber || !request.managerTaskRunId) return refused('manager_worktree_non_ancestor');
+  // The caller has already proven membership. Reobserve the exact Run/Task before PR-based reuse.
+  const membership = resultRecord(envelope(await execute([
+    'orca', 'orchestration', 'task-list', '--run', request.managerTaskRunId, '--json',
+  ], undefined, undefined, path)));
+  const observedRun = membership && record(membership.run) ? text(membership.run.id) : text(membership?.runId);
+  const matches = Array.isArray(membership?.tasks)
+    ? membership.tasks.filter((task) => record(task) && text(task.id) === request.taskId)
+    : [];
+  if (!membership || (observedRun && observedRun !== request.managerTaskRunId) || matches.length !== 1) {
+    return refused('manager_pr_resume_task_unproven');
+  }
+
+  // This is the tracked gh inventory's complete bounded open-PR projection.
+  // At the inventory cap completeness is unknown, so refuse rather than select the first hit.
+  const listing = githubJson(await execute([
+    'gh', 'pr', 'list', '--repo', request.repository, '--state', 'open', '--limit', '200',
+    '--json', 'baseRefName,headRefName,headRefOid,number',
+  ], undefined, undefined, path));
+  if (!Array.isArray(listing) || listing.length >= 200) return refused('manager_pr_resume_inventory_unavailable');
+  const numbers: number[] = [];
+  for (const item of listing) {
+    if (!record(item) || typeof item.number !== 'number' || !Number.isSafeInteger(item.number)
+      || item.number <= 0 || numbers.includes(item.number)) {
+      return refused('manager_pr_resume_inventory_unavailable');
+    }
+    numbers.push(item.number);
+  }
+
+  const viewArgs = (number: number): string[] => [
+    'gh', 'pr', 'view', String(number), '--repo', request.repository,
+    '--json', 'baseRefName,body,headRefName,headRefOid,headRepository,number,state',
+  ];
+  const readPr = async (number: number): Promise<Record<string, unknown> | null> => {
+    const value = githubJson(await execute(viewArgs(number), undefined, undefined, path));
+    return record(value) && value.number === number && typeof value.body === 'string'
+      ? value : null;
+  };
+  const closing: Array<Record<string, unknown>> = [];
+  for (const number of numbers) {
+    const pr = await readPr(number);
+    if (!pr) return refused('manager_pr_resume_pr_unavailable', { prNumber: number });
+    if (prBodyClosesIssue(pr.body as string, request.issueNumber)) closing.push(pr);
+  }
+  if (closing.length !== 1) {
+    return refused('manager_pr_resume_link_ambiguous', { matchCount: closing.length });
+  }
+  const candidate = closing[0]!;
+  const prNumber = candidate.number as number;
+  const matchesHead = (pr: Record<string, unknown>): boolean =>
+    text(pr.state).toLowerCase() === 'open'
+    && text(pr.baseRefName) === managerDefaultBranch(request)
+    && text(pr.headRefName) === branch
+    && text(pr.headRefOid) === head
+    && record(pr.headRepository)
+    && text(pr.headRepository.nameWithOwner).toLowerCase() === request.repository.trim().toLowerCase()
+    && typeof pr.body === 'string'
+    && prBodyClosesIssue(pr.body, request.issueNumber!);
+  if (!matchesHead(candidate)) return refused('manager_pr_resume_head_mismatch', { prNumber });
+
+  // The remote-tracking fetch and PR reads must not authorize a changed local HEAD/branch.
+  const finalStatus = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'], undefined, undefined, path);
+  const finalBranch = await execute(['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'], undefined, undefined, path);
+  const finalHead = await execute(['git', 'rev-parse', '--verify', 'HEAD^{commit}'], undefined, undefined, path);
+  if (!finalStatus.ok || finalStatus.stdout.trim() || !finalBranch.ok || text(finalBranch.stdout) !== branch
+    || !finalHead.ok || text(finalHead.stdout) !== head) {
+    return refused('manager_pr_resume_local_changed', { prNumber });
+  }
+  const currentPr = await readPr(prNumber);
+  if (!currentPr || !matchesHead(currentPr)) {
+    return refused('manager_pr_resume_pr_changed', { prNumber });
+  }
+  return {
+    status: 'ok',
+    value: { id, selector: request.worktreeSelector!, path, setupWitness: 'proven_reuse' },
+    evidence: { worktreeId: id, worktreePath: path, branch, head, originMain, prNumber, refresh: 'pr_head_preserved' },
+  };
+}
+
 async function refreshManagerWorktree(
   request: WorktreePreparationRequest,
   id: string,
@@ -1305,11 +1443,7 @@ async function refreshManagerWorktree(
     'git', 'merge-base', '--is-ancestor', head, originMain,
   ], undefined, undefined, path);
   if (!ancestor.ok) {
-    return worktreeContinue(
-      'manager_worktree_non_ancestor',
-      { worktreeId: id, branch: identity.value.branch, head, originMain },
-      'leave divergent/local manager commits unchanged; do not reset, rebase, merge-commit, or force repair',
-    );
+    return resumeManagerAtOpenPrHead(request, id, path, identity.value.branch, head, originMain, execute);
   }
 
   const fastForward = await execute(['git', 'merge', '--ff-only', originMain], undefined, undefined, path);

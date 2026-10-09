@@ -333,7 +333,7 @@ describe('real Orca assignment target resolution', () => {
     })).toEqual({ status: 'target_unresolved' });
   });
 
-  it('keeps the missing-terminal gone path replaceable after a failed dispatch', async () => {
+  it('refuses same-terminal reuse for the missing-terminal gone path after a failed dispatch', async () => {
     const file = assignmentFile();
     const assignment = await publish(file, { bindingKey: 'dispatch-1' });
     const runJson = vi.fn((): OrcaJsonResponse => ({
@@ -342,13 +342,13 @@ describe('real Orca assignment target resolution', () => {
     }));
     const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
     expect(resolveCurrentWorkerAssignmentTarget({ file, expected: assignment, adapter }))
-      .toEqual({ status: 'gone', assignment });
+      .toEqual({ status: 'gone', assignment, reuseBlockedTerminalId: 'term-missing' });
     expect(await admitCurrentWorkerAssignmentReplacement({
       file,
       expected: assignment,
       adapter,
       requestedTerminalId: 'term-missing',
-    })).toEqual({ status: 'replaceable', expected: assignment });
+    })).toEqual({ status: 'target_unresolved', reason: 'terminal_reuse_unauthorized' });
   });
 
   it('keeps exited plus released as gone and replaceable', async () => {
