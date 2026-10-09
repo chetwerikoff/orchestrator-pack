@@ -237,6 +237,11 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void) {
     locator: vi.fn((selector: string) => {
       if (selector === COMPOSER_SELECTOR) return composer;
       if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+      if (selector === USER_MESSAGE_SELECTOR) {
+        return collectionLocator(sent
+          ? [{ role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` }]
+          : []);
+      }
       if (matchesNewChatControlSelector(selector)) {
         return scalarLocator({ count: vi.fn(async () => 0) });
       }
@@ -554,12 +559,10 @@ describe('state-light fresh conversation collision recovery', () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const outcome = await runNewChatTurn(page, '/tmp/url-wait-expiry.txt');
 
-    expect(outcome.code).toBe(0);
-    expect(outcome.result).toMatchObject({
-      state: 'ok',
-      send_count: 1,
-    });
+    expect(outcome.code).not.toBe(0);
+    expect(outcome.result).toMatchObject({ send_count: 1 });
     expect(outcome.result.state).not.toBe('send_failed');
+    expect(outcome.result.state).not.toBe('ok');
     expect(outcome.result.incidents).toContain('send_observation_deferred');
   });
 
@@ -571,7 +574,7 @@ describe('state-light fresh conversation collision recovery', () => {
     streamRecoveryAlert: string | false = false,
     replySequence: readonly string[] = [reply],
     continueGeneratingSequence: readonly boolean[] = [],
-    observationOverrides: { incompleteReads?: readonly number[]; nonFinalReads?: readonly number[]; nonFinalFromRead?: number; includeOwnedUser?: boolean; keyedOwnedMessages?: boolean; markerlessOwnedUserFromRead?: number; assistantCarrierKeysByRead?: readonly string[] } = {},
+    observationOverrides: { incompleteReads?: readonly number[]; nonFinalReads?: readonly number[]; nonFinalFromRead?: number; includeOwnedUser?: boolean; keyedOwnedMessages?: boolean; markerlessOwnedUserFromRead?: number; assistantCarrierKeysByRead?: readonly string[]; neverMarkerProof?: boolean } = {},
   ) {
     const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0 };
     const withCarrierKeys = (messages: StateLightTestMessage[]) => observationOverrides.keyedOwnedMessages
@@ -622,6 +625,11 @@ describe('state-light fresh conversation collision recovery', () => {
       locator: vi.fn((selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (selector === USER_MESSAGE_SELECTOR) {
+          return collectionLocator(state.sent && !observationOverrides.neverMarkerProof
+            ? [{ role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` }]
+            : []);
+        }
         if (matchesNewChatControlSelector(selector)) return scalarLocator({ count: vi.fn(async () => 0) });
         if (selector === MESSAGE_NODE_SELECTOR) {
           if (!state.sent) return collectionLocator([]);
@@ -715,21 +723,20 @@ describe('state-light fresh conversation collision recovery', () => {
     return { page, state };
   }
 
-  it('harvests the single finished reply of an owned fresh chat that renders no user message, without reload', async () => {
+  it('never publishes a newly discovered fresh assistant-only reply without a proven marker', async () => {
     const prompt = 'PROMPT-FRESH-UNRENDERED';
     const reply = 'FRESH-UNRENDERED-OK';
     const output = join(stateDir, 'fresh-unrendered-owned-message.txt');
-    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false);
+    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false, false, false, [reply], [], { neverMarkerProof: true });
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const outcome = await runNewChatTurn(page, output);
-    const diagnostic = await readPageObservation(page, TEST_OWNED_MARKER, 0);
-    expect(diagnostic).toMatchObject({ ownedWindowCompletionReady: true, transcriptIncomplete: false });
 
-    expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0 });
-    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.code).not.toBe(0);
+    expect(outcome.result).toMatchObject({ send_count: 1 });
+    expect(outcome.result.state).not.toBe('ok');
     expect(state.reloads).toBe(0);
-    expect(readFileSync(output, 'utf8')).toBe(reply);
+    expect(existsSync(output)).toBe(false);
   });
 
   it('publishes the full final owned reply once through the atomic evaluateAll observation', async () => {
