@@ -1,0 +1,28 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2447,
+  "declared_paths": [
+    "docs/declarations/2447.pr-scope.json",
+    "scripts/pr2-foundation/fixtures/opencode-1.18.35-tool-output-order.json",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+  ],
+  "denylist": [
+    ".env",
+    ".orchestrator-pack/",
+    "credentials/",
+    "local.config.json",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/executor-profile-policy.test.ts",
+    "scripts/executor-profile-policy.ts",
+    "scripts/pr2-foundation/fixtures/",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+  ],
+  "source_revision": "f1e86777ec35a9a54a05e72fa475a75e784b96d5"
+}

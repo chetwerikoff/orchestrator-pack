@@ -748,6 +748,94 @@ describe('supervised Task launch assistant', () => {
     expect(calls).toEqual([]);
   });
 
+  it.each([
+    ['OpenCode 1.18.35 ordering', 'none', true],
+    ['unrelated rule reordering', 'other-order', false],
+    ['an extra allow', 'extra-allow', false],
+    ['a missing deny', 'missing-deny', false],
+    ['a non-terminal deny', 'non-terminal-deny', false],
+    ['a changed tool-output action', 'changed-action', false],
+    ['model drift', 'model', false],
+    ['option drift', 'options', false],
+  ] as const)('contextual tool-output order regression: %s', async (_label, drift, accepted) => {
+    type FixtureRule = { permission: string; pattern: string; action: string };
+    type FixtureAgent = {
+      name: string; mode: string; prompt: string; topP: number;
+      model: { providerID: string; modelID: string }; variant: string;
+      options: Record<string, unknown>; permission: FixtureRule[];
+    };
+    const fixture = JSON.parse(readFileSync(new URL('./fixtures/opencode-1.18.35-tool-output-order.json', import.meta.url), 'utf8')) as {
+      baseline: FixtureAgent; contextual: FixtureAgent;
+    };
+    const toolOutput = { permission: 'external_directory', pattern: '~/.local/share/opencode/tool-output/*', action: 'allow' };
+    expect(fixture.baseline.permission[3]).toEqual(toolOutput);
+    expect(fixture.contextual.permission.at(-1)).toEqual(toolOutput);
+
+    const sandbox = mkdtempSync(join(tmpdir(), 'opk2447-offline-'));
+    vi.stubEnv('XDG_CONFIG_HOME', sandbox);
+    vi.stubEnv('OPENCODE_CONFIG_DIR', join(sandbox, 'opencode'));
+    vi.stubEnv('OPENCODE_CONFIG', join(sandbox, 'synthetic.json'));
+    try {
+      const env = profileEnv({
+        PACK_EXECUTOR_T2_AGENT: 'opencode',
+        PACK_EXECUTOR_T2_MODEL: 'gpt-6-luna',
+        PACK_EXECUTOR_T2_EFFORT: 'medium',
+      });
+      const profile = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => {
+        const probe = opencodeProbeResult(args);
+        return { ...probe, stdout: probe.stdout.replaceAll('fixture-opencode-model', 'gpt-6-luna')
+          .replaceAll('fixture-opencode-effort', 'medium') };
+      });
+      if (profile.status !== 'ok') throw new Error('fixture model/variant should resolve');
+
+      const result = await finalizeOpenCodeExecutorProfile(profile.value, join(sandbox, 'worktree'),
+        async (args, _timeoutMs, envOverride) => {
+          if (args[2] === 'config') return { ok: true, stdout: JSON.stringify({ default_agent: 'build' }), stderr: '' };
+          if (args[2] === 'paths') return { ok: true, stdout: envOverride?.XDG_STATE_HOME ?? '', stderr: '' };
+          if (args[2] === 'agent' && args[3] === 'build' && !envOverride?.OPENCODE_CONFIG_CONTENT) {
+            return { ok: true, stdout: JSON.stringify(fixture.baseline), stderr: '' };
+          }
+          if (args[2] === 'agent') {
+            const name = args[3] ?? '';
+            const resolved = JSON.parse(JSON.stringify(fixture.contextual)) as FixtureAgent;
+            resolved.name = name;
+            if (name !== 'general' && name !== 'explore') {
+              if (drift === 'other-order') {
+                const question = resolved.permission.findIndex((rule) => rule.permission === 'question');
+                const task = resolved.permission.findIndex((rule) => rule.permission === 'task');
+                if (question >= 0 && task >= 0) {
+                  [resolved.permission[question], resolved.permission[task]] = [resolved.permission[task]!, resolved.permission[question]!];
+                }
+              }
+              if (drift === 'extra-allow') {
+                resolved.permission.push({ permission: 'external_directory', pattern: '~/unrelated/*', action: 'allow' });
+              }
+              if (drift === 'missing-deny') {
+                resolved.permission = resolved.permission.filter((rule) => !(rule.permission === 'bash' && rule.pattern === 'bsk *'));
+              }
+              if (drift === 'non-terminal-deny') {
+                resolved.permission.push({ permission: 'bash', pattern: '*', action: 'allow' });
+              }
+              if (drift === 'changed-action') {
+                const rule = resolved.permission.find((item) => item.permission === toolOutput.permission && item.pattern === toolOutput.pattern);
+                if (rule) rule.action = 'ask';
+              }
+              if (drift === 'model') resolved.model.modelID = 'different-model';
+              if (drift === 'options') resolved.options = { ...resolved.options, extra: true };
+            }
+            return { ok: true, stdout: JSON.stringify(resolved), stderr: '' };
+          }
+          return { ok: false, stdout: '', stderr: 'unexpected fixture probe' };
+        }, () => true);
+      expect(result).toMatchObject(accepted
+        ? { status: 'ok', evidence: { exactContext: true } }
+        : { status: 'continue', cause: 'executor_effort_channel_unavailable' });
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it('accepts contextual OpenCode probes after a no-write proof', async () => {
     const resolved = await resolveLiveExecutorProfile('t2', opencodeProfileEnv('t2'), undefined, async (args) => opencodeProbeResult(args, true));
     if (resolved.status !== 'ok') throw new Error('fixture profile should resolve');

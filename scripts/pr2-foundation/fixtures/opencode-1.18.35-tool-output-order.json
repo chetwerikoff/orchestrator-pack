@@ -1,0 +1,170 @@
+{
+  "provenance": "Issue #2447 r02's real OpenCode 1.18.35 ordering observation. Only the runtime rule tuple and its relative position, model ID and variant are literal observations; unrelated rules/fields here are safe synthetic stand-ins, not a verbatim runtime capture.",
+  "observed": {
+    "version": "1.18.35",
+    "baseline_tool_output_rule_index": 3,
+    "contextual_tool_output_rule_index": 85,
+    "contextual_rule_count": 86,
+    "only_resolved": [],
+    "only_baseline": [],
+    "other_agent_fields_equal": true,
+    "main_general_explore_denies_terminal": true
+  },
+  "baseline": {
+    "name": "build",
+    "mode": "primary",
+    "prompt": "synthetic fixture prompt",
+    "topP": 0.8,
+    "options": {
+      "fixture": true
+    },
+    "model": {
+      "providerID": "opencode",
+      "modelID": "gpt-6-luna"
+    },
+    "variant": "medium",
+    "permission": [
+      {
+        "permission": "edit",
+        "pattern": "*",
+        "action": "allow"
+      },
+      {
+        "permission": "bash",
+        "pattern": "*",
+        "action": "ask"
+      },
+      {
+        "permission": "skill",
+        "pattern": "*",
+        "action": "ask"
+      },
+      {
+        "permission": "external_directory",
+        "pattern": "~/.local/share/opencode/tool-output/*",
+        "action": "allow"
+      },
+      {
+        "permission": "question",
+        "pattern": "*",
+        "action": "allow"
+      },
+      {
+        "permission": "task",
+        "pattern": "*",
+        "action": "allow"
+      }
+    ]
+  },
+  "contextual": {
+    "name": "pack-opk-fixture",
+    "mode": "primary",
+    "prompt": "synthetic fixture prompt",
+    "topP": 0.8,
+    "options": {
+      "fixture": true
+    },
+    "model": {
+      "providerID": "opencode",
+      "modelID": "gpt-6-luna"
+    },
+    "variant": "medium",
+    "permission": [
+      {
+        "permission": "edit",
+        "pattern": "*",
+        "action": "allow"
+      },
+      {
+        "permission": "bash",
+        "pattern": "*",
+        "action": "ask"
+      },
+      {
+        "permission": "bash",
+        "pattern": "bsk",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "bsk *",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "/bsk",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "/bsk *",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "/*/bsk",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "/*/bsk *",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "~?bsk",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "~?bsk *",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "~?*/bsk",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "~?*/bsk *",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "env bsk",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "env bsk *",
+        "action": "deny"
+      },
+      {
+        "permission": "skill",
+        "pattern": "*",
+        "action": "ask"
+      },
+      {
+        "permission": "skill",
+        "pattern": "browser-skill",
+        "action": "deny"
+      },
+      {
+        "permission": "question",
+        "pattern": "*",
+        "action": "allow"
+      },
+      {
+        "permission": "task",
+        "pattern": "*",
+        "action": "allow"
+      },
+      {
+        "permission": "external_directory",
+        "pattern": "~/.local/share/opencode/tool-output/*",
+        "action": "allow"
+      }
+    ]
+  }
+}
