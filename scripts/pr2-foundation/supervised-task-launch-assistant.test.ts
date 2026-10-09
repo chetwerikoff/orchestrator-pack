@@ -30,6 +30,7 @@ import {
   buildExecutorCommand,
   buildOpenCodeAgentOverlay,
   openCodeAgentConfigFromInfo,
+  withOpenCodeFleetBrowserDenies,
   buildProviderInvocation,
   catalogIdentityForProfile,
   openCodeAgentSemantics,
@@ -749,12 +750,12 @@ describe('supervised Task launch assistant', () => {
   });
 
   it.each([
-    ['captured contextual Hn reordering remains refused', 'captured-order', false, 'home'],
-    ['home-resolved runtime allow, only TO moved', 'none', true, 'home'],
+    ['real 1.18.35 normal-config TO-only ordering', 'none', true, 'home'],
     ['tilde runtime allow, only TO moved', 'none', true, 'tilde'],
     ['unrelated rule reordering', 'other-order', false, 'home'],
     ['an extra allow', 'extra-allow', false, 'home'],
     ['an unchanged inherited external-directory allow', 'inherited-allow', true, 'home'],
+    ['a changed inherited external-directory allow', 'inherited-drift', false, 'home'],
     ['a missing deny', 'missing-deny', false, 'home'],
     ['a non-terminal deny', 'non-terminal-deny', false, 'home'],
     ['a changed tool-output action', 'changed-action', false, 'home'],
@@ -783,34 +784,33 @@ describe('supervised Task launch assistant', () => {
         }
       }
     }
-    // Unmodified replay preserves the 84 raw/94 canonical rules, including
-    // the duplicated TO at both raw indices; capture order must not be "fixed".
-    expect(fixture.baseline.permission).toHaveLength(84);
-    expect(fixture.contextual.permission).toHaveLength(94);
+    // Replay exactly the 104 raw baseline tuples and 97 contextual canonical
+    // tuples supplied by OpenCode 1.18.35 (no Hn alignment or sorting).
+    expect(fixture.baseline.permission).toHaveLength(104);
+    expect(fixture.contextual.permission).toHaveLength(97);
     expect(fixture.baseline.permission[3]).toEqual(toolOutput);
-    expect(fixture.baseline.permission.at(-1)).toEqual(toolOutput);
-    expect(fixture.contextual.permission.at(-1)).toEqual(toolOutput);
+    expect(fixture.baseline.permission[103]).toEqual(toolOutput);
+    expect(fixture.contextual.permission[96]).toEqual(toolOutput);
+    expect(fixture.contextual.permission.slice(4, 73)).toEqual(fixture.baseline.permission.slice(5, 74));
+
     const baselineCanonical = openCodeAgentConfigFromInfo(fixture.baseline).permission;
-    const flattenedBaseline = Object.entries(baselineCanonical as Record<string, string | Record<string, string>>)
-      .flatMap(([permission, rules]) => typeof rules === 'string'
-        ? [{ permission, pattern: '*', action: rules }]
-        : Object.entries(rules).map(([pattern, action]) => ({ permission, pattern, action })));
-    expect(flattenedBaseline).toHaveLength(81);
-    expect(flattenedBaseline[3]).toEqual(toolOutput);
-    expect(fixture.contextual.permission[5]).toEqual({
-      permission: 'external_directory', pattern: '<home>/redacted-13/*', action: 'allow',
-    });
-    if (drift !== 'captured-order') {
-      // Controlled TO-only positive/negative cases: keep the captured fixture
-      // unchanged, but align Hn with baseline here. The literal captured Hn
-      // permutation is separately tested and must remain refused by strict parity.
-      const homePattern = /^<home>\/redacted-\d+\/\*$/u;
-      const inherited = fixture.baseline.permission.filter((rule) => homePattern.test(rule.pattern));
-      const positions = fixture.contextual.permission.flatMap((rule, index) => homePattern.test(rule.pattern) ? [index] : []);
-      expect(inherited).toHaveLength(69);
-      expect(positions).toHaveLength(69);
-      positions.forEach((index, i) => { fixture.contextual.permission[index] = { ...inherited[i]! }; });
-    }
+    const legacyExpected = withOpenCodeFleetBrowserDenies(baselineCanonical);
+    const legacyRules = Object.entries(legacyExpected).flatMap(([permission, rules]) =>
+      typeof rules === 'string' ? [{ permission, pattern: '*', action: rules }]
+        : typeof rules === 'object' && rules !== null
+          ? Object.entries(rules).map(([pattern, action]) => ({ permission, pattern, action: String(action) }))
+          : []);
+    expect(legacyRules).toHaveLength(97);
+    expect(legacyRules[3]).toEqual(toolOutput);
+    const withoutToolOutput = legacyRules.filter((rule) =>
+      !(rule.permission === toolOutput.permission && rule.pattern === toolOutput.pattern && rule.action === toolOutput.action));
+    // This is the precise r02 difference: strict old-main parity fails, while
+    // removing only TO preserves every remaining rule's exact position.
+    expect(withoutToolOutput).toEqual(fixture.contextual.permission.slice(0, -1));
+    expect(openCodeAgentSemantics({ ...fixture.baseline, permission: legacyExpected }))
+      .not.toBe(openCodeAgentSemantics(fixture.contextual));
+    expect(openCodeAgentSemantics({ ...fixture.baseline, permission: [...withoutToolOutput, toolOutput] }))
+      .toBe(openCodeAgentSemantics(fixture.contextual));
     if (drift === 'inherited-allow') {
       const inherited = { permission: 'external_directory', pattern: '~/already-allowed/*', action: 'allow' };
       const baselineIndex = fixture.baseline.permission.findIndex((rule) => rule.permission === 'question');
@@ -858,6 +858,11 @@ describe('supervised Task launch assistant', () => {
               }
               if (drift === 'extra-allow') {
                 resolved.permission.push({ permission: 'external_directory', pattern: '~/unrelated/*', action: 'allow' });
+              }
+              if (drift === 'inherited-drift') {
+                const inherited = resolved.permission.find((rule) =>
+                  rule.permission === 'external_directory' && rule.pattern === '<home>/redacted-2/*');
+                if (inherited) inherited.action = 'deny';
               }
               if (drift === 'missing-deny') {
                 resolved.permission = resolved.permission.filter((rule) => !(rule.permission === 'bash' && rule.pattern === 'bsk *'));

@@ -1,34 +1,43 @@
 {
   "provenance": {
     "kind": "operator-supplied-sanitized-live-permission-capture",
-    "source": "OpenCode 1.18.35 opencode debug agent, disposable isolated XDG config/state in the Issue #2447 worktree",
-    "transport": "Ordered compact symbol sequences supplied in user turn 5d94bfb9-cf1b-456f-97dc-816a9893126b and expanded losslessly to {permission,pattern,action} records",
-    "redaction": "TO maps to <home>/.local/share/opencode/tool-output/*, TMP to <runtime>/redacted-1/*; H2..H70 are distinct consistently-redacted paths. Prompt, description and options are redacted equal-value stand-ins; non-permission Agent.Info is not a verbatim dump.",
-    "limitation": "Real local 84/94-rule projection, NOT the separate original operator-host 86-rule dump. Do not infer that other permission ordering stayed unchanged: H2..H70 is shuffled in contextual output."
+    "source": "OpenCode 1.18.35, original reproduction normal user config in Issue #2447 exact worktree",
+    "baseline_probe": "opencode debug agent build; disposable XDG_STATE_HOME=/tmp/claude-1000/xdgp; no XDG_CONFIG_HOME, OPENCODE_CONFIG_DIR, OPENCODE_CONFIG or OPENCODE_CONFIG_CONTENT override",
+    "contextual_probe": "same worktree/user config with actual OpenCode agent overlay",
+    "transport": "Full ordered symbolic baseline raw and contextual effective-canonical permission sequences supplied in user turn 41c78cf9-fb1d-412d-b229-cfa9a04570f1, expanded losslessly to {permission,pattern,action} records",
+    "redaction": "The original home/runtime directory strings are consistently redacted as <home> and <runtime>. TO, TMP and each H2..H70 retain their exact symbolic rule identities and positions.",
+    "non_permission_fields": "Prompt/description/options and incidental agent fields are equal-value redacted test placeholders, not raw capture and not the basis of the permission reproduction. ModelID and variant are captured facts.",
+    "limitation": "This is the real exact-worktree 104-raw/97-effective local capture, NOT the separate r02 86-rule operator-host summary. Contextual raw output had 199 rules but only its actual 97-rule canonical projection was supplied."
   },
   "observed": {
     "version": "1.18.35",
     "default_agent": "build",
     "modelID": "gpt-6-luna",
     "variant": "medium",
-    "baseline_raw_rule_count": 84,
+    "baseline_raw_rule_count": 104,
     "baseline_raw_tool_output_rule_indices": [
       3,
-      83
+      103
     ],
-    "baseline_canonical_tool_output_rule_index": 3,
-    "expected_canonical_rule_count": 94,
-    "contextual_canonical_rule_count": 94,
-    "contextual_tool_output_rule_index": 93,
+    "contextual_raw_rule_count_reported": 199,
+    "contextual_raw_rules_in_fixture": false,
+    "old_expected_canonical_rule_count": 97,
+    "old_expected_tool_output_rule_index": 3,
+    "contextual_canonical_rule_count": 97,
+    "contextual_tool_output_rule_index": 96,
     "original_r02_operator_host_contextual_count": 86,
-    "original_r02_operator_host_contextual_tool_output_rule_index": 85,
+    "original_r02_operator_host_tool_output_index": 85,
     "onlyResolved": [],
     "onlyBaseline": [],
-    "non_permission_agent_fields_equal": true,
-    "main_general_explore_denies_terminal": true,
-    "contextual_extra_home_order_mismatches": 53,
-    "contextual_order_after_only_tool_output_move_equal": false,
-    "first_non_TO_order_mismatch_index": 5
+    "same_non_tool_output_rule_order": true,
+    "other_agent_semantics_equal": true,
+    "main_general_explore_denies_terminal": [
+      true,
+      true,
+      true
+    ],
+    "old_semantics_equal": false,
+    "after_only_tool_output_move_semantics_equal": true
   },
   "baseline": {
     "mode": "primary",
@@ -460,6 +469,106 @@
         "action": "allow"
       },
       {
+        "permission": "*",
+        "pattern": "*",
+        "action": "allow"
+      },
+      {
+        "permission": "doom_loop",
+        "pattern": "*",
+        "action": "allow"
+      },
+      {
+        "permission": "external_directory",
+        "pattern": "*",
+        "action": "allow"
+      },
+      {
+        "permission": "task",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "webfetch",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "websearch",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "question",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "bsk",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "bsk *",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "/bsk",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "/bsk *",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "/*/bsk",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "/*/bsk *",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "~?bsk",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "~?bsk *",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "~?*/bsk",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "~?*/bsk *",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "env bsk",
+        "action": "deny"
+      },
+      {
+        "permission": "bash",
+        "pattern": "env bsk *",
+        "action": "deny"
+      },
+      {
+        "permission": "skill",
+        "pattern": "browser-skill",
+        "action": "deny"
+      },
+      {
         "permission": "external_directory",
         "pattern": "<home>/.local/share/opencode/tool-output/*",
         "action": "allow"
@@ -488,12 +597,12 @@
       {
         "permission": "doom_loop",
         "pattern": "*",
-        "action": "ask"
+        "action": "allow"
       },
       {
         "permission": "external_directory",
         "pattern": "*",
-        "action": "ask"
+        "action": "allow"
       },
       {
         "permission": "external_directory",
@@ -507,27 +616,7 @@
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-13/*",
-        "action": "allow"
-      },
-      {
-        "permission": "external_directory",
-        "pattern": "<home>/redacted-11/*",
-        "action": "allow"
-      },
-      {
-        "permission": "external_directory",
         "pattern": "<home>/redacted-3/*",
-        "action": "allow"
-      },
-      {
-        "permission": "external_directory",
-        "pattern": "<home>/redacted-6/*",
-        "action": "allow"
-      },
-      {
-        "permission": "external_directory",
-        "pattern": "<home>/redacted-5/*",
         "action": "allow"
       },
       {
@@ -537,12 +626,17 @@
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-7/*",
+        "pattern": "<home>/redacted-5/*",
         "action": "allow"
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-9/*",
+        "pattern": "<home>/redacted-6/*",
+        "action": "allow"
+      },
+      {
+        "permission": "external_directory",
+        "pattern": "<home>/redacted-7/*",
         "action": "allow"
       },
       {
@@ -552,12 +646,27 @@
       },
       {
         "permission": "external_directory",
+        "pattern": "<home>/redacted-9/*",
+        "action": "allow"
+      },
+      {
+        "permission": "external_directory",
         "pattern": "<home>/redacted-10/*",
         "action": "allow"
       },
       {
         "permission": "external_directory",
+        "pattern": "<home>/redacted-11/*",
+        "action": "allow"
+      },
+      {
+        "permission": "external_directory",
         "pattern": "<home>/redacted-12/*",
+        "action": "allow"
+      },
+      {
+        "permission": "external_directory",
+        "pattern": "<home>/redacted-13/*",
         "action": "allow"
       },
       {
@@ -577,11 +686,6 @@
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-20/*",
-        "action": "allow"
-      },
-      {
-        "permission": "external_directory",
         "pattern": "<home>/redacted-17/*",
         "action": "allow"
       },
@@ -592,12 +696,12 @@
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-23/*",
+        "pattern": "<home>/redacted-19/*",
         "action": "allow"
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-19/*",
+        "pattern": "<home>/redacted-20/*",
         "action": "allow"
       },
       {
@@ -608,6 +712,11 @@
       {
         "permission": "external_directory",
         "pattern": "<home>/redacted-22/*",
+        "action": "allow"
+      },
+      {
+        "permission": "external_directory",
+        "pattern": "<home>/redacted-23/*",
         "action": "allow"
       },
       {
@@ -632,17 +741,22 @@
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-29/*",
-        "action": "allow"
-      },
-      {
-        "permission": "external_directory",
         "pattern": "<home>/redacted-28/*",
         "action": "allow"
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-33/*",
+        "pattern": "<home>/redacted-29/*",
+        "action": "allow"
+      },
+      {
+        "permission": "external_directory",
+        "pattern": "<home>/redacted-30/*",
+        "action": "allow"
+      },
+      {
+        "permission": "external_directory",
+        "pattern": "<home>/redacted-31/*",
         "action": "allow"
       },
       {
@@ -652,12 +766,12 @@
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-34/*",
+        "pattern": "<home>/redacted-33/*",
         "action": "allow"
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-36/*",
+        "pattern": "<home>/redacted-34/*",
         "action": "allow"
       },
       {
@@ -667,12 +781,17 @@
       },
       {
         "permission": "external_directory",
+        "pattern": "<home>/redacted-36/*",
+        "action": "allow"
+      },
+      {
+        "permission": "external_directory",
         "pattern": "<home>/redacted-37/*",
         "action": "allow"
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-31/*",
+        "pattern": "<home>/redacted-38/*",
         "action": "allow"
       },
       {
@@ -683,11 +802,6 @@
       {
         "permission": "external_directory",
         "pattern": "<home>/redacted-40/*",
-        "action": "allow"
-      },
-      {
-        "permission": "external_directory",
-        "pattern": "<home>/redacted-38/*",
         "action": "allow"
       },
       {
@@ -717,17 +831,17 @@
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-30/*",
-        "action": "allow"
-      },
-      {
-        "permission": "external_directory",
         "pattern": "<home>/redacted-46/*",
         "action": "allow"
       },
       {
         "permission": "external_directory",
         "pattern": "<home>/redacted-47/*",
+        "action": "allow"
+      },
+      {
+        "permission": "external_directory",
+        "pattern": "<home>/redacted-48/*",
         "action": "allow"
       },
       {
@@ -743,6 +857,16 @@
       {
         "permission": "external_directory",
         "pattern": "<home>/redacted-51/*",
+        "action": "allow"
+      },
+      {
+        "permission": "external_directory",
+        "pattern": "<home>/redacted-52/*",
+        "action": "allow"
+      },
+      {
+        "permission": "external_directory",
+        "pattern": "<home>/redacted-53/*",
         "action": "allow"
       },
       {
@@ -772,21 +896,6 @@
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-48/*",
-        "action": "allow"
-      },
-      {
-        "permission": "external_directory",
-        "pattern": "<home>/redacted-53/*",
-        "action": "allow"
-      },
-      {
-        "permission": "external_directory",
-        "pattern": "<home>/redacted-52/*",
-        "action": "allow"
-      },
-      {
-        "permission": "external_directory",
         "pattern": "<home>/redacted-59/*",
         "action": "allow"
       },
@@ -802,12 +911,12 @@
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-63/*",
+        "pattern": "<home>/redacted-62/*",
         "action": "allow"
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-66/*",
+        "pattern": "<home>/redacted-63/*",
         "action": "allow"
       },
       {
@@ -817,17 +926,12 @@
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-62/*",
-        "action": "allow"
-      },
-      {
-        "permission": "external_directory",
         "pattern": "<home>/redacted-65/*",
         "action": "allow"
       },
       {
         "permission": "external_directory",
-        "pattern": "<home>/redacted-69/*",
+        "pattern": "<home>/redacted-66/*",
         "action": "allow"
       },
       {
@@ -842,13 +946,18 @@
       },
       {
         "permission": "external_directory",
+        "pattern": "<home>/redacted-69/*",
+        "action": "allow"
+      },
+      {
+        "permission": "external_directory",
         "pattern": "<home>/redacted-70/*",
         "action": "allow"
       },
       {
         "permission": "question",
         "pattern": "*",
-        "action": "allow"
+        "action": "deny"
       },
       {
         "permission": "plan_enter",
@@ -879,6 +988,21 @@
         "permission": "read",
         "pattern": "*.env.example",
         "action": "allow"
+      },
+      {
+        "permission": "task",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "webfetch",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "websearch",
+        "pattern": "*",
+        "action": "deny"
       },
       {
         "permission": "bash",
