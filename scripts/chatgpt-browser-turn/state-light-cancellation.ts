@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { releaseCdpBrowser } from './browser-session.ts';
+import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { isOwnedPromptMarker } from './owned-prompt-marker.ts';
 import { conversationUuidFromUrl } from './state-light-fresh-conversation.ts';
 import { RENDERED_STOP_BUTTON_SELECTOR, USER_MESSAGE_SELECTOR } from './product-page-selectors.ts';
@@ -147,57 +149,24 @@ export async function readRecoveryAuthoritativeUserMessages(
   return { messages, incomplete };
 }
 
+/**
+ * r06: A user-supplied explicit request and a Stop button do not authenticate
+ * either the invocation's original tab or its *current* assistant generation.
+ * There is no independent producer for those two witnesses in the allowed
+ * scope. Preserve the no-effect behavior even for a single matching URL.
+ */
 export async function stopOwnedGeneration(
   page: any,
   authority?: ExplicitCancellationAuthority,
 ): Promise<StopOwnedGenerationOutcome> {
-  if (authority !== EXPLICIT_CANCELLATION_AUTHORITY) {
-    return 'not_attempted_authority_absent';
-  }
+  if (authority !== EXPLICIT_CANCELLATION_AUTHORITY) return 'not_attempted_authority_absent';
   if (!page) return 'unavailable';
   try {
-    if (typeof page.isClosed === 'function' && page.isClosed() === true) {
-      return 'unavailable';
-    }
+    if (typeof page.isClosed === 'function' && page.isClosed() === true) return 'unavailable';
   } catch {
     return 'unavailable';
   }
-
-  let controls: any;
-  let count: number;
-  try {
-    controls = page.locator(RENDERED_STOP_BUTTON_SELECTOR);
-    count = Number(await controls.count());
-  } catch {
-    return 'not_attempted_control_absent_or_ambiguous';
-  }
-  if (!Number.isSafeInteger(count) || count !== 1) {
-    return 'not_attempted_control_absent_or_ambiguous';
-  }
-
-  const control = controls.first();
-  try {
-    await control.click({ timeout: CANCELLATION_LOCAL_WAIT_MS });
-  } catch {
-    return 'unconfirmed';
-  }
-
-  if (typeof control.waitFor === 'function') {
-    try {
-      await control.waitFor({ state: 'hidden', timeout: CANCELLATION_LOCAL_WAIT_MS });
-      return 'confirmed';
-    } catch {
-      // Continue to a fresh independent post-click count witness.
-    }
-  }
-
-  try {
-    const remaining = Number(await controls.count());
-    if (!Number.isSafeInteger(remaining) || remaining < 0) return 'unavailable';
-    return remaining === 0 ? 'confirmed' : 'unconfirmed';
-  } catch {
-    return 'unavailable';
-  }
+  return 'not_attempted_identity_unproven';
 }
 
 async function defaultEnumeratePages(browser: any): Promise<readonly any[]> {
@@ -324,19 +293,30 @@ export async function cancelOwnedGenerationFromReceipt(
       );
     }
 
-    const stopOutcome = dependencies.stop
-      ? await dependencies.stop(page)
-      : await stopOwnedGeneration(page, authority);
-    return {
-      state: stopOutcome === 'confirmed' ? 'no_reply' : 'driver_error',
-      cause: stopOutcome === 'confirmed'
-        ? 'child_stdout_eof_timeout_generation_stopped'
-        : `child_stdout_eof_timeout_stop_${stopOutcome}`,
-      sendCount: 1,
-      stopOutcome,
-      identityProven: true,
-      conversationUrl: receipt.conversation_url,
-    };
+    // Exact durable invocation, profile and marker must be re-read. This proves
+    // historical send identity only. Neither this record nor a matching URL
+    // supplies the missing tab+active-generation witnesses.
+    let durable;
+    try {
+      durable = readStateLightTurnObservation(receipt.configured_profile_key, receipt.invocation_id);
+    } catch {
+      return identityUnproven('cancellation_durable_invocation_unreadable', receipt);
+    }
+    if (durable.marker !== receipt.marker
+      || durable.profile_key !== receipt.configured_profile_key
+      || durable.invocation_id !== receipt.invocation_id
+      || durable.conversation_url !== receipt.conversation_url
+      || (durable.send_count ?? 0) < 1
+      || durable.phase === 'not_sent' || durable.phase === 'prepared'
+      || durable.phase === 'harvested') {
+      return identityUnproven('cancellation_durable_identity_or_phase_mismatch', receipt);
+    }
+    // No independently established original send-tab target AND no current
+    // assistant-generation identity. No selector read/click, even when a Stop
+    // button subsequently vanishes through natural completion.
+    void page;
+    void dependencies.stop;
+    return identityUnproven('cancellation_owned_tab_and_generation_unproven', receipt);
   } catch {
     return identityUnproven(
       'child_stdout_eof_timeout_cancellation_handshake_failed',
@@ -350,4 +330,57 @@ export async function cancelOwnedGenerationFromReceipt(
       // Releasing the CDP client is not Stop confirmation and never closes a tab.
     }
   }
+}
+
+/**
+ * Native explicit cancel command. The receipt is a read-only locator, not
+ * cross-process Stop authority: without an independent original tab and active
+ * generation witness every valid request returns a non-success no-op.
+ */
+export async function runStateLightCancellation(
+  argv: readonly string[],
+  dependencies: BrowserTurnCancellationDependencies = {},
+): Promise<number> {
+  let receiptPath: string | undefined;
+  let cdp = '';
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index + 1];
+    if (argv[index] === '--receipt-file' && value) {
+      receiptPath = value;
+      index += 1;
+    } else if (argv[index] === '--cdp' && value) {
+      cdp = value;
+      index += 1;
+    } else {
+      process.stdout.write(JSON.stringify({ schema: 'cancel-result/v1', state: 'driver_error', cause: 'cancel_arguments_invalid' }) + '\n');
+      return 13;
+    }
+  }
+  if (!receiptPath || !cdp) {
+    process.stdout.write(JSON.stringify({ schema: 'cancel-result/v1', state: 'driver_error', cause: 'cancel_arguments_missing' }) + '\n');
+    return 13;
+  }
+  let receipt: BrowserTurnCancellationReceipt | null = null;
+  try {
+    receipt = parseBrowserTurnCancellationReceipt(JSON.parse(readFileSync(receiptPath, 'utf8')) as unknown);
+  } catch {
+    // An absent/unreadable receipt has no cancel authority.
+  }
+  if (!receipt) {
+    process.stdout.write(JSON.stringify({ schema: 'cancel-result/v1', state: 'driver_error', cause: 'cancellation_receipt_unreadable' }) + '\n');
+    return 13;
+  }
+  const attempt = await cancelOwnedGenerationFromReceipt(
+    receipt, cdp, EXPLICIT_CANCELLATION_AUTHORITY, dependencies,
+  );
+  process.stdout.write(JSON.stringify({
+    schema: 'cancel-result/v1',
+    state: attempt.state,
+    cause: attempt.cause,
+    invocation_id: receipt.invocation_id,
+    configured_profile_key: receipt.configured_profile_key,
+    send_count: receipt.send_count,
+    stop_outcome: attempt.stopOutcome,
+  }) + '\n');
+  return attempt.stopOutcome === 'confirmed' && attempt.identityProven ? 0 : 13;
 }
