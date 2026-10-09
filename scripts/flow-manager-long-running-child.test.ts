@@ -196,6 +196,9 @@ describe('observable post-send exits (#2416)', () => {
   it.each(['throw', 'SIGTERM', 'SIGKILL', 'timeout', 'launcher-SIGTERM'] as const)('preserves persisted sent_unbound evidence after %s', async (exit) => {
     const root = tempDir('opk-2416-', tmpdir());
     vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+    // Measured cold preparation plus the synchronous 600 ms stall stays below 1 s.
+    // This fixture tests post-send evidence; strict startup/idle controls stay separate.
+    vi.stubEnv('OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS', '1000');
     const paths = launchPaths(root, exit);
     const profile = join(root, 'profile');
     const cdp = 'http://127.0.0.1:1';
@@ -207,23 +210,13 @@ describe('observable post-send exits (#2416)', () => {
       : exit === 'launcher-SIGTERM' ? 'process.kill(process.ppid, "SIGTERM"); setInterval(() => {}, 1000);'
       : `process.kill(process.pid, '${exit}');`;
     const fixture = nodeFixture(`(async () => {
-      const { resolveBrowserTurnLivenessTiming, startTurnScopedHeartbeatScheduler } = await import(${JSON.stringify(livenessContractUrl)});
-      const heartbeat = startTurnScopedHeartbeatScheduler({
-        timing: resolveBrowserTurnLivenessTiming(),
-        emit: () => process.stdout.write(JSON.stringify({
-          schema: 'observation-heartbeat/v1', phase: 'admitted_pre_send',
-          poll_count: 0, observation_state: 'admitted', stable_reads: 0, completion_ready: false,
-        }) + '\\n'),
-      });
       const { admitStateLightTurnObservation, transitionStateLightTurnObservation } = await import(${JSON.stringify(observationUrl)});
       const profileKey = ${JSON.stringify(profileKey)}; const invocationId = ${JSON.stringify(invocation)};
       admitStateLightTurnObservation({ profileKey, invocationId, marker: 'OPKTURNV1a97e3f70e9c07fa75c0f03840c0528a2' });
-      // Deterministic CI-load reproduction: preparation outlasts startup admission.
-      await new Promise(done => setTimeout(done, 600));
+      // Deterministic synchronous preparation/descheduling stall.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 600);
       transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'dispatching', reason: 'fixture_dispatch' });
       transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'sent_unbound', reason: 'send_observed_fresh_chat', sendCount: 1, sendWitness: 'numeric_send_count' });
-      // Stop pre-send liveness before exercising each abnormal post-send exit.
-      heartbeat.dispose();
       ${terminate}
     })();`);
     const config = {
@@ -244,6 +237,8 @@ describe('observable post-send exits (#2416)', () => {
     }
     expect(readTerminalEnvelope(paths.envelope)).toMatchObject({
       schema: TERMINAL_SCHEMA, lifecycle_outcome: 'incident', delivery: 'POSSIBLY_DELIVERED',
+      incident: exit === 'timeout' ? 'child_startup_timeout'
+        : exit === 'launcher-SIGTERM' ? 'launcher_signal:SIGTERM' : 'child_terminal_result_missing',
       send_count: 1, observed_invocation_id: invocation, recovery_available: false,
       diagnostics: { persisted_observation: { phase: 'sent_unbound', send_count: 1 } },
     });
