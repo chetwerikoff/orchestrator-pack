@@ -1729,11 +1729,56 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(f.read).not.toHaveBeenCalled();
   });
 
+  it('Issue #2451: head moving during final-cap success cannot produce a settled receipt', async () => {
+    const f = fixture();
+    let currentHead = reviewedHead;
+    Object.assign(f.input, {
+      fixtureReadCurrentPrHead: async () => currentHead,
+      fixtureRequiredStatusWriter: async (request: { state: string; context: string }) => {
+        f.statuses.push(request);
+        currentHead = HEAD;
+      },
+    });
+    const first = await reconcileStalePackReviewRuns(f.input);
+    expect(first.results).toContainEqual(expect.objectContaining({
+      settled: false, reason: 'status_not_published',
+      detail: 'final_cap_head_or_authority_changed_during_status',
+    }));
+    expect(readPackReviewAuthority(prNumber, f.options)?.publication?.status).not.toBe('succeeded');
+    expect(f.statuses).toHaveLength(1);
+  });
+
+  it('Issue #2451: strict descendant retries failed publication without a second settlement', async () => {
+    const f = fixture();
+    f.input.fixtureCurrentPrHeadSha = HEAD;
+    f.input.fixtureReviewCompareStatus = 'ahead';
+    f.input.fixtureRequiredStatusWriter = async () => { throw new Error('offline descendant status failure'); };
+    const first = await reconcileStalePackReviewRuns(f.input);
+    expect(first.results).toContainEqual(expect.objectContaining({
+      settled: false, reason: 'status_not_published',
+      detail: expect.stringContaining('offline descendant status failure'),
+    }));
+    const before = readPackReviewAuthority(prNumber, f.options);
+    expect(before?.cycle).toMatchObject({ state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1, 2] });
+    f.input.fixtureRequiredStatusWriter = async (request) => { f.statuses.push(request); };
+    const retried = await reconcileStalePackReviewRuns(f.input);
+    expect(retried.results).toContainEqual(expect.objectContaining({
+      settled: true, statusPublished: true, publicationHeadSha: HEAD,
+      reason: 'final_cap_descendant_settled',
+    }));
+    expect(f.statuses).toContainEqual(expect.objectContaining({ state: 'success' }));
+    expect(readPackReviewAuthority(prNumber, f.options)?.transitionSeq).toBe(before!.transitionSeq + 1);
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.consumedRoundOrdinals).toEqual([1, 2]);
+  });
+
   it('retries status publication without a new logical round or duplicate settlement transition', async () => {
     const f = fixture();
     f.input.fixtureRequiredStatusWriter = async () => { throw new Error('offline status transport failed'); };
     const first = await reconcileStalePackReviewRuns(f.input);
-    expect(first.results).toContainEqual(expect.objectContaining({ settled: false, detail: 'offline status transport failed' }));
+    expect(first.results).toContainEqual(expect.objectContaining({
+      settled: false, reason: 'status_not_published',
+      detail: expect.stringContaining('offline status transport failed'),
+    }));
     const before = readPackReviewAuthority(prNumber, f.options);
     f.input.fixtureRequiredStatusWriter = async (request) => { f.statuses.push(request); };
     const retried = await reconcileStalePackReviewRuns(f.input);
