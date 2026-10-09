@@ -3950,6 +3950,7 @@ describe('Issue #2451 three-source no-judgment delivery', () => {
         tier: 'T2', fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
         fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
         fixturePrState: 'OPEN',
+        claimMode: 'preacquired',
         fixtureIssueBody: '```complexity-tier\\ntier: T2\\n```',
         fixtureIssueNumber: 2451,
         fixtureReviewBySourceSlot: slots,
@@ -3974,7 +3975,7 @@ describe('Issue #2451 three-source no-judgment delivery', () => {
           return { state: submissionState, reason: 'fixture-' + submissionState };
         },
       });
-      expect(result).toMatchObject({
+      expect(result, JSON.stringify(result)).toMatchObject({
         ok: false, created: true, status: 'failed',
         budgetOutcome: 'non_consuming_no_judgment',
         requiredStatusPublication: 'published',
