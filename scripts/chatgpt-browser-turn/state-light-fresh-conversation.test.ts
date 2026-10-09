@@ -164,9 +164,10 @@ import {
   STATE_LIGHT_PASSIVE_FRESH_CLAIM_TTL_MS,
 } from './state-light-fresh-conversation.ts';
 
-const PROJECT_URL = 'https://chatgpt.com/g/g-p-test/project';
-const PROJECT_CONVERSATION_ROOT = 'https://chatgpt.com/g/g-p-test';
+const PROJECT_URL = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test/project';
+const PROJECT_CONVERSATION_ROOT = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test';
 const SHARED_CONV = `${PROJECT_CONVERSATION_ROOT}/c/11111111-1111-4111-8111-111111111111`;
+const SHARED_CANONICAL_CONV = SHARED_CONV.replace('-test/c/', '/c/');
 const LOSER_CONV = `${PROJECT_CONVERSATION_ROOT}/c/22222222-2222-4222-8222-222222222222`;
 const ISSUE_PROJECT_URL = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project';
 const ISSUE_CONVERSATION_URL = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/c/6ab8cb78-4e14-83ec-92ff-3e7b67611185';
@@ -316,6 +317,43 @@ describe('state-light fresh conversation collision recovery', () => {
     releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'winner');
     expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'loser')).toBe('claimed');
     releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'loser');
+  });
+
+  it('fences slug aliases with one canonical claim, distinct projects and legacy URL hashes', async () => {
+    const profileKey = 'alias-exclusion';
+    const alternateAlias = SHARED_CANONICAL_CONV;
+    const foreign = SHARED_CANONICAL_CONV.replace('g-p-11111111111111111111111111111111', 'g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    const legacyFile = join(stateDir, profileKey, 'state-light-fresh-claims', `${(await import('./storage-common.ts')).sha256(SHARED_CONV)}.json`);
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'current-owner')).toBe('claimed');
+    expect(tryClaimStateLightFreshConversation(profileKey, alternateAlias, 'foreign-owner')).toBe('contended');
+    expect(tryClaimStateLightFreshConversation(profileKey, foreign, 'foreign-owner')).toBe('claimed');
+    releaseStateLightFreshConversationClaim(profileKey, alternateAlias, 'foreign-owner');
+    expect(verifyStateLightFreshClaimOwnerFence(profileKey, SHARED_CONV, 'current-owner', 5_000)).toBe('valid');
+    releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'current-owner');
+    releaseStateLightFreshConversationClaim(profileKey, foreign, 'foreign-owner');
+
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(legacyFile, JSON.stringify({
+      schema: 'state-light-fresh-claim/v1',
+      version: 1,
+      invocation_id: 'legacy-owner',
+      conversation_id: SHARED_CONV,
+      pid: process.pid,
+      claimed_at: new Date(mocks.nowMs).toISOString(),
+    }) + '\n');
+    expect(tryClaimStateLightFreshConversation(profileKey, alternateAlias, 'new-owner')).toBe('contended');
+    expect(JSON.parse(readFileSync(legacyFile, 'utf8')).invocation_id).toBe('legacy-owner');
+    writeFileSync(legacyFile, JSON.stringify({
+      schema: 'state-light-fresh-claim/v1',
+      version: 1,
+      invocation_id: 'legacy-owner',
+      conversation_id: SHARED_CONV,
+      pid: process.pid,
+      claimed_at: new Date(mocks.nowMs - STATE_LIGHT_PASSIVE_FRESH_CLAIM_TTL_MS - 1).toISOString(),
+    }) + '\n');
+    expect(tryClaimStateLightFreshConversation(profileKey, alternateAlias, 'new-owner')).toBe('claimed');
+    releaseStateLightFreshConversationClaim(profileKey, alternateAlias, 'new-owner');
+    expect(existsSync(legacyFile)).toBe(true);
   });
 
   it('blocks a second new-chat invocation while the profile send slot is held', async () => {
@@ -1232,7 +1270,7 @@ describe('state-light fresh conversation collision recovery', () => {
 
   it('matches project-scoped and bare conversation urls with the same uuid', () => {
     const uuid = '6a6c32b2-51a0-83ec-9fe6-521e171ba785';
-    const project = `https://chatgpt.com/g/g-p-test-project/c/${uuid}`;
+    const project = `https://chatgpt.com/g/g-p-11111111111111111111111111111111-test-project/c/${uuid}`;
     const bare = `https://chatgpt.com/c/${uuid}`;
     expect(ownedConversationIdentityMatches(project, bare)).toBe(true);
     expect(ownedConversationIdentityMatches(bare, project)).toBe(true);
@@ -1713,12 +1751,14 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
 
     const claimDir = join(stateDir, profileKey, 'state-light-fresh-claims');
     mkdirSync(claimDir, { recursive: true });
-    const claimPath = join(claimDir, `${sha256(SHARED_CONV)}.json`);
+    const claimPath = join(claimDir, `${sha256(SHARED_CANONICAL_CONV)}.json`);
     writeFileSync(claimPath, '{not-json');
-    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'successor-claim', 5_000)).toBe('claimed');
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'successor-claim', 5_000)).toBe('contended');
     writeFileSync(claimPath, '{}\n');
-    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'successor-claim-schema-invalid', 5_000)).toBe('claimed');
-    releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'successor-claim-schema-invalid', 5_000);
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'successor-claim-schema-invalid', 5_000)).toBe('contended');
+    rmSync(claimPath);
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'successor-claim', 5_000)).toBe('claimed');
+    releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'successor-claim', 5_000);
     writeFileSync(claimPath, `${JSON.stringify({
       schema: 'state-light-fresh-claim/v1',
       version: 1,
@@ -1754,7 +1794,7 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
       stateDir,
       profileKey,
       'state-light-fresh-claims',
-      (await import('./storage-common.ts')).sha256(SHARED_CONV) + '.json',
+      (await import('./storage-common.ts')).sha256(SHARED_CANONICAL_CONV) + '.json',
     );
     const claim = JSON.parse(readFileSync(claimPath, 'utf8'));
     expect(claim.schema).toBe('state-light-fresh-claim/v1');
@@ -1798,7 +1838,7 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
     const { writeFileSync } = await import('node:fs');
     const { sha256 } = await import('./storage-common.ts');
     expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'owner', 5_000)).toBe('claimed');
-    const claimPath = join(stateDir, profileKey, 'state-light-fresh-claims', `${sha256(SHARED_CONV)}.json`);
+    const claimPath = join(stateDir, profileKey, 'state-light-fresh-claims', `${sha256(SHARED_CANONICAL_CONV)}.json`);
     writeFileSync(claimPath, `${JSON.stringify({
       schema: 'state-light-fresh-claim/v1',
       version: 1,
