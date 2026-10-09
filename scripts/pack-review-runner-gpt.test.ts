@@ -3951,7 +3951,7 @@ describe('Issue #2451 three-source no-judgment delivery', () => {
         fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
         fixturePrState: 'OPEN',
         claimMode: 'preacquired',
-        fixtureIssueBody: '```complexity-tier\\ntier: T2\\n```',
+        fixtureIssueBody: ['```complexity-tier', 'tier: T2', '```'].join('\n'),
         fixtureIssueNumber: 2451,
         fixtureReviewBySourceSlot: slots,
         fixtureAfterGptInvocationBound: ({ slotId, invocationId }) => {
