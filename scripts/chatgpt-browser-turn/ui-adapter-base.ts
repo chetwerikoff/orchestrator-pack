@@ -160,7 +160,7 @@ interface ProjectConversationIdentity {
   readonly identityRoot: string;
   readonly projectSurface: string;
   readonly origin: string;
-  readonly stableProjectId: string;
+  readonly stableProjectId?: string;
   readonly canonicalProjectId: boolean;
 }
 
@@ -184,13 +184,13 @@ function projectConversationIdentity(projectUrl: string): ProjectConversationIde
     const match = /^\/g\/(g-p-[^/]+)(?:\/(?:project|draft))?$/i.exec(parsed.pathname);
     const projectSegment = match?.[1];
     const stable = projectSegment ? stableProjectId(projectSegment) : undefined;
-    if (!stable) return undefined;
+    if (!projectSegment) return undefined;
     return {
       identityRoot: normalizeConversationUrl(`${parsed.origin}/g/${projectSegment}`),
       projectSurface,
       origin: parsed.origin,
-      stableProjectId: stable,
-      canonicalProjectId: true,
+      ...(stable ? { stableProjectId: stable } : {}),
+      canonicalProjectId: stable !== undefined,
     };
   } catch {
     return undefined;
@@ -200,7 +200,10 @@ function projectConversationIdentity(projectUrl: string): ProjectConversationIde
 export function projectConversationPrefix(projectUrl: string): string | undefined {
   const identity = projectConversationIdentity(projectUrl);
   if (!identity) return undefined;
-  return identity.identityRoot;
+  // The older network-correlated sendTurn retention path preserves its literal
+  // project composer prefix for noncanonical legacy project fixtures. State-light
+  // project-conversation admission below still requires the stable 32-hex id.
+  return identity.canonicalProjectId ? identity.identityRoot : identity.projectSurface;
 }
 
 function conversationPrefixFromObservedUrl(normalizedUrl: string): string | undefined {
@@ -221,7 +224,7 @@ export function projectConversationUrlMatchesProject(
 ): boolean {
   try {
     const identity = projectConversationIdentity(projectUrl);
-    if (!identity) return false;
+    if (!identity?.canonicalProjectId) return false;
     const parsed = new URL(normalizeConversationUrl(conversationUrl));
     if (!allowedChatGptOrigin(parsed) || parsed.origin !== identity.origin) return false;
     const match = /^\/g\/(g-p-[^/]+)\/c\/([0-9a-f-]+)$/i.exec(parsed.pathname);
@@ -237,8 +240,18 @@ function observedConversationUrlAllowedForProject(
   conversationUrl: string,
   projectUrl: string,
 ): boolean {
-  // A root /c/<uuid> URL is an observation candidate, never a fresh-project owner.
-  return projectConversationUrlMatchesProject(conversationUrl, projectUrl);
+  // Canonical state-light owners must be exact-project; the legacy sendTurn
+  // network-correlator retains root and literal /project/c URL observations for
+  // noncanonical pre-existing fixtures, without granting claim/cleanup authority.
+  const identity = projectConversationIdentity(projectUrl);
+  if (!identity) return false;
+  if (identity.canonicalProjectId) return projectConversationUrlMatchesProject(conversationUrl, projectUrl);
+  try {
+    const prefix = conversationPrefixFromObservedUrl(normalizeConversationUrl(conversationUrl));
+    return prefix === identity.identityRoot || prefix === identity.projectSurface || prefix === identity.origin;
+  } catch {
+    return false;
+  }
 }
 
 function buildConversationUrlFromPrefix(prefix: string, conversationUuid: string): string {
