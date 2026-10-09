@@ -1808,9 +1808,29 @@ The words Firefighter universal appear here only as prose.`;
     expect(started).toBe(1);
   });
 
+  it('accepts only the real closing line after tilde examples and HTML comments', async () => {
+    const fixture = managerReuseFixture({
+      ancestor: false,
+      prOverrides: { body: "~~~md\nCloses #2430\n~~~\n<!--\nCloses #2430\n-->\nCloses #2430" },
+    });
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
+      managerRefresh: true, managerTaskRunId: 'run-1', issueNumber: 2430,
+      worktreeSelector: 'id:repo::existing', defaultBranch: 'main',
+    }, fixture.execute);
+    expect(result).toMatchObject({ status: 'ok', evidence: { prNumber: 42, refresh: 'pr_head_preserved' } });
+    expect(fixture.calls.some((args) => args[0] === 'git' && args[1] === 'merge')).toBe(false);
+  });
+
   it.each([
     { name: 'no linked PR', fixture: { noPr: true }, cause: 'manager_pr_resume_link_ambiguous' },
     { name: 'multiple linked PRs', fixture: { duplicatePr: true }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "tilde-fenced closing example", fixture: { prOverrides: { body: "~~~md\nCloses #2430\n~~~" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "long tilde fence and short delimiter", fixture: { prOverrides: { body: "~~~~text\nCloses #2430\n~~~\nCloses #2430\n~~~~" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "multiline HTML comment", fixture: { prOverrides: { body: "<!--\nCloses #2430\n-->" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "unclosed multiline HTML comment", fixture: { prOverrides: { body: "<!-- sample\nCloses #2430" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "comment cannot join fragments into a closing keyword", fixture: { prOverrides: { body: "Clos<!-- sample -->es #2430" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "HTML comment inside a tilde-fenced example", fixture: { prOverrides: { body: "~~~text\n<!-- Closes #2430 -->\nCloses #2430\n~~~" } }, cause: 'manager_pr_resume_link_ambiguous' },
     { name: 'unlinked body', fixture: { prOverrides: { body: 'Mentioned #2430, no closing line' } }, cause: 'manager_pr_resume_link_ambiguous' },
     { name: 'quoted closing text', fixture: { prOverrides: { body: '> Closes #2430' } }, cause: 'manager_pr_resume_link_ambiguous' },
     { name: 'foreign head repository', fixture: { prOverrides: { headRepository: { nameWithOwner: 'foreign/orchestrator-pack' } } }, cause: 'manager_pr_resume_head_mismatch' },

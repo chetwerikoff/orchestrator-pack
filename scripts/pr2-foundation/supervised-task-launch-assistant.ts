@@ -1240,14 +1240,24 @@ async function observeManagerWorktreeIdentity(
 /** A closing line in a live PR body, not a search hit/title or quoted/code example. */
 function prBodyClosesIssue(body: string, issueNumber: number): boolean {
   const closing = new RegExp('^(?:Closes|Fixes|Resolves)[ \\t]+#' + issueNumber + '(?=$|[ \\t.,;!])', 'iu');
-  let fenced = false;
-  for (const raw of body.split(/\r?\n/u)) {
-    const line = raw.trim();
-    if (line.startsWith('```')) {
-      fenced = !fenced;
-      continue;
+  // Mask comments while preserving newlines and word boundaries; examples are not operative links.
+  const visibleBody = body.replace(/<!--[\s\S]*?(?:-->|$)/gu,
+    (comment) => comment.replace(/[^\r\n]/gu, ' '));
+  let fence: string | null = null;
+  for (const raw of visibleBody.split(/\r?\n/u)) {
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(raw);
+    if (marker) {
+      const delimiter = marker[1]!;
+      if (!fence) {
+        fence = delimiter;
+        continue;
+      }
+      if (delimiter[0] === fence[0] && delimiter.length >= fence.length && !marker[2]?.trim()) {
+        fence = null;
+        continue;
+      }
     }
-    if (!fenced && closing.test(raw)) return true;
+    if (!fence && closing.test(raw)) return true;
   }
   return false;
 }

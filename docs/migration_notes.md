@@ -23,17 +23,7 @@ does not adopt machine state or restore a native Run.
    PACK_ROOT through the current setup procedure. Confirm Run/Task membership
    using orca orchestration run-show --id "$RUN_ID" --json and
    orca orchestration task-list --run "$RUN_ID" --json.
-2. Read orca orchestration dispatch-show --task "$TASK_ID" --json **before**
-   preparing a worktree or terminal. A present Dispatch is reconciled and
-   continued by the existing coordinator, not restarted. For an absent
-   Dispatch, invoke the existing manager launch assistant with the exact
-   --project, --issue-number, --run, --task and --worktree arguments as shown
-   in docs/target_repo_setup.md. Its second pre-start Dispatch check remains
-   mandatory. The selected Issue must have exactly one open same-repository
-   closing PR with matching local branch, base branch and complete head SHA.
-   Dirty, ambiguous, forked, drifted and otherwise unsupported evidence
-   refuses without moving the manager branch.
-3. Independently inspect the historical Run coordinator_handle and establish
+2. Independently inspect the historical Run coordinator_handle and establish
    that the **old** exact Run-bound coordinator terminal is no longer live
    before any run-use. A stored coordinator_handle is not liveness evidence:
    the currently substantiated native reads do not provide the required
@@ -47,7 +37,18 @@ does not adopt machine state or restore a native Run.
    orca orchestration run-show --id "$RUN_ID" --json both refer to the
    same existing Run and coordinator_handle equals ORCA_TERMINAL_HANDLE.
    These post-bind reads cannot substitute for old-terminal pre-bind proof.
+   Without that independent proof, stop here before invoking the manager launch assistant.
    Never send worker-start to the coordinator terminal.
+3. Read orca orchestration dispatch-show --task "$TASK_ID" --json **before**
+   preparing a worktree or terminal. A present Dispatch is reconciled and
+   continued by the existing coordinator, not restarted. For an absent
+   Dispatch, invoke the existing manager launch assistant with the exact
+   --project, --issue-number, --run, --task and --worktree arguments as shown
+   in docs/target_repo_setup.md. Its second pre-start Dispatch check remains
+   mandatory. The selected Issue must have exactly one open same-repository
+   closing PR with matching local branch, base branch and complete head SHA.
+   Dirty, ambiguous, forked, drifted and otherwise unsupported evidence
+   refuses without moving the manager branch.
 4. Independently inspect the current same-project/repository *local*
    WorkerAssignment. Inspect operator-primary-binding show --project
    "$PROJECT_ID"; for a verified current local target only, use existing bind

@@ -719,6 +719,63 @@ describe('supervised worker start exact assignment admission',()=>{
     expect(currentWorkerAssignment(file, 1416)?.bindingKey).toBe('dispatch_new');
   });
 
+  it.each([
+    { name: 'first native terminal read is unavailable', firstHandle: null, expectedReason: 'target_unresolved' },
+    { name: 'native terminal identity changes before placement', firstHandle: 'term-fresh', expectedReason: 'supervised_start_terminal_witness_changed' },
+  ])('blocks retained old-terminal reuse when $name', async ({ firstHandle, expectedReason }) => {
+    const base = root();
+    const env = { ...process.env, OPK_BASE_DIR: base };
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    const old = await publishCurrentWorkerAssignment({
+      file, repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1416,
+      taskId: 'task_1', kind: 'local', provider: 'orca', bindingKey: 'dispatch_old', role: 'worker',
+    });
+    if (!old.ok) throw new Error(old.reason);
+    const shown = {
+      dispatch: { status: 'failed', last_heartbeat_at: null },
+      worker: { agent_terminal_handle: canonicalTerminal },
+      terminal: null,
+      observation: { exactWorker: false, status: 'missing' },
+      terminalResource: {
+        terminalHandle: canonicalTerminal, worktreeId: canonicalWorktree,
+        originDispatchId: 'dispatch_old', ownerDispatchId: 'dispatch_old', releaseState: 'retained',
+      },
+    };
+    const runJson = vi.fn((): OrcaJsonResponse => ({ ok: true, result: shown }));
+    const regularInspect = inspectPlacement();
+    let terminalReads = 0;
+    const inspect = async (inspectArgs: readonly string[]) => {
+      if (inspectArgs[0] === 'terminal' && inspectArgs[1] === 'show') {
+        terminalReads += 1;
+        if (terminalReads === 1) {
+          return firstHandle === null
+            ? { ok: false, stdout: '' }
+            : inspectPlacement({ terminal: firstHandle })(inspectArgs);
+        }
+      }
+      return regularInspect(inspectArgs);
+    };
+    let starts = 0;
+    const result = await runSupervisedWorkerStart({
+      role: 'worker', issueNumber: 1416, repository: 'chetwerikoff/orchestrator-pack',
+      env, orcaArgs: args(), inspect,
+      adapter: new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env }),
+      execute: async () => {
+        starts += 1;
+        return { ok: true, stdout: envelope({
+          taskId: 'task_1', dispatchId: 'dispatch_new', state: 'ready', effects: producerEffects(),
+        }) };
+      },
+    });
+    expect(result).toMatchObject({ ok: false, reason: expectedReason });
+    if (firstHandle === null) {
+      expect(result).toMatchObject({ errorMessage: 'terminal_reuse_unauthorized' });
+    }
+    expect(terminalReads).toBe(2);
+    expect(starts).toBe(0);
+    expect(currentWorkerAssignment(file, 1416)).toEqual(old.assignment);
+  });
+
   it('uses absent-current admission after explicit retirement without recovering an old assignment identity', async () => {
     const base = root();
     const env = { ...process.env, OPK_BASE_DIR: base };
