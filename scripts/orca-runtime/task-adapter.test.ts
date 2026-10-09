@@ -1626,7 +1626,7 @@ describe('Orca assignment resolution', () => {
     const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
     expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
       status: 'ok',
-      value: { kind: 'gone' },
+      value: { kind: 'gone', reuseBlockedTerminalId: 'term-missing' },
     });
     expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-1' })).toEqual({
       status: 'ok',
@@ -1636,6 +1636,76 @@ describe('Orca assignment resolution', () => {
       ['orchestration', 'worker-show', '--dispatch', 'dispatch-1'],
       ['orchestration', 'worker-show', '--dispatch', 'dispatch-1'],
     ]);
+  });
+
+  it.each(['ownerDispatchId', 'originDispatchId', 'terminalHandle'] as const)(
+    'refuses missing/failed/retained when the old %s is contradictory',
+    (field) => {
+      const shown = terminallyFailedMissingRetainedWorkerShow();
+      const runJson = vi.fn((): OrcaJsonResponse => ({
+        ok: true,
+        result: {
+          ...shown,
+          terminalResource: {
+            ...shown.terminalResource,
+            [field]: field === 'terminalHandle' ? 'term-foreign' : 'dispatch-foreign',
+          },
+        },
+      }));
+      const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+      expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toMatchObject({
+        status: 'failed', reason: 'assignment_target_unresolved',
+      });
+      expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-1' })).toMatchObject({
+        status: 'failed', reason: 'assignment_target_unresolved',
+      });
+      expect(runJson.mock.calls.every((call) => call[0]?.[0] === 'orchestration')).toBe(true);
+    },
+  );
+
+  it('refuses missing/failed/retained when corroborating worker/terminal identity is absent', () => {
+    const shown = terminallyFailedMissingRetainedWorkerShow();
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true, result: { ...shown, worker: { agent_terminal_handle: null } },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toMatchObject({
+      status: 'failed', reason: 'assignment_target_unresolved',
+    });
+    expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-1' })).toMatchObject({
+      status: 'failed', reason: 'assignment_target_unresolved',
+    });
+  });
+
+  it('refuses an external terminal with no correlated native old-dispatch gone witness', () => {
+    const shown = terminallyFailedMissingRetainedWorkerShow();
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true, result: { ...shown, terminalResource: undefined, worker: { agent_terminal_handle: 'external-terminal' } },
+    }));
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toMatchObject({
+      status: 'failed', reason: 'assignment_target_unresolved',
+    });
+  });
+
+  it('refuses exited retained/unknown when the old resource owner disagrees', () => {
+    for (const releaseState of ['retained', 'unknown'] as const) {
+      const runJson = vi.fn((): OrcaJsonResponse => ({
+        ok: true,
+        result: {
+          worker: { agent_terminal_handle: 'term-owned' },
+          observation: { exactWorker: true, status: 'exited' },
+          terminalResource: {
+            terminalHandle: 'term-owned', originDispatchId: 'dispatch-1',
+            ownerDispatchId: 'dispatch-other', releaseState,
+          },
+        },
+      }));
+      const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+      expect(adapter.resolveAssignmentWorker({ provider: 'orca', bindingKey: 'dispatch-1' })).toMatchObject({
+        status: 'failed', reason: 'assignment_target_unresolved',
+      });
+    }
   });
 
   it('does not classify a terminally failed exact live retained worker-show as gone', () => {
