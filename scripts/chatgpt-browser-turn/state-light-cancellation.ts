@@ -1,12 +1,10 @@
 import { readFileSync } from 'node:fs';
-import { releaseCdpBrowser } from './browser-session.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { isOwnedPromptMarker } from './owned-prompt-marker.ts';
 import { conversationUuidFromUrl } from './state-light-fresh-conversation.ts';
 import { USER_MESSAGE_SELECTOR } from './product-page-selectors.ts';
-import { loadChromium, normalizeConversationUrl } from './ui-adapter.ts';
+import { normalizeConversationUrl } from './ui-adapter.ts';
 import {
-  recoveryMarkerCardinality,
   type RecoveryAuthoritativeMessage,
 } from './state-light-turn-recovery.ts';
 
@@ -168,16 +166,6 @@ export async function stopOwnedGeneration(
   return 'not_attempted_identity_unproven';
 }
 
-async function defaultEnumeratePages(browser: any): Promise<readonly any[]> {
-  const contexts = browser.contexts();
-  if (!Array.isArray(contexts) || contexts.length !== 1) {
-    throw new Error('cancellation_context_count_unproven');
-  }
-  const pages = contexts[0].pages();
-  if (!Array.isArray(pages)) throw new Error('cancellation_page_enumeration_failed');
-  return pages;
-}
-
 function unavailable(
   cause: string,
   receipt?: BrowserTurnCancellationReceipt,
@@ -225,110 +213,39 @@ export async function cancelOwnedGenerationFromReceipt(
   explicitDependencies: BrowserTurnCancellationDependencies = {},
 ): Promise<BrowserTurnCancellationAttempt> {
   const receipt = parseBrowserTurnCancellationReceipt(rawReceipt);
-  if (!receipt) return unavailable('child_stdout_eof_timeout_cancellation_receipt_invalid');
+  if (!receipt) return unavailable('cancellation_receipt_invalid');
   const authority = authorityOrDependencies === EXPLICIT_CANCELLATION_AUTHORITY
     ? authorityOrDependencies
     : undefined;
-  const dependencies = authorityOrDependencies && typeof authorityOrDependencies === 'object'
-    ? authorityOrDependencies
-    : explicitDependencies;
+  void explicitDependencies;
   if (authority !== EXPLICIT_CANCELLATION_AUTHORITY) return authorityAbsent(receipt);
-  if (!cdp.trim()) {
-    return identityUnproven('child_stdout_eof_timeout_cdp_unavailable', receipt);
-  }
+  if (!cdp.trim()) return identityUnproven('cancellation_cdp_unavailable', receipt);
 
-  let browser: any;
+  // The existing observation read is exact and read-only. Validate its
+  // immutable invocation/profile/marker and send witness without manufacturing
+  // a mutable "owner" extension from the current terminal handle.
+  let durable;
   try {
-    browser = dependencies.connect
-      ? await dependencies.connect(cdp)
-      : await loadChromium().connectOverCDP(cdp, { timeout: 30_000 });
+    durable = readStateLightTurnObservation(receipt.configured_profile_key, receipt.invocation_id);
   } catch {
-    return identityUnproven('child_stdout_eof_timeout_cancellation_reconnect_failed', receipt);
+    return identityUnproven('cancellation_durable_invocation_unreadable', receipt);
+  }
+  if (durable.invocation_id !== receipt.invocation_id
+    || durable.profile_key !== receipt.configured_profile_key
+    || durable.marker !== receipt.marker
+    || durable.conversation_url !== receipt.conversation_url
+    || (durable.send_count ?? 0) !== 1
+    || durable.send_witness === 'none'
+    || durable.phase === 'not_sent' || durable.phase === 'prepared' || durable.phase === 'harvested') {
+    return identityUnproven('cancellation_durable_identity_or_phase_mismatch', receipt);
   }
 
-  try {
-    const pages = dependencies.enumeratePages
-      ? await dependencies.enumeratePages(browser)
-      : await defaultEnumeratePages(browser);
-    const exactUrlPages: any[] = [];
-    for (const page of pages) {
-      try {
-        const normalized = normalizeConversationUrl(String(page.url()));
-        if (normalized === receipt.conversation_url) exactUrlPages.push(page);
-      } catch {
-        // An unreadable page has no authority for this exact receipt.
-      }
-    }
-    if (exactUrlPages.length !== 1) {
-      return identityUnproven(
-        exactUrlPages.length > 1
-          ? 'child_stdout_eof_timeout_cancellation_identity_ambiguous'
-          : 'child_stdout_eof_timeout_owned_conversation_not_found',
-        receipt,
-      );
-    }
-
-    const page = exactUrlPages[0];
-    const observed = dependencies.readUserMessages
-      ? await dependencies.readUserMessages(page)
-      : await readRecoveryAuthoritativeUserMessages(page);
-    if (observed.incomplete) {
-      return identityUnproven(
-        'child_stdout_eof_timeout_cancellation_identity_unreadable',
-        receipt,
-      );
-    }
-    const cardinality = recoveryMarkerCardinality(observed.messages, receipt.marker);
-    if (
-      cardinality.matchingUserCarrierCount !== 1
-      || cardinality.exactMarkerTokenCount !== 1
-    ) {
-      return identityUnproven(
-        cardinality.matchingUserCarrierCount > 1
-          || cardinality.exactMarkerTokenCount > 1
-          ? 'child_stdout_eof_timeout_cancellation_identity_ambiguous'
-          : 'child_stdout_eof_timeout_cancellation_identity_unproven',
-        receipt,
-      );
-    }
-
-    // Exact durable invocation, profile and marker must be re-read. This proves
-    // historical send identity only. Neither this record nor a matching URL
-    // supplies the missing tab+active-generation witnesses.
-    let durable;
-    try {
-      durable = readStateLightTurnObservation(receipt.configured_profile_key, receipt.invocation_id);
-    } catch {
-      return identityUnproven('cancellation_durable_invocation_unreadable', receipt);
-    }
-    if (durable.marker !== receipt.marker
-      || durable.profile_key !== receipt.configured_profile_key
-      || durable.invocation_id !== receipt.invocation_id
-      || durable.conversation_url !== receipt.conversation_url
-      || (durable.send_count ?? 0) < 1
-      || durable.phase === 'not_sent' || durable.phase === 'prepared'
-      || durable.phase === 'harvested') {
-      return identityUnproven('cancellation_durable_identity_or_phase_mismatch', receipt);
-    }
-    // No independently established original send-tab target AND no current
-    // assistant-generation identity. No selector read/click, even when a Stop
-    // button subsequently vanishes through natural completion.
-    void page;
-    void dependencies.stop;
-    return identityUnproven('cancellation_owned_tab_and_generation_unproven', receipt);
-  } catch {
-    return identityUnproven(
-      'child_stdout_eof_timeout_cancellation_handshake_failed',
-      receipt,
-    );
-  } finally {
-    try {
-      if (dependencies.releaseBrowser) await dependencies.releaseBrowser(browser);
-      else await releaseCdpBrowser(browser);
-    } catch {
-      // Releasing the CDP client is not Stop confirmation and never closes a tab.
-    }
-  }
+  // URL, historical marker, and a Stop selector cannot prove the original tab
+  // handle or an active assistant generation for this invocation. Neither is
+  // available from the current production contracts. Do not connect, enumerate,
+  // click, or call injected Stop. The disposition is *not* cancelled.
+  void authorityOrDependencies;
+  return identityUnproven('cancellation_owned_tab_and_generation_unproven', receipt);
 }
 
 /**
