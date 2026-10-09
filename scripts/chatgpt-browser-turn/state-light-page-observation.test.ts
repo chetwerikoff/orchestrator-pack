@@ -916,7 +916,7 @@ describe('Issue #2434 original-launch owner admission', () => {
         });
         const record = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId);
         expect(record).toMatchObject({
-          phase: 'prepared', send_witness: 'none', conversation_url: null,
+          phase: 'not_sent', send_witness: 'numeric_send_count', send_count: 0, conversation_url: null,
         });
         expect(record).not.toHaveProperty('owner');
       }
