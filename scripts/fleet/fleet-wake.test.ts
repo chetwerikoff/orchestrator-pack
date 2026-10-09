@@ -1218,7 +1218,8 @@ describe('Issue #2441 read-only diagnostic tick non-interference', () => {
     const wake = await tick({ store, terminals: [coordinator, worker, peer],
       screens: { coord: 'idle', two: 'work\nesc interrupt' } });
     expect(wake.result).toEqual({ state: 'unreadable', handle: 'one' });
-    expect(wake.logs.some((line) => line.includes('handle=two') && line.includes('agent_unverified'))).toBe(true);
+    // A prior injected t=0 may independently age into suspected_hung against the real clock.
+    expect(wake.logs.some((line) => line.startsWith('DIAG handle=two') && line.includes('state=busy'))).toBe(true);
     expect(sends(wake.calls)).toHaveLength(0);
   }));
 
