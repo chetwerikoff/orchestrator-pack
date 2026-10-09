@@ -4166,6 +4166,28 @@ export async function reconcileStalePackReviewRuns(
 
     if (!isPackReviewUnfinishedTerminalRun(run)) continue;
 
+    // A previous zero-judgment terminal may have been reconciled before its
+    // dedicated worker submission could be attempted. The locked channel
+    // claim prevents a second submission, including after an ambiguous result.
+    const currentUnfinished = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
+    if (currentUnfinished.failureReason?.startsWith('gpt_source_non_complete:')
+        && noJudgmentBudgetOutcome(currentUnfinished, storeRoot)) {
+      const notification = await notifyNoJudgmentWorker({
+        run: currentUnfinished, projectId, storeRoot,
+        notifier: input.fixtureWorkerNotifier ?? ((request) => sendPackReviewWorkerNotification({
+          trustedPackRoot: currentUnfinished.trustedPackRoot,
+          sessionId: currentUnfinished.linkedSessionId,
+          projectId, storeRoot, request,
+        })),
+      });
+      if (notification.state !== 'already_attempted') {
+        results.push({
+          runId: run.id, noJudgmentWorkerNotification: notification,
+          budgetOutcome: 'non_consuming_no_judgment',
+        });
+      }
+    }
+
     const currentOrder = resolvePackReviewRunOrder(await readBoundRecords(), run);
     if (currentOrder.kind === 'ambiguous') {
       results.push({
@@ -4687,7 +4709,48 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     options: Parameters<typeof recordPackReviewUnfinishedTerminalStatus>[0],
   ) => {
     terminalPersistenceAttempted = true;
-    await recordPackReviewUnfinishedTerminalStatus(options);
+    const zeroJudgment = options.failureReason?.startsWith('gpt_source_non_complete:') === true;
+    const originalWriter = options.writeRequiredStatus;
+    return recordPackReviewUnfinishedTerminalStatus({
+      ...options,
+      ...(zeroJudgment ? {
+        writeRequiredStatus: async (request: Parameters<PackReviewRequiredStatusWriter>[0]) => {
+          const freshBefore = getPackReviewRun(options.run.id, { projectId, storeRoot });
+          const headBefore = await readCheckedReviewPrHead(
+            input, target.repoSlug, target.prNumber, target.headSha,
+          );
+          if (!freshBefore || !noJudgmentBudgetOutcome(freshBefore, storeRoot)
+            || headBefore !== target.headSha.toLowerCase()) {
+            throw new Error('status_not_published:no_judgment_or_current_head_changed_before_error; rerun scoped reconcile');
+          }
+          await originalWriter(request);
+          // GitHub status writes are not atomic with source recovery or head changes.
+          // A delayed stale error can otherwise land after the verdict's success.
+          const freshAfter = getPackReviewRun(options.run.id, { projectId, storeRoot });
+          const headAfter = await readCheckedReviewPrHead(
+            input, target.repoSlug, target.prNumber, target.headSha,
+          );
+          if (headAfter !== target.headSha.toLowerCase()) {
+            throw new Error('status_not_published:pr_head_changed_during_error; restart PR-led projection');
+          }
+          if (!freshAfter || !noJudgmentBudgetOutcome(freshAfter, storeRoot)) {
+            if (freshAfter && hasPersistedPackReviewVerdict(freshAfter)) {
+              const restored = await restorePackReviewAuthoritativeRequiredStatus({
+                run: freshAfter,
+                projectId,
+                storeRoot,
+                writeRequiredStatus: originalWriter,
+                forceRepublish: true,
+              });
+              throw new Error(restored?.state === 'succeeded'
+                ? 'status_not_published:no_judgment_superseded; authoritative_verdict_status_restored'
+                : 'status_not_published:verdict_superseded_error; rerun scoped reconcile to restore verdict status');
+            }
+            throw new Error('status_not_published:no_judgment_superseded; rerun scoped reconcile');
+          }
+        },
+      } : {}),
+    });
   };
   const recordFallbackProcessFailure = async (fallbackResult: ProcessResult): Promise<never> => {
     if (!run) throw new Error('fallback reviewer failure occurred before run creation');
@@ -5815,7 +5878,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
             ? 'timed_out'
             : 'failed';
         const failureReason = `gpt_source_non_complete:${first.sourceSlotId}:${first.classification}`;
-        await recordUnfinishedTerminal({
+        const unfinished = await recordUnfinishedTerminal({
           run,
           status,
           failureReason,
@@ -5823,6 +5886,20 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           storeRoot,
           writeRequiredStatus,
         });
+        const persisted = getPackReviewRun(run.id, { projectId, storeRoot }) ?? unfinished.run;
+        const budgetOutcome = noJudgmentBudgetOutcome(persisted, storeRoot);
+        const notification = budgetOutcome
+          ? await notifyNoJudgmentWorker({
+              run: persisted, projectId, storeRoot,
+              notifier: input.fixtureWorkerNotifier ?? ((request) => sendPackReviewWorkerNotification({
+                trustedPackRoot: persisted.trustedPackRoot,
+                sessionId: persisted.linkedSessionId,
+                projectId,
+                storeRoot,
+                request,
+              })),
+            })
+          : { state: 'not_applicable' as const, reason: 'no_judgment_census_or_cap_changed' };
         terminal = true;
         const runs = listPackReviewRuns({ projectId, storeRoot });
         if (claimLease) await claimLease.release('run_started', runs);
@@ -5834,6 +5911,14 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           runId: run.id,
           status,
           coverage,
+          ...(budgetOutcome ? { budgetOutcome } : {}),
+          requiredStatusPublication: unfinished.deliveryOutcome.state === 'succeeded'
+            ? 'published' : 'status_not_published',
+          requiredStatusReason: unfinished.deliveryOutcome.reason,
+          ...(unfinished.deliveryOutcome.state === 'succeeded' ? {} : {
+            nextAction: 'rerun scoped reconcile or PR-led status projection; do not resend possible_delivery',
+          }),
+          noJudgmentWorkerNotification: notification,
           httpStatus: status === 'timed_out' ? 504 : 422,
         };
       }
