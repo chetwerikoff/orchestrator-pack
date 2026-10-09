@@ -1296,6 +1296,10 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(projectSurfaceUrlsEquivalent(`${canonical}#composer`, canonical)).toBe(true);
     expect(isBlankProjectSurfaceUrl(canonical, canonical)).toBe(true);
     expect(projectSurfaceUrlsEquivalent(SHARED_CONV, canonical)).toBe(false);
+    expect(isBlankProjectSurfaceUrl(PROJECT_CONVERSATION_ROOT, canonical)).toBe(true);
+    expect(isBlankProjectSurfaceUrl(PROJECT_CONVERSATION_ROOT + '/draft', canonical)).toBe(true);
+    expect(isBlankProjectSurfaceUrl(PROJECT_CONVERSATION_ROOT + '/other-route', canonical)).toBe(false);
+    expect(isBlankProjectSurfaceUrl(canonical.replace('chatgpt.com', 'chatgpt.com:8443'), canonical)).toBe(false);
   });
 
   it('binds every launcher-chain goto to the shared navigation timeout', () => {
