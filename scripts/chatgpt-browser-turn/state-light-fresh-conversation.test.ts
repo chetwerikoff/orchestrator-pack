@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -531,16 +531,20 @@ describe('state-light fresh conversation collision recovery', () => {
     renderAfterReload: boolean,
     ambiguousAssistant = false,
     streamRecoveryAlert: string | false = false,
+    replySequence: readonly string[] = [reply],
+    continueGeneratingSequence: readonly boolean[] = [],
   ) {
     const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0 };
     const working = readyTurnObservationFrames(prompt, reply)[0]!;
     const final = readyTurnObservationFrames(prompt, reply).at(-1)!;
-    const assistantOnly = [
+    const assistantOnlyFor = (text: string) => [
       ...(ambiguousAssistant ? [{ role: 'assistant' as const, text: 'EARLIER ANSWER' }] : []),
-      ...final.filter((message: StateLightTestMessage) => message.role === 'assistant'),
+      ...final.filter((message: StateLightTestMessage) => message.role === 'assistant')
+        .map((message: StateLightTestMessage) => ({ ...message, text })),
     ];
     let active: StateLightTestMessage[] = [];
     let generating = false;
+    let continuationVisible = false;
     const composer = scalarLocator({
       count: vi.fn(async () => 1),
       click: vi.fn(async () => undefined),
@@ -579,10 +583,46 @@ describe('state-light fresh conversation collision recovery', () => {
             active = final;
             generating = false;
           } else {
-            active = streamRecoveryAlert ? [] : assistantOnly;
+            active = streamRecoveryAlert ? [] : assistantOnlyFor(replySequence[Math.min(state.reads - 3, replySequence.length - 1)] ?? reply);
             generating = false;
           }
-          return collectionLocator(active, generating);
+          continuationVisible = continueGeneratingSequence[state.reads - 1] ?? false;
+          const loc: any = collectionLocator(active, generating);
+          loc.evaluateAll = async (callback: (elements: Element[], args: unknown) => unknown, args: unknown) => {
+            const elements = active.map((message: StateLightTestMessage) => ({
+              getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR
+                ? (message.role === 'user' ? 'user-message' : 'assistant-message')
+                : null,
+              getBoundingClientRect: () => ({ height: 1 }),
+              innerText: message.text,
+              querySelector: (query: string) => {
+                if (query === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`) return { getAttribute: () => message.role === 'user' ? 'user-message' : 'assistant-message' };
+                if (query.includes('continue-generating') || query.includes('continue_generating')) return continuationVisible ? {} : null;
+                if (query === uiAdapter.ASSISTANT_TURN_ACTION_SELECTOR) return message.finalActionInTurnContainer ? {} : null;
+                if (query === uiAdapter.ASSISTANT_TURN_IN_PROGRESS_SELECTOR) return generating ? {} : null;
+                return null;
+              },
+              querySelectorAll: () => [],
+              closest: () => ({
+                querySelector: (query: string) => {
+                  if (query.includes('continue-generating') || query.includes('continue_generating')) return continuationVisible ? {} : null;
+                  if (query === uiAdapter.ASSISTANT_TURN_ACTION_SELECTOR) return message.finalActionInTurnContainer ? {} : null;
+                  if (query === uiAdapter.ASSISTANT_TURN_IN_PROGRESS_SELECTOR) return generating ? {} : null;
+                  return null;
+                },
+              }),
+            }));
+            const previousDocument = (globalThis as { document?: unknown }).document;
+            (globalThis as { document?: unknown }).document = {
+              querySelectorAll: (query: string) => (query.includes('stop-button') && generating) || ((query.includes('continue-generating') || query.includes('continue_generating')) && continuationVisible) ? [{}] : [],
+            };
+            try { return callback(elements as unknown as Element[], args); }
+            finally {
+              if (previousDocument === undefined) delete (globalThis as { document?: unknown }).document;
+              else (globalThis as { document?: unknown }).document = previousDocument;
+            }
+          };
+          return loc;
         }
         if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
           const last = active.at(-1);
@@ -624,6 +664,42 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(state.reloads).toBe(0);
     expect(readFileSync(output, 'utf8')).toBe(reply);
+  });
+
+  it('publishes the full final owned reply once through the atomic evaluateAll observation', async () => {
+    const prompt = 'PROMPT-LONG-FINAL';
+    const reply = 'R'.repeat(8_785);
+    const output = join(stateDir, 'full-final-reply.txt');
+    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+    const published = readFileSync(output, 'utf8');
+    const digest = createHash('sha256').update(published, 'utf8').digest('hex');
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({
+      code: 0,
+      result: { state: 'ok', cause: 'completed_page_only', send_count: 1, output: { byte_length: 8_785, sha256: digest } },
+    });
+    expect(published).toBe(reply);
+    expect(state.reloads).toBe(0);
+  });
+
+  it('rejects a repeated early prefix when the same owned final answer later grows', async () => {
+    const prompt = 'PROMPT-GROWING-FINAL';
+    const prefix = 'P'.repeat(2_101);
+    const finalReply = 'F'.repeat(8_785);
+    const output = join(stateDir, 'growing-final-reply.txt');
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt, finalReply, false, false, false,
+      [prefix, prefix, finalReply, finalReply, finalReply],
+      [false, false, true, true, false, false, false],
+    );
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+    const published = readFileSync(output, 'utf8');
+    expect(outcome.result).toMatchObject({ state: 'ok', cause: 'completed_page_only', send_count: 1 });
+    expect(published).toBe(finalReply);
+    expect(published).not.toBe(prefix);
+    expect(state.reloads).toBe(0);
   });
 
   it('returns conversation-scoped stream recovery timeout without reload when the owner is unrendered', async () => {

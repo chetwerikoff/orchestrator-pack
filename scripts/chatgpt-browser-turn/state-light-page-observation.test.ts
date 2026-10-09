@@ -344,6 +344,7 @@ describe('DOM observation boundary', () => {
         if (name === 'data-message-id') return `${message.role}-${index}-12345678`;
         return null;
       },
+      closest: () => ({ querySelector: () => null }),
       querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
         ? { getAttribute: () => message.role === 'user' ? 'user-message' : 'assistant-message' }
         : null,
@@ -351,7 +352,8 @@ describe('DOM observation boundary', () => {
       getBoundingClientRect: () => ({ height: 1 }),
       innerText: message.text,
     }));
-    const querySelectorAll = vi.fn((_selector: string) => {
+    const querySelectorAll = vi.fn((selector: string) => {
+      if (selector !== '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]') return [];
       const match = generationQuery();
       return match ? [match] : [];
     });
@@ -377,7 +379,7 @@ describe('DOM observation boundary', () => {
 
   it('carries the exact probe tuple from one atomic production DOM read', async () => {
     const dead = await readAtomicEvidence([{ role: 'user', text: markedPrompt }], () => null);
-    expect(dead.result.pageTurnEvidence).toEqual({ generationInProgress: false, observedAssistantNodes: 0 });
+    expect(dead.result.pageTurnEvidence).toMatchObject({ generationInProgress: false, observedAssistantNodes: 0, continueGeneratingVisible: false });
     expect(classifyBrowserGptPageTurnStatus(
       dead.result.pageTurnEvidence!.generationInProgress,
       dead.result.pageTurnEvidence!.observedAssistantNodes,
@@ -387,7 +389,7 @@ describe('DOM observation boundary', () => {
       [{ role: 'user', text: markedPrompt }],
       () => ({ getBoundingClientRect: () => ({ height: 1 }) }),
     );
-    expect(live.result.pageTurnEvidence).toEqual({ generationInProgress: true, observedAssistantNodes: 0 });
+    expect(live.result.pageTurnEvidence).toMatchObject({ generationInProgress: true, observedAssistantNodes: 0, continueGeneratingVisible: false });
     expect(classifyBrowserGptPageTurnStatus(
       live.result.pageTurnEvidence!.generationInProgress,
       live.result.pageTurnEvidence!.observedAssistantNodes,
@@ -397,7 +399,7 @@ describe('DOM observation boundary', () => {
       { role: 'user', text: markedPrompt },
       { role: 'assistant', text: 'historical or completed assistant' },
     ], () => null);
-    expect(completed.result.pageTurnEvidence).toEqual({ generationInProgress: false, observedAssistantNodes: 1 });
+    expect(completed.result.pageTurnEvidence).toMatchObject({ generationInProgress: false, observedAssistantNodes: 1, continueGeneratingVisible: false });
     expect(classifyBrowserGptPageTurnStatus(
       completed.result.pageTurnEvidence!.generationInProgress,
       completed.result.pageTurnEvidence!.observedAssistantNodes,
@@ -411,7 +413,7 @@ describe('DOM observation boundary', () => {
     const finished = await readAtomicEvidence([
       { role: 'assistant', text: 'finished reply' },
     ], () => ({ getBoundingClientRect: () => ({ height: 0 }) }));
-    expect(finished.result.pageTurnEvidence).toEqual({ generationInProgress: false, observedAssistantNodes: 1 });
+    expect(finished.result.pageTurnEvidence).toMatchObject({ generationInProgress: false, observedAssistantNodes: 1, continueGeneratingVisible: false });
   });
 
   it('preserves a valid transcript and fails closed when generation reading throws', async () => {
@@ -421,9 +423,10 @@ describe('DOM observation boundary', () => {
     );
     expect(observation.result.messages).toEqual([{ role: 'user', text: markedPrompt }]);
     expect(observation.result.transcriptIncomplete).toBe(false);
-    expect(observation.result.pageTurnEvidence).toEqual({
+    expect(observation.result.pageTurnEvidence).toMatchObject({
       generationInProgress: 'unknown',
       observedAssistantNodes: 0,
+      continueGeneratingVisible: false,
     });
     expect(classifyBrowserGptPageTurnStatus(
       observation.result.pageTurnEvidence!.generationInProgress,
@@ -473,6 +476,10 @@ describe('unchanged observation diagnostics', () => {
     });
     expect(replyStabilityMatches('same', 'same')).toBe(true);
     expect(replyStabilityFingerprint('same')).toContain('same');
+    const longA = `${'H'.repeat(320)}middle-A${'T'.repeat(320)}`;
+    const longB = `${'H'.repeat(320)}middle-B${'T'.repeat(320)}`;
+    expect(replyStabilityMatches(longA, longB)).toBe(false);
+    expect(replyStabilityMatches('first\n   middle\nlast', 'first\n middle\nlast')).toBe(false);
   });
 });
 
