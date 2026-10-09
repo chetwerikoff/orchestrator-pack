@@ -32,7 +32,7 @@ The supervisor owns **completion continuity**, not substantive implementation.
 
 1. Resolve the exact existing Issue and use the existing supervised Task path
    with `work-class=manager`; do not add another manager class or launch system.
-2. Give the manager the Issue identity/URL and the execute-Issue assignment.
+2. Give the manager the exact live Issue URL and execute-Issue assignment. When carrying supporting material into a standalone GPT prompt, use reachable published GitHub Issue/PR/branch/commit URLs or include necessary safe text; a machine-local path or unpushed branch is not a usable external input.
 3. Keep the parent task alive until the execution runbook reaches
    `VERIFIED_COMPLETE` or a genuine external top-level stop boundary is
    reached. Shared-boundary `external_pause` and `contract_defect` are
@@ -84,6 +84,8 @@ conversation, reviewer resend, or another ChatGPT-send-capable argv. Send
 authority remains exclusively with the existing runbook send/no-resend/final-
 revalidation gates. A boundary outcome never becomes manager
 `worker_done --outcome failed`.
+
+For every **manager-authored** initial, implementation/fixer, product-error same-conversation, or authorized fresh-chat execution turn, carry the exact live Issue URL and the latest GitHub-observed Issue-bound PR URL plus 40-hex head baseline when present. Otherwise use the proven Issue-owned remote branch/head or explicitly report `PR: none` and no observed remote work/head. A bare fleet-wake notification is not a continuation prompt or permission to send: expand it only after existing GitHub-first reconciliation and Browser-GPT send/no-resend authority permits a new turn. The [execution runbook](../../../docs/chatgpt-task-execution-runbook.md#per-turn-execution-contract) owns the **single literal advisory executor footer**, the exact-context examples, and the rule that authoritative owned-turn attribution/settlement precedes any model-reported task-status claim. Do not introduce another acceptance classifier or treat a bad footer as grounds to re-send or discard independently verified Issue-bound GitHub work.
 
 At the start of **every** manager turn, re-read the live Issue before choosing
 the turn prompt or next action. If the title/body changed since the manager's
