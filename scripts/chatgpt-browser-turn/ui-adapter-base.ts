@@ -172,7 +172,7 @@ function stableProjectId(projectSegment: string): string | undefined {
 }
 
 function allowedChatGptOrigin(url: URL): boolean {
-  return url.protocol === 'https:' && url.hostname === 'chatgpt.com' && !url.username && !url.password;
+  return url.origin === 'https://chatgpt.com' && !url.username && !url.password;
 }
 
 function projectConversationIdentity(projectUrl: string): ProjectConversationIdentity | undefined {
