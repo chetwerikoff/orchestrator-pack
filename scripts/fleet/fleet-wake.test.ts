@@ -1223,6 +1223,17 @@ describe('Issue #2441 read-only diagnostic tick non-interference', () => {
     expect(sends(wake.calls)).toHaveLength(0);
   }));
 
+  it('keeps the legacy wake path independent when advisory history cannot be written', async () => withStore(async (store) => {
+    vi.spyOn(store, 'writeDiagnosticHistory').mockImplementation(() => { throw new Error('synthetic history write refusal'); });
+    const output = await tick({ store, terminals: [coordinator, worker], screens: {
+      coord: 'idle', one: 'done',
+    } });
+    expect(output.logs.some((line) => line.includes('reason=diagnostic_unreadable'))).toBe(true);
+    expect(output.result.state).toBe('sent');
+    expect(sendsTo(output.calls, 'coord')).toHaveLength(2);
+    // The diagnostic failure itself never routes or calls terminal send; old dispatch still owns it.
+  }));
+
   it('adds advisory output to normal wake ticks without making busy agents actionable', async () => {
     const observed = await tick({ terminals: [coordinator, worker], screens: {
       coord: 'work\nctrl+c to stop', one: 'work\nesc interrupt',
