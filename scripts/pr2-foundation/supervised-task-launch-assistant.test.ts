@@ -1773,7 +1773,7 @@ The words Firefighter universal appear here only as prose.`;
     expect(fixture.head()).toBe('1'.repeat(40));
     expect(fixture.mergeTransitions()).toBe(0);
     expect(fixture.calls.filter((args) => args.slice(0, 3).join(' ') === 'gh pr view')).toHaveLength(2);
-    expect(fixture.calls.some((args) => args[0] === 'orca' && args[2] === 'task-list' && args[4] === '--run')).toBe(true);
+    expect(fixture.calls.some((args) => args[0] === 'orca' && args[2] === 'task-list' && args[3] === '--run')).toBe(true);
     expect(fixture.calls.some((args) => args[0] === 'git' && ['merge', 'reset', 'rebase'].includes(args[1]!))).toBe(false);
 
     let started = 0;
@@ -1781,7 +1781,7 @@ The words Firefighter universal appear here only as prose.`;
       ...launchInput('manager'), issueNumber: 2430, defaultBranch: 'main',
     }, {
       ...deps({ onSupervised: () => { started += 1; } }),
-      prepareWorktree: (input) => prepareWorktreeWithOrca(input, managerReuseFixture({ ancestor: false }).execute),
+      prepareWorktree: (input) => prepareWorktreeWithOrca(input, managerReuseFixture({ ancestor: false, worktreeId: 'manager-worktree' }).execute),
     });
     expect(launch).toMatchObject({
       outcome: 'ready', resources: { runId: 'run-1', taskId: 'task-1', dispatchId: 'dispatch-1' },
