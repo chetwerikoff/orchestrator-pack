@@ -1424,6 +1424,25 @@ The words Firefighter universal appear here only as prose.`;
     ]) expect(serialized).not.toContain(sentinel);
   });
 
+  it('reports only the sanctioned gone-path refusal or native cause unavailable', async () => {
+    for (const [message, expected] of [
+      ['terminal_reuse_unauthorized', 'terminal_reuse_unauthorized'],
+      ['untrusted provider detail', 'native cause unavailable'],
+      [undefined, 'native cause unavailable'],
+    ] as const) {
+      const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({
+        supervised: { ok: false, reason: 'target_unresolved', ...(message ? { errorMessage: message } : {}) },
+      }));
+      expect(result).toMatchObject({
+        outcome: 'continue', stage: 'supervised_start',
+        observedCause: 'target_unresolved',
+        evidence: { admissionDiagnostic: expected },
+        nextAction: { kind: 'reconcile_supervised_start' },
+      });
+      expect(JSON.stringify(result)).not.toContain('untrusted provider detail');
+    }
+  });
+
   it('preserves provider base branch on retry action', async () => {
     const result = await runSupervisedTaskLaunchAssistant({
       ...launchInput('t2'), startMode: 'provider_new_top_level', baseBranch: 'feature/base',
