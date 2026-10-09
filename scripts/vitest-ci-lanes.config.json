@@ -50,6 +50,7 @@
     "scripts/cutover/issue-928.test.ts": "light",
     "scripts/delegated-integration-contract.test.ts": "light",
     "scripts/direct-pack-review-status.test.ts": "light",
+    "scripts/discuss-writer-cutover.test.ts": "light",
     "scripts/fleet/fleet-sweep.test.ts": "light",
     "scripts/fleet/fleet-wake.test.ts": "light",
     "scripts/flow-manager-authority-contract.test.ts": "light",

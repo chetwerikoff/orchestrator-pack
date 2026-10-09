@@ -41,10 +41,12 @@ import { createRequire } from 'node:module';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, openSync, fsyncSync, closeSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { resolveDiscussWithGptConfig } from './config.mjs';
 import { isCdpReachable, verifyCdpProfile } from './verify-cdp-owner.mjs';
 import { legacyBarrierActive } from '../../../scripts/lib/cutover/activation-cordon.ts';
+import { FileEpochAuthority } from '../../../scripts/lib/cutover/activation-epoch-authority.ts';
+import { isLiveSupervisorStatus, readSupervisorStatus } from '../../../scripts/lib/orchestrator-side-process-supervisor.ts';
 
 const require = createRequire(import.meta.url);
 function loadChromium() {
@@ -92,6 +94,46 @@ const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 let sha = '', promptText = '';
 const DISCUSS_BINDING_SCHEMA = 'orchestrator-pack/project-state-binding/v1';
 let namespaceTrusted = false;
+// Retained issue-928 barriers still cordon legacy; only discuss may bypass them.
+function committedIssue928CutoverAllowsDiscussWriter(supervisorStateDir) {
+  const stopping = join(supervisorStateDir, 'stopping');
+  const maintenancePath = join(supervisorStateDir, 'maintenance.epoch');
+  if (!existsSync(stopping) || !existsSync(maintenancePath)) return false;
+  try {
+    const marker = JSON.parse(readFileSync(maintenancePath, 'utf8'));
+    if (
+      !marker
+      || typeof marker !== 'object'
+      || Array.isArray(marker)
+      || marker.reason !== 'issue-928-cutover'
+      || typeof marker.epochId !== 'string'
+      || !marker.epochId.trim()
+      || !Number.isSafeInteger(marker.startedMs)
+      || marker.startedMs <= 0
+    ) return false;
+    const status = readSupervisorStatus({ stateDir: supervisorStateDir });
+    if (
+      !isLiveSupervisorStatus(status)
+      || status.epochId !== marker.epochId
+      || typeof status.nonce !== 'string'
+      || !status.nonce
+      || status.projectId !== projectId
+      || status.repository !== repository
+      || status.cordonReason !== 'post-cas-epoch-owner'
+      || status.childId !== 'pr2-scheduler'
+      || !['starting', 'running', 'waiting-restart'].includes(status.restartState)
+    ) return false;
+    const committed = new FileEpochAuthority(
+      join(dirname(supervisorStateDir), 'epoch-authority.json'),
+    ).verify(status.epochId, status.nonce);
+    return typeof committed.registryHash === 'string'
+      && /^[0-9a-f]{64}$/iu.test(committed.registryHash)
+      && status.registryHash === committed.registryHash;
+  } catch {
+    return false;
+  }
+}
+
 function assertDiscussWriterOpen() {
   const home = String(process.env.HOME ?? '').trim() || homedir();
   const stateBase = String(process.env.XDG_STATE_HOME ?? '').trim()
@@ -99,7 +141,11 @@ function assertDiscussWriterOpen() {
     || join(home, '.local', 'state');
   const root = String(process.env.OPK_WAKE_SUPERVISOR_STATE_DIR ?? '').trim()
     || join(stateBase, 'orchestrator-pack-wake-supervisor', projectId);
-  if (legacyBarrierActive(join(root, 'supervisor'))) throw new Error('legacy_writer_barrier_active');
+  const supervisorStateDir = join(root, 'supervisor');
+  if (legacyBarrierActive(supervisorStateDir)
+    && !committedIssue928CutoverAllowsDiscussWriter(supervisorStateDir)) {
+    throw new Error('legacy_writer_barrier_active');
+  }
 }
 function assertDiscussProjectBinding() {
   const root = join(homedir(), '.local/state/discuss-with-gpt', projectId);
