@@ -15,7 +15,7 @@ import {
   writeSync,
   fsyncSync,
 } from 'node:fs';
-import { dirname, basename, join, normalize, resolve } from 'node:path';
+import { dirname, basename, isAbsolute, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TURN_STATES, type FailureScope, type TurnResultV1, type TurnState } from './chatgpt-browser-turn/contracts.ts';
 import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
@@ -757,7 +757,7 @@ export interface LaunchConfig {
   readonly attemptIdentity: string;
   readonly handoffReceiptPath: string;
   readonly terminalEnvelopePath: string;
-  /** Disposable caller root; the CLI always uses the canonical production root. */
+  /** Disposable caller root; ordinary CLI launch keeps the canonical production default. */
   readonly terminalEnvelopeRoot?: string;
   readonly browserOutputPath: string;
   readonly cwd: string;
@@ -1301,7 +1301,12 @@ async function launchFromCli(argv: readonly string[]): Promise<number> {
     refuse('forbidden_authority_selector');
     return 2;
   }
+  // Only synthetic native CLI fixtures may override the fleet wake root. Either signal alone is inert.
+  const fixtureRoot = process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT;
+  const useFixtureRoot = process.env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
+    && typeof fixtureRoot === 'string' && isAbsolute(fixtureRoot);
   const config: LaunchConfig = {
+    ...(useFixtureRoot && fixtureRoot ? { terminalEnvelopeRoot: fixtureRoot } : {}),
     runIdentity: requiredOption(options, 'run-identity'),
     attemptIdentity: requiredOption(options, 'attempt-identity'),
     handoffReceiptPath: requiredOption(options, 'handoff-receipt'),
