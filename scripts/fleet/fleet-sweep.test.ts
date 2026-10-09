@@ -487,6 +487,15 @@ describe('Issue #2441 observational-only fleet diagnostics', () => {
       .toBe('agent_unverified');
     expect(store.readDiagnosticHistory('agent')).toBeUndefined();
     expect(diagnose(store, [{ ...missing, title: 'bash' }], { agent: '$' }, 1_200_000)).toEqual([]);
+    // A stable list key must not override a contradictory fresh terminal-show identity.
+    const complete = designated();
+    expect(diagnose(store, [complete], { agent: 'work\nesc interrupt' }, 1_500_000)[0]?.reason)
+      .toBe('agent_unverified');
+    const currentShell = { ...complete, title: 'bash', agentIdentity: undefined };
+    const conflicting = { agent: { handle: 'agent', incarnationId: 'replaced-incarnation',
+      worktreePath: workerPath, branch: complete.branch } };
+    expect(diagnose(store, [currentShell], { agent: '$' }, 1_800_000, [], conflicting)).toEqual([]);
+    expect(store.readDiagnosticHistory('agent')).toBeUndefined();
   }));
 
   it('reports exact prior agent with missing or unknown new title as unverified, not disappeared or dead', () => withStore((store) => {

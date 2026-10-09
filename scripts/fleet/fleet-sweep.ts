@@ -586,10 +586,13 @@ function diagnosticTerminalDetails(terminal: FleetTerminal, executor: OrcaExecut
   try {
     const envelope = JSON.parse(response.stdout) as { ok?: boolean; result?: { terminal?: Record<string, unknown> } };
     const shown = envelope.ok === true ? envelope.result?.terminal : undefined;
-    if (!shown || shown.handle !== terminal.handle
-      || shown.incarnationId !== terminal.incarnationId
+    if (!shown) return terminal;
+    if (shown.handle !== terminal.handle || shown.incarnationId !== terminal.incarnationId
       || typeof shown.worktreePath !== 'string'
-      || normalizedPath(shown.worktreePath) !== normalizedPath(terminal.worktreePath)) return terminal;
+      || normalizedPath(shown.worktreePath) !== normalizedPath(terminal.worktreePath)) {
+      // A contradictory native show invalidates history even if list had a branch.
+      return { ...terminal, branch: '' };
+    }
     // Conflicting list/show branch or agent identity is not trustworthy
     // attribution. Withhold the key rather than promoting either candidate.
     if ((terminal.branch && typeof shown.branch === 'string' && terminal.branch !== shown.branch)
