@@ -4014,3 +4014,212 @@ describe('Issue #2451 three-source no-judgment delivery', () => {
     },
   );
 });
+
+
+describe('Issue #2451 final-cap fixer regressions', () => {
+  const optionsFor = (storeRoot: string) => ({ projectId: 'orchestrator-pack', storeRoot });
+
+  async function failedZeroJudgmentFixture() {
+    const storeRoot = tempRoot('opk-2451-fixer-');
+    const capture = path.join(storeRoot, 'review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const options = optionsFor(storeRoot);
+    const slots: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+    const started = await startPackReview({
+      ...options, sourceRepoRoot: repoRoot, prNumber: 2451, headSha: HEAD_A,
+      tier: 'T2', fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixturePrState: 'OPEN', claimMode: 'preacquired',
+      fixtureIssueBody: ["```complexity-tier", 'tier: T2', "```"].join('\n'),
+      fixtureIssueNumber: 2451,
+      fixtureReviewBySourceSlot: slots,
+      fixtureAfterGptInvocationBound: ({ slotId, invocationId }) => {
+        slots[slotId] = [{
+          stdout: terminalTurnPayload({
+            state: 'driver_error', cause: 'connect_over_cdp_failed', invocationId,
+          }),
+          exitCode: 1,
+        }];
+      },
+      fixtureRequiredStatusWriter: async (request) => {
+        if (request.state === 'error') throw new Error('first no-judgment status write unavailable');
+      },
+    });
+    expect(started, JSON.stringify(started)).toMatchObject({
+      ok: false, status: 'failed', budgetOutcome: 'non_consuming_no_judgment',
+      requiredStatusPublication: 'status_not_published',
+      noJudgmentWorkerNotification: { state: 'skipped_unbound' },
+    });
+    const runId = String(started.runId);
+    expect(getPackReviewRun(runId, options)?.deliveryOutcomes.requiredStatus?.state).toBe('failed');
+    return { runId, storeRoot, options };
+  }
+
+  function emptyComments(): PackGptSourceCommentTransport {
+    return {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async () => [],
+      getComment: async () => { throw new Error('no synthetic comment'); },
+    };
+  }
+
+  it.each(['status-first', 'notification-first'] as const)(
+    'retains newer independent channels when both writers submit full stale maps (%s)', (order) => {
+      const storeRoot = tempRoot('opk-2451-fixer-full-map-');
+      const options = optionsFor(storeRoot);
+      const run = createPackReviewRun({
+        ...options, prNumber: 2451, headSha: HEAD_A,
+        trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+      }).run;
+      const first = '2026-10-10T00:00:00.000Z';
+      const later = '2026-10-10T00:00:01.000Z';
+      const statusKey = 'required-status:orchestrator-pack/pack-review:' + HEAD_A;
+      const failureKey = 'worker-notification:no-judgment:' + run.id + ':' + HEAD_A;
+      const oldStatus = { state: 'failed' as const, reason: 'not_published',
+        idempotencyKey: statusKey, recordedAtUtc: first };
+      const oldFailure = { state: 'escalated' as const, reason: 'submission_unresolved',
+        idempotencyKey: failureKey, recordedAtUtc: first };
+      updatePackReviewRun(run.id, {
+        deliveryOutcomes: { requiredStatus: oldStatus, noJudgmentWorkerNotification: oldFailure },
+      }, options);
+      const stale = { ...getPackReviewRun(run.id, options)!.deliveryOutcomes };
+      const currentStatus = { ...oldStatus, state: 'succeeded' as const,
+        reason: 'status_published', recordedAtUtc: later };
+      const currentFailure = { ...oldFailure, state: 'succeeded' as const,
+        reason: 'submit_succeeded', recordedAtUtc: later };
+      if (order === 'status-first') {
+        updatePackReviewRun(run.id, { deliveryOutcomes: { requiredStatus: currentStatus } }, options);
+        updatePackReviewRun(run.id, {
+          deliveryOutcomes: { ...stale, noJudgmentWorkerNotification: currentFailure },
+        }, options);
+      } else {
+        updatePackReviewRun(run.id, {
+          deliveryOutcomes: { noJudgmentWorkerNotification: currentFailure },
+        }, options);
+        updatePackReviewRun(run.id, {
+          deliveryOutcomes: { ...stale, requiredStatus: currentStatus },
+        }, options);
+      }
+      const verdict = { state: 'succeeded' as const, reason: 'verdict_submitted',
+        idempotencyKey: 'worker-notification:' + run.id + ':' + HEAD_A,
+        recordedAtUtc: later };
+      updatePackReviewRun(run.id, {
+        deliveryOutcomes: { ...stale, workerNotification: verdict },
+      }, options);
+      expect(getPackReviewRun(run.id, options)?.deliveryOutcomes).toMatchObject({
+        requiredStatus: currentStatus,
+        noJudgmentWorkerNotification: currentFailure,
+        workerNotification: verdict,
+      });
+      // Even an equal-clock stale claim cannot revoke completed submission.
+      updatePackReviewRun(run.id, {
+        deliveryOutcomes: {
+          noJudgmentWorkerNotification: { ...oldFailure, recordedAtUtc: later },
+        },
+      }, options);
+      expect(getPackReviewRun(run.id, options)?.deliveryOutcomes.noJudgmentWorkerNotification)
+        .toEqual(currentFailure);
+    },
+  );
+
+  it('retries missing status and failure-only submission after empty source recovery', async () => {
+    const f = await failedZeroJudgmentFixture();
+    updatePackReviewRun(f.runId, {
+      workerNotificationBinding: {
+        schemaVersion: 1, runtime: 'cursor', id: 'fixture-worker-2451',
+        generation: 'fixture-generation', workspacePath: '/fixture/worktree',
+        headSha: HEAD_A,
+      },
+    } as unknown as Parameters<typeof updatePackReviewRun>[1], f.options);
+    const statuses: string[] = [];
+    const notifications: string[] = [];
+    const input = {
+      ...f.options, sourceRepoRoot: repoRoot,
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      prNumber: 2451, fixtureCurrentPrHeadSha: HEAD_A,
+      fixtureGptSourceCommentTransport: emptyComments(),
+      fixtureRequiredStatusWriter: async (request: { state: string }) => { statuses.push(request.state); },
+      fixtureWorkerNotifier: async (request: { idempotencyKey: string }) => {
+        notifications.push(request.idempotencyKey);
+        return { state: 'submitted' as const, reason: 'fixture_submit_only' };
+      },
+    };
+    const reconciled = await reconcileStalePackReviewRuns(input);
+    expect(reconciled.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ runId: f.runId, statusReconciled: true }),
+    ]));
+    expect(statuses).toEqual(['error']);
+    expect(notifications).toEqual([
+      'worker-notification:no-judgment:' + f.runId + ':' + HEAD_A,
+    ]);
+    expect(getPackReviewRun(f.runId, f.options)?.deliveryOutcomes).toMatchObject({
+      requiredStatus: { state: 'succeeded' },
+      noJudgmentWorkerNotification: { state: 'succeeded' },
+    });
+    await reconcileStalePackReviewRuns(input);
+    expect(statuses).toEqual(['error']);
+    expect(notifications).toHaveLength(1);
+    expect(readPackReviewAuthority(2451, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([]);
+  });
+
+  it('restores a same-run credentialed verdict when a stale reconcile error lands last', async () => {
+    const f = await failedZeroJudgmentFixture();
+    const published: string[] = [];
+    let recovered = false;
+    const result = await reconcileStalePackReviewRuns({
+      ...f.options, sourceRepoRoot: repoRoot,
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      prNumber: 2451, fixtureCurrentPrHeadSha: HEAD_A,
+      fixtureGptSourceCommentTransport: emptyComments(),
+      fixtureRequiredStatusWriter: async (request) => {
+        if (request.state === 'error' && !recovered) {
+          recovered = true;
+          const run = getPackReviewRun(f.runId, f.options)!;
+          const now = '2026-10-10T00:00:01.000Z';
+          // Barrier fixture: a second reconciler has persisted the same-run
+          // credentialed verdict and its required success while error awaits.
+          setPackReviewRunTerminal(run.id, 'up_to_date', {
+            reviewVerdict: 'clean', findingCount: 0, findings: [],
+            journalOutcome: {
+              state: 'persisted', reason: 'credentialed_verdict',
+              recordedAtUtc: now, idempotencyKey: 'verdict:' + run.id + ':' + HEAD_A,
+              attempts: 1,
+            },
+          }, f.options);
+          const authority = readPackReviewAuthority(2451, { storeRoot: f.storeRoot })!;
+          commitPackReviewTerminal({
+            prNumber: 2451, expectedTransitionSeq: authority.transitionSeq,
+            terminal: {
+              schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal',
+              runId: run.id, targetSha: HEAD_A, reviewVerdict: 'clean',
+              findingCount: 0, findingsDigest: 'fixture-2451-credentialed-verdict',
+              automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 1,
+            },
+            status: 'clean', findingCount: 0, options: { storeRoot: f.storeRoot },
+          });
+          published.push('success', 'error');
+        } else {
+          published.push(request.state);
+        }
+      },
+    });
+    expect(recovered).toBe(true);
+    expect(published).toEqual(['success', 'error', 'success']);
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, statusReconciled: false,
+        reason: 'same_run_verdict_status_restored',
+        statusPublication: 'authoritative_verdict_restored',
+      }),
+    ]));
+    expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+      status: 'up_to_date', reviewVerdict: 'clean',
+      deliveryOutcomes: { requiredStatus: { state: 'succeeded' } },
+    });
+    expect(readPackReviewAuthority(2451, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([1]);
+  });
+});
