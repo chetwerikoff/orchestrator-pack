@@ -875,6 +875,62 @@ describe('Issue #1430 deterministic observation admission crash recovery', () =>
   });
 });
 
+describe('Issue #2434 original-launch owner admission', () => {
+  it('refuses a present or empty inherited terminal locator before any browser/composer effect', async () => {
+    const { randomUUID } = await import('node:crypto');
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { configuredProfileKey } = await import('./storage-common.ts');
+    const { readStateLightTurnObservation } = await import('./state-light-turn-observation.ts');
+    const { runStateLightTurn } = await import('./state-light-turn.ts');
+    const root = mkdtempSync(join(tmpdir(), 'opk-2434-owner-admission-'));
+    const originalStateDir = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    const originalHandle = process.env.ORCA_TERMINAL_HANDLE;
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = join(root, 'state');
+    const profile = join(root, 'fake-profile');
+    const cdp = 'http://127.0.0.1:9222';
+    const input = join(root, 'input.txt');
+    writeFileSync(input, 'synthetic prompt', 'utf8');
+    const observed: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      observed.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      for (const handle of ['pane-recycled', '']) {
+        process.env.ORCA_TERMINAL_HANDLE = handle;
+        const invocationId = randomUUID();
+        const code = await runStateLightTurn([
+          '--profile', profile, '--cdp', cdp, '--input', input,
+          '--output', join(root, invocationId + '.txt'), '--new-chat',
+          '--project-url', 'https://chatgpt.com/g/g-p-11111111111111111111111111111111/project',
+          '--invocation-id', invocationId, '--timeout-ms', '5000',
+        ]);
+        expect(code).toBe(13);
+        const result = observed.map((chunk) => {
+          try { return JSON.parse(chunk.trim()) as Record<string, unknown>; } catch { return null; }
+        }).find((record) => record?.schema === 'turn-result/v1' && record.invocation_id === invocationId);
+        expect(result).toMatchObject({
+          state: 'driver_error', cause: 'original_launch_generation_unavailable', send_count: 0,
+        });
+        const record = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId);
+        expect(record).toMatchObject({
+          phase: 'prepared', send_witness: 'none', conversation_url: null,
+        });
+        expect(record).not.toHaveProperty('owner');
+      }
+    } finally {
+      stdout.mockRestore();
+      if (originalStateDir === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+      else process.env.CHATGPT_BROWSER_TURN_STATE_DIR = originalStateDir;
+      if (originalHandle === undefined) delete process.env.ORCA_TERMINAL_HANDLE;
+      else process.env.ORCA_TERMINAL_HANDLE = originalHandle;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('existing generation behind a connection-recovery status', () => {
   function recoveryPage(recoveryShown: boolean) {
     const state = { stopped: false, recovery: recoveryShown };
