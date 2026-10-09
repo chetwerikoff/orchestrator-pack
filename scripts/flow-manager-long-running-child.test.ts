@@ -110,7 +110,7 @@ beforeEach(() => {
 });
 
 function tempDir(prefix = 'opk-fm-long-child-'): string {
-  const dir = mkdtempSync(plannedFixturePrefix(prefix));
+  const dir = mkdtempSync(plannedFixturePrefix(prefix, tmpdir()));
   cleanupDirs.push(dir);
   return dir;
 }
