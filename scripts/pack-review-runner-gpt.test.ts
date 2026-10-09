@@ -4179,8 +4179,32 @@ describe('Issue #2451 final-cap fixer regressions', () => {
           recovered = true;
           const run = getPackReviewRun(f.runId, f.options)!;
           const now = '2026-10-10T00:00:01.000Z';
-          // Barrier fixture: a second reconciler has persisted the same-run
-          // credentialed verdict and its required success while error awaits.
+          // The incumbent frozen-source merge admits a completed comment for
+          // its original invocation only with credentialed GitHub evidence.
+          // Two of the three original zero-send slots become a sufficient,
+          // explicitly settled source quorum; the third stays non-complete.
+          const recoveredRound = {
+            ...run.reviewRound!,
+            settledSourceCount: 2,
+            sourceSlots: run.reviewRound!.sourceSlots.map((slot, index) => index < 2
+              ? {
+                  ...slot,
+                  terminalClass: 'complete_clean',
+                  terminalResult: {
+                    schema: 'turn-result/v1',
+                    state: 'ok', scope: 'invocation', cause: 'completed_page_only',
+                    invocation_id: slot.invocationId, send_count: 1,
+                    source_comment_authority: 'credentialed_github',
+                    source_comment_receipt: { id: 245100 + index },
+                  },
+                  payload: { verdict: 'clean' as const, findingCount: 0, findings: [] },
+                }
+              : slot),
+          };
+          updatePackReviewRun(run.id, { reviewRound: recoveredRound }, f.options);
+          // Barrier fixture: a second reconciler has committed this validated
+          // same-run credentialed verdict and published success while the
+          // first reconciler's obsolete error write is still awaiting.
           setPackReviewRunTerminal(run.id, 'up_to_date', {
             reviewVerdict: 'clean', findingCount: 0, findings: [],
             journalOutcome: {
