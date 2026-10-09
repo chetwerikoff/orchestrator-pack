@@ -308,17 +308,17 @@ current project card and the current, same-project/repository **local**
 WorkerAssignment first; if there is none, refuse pointer mutation:
 
 ```bash
-node --experimental-strip-types "$PACK_ROOT/scripts/operator-primary-binding.ts" show --project "$PROJECT_ID"
+node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/operator-primary-binding.ts" -- show --project "$PROJECT_ID"
 # For a verified current local assignment and an absent pointer ONLY:
-node --experimental-strip-types "$PACK_ROOT/scripts/operator-primary-binding.ts" bind \
+node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/operator-primary-binding.ts" -- bind \
   --project "$PROJECT_ID" --task-id "$TASK_ID" --binding-key "$DISPATCH_ID" --operator-attested
 # For an existing pointer, replace uses the entire observed old pointer:
-node --experimental-strip-types "$PACK_ROOT/scripts/operator-primary-binding.ts" replace \
+node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/operator-primary-binding.ts" -- replace \
   --project "$PROJECT_ID" --task-id "$TASK_ID" --binding-key "$DISPATCH_ID" \
   --expected-task-id "$OLD_TASK_ID" --expected-binding-key "$OLD_BINDING_KEY" \
   --expected-assignment-id "$OLD_ASSIGNMENT_ID" \
   --expected-assignment-generation "$OLD_ASSIGNMENT_GENERATION" --operator-attested
-node --experimental-strip-types "$PACK_ROOT/scripts/operator-primary-binding.ts" show --project "$PROJECT_ID"
+node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/operator-primary-binding.ts" -- show --project "$PROJECT_ID"
 orca orchestration worker-show --dispatch "$DISPATCH_ID"
 ```
 
