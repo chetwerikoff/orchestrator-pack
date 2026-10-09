@@ -19,6 +19,8 @@ import {
   DEFAULT_ORCHESTRATOR_TITLE_RE,
   FileFleetStateStore,
   FleetScreenReadError,
+  collectFleetDiagnostics,
+  formatFleetDiagnostics,
   compileRegex,
   defaultOrcaExecutor,
   defaultWorkspaceRegex,
@@ -748,6 +750,61 @@ function submitCoordinator(executor: OrcaExecutor, handle: string): boolean {
   return executor(['terminal', 'send', '--terminal', handle, '--enter']).ok;
 }
 
+// A separate, read-only tick projection. It never receives delivery/actionable state,
+// and neither its rows nor its page evidence can become wake admission or retry authority.
+export interface FleetDiagnosticTickOptions {
+  readonly config: FleetWakeConfig;
+  readonly executor?: OrcaExecutor;
+  readonly store?: FleetPollingStore;
+  readonly terminals?: readonly FleetTerminal[];
+  readonly now?: () => number;
+  readonly log?: (line: string) => void;
+  readonly readChats?: (cdpUrl: string, scope: ChatBannerScope) => Promise<ProjectChat[]>;
+}
+
+export async function runFleetDiagnosticTick(options: FleetDiagnosticTickOptions): Promise<void> {
+  const { config } = options;
+  const executor = options.executor ?? defaultOrcaExecutor;
+  const store = options.store ?? new FileFleetStateStore(config.projectId);
+  const log = options.log ?? ((line: string) => process.stdout.write(`${line}\n`));
+  const rows = collectFleetDiagnostics({
+    projectId: config.projectId, primary: config.primary, workspaceRe: config.workspaceRe,
+    coordinatorHandle: config.orchestratorHandle,
+    coordinatorTitleRe: config.orchestratorTitleRe, architectHandle: config.architectHandle,
+    busyRe: config.busyRe, executor, store,
+    ...(options.terminals ? { terminals: options.terminals } : {}),
+    ...(options.now ? { now: options.now } : {}),
+  });
+  for (const line of formatFleetDiagnostics(rows).split('\n').filter(Boolean)) log(line);
+  if (rows.some((row) => row.reason === 'fleet_census_unreadable')) return;
+
+  // Positive ORCH_HANDLE only selects an exact pane. An unpinned title match can
+  // be ambiguous; neither proves a live child agent or changes the old resolver.
+  const terminals = options.terminals ?? [];
+  const matches = terminals.filter((terminal) => {
+    config.orchestratorTitleRe.lastIndex = 0;
+    return Boolean(terminal.worktreePath) && samePath(terminal.worktreePath, config.primary)
+      && config.orchestratorTitleRe.test(terminal.title);
+  });
+  if (!config.orchestratorHandle && matches.length > 1) {
+    log(`DIAG reason=coordinator_ambiguous candidates=${matches.map((pane) => pane.handle).join(',')} evidence=primary-title-matches; no_live_agent_witness`);
+  } else {
+    const selected = config.orchestratorHandle
+      ? terminals.find((pane) => pane.handle === config.orchestratorHandle)
+      : matches.length === 1 ? matches[0] : undefined;
+    log(`DIAG reason=coordinator_unverified selected=${selected?.handle ?? 'none'} evidence=${config.orchestratorHandle ? 'ORCH_HANDLE exact_selection_only' : 'primary-title-predicate_only'}; no_live_agent_witness`);
+  }
+
+  if (config.chatCdpUrl && config.chatScope) {
+    const chats = await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => []);
+    for (const chat of chats) {
+      for (const banner of chat.banners) {
+        log(`DIAG banner_kind=${banner.kind} url=${banner.url} retry_control_observed=${banner.retry === true} generation_observed=${chat.generating === true} attribution=tentative/unbound evidence=DOM_structure_only; banner_text_untrusted`);
+      }
+    }
+  }
+}
+
 export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise<FleetAlarmTickResult> {
   const { config } = options;
   const executor = options.executor ?? defaultOrcaExecutor;
@@ -759,9 +816,12 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   try {
     terminals = listFleetTerminals(executor);
   } catch {
+    log('DIAG handle=none incarnation=unknown state=unverified reason=fleet_census_unreadable evidence=terminal list --json: incomplete_or_malformed');
     log('terminal list unreadable');
     return { state: 'unreadable', handle: 'terminal-list' };
   }
+
+  await runFleetDiagnosticTick({ config, executor, store, terminals, log, ...(options.readChats ? { readChats: options.readChats } : {}) });
 
   const coordinator = resolveCoordinatorPane(terminals, config);
   if (!coordinator) {
