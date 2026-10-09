@@ -3621,8 +3621,8 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     digest: string,
     successReason: string,
   ): Promise<Record<string, unknown>> => {
-    const publicationHead = authority.currentHeadSha;
-    const publicationCycle = authority.cycle?.cycleId;
+    const publicationHead = authority?.currentHeadSha ?? '';
+    const publicationCycle = authority?.cycle?.cycleId;
     const validCurrent = async () => {
       const liveHead = await readCheckedReviewPrHead(input, options.repoSlug, prNumber, publicationHead);
       const latest = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot });
@@ -3630,8 +3630,8 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         && latest?.currentHeadSha.toLowerCase() === publicationHead.toLowerCase()
         && latest.terminal?.runId === priorRun.id
         && latest.cycle?.cycleId === publicationCycle
-        && latest.cycle.state === 'closed'
-        && latest.cycle.reviewStageComplete === true
+        && latest.cycle?.state === 'closed'
+        && latest.cycle?.reviewStageComplete === true
         && latest.triage?.verdict !== 'BLOCK';
     };
     const unresolved = (detail: string): Record<string, unknown> => ({
