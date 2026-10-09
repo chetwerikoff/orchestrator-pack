@@ -147,6 +147,10 @@ interface MockFleetUnit {
   nextPid?: number;
   raceToInactive?: boolean;
   failRestart?: boolean;
+  inactiveAfterActiveReads?: number;
+  activeReadCount?: number;
+  changedPidOnSecondRead?: number;
+  pidReadCount?: number;
 }
 
 /** Intercept systemctl only; real synthetic child /proc identity makes root/argv checks meaningful. */
@@ -160,9 +164,19 @@ function fakeSystemctl(units: Map<string, MockFleetUnit>) {
     const unitName = args[2] ?? '';
     const unit = units.get(unitName);
     if (args[0] !== '--user') throw new Error('unexpected non-user systemctl');
-    if (args[1] === 'is-active') return systemctlResult(unit?.state === 'missing' || !unit ? 'unknown' : unit.state, unit?.state === 'active');
+    if (args[1] === 'is-active') {
+      if (unit) {
+        unit.activeReadCount = (unit.activeReadCount ?? 0) + 1;
+        if (unit.inactiveAfterActiveReads && unit.activeReadCount > unit.inactiveAfterActiveReads) unit.state = 'inactive';
+      }
+      return systemctlResult(unit?.state === 'missing' || !unit ? 'unknown' : unit.state, unit?.state === 'active');
+    }
     if (args[1] === 'show' && args[3] === '--property=LoadState') return systemctlResult(unit?.state === 'missing' || !unit ? 'not-found' : 'loaded');
-    if (args[1] === 'show' && args[3] === '--property=MainPID') return systemctlResult(String(unit?.pid ?? 0));
+    if (args[1] === 'show' && args[3] === '--property=MainPID') {
+      if (unit) unit.pidReadCount = (unit.pidReadCount ?? 0) + 1;
+      return systemctlResult(String(unit?.pidReadCount === 2 && unit.changedPidOnSecondRead
+        ? unit.changedPidOnSecondRead : unit?.pid ?? 0));
+    }
     if (args[1] === 'try-restart') {
       if (!unit) return systemctlResult('not-found', false);
       if (unit.raceToInactive) { unit.state = 'inactive'; return systemctlResult(''); }
@@ -542,6 +556,54 @@ describe('Issue #2145 merge adoption effect verification', () => {
       if (originalProject === undefined) delete process.env.OPK_PROJECT_ID; else process.env.OPK_PROJECT_ID = originalProject;
       rmSync(root, { recursive: true, force: true });
       rmSync(other, { recursive: true, force: true });
+      rmSync(config, { recursive: true, force: true });
+    }
+  });
+
+
+  it.skipIf(process.platform !== 'linux')('Issue #2445: active-to-inactive pre-control race, changed MainPID and unreadable proc refuse control', async () => {
+    const root = mappingFixture();
+    const config = mkdtempSync(path.join(tmpdir(), 'fleet-precontrol-races-'));
+    const oldXdg = process.env.XDG_CONFIG_HOME;
+    const oldProject = process.env.OPK_PROJECT_ID;
+    let child: FixtureProcess | undefined;
+    let fake: ReturnType<typeof fakeSystemctl> | undefined;
+    try {
+      const env = registeredCards(root, config);
+      process.env.XDG_CONFIG_HOME = env.XDG_CONFIG_HOME;
+      process.env.OPK_PROJECT_ID = env.OPK_PROJECT_ID;
+      const mergeSha = fixtureMerge(root, 'scripts/fleet/fleet-wake.ts');
+      child = await startFleetFixture(root, 'leopoker');
+      await delay(150);
+      const cutoff = Date.now();
+      const unitName = 'fleet-wake@leopoker.service';
+      const controls = async (unit: MockFleetUnit, expectedCode: string): Promise<void> => {
+        fake?.restore();
+        const units = new Map<string, MockFleetUnit>([
+          ['fleet-wake@orchestrator-pack.service', { state: 'inactive' }],
+          [unitName, unit],
+          ['fleet-wake@sample-target.service', { state: 'inactive' }],
+        ]);
+        fake = fakeSystemctl(units);
+        const report = await runCli(fixtureVerifyArgv(root, mergeSha, cutoff - 100, cutoff));
+        expect(report.operationalOutcome).toBe('operationally_incomplete');
+        expect(report.effect).toContain('effect_unverified');
+        expect(report.consumers.find((row) => row.id === unitName)?.reason).toContain(expectedCode);
+        expect(fake.commandLog.filter((args) => args[1] === 'try-restart')).toEqual([]);
+        expect(fake.commandLog.every((args) => args[0] === '--user')).toBe(true);
+      };
+      // Exactly one initial active observation is followed by a stale-to-inactive change.
+      await controls({ state: 'active', pid: child.pid, inactiveAfterActiveReads: 1 }, 'fleet_wake_precontrol_identity_changed');
+      // Same active unit, but systemd returns a different MainPID within its first readback.
+      await controls({ state: 'active', pid: child.pid, changedPidOnSecondRead: child.pid + 100_000 }, 'fleet_wake_main_pid_changed');
+      // No /proc process identity is available for this synthetic MainPID.
+      await controls({ state: 'active', pid: 999_999_999 }, 'fleet_wake_process_identity_unavailable');
+    } finally {
+      fake?.restore();
+      if (child) await stopFixture(child);
+      if (oldXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = oldXdg;
+      if (oldProject === undefined) delete process.env.OPK_PROJECT_ID; else process.env.OPK_PROJECT_ID = oldProject;
+      rmSync(root, { recursive: true, force: true });
       rmSync(config, { recursive: true, force: true });
     }
   });
