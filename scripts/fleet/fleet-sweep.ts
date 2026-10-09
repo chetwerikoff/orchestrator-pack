@@ -570,7 +570,7 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
 
 // Advisory projection. Unlike runFleetSweep, this tolerates one unreadable screen and
 // includes historical shell candidates; none of its outputs enter actionablePanes.
-const SHELL_TITLE_RE = /^(?:bash|zsh|fish|sh|dash|ksh|pwsh|powershell)(?:\s|$|[-:])/iu;
+const SHELL_TITLE_RE = /^(?:bash|zsh|fish|sh|dash|ksh)(?:\s|$|[-:])/iu;
 const HUNG_AFTER_MS = 900_000;
 
 function diagnosticKey(project: string, terminal: FleetTerminal): string | undefined {
