@@ -663,7 +663,7 @@ export function collectFleetDiagnostics(options: FleetDiagnosticOptions): FleetD
 
 export function formatFleetDiagnostics(rows: readonly FleetDiagnostic[]): string {
   return rows.map((row) =>
-    \`DIAG handle=\${row.handle ?? 'none'} incarnation=\${row.incarnationId ?? 'unknown'} state=\${row.state ?? 'unverified'} reason=\${row.reason} evidence=\${row.evidence}\`,
+    `DIAG handle=${row.handle ?? 'none'} incarnation=${row.incarnationId ?? 'unknown'} state=${row.state ?? 'unverified'} reason=${row.reason} evidence=${row.evidence}`,
   ).join('\n');
 }
 
