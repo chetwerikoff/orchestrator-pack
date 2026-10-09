@@ -608,8 +608,10 @@ describe('state-light fresh conversation collision recovery', () => {
     const withCarrierKeys = (messages: StateLightTestMessage[]) => observationOverrides.keyedOwnedMessages
       ? messages.map((message) => ({ ...message, key: message.role === 'user' ? 'user-carrier-12345678' : 'assistant-carrier-12345678' }))
       : messages;
-    const working = withCarrierKeys(readyTurnObservationFrames(prompt, reply)[0]!);
-    const final = withCarrierKeys(readyTurnObservationFrames(prompt, reply).at(-1)!);
+    const working = withCarrierKeys(readyTurnObservationFrames(prompt, reply)[0]!)
+      .filter((message) => !observationOverrides.neverMarkerProof || message.role !== 'user');
+    const final = withCarrierKeys(readyTurnObservationFrames(prompt, reply).at(-1)!)
+      .filter((message) => !observationOverrides.neverMarkerProof || message.role !== 'user');
     const assistantOnlyFor = (text: string) => {
       const messages = [
         ...(ambiguousAssistant ? [{ role: 'assistant' as const, text: 'EARLIER ANSWER' }] : []),
@@ -756,13 +758,19 @@ describe('state-light fresh conversation collision recovery', () => {
     const reply = 'FRESH-UNRENDERED-OK';
     const output = join(stateDir, 'fresh-unrendered-owned-message.txt');
     const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false, false, false, [reply], [], { neverMarkerProof: true });
+    const invocationId = randomUUID();
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const outcome = await runNewChatTurn(page, output);
+    const outcome = await runNewChatTurn(page, output, '5000', invocationId);
 
     expect(outcome.code).not.toBe(0);
     expect(outcome.result).toMatchObject({ send_count: 1 });
     expect(outcome.result.state).not.toBe('ok');
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'sent_unbound',
+      conversation_url: null,
+      send_count: 1,
+    });
     expect(state.reloads).toBe(0);
     expect(existsSync(output)).toBe(false);
   });
@@ -2209,6 +2217,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     expect(outcome.result.incidents).toContain('observation_exhausted');
     expect(ownedStop, JSON.stringify(outcome)).not.toHaveBeenCalled();
     expect(outcome.result.incidents).toEqual([
+      'send_observation_deferred',
       'observation_exhausted',
       'owned_generation_stop_not_attempted_authority_absent',
     ]);
