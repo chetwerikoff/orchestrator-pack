@@ -75,7 +75,7 @@ export interface GithubCommentReviewReconciliation {
   lastError?: string;
 }
 
-export type PackReviewDeliveryChannel = 'githubComment' | 'requiredStatus' | 'workerNotification';
+export type PackReviewDeliveryChannel = 'githubComment' | 'requiredStatus' | 'workerNotification' | 'noJudgmentWorkerNotification';
 export type PackReviewDeliveryState = 'succeeded' | 'delivered' | 'failed' | 'escalated';
 
 export interface PackReviewDeliveryOutcome {
@@ -188,6 +188,29 @@ export function derivePackReviewGptCoverage(round: PackReviewGptRoundRecord | un
     completedSourceSlotIds: completed.map((slot) => slot.slotId),
     incompleteSources,
   };
+}
+
+/**
+ * An unfinished GPT source census is not a logical review round charge.
+ * This is a read-time outcome, never a mutable run disposition. Callers must
+ * supply the current canonical consumed ordinals rather than inferring a cap
+ * charge from automaticBudgetDisposition (verdict eligibility).
+ */
+export function derivePackReviewNoJudgmentBudgetOutcome(
+  run: PackReviewRunRecord,
+  consumedRoundOrdinals: readonly number[],
+): 'non_consuming_no_judgment' | null {
+  const coverage = derivePackReviewGptCoverage(run.reviewRound);
+  if (run.accountingVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    || !Number.isInteger(run.logicalRoundOrdinal)
+    || !['failed', 'timed_out', 'cancelled'].includes(run.status)
+    || run.automaticBudgetDisposition !== 'consume'
+    || !coverage || coverage.kind !== 'empty'
+    || hasPersistedPackReviewVerdict(run)
+    || run.reviewVerdict !== undefined
+    || run.journalOutcome?.state === 'persisted'
+    || consumedRoundOrdinals.includes(run.logicalRoundOrdinal!)) return null;
+  return 'non_consuming_no_judgment';
 }
 
 export interface PackReviewNativeAttemptBinding {
@@ -1921,6 +1944,11 @@ function buildUpdatedPackReviewRun(
   const candidate: Record<string, unknown> = {
     ...existing,
     ...fields,
+    // Delivery writers may have independently loaded stale whole-record maps.
+    // Rebase each supplied channel on the most recent record under this lock.
+    deliveryOutcomes: fields.deliveryOutcomes === undefined
+      ? existing.deliveryOutcomes
+      : { ...existing.deliveryOutcomes, ...fields.deliveryOutcomes },
     automaticBudgetDisposition: existing.automaticBudgetDisposition,
     sameKeyOrder: existing.sameKeyOrder,
     id: existing.id,
