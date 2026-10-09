@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
@@ -778,7 +778,7 @@ describe('supervised Task launch assistant', () => {
     expect(Object.entries(agent.permission.bash)).toEqual([
       ['git *', 'allow'], ['*', 'allow'],
       ['bsk*', 'deny'], ['/bsk*', 'deny'], ['/*/bsk*', 'deny'],
-      ['~/bsk*', 'deny'], ['~/*/bsk*', 'deny'], ['env bsk*', 'deny'],
+      ['~?bsk*', 'deny'], ['~?*/bsk*', 'deny'], ['env bsk*', 'deny'],
     ]);
     expect(Object.entries(agent.permission.skill)).toEqual([
       ['fixture-safe', 'allow'], ['*', 'allow'], ['browser-skill', 'deny'],
@@ -787,7 +787,7 @@ describe('supervised Task launch assistant', () => {
   });
 
 
-  it('matches only bsk executable segments in generated command and permissive overlay policy', () => {
+  it('matches OpenCode 1.18.35 normalized permissions against source-derived Bash command segments', () => {
     const resolved = resolveSemanticExecutorProfile({
       surface: 'task', names: profileNamesForTask('t2'), env: opencodeProfileEnv('t2'),
     });
@@ -806,46 +806,94 @@ describe('supervised Task launch assistant', () => {
       },
       model: resolved.profile.model, effort: resolved.profile.effort,
     });
-    // Synthetic command nodes model OpenCode BashTool's separate permission
-    // checks for compound command segments; no shell or browser is launched.
-    const globMatches = (pattern: string, subject: string): boolean => {
-      const parts = pattern.split('*');
-      let cursor = 0;
-      for (const [index, part] of parts.entries()) {
-        const found = subject.indexOf(part, cursor);
-        if (found < 0 || (index === 0 && found !== 0)) return false;
-        cursor = found + part.length;
-      }
-      return pattern.endsWith('*') || cursor === subject.length;
+
+    // Source-derived OpenCode v1.18.35 (tag commit 53d1eabb61e21162157817bf677da0a4ad3332e3):
+    // packages/opencode/src/tool/shell.ts: commands(root) visits each tree-sitter
+    // "command" descendant and collect() asks for the raw source(node) of each.
+    // These synthetic fixtures contain only unquoted && and ; delimiters; this
+    // split models those verified node boundaries, not a native OpenCode invocation.
+    const commandSources = (input: string): string[] =>
+      input.split(/\s*(?:&&|;)\s*/u).map((segment) => segment.trim());
+
+    // packages/opencode/src/util/wildcard.ts: Wildcard.match (whole-string
+    // *, ?, optional trailing " *", slash normalization).
+    const wildcardMatch = (subject: string, pattern: string): boolean => {
+      const normalized = subject.replaceAll('\\', '/');
+      let escaped = pattern.replaceAll('\\', '/')
+        .replace(/[.+^$()|[\]{}\\]/g, '\\$&')
+        .replace(/\*/g, '.*')
+        .replace(/\?/g, '.');
+      if (escaped.endsWith(' .*')) escaped = escaped.slice(0, -3) + '( .*)?';
+      return new RegExp('^' + escaped + '$', process.platform === 'win32' ? 'si' : 's').test(normalized);
     };
-    const actionFor = (rules: Record<string, string>, segment: string): string =>
-      Object.entries(rules).filter(([pattern]) => globMatches(pattern, segment)).at(-1)?.[1] ?? 'ask';
+
+    // packages/opencode/src/permission/index.ts: fromConfig expands leading
+    // "~/" in *rule patterns*, not raw Bash source; evaluate uses findLast().
+    const expandPattern = (pattern: string): string => {
+      if (pattern.startsWith('~/')) return homedir() + pattern.slice(1);
+      if (pattern === '~') return homedir();
+      if (pattern.startsWith('$HOME/')) return homedir() + pattern.slice(5);
+      if (pattern.startsWith('$HOME')) return homedir() + pattern.slice(5);
+      return pattern;
+    };
+    const actionFor = (rules: Record<string, string>, segment: string): string => {
+      const ordered: readonly (readonly [string, string])[] = [
+        ['*', 'allow'], // synthetic permissive inherited baseline
+        ...Object.entries(rules).map(([pattern, action]) => [expandPattern(pattern), action] as const),
+      ];
+      return ordered.findLast(([pattern]) => wildcardMatch(segment, pattern))?.[1] ?? 'ask';
+    };
+
+    // Reproduce the current-head pre-correction failure using the exact V1
+    // config normalization: these two literal "~/..." rules become absolute.
+    const oldHomeRules = { '*': 'allow', '~/bsk*': 'deny', '~/*/bsk*': 'deny' };
+    expect(actionFor(oldHomeRules, '~/bsk')).toBe('allow');
+    expect(actionFor(oldHomeRules, '~/.local/bin/bsk')).toBe('allow');
+
     const configs = [
       (JSON.parse(command.inlineConfigJson ?? '{}') as { agent: Record<string, { permission: Record<string, unknown> }> }).agent.pack!,
       (JSON.parse(overlay.inlineConfigJson ?? '{}') as { agent: Record<string, { permission: Record<string, unknown> }> }).agent['pack-opk-fixture']!,
     ];
+    const positive = [
+      './appliedin start',
+      './appliedin status',
+      '.venv/bin/python -m daemon --synthetic-browser-fixture',
+      '.venv/bin/python -m pytest -q',
+      'grep -rn bsk src',
+      'grep -rn /home/che/.local/bin/bsk src',
+      './appliedin start && grep -rn bsk src',
+      './appliedin status; .venv/bin/python -m pytest -q',
+      '.venv/bin/python -m daemon --synthetic-browser-fixture && ./appliedin status',
+      'grep -rn bsk src; ./appliedin start',
+    ];
+    const denied = [
+      'bsk navigate https://example.test',
+      'bsk',
+      'cd x && bsk doctor',
+      'echo fixture; bsk doctor',
+      '/home/che/.local/bin/bsk doctor',
+      '~/bsk',
+      '~/.local/bin/bsk',
+      'env bsk doctor',
+      './appliedin status && bsk doctor',
+      'grep -rn bsk src; env bsk doctor',
+    ];
     for (const generated of configs) {
       const bash = generated.permission.bash as Record<string, string>;
       const skill = generated.permission.skill as Record<string, string>;
-      const cases: readonly { segments: readonly string[]; denied: boolean }[] = [
-        { segments: ['./appliedin start'], denied: false },
-        { segments: ['./appliedin status'], denied: false },
-        { segments: ['.venv/bin/python -m daemon --synthetic-browser-fixture'], denied: false },
-        { segments: ['.venv/bin/python -m pytest -q'], denied: false },
-        { segments: ['grep -rn bsk src'], denied: false },
-        { segments: ['grep -rn /home/che/.local/bin/bsk src'], denied: false },
-        { segments: ['bsk navigate https://example.test'], denied: true },
-        { segments: ['cd x', 'bsk doctor'], denied: true }, // cd x && bsk doctor
-        { segments: ['/home/che/.local/bin/bsk doctor'], denied: true },
-        { segments: ['~/.local/bin/bsk'], denied: true },
-        { segments: ['env bsk doctor'], denied: true },
-        { segments: ['echo fixture', 'bsk doctor'], denied: true }, // echo fixture; bsk doctor
-      ];
-      for (const { segments, denied } of cases) {
-        expect(segments.some((segment) => actionFor(bash, segment) === 'deny'))
-          .toBe(denied);
+      const newDenies = Object.entries(bash).filter(([, action]) => action === 'deny');
+      for (const input of positive) {
+        for (const segment of commandSources(input)) {
+          // No bsk-specific rule may match a permitted command in any position.
+          expect(newDenies.some(([pattern]) => wildcardMatch(segment, expandPattern(pattern)))).toBe(false);
+          expect(actionFor(bash, segment)).toBe('allow');
+        }
+      }
+      for (const input of denied) {
+        expect(commandSources(input).some((segment) => actionFor(bash, segment) === 'deny')).toBe(true);
       }
       expect(actionFor(skill, 'browser-skill')).toBe('deny');
+      expect(actionFor(skill, 'fixture-safe')).toBe('allow');
     }
   });
 

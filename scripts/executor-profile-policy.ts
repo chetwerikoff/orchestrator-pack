@@ -521,7 +521,9 @@ export function withOpenCodeFleetBrowserDenies(permission: unknown): Record<stri
   };
   return {
     ...inherited,
-    bash: ['bsk*', '/bsk*', '/*/bsk*', '~/bsk*', '~/*/bsk*', 'env bsk*']
+    // OpenCode v1.18.35 expands permission patterns beginning with "~/", but checks raw Bash command text.
+    // "~?" matches the literal "~/" command prefix without triggering home expansion.
+    bash: ['bsk*', '/bsk*', '/*/bsk*', '~?bsk*', '~?*/bsk*', 'env bsk*']
       .reduce<unknown>((rules, pattern) => appendDeny(rules, pattern), inherited.bash),
     skill: appendDeny(inherited.skill, 'browser-skill'),
   };
