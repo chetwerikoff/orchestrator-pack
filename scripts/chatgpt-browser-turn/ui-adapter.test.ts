@@ -178,6 +178,7 @@ describe('fresh project conversation identity', () => {
     expect(projectConversationUrlMatchesProject('https://chatgpt.com/c/' + conversationUuid, projectUrl)).toBe(false);
     expect(projectConversationUrlMatchesProject(sameId.replace('6ab8cb78-', 'xxxxxxxx-'), projectUrl)).toBe(false);
     expect(projectConversationUrlMatchesProject(sameId.replace('chatgpt.com', 'example.com'), projectUrl)).toBe(false);
+    expect(projectConversationUrlMatchesProject(sameId.replace('chatgpt.com', 'chatgpt.com:8443'), projectUrl)).toBe(false);
   });
 
   it('rejects an unrelated nested route on the selected stable project', () => {
