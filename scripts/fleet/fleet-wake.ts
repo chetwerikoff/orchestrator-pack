@@ -825,7 +825,13 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     return { state: 'unreadable', handle: 'terminal-list' };
   }
 
-  await runFleetDiagnosticTick({ config, executor, store, terminals, log, ...(options.readChats ? { readChats: options.readChats } : {}) });
+  // A failure in advisory history/formatting must not acquire authority to abort
+  // the pre-existing delivery path, even on an unwritable ephemeral store.
+  try {
+    await runFleetDiagnosticTick({ config, executor, store, terminals, log, ...(options.readChats ? { readChats: options.readChats } : {}) });
+  } catch {
+    log('DIAG state=unverified reason=diagnostic_unreadable evidence=read_only_projection_failure');
+  }
 
   const coordinator = resolveCoordinatorPane(terminals, config);
   if (!coordinator) {
