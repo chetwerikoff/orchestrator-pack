@@ -81,6 +81,7 @@ import {
   MESSAGE_NODE_SELECTOR,
   normalizeConversationUrl,
   productStatusText,
+  CONTINUE_GENERATING_BUTTON_NAME,
   locateContinueGeneratingControl,
   ASSISTANT_TURN_ANCESTOR_XPATH,
   readAssistantNodeCompletionReady,
@@ -1909,12 +1910,12 @@ async function readPostSendObservation(
   };
 }
 
-async function maybeContinueGeneration(page: any, deadlineMs: number, assistantDomIndex: number): Promise<boolean> {
+async function maybeContinueGeneration(page: any, deadlineMs: number, assistantDomIndex: number, allowClick: boolean): Promise<boolean> {
   try {
     const assistant = page.locator(MESSAGE_NODE_SELECTOR).nth(assistantDomIndex);
     const turn = assistant.locator(ASSISTANT_TURN_ANCESTOR_XPATH).first();
     const continuation = locateContinueGeneratingControl(turn);
-    if (await locatorCount(continuation, deadlineMs) !== 1) return false;
+    if (await locatorCount(continuation, deadlineMs) !== 1 || !allowClick) return false;
     const button = continuation.first();
     if (typeof button.isVisible === 'function' && !await button.isVisible()) return false;
     if (typeof button.isEnabled === 'function' && !await button.isEnabled()) return false;
@@ -1924,6 +1925,12 @@ async function maybeContinueGeneration(page: any, deadlineMs: number, assistantD
     return true;
   } catch (error) {
     if (isPostSendTargetCrash(error)) throw error;
+    try {
+      // Preserve crash classification for adapters that cannot scope this read; never use this page-wide probe to click.
+      await locatorCount(page.getByRole('button', { name: CONTINUE_GENERATING_BUTTON_NAME }), deadlineMs);
+    } catch (probeError) {
+      if (isPostSendTargetCrash(probeError)) throw probeError;
+    }
     return false;
   }
 }
@@ -4264,19 +4271,58 @@ async function runTurn(
           || Boolean(ownedCarrierKey)
           || Boolean(config.newChat && ownedConversationUrl && !ownershipForfeited
             && freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs));
-        if (continuationCarrier?.continuationVisible && hasOwnershipEvidence) {
-          const continued = await maybeContinueGeneration(page, hardExhaustionDeadline, continuationCarrier.domIndex);
-          if (continued) {
-            stableReads = 0;
-            lastReadyReply = '';
-            lastReadyObservedText = '';
-            bestReadyReply = '';
-            completionReadySeen = false;
-            lastReadyAssistantIdentity = '';
-            updateHeartbeatForPoll({ state: 'waiting' });
-            await sleep(page, INITIAL_POLL_MS);
-            continue;
+        let continued = false;
+        try {
+          if (hasOwnershipEvidence && !continuationCarrier?.continuationVisible) {
+            try {
+              // Read only for target-loss classification; never use this page-wide result as owned-turn evidence or a click target.
+              await locatorCount(page.getByRole('button', { name: CONTINUE_GENERATING_BUTTON_NAME }), hardExhaustionDeadline);
+            } catch (error) {
+              if (isPostSendTargetCrash(error)) throw error;
+            }
           }
+          if (continuationCarrier && hasOwnershipEvidence) {
+            continued = await maybeContinueGeneration(
+              page,
+              hardExhaustionDeadline,
+              continuationCarrier.domIndex,
+              continuationCarrier.continuationVisible === true,
+            );
+          }
+        } catch (error) {
+          if (isPostSendTargetCrash(error)) {
+            incident('post_send_target_loss', 'post_send_target_crashed', 'retain_owned_page_no_resend');
+            return {
+              page,
+              browser,
+              cleanupAction: 'preserve',
+              result: compactResult(
+                'driver_error',
+                'invocation',
+                'post_send_target_crashed',
+                invocationId,
+                profileKey,
+                sendCount,
+                pollCount,
+                navigation,
+                incidents,
+                { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+                journalWriteFailed,
+              ),
+            };
+          }
+          throw error;
+        }
+        if (continued) {
+          stableReads = 0;
+          lastReadyReply = '';
+          lastReadyObservedText = '';
+          bestReadyReply = '';
+          completionReadySeen = false;
+          lastReadyAssistantIdentity = '';
+          updateHeartbeatForPoll({ state: 'waiting' });
+          await sleep(page, INITIAL_POLL_MS);
+          continue;
         }
       }
 
