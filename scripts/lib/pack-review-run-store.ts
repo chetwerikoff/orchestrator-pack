@@ -1955,15 +1955,19 @@ function buildUpdatedPackReviewRun(
     const current = existing.deliveryOutcomes[channel];
     const currentAt = current ? Date.parse(current.recordedAtUtc) : NaN;
     const incomingAt = Date.parse(incoming.recordedAtUtc);
-    const olderSnapshot = current
+    const sameKey = current?.idempotencyKey === incoming.idempotencyKey;
+    // Timestamp precedence only applies to the *same* delivery attempt.
+    // Different keys can legitimately replace an earlier pending projection
+    // even when an injected or imported fixture has an older timestamp.
+    const olderSnapshot = current && sameKey
       && Number.isFinite(currentAt) && Number.isFinite(incomingAt)
       && incomingAt < currentAt;
-    // A completed submission/status for the same key cannot become uncertain
-    // again merely because a stale whole-map writer saved its old snapshot.
-    const submittedDowngrade = current
-      && current.idempotencyKey === incoming.idempotencyKey
+    // A stale in-flight claim cannot undo a proven submission, including
+    // equal-clock writer races. A deliberate failed delivery correction with
+    // its own evidence is not a stale 'escalated' claim.
+    const submittedDowngrade = current && sameKey
       && (current.state === 'succeeded' || current.state === 'delivered')
-      && incoming.state !== 'succeeded' && incoming.state !== 'delivered';
+      && incoming.state === 'escalated';
     // Credentialed same-run recovery owns the verdict projection even if an
     // unfinished writer's stale snapshot happens to have an equal timestamp.
     const obsoleteVerdictStatus = channel === 'requiredStatus'
