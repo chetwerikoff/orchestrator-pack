@@ -19,6 +19,8 @@ export interface FleetTerminal {
   readonly branch?: string;
   readonly incarnationId?: string;
   readonly status?: string;
+  // Native terminal output-progress metadata; never an agent-child liveness witness.
+  readonly lastOutputAt?: number;
 }
 
 export interface FleetPaneObservation extends FleetTerminal {
@@ -45,11 +47,55 @@ export interface FleetPollingStore {
   writePaneWait?(handle: string, wait: FleetPaneWait): void;
   clearPaneWait?(handle: string): void;
   prunePaneWaits?(handles: ReadonlySet<string>): void;
+  readDiagnosticHistory?(handle: string): FleetDiagnosticHistory | undefined;
+  writeDiagnosticHistory?(handle: string, observation: FleetDiagnosticHistory): void;
+  clearDiagnosticHistory?(handle: string): void;
 }
 
 export interface FleetPaneWait {
   readonly binding: string;
   readonly wait: string;
+}
+
+// Ephemeral per-project evidence only. Never consulted by the operational classifier or sender.
+export interface FleetDiagnosticHistory {
+  readonly key: string;
+  readonly designatedAgent: boolean;
+  readonly agentIdentity?: string;
+  readonly tailHash: string;
+  readonly firstUnchangedObservedAt: number;
+  readonly lastOutputAt?: number;
+}
+
+export type FleetDiagnosticReason =
+  | 'terminal_exited'
+  | 'suspected_bare_shell'
+  | 'suspected_hung'
+  | 'agent_unverified'
+  | 'unverified:screen_unreadable'
+  | 'fleet_census_unreadable';
+
+export interface FleetDiagnostic {
+  readonly handle?: string;
+  readonly incarnationId?: string;
+  readonly title?: string;
+  readonly state?: FleetPaneState;
+  readonly reason: FleetDiagnosticReason;
+  readonly evidence: string;
+}
+
+export interface FleetDiagnosticOptions {
+  readonly projectId: string;
+  readonly primary: string;
+  readonly workspaceRe?: RegExp;
+  readonly coordinatorHandle?: string;
+  readonly coordinatorTitleRe?: RegExp;
+  readonly architectHandle?: string;
+  readonly executor?: OrcaExecutor;
+  readonly store?: FleetPollingStore;
+  readonly terminals?: readonly FleetTerminal[];
+  readonly now?: () => number;
+  readonly busyRe?: RegExp;
 }
 
 export interface FleetSweepOptions {
@@ -224,6 +270,33 @@ export class FileFleetStateStore implements FleetPollingStore {
       }
     }
   }
+
+  private diagnosticPath(handle: string): string {
+    const key = createHash('sha256').update(handle).digest('hex').slice(0, 24);
+    return join(this.root, `diagnostic-${key}.json`);
+  }
+
+  readDiagnosticHistory(handle: string): FleetDiagnosticHistory | undefined {
+    try {
+      const value = JSON.parse(readFileSync(this.diagnosticPath(handle), 'utf8')) as FleetDiagnosticHistory;
+      if (typeof value.key !== 'string' || !value.key
+        || typeof value.designatedAgent !== 'boolean'
+        || (value.agentIdentity !== undefined && (typeof value.agentIdentity !== 'string' || !value.agentIdentity))
+        || typeof value.tailHash !== 'string' || !/^[0-9a-f]{64}$/u.test(value.tailHash)
+        || !Number.isFinite(value.firstUnchangedObservedAt)
+        || (value.lastOutputAt !== undefined && !Number.isFinite(value.lastOutputAt))) return undefined;
+      return value;
+    } catch { return undefined; }
+  }
+
+  writeDiagnosticHistory(handle: string, observation: FleetDiagnosticHistory): void {
+    mkdirSync(this.root, { recursive: true });
+    writeFileSync(this.diagnosticPath(handle), JSON.stringify(observation), 'utf8');
+  }
+
+  clearDiagnosticHistory(handle: string): void {
+    rmSync(this.diagnosticPath(handle), { force: true });
+  }
 }
 
 export function defaultOrcaExecutor(args: readonly string[]): OrcaCommandResult {
@@ -279,6 +352,8 @@ function terminalCensus(payload: unknown): FleetTerminal[] {
       ...(typeof item.branch === 'string' && item.branch ? { branch: item.branch } : {}),
       ...(typeof item.incarnationId === 'string' && item.incarnationId ? { incarnationId: item.incarnationId } : {}),
       ...(typeof item.status === 'string' ? { status: item.status } : {}),
+      ...(typeof item.lastOutputAt === 'number' && Number.isFinite(item.lastOutputAt)
+        ? { lastOutputAt: item.lastOutputAt } : {}),
     };
   });
 }
@@ -493,6 +568,105 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
   });
 }
 
+// Advisory projection. Unlike runFleetSweep, this tolerates one unreadable screen and
+// includes historical shell candidates; none of its outputs enter actionablePanes.
+const SHELL_TITLE_RE = /^(?:bash|zsh|fish|sh|dash|ksh|pwsh|powershell)(?:\s|$|[-:])/iu;
+const HUNG_AFTER_MS = 900_000;
+
+function diagnosticKey(project: string, terminal: FleetTerminal): string | undefined {
+  if (![project, terminal.handle, terminal.incarnationId, terminal.worktreePath, terminal.branch]
+    .every((part) => typeof part === 'string' && part.trim().length > 0)) return undefined;
+  return JSON.stringify([project, terminal.handle, terminal.incarnationId, normalizedPath(terminal.worktreePath), terminal.branch]);
+}
+
+export function collectFleetDiagnostics(options: FleetDiagnosticOptions): FleetDiagnostic[] {
+  const executor = options.executor ?? defaultOrcaExecutor;
+  const store = options.store ?? new FileFleetStateStore(options.projectId);
+  let terminals: readonly FleetTerminal[];
+  try {
+    terminals = options.terminals ?? listFleetTerminals(executor);
+  } catch {
+    return [{ reason: 'fleet_census_unreadable', evidence: 'terminal list --json: incomplete_or_malformed' }];
+  }
+  const workspaceRe = options.workspaceRe ?? defaultWorkspaceRegex(options.primary);
+  const coordinatorRe = options.coordinatorTitleRe ?? DEFAULT_ORCHESTRATOR_TITLE_RE;
+  const primary = normalizedPath(options.primary);
+  const now = (options.now ?? Date.now)();
+  const diagnostics: FleetDiagnostic[] = [];
+  for (const terminal of terminals) {
+    if (terminal.handle === options.coordinatorHandle || terminal.handle === options.architectHandle) continue;
+    if (!terminal.worktreePath || !terminal.handle) continue;
+    coordinatorRe.lastIndex = 0;
+    if (normalizedPath(terminal.worktreePath) === primary && coordinatorRe.test(terminal.title)) continue;
+    workspaceRe.lastIndex = 0;
+    if (!workspaceRe.test(terminal.worktreePath.replaceAll('\\', '/'))) continue;
+    const key = diagnosticKey(options.projectId, terminal);
+    const old = store.readDiagnosticHistory?.(terminal.handle);
+    const prior = key && old?.key === key ? old : undefined;
+    if (!key || (old && !prior)) store.clearDiagnosticHistory?.(terminal.handle);
+    const designated = typeof terminal.agentIdentity === 'string' && terminal.agentIdentity.trim().length > 0;
+    const shell = SHELL_TITLE_RE.test(terminal.title);
+    const formerAgentShell = shell && prior?.designatedAgent === true;
+    if (!designated && !looksLikeAgentPane(terminal.title) && !formerAgentShell
+      && terminal.status?.toLowerCase() !== 'exited') continue;
+    const fields = {
+      handle: terminal.handle,
+      ...(terminal.incarnationId ? { incarnationId: terminal.incarnationId } : {}),
+      title: terminal.title,
+    };
+    if (terminal.status?.toLowerCase() === 'exited') {
+      store.clearDiagnosticHistory?.(terminal.handle);
+      diagnostics.push({ ...fields, state: 'STOPPED', reason: 'terminal_exited', evidence: 'terminal.status=exited (terminal only)' });
+      continue;
+    }
+    let screen: string;
+    try {
+      screen = readFleetScreen(terminal.handle, executor);
+    } catch {
+      store.clearDiagnosticHistory?.(terminal.handle);
+      diagnostics.push({ ...fields, reason: 'unverified:screen_unreadable', evidence: 'terminal read --screen unavailable' });
+      continue;
+    }
+    const outcome = ownPaneOutcome(screen);
+    const busy = isBusyScreen(screen, options.busyRe ?? DEFAULT_BUSY_RE);
+    const state: FleetPaneState = formerAgentShell ? 'STOPPED' : !busy
+      ? outcome.wait ? 'PARKED' : 'STOPPED'
+      : hasPollingEvidence(screen) && store.hasPollingMark(terminal.handle) ? 'POLLING' : 'busy';
+    // Ignore TUI chrome, clocks and status bars; cap retained content and hash it.
+    const tail = nonChromeLines(screen).slice(-20).join('\n').slice(-4096);
+    const tailHash = createHash('sha256').update(tail).digest('hex');
+    const progress = terminal.lastOutputAt;
+    const unchanged = Boolean(prior && prior.agentIdentity === (designated ? terminal.agentIdentity : undefined)
+      && prior.tailHash === tailHash && prior.lastOutputAt === progress
+      && prior.firstUnchangedObservedAt <= now);
+    const firstUnchangedObservedAt = unchanged ? prior!.firstUnchangedObservedAt : now;
+    if (key && Number.isFinite(now)) {
+      store.writeDiagnosticHistory?.(terminal.handle, {
+        key, designatedAgent: designated || formerAgentShell,
+        ...(designated ? { agentIdentity: terminal.agentIdentity } : {}),
+        tailHash, firstUnchangedObservedAt, ...(progress !== undefined ? { lastOutputAt: progress } : {}),
+      });
+    }
+    const suspectedHung = key && unchanged && now - firstUnchangedObservedAt >= HUNG_AFTER_MS
+      && state !== 'PARKED' && state !== 'POLLING' && !formerAgentShell;
+    diagnostics.push({
+      ...fields, state,
+      reason: formerAgentShell ? 'suspected_bare_shell' : suspectedHung ? 'suspected_hung' : 'agent_unverified',
+      evidence: formerAgentShell ? 'prior agentIdentity + exact handle/incarnation/worktree/branch; shell title'
+        : suspectedHung ? 'unchanged normalized tail + available output progress for >=900s; possible intentional wait'
+          : designated ? 'terminal.agentIdentity + screen; child process unverified'
+            : 'agent-looking title + screen; child process unverified',
+    });
+  }
+  return diagnostics;
+}
+
+export function formatFleetDiagnostics(rows: readonly FleetDiagnostic[]): string {
+  return rows.map((row) =>
+    \`DIAG handle=\${row.handle ?? 'none'} incarnation=\${row.incarnationId ?? 'unknown'} state=\${row.state ?? 'unverified'} reason=\${row.reason} evidence=\${row.evidence}\`,
+  ).join('\n');
+}
+
 export function formatFleetSweep(observations: readonly FleetPaneObservation[]): string {
   return observations
     .flatMap((pane) => [
@@ -562,8 +736,13 @@ function isDirectExecution(): boolean {
 if (isDirectExecution()) {
   try {
     const options = parseSweepCli(process.argv.slice(2));
-    const observations = runFleetSweep(options);
-    process.stdout.write(options.json ? `${JSON.stringify(observations, null, 2)}\n` : `${formatFleetSweep(observations)}${observations.length ? '\n' : ''}`);
+    const store = new FileFleetStateStore(options.projectId);
+    const terminals = listFleetTerminals();
+    const observations = runFleetSweep({ ...options, store, terminals });
+    const diagnostics = collectFleetDiagnostics({ ...options, store, terminals });
+    process.stdout.write(options.json
+      ? `${JSON.stringify({ observations, diagnostics }, null, 2)}\n`
+      : [formatFleetSweep(observations), formatFleetDiagnostics(diagnostics)].filter(Boolean).join('\n') + '\n');
   } catch (error) {
     process.stderr.write(`fleet-sweep: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
