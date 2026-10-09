@@ -1,0 +1,30 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2445,
+  "declared_paths": [
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "scripts/merge-adoption-effect.test.ts",
+    "scripts/merge-adoption-effect.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "docs/fleet-alarm.md",
+    "docs/target_repo_setup.md",
+    "packages/core/",
+    "scripts/fleet/",
+    "scripts/lib/target-context.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/orchestrator-side-process-registry.json",
+    "scripts/toolchain/",
+    "scripts/vitest-ci-lanes.config.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "docs/declarations/",
+    "scripts/merge-adoption-effect.test.ts",
+    "scripts/merge-adoption-effect.ts"
+  ],
+  "source_revision": "4c90994a926c959209e09628a0ac4021e6d01a15"
+}
