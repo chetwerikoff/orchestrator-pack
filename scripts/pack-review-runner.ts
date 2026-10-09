@@ -3569,13 +3569,18 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   const logicalFinalFindings = logicalAccounting
     && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
     && authority.terminal?.reviewVerdict === 'findings';
-  const sameHeadPublicationRetry = logicalAccounting && authority.cycle.state === 'closed'
-    && authority.cycle.settlementKind === 'same_head_issue_resolution'
-    && authority.publication?.status !== 'succeeded';
-  if (!logicalFinalFindings && !sameHeadPublicationRetry && authority.cycle.state !== 'at_cap_continuation_required') return null;
+  const settlementPublicationRetry = logicalAccounting && authority.cycle.state === 'closed'
+    && authority.cycle.reviewStageComplete === true
+    && authority.terminal?.reviewVerdict === 'findings'
+    && (authority.cycle.settlementKind === 'same_head_issue_resolution'
+      || authority.currentHeadSha !== authority.terminal.targetSha)
+    && (authority.publication?.status !== 'succeeded'
+      || authority.publication.headSha !== authority.currentHeadSha);
+  if (!logicalFinalFindings && !settlementPublicationRetry && authority.cycle.state !== 'at_cap_continuation_required') return null;
 
-  const currentHead = input.fixtureCurrentPrHeadSha
-    ?? await resolveCurrentPrHead(input.sourceRepoRoot, options.repoSlug, prNumber);
+  const currentHead = await readCheckedReviewPrHead(
+    input, options.repoSlug, prNumber, authority.currentHeadSha,
+  );
   if (logicalFinalFindings && currentHead.toLowerCase() !== authority.currentHeadSha.toLowerCase()) {
     try {
       authority = observePackReviewHead({
@@ -3611,85 +3616,126 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     };
   }
 
+  const publishFinalCapStatus = async (
+    description: string,
+    digest: string,
+    successReason: string,
+  ): Promise<Record<string, unknown>> => {
+    const publicationHead = authority.currentHeadSha;
+    const publicationCycle = authority.cycle?.cycleId;
+    const validCurrent = async () => {
+      const liveHead = await readCheckedReviewPrHead(input, options.repoSlug, prNumber, publicationHead);
+      const latest = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot });
+      return liveHead === publicationHead.toLowerCase()
+        && latest?.currentHeadSha.toLowerCase() === publicationHead.toLowerCase()
+        && latest.terminal?.runId === priorRun.id
+        && latest.cycle?.cycleId === publicationCycle
+        && latest.cycle.state === 'closed'
+        && latest.cycle.reviewStageComplete === true
+        && latest.triage?.verdict !== 'BLOCK';
+    };
+    const unresolved = (detail: string): Record<string, unknown> => ({
+      prNumber, headSha: publicationHead, finalCapSettlement: true,
+      settled: false, reason: 'status_not_published', detail,
+      nextAction: 'retry current-head status projection with PR-led start or scoped reconcile; do not consume another round',
+    });
+    if (!(await validCurrent())) return unresolved('final_cap_head_or_authority_changed_before_status');
+    const request = {
+      state: 'success' as const, context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+      description, idempotencyKey: `final-cap:${priorRun.id}:${publicationHead}`,
+    };
+    try {
+      await (input.fixtureRequiredStatusWriter ?? ((value) => publishPackReviewRequiredStatus({
+        repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+        headSha: publicationHead, request: value,
+      })))(request);
+    } catch (error) {
+      return unresolved(`final_cap_status_write_failed:${describeError(error)}`);
+    }
+    if (!(await validCurrent())) return unresolved('final_cap_head_or_authority_changed_during_status');
+    try {
+      const latest = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot });
+      if (!latest) return unresolved('final_cap_authority_missing_after_status');
+      authority = recordPackReviewPublication({
+        prNumber, expectedTransitionSeq: latest.transitionSeq, nextPhase: 'external_published',
+        publication: {
+          headSha: publicationHead, terminalRunId: priorRun.id,
+          status: 'succeeded', publicationDigest: digest,
+          recordedAtUtc: new Date().toISOString(),
+        },
+        options: { storeRoot: options.storeRoot },
+      });
+    } catch (error) {
+      return unresolved(`final_cap_publication_record_failed:${describeError(error)}`);
+    }
+    if (!(await validCurrent())) return unresolved('final_cap_authority_or_head_changed_after_record');
+    return {
+      prNumber, headSha: publicationHead, finalCapSettlement: true, settled: true,
+      statusPublished: true, publicationHeadSha: publicationHead,
+      reason: successReason, settlementKind: authority.cycle?.settlementKind,
+    };
+  };
+
   if (logicalAccounting) {
     const reviewedHeadSha = authority.terminal.targetSha;
     if (authority.currentHeadSha === reviewedHeadSha) {
       try {
         const proof = await resolveSameHeadIssueResolution(input, options, authority, priorRun);
-        if (!sameHeadPublicationRetry) {
+        if (!settlementPublicationRetry) {
           authority = settleLogicalPackReviewFindingsByStrictDescendant({
             prNumber, expectedTransitionSeq: authority.transitionSeq, reviewedHeadSha,
             currentHeadSha: authority.currentHeadSha, reviewedHeadIsAncestor: false,
             sameHeadIssueResolution: proof, options: { storeRoot: options.storeRoot },
           });
         }
-        const request = { runId: priorRun.id, prNumber, headSha: authority.currentHeadSha,
-          state: 'success' as const, context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-          description: 'review_stage_complete: same-head Issue resolution',
-          idempotencyKey: `final-cap:${priorRun.id}:${authority.currentHeadSha}` };
-        await (input.fixtureRequiredStatusWriter ?? ((value) => publishPackReviewRequiredStatus({
-          repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug, headSha: request.headSha, request: value,
-        })))(request);
-        authority = recordPackReviewPublication({ prNumber, expectedTransitionSeq: authority.transitionSeq,
-          nextPhase: 'external_published', publication: { headSha: authority.currentHeadSha, terminalRunId: priorRun.id,
-            status: 'succeeded', publicationDigest: proof.publicationDigest, recordedAtUtc: new Date().toISOString() },
-          options: { storeRoot: options.storeRoot } });
-        return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true, settled: true,
-          reason: 'final_cap_same_head_issue_resolution_settled', settlementKind: authority.cycle?.settlementKind };
+        return await publishFinalCapStatus(
+          'review_stage_complete: same-head Issue resolution',
+          proof.publicationDigest,
+          'final_cap_same_head_issue_resolution_settled',
+        );
       } catch (error) {
         return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true, settled: false,
           reason: 'final_cap_strict_descendant_required', detail: describeError(error),
           nextAction: 'provide complete exact-run trusted Issue-only dispositions, post-terminal body revision and current-head green CI, or advance to a proven strict descendant; rerun scoped reconcile' };
       }
     }
-    const strictDescendant = await resolvePackReviewStrictDescendant({
-      repoRoot: input.sourceRepoRoot,
-      repoSlug: options.repoSlug,
-      reviewedHeadSha,
-      currentHeadSha: authority.currentHeadSha,
-      fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
-    });
-    if (!strictDescendant) {
-      return {
-        prNumber,
-        headSha: authority.currentHeadSha,
-        finalCapSettlement: true,
-        settled: false,
-        reason: 'final_cap_strict_descendant_required',
-        nextAction: 'advance the PR to a proven strict descendant of the reviewed findings head, then rerun scoped reconcile',
-      };
-    }
-    try {
-      authority = settleLogicalPackReviewFindingsByStrictDescendant({
-        prNumber,
-        expectedTransitionSeq: authority.transitionSeq,
+    if (!settlementPublicationRetry) {
+      const strictDescendant = await resolvePackReviewStrictDescendant({
+        repoRoot: input.sourceRepoRoot,
+        repoSlug: options.repoSlug,
         reviewedHeadSha,
         currentHeadSha: authority.currentHeadSha,
-        reviewedHeadIsAncestor: true,
-        options: { storeRoot: options.storeRoot },
+        fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
       });
-    } catch (error) {
-      return {
-        prNumber,
-        headSha: authority.currentHeadSha,
-        finalCapSettlement: true,
-        settled: false,
-        reason: `final_cap_settlement_incomplete:${describeError(error)}`,
-        nextAction: 'rerun scoped reconcile after confirming the current PR head',
-      };
+      if (!strictDescendant) {
+        return {
+          prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
+          settled: false, reason: 'final_cap_strict_descendant_required',
+          nextAction: 'advance the PR to a proven strict descendant of the reviewed findings head, then rerun scoped reconcile',
+        };
+      }
+      try {
+        authority = settleLogicalPackReviewFindingsByStrictDescendant({
+          prNumber, expectedTransitionSeq: authority.transitionSeq,
+          reviewedHeadSha, currentHeadSha: authority.currentHeadSha,
+          reviewedHeadIsAncestor: true, options: { storeRoot: options.storeRoot },
+        });
+      } catch (error) {
+        return {
+          prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
+          settled: false, reason: `final_cap_settlement_incomplete:${describeError(error)}`,
+          nextAction: 'rerun scoped reconcile after confirming the current PR head',
+        };
+      }
     }
-    return {
-      prNumber,
-      headSha: authority.currentHeadSha,
-      finalCapSettlement: true,
-      settled: authority.cycle?.reviewStageComplete === true,
-      reason: authority.cycle?.reviewStageComplete === true
-        ? 'final_cap_descendant_settled'
-        : 'final_cap_settlement_incomplete',
-      ...(authority.cycle?.reviewStageComplete === true
-        ? {}
-        : { nextAction: 'rerun scoped reconcile after confirming the current PR head' }),
-    };
+    return publishFinalCapStatus(
+      'Required pack-review stage completed; strict descendant of reviewed findings.',
+      sha256Bytes(stableJson({
+        runId: priorRun.id, reviewedHeadSha, publicationHead: authority.currentHeadSha,
+        settlementKind: 'strict_descendant',
+      })),
+      'final_cap_descendant_settled',
+    );
   }
 
   let issueNumber = input.fixtureIssueNumber;
