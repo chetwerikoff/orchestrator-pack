@@ -346,6 +346,19 @@ function isTerminallyFailedMissingRetained(parsed: OrcaWorkerShowResult): boolea
     && parsed.terminalResource?.releaseState === 'retained';
 }
 
+/** An old retained handle is usable only as a denial witness, with correlated old-Dispatch identity. */
+function corroboratedRetainedHandle(parsed: OrcaWorkerShowResult, dispatchId: string): string {
+  const resource = parsed.terminalResource;
+  const historical = String(resource?.terminalHandle ?? '').trim();
+  const workerHandle = String(parsed.worker?.agent_terminal_handle ?? '').trim();
+  const terminalHandle = String(parsed.terminal?.handle ?? '').trim();
+  if (!historical || !workerHandle || historical !== workerHandle
+    || (terminalHandle && terminalHandle !== historical)
+    || String(resource?.originDispatchId ?? '').trim() !== dispatchId
+    || String(resource?.ownerDispatchId ?? '').trim() !== dispatchId) return '';
+  return historical;
+}
+
 function retainedExactTerminalHandle(parsed: OrcaWorkerShowResult): string {
   return String(
     parsed.terminal?.handle
@@ -571,7 +584,9 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
     if (isTerminallyFailedMissingRetained(parsed)) {
-      return { status: 'ok', value: { kind: 'gone', evidence: 'producer_exact_absence' } };
+      return corroboratedRetainedHandle(parsed, dispatchId)
+        ? { status: 'ok', value: { kind: 'gone', evidence: 'producer_exact_absence' } }
+        : runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
     if (parsed.observation?.exactWorker !== true) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
@@ -647,7 +662,12 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
     if (isTerminallyFailedMissingRetained(parsed)) {
-      return { status: 'ok', value: { kind: 'gone' } };
+      const retainedHandle = corroboratedRetainedHandle(parsed, dispatchId);
+      if (!retainedHandle) return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+      // RuntimeAdapter's public gone shape is narrower. Preserve this internal
+      // no-reuse witness through structural typing, as in the exited branch.
+      const value = { kind: 'gone' as const, reuseBlockedTerminalId: retainedHandle };
+      return { status: 'ok', value };
     }
     const exact = parsed.observation?.exactWorker === true;
     if (!exact) {
@@ -678,8 +698,11 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
         ? String(resource?.terminalHandle ?? '').trim()
         : '';
       const reuseBlockedTerminalId = (releaseState === 'retained' || releaseState === 'unknown')
-        ? String(resource?.terminalHandle ?? '').trim()
+        ? corroboratedRetainedHandle(parsed, dispatchId)
         : '';
+      if ((releaseState === 'retained' || releaseState === 'unknown') && !reuseBlockedTerminalId) {
+        return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+      }
       const value = {
         kind: 'gone' as const,
         ...(workerId ? { workerId } : {}),

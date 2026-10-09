@@ -1,0 +1,27 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2437,
+  "declared_paths": [
+    "scripts/executor-profile-policy.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+  ],
+  "denylist": [
+    ".env",
+    ".orchestrator-pack/",
+    "credentials/",
+    "local.config.json",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/executor-profile-policy.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+  ],
+  "source_revision": "f7b710204f11d685c5e2dc68eb119d61f20c9bcd"
+}

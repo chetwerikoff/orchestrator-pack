@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,8 +33,10 @@ import {
   buildProviderInvocation,
   catalogIdentityForProfile,
   openCodeAgentSemantics,
+  openCodeFleetBrowserDenyRulesAreTerminal,
   EXECUTOR_FAMILY_DESCRIPTORS,
   profileNamesForTask,
+  profileNamesForSmoke,
   resolveSemanticExecutorProfile,
 } from '../executor-profile-policy.ts';
 import { overlayExecutorProfileEnv, readExecutorProfileStore } from '../executor-profile-store.ts';
@@ -301,6 +303,14 @@ function managerReuseFixture(input: {
   ancestor?: boolean;
   mergeOk?: boolean;
   sharedBranch?: boolean;
+  prOverrides?: Readonly<Record<string, unknown>>;
+  noPr?: boolean;
+  duplicatePr?: boolean;
+  prListOk?: boolean;
+  prViewOk?: boolean;
+  prChanged?: boolean;
+  taskMembership?: boolean;
+  localHeadChanged?: boolean;
 } = {}) {
   const worktreeId = input.worktreeId ?? 'repo::existing';
   const worktreePath = input.worktreePath ?? '/tmp/existing';
@@ -308,6 +318,21 @@ function managerReuseFixture(input: {
   const branch = input.branch ?? 'manager-2024';
   let head = input.head ?? '1'.repeat(40);
   let mergeTransitions = 0;
+  let headReads = 0;
+  const prReads = new Map<number, number>();
+  const firstPr: Record<string, unknown> = {
+    number: 42,
+    body: 'Closes #2430',
+    state: 'OPEN',
+    baseRefName: 'main',
+    headRefName: branch,
+    headRefOid: head,
+    headRepository: { nameWithOwner: 'chetwerikoff/orchestrator-pack' },
+    ...input.prOverrides,
+  };
+  const prs: Array<Record<string, unknown>> = input.noPr
+    ? []
+    : input.duplicatePr ? [firstPr, { ...firstPr, number: 43 }] : [firstPr];
   const calls: string[][] = [];
   const execute = async (
     args: readonly string[],
@@ -317,10 +342,39 @@ function managerReuseFixture(input: {
   ) => {
     calls.push([...args]);
     if (args[0] === 'orca') {
+      if (args[2] === 'task-list') {
+        return { ok: true, stdout: okEnvelope({
+          runId: 'run-1',
+          tasks: input.taskMembership === false ? [{ id: 'task-other' }] : [{ id: 'task-1' }],
+        }), stderr: '' };
+      }
       return { ok: true, stdout: okEnvelope({ worktree: { id: worktreeId, path: worktreePath } }), stderr: '' };
     }
     if (cwd !== worktreePath) return { ok: false, stdout: '', stderr: 'wrong cwd' };
     const command = args.join(' ');
+    if (args[0] === 'gh' && args[1] === 'pr' && args[2] === 'list') {
+      return {
+        ok: input.prListOk !== false,
+        stdout: JSON.stringify(prs.map((pr) => ({
+          number: pr.number, baseRefName: pr.baseRefName, headRefName: pr.headRefName, headRefOid: pr.headRefOid,
+        }))),
+        stderr: '',
+      };
+    }
+    if (args[0] === 'gh' && args[1] === 'pr' && args[2] === 'view') {
+      const number = Number(args[3]);
+      const count = (prReads.get(number) ?? 0) + 1;
+      prReads.set(number, count);
+      const pr = prs.find((candidate) => candidate.number === number);
+      return {
+        ok: input.prViewOk !== false && Boolean(pr),
+        stdout: JSON.stringify(input.prChanged && count > 1 ? { ...pr, headRefOid: 'f'.repeat(40) } : pr),
+        stderr: '',
+      };
+    }
+    if (command === 'git symbolic-ref --quiet --short HEAD') {
+      return { ok: true, stdout: branch + '\n', stderr: '' };
+    }
     if (command === 'git rev-parse --show-toplevel') return { ok: true, stdout: `${worktreePath}\n`, stderr: '' };
     if (command === 'git remote get-url origin') {
       return {
@@ -357,7 +411,10 @@ function managerReuseFixture(input: {
     if (command === 'git status --porcelain=v1 --untracked-files=all') {
       return { ok: true, stdout: input.status ?? '', stderr: '' };
     }
-    if (command === 'git rev-parse --verify HEAD^{commit}') return { ok: true, stdout: `${head}\n`, stderr: '' };
+    if (command === 'git rev-parse --verify HEAD^{commit}') {
+      headReads += 1;
+      return { ok: true, stdout: (input.localHeadChanged && headReads > 1 ? 'f'.repeat(40) : head) + '\n', stderr: '' };
+    }
     if (args[0] === 'git' && args[1] === 'merge-base' && args[2] === '--is-ancestor'
       && args[4] === originMain) {
       return { ok: input.ancestor !== false, stdout: '', stderr: input.ancestor === false ? 'not ancestor' : '' };
@@ -540,8 +597,70 @@ describe('supervised Task launch assistant', () => {
       env: { ...opencodeProfileEnv('t2'), PACK_EXECUTOR_CURSOR_CONTEXT: '272k' },
     });
     if (!withoutContext.ok || !withContext.ok) throw new Error('OpenCode profile should resolve');
-    expect(buildExecutorCommand(withContext.profile)).toEqual(buildExecutorCommand(withoutContext.profile));
+    expect(withContext.profile).toEqual(withoutContext.profile);
+    const contextual = buildExecutorCommand(withContext.profile);
+    const ordinary = buildExecutorCommand(withoutContext.profile);
+    expect(contextual.executable).toBe(ordinary.executable);
+    expect(contextual.agentName).not.toBe(ordinary.agentName);
+    expect(JSON.parse(contextual.inlineConfigJson ?? '{}').permission).toEqual(JSON.parse(ordinary.inlineConfigJson ?? '{}').permission);
   });
+  it.each([
+    ['manager', 'task', profileNamesForTask('manager')],
+    ['t1', 'task', profileNamesForTask('t1')],
+    ['t2', 'task', profileNamesForTask('t2')],
+    ['t3', 'task', profileNamesForTask('t3')],
+    ['firefighter-manager', 'task', profileNamesForTask('manager')],
+    ['routine-smoke', 'smoke', profileNamesForSmoke('routine')],
+    ['complex-smoke', 'smoke', profileNamesForSmoke('complex')],
+  ] as const)('emits global and agent browser denies in OpenCode JSON for %s', (_name, surface, names) => {
+    const resolved = resolveSemanticExecutorProfile({
+      surface,
+      names,
+      env: { [names[0]]: 'opencode', [names[1]]: 'fixture/provider-model', [names[2]]: 'high' },
+    });
+    if (!resolved.ok) throw new Error('synthetic OpenCode profile should resolve');
+    const invocation = buildExecutorCommand(resolved.profile);
+    const agentName = invocation.agentName ?? '';
+    const config = JSON.parse(invocation.inlineConfigJson ?? '{}') as {
+      permission?: { bash?: Record<string, string>; skill?: Record<string, string> };
+      agent?: Record<string, Record<string, unknown>>;
+    };
+    const agent = config.agent?.[agentName];
+    const bashDenies = {
+      bsk: 'deny', 'bsk *': 'deny', '/bsk': 'deny', '/bsk *': 'deny',
+      '/*/bsk': 'deny', '/*/bsk *': 'deny', '~?bsk': 'deny', '~?bsk *': 'deny',
+      '~?*/bsk': 'deny', '~?*/bsk *': 'deny', 'env bsk': 'deny', 'env bsk *': 'deny',
+    };
+    expect(agentName).toMatch(/^pack-opk-[a-f0-9]{32}$/u);
+    expect(config.agent).not.toHaveProperty('pack');
+    expect(config.permission).toEqual({ bash: bashDenies, skill: { 'browser-skill': 'deny' } });
+    expect(agent).toMatchObject({
+      model: 'fixture/provider-model',
+      variant: 'high',
+      permission: config.permission,
+    });
+    expect(config.agent?.general?.permission).toEqual(config.permission);
+    expect(config.agent?.explore?.permission).toEqual(config.permission);
+    expect(invocation.command).toContain(`OPENCODE_CONFIG_CONTENT='${invocation.inlineConfigJson}'`);
+    expect(invocation.command).toContain(`--agent '${agentName}'`);
+  });
+
+  it('keeps the browser deny in generated unit config, not fleet service or global-config transport', () => {
+    const resolved = resolveSemanticExecutorProfile({
+      surface: 'task', names: profileNamesForTask('t2'), env: opencodeProfileEnv('t2'),
+    });
+    if (!resolved.ok) throw new Error('synthetic OpenCode profile should resolve');
+    const invocation = buildExecutorCommand(resolved.profile);
+    const config = JSON.parse(invocation.inlineConfigJson ?? '{}') as Record<string, unknown>;
+    const fleetService = readFileSync(new URL('../fleet/fleet-wake@.service', import.meta.url), 'utf8');
+    const fleetEnvironment = readFileSync(new URL('../fleet/fleet-wake.env.example', import.meta.url), 'utf8');
+    expect(Object.keys(config).sort()).toEqual(['agent', 'permission']);
+    expect(invocation.command.match(/OPENCODE_CONFIG_CONTENT=/gu)).toHaveLength(1);
+    expect(invocation.command).not.toContain('--config');
+    expect(invocation.command).not.toMatch(/fleet-wake|systemctl/iu);
+    expect(`${fleetService}\n${fleetEnvironment}`).not.toMatch(/OPENCODE_CONFIG_CONTENT|browser-skill|\bbsk\b/iu);
+  });
+
 
   it.each(['manager', 't1', 't2', 't3'] as const)('closed two-family mapping recognizes OpenCode for %s without inventing a route', (workClass) => {
     const result = resolveExecutorProfile(workClass, opencodeProfileEnv(workClass));
@@ -582,12 +701,22 @@ describe('supervised Task launch assistant', () => {
     });
     expect(admitted).toMatchObject({
       status: 'ok',
-      value: {
-        family: 'opencode',
-        route: 'exact_terminal_worktree',
-        launchCommand: `OPENCODE_CONFIG_CONTENT='{\"agent\":{\"pack\":{\"model\":\"fixture-opencode-model\",\"variant\":\"fixture-opencode-effort\"}}}' opencode --hostname 127.0.0.1 --port 42985 --agent 'pack'`,
-      },
+      value: { family: 'opencode', route: 'exact_terminal_worktree' },
     });
+    if (admitted.status !== 'ok') throw new Error('synthetic OpenCode route should admit');
+    const launchJson = admitted.value.launchCommand.match(/OPENCODE_CONFIG_CONTENT='([^']+)'/u)?.[1];
+    const launchConfig = JSON.parse(launchJson ?? '{}') as {
+      permission?: Record<string, unknown>;
+      agent?: Record<string, { model: string; variant: string; permission: unknown }>;
+    };
+    const agentName = Object.keys(launchConfig.agent ?? {})[0] ?? '';
+    expect(agentName).toMatch(/^pack-opk-[a-f0-9]{32}$/u);
+    expect(admitted.value.launchCommand).toContain(`--agent '${agentName}'`);
+    expect(launchConfig.agent?.[agentName]).toMatchObject({
+      model: 'fixture-opencode-model', variant: 'fixture-opencode-effort', permission: launchConfig.permission,
+    });
+    expect(launchConfig.permission).toMatchObject({ skill: { 'browser-skill': 'deny' } });
+    expect(launchConfig.permission?.bash).toHaveProperty('bsk *', 'deny');
     expect(admittedCalls[0]).toEqual(['opencode', 'models']);
     expect(admittedCalls).toContainEqual(['opencode', '--help']);
     expect(admittedCalls).toContainEqual(['opencode', 'models', '--verbose']);
@@ -630,9 +759,37 @@ describe('supervised Task launch assistant', () => {
       }
       if (args[1] === 'debug' && args[2] === 'agent') {
         const name = args[3] ?? '';
+        const baseline = {
+          name: 'build', prompt: 'fixture', mode: 'primary', topP: 0.8,
+          model: { providerID: 'opencode', modelID: 'fixture-opencode-model' },
+          variant: 'fixture-opencode-effort',
+          permission: [
+            { permission: 'bash', pattern: '*', action: 'allow' },
+            { permission: 'skill', pattern: '*', action: 'allow' },
+          ],
+        };
+        if (name === 'build' && !envOverride?.OPENCODE_CONFIG_CONTENT) {
+          return { ok: true, stdout: JSON.stringify(baseline), stderr: '' };
+        }
+        const overlay = JSON.parse(envOverride?.OPENCODE_CONFIG_CONTENT ?? '{}') as {
+          permission?: Record<string, string | Record<string, string>>;
+          agent?: Record<string, { permission?: Record<string, string | Record<string, string>> }>;
+        };
+        const flatten = (permissions?: Record<string, string | Record<string, string>>) => Object.entries(permissions ?? {}).flatMap(([permission, patterns]) =>
+          typeof patterns === 'string'
+            ? [{ permission, pattern: '*', action: patterns }]
+            : Object.entries(patterns).map(([pattern, action]) => ({ permission, pattern, action })));
+        const effective = [
+          ...baseline.permission,
+          ...flatten(overlay.permission),
+          ...flatten(overlay.agent?.[name]?.permission),
+        ];
         return {
           ok: true,
-          stdout: JSON.stringify({ name, prompt: 'fixture', model: { providerID: 'opencode', modelID: 'fixture-opencode-model' }, variant: 'fixture-opencode-effort' }),
+          stdout: JSON.stringify({
+            ...baseline, name, permission: effective,
+            model: { providerID: 'opencode', modelID: 'fixture-opencode-model' },
+          }),
           stderr: '',
         };
       }
@@ -643,15 +800,16 @@ describe('supervised Task launch assistant', () => {
     }, () => true);
     expect(result).toMatchObject({ status: 'ok', evidence: { exactContext: true } });
     expect(calls).toContainEqual(['opencode', 'debug', 'config']);
-    expect(calls.filter((args) => args[1] === 'debug' && args[2] === 'agent')).toHaveLength(2);
+    expect(calls.filter((args) => args[1] === 'debug' && args[2] === 'agent')).toHaveLength(4);
+    expect(calls).toContainEqual(['opencode', 'debug', 'agent', 'general']);
+    expect(calls).toContainEqual(['opencode', 'debug', 'agent', 'explore']);
     expect(calls).toContainEqual(['opencode', 'debug', 'paths']);
   });
-
   it('probe surface equals spawn surface', async () => {
     const profile = resolveSemanticExecutorProfile({ surface: 'task', names: profileNamesForTask('t2'), env: opencodeProfileEnv('t2') });
     if (!profile.ok) throw new Error('semantic profile should be ok');
     const invocation = buildExecutorCommand(profile.profile);
-    expect(invocation.command).toContain("--agent 'pack'");
+    expect(invocation.command).toContain(`--agent '${invocation.agentName}'`);
     expect(invocation.command).not.toContain('--model');
     expect(invocation.command).not.toContain('--variant');
     expect(invocation.inlineConfigJson).toContain('"model":"fixture-opencode-model"');
@@ -670,7 +828,7 @@ describe('supervised Task launch assistant', () => {
     expect(probes[0]?.join(' ')).toContain('opencode');
   });
 
-  it('projects resolved Agent.Info into a config-valid baseline overlay', () => {
+  it('projects resolved Agent.Info into a config-valid baseline overlay with terminal browser denies', () => {
     const invocation = buildOpenCodeAgentOverlay({
       agentName: 'pack-opk-fixture',
       baseline: {
@@ -683,17 +841,190 @@ describe('supervised Task launch assistant', () => {
       },
       model: 'fixture/provider-model', effort: 'high',
     });
-    const config = JSON.parse(invocation.inlineConfigJson ?? '{}') as { agent?: Record<string, Record<string, unknown>> };
+    const config = JSON.parse(invocation.inlineConfigJson ?? '{}') as {
+      permission?: Record<string, unknown>;
+      agent?: Record<string, Record<string, unknown>>;
+    };
     const agent = config.agent?.['pack-opk-fixture'];
+    expect(config.permission).toEqual({
+      bash: {
+        bsk: 'deny', 'bsk *': 'deny', '/bsk': 'deny', '/bsk *': 'deny',
+        '/*/bsk': 'deny', '/*/bsk *': 'deny', '~?bsk': 'deny', '~?bsk *': 'deny',
+        '~?*/bsk': 'deny', '~?*/bsk *': 'deny', 'env bsk': 'deny', 'env bsk *': 'deny',
+      },
+      skill: { 'browser-skill': 'deny' },
+    });
+    expect(config.agent?.general?.permission).toEqual(config.permission);
+    expect(config.agent?.explore?.permission).toEqual(config.permission);
     expect(agent).toMatchObject({
       model: 'fixture/provider-model', variant: 'high', mode: 'primary',
       top_p: 0.8, prompt: 'fixture prompt',
-      permission: { edit: 'allow', bash: 'ask' },
     });
+    expect(agent?.permission).toMatchObject({
+      edit: 'allow',
+      bash: {
+        '*': 'ask',
+        bsk: 'deny', 'bsk *': 'deny', '/bsk': 'deny', '/bsk *': 'deny',
+        '/*/bsk': 'deny', '/*/bsk *': 'deny', '~?bsk': 'deny', '~?bsk *': 'deny',
+        '~?*/bsk': 'deny', '~?*/bsk *': 'deny', 'env bsk': 'deny', 'env bsk *': 'deny',
+      },
+      skill: { 'browser-skill': 'deny' },
+    });
+    expect(openCodeFleetBrowserDenyRulesAreTerminal(agent?.permission)).toBe(true);
     expect(agent).not.toHaveProperty('native');
     expect(agent).not.toHaveProperty('name');
     expect(openCodeAgentSemantics({ ...agent, name: 'pack-opk-fixture', model: { providerID: 'fixture', modelID: 'provider-model' }, variant: 'high', native: false }))
       .toBe(openCodeAgentSemantics({ name: 'build', native: true, mode: 'primary', topP: 0.8, prompt: 'fixture prompt', options: { temperature: 0.2 }, permission: agent?.permission }));
+  });
+
+
+  it('appends precise browser denies after inherited allows without changing other permissions', () => {
+    const invocation = buildOpenCodeAgentOverlay({
+      agentName: 'pack-opk-fixture',
+      baseline: {
+        name: 'build', prompt: 'original prompt', mode: 'primary',
+        permission: [
+          { permission: 'bash', pattern: 'bsk*', action: 'allow' },
+          { permission: 'bash', pattern: 'git *', action: 'allow' },
+          { permission: 'bash', pattern: '*', action: 'allow' },
+          { permission: 'skill', pattern: 'browser-skill', action: 'allow' },
+          { permission: 'skill', pattern: 'fixture-safe', action: 'allow' },
+          { permission: 'skill', pattern: '*', action: 'allow' },
+          { permission: 'edit', pattern: '*', action: 'allow' },
+        ],
+      },
+      model: 'fixture/provider-model', effort: 'high',
+    });
+    const parsed = JSON.parse(invocation.inlineConfigJson ?? '{}') as {
+      permission?: Record<string, Record<string, unknown>>;
+      agent: Record<string, {
+        model: string; variant: string; prompt: string;
+        permission: { bash: Record<string, unknown>; skill: Record<string, unknown>; edit: string };
+      }>
+    };
+    const agent = parsed.agent['pack-opk-fixture']!;
+    const deniedBash = [
+      'bsk', 'bsk *', '/bsk', '/bsk *', '/*/bsk', '/*/bsk *',
+      '~?bsk', '~?bsk *', '~?*/bsk', '~?*/bsk *', 'env bsk', 'env bsk *',
+    ];
+    expect(agent.model).toBe('fixture/provider-model');
+    expect(agent.variant).toBe('high');
+    expect(agent.prompt).toBe('original prompt');
+    expect(Object.entries(agent.permission.bash).slice(-12)).toEqual(deniedBash.map((pattern) => [pattern, 'deny']));
+    expect(agent.permission.bash).toMatchObject({ 'bsk*': 'allow', 'git *': 'allow', '*': 'allow' });
+    expect(agent.permission.skill).toEqual({ 'fixture-safe': 'allow', '*': 'allow', 'browser-skill': 'deny' });
+    expect(agent.permission.edit).toBe('allow');
+    expect(parsed.permission).toEqual({
+      bash: Object.fromEntries(deniedBash.map((pattern) => [pattern, 'deny'])),
+      skill: { 'browser-skill': 'deny' },
+    });
+    expect(openCodeFleetBrowserDenyRulesAreTerminal(agent.permission)).toBe(true);
+  });
+
+
+  it.each([
+    ['unchanged', true],
+    ['prompt', false],
+    ['edit', false],
+    ['bash', false],
+    ['bash-order', false],
+    ['skill', false],
+    ['subagent-bash', false],
+    ['subagent-skill', false],
+    ['model', false],
+    ['effort', false],
+  ] as const)('contextual finalization permits only the intended narrowed policy: %s', async (drift, accepted) => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'opk2437-offline-'));
+    vi.stubEnv('XDG_CONFIG_HOME', sandbox);
+    vi.stubEnv('OPENCODE_CONFIG_DIR', join(sandbox, 'opencode'));
+    vi.stubEnv('OPENCODE_CONFIG', join(sandbox, 'synthetic.json'));
+    try {
+      const profile = await resolveLiveExecutorProfile('t2', opencodeProfileEnv('t2'), undefined, async (args) => opencodeProbeResult(args));
+      if (profile.status !== 'ok') throw new Error('synthetic OpenCode profile should resolve');
+      const baseline = {
+        name: 'build', mode: 'primary', prompt: 'original prompt', topP: 0.8,
+        options: { temperature: 0.2 },
+        model: { providerID: 'opencode', modelID: 'fixture-opencode-model' },
+        variant: 'fixture-opencode-effort',
+        permission: [
+          { permission: 'edit', pattern: '*', action: 'allow' },
+          { permission: 'bash', pattern: 'bsk*', action: 'allow' },
+          { permission: 'bash', pattern: '*', action: 'allow' },
+          { permission: 'skill', pattern: 'browser-skill', action: 'allow' },
+          { permission: 'skill', pattern: '*', action: 'allow' },
+        ],
+      };
+      type SyntheticRule = { permission: string; pattern: string; action: string };
+      const flatten = (permission?: Record<string, unknown>): SyntheticRule[] => Object.entries(permission ?? {}).flatMap(([scope, patterns]) =>
+        typeof patterns === 'string'
+          ? [{ permission: scope, pattern: '*', action: patterns }]
+          : patterns && typeof patterns === 'object'
+            ? Object.entries(patterns).map(([pattern, action]) => ({ permission: scope, pattern, action: String(action) }))
+            : []);
+      const baselineRules: SyntheticRule[] = baseline.permission;
+      const result = await finalizeOpenCodeExecutorProfile(profile.value, join(sandbox, 'worktree'),
+        async (args, _timeoutMs, envOverride) => {
+          if (args[2] === 'config') return { ok: true, stdout: JSON.stringify({ default_agent: 'build' }), stderr: '' };
+          if (args[2] === 'paths') return { ok: true, stdout: envOverride?.XDG_STATE_HOME ?? '', stderr: '' };
+          if (args[2] === 'agent' && args[3] === 'build') return { ok: true, stdout: JSON.stringify(baseline), stderr: '' };
+          if (args[2] === 'agent') {
+            const name = args[3] ?? '';
+            const inline = JSON.parse(envOverride?.OPENCODE_CONFIG_CONTENT ?? '{}') as {
+              permission?: Record<string, unknown>;
+              agent?: Record<string, { permission?: Record<string, unknown> }>;
+            };
+            const isChild = name === 'general' || name === 'explore';
+            const globalRules = flatten(inline.permission);
+            const agentRules = flatten(inline.agent?.[name]?.permission);
+            if (drift === 'bash-order' && !isChild) {
+              const denyIndex = agentRules.findIndex((rule) => rule.permission === 'bash' && rule.pattern === 'bsk *');
+              const wildcardIndex = agentRules.findIndex((rule) => rule.permission === 'bash' && rule.pattern === '*' && rule.action !== 'deny');
+              if (denyIndex >= 0 && wildcardIndex >= 0 && denyIndex > wildcardIndex) {
+                const [deny] = agentRules.splice(denyIndex, 1);
+                agentRules.splice(wildcardIndex, 0, deny!);
+              }
+            }
+            const removeOne = (source: SyntheticRule[], scope: string, pattern: string) => {
+              const index = source.findIndex((rule) => rule.permission === scope && rule.pattern === pattern);
+              if (index >= 0) source.splice(index, 1);
+            };
+            if (drift === 'bash' && !isChild) {
+              removeOne(globalRules, 'bash', 'bsk *');
+              removeOne(agentRules, 'bash', 'bsk *');
+            }
+            if (drift === 'skill' && !isChild) {
+              removeOne(globalRules, 'skill', 'browser-skill');
+              removeOne(agentRules, 'skill', 'browser-skill');
+            }
+            if (drift === 'subagent-bash' && name === 'general') {
+              removeOne(globalRules, 'bash', 'bsk *');
+              removeOne(agentRules, 'bash', 'bsk *');
+            }
+            if (drift === 'subagent-skill' && name === 'explore') {
+              removeOne(globalRules, 'skill', 'browser-skill');
+              removeOne(agentRules, 'skill', 'browser-skill');
+            }
+            const rules = [...baselineRules, ...globalRules, ...agentRules];
+            if (drift === 'edit' && !isChild) {
+              const edit = [...rules].reverse().find((rule) => rule.permission === 'edit');
+              if (edit) edit.action = 'deny';
+            }
+            const resolved = {
+              ...baseline, name, permission: rules,
+              prompt: drift === 'prompt' ? 'changed prompt' : baseline.prompt,
+              model: { providerID: 'opencode', modelID: drift === 'model' ? 'different-model' : 'fixture-opencode-model' },
+              variant: drift === 'effort' ? 'other-effort' : 'fixture-opencode-effort',
+            };
+            return { ok: true, stdout: JSON.stringify(resolved), stderr: '' };
+          }
+          return { ok: false, stdout: '', stderr: 'unexpected synthetic probe' };
+        }, () => true);
+      expect(result.status).toBe(accepted ? 'ok' : 'continue');
+      if (!accepted) expect(result).toMatchObject({ status: 'continue', cause: 'executor_effort_channel_unavailable' });
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(sandbox, { recursive: true, force: true });
+    }
   });
 
   it('encodes duplicate star permission rules as a last-wins string action', () => {
@@ -707,14 +1038,14 @@ describe('supervised Task launch assistant', () => {
     expect(config.permission).toEqual({ question: 'allow' });
   });
 
-  it('compares overlay agent semantics without permission-rule order', () => {
+  it('keeps permission-rule order in overlay semantics because deny precedence is ordered', () => {
     const first = [
       { permission: 'edit', pattern: '*', action: 'allow' },
       { permission: 'bash', pattern: '*', action: 'ask' },
     ];
     const reversed = [...first].reverse();
     expect(openCodeAgentSemantics({ mode: 'primary', permission: first }))
-      .toBe(openCodeAgentSemantics({ mode: 'primary', permission: reversed }));
+      .not.toBe(openCodeAgentSemantics({ mode: 'primary', permission: reversed }));
   });
 
   it('agent config effort channel', async () => {
@@ -1369,6 +1700,25 @@ The words Firefighter universal appear here only as prose.`;
     ]) expect(serialized).not.toContain(sentinel);
   });
 
+  it('reports only the sanctioned gone-path refusal or native cause unavailable', async () => {
+    for (const [message, expected] of [
+      ['terminal_reuse_unauthorized', 'terminal_reuse_unauthorized'],
+      ['untrusted provider detail', 'native cause unavailable'],
+      [undefined, 'native cause unavailable'],
+    ] as const) {
+      const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({
+        supervised: { ok: false, reason: 'target_unresolved', ...(message ? { errorMessage: message } : {}) },
+      }));
+      expect(result).toMatchObject({
+        outcome: 'continue', stage: 'supervised_start',
+        observedCause: 'target_unresolved',
+        evidence: { admissionDiagnostic: expected },
+        nextAction: { kind: 'reconcile_supervised_start' },
+      });
+      expect(JSON.stringify(result)).not.toContain('untrusted provider detail');
+    }
+  });
+
   it('preserves provider base branch on retry action', async () => {
     const result = await runSupervisedTaskLaunchAssistant({
       ...launchInput('t2'), startMode: 'provider_new_top_level', baseBranch: 'feature/base',
@@ -1701,6 +2051,98 @@ The words Firefighter universal appear here only as prose.`;
     expect(serialized).not.toContain('rebase');
     expect(serialized).not.toContain('--force');
     expect(fixture.calls.some((args) => args[0] === 'git' && args[1] === 'merge')).toBe(false);
+  });
+
+  it('admits one live Issue-closing same-repository PR head without rewriting its manager branch', async () => {
+    const fixture = managerReuseFixture({ ancestor: false });
+    const request = {
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
+      managerRefresh: true, managerTaskRunId: 'run-1', issueNumber: 2430,
+      worktreeSelector: 'id:repo::existing', defaultBranch: 'main',
+    } as const;
+    const result = await prepareWorktreeWithOrca(request, fixture.execute);
+    expect(result).toMatchObject({
+      status: 'ok', value: { id: 'repo::existing', path: '/tmp/existing', setupWitness: 'proven_reuse' },
+      evidence: { prNumber: 42, head: '1'.repeat(40), refresh: 'pr_head_preserved' },
+    });
+    expect(fixture.head()).toBe('1'.repeat(40));
+    expect(fixture.mergeTransitions()).toBe(0);
+    expect(fixture.calls.filter((args) => args.slice(0, 3).join(' ') === 'gh pr view')).toHaveLength(2);
+    expect(fixture.calls.some((args) => args[0] === 'orca' && args[2] === 'task-list' && args[3] === '--run')).toBe(true);
+    expect(fixture.calls.some((args) => args[0] === 'git' && ['merge', 'reset', 'rebase'].includes(args[1]!))).toBe(false);
+
+    let started = 0;
+    const launch = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('manager'), issueNumber: 2430, defaultBranch: 'main',
+    }, {
+      ...deps({ onSupervised: () => { started += 1; } }),
+      prepareWorktree: (input) => prepareWorktreeWithOrca(input, managerReuseFixture({ ancestor: false, worktreeId: 'manager-worktree', worktreePath: '/tmp/exact-worktree' }).execute),
+    });
+    expect(launch).toMatchObject({
+      outcome: 'ready', resources: { runId: 'run-1', taskId: 'task-1', dispatchId: 'dispatch-1' },
+    });
+    expect(started).toBe(1);
+  });
+
+  it('accepts only the real closing line after tilde examples and HTML comments', async () => {
+    const fixture = managerReuseFixture({
+      ancestor: false,
+      prOverrides: { body: "~~~md\nCloses #2430\n~~~\n<!--\nCloses #2430\n-->\nCloses #2430" },
+    });
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
+      managerRefresh: true, managerTaskRunId: 'run-1', issueNumber: 2430,
+      worktreeSelector: 'id:repo::existing', defaultBranch: 'main',
+    }, fixture.execute);
+    expect(result).toMatchObject({ status: 'ok', evidence: { prNumber: 42, refresh: 'pr_head_preserved' } });
+    expect(fixture.calls.some((args) => args[0] === 'git' && args[1] === 'merge')).toBe(false);
+  });
+
+  it.each([
+    { name: 'no linked PR', fixture: { noPr: true }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: 'multiple linked PRs', fixture: { duplicatePr: true }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "tilde-fenced closing example", fixture: { prOverrides: { body: "~~~md\nCloses #2430\n~~~" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "long tilde fence and short delimiter", fixture: { prOverrides: { body: "~~~~text\nCloses #2430\n~~~\nCloses #2430\n~~~~" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "multiline HTML comment", fixture: { prOverrides: { body: "<!--\nCloses #2430\n-->" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "unclosed multiline HTML comment", fixture: { prOverrides: { body: "<!-- sample\nCloses #2430" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "comment cannot join fragments into a closing keyword", fixture: { prOverrides: { body: "Clos<!-- sample -->es #2430" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "HTML comment inside a tilde-fenced example", fixture: { prOverrides: { body: "~~~text\n<!-- Closes #2430 -->\nCloses #2430\n~~~" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: 'unlinked body', fixture: { prOverrides: { body: 'Mentioned #2430, no closing line' } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: 'quoted closing text', fixture: { prOverrides: { body: '> Closes #2430' } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: 'foreign head repository', fixture: { prOverrides: { headRepository: { nameWithOwner: 'foreign/orchestrator-pack' } } }, cause: 'manager_pr_resume_head_mismatch' },
+    { name: 'different base', fixture: { prOverrides: { baseRefName: 'release' } }, cause: 'manager_pr_resume_head_mismatch' },
+    { name: 'different head branch', fixture: { prOverrides: { headRefName: 'another-branch' } }, cause: 'manager_pr_resume_head_mismatch' },
+    { name: 'unpublished local head', fixture: { prOverrides: { headRefOid: '9'.repeat(40) } }, cause: 'manager_pr_resume_head_mismatch' },
+    { name: 'closed PR', fixture: { prOverrides: { state: 'CLOSED' } }, cause: 'manager_pr_resume_head_mismatch' },
+    { name: 'PR read unavailable', fixture: { prViewOk: false }, cause: 'manager_pr_resume_pr_unavailable' },
+    { name: 'PR inventory unavailable', fixture: { prListOk: false }, cause: 'manager_pr_resume_inventory_unavailable' },
+    { name: 'PR changed at final read', fixture: { prChanged: true }, cause: 'manager_pr_resume_pr_changed' },
+    { name: 'local HEAD changed before new effects', fixture: { localHeadChanged: true }, cause: 'manager_pr_resume_local_changed' },
+    { name: 'Task not in requested Run', fixture: { taskMembership: false }, cause: 'manager_pr_resume_task_unproven' },
+  ])('refuses non-ancestor restore on $name', async ({ fixture: options, cause }) => {
+    const fixture = managerReuseFixture({ ancestor: false, ...options });
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
+      managerRefresh: true, managerTaskRunId: 'run-1', issueNumber: 2430,
+      worktreeSelector: 'id:repo::existing', defaultBranch: 'main',
+    }, fixture.execute);
+    expect(result).toMatchObject({ status: 'continue', cause });
+    expect(fixture.head()).toBe('1'.repeat(40));
+    expect(fixture.mergeTransitions()).toBe(0);
+    expect(fixture.calls.some((args) => args[0] === 'git' && args[1] === 'merge')).toBe(false);
+  });
+
+  it('refuses PR-head resume when Issue or native Run/Task binding is absent', async () => {
+    for (const missing of ['issue', 'run'] as const) {
+      const fixture = managerReuseFixture({ ancestor: false });
+      const result = await prepareWorktreeWithOrca({
+        repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
+        managerRefresh: true, ...(missing === 'issue' ? { managerTaskRunId: 'run-1' } : { issueNumber: 2430 }),
+        worktreeSelector: 'id:repo::existing', defaultBranch: 'main',
+      }, fixture.execute);
+      expect(result).toMatchObject({ status: 'continue', cause: 'manager_worktree_non_ancestor' });
+      expect(fixture.calls.some((args) => args[0] === 'gh')).toBe(false);
+    }
   });
 
   it('treats an already-equal manager HEAD as success without a local update', async () => {

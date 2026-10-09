@@ -15,6 +15,8 @@ import {
   fleetWakeConfigFromEnv,
   managerBannerMessage,
   runFleetAlarmTick,
+  runFleetDiagnosticTick,
+  type FleetAlarmTickOptions,
   type FleetWakeConfig,
   type FleetWakeStateStore,
   type OpenPullHead,
@@ -103,6 +105,7 @@ async function tick(input: {
   config?: FleetWakeConfig;
   terminals?: readonly FleetTerminal[];
   executor?: OrcaExecutor;
+  readChats?: FleetAlarmTickOptions['readChats'];
   listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
   listUnreadRunMessages?: () => readonly { id: string; subject: string; toHandle: string; fromHandle: string }[];
   listOpenPulls?: (repository: string) => readonly OpenPullHead[];
@@ -121,6 +124,7 @@ async function tick(input: {
     store,
     sleepMs: async (ms) => { sleeps.push(ms); },
     log: (line) => { logs.push(line); },
+    ...(input.readChats ? { readChats: input.readChats } : {}),
     listTerminalEnvelopes: input.listTerminalEnvelopes ?? (() => []),
     ...(input.listUnreadRunMessages ? { listUnreadRunMessages: input.listUnreadRunMessages } : {}),
     ...(input.listOpenPulls ? { listOpenPulls: input.listOpenPulls } : {}),
@@ -1101,5 +1105,199 @@ describe('Issue #2342 unloadable chat', () => {
     const alarm = fleetAlarmMessage('idle', [], [banner]);
     expect(alarm).toContain('cannot be loaded');
     expect(alarm).not.toContain('need a continuation');
+  });
+});
+
+describe('Issue #2441 read-only diagnostic tick non-interference', () => {
+  const worker: FleetTerminal = {
+    handle: 'one', title: 'OpenCode manager one', worktreePath: workerBase + '/one',
+    incarnationId: 'inc-1', branch: 'refs/heads/diagnostic', agentIdentity: 'opencode',
+  };
+  const coordinator: FleetTerminal = {
+    handle: 'coord', title: 'Cursor coordinator', worktreePath: primary, incarnationId: 'coordinator-inc',
+  };
+  const withStore = async (body: (store: FileFleetWakeStateStore) => Promise<void>): Promise<void> => {
+    const xdg = mkdtempSync(join(tmpdir(), 'fleet-wake-2441-'));
+    try { await body(new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: xdg })); }
+    finally { rmSync(xdg, { recursive: true, force: true }); }
+  };
+  const diagnostic = async (input: {
+    store: FileFleetWakeStateStore;
+    terminals?: readonly FleetTerminal[];
+    screens: Record<string, string>;
+    now: number;
+    retry?: boolean;
+  }) => {
+    const calls: string[][] = [], logs: string[] = [];
+    const rows = input.terminals ?? [coordinator, worker];
+    const url = 'https://chatgpt.com/c/synthetic';
+    await runFleetDiagnosticTick({
+      config: config({
+        chatCdpUrl: 'http://127.0.0.1:9222',
+        chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/project',
+          repository: 'chetwerikoff/orchestrator-pack' },
+      }),
+      executor: fakeOrca(input.screens, calls, rows), store: input.store, terminals: rows,
+      now: () => input.now, log: (line) => logs.push(line),
+      readChats: async () => [{
+        targetId: 'synthetic', url, generating: false,
+        banners: [{ kind: 'error_banner', url, text: 'Failed to fetch / Retry shown',
+          retry: input.retry === true }],
+      }],
+      // Adversarial incident data cannot enter this API's send path.
+      ...{ listUnreadRunMessages: () => [{ id: 'run-1', toHandle: 'run:coord',
+        fromHandle: 'run:one', subject: '; $(touch /tmp/never-run) && echo pwned' }] },
+    });
+    return { calls, logs };
+  };
+
+  it('logs unverified → exited despite the same old delivery signature and never replays a partial send', async () => withStore(async (store) => {
+    store.writeLastSentSignature('coord\nsame-screen-stopped');
+    store.writeBannerSignature('failed-direct-banner-signature');
+    store.markParkedWakeEvent('gpt:prior-event');
+    const first = await diagnostic({ store, screens: { one: 'work\nesc interrupt' }, now: 0 });
+    const second = await diagnostic({ store, screens: { one: 'work\nesc interrupt' },
+      terminals: [coordinator, { ...worker, status: 'exited' }], now: 300_000 });
+    expect(first.logs.some((line) => line.includes('reason=agent_unverified'))).toBe(true);
+    expect(second.logs.some((line) => line.includes('reason=terminal_exited'))).toBe(true);
+    expect([...first.calls, ...second.calls].filter((call) => call[1] === 'send')).toHaveLength(0);
+    expect(store.readLastSentSignature()).toBe('coord\nsame-screen-stopped');
+    expect(store.readBannerSignature()).toBe('failed-direct-banner-signature');
+    expect(store.hasParkedWakeEvent('gpt:prior-event')).toBe(true);
+    expect(second.logs.some((line) => /delivered|undelivered|resend suggestion/iu.test(line))).toBe(false);
+  }));
+
+  it('records unchanged busy → suspected_hung at t=900 without updating a signature or sending shell metacharacters', async () => withStore(async (store) => {
+    store.writeLastSentSignature('unchanged-legacy-signature');
+    for (const now of [0, 300_000, 600_000, 900_000]) {
+      const observed = await diagnostic({ store, screens: { one: 'work\nesc interrupt' }, now });
+      const expected = now === 900_000 ? 'suspected_hung' : 'agent_unverified';
+      expect(observed.logs.some((line) => line.includes('reason=' + expected))).toBe(true);
+      expect(observed.calls.some((call) => call[1] === 'send')).toBe(false);
+      expect(store.readLastSentSignature()).toBe('unchanged-legacy-signature');
+    }
+  }));
+
+  it('reports ambiguous primary titles without routing and pinned selection without child-liveness assertion', async () => withStore(async (store) => {
+    const multiple = [coordinator, { ...coordinator, handle: 'coord-2' }, worker];
+    const result = await diagnostic({ store, terminals: multiple, screens: { one: 'done' }, now: 0 });
+    expect(result.logs.some((line) => line.includes('reason=coordinator_ambiguous'))).toBe(true);
+    const pinnedLogs: string[] = [], pinnedCalls: string[][] = [];
+    await runFleetDiagnosticTick({ config: config({ orchestratorHandle: 'coord-2' }),
+      store, terminals: multiple, executor: fakeOrca({ one: 'done' }, pinnedCalls, multiple),
+      log: (line) => pinnedLogs.push(line) });
+    expect(pinnedLogs.some((line) => line.includes('reason=coordinator_unverified selected=coord-2')
+      && line.includes('exact_selection_only'))).toBe(true);
+    expect(pinnedLogs.some((line) => line.includes('coordinator_ambiguous'))).toBe(false);
+    expect([...result.calls, ...pinnedCalls].filter((call) => call[1] === 'send')).toHaveLength(0);
+  }));
+
+  it('uses structural Retry=false/true and tentative unbound banner evidence on two zero-send ticks', async () => withStore(async (store) => {
+    store.writeBannerSignature('already-observed-even-though-direct-send-failed');
+    const first = await diagnostic({ store, screens: { one: 'work\nesc interrupt' }, now: 0, retry: false });
+    const second = await diagnostic({ store, screens: { one: 'work\nesc interrupt' }, now: 300_000, retry: true });
+    expect(first.logs).toContainEqual(expect.stringContaining('retry_control_observed=false'));
+    expect(second.logs).toContainEqual(expect.stringContaining('retry_control_observed=true'));
+    expect(first.logs).toContainEqual(expect.stringContaining('attribution=tentative/unbound'));
+    expect(first.logs.join('\n')).not.toContain('Failed to fetch / Retry shown');
+    expect([...first.calls, ...second.calls].filter((call) => call[1] === 'send')).toHaveLength(0);
+    expect(store.readBannerSignature()).toBe('already-observed-even-though-direct-send-failed');
+  }));
+
+  it('reports global census failure once, and local unreadability without hiding a readable peer', async () => withStore(async (store) => {
+    const malformed: OrcaExecutor = (args) => args[1] === 'list'
+      ? commandResult(JSON.stringify({ ok: true, result: { terminals: [worker], truncated: true, totalCount: 2 } }))
+      : commandResult('', false);
+    const logs: string[] = [];
+    await runFleetDiagnosticTick({ config: config(), executor: malformed, store, log: (line) => logs.push(line) });
+    expect(logs.filter((line) => line.includes('fleet_census_unreadable'))).toHaveLength(1);
+    expect(logs).toHaveLength(1);
+    const peer = { ...worker, handle: 'two', incarnationId: 'peer' };
+    const result = await diagnostic({ store, terminals: [coordinator, worker, peer],
+      screens: { two: 'work\nesc interrupt' }, now: 0 });
+    expect(result.logs.some((line) => line.includes('handle=one') && line.includes('screen_unreadable'))).toBe(true);
+    expect(result.logs.some((line) => line.includes('handle=two') && line.includes('agent_unverified'))).toBe(true);
+    expect(result.calls.filter((call) => call[1] === 'send')).toHaveLength(0);
+    const wake = await tick({ store, terminals: [coordinator, worker, peer],
+      screens: { coord: 'idle', two: 'work\nesc interrupt' } });
+    expect(wake.result).toEqual({ state: 'unreadable', handle: 'one' });
+    // A prior injected t=0 may independently age into suspected_hung against the real clock.
+    expect(wake.logs.some((line) => line.startsWith('DIAG handle=two') && line.includes('state=busy'))).toBe(true);
+    expect(sends(wake.calls)).toHaveLength(0);
+  }));
+
+  it('keeps the legacy wake path independent when advisory history cannot be written', async () => withStore(async (store) => {
+    vi.spyOn(store, 'writeDiagnosticHistory').mockImplementation(() => { throw new Error('synthetic history write refusal'); });
+    const output = await tick({ store, terminals: [coordinator, worker], screens: {
+      coord: 'idle', one: 'done',
+    } });
+    expect(output.logs.some((line) => line.includes('reason=diagnostic_unreadable'))).toBe(true);
+    expect(output.result.state).toBe('sent');
+    expect(sendsTo(output.calls, 'coord')).toHaveLength(2);
+    // The diagnostic failure itself never routes or calls terminal send; old dispatch still owns it.
+  }));
+
+
+
+  it('sends existing GPT event before browser read and reuses the same post-event CDP snapshot for advisory', async () => {
+    const order: string[] = [];
+    const custom = [coordinator, worker];
+    const calls: string[][] = [];
+    const execute = fakeOrca({ coord: 'idle', one: 'done' }, calls, custom);
+    let reads = 0;
+    const url = 'https://chatgpt.com/c/synthetic-banner';
+    const readChats: NonNullable<FleetAlarmTickOptions['readChats']> = async () => {
+      reads += 1;
+      order.push('cdp');
+      return [{ targetId: 'synthetic', url, generating: false,
+        banners: [{ kind: 'error_banner', url, text: 'Failed to fetch / Retry shown', retry: false }] }];
+    };
+    const run = await tick({
+      config: config({ chatCdpUrl: 'http://127.0.0.1:9222', chatScope: {
+        projectUrl: 'https://chatgpt.com/g/g-p/project/project',
+        repository: 'chetwerikoff/orchestrator-pack',
+      } }),
+      terminals: custom, screens: { coord: 'idle', one: 'done' },
+      executor: (args) => {
+        if (args[1] === 'send') order.push('legacy-send');
+        return execute(args);
+      },
+      readChats,
+      listTerminalEnvelopes: () => [{ path: '/tmp/opencode/synthetic-end.json',
+        terminalHandle: 'one', invocationId: 'synthetic-ended' }],
+    });
+    expect(reads).toBe(1);
+    expect(order.indexOf('legacy-send')).toBeLessThan(order.indexOf('cdp'));
+    expect(run.logs.some((line) => line.includes('retry_control_observed=false'))).toBe(true);
+    expect(run.logs.some((line) => line.includes('attribution=tentative/unbound'))).toBe(true);
+    expect(calls.filter((args) => args[1] === 'send').length).toBeGreaterThan(0);
+    expect(run.calls.filter((args) => args[1] === 'send')).toHaveLength(
+      calls.filter((args) => args[1] === 'send').length);
+  });
+
+  it('retains operational PARKED state on a short acknowledgment without advisory rewriting wait data', async () =>
+    withStore(async (store) => {
+      const fleet = [coordinator, worker];
+      const first = await tick({ store, terminals: fleet, screens: {
+        coord: 'idle', one: 'PARKED on PR #1 merged',
+      } });
+      const held = store.readPaneWait('one');
+      expect(held?.wait).toBe('PARKED on PR #1 merged');
+      expect(first.logs.some((line) => line.includes('handle=one') && line.includes('state=PARKED'))).toBe(true);
+      const second = await tick({ store, terminals: fleet, screens: {
+        coord: 'idle', one: 'Acknowledged',
+      } });
+      expect(second.logs.some((line) => line.includes('handle=one') && line.includes('state=PARKED'))).toBe(true);
+      expect(store.readPaneWait('one')).toEqual(held);
+    }));
+
+  it('adds advisory output to normal wake ticks without making busy agents actionable', async () => {
+    const observed = await tick({ terminals: [coordinator, worker], screens: {
+      coord: 'work\nctrl+c to stop', one: 'work\nesc interrupt',
+    } });
+    expect(observed.result.state).toBe('nothing_stopped');
+    expect(observed.logs.some((line) => line.includes('reason=agent_unverified'))).toBe(true);
+    expect(observed.logs.some((line) => line.includes('reason=coordinator_unverified'))).toBe(true);
+    expect(sends(observed.calls)).toHaveLength(0);
   });
 });
