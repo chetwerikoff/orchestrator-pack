@@ -2745,7 +2745,9 @@ async function runTurn(
       if (!config.newChat || !config.projectUrl
         || !projectConversationUrlMatchesProject(conversationUrl, config.projectUrl)) return false;
       try {
-        if (normalizeConversationUrl(String(candidatePage.url())) !== normalizeConversationUrl(conversationUrl)) return false;
+        const observedPageUrl = String(candidatePage.url());
+        if (!projectConversationUrlMatchesProject(observedPageUrl, config.projectUrl)
+          || conversationUuidFromUrl(observedPageUrl) !== conversationUuidFromUrl(conversationUrl)) return false;
         const remainingMs = invocationDeadlineMs - Date.now();
         if (remainingMs <= 0) return false;
         const census = await boundedBrowserRead(
