@@ -4447,6 +4447,31 @@ async function runTurn(
           stableReads = 1;
         }
         if (stableReads >= 2) {
+          if (config.newChat && !ownedConversationUrl) {
+            // A ready assistant on a root/foreign/unproven fresh URL does not
+            // authenticate the selected conversation. Keep observing within
+            // the incumbent deadline; do not publish or close an unbound page.
+            if (Date.now() >= hardExhaustionDeadline) {
+              incident('post_send_observation_error', 'fresh_conversation_owner_unproven', 'retain_page_no_resend');
+              return {
+                page,
+                browser,
+                cleanupAction: 'preserve',
+                result: compactResult(
+                  'observation_uncertain', 'invocation', 'fresh_conversation_owner_unproven',
+                  invocationId, profileKey, sendCount, pollCount, navigation, incidents, {},
+                  journalWriteFailed,
+                ),
+              };
+            }
+            stableReads = 0;
+            lastReadyReply = '';
+            lastReadyObservedText = '';
+            bestReadyReply = '';
+            lastReadyAssistantIdentity = '';
+            await sleep(page, INITIAL_POLL_MS);
+            continue;
+          }
           if (
             config.newChat
             && ownedConversationUrl
