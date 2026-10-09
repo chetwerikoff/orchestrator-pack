@@ -663,9 +663,11 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     }
     if (isTerminallyFailedMissingRetained(parsed)) {
       const retainedHandle = corroboratedRetainedHandle(parsed, dispatchId);
-      return retainedHandle
-        ? { status: 'ok', value: { kind: 'gone', reuseBlockedTerminalId: retainedHandle } }
-        : runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+      if (!retainedHandle) return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+      // RuntimeAdapter's public gone shape is narrower. Preserve this internal
+      // no-reuse witness through structural typing, as in the exited branch.
+      const value = { kind: 'gone' as const, reuseBlockedTerminalId: retainedHandle };
+      return { status: 'ok', value };
     }
     const exact = parsed.observation?.exactWorker === true;
     if (!exact) {
