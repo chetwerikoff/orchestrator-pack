@@ -17,6 +17,8 @@ import {
 import { BEFORE_CDP_BROWSER_RELEASE, releaseCdpBrowser } from './browser-session.ts';
 import { runStateLightEntry } from './state-light-entry.ts';
 import { readChatBinding } from './chat-bindings.ts';
+import { configuredProfileKey } from './storage-common.ts';
+import { admitStateLightTurnObservation, transitionStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { TURN_STATES } from './contracts.ts';
 import { COMPOSER_SELECTOR, loadChromium, SEND_BUTTON_SELECTOR } from './ui-adapter.ts';
 import { fakeTurnPage } from './fixtures/fake-turn-page.ts';
@@ -777,12 +779,29 @@ describe('Issue #1377 explicit abandonment authority', () => {
 });
 
 
-describe('Issue #1377 cancellation actuator and receipt admission', () => {
+describe('Issue #2434 cancellation is no-effect without original tab+generation proof', () => {
   const marker = `OPKTURNV1${'12'.repeat(16)}`;
+  const cdp = 'http://127.0.0.1:9222';
   const ownedUrl = 'https://chatgpt.com/c/11111111-1111-4111-8111-111111111111';
-  const foreignUrl = 'https://chatgpt.com/c/22222222-2222-4222-8222-222222222222';
 
-  it('accepts only closed ChatGPT conversation origins and UUID paths', () => {
+  function admittedSentFixture() {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2434-cancel-'));
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = join(root, 'state');
+    const profileKey = configuredProfileKey('synthetic-profile', cdp);
+    const invocationId = 'synthetic-cancel-invocation';
+    admitStateLightTurnObservation({ profileKey, invocationId, marker });
+    transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'dispatching', reason: 'synthetic_dispatch' });
+    transitionStateLightTurnObservation({
+      profileKey, invocationId, phase: 'sent_unharvested', reason: 'synthetic_send',
+      sendCount: 1, sendWitness: 'numeric_send_count', conversationUrl: ownedUrl,
+    });
+    const receipt = buildBrowserTurnCancellationReceipt({
+      invocationId, profileKey, conversationUrl: ownedUrl, marker, sendCount: 1,
+    })!;
+    return { root, profileKey, invocationId, receipt };
+  }
+
+  it('accepts only exact ChatGPT UUID conversation URL shapes', () => {
     expect(isSupportedChatGptConversationUrl(ownedUrl)).toBe(true);
     expect(isSupportedChatGptConversationUrl(`${ownedUrl}?model=auto#x`)).toBe(true);
     expect(isSupportedChatGptConversationUrl('https://evil.example/c/11111111-1111-4111-8111-111111111111')).toBe(false);
@@ -790,311 +809,93 @@ describe('Issue #1377 cancellation actuator and receipt admission', () => {
     expect(isSupportedChatGptConversationUrl('https://chatgpt.com/c/not-a-uuid')).toBe(false);
   });
 
-  it('requires explicit authority before inspecting a Stop control', async () => {
+  it('never inspects or clicks Stop from caller-supplied explicit authority alone', async () => {
     const count = vi.fn(async () => 1);
     const click = vi.fn(async () => undefined);
-    const page = {
-      isClosed: () => false,
-      locator: () => ({
-        count,
-        first: () => ({ click, waitFor: vi.fn(async () => undefined) }),
-      }),
-    };
-    await expect(stopOwnedGeneration(page)).resolves.toBe('not_attempted_authority_absent');
+    const page = { isClosed: () => false, locator: () => ({
+      count, first: () => ({ click, waitFor: vi.fn(async () => undefined) }),
+    }) };
+    expect(await stopOwnedGeneration(page)).toBe('not_attempted_authority_absent');
+    expect(await stopOwnedGeneration(page, EXPLICIT_CANCELLATION_AUTHORITY)).toBe('not_attempted_identity_unproven');
     expect(count).not.toHaveBeenCalled();
     expect(click).not.toHaveBeenCalled();
   });
 
-  it('does not click when the Stop control is absent or ambiguous', async () => {
-    for (const countValue of [0, 2]) {
-      const click = vi.fn(async () => undefined);
-      const close = vi.fn(async () => undefined);
-      const goto = vi.fn(async () => undefined);
-      const page = {
-        isClosed: () => false,
-        close,
-        goto,
-        locator: () => ({
-          count: vi.fn(async () => countValue),
-          first: () => ({ click, waitFor: vi.fn(async () => undefined) }),
-        }),
-      };
-      await expect(stopOwnedGeneration(page, EXPLICIT_CANCELLATION_AUTHORITY))
-        .resolves.toBe('not_attempted_control_absent_or_ambiguous');
-      expect(click).toHaveBeenCalledTimes(0);
-      expect(close).toHaveBeenCalledTimes(0);
-      expect(goto).toHaveBeenCalledTimes(0);
+  it('does not connect, click Stop or report cancelled even for an exact URL and historical marker', async () => {
+    const { root, receipt } = admittedSentFixture();
+    const page = { url: () => ownedUrl, close: vi.fn(), locator: vi.fn() };
+    const sibling = { url: () => ownedUrl, close: vi.fn(), locator: vi.fn() };
+    const connect = vi.fn(async () => ({}));
+    const enumeratePages = vi.fn(async () => [page, sibling]);
+    const readUserMessages = vi.fn(async () => ({
+      messages: [{ role: 'user' as const, text: `${marker}\n\nprompt` }], incomplete: false,
+    }));
+    const stop = vi.fn(async () => 'confirmed' as const);
+    try {
+      const result = await cancelOwnedGenerationFromReceipt(receipt, cdp, EXPLICIT_CANCELLATION_AUTHORITY, {
+        connect, enumeratePages, readUserMessages, stop,
+      });
+      expect(result).toMatchObject({
+        state: 'driver_error', cause: 'cancellation_owned_tab_and_generation_unproven',
+        sendCount: 1, stopOutcome: 'not_attempted_identity_unproven',
+        identityProven: false, conversationUrl: ownedUrl,
+      });
+      expect(connect).toHaveBeenCalledTimes(0);
+      expect(enumeratePages).toHaveBeenCalledTimes(0);
+      expect(readUserMessages).toHaveBeenCalledTimes(0);
+      expect(stop).toHaveBeenCalledTimes(0);
+      expect(page.close).not.toHaveBeenCalled();
+      expect(sibling.close).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it('does not click when the Stop control is unreadable before the click', async () => {
-    const click = vi.fn(async () => undefined);
-    const count = vi.fn(async () => {
-      throw new Error('stop-control-unreadable');
-    });
-    const close = vi.fn(async () => undefined);
-    const goto = vi.fn(async () => undefined);
-    const page = {
-      isClosed: () => false,
-      close,
-      goto,
-      locator: () => ({
-        count,
-        first: () => ({ click, waitFor: vi.fn(async () => undefined) }),
-      }),
-    };
-
-    await expect(stopOwnedGeneration(page, EXPLICIT_CANCELLATION_AUTHORITY))
-      .resolves.toBe('not_attempted_control_absent_or_ambiguous');
-    expect(count).toHaveBeenCalledTimes(1);
-    expect(click).toHaveBeenCalledTimes(0);
-    expect(close).toHaveBeenCalledTimes(0);
-    expect(goto).toHaveBeenCalledTimes(0);
+  it('rejects foreign profile/marker and missing exact durable observations without Stop', async () => {
+    const { root, receipt } = admittedSentFixture();
+    try {
+      const foreignMarkerReceipt = {
+        ...receipt, marker: `OPKTURNV1${'34'.repeat(16)}`,
+      };
+      expect((await cancelOwnedGenerationFromReceipt(
+        foreignMarkerReceipt, cdp, EXPLICIT_CANCELLATION_AUTHORITY,
+      )).cause).toBe('cancellation_durable_identity_or_phase_mismatch');
+      expect((await cancelOwnedGenerationFromReceipt(
+        { ...receipt, configured_profile_key: 'unrelated-profile' },
+        cdp, EXPLICIT_CANCELLATION_AUTHORITY,
+      )).cause).toBe('cancellation_durable_invocation_unreadable');
+      expect((await cancelOwnedGenerationFromReceipt(
+        receipt, cdp,
+      )).stopOutcome).toBe('not_attempted_authority_absent');
+    } finally {
+      delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
-  it('clicks exactly once and confirms only from a fresh hidden witness', async () => {
-    const click = vi.fn(async () => undefined);
-    const waitFor = vi.fn(async () => undefined);
-    const count = vi.fn(async () => 1);
-    const page = {
-      isClosed: () => false,
-      locator: () => ({
-        count,
-        first: () => ({ click, waitFor }),
-      }),
-    };
-    await expect(stopOwnedGeneration(page, EXPLICIT_CANCELLATION_AUTHORITY))
-      .resolves.toBe('confirmed');
-    expect(click).toHaveBeenCalledTimes(1);
-    expect(waitFor).toHaveBeenCalledTimes(1);
-    expect(count).toHaveBeenCalledTimes(1);
-  });
-
-  it('never retries when the post-click confirmation remains visible', async () => {
-    const click = vi.fn(async () => undefined);
-    const waitFor = vi.fn(async () => { throw new Error('still-visible'); });
-    const count = vi.fn(async () => 1);
-    const page = {
-      isClosed: () => false,
-      locator: () => ({
-        count,
-        first: () => ({ click, waitFor }),
-      }),
-    };
-    await expect(stopOwnedGeneration(page, EXPLICIT_CANCELLATION_AUTHORITY))
-      .resolves.toBe('unconfirmed');
-    expect(click).toHaveBeenCalledTimes(1);
-    expect(waitFor).toHaveBeenCalledTimes(1);
-    expect(count).toHaveBeenCalledTimes(2);
-  });
-
-  it('clicks once and reports unavailable when post-click confirmation is unreadable', async () => {
-    let countCalls = 0;
-    const click = vi.fn(async () => undefined);
-    const waitFor = vi.fn(async () => { throw new Error('still-visible'); });
-    const count = vi.fn(async () => {
-      countCalls += 1;
-      if (countCalls === 1) return 1;
-      throw new Error('post-click-count-unreadable');
-    });
-    const page = {
-      isClosed: () => false,
-      locator: () => ({
-        count,
-        first: () => ({ click, waitFor }),
-      }),
-    };
-
-    await expect(stopOwnedGeneration(page, EXPLICIT_CANCELLATION_AUTHORITY))
-      .resolves.toBe('unavailable');
-    expect(click).toHaveBeenCalledTimes(1);
-    expect(waitFor).toHaveBeenCalledTimes(1);
-    expect(count).toHaveBeenCalledTimes(2);
-  });
-
-  it('does not let a valid receipt and exact ownership proof substitute for authority', async () => {
-    const owned = { url: () => ownedUrl, close: vi.fn() };
-    const sibling = { url: () => foreignUrl, close: vi.fn() };
-    const connect = vi.fn(async () => ({}));
-    const enumeratePages = vi.fn(async () => [sibling, owned]);
-    const stop = vi.fn(async () => 'confirmed' as const);
-    const receipt = buildBrowserTurnCancellationReceipt({
-      invocationId: 'inv-1377-no-authority',
-      profileKey: 'profile-1377',
-      conversationUrl: ownedUrl,
-      marker,
-      sendCount: 1,
-    });
-    expect(receipt).not.toBeNull();
-    const result = await cancelOwnedGenerationFromReceipt(receipt!, 'http://127.0.0.1:9222', {
-      connect,
-      releaseBrowser: vi.fn(async () => undefined),
-      enumeratePages,
-      readUserMessages: vi.fn(async () => ({
-        messages: [{ role: 'user' as const, text: `${marker}\n\nprompt` }],
-        incomplete: false,
-      })),
-      stop,
-    });
-    expect(result).toMatchObject({
-      state: 'driver_error',
-      cause: 'child_stdout_eof_timeout_cancellation_authority_absent',
-      sendCount: 1,
-      stopOutcome: 'not_attempted_authority_absent',
-      identityProven: false,
-      conversationUrl: ownedUrl,
-    });
-    expect(connect).not.toHaveBeenCalled();
-    expect(enumeratePages).not.toHaveBeenCalled();
-    expect(stop).toHaveBeenCalledTimes(0);
-    expect(owned.close).toHaveBeenCalledTimes(0);
-    expect(sibling.close).toHaveBeenCalledTimes(0);
-  });
-
-  it('allows one exact-owner Stop only when separate authority is present', async () => {
-    const owned = { url: () => ownedUrl, close: vi.fn() };
-    const sibling = { url: () => foreignUrl, close: vi.fn() };
-    const stop = vi.fn(async () => 'confirmed' as const);
-    const receipt = buildBrowserTurnCancellationReceipt({
-      invocationId: 'inv-1377-authorized',
-      profileKey: 'profile-1377',
-      conversationUrl: ownedUrl,
-      marker,
-      sendCount: 1,
-    });
-    expect(receipt).not.toBeNull();
-    const result = await cancelOwnedGenerationFromReceipt(
-      receipt!,
-      'http://127.0.0.1:9222',
-      EXPLICIT_CANCELLATION_AUTHORITY,
-      {
-        connect: vi.fn(async () => ({})),
-        releaseBrowser: vi.fn(async () => undefined),
-        enumeratePages: vi.fn(async () => [sibling, owned]),
-        readUserMessages: vi.fn(async (page) => ({
-          messages: page === owned
-            ? [{ role: 'user' as const, text: `${marker}\n\nprompt` }]
-            : [{ role: 'user' as const, text: 'foreign prompt' }],
-          incomplete: false,
-        })),
-        stop,
-      },
-    );
-    expect(result).toMatchObject({
-      state: 'no_reply',
-      cause: 'child_stdout_eof_timeout_generation_stopped',
-      sendCount: 1,
-      stopOutcome: 'confirmed',
-      identityProven: true,
-      conversationUrl: ownedUrl,
-    });
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(stop).toHaveBeenCalledWith(owned);
-    expect(owned.close).not.toHaveBeenCalled();
-    expect(sibling.close).not.toHaveBeenCalled();
-  });
-
-  it('fails closed on duplicate exact-URL pages even with explicit authority', async () => {
-    const first = { url: () => ownedUrl, close: vi.fn() };
-    const second = { url: () => ownedUrl, close: vi.fn() };
-    const stop = vi.fn(async () => 'confirmed' as const);
-    const receipt = buildBrowserTurnCancellationReceipt({
-      invocationId: 'inv-1377-duplicate',
-      profileKey: 'profile-1377',
-      conversationUrl: ownedUrl,
-      marker,
-      sendCount: 1,
-    });
-    const result = await cancelOwnedGenerationFromReceipt(
-      receipt!,
-      'http://127.0.0.1:9222',
-      EXPLICIT_CANCELLATION_AUTHORITY,
-      {
-        connect: vi.fn(async () => ({})),
-        releaseBrowser: vi.fn(async () => undefined),
-        enumeratePages: vi.fn(async () => [first, second]),
-        readUserMessages: vi.fn(async () => ({
-          messages: [{ role: 'user' as const, text: `${marker}\n\nprompt` }],
-          incomplete: false,
-        })),
-        stop,
-      },
-    );
-    expect(result).toMatchObject({
-      state: 'driver_error',
-      stopOutcome: 'not_attempted_identity_unproven',
-      identityProven: false,
-    });
-    expect(stop).toHaveBeenCalledTimes(0);
-    expect(first.close).toHaveBeenCalledTimes(0);
-    expect(second.close).toHaveBeenCalledTimes(0);
-  });
-
-  it('fails closed when the owned identity is absent, missing, or unreadable', async () => {
-    const cases = [
-      {
-        id: 'missing-page',
-        pages: [],
-        messages: [],
-        incomplete: false,
-        cause: 'child_stdout_eof_timeout_owned_conversation_not_found',
-      },
-      {
-        id: 'missing-marker',
-        pages: [{ url: () => ownedUrl }],
-        messages: [{ role: 'user' as const, text: 'foreign prompt' }],
-        incomplete: false,
-        cause: 'child_stdout_eof_timeout_cancellation_identity_unproven',
-      },
-      {
-        id: 'unreadable-messages',
-        pages: [{ url: () => ownedUrl }],
-        messages: [],
-        incomplete: true,
-        cause: 'child_stdout_eof_timeout_cancellation_identity_unreadable',
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const stop = vi.fn(async () => 'confirmed' as const);
-      const readUserMessages = vi.fn(async () => ({
-        messages: testCase.messages,
-        incomplete: testCase.incomplete,
-      }));
-      const receipt = buildBrowserTurnCancellationReceipt({
-        invocationId: `inv-1377-${testCase.id}`,
-        profileKey: 'profile-1377',
-        conversationUrl: ownedUrl,
-        marker,
-        sendCount: 1,
-      });
-      expect(receipt).not.toBeNull();
-      const result = await cancelOwnedGenerationFromReceipt(
-        receipt!,
-        'http://127.0.0.1:9222',
-        EXPLICIT_CANCELLATION_AUTHORITY,
-        {
-          connect: vi.fn(async () => ({})),
-          releaseBrowser: vi.fn(async () => undefined),
-          enumeratePages: vi.fn(async () => testCase.pages),
-          readUserMessages,
-          stop,
-        },
-      );
-      expect(result).toMatchObject({
-        state: 'driver_error',
-        cause: testCase.cause,
-        sendCount: 1,
-        stopOutcome: 'not_attempted_identity_unproven',
-        identityProven: false,
-        conversationUrl: ownedUrl,
-      });
-      expect(stop).toHaveBeenCalledTimes(0);
-      expect(readUserMessages).toHaveBeenCalledTimes(testCase.incomplete || testCase.messages.length > 0 ? 1 : 0);
+  it('exposes the native cancel command and returns non-success without any browser effects', async () => {
+    const { root, receipt } = admittedSentFixture();
+    const receiptFile = join(root, 'receipt.json');
+    writeFileSync(receiptFile, JSON.stringify(receipt), 'utf8');
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const code = await runStateLightEntry(['cancel', '--receipt-file', receiptFile, '--cdp', cdp]);
+      expect(code).not.toBe(0);
+      expect(writes.join('')).toContain('"state":"driver_error"');
+      expect(writes.join('')).toContain('"stop_outcome":"not_attempted_identity_unproven"');
+      expect(writes.join('')).not.toContain('"state":"cancelled"');
+    } finally {
+      spy.mockRestore();
+      delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
-
 
 
 describe('Issue #1377 production runStateLightTurn recovery integration', () => {
