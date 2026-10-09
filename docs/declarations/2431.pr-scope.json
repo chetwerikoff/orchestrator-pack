@@ -1,0 +1,24 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2431,
+  "declared_paths": [
+    "docs/declarations/2431.pr-scope.json",
+    "scripts/flow-manager-long-running-child.test.ts"
+  ],
+  "denylist": [
+    ".claude/skills/discuss-with-gpt/local.config.json",
+    ".env",
+    ".github/workflows/",
+    "credentials/",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/flow-manager-long-running-child.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/flow-manager-long-running-child.test.ts"
+  ],
+  "source_revision": "8c3b385f1c4b08c0cf497930a51302974bab2e7e"
+}

@@ -207,11 +207,23 @@ describe('observable post-send exits (#2416)', () => {
       : exit === 'launcher-SIGTERM' ? 'process.kill(process.ppid, "SIGTERM"); setInterval(() => {}, 1000);'
       : `process.kill(process.pid, '${exit}');`;
     const fixture = nodeFixture(`(async () => {
+      const { resolveBrowserTurnLivenessTiming, startTurnScopedHeartbeatScheduler } = await import(${JSON.stringify(livenessContractUrl)});
+      const heartbeat = startTurnScopedHeartbeatScheduler({
+        timing: resolveBrowserTurnLivenessTiming(),
+        emit: () => process.stdout.write(JSON.stringify({
+          schema: 'observation-heartbeat/v1', phase: 'admitted_pre_send',
+          poll_count: 0, observation_state: 'admitted', stable_reads: 0, completion_ready: false,
+        }) + '\\n'),
+      });
       const { admitStateLightTurnObservation, transitionStateLightTurnObservation } = await import(${JSON.stringify(observationUrl)});
       const profileKey = ${JSON.stringify(profileKey)}; const invocationId = ${JSON.stringify(invocation)};
       admitStateLightTurnObservation({ profileKey, invocationId, marker: 'OPKTURNV1a97e3f70e9c07fa75c0f03840c0528a2' });
+      // Deterministic CI-load reproduction: preparation outlasts startup admission.
+      await new Promise(done => setTimeout(done, 600));
       transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'dispatching', reason: 'fixture_dispatch' });
       transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'sent_unbound', reason: 'send_observed_fresh_chat', sendCount: 1, sendWitness: 'numeric_send_count' });
+      // Stop pre-send liveness before exercising each abnormal post-send exit.
+      heartbeat.dispose();
       ${terminate}
     })();`);
     const config = {
