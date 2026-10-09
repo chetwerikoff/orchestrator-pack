@@ -27,7 +27,14 @@ function write(root: string, relative: string, content: string): void {
 
 function mappingFixture(): string {
   const root = mkdtempSync(path.join(tmpdir(), 'merge-adoption-map-'));
-  write(root, '.git/config', '[remote "origin"]\n  url = ' + readOriginUrlFromGitConfig(process.cwd()) + '\n');
+  // The real card parser reads origin via git, not a raw .git/config; create an actual synthetic checkout.
+  for (const args of [
+    ['-C', root, 'init', '-q'],
+    ['-C', root, 'remote', 'add', 'origin', readOriginUrlFromGitConfig(process.cwd())],
+  ]) {
+    const result = runProcessSync({ command: 'git', args, inheritParentEnv: true });
+    if (!result.ok) throw new Error('synthetic fixture git repository initialization failed');
+  }
   write(root, 'package.json', JSON.stringify({ imports: { '#opk-kernel/*': './scripts/kernel/*.ts' } }));
   write(root, 'scripts/orchestrator-side-process-registry.json', JSON.stringify({ children: [{ id: 'pr2-scheduler', script: 'pr2-foundation/scheduler.ts' }] }));
   write(root, 'scripts/orchestrator-wake-supervisor.ts', "import './lib/supervisor-core.ts';\nimport '#opk-kernel/shared';\n");
@@ -427,6 +434,11 @@ describe('Issue #2145 merge adoption effect verification', () => {
         expect(template.coordinatorMessage).toContain('daemon-reload');
         expect(template.operationalOutcome).toBe('operationally_incomplete');
         expect(template.consumers.find((row) => row.id === 'fleet-wake-template')?.action).toBe('none');
+      const mixed = mapChangedPathsToConsumers(templateRoot, [
+        'scripts/fleet/fleet-wake.ts', 'scripts/fleet/fleet-wake@.service',
+      ]);
+      expect(mixed.map((row) => row.id)).toContain('fleet-wake-template');
+      expect(mixed.some((row) => row.id.startsWith('fleet-wake@'))).toBe(false);
       } finally { rmSync(templateRoot, { recursive: true, force: true }); }
     } finally {
       if (originalXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = originalXdg;
@@ -566,6 +578,61 @@ describe('Issue #2145 merge adoption effect verification', () => {
     });
     expect(noFleetTime.effect).toContain('fleet_adopted_at_missing_or_invalid');
     expect(noFleetTime.operationalOutcome).toBe('operationally_incomplete');
+  });
+
+
+  it('Issue #2445: shared MainPID/start-ticks cannot authorize either instance, and failed third unit cannot hide behind green peers', async () => {
+    const old = Date.now() - 10_000;
+    const fleetCutoff = Date.now() - 1_000;
+    const projects = ['orchestrator-pack', 'leopoker', 'sample-target'];
+    const consumers = projects.map((projectId) => ({
+      id: 'fleet-wake@' + projectId + '.service', matchedPaths: ['scripts/fleet/fleet-wake.ts'],
+    }));
+    let aliasControls = 0;
+    const aliased = await verifyAdoptionEffect({
+      adoptionStartedAtMs: old,
+      fleetAdoptedAtMs: fleetCutoff,
+      consumers: consumers.slice(0, 2),
+      controllers: Object.fromEntries(consumers.slice(0, 2).map((row) => [row.id, {
+        observe: () => ({ state: 'running' as const, startedAtMs: old, identity: '123:456' }),
+        restart: () => { aliasControls += 1; },
+      }])),
+      runLiveCheck: () => ({ ok: true }),
+    });
+    expect(aliased.consumers.map((row) => row.before.reason)).toEqual([
+      'fleet_wake_shared_process_identity', 'fleet_wake_shared_process_identity',
+    ]);
+    expect(aliased.consumers.every((row) => !row.verified && row.action === 'none')).toBe(true);
+    expect(aliasControls).toBe(0);
+    expect(aliased.operationalOutcome).toBe('operationally_incomplete');
+
+    const restarts: string[] = [];
+    const controllers: Record<string, ConsumerController> = {};
+    for (const row of consumers) {
+      let restarted = false;
+      controllers[row.id] = {
+        observe: () => ({
+          state: 'running', startedAtMs: restarted ? Date.now() + 1000 : old,
+          identity: restarted ? row.id + ':new' : row.id + ':old',
+        }),
+        restart: () => {
+          restarts.push(row.id);
+          if (row.id.includes('leopoker')) throw new Error('synthetic_control_failed');
+          restarted = true;
+        },
+      };
+    }
+    const partial = await verifyAdoptionEffect({
+      adoptionStartedAtMs: old, fleetAdoptedAtMs: fleetCutoff, consumers, controllers,
+      runLiveCheck: () => ({ ok: true }),
+    });
+    expect(restarts).toHaveLength(3);
+    expect(partial.operationalOutcome).toBe('operationally_incomplete');
+    expect(partial.effect).toContain('restart_failed:fleet-wake@leopoker.service');
+    expect(partial.consumers.find((row) => row.id === 'fleet-wake@orchestrator-pack.service')?.verified).toBe(true);
+    expect(partial.consumers.find((row) => row.id === 'fleet-wake@sample-target.service')?.verified).toBe(true);
+    expect(partial.consumers.find((row) => row.id === 'fleet-wake@leopoker.service')?.verified).toBe(false);
+    expect(partial.coordinatorMessage).toContain('fleet-wake@leopoker.service');
   });
 
   it('looks for supervisor status in the supervisor directory the cutover layout defines', () => {
