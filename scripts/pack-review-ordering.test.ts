@@ -3,7 +3,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startPackReview } from './pack-review-runner.ts';
 import { listPackReviewRuns } from './lib/pack-review-run-store.ts';
 import {
@@ -25,11 +25,12 @@ const NEXT_HEAD = 'b'.repeat(40);
 
 describe('Issue #2250 retire smoke ordering without removing pack-review cycle authority', () => {
   const roots: string[] = [];
-  afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+  afterEach(() => { vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
   function authorityFixture(tier: 'T1' | 'T2' | 'T3' = 'T3') {
     const root = mkdtempSync(join(tmpdir(), 'pack-review-no-smoke-ordering-'));
     roots.push(root);
+    vi.stubEnv('XDG_CONFIG_HOME', join(root, 'test-config'));
     const options: PackReviewAuthorityOptions = { storeRoot: root };
     const authority = initializePackReviewAuthority({
       prNumber: 1436,

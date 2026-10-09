@@ -562,11 +562,11 @@ Keep its prompt authority-driven: provide the live Issue URL, PR URL, and exact
 reviewed head, then instruct it to read the live Issue, PR, current CI, and
 current pack-review/source comments and fix every applicable finding. Do not
 paste a stale findings summary when GitHub is available. One fixer conversation
-may continue for concrete CI/fix gaps in that same correction episode. Any
-required code/spec correction must advance the PR to a Git strict descendant of
-the findings-reviewed head, and current required CI must be green before review
-progression. The fixer never merges unless the direct top-level operator
-separately orders merge.
+may continue for concrete CI/fix gaps in that same correction episode. Required
+code corrections advance the PR to a Git strict descendant of the findings-reviewed
+head; current required CI must be green before review progression. The guarded
+final-cap Issue-only case below can settle at the unchanged reviewed head. The
+fixer never merges unless the direct top-level operator separately orders merge.
 
 Preserve the existing logical-round economics and settlement authority:
 
@@ -577,14 +577,50 @@ T3 -> 2 logical rounds x 3 GPT sources
 ```
 
 A findings-bearing pre-final round is fixed to a strict descendant before the
-next required round. Final-cap findings are fixed to a strict descendant and
-settled through the existing scoped reconcile; do not launch a cap+1 round:
+next required round. Final-cap code fixes require a proven strict descendant.
+Final-cap Issue-only resolution uses the same scoped reconcile; do not launch a
+cap+1 round or manufacture an empty/process-only commit:
 
 ```text
 node --experimental-strip-types scripts/pack-review-runner.ts reconcile \
   --source-repo-root <path> --repo-slug <owner/repo> \
   --pr-number <PR_NUMBER> --immediate
 ```
+
+At the unchanged reviewed head, scoped reconcile may settle a blocking scope-fence
+finding resolved in the linked Issue's live allowed-roots. It requires the exact
+repository/PR/Issue/head, terminal run/current cycle/final logical round, every
+credentialed source complete (no degraded coverage), the frozen Issue snapshot,
+and current-head required CI green (excluding the settlement-owned pack-review
+status). It consumes the ordinary trusted author disposition convention owned by
+[`create-issue-draft`](../.cursor/skills/create-issue-draft/SKILL.md): the exact
+`Rn dispositions` run/head section must resolve every blocking finding by full
+finding code/signature, name the live Issue revision and corrected root, and
+explicitly state that no code or behavior change was made for that disposition.
+Earlier rounds' FIXED entries and a non-blocking DEFER cannot answer a blocker.
+Credentialed source `scope` and `scope-violation` findings use the same eligibility
+predicate, based on the persisted typed category and canonical fingerprint,
+never scope/signature lines quoted in free-form reviewer prose. Corrected paths
+use the existing scope guard's normalized glob/prefix matcher: an effective live
+allowed root must admit the path, and neither the live Issue denylist nor the
+repository denylist may deny it. SHA-green CI does not supersede a denylist
+retained in a later live Issue revision.
+
+The registered `issue-body-edit-evidence` query in the tracked GitHub inventory
+provides the latest undeleted content-edit body and timestamp; that body must
+equal the canonical REST Issue body before and after the read, differ from the
+frozen snapshot, and have been edited after the terminal run completed. A title
+or comment timestamp, bare FIXED text, missing/deleted history, wrong publisher
+or identity, body drift or non-green CI refuses with
+`final_cap_strict_descendant_required` and names the allowed remedy. No alternate
+transport or evidence receipt is created.
+
+Eligible settlement goes through the existing state transition, preserves the
+terminal findings, frozen cycle/cap and source identities, records settlement
+kind `same_head_issue_resolution`, and publishes the existing required status.
+A failed publication is retried by scoped reconcile without another logical
+round; successful repeated reconcile remains idempotent. Changed heads retain
+the existing observation and proven strict-descendant path.
 
 A completed `reviewStageComplete` remains completed. A later smoke
 fix does not reopen pack review.

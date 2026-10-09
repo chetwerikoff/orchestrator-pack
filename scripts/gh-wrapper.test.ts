@@ -52,7 +52,9 @@ import {
 } from './lib/pack-gpt-reviewer.ts';
 import { createPackGptSourceCommentTransport } from './lib/pack-gpt-source-comment.ts';
 import { createGithubReviewTransport } from './lib/github-review-reconciliation.ts';
-import { resolveCurrentPrHead } from './pack-review-runner.ts';
+import { resolveCurrentPrHead, resolveFinalCapIssueBodyRevision } from './pack-review-runner.ts';
+import { computeBoundIssueSnapshotHash } from './lib/reverify-bound-issue-snapshot.ts';
+import { runProcess } from './kernel/subprocess.ts';
 import { fetchIssueBodyFromGitHub } from './invoke-reviewer-contract-mapping.ts';
 import { resolveIssueNumber } from '../plugins/codex-pr-reviewer/lib/scope_context.ts';
 import { runSmokeGhSync } from './worker-smoke-run.ts';
@@ -1418,6 +1420,27 @@ tryGraphqlDegradedPassthrough(argv, fakeGh, { env: process.env });`;
     return readFileSync(auditPath, 'utf8').trim().split('\n').filter(Boolean);
   }
 
+  it('keeps the registered Issue #2428 body-edit query on unchanged quota/degraded passthrough', () => {
+    const inventory = JSON.parse(readFileSync(join(wrapperDir, 'lib/graphql-quota-github-read-inventory.json'), 'utf8')) as { rows: Array<{ id: string; ownerClass: string; query?: string }> };
+    const row = inventory.rows.find((entry) => entry.id === 'issue-body-edit-evidence')!;
+    expect(row.ownerClass).toBe('graphql_fail_fast');
+    // Live Issue2428 calibration: first is r01/latest; last was r00/creation.
+    expect(row.query).toContain('userContentEdits(first: 1)');
+    expect(row.query).not.toContain('userContentEdits(last:');
+    const argv = ['api', 'graphql', '-f', `query=${row.query}`, '-f', 'owner=example', '-f', 'name=target', '-F', 'number=228'];
+    const harness = buildGraphqlDegradedHarness({ initialRemaining: 5000, forceGraphqlQuotaError: true });
+    try {
+      const first = spawnGraphqlPassthrough(harness.fakeGh, argv, harness.env);
+      expect(first.status).not.toBe(0);
+      expect(first.stderr).toMatch(/graphql_rate_limit|primary quota exhausted/i);
+      expect(auditLines(harness.audit)).toContain(argv.join(' '));
+      const second = spawnGraphqlPassthrough(harness.fakeGh, argv, harness.env);
+      expect(second.status).not.toBe(0);
+      expect(second.stderr).toContain('graphql_degraded_fail_fast');
+      expect(auditLines(harness.audit).filter((line) => line === argv.join(' '))).toHaveLength(1);
+    } finally { harness.cleanup(); }
+  });
+
   it('arms from live primary-quota failure and suppresses a second subprocess without network GraphQL', () => {
     const harness = buildGraphqlDegradedHarness({ initialRemaining: 5000, forceGraphqlQuotaError: true });
     try {
@@ -2456,5 +2479,57 @@ describe('Issue #1623 focused tracked-wrapper runtime harness', () => {
       if (priorVitest === undefined) delete process.env.VITEST;
       else process.env.VITEST = priorVitest;
     }
+  });
+});
+
+describe('Issue #2428 registered body-edit evidence identity/content read', () => {
+  function evidenceFixture() {
+    const body = '<!-- source-revision: r12 -->\ncorrected allowed-roots';
+    const url = 'https://github.com/example/target/issues/228';
+    const edit = { editedAt: '2026-10-08T20:50:00Z', deletedAt: null, diff: body };
+    const rest = { node_id: 'issue-node-228', number: 228, html_url: url, repository_url: 'https://api.github.com/repos/example/target', body };
+    const graph = { data: { repository: { nameWithOwner: 'example/target', issue: { id: rest.node_id, number: 228, url, body,
+      lastEditedAt: edit.editedAt, userContentEdits: { totalCount: 2, nodes: [edit] } } } } };
+    const input = { sourceRepoRoot: resolve(import.meta.dirname, '..'), repoSlug: 'example/target', issueNumber: 228,
+      terminalizedAt: '2026-10-08T20:40:00Z', frozenBodyHash: computeBoundIssueSnapshotHash('old body') };
+    const read = vi.fn(async (request: Parameters<typeof runProcess>[0]) => ({
+      ok: true, outcome: 'exit' as const, exitCode: 0, stdout: JSON.stringify(request.args?.includes('graphql') ? graph : rest),
+      stderr: '', signal: null, durationMs: 1, timedOut: false, cancelled: false,
+    }));
+    return { body, rest, graph, input, read, edit };
+  }
+  it('binds the owning query to the selected repository, exact Issue node and unchanged canonical REST body', async () => {
+    const f = evidenceFixture();
+    expect(await resolveFinalCapIssueBodyRevision(f.input, f.read as typeof runProcess)).toEqual({ body: f.body, revision: 'r12', editedAt: f.edit.editedAt });
+    const inventory = JSON.parse(readFileSync(join(import.meta.dirname, 'lib/graphql-quota-github-read-inventory.json'), 'utf8')) as { rows: Array<{ id: string; query?: string }> };
+    const query = inventory.rows.find((row) => row.id === 'issue-body-edit-evidence')!.query;
+    expect(f.read.mock.calls[1]![0].args).toEqual(['api', 'graphql', '-f', `query=${query}`, '-f', 'owner=example', '-f', 'name=target', '-F', 'number=228']);
+    for (const [request] of f.read.mock.calls) expect(request.command).toBe(resolve(import.meta.dirname, 'gh'));
+    expect(f.read.mock.calls[0]![0].args).toEqual(['api', 'repos/example/target/issues/228']);
+    expect(f.read.mock.calls[2]![0].args).toEqual(f.read.mock.calls[0]![0].args);
+  });
+  it.each(['repository', 'Issue', 'node', 'body', 'edit-content', 'deleted', 'pre-terminal', 'stale', 'history-missing'])('refuses %s evidence', async (kind) => {
+    const f = evidenceFixture();
+    const issue = f.graph.data.repository.issue;
+    if (kind === 'repository') f.graph.data.repository.nameWithOwner = 'example/other';
+    if (kind === 'Issue') issue.number = 229;
+    if (kind === 'node') issue.id = 'other-node';
+    if (kind === 'body') f.rest.body = 'drifted body';
+    if (kind === 'edit-content') f.edit.diff = 'other content';
+    if (kind === 'deleted') Object.assign(f.edit, { deletedAt: f.edit.editedAt });
+    if (kind === 'pre-terminal') issue.lastEditedAt = f.edit.editedAt = f.input.terminalizedAt;
+    if (kind === 'stale') issue.lastEditedAt = '2026-10-08T20:55:00Z';
+    if (kind === 'history-missing') issue.userContentEdits.nodes = [];
+    await expect(resolveFinalCapIssueBodyRevision(f.input, f.read as typeof runProcess)).rejects.toThrow();
+  });
+  it('does not replace a failed tracked GraphQL read with another transport or timestamp inference', async () => {
+    const f = evidenceFixture();
+    f.read.mockImplementation(async (request) => {
+      if (request.args?.includes('graphql')) return { ok: false, outcome: 'exit' as const, exitCode: 1,
+        stdout: '', stderr: 'graphql_degraded_fail_fast: primary quota exhausted', signal: null, durationMs: 1, timedOut: false, cancelled: false };
+      return { ok: true, outcome: 'exit' as const, exitCode: 0, stdout: JSON.stringify(f.rest), stderr: '', signal: null, durationMs: 1, timedOut: false, cancelled: false };
+    });
+    await expect(resolveFinalCapIssueBodyRevision(f.input, f.read as typeof runProcess)).rejects.toThrow('graphql_degraded_fail_fast');
+    expect(f.read).toHaveBeenCalledTimes(2);
   });
 });

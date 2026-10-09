@@ -80,6 +80,7 @@ function harness(storeRoot: string): void {
   process.env.OPK_VITEST_HARNESS = '1';
   process.env.PACK_REVIEWER = 'codex';
   process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
+  process.env.XDG_CONFIG_HOME = join(storeRoot, 'test-config');
   process.env.OPK_BASE_DIR = join(storeRoot, 'base');
   process.env.OPK_REVIEW_CLAIM_DIR = join(storeRoot, 'base', 'projects', PROJECT, 'review-start-claims');
   process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR = join(storeRoot, 'bound-issue-snapshots');

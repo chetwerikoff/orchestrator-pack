@@ -1,9 +1,11 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mapGptReplyToReviewPayload } from './lib/pack-gpt-reviewer.ts';
 import {
   observeGptPackReviewAttempt,
   observeNativePackReviewAttempt,
@@ -23,6 +25,8 @@ import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 import { runProcess } from './kernel/subprocess.ts';
 import {
   boundIssueSnapshotArtifactPaths,
+  captureBoundIssueSnapshot,
+  computeBoundIssueSnapshotHash,
   resolveBoundIssueSnapshot,
 } from './lib/reverify-bound-issue-snapshot.ts';
 import {
@@ -1430,5 +1434,311 @@ describe('Issue #2420 stale reconciliation linked-owner notification', () => {
     expect(f.notifications).toHaveLength(1);
     expect(f.statuses).toEqual(['error']);
     expect(getPackReviewRun(f.run.id, f.options)?.deliveryOutcomes.requiredStatus).toEqual(before);
+  });
+});
+
+describe('Issue #2428 production scoped same-head Issue resolution', () => {
+  const repository = 'chetwerikoff/orchestrator-pack';
+  const prNumber = 245;
+  const issueNumber = 228;
+  const reviewedHead = '491c0d17a3532d9c53d4993e05bfcdeda6ec6591';
+  const signature = 'c1218bc3453f2182a38b07ff4c4bbe8a24da86a2777fcaa9cb6d88ec9d37cc9e';
+  const code = '228:r13-test-outside-allowed-roots';
+  const revisedBody = '<!-- source-revision: r12 -->\n```allowed-roots\ntests/spot/test_field_benchmark_r13.py\n```\n```denylist\nvendor/**\npackages/core/**\n```\n';
+  const editedAt = '2026-10-08T20:50:00Z';
+  const terminalAt = '2026-10-08T20:40:00Z';
+  const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  // Captured raw source payload, PR245 comment6068701751, updated_at2026-10-08T20:44:03Z.
+  // Map through the same production source parser/emit seam rather than inventing a runtime finding.
+  const witnessSource = { findings: [
+    { type: 'scope', code, severity: 'blocking', path: 'tests/spot/test_field_benchmark_r13.py',
+      summary: 'FIX_NOW: PR #245 modifies this r13 golden-test file although it is absent from the explicitly bound allowed-roots fence in both the review request and Issue #228. The r12 A8 amendment does specifically authorize switching its evaluator-entering cases to evaluate_field_adjustment_v1, but it did not amend the fenced path scope. This is a concrete scope mismatch, not an objection to that small test correction; merging as-is either violates the declared file boundary or requires bypassing its enforcement. Have the operator reconcile the r12 exception with the authoritative allowed-roots/runner declaration (add this one exact test path) and re-run the ordinary scope check; alternatively remove the out-of-scope edit and resolve A8 within an expressly authorized boundary. No new machinery is needed.', source: 'gpt-browser' },
+    { type: 'quality', code: 'field:ambiguous-complete-window-undercount', severity: 'non-blocking', path: 'src/leopoker/spot/field.py',
+      summary: 'DEFER: _quality_summary_v2 sets per-month and aggregate complete_response_windows to eligible-parent count minus ambiguous_response_parents. Trigger: 120 already-admitted parents, one legal complete direct SB-call/BB-raise or SB-first-aggression prefix. It reports 119 complete windows and zero incomplete_eligible_windows even though all 120 #180 direct windows passed response_window_outcome; ambiguity is the unobserved later continuation, not a missing/invalid direct window. This makes operator source-completeness diagnostics misleading, but the count-qualified ambiguous cell already refuses before frequencies or EV, so it need not block merge. Cheap correction: retain structural complete-window count N and report the ambiguous-parent count separately, as /1 does for structurally valid unsupported prefixes; no new state or gate.', source: 'gpt-browser' },
+  ] };
+
+  function fixture(settings: { scopeType?: string; scopePath?: string; allowedRoot?: string; denylist?: string[]; summary?: string; details?: string; dispositionSignature?: string } = {}) {
+    const scopePath = settings.scopePath ?? witnessSource.findings[0]!.path;
+    const allowedRoot = settings.allowedRoot ?? scopePath;
+    const liveBody = `<!-- source-revision: r12 -->\n\`\`\`allowed-roots\n${allowedRoot}\n\`\`\`\n\`\`\`denylist\n${(settings.denylist ?? ['vendor/**', 'packages/core/**']).join('\n')}\n\`\`\`\n`;
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2428-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const options = { projectId: 'orchestrator-pack', storeRoot };
+    const frozenBody = '<!-- source-revision: r12 -->\n```allowed-roots\nsrc/**\n```\n';
+    captureBoundIssueSnapshot({ ...options, prNumber, prHeadSha: reviewedHead, issueNumber, issueBody: frozenBody });
+    let authority = initializePackReviewAuthority({
+      prNumber, headSha: reviewedHead, tier: 'T3', capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options,
+    });
+    authority = commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: authority.transitionSeq, status: 'clean', findingCount: 0, options,
+      terminal: { schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal', runId: 'fixture-r1',
+        targetSha: reviewedHead, reviewVerdict: 'clean', findingCount: 0, findingsDigest: fingerprint([]),
+        automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 1 },
+    });
+    const mapped = mapGptReplyToReviewPayload(JSON.stringify({ findings: [
+      { ...witnessSource.findings[0], type: settings.scopeType ?? 'scope', path: scopePath,
+        summary: settings.summary ?? witnessSource.findings[0]!.summary, ...(settings.details ? { details: settings.details } : {}) }, witnessSource.findings[1],
+    ] }));
+    const [blocker, deferred] = mapped.findings;
+    if (!blocker || !deferred) throw new Error('observed source payload lost its two findings');
+    const sourceSignature = settings.dispositionSignature ?? blocker.fingerprint;
+    const run = createPackReviewRun({ ...options, prNumber, headSha: reviewedHead, trustedPackRoot: process.cwd(),
+      sourceRepoRoot: process.cwd(), canonicalRepository: repository, resolvedReviewer: 'gpt',
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal: 2, logicalRoundCap: 2, now: new Date(terminalAt),
+    }).run;
+    const findings = [{ ...blocker, sourceSlotId: 'source-01' }, { ...deferred, sourceSlotId: 'source-01' }];
+    updatePackReviewRun(run.id, { reviewRound: {
+      schema: 'pack-review-gpt-round/v1', reviewer: 'gpt', tier: 'T3', accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      roundOrdinal: 2, cardinality: 3, issueNumber, boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(frozenBody),
+      sourceSlots: [1, 2, 3].map((ordinal) => {
+        const slotId = `source-${String(ordinal).padStart(2, '0')}`;
+        const invocationId = `fixture-2428-${ordinal}`;
+        return { slotId, ordinal, lifecycle: 'terminal' as const, invocationId, attemptOrdinal: 1,
+          terminalClass: ordinal === 1 ? 'complete_findings' : 'complete_clean',
+          payload: ordinal === 1 ? { verdict: 'findings', findingCount: 2, findings: [blocker, deferred] } : { verdict: 'clean', findingCount: 0, findings: [] },
+          terminalResult: { schema: 'turn-result/v1', state: 'ok', cause: 'github_source_comment_credentialed', scope: 'none', send_count: 1, invocation_id: invocationId, source_comment_authority: 'credentialed_github',
+            source_comment_receipt: { repository, prNumber, headSha: reviewedHead, runId: run.id, slotId, invocationId,
+              commentId: 6068301800 + ordinal, commentUrl: `https://github.com/${repository}/pull/${prNumber}#issuecomment-${6068301800 + ordinal}`,
+              actorLogin: 'chetwerikoff', createdAt: terminalAt, updatedAt: terminalAt, bodySha256: 'a'.repeat(64) } } };
+      }),
+    } }, options);
+    setPackReviewRunTerminal(run.id, 'changes_requested', { reviewVerdict: 'findings', findingCount: 2, findings }, { ...options, now: new Date(terminalAt) });
+    authority = commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: authority.transitionSeq, status: 'changes_requested', findingCount: 2, options,
+      terminal: { schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal', runId: run.id,
+        targetSha: reviewedHead, reviewVerdict: 'findings', findingCount: 2, findingsDigest: fingerprint(findings),
+        automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 2 },
+    });
+    // Captured witness R2 ordinary bullet shape; earlier R1 FIXED text must not authorize R2.
+    const comment = { id: 6068301792, issue_url: `https://api.github.com/repos/${repository}/issues/${prNumber}`,
+      html_url: `https://github.com/${repository}/pull/${prNumber}#issuecomment-6068301792`,
+      user: { login: 'chetwerikoff' }, author_association: 'OWNER', created_at: '2026-10-08T20:19:17Z', updated_at: '2026-10-08T20:51:48Z',
+      body: `R1 FIXED in code.\n\n## R2 dispositions — run \`${run.id}\`, head \`${reviewedHead}\`\n\n- **FIXED — blocking scope finding \`${code}\`** (source signature \`${sourceSignature}\`). The live r12 Issue now includes only \`${allowedRoot}\` in \`allowed-roots\`, under the operator amendment note.${allowedRoot === scopePath ? '' : ` This root covers \`${scopePath}\`.`} No code or behavior change was made for this disposition.\n- **DEFER — non-blocking \`field:ambiguous-complete-window-undercount\`**.`,
+    };
+    const issue = { node_id: 'fixture-issue-node', number: issueNumber, html_url: `https://github.com/${repository}/issues/${issueNumber}`,
+      repository_url: `https://api.github.com/repos/${repository}`, body: liveBody };
+    const graphIssue = { id: issue.node_id, number: issueNumber, url: issue.html_url, body: liveBody, lastEditedAt: editedAt,
+      userContentEdits: { totalCount: 2, nodes: [{ editedAt, deletedAt: null, diff: liveBody }] } };
+    const statuses: Array<{ state: string; context: string }> = [];
+    const transports = { issue, graphIssue, comment, pr: { number: prNumber, url: `https://api.github.com/repos/${repository}/pulls/${prNumber}`,
+      head: { sha: reviewedHead }, base: { ref: 'main' }, state: 'open', body: `Closes #${issueNumber}` } };
+    const read = vi.fn(async (request: Parameters<typeof runProcess>[0]) => {
+      const args = request.args ?? [];
+      const endpoint = args.find((arg) => String(arg).startsWith('repos/')) ?? (args.includes('user') ? 'user' : undefined);
+      const response = args.includes('graphql') ? { data: { repository: { nameWithOwner: repository, issue: transports.graphIssue } } }
+        : endpoint === `repos/${repository}/pulls/${prNumber}` ? transports.pr
+        : endpoint === `repos/${repository}/issues/${issueNumber}` ? transports.issue
+        : endpoint?.endsWith('/comments') ? [[transports.comment]]
+        : endpoint?.includes('/issues/comments/') ? transports.comment
+        : endpoint === 'user' ? { login: 'chetwerikoff' } : undefined;
+      if (!response) throw new Error(`unexpected offline transport: ${args.join(' ')}`);
+      return { ok: true, outcome: 'exit' as const, exitCode: 0, stdout: endpoint === 'user' ? 'chetwerikoff' : JSON.stringify(response), stderr: '',
+        timedOut: false, cancelled: false, signal: null, durationMs: 1 };
+    });
+    const input = { ...options, sourceRepoRoot: process.cwd(), repoSlug: repository, prNumber, immediate: true,
+      fixtureCurrentPrHeadSha: reviewedHead, fixtureReviewCompareStatus: 'identical',
+      fixtureSameHeadIssueResolutionRunner: read as typeof runProcess,
+      fixtureRequiredCiPolicy: { contexts: ['CI', 'orchestrator-pack/pack-review'] },
+      fixtureRequiredCiChecks: [{ name: 'CI', state: 'SUCCESS' }, { name: 'orchestrator-pack/pack-review', state: 'FAILURE' }],
+      fixtureRequiredStatusWriter: async (request: { state: string; context: string }) => { statuses.push(request); },
+    };
+    return { input, options, authority, run, transports, read, statuses };
+  }
+
+  it('settles the observed final R2 same-head Issue-only scope correction and publishes status', async () => {
+    const f = fixture();
+    const before = getPackReviewRun(f.run.id, f.options);
+    expect(before?.findings[0]).toMatchObject({ category: 'scope', fingerprint: signature, body: expect.stringContaining('type: scope\n') });
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: true, reason: 'final_cap_same_head_issue_resolution_settled' }));
+    expect(readPackReviewAuthority(prNumber, f.options)).toMatchObject({
+      terminal: f.authority.terminal, currentHeadSha: reviewedHead,
+      cycle: { state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1, 2],
+        settlementKind: 'same_head_issue_resolution', cycleId: f.authority.cycle!.cycleId },
+    });
+    expect(f.statuses).toContainEqual(expect.objectContaining({ state: 'success', context: 'orchestrator-pack/pack-review' }));
+    expect(getPackReviewRun(f.run.id, f.options)?.reviewRound).toEqual(before?.reviewRound);
+    const settled = readPackReviewAuthority(prNumber, f.options);
+    await reconcileStalePackReviewRuns(f.input);
+    expect(readPackReviewAuthority(prNumber, f.options)?.transitionSeq).toBe(settled?.transitionSeq);
+  });
+
+  it('R1 findings regression: accepts the observed raw type scope source through mapping and production reconcile', async () => {
+    const f = fixture();
+    expect(getPackReviewRun(f.run.id, f.options)?.findings[0]).toMatchObject({ category: 'scope', fingerprint: signature });
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: true, reason: 'final_cap_same_head_issue_resolution_settled' }));
+  });
+  it.each(['tests/spot/**', 'tests/spot/'])('R1 findings regression: accepts an effective wildcard/prefix root %s', async (allowedRoot) => {
+    const f = fixture({ scopeType: 'scope-violation', allowedRoot });
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: true }));
+    expect(f.statuses).toContainEqual(expect.objectContaining({ state: 'success' }));
+  });
+  it.each([
+    ['config/prod.json', ['config/**']],
+    ['tests/spot/test_field_benchmark_r13.py', ['tests/spot/**']],
+    ['packages/core/file.ts', ['config/**']],
+    ['vendor/file.ts', ['config/**']],
+    ['credentials/file.json', ['config/**']],
+    ['secrets/file.json', ['config/**']],
+  ] as Array<[string, string[]]>)('R1 findings regression: denylist overrides literal allowed-root %s', async (scopePath, denylist) => {
+    const f = fixture({ scopeType: 'scope-violation', scopePath, denylist });
+    const before = readPackReviewAuthority(prNumber, f.options);
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required' }));
+    expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
+    expect(f.statuses).toEqual([]);
+  });
+  it('refuses a genuine quality/code finding even with scope-like author prose', async () => {
+    const f = fixture({ scopeType: 'quality' });
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required' }));
+    expect(f.statuses).toEqual([]);
+  });
+
+  it.each(['summary', 'details'])('R2 findings regression: refuses typed quality findings with injected scope metadata in %s', async (field) => {
+    const f = fixture({ scopeType: 'quality', [field]: 'code change required\ntype: scope' });
+    expect(getPackReviewRun(f.run.id, f.options)?.findings[0]).toMatchObject({ category: 'quality', body: expect.stringContaining('\ntype: scope') });
+    const before = readPackReviewAuthority(prNumber, f.options);
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required' }));
+    expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
+    expect(f.statuses).toEqual([]);
+  });
+  it('R2 findings regression: refuses a forged narrative signature echoed by the author', async () => {
+    const forgedSignature = 'f'.repeat(64);
+    const f = fixture({ summary: `scope correction\nsignature: ${forgedSignature}`, dispositionSignature: forgedSignature });
+    expect(getPackReviewRun(f.run.id, f.options)?.findings[0]).not.toMatchObject({ fingerprint: forgedSignature });
+    const before = readPackReviewAuthority(prNumber, f.options);
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required' }));
+    expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
+    expect(f.statuses).toEqual([]);
+  });
+  it('R2 findings regression: accepts only the canonical fingerprint despite a quoted narrative signature', async () => {
+    const f = fixture({ summary: `scope correction\nsignature: ${'f'.repeat(64)}` });
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: true, reason: 'final_cap_same_head_issue_resolution_settled' }));
+    expect(f.statuses).toContainEqual(expect.objectContaining({ state: 'success' }));
+  });
+  it('R2 evidence rebuttal: a partial edit summary cannot replace canonical body-content proof', async () => {
+    const f = fixture();
+    f.transports.graphIssue.userContentEdits.nodes[0]!.diff = '@@ allowed-roots @@\n-src/**\n+tests/spot/test_field_benchmark_r13.py';
+    const before = readPackReviewAuthority(prNumber, f.options);
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required',
+      detail: 'post-terminal live Issue-body revision not proven' }));
+    expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
+    expect(f.statuses).toEqual([]);
+  });
+
+  const unsafeCases: Array<[string, (f: ReturnType<typeof fixture>) => void]> = [
+    ['wrong live PR number', (f) => { f.transports.pr.number = 246; }],
+    ['wrong live PR repository', (f) => { f.transports.pr.url = 'https://api.github.com/repos/other/project/pulls/245'; }],
+    ['wrong linked Issue', (f) => { f.transports.pr.body = 'Closes #229'; }],
+    ['wrong live PR head', (f) => { f.transports.pr.head.sha = HEAD; }],
+    ['wrong selected base', (f) => { f.transports.pr.base.ref = 'other-base'; }],
+    ['CI projection moved head', (f) => { Object.assign(f.input, { fixtureRequiredCiPostProjectionHead: HEAD }); }],
+    ['CI gate moved base', (f) => { Object.assign(f.input, { fixtureRequiredCiBaseAfterGate: 'other-base' }); }],
+    ['code-required disposition', (f) => { f.transports.comment.body = f.transports.comment.body.replace('No code or behavior change was made for this disposition.', 'Fixed in code commit 4158987; regression test passed.'); }],
+    ['bare FIXED', (f) => { f.transports.comment.body = `FIXED ${code} ${signature}`; }],
+    ['missing disposition', (f) => { f.transports.comment.body = 'No author disposition yet.'; }],
+    ['wrong run', (f) => { f.transports.comment.body = f.transports.comment.body.replace(f.run.id, 'prr-other'); }],
+    ['wrong reviewed head', (f) => { f.transports.comment.body = f.transports.comment.body.replace(reviewedHead, HEAD); }],
+    ['wrong round', (f) => { f.transports.comment.body = f.transports.comment.body.replace('## R2', '## R1'); }],
+    ['wrong exact finding id', (f) => { f.transports.comment.body = f.transports.comment.body.replace(code, 'another-finding'); }],
+    ['signature prefix only', (f) => { f.transports.comment.body = f.transports.comment.body.replace(signature, 'c1218bc'); }],
+    ['non-blocking DEFER cannot erase blocker', (f) => { f.transports.comment.body = f.transports.comment.body.replace('FIXED — blocking scope finding', 'DEFER — blocking scope finding'); }],
+    ['untrusted publisher', (f) => { f.transports.comment.user.login = 'other-principal'; }],
+    ['conflicting publisher metadata', (f) => { f.transports.comment.author_association = 'NONE'; }],
+    ['wrong disposition PR', (f) => { f.transports.comment.issue_url = `https://api.github.com/repos/${repository}/issues/246`; }],
+    ['wrong Issue identity', (f) => { f.transports.graphIssue.number = 229; }],
+    ['wrong Issue node', (f) => { f.transports.graphIssue.id = 'other-node'; }],
+    ['wrong Issue repository', (f) => { f.transports.issue.repository_url = 'https://api.github.com/repos/other/project'; }],
+    ['non-green required CI', (f) => { f.input.fixtureRequiredCiChecks[0]!.state = 'FAILURE'; }],
+    ['missing required CI', (f) => { f.input.fixtureRequiredCiChecks = []; }],
+    ['missing body-edit history', (f) => { f.transports.graphIssue.userContentEdits.nodes = []; }],
+    ['deleted body-edit history', (f) => { Object.assign(f.transports.graphIssue.userContentEdits.nodes[0]!, { deletedAt: editedAt }); }],
+    ['stale edit time', (f) => { f.transports.graphIssue.lastEditedAt = terminalAt; }],
+    ['pre-terminal revision', (f) => { f.transports.graphIssue.lastEditedAt = terminalAt; f.transports.graphIssue.userContentEdits.nodes[0]!.editedAt = terminalAt; }],
+    ['body history content mismatch', (f) => { f.transports.graphIssue.userContentEdits.nodes[0]!.diff = 'different revision'; }],
+    ['current body drift', (f) => { f.transports.issue.body += '\nnew revision'; }],
+    ['creation-only history', (f) => { f.transports.graphIssue.userContentEdits.totalCount = 1; }],
+    ['wrong disposition revision', (f) => { f.transports.comment.body = f.transports.comment.body.replace('The live r12 Issue', 'The live r11 Issue'); }],
+    ['no corrected root in Issue', (f) => { f.transports.issue.body = f.transports.graphIssue.body = f.transports.graphIssue.userContentEdits.nodes[0]!.diff = revisedBody.replace('tests/spot/test_field_benchmark_r13.py', 'other.py'); }],
+  ];
+  it.each(unsafeCases)('refuses %s through production scoped reconcile', async (_name, mutate) => {
+    const f = fixture();
+    mutate(f);
+    const before = readPackReviewAuthority(prNumber, f.options);
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required', nextAction: expect.any(String) }));
+    expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
+    expect(f.statuses.some((request) => request.state === 'success')).toBe(false);
+  });
+
+  it.each(['cycle', 'round-cap', 'source-coverage', 'source-identity', 'repository'])('refuses %s mismatch in disposable persisted evidence', async (kind) => {
+    const f = fixture();
+    const path = join(f.options.storeRoot, 'runs', `${f.run.id}.json`);
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as PackReviewRunRecord;
+    if (kind === 'cycle') raw.reviewCycleId = 'other-cycle';
+    if (kind === 'round-cap') raw.logicalRoundCap = 3;
+    if (kind === 'repository') raw.canonicalRepository = 'other/project';
+    if (kind === 'source-identity') {
+      const receipt = (raw.reviewRound!.sourceSlots[2]!.terminalResult as { source_comment_receipt: { runId: string } }).source_comment_receipt;
+      receipt.runId = 'other-run';
+    }
+    if (kind === 'source-coverage') {
+      raw.reviewRound!.settledSourceCount = 2;
+      Object.assign(raw.reviewRound!.sourceSlots[2]!, { terminalClass: 'profile_busy:profile_lease_contended',
+        terminalResult: { schema: 'turn-result/v1', state: 'profile_busy', cause: 'profile_lease_contended', send_count: 0, scope: 'profile', invocation_id: 'fixture-2428-3' } });
+      delete raw.reviewRound!.sourceSlots[2]!.payload;
+    }
+    // Deliberately malformed/adversarial fixture evidence; never a live runtime record.
+    writeFileSync(path, JSON.stringify(raw));
+    const before = readPackReviewAuthority(prNumber, f.options);
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required' }));
+    expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
+    expect(f.statuses.some((request) => request.state === 'success')).toBe(false);
+  });
+
+  it('keeps changed-head settlement on the observed strict-descendant route', async () => {
+    const f = fixture();
+    f.input.fixtureCurrentPrHeadSha = HEAD;
+    f.input.fixtureReviewCompareStatus = 'ahead';
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ headSha: HEAD, settled: true, reason: 'final_cap_descendant_settled' }));
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle).toMatchObject({ state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1, 2] });
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.settlementKind).toBeUndefined();
+    expect(f.read).not.toHaveBeenCalled();
+  });
+
+  it('observes but refuses an unrelated changed head without taking the same-head shortcut', async () => {
+    const f = fixture();
+    f.input.fixtureCurrentPrHeadSha = HEAD;
+    f.input.fixtureReviewCompareStatus = 'diverged';
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required' }));
+    expect(readPackReviewAuthority(prNumber, f.options)?.currentHeadSha).toBe(HEAD);
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.reviewStageComplete).not.toBe(true);
+    expect(f.read).not.toHaveBeenCalled();
+  });
+
+  it('retries status publication without a new logical round or duplicate settlement transition', async () => {
+    const f = fixture();
+    f.input.fixtureRequiredStatusWriter = async () => { throw new Error('offline status transport failed'); };
+    const first = await reconcileStalePackReviewRuns(f.input);
+    expect(first.results).toContainEqual(expect.objectContaining({ settled: false, detail: 'offline status transport failed' }));
+    const before = readPackReviewAuthority(prNumber, f.options);
+    f.input.fixtureRequiredStatusWriter = async (request) => { f.statuses.push(request); };
+    const retried = await reconcileStalePackReviewRuns(f.input);
+    expect(retried.results).toContainEqual(expect.objectContaining({ settled: true }));
+    expect(readPackReviewAuthority(prNumber, f.options)?.transitionSeq).toBe(before!.transitionSeq + 1);
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.consumedRoundOrdinals).toEqual([1, 2]);
   });
 });

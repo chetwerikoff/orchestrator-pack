@@ -198,6 +198,14 @@
       "policy": "pack scripts/gh passthrough fail-fast after primary GraphQL quota exhaustion"
     },
     {
+      "id": "issue-body-edit-evidence",
+      "ownerClass": "graphql_fail_fast",
+      "canonical": "gh api graphql -f query=<owning query> -f owner=<selected owner> -f name=<selected repository> -F number=<linked Issue>",
+      "query": "query IssueBodyEditEvidence($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { nameWithOwner issue(number: $number) { id number url body lastEditedAt userContentEdits(first: 1) { totalCount nodes { editedAt deletedAt diff } } } } }",
+      "ownerIssue": 2428,
+      "policy": "Read through unchanged tracked gh GraphQL quota/degraded passthrough; bind repository, Issue node/id, live REST body and latest undeleted body-content edit. Unavailable, deleted, stale or drifting evidence never authorizes same-head settlement."
+    },
+    {
       "id": "rest-authenticated-principal-login",
       "ownerClass": "rest_direct",
       "pattern": "^gh api user --jq \\.login$",
