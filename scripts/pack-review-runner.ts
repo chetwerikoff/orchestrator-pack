@@ -4570,6 +4570,11 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     );
   }
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
+  const readProjectionHead = () => readCheckedReviewPrHead({
+    sourceRepoRoot: target.sourceRepoRoot,
+    fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
+    fixtureReadCurrentPrHead: input.fixtureReadCurrentPrHead,
+  }, target.repoSlug, target.prNumber, target.headSha);
   const productionRequiredCiStart = directCliStarts.has(input)
     || trim(input.surface) === 'pack-gpt-review'
     || trim(input.surface) === 'pr2-scheduler';
@@ -4716,9 +4721,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       ...(zeroJudgment ? {
         writeRequiredStatus: async (request: Parameters<PackReviewRequiredStatusWriter>[0]) => {
           const freshBefore = getPackReviewRun(options.run.id, { projectId, storeRoot });
-          const headBefore = await readCheckedReviewPrHead(
-            input, target.repoSlug, target.prNumber, target.headSha,
-          );
+          const headBefore = await readProjectionHead();
           if (!freshBefore || !noJudgmentBudgetOutcome(freshBefore, storeRoot)
             || headBefore !== target.headSha.toLowerCase()) {
             throw new Error('status_not_published:no_judgment_or_current_head_changed_before_error; rerun scoped reconcile');
@@ -4727,9 +4730,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           // GitHub status writes are not atomic with source recovery or head changes.
           // A delayed stale error can otherwise land after the verdict's success.
           const freshAfter = getPackReviewRun(options.run.id, { projectId, storeRoot });
-          const headAfter = await readCheckedReviewPrHead(
-            input, target.repoSlug, target.prNumber, target.headSha,
-          );
+          const headAfter = await readProjectionHead();
           if (headAfter !== target.headSha.toLowerCase()) {
             throw new Error('status_not_published:pr_head_changed_during_error; restart PR-led projection');
           }
@@ -4948,18 +4949,47 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
 
     if (authority.cycle?.reviewStageComplete === true
         && authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) {
+      const cycleId = authority.cycle.cycleId;
+      const verifyStageCompleteHead = async () => {
+        const head = await readProjectionHead();
+        const latest = readPackReviewAuthority(target.prNumber, authorityOptions);
+        return head === target.headSha.toLowerCase()
+          && latest?.currentHeadSha.toLowerCase() === target.headSha.toLowerCase()
+          && latest.cycle?.cycleId === cycleId
+          && latest.cycle.reviewStageComplete === true
+          && latest.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
+      };
+      const unresolved = async (detail: string) => {
+        await releaseEarlyClaim('status_not_published');
+        return {
+          ok: false, created: false, reused: true,
+          reason: 'status_not_published', detail,
+          nextAction: 'restart PR-led pack review for the live head or rerun scoped reconcile; no extra review round',
+          prNumber: target.prNumber, headSha: target.headSha, cycleId, httpStatus: 409,
+        };
+      };
+      if (!(await verifyStageCompleteHead())) {
+        return unresolved('stage_complete_head_or_authority_changed_before_status');
+      }
       const writeRequiredStatus = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
         repoRoot: target.sourceRepoRoot,
         repoSlug: target.repoSlug,
         headSha: target.headSha,
         request,
       }));
-      await writeRequiredStatus({
-        state: 'success',
-        context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-        description: 'Required pack-review stage completed; no additional review round required.',
-        idempotencyKey: `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${target.headSha}:stage-complete:${authority.cycle.cycleId}`,
-      });
+      try {
+        await writeRequiredStatus({
+          state: 'success',
+          context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+          description: 'Required pack-review stage completed; no additional review round required.',
+          idempotencyKey: `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${target.headSha}:stage-complete:${cycleId}`,
+        });
+      } catch (error) {
+        return unresolved(`stage_complete_status_write_failed:${describeError(error)}`);
+      }
+      if (!(await verifyStageCompleteHead())) {
+        return unresolved('stage_complete_head_or_authority_changed_during_status');
+      }
       const stageCompleteReason = authority.terminal?.targetSha === target.headSha
         ? 'terminal_run_exists'
         : 'review_stage_complete';
@@ -4969,9 +4999,11 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         created: false,
         reused: true,
         reason: stageCompleteReason,
+        statusPublished: true,
+        publicationHeadSha: target.headSha,
         prNumber: target.prNumber,
         headSha: target.headSha,
-        cycleId: authority.cycle.cycleId,
+        cycleId,
         httpStatus: 200,
       };
     }
