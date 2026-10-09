@@ -961,31 +961,41 @@ export async function finalizeOpenCodeExecutorProfile(
   const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
   const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model: modelMatch[1], effort: effortMatch[1], stateRoot });
   // OpenCode 1.18.35 appends its runtime tool-output allow after the overlay rules.
-  // Move only that exact rule; keep all other permission ordering significant.
-  const toolOutputAllow = {
-    permission: 'external_directory', pattern: '~/.local/share/opencode/tool-output/*', action: 'allow',
-  } as const;
+  // Leave every other permission's ordered semantics unchanged.
+  // Match only the OpenCode runtime tool-output allow from this user's home;
+  // append the exact observed tuple, not a normalized or wildcard substitute.
+  const runtimeToolOutputPatterns = new Set([
+    '~/.local/share/opencode/tool-output/*',
+    join(homedir(), '.local', 'share', 'opencode', 'tool-output', '*'),
+  ]);
+  const matchingRuntimeRules = Array.isArray(baselineValue.permission)
+    ? baselineValue.permission.filter((rule) => record(rule)
+      && rule.permission === 'external_directory' && rule.action === 'allow'
+      && typeof rule.pattern === 'string' && runtimeToolOutputPatterns.has(rule.pattern))
+    : [];
+  const runtimeRule = matchingRuntimeRules.length === 1 ? matchingRuntimeRules[0] : null;
   const baselinePermission = openCodeAgentConfigFromInfo(baselineValue).permission;
   const inheritedPermission = record(baselinePermission) ? baselinePermission : {};
   const externalDirectory = inheritedPermission.external_directory;
-  const hasToolOutputAllow = record(externalDirectory)
-    && externalDirectory[toolOutputAllow.pattern] === toolOutputAllow.action;
-  const withoutToolOutputAllow = hasToolOutputAllow
+  const toolOutputPattern = record(runtimeRule) && typeof runtimeRule.pattern === 'string'
+    && record(externalDirectory) && externalDirectory[runtimeRule.pattern] === 'allow'
+    ? runtimeRule.pattern : undefined;
+  const withoutToolOutputAllow = toolOutputPattern && record(externalDirectory)
     ? {
       ...inheritedPermission,
-      external_directory: Object.fromEntries(Object.entries(externalDirectory).filter(([pattern]) => pattern !== toolOutputAllow.pattern)),
+      external_directory: Object.fromEntries(Object.entries(externalDirectory).filter(([pattern]) => pattern !== toolOutputPattern)),
     }
     : inheritedPermission;
   const narrowedPermission = withOpenCodeFleetBrowserDenies(withoutToolOutputAllow);
   const expected = {
     ...baselineValue,
-    permission: hasToolOutputAllow
+    permission: toolOutputPattern && runtimeRule
       ? [
         ...Object.entries(narrowedPermission).flatMap(([permission, value]) => (
           typeof value === 'string' ? [{ permission, pattern: '*', action: value }]
             : record(value) ? Object.entries(value).map(([pattern, action]) => ({ permission, pattern, action })) : []
         )),
-        toolOutputAllow,
+        runtimeRule,
       ]
       : narrowedPermission,
   };

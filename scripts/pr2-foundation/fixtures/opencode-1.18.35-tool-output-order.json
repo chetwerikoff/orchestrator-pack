@@ -1,5 +1,5 @@
 {
-  "provenance": "Issue #2447 r02's real OpenCode 1.18.35 ordering observation. Only the runtime rule tuple and its relative position, model ID and variant are literal observations; unrelated rules/fields here are safe synthetic stand-ins, not a verbatim runtime capture.",
+  "provenance": "Synthetic minimal stand-in only. The exact redacted home-resolved runtime pattern, baseline index 3, contextual index 85/86, model and variant are taken from the Issue #2447 r02 and operator correction. The other permission entries and agent fields are invented and are NOT full OpenCode 1.18.35 debug-agent captures; the r02 real-output fixture requirement remains unmet.",
   "observed": {
     "version": "1.18.35",
     "baseline_tool_output_rule_index": 3,
@@ -8,7 +8,8 @@
     "only_resolved": [],
     "only_baseline": [],
     "other_agent_fields_equal": true,
-    "main_general_explore_denies_terminal": true
+    "main_general_explore_denies_terminal": true,
+    "runtime_tool_output_pattern_redacted": "<home>/.local/share/opencode/tool-output/*"
   },
   "baseline": {
     "name": "build",
@@ -41,7 +42,7 @@
       },
       {
         "permission": "external_directory",
-        "pattern": "~/.local/share/opencode/tool-output/*",
+        "pattern": "<home>/.local/share/opencode/tool-output/*",
         "action": "allow"
       },
       {
@@ -162,7 +163,7 @@
       },
       {
         "permission": "external_directory",
-        "pattern": "~/.local/share/opencode/tool-output/*",
+        "pattern": "<home>/.local/share/opencode/tool-output/*",
         "action": "allow"
       }
     ]

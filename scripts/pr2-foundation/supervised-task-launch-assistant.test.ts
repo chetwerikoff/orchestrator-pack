@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
@@ -749,15 +749,19 @@ describe('supervised Task launch assistant', () => {
   });
 
   it.each([
-    ['OpenCode 1.18.35 ordering', 'none', true],
-    ['unrelated rule reordering', 'other-order', false],
-    ['an extra allow', 'extra-allow', false],
-    ['a missing deny', 'missing-deny', false],
-    ['a non-terminal deny', 'non-terminal-deny', false],
-    ['a changed tool-output action', 'changed-action', false],
-    ['model drift', 'model', false],
-    ['option drift', 'options', false],
-  ] as const)('contextual tool-output order regression: %s', async (_label, drift, accepted) => {
+    ['home-resolved runtime allow', 'none', true, 'home'],
+    ['tilde runtime allow', 'none', true, 'tilde'],
+    ['unrelated rule reordering', 'other-order', false, 'home'],
+    ['an extra allow', 'extra-allow', false, 'home'],
+    ['an unchanged inherited external-directory allow', 'inherited-allow', true, 'home'],
+    ['a missing deny', 'missing-deny', false, 'home'],
+    ['a non-terminal deny', 'non-terminal-deny', false, 'home'],
+    ['a changed tool-output action', 'changed-action', false, 'home'],
+    ['a changed tool-output path', 'changed-path', false, 'home'],
+    ['an unrelated home path', 'none', false, 'foreign'],
+    ['model drift', 'model', false, 'home'],
+    ['option drift', 'options', false, 'home'],
+  ] as const)('contextual tool-output order regression: %s', async (_label, drift, accepted, pathKind) => {
     type FixtureRule = { permission: string; pattern: string; action: string };
     type FixtureAgent = {
       name: string; mode: string; prompt: string; topP: number;
@@ -767,9 +771,25 @@ describe('supervised Task launch assistant', () => {
     const fixture = JSON.parse(readFileSync(new URL('./fixtures/opencode-1.18.35-tool-output-order.json', import.meta.url), 'utf8')) as {
       baseline: FixtureAgent; contextual: FixtureAgent;
     };
-    const toolOutput = { permission: 'external_directory', pattern: '~/.local/share/opencode/tool-output/*', action: 'allow' };
+    const runtimePattern = pathKind === 'tilde' ? '~/.local/share/opencode/tool-output/*'
+      : pathKind === 'foreign' ? join(homedir(), 'unrelated-home', '.local', 'share', 'opencode', 'tool-output', '*')
+        : join(homedir(), '.local', 'share', 'opencode', 'tool-output', '*');
+    const toolOutput = { permission: 'external_directory', pattern: runtimePattern, action: 'allow' };
+    for (const agent of [fixture.baseline, fixture.contextual]) {
+      for (const rule of agent.permission) {
+        if (rule.permission === 'external_directory' && rule.pattern === '<home>/.local/share/opencode/tool-output/*') {
+          rule.pattern = runtimePattern;
+        }
+      }
+    }
     expect(fixture.baseline.permission[3]).toEqual(toolOutput);
     expect(fixture.contextual.permission.at(-1)).toEqual(toolOutput);
+    if (drift === 'inherited-allow') {
+      const inherited = { permission: 'external_directory', pattern: '~/already-allowed/*', action: 'allow' };
+      fixture.baseline.permission.splice(3, 0, inherited);
+      const index = fixture.contextual.permission.findIndex((rule) => rule.permission === 'question');
+      fixture.contextual.permission.splice(index, 0, { ...inherited });
+    }
 
     const sandbox = mkdtempSync(join(tmpdir(), 'opk2447-offline-'));
     vi.stubEnv('XDG_CONFIG_HOME', sandbox);
@@ -816,9 +836,12 @@ describe('supervised Task launch assistant', () => {
               if (drift === 'non-terminal-deny') {
                 resolved.permission.push({ permission: 'bash', pattern: '*', action: 'allow' });
               }
-              if (drift === 'changed-action') {
+              if (drift === 'changed-action' || drift === 'changed-path') {
                 const rule = resolved.permission.find((item) => item.permission === toolOutput.permission && item.pattern === toolOutput.pattern);
-                if (rule) rule.action = 'ask';
+                if (rule) {
+                  if (drift === 'changed-action') rule.action = 'ask';
+                  else rule.pattern = join(homedir(), '.local', 'share', 'opencode', 'unrelated-output', '*');
+                }
               }
               if (drift === 'model') resolved.model.modelID = 'different-model';
               if (drift === 'options') resolved.options = { ...resolved.options, extra: true };
