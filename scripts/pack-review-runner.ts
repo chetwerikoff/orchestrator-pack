@@ -76,6 +76,7 @@ import {
   PACK_REVIEW_ACTIVE_STATUSES,
   createPackReviewRun,
   derivePackReviewGptCoverage,
+  derivePackReviewNoJudgmentBudgetOutcome,
   getPackReviewRun,
   hasPersistedPackReviewVerdict,
   heartbeatPackReviewRun,
@@ -136,6 +137,7 @@ import {
   type PackReviewerLayerOverrides,
 } from './lib/resolve-pack-reviewer.ts';
 import { resolveGptBrowserConfig, resolveRepositorySlug } from './lib/pack-gpt-reviewer.ts';
+import { parsePersistedWorkerNotificationBinding } from './lib/pack-review-worker-notification.ts';
 import { resolveTargetContext, type TargetContext } from './lib/target-context.ts';
 import {
   createPackGptSourceCommentTransport,
@@ -200,6 +202,7 @@ interface StartInput {
     timeoutSeconds: number;
   }) => void | Promise<void>;
   fixtureCurrentPrHeadSha?: string;
+  fixtureReadCurrentPrHead?: () => string | Promise<string>;
   fixtureRequiredCi?: readonly string[];
   fixtureRequiredCiChecks?: Array<{ name?: string; workflow?: string; state?: string; conclusion?: string; status?: string }> | null;
   fixtureRequiredCiPolicy?: {
@@ -297,6 +300,7 @@ export interface ReconcileStalePackReviewRunsInput {
   settlePartialAfterGrace?: boolean;
   baseRef?: string;
   fixtureCurrentPrHeadSha?: string;
+  fixtureReadCurrentPrHead?: () => string | Promise<string>;
   fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
   fixtureBeforeGptRoundFreeze?: (event: {
     runId: string;
@@ -3435,6 +3439,121 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
       || extractClosingIssueNumber(after.body) !== round.issueNumber) throw new Error('PR identity changed before settlement');
   return { runId: run.id, cycleId: cycle.cycleId, logicalRoundOrdinal: round.roundOrdinal,
     publicationDigest: sha256Bytes(stableJson({ comment, revision, terminalDigest: terminal.digest })) };
+}
+
+async function readCheckedReviewPrHead(
+  input: { sourceRepoRoot: string; fixtureCurrentPrHeadSha?: string;
+    fixtureReadCurrentPrHead?: () => string | Promise<string> },
+  repoSlug: string,
+  prNumber: number,
+  expectedSha: string,
+): Promise<string> {
+  if (input.fixtureReadCurrentPrHead) {
+    return trim(await input.fixtureReadCurrentPrHead()).toLowerCase();
+  }
+  if (process.env.OPK_VITEST_HARNESS === '1') {
+    return trim(input.fixtureCurrentPrHeadSha ?? expectedSha).toLowerCase();
+  }
+  return (await resolveCurrentPrHead(input.sourceRepoRoot, repoSlug, prNumber)).toLowerCase();
+}
+
+/** A read-time projection; launch disposition is not an accounting event. */
+function noJudgmentBudgetOutcome(
+  run: PackReviewRunRecord,
+  storeRoot: string,
+): 'non_consuming_no_judgment' | null {
+  const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
+  if (!authority?.cycle
+    || authority.currentHeadSha.toLowerCase() !== run.targetSha.toLowerCase()
+    || authority.cycle.cycleId !== run.reviewCycleId
+    || authority.terminal?.runId === run.id) return null;
+  return derivePackReviewNoJudgmentBudgetOutcome(
+    run,
+    authority.cycle.consumedRoundOrdinals ?? [],
+  );
+}
+
+/** Exactly one failure-only submission, independent of the eventual verdict. */
+async function notifyNoJudgmentWorker(options: {
+  run: PackReviewRunRecord;
+  projectId: string;
+  storeRoot: string;
+  notifier: PackReviewWorkerNotifier;
+}): Promise<{ state: 'submitted' | 'pre_dispatch_failure' | 'ambiguous' | 'skipped_unbound' | 'already_attempted' | 'not_applicable'; reason: string }> {
+  const { projectId, storeRoot, notifier } = options;
+  const read = () => getPackReviewRun(options.run.id, { projectId, storeRoot });
+  const current = read();
+  if (!current || !noJudgmentBudgetOutcome(current, storeRoot)) {
+    return { state: 'not_applicable', reason: 'no_judgment_census_or_cap_changed' };
+  }
+  // Only the durable, immutable worker binding is authoritative. Session strings
+  // and a caller-supplied recipient are never fallback transport identities.
+  if (!parsePersistedWorkerNotificationBinding(current)) {
+    return { state: 'skipped_unbound', reason: 'bound_worker_unavailable' };
+  }
+  const key = `worker-notification:no-judgment:${current.id}:${current.targetSha}`;
+  const claimed = updatePackReviewRunIf(
+    current.id,
+    (records) => {
+      const stored = records.find((candidate) => candidate.id === current.id);
+      return Boolean(stored
+        && !stored.deliveryOutcomes.noJudgmentWorkerNotification
+        && !hasPersistedPackReviewVerdict(stored)
+        && derivePackReviewGptCoverage(stored.reviewRound)?.kind === 'empty'
+        && ['failed', 'timed_out', 'cancelled'].includes(stored.status));
+    },
+    (stored) => ({
+      deliveryOutcomes: {
+        ...stored.deliveryOutcomes,
+        noJudgmentWorkerNotification: {
+          state: 'escalated' as const,
+          recordedAtUtc: new Date().toISOString(),
+          reason: 'submission_outcome_unresolved',
+          idempotencyKey: key,
+        },
+      },
+    }),
+    { projectId, storeRoot },
+  );
+  if (!claimed) return { state: 'already_attempted', reason: 'submission_fenced_by_persisted_channel' };
+  let state: 'submitted' | 'pre_dispatch_failure' | 'ambiguous' = 'ambiguous';
+  let reason = 'dispatch_outcome_unknown';
+  try {
+    const submission = await notifier({
+      message: [
+        `Pack review produced no completed reviewer judgment for PR #${current.prNumber}.`,
+        `Run: ${current.id}`,
+        `Head: ${current.targetSha}`,
+        `Cause: ${current.failureReason ?? 'gpt_source_non_complete'}`,
+        'The terminal source census did not consume a logical review round.',
+        'Next: inspect the exact run with scoped pack-review reconcile; do not resend a possible_delivery attempt.',
+        'This submission does not establish recipient receipt or authorize a new round.',
+      ].join('\n'),
+      idempotencyKey: key,
+      reviewRunId: current.id,
+    });
+    state = submission.state === 'submitted' || submission.state === 'delivered'
+      ? 'submitted'
+      : submission.state === 'pre_dispatch_failure' || submission.state === 'failed'
+        ? 'pre_dispatch_failure'
+        : 'ambiguous';
+    reason = submission.reason;
+  } catch (error) {
+    // A thrown call may have dispatched already; never blindly resend.
+    state = 'ambiguous';
+    reason = describeError(error);
+  }
+  updatePackReviewRun(current.id, {
+    deliveryOutcomes: {
+      noJudgmentWorkerNotification: {
+        state: state === 'submitted' ? 'succeeded' : state === 'pre_dispatch_failure' ? 'failed' : 'escalated',
+        recordedAtUtc: new Date().toISOString(),
+        reason,
+        idempotencyKey: key,
+      },
+    },
+  }, { projectId, storeRoot });
+  return { state, reason };
 }
 
 async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsInput, options: {
