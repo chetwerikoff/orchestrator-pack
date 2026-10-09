@@ -1067,6 +1067,13 @@ describe('state-light fresh conversation collision recovery', () => {
       locator: vi.fn((selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (selector === USER_MESSAGE_SELECTOR) {
+          // Independent user-carrier census: a foreign surface cannot authenticate
+          // our marker even when a URL was observed first.
+          return collectionLocator(sent && surface === 'owned'
+            ? [{ role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` }]
+            : sent && surface === 'foreign' ? foreignMessages.filter((message) => message.role === 'user') : []);
+        }
         if (matchesNewChatControlSelector(selector)) return scalarLocator({ count: vi.fn(async () => 0) });
         if (selector === MESSAGE_NODE_SELECTOR) {
           if (!sent) return collectionLocator([]);
@@ -1487,8 +1494,11 @@ describe('state-light fresh conversation collision recovery', () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const outcome = await runNewChatTurn(page, '/tmp/journal-defer-replay.txt');
 
-    expect(outcome.code).toBe(0);
-    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    // A deferred URL that never materializes into a canonical project /c/UUID
+    // cannot become an owned fresh conversation, even if a reply looks ready.
+    expect(outcome.code).not.toBe(0);
+    expect(outcome.result).toMatchObject({ send_count: 1 });
+    expect(outcome.result.state).not.toBe('ok');
     expect(page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), {
       waitUntil: 'domcontentloaded',
       timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
@@ -1762,9 +1772,12 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const startedAt = mocks.nowMs;
     const outcome = await runNewChatTurn(page, '/tmp/threshold-after-2x.txt', '1000');
-    expect(outcome.code).toBe(0);
+    expect(outcome.code).not.toBe(0);
     expect(mocks.nowMs).toBeGreaterThanOrEqual(startedAt + 2000);
-    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result).toMatchObject({ send_count: 1 });
+    // The fixture never materializes a canonical conversation URL; 2x timeout
+    // is not permission to claim a project-root page or publish an unowned reply.
+    expect(outcome.result.state).not.toBe('ok');
   });
 
   it('recovers expired and corrupt ownership artifacts through bounded exclusive create', async () => {
