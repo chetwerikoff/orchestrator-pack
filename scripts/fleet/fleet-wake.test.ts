@@ -16,6 +16,7 @@ import {
   managerBannerMessage,
   runFleetAlarmTick,
   runFleetDiagnosticTick,
+  type FleetAlarmTickOptions,
   type FleetWakeConfig,
   type FleetWakeStateStore,
   type OpenPullHead,
@@ -104,6 +105,7 @@ async function tick(input: {
   config?: FleetWakeConfig;
   terminals?: readonly FleetTerminal[];
   executor?: OrcaExecutor;
+  readChats?: FleetAlarmTickOptions['readChats'];
   listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
   listUnreadRunMessages?: () => readonly { id: string; subject: string; toHandle: string; fromHandle: string }[];
   listOpenPulls?: (repository: string) => readonly OpenPullHead[];
@@ -122,6 +124,7 @@ async function tick(input: {
     store,
     sleepMs: async (ms) => { sleeps.push(ms); },
     log: (line) => { logs.push(line); },
+    ...(input.readChats ? { readChats: input.readChats } : {}),
     listTerminalEnvelopes: input.listTerminalEnvelopes ?? (() => []),
     ...(input.listUnreadRunMessages ? { listUnreadRunMessages: input.listUnreadRunMessages } : {}),
     ...(input.listOpenPulls ? { listOpenPulls: input.listOpenPulls } : {}),
@@ -1233,6 +1236,60 @@ describe('Issue #2441 read-only diagnostic tick non-interference', () => {
     expect(sendsTo(output.calls, 'coord')).toHaveLength(2);
     // The diagnostic failure itself never routes or calls terminal send; old dispatch still owns it.
   }));
+
+
+
+  it('sends existing GPT event before browser read and reuses the same post-event CDP snapshot for advisory', async () => {
+    const order: string[] = [];
+    const custom = [coordinator, worker];
+    const calls: string[][] = [];
+    const execute = fakeOrca({ coord: 'idle', one: 'done' }, calls, custom);
+    let reads = 0;
+    const url = 'https://chatgpt.com/c/synthetic-banner';
+    const readChats: NonNullable<FleetAlarmTickOptions['readChats']> = async () => {
+      reads += 1;
+      order.push('cdp');
+      return [{ targetId: 'synthetic', url, generating: false,
+        banners: [{ kind: 'error_banner', url, text: 'Failed to fetch / Retry shown', retry: false }] }];
+    };
+    const run = await tick({
+      config: config({ chatCdpUrl: 'http://127.0.0.1:9222', chatScope: {
+        projectUrl: 'https://chatgpt.com/g/g-p/project/project',
+        repository: 'chetwerikoff/orchestrator-pack',
+      } }),
+      terminals: custom, screens: { coord: 'idle', one: 'done' },
+      executor: (args) => {
+        if (args[1] === 'send') order.push('legacy-send');
+        return execute(args);
+      },
+      readChats,
+      listTerminalEnvelopes: () => [{ path: '/tmp/opencode/synthetic-end.json',
+        terminalHandle: 'one', invocationId: 'synthetic-ended' }],
+    });
+    expect(reads).toBe(1);
+    expect(order.indexOf('legacy-send')).toBeLessThan(order.indexOf('cdp'));
+    expect(run.logs.some((line) => line.includes('retry_control_observed=false'))).toBe(true);
+    expect(run.logs.some((line) => line.includes('attribution=tentative/unbound'))).toBe(true);
+    expect(calls.filter((args) => args[1] === 'send').length).toBeGreaterThan(0);
+    expect(run.calls.filter((args) => args[1] === 'send')).toHaveLength(
+      calls.filter((args) => args[1] === 'send').length);
+  });
+
+  it('retains operational PARKED state on a short acknowledgment without advisory rewriting wait data', async () =>
+    withStore(async (store) => {
+      const fleet = [coordinator, worker];
+      const first = await tick({ store, terminals: fleet, screens: {
+        coord: 'idle', one: 'PARKED on PR #1 merged',
+      } });
+      const held = store.readPaneWait('one');
+      expect(held?.wait).toBe('PARKED on PR #1 merged');
+      expect(first.logs.some((line) => line.includes('handle=one') && line.includes('state=PARKED'))).toBe(true);
+      const second = await tick({ store, terminals: fleet, screens: {
+        coord: 'idle', one: 'Acknowledged',
+      } });
+      expect(second.logs.some((line) => line.includes('handle=one') && line.includes('state=PARKED'))).toBe(true);
+      expect(store.readPaneWait('one')).toEqual(held);
+    }));
 
   it('adds advisory output to normal wake ticks without making busy agents actionable', async () => {
     const observed = await tick({ terminals: [coordinator, worker], screens: {

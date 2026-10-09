@@ -5,9 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
+import * as targetContext from '../lib/target-context.ts';
 import {
   classifyFleetPane,
   collectFleetDiagnostics,
+  parseSweepCli,
   FileFleetStateStore,
   formatFleetDiagnostics,
   defaultWorkspaceRegex,
@@ -15,6 +17,7 @@ import {
   runFleetSweep,
   selectAgentTerminals,
   type FleetPollingStore,
+  type FleetPaneObservation,
   type FleetTerminal,
   type OrcaCommandResult,
   type OrcaExecutor,
@@ -35,6 +38,7 @@ function fakeExecutor(
   terminals: readonly FleetTerminal[],
   screens: Readonly<Record<string, string>>,
   calls: string[][] = [],
+  shows: Readonly<Record<string, Record<string, unknown>>> = {},
 ): OrcaExecutor {
   return (args) => {
     calls.push([...args]);
@@ -47,6 +51,10 @@ function fakeExecutor(
     if (args[0] === 'terminal' && args[1] === 'read') {
       const handle = args[args.indexOf('--terminal') + 1] ?? '';
       return handle in screens ? result(screens[handle] ?? '') : result('', false);
+    }
+    if (args[0] === 'terminal' && args[1] === 'show') {
+      const handle = args[args.indexOf('--terminal') + 1] ?? '';
+      return shows[handle] ? result(JSON.stringify({ ok: true, result: { terminal: shows[handle] } })) : result('', false);
     }
     return result('', false);
   };
@@ -307,9 +315,12 @@ describe('Issue #2441 observational-only fleet diagnostics', () => {
     try { run(new FileFleetStateStore('project', { XDG_RUNTIME_DIR: xdg })); }
     finally { rmSync(xdg, { recursive: true, force: true }); }
   };
-  const diagnose = (store: FileFleetStateStore, terminals: FleetTerminal[], screens: Record<string, string>, now: number, calls: string[][] = []) =>
+  const diagnose = (store: FileFleetStateStore, terminals: FleetTerminal[], screens: Record<string, string>, now: number,
+    calls: string[][] = [], shows: Readonly<Record<string, Record<string, unknown>>> = {},
+    observations?: readonly FleetPaneObservation[]) =>
     collectFleetDiagnostics({ projectId: 'project', primary, workspaceRe: /orca\/workspaces\/project\//u,
-      store, terminals, executor: fakeExecutor(terminals, screens, calls), now: () => now });
+      store, terminals, executor: fakeExecutor(terminals, screens, calls, shows), now: () => now,
+      ...(observations ? { observations } : {}) });
 
   it('uses capture-shaped terminal evidence without command/PID/agent_alive and preserves the old classifier', () => withStore((store) => {
     const agent = designated();
@@ -393,8 +404,12 @@ describe('Issue #2441 observational-only fleet diagnostics', () => {
     const poll = designated('poll', 'inc-q');
     store.setPollingMark('poll');
     const stable = { parked: 'PARKED on PR #1 merged', poll: '⠏ sleep 300\nesc interrupt' };
-    expect(diagnose(store, [parked, poll], stable, 0).map((row) => row.state)).toEqual(['PARKED', 'POLLING']);
-    const late = diagnose(store, [parked, poll], stable, 900_000);
+    const operational: FleetPaneObservation[] = [
+      { ...parked, state: 'PARKED', lines: [], wait: 'PARKED on PR #1 merged', taskBinding: 'synthetic-exact-binding' },
+      { ...poll, state: 'POLLING', lines: [] },
+    ];
+    expect(diagnose(store, [parked, poll], stable, 0, [], {}, operational).map((row) => row.state)).toEqual(['PARKED', 'POLLING']);
+    const late = diagnose(store, [parked, poll], stable, 900_000, [], {}, operational);
     expect(late.map((row) => row.state)).toEqual(['PARKED', 'POLLING']);
     expect(late.every((row) => row.reason === 'agent_unverified')).toBe(true);
   }));
@@ -416,5 +431,114 @@ describe('Issue #2441 observational-only fleet diagnostics', () => {
     ]);
     expect(calls.filter((call) => call[1] === 'read')).toHaveLength(2);
     expect(calls.every((call) => call[1] === 'list' || call[1] === 'read')).toBe(true);
+  }));
+
+
+  it.each(['ORCH_HANDLE', 'ARCHITECT_HANDLE'] as const)(
+    'forwards %s CLI exclusion into read-only collection without a read or history entry', (variable) => withStore((store) => {
+      const parsedTarget = vi.spyOn(targetContext, 'resolveTargetContext').mockReturnValue({
+        projectId: 'project', repository: 'example/test', primaryRoot: primary, defaultBranch: 'main',
+        orcaWorkspacePattern: '/orca/workspaces/project/', orchestratorTitlePattern: 'Cursor',
+        browserGpt: { projectUrl: 'https://chatgpt.com/g/g-p/example/project' },
+        packRoot: '/pack', cardPath: '/synthetic/project.json',
+      });
+      try {
+        const parsed = parseSweepCli(['--project', 'project'], primary, { [variable]: ' agent ' });
+        const agent = designated(), peer = designated('peer', 'inc-peer');
+        const calls: string[][] = [];
+        const rows = collectFleetDiagnostics({ ...parsed, terminals: [agent, peer], store,
+          executor: fakeExecutor([agent, peer], { agent: 'done', peer: 'done' }, calls), now: () => 0 });
+        expect(rows.map((r) => r.handle)).toEqual(['peer']);
+        expect(calls.filter((args) => args[1] === 'read' || args[1] === 'show')
+          .every((args) => !args.includes('agent'))).toBe(true);
+        expect(store.readDiagnosticHistory('agent')).toBeUndefined();
+      } finally { parsedTarget.mockRestore(); }
+    }),
+  );
+
+  it('reads exact native terminal-show metadata when list summary omits branch and agentIdentity', () => withStore((store) => {
+    const complete = designated();
+    const listOnly = { handle: complete.handle, title: complete.title,
+      incarnationId: complete.incarnationId, worktreePath: complete.worktreePath };
+    const shown = { agent: { handle: complete.handle, incarnationId: complete.incarnationId,
+      worktreePath: complete.worktreePath, branch: complete.branch, agentIdentity: 'opencode', lastOutputAt: 5 } };
+    const calls: string[][] = [];
+    const first = diagnose(store, [listOnly], { agent: 'work\nesc interrupt' }, 0, calls, shown);
+    expect(first[0]?.reason).toBe('agent_unverified');
+    expect(store.readDiagnosticHistory('agent')?.agentIdentity).toBe('opencode');
+    expect(calls.filter((args) => args[1] === 'show')).toEqual([
+      ['terminal', 'show', '--terminal', 'agent', '--json'],
+    ]);
+    const shellList = { ...listOnly, title: 'bash' };
+    const lastShow = { agent: { ...shown.agent, agentIdentity: undefined } };
+    expect(diagnose(store, [shellList], { agent: '$' }, 300_000, [], lastShow)[0]?.reason)
+      .toBe('suspected_bare_shell');
+    expect(store.readDiagnosticHistory('agent')?.agentIdentity).toBe('opencode');
+  }));
+
+  it('never manufactures history from missing/mismatched show evidence', () => withStore((store) => {
+    const missing = { handle: 'agent', incarnationId: 'inc-1', title: 'OpenCode manager', worktreePath: workerPath };
+    const showMismatch = { agent: { handle: 'agent', incarnationId: 'other-inc',
+      worktreePath: workerPath, branch: 'refs/heads/diagnostic', agentIdentity: 'opencode' } };
+    expect(diagnose(store, [missing], { agent: 'work\nesc interrupt' }, 0, [], showMismatch)[0]?.reason)
+      .toBe('agent_unverified');
+    expect(store.readDiagnosticHistory('agent')).toBeUndefined();
+    expect(diagnose(store, [missing], { agent: 'work\nesc interrupt' }, 900_000)[0]?.reason)
+      .toBe('agent_unverified');
+    expect(store.readDiagnosticHistory('agent')).toBeUndefined();
+    expect(diagnose(store, [{ ...missing, title: 'bash' }], { agent: '$' }, 1_200_000)).toEqual([]);
+  }));
+
+  it('reports exact prior agent with missing or unknown new title as unverified, not disappeared or dead', () => withStore((store) => {
+    const initial = designated();
+    expect(diagnose(store, [initial], { agent: 'work\nesc interrupt' }, 0)[0]?.reason)
+      .toBe('agent_unverified');
+    const unknown = { ...initial, agentIdentity: undefined, title: '' };
+    const calls: string[][] = [];
+    const current = diagnose(store, [unknown], { agent: 'current screen' }, 300_000, calls);
+    expect(current).toMatchObject([{ handle: 'agent', reason: 'agent_unverified' }]);
+    expect(current[0]?.state).toBeUndefined();
+    expect(current[0]?.evidence).toContain('prior exact agentIdentity');
+    expect(calls.some((args) => args[1] === 'read' && args.includes('agent'))).toBe(true);
+    expect(diagnose(store, [{ ...unknown, incarnationId: 'new' }], { agent: 'current screen' }, 600_000)).toEqual([]);
+    expect(diagnose(store, [{ ...unknown, handle: 'never' }], { never: 'current screen' }, 600_000)).toEqual([]);
+  }));
+
+  it('never reports a stable finished STOPPED pane as hung after 900 seconds', () => withStore((store) => {
+    const terminal = designated();
+    const operational: FleetPaneObservation[] = [{ ...terminal, state: 'STOPPED', lines: ['done'] }];
+    expect(diagnose(store, [terminal], { agent: 'done' }, 0, [], {}, operational)[0]?.reason)
+      .toBe('agent_unverified');
+    const late = diagnose(store, [terminal], { agent: 'done' }, 900_000, [], {}, operational);
+    expect(late[0]?.state).toBe('STOPPED');
+    expect(late[0]?.reason).toBe('agent_unverified');
+  }));
+
+  it('mirrors retained PARKED acknowledgment and stale wait rejection without writing legacy task state', () => withStore((store) => {
+    const terminal = designated();
+    const perform = (current: FleetTerminal, screen: string, now: number) => {
+      const observations = runFleetSweep({ projectId: 'project', primary, terminals: [current], store,
+        executor: fakeExecutor([current], { agent: screen }) });
+      const before = store.readPaneWait('agent');
+      const rows = diagnose(store, [current], { agent: screen }, now, [], {}, observations);
+      expect(store.readPaneWait('agent')).toEqual(before);
+      return { state: observations[0]?.state, diagnostic: rows[0]?.state };
+    };
+    const parked = perform(terminal, 'PARKED on PR #1 merged', 0);
+    expect(parked).toEqual({ state: 'PARKED', diagnostic: 'PARKED' });
+    const acknowledged = perform(terminal, 'Acknowledged', 300_000);
+    expect(acknowledged).toEqual({ state: 'PARKED', diagnostic: 'PARKED' });
+    const changed = perform({ ...terminal, incarnationId: 'inc-new' }, 'PARKED on PR #1 merged', 600_000);
+    expect(changed).toEqual({ state: 'STOPPED', diagnostic: 'STOPPED' });
+  }));
+
+  it('does not assert a bound PARKED state for an unbound screen even if the old operational result says PARKED', () => withStore((store) => {
+    const unbound = { ...designated(), incarnationId: undefined };
+    const observations = runFleetSweep({ projectId: 'project', primary, terminals: [unbound], store,
+      executor: fakeExecutor([unbound], { agent: 'PARKED on PR #1 merged' }) });
+    const rows = diagnose(store, [unbound], { agent: 'PARKED on PR #1 merged' }, 0, [], {}, observations);
+    expect(observations[0]?.taskBinding).toBeUndefined();
+    expect(rows[0]?.state).toBeUndefined();
+    expect(rows[0]?.reason).toBe('agent_unverified');
   }));
 });

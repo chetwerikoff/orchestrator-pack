@@ -96,6 +96,7 @@ export interface FleetDiagnosticOptions {
   readonly terminals?: readonly FleetTerminal[];
   readonly now?: () => number;
   readonly busyRe?: RegExp;
+  readonly observations?: readonly FleetPaneObservation[];
 }
 
 export interface FleetSweepOptions {
@@ -574,6 +575,41 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
 const SHELL_TITLE_RE = /^(?:bash|zsh|fish|sh|dash|ksh)(?:\s|$|[-:])/iu;
 const HUNG_AFTER_MS = 900_000;
 
+// The terminal-list summary contract does not promise branch or agentIdentity.
+// Terminal show is the existing native field-bearing read; consume it only after
+// checking the list incarnation/worktree/handle against the returned metadata.
+function diagnosticTerminalDetails(terminal: FleetTerminal, executor: OrcaExecutor): FleetTerminal {
+  if (!terminal.incarnationId?.trim() || terminal.status === 'exited'
+    || (terminal.branch?.trim() && terminal.agentIdentity?.trim())) return terminal;
+  const response = executor(['terminal', 'show', '--terminal', terminal.handle, '--json']);
+  if (!response.ok) return terminal;
+  try {
+    const envelope = JSON.parse(response.stdout) as { ok?: boolean; result?: { terminal?: Record<string, unknown> } };
+    const shown = envelope.ok === true ? envelope.result?.terminal : undefined;
+    if (!shown || shown.handle !== terminal.handle
+      || shown.incarnationId !== terminal.incarnationId
+      || typeof shown.worktreePath !== 'string'
+      || normalizedPath(shown.worktreePath) !== normalizedPath(terminal.worktreePath)) return terminal;
+    // Conflicting list/show branch or agent identity is not trustworthy
+    // attribution. Withhold the key rather than promoting either candidate.
+    if ((terminal.branch && typeof shown.branch === 'string' && terminal.branch !== shown.branch)
+      || (terminal.agentIdentity && typeof shown.agentIdentity === 'string'
+        && terminal.agentIdentity !== shown.agentIdentity)) return { ...terminal, branch: '' };
+    return {
+      ...terminal,
+      ...(typeof shown.branch === 'string' && shown.branch.trim() && !terminal.branch
+        ? { branch: shown.branch } : {}),
+      ...(typeof shown.agentIdentity === 'string' && shown.agentIdentity.trim() && !terminal.agentIdentity
+        ? { agentIdentity: shown.agentIdentity } : {}),
+      ...(typeof shown.lastOutputAt === 'number' && Number.isFinite(shown.lastOutputAt)
+        && terminal.lastOutputAt === undefined ? { lastOutputAt: shown.lastOutputAt } : {}),
+      ...(typeof shown.status === 'string' && !terminal.status ? { status: shown.status } : {}),
+    };
+  } catch {
+    return terminal;
+  }
+}
+
 function diagnosticKey(project: string, terminal: FleetTerminal): string | undefined {
   if (![project, terminal.handle, terminal.incarnationId, terminal.worktreePath, terminal.branch]
     .every((part) => typeof part === 'string' && part.trim().length > 0)) return undefined;
@@ -594,21 +630,26 @@ export function collectFleetDiagnostics(options: FleetDiagnosticOptions): FleetD
   const primary = normalizedPath(options.primary);
   const now = (options.now ?? Date.now)();
   const diagnostics: FleetDiagnostic[] = [];
-  for (const terminal of terminals) {
-    if (terminal.handle === options.coordinatorHandle || terminal.handle === options.architectHandle) continue;
-    if (!terminal.worktreePath || !terminal.handle) continue;
+  for (const listed of terminals) {
+    if (listed.handle === options.coordinatorHandle || listed.handle === options.architectHandle) continue;
+    if (!listed.worktreePath || !listed.handle) continue;
     coordinatorRe.lastIndex = 0;
-    if (normalizedPath(terminal.worktreePath) === primary && coordinatorRe.test(terminal.title)) continue;
+    if (normalizedPath(listed.worktreePath) === primary && coordinatorRe.test(listed.title)) continue;
     workspaceRe.lastIndex = 0;
-    if (!workspaceRe.test(terminal.worktreePath.replaceAll('\\', '/'))) continue;
+    if (!workspaceRe.test(listed.worktreePath.replaceAll('\\', '/'))) continue;
+    const old = store.readDiagnosticHistory?.(listed.handle);
+    // Never-agent shells without exact historical designation are not diagnostic candidates.
+    if (!listed.agentIdentity && !looksLikeAgentPane(listed.title)
+      && listed.status?.toLowerCase() !== 'exited' && !(old?.designatedAgent && old.agentIdentity)) continue;
+    const terminal = diagnosticTerminalDetails(listed, executor);
     const key = diagnosticKey(options.projectId, terminal);
-    const old = store.readDiagnosticHistory?.(terminal.handle);
     const prior = key && old?.key === key ? old : undefined;
     if (!key || (old && !prior)) store.clearDiagnosticHistory?.(terminal.handle);
     const designated = typeof terminal.agentIdentity === 'string' && terminal.agentIdentity.trim().length > 0;
     const shell = SHELL_TITLE_RE.test(terminal.title);
-    const formerAgentShell = shell && prior?.designatedAgent === true && Boolean(prior.agentIdentity);
-    if (!designated && !looksLikeAgentPane(terminal.title) && !formerAgentShell
+    const previouslyDesignated = prior?.designatedAgent === true && Boolean(prior.agentIdentity);
+    const formerAgentShell = shell && previouslyDesignated;
+    if (!designated && !looksLikeAgentPane(terminal.title) && !previouslyDesignated
       && terminal.status?.toLowerCase() !== 'exited') continue;
     const fields = {
       handle: terminal.handle,
@@ -628,11 +669,18 @@ export function collectFleetDiagnostics(options: FleetDiagnosticOptions): FleetD
       diagnostics.push({ ...fields, reason: 'unverified:screen_unreadable', evidence: 'terminal read --screen unavailable' });
       continue;
     }
-    const outcome = ownPaneOutcome(screen);
     const busy = isBusyScreen(screen, options.busyRe ?? DEFAULT_BUSY_RE);
-    const state: FleetPaneState = formerAgentShell ? 'STOPPED' : !busy
-      ? outcome.wait ? 'PARKED' : 'STOPPED'
-      : hasPollingEvidence(screen) && store.hasPollingMark(terminal.handle) ? 'POLLING' : 'busy';
+    // Only the existing operational sweep can establish retained or rejected
+    // task-bound PARKED. Without that witness, idle/wait text remains unverified.
+    const operational = options.observations?.find((pane) =>
+      pane.handle === terminal.handle && pane.incarnationId === terminal.incarnationId
+      && normalizedPath(pane.worktreePath) === normalizedPath(terminal.worktreePath));
+    const operationalState = operational?.state === 'PARKED' && (!operational.taskBinding || !operational.wait)
+      ? undefined : operational?.state;
+    const state: FleetPaneState | undefined = operationalState
+      ?? (formerAgentShell ? 'STOPPED'
+        : busy ? (hasPollingEvidence(screen) && store.hasPollingMark(terminal.handle) ? 'POLLING' : 'busy')
+          : undefined);
     // Ignore TUI chrome, clocks and status bars; cap retained content and hash it.
     const tail = nonChromeLines(screen).slice(-20).join('\n').slice(-4096);
     const tailHash = createHash('sha256').update(tail).digest('hex');
@@ -643,21 +691,22 @@ export function collectFleetDiagnostics(options: FleetDiagnosticOptions): FleetD
     const firstUnchangedObservedAt = unchanged ? prior!.firstUnchangedObservedAt : now;
     if (key && Number.isFinite(now)) {
       store.writeDiagnosticHistory?.(terminal.handle, {
-        key, designatedAgent: designated || formerAgentShell,
+        key, designatedAgent: designated || previouslyDesignated,
         ...(designated ? { agentIdentity: terminal.agentIdentity }
-          : formerAgentShell && prior?.agentIdentity ? { agentIdentity: prior.agentIdentity } : {}),
+          : previouslyDesignated && prior?.agentIdentity ? { agentIdentity: prior.agentIdentity } : {}),
         tailHash, firstUnchangedObservedAt, ...(progress !== undefined ? { lastOutputAt: progress } : {}),
       });
     }
     const suspectedHung = key && unchanged && now - firstUnchangedObservedAt >= HUNG_AFTER_MS
-      && state !== 'PARKED' && state !== 'POLLING' && !formerAgentShell;
+      && state === 'busy' && !formerAgentShell;
     diagnostics.push({
       ...fields, state,
       reason: formerAgentShell ? 'suspected_bare_shell' : suspectedHung ? 'suspected_hung' : 'agent_unverified',
       evidence: formerAgentShell ? 'prior agentIdentity + exact handle/incarnation/worktree/branch; shell title'
         : suspectedHung ? 'unchanged normalized tail + available output progress for >=900s; possible intentional wait'
           : designated ? 'terminal.agentIdentity + screen; child process unverified'
-            : 'agent-looking title + screen; child process unverified',
+            : previouslyDesignated ? 'prior exact agentIdentity; current title/agent identity unverified'
+              : 'agent-looking title + screen; child process unverified',
     });
   }
   return diagnostics;
@@ -686,6 +735,8 @@ interface SweepCliOptions {
   busyRe?: RegExp;
   lines: number;
   json: boolean;
+  coordinatorHandle?: string;
+  architectHandle?: string;
 }
 
 export function parseSweepCli(
@@ -725,6 +776,8 @@ export function parseSweepCli(
     primary: target.primaryRoot,
     workspaceRe: compileRegex(target.orcaWorkspacePattern, defaultWorkspaceRegex(target.primaryRoot)),
     coordinatorTitleRe: compileRegex(target.orchestratorTitlePattern, DEFAULT_ORCHESTRATOR_TITLE_RE),
+    ...(env.ORCH_HANDLE?.trim() ? { coordinatorHandle: env.ORCH_HANDLE.trim() } : {}),
+    ...(env.ARCHITECT_HANDLE?.trim() ? { architectHandle: env.ARCHITECT_HANDLE.trim() } : {}),
     ...(busyRaw ? { busyRe: compileRegex(busyRaw, DEFAULT_BUSY_RE) } : {}),
     lines,
     json,
@@ -754,19 +807,21 @@ if (isDirectExecution()) {
       reportIncomplete([{ reason: 'fleet_census_unreadable', evidence: 'terminal list --json: incomplete_or_malformed' }]);
       throw error;
     }
-    let diagnostics: FleetDiagnostic[] = [];
-    try {
-      diagnostics = collectFleetDiagnostics({ ...options, store, terminals });
-    } catch {
-      // Advisory store failure must not suppress the pre-existing operational sweep.
-      process.stderr.write('fleet-sweep: diagnostic projection unverified\n');
-    }
     let observations: FleetPaneObservation[];
     try {
       observations = runFleetSweep({ ...options, store, terminals });
     } catch (error) {
-      reportIncomplete(diagnostics);
+      // Failure of one legacy read does not hide independently readable peers.
+      try { reportIncomplete(collectFleetDiagnostics({ ...options, store, terminals })); }
+      catch { process.stderr.write('fleet-sweep: diagnostic projection unverified\n'); }
       throw error;
+    }
+    let diagnostics: FleetDiagnostic[] = [];
+    try {
+      diagnostics = collectFleetDiagnostics({ ...options, store, terminals, observations });
+    } catch {
+      // Advisory store failure must not suppress the pre-existing operational sweep.
+      process.stderr.write('fleet-sweep: diagnostic projection unverified\n');
     }
     const reported = observations.map((pane) => {
       const diagnostic = diagnostics.find((row) => row.handle === pane.handle);
