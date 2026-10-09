@@ -538,6 +538,7 @@ export async function runSupervisedWorkerStart(input: {
     return { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error };
   });
 
+  let admittedTerminalId = '';
   if (expectedCurrent?.kind === 'local') {
     let adapter = input.adapter;
     if (!adapter) {
@@ -551,35 +552,24 @@ export async function runSupervisedWorkerStart(input: {
         return { ok: false, reason: 'runtime_unavailable' };
       }
     }
-    let requestedTerminalId = '';
     if (terminal && mode === 'exact_terminal_worktree') {
-      requestedTerminalId = (await resolveCanonicalTerminalHandle(terminal, inspect)) ?? '';
+      admittedTerminalId = (await resolveCanonicalTerminalHandle(terminal, inspect)) ?? '';
+      if (!admittedTerminalId) {
+        // Keep the existing bounded second native read, never admit an unidentified destination.
+        admittedTerminalId = (await resolveCanonicalTerminalHandle(terminal, inspect)) ?? '';
+      }
+      if (!admittedTerminalId) {
+        return { ok: false, reason: 'supervised_start_terminal_witness_unavailable' };
+      }
     }
-    let admission = await admitCurrentWorkerAssignmentReplacement({
+    const admission = await admitCurrentWorkerAssignmentReplacement({
       file,
       expected: expectedCurrent,
       adapter,
-      ...(requestedTerminalId
-        ? { requestedTerminalId, env: input.env ?? process.env }
+      ...(admittedTerminalId
+        ? { requestedTerminalId: admittedTerminalId, env: input.env ?? process.env }
         : {}),
     });
-    if (
-      admission.status === 'target_unresolved'
-      && terminal
-      && mode === 'exact_terminal_worktree'
-      && !requestedTerminalId
-    ) {
-      const canonicalTerminal = await resolveCanonicalTerminalHandle(terminal, inspect);
-      if (canonicalTerminal) {
-        admission = await admitCurrentWorkerAssignmentReplacement({
-          file,
-          expected: expectedCurrent,
-          adapter,
-          requestedTerminalId: canonicalTerminal,
-          env: input.env ?? process.env,
-        });
-      }
-    }
     if (admission.status !== 'replaceable') {
       if (sameCurrentDelegatedIntegration && expectedCurrent && admission.status === 'skipped_live') {
         return {
@@ -606,7 +596,13 @@ export async function runSupervisedWorkerStart(input: {
           };
         }
       } else {
-        return { ok: false, reason: admission.status };
+        return {
+          ok: false,
+          reason: admission.status,
+          ...(admission.status === 'target_unresolved'
+            ? { errorMessage: admission.reason?.trim() || 'native cause unavailable' }
+            : {}),
+        };
       }
     }
   }
@@ -619,6 +615,9 @@ export async function runSupervisedWorkerStart(input: {
     })
     : { ok: true as const, witness: undefined };
   if (!placement.ok) return { ok: false, reason: placement.reason };
+  if (admittedTerminalId && placement.witness?.terminalHandle !== admittedTerminalId) {
+    return { ok: false, reason: 'supervised_start_terminal_witness_changed' };
+  }
 
   if (!args.includes('--json')) args.push('--json');
   const execute = input.execute ?? (async (workerArgs) => {

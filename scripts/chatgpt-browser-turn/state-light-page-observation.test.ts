@@ -8,6 +8,8 @@ import {
 import {
   ASSISTANT_MESSAGE_SELECTOR,
   ASSISTANT_TURN_ANCESTOR_XPATH,
+  ASSISTANT_TURN_ACTION_SELECTOR,
+  ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR,
   CONNECTION_RECOVERY_STATUS_SELECTOR,
   MESSAGE_NODE_SELECTOR,
@@ -344,6 +346,7 @@ describe('DOM observation boundary', () => {
         if (name === 'data-message-id') return `${message.role}-${index}-12345678`;
         return null;
       },
+      closest: () => ({ querySelector: () => null }),
       querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
         ? { getAttribute: () => message.role === 'user' ? 'user-message' : 'assistant-message' }
         : null,
@@ -351,7 +354,8 @@ describe('DOM observation boundary', () => {
       getBoundingClientRect: () => ({ height: 1 }),
       innerText: message.text,
     }));
-    const querySelectorAll = vi.fn((_selector: string) => {
+    const querySelectorAll = vi.fn((selector: string) => {
+      if (selector !== '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]') return [];
       const match = generationQuery();
       return match ? [match] : [];
     });
@@ -377,7 +381,7 @@ describe('DOM observation boundary', () => {
 
   it('carries the exact probe tuple from one atomic production DOM read', async () => {
     const dead = await readAtomicEvidence([{ role: 'user', text: markedPrompt }], () => null);
-    expect(dead.result.pageTurnEvidence).toEqual({ generationInProgress: false, observedAssistantNodes: 0 });
+    expect(dead.result.pageTurnEvidence).toMatchObject({ generationInProgress: false, observedAssistantNodes: 0, continueGeneratingVisible: false });
     expect(classifyBrowserGptPageTurnStatus(
       dead.result.pageTurnEvidence!.generationInProgress,
       dead.result.pageTurnEvidence!.observedAssistantNodes,
@@ -387,7 +391,7 @@ describe('DOM observation boundary', () => {
       [{ role: 'user', text: markedPrompt }],
       () => ({ getBoundingClientRect: () => ({ height: 1 }) }),
     );
-    expect(live.result.pageTurnEvidence).toEqual({ generationInProgress: true, observedAssistantNodes: 0 });
+    expect(live.result.pageTurnEvidence).toMatchObject({ generationInProgress: true, observedAssistantNodes: 0, continueGeneratingVisible: false });
     expect(classifyBrowserGptPageTurnStatus(
       live.result.pageTurnEvidence!.generationInProgress,
       live.result.pageTurnEvidence!.observedAssistantNodes,
@@ -397,7 +401,7 @@ describe('DOM observation boundary', () => {
       { role: 'user', text: markedPrompt },
       { role: 'assistant', text: 'historical or completed assistant' },
     ], () => null);
-    expect(completed.result.pageTurnEvidence).toEqual({ generationInProgress: false, observedAssistantNodes: 1 });
+    expect(completed.result.pageTurnEvidence).toMatchObject({ generationInProgress: false, observedAssistantNodes: 1, continueGeneratingVisible: false });
     expect(classifyBrowserGptPageTurnStatus(
       completed.result.pageTurnEvidence!.generationInProgress,
       completed.result.pageTurnEvidence!.observedAssistantNodes,
@@ -407,11 +411,59 @@ describe('DOM observation boundary', () => {
     );
   });
 
+  it('captures an actionable text-named Continue generating control on its own assistant turn', async () => {
+    const button = {
+      getAttribute: (name: string) => name === 'aria-label' ? null : null,
+      innerText: 'Continue generating',
+      textContent: 'Continue generating',
+      getBoundingClientRect: () => ({ width: 120, height: 24 }),
+      hasAttribute: () => false,
+    };
+    const turn = {
+      querySelector: (selector: string) => selector === ASSISTANT_TURN_ACTION_SELECTOR ? {} : null,
+      querySelectorAll: (selector: string) => selector === 'button' ? [button] : [],
+    };
+    const makeMessage = (role: 'user' | 'assistant', text: string) => ({
+      getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR
+        ? `${role}-message`
+        : name === 'data-message-id' ? null : null,
+      closest: () => turn,
+      querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+        ? { getAttribute: () => `${role}-message` }
+        : selector === ASSISTANT_TURN_ACTION_SELECTOR && role === 'assistant' ? {} : null,
+      querySelectorAll: () => [],
+      getBoundingClientRect: () => ({ height: 1 }),
+      innerText: text,
+    });
+    const elements = [makeMessage('user', markedPrompt), makeMessage('assistant', 'partial reply')];
+    const nodes = scalarLocator({
+      evaluateAll: vi.fn(async (callback: (items: Element[], args: unknown) => unknown, args: unknown) => (
+        callback(elements as unknown as Element[], args)
+      )),
+    });
+    const page = { locator: vi.fn((selector: string) => selector === MESSAGE_NODE_SELECTOR ? nodes : scalarLocator()) };
+    const priorDocument = (globalThis as { document?: unknown }).document;
+    (globalThis as { document?: unknown }).document = { querySelectorAll: () => [] };
+    try {
+      const observation = await readPageObservation(page, marker, 0);
+      expect(observation.transcriptIncomplete).toBe(false);
+      expect(observation.snapshot?.carriers[1]).toMatchObject({
+        role: 'assistant',
+        continuationVisible: true,
+        completionReady: false,
+      });
+      expect(observation.ownedWindowCompletionReady).toBe(false);
+    } finally {
+      if (priorDocument === undefined) delete (globalThis as { document?: unknown }).document;
+      else (globalThis as { document?: unknown }).document = priorDocument;
+    }
+  });
+
   it('does not count an unrendered Stop as generation in progress', async () => {
     const finished = await readAtomicEvidence([
       { role: 'assistant', text: 'finished reply' },
     ], () => ({ getBoundingClientRect: () => ({ height: 0 }) }));
-    expect(finished.result.pageTurnEvidence).toEqual({ generationInProgress: false, observedAssistantNodes: 1 });
+    expect(finished.result.pageTurnEvidence).toMatchObject({ generationInProgress: false, observedAssistantNodes: 1, continueGeneratingVisible: false });
   });
 
   it('preserves a valid transcript and fails closed when generation reading throws', async () => {
@@ -421,9 +473,10 @@ describe('DOM observation boundary', () => {
     );
     expect(observation.result.messages).toEqual([{ role: 'user', text: markedPrompt }]);
     expect(observation.result.transcriptIncomplete).toBe(false);
-    expect(observation.result.pageTurnEvidence).toEqual({
+    expect(observation.result.pageTurnEvidence).toMatchObject({
       generationInProgress: 'unknown',
       observedAssistantNodes: 0,
+      continueGeneratingVisible: false,
     });
     expect(classifyBrowserGptPageTurnStatus(
       observation.result.pageTurnEvidence!.generationInProgress,
@@ -473,6 +526,10 @@ describe('unchanged observation diagnostics', () => {
     });
     expect(replyStabilityMatches('same', 'same')).toBe(true);
     expect(replyStabilityFingerprint('same')).toContain('same');
+    const longA = `${'H'.repeat(320)}middle-A${'T'.repeat(320)}`;
+    const longB = `${'H'.repeat(320)}middle-B${'T'.repeat(320)}`;
+    expect(replyStabilityMatches(longA, longB)).toBe(false);
+    expect(replyStabilityMatches('first\n   middle\nlast', 'first\n middle\nlast')).toBe(false);
   });
 });
 

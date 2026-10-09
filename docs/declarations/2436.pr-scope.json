@@ -1,0 +1,29 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2436,
+  "declared_paths": [
+    ".claude/skills/discuss-with-gpt/driver.mjs",
+    "docs/declarations/2436.pr-scope.json",
+    "scripts/discuss-writer-cutover.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    ".claude/skills/discuss-with-gpt/local.config.json",
+    ".env",
+    "credentials/",
+    "packages/core/",
+    "runtime-state/",
+    "scripts/lib/cutover/activation-recovery.ts",
+    "scripts/lib/cutover/activation-transaction.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/discuss-with-gpt/driver.mjs",
+    "docs/declarations/",
+    "scripts/discuss-writer-cutover.test.ts",
+    "scripts/lib/cutover/activation-cordon.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "a0a81a6536329b85b2f212642d0c225ee41389a1"
+}

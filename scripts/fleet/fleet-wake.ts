@@ -19,6 +19,8 @@ import {
   DEFAULT_ORCHESTRATOR_TITLE_RE,
   FileFleetStateStore,
   FleetScreenReadError,
+  collectFleetDiagnostics,
+  formatFleetDiagnostics,
   compileRegex,
   defaultOrcaExecutor,
   defaultWorkspaceRegex,
@@ -748,6 +750,68 @@ function submitCoordinator(executor: OrcaExecutor, handle: string): boolean {
   return executor(['terminal', 'send', '--terminal', handle, '--enter']).ok;
 }
 
+// A separate, read-only tick projection. It never receives delivery/actionable state,
+// and neither its rows nor its page evidence can become wake admission or retry authority.
+export interface FleetDiagnosticTickOptions {
+  readonly config: FleetWakeConfig;
+  readonly executor?: OrcaExecutor;
+  readonly store?: FleetPollingStore;
+  readonly terminals?: readonly FleetTerminal[];
+  readonly observations?: readonly FleetPaneObservation[];
+  readonly observedChats?: readonly ProjectChat[];
+  readonly now?: () => number;
+  readonly log?: (line: string) => void;
+  readonly readChats?: (cdpUrl: string, scope: ChatBannerScope) => Promise<ProjectChat[]>;
+}
+
+export async function runFleetDiagnosticTick(options: FleetDiagnosticTickOptions): Promise<void> {
+  const { config } = options;
+  const executor = options.executor ?? defaultOrcaExecutor;
+  const store = options.store ?? new FileFleetStateStore(config.projectId);
+  const log = options.log ?? ((line: string) => process.stdout.write(`${line}\n`));
+  let terminals: readonly FleetTerminal[];
+  try {
+    terminals = options.terminals ?? listFleetTerminals(executor);
+  } catch {
+    log('DIAG handle=none incarnation=unknown state=unverified reason=fleet_census_unreadable evidence=terminal list --json: incomplete_or_malformed');
+    return;
+  }
+  const rows = collectFleetDiagnostics({
+    projectId: config.projectId, primary: config.primary, workspaceRe: config.workspaceRe,
+    coordinatorHandle: config.orchestratorHandle,
+    coordinatorTitleRe: config.orchestratorTitleRe, architectHandle: config.architectHandle,
+    busyRe: config.busyRe, executor, store, terminals,
+    ...(options.observations ? { observations: options.observations } : {}),
+    ...(options.now ? { now: options.now } : {}),
+  });
+  for (const line of formatFleetDiagnostics(rows).split('\n').filter(Boolean)) log(line);
+
+  // Positive ORCH_HANDLE only selects an exact pane. An unpinned title match can
+  // be ambiguous; neither proves a live child agent or changes the old resolver.
+  const matches = terminals.filter((terminal) => {
+    config.orchestratorTitleRe.lastIndex = 0;
+    return Boolean(terminal.worktreePath) && samePath(terminal.worktreePath, config.primary)
+      && config.orchestratorTitleRe.test(terminal.title);
+  });
+  if (!config.orchestratorHandle && matches.length > 1) {
+    log(`DIAG reason=coordinator_ambiguous candidates=${matches.map((pane) => pane.handle).join(',')} evidence=primary-title-matches; no_live_agent_witness`);
+  } else {
+    const selected = config.orchestratorHandle
+      ? resolveCoordinatorPane(terminals, config)
+      : matches.length === 1 ? matches[0] : undefined;
+    log(`DIAG reason=coordinator_unverified selected=${selected?.handle ?? 'none'} evidence=${config.orchestratorHandle ? 'ORCH_HANDLE exact_selection_only' : 'primary-title-predicate_only'}; no_live_agent_witness`);
+  }
+
+  if (config.chatCdpUrl && config.chatScope) {
+    const chats = options.observedChats ?? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => []);
+    for (const chat of chats) {
+      for (const banner of chat.banners) {
+        log(`DIAG banner_kind=${banner.kind} url=${banner.url} retry_control_observed=${banner.retry === true} generation_observed=${chat.generating === true} attribution=tentative/unbound evidence=DOM_structure_only; banner_text_untrusted`);
+      }
+    }
+  }
+}
+
 export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise<FleetAlarmTickResult> {
   const { config } = options;
   const executor = options.executor ?? defaultOrcaExecutor;
@@ -759,128 +823,147 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   try {
     terminals = listFleetTerminals(executor);
   } catch {
+    log('DIAG handle=none incarnation=unknown state=unverified reason=fleet_census_unreadable evidence=terminal list --json: incomplete_or_malformed');
     log('terminal list unreadable');
     return { state: 'unreadable', handle: 'terminal-list' };
   }
 
-  const coordinator = resolveCoordinatorPane(terminals, config);
-  if (!coordinator) {
-    log('normal fleet result: no orchestrator pane found');
-    return { state: 'no_orchestrator' };
-  }
-
-  let observations: FleetPaneObservation[];
+  // Legacy events and banners run first; advisory reads never delay their effects.
+  // The same browser snapshot is reused for logging, with no second CDP scan.
+  let operationalObservations: FleetPaneObservation[] | undefined;
+  let activeChats: ProjectChat[] = [];
   try {
-    observations = runFleetSweep({
-      primary: config.primary,
-      projectId: config.projectId,
-      workspaceRe: config.workspaceRe,
-      coordinatorHandle: coordinator.handle,
-      coordinatorTitleRe: config.orchestratorTitleRe,
-      architectHandle: config.architectHandle,
-      busyRe: config.busyRe,
-      executor,
-      store,
-      terminals,
-    });
-  } catch (error) {
-    if (error instanceof FleetScreenReadError) {
-      log(`${error.handle} unreadable`);
-      return { state: 'unreadable', handle: error.handle };
+    const coordinator = resolveCoordinatorPane(terminals, config);
+    if (!coordinator) {
+      log('normal fleet result: no orchestrator pane found');
+      return { state: 'no_orchestrator' };
     }
-    log('fleet sweep unreadable');
-    return { state: 'unreadable', handle: 'fleet-sweep' };
-  }
 
-  await wakePanesOnEvents(options, coordinator, observations, executor, store, log, sleepMs);
-
-  const chats = config.chatCdpUrl && config.chatScope
-    ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])
-    : [];
-  const superseded = new Set(supersededChats(chats, (chat) => {
-    const owner = bannerOwnerPane(chat, terminals, config);
-    if (owner) return `pane ${owner.handle}`;
-    if (chat.issue) return `issue ${chat.issue}`;
-    return chat.pull ? `pull ${chat.pull}` : undefined;
-  }));
-  for (const chat of superseded) {
-    if (chat.generating) continue;
-    const closed = await (options.closeChat ?? closeChatTarget)(config.chatCdpUrl!, chat.targetId);
-    log(`${closed ? 'closed' : 'close failed for'} superseded chat ${chat.url}`);
-  }
-  const observed = chats.filter((chat) => !superseded.has(chat)).flatMap((chat) => chat.banners);
-  // A stalled chat must be seen on two consecutive ticks; page loads and turn
-  // starts briefly show neither Stop nor finished-reply actions.
-  const stalledNow = observed.filter((banner) => banner.kind === 'stalled').map((banner) => banner.url).sort();
-  const stalledBefore = new Set((store.readStalledSeen?.() ?? '').split('\n').filter(Boolean));
-  store.writeStalledSeen?.(stalledNow.join('\n'));
-  const seenUrls = new Set<string>();
-  const banners = observed.filter((banner) => (banner.kind !== 'stalled' || stalledBefore.has(banner.url))
-    && !seenUrls.has(banner.url) && Boolean(seenUrls.add(banner.url)));
-  const direct: Array<readonly [FleetTerminal, ChatErrorBanner]> = [];
-  const routed: ChatErrorBanner[] = [];
-  for (const banner of banners) {
-    const owner = bannerOwnerPane(banner, terminals, config);
-    if (owner) direct.push([owner, banner]);
-    else routed.push(banner);
-  }
-  const directSignature = direct
-    .map(([owner, banner]) => `${owner.handle} ${banner.url} ${banner.text}`)
-    .sort((left, right) => left.localeCompare(right))
-    .join('\n');
-  if (store.readBannerSignature?.() !== directSignature) {
-    for (const [owner, banner] of direct) {
-      const delivered = sendCoordinator(executor, owner.handle, managerBannerMessage(banner))
-        && (await sleepMs(4_000), submitCoordinator(executor, owner.handle));
-      log(`${delivered ? 'sent' : 'send failed'} chat banner to ${owner.handle}: ${banner.url}`);
-      if (!delivered) routed.push(banner);
+    let observations: FleetPaneObservation[];
+    try {
+      observations = runFleetSweep({
+        primary: config.primary,
+        projectId: config.projectId,
+        workspaceRe: config.workspaceRe,
+        coordinatorHandle: coordinator.handle,
+        coordinatorTitleRe: config.orchestratorTitleRe,
+        architectHandle: config.architectHandle,
+        busyRe: config.busyRe,
+        executor,
+        store,
+        terminals,
+      });
+      operationalObservations = observations;
+    } catch (error) {
+      if (error instanceof FleetScreenReadError) {
+        log(`${error.handle} unreadable`);
+        return { state: 'unreadable', handle: error.handle };
+      }
+      log('fleet sweep unreadable');
+      return { state: 'unreadable', handle: 'fleet-sweep' };
     }
-    store.writeBannerSignature?.(directSignature);
-  }
 
-  const stopped = actionablePanes(observations);
-  if (stopped.length === 0 && routed.length === 0) {
-    store.clearLastSentSignature();
-    log('nothing stopped');
-    return { state: 'nothing_stopped' };
-  }
+    await wakePanesOnEvents(options, coordinator, observations, executor, store, log, sleepMs);
 
-  let coordinatorScreen: string;
-  try {
-    coordinatorScreen = readFleetScreen(coordinator.handle, executor);
-  } catch {
-    log(`${coordinator.handle} unreadable`);
-    return { state: 'unreadable', handle: coordinator.handle };
-  }
+    const chats = config.chatCdpUrl && config.chatScope
+      ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])
+      : [];
+    const superseded = new Set(supersededChats(chats, (chat) => {
+      const owner = bannerOwnerPane(chat, terminals, config);
+      if (owner) return `pane ${owner.handle}`;
+      if (chat.issue) return `issue ${chat.issue}`;
+      return chat.pull ? `pull ${chat.pull}` : undefined;
+    }));
+    for (const chat of superseded) {
+      if (chat.generating) continue;
+      const closed = await (options.closeChat ?? closeChatTarget)(config.chatCdpUrl!, chat.targetId);
+      log(`${closed ? 'closed' : 'close failed for'} superseded chat ${chat.url}`);
+    }
+    activeChats = chats.filter((chat) => !superseded.has(chat));
+    const observed = activeChats.flatMap((chat) => chat.banners);
+    // A stalled chat must be seen on two consecutive ticks; page loads and turn
+    // starts briefly show neither Stop nor finished-reply actions.
+    const stalledNow = observed.filter((banner) => banner.kind === 'stalled').map((banner) => banner.url).sort();
+    const stalledBefore = new Set((store.readStalledSeen?.() ?? '').split('\n').filter(Boolean));
+    store.writeStalledSeen?.(stalledNow.join('\n'));
+    const seenUrls = new Set<string>();
+    const banners = observed.filter((banner) => (banner.kind !== 'stalled' || stalledBefore.has(banner.url))
+      && !seenUrls.has(banner.url) && Boolean(seenUrls.add(banner.url)));
+    const direct: Array<readonly [FleetTerminal, ChatErrorBanner]> = [];
+    const routed: ChatErrorBanner[] = [];
+    for (const banner of banners) {
+      const owner = bannerOwnerPane(banner, terminals, config);
+      if (owner) direct.push([owner, banner]);
+      else routed.push(banner);
+    }
+    const directSignature = direct
+      .map(([owner, banner]) => `${owner.handle} ${banner.url} ${banner.text}`)
+      .sort((left, right) => left.localeCompare(right))
+      .join('\n');
+    if (store.readBannerSignature?.() !== directSignature) {
+      for (const [owner, banner] of direct) {
+        const delivered = sendCoordinator(executor, owner.handle, managerBannerMessage(banner))
+          && (await sleepMs(4_000), submitCoordinator(executor, owner.handle));
+        log(`${delivered ? 'sent' : 'send failed'} chat banner to ${owner.handle}: ${banner.url}`);
+        if (!delivered) routed.push(banner);
+      }
+      store.writeBannerSignature?.(directSignature);
+    }
 
-  const coordinatorState: 'idle' | 'busy' = isBusyScreen(coordinatorScreen, config.busyRe) ? 'busy' : 'idle';
-  const signature = [stoppedSignature(observations), chatBannerSignature(routed)].filter(Boolean).join('\n');
-  const deliverySignature = `${coordinator.handle}\n${signature}`;
-  if (coordinatorState === 'busy' && store.readLastSentSignature() === deliverySignature) {
-    log(`${coordinator.handle} same stopped set already queued`);
-    return { state: 'same_stopped_set', coordinator: coordinator.handle, signature };
-  }
+    const stopped = actionablePanes(observations);
+    if (stopped.length === 0 && routed.length === 0) {
+      store.clearLastSentSignature();
+      log('nothing stopped');
+      return { state: 'nothing_stopped' };
+    }
 
-  const message = fleetAlarmMessage(coordinatorState, observations, routed);
-  if (!sendCoordinator(executor, coordinator.handle, message)) {
-    log(`${coordinator.handle} send failed`);
-    return { state: 'send_failed', coordinator: coordinator.handle };
-  }
-  await sleepMs(4_000);
-  if (!submitCoordinator(executor, coordinator.handle)) {
-    log(`${coordinator.handle} send failed`);
-    return { state: 'send_failed', coordinator: coordinator.handle };
-  }
+    let coordinatorScreen: string;
+    try {
+      coordinatorScreen = readFleetScreen(coordinator.handle, executor);
+    } catch {
+      log(`${coordinator.handle} unreadable`);
+      return { state: 'unreadable', handle: coordinator.handle };
+    }
 
-  store.writeLastSentSignature(deliverySignature);
-  log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} need a step, ${routed.length} chat banner(s)`);
-  return {
-    state: 'sent',
-    coordinator: coordinator.handle,
-    coordinatorState,
-    count: stopped.length,
-    signature,
-  };
+    const coordinatorState: 'idle' | 'busy' = isBusyScreen(coordinatorScreen, config.busyRe) ? 'busy' : 'idle';
+    const signature = [stoppedSignature(observations), chatBannerSignature(routed)].filter(Boolean).join('\n');
+    const deliverySignature = `${coordinator.handle}\n${signature}`;
+    if (coordinatorState === 'busy' && store.readLastSentSignature() === deliverySignature) {
+      log(`${coordinator.handle} same stopped set already queued`);
+      return { state: 'same_stopped_set', coordinator: coordinator.handle, signature };
+    }
+
+    const message = fleetAlarmMessage(coordinatorState, observations, routed);
+    if (!sendCoordinator(executor, coordinator.handle, message)) {
+      log(`${coordinator.handle} send failed`);
+      return { state: 'send_failed', coordinator: coordinator.handle };
+    }
+    await sleepMs(4_000);
+    if (!submitCoordinator(executor, coordinator.handle)) {
+      log(`${coordinator.handle} send failed`);
+      return { state: 'send_failed', coordinator: coordinator.handle };
+    }
+
+    store.writeLastSentSignature(deliverySignature);
+    log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} need a step, ${routed.length} chat banner(s)`);
+    return {
+      state: 'sent',
+      coordinator: coordinator.handle,
+      coordinatorState,
+      count: stopped.length,
+      signature,
+    };
+  } finally {
+    // Advisory history, screen reads, and formatting cannot abort the pre-existing tick.
+    try {
+      await runFleetDiagnosticTick({
+        config, executor, store, terminals, log, observedChats: activeChats,
+        ...(operationalObservations ? { observations: operationalObservations } : {}),
+      });
+    } catch {
+      log('DIAG state=unverified reason=diagnostic_unreadable evidence=read_only_projection_failure');
+    }
+  }
 }
 
 export function fleetWakeConfigFromEnv(

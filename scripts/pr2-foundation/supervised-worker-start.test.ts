@@ -469,7 +469,7 @@ describe('supervised worker start exact assignment admission',()=>{
         return { ok: true, stdout: envelope({ taskId: 'task_new', dispatchId: 'dispatch_new', state: 'ready', effects: producerEffects() }) };
       },
     });
-    expect(result).toEqual({ ok: false, reason: 'target_unresolved' });
+    expect(result).toEqual({ ok: false, reason: 'target_unresolved', errorMessage: 'terminal_reuse_unauthorized' });
     expect(starts).toBe(0);
     expect(currentWorkerAssignment(file, 1416)).toEqual(old.assignment);
     expect(runJson.mock.calls.some((call) => call[0]?.slice(0, 2).join(' ') === 'terminal close')).toBe(false);
@@ -613,7 +613,7 @@ describe('supervised worker start exact assignment admission',()=>{
       inspect:inspectPlacement(),
       execute:async()=>{starts+=1;return{ok:true,stdout:envelope({taskId:'task_blocked',dispatchId:'dispatch_new',state:'ready',effects:producerEffects()})};},
     });
-    expect(result).toEqual({ok:false,reason:'target_unresolved'});
+    expect(result).toEqual({ok:false,reason:'target_unresolved',errorMessage:'native cause unavailable'});
     expect(starts).toBe(0);
     expect(currentWorkerAssignment(file,1416)).toEqual(old.assignment);
     expect(runJson.mock.calls.some((call)=>call[0]?.slice(0,2).join(' ')==='orchestration send')).toBe(true);
@@ -633,9 +633,181 @@ describe('supervised worker start exact assignment admission',()=>{
       inspect:inspectPlacement({terminal:'foreign-terminal'}),
       execute:async()=>{calls+=1;return{ok:true,stdout:envelope({taskId:'task_new',dispatchId:'dispatch_new',state:'ready',effects:producerEffects({terminal:'foreign-terminal'})})}},
     });
-    expect(result).toEqual({ok:false,reason:'target_unresolved'});
+    expect(result).toEqual({ok:false,reason:'target_unresolved',errorMessage:'native cause unavailable'});
     expect(calls).toBe(0);
     expect(currentWorkerAssignment(file,1416)).toEqual(old.assignment);
+  });
+
+  it('rejects a missing/failed/retained historical terminal on all three repeated start attempts', async () => {
+    const base = root();
+    const env = { ...process.env, OPK_BASE_DIR: base };
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    const old = await publishCurrentWorkerAssignment({
+      file, repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1416, taskId: 'task_1',
+      kind: 'local', provider: 'orca', bindingKey: 'dispatch_old', role: 'worker',
+    });
+    if (!old.ok) throw new Error(old.reason);
+    const shown = {
+      dispatch: { status: 'failed', last_heartbeat_at: null },
+      worker: { agent_terminal_handle: canonicalTerminal },
+      terminal: null,
+      observation: { exactWorker: false, status: 'missing' },
+      terminalResource: {
+        terminalHandle: canonicalTerminal, worktreeId: canonicalWorktree,
+        originDispatchId: 'dispatch_old', ownerDispatchId: 'dispatch_old', releaseState: 'retained',
+      },
+    };
+    const runJson = vi.fn((): OrcaJsonResponse => ({ ok: true, result: shown }));
+    let starts = 0;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await runSupervisedWorkerStart({
+        role: 'worker', repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1416,
+        env, orcaArgs: args(), inspect: inspectPlacement(),
+        adapter: new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env }),
+        execute: async () => {
+          starts += 1;
+          return { ok: true, stdout: envelope({ taskId: 'task_1', dispatchId: 'dispatch_new', state: 'ready' }) };
+        },
+      });
+      expect(result).toEqual({ ok: false, reason: 'target_unresolved', errorMessage: 'terminal_reuse_unauthorized' });
+      expect(currentWorkerAssignment(file, 1416)).toEqual(old.assignment);
+    }
+    expect(starts).toBe(0);
+  });
+
+  it('admits the native-proven missing/failed/retained predecessor on a different terminal only', async () => {
+    const base = root();
+    const env = { ...process.env, OPK_BASE_DIR: base };
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    const old = await publishCurrentWorkerAssignment({
+      file, repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1416, taskId: 'task_1',
+      kind: 'local', provider: 'orca', bindingKey: 'dispatch_old', role: 'worker',
+    });
+    if (!old.ok) throw new Error(old.reason);
+    const runJson = vi.fn((): OrcaJsonResponse => ({
+      ok: true,
+      result: {
+        dispatch: { status: 'failed', last_heartbeat_at: null },
+        worker: { agent_terminal_handle: canonicalTerminal },
+        terminal: null,
+        observation: { exactWorker: false, status: 'missing' },
+        terminalResource: {
+          terminalHandle: canonicalTerminal, worktreeId: canonicalWorktree,
+          originDispatchId: 'dispatch_old', ownerDispatchId: 'dispatch_old', releaseState: 'retained',
+        },
+      },
+    }));
+    let starts = 0;
+    const result = await runSupervisedWorkerStart({
+      role: 'worker', issueNumber: 1416, repository: 'chetwerikoff/orchestrator-pack', env,
+      orcaArgs: argsForTerminal('terminal:fresh', 'task_1'),
+      adapter: new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env }),
+      inspect: inspectPlacement({ terminal: 'term-fresh' }),
+      execute: async () => {
+        starts += 1;
+        return { ok: true, stdout: envelope({
+          taskId: 'task_1', dispatchId: 'dispatch_new', state: 'ready', effects: producerEffects({ terminal: 'term-fresh' }),
+        }) };
+      },
+    });
+    expect(result).toMatchObject({
+      ok: true, reason: 'ready_and_assignment_bound',
+      assignment: { taskId: 'task_1', bindingKey: 'dispatch_new', generation: 2 },
+    });
+    expect(result.assignment?.assignmentId).not.toBe(old.assignment.assignmentId);
+    expect(starts).toBe(1);
+    expect(currentWorkerAssignment(file, 1416)?.bindingKey).toBe('dispatch_new');
+  });
+
+  it.each([
+    { name: 'first native terminal read is unavailable', firstHandle: null, expectedReason: 'target_unresolved' },
+    { name: 'native terminal identity changes before placement', firstHandle: 'term-fresh', expectedReason: 'supervised_start_terminal_witness_changed' },
+  ])('blocks retained old-terminal reuse when $name', async ({ firstHandle, expectedReason }) => {
+    const base = root();
+    const env = { ...process.env, OPK_BASE_DIR: base };
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    const old = await publishCurrentWorkerAssignment({
+      file, repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1416,
+      taskId: 'task_1', kind: 'local', provider: 'orca', bindingKey: 'dispatch_old', role: 'worker',
+    });
+    if (!old.ok) throw new Error(old.reason);
+    const shown = {
+      dispatch: { status: 'failed', last_heartbeat_at: null },
+      worker: { agent_terminal_handle: canonicalTerminal },
+      terminal: null,
+      observation: { exactWorker: false, status: 'missing' },
+      terminalResource: {
+        terminalHandle: canonicalTerminal, worktreeId: canonicalWorktree,
+        originDispatchId: 'dispatch_old', ownerDispatchId: 'dispatch_old', releaseState: 'retained',
+      },
+    };
+    const runJson = vi.fn((): OrcaJsonResponse => ({ ok: true, result: shown }));
+    const regularInspect = inspectPlacement();
+    let terminalReads = 0;
+    const inspect = async (inspectArgs: readonly string[]) => {
+      if (inspectArgs[0] === 'terminal' && inspectArgs[1] === 'show') {
+        terminalReads += 1;
+        if (terminalReads === 1) {
+          return firstHandle === null
+            ? { ok: false, stdout: '' }
+            : inspectPlacement({ terminal: firstHandle })(inspectArgs);
+        }
+      }
+      return regularInspect(inspectArgs);
+    };
+    let starts = 0;
+    const result = await runSupervisedWorkerStart({
+      role: 'worker', issueNumber: 1416, repository: 'chetwerikoff/orchestrator-pack',
+      env, orcaArgs: args(), inspect,
+      adapter: new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env }),
+      execute: async () => {
+        starts += 1;
+        return { ok: true, stdout: envelope({
+          taskId: 'task_1', dispatchId: 'dispatch_new', state: 'ready', effects: producerEffects(),
+        }) };
+      },
+    });
+    expect(result).toMatchObject({ ok: false, reason: expectedReason });
+    if (firstHandle === null) {
+      expect(result).toMatchObject({ errorMessage: 'terminal_reuse_unauthorized' });
+    }
+    expect(terminalReads).toBe(2);
+    expect(starts).toBe(0);
+    expect(currentWorkerAssignment(file, 1416)).toEqual(old.assignment);
+  });
+
+  it('uses absent-current admission after explicit retirement without recovering an old assignment identity', async () => {
+    const base = root();
+    const env = { ...process.env, OPK_BASE_DIR: base };
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    const old = await publishCurrentWorkerAssignment({
+      file, repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1416, taskId: 'task_1',
+      kind: 'local', provider: 'orca', bindingKey: 'dispatch_old', role: 'worker',
+    });
+    if (!old.ok) throw new Error(old.reason);
+    const retired = await retireCurrentWorkerAssignment({ file, expected: old.assignment });
+    expect(retired.ok).toBe(true);
+    let resolves = 0;
+    const liveAdapter = { ...adapter({ kind: 'gone' }),
+      resolveAssignmentWorker: () => {
+        resolves += 1;
+        throw new Error('absent current must not resolve an old Dispatch');
+      },
+    };
+    const result = await runSupervisedWorkerStart({
+      role: 'worker', issueNumber: 1416, repository: 'chetwerikoff/orchestrator-pack', env,
+      orcaArgs: args(), adapter: liveAdapter, inspect: inspectPlacement(),
+      execute: async () => ({
+        ok: true, stdout: envelope({
+          taskId: 'task_1', dispatchId: 'dispatch_new', state: 'ready', effects: producerEffects(),
+        }),
+      }),
+    });
+    expect(result).toMatchObject({
+      ok: true, reason: 'ready_and_assignment_bound', assignment: { bindingKey: 'dispatch_new' },
+    });
+    expect(resolves).toBe(0);
+    expect(result.assignment?.assignmentId).not.toBe(old.assignment.assignmentId);
   });
 
   it('separate operator successor advances generation only after affirmative current-local gone evidence',async()=>{

@@ -1,0 +1,43 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2430,
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "docs/target_repo_setup.md",
+    "scripts/lib/worker-assignment-runtime.test.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/orca-runtime/task-adapter.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/pr2-foundation/supervised-worker-start.test.ts",
+    "scripts/pr2-foundation/supervised-worker-start.ts"
+  ],
+  "denylist": [
+    ".env",
+    ".orchestrator-pack/",
+    "credentials/",
+    "local.config.json",
+    "packages/core/",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/lib/worker-assignment-runtime.ts",
+    "scripts/lib/worker-assignment-store.ts",
+    "scripts/operator-primary-binding.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/2430.pr-scope.json",
+    "docs/migration_notes.md",
+    "docs/target_repo_setup.md",
+    "scripts/lib/worker-assignment-runtime.test.ts",
+    "scripts/operator-primary-binding.test.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/orca-runtime/task-adapter.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/pr2-foundation/supervised-worker-start.test.ts",
+    "scripts/pr2-foundation/supervised-worker-start.ts"
+  ],
+  "source_revision": "0aafb41cb560d00eb62aee88d36da974f678d671"
+}

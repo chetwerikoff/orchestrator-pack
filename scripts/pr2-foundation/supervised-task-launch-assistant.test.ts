@@ -303,6 +303,14 @@ function managerReuseFixture(input: {
   ancestor?: boolean;
   mergeOk?: boolean;
   sharedBranch?: boolean;
+  prOverrides?: Readonly<Record<string, unknown>>;
+  noPr?: boolean;
+  duplicatePr?: boolean;
+  prListOk?: boolean;
+  prViewOk?: boolean;
+  prChanged?: boolean;
+  taskMembership?: boolean;
+  localHeadChanged?: boolean;
 } = {}) {
   const worktreeId = input.worktreeId ?? 'repo::existing';
   const worktreePath = input.worktreePath ?? '/tmp/existing';
@@ -310,6 +318,21 @@ function managerReuseFixture(input: {
   const branch = input.branch ?? 'manager-2024';
   let head = input.head ?? '1'.repeat(40);
   let mergeTransitions = 0;
+  let headReads = 0;
+  const prReads = new Map<number, number>();
+  const firstPr: Record<string, unknown> = {
+    number: 42,
+    body: 'Closes #2430',
+    state: 'OPEN',
+    baseRefName: 'main',
+    headRefName: branch,
+    headRefOid: head,
+    headRepository: { nameWithOwner: 'chetwerikoff/orchestrator-pack' },
+    ...input.prOverrides,
+  };
+  const prs: Array<Record<string, unknown>> = input.noPr
+    ? []
+    : input.duplicatePr ? [firstPr, { ...firstPr, number: 43 }] : [firstPr];
   const calls: string[][] = [];
   const execute = async (
     args: readonly string[],
@@ -319,10 +342,39 @@ function managerReuseFixture(input: {
   ) => {
     calls.push([...args]);
     if (args[0] === 'orca') {
+      if (args[2] === 'task-list') {
+        return { ok: true, stdout: okEnvelope({
+          runId: 'run-1',
+          tasks: input.taskMembership === false ? [{ id: 'task-other' }] : [{ id: 'task-1' }],
+        }), stderr: '' };
+      }
       return { ok: true, stdout: okEnvelope({ worktree: { id: worktreeId, path: worktreePath } }), stderr: '' };
     }
     if (cwd !== worktreePath) return { ok: false, stdout: '', stderr: 'wrong cwd' };
     const command = args.join(' ');
+    if (args[0] === 'gh' && args[1] === 'pr' && args[2] === 'list') {
+      return {
+        ok: input.prListOk !== false,
+        stdout: JSON.stringify(prs.map((pr) => ({
+          number: pr.number, baseRefName: pr.baseRefName, headRefName: pr.headRefName, headRefOid: pr.headRefOid,
+        }))),
+        stderr: '',
+      };
+    }
+    if (args[0] === 'gh' && args[1] === 'pr' && args[2] === 'view') {
+      const number = Number(args[3]);
+      const count = (prReads.get(number) ?? 0) + 1;
+      prReads.set(number, count);
+      const pr = prs.find((candidate) => candidate.number === number);
+      return {
+        ok: input.prViewOk !== false && Boolean(pr),
+        stdout: JSON.stringify(input.prChanged && count > 1 ? { ...pr, headRefOid: 'f'.repeat(40) } : pr),
+        stderr: '',
+      };
+    }
+    if (command === 'git symbolic-ref --quiet --short HEAD') {
+      return { ok: true, stdout: branch + '\n', stderr: '' };
+    }
     if (command === 'git rev-parse --show-toplevel') return { ok: true, stdout: `${worktreePath}\n`, stderr: '' };
     if (command === 'git remote get-url origin') {
       return {
@@ -359,7 +411,10 @@ function managerReuseFixture(input: {
     if (command === 'git status --porcelain=v1 --untracked-files=all') {
       return { ok: true, stdout: input.status ?? '', stderr: '' };
     }
-    if (command === 'git rev-parse --verify HEAD^{commit}') return { ok: true, stdout: `${head}\n`, stderr: '' };
+    if (command === 'git rev-parse --verify HEAD^{commit}') {
+      headReads += 1;
+      return { ok: true, stdout: (input.localHeadChanged && headReads > 1 ? 'f'.repeat(40) : head) + '\n', stderr: '' };
+    }
     if (args[0] === 'git' && args[1] === 'merge-base' && args[2] === '--is-ancestor'
       && args[4] === originMain) {
       return { ok: input.ancestor !== false, stdout: '', stderr: input.ancestor === false ? 'not ancestor' : '' };
@@ -1645,6 +1700,25 @@ The words Firefighter universal appear here only as prose.`;
     ]) expect(serialized).not.toContain(sentinel);
   });
 
+  it('reports only the sanctioned gone-path refusal or native cause unavailable', async () => {
+    for (const [message, expected] of [
+      ['terminal_reuse_unauthorized', 'terminal_reuse_unauthorized'],
+      ['untrusted provider detail', 'native cause unavailable'],
+      [undefined, 'native cause unavailable'],
+    ] as const) {
+      const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({
+        supervised: { ok: false, reason: 'target_unresolved', ...(message ? { errorMessage: message } : {}) },
+      }));
+      expect(result).toMatchObject({
+        outcome: 'continue', stage: 'supervised_start',
+        observedCause: 'target_unresolved',
+        evidence: { admissionDiagnostic: expected },
+        nextAction: { kind: 'reconcile_supervised_start' },
+      });
+      expect(JSON.stringify(result)).not.toContain('untrusted provider detail');
+    }
+  });
+
   it('preserves provider base branch on retry action', async () => {
     const result = await runSupervisedTaskLaunchAssistant({
       ...launchInput('t2'), startMode: 'provider_new_top_level', baseBranch: 'feature/base',
@@ -1977,6 +2051,98 @@ The words Firefighter universal appear here only as prose.`;
     expect(serialized).not.toContain('rebase');
     expect(serialized).not.toContain('--force');
     expect(fixture.calls.some((args) => args[0] === 'git' && args[1] === 'merge')).toBe(false);
+  });
+
+  it('admits one live Issue-closing same-repository PR head without rewriting its manager branch', async () => {
+    const fixture = managerReuseFixture({ ancestor: false });
+    const request = {
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
+      managerRefresh: true, managerTaskRunId: 'run-1', issueNumber: 2430,
+      worktreeSelector: 'id:repo::existing', defaultBranch: 'main',
+    } as const;
+    const result = await prepareWorktreeWithOrca(request, fixture.execute);
+    expect(result).toMatchObject({
+      status: 'ok', value: { id: 'repo::existing', path: '/tmp/existing', setupWitness: 'proven_reuse' },
+      evidence: { prNumber: 42, head: '1'.repeat(40), refresh: 'pr_head_preserved' },
+    });
+    expect(fixture.head()).toBe('1'.repeat(40));
+    expect(fixture.mergeTransitions()).toBe(0);
+    expect(fixture.calls.filter((args) => args.slice(0, 3).join(' ') === 'gh pr view')).toHaveLength(2);
+    expect(fixture.calls.some((args) => args[0] === 'orca' && args[2] === 'task-list' && args[3] === '--run')).toBe(true);
+    expect(fixture.calls.some((args) => args[0] === 'git' && ['merge', 'reset', 'rebase'].includes(args[1]!))).toBe(false);
+
+    let started = 0;
+    const launch = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('manager'), issueNumber: 2430, defaultBranch: 'main',
+    }, {
+      ...deps({ onSupervised: () => { started += 1; } }),
+      prepareWorktree: (input) => prepareWorktreeWithOrca(input, managerReuseFixture({ ancestor: false, worktreeId: 'manager-worktree', worktreePath: '/tmp/exact-worktree' }).execute),
+    });
+    expect(launch).toMatchObject({
+      outcome: 'ready', resources: { runId: 'run-1', taskId: 'task-1', dispatchId: 'dispatch-1' },
+    });
+    expect(started).toBe(1);
+  });
+
+  it('accepts only the real closing line after tilde examples and HTML comments', async () => {
+    const fixture = managerReuseFixture({
+      ancestor: false,
+      prOverrides: { body: "~~~md\nCloses #2430\n~~~\n<!--\nCloses #2430\n-->\nCloses #2430" },
+    });
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
+      managerRefresh: true, managerTaskRunId: 'run-1', issueNumber: 2430,
+      worktreeSelector: 'id:repo::existing', defaultBranch: 'main',
+    }, fixture.execute);
+    expect(result).toMatchObject({ status: 'ok', evidence: { prNumber: 42, refresh: 'pr_head_preserved' } });
+    expect(fixture.calls.some((args) => args[0] === 'git' && args[1] === 'merge')).toBe(false);
+  });
+
+  it.each([
+    { name: 'no linked PR', fixture: { noPr: true }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: 'multiple linked PRs', fixture: { duplicatePr: true }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "tilde-fenced closing example", fixture: { prOverrides: { body: "~~~md\nCloses #2430\n~~~" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "long tilde fence and short delimiter", fixture: { prOverrides: { body: "~~~~text\nCloses #2430\n~~~\nCloses #2430\n~~~~" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "multiline HTML comment", fixture: { prOverrides: { body: "<!--\nCloses #2430\n-->" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "unclosed multiline HTML comment", fixture: { prOverrides: { body: "<!-- sample\nCloses #2430" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "comment cannot join fragments into a closing keyword", fixture: { prOverrides: { body: "Clos<!-- sample -->es #2430" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: "HTML comment inside a tilde-fenced example", fixture: { prOverrides: { body: "~~~text\n<!-- Closes #2430 -->\nCloses #2430\n~~~" } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: 'unlinked body', fixture: { prOverrides: { body: 'Mentioned #2430, no closing line' } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: 'quoted closing text', fixture: { prOverrides: { body: '> Closes #2430' } }, cause: 'manager_pr_resume_link_ambiguous' },
+    { name: 'foreign head repository', fixture: { prOverrides: { headRepository: { nameWithOwner: 'foreign/orchestrator-pack' } } }, cause: 'manager_pr_resume_head_mismatch' },
+    { name: 'different base', fixture: { prOverrides: { baseRefName: 'release' } }, cause: 'manager_pr_resume_head_mismatch' },
+    { name: 'different head branch', fixture: { prOverrides: { headRefName: 'another-branch' } }, cause: 'manager_pr_resume_head_mismatch' },
+    { name: 'unpublished local head', fixture: { prOverrides: { headRefOid: '9'.repeat(40) } }, cause: 'manager_pr_resume_head_mismatch' },
+    { name: 'closed PR', fixture: { prOverrides: { state: 'CLOSED' } }, cause: 'manager_pr_resume_head_mismatch' },
+    { name: 'PR read unavailable', fixture: { prViewOk: false }, cause: 'manager_pr_resume_pr_unavailable' },
+    { name: 'PR inventory unavailable', fixture: { prListOk: false }, cause: 'manager_pr_resume_inventory_unavailable' },
+    { name: 'PR changed at final read', fixture: { prChanged: true }, cause: 'manager_pr_resume_pr_changed' },
+    { name: 'local HEAD changed before new effects', fixture: { localHeadChanged: true }, cause: 'manager_pr_resume_local_changed' },
+    { name: 'Task not in requested Run', fixture: { taskMembership: false }, cause: 'manager_pr_resume_task_unproven' },
+  ])('refuses non-ancestor restore on $name', async ({ fixture: options, cause }) => {
+    const fixture = managerReuseFixture({ ancestor: false, ...options });
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
+      managerRefresh: true, managerTaskRunId: 'run-1', issueNumber: 2430,
+      worktreeSelector: 'id:repo::existing', defaultBranch: 'main',
+    }, fixture.execute);
+    expect(result).toMatchObject({ status: 'continue', cause });
+    expect(fixture.head()).toBe('1'.repeat(40));
+    expect(fixture.mergeTransitions()).toBe(0);
+    expect(fixture.calls.some((args) => args[0] === 'git' && args[1] === 'merge')).toBe(false);
+  });
+
+  it('refuses PR-head resume when Issue or native Run/Task binding is absent', async () => {
+    for (const missing of ['issue', 'run'] as const) {
+      const fixture = managerReuseFixture({ ancestor: false });
+      const result = await prepareWorktreeWithOrca({
+        repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
+        managerRefresh: true, ...(missing === 'issue' ? { managerTaskRunId: 'run-1' } : { issueNumber: 2430 }),
+        worktreeSelector: 'id:repo::existing', defaultBranch: 'main',
+      }, fixture.execute);
+      expect(result).toMatchObject({ status: 'continue', cause: 'manager_worktree_non_ancestor' });
+      expect(fixture.calls.some((args) => args[0] === 'gh')).toBe(false);
+    }
   });
 
   it('treats an already-equal manager HEAD as success without a local update', async () => {
