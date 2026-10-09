@@ -4,7 +4,8 @@
   "declared_paths": [
     ".claude/skills/discuss-with-gpt/driver.mjs",
     "docs/declarations/2436.pr-scope.json",
-    "scripts/discuss-writer-cutover.test.ts"
+    "scripts/discuss-writer-cutover.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     ".claude/skills/discuss-with-gpt/local.config.json",
@@ -21,7 +22,8 @@
     ".claude/skills/discuss-with-gpt/driver.mjs",
     "docs/declarations/",
     "scripts/discuss-writer-cutover.test.ts",
-    "scripts/lib/cutover/activation-cordon.ts"
+    "scripts/lib/cutover/activation-cordon.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "f5feba7330c6c61d462fd110e1b3fe63653d79bf"
+  "source_revision": "a0a81a6536329b85b2f212642d0c225ee41389a1"
 }
