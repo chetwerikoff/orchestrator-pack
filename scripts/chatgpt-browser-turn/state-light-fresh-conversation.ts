@@ -147,7 +147,7 @@ function stableProjectId(segment: string): string | undefined {
 function supportedChatGptUrl(value: string): URL | undefined {
   try {
     const url = new URL(normalizeConversationUrl(value));
-    return url.protocol === 'https:' && url.hostname === 'chatgpt.com' && !url.username && !url.password
+    return url.origin === 'https://chatgpt.com' && !url.username && !url.password
       ? url : undefined;
   } catch {
     return undefined;
