@@ -577,8 +577,8 @@ PARKED: merge-<PR_NUMBER> — waiting on <verified dependency>; resume when <con
 
 Use the resolved **actual PR number**, any separately known release identifier,
 a concrete observed reason, a specific resume condition and its owner. The
-observer's accepted prefix grammar is `^PARKED(?: on\\b|:)`; the actual
-extraction grammar is `^PARKED(?: on\\s+|:\\s*(?:wait\\s+)?)(.+)$`.
+observer's accepted prefix grammar is `^PARKED(?: on\b|:)`; the actual
+extraction grammar is `^PARKED(?: on\s+|:\s*(?:wait\s+)?)(.+)$`.
 Merely containing the word PARKED or using `PARKED merge-...` is not enough.
 An ordinary technical failure without an actual retained actor/wait must
 not be falsely parked; report its concrete failure and next action.
