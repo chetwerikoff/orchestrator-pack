@@ -281,6 +281,7 @@ export class FileFleetStateStore implements FleetPollingStore {
       const value = JSON.parse(readFileSync(this.diagnosticPath(handle), 'utf8')) as FleetDiagnosticHistory;
       if (typeof value.key !== 'string' || !value.key
         || typeof value.designatedAgent !== 'boolean'
+        || (value.designatedAgent && (typeof value.agentIdentity !== 'string' || !value.agentIdentity.trim()))
         || (value.agentIdentity !== undefined && (typeof value.agentIdentity !== 'string' || !value.agentIdentity))
         || typeof value.tailHash !== 'string' || !/^[0-9a-f]{64}$/u.test(value.tailHash)
         || !Number.isFinite(value.firstUnchangedObservedAt)
@@ -606,7 +607,7 @@ export function collectFleetDiagnostics(options: FleetDiagnosticOptions): FleetD
     if (!key || (old && !prior)) store.clearDiagnosticHistory?.(terminal.handle);
     const designated = typeof terminal.agentIdentity === 'string' && terminal.agentIdentity.trim().length > 0;
     const shell = SHELL_TITLE_RE.test(terminal.title);
-    const formerAgentShell = shell && prior?.designatedAgent === true;
+    const formerAgentShell = shell && prior?.designatedAgent === true && Boolean(prior.agentIdentity);
     if (!designated && !looksLikeAgentPane(terminal.title) && !formerAgentShell
       && terminal.status?.toLowerCase() !== 'exited') continue;
     const fields = {
@@ -643,7 +644,8 @@ export function collectFleetDiagnostics(options: FleetDiagnosticOptions): FleetD
     if (key && Number.isFinite(now)) {
       store.writeDiagnosticHistory?.(terminal.handle, {
         key, designatedAgent: designated || formerAgentShell,
-        ...(designated ? { agentIdentity: terminal.agentIdentity } : {}),
+        ...(designated ? { agentIdentity: terminal.agentIdentity }
+          : formerAgentShell && prior?.agentIdentity ? { agentIdentity: prior.agentIdentity } : {}),
         tailHash, firstUnchangedObservedAt, ...(progress !== undefined ? { lastOutputAt: progress } : {}),
       });
     }
