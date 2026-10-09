@@ -1199,6 +1199,72 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
   });
 });
 
+describe('Issue #2451 same-run late error versus recovered verdict', () => {
+  it('keeps a credentialed complete verdict terminal and its success channel against stale no-judgment writes', () => {
+    const storeRoot = tempRoot('opk-2451-recovery-writer-order-');
+    harness(storeRoot);
+    const options = { projectId: PROJECT, storeRoot };
+    const stamp = '2026-10-10T00:00:00.000Z';
+    const round = threeSourceRound(stamp);
+    round.sourceSlots = round.sourceSlots.map((slot) => {
+      const invocationId = `2451-complete-${slot.ordinal}`;
+      return {
+        ...slot, lifecycle: 'terminal' as const, invocationId, attemptOrdinal: 1,
+        terminalClass: 'complete_clean',
+        terminalResult: {
+          schema: 'turn-result/v1', state: 'ok', scope: 'invocation',
+          cause: 'completed_page_only', invocation_id: invocationId, send_count: 1,
+        },
+        payload: { verdict: 'clean' as const, findingCount: 0, findings: [] },
+      };
+    });
+    round.settledSourceCount = 3;
+    const created = createPackReviewRun({
+      ...options, prNumber: 1591, headSha: HEAD_A,
+      trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+      canonicalRepository: REPO, reviewRound: round,
+    }).run;
+    const success = {
+      state: 'succeeded' as const, reason: 'status_success',
+      idempotencyKey: `required-status:orchestrator-pack/pack-review:${HEAD_A}`,
+      recordedAtUtc: stamp,
+    };
+    setPackReviewRunTerminal(created.id, 'up_to_date', {
+      reviewVerdict: 'clean', findingCount: 0, findings: [],
+      journalOutcome: {
+        state: 'persisted', recordedAtUtc: stamp, reason: 'verdict_committed',
+        idempotencyKey: `verdict:${created.id}:${HEAD_A}`, attempts: 1,
+      },
+      deliveryOutcomes: { requiredStatus: success },
+    }, options);
+    // The old failure writer can arrive after the verdict's successful status,
+    // and must not erase either the verdict or the newer same-channel receipt.
+    updatePackReviewRun(created.id, {
+      status: 'failed', latestRunStatus: 'failed',
+      failureReason: 'gpt_source_non_complete:source-01:connect_over_cdp_failed',
+      deliveryOutcomes: {
+        requiredStatus: {
+          state: 'failed', reason: 'late_stale_error',
+          idempotencyKey: `required-status:orchestrator-pack/pack-review:${HEAD_A}:unfinished:gpt_source_non_complete:source-01:connect_over_cdp_failed`,
+          recordedAtUtc: stamp,
+        },
+        noJudgmentWorkerNotification: {
+          state: 'escalated', reason: 'dispatch_uncertain',
+          idempotencyKey: `worker-notification:no-judgment:${created.id}:${HEAD_A}`,
+          recordedAtUtc: stamp,
+        },
+      },
+    }, options);
+    expect(getPackReviewRun(created.id, options)).toMatchObject({
+      status: 'up_to_date', reviewVerdict: 'clean',
+      journalOutcome: { state: 'persisted' },
+      deliveryOutcomes: { requiredStatus: success,
+        noJudgmentWorkerNotification: { state: 'escalated' } },
+    });
+    expect(getPackReviewRun(created.id, options)?.reviewRound?.settledSourceCount).toBe(3);
+  });
+});
+
 it('keeps the focused fixture self-contained', () => {
   expect(existsSync(repoRoot)).toBe(true);
 });
