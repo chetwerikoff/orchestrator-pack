@@ -35,6 +35,7 @@ import {
 import { packReviewDeliveryNeedsResume } from './lib/pack-review-delivery.js';
 import {
   createPackReviewRun,
+  derivePackReviewNoJudgmentBudgetOutcome,
   getPackReviewRun,
   listPackReviewRuns,
   setPackReviewRunTerminal,
@@ -3838,5 +3839,95 @@ describe('recovered sub-quorum blocking source regression', () => {
     expect(unsettled?.findingCount).toBeUndefined();
     expect(statusStates).toEqual([]);
     expect(reviewBodies).toEqual([]);
+  });
+});
+
+
+describe('Issue #2451 zero-judgment budget and wrapper projection', () => {
+  it.each(['review_stage_complete', 'terminal_run_exists'] as const)(
+    'accepts only current-head published %s reuse without launching GPT', async (reason) => {
+      const startReview = vi.fn(async () => ({
+        ok: true, created: false, reused: true, reason,
+        prNumber: 2451, headSha: HEAD_A,
+        publicationHeadSha: HEAD_A, statusPublished: true,
+      }));
+      const execution = await runPackGptReviewCommand({ prNumber: 2451 }, {
+        env: {}, stderr: { write: () => undefined },
+        startReview,
+      });
+      expect(execution).toMatchObject({
+        exitCode: 0, result: { ok: true, created: false, reason, publicationHeadSha: HEAD_A },
+      });
+      expect(startReview).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    { reason: 'terminal_run_exists', statusPublished: false, publicationHeadSha: HEAD_A },
+    { reason: 'review_stage_complete', statusPublished: true, publicationHeadSha: HEAD_B },
+    { reason: 'active_run_exists', statusPublished: true, publicationHeadSha: HEAD_A },
+  ])('refuses unproven non-created result $reason ($statusPublished)', async (reply) => {
+    const execution = await runPackGptReviewCommand({ prNumber: 2451 }, {
+      env: {}, stderr: { write: () => undefined },
+      startReview: async () => ({
+        ok: true, created: false, reused: true, prNumber: 2451,
+        headSha: HEAD_A, ...reply,
+      }),
+    });
+    expect(execution).toMatchObject({
+      exitCode: 1, result: { outcome: 'review_not_started', runnerReason: reply.reason },
+    });
+  });
+
+  it('derives the zero-judgment terminal without rewriting verdict-eligible consumption', () => {
+    const storeRoot = tempRoot('opk-2451-no-judgment-census-');
+    const options = { projectId: 'orchestrator-pack', storeRoot };
+    const round = plannedStoredGptRound();
+    round.tier = 'T2';
+    round.sourceSlots = round.sourceSlots.map((slot) => ({
+      ...slot, lifecycle: 'terminal' as const, invocationId: `inv-${slot.ordinal}`,
+      attemptOrdinal: 1,
+      terminalClass: 'driver_error:connect_over_cdp_failed',
+      terminalResult: storedTerminalTurnResult(`inv-${slot.ordinal}`, {
+        state: 'driver_error', cause: 'connect_over_cdp_failed', send_count: 0,
+      }),
+    }));
+    const created = createPackReviewRun({
+      ...options, prNumber: 2451, headSha: HEAD_A,
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: 'cycle-2451', logicalRoundOrdinal: 1, logicalRoundCap: 2,
+      automaticBudgetDisposition: 'consume', reviewRound: round,
+    }).run;
+    const failed = setPackReviewRunTerminal(created.id, 'failed', {
+      failureReason: 'gpt_source_non_complete:source-01:connect_over_cdp_failed',
+    }, options);
+    expect(derivePackReviewNoJudgmentBudgetOutcome(failed, [])).toBe('non_consuming_no_judgment');
+    expect(derivePackReviewNoJudgmentBudgetOutcome(failed, [1])).toBeNull();
+    expect(failed.automaticBudgetDisposition).toBe('consume');
+    expect(failed.reviewVerdict).toBeUndefined();
+    expect(failed.journalOutcome).toBeUndefined();
+    expect(failed.reviewRound?.sourceSlots).toHaveLength(3);
+  });
+
+  it('merges independent verdict and failure notifications under the store lock', () => {
+    const storeRoot = tempRoot('opk-2451-outcome-lock-');
+    const options = { projectId: 'orchestrator-pack', storeRoot };
+    const run = createPackReviewRun({
+      ...options, prNumber: 2451, headSha: HEAD_A,
+      trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+    }).run;
+    const stamp = '2026-10-10T00:00:00.000Z';
+    const status = { state: 'succeeded' as const, reason: 'status_success',
+      recordedAtUtc: stamp, idempotencyKey: `required-status:orchestrator-pack/pack-review:${HEAD_A}` };
+    const failure = { state: 'escalated' as const, reason: 'submission_outcome_unresolved',
+      recordedAtUtc: stamp, idempotencyKey: `worker-notification:no-judgment:${run.id}:${HEAD_A}` };
+    updatePackReviewRun(run.id, { deliveryOutcomes: { requiredStatus: status } }, options);
+    // Simulate a stale full-map writer racing the successful status outcome.
+    updatePackReviewRun(run.id, { deliveryOutcomes: { noJudgmentWorkerNotification: failure } }, options);
+    expect(getPackReviewRun(run.id, options)?.deliveryOutcomes).toMatchObject({
+      requiredStatus: status, noJudgmentWorkerNotification: failure,
+    });
   });
 });
