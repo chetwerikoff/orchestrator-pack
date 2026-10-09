@@ -311,20 +311,27 @@ describe('Issue #2441 observational-only fleet diagnostics', () => {
     collectFleetDiagnostics({ projectId: 'project', primary, workspaceRe: /orca\/workspaces\/project\//u,
       store, terminals, executor: fakeExecutor(terminals, screens, calls), now: () => now });
 
-  it('uses terminal evidence, not imaginary command/PID/agent_alive, and preserves the old classifier', () => withStore((store) => {
+  it('uses capture-shaped terminal evidence without command/PID/agent_alive and preserves the old classifier', () => withStore((store) => {
     const agent = designated();
     const exited = { ...designated('exited', 'inc-2'), status: 'exited' };
-    const fake = { ...designated('fake', 'inc-3'), agent_alive: true, pid: 42, command: 'agent' } as FleetTerminal;
-    const terminals = [agent, exited, fake];
+    const captured = designated('captured', 'inc-3');
+    // Native Orca terminal metadata contains none of these child-liveness witnesses.
+    for (const field of ['agent_alive', 'pid', 'command']) {
+      expect(Object.hasOwn(captured, field)).toBe(false);
+    }
+    const terminals = [agent, exited, captured];
     const calls: string[][] = [];
-    const rows = diagnose(store, terminals, { agent: 'work\nesc interrupt', fake: 'work\nesc interrupt' }, 0, calls);
+    const rows = diagnose(store, terminals, {
+      agent: 'work\nesc interrupt', captured: 'work\nesc interrupt',
+    }, 0, calls);
     expect(rows.map((row) => [row.handle, row.reason])).toEqual([
-      ['agent', 'agent_unverified'], ['exited', 'terminal_exited'], ['fake', 'agent_unverified'],
+      ['agent', 'agent_unverified'], ['exited', 'terminal_exited'], ['captured', 'agent_unverified'],
     ]);
     expect(rows[0]?.state).toBe('busy');
     expect(rows[1]?.evidence).toContain('terminal only');
     expect(formatFleetDiagnostics(rows)).not.toMatch(/agent_alive|pid=|command=/u);
     expect(calls.every((call) => call[0] === 'terminal' && call[1] === 'read')).toBe(true);
+    expect(calls.some((call) => call.includes('exited'))).toBe(false);
     const standard = runFleetSweep({ projectId: 'project', primary, terminals: [agent],
       store, executor: fakeExecutor([agent], { agent: 'PARKED on PR #1 merged' }) });
     expect(standard[0]?.state).toBe('PARKED');
