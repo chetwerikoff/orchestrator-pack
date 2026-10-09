@@ -1941,14 +1941,35 @@ function buildUpdatedPackReviewRun(
   path: string,
   updatedAt: string,
 ): PackReviewRunRecord {
+  const staleNoJudgmentTerminal = fields.failureReason?.startsWith('gpt_source_non_complete:') === true
+    && hasPersistedPackReviewVerdict(existing);
+  const incomingStatus = fields.deliveryOutcomes?.requiredStatus;
+  const existingStatus = existing.deliveryOutcomes.requiredStatus;
+  // A queued no-judgment error writer cannot erase the successful verdict
+  // projection that won the same-run source-recovery race.
+  const staleUnfinishedStatus = hasPersistedPackReviewVerdict(existing)
+    && incomingStatus !== undefined
+    && incomingStatus.idempotencyKey.includes(':unfinished:')
+    && existingStatus?.state === 'succeeded'
+    && existingStatus.idempotencyKey === `required-status:orchestrator-pack/pack-review:${existing.targetSha}`;
+  const mergedDeliveryOutcomes = {
+    ...existing.deliveryOutcomes,
+    ...fields.deliveryOutcomes,
+    ...(staleUnfinishedStatus ? { requiredStatus: existingStatus } : {}),
+  };
   const candidate: Record<string, unknown> = {
     ...existing,
     ...fields,
+    ...(staleNoJudgmentTerminal ? {
+      status: existing.status,
+      latestRunStatus: existing.latestRunStatus,
+      failureReason: existing.failureReason,
+      completedAtUtc: existing.completedAtUtc,
+      exitCode: existing.exitCode,
+    } : {}),
     // Delivery writers may have independently loaded stale whole-record maps.
     // Rebase each supplied channel on the most recent record under this lock.
-    deliveryOutcomes: fields.deliveryOutcomes === undefined
-      ? existing.deliveryOutcomes
-      : { ...existing.deliveryOutcomes, ...fields.deliveryOutcomes },
+    deliveryOutcomes: mergedDeliveryOutcomes,
     automaticBudgetDisposition: existing.automaticBudgetDisposition,
     sameKeyOrder: existing.sameKeyOrder,
     id: existing.id,
