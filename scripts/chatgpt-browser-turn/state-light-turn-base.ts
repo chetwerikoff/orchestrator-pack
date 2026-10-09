@@ -23,7 +23,6 @@ import {
   type ResourceCleanupOutcome,
 } from './browser-session.ts';
 import { destinationIdentity } from './coordination.ts';
-import { launchingTerminalHandle } from './chat-bindings.ts';
 import {
   turnExitCode,
   type ComposerMutationDiagnosticV1,
@@ -2592,7 +2591,7 @@ async function runTurn(
     // ORCA_TERMINAL_HANDLE is only a locator for the current occupant. It does not
     // authenticate the generation which originally launched this invocation.
     // r06 forbids composer mutation until independent launch provenance exists.
-    if (launchingTerminalHandle()) {
+    if (process.env.ORCA_TERMINAL_HANDLE !== undefined) {
       incident('runtime_owner_unproven', 'original_launch_generation_unavailable', 'return_pre_send_no_effect');
       return {
         result: compactResult(
