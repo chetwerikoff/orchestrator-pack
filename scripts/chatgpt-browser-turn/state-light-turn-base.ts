@@ -23,6 +23,7 @@ import {
   type ResourceCleanupOutcome,
 } from './browser-session.ts';
 import { destinationIdentity } from './coordination.ts';
+import { launchingTerminalHandle } from './chat-bindings.ts';
 import {
   turnExitCode,
   type ComposerMutationDiagnosticV1,
@@ -81,6 +82,7 @@ import {
   MESSAGE_NODE_SELECTOR,
   normalizeConversationUrl,
   productStatusText,
+  projectConversationUrlMatchesProject,
   CONTINUE_GENERATING_BUTTON_NAME,
   locateContinueGeneratingControl,
   ASSISTANT_TURN_ANCESTOR_XPATH,
@@ -2585,6 +2587,19 @@ async function runTurn(
     const config = baseConfig;
     const marker = generateOwnedPromptMarker();
     admitStateLightTurnObservation({ profileKey, invocationId, marker });
+    // ORCA_TERMINAL_HANDLE is only a locator for the current occupant. It does not
+    // authenticate the generation which originally launched this invocation.
+    // r06 forbids composer mutation until independent launch provenance exists.
+    if (launchingTerminalHandle()) {
+      incident('runtime_owner_unproven', 'original_launch_generation_unavailable', 'return_pre_send_no_effect');
+      return {
+        result: compactResult(
+          'driver_error', 'invocation', 'original_launch_generation_unavailable',
+          invocationId, profileKey, 0, pollCount, navigation, incidents, {},
+          journalWriteFailed,
+        ),
+      };
+    }
     const invocationStartedAt = Date.now();
     const invocationDeadlineMs = invocationStartedAt + config.timeoutMs;
     const invocationBudget = createTurnOperationBudget(config.timeoutMs, invocationStartedAt);
@@ -2645,6 +2660,11 @@ async function runTurn(
     const selection = await selectConversationPage(browser, chromium, config, invocationBudget);
     browser = selection.browser;
     page = selection.page;
+    if (page && typeof page === 'object') {
+      // Existing tabs and URL-reselected CDP targets are not direct creation
+      // handles; never infer cleanup authority from matching URLs.
+      cleanupAuthorityUnprovenPages.add(page);
+    }
     if (!page) {
       page = await createDedicatedTurnPage(browser, invocationBudget);
       await navigateOwnedTurnPage(page, config, navigation);
@@ -2712,6 +2732,32 @@ async function runTurn(
     };
 
     const markedPayload = wrapOwnedPromptPayload(marker, snapshot.text);
+
+    // A URL is only a candidate. A complete conversation-local census and
+    // exactly one owned user carrier/marker token are required before *any*
+    // fresh claim, URL transition or receipt on the early and recovery paths.
+    const freshProjectMarkerProven = async (
+      candidatePage: any,
+      conversationUrl: string,
+    ): Promise<boolean> => {
+      if (!config.newChat || !config.projectUrl
+        || !projectConversationUrlMatchesProject(conversationUrl, config.projectUrl)) return false;
+      try {
+        if (normalizeConversationUrl(String(candidatePage.url())) !== normalizeConversationUrl(conversationUrl)) return false;
+        const remainingMs = invocationDeadlineMs - Date.now();
+        if (remainingMs <= 0) return false;
+        const census = await boundedBrowserRead(
+          readRecoveryAuthoritativeUserMessages(candidatePage),
+          Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs),
+          'fresh_conversation_marker_census_timeout',
+        );
+        if (census.incomplete) return false;
+        const count = recoveryMarkerCardinality(census.messages, marker);
+        return count.matchingUserCarrierCount === 1 && count.exactMarkerTokenCount === 1;
+      } catch {
+        return false;
+      }
+    };
 
     const emitCancellationReceipt = (conversationUrl: string): void => {
       if (cancellationReceiptEmitted || sendCount !== 1) return;
@@ -2781,7 +2827,7 @@ async function runTurn(
       if (delivery.sendCount === 0) {
         if (browserOrPageDefinitelyLost(page, browser)) {
           deliveryProofPendingRecovery = true;
-          ownedConversationUrl = pageConversationUrl(page) ?? ownedConversationUrl;
+          if (!config.newChat) ownedConversationUrl = pageConversationUrl(page) ?? ownedConversationUrl;
           return null;
         }
         incident('send_observation_error', 'send_delivery_unproven', 'retain_owned_page_no_resend');
@@ -3093,6 +3139,13 @@ async function runTurn(
             };
           }
 
+          // The early URL alone cannot bind an invocation. The incumbent
+          // post-send observer can bind later once the marker becomes visible.
+          if (!(await freshProjectMarkerProven(page, conversationUrl))) {
+            incident('send_observation_deferred', 'fresh_conversation_marker_unproven', 'continue_observing_after_send');
+            claimed = true;
+            break;
+          }
           if (verifyStateLightSendSlotOwnerFence(profileKey, invocationId) !== 'valid') {
             if (sendCount >= 1) {
               ownershipForfeited = true;
@@ -3499,6 +3552,20 @@ async function runTurn(
         deliveryProofPendingRecovery = false;
       }
       if (config.newChat && !ownedConversationUrl) {
+        if (!(await freshProjectMarkerProven(recovered.page, recovered.conversationUrl))) {
+          incident('post_send_observation_error', 'recovered_fresh_owner_marker_or_project_unproven', 'retain_page_no_resend');
+          return {
+            page: recovered.page,
+            browser,
+            cleanupAction: 'preserve',
+            result: compactResult(
+              'observation_uncertain', 'invocation',
+              'recovered_fresh_owner_marker_or_project_unproven',
+              invocationId, profileKey, sendCount, pollCount, navigation,
+              incidents, {}, journalWriteFailed,
+            ),
+          };
+        }
         let claim: ReturnType<typeof tryClaimStateLightFreshConversation>;
         try {
           claim = tryClaimStateLightFreshConversation(
