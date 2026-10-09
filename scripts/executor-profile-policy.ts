@@ -428,7 +428,7 @@ export function buildExecutorCommand(profile: SemanticExecutorProfile): Executor
   }
 
   const executable = profile.surface === 'task' ? descriptor.taskExecutable : descriptor.smokeExecutable;
-  const inlineConfig = JSON.stringify({ agent: { [OPENCODE_PACK_AGENT]: { model: profile.model, variant: profile.effort } } });
+  const inlineConfig = JSON.stringify({ agent: { [OPENCODE_PACK_AGENT]: { model: profile.model, variant: profile.effort, permission: withOpenCodeFleetBrowserDenies(undefined) } } });
   const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)} ${executable} --hostname 127.0.0.1 --port ${openCodeControlPort(OPENCODE_PACK_AGENT)} --agent ${quote(OPENCODE_PACK_AGENT)}`;
   return {
     executable,
@@ -511,6 +511,22 @@ export function openCodeAgentConfigFromInfo(baseline: Readonly<Record<string, un
   return config;
 }
 
+
+/** Preserve inherited permissions; put the fleet browser denies last for OpenCode's last-matching rule. */
+export function withOpenCodeFleetBrowserDenies(permission: unknown): Record<string, unknown> {
+  const inherited = record(permission) ? permission : {};
+  const appendDeny = (value: unknown, pattern: string): Record<string, unknown> => {
+    const rules = typeof value === 'string' ? { '*': value } : record(value) ? value : {};
+    return { ...Object.fromEntries(Object.entries(rules).filter(([key]) => key !== pattern)), [pattern]: 'deny' };
+  };
+  return {
+    ...inherited,
+    bash: ['bsk*', '/bsk*', '/*/bsk*', '~/bsk*', '~/*/bsk*', 'env bsk*']
+      .reduce<unknown>((rules, pattern) => appendDeny(rules, pattern), inherited.bash),
+    skill: appendDeny(inherited.skill, 'browser-skill'),
+  };
+}
+
 function canonicalPermission(value: unknown): unknown {
   const rules = Array.isArray(value)
     ? value
@@ -561,10 +577,12 @@ export function openCodeControlPort(agentName: string): number {
 }
 
 export function buildOpenCodeAgentOverlay(input: OpenCodeAgentOverlay): ExecutorInvocationShape {
+  const baseline = openCodeAgentConfigFromInfo(input.baseline);
   const agent = {
-    ...openCodeAgentConfigFromInfo(input.baseline),
+    ...baseline,
     model: input.model,
     variant: input.effort,
+    permission: withOpenCodeFleetBrowserDenies(baseline.permission),
   };
   const inlineConfig = JSON.stringify({ agent: { [input.agentName]: agent } });
   const state = input.stateRoot ? ` XDG_STATE_HOME=${quote(input.stateRoot)}` : '';

@@ -21,7 +21,9 @@ import {
   executorCatalogContains,
   OPENCODE_PACK_AGENT,
   buildOpenCodeAgentOverlay,
+  openCodeAgentConfigFromInfo,
   openCodeAgentSemantics,
+  withOpenCodeFleetBrowserDenies,
   openCodeConfigPaths,
   openCodeEdgeCapabilities,
   profileNamesForTask,
@@ -947,12 +949,13 @@ export async function finalizeOpenCodeExecutorProfile(
   if (!modelMatch?.[1] || !effortMatch?.[1]) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
   const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model: modelMatch[1], effort: effortMatch[1], stateRoot });
+  const expected = { ...baselineValue, permission: withOpenCodeFleetBrowserDenies(openCodeAgentConfigFromInfo(baselineValue).permission) };
   const resolved = await execute(['opencode', 'debug', 'agent', agentName], 15_000, { ...isolatedEnv, OPENCODE_CONFIG_CONTENT: overlay.inlineConfigJson! }, worktreePath);
   const resolvedValue = resolvedAgent(resolved.stdout);
   const model = resolvedValue && record(resolvedValue.model) ? resolvedValue.model : null;
   if (!resolved.ok || before !== configState(worktreePath) || !resolvedValue || !model
     || model.modelID !== modelMatch[1].split('/').at(-1) || resolvedValue.variant !== effortMatch[1]
-    || openCodeAgentSemantics(resolvedValue) !== openCodeAgentSemantics(baselineValue)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
+    || openCodeAgentSemantics(resolvedValue) !== openCodeAgentSemantics(expected)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const paths = await execute(['opencode', 'debug', 'paths'], 15_000, isolatedEnv, worktreePath);
   if (!paths.ok || !paths.stdout.includes(stateRoot)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   return { status: 'ok', value: { ...profile, launchCommand: overlay.command }, evidence: { executorFamily: 'opencode', route: profile.route, exactContext: true } };

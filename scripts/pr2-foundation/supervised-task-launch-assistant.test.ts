@@ -35,6 +35,7 @@ import {
   openCodeAgentSemantics,
   EXECUTOR_FAMILY_DESCRIPTORS,
   profileNamesForTask,
+  profileNamesForSmoke,
   resolveSemanticExecutorProfile,
 } from '../executor-profile-policy.ts';
 import { overlayExecutorProfileEnv, readExecutorProfileStore } from '../executor-profile-store.ts';
@@ -543,6 +544,37 @@ describe('supervised Task launch assistant', () => {
     expect(buildExecutorCommand(withContext.profile)).toEqual(buildExecutorCommand(withoutContext.profile));
   });
 
+
+  it.each([
+    ['manager', 'task', profileNamesForTask('manager')],
+    ['t1', 'task', profileNamesForTask('t1')],
+    ['t2', 'task', profileNamesForTask('t2')],
+    ['t3', 'task', profileNamesForTask('t3')],
+    ['firefighter-manager', 'task', profileNamesForTask('manager')],
+    ['routine-smoke', 'smoke', profileNamesForSmoke('routine')],
+    ['complex-smoke', 'smoke', profileNamesForSmoke('complex')],
+  ] as const)('emits fleet browser denies in actual OpenCode JSON for %s', (_name, surface, names) => {
+    const resolved = resolveSemanticExecutorProfile({
+      surface,
+      names,
+      env: {
+        [names[0]]: 'opencode',
+        [names[1]]: 'fixture/provider-model',
+        [names[2]]: 'high',
+      },
+    });
+    if (!resolved.ok) throw new Error('synthetic OpenCode profile should resolve');
+    const invocation = buildExecutorCommand(resolved.profile);
+    const config = JSON.parse(invocation.inlineConfigJson ?? '{}') as { agent?: { pack?: Record<string, unknown> } };
+    expect(config.agent?.pack).toMatchObject({
+      model: 'fixture/provider-model',
+      variant: 'high',
+      permission: { bash: { 'bsk*': 'deny' }, skill: { 'browser-skill': 'deny' } },
+    });
+    expect(invocation.command).toContain("OPENCODE_CONFIG_CONTENT='" + invocation.inlineConfigJson + "'");
+    expect(invocation.command).toContain("--agent 'pack'");
+  });
+
   it.each(['manager', 't1', 't2', 't3'] as const)('closed two-family mapping recognizes OpenCode for %s without inventing a route', (workClass) => {
     const result = resolveExecutorProfile(workClass, opencodeProfileEnv(workClass));
     expect(result).toMatchObject({
@@ -585,8 +617,17 @@ describe('supervised Task launch assistant', () => {
       value: {
         family: 'opencode',
         route: 'exact_terminal_worktree',
-        launchCommand: `OPENCODE_CONFIG_CONTENT='{\"agent\":{\"pack\":{\"model\":\"fixture-opencode-model\",\"variant\":\"fixture-opencode-effort\"}}}' opencode --hostname 127.0.0.1 --port 42985 --agent 'pack'`,
+        launchCommand: expect.stringContaining(" opencode --hostname 127.0.0.1 --port 42985 --agent 'pack'"),
       },
+    });
+    if (admitted.status !== 'ok') throw new Error('synthetic OpenCode route should admit');
+    const launchJson = admitted.value.launchCommand.match(/OPENCODE_CONFIG_CONTENT='([^']+)'/u)?.[1];
+    expect(JSON.parse(launchJson ?? '{}')).toMatchObject({
+      agent: { pack: {
+        model: 'fixture-opencode-model',
+        variant: 'fixture-opencode-effort',
+        permission: { bash: { 'bsk*': 'deny' }, skill: { 'browser-skill': 'deny' } },
+      } },
     });
     expect(admittedCalls[0]).toEqual(['opencode', 'models']);
     expect(admittedCalls).toContainEqual(['opencode', '--help']);
@@ -630,9 +671,21 @@ describe('supervised Task launch assistant', () => {
       }
       if (args[1] === 'debug' && args[2] === 'agent') {
         const name = args[3] ?? '';
+        const overlay = envOverride?.OPENCODE_CONFIG_CONTENT
+          ? JSON.parse(envOverride.OPENCODE_CONFIG_CONTENT) as { agent?: Record<string, { permission?: Record<string, string | Record<string, string>> }> }
+          : undefined;
+        const permissions = overlay?.agent?.[name]?.permission;
+        const rules = permissions && Object.entries(permissions).flatMap(([permission, patterns]) =>
+          typeof patterns === 'string'
+            ? [{ permission, pattern: '*', action: patterns }]
+            : Object.entries(patterns).map(([pattern, action]) => ({ permission, pattern, action })));
         return {
           ok: true,
-          stdout: JSON.stringify({ name, prompt: 'fixture', model: { providerID: 'opencode', modelID: 'fixture-opencode-model' }, variant: 'fixture-opencode-effort' }),
+          stdout: JSON.stringify({
+            name, prompt: 'fixture', model: { providerID: 'opencode', modelID: 'fixture-opencode-model' },
+            variant: 'fixture-opencode-effort',
+            ...(rules ? { permission: rules } : {}),
+          }),
           stderr: '',
         };
       }
@@ -688,12 +741,184 @@ describe('supervised Task launch assistant', () => {
     expect(agent).toMatchObject({
       model: 'fixture/provider-model', variant: 'high', mode: 'primary',
       top_p: 0.8, prompt: 'fixture prompt',
-      permission: { edit: 'allow', bash: 'ask' },
+      permission: { edit: 'allow', bash: { '*': 'ask', 'bsk*': 'deny' }, skill: { 'browser-skill': 'deny' } },
     });
     expect(agent).not.toHaveProperty('native');
     expect(agent).not.toHaveProperty('name');
     expect(openCodeAgentSemantics({ ...agent, name: 'pack-opk-fixture', model: { providerID: 'fixture', modelID: 'provider-model' }, variant: 'high', native: false }))
       .toBe(openCodeAgentSemantics({ name: 'build', native: true, mode: 'primary', topP: 0.8, prompt: 'fixture prompt', options: { temperature: 0.2 }, permission: agent?.permission }));
+  });
+
+
+  it('appends browser denies after permissive and same-pattern allows without changing other permissions', () => {
+    const invocation = buildOpenCodeAgentOverlay({
+      agentName: 'pack-opk-fixture',
+      baseline: {
+        name: 'build', prompt: 'original prompt', mode: 'primary',
+        permission: [
+          { permission: 'bash', pattern: 'bsk*', action: 'allow' },
+          { permission: 'bash', pattern: 'git *', action: 'allow' },
+          { permission: 'bash', pattern: '*', action: 'allow' },
+          { permission: 'skill', pattern: 'browser-skill', action: 'allow' },
+          { permission: 'skill', pattern: 'fixture-safe', action: 'allow' },
+          { permission: 'skill', pattern: '*', action: 'allow' },
+          { permission: 'edit', pattern: '*', action: 'allow' },
+        ],
+      },
+      model: 'fixture/provider-model', effort: 'high',
+    });
+    const parsed = JSON.parse(invocation.inlineConfigJson ?? '{}') as { agent: Record<string, {
+      model: string; variant: string; prompt: string;
+      permission: { bash: Record<string, unknown>; skill: Record<string, unknown>; edit: string };
+    }> };
+    const agent = parsed.agent['pack-opk-fixture']!;
+    expect(agent.model).toBe('fixture/provider-model');
+    expect(agent.variant).toBe('high');
+    expect(agent.prompt).toBe('original prompt');
+    expect(Object.entries(agent.permission.bash)).toEqual([
+      ['git *', 'allow'], ['*', 'allow'],
+      ['bsk*', 'deny'], ['/bsk*', 'deny'], ['/*/bsk*', 'deny'],
+      ['~/bsk*', 'deny'], ['~/*/bsk*', 'deny'], ['env bsk*', 'deny'],
+    ]);
+    expect(Object.entries(agent.permission.skill)).toEqual([
+      ['fixture-safe', 'allow'], ['*', 'allow'], ['browser-skill', 'deny'],
+    ]);
+    expect(agent.permission.edit).toBe('allow');
+  });
+
+
+  it('matches only bsk executable segments in generated command and permissive overlay policy', () => {
+    const resolved = resolveSemanticExecutorProfile({
+      surface: 'task', names: profileNamesForTask('t2'), env: opencodeProfileEnv('t2'),
+    });
+    if (!resolved.ok) throw new Error('synthetic OpenCode profile should resolve');
+    const command = buildExecutorCommand(resolved.profile);
+    const overlay = buildOpenCodeAgentOverlay({
+      agentName: 'pack-opk-fixture',
+      baseline: {
+        prompt: 'synthetic prompt',
+        permission: [
+          { permission: 'bash', pattern: '*', action: 'allow' },
+          { permission: 'bash', pattern: 'bsk*', action: 'allow' },
+          { permission: 'skill', pattern: '*', action: 'allow' },
+          { permission: 'skill', pattern: 'browser-skill', action: 'allow' },
+        ],
+      },
+      model: resolved.profile.model, effort: resolved.profile.effort,
+    });
+    // Synthetic command nodes model OpenCode BashTool's separate permission
+    // checks for compound command segments; no shell or browser is launched.
+    const globMatches = (pattern: string, subject: string): boolean => {
+      const parts = pattern.split('*');
+      let cursor = 0;
+      for (const [index, part] of parts.entries()) {
+        const found = subject.indexOf(part, cursor);
+        if (found < 0 || (index === 0 && found !== 0)) return false;
+        cursor = found + part.length;
+      }
+      return pattern.endsWith('*') || cursor === subject.length;
+    };
+    const actionFor = (rules: Record<string, string>, segment: string): string =>
+      Object.entries(rules).filter(([pattern]) => globMatches(pattern, segment)).at(-1)?.[1] ?? 'ask';
+    const configs = [
+      (JSON.parse(command.inlineConfigJson ?? '{}') as { agent: Record<string, { permission: Record<string, unknown> }> }).agent.pack!,
+      (JSON.parse(overlay.inlineConfigJson ?? '{}') as { agent: Record<string, { permission: Record<string, unknown> }> }).agent['pack-opk-fixture']!,
+    ];
+    for (const generated of configs) {
+      const bash = generated.permission.bash as Record<string, string>;
+      const skill = generated.permission.skill as Record<string, string>;
+      const cases: readonly { segments: readonly string[]; denied: boolean }[] = [
+        { segments: ['./appliedin start'], denied: false },
+        { segments: ['./appliedin status'], denied: false },
+        { segments: ['.venv/bin/python -m daemon --synthetic-browser-fixture'], denied: false },
+        { segments: ['.venv/bin/python -m pytest -q'], denied: false },
+        { segments: ['grep -rn bsk src'], denied: false },
+        { segments: ['grep -rn /home/che/.local/bin/bsk src'], denied: false },
+        { segments: ['bsk navigate https://example.test'], denied: true },
+        { segments: ['cd x', 'bsk doctor'], denied: true }, // cd x && bsk doctor
+        { segments: ['/home/che/.local/bin/bsk doctor'], denied: true },
+        { segments: ['~/.local/bin/bsk'], denied: true },
+        { segments: ['env bsk doctor'], denied: true },
+        { segments: ['echo fixture', 'bsk doctor'], denied: true }, // echo fixture; bsk doctor
+      ];
+      for (const { segments, denied } of cases) {
+        expect(segments.some((segment) => actionFor(bash, segment) === 'deny'))
+          .toBe(denied);
+      }
+      expect(actionFor(skill, 'browser-skill')).toBe('deny');
+    }
+  });
+
+  it.each([
+    ['unchanged', true],
+    ['prompt', false],
+    ['edit', false],
+    ['bash', false],
+    ['skill', false],
+    ['model', false],
+    ['effort', false],
+  ] as const)('contextual finalization permits only the intended narrowed policy: %s', async (drift, accepted) => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'opk2437-offline-'));
+    vi.stubEnv('XDG_CONFIG_HOME', sandbox);
+    vi.stubEnv('OPENCODE_CONFIG_DIR', join(sandbox, 'opencode'));
+    vi.stubEnv('OPENCODE_CONFIG', join(sandbox, 'synthetic.json'));
+    try {
+      const profile = await resolveLiveExecutorProfile('t2', opencodeProfileEnv('t2'), undefined, async (args) => opencodeProbeResult(args));
+      if (profile.status !== 'ok') throw new Error('synthetic OpenCode profile should resolve');
+      const baseline = {
+        name: 'build', mode: 'primary', prompt: 'original prompt', topP: 0.8,
+        options: { temperature: 0.2 },
+        model: { providerID: 'opencode', modelID: 'fixture-opencode-model' },
+        variant: 'fixture-opencode-effort',
+        permission: [
+          { permission: 'edit', pattern: '*', action: 'allow' },
+          { permission: 'bash', pattern: 'bsk*', action: 'allow' },
+          { permission: 'bash', pattern: '*', action: 'allow' },
+          { permission: 'skill', pattern: 'browser-skill', action: 'allow' },
+          { permission: 'skill', pattern: '*', action: 'allow' },
+        ],
+      };
+      const result = await finalizeOpenCodeExecutorProfile(profile.value, join(sandbox, 'worktree'),
+        async (args, _timeoutMs, envOverride) => {
+          if (args[2] === 'config') return { ok: true, stdout: JSON.stringify({ default_agent: 'build' }), stderr: '' };
+          if (args[2] === 'paths') return { ok: true, stdout: envOverride?.XDG_STATE_HOME ?? '', stderr: '' };
+          if (args[2] === 'agent' && args[3] === 'build') return { ok: true, stdout: JSON.stringify(baseline), stderr: '' };
+          if (args[2] === 'agent') {
+            const name = args[3] ?? '';
+            const inline = JSON.parse(envOverride?.OPENCODE_CONFIG_CONTENT ?? '{}') as {
+              agent?: Record<string, { permission?: Record<string, string | Record<string, string>> }>;
+            };
+            const permission = inline.agent?.[name]?.permission;
+            if (!permission) return { ok: false, stdout: '', stderr: 'no generated policy' };
+            const rules = Object.entries(permission).flatMap(([scope, patterns]) =>
+              typeof patterns === 'string'
+                ? [{ permission: scope, pattern: '*', action: patterns }]
+                : Object.entries(patterns).map(([pattern, action]) => ({ permission: scope, pattern, action })));
+            if (drift === 'edit') {
+              const edit = rules.find((rule) => rule.permission === 'edit');
+              if (edit) edit.action = 'deny';
+            }
+            if (drift === 'bash' || drift === 'skill') {
+              const forbidden = drift === 'bash' ? 'bsk*' : 'browser-skill';
+              const index = rules.findIndex((rule) => rule.permission === drift && rule.pattern === forbidden);
+              if (index >= 0) rules.splice(index, 1);
+            }
+            const resolved = {
+              ...baseline, name, permission: rules,
+              prompt: drift === 'prompt' ? 'changed prompt' : baseline.prompt,
+              model: { providerID: 'opencode', modelID: drift === 'model' ? 'different-model' : 'fixture-opencode-model' },
+              variant: drift === 'effort' ? 'other-effort' : 'fixture-opencode-effort',
+            };
+            return { ok: true, stdout: JSON.stringify(resolved), stderr: '' };
+          }
+          return { ok: false, stdout: '', stderr: 'unexpected synthetic probe' };
+        }, () => true);
+      expect(result.status).toBe(accepted ? 'ok' : 'continue');
+      if (!accepted) expect(result).toMatchObject({ status: 'continue', cause: 'executor_effort_channel_unavailable' });
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(sandbox, { recursive: true, force: true });
+    }
   });
 
   it('encodes duplicate star permission rules as a last-wins string action', () => {
