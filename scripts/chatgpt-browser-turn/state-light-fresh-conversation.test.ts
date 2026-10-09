@@ -2175,9 +2175,12 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
         })
         : scalarLocator()),
     };
+    // URL/visible Stop is not an original-tab and active-generation witness.
+    // Explicit cancellation must be a no-effect refusal even on this singleton.
     expect(await stopOwnedGeneration(stopProbePage, EXPLICIT_CANCELLATION_AUTHORITY))
-      .toBe('confirmed');
-    expect(stopProbeClick).toHaveBeenCalledTimes(1);
+      .toBe('not_attempted_identity_unproven');
+    expect(stopProbeClick).not.toHaveBeenCalled();
+    expect(stopProbePage.locator).not.toHaveBeenCalled();
 
     mocks.browserQueue.push(browserWithPages(ownedPage, [ownedPage, foreignPage], () => true));
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
