@@ -4165,7 +4165,15 @@ export async function reconcileStalePackReviewRuns(
         continue;
       }
 
-      if (needsGptSourceRecovery) {
+      // Source recovery is still permitted on the same run, but a terminal
+      // zero-judgment census must also reach failure-notification and required
+      // error-status reconciliation when no credentialed comments are found.
+      const stillZeroJudgment = needsGptSourceRecovery
+        && isPackReviewUnfinishedTerminalRun(recoveredSnapshot)
+        && recoveredSnapshot.failureReason?.startsWith('gpt_source_non_complete:') === true
+        && recoveryCoverage?.kind === 'empty'
+        && noJudgmentBudgetOutcome(recoveredSnapshot, storeRoot) !== null;
+      if (needsGptSourceRecovery && !stillZeroJudgment) {
         results.push({
           runId: run.id,
           terminalized: false,
@@ -4178,6 +4186,7 @@ export async function reconcileStalePackReviewRuns(
         });
         continue;
       }
+      if (stillZeroJudgment) run = await bindRepositoryIdentity(recoveredSnapshot);
       if (activeGptRecovery && !activeStale) {
         results.push({
           runId: run.id,
@@ -4281,12 +4290,52 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
 
-    const authorizeStaleWrite = () => readBoundRecords().then((freshRecords) => (
-      resolvePackReviewRunOrder(freshRecords, run).kind === 'none'
-    ));
+    const zeroJudgmentStaleStatus = run.failureReason?.startsWith('gpt_source_non_complete:') === true;
+    const verifyNoJudgmentStatusTarget = async () => {
+      const current = getPackReviewRun(run.id, { projectId, storeRoot });
+      if (!current || !noJudgmentBudgetOutcome(current, storeRoot)) return false;
+      const head = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
+      const afterHeadRead = getPackReviewRun(run.id, { projectId, storeRoot });
+      return head === run.targetSha.toLowerCase()
+        && Boolean(afterHeadRead && noJudgmentBudgetOutcome(afterHeadRead, storeRoot));
+    };
+    const authorizeStaleWrite = async () => {
+      if (resolvePackReviewRunOrder(await readBoundRecords(), run).kind !== 'none') return false;
+      return !zeroJudgmentStaleStatus || await verifyNoJudgmentStatusTarget();
+    };
     const repairSupersededStaleWrite = async () => {
+      if (zeroJudgmentStaleStatus) {
+        const current = getPackReviewRun(run.id, { projectId, storeRoot });
+        const head = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
+        const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
+        if (current && hasPersistedPackReviewVerdict(current)
+          && head === run.targetSha.toLowerCase()
+          && authority?.currentHeadSha.toLowerCase() === head
+          && authority.terminal?.runId === current.id
+          && authority.cycle?.cycleId === current.reviewCycleId) {
+          // A same-run verdict is deliberately excluded by the newer-run
+          // ordering helper. It still supersedes this zero-judgment error.
+          const restored = await restorePackReviewAuthoritativeRequiredStatus({
+            run: current, projectId, storeRoot,
+            writeRequiredStatus: statusWriter, forceRepublish: true,
+          });
+          const after = getPackReviewRun(run.id, { projectId, storeRoot });
+          const afterHead = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
+          const afterAuthority = readPackReviewAuthority(run.prNumber, { storeRoot });
+          if (restored?.state === 'succeeded'
+            && after && hasPersistedPackReviewVerdict(after)
+            && afterHead === run.targetSha.toLowerCase()
+            && afterAuthority?.terminal?.runId === run.id
+            && afterAuthority.currentHeadSha.toLowerCase() === afterHead) {
+            return { reason: 'same_run_verdict_status_restored' };
+          }
+          return { reason: 'status_not_published:verdict_restoration_unverified; rerun scoped reconcile' };
+        }
+      }
       const restoration = await restoreLatestAuthority(run, statusWriter, true);
-      return { reason: restoration.reason };
+      return { reason: zeroJudgmentStaleStatus && restoration.reason === 'authority_not_newer'
+        ? 'status_not_published:head_or_same_run_authority_changed; rerun scoped reconcile or PR-led status projection'
+        : restoration.reason };
     };
 
     const outcome = await recordPackReviewStaleRequiredStatus({
@@ -4312,6 +4361,11 @@ export async function reconcileStalePackReviewRuns(
       terminalized,
       statusReconciled: needsStaleStatus && outcome.state === 'succeeded',
       reason: needsStaleStatus ? outcome.reason : 'status_already_reconciled',
+      ...(zeroJudgmentStaleStatus && needsStaleStatus && outcome.state !== 'succeeded' ? {
+        statusPublication: outcome.reason === 'same_run_verdict_status_restored'
+          ? 'authoritative_verdict_restored' : 'status_not_published',
+        nextAction: 'rerun scoped reconcile or PR-led current-head status projection; no additional review round',
+      } : {}),
     });
   }
 
