@@ -739,9 +739,35 @@ if (isDirectExecution()) {
   try {
     const options = parseSweepCli(process.argv.slice(2));
     const store = new FileFleetStateStore(options.projectId);
-    const terminals = listFleetTerminals();
-    const observations = runFleetSweep({ ...options, store, terminals });
-    const diagnostics = collectFleetDiagnostics({ ...options, store, terminals });
+    // Preserve the operational sweep's fail-closed exit, but still expose independently
+    // readable diagnostic peers when a single legacy terminal read fails.
+    const reportIncomplete = (rows: readonly FleetDiagnostic[]) => {
+      const report = options.json
+        ? JSON.stringify({ diagnostics: rows, incomplete: true }, null, 2)
+        : formatFleetDiagnostics(rows);
+      if (report) process.stdout.write(report + '\n');
+    };
+    let terminals: FleetTerminal[];
+    try {
+      terminals = listFleetTerminals();
+    } catch (error) {
+      reportIncomplete([{ reason: 'fleet_census_unreadable', evidence: 'terminal list --json: incomplete_or_malformed' }]);
+      throw error;
+    }
+    let diagnostics: FleetDiagnostic[] = [];
+    try {
+      diagnostics = collectFleetDiagnostics({ ...options, store, terminals });
+    } catch {
+      // Advisory store failure must not suppress the pre-existing operational sweep.
+      process.stderr.write('fleet-sweep: diagnostic projection unverified\n');
+    }
+    let observations: FleetPaneObservation[];
+    try {
+      observations = runFleetSweep({ ...options, store, terminals });
+    } catch (error) {
+      reportIncomplete(diagnostics);
+      throw error;
+    }
     const reported = observations.map((pane) => {
       const diagnostic = diagnostics.find((row) => row.handle === pane.handle);
       return diagnostic ? { ...pane, diagnostic: { reason: diagnostic.reason, evidence: diagnostic.evidence } } : pane;
