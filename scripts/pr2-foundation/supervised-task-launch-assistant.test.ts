@@ -1800,7 +1800,7 @@ The words Firefighter universal appear here only as prose.`;
       ...launchInput('manager'), issueNumber: 2430, defaultBranch: 'main',
     }, {
       ...deps({ onSupervised: () => { started += 1; } }),
-      prepareWorktree: (input) => prepareWorktreeWithOrca(input, managerReuseFixture({ ancestor: false, worktreeId: 'manager-worktree' }).execute),
+      prepareWorktree: (input) => prepareWorktreeWithOrca(input, managerReuseFixture({ ancestor: false, worktreeId: 'manager-worktree', worktreePath: '/tmp/exact-worktree' }).execute),
     });
     expect(launch).toMatchObject({
       outcome: 'ready', resources: { runId: 'run-1', taskId: 'task-1', dispatchId: 'dispatch-1' },
