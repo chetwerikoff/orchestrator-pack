@@ -43,6 +43,7 @@ import {
   type ProjectChat,
 } from './chat-error-banners.ts';
 import { readChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
+import { readStateLightTurnObservation } from '../chatgpt-browser-turn/state-light-turn-observation.ts';
 import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath } from '../flow-manager-long-running-child.ts';
 
 export interface FleetWakeConfig {
@@ -383,6 +384,11 @@ export interface TerminalEnvelopeEvent {
   readonly invocationId: string;
   readonly cwd?: string;
   readonly terminalHandle?: string;
+  /** Only present if this is the producer's exact observed invocation, not an attempt-id guess. */
+  readonly observedInvocationId?: string;
+  readonly sendCount?: number;
+  readonly conversationLocator?: string;
+  readonly persistedObservationProfileKey?: string;
 }
 
 export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeEvent[] {
@@ -407,17 +413,63 @@ export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeE
         const envelope = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
         const cwd = typeof envelope.cwd === 'string' ? envelope.cwd : undefined;
         const terminalHandle = typeof envelope.terminal_handle === 'string' ? envelope.terminal_handle : undefined;
-        if (envelope.schema !== TERMINAL_SCHEMA || (!cwd && !terminalHandle)) continue;
-        const invocationId = typeof envelope.observed_invocation_id === 'string'
+        const observedInvocationId = typeof envelope.observed_invocation_id === 'string'
+          && envelope.observed_invocation_id.length > 0
           ? envelope.observed_invocation_id
-          : String(envelope.attempt_identity ?? basename(path));
-        events.push({ path, invocationId, ...(cwd ? { cwd } : {}), ...(terminalHandle ? { terminalHandle } : {}) });
+          : undefined;
+        const diagnostics = envelope.diagnostics;
+        const persistedObservation = diagnostics && typeof diagnostics === 'object' && !Array.isArray(diagnostics)
+          ? (diagnostics as Record<string, unknown>).persisted_observation : undefined;
+        const profileKey = persistedObservation && typeof persistedObservation === 'object' && !Array.isArray(persistedObservation)
+          ? (persistedObservation as Record<string, unknown>).profile_key : undefined;
+        const persistedObservationProfileKey = typeof profileKey === 'string' && profileKey.length > 0
+          ? profileKey : undefined;
+        if (envelope.schema !== TERMINAL_SCHEMA
+          || (!cwd && !terminalHandle && !persistedObservationProfileKey)) continue;
+        const invocationId = observedInvocationId
+          ?? String(envelope.attempt_identity ?? basename(path));
+        const sendCount = typeof envelope.send_count === 'number'
+          && Number.isSafeInteger(envelope.send_count) && envelope.send_count >= 0
+          ? envelope.send_count : undefined;
+        events.push({
+          path, invocationId,
+          ...(cwd ? { cwd } : {}),
+          ...(terminalHandle ? { terminalHandle } : {}),
+          ...(observedInvocationId ? { observedInvocationId } : {}),
+          ...(sendCount !== undefined ? { sendCount } : {}),
+          ...(typeof envelope.conversation_locator === 'string' && envelope.conversation_locator.length > 0
+            ? { conversationLocator: envelope.conversation_locator } : {}),
+          ...(persistedObservationProfileKey ? { persistedObservationProfileKey } : {}),
+        });
       } catch {
         // A partial or unrelated terminal artifact is not completion evidence.
       }
     }
   }
   return events.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+/**
+ * The no-result producer exposes only an observation *pointer*, not launcher
+ * authority. Result-present envelopes can have send_count without any pointer.
+ * In either case a possible sent-unbound turn must never fall through to the
+ * legacy terminal-handle/cwd wake, which targets a potentially recycled pane.
+ */
+export function potentiallySentUnboundEnvelope(event: TerminalEnvelopeEvent): boolean {
+  if (event.sendCount !== undefined && event.sendCount >= 1 && !event.conversationLocator) return true;
+  if (!event.persistedObservationProfileKey) return false;
+  // No pointer scan or fallback to an environment/current-handle occupant.
+  if (!event.observedInvocationId || event.observedInvocationId !== event.invocationId) return true;
+  try {
+    const record = readStateLightTurnObservation(
+      event.persistedObservationProfileKey, event.observedInvocationId,
+    );
+    if (record.phase === 'sent_unbound' && record.conversation_url === null) return true;
+    return record.phase === 'dispatching' && record.conversation_url === null;
+  } catch {
+    // Unreadable owner of a known no-result event gives no effect, not fallback.
+    return true;
+  }
 }
 
 export interface OpenPullHead {
@@ -655,6 +707,10 @@ async function wakePanesOnEvents(
   const wakes: Array<{ pane: FleetTerminal | FleetPaneObservation; key: string; message: string }> = [];
   for (const envelope of (options.listTerminalEnvelopes ?? listTerminalEnvelopes)()) {
     const key = `gpt:${envelope.path}`;
+    if (potentiallySentUnboundEnvelope(envelope)) {
+      log(`skip unsafe GPT terminal wake: owner_generation_unproven ${key}`);
+      continue;
+    }
     const pane = envelope.terminalHandle !== undefined
       ? observations.find((candidate) =>
         candidate.handle === envelope.terminalHandle)
