@@ -1943,20 +1943,37 @@ function buildUpdatedPackReviewRun(
 ): PackReviewRunRecord {
   const staleNoJudgmentTerminal = fields.failureReason?.startsWith('gpt_source_non_complete:') === true
     && hasPersistedPackReviewVerdict(existing);
-  const incomingStatus = fields.deliveryOutcomes?.requiredStatus;
-  const existingStatus = existing.deliveryOutcomes.requiredStatus;
-  // A queued no-judgment error writer cannot erase the successful verdict
-  // projection that won the same-run source-recovery race.
-  const staleUnfinishedStatus = hasPersistedPackReviewVerdict(existing)
-    && incomingStatus !== undefined
-    && incomingStatus.idempotencyKey.includes(':unfinished:')
-    && existingStatus?.state === 'succeeded'
-    && existingStatus.idempotencyKey === `required-status:orchestrator-pack/pack-review:${existing.targetSha}`;
-  const mergedDeliveryOutcomes = {
+  // Delivery writers frequently carry an entire map loaded before another
+  // independent channel completed. Rebase every channel under the store lock,
+  // including stale values for the *same* channel, not just disjoint keys.
+  const mergedDeliveryOutcomes: PackReviewRunRecord['deliveryOutcomes'] = {
     ...existing.deliveryOutcomes,
-    ...fields.deliveryOutcomes,
-    ...(staleUnfinishedStatus ? { requiredStatus: existingStatus } : {}),
   };
+  for (const channel of Object.keys(fields.deliveryOutcomes ?? {}) as PackReviewDeliveryChannel[]) {
+    const incoming = fields.deliveryOutcomes?.[channel];
+    if (!incoming) continue;
+    const current = existing.deliveryOutcomes[channel];
+    const currentAt = current ? Date.parse(current.recordedAtUtc) : NaN;
+    const incomingAt = Date.parse(incoming.recordedAtUtc);
+    const olderSnapshot = current
+      && Number.isFinite(currentAt) && Number.isFinite(incomingAt)
+      && incomingAt < currentAt;
+    // A completed submission/status for the same key cannot become uncertain
+    // again merely because a stale whole-map writer saved its old snapshot.
+    const submittedDowngrade = current
+      && current.idempotencyKey === incoming.idempotencyKey
+      && (current.state === 'succeeded' || current.state === 'delivered')
+      && incoming.state !== 'succeeded' && incoming.state !== 'delivered';
+    // Credentialed same-run recovery owns the verdict projection even if an
+    // unfinished writer's stale snapshot happens to have an equal timestamp.
+    const obsoleteVerdictStatus = channel === 'requiredStatus'
+      && current
+      && hasPersistedPackReviewVerdict(existing)
+      && current.idempotencyKey === `required-status:orchestrator-pack/pack-review:${existing.targetSha}`
+      && incoming.idempotencyKey !== current.idempotencyKey;
+    if (olderSnapshot || submittedDowngrade || obsoleteVerdictStatus) continue;
+    mergedDeliveryOutcomes[channel] = incoming;
+  }
   const candidate: Record<string, unknown> = {
     ...existing,
     ...fields,
