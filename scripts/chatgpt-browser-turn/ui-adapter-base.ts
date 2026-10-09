@@ -160,23 +160,37 @@ interface ProjectConversationIdentity {
   readonly identityRoot: string;
   readonly projectSurface: string;
   readonly origin: string;
+  readonly stableProjectId: string;
   readonly canonicalProjectId: boolean;
 }
 
-const CANONICAL_PROJECT_GPT_SEGMENT_RE = /^g-p-[0-9a-f]{32}(?:-[^/]+)?$/i;
+const CANONICAL_PROJECT_GPT_SEGMENT_RE = /^g-p-([0-9a-f]{32})(?:-[^/]+)?$/i;
+
+function stableProjectId(projectSegment: string): string | undefined {
+  const match = CANONICAL_PROJECT_GPT_SEGMENT_RE.exec(projectSegment);
+  return match ? `g-p-${match[1]!.toLowerCase()}` : undefined;
+}
+
+function allowedChatGptOrigin(url: URL): boolean {
+  return url.protocol === 'https:' && url.hostname === 'chatgpt.com' && !url.username && !url.password;
+}
 
 function projectConversationIdentity(projectUrl: string): ProjectConversationIdentity | undefined {
   try {
     const projectSurface = normalizeConversationUrl(projectUrl);
     const parsed = new URL(projectSurface);
-    const match = /^\/g\/(g-p-[^/]+)/i.exec(parsed.pathname);
+    if (!allowedChatGptOrigin(parsed)) return undefined;
+    // Only the project root or its recognized composer/draft route is a project selection.
+    const match = /^\/g\/(g-p-[^/]+)(?:\/(?:project|draft))?$/i.exec(parsed.pathname);
     const projectSegment = match?.[1];
-    if (!projectSegment) return undefined;
+    const stable = projectSegment ? stableProjectId(projectSegment) : undefined;
+    if (!stable) return undefined;
     return {
       identityRoot: normalizeConversationUrl(`${parsed.origin}/g/${projectSegment}`),
       projectSurface,
       origin: parsed.origin,
-      canonicalProjectId: CANONICAL_PROJECT_GPT_SEGMENT_RE.test(projectSegment),
+      stableProjectId: stable,
+      canonicalProjectId: true,
     };
   } catch {
     return undefined;
@@ -186,12 +200,19 @@ function projectConversationIdentity(projectUrl: string): ProjectConversationIde
 export function projectConversationPrefix(projectUrl: string): string | undefined {
   const identity = projectConversationIdentity(projectUrl);
   if (!identity) return undefined;
-  return identity.canonicalProjectId ? identity.identityRoot : identity.projectSurface;
+  return identity.identityRoot;
 }
 
 function conversationPrefixFromObservedUrl(normalizedUrl: string): string | undefined {
-  const match = /^(.*)\/c\/[0-9a-f-]{36}$/i.exec(normalizedUrl);
-  return match?.[1];
+  try {
+    const parsed = new URL(normalizedUrl);
+    if (!allowedChatGptOrigin(parsed)) return undefined;
+    const match = /^(.*)\/c\/([0-9a-f-]+)$/i.exec(parsed.pathname);
+    if (!match || !SERVICE_CONVERSATION_UUID_RE.test(match[2]!)) return undefined;
+    return `${parsed.origin}${match[1]}`;
+  } catch {
+    return undefined;
+  }
 }
 
 export function projectConversationUrlMatchesProject(
@@ -201,11 +222,12 @@ export function projectConversationUrlMatchesProject(
   try {
     const identity = projectConversationIdentity(projectUrl);
     if (!identity) return false;
-    const conversationPrefix = conversationPrefixFromObservedUrl(
-      normalizeConversationUrl(conversationUrl),
-    );
-    return conversationPrefix === identity.identityRoot
-      || conversationPrefix === identity.projectSurface;
+    const parsed = new URL(normalizeConversationUrl(conversationUrl));
+    if (!allowedChatGptOrigin(parsed) || parsed.origin !== identity.origin) return false;
+    const match = /^\/g\/(g-p-[^/]+)\/c\/([0-9a-f-]+)$/i.exec(parsed.pathname);
+    return match !== null
+      && SERVICE_CONVERSATION_UUID_RE.test(match[2]!)
+      && stableProjectId(match[1]!) === identity.stableProjectId;
   } catch {
     return false;
   }
@@ -215,18 +237,8 @@ function observedConversationUrlAllowedForProject(
   conversationUrl: string,
   projectUrl: string,
 ): boolean {
-  try {
-    const identity = projectConversationIdentity(projectUrl);
-    if (!identity) return false;
-    const conversationPrefix = conversationPrefixFromObservedUrl(
-      normalizeConversationUrl(conversationUrl),
-    );
-    return conversationPrefix === identity.identityRoot
-      || conversationPrefix === identity.projectSurface
-      || conversationPrefix === identity.origin;
-  } catch {
-    return false;
-  }
+  // A root /c/<uuid> URL is an observation candidate, never a fresh-project owner.
+  return projectConversationUrlMatchesProject(conversationUrl, projectUrl);
 }
 
 function buildConversationUrlFromPrefix(prefix: string, conversationUuid: string): string {
