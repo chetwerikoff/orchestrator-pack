@@ -786,7 +786,7 @@ describe('Issue #2434 cancellation is no-effect without original tab+generation 
 
   function admittedSentFixture() {
     const root = mkdtempSync(join(tmpdir(), 'opk-2434-cancel-'));
-    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = join(root, 'state');
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
     const profileKey = configuredProfileKey('synthetic-profile', cdp);
     const invocationId = 'synthetic-cancel-invocation';
     admitStateLightTurnObservation({ profileKey, invocationId, marker });
@@ -847,7 +847,7 @@ describe('Issue #2434 cancellation is no-effect without original tab+generation 
       expect(page.close).not.toHaveBeenCalled();
       expect(sibling.close).not.toHaveBeenCalled();
     } finally {
-      delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+      vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -869,7 +869,7 @@ describe('Issue #2434 cancellation is no-effect without original tab+generation 
         receipt, cdp,
       )).stopOutcome).toBe('not_attempted_authority_absent');
     } finally {
-      delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+      vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -891,7 +891,7 @@ describe('Issue #2434 cancellation is no-effect without original tab+generation 
       expect(writes.join('')).not.toContain('"state":"cancelled"');
     } finally {
       spy.mockRestore();
-      delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+      vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
     }
   });
