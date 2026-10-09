@@ -16,5 +16,6 @@
     ".cursor/skills/execute-issue-with-gpt/SKILL.md",
     ".cursor/skills/merge-with-local-adoption/SKILL.md",
     "docs/chatgpt-task-execution-runbook.md"
-  ]
+  ],
+  "source_revision": "9b1bb79b238b63da4241103fc7f7d5b7536a0691"
 }
