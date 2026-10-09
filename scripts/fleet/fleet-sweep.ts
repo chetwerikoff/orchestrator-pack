@@ -740,8 +740,12 @@ if (isDirectExecution()) {
     const terminals = listFleetTerminals();
     const observations = runFleetSweep({ ...options, store, terminals });
     const diagnostics = collectFleetDiagnostics({ ...options, store, terminals });
+    const reported = observations.map((pane) => {
+      const diagnostic = diagnostics.find((row) => row.handle === pane.handle);
+      return diagnostic ? { ...pane, diagnostic: { reason: diagnostic.reason, evidence: diagnostic.evidence } } : pane;
+    });
     process.stdout.write(options.json
-      ? `${JSON.stringify({ observations, diagnostics }, null, 2)}\n`
+      ? `${JSON.stringify(reported, null, 2)}\n`
       : [formatFleetSweep(observations), formatFleetDiagnostics(diagnostics)].filter(Boolean).join('\n') + '\n');
   } catch (error) {
     process.stderr.write(`fleet-sweep: ${error instanceof Error ? error.message : String(error)}\n`);
