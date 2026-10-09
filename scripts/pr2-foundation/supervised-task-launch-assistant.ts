@@ -973,7 +973,11 @@ export async function finalizeOpenCodeExecutorProfile(
       && rule.permission === 'external_directory' && rule.action === 'allow'
       && typeof rule.pattern === 'string' && runtimeToolOutputPatterns.has(rule.pattern))
     : [];
-  const runtimeRule = matchingRuntimeRules.length === 1 ? matchingRuntimeRules[0] : null;
+  // OpenCode may emit the identical tool-output allow twice in the raw
+  // baseline. Its last-wins config projection retains the first rule position.
+  const runtimeRule = matchingRuntimeRules.length > 0
+    && matchingRuntimeRules.every((rule) => rule.pattern === matchingRuntimeRules[0]?.pattern)
+    ? matchingRuntimeRules.at(-1) : null;
   const baselinePermission = openCodeAgentConfigFromInfo(baselineValue).permission;
   const inheritedPermission = record(baselinePermission) ? baselinePermission : {};
   const externalDirectory = inheritedPermission.external_directory;

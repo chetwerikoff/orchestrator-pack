@@ -749,8 +749,9 @@ describe('supervised Task launch assistant', () => {
   });
 
   it.each([
-    ['home-resolved runtime allow', 'none', true, 'home'],
-    ['tilde runtime allow', 'none', true, 'tilde'],
+    ['captured contextual Hn reordering remains refused', 'captured-order', false, 'home'],
+    ['home-resolved runtime allow, only TO moved', 'none', true, 'home'],
+    ['tilde runtime allow, only TO moved', 'none', true, 'tilde'],
     ['unrelated rule reordering', 'other-order', false, 'home'],
     ['an extra allow', 'extra-allow', false, 'home'],
     ['an unchanged inherited external-directory allow', 'inherited-allow', true, 'home'],
@@ -764,7 +765,7 @@ describe('supervised Task launch assistant', () => {
   ] as const)('contextual tool-output order regression: %s', async (_label, drift, accepted, pathKind) => {
     type FixtureRule = { permission: string; pattern: string; action: string };
     type FixtureAgent = {
-      name: string; mode: string; prompt: string; topP: number;
+      name: string; mode: string; prompt: string; description?: string;
       model: { providerID: string; modelID: string }; variant: string;
       options: Record<string, unknown>; permission: FixtureRule[];
     };
@@ -782,13 +783,40 @@ describe('supervised Task launch assistant', () => {
         }
       }
     }
+    // Unmodified replay preserves the 84 raw/94 canonical rules, including
+    // the duplicated TO at both raw indices; capture order must not be "fixed".
+    expect(fixture.baseline.permission).toHaveLength(84);
+    expect(fixture.contextual.permission).toHaveLength(94);
     expect(fixture.baseline.permission[3]).toEqual(toolOutput);
+    expect(fixture.baseline.permission.at(-1)).toEqual(toolOutput);
     expect(fixture.contextual.permission.at(-1)).toEqual(toolOutput);
+    const baselineCanonical = openCodeAgentConfigFromInfo(fixture.baseline).permission;
+    const flattenedBaseline = Object.entries(baselineCanonical as Record<string, string | Record<string, string>>)
+      .flatMap(([permission, rules]) => typeof rules === 'string'
+        ? [{ permission, pattern: '*', action: rules }]
+        : Object.entries(rules).map(([pattern, action]) => ({ permission, pattern, action })));
+    expect(flattenedBaseline).toHaveLength(81);
+    expect(flattenedBaseline[3]).toEqual(toolOutput);
+    expect(fixture.contextual.permission[5]).toEqual({
+      permission: 'external_directory', pattern: '<home>/redacted-13/*', action: 'allow',
+    });
+    if (drift !== 'captured-order') {
+      // Controlled TO-only positive/negative cases: keep the captured fixture
+      // unchanged, but align Hn with baseline here. The literal captured Hn
+      // permutation is separately tested and must remain refused by strict parity.
+      const homePattern = /^<home>\/redacted-\d+\/\*$/u;
+      const inherited = fixture.baseline.permission.filter((rule) => homePattern.test(rule.pattern));
+      const positions = fixture.contextual.permission.flatMap((rule, index) => homePattern.test(rule.pattern) ? [index] : []);
+      expect(inherited).toHaveLength(69);
+      expect(positions).toHaveLength(69);
+      positions.forEach((index, i) => { fixture.contextual.permission[index] = { ...inherited[i]! }; });
+    }
     if (drift === 'inherited-allow') {
       const inherited = { permission: 'external_directory', pattern: '~/already-allowed/*', action: 'allow' };
-      fixture.baseline.permission.splice(3, 0, inherited);
-      const index = fixture.contextual.permission.findIndex((rule) => rule.permission === 'question');
-      fixture.contextual.permission.splice(index, 0, { ...inherited });
+      const baselineIndex = fixture.baseline.permission.findIndex((rule) => rule.permission === 'question');
+      const contextualIndex = fixture.contextual.permission.findIndex((rule) => rule.permission === 'question');
+      fixture.baseline.permission.splice(baselineIndex, 0, inherited);
+      fixture.contextual.permission.splice(contextualIndex, 0, { ...inherited });
     }
 
     const sandbox = mkdtempSync(join(tmpdir(), 'opk2447-offline-'));
@@ -822,9 +850,10 @@ describe('supervised Task launch assistant', () => {
             if (name !== 'general' && name !== 'explore') {
               if (drift === 'other-order') {
                 const question = resolved.permission.findIndex((rule) => rule.permission === 'question');
-                const task = resolved.permission.findIndex((rule) => rule.permission === 'task');
-                if (question >= 0 && task >= 0) {
-                  [resolved.permission[question], resolved.permission[task]] = [resolved.permission[task]!, resolved.permission[question]!];
+                const planEnter = resolved.permission.findIndex((rule) => rule.permission === 'plan_enter');
+                if (question >= 0 && planEnter >= 0) {
+                  [resolved.permission[question], resolved.permission[planEnter]] =
+                    [resolved.permission[planEnter]!, resolved.permission[question]!];
                 }
               }
               if (drift === 'extra-allow') {
