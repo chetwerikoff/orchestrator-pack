@@ -3931,3 +3931,85 @@ describe('Issue #2451 zero-judgment budget and wrapper projection', () => {
     });
   });
 });
+
+
+describe('Issue #2451 three-source no-judgment delivery', () => {
+  it.each(['submitted', 'pre_dispatch_failure', 'ambiguous'] as const)(
+    'submits the bounded failure-only notification once (%s)', async (submissionState) => {
+      const storeRoot = tempRoot('opk-2451-zero-source-');
+      const capture = path.join(storeRoot, 'review.json');
+      harnessEnv(storeRoot, capture);
+      process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+      delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+      const options = { projectId: 'orchestrator-pack', storeRoot };
+      const slots: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+      const notifications: string[] = [];
+      const statusStates: string[] = [];
+      const result = await startPackReview({
+        ...options, sourceRepoRoot: repoRoot, prNumber: 2451, headSha: HEAD_A,
+        tier: 'T2', fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
+        fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+        fixturePrState: 'OPEN',
+        fixtureIssueBody: ' ```complexity-tier\\ntier: T2\\n```'.trim().replaceAll('\\n', '\n'),
+        fixtureIssueNumber: 2451,
+        fixtureReviewBySourceSlot: slots,
+        fixtureAfterGptInvocationBound: ({ slotId, invocationId }) => {
+          slots[slotId] = [{ stdout: terminalTurnPayload({
+            state: 'driver_error', cause: 'connect_over_cdp_failed', invocationId,
+          }), exitCode: 1 }];
+          // A fixture-only exact generation binding. A plain session string
+          // cannot qualify as authorization for the notification channel.
+          const run = listPackReviewRuns(options)[0];
+          if (run) updatePackReviewRun(run.id, {
+            workerNotificationBinding: {
+              schemaVersion: 1, runtime: 'cursor', id: 'fixture-worker-2451',
+              generation: 'fixture-generation', workspacePath: '/fixture/worktree',
+              headSha: HEAD_A,
+            },
+          }, options);
+        },
+        fixtureRequiredStatusWriter: async (request) => { statusStates.push(request.state); },
+        fixtureWorkerNotifier: async (request) => {
+          notifications.push(request.idempotencyKey);
+          return { state: submissionState, reason: 'fixture-' + submissionState };
+        },
+      });
+      expect(result).toMatchObject({
+        ok: false, created: true, status: 'failed',
+        budgetOutcome: 'non_consuming_no_judgment',
+        requiredStatusPublication: 'published',
+        noJudgmentWorkerNotification: { state: submissionState },
+      });
+      const run = getPackReviewRun(String(result.runId), options)!;
+      expect(run.reviewVerdict).toBeUndefined();
+      expect(run.journalOutcome).toBeUndefined();
+      expect(run.automaticBudgetDisposition).toBe('consume');
+      expect(readPackReviewAuthority(2451, { storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([]);
+      expect(notifications).toEqual([`worker-notification:no-judgment:${run.id}:${HEAD_A}`]);
+      expect(run.deliveryOutcomes.noJudgmentWorkerNotification).toMatchObject({
+        state: submissionState === 'submitted' ? 'succeeded'
+          : submissionState === 'pre_dispatch_failure' ? 'failed' : 'escalated',
+      });
+      expect(run.deliveryOutcomes.workerNotification).toBeUndefined();
+      expect(statusStates).toContain('error');
+      expect(statusStates).not.toContain('success');
+      expect(existsSync(capture)).toBe(false);
+      // A second scoped read may recover evidence, but must never blindly
+      // resubmit the already claimed failure-only channel.
+      await reconcileStalePackReviewRuns({
+        ...options, sourceRepoRoot: repoRoot, repoSlug: 'chetwerikoff/orchestrator-pack',
+        prNumber: 2451, fixtureCurrentPrHeadSha: HEAD_A,
+        fixtureGptSourceCommentTransport: {
+          resolveActorLogin: async () => 'browser-gpt-bot',
+          listComments: async () => [], getComment: async () => { throw new Error('unavailable'); },
+        },
+        fixtureRequiredStatusWriter: async (request) => { statusStates.push(request.state); },
+        fixtureWorkerNotifier: async (request) => {
+          notifications.push(request.idempotencyKey);
+          return { state: 'submitted', reason: 'duplicate' };
+        },
+      });
+      expect(notifications).toHaveLength(1);
+    },
+  );
+});
