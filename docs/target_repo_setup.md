@@ -226,6 +226,109 @@ Updating the shared worker preamble and firefighter/flow-manager templates to
 supply this rendered `{VERIFY}` is an operator adoption step outside tracked
 repository acceptance.
 
+## Restore an existing supervised manager after reboot
+
+This is an **existing Task / existing worktree** procedure, not a fresh manager
+or a new coordinator. Select the project card first and use the corresponding
+repository, Run, Task, Issue and exact Orca worktree. The Task must belong
+uniquely to the chosen Run under native `task-list --run`. Check its current
+Dispatch **before** preparing a terminal:
+
+```bash
+orca orchestration run-show --id "$RUN_ID" --json
+orca orchestration task-list --run "$RUN_ID" --json
+orca orchestration dispatch-show --task "$TASK_ID" --json
+```
+
+When `dispatch-show.dispatch` is **present**, do not launch a new Dispatch:
+the existing coordinator must reconcile/continue that same Dispatch. If it
+is absent, the current supervised launch assistant can restore a clean
+non-ancestor manager worktree only with an explicit **same-task Issue**:
+
+```bash
+node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" \
+  --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/pr2-foundation/supervised-task-launch-assistant.ts" -- \
+  --project "$PROJECT_ID" --work-class manager --issue-number "$ISSUE_NUMBER" \
+  --run "$RUN_ID" --task "$TASK_ID" --worktree "$WORKTREE_SELECTOR" \
+  --base-branch "origin/$DEFAULT_BRANCH"
+```
+
+The assistant verifies that the worktree is clean and uniquely owned by its
+local branch, then fetches only the default **remote-tracking** ref. For an
+otherwise non-ancestor HEAD it requires exactly one currently **open PR whose
+live body closes that Issue** with `Closes/Fixes/Resolves #N`; the PR must be
+in the selected repository, have that same repository as head (not a fork),
+base `$DEFAULT_BRANCH`, head branch equal to the observed local branch and
+full head SHA equal to the observed local HEAD. It rechecks branch/HEAD/clean
+status and PR before launching. Missing, ambiguous, closed, foreign, dirty,
+unpublished or changed evidence refuses without reset, rebase, merge or
+fast-forward of the manager branch. A fresh manager created from the default
+branch continues through the existing separate `--manager-brief --worktree-name`
+path. The early/final Task Dispatch absence checks are both required for a new
+start, even when the worktree and terminal were already prepared.
+
+### Coordinator Run binding is independent of worker-start
+
+**Never** recover a coordinator by calling `worker-start` against the
+coordinator terminal or by bypassing `terminal_is_coordinator`. An observed
+`run-show.coordinator_handle` is historical binding evidence, **not** a
+current-liveness observation of the old coordinator. The currently documented
+native observations have **not** established an independent, exact Run/old
+terminal pre-bind liveness witness. Accordingly, **refuse** the
+`orca orchestration run-use` mutation if the old coordinator is live,
+unknown, mismatched, or cannot be authoritatively proved no longer live. Record
+the exact Run and old handle and manually reconcile that pair using already
+supported native authority. A fresh terminal's existence or a fixture alone
+cannot authorize takeover.
+
+Only **after** separate native proof/reconciliation establishes that takeover
+is safe may the operator use a genuinely runtime-issued new coordinator
+terminal with `ORCA_TERMINAL_HANDLE` and the supported native binding:
+
+```bash
+# CONDITIONALLY AUTHORIZED: do not execute until old Run/terminal liveness is resolved.
+orca orchestration run-use --id "$RUN_ID" --json
+orca orchestration run-current --json
+orca orchestration run-show --id "$RUN_ID" --json
+```
+
+Both post-bind reads must identify the **same** existing Run, and
+`run-show.coordinator_handle` must equal the actual
+`ORCA_TERMINAL_HANDLE`. These are **post-bind** checks; they never substitute
+for the missing **pre-bind** old-coordinator liveness authority. Where the
+native `--from <exact_current_handle>` form applies, supply only the actually
+observed current handle, not a guessed or stale one. Do not create a second Run.
+
+### Logical operator-primary pointer is separate
+
+The tracked `scripts/operator-primary-binding.ts` changes only a
+**project-scoped logical WorkerAssignment pointer**. It cannot perform native
+`run-use`, create a terminal or reclassify a gone predecessor. Read the
+current project card and the current, same-project/repository **local**
+WorkerAssignment first; if there is none, refuse pointer mutation:
+
+```bash
+node --experimental-strip-types "$PACK_ROOT/scripts/operator-primary-binding.ts" show --project "$PROJECT_ID"
+# For a verified current local assignment and an absent pointer ONLY:
+node --experimental-strip-types "$PACK_ROOT/scripts/operator-primary-binding.ts" bind \
+  --project "$PROJECT_ID" --task-id "$TASK_ID" --binding-key "$DISPATCH_ID" --operator-attested
+# For an existing pointer, replace uses the entire observed old pointer:
+node --experimental-strip-types "$PACK_ROOT/scripts/operator-primary-binding.ts" replace \
+  --project "$PROJECT_ID" --task-id "$TASK_ID" --binding-key "$DISPATCH_ID" \
+  --expected-task-id "$OLD_TASK_ID" --expected-binding-key "$OLD_BINDING_KEY" \
+  --expected-assignment-id "$OLD_ASSIGNMENT_ID" \
+  --expected-assignment-generation "$OLD_ASSIGNMENT_GENERATION" --operator-attested
+node --experimental-strip-types "$PACK_ROOT/scripts/operator-primary-binding.ts" show --project "$PROJECT_ID"
+orca orchestration worker-show --dispatch "$DISPATCH_ID"
+```
+
+`show` must point to the actual current project/repository assignment and
+the last native read separately revalidates its runtime target. A stale or
+cross-project pointer/assignment must be reconciled, not overwritten blindly.
+All examples above are **instructions**, not proof that a live coordinator,
+old terminal, current Task, or operator pointer was repaired. See
+`docs/migration_notes.md` for post-merge adoption and rollback.
+
 ## Managed AGENTS.md block
 
 Target-project rules live outside one marker pair. Pack rules live inside that
