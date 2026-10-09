@@ -355,7 +355,7 @@ describe('Issue #2441 observational-only fleet diagnostics', () => {
     const titleOnly = { ...designated(), agentIdentity: undefined };
     expect(diagnose(store, [titleOnly], { agent: 'busy\nesc interrupt' }, 300_000)[0]?.reason).toBe('agent_unverified');
     expect(diagnose(store, [shell()], { agent: '$' }, 600_000)).toEqual([]);
-    const path = join(store.root, \`diagnostic-\${createHash('sha256').update('agent').digest('hex').slice(0, 24)}.json\`);
+    const path = join(store.root, `diagnostic-${createHash('sha256').update('agent').digest('hex').slice(0, 24)}.json`);
     // An older/invalid persisted record is not evidence of a previous agent.
     writeFileSync(path, JSON.stringify({ key: 'legacy', designatedAgent: true, firstUnchangedObservedAt: 0 }), 'utf8');
     expect(diagnose(store, [shell()], { agent: '$' }, 900_000)).toEqual([]);
