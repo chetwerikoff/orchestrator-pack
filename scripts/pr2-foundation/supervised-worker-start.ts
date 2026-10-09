@@ -606,7 +606,13 @@ export async function runSupervisedWorkerStart(input: {
           };
         }
       } else {
-        return { ok: false, reason: admission.status };
+        return {
+          ok: false,
+          reason: admission.status,
+          ...(admission.status === 'target_unresolved'
+            ? { errorMessage: admission.reason?.trim() || 'native cause unavailable' }
+            : {}),
+        };
       }
     }
   }
