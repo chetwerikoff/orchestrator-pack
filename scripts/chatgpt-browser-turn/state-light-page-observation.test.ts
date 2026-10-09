@@ -8,6 +8,8 @@ import {
 import {
   ASSISTANT_MESSAGE_SELECTOR,
   ASSISTANT_TURN_ANCESTOR_XPATH,
+  ASSISTANT_TURN_ACTION_SELECTOR,
+  ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR,
   CONNECTION_RECOVERY_STATUS_SELECTOR,
   MESSAGE_NODE_SELECTOR,
@@ -407,6 +409,54 @@ describe('DOM observation boundary', () => {
     expect(completed.querySelectorAll).toHaveBeenCalledWith(
       '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]',
     );
+  });
+
+  it('captures an actionable text-named Continue generating control on its own assistant turn', async () => {
+    const button = {
+      getAttribute: (name: string) => name === 'aria-label' ? null : null,
+      innerText: 'Continue generating',
+      textContent: 'Continue generating',
+      getBoundingClientRect: () => ({ width: 120, height: 24 }),
+      hasAttribute: () => false,
+    };
+    const turn = {
+      querySelector: (selector: string) => selector === ASSISTANT_TURN_ACTION_SELECTOR ? {} : null,
+      querySelectorAll: (selector: string) => selector === 'button' ? [button] : [],
+    };
+    const makeMessage = (role: 'user' | 'assistant', text: string) => ({
+      getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR
+        ? `${role}-message`
+        : name === 'data-message-id' ? null : null,
+      closest: () => turn,
+      querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+        ? { getAttribute: () => `${role}-message` }
+        : selector === ASSISTANT_TURN_ACTION_SELECTOR && role === 'assistant' ? {} : null,
+      querySelectorAll: () => [],
+      getBoundingClientRect: () => ({ height: 1 }),
+      innerText: text,
+    });
+    const elements = [makeMessage('user', markedPrompt), makeMessage('assistant', 'partial reply')];
+    const nodes = scalarLocator({
+      evaluateAll: vi.fn(async (callback: (items: Element[], args: unknown) => unknown, args: unknown) => (
+        callback(elements as unknown as Element[], args)
+      )),
+    });
+    const page = { locator: vi.fn((selector: string) => selector === MESSAGE_NODE_SELECTOR ? nodes : scalarLocator()) };
+    const priorDocument = (globalThis as { document?: unknown }).document;
+    (globalThis as { document?: unknown }).document = { querySelectorAll: () => [] };
+    try {
+      const observation = await readPageObservation(page, marker, 0);
+      expect(observation.transcriptIncomplete).toBe(false);
+      expect(observation.snapshot?.carriers[1]).toMatchObject({
+        role: 'assistant',
+        continuationVisible: true,
+        completionReady: false,
+      });
+      expect(observation.ownedWindowCompletionReady).toBe(false);
+    } finally {
+      if (priorDocument === undefined) delete (globalThis as { document?: unknown }).document;
+      else (globalThis as { document?: unknown }).document = priorDocument;
+    }
   });
 
   it('does not count an unrendered Stop as generation in progress', async () => {

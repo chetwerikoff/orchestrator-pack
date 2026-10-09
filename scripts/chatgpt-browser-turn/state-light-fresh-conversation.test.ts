@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -116,7 +116,7 @@ import {
   type StateLightTestMessage,
   type StateLightTestSnapshot,
 } from './state-light-turn.test-fixtures.ts';
-import { classifyPageObservation, classifySendLandingEvidence, runStateLightTurn } from './state-light-turn.ts';
+import { classifyPageObservation, classifySendLandingEvidence, readPageObservation, runStateLightTurn } from './state-light-turn.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { deriveComposerInsertionBudgetMs } from './state-light-turn-base.ts';
 import { wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
@@ -533,15 +533,27 @@ describe('state-light fresh conversation collision recovery', () => {
     streamRecoveryAlert: string | false = false,
     replySequence: readonly string[] = [reply],
     continueGeneratingSequence: readonly boolean[] = [],
+    observationOverrides: { incompleteReads?: readonly number[]; nonFinalReads?: readonly number[]; nonFinalFromRead?: number; includeOwnedUser?: boolean; keyedOwnedMessages?: boolean; markerlessOwnedUserFromRead?: number; assistantCarrierKeysByRead?: readonly string[] } = {},
   ) {
     const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0 };
-    const working = readyTurnObservationFrames(prompt, reply)[0]!;
-    const final = readyTurnObservationFrames(prompt, reply).at(-1)!;
-    const assistantOnlyFor = (text: string) => [
-      ...(ambiguousAssistant ? [{ role: 'assistant' as const, text: 'EARLIER ANSWER' }] : []),
-      ...final.filter((message: StateLightTestMessage) => message.role === 'assistant')
-        .map((message: StateLightTestMessage) => ({ ...message, text })),
-    ];
+    const withCarrierKeys = (messages: StateLightTestMessage[]) => observationOverrides.keyedOwnedMessages
+      ? messages.map((message) => ({ ...message, key: message.role === 'user' ? 'user-carrier-12345678' : 'assistant-carrier-12345678' }))
+      : messages;
+    const working = withCarrierKeys(readyTurnObservationFrames(prompt, reply)[0]!);
+    const final = withCarrierKeys(readyTurnObservationFrames(prompt, reply).at(-1)!);
+    const assistantOnlyFor = (text: string) => {
+      const messages = [
+        ...(ambiguousAssistant ? [{ role: 'assistant' as const, text: 'EARLIER ANSWER' }] : []),
+        ...(observationOverrides.includeOwnedUser ? final.filter((message: StateLightTestMessage) => message.role === 'user') : []),
+        ...final.filter((message: StateLightTestMessage) => message.role === 'assistant')
+          .map((message: StateLightTestMessage) => ({ ...message, text })),
+      ];
+      return observationOverrides.assistantCarrierKeysByRead
+        ? messages.map((message) => message.role === 'assistant'
+          ? { ...message, key: observationOverrides.assistantCarrierKeysByRead![state.reads - 1] ?? `assistant-carrier-${state.reads}-0000` }
+          : message)
+        : messages;
+    };
     let active: StateLightTestMessage[] = [];
     let generating = false;
     let continuationVisible = false;
@@ -583,7 +595,16 @@ describe('state-light fresh conversation collision recovery', () => {
             active = final;
             generating = false;
           } else {
-            active = streamRecoveryAlert ? [] : assistantOnlyFor(replySequence[Math.min(state.reads - 3, replySequence.length - 1)] ?? reply);
+            active = streamRecoveryAlert ? [] : assistantOnlyFor(replySequence[Math.min(state.reads - 3, replySequence.length - 1)] ?? reply)
+              .map((message) => observationOverrides.markerlessOwnedUserFromRead !== undefined
+                && state.reads >= observationOverrides.markerlessOwnedUserFromRead
+                && message.role === 'user'
+                ? { ...message, text: 'markerless rendered user carrier' }
+                : message)
+              .map((message) => (observationOverrides.nonFinalReads?.includes(state.reads) || state.reads >= (observationOverrides.nonFinalFromRead ?? Number.POSITIVE_INFINITY))
+                && message.role === 'assistant'
+                ? { ...message, finalActionInTurnContainer: false }
+                : message);
             generating = false;
           }
           continuationVisible = continueGeneratingSequence[state.reads - 1] ?? false;
@@ -592,9 +613,14 @@ describe('state-light fresh conversation collision recovery', () => {
             const elements = active.map((message: StateLightTestMessage) => ({
               getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR
                 ? (message.role === 'user' ? 'user-message' : 'assistant-message')
-                : null,
+                : name === 'data-message-id' ? (message as StateLightTestMessage & { key?: string }).key ?? null : null,
               getBoundingClientRect: () => ({ height: 1 }),
-              innerText: message.text,
+              get innerText() {
+                if (observationOverrides.incompleteReads?.includes(state.reads) && message.role === 'assistant') {
+                  throw new Error('injected_incomplete_assistant_text');
+                }
+                return message.text;
+              },
               querySelector: (query: string) => {
                 if (query === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`) return { getAttribute: () => message.role === 'user' ? 'user-message' : 'assistant-message' };
                 if (query.includes('continue-generating') || query.includes('continue_generating')) return continuationVisible ? {} : null;
@@ -659,6 +685,8 @@ describe('state-light fresh conversation collision recovery', () => {
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const outcome = await runNewChatTurn(page, output);
+    const diagnostic = await readPageObservation(page, TEST_OWNED_MARKER, 0);
+    expect(diagnostic).toMatchObject({ ownedWindowCompletionReady: true, transcriptIncomplete: false });
 
     expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0 });
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
@@ -700,6 +728,87 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(published).toBe(finalReply);
     expect(published).not.toBe(prefix);
     expect(state.reloads).toBe(0);
+  });
+
+  it('discards a completion-ready poll when the selected assistant loses its own finality evidence', async () => {
+    const prompt = 'PROMPT-INTERRUPTED-STABILITY';
+    const reply = 'SHORT-BUT-COMPLETE-LOOKING';
+    const output = join(stateDir, 'interrupted-stability-must-not-publish.txt');
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt,
+      reply,
+      false,
+      false,
+      false,
+      [reply],
+      [],
+      { incompleteReads: [5], nonFinalReads: [4], nonFinalFromRead: 6, includeOwnedUser: true },
+    );
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await runNewChatTurn(page, output, '1000');
+
+    expect(outcome.result.state).not.toBe('ok');
+    expect(outcome.result.send_count).toBe(1);
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it('keeps the incumbent keyed markerless owned-window publication path', async () => {
+    const prompt = 'PROMPT-KEYED-MARKERLESS';
+    const reply = 'KEYED-MARKERLESS-FINAL';
+    const output = join(stateDir, 'keyed-markerless-final.txt');
+    const { page } = unrenderedOwnedMessagePage(
+      prompt,
+      reply,
+      false,
+      false,
+      false,
+      [reply],
+      [],
+      { includeOwnedUser: true, keyedOwnedMessages: true, markerlessOwnedUserFromRead: 4 },
+    );
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await runNewChatTurn(page, output);
+
+    expect(outcome.result).toMatchObject({ state: 'ok', cause: 'completed_page_only', send_count: 1 });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+  });
+
+  it('does not transfer a stable reply proof across assistant carrier-key changes', async () => {
+    const prompt = 'PROMPT-ASSISTANT-KEY-DRIFT';
+    const reply = 'SAME-KEYED-REPLY-TEXT';
+    const output = join(stateDir, 'assistant-key-drift-must-not-publish.txt');
+    const changingKeys = [
+      'unused-key-00000000',
+      'unused-key-00000000',
+      'assistant-carrier-11111111',
+      'assistant-carrier-11111111',
+      'assistant-carrier-22222222',
+      'assistant-carrier-33333333',
+      'assistant-carrier-44444444',
+      'assistant-carrier-55555555',
+      'assistant-carrier-66666666',
+      'assistant-carrier-77777777',
+      'assistant-carrier-88888888',
+    ];
+    const { page } = unrenderedOwnedMessagePage(
+      prompt,
+      reply,
+      false,
+      false,
+      false,
+      [reply],
+      [],
+      { includeOwnedUser: true, keyedOwnedMessages: true, assistantCarrierKeysByRead: changingKeys },
+    );
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await runNewChatTurn(page, output, '1000');
+
+    expect(outcome.result.state).not.toBe('ok');
+    expect(outcome.result.send_count).toBe(1);
+    expect(existsSync(output)).toBe(false);
   });
 
   it('returns conversation-scoped stream recovery timeout without reload when the owner is unrendered', async () => {
