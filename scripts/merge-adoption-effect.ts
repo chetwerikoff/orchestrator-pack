@@ -363,22 +363,24 @@ const systemFleetIO: FleetWakeIO = {
   },
 };
 
-/** Parse only the three existing launcher options; never surface raw cmdline or environment values. */
+/** Validate the installed fleet ExecStart's Node -> launcher -> -- forwarding shape, not loose argv flags. */
 function matchesFleetInvocation(raw: Buffer, projectId: string, adoptedRoot: string): boolean {
   if (raw.length === 0 || raw.length > 65_536 || raw[raw.length - 1] !== 0) return false;
   const argv = raw.toString('utf8').split('\0').slice(0, -1);
-  const singleValue = (flag: string): string | null => {
-    const positions = argv.flatMap((argument, index) => argument === flag ? [index] : []);
-    const index = positions[0];
-    return positions.length === 1 && index !== undefined && index + 1 < argv.length ? argv[index + 1]! : null;
-  };
-  if (singleValue('--project') !== projectId) return false;
-  const root = singleValue('--repo-root');
-  const script = singleValue('--script');
-  if (!root || !script || !path.isAbsolute(root) || !path.isAbsolute(script)) return false;
+  // systemd's /usr/bin/env execs node; /proc/cmdline then starts with node (or its resolved path).
+  // The template has no optional arguments: --project belongs only after the launcher '--'.
+  if (argv.length !== 10) return false;
+  const [node, stripTypes, launcher, repoFlag, root, scriptFlag, script, separator, projectFlag, runningProject] = argv;
+  if (!node || path.basename(node) !== 'node'
+    || stripTypes !== '--experimental-strip-types'
+    || repoFlag !== '--repo-root' || scriptFlag !== '--script'
+    || separator !== '--' || projectFlag !== '--project' || runningProject !== projectId
+    || !launcher || !root || !script
+    || !path.isAbsolute(launcher) || !path.isAbsolute(root) || !path.isAbsolute(script)) return false;
   try {
     const adopted = realpathSync(adoptedRoot);
     return realpathSync(root) === adopted
+      && realpathSync(launcher) === realpathSync(path.join(adopted, TYPESCRIPT_CLI_ENTRYPOINT))
       && realpathSync(script) === realpathSync(path.join(adopted, FLEET_WAKE_ENTRYPOINT));
   } catch { return false; }
 }
