@@ -563,5 +563,39 @@ Report in the user's language:
   source paths and live observations, adoption actions, the common Verify-effect receipt,
   exact residual state/blocker, and next action.
 
+**Final own-response line (already-invoked actors only):** Preserve the
+detailed evidence-backed report above, then end the actual actor's standalone
+final reply with the single truthful terminal line appropriate to its state.
+
+For a genuinely observed **retained wait** after actor invocation, the final
+line begins **exactly** `PARKED on ` or `PARKED:`. Examples:
+
+```text
+PARKED on merge-<PR_NUMBER> — waiting on <verified dependency>; resume when <condition>, owner <owner>
+PARKED: merge-<PR_NUMBER> — waiting on <verified dependency>; resume when <condition>, owner <owner>
+```
+
+Use the resolved **actual PR number**, any separately known release identifier,
+a concrete observed reason, a specific resume condition and its owner. The
+observer's accepted prefix grammar is `^PARKED(?: on\b|:)`; the actual
+extraction grammar is `^PARKED(?: on\s+|:\s*(?:wait\s+)?)(.+)$`.
+Merely containing the word PARKED or using `PARKED merge-...` is not enough.
+An ordinary technical failure without an actual retained actor/wait must
+not be falsely parked; report its concrete failure and next action.
+
+Only after **verified completion** of the resolved PR merge, applicable local
+adoption and effect verification, worktree/terminal cleanup, and required
+GitHub/runtime read-back is the final own-response line:
+
+```text
+merge-<PR_NUMBER> done
+```
+
+A merely merged but unadopted, otherwise blocked, unverified, partial, or
+never-launched actor may not report `done`. The orchestrator's **pre-dispatch**
+`wait_for_dependency` launches **no merge actor**, so this Step 10 line
+convention makes **no output promise** for a worker that does not exist.
+Prelaunch dependency sequencing and reporting remain outside this skill.
+
 Never claim merge, adoption, quiescence, removal, branch deletion, or read-back succeeded without
 corresponding remote/runtime evidence.
