@@ -23,6 +23,7 @@ import {
   buildOpenCodeAgentOverlay,
   openCodeAgentConfigFromInfo,
   openCodeAgentSemantics,
+  openCodeFleetBrowserDenyRulesAreTerminal,
   withOpenCodeFleetBrowserDenies,
   openCodeConfigPaths,
   openCodeEdgeCapabilities,
@@ -955,7 +956,14 @@ export async function finalizeOpenCodeExecutorProfile(
   const model = resolvedValue && record(resolvedValue.model) ? resolvedValue.model : null;
   if (!resolved.ok || before !== configState(worktreePath) || !resolvedValue || !model
     || model.modelID !== modelMatch[1].split('/').at(-1) || resolvedValue.variant !== effortMatch[1]
+    || !openCodeFleetBrowserDenyRulesAreTerminal(resolvedValue.permission)
     || openCodeAgentSemantics(resolvedValue) !== openCodeAgentSemantics(expected)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
+  for (const childAgent of ['general', 'explore']) {
+    const child = await execute(['opencode', 'debug', 'agent', childAgent], 15_000, { ...isolatedEnv, OPENCODE_CONFIG_CONTENT: overlay.inlineConfigJson! }, worktreePath);
+    const childValue = resolvedAgent(child.stdout);
+    if (!child.ok || before !== configState(worktreePath) || !childValue
+      || !openCodeFleetBrowserDenyRulesAreTerminal(childValue.permission)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
+  }
   const paths = await execute(['opencode', 'debug', 'paths'], 15_000, isolatedEnv, worktreePath);
   if (!paths.ok || !paths.stdout.includes(stateRoot)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   return { status: 'ok', value: { ...profile, launchCommand: overlay.command }, evidence: { executorFamily: 'opencode', route: profile.route, exactContext: true } };

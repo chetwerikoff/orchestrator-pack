@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 export const EXECUTOR_PROFILE_REFUSALS = [
   'executor_route_unavailable',
   'executor_effort_channel_unavailable',
@@ -428,12 +429,19 @@ export function buildExecutorCommand(profile: SemanticExecutorProfile): Executor
   }
 
   const executable = profile.surface === 'task' ? descriptor.taskExecutable : descriptor.smokeExecutable;
-  const inlineConfig = JSON.stringify({ agent: { [OPENCODE_PACK_AGENT]: { model: profile.model, variant: profile.effort, permission: withOpenCodeFleetBrowserDenies(undefined) } } });
-  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)} ${executable} --hostname 127.0.0.1 --port ${openCodeControlPort(OPENCODE_PACK_AGENT)} --agent ${quote(OPENCODE_PACK_AGENT)}`;
+  const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
+  const permission = withOpenCodeFleetBrowserDenies(undefined);
+  const agent = {
+    [agentName]: { model: profile.model, variant: profile.effort, permission },
+    general: { permission },
+    explore: { permission },
+  };
+  const inlineConfig = JSON.stringify({ permission, agent });
+  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)} ${executable} --hostname 127.0.0.1 --port ${openCodeControlPort(agentName)} --agent ${quote(agentName)}`;
   return {
     executable,
     command,
-    agentName: OPENCODE_PACK_AGENT,
+    agentName,
     inlineConfigJson: inlineConfig,
   };
 }
@@ -512,19 +520,20 @@ export function openCodeAgentConfigFromInfo(baseline: Readonly<Record<string, un
 }
 
 
-/** Preserve inherited permissions; put the fleet browser denies last for OpenCode's last-matching rule. */
+/** Preserve inherited permissions; append precise executable-token denies last. */
 export function withOpenCodeFleetBrowserDenies(permission: unknown): Record<string, unknown> {
   const inherited = record(permission) ? permission : {};
   const appendDeny = (value: unknown, pattern: string): Record<string, unknown> => {
     const rules = typeof value === 'string' ? { '*': value } : record(value) ? value : {};
     return { ...Object.fromEntries(Object.entries(rules).filter(([key]) => key !== pattern)), [pattern]: 'deny' };
   };
+  const executablePatterns = [
+    'bsk', '/bsk', '/*/bsk', '~?bsk', '~?*/bsk', 'env bsk',
+  ];
+  const bashPatterns = executablePatterns.flatMap((pattern) => [`${pattern}`, `${pattern} *`]);
   return {
     ...inherited,
-    // OpenCode v1.18.35 expands permission patterns beginning with "~/", but checks raw Bash command text.
-    // "~?" matches the literal "~/" command prefix without triggering home expansion.
-    bash: ['bsk*', '/bsk*', '/*/bsk*', '~?bsk*', '~?*/bsk*', 'env bsk*']
-      .reduce<unknown>((rules, pattern) => appendDeny(rules, pattern), inherited.bash),
+    bash: bashPatterns.reduce<unknown>((rules, pattern) => appendDeny(rules, pattern), inherited.bash),
     skill: appendDeny(inherited.skill, 'browser-skill'),
   };
 }
@@ -549,13 +558,31 @@ function canonicalPermission(value: unknown): unknown {
     if (!rule || typeof rule !== 'object' || Array.isArray(rule)) return false;
     const item = rule as Record<string, unknown>;
     return last.get(`${item.permission}\u0000${item.pattern}`) === index;
-  }).sort((left, right) => {
-    const asItem = (value: unknown): Record<string, unknown> => (
-      value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
-    );
-    const l = `${String(asItem(left).permission)}\u0000${String(asItem(left).pattern)}`;
-    const r = `${String(asItem(right).permission)}\u0000${String(asItem(right).pattern)}`;
-    return l.localeCompare(r);
+  });
+}
+
+/** Return true only when every fleet browser rule is last among applicable ordered rules. */
+export function openCodeFleetBrowserDenyRulesAreTerminal(permission: unknown): boolean {
+  const rules = canonicalPermission(permission);
+  const required = canonicalPermission(withOpenCodeFleetBrowserDenies(undefined));
+  if (!Array.isArray(rules) || !Array.isArray(required)) return false;
+  return required.every((expected) => {
+    if (!expected || typeof expected !== 'object' || Array.isArray(expected)) return false;
+    const item = expected as Record<string, unknown>;
+    let lastIndex = -1;
+    rules.forEach((rule, index) => {
+      if (!rule || typeof rule !== 'object' || Array.isArray(rule)) return;
+      const candidate = rule as Record<string, unknown>;
+      if (candidate.permission === item.permission && candidate.pattern === item.pattern) lastIndex = index;
+    });
+    if (lastIndex < 0) return false;
+    const last = rules[lastIndex] as Record<string, unknown>;
+    return last.action === 'deny' && !rules.slice(lastIndex + 1).some((rule) => {
+      if (!rule || typeof rule !== 'object' || Array.isArray(rule)) return false;
+      const candidate = rule as Record<string, unknown>;
+      return (candidate.permission === item.permission || candidate.permission === '*')
+        && candidate.action !== 'deny';
+    });
   });
 }
 
@@ -580,13 +607,18 @@ export function openCodeControlPort(agentName: string): number {
 
 export function buildOpenCodeAgentOverlay(input: OpenCodeAgentOverlay): ExecutorInvocationShape {
   const baseline = openCodeAgentConfigFromInfo(input.baseline);
+  const permission = withOpenCodeFleetBrowserDenies(undefined);
   const agent = {
-    ...baseline,
-    model: input.model,
-    variant: input.effort,
-    permission: withOpenCodeFleetBrowserDenies(baseline.permission),
+    [input.agentName]: {
+      ...baseline,
+      model: input.model,
+      variant: input.effort,
+      permission: withOpenCodeFleetBrowserDenies(baseline.permission),
+    },
+    general: { permission },
+    explore: { permission },
   };
-  const inlineConfig = JSON.stringify({ agent: { [input.agentName]: agent } });
+  const inlineConfig = JSON.stringify({ permission, agent });
   const state = input.stateRoot ? ` XDG_STATE_HOME=${quote(input.stateRoot)}` : '';
   const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)}${state} opencode --hostname 127.0.0.1 --port ${openCodeControlPort(input.agentName)} --agent ${quote(input.agentName)}`;
   return {
