@@ -6,7 +6,6 @@ export const TURN_STATES = [
   'send_failed', 'no_reply', 'chrome_not_running', 'driver_error', 'profile_mismatch',
   'recovery_required', 'orphaned_fresh_turn', 'ui_contract_mismatch', 'foreign_activity',
   'observation_uncertain', 'output_conflict', 'conversation_busy', 'profile_busy', 'incompatible_record',
-  'cancelled',
 ] as const;
 export type TurnState = (typeof TURN_STATES)[number];
 
@@ -178,7 +177,7 @@ export interface PublicationStatusV1 {
 export function turnExitCode(state: TurnState): number {
   if (state === 'ok') return 0;
   if (state === 'driver_error') return 13;
-  if (state === 'cancelled') return 11;
+
   if (state === 'incompatible_record') return 14;
   if (['stream_timeout', 'no_reply', 'recovery_required', 'foreign_activity', 'observation_uncertain', 'conversation_busy'].includes(state)) return 11;
   if (['quota', 'rate_limit', 'challenge', 'login', 'chrome_not_running', 'profile_mismatch', 'orphaned_fresh_turn', 'profile_busy'].includes(state)) return 12;
@@ -197,3 +196,11 @@ export function publicationExitCode(state: PublicationStatusV1['state']): number
   if (state === 'in_progress' || state === 'recovery_required' || state === 'conflict') return 20;
   return 0;
 }
+
+/**
+ * Conditional cancellation result is distinct from the ordinary turn classifier.
+ * It cannot be entered without separately proven original-tab/generation identity
+ * and confirmed effect; r06 has no in-scope source for those witnesses.
+ */
+export const BROWSER_TURN_CANCELLED_TERMINAL_STATE = 'cancelled' as const;
+export type BrowserTurnCancellationTerminalState = typeof BROWSER_TURN_CANCELLED_TERMINAL_STATE;
