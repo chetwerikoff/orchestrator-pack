@@ -2282,6 +2282,7 @@ async function selectConversationPage(
   let activeBrowser = browser;
   let lookup = await findOpenConversationPage(activeBrowser, config);
   let page = lookup.page;
+  if (page && typeof page === 'object') cleanupAuthorityUnprovenPages.add(page);
   if (page || config.newChat || !config.chatUrl) return { browser: activeBrowser, page };
   if (lookup.contextUsable) return { browser: activeBrowser, page };
 
@@ -2306,6 +2307,7 @@ async function selectConversationPage(
   });
   lookup = await findOpenConversationPage(activeBrowser, config);
   page = lookup.page;
+  if (page && typeof page === 'object') cleanupAuthorityUnprovenPages.add(page);
   return { browser: activeBrowser, page };
 }
 
