@@ -3,7 +3,7 @@ import { releaseCdpBrowser } from './browser-session.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { isOwnedPromptMarker } from './owned-prompt-marker.ts';
 import { conversationUuidFromUrl } from './state-light-fresh-conversation.ts';
-import { RENDERED_STOP_BUTTON_SELECTOR, USER_MESSAGE_SELECTOR } from './product-page-selectors.ts';
+import { USER_MESSAGE_SELECTOR } from './product-page-selectors.ts';
 import { loadChromium, normalizeConversationUrl } from './ui-adapter.ts';
 import {
   recoveryMarkerCardinality,
@@ -20,7 +20,6 @@ const CHATGPT_CONVERSATION_ORIGINS = new Set([
   'https://chatgpt.com',
   'https://chat.openai.com',
 ]);
-const CANCELLATION_LOCAL_WAIT_MS = 5_000;
 const USER_MESSAGE_READ_WAIT_MS = 800;
 
 export type ExplicitCancellationAuthority = typeof EXPLICIT_CANCELLATION_AUTHORITY;
