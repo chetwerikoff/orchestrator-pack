@@ -81,7 +81,9 @@ import {
   MESSAGE_NODE_SELECTOR,
   normalizeConversationUrl,
   productStatusText,
+  CONTINUE_GENERATING_BUTTON_NAME,
   locateContinueGeneratingControl,
+  ASSISTANT_TURN_ANCESTOR_XPATH,
   readAssistantNodeCompletionReady,
   readAssistantTurnCompletionReady,
   SEND_BUTTON_SELECTOR,
@@ -161,6 +163,7 @@ const MESSAGE_NODE_READ_RETRY_TIMEOUT_MS = 400;
 const MESSAGE_NODE_READ_ATTEMPTS = 2;
 /** Exact generation selector already owned by browser-gpt-page-probe; do not widen it here. */
 const BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR = '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]';
+const CONTINUE_GENERATING_SELECTOR = 'button[aria-label*="Continue generating" i], button[data-testid*="continue-generating"], button[data-testid*="continue_generating"]';
 /** Post-send wall probes must not block transcript reads or the confirm loop. */
 const POST_SEND_PRODUCT_WALL_PROBE_MS = 2_000;
 const BROWSER_TURN_PROJECT_BINDING_SCHEMA = 'orchestrator-pack/project-state-binding/v1';
@@ -278,6 +281,8 @@ interface PageMessage {
 export interface AtomicTranscriptCarrier extends PageMessage {
   readonly domIndex: number;
   readonly fingerprint: string;
+  readonly completionReady?: boolean;
+  readonly continuationVisible?: boolean;
 }
 
 export interface AtomicTranscriptSnapshot {
@@ -288,8 +293,8 @@ export interface AtomicTranscriptSnapshot {
 export interface BrowserGptPageTurnEvidence {
   readonly generationInProgress: boolean | 'unknown';
   readonly observedAssistantNodes: number;
+  readonly continueGeneratingVisible?: boolean;
 }
-
 export interface PageObservationDecision {
   readonly state: 'waiting' | 'ready' | 'uncertain';
   readonly reply?: string;
@@ -745,11 +750,10 @@ export function ownedPromptMatches(visibleText: string, expectedMarker: string):
   return ownedPromptMarkerMatches(visibleText, expectedMarker);
 }
 
-const REPLY_STABILITY_HEAD_CHARS = DIAGNOSTIC_HEAD_CHARS;
-const REPLY_STABILITY_TAIL_CHARS = DIAGNOSTIC_HEAD_CHARS;
-
 function normalizeReplyForStability(text: string): string {
-  return stripUiCollapseAffixes(normalizeEchoComparisonText(text));
+  // The stability oracle is the original observed innerText; output normalization
+  // remains exclusively in normalizeVisibleText at the incumbent publication seam.
+  return text;
 }
 
 export function hasOwnedUserMessage(messages: readonly PageMessage[], expectedMarker: string): boolean {
@@ -757,13 +761,7 @@ export function hasOwnedUserMessage(messages: readonly PageMessage[], expectedMa
 }
 
 export function replyStabilityFingerprint(text: string): string {
-  const normalized = normalizeReplyForStability(text);
-  if (!normalized) return '';
-  const head = normalized.slice(0, REPLY_STABILITY_HEAD_CHARS);
-  const tail = normalized.length > REPLY_STABILITY_HEAD_CHARS
-    ? normalized.slice(-REPLY_STABILITY_TAIL_CHARS)
-    : normalized;
-  return `${head}\u0000${tail}`;
+  return normalizeReplyForStability(text);
 }
 
 export function replyStabilityMatches(currentReply: string, previousReply: string): boolean {
@@ -771,6 +769,87 @@ export function replyStabilityMatches(currentReply: string, previousReply: strin
   const current = replyStabilityFingerprint(currentReply);
   const previous = replyStabilityFingerprint(previousReply);
   return current.length > 0 && current === previous;
+}
+
+function selectedOwnedReplyText(input: {
+  readonly messages: readonly PageMessage[];
+  readonly snapshot: AtomicTranscriptSnapshot;
+  readonly baselineSnapshot?: AtomicTranscriptSnapshot;
+  readonly baselineCount: number;
+  readonly marker: string;
+  readonly ownedCarrierKey?: string;
+}): string {
+  if (hasOwnedUserMessage(input.messages, input.marker)) {
+    const selected = resolveOwnedReplyWindow(input.messages, input.baselineCount, input.marker);
+    return selected.lastOwnedAssistantMessageIndex === null
+      ? ''
+      : input.messages[selected.lastOwnedAssistantMessageIndex]?.text ?? '';
+  }
+  if (input.ownedCarrierKey) {
+    const candidate = keyedHarvestCandidate(
+      input.snapshot,
+      input.baselineSnapshot,
+      input.ownedCarrierKey,
+    );
+    if (candidate.state !== 'ready') return '';
+    const assistant = input.snapshot.carriers.filter((carrier) => (
+      carrier.role === 'assistant' && carrier.key === candidate.assistantKey
+    ));
+    return assistant.length === 1 ? assistant[0]!.text : '';
+  }
+  const users = input.messages.filter((message) => message.role === 'user');
+  const assistants = input.messages.filter((message) => message.role === 'assistant');
+  return users.length === 0 && assistants.length === 1 ? assistants[0]!.text : '';
+}
+
+function selectedOwnedReplyIdentity(input: {
+  readonly messages: readonly PageMessage[];
+  readonly snapshot: AtomicTranscriptSnapshot;
+  readonly baselineSnapshot?: AtomicTranscriptSnapshot;
+  readonly baselineCount: number;
+  readonly marker: string;
+  readonly ownedCarrierKey?: string;
+}): string {
+  if (hasOwnedUserMessage(input.messages, input.marker)) {
+    const selected = resolveOwnedReplyWindow(input.messages, input.baselineCount, input.marker);
+    const selectedIndex = selected.lastOwnedAssistantMessageIndex;
+    if (selectedIndex === null) return '';
+    const carrier = input.snapshot.carriers[selectedIndex];
+    if (!carrier || carrier.role !== 'assistant') return '';
+    if (!carrier.key) return 'unkeyed';
+    const occurrences = input.snapshot.carriers.filter((candidate) => candidate.role === 'assistant' && candidate.key === carrier.key).length;
+    return occurrences === 1 ? `key:${carrier.key}` : 'ambiguous';
+  }
+  if (input.ownedCarrierKey) {
+    const candidate = keyedHarvestCandidate(input.snapshot, input.baselineSnapshot, input.ownedCarrierKey);
+    if (candidate.state !== 'ready') return '';
+    const matches = input.snapshot.carriers.filter((carrier) => carrier.role === 'assistant' && carrier.key === candidate.assistantKey);
+    return matches.length === 1 ? `key:${candidate.assistantKey}` : 'ambiguous';
+  }
+  const assistants = input.snapshot.carriers.filter((carrier) => carrier.role === 'assistant');
+  return assistants.length === 1 ? (assistants[0]!.key ? `key:${assistants[0]!.key}` : 'unkeyed') : '';
+}
+
+function selectedOwnedReplyCarrier(input: {
+  readonly messages: readonly PageMessage[];
+  readonly snapshot: AtomicTranscriptSnapshot;
+  readonly baselineSnapshot?: AtomicTranscriptSnapshot;
+  readonly baselineCount: number;
+  readonly marker: string;
+  readonly ownedCarrierKey?: string;
+}): AtomicTranscriptCarrier | undefined {
+  if (hasOwnedUserMessage(input.messages, input.marker)) {
+    const index = resolveOwnedReplyWindow(input.messages, input.baselineCount, input.marker).lastOwnedAssistantMessageIndex;
+    return index === null ? undefined : input.snapshot.carriers[index];
+  }
+  if (input.ownedCarrierKey) {
+    const candidate = keyedHarvestCandidate(input.snapshot, input.baselineSnapshot, input.ownedCarrierKey);
+    if (candidate.state !== 'ready') return undefined;
+    const matches = input.snapshot.carriers.filter((carrier) => carrier.role === 'assistant' && carrier.key === candidate.assistantKey);
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+  const assistants = input.snapshot.carriers.filter((carrier) => carrier.role === 'assistant');
+  return input.messages.every((message) => message.role !== 'user') && assistants.length === 1 ? assistants[0] : undefined;
 }
 
 function lastAssistantVisibleText(
@@ -1527,6 +1606,10 @@ export async function readPageObservation(
           unitKeyAttribute: string;
           assistantMessageStyle: string;
           generationSelector: string;
+          continuationSelector: string;
+          turnSelector: string;
+          inProgressSelector: string;
+          actionSelector: string;
         }) => {
           const elements = allElements.filter((element) => element.getBoundingClientRect().height > 0);
           const valid = (value: string | null): value is string => Boolean(value && value.length >= 8);
@@ -1541,7 +1624,7 @@ export async function readPageObservation(
             }
             return undefined;
           };
-          const rows: Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean }> = [];
+          const rows: Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean; completionReady: boolean; continuationVisible: boolean }> = [];
           let observedAssistantNodes = 0;
           let observedMessageNodes = 0;
           for (let domIndex = 0; domIndex < elements.length; domIndex++) {
@@ -1557,9 +1640,34 @@ export async function readPageObservation(
                 if (role === 'assistant') observedAssistantNodes += 1;
               }
               const text = (element as HTMLElement).innerText;
-              rows.push({ role, text, key: canonicalKey(element), domIndex, complete: true });
+              let completionReady = false;
+              let continuationVisible = false;
+              try {
+                const turn = element.closest(args.turnSelector) ?? element;
+                const visibleContinueButton = typeof turn.querySelectorAll === 'function'
+                  && Array.from(turn.querySelectorAll('button')).some((button) => {
+                    const name = (button.getAttribute('aria-label') || button.innerText || button.textContent || '').trim();
+                    const style = typeof window === 'undefined'
+                      ? { display: 'block', visibility: 'visible' }
+                      : window.getComputedStyle(button);
+                  const rect = button.getBoundingClientRect();
+                  return /continue\s+generating/i.test(name)
+                    && rect.height > 0
+                    && style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && !button.hasAttribute('disabled')
+                    && button.getAttribute('aria-disabled') !== 'true';
+                  });
+                continuationVisible = Boolean(turn.querySelector(args.continuationSelector)) || visibleContinueButton;
+                completionReady = !continuationVisible
+                  && !turn.querySelector(args.inProgressSelector)
+                  && Boolean(turn.querySelector(args.actionSelector));
+              } catch {
+                completionReady = false;
+              }
+              rows.push({ role, text, key: canonicalKey(element), domIndex, complete: true, completionReady, continuationVisible });
             } catch {
-              rows.push({ role: '', text: '', domIndex, complete: false });
+              rows.push({ role: '', text: '', domIndex, complete: false, completionReady: false, continuationVisible: false });
             }
           }
           let generationInProgress: boolean | 'unknown' = 'unknown';
@@ -1569,10 +1677,17 @@ export async function readPageObservation(
           } catch {
             generationInProgress = 'unknown';
           }
+          let continueGeneratingVisible = false;
+          try {
+            continueGeneratingVisible = Array.from(document.querySelectorAll(args.continuationSelector))
+              .some((node) => node.getBoundingClientRect().height > 0);
+          } catch {
+            generationInProgress = 'unknown';
+          }
           return {
             rows,
             pageTurnEvidence: observedMessageNodes > 0
-              ? { generationInProgress, observedAssistantNodes }
+              ? { generationInProgress, observedAssistantNodes, continueGeneratingVisible }
               : undefined,
           };
         }, {
@@ -1581,11 +1696,15 @@ export async function readPageObservation(
           unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
           assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
           generationSelector: BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR,
+          continuationSelector: CONTINUE_GENERATING_SELECTOR,
+          turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
+          inProgressSelector: ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
+          actionSelector: ASSISTANT_TURN_ACTION_SELECTOR,
         }),
         snapshotWaitMs,
         'atomic_transcript_snapshot_timeout',
       ) as {
-        rows: Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean }>;
+        rows: Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean; completionReady: boolean; continuationVisible: boolean }>;
         pageTurnEvidence?: BrowserGptPageTurnEvidence;
       };
       pageTurnEvidence = observed.pageTurnEvidence;
@@ -1602,6 +1721,8 @@ export async function readPageObservation(
           ...(validCarrierKey(row.key) ? { key: row.key } : {}),
           fingerprint: transcriptFingerprint(role, text),
           domIndex: row.domIndex,
+          completionReady: row.completionReady,
+          continuationVisible: row.continuationVisible,
         });
       }
       if (observed.rows.length !== carriers.length) transcriptIncomplete = true;
@@ -1673,12 +1794,23 @@ export async function readPageObservation(
       ? undefined
       : carriers[lastOwnedAssistantMessageIndex];
     if (ownedAssistant) {
-      ownedWindowCompletionReady = await readAssistantNodeCompletionReady(
-        nodes.nth(ownedAssistant.domIndex),
-        MESSAGE_NODE_READ_TIMEOUT_MS,
-      );
+      const atomicCompletion = ownedAssistant.completionReady;
+      ownedWindowCompletionReady = atomicCompletion === undefined
+        ? await readAssistantNodeCompletionReady(
+          nodes.nth(ownedAssistant.domIndex),
+          MESSAGE_NODE_READ_TIMEOUT_MS,
+        )
+        : atomicCompletion;
     } else {
-      ownedWindowCompletionReady = await readAssistantTurnCompletionReady(page, MESSAGE_NODE_READ_TIMEOUT_MS);
+      const assistantCarriers = carriers.filter((carrier) => carrier.role === 'assistant');
+      const soleAssistant = assistantCarriers.length === 1 ? assistantCarriers[0] : undefined;
+      if (soleAssistant && soleAssistant.completionReady !== undefined) {
+        ownedWindowCompletionReady = soleAssistant.completionReady;
+      } else {
+        // Legacy/recovery observation only; markerless publication still requires
+        // the caller's existing independent ownership claim.
+        ownedWindowCompletionReady = await readAssistantTurnCompletionReady(page, MESSAGE_NODE_READ_TIMEOUT_MS);
+      }
     }
   }
   const complete = !transcriptIncomplete;
@@ -1778,16 +1910,27 @@ async function readPostSendObservation(
   };
 }
 
-async function maybeContinueGeneration(page: any, deadlineMs: number): Promise<boolean> {
+async function maybeContinueGeneration(page: any, deadlineMs: number, assistantDomIndex: number, allowClick: boolean): Promise<boolean> {
   try {
-    const continuation = locateContinueGeneratingControl(page);
-    if (await locatorCount(continuation, deadlineMs) === 0) return false;
+    const assistant = page.locator(MESSAGE_NODE_SELECTOR).nth(assistantDomIndex);
+    const turn = assistant.locator(ASSISTANT_TURN_ANCESTOR_XPATH).first();
+    const continuation = locateContinueGeneratingControl(turn);
+    if (await locatorCount(continuation, deadlineMs) !== 1 || !allowClick) return false;
+    const button = continuation.first();
+    if (typeof button.isVisible === 'function' && !await button.isVisible()) return false;
+    if (typeof button.isEnabled === 'function' && !await button.isEnabled()) return false;
     const remainingMs = deadlineMs - Date.now();
     if (remainingMs <= 0) return false;
-    await continuation.first().click({ timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs) });
+    await button.click({ timeout: Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs) });
     return true;
   } catch (error) {
     if (isPostSendTargetCrash(error)) throw error;
+    try {
+      // Preserve crash classification for adapters that cannot scope this read; never use this page-wide probe to click.
+      await locatorCount(page.getByRole('button', { name: CONTINUE_GENERATING_BUTTON_NAME }), deadlineMs);
+    } catch (probeError) {
+      if (isPostSendTargetCrash(probeError)) throw probeError;
+    }
     return false;
   }
 }
@@ -3196,8 +3339,10 @@ async function runTurn(
       config.timeoutMs,
     );
     let lastReadyReply = '';
+    let lastReadyObservedText = '';
     let bestReadyReply = '';
     let stableReads = 0;
+    let lastReadyAssistantIdentity = '';
     let uncertainCause = '';
     let observedUserHeads: string[] | undefined;
     let ownedPromptEverSeen = false;
@@ -3493,11 +3638,12 @@ async function runTurn(
         }
         const symptom = error instanceof Error ? error.message : String(error);
         incident('post_send_observation_error', symptom, 'continue_polling_owned_page');
-        if (!(completionReadySeen && bestReadyReply.length > 0)) {
-          stableReads = 0;
-          lastReadyReply = '';
-          bestReadyReply = '';
-        }
+        stableReads = 0;
+        lastReadyReply = '';
+        lastReadyObservedText = '';
+        bestReadyReply = '';
+        completionReadySeen = false;
+        lastReadyAssistantIdentity = '';
         uncertainCause = ownedCarrierKey
           ? 'transcript_continuity_unproven'
           : 'owned_carrier_unproven';
@@ -3598,6 +3744,12 @@ async function runTurn(
       }
 
       if (transcriptIncomplete) {
+        stableReads = 0;
+        lastReadyReply = '';
+        lastReadyObservedText = '';
+        bestReadyReply = '';
+        completionReadySeen = false;
+        lastReadyAssistantIdentity = '';
         incident('post_send_observation_error', 'transcript_read_incomplete', 'continue_polling_owned_page');
         uncertainCause = ownedCarrierKey
           ? 'transcript_continuity_unproven'
@@ -3632,7 +3784,7 @@ async function runTurn(
         );
         if (incompleteExhausted) return incompleteExhausted;
         updateHeartbeatForPoll({ state: 'waiting' });
-        await sleep(page, completionReadySeen ? COMPLETION_CONFIRM_POLL_MS : INITIAL_POLL_MS);
+        await sleep(page, INITIAL_POLL_MS);
         continue;
       }
 
@@ -3907,13 +4059,12 @@ async function runTurn(
         && !forcedDecision
         && config.newChat
         && ownedConversationUrl
-        && !ownershipForfeited
         && freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs)
+        && !ownershipForfeited
         && sendCount >= 1
         && freshTranscriptUsers === 0
         && freshTranscriptAssistants.length === 1
-        && ownedWindowCompletionReady
-        && pageTurnEvidence?.generationInProgress !== true
+        && (ownedWindowCompletionReady || transcriptSnapshot.carriers.length === 1 && transcriptSnapshot.carriers[0]!.role === 'assistant' && transcriptSnapshot.carriers[0]!.completionReady === true)
       ) {
         const reply = normalizeVisibleText(freshTranscriptAssistants[0]!.text);
         if (reply && reply === freshMarkerlessReply) {
@@ -3942,8 +4093,7 @@ async function runTurn(
         && durableConversationUrl
         && sendCount >= 1
         && (ownedPromptEverSeen || Date.now() >= dispatchDeadline)
-        && ownedWindowCompletionReady
-        && pageTurnEvidence?.generationInProgress !== true
+        && (ownedWindowCompletionReady || transcriptSnapshot.carriers.filter((carrier) => carrier.role === 'assistant').length === 1 && transcriptSnapshot.carriers.every((carrier) => carrier.role !== 'user') && transcriptSnapshot.carriers.find((carrier) => carrier.role === 'assistant')?.completionReady === true)
       ) {
         markerlessFinishedReads += 1;
         if (markerlessFinishedReads >= MARKERLESS_RELOAD_SETTLE_READS) {
@@ -4018,7 +4168,7 @@ async function runTurn(
         deadEvidenceReads = 0;
       }
 
-      const inProgress = !ownedWindowCompletionReady && !completionReadySeen;
+      const inProgress = !ownedWindowCompletionReady;
       const decision = forcedDecision ?? classifyPageObservation(messages, baselineCount, marker, inProgress);
 
       if (hasOwnedUserMessage(messages, marker)) {
@@ -4035,6 +4185,9 @@ async function runTurn(
         stableReads = 0;
         lastReadyReply = '';
         bestReadyReply = '';
+        lastReadyObservedText = '';
+        completionReadySeen = false;
+        lastReadyAssistantIdentity = '';
         if (uncertainCause === 'foreign_user_after_owned_send') {
           incident('observation_exhausted', uncertainCause, 'retain_owned_page_no_resend');
           return {
@@ -4105,12 +4258,121 @@ async function runTurn(
 
       if (markerVisible || forcedDecision) uncertainCause = '';
       observedUserHeads = undefined;
+      if (decision.state !== 'ready' && !forcedDecision) {
+        const continuationCarrier = selectedOwnedReplyCarrier({
+          messages,
+          snapshot: transcriptSnapshot,
+          baselineSnapshot,
+          baselineCount,
+          marker,
+          ownedCarrierKey,
+        });
+        const hasOwnershipEvidence = hasOwnedUserMessage(messages, marker)
+          || Boolean(ownedCarrierKey)
+          || Boolean(config.newChat && ownedConversationUrl && !ownershipForfeited
+            && freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs));
+        let continued = false;
+        try {
+          if (hasOwnershipEvidence && !continuationCarrier?.continuationVisible) {
+            try {
+              // Read only for target-loss classification; never use this page-wide result as owned-turn evidence or a click target.
+              await locatorCount(page.getByRole('button', { name: CONTINUE_GENERATING_BUTTON_NAME }), hardExhaustionDeadline);
+            } catch (error) {
+              if (isPostSendTargetCrash(error)) throw error;
+            }
+          }
+          if (continuationCarrier && hasOwnershipEvidence) {
+            continued = await maybeContinueGeneration(
+              page,
+              hardExhaustionDeadline,
+              continuationCarrier.domIndex,
+              continuationCarrier.continuationVisible === true,
+            );
+          }
+        } catch (error) {
+          if (isPostSendTargetCrash(error)) {
+            incident('post_send_target_loss', 'post_send_target_crashed', 'retain_owned_page_no_resend');
+            return {
+              page,
+              browser,
+              cleanupAction: 'preserve',
+              result: compactResult(
+                'driver_error',
+                'invocation',
+                'post_send_target_crashed',
+                invocationId,
+                profileKey,
+                sendCount,
+                pollCount,
+                navigation,
+                incidents,
+                { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+                journalWriteFailed,
+              ),
+            };
+          }
+          throw error;
+        }
+        if (continued) {
+          stableReads = 0;
+          lastReadyReply = '';
+          lastReadyObservedText = '';
+          bestReadyReply = '';
+          completionReadySeen = false;
+          lastReadyAssistantIdentity = '';
+          updateHeartbeatForPoll({ state: 'waiting' });
+          await sleep(page, INITIAL_POLL_MS);
+          continue;
+        }
+      }
 
       if (decision.state === 'ready' && decision.reply) {
+        const currentObservedText = selectedOwnedReplyText({
+          messages,
+          snapshot: transcriptSnapshot,
+          baselineSnapshot,
+          baselineCount,
+          marker,
+          ownedCarrierKey,
+        });
+        const currentAssistantIdentity = selectedOwnedReplyIdentity({
+          messages,
+          snapshot: transcriptSnapshot,
+          baselineSnapshot,
+          baselineCount,
+          marker,
+          ownedCarrierKey,
+        });
+        const currentKeyedCandidate = !markerVisible && ownedCarrierKey
+          ? keyedHarvestCandidate(transcriptSnapshot, baselineSnapshot, ownedCarrierKey)
+          : undefined;
+        const currentKeyedAssistant = currentKeyedCandidate?.state === 'ready'
+          ? transcriptSnapshot.carriers.filter((carrier) => carrier.role === 'assistant' && carrier.key === currentKeyedCandidate.assistantKey)
+          : [];
+        const currentCandidateReady = markerVisible
+          ? ownedWindowCompletionReady
+          : currentKeyedAssistant.length === 1 && currentKeyedAssistant[0]!.completionReady === true
+            || Boolean(config.newChat && ownedConversationUrl && !ownershipForfeited
+              && messages.every((message) => message.role !== 'user')
+              && transcriptSnapshot.carriers.filter((carrier) => carrier.role === 'assistant').length === 1
+              && transcriptSnapshot.carriers.find((carrier) => carrier.role === 'assistant')?.completionReady === true);
+        if (!currentObservedText || !currentAssistantIdentity || currentAssistantIdentity === 'ambiguous' || !currentCandidateReady) {
+          stableReads = 0;
+          lastReadyReply = '';
+          lastReadyObservedText = '';
+          bestReadyReply = '';
+          completionReadySeen = false;
+          lastReadyAssistantIdentity = '';
+          updateHeartbeatForPoll({ state: 'waiting' });
+          await sleep(page, INITIAL_POLL_MS);
+          continue;
+        }
         if (decision.reply.length > bestReadyReply.length) bestReadyReply = decision.reply;
-        if (replyStabilityMatches(decision.reply, lastReadyReply)) stableReads++;
+        if (currentAssistantIdentity === lastReadyAssistantIdentity && replyStabilityMatches(currentObservedText, lastReadyObservedText)) stableReads++;
         else {
           lastReadyReply = decision.reply;
+          lastReadyObservedText = currentObservedText;
+          lastReadyAssistantIdentity = currentAssistantIdentity;
           stableReads = 1;
         }
         if (stableReads >= 2) {
@@ -4153,8 +4415,80 @@ async function runTurn(
               );
             }
           }
-          const captureReply = bestReadyReply.length >= decision.reply.length ? bestReadyReply : decision.reply;
+          // Never publish a historical longest candidate: only the current full reply
+          // that passed exact full-content stability is admissible.
+          const captureReply = decision.reply;
           const managerReply = captureReply;
+          const finalObservation = await readPostSendObservation(page, marker, baselineCount, hardExhaustionDeadline);
+          const finalKeyedCandidate = ownedCarrierKey
+            ? keyedHarvestCandidate(finalObservation.snapshot, baselineSnapshot, ownedCarrierKey)
+            : undefined;
+          const finalKeyedAssistant = finalKeyedCandidate?.state === 'ready'
+            ? finalObservation.snapshot.carriers.filter((carrier) => carrier.role === 'assistant' && carrier.key === finalKeyedCandidate.assistantKey)
+            : [];
+          const finalFreshClaimReady = Boolean(config.newChat && ownedConversationUrl && !ownershipForfeited
+            && freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs)
+            && finalObservation.messages.every((message) => message.role !== 'user')
+            && finalObservation.snapshot.carriers.filter((carrier) => carrier.role === 'assistant').length === 1
+            && finalObservation.snapshot.carriers.find((carrier) => carrier.role === 'assistant')?.completionReady === true);
+          const finalReady = !finalObservation.transcriptIncomplete
+            && (hasOwnedUserMessage(finalObservation.messages, marker)
+              ? finalObservation.ownedWindowCompletionReady
+              : finalKeyedAssistant.length === 1 && finalKeyedAssistant[0]!.completionReady === true || finalFreshClaimReady);
+          const finalAssistantMessages = finalObservation.messages.filter((message) => message.role === 'assistant');
+          const finalUsers = finalObservation.messages.filter((message) => message.role === 'user');
+          const finalMarkerlessReply = finalKeyedAssistant.length === 1
+            ? normalizeVisibleText(finalKeyedAssistant[0]!.text)
+            : finalAssistantMessages.length === 1
+              ? normalizeVisibleText(finalAssistantMessages[0]!.text)
+              : '';
+          const finalMarkerlessEligible = finalReady
+            && (ownedCarrierKey
+              ? finalKeyedCandidate?.state === 'ready'
+                && finalKeyedAssistant.length === 1
+                && normalizeVisibleText(finalKeyedAssistant[0]!.text) === managerReply
+              : !hasOwnedUserMessage(finalObservation.messages, marker)
+                && finalUsers.length === 0
+                && finalMarkerlessReply === managerReply
+                && Boolean(config.newChat && ownedConversationUrl && !ownershipForfeited
+                  && freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs)));
+          const classifiedFinal = finalReady
+            ? classifyPageObservation(finalObservation.messages, baselineCount, marker, false)
+            : { state: 'waiting' as const };
+          const finalDecision = classifiedFinal.state === 'ready'
+            ? classifiedFinal
+            : finalMarkerlessEligible ? { state: 'ready' as const, reply: finalMarkerlessReply } : classifiedFinal;
+          const finalObservedText = finalReady ? selectedOwnedReplyText({
+            messages: finalObservation.messages,
+            snapshot: finalObservation.snapshot,
+            baselineSnapshot,
+            baselineCount,
+            marker,
+            ownedCarrierKey,
+          }) : '';
+          const finalAssistantIdentity = finalReady ? selectedOwnedReplyIdentity({
+            messages: finalObservation.messages,
+            snapshot: finalObservation.snapshot,
+            baselineSnapshot,
+            baselineCount,
+            marker,
+            ownedCarrierKey,
+          }) : '';
+          if (finalDecision.state !== 'ready'
+            || finalDecision.reply !== managerReply
+            || !finalObservedText
+            || finalObservedText !== currentObservedText
+            || finalAssistantIdentity !== currentAssistantIdentity) {
+            stableReads = 0;
+            lastReadyReply = '';
+            lastReadyObservedText = '';
+            bestReadyReply = '';
+            completionReadySeen = false;
+            lastReadyAssistantIdentity = '';
+            updateHeartbeatForPoll({ state: 'waiting' });
+            await sleep(page, INITIAL_POLL_MS);
+            continue;
+          }
           const publication = await finalizeStateLightPrimaryPublication({
             profileKey,
             invocationId,
@@ -4245,47 +4579,12 @@ async function runTurn(
         continue;
       }
 
-      if (!(completionReadySeen && bestReadyReply.length > 0)) {
-        stableReads = 0;
-        lastReadyReply = '';
-        bestReadyReply = '';
-      }
-      const mayContinueGeneration = !ownershipForfeited
-        && (!config.newChat
-          || !ownedConversationUrl
-          || freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs));
-      if (mayContinueGeneration) {
-        let continued = false;
-        try {
-          continued = await maybeContinueGeneration(page, hardExhaustionDeadline);
-        } catch (error) {
-          if (!isPostSendTargetCrash(error)) throw error;
-          incident('post_send_target_loss', 'post_send_target_crashed', 'retain_owned_page_no_resend');
-          return {
-            page,
-            browser,
-            cleanupAction: 'preserve',
-            result: compactResult(
-              'driver_error',
-              'invocation',
-              'post_send_target_crashed',
-              invocationId,
-              profileKey,
-              sendCount,
-              pollCount,
-              navigation,
-              incidents,
-              { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
-              journalWriteFailed,
-            ),
-          };
-        }
-        if (continued) {
-          updateHeartbeatForPoll(decision);
-          await sleep(page, INITIAL_POLL_MS);
-          continue;
-        }
-      }
+      stableReads = 0;
+      lastReadyReply = '';
+      lastReadyObservedText = '';
+      bestReadyReply = '';
+      completionReadySeen = false;
+      lastReadyAssistantIdentity = '';
       if (
         config.newChat
         && sendCount >= 1
