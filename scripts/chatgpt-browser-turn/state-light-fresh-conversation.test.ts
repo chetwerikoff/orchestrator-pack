@@ -174,6 +174,16 @@ const ISSUE_CONVERSATION_URL = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef608
 const OTHER_PROJECT_CONVERSATION_URL = 'https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-other/c/6ab8cb78-4e14-83ec-92ff-3e7b67611185';
 const OTHER_ORIGIN_CONVERSATION_URL = 'https://example.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/c/6ab8cb78-4e14-83ec-92ff-3e7b67611185';
 
+// Synthetic fresh-chat turns exercise the locator-absent path. A real launcher
+// locator must continue to fail closed in production until its original generation
+// is independently proven; never inherit the test runner's terminal handle here.
+beforeEach(() => {
+  vi.stubEnv('ORCA_TERMINAL_HANDLE', undefined);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 function disableSendSlotForTest(): void {
   process.env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT = '1';
   process.env.OPK_STATE_LIGHT_ALLOW_SEND_SLOT_DISABLE = '1';
@@ -433,6 +443,24 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(outcome.result.goto_count).toBeGreaterThan(0);
     expect(loser.page.goto).toHaveBeenCalled();
+  });
+
+  it('permits an ordinary unowned fresh send when the terminal locator is absent', async () => {
+    expect(process.env.ORCA_TERMINAL_HANDLE).toBeUndefined();
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-UNOWNED';
+    const reply = 'UNOWNED-OK';
+    const output = join(stateDir, 'unowned-fresh-reply.txt');
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const ordinary = makeLoserPage(prompt, reply);
+    const outcome = await runNewChatTurn(ordinary.page, output, '5000', invocationId);
+
+    expect(outcome).toMatchObject({ code: 0, result: { state: 'ok', send_count: 1 } });
+    expect(ordinary.getSends()).toBe(1);
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+    const observation = readStateLightTurnObservation('collision-profile', invocationId);
+    expect(observation).toMatchObject({ invocation_id: invocationId, send_count: 1 });
+    expect(observation).not.toHaveProperty('owner');
   });
 
   it('regresses if a stored wall becomes an invocation refusal again', async () => {
