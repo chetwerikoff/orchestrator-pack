@@ -114,10 +114,12 @@ import {
   STATE_LIGHT_TURN_BASE_ARGV,
   TEST_OWNED_MARKER,
   type StateLightTestMessage,
+  type CapturedStateLightTurnResult,
   type StateLightTestSnapshot,
 } from './state-light-turn.test-fixtures.ts';
 import { classifyPageObservation, classifySendLandingEvidence, readPageObservation, runStateLightTurn } from './state-light-turn.ts';
 import { admitStateLightTurnObservation, readStateLightTurnObservation } from './state-light-turn-observation.ts';
+import { deriveDelivery } from '../flow-manager-long-running-child.ts';
 import { __testComposerMutation, deriveComposerInsertionBudgetMs } from './state-light-turn-base.ts';
 import { wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
@@ -478,6 +480,13 @@ describe('state-light fresh conversation collision recovery', () => {
   });
 
 
+  const expectPossibleEffect = (result: CapturedStateLightTurnResult): void => {
+    expect(deriveDelivery({
+      ...result,
+      resolved_send_count: result.send_count ?? 0,
+    }, false)).toBe('POSSIBLY_DELIVERED');
+  };
+
   // A positive first-actionability timeout is the *only* possible retry
   // admission witness. Every negative control below runs the production
   // driver, not just the static timeout parser.
@@ -507,6 +516,7 @@ describe('state-light fresh conversation collision recovery', () => {
       turn.page, join(stateDir, invocationId + '-log-guard.txt'), '90000', invocationId,
     );
     expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'send_failed' });
+    expectPossibleEffect(outcome.result);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.getSends()).toBe(0);
     expect(turn.composer.fill).not.toHaveBeenLastCalledWith('', expect.anything());
@@ -546,6 +556,7 @@ describe('state-light fresh conversation collision recovery', () => {
         turn.page, join(stateDir, invocationId + '-dom-guard.txt'), '90000', invocationId,
       );
       expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'send_failed' });
+      expectPossibleEffect(outcome.result);
       expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
       expect(turn.getSends()).toBe(0);
       expect(turn.page.close).not.toHaveBeenCalled();
@@ -569,6 +580,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({
       send_count: 0, send_attempted: true, cause: 'fresh_conversation_surface_unavailable',
     });
+    expectPossibleEffect(outcome.result);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.page.close).not.toHaveBeenCalled();
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
@@ -599,6 +611,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({
       send_count: 0, send_attempted: true, cause: 'state_light_new_chat_send_slot_owner_lost',
     });
+    expectPossibleEffect(outcome.result);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.page.close).not.toHaveBeenCalled();
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
@@ -616,6 +629,7 @@ describe('state-light fresh conversation collision recovery', () => {
       turn.page, join(stateDir, invocationId + '-second-final.txt'), '90000', invocationId,
     );
     expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'send_failed' });
+    expectPossibleEffect(outcome.result);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
     expect(turn.getSends()).toBe(0);
     expect(turn.page.close).not.toHaveBeenCalled();
@@ -644,6 +658,7 @@ describe('state-light fresh conversation collision recovery', () => {
       turn.page, join(stateDir, invocationId + '-stop-first.txt'), '90000', invocationId,
     );
     expect(outcome.result.send_count).toBe(1);
+    expectPossibleEffect(outcome.result);
     expect(outcome.result.cause).not.toBe('fresh_conversation_landing_mismatch');
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.page.close).not.toHaveBeenCalled();
@@ -671,6 +686,7 @@ describe('state-light fresh conversation collision recovery', () => {
       turn.page, join(stateDir, invocationId + '-stop-second.txt'), '90000', invocationId,
     );
     expect(outcome.result.send_count).toBe(1);
+    expectPossibleEffect(outcome.result);
     expect(outcome.result.cause).not.toBe('fresh_conversation_landing_mismatch');
     expect(outcome.result.poll_count).toBeGreaterThan(0);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
