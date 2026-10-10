@@ -7,17 +7,17 @@
     "scripts/chatgpt-browser-turn/state-light-turn-base.ts"
   ],
   "denylist": [
-    "vendor/**",
-    "packages/core/**",
-    "credentials/**",
-    "secrets/**"
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
-    "scripts/chatgpt-browser-turn/**",
-    "scripts/chatgpt-browser-turn.ts",
+    "docs/declarations/",
     "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/",
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
-    "scripts/toolchain/chatgpt-browser-turn.test.ts",
-    "docs/declarations/"
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ]
 }
