@@ -1,0 +1,21 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2480,
+  "declared_paths": [
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts"
+  ],
+  "source_revision": "a695bb7359dcc211a21e5f964ca5f1de48c55ff9"
+}
