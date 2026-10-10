@@ -7,6 +7,7 @@ import {
   existsSync,
   fchmodSync,
   mkdirSync,
+  lstatSync,
   openSync,
   readFileSync,
   realpathSync,
@@ -33,7 +34,7 @@ import {
   parseObservationHeartbeatLine,
   resolveBrowserTurnLivenessTiming,
 } from './chatgpt-browser-turn/liveness-contract.ts';
-import { readStateLightTurnObservation, type StateLightTurnObservationRecord } from './chatgpt-browser-turn/state-light-turn-observation.ts';
+import { observationRecordPath, readStateLightTurnObservation, type StateLightTurnObservationRecord } from './chatgpt-browser-turn/state-light-turn-observation.ts';
 import { loadChromium, normalizeConversationUrl } from './chatgpt-browser-turn/ui-adapter.ts';
 import { releaseCdpBrowser } from './chatgpt-browser-turn/browser-session.ts';
 import { recoveryMarkerCardinality } from './chatgpt-browser-turn/state-light-turn-recovery.ts';
@@ -46,6 +47,132 @@ export const REFUSAL_SCHEMA = 'flow-manager-long-running-child-refusal/v1' as co
 // fleet-wake scans terminal envelopes under this root by file name.
 export const TERMINAL_ENVELOPE_NAME_SUFFIX = 'terminal.json' as const;
 export const TERMINAL_ENVELOPE_ROOT = '/tmp/opencode' as const;
+export const RECEIPT_LOCATOR_SCHEMA = 'flow-manager-long-running-child-locator/v1' as const;
+export const RECEIPT_LOCATOR_ROOT = join(TERMINAL_ENVELOPE_ROOT, 'browser-gpt-receipts');
+
+export interface InvocationReceiptLocator {
+  readonly schema: typeof RECEIPT_LOCATOR_SCHEMA;
+  readonly invocation_id: string;
+  readonly run_identity: string;
+  readonly attempt_identity: string;
+  readonly handoff_receipt_path: string;
+  readonly terminal_envelope_path: string;
+}
+
+/** The same two-part fixture gate already used for terminal envelopes; never redirect production by one env var. */
+function effectiveTerminalRoot(): string {
+  const fixtureRoot = process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT;
+  return process.env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
+    && typeof fixtureRoot === 'string' && isAbsolute(fixtureRoot)
+    ? resolve(fixtureRoot)
+    : TERMINAL_ENVELOPE_ROOT;
+}
+
+export function invocationReceiptLocatorPath(
+  invocationId: string,
+  terminalRoot: string = effectiveTerminalRoot(),
+): string {
+  if (typeof invocationId !== 'string' || !invocationId.trim()) throw new Error('invocation_id_required');
+  return join(resolve(terminalRoot), 'browser-gpt-receipts',
+    createHash('sha256').update(invocationId, 'utf8').digest('hex') + '.json');
+}
+
+function assertNoSymlinkComponents(path: string): void {
+  let cursor = resolve(path);
+  for (;;) {
+    try {
+      if (lstatSync(cursor).isSymbolicLink()) throw new Error('receipt_locator_symlink_escape');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+}
+
+function assertPrivateFile(path: string, directory: boolean): void {
+  assertNoSymlinkComponents(path);
+  const st = lstatSync(path);
+  if ((directory ? !st.isDirectory() : !st.isFile())
+    || (process.platform !== 'win32' && (st.mode & 0o077) !== 0)
+    || (typeof process.getuid === 'function' && st.uid !== process.getuid())) {
+    throw new Error('receipt_locator_permissions_or_type_invalid');
+  }
+}
+
+function locatorRoot(terminalRoot: string, create: boolean): string {
+  const root = join(resolve(terminalRoot), 'browser-gpt-receipts');
+  assertNoSymlinkComponents(root);
+  if (create) mkdirSync(root, { recursive: true, mode: 0o700 });
+  assertPrivateFile(root, true);
+  return root;
+}
+
+function readLocatorIndex(
+  path: string,
+  terminalRoot: string,
+  expected?: { invocationId?: string; runIdentity: string; attemptIdentity: string },
+): InvocationReceiptLocator {
+  const root = locatorRoot(terminalRoot, false);
+  const target = resolve(path);
+  if (dirname(target) !== root || !/^[a-f0-9]{64}\.json$/u.test(basename(target))) {
+    throw new Error('receipt_locator_outside_discovery_root');
+  }
+  assertPrivateFile(target, false);
+  const value = JSON.parse(readFileSync(target, 'utf8')) as InvocationReceiptLocator;
+  if (value.schema !== RECEIPT_LOCATOR_SCHEMA
+    || typeof value.invocation_id !== 'string' || !value.invocation_id.trim()
+    || invocationReceiptLocatorPath(value.invocation_id, terminalRoot) !== target
+    || typeof value.run_identity !== 'string' || !value.run_identity
+    || typeof value.attempt_identity !== 'string' || !value.attempt_identity
+    || typeof value.handoff_receipt_path !== 'string' || !isAbsolute(value.handoff_receipt_path)
+    || resolve(value.handoff_receipt_path) !== value.handoff_receipt_path
+    || typeof value.terminal_envelope_path !== 'string' || !isAbsolute(value.terminal_envelope_path)
+    || resolve(value.terminal_envelope_path) !== value.terminal_envelope_path
+    || (expected?.invocationId && value.invocation_id !== expected.invocationId)
+    || (expected && (value.run_identity !== expected.runIdentity
+      || value.attempt_identity !== expected.attemptIdentity))) {
+    throw new Error('receipt_locator_identity_mismatch');
+  }
+  assertNoSymlinkComponents(value.handoff_receipt_path);
+  assertNoSymlinkComponents(value.terminal_envelope_path);
+  assertPairwiseDistinct([target, value.handoff_receipt_path, value.terminal_envelope_path]);
+  return value;
+}
+
+/** Lookup is evidence only; it neither sends nor turns a timeout into success/retry authority. */
+export function readInvocationReceiptLocator(input: {
+  readonly invocationId?: string;
+  readonly receiptLocator?: string;
+  readonly runIdentity: string;
+  readonly attemptIdentity: string;
+  readonly terminalEnvelopeRoot?: string;
+}): { readonly locator: InvocationReceiptLocator; readonly receipt: HandoffReceipt; readonly path: string } {
+  const root = input.terminalEnvelopeRoot ?? effectiveTerminalRoot();
+  if (input.invocationId && input.receiptLocator) throw new Error('wait_locator_selector_ambiguous');
+  if (!input.invocationId && !input.receiptLocator) throw new Error('wait_locator_selector_required');
+  const path = input.invocationId
+    ? invocationReceiptLocatorPath(input.invocationId, root)
+    : resolve(input.receiptLocator!);
+  const locator = readLocatorIndex(path, root, {
+    ...(input.invocationId ? { invocationId: input.invocationId } : {}),
+    runIdentity: input.runIdentity,
+    attemptIdentity: input.attemptIdentity,
+  });
+  assertPrivateFile(locator.handoff_receipt_path, false);
+  const receipt = readHandoffReceipt(locator.handoff_receipt_path, {
+    runIdentity: input.runIdentity,
+    attemptIdentity: input.attemptIdentity,
+  });
+  if (!receipt || receipt.invocation_id !== locator.invocation_id
+    || !Number.isSafeInteger(receipt.launcher_pid) || (receipt.launcher_pid ?? 0) <= 1
+    || typeof receipt.child_cwd !== 'string' || !isAbsolute(receipt.child_cwd)
+    || receipt.completion_mode !== COMPLETION_MODE) {
+    throw new Error('receipt_locator_handoff_missing_or_mismatched');
+  }
+  return { locator, receipt, path };
+}
 
 export function isWakeableTerminalEnvelopePath(
   path: string,
@@ -87,6 +214,14 @@ export interface HandoffReceipt {
   readonly launcher_started_at: string;
   readonly handoff_committed_at: string;
   readonly completion_mode: typeof COMPLETION_MODE;
+  readonly invocation_id?: string;
+  readonly owner_task_id?: string;
+  readonly owner_dispatch_id?: string;
+  /** Browser child cwd, never the invoking terminal's worktree. */
+  readonly child_cwd?: string;
+  readonly launcher_pid?: number;
+  /** Optional routing hint, not a terminal incarnation or effect authority. */
+  readonly launching_terminal_handle?: string;
 }
 
 export interface TerminalEnvelope {
@@ -764,6 +899,12 @@ export interface LaunchConfig {
   readonly childCommand: string;
   readonly childArgs: readonly string[];
   readonly conversationLocator?: string;
+  readonly invocationId?: string;
+  readonly ownerTaskId?: string;
+  readonly ownerDispatchId?: string;
+  /** Supplied selected Browser profile/CDP for pre-spawn durable observation collision checks. */
+  readonly profile?: string;
+  readonly cdp?: string;
   readonly secretCanaries?: readonly string[];
   readonly cancellationDependencies?: BrowserTurnCancellationDependencies;
 }
@@ -939,11 +1080,81 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     launcher_started_at: launcherStartedAt,
     handoff_committed_at: nowIso(),
     completion_mode: COMPLETION_MODE,
+    ...(config.invocationId ? { invocation_id: config.invocationId } : {}),
+    ...(config.ownerTaskId ? { owner_task_id: config.ownerTaskId } : {}),
+    ...(config.ownerDispatchId ? { owner_dispatch_id: config.ownerDispatchId } : {}),
+    child_cwd: realpathSync(config.cwd),
+    launcher_pid: process.pid,
+    ...(launchingTerminalHandle() ? { launching_terminal_handle: launchingTerminalHandle() } : {}),
   };
+  // Reserve the single global invocation key before publishing the original receipt or spawning the Browser.
+  // A partial reservation is intentionally not recycled: retry with a fresh invocation ID.
+  let indexedPath: string | undefined;
+  if (config.invocationId !== undefined) {
+    try {
+      if (!config.invocationId.trim() || !config.profile?.trim() || !config.cdp?.trim()) {
+        throw new Error('indexed_invocation_profile_cdp_required');
+      }
+      const profileKey = configuredProfileKey(config.profile, config.cdp);
+      const observationPath = observationRecordPath(profileKey, config.invocationId);
+      try {
+        lstatSync(observationPath);
+        throw new Error('invocation_observation_occupied_use_fresh_id');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      const terminalRoot = config.terminalEnvelopeRoot ?? effectiveTerminalRoot();
+      indexedPath = invocationReceiptLocatorPath(config.invocationId, terminalRoot);
+      assertNoSymlinkComponents(config.handoffReceiptPath);
+      assertNoSymlinkComponents(config.terminalEnvelopePath);
+      assertNoSymlinkComponents(config.browserOutputPath);
+      assertPairwiseDistinct([...launcherArtifacts, indexedPath]);
+      locatorRoot(terminalRoot, true);
+      const index: InvocationReceiptLocator = {
+        schema: RECEIPT_LOCATOR_SCHEMA,
+        invocation_id: config.invocationId,
+        run_identity: config.runIdentity,
+        attempt_identity: config.attemptIdentity,
+        handoff_receipt_path: resolve(config.handoffReceiptPath),
+        terminal_envelope_path: resolve(config.terminalEnvelopePath),
+      };
+      if (canaries.some((value) => JSON.stringify(index).includes(value) || JSON.stringify(receipt).includes(value))) {
+        throw new Error('canary_in_index_or_receipt');
+      }
+      atomicCreateJson(indexedPath, index as unknown as Record<string, unknown>, 'receipt');
+      const committed = readLocatorIndex(indexedPath, terminalRoot, {
+        invocationId: config.invocationId,
+        runIdentity: config.runIdentity,
+        attemptIdentity: config.attemptIdentity,
+      });
+      if (JSON.stringify(committed) !== JSON.stringify(index)) throw new Error('receipt_locator_readback_failed');
+    } catch (error) {
+      refuse('invocation_admission_failed_use_fresh_id', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return 2;
+    }
+  }
   try {
     atomicCreateJson(config.handoffReceiptPath, receipt as unknown as Record<string, unknown>, 'receipt');
+    if (indexedPath) {
+      const bound = readInvocationReceiptLocator({
+        invocationId: config.invocationId!,
+        runIdentity: config.runIdentity,
+        attemptIdentity: config.attemptIdentity,
+        terminalEnvelopeRoot: config.terminalEnvelopeRoot ?? effectiveTerminalRoot(),
+      });
+      if (bound.path !== indexedPath || bound.locator.terminal_envelope_path !== resolve(config.terminalEnvelopePath)
+        || bound.locator.handoff_receipt_path !== resolve(config.handoffReceiptPath)
+        || bound.receipt.launcher_pid !== process.pid
+        || bound.receipt.child_cwd !== realpathSync(config.cwd)) {
+        throw new Error('receipt_locator_readback_failed');
+      }
+    }
   } catch (error) {
-    refuse('receipt_create_failed', { message: error instanceof Error ? error.message : String(error) });
+    refuse('receipt_create_or_index_readback_failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
     return 2;
   }
   if (scanArtifactForCanaries(config.handoffReceiptPath, canaries).length > 0) {
@@ -1262,24 +1473,56 @@ export function readHandoffReceipt(
 export async function runWait(options: {
   readonly runIdentity: string;
   readonly attemptIdentity: string;
-  readonly terminalEnvelopePath: string;
-  readonly handoffReceiptPath: string;
+  readonly terminalEnvelopePath?: string;
+  readonly handoffReceiptPath?: string;
+  readonly invocationId?: string;
+  readonly receiptLocator?: string;
+  readonly terminalEnvelopeRoot?: string;
   readonly deadlineMs: number;
 }): Promise<void> {
+  const indexed = options.invocationId !== undefined || options.receiptLocator !== undefined;
+  if (indexed && (options.terminalEnvelopePath !== undefined || options.handoffReceiptPath !== undefined)) {
+    throw new Error('wait_locator_and_explicit_paths_conflict');
+  }
+  const bound = indexed ? readInvocationReceiptLocator({
+    ...(options.invocationId !== undefined ? { invocationId: options.invocationId } : {}),
+    ...(options.receiptLocator !== undefined ? { receiptLocator: options.receiptLocator } : {}),
+    runIdentity: options.runIdentity,
+    attemptIdentity: options.attemptIdentity,
+    ...(options.terminalEnvelopeRoot ? { terminalEnvelopeRoot: options.terminalEnvelopeRoot } : {}),
+  }) : null;
+  const terminalEnvelopePath = bound?.locator.terminal_envelope_path ?? options.terminalEnvelopePath;
+  const handoffReceiptPath = bound?.locator.handoff_receipt_path ?? options.handoffReceiptPath;
+  if (!terminalEnvelopePath || !handoffReceiptPath) throw new Error('wait_paths_or_locator_required');
   const started = Date.now();
   let envelope: TerminalEnvelope | null = null;
   while (Date.now() - started < options.deadlineMs) {
-    envelope = readTerminalEnvelope(options.terminalEnvelopePath, {
+    envelope = readTerminalEnvelope(terminalEnvelopePath, {
       runIdentity: options.runIdentity,
       attemptIdentity: options.attemptIdentity,
     });
     if (envelope) break;
     await delay(50);
   }
-  const handoff = readHandoffReceipt(options.handoffReceiptPath, {
+  const handoff = readHandoffReceipt(handoffReceiptPath, {
     runIdentity: options.runIdentity,
     attemptIdentity: options.attemptIdentity,
   });
+  if (indexed) {
+    const reread = readInvocationReceiptLocator({
+      ...(options.invocationId !== undefined ? { invocationId: options.invocationId } : {}),
+      ...(options.receiptLocator !== undefined ? { receiptLocator: options.receiptLocator } : {}),
+      runIdentity: options.runIdentity,
+      attemptIdentity: options.attemptIdentity,
+      ...(options.terminalEnvelopeRoot ? { terminalEnvelopeRoot: options.terminalEnvelopeRoot } : {}),
+    });
+    if (reread.locator.handoff_receipt_path !== handoffReceiptPath
+      || reread.locator.terminal_envelope_path !== terminalEnvelopePath
+      || !handoff || JSON.stringify(reread.receipt) !== JSON.stringify(handoff)
+      || (envelope && envelope.handoff_receipt_path !== handoffReceiptPath)) {
+      throw new Error('wait_locator_identity_changed');
+    }
+  }
   process.stdout.write(JSON.stringify({
     schema: WAIT_SCHEMA,
     run_identity: options.runIdentity,
@@ -1318,6 +1561,11 @@ async function launchFromCli(argv: readonly string[]): Promise<number> {
     ...(typeof options.get('conversation-locator') === 'string'
       ? { conversationLocator: options.get('conversation-locator') as string }
       : {}),
+    ...(options.has('invocation-id') ? { invocationId: requiredOption(options, 'invocation-id') } : {}),
+    ...(options.has('owner-task-id') ? { ownerTaskId: requiredOption(options, 'owner-task-id') } : {}),
+    ...(options.has('owner-dispatch-id') ? { ownerDispatchId: requiredOption(options, 'owner-dispatch-id') } : {}),
+    ...(options.has('profile') ? { profile: requiredOption(options, 'profile') } : {}),
+    ...(options.has('cdp') ? { cdp: requiredOption(options, 'cdp') } : {}),
   };
   return await runLaunch(config);
 }
@@ -1330,8 +1578,15 @@ async function main(): Promise<void> {
     await runWait({
       runIdentity: requiredOption(options, 'run-identity'),
       attemptIdentity: requiredOption(options, 'attempt-identity'),
-      terminalEnvelopePath: requiredOption(options, 'terminal-envelope'),
-      handoffReceiptPath: requiredOption(options, 'handoff-receipt'),
+      ...(options.has('terminal-envelope') ? { terminalEnvelopePath: requiredOption(options, 'terminal-envelope') } : {}),
+      ...(options.has('handoff-receipt') ? { handoffReceiptPath: requiredOption(options, 'handoff-receipt') } : {}),
+      ...(options.has('invocation-id') ? { invocationId: requiredOption(options, 'invocation-id') } : {}),
+      ...(options.has('receipt-locator') ? { receiptLocator: requiredOption(options, 'receipt-locator') } : {}),
+      ...(process.env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
+        && process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT
+        && isAbsolute(process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT)
+        ? { terminalEnvelopeRoot: resolve(process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT) }
+        : {}),
       deadlineMs: Number(requiredOption(options, 'deadline-ms')),
     });
     return;
