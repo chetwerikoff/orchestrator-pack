@@ -3244,6 +3244,73 @@ function turnArgvFor1060(outputPath: string, flags: string[] = []): string[] {
   ];
 }
 
+describe('Issue #2489 legacy runCli product-wall envelope', () => {
+  const diagnostic = {
+    wall_kind: 'quota' as const,
+    matched_text: "You've reached your usage limit",
+    matched_selector: '[role="alert"]',
+  };
+  const conversationId = 'https://chatgpt.com/c/fixture-conv';
+  const cases = [
+    {
+      label: 'completed',
+      state: 'ok' as TurnState,
+      sendResult: {
+        state: 'ok',
+        cause: 'completed',
+        possibleDelivery: true,
+        conversationId,
+        userMessageId: 'user-fixture-12345678',
+        assistantMessageId: 'asst-fixture-12345678',
+        reply: 'reply text',
+      },
+    },
+    {
+      label: 'proven not-sent',
+      state: 'send_failed' as TurnState,
+      sendResult: {
+        state: 'send_failed',
+        cause: 'composer_unavailable',
+        possibleDelivery: false,
+      },
+    },
+    {
+      label: 'post-send uncertain',
+      state: 'recovery_required' as TurnState,
+      sendResult: {
+        state: 'recovery_required',
+        cause: 'message_stream_error',
+        possibleDelivery: true,
+        conversationId,
+        userMessageId: 'user-fixture-12345678',
+      },
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    it(`preserves matched selector/text in terminal turn-result/v1 for ${testCase.label}`, async () => {
+      const output = join(root, `legacy-wall-diagnostic-${testCase.label.replaceAll(' ', '-')}.txt`);
+      const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output), {
+        sendResult: {
+          ...testCase.sendResult,
+          product_wall_diagnostic: diagnostic,
+        },
+      });
+      const terminals = stdout.trim().split(/\r?\n/)
+        .map((line) => JSON.parse(line))
+        .filter((row) => row.schema === 'turn-result/v1');
+
+      expect(exitCode).toBe(turnExitCode(testCase.state));
+      expect(terminals).toHaveLength(1);
+      expect(terminals[0]).toMatchObject({
+        schema: 'turn-result/v1',
+        state: testCase.state,
+        product_wall_diagnostic: diagnostic,
+      });
+    });
+  }
+});
+
 describe('issue 1060 remove profile-wide admission', () => {
   it('AC1/AC11a: independent conversations race while capability is absent and changing', async () => {
     const [one, two] = await Promise.all([

@@ -4,6 +4,7 @@
   "declared_paths": [
     "docs/declarations/2489.pr-scope.json",
     "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/chatgpt-browser-turn.ts",
     "scripts/chatgpt-browser-turn/contracts.ts",
     "scripts/chatgpt-browser-turn/profile-probe.ts",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
@@ -26,9 +27,10 @@
   "allowed_roots": [
     "docs/declarations/2489.pr-scope.json",
     "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/chatgpt-browser-turn.ts",
     "scripts/chatgpt-browser-turn/",
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
-  "source_revision": "d75bc2fa11ef91b0a553700c42c178cf7a9e02eb"
+  "source_revision": "eb1a96ca96f50a1507c84ace70ab9cb4c3c2830e"
 }

@@ -563,6 +563,10 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     }, segmentBudget, freshIdentity);
 
     if (result.userMessageId) retainedUserMessageId = result.userMessageId;
+    const productWallDiagnostic = result.product_wall_diagnostic
+      ? { product_wall_diagnostic: result.product_wall_diagnostic }
+      : {};
+
 
     if (!result.possibleDelivery) {
       await closeOwnedTurnPage(opened, { retainPage: false });
@@ -575,6 +579,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         reservation = null;
       } else {
         return emitTurnAndCode(turnResult('driver_error', 'invocation', 'pre_send_incident_cleanup_failed', invocationId, profileKey, {
+          ...productWallDiagnostic,
           incident_id: incidentId,
         }));
       }
@@ -582,11 +587,12 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       if (result.state === 'quota' || result.state === 'rate_limit' || result.state === 'challenge' || result.state === 'login') {
         const wall = ensureProfileWall(profileKey, result.state);
         return emitTurnAndCode(turnResult(result.state, 'profile', result.cause, invocationId, profileKey, {
+          ...productWallDiagnostic,
           incident_id: wall.identity,
           generation: wall.generation,
         }));
       }
-      return emitTurnAndCode(turnResult(result.state, 'invocation', result.cause, invocationId, profileKey));
+      return emitTurnAndCode(turnResult(result.state, 'invocation', result.cause, invocationId, profileKey, productWallDiagnostic));
     }
 
     const canonicalConversation = result.conversationId ?? conversationId;
@@ -604,6 +610,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       safeReleaseDestination(reservation);
       reservation = null;
       return emitTurnAndCode(turnResult('orphaned_fresh_turn', 'profile', 'canonical_fresh_conversation_unproven', invocationId, profileKey, {
+        ...productWallDiagnostic,
         provisional_id: opened.provisionalId,
         incident_id: incidentId,
         generation: incident.generation,
@@ -627,6 +634,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       safeReleaseDestination(reservation);
       reservation = null;
       return emitTurnAndCode(turnResult(result.state, 'conversation', result.cause, invocationId, profileKey, {
+        ...productWallDiagnostic,
         ...(canonicalConversation ? { conversation_id: canonicalConversation } : {}),
         ...(opened.provisionalId ? { provisional_id: opened.provisionalId } : {}),
         incident_id: incidentId,
@@ -669,6 +677,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         invocationId,
         profileKey,
         {
+          ...productWallDiagnostic,
           conversation_id: canonicalConversation,
           ...(opened.provisionalId ? { provisional_id: opened.provisionalId } : {}),
           incident_id: incidentId,
@@ -705,6 +714,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     }
 
     return emitTurnAndCode(turnResult('ok', 'none', provenanceDriftObserved ? 'browser_provenance_drift_observed' : 'completed', invocationId, profileKey, {
+      ...productWallDiagnostic,
       conversation_id: canonicalConversation,
       ...(opened.provisionalId ? { provisional_id: opened.provisionalId } : {}),
       output: {
