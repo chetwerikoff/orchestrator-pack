@@ -135,12 +135,18 @@ There is no completion-mode selector. Authority is fixed to `browser-turn-result
 The adapter prints the existing `flow-manager-browser-gpt-long-run-accepted/v1`
 keys plus `invocation_id`, `receipt_locator`, the original handoff's verified
 `launcher_pid` and `child_cwd`, and optional owner/terminal-handle data.
-The synchronous `OPK_FM_LONG_CHILD_DISABLE_DETACH=1` spawn returns a launcher
-**exit status**, not a PID. Detached spawn returns a shell-observed number.
-Neither return value is accepted as PID: both modes read the actual
-`process.pid` from the same identity-bound handoff. A committed handoff
-remains handoff evidence even if its Browser child later exits nonzero; it
-never proves a successful turn or delivery.
+In synchronous `OPK_FM_LONG_CHILD_DISABLE_DETACH=1` mode,
+`runProcess.onSpawn` captures the newly spawned launcher's OS PID, separately
+from its exit status. In detached mode, the launch command observes the actual
+background launcher PID. The adapter refuses a pre-existing handoff file or
+invocation locator **before spawning**, even when every run/attempt/invocation
+ID, path and owner matches the old launch. After spawn, it compares that
+freshly observed PID with the original committed handoff's `launcher_pid`
+before emitting accepted/v1; synchronous pre-spawn refusal exit status 2
+is never accepted. An identical retry after a lost acknowledgment must
+recover the **original** invocation using `wait`, not relaunch or re-send
+it. A committed handoff remains handoff evidence even if its Browser child
+later exits nonzero; it never proves a successful turn or delivery.
 
 Indexed wait uses **either** the exact invocation or the adapter-returned
 `receipt_locator`, with the original run/attempt to verify the single indexed
@@ -158,9 +164,14 @@ npm run --silent flow-manager-long-running-child -- wait \
   --deadline-ms 5000
 ```
 
-Do not combine locator selectors with the legacy explicit paths. An unindexed
-pre-upgrade or standalone direct receipt cannot be upgraded or silently
-looked up by ID; keep using its original explicit-path wait. The only test
+Do not combine locator selectors with the legacy explicit paths. An indexed
+direct launch may have preserved a relative caller-supplied handoff spelling
+inside terminal/v1. The indexed waiter checks it against the original indexed
+absolute receipt and committed launch identity without resolving that old
+relative spelling against the **waiter's** cwd; it does not rewrite legacy
+terminal payloads. An unindexed pre-upgrade or standalone direct receipt
+cannot be upgraded or silently looked up by ID; keep using its original
+explicit-path wait. The only test
 redirection is the existing two-part
 `OPK_FM_LONG_CHILD_TEST_GATE=fixture-root-v1` plus
 `OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT=<disposable-absolute-root>` fixture
