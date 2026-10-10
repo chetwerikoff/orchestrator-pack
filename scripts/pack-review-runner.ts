@@ -4384,11 +4384,14 @@ export async function reconcileStalePackReviewRuns(
           && resolvePackReviewRunOrder(await readBoundRecords(), beforeZero).kind === 'none';
         if (authorized && beforeZero) {
           const snapshotRound = stableJson(beforeZero.reviewRound);
+          // Authority and run-store share one filesystem lock. Read authority
+          // immediately before entering the run-store CAS; never nest the
+          // authority reader inside that lock.
+          const authorityAtCas = readPackReviewAuthority(run.prNumber, { storeRoot });
           const changed = updatePackReviewRunIf(
             run.id,
             (all) => {
               const current = all.find((item) => item.id === run.id);
-              const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
               return Boolean(current && isPackReviewRunStale(current)
                 && current.targetSha === beforeZero.targetSha
                 && current.reviewCycleId === beforeZero.reviewCycleId
@@ -4397,14 +4400,14 @@ export async function reconcileStalePackReviewRuns(
                 && provenFirstAttemptZeroSendCensus(
                   current, recovery.missingFirstAttemptIdentities ?? [],
                 )
-                && authority?.cycle !== null
-                && authority?.cycle !== undefined
-                && authority.cycle.cycleId === current.reviewCycleId
-                && authority.currentHeadSha.toLowerCase() === current.targetSha.toLowerCase()
-                && authority.terminal?.runId !== current.id
+                && authorityAtCas?.cycle !== null
+                && authorityAtCas?.cycle !== undefined
+                && authorityAtCas.cycle.cycleId === current.reviewCycleId
+                && authorityAtCas.currentHeadSha.toLowerCase() === current.targetSha.toLowerCase()
+                && authorityAtCas.terminal?.runId !== current.id
                 && derivePackReviewNoJudgmentBudgetOutcome({
                   ...current, status: 'failed', failureReason: failedReason,
-                }, authority.cycle.consumedRoundOrdinals ?? []) !== null
+                }, authorityAtCas.cycle.consumedRoundOrdinals ?? []) !== null
                 && resolvePackReviewRunOrder(all, current).kind === 'none');
             },
             {
@@ -4418,8 +4421,15 @@ export async function reconcileStalePackReviewRuns(
             { projectId, storeRoot },
           );
           if (changed) {
-            terminalized = true;
-            run = await bindRepositoryIdentity(changed);
+            // External publication performs another exact-head/current-authority
+            // check. Re-read here as well to avoid reporting a stale winner.
+            const afterCasAuthority = readPackReviewAuthority(run.prNumber, { storeRoot });
+            if (afterCasAuthority?.cycle?.cycleId === changed.reviewCycleId
+              && afterCasAuthority.currentHeadSha.toLowerCase() === changed.targetSha.toLowerCase()
+              && afterCasAuthority.terminal?.runId !== changed.id) {
+              terminalized = true;
+              run = await bindRepositoryIdentity(changed);
+            }
           }
         }
         if (!terminalized) {
