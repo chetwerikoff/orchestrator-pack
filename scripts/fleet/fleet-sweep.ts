@@ -573,6 +573,9 @@ export function visibleOpenCodePermission(screen: string): FleetPermissionObserv
   if (!once || !always || !reject) return undefined;
   const lastChoice = controls.reduce((index, line, i) =>
     /\b(?:once|always|reject|deny)\b/u.test(line) ? i : index, -1);
+  const footer = region.slice(lastChoice + 1);
+  if (!footer.some((line) => /^[╹╻▀▄█▌▐⬝■▣◆●•·─━═-]{3,}$/u.test(line)
+    || /(?:esc\s+interrupt|ctrl\+p\s+commands|tab\s+to\s+select|enter\s+to\s+confirm)/iu.test(line))) return undefined;
   // The next own tool, user prompt or answer means this is old scrollback.
   if (region.slice(lastChoice + 1).some((line) =>
     !/^(?:[╹╻▀▄█▌▐⬝■▣◆●•·─━═\s-]*|.*(?:esc\s+interrupt|ctrl\+p\s+commands|\d+K\s*\(\d+%\)|tab\s+to\s+select|enter\s+to\s+confirm).*)$/iu.test(line))) return undefined;
@@ -585,8 +588,9 @@ export function visibleOpenCodePermission(screen: string): FleetPermissionObserv
 }
 
 function nativeOpenCodePermissionPane(terminal: FleetTerminal, executor: OrcaExecutor): FleetTerminal | undefined {
+  const listedStatus = terminal.status?.trim().toLowerCase();
   if (terminal.agentIdentity?.trim().toLowerCase() !== 'opencode'
-    || terminal.status?.trim().toLowerCase() === 'exited') return undefined;
+    || (listedStatus && !/^(?:running|active|open|connected)$/u.test(listedStatus))) return undefined;
   if (/^(?:running|active|open|connected)$/iu.test(terminal.status?.trim() ?? '')) return terminal;
   // A show read fills missing liveness fields; never substitutes title or
   // stale/contradictory metadata for native OpenCode identity.
