@@ -27,7 +27,7 @@ import {
 import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
 import type { ChatErrorBanner, ProjectChat } from './chat-error-banners.ts';
 import { FileFleetStateStore, type FleetPaneObservation, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
-import { runLaunch, readTerminalEnvelope } from '../flow-manager-long-running-child.ts';
+import { COMPLETION_MODE, HANDOFF_SCHEMA, TERMINAL_SCHEMA, invocationReceiptLocatorPath, runLaunch, readTerminalEnvelope } from '../flow-manager-long-running-child.ts';
 import { configuredProfileKey } from '../chatgpt-browser-turn/storage-common.ts';
 import { admitStateLightTurnObservation, transitionStateLightTurnObservation } from '../chatgpt-browser-turn/state-light-turn-observation.ts';
 
@@ -140,6 +140,9 @@ async function tick(input: {
   readNamedPull?: FleetAlarmTickOptions['readNamedPull'];
   readNamedReview?: FleetAlarmTickOptions['readNamedReview'];
   readPackReviewStage?: FleetAlarmTickOptions['readPackReviewStage'];
+  indexedGptTerminalRoot?: string;
+  probeIndexedGptPid?: FleetAlarmTickOptions['probeIndexedGptPid'];
+  sleepMs?: (ms: number) => void | Promise<void>;
   now?: () => number;
 }) {
   const calls: string[][] = [];
@@ -151,7 +154,7 @@ async function tick(input: {
     config: input.config ?? config(),
     executor: (args) => { calls.push([...args]); return baseExecutor(args); },
     store,
-    sleepMs: async (ms) => { sleeps.push(ms); },
+    sleepMs: async (ms) => { sleeps.push(ms); await input.sleepMs?.(ms); },
     log: (line) => { logs.push(line); },
     ...(input.readChats ? { readChats: input.readChats } : {}),
     ...(input.closeChat ? { closeChat: input.closeChat } : {}),
@@ -165,6 +168,8 @@ async function tick(input: {
     ...(input.readNamedReview ? { readNamedReview: input.readNamedReview } : {}),
     ...(input.readPackReviewStage ? { readPackReviewStage: input.readPackReviewStage } : {}),
     ...(input.now ? { now: input.now } : {}),
+    ...(input.indexedGptTerminalRoot ? { indexedGptTerminalRoot: input.indexedGptTerminalRoot } : {}),
+    ...(input.probeIndexedGptPid ? { probeIndexedGptPid: input.probeIndexedGptPid } : {}),
   });
   return { result, calls, logs, sleeps, store };
 }
@@ -2547,5 +2552,305 @@ describe('Issue #2441 read-only diagnostic tick non-interference', () => {
     expect(observed.logs.some((line) => line.includes('reason=agent_unverified'))).toBe(true);
     expect(observed.logs.some((line) => line.includes('reason=coordinator_unverified'))).toBe(true);
     expect(sends(observed.calls)).toHaveLength(0);
+  });
+});
+
+
+describe('Issue #2485 indexed GPT named PARKED owner, source and veto isolation', () => {
+  const id = '24852485-1111-4111-8111-248524852485';
+  const runId = 'synthetic-run-2485';
+  const attemptId = 'synthetic-attempt-2485';
+  const startedAt = '2026-10-10T00:00:00.000Z';
+  const committedAt = '2026-10-10T00:00:01.000Z';
+
+  function fixture() {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-2485-'));
+    const a: FleetTerminal = { ...terminals[1]!, branch: 'refs/heads/gpt-a',
+      incarnationId: 'inc-a', status: 'running', agentIdentity: 'supervised-manager' };
+    const b: FleetTerminal = { ...terminals[2]!, branch: 'refs/heads/gpt-b',
+      incarnationId: 'inc-b', status: 'running', agentIdentity: 'supervised-manager' };
+    const c: FleetTerminal = { ...terminals[1]!, handle: 'third', title: 'OpenCode launcher C',
+      worktreePath: workerBase + '/third', branch: 'refs/heads/launcher',
+      incarnationId: 'inc-c', status: 'running', agentIdentity: 'launcher' };
+    const fleet: FleetTerminal[] = [terminals[0]!, a, b, c];
+    const screens: Record<string, string> = {
+      coord: 'idle', one: 'PARKED on GPT turn ' + id,
+      two: 'work\nesc interrupt', third: 'done',
+    };
+    const tasks = new Map([
+      ['one', { terminal: a, task: 'task-a', dispatch: 'dispatch-a' }],
+      ['two', { terminal: b, task: 'task-b', dispatch: 'dispatch-b' }],
+    ]);
+    const indexPath = invocationReceiptLocatorPath(id, root);
+    const handoffPath = join(root, 'original-handoff.json');
+    let terminalPath = join(root, 'original-terminal.json');
+    let elapsed = 0;
+    let pid: 'exists' | 'absent' | 'unknown' = 'exists';
+    const receipt = (extra: Record<string, unknown> = {}) => ({
+      schema: HANDOFF_SCHEMA, invocation_id: id, run_identity: runId, attempt_identity: attemptId,
+      launcher_started_at: startedAt, handoff_committed_at: committedAt,
+      completion_mode: COMPLETION_MODE, launcher_pid: 42424, child_cwd: '/synthetic/browser-child',
+      launching_terminal_handle: 'third', ...extra,
+    });
+    const locator = (extra: Record<string, unknown> = {}) => ({
+      schema: 'flow-manager-long-running-child-locator/v1',
+      invocation_id: id, run_identity: runId, attempt_identity: attemptId,
+      handoff_receipt_path: handoffPath, terminal_envelope_path: terminalPath, ...extra,
+    });
+    const terminal = (extra: Record<string, unknown> = {}) => ({
+      schema: TERMINAL_SCHEMA, run_identity: runId, attempt_identity: attemptId,
+      completion_mode: COMPLETION_MODE, handoff_receipt_path: handoffPath,
+      launcher_started_at: startedAt, handoff_committed_at: committedAt,
+      terminal_at: '2026-10-10T00:00:02.000Z', lifecycle_outcome: 'success',
+      delivery: 'not-sent', recovery_available: false,
+      cwd: c.worktreePath, terminal_handle: 'third', ...extra,
+    });
+    const writeJson = (path: string, value: unknown) => {
+      mkdirSync(join(path, '..'), { recursive: true, mode: 0o700 });
+      writeFileSync(path, JSON.stringify(value), { mode: 0o600 });
+    };
+    const writeOriginal = (extra: Record<string, unknown> = {}) => {
+      writeJson(handoffPath, receipt(extra));
+      writeJson(indexPath, locator());
+    };
+    const land = (extra: Record<string, unknown> = {}) => writeJson(terminalPath, terminal(extra));
+    const event = (): TerminalEnvelopeEvent => ({
+      path: terminalPath, invocationId: attemptId, terminalHandle: 'third',
+      cwd: c.worktreePath, delivery: 'not-sent',
+    });
+    const original = fakeOrca(screens, [], fleet);
+    let listCount = 0;
+    let beforeFreshList: (() => void) | undefined;
+    const executor: OrcaExecutor = (args) => {
+      if (args[0] === 'terminal' && args[1] === 'list') {
+        listCount += 1;
+        if (listCount === 2) beforeFreshList?.();
+      }
+      if (args[0] === 'orchestration' && args[1] === 'worker-list') {
+        return commandResult(JSON.stringify({ ok: true, result: {
+          workers: [...tasks.entries()].map(([handle, value]) => ({
+            agentTerminalHandle: handle, taskId: value.task,
+            dispatchId: value.dispatch, dispatchStatus: 'dispatched',
+          })), page: { hasMore: false },
+        } }));
+      }
+      if (args[0] === 'orchestration' && args[1] === 'worker-show') {
+        const dispatch = args[args.indexOf('--dispatch') + 1] ?? '';
+        const owner = [...tasks.values()].find((value) => value.dispatch === dispatch);
+        if (!owner) return commandResult('', false);
+        return commandResult(JSON.stringify({ ok: true, result: {
+          dispatch: { id: owner.dispatch, taskId: owner.task, status: 'dispatched' },
+          terminal: owner.terminal, observation: { status: 'live', exactWorker: true },
+        } }));
+      }
+      return original(args);
+    };
+    const step = (input: {
+      store?: FleetWakeStateStore; sleepMs?: (ms: number) => void | Promise<void>;
+      listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
+    } = {}) => tick({
+      screens, terminals: fleet, executor, store: input.store,
+      now: () => elapsed, indexedGptTerminalRoot: root,
+      probeIndexedGptPid: () => pid, sleepMs: input.sleepMs,
+      listTerminalEnvelopes: input.listTerminalEnvelopes ?? (() => []),
+      listOpenPulls: () => [], listUnreadRunMessages: () => [],
+    });
+    return {
+      root, fleet, screens, tasks, a, b, c, indexPath, handoffPath,
+      writeOriginal, land, event, receipt, terminal, locator, step,
+      time: (at: number) => { elapsed = at; },
+      pid: (next: 'exists' | 'absent' | 'unknown') => { pid = next; },
+      path: (path: string) => { terminalPath = path; writeJson(indexPath, locator()); },
+      beforeFresh: (fn: () => void) => { beforeFreshList = fn; },
+      cleanup: () => rmSync(root, { recursive: true, force: true }),
+    };
+  }
+
+  const unitWake = (calls: readonly string[][], handle = 'one') =>
+    sendsTo(calls, handle).filter((args) => args.includes('--text')
+      && (args[args.indexOf('--text') + 1] ?? '').startsWith('Wake: GPT-turn-'));
+  const gptMarks = (store: FleetWakeStateStore, path: string) =>
+    store.readParkedWakeEventStatus('gpt:' + path);
+
+  it('keeps a PID-exists receipt only provisionally pending, expires at 30 min, and alarms absent/unknown PID', async () => {
+    const f = fixture();
+    try {
+      f.writeOriginal();
+      const store = new MemoryWakeStore();
+      const first = await f.step({ store });
+      expect(unitWake(first.calls)).toHaveLength(0);
+      expect(sendsTo(first.calls, 'coord')).toHaveLength(0);
+      f.time(60_000);
+      expect(unitWake((await f.step({ store })).calls)).toHaveLength(0);
+      f.time(1_800_000);
+      const expired = await f.step({ store });
+      expect(unitWake(expired.calls)).toHaveLength(0);
+      expect(sendsTo(expired.calls, 'coord').some((call) => call.join(' ').includes('pid-identity-unverified'))).toBe(true);
+      expect(sendsTo(expired.calls, 'one').some((call) => call.includes('--text')
+        && call.join(' ').includes('Reminder: parked 30 min'))).toBe(true);
+      for (const [probe, reason] of [
+        ['absent', 'launcher-gone; envelope-absent'],
+        ['unknown', 'launcher-identity-unverifiable'],
+      ] as const) {
+        const fresh = new MemoryWakeStore();
+        f.time(0); f.pid(probe);
+        const result = await f.step({ store: fresh });
+        expect(unitWake(result.calls)).toHaveLength(0);
+        expect(sendsTo(result.calls, 'coord').some((call) => call.join(' ').includes(reason))).toBe(true);
+      }
+      // Reused PID yields the same observation as any other present PID.
+      f.pid('exists'); f.time(1_800_000);
+      const reused = await f.step({ store });
+      expect(sendsTo(reused.calls, 'coord').some((call) => call.join(' ').includes('pid-identity-unverified'))).toBe(true);
+      const invalid = new MemoryWakeStore();
+      invalid.readParkedEpoch = () => ({ key: '', since: Number.NaN });
+      // Invalid native clock evidence must never establish indefinite pending.
+      expect(unitWake((await f.step({ store: invalid })).calls)).toHaveLength(0);
+    } finally { f.cleanup(); }
+  });
+
+  it('joins only the original terminal, ignores launcher hints, encodes UTF-8 safely, and retains marks across restart', async () => {
+    const f = fixture();
+    try {
+      const weird = join(f.root, 'space;漢字', 'result-terminal.json');
+      f.path(weird); f.writeOriginal(); f.land();
+      const xdg = mkdtempSync(join(tmpdir(), 'fleet-2485-marks-'));
+      try {
+        const store = new FileFleetWakeStateStore('indexed-2485', { XDG_RUNTIME_DIR: xdg });
+        const result = await f.step({ store, listTerminalEnvelopes: () => [f.event()] });
+        const unit = unitWake(result.calls);
+        expect(unit).toHaveLength(1);
+        const text = unit[0]![unit[0]!.indexOf('--text') + 1]!;
+        expect(text).toContain('%20');
+        expect(text).toContain('%3b');
+        expect(text).toContain('%e6%bc%a2');
+        expect(text).toMatch(/^[A-Za-z0-9 _./:%#=+-]+$/u);
+        expect(sendsTo(result.calls, 'one')).toHaveLength(2);
+        expect(sendsTo(result.calls, 'third')).toHaveLength(0);
+        expect(gptMarks(store, weird)).toBe('sent');
+        const restart = new FileFleetWakeStateStore('indexed-2485', { XDG_RUNTIME_DIR: xdg });
+        expect(unitWake((await f.step({ store: restart, listTerminalEnvelopes: () => [f.event()] })).calls)).toHaveLength(0);
+      } finally { rmSync(xdg, { recursive: true, force: true }); }
+    } finally { f.cleanup(); }
+  });
+
+  it('vetoes an unrepresentable original event before legacy can select third, without consuming a global mark', async () => {
+    const f = fixture();
+    try {
+      const huge = join(f.root, 'n'.repeat(231), 'result-terminal.json');
+      f.path(huge); f.writeOriginal(); f.land();
+      const store = new MemoryWakeStore();
+      const input = { store, listTerminalEnvelopes: () => [f.event()] };
+      const first = await f.step(input);
+      expect(unitWake(first.calls)).toHaveLength(0);
+      expect(sendsTo(first.calls, 'third')).toHaveLength(0);
+      expect(gptMarks(store, huge)).toBeUndefined();
+      expect(sendsTo(first.calls, 'coord').some((call) => call.join(' ').includes('path-unrepresentable'))).toBe(true);
+      expect(sendsTo((await f.step(input)).calls, 'third')).toHaveLength(0);
+    } finally { f.cleanup(); }
+  });
+
+  it.each(['one-first', 'two-first'])('vetoes both claimants and legacy third on ambiguous indexed owner: %s', async (order) => {
+    const f = fixture();
+    try {
+      f.writeOriginal(); f.land();
+      f.screens.two = f.screens.one!;
+      if (order === 'two-first') f.fleet.splice(1, 2, f.b, f.a);
+      const store = new MemoryWakeStore();
+      const result = await f.step({ store, listTerminalEnvelopes: () => [f.event()] });
+      expect(unitWake(result.calls, 'one')).toHaveLength(0);
+      expect(unitWake(result.calls, 'two')).toHaveLength(0);
+      expect(sendsTo(result.calls, 'third')).toHaveLength(0);
+      expect(gptMarks(store, f.event().path)).toBeUndefined();
+      expect(sendsTo(result.calls, 'coord').some((call) => call.join(' ').includes('ambiguous-gpt-owner'))).toBe(true);
+    } finally { f.cleanup(); }
+  });
+
+  it.each(['one-first', 'two-first'])('disambiguates both owner assertions without iteration-order election: %s', async (order) => {
+    const f = fixture();
+    try {
+      f.writeOriginal({ owner_task_id: 'task-a', owner_dispatch_id: 'dispatch-a' }); f.land();
+      f.screens.two = f.screens.one!;
+      if (order === 'two-first') f.fleet.splice(1, 2, f.b, f.a);
+      const store = new MemoryWakeStore();
+      const result = await f.step({ store, listTerminalEnvelopes: () => [f.event()] });
+      expect(unitWake(result.calls, 'one')).toHaveLength(1);
+      expect(unitWake(result.calls, 'two')).toHaveLength(0);
+      expect(sendsTo(result.calls, 'third')).toHaveLength(0);
+      expect(gptMarks(store, f.event().path)).toBe('sent');
+    } finally { f.cleanup(); }
+  });
+
+  it('preserves tick-A legacy consumption without claimant and rejects tick-B new named delivery', async () => {
+    const f = fixture();
+    try {
+      f.writeOriginal(); f.land();
+      f.screens.one = 'work\nesc interrupt'; // Not yet GPT-PARKED on the first tick.
+      const xdg = mkdtempSync(join(tmpdir(), 'fleet-2485-legacy-'));
+      try {
+        const events = () => [f.event()];
+        const firstStore = new FileFleetWakeStateStore('indexed-legacy-2485', { XDG_RUNTIME_DIR: xdg });
+        const first = await f.step({ store: firstStore, listTerminalEnvelopes: events });
+        expect(sendsTo(first.calls, 'third').some((args) => args.includes('--text'))).toBe(true);
+        expect(gptMarks(firstStore, f.event().path)).toBe('sent');
+        f.screens.one = 'PARKED on GPT turn ' + id;
+        const restart = new FileFleetWakeStateStore('indexed-legacy-2485', { XDG_RUNTIME_DIR: xdg });
+        const second = await f.step({ store: restart, listTerminalEnvelopes: events });
+        expect(unitWake(second.calls)).toHaveLength(0);
+        expect(sendsTo(second.calls, 'coord').some((args) => args.join(' ').includes('recipient-unproven'))).toBe(true);
+        expect(gptMarks(restart, f.event().path)).toBe('sent');
+      } finally { rmSync(xdg, { recursive: true, force: true }); }
+    } finally { f.cleanup(); }
+  });
+
+  it('checks native incarnation before first effect and vetoes legacy third even after manager replacement', async () => {
+    const f = fixture();
+    try {
+      f.writeOriginal(); f.land();
+      f.beforeFresh(() => { f.screens.one = 'done'; });
+      const store = new MemoryWakeStore();
+      const result = await f.step({ store, listTerminalEnvelopes: () => [f.event()] });
+      expect(unitWake(result.calls)).toHaveLength(0);
+      expect(sendsTo(result.calls, 'third')).toHaveLength(0);
+      expect(gptMarks(store, f.event().path)).toBeUndefined();
+      expect(sendsTo(result.calls, 'coord').some((args) => args.join(' ').includes('pane-changed-before-send'))).toBe(true);
+    } finally { f.cleanup(); }
+  });
+
+  it('skips delayed second Enter after a screen change, persisting both uncertain marks without retry', async () => {
+    const f = fixture();
+    try {
+      f.writeOriginal(); f.land();
+      const store = new MemoryWakeStore();
+      const run = await f.step({
+        store, listTerminalEnvelopes: () => [f.event()],
+        sleepMs: () => { f.screens.one = 'done'; },
+      });
+      expect(unitWake(run.calls)).toHaveLength(1);
+      expect(sendsTo(run.calls, 'one')).toHaveLength(1);
+      expect(gptMarks(store, f.event().path)).toBe('attempted_unverified');
+      expect([...store.parkedWakeEvents].some((key) => key.startsWith('producer:'))).toBe(true);
+      expect(sendsTo(run.calls, 'coord').some((args) => args.join(' ').includes('pane-changed-during-wake'))).toBe(true);
+      expect(unitWake((await f.step({ store, listTerminalEnvelopes: () => [f.event()] })).calls)).toHaveLength(0);
+    } finally { f.cleanup(); }
+  });
+
+  it('rejects malformed index, inconsistent terminal identity, and incomplete owner assertions', async () => {
+    const f = fixture();
+    try {
+      f.writeOriginal(); f.land({ handoff_committed_at: '2026-10-11T00:00:00.000Z' });
+      const mismatch = await f.step({ listTerminalEnvelopes: () => [] });
+      expect(unitWake(mismatch.calls)).toHaveLength(0);
+      expect(sendsTo(mismatch.calls, 'coord').some((args) => args.join(' ').includes('terminal-identity-mismatch'))).toBe(true);
+      f.writeOriginal({ owner_task_id: 'not-task-a' });
+      f.land();
+      const conflict = await f.step();
+      expect(unitWake(conflict.calls)).toHaveLength(0);
+      const bogus = JSON.parse(readFileSync(f.indexPath, 'utf8')) as Record<string, unknown>;
+      writeFileSync(f.indexPath, JSON.stringify({ ...bogus, attempt_identity: 'other-attempt' }));
+      const invalid = await f.step();
+      expect(unitWake(invalid.calls)).toHaveLength(0);
+      expect(sendsTo(invalid.calls, 'coord').some((args) => args.join(' ').includes('invalid-receipt-or-index'))).toBe(true);
+    } finally { f.cleanup(); }
   });
 });
