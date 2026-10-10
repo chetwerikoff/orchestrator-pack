@@ -960,9 +960,21 @@ function reportCorrespondenceReason(partial: Partial<SmokeReport>, plan: SmokeTe
         || smokeResultForWorkerSmokeCauseFamily(terminal.causeFamily) !== result) {
       return 'non_pass_result_terminal_mismatch';
     }
+    // Both directions must agree: an explicit generic precondition cause cannot
+    // describe an assertion failure or an unrelated BLOCKED terminal.
     if (terminal.causeFamily === 'scenario_precondition_unavailable'
-        && partial.nonPassCause !== 'scenario_precondition_unavailable') {
-      return 'precondition_non_pass_cause_mismatch';
+        || partial.nonPassCause === 'scenario_precondition_unavailable') {
+      if (result !== 'BLOCKED'
+          || terminal.outcome !== 'blocked'
+          || terminal.causeFamily !== 'scenario_precondition_unavailable'
+          || partial.nonPassCause !== 'scenario_precondition_unavailable') {
+        return 'precondition_non_pass_cause_mismatch';
+      }
+      // The normalizer drops causeFamily on PASS rows. Refuse contradictory
+      // sealed evidence before that lossy normalization or the comment POST.
+      if (rows.slice(0, -1).some((scenario) => scenario.causeFamily !== undefined)) {
+        return 'precondition_prefix_cause_family_invalid';
+      }
     }
     if (!partial.nonPassCause) return 'non_pass_cause_missing_or_invalid';
   }

@@ -907,6 +907,7 @@ describe('Issue #2319 terminal-free publish', () => {
       { name: 'single absent', rows: single, explicit: false },
       { name: 'mixed absent', rows: mixed, explicit: false },
       { name: 'single explicit', rows: single, explicit: true },
+      { name: 'mixed explicit', rows: mixed, explicit: true },
     ]) {
       const writes: string[] = [];
       const posted: string[] = [];
@@ -949,6 +950,68 @@ describe('Issue #2319 terminal-free publish', () => {
         expect(posted[0]).not.toContain('terminal-handle');
       } finally {
         stdout.mockRestore();
+      }
+    }
+  });
+
+
+  it('rejects explicit precondition cause on assertion FAIL or unrelated evidence BLOCKED with zero POSTs', async () => {
+    const cases = [
+      {
+        name: 'executed assertion is not a missing precondition',
+        text: reportText('FAIL', [{
+          ...scenario('exercise publish scenario A', 'scenario A passes', 'fail'),
+          causeFamily: 'scenario_assertion_failed',
+        }], 'scenario_precondition_unavailable'),
+      },
+      {
+        name: 'missing scenario evidence is not a missing precondition',
+        text: reportText('BLOCKED', [{
+          ...scenario('exercise publish scenario A', 'scenario A passes', 'blocked'),
+          causeFamily: 'scenario_evidence_missing',
+        }], 'scenario_precondition_unavailable'),
+      },
+    ];
+    for (const testCase of cases) {
+      let posts = 0;
+      await expect(runPublishSmoke(publishOptions(), {
+        resolveTarget: () => publishTarget,
+        readReportFile: () => testCase.text,
+        gitStatus: () => [],
+        gitHead: () => HEAD_ONE,
+        publishComment: () => { posts += 1; return 'https://github.com/comment'; },
+      }), testCase.name).rejects.toThrow('report_plan_mismatch: precondition_non_pass_cause_mismatch');
+      expect(posts, testCase.name).toBe(0);
+    }
+  });
+
+  it('refuses precondition PASS prefixes containing non-PASS cause evidence before normalization or POST', async () => {
+    const terminal = {
+      ...scenario('exercise publish scenario B', 'scenario B passes', 'blocked'),
+      causeFamily: 'scenario_precondition_unavailable' as const,
+    };
+    for (const prefixCauseFamily of [
+      'scenario_assertion_failed', 'scenario_evidence_missing', 'scenario_precondition_unavailable',
+    ] as const) {
+      for (const explicitlyDeclared of [false, true]) {
+        let posts = 0;
+        const text = reportText('BLOCKED', [
+          {
+            ...scenario('exercise publish scenario A', 'scenario A passes'),
+            causeFamily: prefixCauseFamily,
+          },
+          terminal,
+        ], explicitlyDeclared ? 'scenario_precondition_unavailable' : undefined);
+        await expect(runPublishSmoke(publishOptions(), {
+          resolveTarget: () => publishTarget,
+          readReportFile: () => text,
+          gitStatus: () => [],
+          gitHead: () => HEAD_ONE,
+          publishComment: () => { posts += 1; return 'https://github.com/comment'; },
+        }), `prefix ${prefixCauseFamily}; explicit=${explicitlyDeclared}`).rejects.toThrow(
+          'report_plan_mismatch: precondition_prefix_cause_family_invalid',
+        );
+        expect(posts, `prefix ${prefixCauseFamily}; explicit=${explicitlyDeclared}`).toBe(0);
       }
     }
   });
