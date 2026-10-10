@@ -542,7 +542,7 @@ describe('Issue #2479 unchanged required-status wire contract', () => {
       reviewVerdict: 'clean', findingCount: 0, findings: [],
       journalOutcome: {
         state: 'persisted', recordedAtUtc: '2026-10-10T00:00:00.000Z',
-        reason: 'verdict_persisted', idempotencyKey: 'fixture-2479-clean', attempts: 1,
+        reason: 'verdict_persisted', idempotencyKey: `verdict:${run.id}:${headSha}`, attempts: 1,
       },
     }, { projectId: 'orchestrator-pack', storeRoot });
     const restored = await restorePackReviewAuthoritativeRequiredStatus({
