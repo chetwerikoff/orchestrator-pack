@@ -414,8 +414,8 @@ export async function inspectCdpProfileBounded(
  * The ordinary bounded verifier deliberately persists successful CDP ownership.
  * The separately named inspectCdpProfileBounded is the only non-writing branch.
  */
-export async function verifyCdpProfileBounded(input) {
-  const result = await inspectCdpProfileBounded(input);
+export async function verifyCdpProfileBounded(input, testObservation) {
+  const result = await inspectCdpProfileBounded(input, testObservation);
   if (result.ok) recordCdpOwner(input.cdp ?? 'http://localhost:9222', input.profile);
   return result;
 }
