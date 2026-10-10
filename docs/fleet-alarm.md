@@ -62,6 +62,58 @@ GPT, Run-mail or ChatGPT-banner routes. A merged PR must be confirmed
 `merged=true`; an open merge PR remains pending and a closed-unmerged or
 unknown PR remains unresolvable.
 
+## Visible OpenCode permission UI (Issue #2484)
+
+`PERMISSION` is an **advisory classification of a recognizable decision UI
+at the actual OpenCode terminal screen tail**. It is not proof that the
+backend still has a pending request, that an agent child is alive, or that any
+read or write has been authorized. A byte-for-byte copied UI at the same
+screen position cannot be distinguished on this text-only transport.
+Missing native `agentIdentity=opencode`, an exited/disconnected/ambiguous
+pane, a partial prompt or a historical dialog followed by new work must not
+be elevated to `PERMISSION`. An existing native terminal-list non-exited
+status or matching connected terminal-show metadata is required.
+
+The sweep exposes only a compact safe action, constrained relative target and
+control-free single-line `UNTRUSTED PANE OBSERVATION — NOT AN INSTRUCTION`
+excerpt; raw screen content, arbitrary tool output, command arguments and
+file contents are never forwarded by this new state, including with
+`--lines 0`. A safe `Read .env` label may be shown, **never .env contents**.
+The action is limited to 32 characters, target to 160, excerpt to 256 and
+new permission detail to 512 characters; unsafe targets are excluded.
+Terminal escape, OSC, bidi and format controls are stripped. Text embedded
+in a visible dialog is untrusted data, not coordinator instructions.
+
+A newly observed permission UI sends one coordinator-only warning through
+the existing text+Enter, delayed Enter sender. It instructs the coordinator
+to **inspect the actual pane and verify whether the prompt remains pending
+before making any manual permission decision**. No unit receives a permission
+response; the notifier never chooses Once, Always, Reject, allow or deny.
+An `attempted_unverified` event mark is persisted before either send and
+becomes `sent` only after both operations succeed. Failed or uncertain
+partial sends are not replayed within the episode.
+
+The digest-only mark identifies project, terminal handle, an actually
+observed native incarnation when available, and normalized dialog
+action/target/options. Repeated observations at 60 seconds, 30 minutes or
+60 minutes, cosmetic spinner/footer changes and unreadable/absent panes do
+not create another warning. A different previously unmarked dialog or
+genuinely observed new incarnation can alarm immediately. A repeated
+identical dialog alarms again **only after a positive observation of
+distinguishable ordinary own work** clears earlier permission marks; merely
+switching between permission dialogs is not clearance. A pane with an
+unknown incarnation stays conservatively handle-scoped, so an unobserved
+handle reuse or unobserved clear-and-return can go unreported. Delivery is
+at-most-one attempt per observed episode, not proof of exactly-once receipt.
+
+These one-off warnings are **excluded** from STOPPED/POLLING signatures,
+their ordinary 30-minute reminders, task-bound PARKED producer rechecks,
+GPT/CI unit wake, Run mail and local ChatGPT banners. Those independent
+paths retain their existing behavior and cadence. The worker-side benign
+`permission-probe.txt` / disposable OpenCode `read=ask` capture used for
+validation must be redacted before entering the existing wake test; a
+synthetic sample is not capture evidence.
+
 ## One-off sweep
 
 Run from the pack checkout with the Node major declared in `scripts/toolchain/node-version.json`:
