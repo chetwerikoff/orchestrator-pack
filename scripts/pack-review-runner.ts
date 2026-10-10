@@ -1900,7 +1900,9 @@ export function observeNativePackReviewAttempt(
 ): PackReviewNativeAttemptObservation | null {
   const attempt = run.nativeAttempt;
   if (!attempt) return null;
-  const startedAtMs = Date.parse(attempt.childStartedAtUtc ?? attempt.startedAtUtc);
+  const startedAtMs = Date.parse(attempt.reviewer === 'claude'
+    ? attempt.startedAtUtc
+    : (attempt.childStartedAtUtc ?? attempt.startedAtUtc));
   const elapsedMs = Number.isFinite(startedAtMs) ? Math.max(0, nowMs - startedAtMs) : 0;
   const nativeReplacementCeilingMs = Math.min(attempt.effectiveBudgetMs, NATIVE_REPLACEMENT_MAX_MS);
   const processGroupId = attempt.reviewer === 'claude'
@@ -1939,6 +1941,36 @@ export function bindReviewerProjectSelection(
   projectId: string,
  ): NodeJS.ProcessEnv {
   return { ...environment, OPK_PROJECT_ID: projectId };
+}
+
+/** Record each real Claude child in the same native ordinal; do not replace its original clock. */
+export function recordClaudeNativeChildFrame(
+  frame: Record<string, unknown>,
+  binding: { runId: string; projectId: string; storeRoot: string; invocationOrdinal: number },
+): boolean {
+  if (frame.schema !== 'pack-review-native-child/v1'
+      || frame.runId !== binding.runId || frame.reviewer !== 'claude') return false;
+  const childPid = frame.pid;
+  const childStartedAtUtc = frame.startedAtUtc;
+  const group = frame.processGroupId;
+  if (typeof childPid !== 'number' || !Number.isInteger(childPid) || childPid <= 0
+      || typeof childStartedAtUtc !== 'string'
+      || !Number.isFinite(Date.parse(childStartedAtUtc))) return false;
+  const persisted = getPackReviewRun(binding.runId, {
+    projectId: binding.projectId, storeRoot: binding.storeRoot,
+  });
+  if (!persisted?.nativeAttempt || persisted.nativeAttempt.reviewer !== 'claude'
+      || persisted.nativeAttempt.invocationOrdinal !== binding.invocationOrdinal) return false;
+  updatePackReviewRun(binding.runId, {
+    nativeAttempt: {
+      ...persisted.nativeAttempt,
+      childPid,
+      childProcessGroupId: typeof group === 'number' && Number.isInteger(group) && group > 0
+        ? group : undefined,
+      childStartedAtUtc,
+    },
+  }, { projectId: binding.projectId, storeRoot: binding.storeRoot });
+  return true;
 }
 
 async function invokeReviewer(options: {
@@ -2067,11 +2099,10 @@ async function invokeReviewer(options: {
     delete env.PACK_REVIEW_CARRYOVER_BUNDLE_PATH;
   }
 
-  let nativeStderrBuffer = '';
-  let acceptedNativeChildFrame = false;
+let nativeStderrBuffer = '';
   const nativeInvocationOrdinal = options.nativeInvocationOrdinal ?? 1;
   const consumeNativeChildFrames = (chunk: string): void => {
-    if (resolvedReviewer !== 'claude' || acceptedNativeChildFrame) return;
+    if (resolvedReviewer !== 'claude') return;
     nativeStderrBuffer += chunk;
     const lines = nativeStderrBuffer.split(/\r?\n/);
     nativeStderrBuffer = lines.pop() ?? '';
@@ -2083,30 +2114,12 @@ async function invokeReviewer(options: {
       } catch {
         continue;
       }
-      if (frame.schema !== 'pack-review-native-child/v1'
-          || frame.runId !== options.runId
-          || frame.reviewer !== 'claude') continue;
-      const childPid = Number(frame.pid);
-      const childProcessGroupId = Number(frame.processGroupId);
-      const childStartedAtUtc = String(frame.startedAtUtc ?? '');
-      if (!Number.isInteger(childPid) || childPid <= 0 || !childStartedAtUtc) continue;
-      const persisted = getPackReviewRun(options.runId, {
+      recordClaudeNativeChildFrame(frame, {
+        runId: options.runId,
         projectId: options.projectId,
         storeRoot: options.storeRoot,
+        invocationOrdinal: nativeInvocationOrdinal,
       });
-      if (!persisted?.nativeAttempt
-          || persisted.nativeAttempt.invocationOrdinal !== nativeInvocationOrdinal
-          || persisted.nativeAttempt.reviewer !== 'claude') continue;
-      updatePackReviewRun(options.runId, {
-        nativeAttempt: {
-          ...persisted.nativeAttempt,
-          childPid,
-          ...(Number.isInteger(childProcessGroupId) && childProcessGroupId > 0 ? { childProcessGroupId } : {}),
-          childStartedAtUtc,
-        },
-      }, { projectId: options.projectId, storeRoot: options.storeRoot });
-      acceptedNativeChildFrame = true;
-      break;
     }
   };
 
