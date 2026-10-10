@@ -1226,6 +1226,40 @@ describe('Issue #2461 selected pack-review CDP preflight', () => {
     ]) expect(() => parsePackReviewPreflightArgs(invalid)).toThrow();
   });
 
+  it('uses explicit project selection when OPK_PROJECT_ID is unset or blank, but refuses conflicts before resolution', async () => {
+    const resolveTarget = vi.fn((input: { projectId: string; env: Readonly<NodeJS.ProcessEnv> }) => {
+      expect(input.projectId).toBe('orchestrator-pack');
+      expect(input.env.OPK_PROJECT_ID).toBe('orchestrator-pack');
+      return selectedCard;
+    });
+    const resolveBrowserConfig = vi.fn((env: NodeJS.ProcessEnv) => {
+      expect(env.OPK_PROJECT_ID).toBe('orchestrator-pack');
+      return { profile: '/synthetic/selected-A', cdpUrl: cdpA, projectUrl };
+    });
+    const inspectOwner = vi.fn(async () => ({ ok: true }));
+    const isReachable = vi.fn(async () => true);
+    const dependencies = { resolveTarget, resolveBrowserConfig, inspectOwner, isReachable };
+    const selectors: NodeJS.ProcessEnv[] = [
+      {},
+      { OPK_PROJECT_ID: '' },
+      { OPK_PROJECT_ID: '   ' },
+      { OPK_PROJECT_ID: 'orchestrator-pack' },
+    ];
+    for (const env of selectors) {
+      const original = { ...env };
+      expect(await runPackReviewPreflight(args, dependencies, env)).toMatchObject({
+        outcome: 'pass', reason: 'selected_route_reachable',
+      });
+      expect(env).toEqual(original);
+    }
+    const mismatch = await runPackReviewPreflight(args, dependencies, { OPK_PROJECT_ID: 'foreign' });
+    expect(mismatch).toMatchObject({ outcome: 'incomplete', reason: 'project_selector_mismatch' });
+    expect(resolveTarget).toHaveBeenCalledTimes(4);
+    expect(resolveBrowserConfig).toHaveBeenCalledTimes(4);
+    expect(inspectOwner).toHaveBeenCalledTimes(4);
+    expect(isReachable).toHaveBeenCalledTimes(4);
+  });
+
   it('proves selected pair A only; a second individually healthy pair B cannot rescue failed A', async () => {
     const inspected: string[] = [];
     const reached: string[] = [];
@@ -1256,13 +1290,13 @@ describe('Issue #2461 selected pack-review CDP preflight', () => {
     const mismatch = await runPackReviewPreflight(args, fake, { OPK_PROJECT_ID: 'foreign' });
     expect(mismatch.reason).toBe('project_selector_mismatch');
     const absent = await runPackReviewPreflight(args, fake, {});
-    expect(absent.reason).toBe('project_selector_mismatch');
-    expect(browserConfig).toHaveBeenCalledTimes(1);
+    expect(absent.reason).toBe('owner_not_listening');
+    expect(browserConfig).toHaveBeenCalledTimes(2);
     const cardMismatch = await runPackReviewPreflight(args, {
       ...fake, resolveTarget: () => ({ ...selectedCard, repository: 'foreign/repository' }),
     }, { OPK_PROJECT_ID: 'orchestrator-pack' });
     expect(cardMismatch.reason).toBe('selected_pack_card_mismatch');
-    expect(browserConfig).toHaveBeenCalledTimes(1);
+    expect(browserConfig).toHaveBeenCalledTimes(2);
   });
 
   it('binds the actual unchanged pack-review resolver to the selected project card, never a foreign healthy pair', async () => {
