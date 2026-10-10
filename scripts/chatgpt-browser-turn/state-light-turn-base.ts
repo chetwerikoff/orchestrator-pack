@@ -2181,6 +2181,9 @@ async function mutateComposerOrCause(
     return 'composer_mutation_budget_exhausted';
   };
   if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
+    // Readiness failure reaches the ordinary mutation path. Distinguish a
+    // genuinely absent composer from a slow or blocked existing element.
+    if (await locatorCount(composer, insertionDeadlineMs) === 0) return 'composer_unavailable';
     return exhausted('readiness_before_click');
   }
 
@@ -2703,7 +2706,7 @@ async function runTurnCore(
         page,
         browser,
         result: compactResult(
-          'driver_error',
+          cause === 'composer_unavailable' ? 'send_failed' : 'driver_error',
           'invocation',
           cause,
           invocationId,
@@ -2956,7 +2959,7 @@ async function runTurnCore(
         const returnComposerBlocker = (
           composerState: { state: 'ready' } | { state: TurnState; cause: string },
         ): TurnRunOutcome | null => {
-          if (composerState.state === 'ready') return null;
+          if (composerState.state === 'ready' || composerState.cause === 'composer_unavailable') return null;
           incident('invocation_blocker', composerState.cause, 'return_local_error');
           return {
             page,
@@ -2988,7 +2991,7 @@ async function runTurnCore(
         const initialPrepareFailure = returnFreshPrepareFailure(initialPrepare);
         if (initialPrepareFailure) return initialPrepareFailure;
 
-        let composerState = await waitForComposer(page, invocationDeadlineMs, true, observeProductWall);
+        let composerState = await waitForComposer(page, invocationDeadlineMs, false, observeProductWall);
         const initialComposerFailure = returnComposerBlocker(composerState);
         if (initialComposerFailure) return initialComposerFailure;
 
@@ -3052,7 +3055,7 @@ async function runTurnCore(
             );
             const preparedFailure = returnFreshPrepareFailure(prepared);
             if (preparedFailure) return preparedFailure;
-            composerState = await waitForComposer(page, invocationDeadlineMs, true, observeProductWall);
+            composerState = await waitForComposer(page, invocationDeadlineMs, false, observeProductWall);
             const composerFailure = returnComposerBlocker(composerState);
             if (composerFailure) return composerFailure;
             sendAuthorized = true;
@@ -3337,8 +3340,8 @@ async function runTurnCore(
         );
       }
 
-      const composerState = await waitForComposer(page, invocationDeadlineMs, true, observeProductWall);
-      if (composerState.state !== 'ready') {
+      const composerState = await waitForComposer(page, invocationDeadlineMs, false, observeProductWall);
+      if (composerState.state !== 'ready' && composerState.cause !== 'composer_unavailable') {
         incident('invocation_blocker', composerState.cause, 'return_local_error');
         return {
           page,

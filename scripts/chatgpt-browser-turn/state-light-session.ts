@@ -1234,9 +1234,12 @@ async function runActivePayload(
   let baseline: PageObservationResult;
   try {
     if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
-    const composerState = await deps.waitForComposer(state.page, state.wholeSessionDeadline, true, (wall) => rememberSessionProductWall(state, wall, deps));
+    const composerState = await deps.waitForComposer(state.page, state.wholeSessionDeadline, false, (wall) => rememberSessionProductWall(state, wall, deps));
     if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
-    if (composerState.state !== 'ready') return tuple(composerState.state, 'invocation', composerState.cause);
+    // Readiness is advisory for absent input: try normal composer mutation.
+    if (composerState.state !== 'ready' && composerState.cause !== 'composer_unavailable') {
+      return tuple(composerState.state, 'invocation', composerState.cause);
+    }
 
     payload.expectedMarker = deps.marker();
     const wrapped = deps.wrapPayload(payload.expectedMarker, payload.item.snapshot.text);
@@ -1248,7 +1251,7 @@ async function runActivePayload(
       insertionContext,
     );
     if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
-    if (mutationFailure) return tuple('driver_error', 'invocation', mutationFailure);
+    if (mutationFailure) return tuple(mutationFailure === 'composer_unavailable' ? 'send_failed' : 'driver_error', 'invocation', mutationFailure);
     const insertionDeadline = insertionContext.insertionDeadlineMs ?? state.wholeSessionDeadline;
 
     if (ordinalIndex > 0) {

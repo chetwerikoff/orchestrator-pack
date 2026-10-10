@@ -2000,12 +2000,9 @@ async function sendTurnWithDiagnostics(
     await witnessPollDelay(page, Math.min(500, waitMs));
   }
   const composerReadyWait = loopOperationWaitMs(readyEndsAt, wallClock());
-  if (!(await boundedLocatorCount(composer, composerReadyWait))) {
-    if (segmentBudget && wallClock() >= readyEndsAt) {
-      throw new BrowserOperationTimeoutError('composer_readiness');
-    }
-    return { state: 'ui_contract_mismatch', cause: 'composer_unavailable', possibleDelivery: false };
-  }
+  // An absent composer must be established through the ordinary mutation
+  // attempt, never short-circuited by the diagnostic product-status probe.
+  const composerWasMissing = (await boundedLocatorCount(composer, composerReadyWait)) === 0;
 
   const baseline = page.locator(MESSAGE_NODE_SELECTOR);
   const baselineIds = new Set<string>();
@@ -2060,13 +2057,19 @@ async function sendTurnWithDiagnostics(
   }
 
   let mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
-  if (segmentBudget && mutationWait <= 0) throw new BrowserOperationTimeoutError('pre_send_mutation');
+  if (segmentBudget && mutationWait <= 0) {
+    if (composerWasMissing) return { state: 'send_failed', cause: 'composer_unavailable', possibleDelivery: false };
+    throw new BrowserOperationTimeoutError('pre_send_mutation');
+  }
   try {
     await composer.click(playwrightTimeout(mutationWait)!);
     mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
     if (segmentBudget && mutationWait <= 0) throw new BrowserOperationTimeoutError('pre_send_mutation');
     await composer.fill(text, playwrightTimeout(mutationWait)!);
   } catch (error) {
+    if (composerWasMissing && (await boundedLocatorCount(composer, 250)) === 0) {
+      return { state: 'send_failed', cause: 'composer_unavailable', possibleDelivery: false };
+    }
     throw coerceBrowserOperationTimeout(error, 'pre_send_mutation');
   }
   const send = page.locator(SEND_BUTTON_SELECTOR);

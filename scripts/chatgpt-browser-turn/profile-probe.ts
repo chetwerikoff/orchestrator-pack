@@ -24,9 +24,9 @@ async function probePage(page: any): Promise<ProfileReadyProbe | null> {
     return surface.composer ? { ready: true, state: 'ready', cause: 'composer_ready_no_wall' } : null;
   }
   const diagnostic = 'wall_kind' in wall && wall.wall_kind !== 'none' ? { product_wall_diagnostic: wall } : {};
-  return surface.composer
-    ? { ready: true, state: 'ready', cause: 'composer_ready_no_wall', ...diagnostic }
-    : { ready: false, state: 'ui_contract_mismatch', cause: 'composer_unavailable', ...diagnostic };
+  // Profile verification cannot turn absence of a composer into a refusal
+  // to attempt the owned send; the send path supplies the delivery outcome.
+  return { ready: true, state: 'ready', cause: surface.composer ? 'composer_ready_no_wall' : 'composer_unavailable_advisory', ...diagnostic };
 }
 
 export async function probeProfileReady(config: BrowserConfig): Promise<ProfileReadyProbe> {
