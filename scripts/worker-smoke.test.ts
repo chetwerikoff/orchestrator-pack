@@ -6,7 +6,12 @@ import { runProcessSync } from './kernel/subprocess.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import {
   buildSmokeGhChildEnv,
+  classifyDeclaredScenarioNonPassCause,
+  evaluateWorkerSmokeCoverage,
   formatSmokeReportComment,
+  isSmokeNonPassCause,
+  normalizeSmokeReport,
+  parseSmokeAgentReport,
   SMOKE_REPORT_PRODUCER,
   type SmokeReport,
   type SmokeScenario,
@@ -404,6 +409,90 @@ describe('delegated readiness consumes the production post-smoke owner', () => {
       }
     }
   });
+  it('preserves earlier PR PASS for readiness while strict coverage blocks newest terminal-free BLOCKED', async () => {
+    let published = '';
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await runPublishSmoke({
+        ...gateOptions('/fixture/repo', ''), command: 'publish', reportFile: '/fixture/report.md',
+      }, {
+        resolveTarget: () => ({
+          repositorySlug: REPOSITORY, issueNumber: 1343, prNumber: 2001, issueBody,
+        }),
+        readReportFile: () => [
+          'result: BLOCKED',
+          'scenarios:',
+          '  - action: run runtime lifecycle | expected: PASS | observed: dependency unavailable | outcome: blocked | cause-family: scenario_precondition_unavailable',
+        ].join('\n'),
+        gitStatus: () => [],
+        gitHead: () => HEAD_ONE,
+        publishComment: (_pr, body) => { published = body; return 'https://github.com/comment'; },
+      });
+    } finally {
+      output.mockRestore();
+    }
+    expect(parseSmokeAgentReport(published)?.nonPassCause).toBe('scenario_precondition_unavailable');
+
+    // The earlier PASS is a synthetic terminal-owned strict-valid fixture.
+    // No terminal provenance is invented for the publisher's newer BLOCKED.
+    const terminalOwnedPass = formatSmokeReportComment(report('PASS', [
+      scenario('run runtime lifecycle', 'PASS'),
+    ])).replace(
+      'producer: ' + SMOKE_REPORT_PRODUCER + '\n',
+      'producer: ' + SMOKE_REPORT_PRODUCER
+        + '\nterminal-handle: smoke-terminal-1\norca-executable: runtime-adapter\nterminal-cleanup: closed_owned_handle\n',
+    );
+    const earlierPass = comment(1, report('PASS', [
+      scenario('run runtime lifecycle', 'PASS'),
+    ]), { body: terminalOwnedPass });
+    const laterBlocked = comment(2, report('BLOCKED', [{
+      ...scenario('run runtime lifecycle', 'PASS', 'blocked'),
+      causeFamily: 'scenario_precondition_unavailable',
+    }]), { body: published });
+    const target = {
+      repositorySlug: REPOSITORY, issueNumber: 1343, prNumber: 2001, headSha: HEAD_ONE,
+      resolvedIssueNumber: 1343, resolvedPrNumber: 2001, liveHeadSha: HEAD_ONE,
+      issueBodyMatchesTarget: true, trustedPublisherLogin: TRUSTED_ACTOR,
+      commentCensusComplete: true, commentSnapshotStable: true,
+    };
+    expect(evaluateWorkerSmokeCoverage({ issueBody, comments: [earlierPass], target }).accepting).toBe(true);
+    const strictBoth = evaluateWorkerSmokeCoverage({
+      issueBody, comments: [earlierPass, laterBlocked], target,
+    });
+    expect(strictBoth.accepting).toBe(false);
+    expect(strictBoth.latestClearingPass?.result).toBe('PASS');
+    expect(strictBoth.diagnostics.globalBlock).toMatchObject({
+      blocked: true, kind: 'invalid_candidate', reason: 'terminal_handle_missing_or_invalid',
+    });
+    const strictBlockedOnly = evaluateWorkerSmokeCoverage({ issueBody, comments: [laterBlocked], target });
+    expect(strictBlockedOnly.accepting).toBe(false);
+    expect(strictBlockedOnly.diagnostics.globalBlock.blocked).toBe(true);
+
+    for (const fixture of [
+      { comments: [earlierPass, laterBlocked], expected: 'verified' },
+      { comments: [laterBlocked], expected: 'missing' },
+    ]) {
+      const root = mkdtempSync(join(tmpdir(), 'smoke-readiness-2454-'));
+      const issueFile = join(root, 'issue.md');
+      writeFileSync(issueFile, issueBody, 'utf8');
+      const previous = process.env.OPK_BASE_DIR;
+      process.env.OPK_BASE_DIR = root;
+      try {
+        const { result } = await runDelegatedReadinessForComments(root, issueFile, fixture.comments);
+        expect(result.smokeEvidence.state).toBe(fixture.expected);
+        if (fixture.expected === 'missing') {
+          expect(result.readiness.failedPredicates).toContain('pr_smoke_not_passed');
+        } else {
+          expect(result.readiness.failedPredicates).not.toContain('pr_smoke_not_passed');
+        }
+      } finally {
+        if (previous === undefined) delete process.env.OPK_BASE_DIR;
+        else process.env.OPK_BASE_DIR = previous;
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
 });
 
 function executable(path: string, source: string): void {
@@ -772,4 +861,226 @@ describe('Issue #2319 terminal-free publish', () => {
       stdout.mockRestore();
     }
   });
+  it('recognizes the generic cause and only derives it from a terminal blocked precondition', () => {
+    expect(isSmokeNonPassCause('scenario_precondition_unavailable')).toBe(true);
+    expect(isSmokeNonPassCause('unsupported_executor_capability')).toBe(true);
+    const terminal: SmokeScenario = {
+      ...scenario('exercise publish scenario A', 'scenario A passes', 'blocked'),
+      causeFamily: 'scenario_precondition_unavailable',
+    };
+    const classify = (result: 'PASS' | 'FAIL' | 'BLOCKED', rows: SmokeScenario[]) =>
+      classifyDeclaredScenarioNonPassCause({
+        partial: { result, scenarios: rows }, agentActivityObserved: false,
+      });
+    expect(classify('BLOCKED', [terminal])).toBe('scenario_precondition_unavailable');
+    expect(classify('BLOCKED', [
+      scenario('exercise publish scenario A', 'scenario A passes'), terminal,
+    ])).toBe('scenario_precondition_unavailable');
+    expect(classify('FAIL', [terminal])).toBeUndefined();
+    expect(classify('BLOCKED', [{ ...terminal, causeFamily: 'scenario_evidence_missing' }])).toBeUndefined();
+    expect(classify('FAIL', [{
+      ...scenario('exercise publish scenario A', 'scenario A passes', 'fail'),
+      causeFamily: 'scenario_assertion_failed',
+    }])).toBe('executed_scenario_failure');
+    expect(classify('BLOCKED', [
+      scenario('exercise publish scenario A', 'scenario A passes', 'skipped'),
+    ])).toBeUndefined();
+    expect(classifyDeclaredScenarioNonPassCause({
+      partial: null, agentActivityObserved: true, agentCompleted: true,
+    })).toBe('missing_agent_report');
+    expect(classifyDeclaredScenarioNonPassCause({
+      zeroParsedScenarios: true, partial: null, agentActivityObserved: false,
+    })).toBe('zero_parsed_scenarios');
+  });
+
+  it('publishes exact single and mixed precondition BLOCKED reports in one comment and JSON each', async () => {
+    const blocked = (action: string, expected: string): SmokeScenario => ({
+      ...scenario(action, expected, 'blocked'), causeFamily: 'scenario_precondition_unavailable',
+    });
+    const single = [blocked('exercise publish scenario A', 'scenario A passes')];
+    const mixed = [
+      scenario('exercise publish scenario A', 'scenario A passes'),
+      scenario('exercise publish scenario B', 'scenario B passes'),
+      blocked('exercise publish scenario C', 'scenario C can start'),
+    ];
+    for (const fixture of [
+      { name: 'single absent', rows: single, explicit: false },
+      { name: 'mixed absent', rows: mixed, explicit: false },
+      { name: 'single explicit', rows: single, explicit: true },
+      { name: 'mixed explicit', rows: mixed, explicit: true },
+    ]) {
+      const writes: string[] = [];
+      const posted: string[] = [];
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+        writes.push(String(chunk)); return true;
+      }) as typeof process.stdout.write);
+      try {
+        const code = await runPublishSmoke(publishOptions(), {
+          resolveTarget: () => ({
+            ...publishTarget,
+            issueBody: planBody(fixture.rows.map((row) => ({ action: row.action, expected: row.expected }))),
+          }),
+          readReportFile: () => reportText('BLOCKED', fixture.rows,
+            fixture.explicit ? 'scenario_precondition_unavailable' : undefined),
+          gitStatus: () => ['?? synthetic-report.md'],
+          gitHead: () => HEAD_ONE,
+          publishComment: (_pr, body) => {
+            posted.push(body);
+            return 'https://github.com/chetwerikoff/orchestrator-pack/issues/2001#issuecomment-2454';
+          },
+        });
+        expect(code, fixture.name).toBe(0);
+        expect(posted, fixture.name).toHaveLength(1);
+        const parsed = parseSmokeAgentReport(posted[0]);
+        expect(parsed?.result).toBe('BLOCKED');
+        expect(parsed?.nonPassCause).toBe('scenario_precondition_unavailable');
+        expect(parsed?.causeFamily).toBe('scenario_precondition_unavailable');
+        expect(parsed?.scenarios?.map((row) => row.outcome)).toEqual(fixture.rows.map((row) => row.outcome));
+        const normalized = normalizeSmokeReport(parsed!, { issueNumber: 1343, prNumber: 2001, headSha: HEAD_ONE });
+        expect(normalized.ok).toBe(true);
+        if (normalized.ok) expect(normalized.report.nonPassCause).toBe('scenario_precondition_unavailable');
+        const emitted = JSON.parse(writes.join('').trim()) as Record<string, unknown>;
+        expect(emitted).toMatchObject({
+          result: 'BLOCKED', nonPassCause: 'scenario_precondition_unavailable',
+          causeFamily: 'scenario_precondition_unavailable', headSha: HEAD_ONE,
+          issueNumber: 1343, prNumber: 2001,
+        });
+        expect(emitted.scenarios).toHaveLength(fixture.rows.length);
+        expect(posted[0]).not.toContain('executed_scenario_failure');
+        expect(posted[0]).not.toContain('terminal-handle');
+      } finally {
+        stdout.mockRestore();
+      }
+    }
+  });
+
+
+  it('rejects explicit precondition cause on assertion FAIL or unrelated evidence BLOCKED with zero POSTs', async () => {
+    const cases = [
+      {
+        name: 'executed assertion is not a missing precondition',
+        text: reportText('FAIL', [{
+          ...scenario('exercise publish scenario A', 'scenario A passes', 'fail'),
+          causeFamily: 'scenario_assertion_failed',
+        }], 'scenario_precondition_unavailable'),
+      },
+      {
+        name: 'missing scenario evidence is not a missing precondition',
+        text: reportText('BLOCKED', [{
+          ...scenario('exercise publish scenario A', 'scenario A passes', 'blocked'),
+          causeFamily: 'scenario_evidence_missing',
+        }], 'scenario_precondition_unavailable'),
+      },
+    ];
+    for (const testCase of cases) {
+      let posts = 0;
+      await expect(runPublishSmoke(publishOptions(), {
+        resolveTarget: () => publishTarget,
+        readReportFile: () => testCase.text,
+        gitStatus: () => [],
+        gitHead: () => HEAD_ONE,
+        publishComment: () => { posts += 1; return 'https://github.com/comment'; },
+      }), testCase.name).rejects.toThrow('report_plan_mismatch: precondition_non_pass_cause_mismatch');
+      expect(posts, testCase.name).toBe(0);
+    }
+  });
+
+  it('refuses precondition PASS prefixes containing non-PASS cause evidence before normalization or POST', async () => {
+    const terminal = {
+      ...scenario('exercise publish scenario B', 'scenario B passes', 'blocked'),
+      causeFamily: 'scenario_precondition_unavailable' as const,
+    };
+    for (const prefixCauseFamily of [
+      'scenario_assertion_failed', 'scenario_evidence_missing', 'scenario_precondition_unavailable',
+    ] as const) {
+      for (const explicitlyDeclared of [false, true]) {
+        let posts = 0;
+        const text = reportText('BLOCKED', [
+          {
+            ...scenario('exercise publish scenario A', 'scenario A passes'),
+            causeFamily: prefixCauseFamily,
+          },
+          terminal,
+        ], explicitlyDeclared ? 'scenario_precondition_unavailable' : undefined);
+        await expect(runPublishSmoke(publishOptions(), {
+          resolveTarget: () => publishTarget,
+          readReportFile: () => text,
+          gitStatus: () => [],
+          gitHead: () => HEAD_ONE,
+          publishComment: () => { posts += 1; return 'https://github.com/comment'; },
+        }), `prefix ${prefixCauseFamily}; explicit=${explicitlyDeclared}`).rejects.toThrow(
+          'report_plan_mismatch: precondition_prefix_cause_family_invalid',
+        );
+        expect(posts, `prefix ${prefixCauseFamily}; explicit=${explicitlyDeclared}`).toBe(0);
+      }
+    }
+  });
+
+  it('rejects invalid raw cause, mismatched results and unsupported surrogates with zero POSTs', async () => {
+    const blocked: SmokeScenario[] = [{
+      ...scenario('exercise publish scenario A', 'scenario A passes', 'blocked'),
+      causeFamily: 'scenario_precondition_unavailable',
+    }];
+    const original = reportText('BLOCKED', blocked);
+    const causeLine = (cause: string) => original.replace('scenarios:', 'non-pass-cause: ' + cause + '\nscenarios:');
+    const cases = [
+      { name: 'unknown explicit', text: causeLine('invented_subtype') },
+      { name: 'blank explicit', text: causeLine('') },
+      { name: 'duplicate explicit', text: original.replace('scenarios:',
+        'non-pass-cause: scenario_precondition_unavailable\nnon-pass-cause: scenario_precondition_unavailable\nscenarios:') },
+      { name: 'malformed explicit', text: original.replace('scenarios:',
+        'non-pass-cause = scenario_precondition_unavailable\nscenarios:') },
+      ...[
+        'unsupported_executor_capability', 'missing_agent_report', 'zero_parsed_scenarios',
+        'executed_scenario_failure', 'login_required',
+      ].map((cause) => ({ name: 'unsupported ' + cause, text: causeLine(cause) })),
+      { name: 'FAIL with blocked', text: reportText('FAIL', blocked, 'scenario_precondition_unavailable') },
+      { name: 'BLOCKED with fail', text: reportText('BLOCKED', [{
+        ...scenario('exercise publish scenario A', 'scenario A passes', 'fail'),
+        causeFamily: 'scenario_assertion_failed',
+      }], 'executed_scenario_failure') },
+      { name: 'multiple terminal rows', text: reportText('BLOCKED', [blocked[0], {
+        ...scenario('exercise publish scenario B', 'scenario B passes', 'blocked'),
+        causeFamily: 'scenario_precondition_unavailable',
+      }]) },
+      { name: 'missing family', text: reportText('BLOCKED', [
+        scenario('exercise publish scenario A', 'scenario A passes', 'blocked'),
+      ]) },
+      { name: 'unknown family', text: original.replace(
+        'cause-family: scenario_precondition_unavailable', 'cause-family: alien_family',
+      ) },
+      { name: 'wrong plan identity', text: reportText('BLOCKED', [{
+        ...blocked[0], expected: 'different assertion',
+      }]) },
+      { name: 'extra plan row', text: reportText('BLOCKED', [
+        scenario('exercise publish scenario A', 'scenario A passes'),
+        scenario('exercise publish scenario B', 'scenario B passes'),
+        blocked[0],
+      ]) },
+      { name: 'skipped prefix', text: reportText('BLOCKED', [
+        scenario('exercise publish scenario A', 'scenario A passes', 'skipped'),
+        { ...scenario('exercise publish scenario B', 'scenario B passes', 'blocked'),
+          causeFamily: 'scenario_precondition_unavailable' },
+      ]) },
+      { name: 'tracked worktree dirty', text: original, dirty: true },
+      { name: 'PASS with cause', text: reportText('PASS', [
+        scenario('exercise publish scenario A', 'scenario A passes'),
+        scenario('exercise publish scenario B', 'scenario B passes'),
+      ], 'scenario_precondition_unavailable') },
+    ];
+    for (const testCase of cases) {
+      let posts = 0;
+      await expect(runPublishSmoke(publishOptions(), {
+        resolveTarget: () => publishTarget,
+        readReportFile: () => testCase.text,
+        gitStatus: () => ('dirty' in testCase && testCase.dirty) ? [' M scripts/example.ts'] : [],
+        gitHead: () => HEAD_ONE,
+        publishComment: () => { posts += 1; return 'https://github.com/comment'; },
+      }), testCase.name).rejects.toThrow(
+        /report_file_invalid|report_plan_mismatch|report_normalization_failed|tracked_worktree_dirty/,
+      );
+      expect(posts, testCase.name).toBe(0);
+    }
+  });
+
 });
