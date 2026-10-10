@@ -17,6 +17,7 @@ import {
   productStatusText,
   projectConversationUrlMatchesProject,
   type BrowserConfig,
+  type ProductWallDiagnostic,
 } from './ui-adapter.ts';
 import type { TurnState } from './contracts.ts';
 import { profileDirs, sha256 } from './storage-common.ts';
@@ -70,14 +71,15 @@ interface StateLightAdvisoryWallRecord {
   readonly recorded_at: string;
   readonly expires_at: string;
   readonly invocation_id?: string;
+  readonly matched_text?: string;
+  readonly matched_selector?: string;
 }
 
 export type StateLightFreshConversationClaimResult = 'claimed' | 'owned' | 'contended';
 
 export type StateLightFreshPrepareResult =
   | { state: 'ready' }
-  | { state: 'ui_contract_mismatch'; cause: string }
-  | { state: 'wall'; wallState: TurnState; cause: string };
+  | { state: 'ui_contract_mismatch'; cause: string };
 
 export class StateLightNavigationCounter {
   readonly gotoCount = { value: 0 };
@@ -507,7 +509,7 @@ export function newChatSendSlotEnabled(env: NodeJS.ProcessEnv = process.env): bo
 export function readStateLightAdvisoryWall(
   profileKey: string,
   nowMs = Date.now(),
-): { state: TurnState; cause: string } | null {
+): { state: TurnState; cause: string; matched_text: string; matched_selector: string } | null {
   const path = stateLightAdvisoryWallPath(profileKey);
   if (!existsSync(path)) return null;
   const record = readStateLightAdvisoryWallRecord(path);
@@ -517,7 +519,7 @@ export function readStateLightAdvisoryWall(
     try { rmSync(path, { force: true }); } catch { /* fail-open */ }
     return null;
   }
-  return { state: record.wall_state, cause: record.cause };
+  return { state: record.wall_state, cause: record.cause, matched_text: record.matched_text ?? 'none', matched_selector: record.matched_selector ?? 'none' };
 }
 
 export function recordStateLightAdvisoryWall(
@@ -527,6 +529,7 @@ export function recordStateLightAdvisoryWall(
   invocationId?: string,
   ttlMs = STATE_LIGHT_ADVISORY_WALL_TTL_MS,
   nowMs = Date.now(),
+  diagnostic?: ProductWallDiagnostic,
 ): void {
   if (!ADVISORY_WALL_STATES.has(wallState)) return;
   const dir = profileDirs(profileKey).root;
@@ -539,6 +542,8 @@ export function recordStateLightAdvisoryWall(
     recorded_at: new Date(nowMs).toISOString(),
     expires_at: new Date(nowMs + ttlMs).toISOString(),
     ...(invocationId ? { invocation_id: invocationId } : {}),
+    matched_text: diagnostic?.matched_text ?? 'none',
+    matched_selector: diagnostic?.matched_selector ?? 'none',
   };
   writeFileSync(stateLightAdvisoryWallPath(profileKey), `${JSON.stringify(record)}\n`, { mode: 0o600 });
 }
@@ -716,13 +721,12 @@ async function probeProductWall(
   page: any,
   deadlineMs?: number,
   now: () => number = Date.now,
-): Promise<{ state: TurnState; cause: string } | null> {
+): Promise<ProductWallDiagnostic> {
   const timeoutMs = Math.min(PRODUCT_WALL_PROBE_MS, requireFreshPreparationTime(deadlineMs, now));
   const wall = classifyProductWall(await boundedFreshPreparation(
     () => productStatusText(page, timeoutMs), deadlineMs, now,
   ));
-  if (!wall.state) return null;
-  return { state: wall.state, cause: wall.cause ?? `${wall.state}_detected` };
+  return 'wall_kind' in wall ? wall : { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
 }
 
 export async function openBlankProjectChatSurface(
@@ -776,6 +780,7 @@ export async function prepareStateLightFreshConversation(
   navigation?: StateLightNavigationCounter,
   deadlineMs?: number,
   now: () => number = Date.now,
+  onProductWall?: (diagnostic: ProductWallDiagnostic) => void,
 ): Promise<StateLightFreshPrepareResult> {
   if (!config.newChat || !config.projectUrl) {
     return { state: 'ui_contract_mismatch', cause: 'project_url_required' };
@@ -800,8 +805,7 @@ export async function prepareStateLightFreshConversation(
     const needsSurface = !currentUrl || !isBlankProjectSurfaceUrl(currentUrl, config.projectUrl);
     if (needsSurface) {
       await openBlankProjectChatSurface(page, config.projectUrl, navigation, deadlineMs, now);
-      const wall = await probeProductWall(page, deadlineMs, now);
-      if (wall) return { state: 'wall', wallState: wall.state, cause: wall.cause };
+      onProductWall?.(await probeProductWall(page, deadlineMs, now));
       try {
         currentUrl = normalizeConversationUrl(page.url());
       } catch {
