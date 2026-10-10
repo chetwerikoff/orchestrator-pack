@@ -242,6 +242,9 @@ export interface TerminalEnvelope {
   readonly turn_result_cause?: string;
   readonly send_count?: number;
   readonly observed_invocation_id?: string;
+  readonly send_slot_holder_invocation_id?: string;
+  readonly send_slot_holder_phase?: string;
+  readonly stale_composer_cleared?: true;
   readonly observed_turn_result_identity?: string;
   readonly recovery_available: boolean;
   readonly conversation_locator?: string;
@@ -511,6 +514,16 @@ function parseTurnResult(line: string): ParsedTurnResult | null {
     };
 
     if (body.send_attempted === true) result.send_attempted = true;
+    if (body.stale_composer_cleared === true) result.stale_composer_cleared = true;
+    if (body.cause === 'state_light_new_chat_send_slot_timeout') {
+      const validHolder = typeof body.send_slot_holder_invocation_id === 'string'
+        && /^[A-Za-z0-9-]{1,128}$/u.test(body.send_slot_holder_invocation_id)
+        && typeof body.send_slot_holder_phase === 'string'
+        && ['prepared', 'dispatching', 'not_sent', 'sent_unbound', 'sent_unharvested', 'harvested', 'unknown']
+          .includes(body.send_slot_holder_phase);
+      result.send_slot_holder_invocation_id = validHolder ? body.send_slot_holder_invocation_id as string : 'unknown';
+      result.send_slot_holder_phase = validHolder ? body.send_slot_holder_phase as string : 'unknown';
+    }
     if (typeof body.legacy_configured_profile_key === 'string') {
       result.legacy_configured_profile_key = body.legacy_configured_profile_key;
     }
@@ -970,6 +983,13 @@ async function finalizeCandidatePath(
   // evidence, not a lifecycle outcome.
   const resolvedExitCode: number | null = exited ? (completion.result?.exitCode ?? childExitCode) : null;
   const childExitDiagnostic: ChildExitDiagnostic = exited ? 'exited_within_grace' : 'retained_after_result';
+  const projectedTurnDiagnostics = {
+    ...(candidate.cause === 'state_light_new_chat_send_slot_timeout' ? {
+      send_slot_holder_invocation_id: candidate.send_slot_holder_invocation_id ?? 'unknown',
+      send_slot_holder_phase: candidate.send_slot_holder_phase ?? 'unknown',
+    } : {}),
+    ...(candidate.stale_composer_cleared === true ? { stale_composer_cleared: true as const } : {}),
+  };
   const incidentEnvelope = (incident: string): TerminalEnvelope => ({
     schema: TERMINAL_SCHEMA,
     run_identity: config.runIdentity,
@@ -988,6 +1008,7 @@ async function finalizeCandidatePath(
     turn_result_cause: candidate.cause,
     send_count: candidate.resolved_send_count,
     observed_invocation_id: candidate.invocation_id,
+    ...projectedTurnDiagnostics,
     ...(candidate.observed_turn_result_identity
       ? { observed_turn_result_identity: candidate.observed_turn_result_identity }
       : {}),
@@ -1017,6 +1038,7 @@ async function finalizeCandidatePath(
       turn_result_cause: candidate.cause,
       send_count: candidate.resolved_send_count,
       observed_invocation_id: candidate.invocation_id,
+      ...projectedTurnDiagnostics,
       ...(candidate.observed_turn_result_identity
         ? { observed_turn_result_identity: candidate.observed_turn_result_identity }
         : {}),
