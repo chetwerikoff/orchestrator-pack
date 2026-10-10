@@ -5035,6 +5035,7 @@ async function runTurn(
         && Date.now() >= freshConversationLandingDeadline
         && !readProjectConversationUrl(page, config.projectUrl ?? '')
         && !ownedPromptEverSeen
+        && !ownedStopDeliveryObserved
       ) {
         return returnFreshConversationLandingMismatch(
           page,
