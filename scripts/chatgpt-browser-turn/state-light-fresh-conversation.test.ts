@@ -466,6 +466,47 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
   });
 
+  it('never clears a stale draft after its selected tab is repurposed during the read (#2487)', async () => {
+    const prompt = 'PROMPT-STALE-TAB-REPURPOSED';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    await turn.composer.fill('SYNTHETIC-STALE-DRAFT');
+    turn.composer.fill.mockClear();
+    const originalUrl = turn.page.url.getMockImplementation()!;
+    const read = turn.composer.innerText.getMockImplementation()!;
+    let repurposed = false;
+    turn.page.url.mockImplementation(() => repurposed ? OTHER_PROJECT_CONVERSATION_URL : originalUrl());
+    turn.composer.innerText.mockImplementationOnce(async () => {
+      const text = await read();
+      repurposed = true;
+      return text;
+    });
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'repurposed-stale-tab.txt'));
+    expect(outcome.result).toMatchObject({ send_count: 0, cause: 'fresh_conversation_surface_unavailable' });
+    expect(turn.composer.fill).not.toHaveBeenCalled();
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.page.close).not.toHaveBeenCalled();
+  });
+
+  it('never erases a stale composer that was rewritten between safe preflight reads (#2487)', async () => {
+    const prompt = 'PROMPT-STALE-REWRITTEN';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    await turn.composer.fill('SYNTHETIC-STALE-DRAFT');
+    turn.composer.fill.mockClear();
+    const read = turn.composer.innerText.getMockImplementation()!;
+    let draftReads = 0;
+    turn.composer.innerText.mockImplementation(async () => {
+      draftReads++;
+      if (draftReads === 2) await turn.composer.fill('SYNTHETIC-REPLACED-DRAFT');
+      return await read();
+    });
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'rewritten-stale-tab.txt'));
+    expect(outcome.result).toMatchObject({ send_count: 0, cause: 'fresh_composer_draft_unreadable' });
+    expect(turn.composer.fill.mock.calls.map((args: unknown[]) => args[0])).toEqual(['SYNTHETIC-REPLACED-DRAFT']);
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.page.close).not.toHaveBeenCalled();
+  });
   it('closes a proven owned, never-clicked draft only after 60s of disabled Send (#2487)', async () => {
     const prompt = 'PROMPT-FRESH-NEVER-ENABLED';
     const invocationId = randomUUID();
@@ -483,6 +524,104 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
   });
 
+  it('does not click Send when the owned marker is replaced during enablement polling (#2487)', async () => {
+    const prompt = 'PROMPT-PRECLICK-IDENTITY';
+    const invocationId = randomUUID();
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    turn.sendButton.isEnabled.mockImplementation(async () => {
+      await turn.composer.fill('SYNTHETIC-FOREIGN-COMPOSER-EDIT');
+      return true;
+    });
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, 'foreign-before-send.txt'), '90000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'fresh_owned_payload_changed_before_click', send_count: 0,
+    });
+    expect(turn.getSends()).toBe(0);
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(turn.composer.fill).toHaveBeenLastCalledWith('SYNTHETIC-FOREIGN-COMPOSER-EDIT');
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
+  });
+
+  it('rechecks the complete 60s Send reserve after a delayed final Stop read (#2487)', async () => {
+    const prompt = 'PROMPT-SLOW-STOP-BOUNDARY';
+    const invocationId = randomUUID();
+    const invocationDeadlineMs = mocks.nowMs + 90_000;
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    const oldLocator = turn.page.locator.getMockImplementation()!;
+    let lateProbeInjected = false;
+    turn.page.locator.mockImplementation((selector: string) => {
+      if (selector.includes(STOP_BUTTON_TESTID)) {
+        return scalarLocator({ count: vi.fn(async () => {
+          if (!lateProbeInjected && turn.composer.fill.mock.calls.some((args: unknown[]) => String(args[0]).includes(prompt))) {
+            lateProbeInjected = true;
+            // Before the probe there is just over a full window left. Its
+            // async work consumes that reserve; no late Send is authorized.
+            mocks.nowMs = invocationDeadlineMs - 59_000;
+          }
+          return 0;
+        }) });
+      }
+      return oldLocator(selector);
+    });
+    turn.sendButton.isEnabled.mockImplementation(async () => mocks.nowMs >= invocationDeadlineMs + 500);
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, 'slow-stop-reserve.txt'), '90000', invocationId,
+    );
+    expect(lateProbeInjected).toBe(true);
+    expect(outcome.result).toMatchObject({
+      state: 'driver_error', cause: 'state_light_new_chat_send_budget_unavailable', send_count: 0,
+    });
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.page.close).toHaveBeenCalledTimes(1);
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
+  });
+
+  it('closes its already-empty created tab when the budget aborts before any fill (#2487)', async () => {
+    const prompt = 'PROMPT-PRE-FILL-BUDGET-FAILURE';
+    const invocationId = randomUUID();
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, 'empty-pre-fill.txt'), '61000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({
+      state: 'driver_error', cause: 'state_light_new_chat_send_budget_unavailable', send_count: 0,
+    });
+    expect(turn.composer.fill).not.toHaveBeenCalled();
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.page.close).toHaveBeenCalledTimes(1);
+    expect(outcome.result.incidents).not.toContain('owned_composer_cleanup_unavailable');
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
+  });
+
+  it('preserves a formerly owned tab that navigates during terminal composer cleanup (#2487)', async () => {
+    const prompt = 'PROMPT-CLEANUP-PAGE-REPLACED';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    turn.sendButton.isEnabled.mockResolvedValue(false);
+    const originalUrl = turn.page.url.getMockImplementation()!;
+    const read = turn.composer.innerText.getMockImplementation()!;
+    let repurposed = false;
+    turn.page.url.mockImplementation(() => repurposed ? OTHER_PROJECT_CONVERSATION_URL : originalUrl());
+    turn.composer.innerText.mockImplementation(async () => {
+      const text = await read();
+      if (mocks.nowMs >= 70_000) repurposed = true;
+      return text;
+    });
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'cleanup-tab-replaced.txt'));
+    expect(outcome.result).toMatchObject({
+      state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
+    });
+    expect(repurposed).toBe(true);
+    expect(turn.composer.fill).not.toHaveBeenLastCalledWith('', expect.anything());
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(outcome.result.incidents).toContain('owned_composer_cleanup_unavailable');
+  });
   it('allows one and only one additional click after positive pre-actionability TimeoutError (#2487)', async () => {
     const prompt = 'PROMPT-RETRY-PROVEN';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
@@ -545,6 +684,8 @@ describe('state-light fresh conversation collision recovery', () => {
     ['truncated Call log', 'locator.click: Timeout 5000ms exceeded\nCall log:\n - waiting for element to be visible'],
     ['post-dispatch action', provenPreActionabilityLog + '\n - performing click action'],
     ['explicit dispatched action', provenPreActionabilityLog + '\n - click done'],
+    ['actual Playwright click completion', provenPreActionabilityLog + '\n - click action done'],
+    ['late click progression', provenPreActionabilityLog + '\n - scrolling into view'],
   ] as const)('never retries or clears an unproven Playwright first action: %s (#2487)', async (_label, message) => {
     const invocationId = randomUUID();
     const prompt = 'PROMPT-2487-UNPROVEN-LOG';

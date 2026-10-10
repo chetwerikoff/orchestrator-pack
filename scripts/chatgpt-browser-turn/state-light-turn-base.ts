@@ -385,11 +385,14 @@ export interface TurnRunOutcome {
   readonly ownershipForfeited?: boolean;
   /** Private, process-local cleanup value; never emitted as turn-result. */
   readonly ownedTypedPayload?: string;
+  /** Exact new-chat project surface of a proven created tab; never emitted. */
+  readonly ownedFreshProjectUrl?: string;
 }
 
 interface FreshComposerCleanupContext {
   page?: any;
   markedPayload?: string;
+  projectUrl?: string;
   staleComposerCleared: boolean;
 }
 
@@ -2023,6 +2026,7 @@ async function observeStateLightSendDelivery(
   invocationDeadlineMs: number,
   deliveryProofWaitMs = MAX_LOCAL_READ_WAIT_MS,
   browser?: any,
+  allowOwnedStopWitness = false,
 ): Promise<StateLightSendDeliveryWitness> {
   const proofDeadlineMs = Math.min(
     invocationDeadlineMs,
@@ -2034,6 +2038,7 @@ async function observeStateLightSendDelivery(
       invocationDeadlineMs,
       Math.max(Date.now() + 1, proofDeadlineMs),
     );
+    if (allowOwnedStopWitness && await readFreshStopVisible(page, attemptDeadlineMs) === true) return 'owned_stop';
     const observation = await readPageObservation(
       page,
       undefined,
@@ -2054,6 +2059,9 @@ async function observeStateLightSendDelivery(
     if (composerText !== undefined && normalizeVisibleText(composerText).length === 0) {
       return 'composer_cleared';
     }
+    if (allowOwnedStopWitness && await readFreshStopVisible(
+      page, Math.min(invocationDeadlineMs, Math.max(Date.now() + 1, proofDeadlineMs)),
+    ) === true) return 'owned_stop';
     const remainingMs = proofDeadlineMs - Date.now();
     if (remainingMs <= 0) return 'unproven';
     await sleep(page, Math.min(INITIAL_POLL_MS, remainingMs));
@@ -2108,6 +2116,7 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
       input.invocationDeadlineMs,
       input.deliveryProofWaitMs,
       input.browser,
+      input.allowOwnedStopWitness === true,
     );
   return {
     sendCount: witness === 'unproven' ? 0 : 1,
@@ -2143,15 +2152,26 @@ async function readFreshStopVisible(page: any, deadlineMs: number): Promise<bool
 async function prepareFreshComposerDraft(
   page: any,
   deadlineMs: number,
+  assertOwnerAndPage?: () => void,
 ): Promise<'empty' | 'cleared' | 'unavailable'> {
+  assertOwnerAndPage?.();
   const composer = page.locator(COMPOSER_SELECTOR);
   const original = await readComposerTextForSendDelivery(composer, deadlineMs);
+  assertOwnerAndPage?.();
   if (original === undefined) return 'unavailable';
   if (original.length === 0) return 'empty';
+  // Read the current Stop and text again after the first awaited observation;
+  // a repurposed tab or rewritten draft is not ours to erase.
+  if (await readFreshStopVisible(page, deadlineMs) !== false) return 'unavailable';
+  const current = await readComposerTextForSendDelivery(composer, deadlineMs);
+  assertOwnerAndPage?.();
+  if (current !== original) return 'unavailable';
   try {
     const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
     if (waitMs <= 0) return 'unavailable';
+    assertOwnerAndPage?.();
     await composer.fill('', { timeout: waitMs });
+    assertOwnerAndPage?.();
   } catch {
     return 'unavailable';
   }
@@ -2209,11 +2229,16 @@ async function waitForFreshSendButton(
  * invalidates that proof. Missing/truncated logs fail closed.
  */
 function affirmativePreActionabilityTimeout(actionError: string | undefined): boolean {
-  if (!actionError || !/^(?:TimeoutError):/u.test(actionError)
-    || !/Call log:/u.test(actionError)
-    || !/\belement is not enabled\b/u.test(actionError)
-    || /performing click action|click done|dispatch(?:ed|ing)/iu.test(actionError)) return false;
-  return true;
+  if (!actionError || !/^TimeoutError:\s*locator\.click:\s*Timeout\b/iu.test(actionError)
+    || !/Call log:/u.test(actionError)) return false;
+  const log = actionError.slice(actionError.indexOf('Call log:') + 'Call log:'.length);
+  const lines = log.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+  // Every recorded step must remain pre-dispatch, and the *last* step must
+  // affirmatively be disabled. Unknown/partial action logs cannot permit resend.
+  if (lines.length < 2 || !lines.some((line) => /waiting for element to be visible, enabled and stable/iu.test(line))
+    || !/^- element is not enabled$/iu.test(lines.at(-1) ?? '')) return false;
+  if (/performing click action|click action done|click done|scrolling into view|done scrolling|element is visible, enabled and stable|pointer(?:down|up)|mouse(?:down|up)|waiting for scheduled navigations|dispatch(?:ed|ing)/iu.test(log)) return false;
+  return lines.every((line) => /^- (?:waiting for locator\b.*|locator resolved to\b.*|attempting click action|waiting for element to be visible, enabled and stable|element is not enabled|retrying click action(?:, attempt #\d+)?|waiting \d+ms)$/iu.test(line));
 }
 
 async function freshRetryDomGuards(input: {
@@ -2808,6 +2833,10 @@ async function runTurn(
     }
     if (!page) {
       page = await createDedicatedTurnPage(browser, invocationBudget);
+      if (config.newChat && freshCleanup) {
+        freshCleanup.page = page;
+        freshCleanup.projectUrl = config.projectUrl;
+      }
       await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs);
     }
 
@@ -2941,6 +2970,7 @@ async function runTurn(
 
     const sendOwnedFreshPrompt = async (): Promise<TurnRunOutcome | null> => {
       setHeartbeatPhase('composer_dispatch');
+      if (freshCleanup) freshCleanup.markedPayload = markedPayload;
       // Preparation, stale-draft cleanup, baseline and insertion must not
       // consume either of the two readiness windows.
       requireFreshSendReserve(deriveComposerInsertionBudgetMs(markedPayload) + FRESH_SEND_PREPARE_RESERVE_MS);
@@ -2965,7 +2995,7 @@ async function runTurn(
           ),
         };
       }
-      const draft = await prepareFreshComposerDraft(page, Math.min(invocationDeadlineMs, Date.now() + MAX_LOCAL_READ_WAIT_MS * 2));
+      const draft = await prepareFreshComposerDraft(page, Math.min(invocationDeadlineMs, Date.now() + MAX_LOCAL_READ_WAIT_MS * 2), assertFreshOwner);
       assertFreshOwner();
       if (draft === 'unavailable') {
         incident('invocation_blocker', 'fresh_composer_draft_unreadable', 'preserve_page');
@@ -3008,6 +3038,8 @@ async function runTurn(
           ),
         };
       }
+      // The last Stop probe is awaited: reserve both full windows after it.
+      requireFreshSendReserve(0);
       const readinessStartedAtMs = Date.now();
       const readinessDeadlineMs = readinessStartedAtMs + FRESH_SEND_RESERVE_MS;
       const readiness = await waitForFreshSendButton(page, sendButton, assertFreshOwner, readinessStartedAtMs);
@@ -3034,12 +3066,19 @@ async function runTurn(
       }
       const beforeClick = (): void => {
         assertFreshOwner();
+        if (Date.now() >= invocationDeadlineMs) throw new Error('state_light_new_chat_send_budget_unavailable');
         if (Date.now() >= readinessDeadlineMs) throw new Error('fresh_send_readiness_deadline_exhausted');
         transitionStateLightTurnObservation({
           profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
         });
         sendAttempted = true;
       };
+      // The composer can change during Send readiness polling. Do not send a
+      // different draft as though it were the invocation's marked payload.
+      if (await readComposerTextForSendDelivery(
+        composer, Math.min(invocationDeadlineMs, readinessDeadlineMs),
+      ) !== markedPayload) throw new Error('ui_contract_mismatch:fresh_owned_payload_changed_before_click');
+      assertFreshOwner();
       const sendAction = async () => await dispatchStateLightSendAndObserveDelivery({
         page, browser, composer, sendButton, hasSendButton: true, marker,
         baselineUserNodeCount, sendWaitMs: Math.max(1, Math.min(MAX_LOCAL_READ_WAIT_MS, readinessDeadlineMs - Date.now())),
@@ -5292,22 +5331,40 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   let pageAction = (outcome.result.send_count >= 1 || outcome.result.send_attempted === true) && outcome.result.state !== 'ok'
     ? 'preserve'
     : requestedPageAction;
-  if (pageAction === 'close' && outcome.result.send_count === 0 && outcome.ownedTypedPayload) {
-    // Only the exact text left by this invocation on its proven created tab
-    // can be removed, and only after a durable prepared -> not_sent proof.
+  if (pageAction === 'close' && outcome.result.send_count === 0 && outcome.ownedFreshProjectUrl) {
+    // The slot was already owner-released. For this proven-created tab, check
+    // its current blank project identity and no foreign Stop at each destructive
+    // boundary, never only its original creation handle or old composer read.
+    const stillOwnedBlankSurface = (): boolean => {
+      try {
+        return cleanupAuthorityProven
+          && !browserOrPageDefinitelyLost(outcome.page, outcome.browser)
+          && isBlankProjectSurfaceUrl(String(outcome.page.url()), outcome.ownedFreshProjectUrl!);
+      } catch { return false; }
+    };
+    const safeComposerBoundary = async (): Promise<boolean> => stillOwnedBlankSurface()
+      && await readFreshStopVisible(outcome.page, Date.now() + MAX_LOCAL_READ_WAIT_MS) === false
+      && stillOwnedBlankSurface();
     let cleared = false;
     if (observedNotSent && !pageLost && outcome.result.send_attempted !== true) {
       try {
         const composer = outcome.page.locator(COMPOSER_SELECTOR);
-        const text = await readComposerTextForSendDelivery(composer, Date.now() + MAX_LOCAL_READ_WAIT_MS);
-        if (text === outcome.ownedTypedPayload) {
-          await composer.fill('', { timeout: MAX_LOCAL_READ_WAIT_MS });
-          cleared = await readComposerTextForSendDelivery(
-            composer, Date.now() + MAX_LOCAL_READ_WAIT_MS,
-          ) === '';
+        if (await safeComposerBoundary()) {
+          const text = await readComposerTextForSendDelivery(composer, Date.now() + MAX_LOCAL_READ_WAIT_MS);
+          // The empty composer is already clean if insertion never happened.
+          // A nonempty draft must still match this turn's exact marked payload.
+          if (text !== undefined && (text === '' || text === outcome.ownedTypedPayload)
+            && await safeComposerBoundary()
+            && await readComposerTextForSendDelivery(composer, Date.now() + MAX_LOCAL_READ_WAIT_MS) === text
+            && stillOwnedBlankSurface()) {
+            if (text !== '') await composer.fill('', { timeout: MAX_LOCAL_READ_WAIT_MS });
+            cleared = await safeComposerBoundary()
+              && await readComposerTextForSendDelivery(composer, Date.now() + MAX_LOCAL_READ_WAIT_MS) === ''
+              && await safeComposerBoundary();
+          }
         }
       } catch {
-        // Keep the tab and report that safe cleanup could not be confirmed.
+        // Preserve the tab if owner, Stop, content or clearing is uncertain.
       }
     }
     if (!cleared) {
@@ -5426,6 +5483,8 @@ export async function runStateLightTurn(
       },
       ...(freshCleanup.page && outcome.page === freshCleanup.page && freshCleanup.markedPayload
         ? { ownedTypedPayload: freshCleanup.markedPayload } : {}),
+      ...(freshCleanup.page && outcome.page === freshCleanup.page && freshCleanup.projectUrl
+        ? { ownedFreshProjectUrl: freshCleanup.projectUrl } : {}),
     };
     const result = await finalizeTurn(augmented);
     // Keep liveness continuous through every pre-emission cleanup await, then

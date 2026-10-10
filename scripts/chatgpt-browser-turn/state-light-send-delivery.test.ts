@@ -212,11 +212,47 @@ describe('Issue #2487 fresh-send readiness, positive non-dispatch evidence and S
       callLog + '\n - performing click action',
     )).toBe(false);
     expect(__testSendDelivery.affirmativePreActionabilityTimeout(
+      callLog + '\n - click action done',
+    )).toBe(false);
+    expect(__testSendDelivery.affirmativePreActionabilityTimeout(
+      callLog + '\n - scrolling into view',
+    )).toBe(false);
+    expect(__testSendDelivery.affirmativePreActionabilityTimeout(
+      callLog + '\n - unknown later actionability progress',
+    )).toBe(false);
+    expect(__testSendDelivery.affirmativePreActionabilityTimeout(
       callLog.replace('element is not enabled', 'waiting for enabled element'),
     )).toBe(false);
     expect(__testSendDelivery.affirmativePreActionabilityTimeout(
       callLog.replace('TimeoutError', 'Error'),
     )).toBe(false);
+  });
+
+  it('accepts an attributable Stop discovered during delivery-proof polling after the first probe', async () => {
+    const harness = createHarness('click', 'none');
+    const previousLocator = harness.page.locator;
+    let stopReads = 0;
+    harness.page.locator = vi.fn((selector: string) => {
+      if (selector.includes('stop-button') || selector.includes('Stop')) {
+        return { count: vi.fn(async () => ++stopReads >= 3 ? 1 : 0), isVisible: vi.fn(async () => true) };
+      }
+      return previousLocator(selector);
+    });
+    const result = await __testSendDelivery.dispatchStateLightSendAndObserveDelivery({
+      page: harness.page,
+      composer: harness.composer,
+      sendButton: harness.sendButton,
+      hasSendButton: true,
+      marker: MARKER,
+      baselineUserNodeCount: 1,
+      sendWaitMs: 1_000,
+      invocationDeadlineMs: Date.now() + 1_000,
+      deliveryProofWaitMs: 150,
+      allowOwnedStopWitness: true,
+    });
+    expect(result).toMatchObject({ sendCount: 1, witness: 'owned_stop' });
+    expect(stopReads).toBeGreaterThanOrEqual(3);
+    expect(harness.sendButton.click).toHaveBeenCalledTimes(1);
   });
 
   it('treats newly attributable Stop after an owned click as delivered without numeric user nodes', async () => {
