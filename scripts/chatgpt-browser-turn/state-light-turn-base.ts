@@ -2588,19 +2588,6 @@ async function runTurn(
     const config = baseConfig;
     const marker = generateOwnedPromptMarker();
     admitStateLightTurnObservation({ profileKey, invocationId, marker });
-    // ORCA_TERMINAL_HANDLE is only a locator for the current occupant. It does not
-    // authenticate the generation which originally launched this invocation.
-    // r06 forbids composer mutation until independent launch provenance exists.
-    if (process.env.ORCA_TERMINAL_HANDLE !== undefined) {
-      incident('runtime_owner_unproven', 'original_launch_generation_unavailable', 'return_pre_send_no_effect');
-      return {
-        result: compactResult(
-          'driver_error', 'invocation', 'original_launch_generation_unavailable',
-          invocationId, profileKey, 0, pollCount, navigation, incidents, {},
-          journalWriteFailed,
-        ),
-      };
-    }
     const invocationStartedAt = Date.now();
     const invocationDeadlineMs = invocationStartedAt + config.timeoutMs;
     const invocationBudget = createTurnOperationBudget(config.timeoutMs, invocationStartedAt);
