@@ -9,6 +9,7 @@ import { mapGptReplyToReviewPayload } from './lib/pack-gpt-reviewer.ts';
 import {
   observeGptPackReviewAttempt,
   observeNativePackReviewAttempt,
+  recordClaudeNativeChildFrame,
   parseAuthoritativeTier,
   reconcileStalePackReviewRuns,
   resolveGithubCommitIsStrictDescendant,
@@ -680,6 +681,148 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
       .toMatchObject({ state: 'observation_unavailable', replacementEligible: false });
     expect(observeNativePackReviewAttempt(run, Date.parse('2026-08-30T00:15:00.000Z')))
       .toMatchObject({ state: 'observation_unavailable', replacementEligible: true });
+  });
+});
+
+
+describe('Issue #2474 Claude same-ordinal child rollover and original budget', () => {
+  it('records both real child frames and observes the newest live group without resetting the clock', async () => {
+    if (process.platform === 'win32') return;
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2474-children-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const started = '2026-10-10T00:00:00.000Z';
+    const repairedAt = '2026-10-10T00:09:00.000Z';
+    const run = createPackReviewRun({
+      projectId: 'orchestrator-pack', storeRoot, prNumber: 2474,
+      headSha: HEAD, trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack', resolvedReviewer: 'claude',
+    });
+    const runId = run.run.id;
+    updatePackReviewRun(runId, {
+      nativeAttempt: {
+        schema: 'pack-review-native-attempt/v1', reviewer: 'claude',
+        invocationOrdinal: 1, startedAtUtc: started,
+        effectiveBudgetMs: 10 * 60_000, wrapperPid: process.pid,
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const binding = { runId, projectId: 'orchestrator-pack', storeRoot, invocationOrdinal: 1 };
+    const initial = {
+      schema: 'pack-review-native-child/v1', runId,
+      reviewer: 'claude', pid: 91_001, processGroupId: 91_001, startedAtUtc: started,
+    };
+    expect(recordClaudeNativeChildFrame(initial, { ...binding, invocationOrdinal: 2 })).toBe(false);
+    expect(recordClaudeNativeChildFrame({ ...initial, reviewer: 'codex' }, binding)).toBe(false);
+    expect(recordClaudeNativeChildFrame(initial, binding)).toBe(true);
+
+    // Start a private detached synthetic group; no live Claude or external review.
+    // Using the existing process primitive keeps the group observation factual.
+    let resolvePid!: (pid: number) => void;
+    const spawned = new Promise<number>((resolve) => { resolvePid = resolve; });
+    const childExit = runProcess({
+      command: process.execPath,
+      args: ['-e', 'setInterval(() => {}, 1000)'],
+      allowEmptyStdout: true,
+      onSpawn: resolvePid,
+    });
+    const activePid = await spawned;
+    try {
+      expect(recordClaudeNativeChildFrame({
+        ...initial, pid: activePid, processGroupId: activePid, startedAtUtc: repairedAt,
+      }, binding)).toBe(true);
+      const persisted = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot })!;
+      expect(persisted.nativeAttempt).toMatchObject({
+        reviewer: 'claude', invocationOrdinal: 1,
+        startedAtUtc: started, childStartedAtUtc: repairedAt,
+        childPid: activePid, childProcessGroupId: activePid,
+      });
+      expect(observeNativePackReviewAttempt(persisted, Date.parse(started) + 9 * 60_000))
+        .toMatchObject({
+          reviewer: 'claude', state: 'running', elapsedMs: 9 * 60_000,
+          nativeReplacementCeilingMs: 600_000, replacementEligible: false,
+        });
+      expect(observeNativePackReviewAttempt(persisted, Date.parse(started) + 10 * 60_000))
+        .toMatchObject({
+          reviewer: 'claude', state: 'running', elapsedMs: 600_000,
+          replacementEligible: true,
+        });
+      process.kill(-activePid, 'SIGKILL');
+      await childExit;
+      expect(observeNativePackReviewAttempt(persisted, Date.parse(started) + 9 * 60_000 + 1))
+        .toMatchObject({ state: 'stopped', replacementEligible: true, elapsedMs: 540_001 });
+    } finally {
+      try { process.kill(-activePid, 'SIGKILL'); } catch { /* already stopped */ }
+      await childExit;
+    }
+  });
+
+  it('keeps ordinal-2 conflict fallback independently armed and does not alter Codex clock behavior', async () => {
+    if (process.platform === 'win32') return;
+    const start = '2026-10-10T00:00:00.000Z';
+    const arm2 = '2026-10-10T00:05:00.000Z';
+    const repair2 = '2026-10-10T00:09:00.000Z';
+    let resolvePid!: (pid: number) => void;
+    const spawned = new Promise<number>((resolve) => { resolvePid = resolve; });
+    const childExit = runProcess({
+      command: process.execPath,
+      args: ['-e', 'setInterval(() => {}, 1000)'],
+      allowEmptyStdout: true,
+      onSpawn: resolvePid,
+    });
+    const pid = await spawned;
+    try {
+      const base = {
+        nativeAttempt: {
+          schema: 'pack-review-native-attempt/v1', reviewer: 'claude',
+          invocationOrdinal: 2, startedAtUtc: arm2,
+          childStartedAtUtc: repair2, effectiveBudgetMs: 600_000,
+          wrapperPid: pid, processGroupId: pid,
+          childPid: pid, childProcessGroupId: pid,
+        },
+      } as PackReviewRunRecord;
+      expect(observeNativePackReviewAttempt(base, Date.parse(arm2) + 9 * 60_000))
+        .toMatchObject({ state: 'running', replacementEligible: false, elapsedMs: 540_000 });
+      expect(observeNativePackReviewAttempt(base, Date.parse(arm2) + 10 * 60_000))
+        .toMatchObject({ state: 'running', replacementEligible: true, elapsedMs: 600_000 });
+      base.nativeAttempt = {
+        ...base.nativeAttempt!, reviewer: 'codex', invocationOrdinal: 1,
+        startedAtUtc: start, processGroupId: pid,
+      };
+      expect(observeNativePackReviewAttempt(base, Date.parse(start) + 10 * 60_000))
+        .toMatchObject({ reviewer: 'codex', state: 'running', replacementEligible: false, elapsedMs: 60_000 });
+    } finally {
+      try { process.kill(-pid, 'SIGKILL'); } catch { /* already stopped */ }
+      await childExit;
+    }
+  });
+
+  it('keeps an accepted Claude T2 fixture to one logical review round on the same head', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2474-round-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const prNumber = 2474;
+    const options = { storeRoot };
+    const common = {
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+      prNumber, headSha: HEAD, claimMode: 'preacquired' as const,
+      fixtureCurrentPrHeadSha: HEAD, fixturePostReviewHeadSha: HEAD,
+      fixturePrState: 'OPEN' as const,
+      fixturePrBody: 'Closes #2474', fixturePostReviewPrBody: 'Closes #2474',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack', fixtureIssueNumber: 2474,
+      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureReviewStdout: cleanPayload(), fixtureGithubReviewId: 247401,
+      fixtureReviewerLayerOverrides: { Process: 'claude', User: 'claude' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    };
+    const one = await startPackReview(common);
+    expect(one).toMatchObject({ ok: true, created: true });
+    expect(readPackReviewAuthority(prNumber, options)?.cycle?.consumedRoundOrdinals).toEqual([1]);
+    await startPackReview(common);
+    expect(readPackReviewAuthority(prNumber, options)?.cycle?.consumedRoundOrdinals).toEqual([1]);
   });
 });
 
