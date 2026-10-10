@@ -5158,7 +5158,9 @@ async function runTurn(
         ? lostAfterSend
           ? 'page_or_browser_lost_after_send'
           : 'helper_error_after_send_page_retained'
-        : message;
+        : message === 'ui_contract_mismatch:fresh_conversation_surface_unavailable'
+          ? 'fresh_conversation_surface_unavailable'
+          : message;
     if (!isInput && !isOutput) {
       incident(
         retirementCleanupRequired
