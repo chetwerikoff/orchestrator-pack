@@ -3002,7 +3002,7 @@ describe('Issue #1752 production liveness regressions', () => {
     }
   });
 
-  it('terminates a never-resolving locator count under the invocation budget while heartbeats stay healthy', async () => {
+  it('refuses an unresolved fresh Send actionability count with live heartbeats and zero clicks', async () => {
     const prompt = 'PROMPT-LIVENESS-LOCATOR-STALL';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const fake = makeLoserPage(prompt, 'UNREACHABLE');
@@ -3020,12 +3020,13 @@ describe('Issue #1752 production liveness regressions', () => {
         { entryLivenessHeartbeat: true },
       );
       expect(code).not.toBe(0);
+      expect(fake.sendButton.click).not.toHaveBeenCalled();
       const records = parseRecords(writes);
       const heartbeats = records.filter((record) => record.schema === 'observation-heartbeat/v1');
       expect(heartbeats.length).toBeGreaterThan(2);
       expect(records.at(-1)).toMatchObject({
         schema: 'turn-result/v1',
-        state: 'driver_error',
+        state: 'ui_contract_mismatch',
         cause: 'fresh_send_actionability_unknown_or_busy',
         send_count: 0,
       });
