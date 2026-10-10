@@ -1412,6 +1412,16 @@ function selectGithubReviewEvent(_payload: ReviewPayload): 'COMMENT' {
   return 'COMMENT';
 }
 
+function reviewerProvenanceReceipt(run: PackReviewRunRecord): Record<string, unknown> {
+  return {
+    ...(run.resolvedReviewer ? { resolvedReviewer: run.resolvedReviewer } : {}),
+    ...(run.resolvedReviewerSource ? { resolvedReviewerSource: run.resolvedReviewerSource } : {}),
+    ...(run.executedReviewer ? { executedReviewer: run.executedReviewer } : {}),
+    ...(run.reviewerExecutionRunId ? { reviewerExecutionRunId: run.reviewerExecutionRunId } : {}),
+    ...(run.reviewerInvokedForThisRun !== undefined ? { reviewerInvokedForThisRun: run.reviewerInvokedForThisRun } : {}),
+  };
+}
+
 function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload): string {
   const hasHarvestIncident = (payload.harvestIncidents?.length ?? 0) > 0;
   const lines = [
@@ -1421,6 +1431,13 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
     '',
     `Run: \`${run.id}\``,
     `Head: \`${run.targetSha}\``,
+    `Selected reviewer: \`${run.resolvedReviewer ?? 'unrecorded'}\``,
+    `Selection source: \`${run.resolvedReviewerSource ?? 'unrecorded'}\``,
+    `Verdict reviewer: \`${run.executedReviewer ?? 'unrecorded'}\``,
+    `Verdict execution run: \`${run.reviewerExecutionRunId ?? 'unrecorded'}\``,
+    ...(run.reviewerInvokedForThisRun === false
+      ? [`Reviewer invocation: none for this run; carried-over clean verdict from \`${run.reviewerExecutionRunId ?? 'unrecorded'}\` by \`${run.executedReviewer ?? 'unrecorded'}\`.`]
+      : [`Reviewer invocation: ${run.reviewerInvokedForThisRun === true ? 'executed for this run' : 'unrecorded'}`]),
     '',
   ];
   const coverage = derivePackReviewGptCoverage(run.reviewRound);
@@ -5755,6 +5772,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         reused: true,
         recovered: true,
         reason: 'resumed_journaled_delivery',
+        ...reviewerProvenanceReceipt(resumeCandidate),
         deliveryReason: resumed.reason,
         prNumber: target.prNumber,
         headSha: target.headSha,
@@ -6358,6 +6376,28 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       }
     }
 
+    // Bind execution provenance to the actual accepted verdict before the
+    // journal or review comment can re-read this run.
+    const conflictFreeSourceRun = carryover?.replay.kind === 'conflict_free_carryover'
+      ? getPackReviewRun(carryover.sourceCleanRunId, { projectId, storeRoot })
+      : null;
+    const verifiedSourceReviewer = conflictFreeSourceRun && hasPersistedPackReviewVerdict(conflictFreeSourceRun)
+      ? (conflictFreeSourceRun.executedReviewer
+        ?? conflictFreeSourceRun.reviewRound?.reviewer
+        ?? conflictFreeSourceRun.nativeAttempt?.reviewer)
+      : undefined;
+    run = updatePackReviewRun(run.id, carryover?.replay.kind === 'conflict_free_carryover'
+      ? {
+          reviewerInvokedForThisRun: false,
+          reviewerExecutionRunId: conflictFreeSourceRun?.reviewerExecutionRunId ?? carryover.sourceCleanRunId,
+          ...(verifiedSourceReviewer ? { executedReviewer: verifiedSourceReviewer } : {}),
+        }
+      : {
+          reviewerInvokedForThisRun: true,
+          executedReviewer: reviewer,
+          reviewerExecutionRunId: run.id,
+        }, { projectId, storeRoot });
+
     authority = commitPackReviewTerminal({
       prNumber: target.prNumber,
       expectedTransitionSeq: authority.transitionSeq,
@@ -6474,6 +6514,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       created: true,
       reused: false,
       reason: delivered.reason,
+      ...reviewerProvenanceReceipt(run),
       runId: run.id,
       status: delivered.status,
       ...(terminalCoverage ? { coverage: terminalCoverage } : {}),
