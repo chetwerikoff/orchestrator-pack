@@ -53,6 +53,9 @@ class MemoryWakeStore implements FleetWakeStateStore {
     for (const [handle, epoch] of this.epochs) if (keys.get(handle) !== epoch.key) this.epochs.delete(handle);
   }
   hasParkedWakeEvent(key: string): boolean { return this.parkedWakeEvents.has(key); }
+  readParkedWakeEventStatus(key: string): 'sent' | 'attempted_unverified' | undefined {
+    return this.parkedWakeEvents.has(key) ? this.eventStatus.get(key) ?? 'sent' : undefined;
+  }
   markParkedWakeEvent(key: string, status: 'sent' | 'attempted_unverified' = 'sent'): void {
     this.parkedWakeEvents.add(key);
     this.eventStatus.set(key, status);
@@ -1252,6 +1255,8 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
     let currentDispatch = 'dispatch-2463';
     let exact = true;
     let failSecondEnter = false;
+    let failCoordinatorRead = false;
+    let failCoordinatorSend = false;
     const base = fakeOrca(screens, [], fleet);
     const executor: OrcaExecutor = (args) => {
       if (args[0] === 'orchestration' && args[1] === 'worker-list') {
@@ -1269,6 +1274,10 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
       }
       if (failSecondEnter && args[0] === 'terminal' && args[1] === 'send'
         && args.includes('one') && !args.includes('--text')) return commandResult('', false);
+      if (failCoordinatorRead && args[0] === 'terminal' && args[1] === 'read'
+        && args.includes('coord')) return commandResult('', false);
+      if (failCoordinatorSend && args[0] === 'terminal' && args[1] === 'send'
+        && args.includes('coord')) return commandResult('', false);
       return base(args);
     };
     const step = (overrides: Partial<Parameters<typeof tick>[0]> = {}) => tick({
@@ -1288,6 +1297,8 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
       task: (id: string) => { currentTask = id; currentDispatch = 'dispatch-' + id; },
       exact: (value: boolean) => { exact = value; },
       failSecond: (value: boolean) => { failSecondEnter = value; },
+      failCoordRead: (value: boolean) => { failCoordinatorRead = value; },
+      failCoordSend: (value: boolean) => { failCoordinatorSend = value; },
     };
   }
 
@@ -1407,12 +1418,32 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
   it('distinguishes aggregate pack-review stage from the named submitted review ID', async () => {
     const pack = parkedHarness('PARKED on pack-review PR #12 head ' + sha);
     const stage = await pack.step({
-      readNamedPull: () => nativePull(), readPackReviewStage: () => 'success',
+      readNamedPull: () => nativePull(),
+      readPackReviewStage: () => ({ state: 'success', description: 'Pack review completed with no findings.' }),
     });
     expectSafeWake(stage.calls, 'stage-complete');
+    const semanticDirectReview = parkedHarness('PARKED on pack-review PR #12 head ' + sha);
+    const stillActive = await semanticDirectReview.step({
+      readNamedPull: () => nativePull(),
+      // A separate clean direct review may project semantic success while the
+      // named aggregate runner has not reached a terminal stage.
+      readPackReviewStage: () => ({ state: 'success', description: 'pack review evidence is complete for current facts' }),
+    });
+    expect(unitText(stillActive.calls)).toHaveLength(0);
+    const blockingStage = parkedHarness('PARKED on pack-review PR #12 head ' + sha);
+    expectSafeWake((await blockingStage.step({
+      readNamedPull: () => nativePull(),
+      readPackReviewStage: () => ({ state: 'failure', description: 'Pack review found blocking issues.' }),
+    })).calls, 'stage-findings');
+    const genericFailure = parkedHarness('PARKED on pack-review PR #12 head ' + sha);
+    expect(unitText((await genericFailure.step({
+      readNamedPull: () => nativePull(),
+      readPackReviewStage: () => ({ state: 'failure', description: 'pack review evidence is missing' }),
+    })).calls)).toHaveLength(0);
     const pending = parkedHarness('PARKED on pack-review PR #12 head ' + sha);
     expect(unitText((await pending.step({
-      readNamedPull: () => nativePull(), readPackReviewStage: () => 'pending',
+      readNamedPull: () => nativePull(),
+      readPackReviewStage: () => ({ state: 'pending', description: 'Pack review is running for this exact head.' }),
     })).calls)).toHaveLength(0);
     const review = parkedHarness('PARKED on PR #12 review #991 head ' + sha);
     const reviewed = await review.step({
@@ -1562,6 +1593,106 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
       const mark = readdirSync(restarted.root).find((filename) => filename.startsWith('parked-wake-'));
       expect(readFileSync(join(restarted.root, mark!), 'utf8')).toContain('attempted_unverified');
     } finally { rmSync(xdg, { recursive: true, force: true }); }
+  });
+
+
+  it('persists GPT legacy suppression across STOPPED and replacement Task ticks and state-store restart', async () => {
+    const h = parkedHarness('PARKED on GPT turn ' + invocation);
+    const event: TerminalEnvelopeEvent = {
+      path: '/tmp/opencode/fixture-cross-task-terminal.json',
+      invocationId: invocation, observedInvocationId: invocation,
+      terminalHandle: 'one', cwd: h.unit.worktreePath, delivery: 'landed',
+    };
+    const options = { listTerminalEnvelopes: () => [event] };
+    const xdg = mkdtempSync(join(tmpdir(), 'fleet-2463-gpt-dedup-'));
+    try {
+      const firstStore = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: xdg });
+      expectSafeWake((await h.step({ ...options, store: firstStore })).calls, 'terminal-envelope');
+      expect(firstStore.readParkedWakeEventStatus('gpt:' + event.path)).toBe('sent');
+      const restarted = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: xdg });
+      expect(restarted.readParkedWakeEventStatus('gpt:' + event.path)).toBe('sent');
+      h.task('replacement-task');
+      h.screens.one = 'Ready for next Task';
+      const replaced = await h.step({ ...options, store: restarted });
+      expect(sendsTo(replaced.calls, 'one')).toHaveLength(0);
+    } finally { rmSync(xdg, { recursive: true, force: true }); }
+  });
+
+  it('persists CI legacy suppression after the same handle is re-bound to another Task', async () => {
+    const h = parkedHarness('PARKED on CI PR #12 head ' + sha);
+    const input = {
+      readNamedPull: () => nativePull(),
+      listOpenPulls: () => [{ number: 12, sha, ref: 'issue-2463' }],
+      checkRunsFinishedAt: () => 1234,
+    };
+    expectSafeWake((await h.step(input)).calls, 'checks-completed');
+    expect(h.store.readParkedWakeEventStatus('ci:12:' + sha + ':1234')).toBe('sent');
+    h.task('replacement-task');
+    h.screens.one = 'Ready for new work';
+    const later = await h.step(input);
+    expect(sendsTo(later.calls, 'one')).toHaveLength(0);
+  });
+
+  it.each(['coordinator-send', 'coordinator-read'])(
+    'retains uncertain Wake alert after failed second Enter and %s failure, including restart', async (failure) => {
+      const h = parkedHarness('PARKED on GPT turn ' + invocation);
+      const event: TerminalEnvelopeEvent = {
+        path: '/tmp/opencode/fixture-uncertain-terminal.json',
+        invocationId: invocation, observedInvocationId: invocation,
+        terminalHandle: 'one', cwd: h.unit.worktreePath, delivery: 'landed',
+      };
+      const root = mkdtempSync(join(tmpdir(), 'fleet-2463-uncertain-'));
+      try {
+        const firstStore = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: root });
+        h.failSecond(true);
+        if (failure === 'coordinator-send') h.failCoordSend(true);
+        else h.failCoordRead(true);
+        const first = await h.step({ listTerminalEnvelopes: () => [event], store: firstStore });
+        expect(unitText(first.calls)).toHaveLength(1);
+        expect(first.result.state).toBe(failure === 'coordinator-send' ? 'send_failed' : 'unreadable');
+        expect(firstStore.readParkedWakeEventStatus('gpt:' + event.path)).toBe('attempted_unverified');
+        h.failSecond(false);
+        h.failCoordSend(false);
+        h.failCoordRead(false);
+        h.time(60_000);
+        const restarted = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: root });
+        const recovered = await h.step({ listTerminalEnvelopes: () => [event], store: restarted });
+        expect(recovered.result.state).toBe('sent');
+        expect(sendsTo(recovered.calls, 'one')).toHaveLength(0);
+        expect(sendsTo(recovered.calls, 'coord').find((call) => call.includes('--text'))?.join(' '))
+          .toContain('uncertain unit Wake');
+        expect((await h.step({ listTerminalEnvelopes: () => [event], store: restarted })).result.state)
+          .toBe('same_stopped_set');
+        h.time(1_800_000);
+        const reminder = await h.step({ listTerminalEnvelopes: () => [event], store: restarted });
+        expect(unitText(reminder.calls)[0]).toContain('Reminder: parked 30 min');
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    },
+  );
+
+  it('alarms an identical unsupported park immediately after Task replacement', async () => {
+    const h = parkedHarness('PARKED on unsupported external dependency');
+    expect((await h.step()).result.state).toBe('sent');
+    h.time(60_000);
+    expect((await h.step()).result.state).toBe('same_stopped_set');
+    h.task('replacement-task');
+    const next = await h.step();
+    expect(next.result.state).toBe('sent');
+    expect(sendsTo(next.calls, 'coord')[0]?.join(' ')).toContain('park on unresolvable producer');
+  });
+
+  it('alarms changed STOPPED imperatives immediately but ignores a cosmetic TUI redraw', async () => {
+    const store = new MemoryWakeStore();
+    const screens = { coord: 'idle', one: 'Please approve staging deployment',
+      two: 'working\\nesc interrupt' };
+    expect((await tick({ store, screens })).result.state).toBe('sent');
+    screens.one = 'Please approve staging deployment\\n╹▀▀▀▀▀▀▀▀▀▀';
+    expect((await tick({ store, screens })).result.state).toBe('same_stopped_set');
+    screens.one = 'Please approve production deployment';
+    const changed = await tick({ store, screens });
+    expect(changed.result.state).toBe('sent');
+    expect(sendsTo(changed.calls, 'coord').find((call) => call.includes('--text'))?.join(' '))
+      .toContain('Fleet alarm (idle)');
   });
 
   it.each(['idle', 'busy'])('limits unchanged %s coordinator alarms at 0/60/120/1800 seconds', async (mode) => {
