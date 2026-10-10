@@ -2100,10 +2100,13 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
 async function waitForComposer(
   page: any,
   invocationDeadlineMs: number,
+  useWholePreSendDeadline = false,
 ): Promise<{ state: 'ready' } | { state: TurnState; cause: string }> {
-  // A committed document can hydrate later than the old 12-second local horizon.
-  // Pre-send readiness is governed by the existing whole-invocation deadline.
-  const readinessDeadline = invocationDeadlineMs;
+  // Preserve the legacy two-argument helper contract used by in-process tests.
+  // Committed pre-send navigations explicitly opt into the whole invocation deadline.
+  const readinessDeadline = useWholePreSendDeadline
+    ? invocationDeadlineMs
+    : Math.min(Date.now() + COMPOSER_READINESS_WAIT_MS, invocationDeadlineMs);
   while (true) {
     let remainingMs = readinessDeadline - Date.now();
     if (remainingMs <= 0) break;
@@ -2978,7 +2981,7 @@ async function runTurn(
         const initialPrepareFailure = returnFreshPrepareFailure(initialPrepare);
         if (initialPrepareFailure) return initialPrepareFailure;
 
-        let composerState = await waitForComposer(page, invocationDeadlineMs);
+        let composerState = await waitForComposer(page, invocationDeadlineMs, true);
         const initialComposerFailure = returnComposerBlocker(composerState);
         if (initialComposerFailure) return initialComposerFailure;
 
@@ -3040,7 +3043,7 @@ async function runTurn(
             );
             const preparedFailure = returnFreshPrepareFailure(prepared);
             if (preparedFailure) return preparedFailure;
-            composerState = await waitForComposer(page, invocationDeadlineMs);
+            composerState = await waitForComposer(page, invocationDeadlineMs, true);
             const composerFailure = returnComposerBlocker(composerState);
             if (composerFailure) return composerFailure;
             sendAuthorized = true;
@@ -3325,7 +3328,7 @@ async function runTurn(
         );
       }
 
-      const composerState = await waitForComposer(page, invocationDeadlineMs);
+      const composerState = await waitForComposer(page, invocationDeadlineMs, true);
       if (composerState.state !== 'ready') {
         recordProductWallAdvisory(profileKey, composerState.state, composerState.cause, invocationId);
         incident('invocation_blocker', composerState.cause, 'return_local_error');
