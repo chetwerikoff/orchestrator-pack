@@ -2516,7 +2516,7 @@ describe('Issue #2461 bounded pack OpenCode primary probe', () => {
     const scratch = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
     const commands: string[] = [];
     let persistentState = 'unchanged';
-    const profile = resolveExecutorProfile('manager', opencodeProfileEnv('manager'), 'exact_terminal_worktree');
+    const profile = await resolveLiveExecutorProfile('manager', opencodeProfileEnv('manager'), 'exact_terminal_worktree', async (args) => opencodeProbeResult(args, true));
     if (profile.status !== 'ok') throw new Error('fixture profile failed');
     try {
       const result = await runOpenCodePrimaryProbe(args, {
@@ -2577,7 +2577,7 @@ describe('Issue #2461 bounded pack OpenCode primary probe', () => {
 
   it('flags a persistent config write, timeout and never starts an Orca Task or terminal', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk2461-snapshot-'));
-    const profile = resolveExecutorProfile('manager', opencodeProfileEnv('manager'), 'exact_terminal_worktree');
+    const profile = await resolveLiveExecutorProfile('manager', opencodeProfileEnv('manager'), 'exact_terminal_worktree', async (args) => opencodeProbeResult(args, true));
     if (profile.status !== 'ok') throw new Error('fixture profile failed');
     let persistentState = 'before';
     const calls: string[][] = [];
