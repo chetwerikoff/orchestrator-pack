@@ -1215,6 +1215,285 @@ describe('fleet alarm', () => {
   });
 });
 
+
+describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => {
+  const sha = 'a'.repeat(40);
+  const invocation = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const repository = 'test/project';
+  const nativePull = (merged = false, headSha = sha) => ({
+    number: 12, headSha, state: merged ? 'closed' as const : 'open' as const, merged,
+  });
+
+  function parkedHarness(wait: string, extraTerminals: FleetTerminal[] = []) {
+    const unit: FleetTerminal = {
+      ...terminals[1]!, incarnationId: 'inc-2463', branch: 'refs/heads/issue-2463',
+      status: 'running', agentIdentity: 'supervised-worker',
+    };
+    const fleet: FleetTerminal[] = [terminals[0]!, unit, ...extraTerminals];
+    const screens: Record<string, string> = { coord: 'idle', one: wait };
+    const store = new MemoryWakeStore();
+    let currentTime = 0;
+    let currentTask = 'task-2463';
+    let currentDispatch = 'dispatch-2463';
+    let exact = true;
+    let failSecondEnter = false;
+    const base = fakeOrca(screens, [], fleet);
+    const executor: OrcaExecutor = (args) => {
+      if (args[0] === 'orchestration' && args[1] === 'worker-list') {
+        return commandResult(JSON.stringify({ ok: true, result: {
+          workers: [{ agentTerminalHandle: 'one', taskId: currentTask,
+            dispatchId: currentDispatch, dispatchStatus: exact ? 'dispatched' : 'failed' }],
+          page: { hasMore: false },
+        } }));
+      }
+      if (args[0] === 'orchestration' && args[1] === 'worker-show') {
+        return commandResult(JSON.stringify({ ok: true, result: {
+          dispatch: { id: currentDispatch, taskId: currentTask, status: 'dispatched' },
+          terminal: unit, observation: { status: 'live', exactWorker: true },
+        } }));
+      }
+      if (failSecondEnter && args[0] === 'terminal' && args[1] === 'send'
+        && args.includes('one') && !args.includes('--text')) return commandResult('', false);
+      return base(args);
+    };
+    const step = (overrides: Partial<Parameters<typeof tick>[0]> = {}) => tick({
+      screens, store, terminals: fleet, executor, now: () => currentTime,
+      config: config({ chatScope: { projectUrl: 'https://chatgpt.com/p/synthetic', repository } }),
+      listTerminalEnvelopes: () => [],
+      listOpenPulls: () => [],
+      checkRunsFinishedAt: () => undefined,
+      readNamedPull: () => undefined,
+      readNamedReview: () => undefined,
+      readPackReviewStage: () => undefined,
+      ...overrides,
+    });
+    return {
+      unit, fleet, screens, store, step,
+      time: (milliseconds: number) => { currentTime = milliseconds; },
+      task: (id: string) => { currentTask = id; currentDispatch = 'dispatch-' + id; },
+      exact: (value: boolean) => { exact = value; },
+      failSecond: (value: boolean) => { failSecondEnter = value; },
+    };
+  }
+
+  function unitText(calls: readonly string[][]): string[] {
+    return sendsTo(calls, 'one').filter((call) => call.includes('--text'))
+      .map((call) => call[call.indexOf('--text') + 1]!);
+  }
+
+  function expectSafeWake(calls: readonly string[][], state: string): void {
+    const text = unitText(calls);
+    expect(text).toHaveLength(1);
+    expect(text[0]).toMatch(/^Wake: .+ ended state .+ evidence .+ - re-check the producer yourself before continuing$/u);
+    expect(text[0]).toContain('ended state ' + state + ' evidence ');
+    expect(text[0]).toMatch(/^[A-Za-z0-9 _./:%#=+-]+$/u);
+    expect(text[0]).not.toMatch(/[;&|$'"()<>*?\\\x00-\x1f\x7f]/u);
+    expect(sendsTo(calls, 'one')).toHaveLength(2);
+    expect(text[0]).not.toMatch(/^[!$]/u);
+  }
+
+  it('wakes only one exact observed GPT invocation and coalesces legacy GPT wake', async () => {
+    const h = parkedHarness('PARKED on GPT turn ' + invocation + ' (self-wake armed)');
+    const event: TerminalEnvelopeEvent = {
+      path: '/tmp/opencode/fixture-terminal.json', invocationId: invocation,
+      observedInvocationId: invocation, terminalHandle: 'one',
+      cwd: h.unit.worktreePath, delivery: 'landed',
+    };
+    const options = { listTerminalEnvelopes: () => [event] };
+    const first = await h.step(options);
+    expectSafeWake(first.calls, 'terminal-envelope');
+    expect(unitText((await h.step(options)).calls)).toHaveLength(0);
+    expect(sendsTo((await h.step(options)).calls, 'one')).toHaveLength(0);
+    const foreign = parkedHarness('PARKED on GPT turn ' + invocation);
+    const wrong = await foreign.step({
+      listTerminalEnvelopes: () => [{ ...event, observedInvocationId: 'ffffffff-bbbb-4ccc-8ddd-eeeeeeeeeeee' }],
+    });
+    expect(unitText(wrong.calls)).toHaveLength(0);
+    expect(sendsTo(wrong.calls, 'coord')[0]?.join(' ')).toContain('park on unresolvable producer');
+    const unsafe = parkedHarness('PARKED on GPT turn ' + invocation);
+    const uncertain = await unsafe.step({
+      listTerminalEnvelopes: () => [{ ...event, delivery: 'POSSIBLY_DELIVERED', conversationLocator: undefined }],
+    });
+    expect(unitText(uncertain.calls)).toHaveLength(0);
+  });
+
+  it('distinguishes aggregate pack-review stage from the named submitted review ID', async () => {
+    const pack = parkedHarness('PARKED on pack-review PR #12 head ' + sha);
+    const stage = await pack.step({
+      readNamedPull: () => nativePull(), readPackReviewStage: () => 'success',
+    });
+    expectSafeWake(stage.calls, 'stage-complete');
+    const pending = parkedHarness('PARKED on pack-review PR #12 head ' + sha);
+    expect(unitText((await pending.step({
+      readNamedPull: () => nativePull(), readPackReviewStage: () => 'pending',
+    })).calls)).toHaveLength(0);
+    const review = parkedHarness('PARKED on PR #12 review #991 head ' + sha);
+    const reviewed = await review.step({
+      readNamedPull: () => nativePull(),
+      readNamedReview: () => ({ id: 991, commitSha: sha, state: 'APPROVED', submittedAt: '2026-10-10T00:00:00Z' }),
+    });
+    expectSafeWake(reviewed.calls, 'review-submitted');
+    const otherReviewer = parkedHarness('PARKED on PR #12 review #991 head ' + sha);
+    expect(unitText((await otherReviewer.step({
+      readNamedPull: () => nativePull(),
+      readNamedReview: () => ({ id: 992, commitSha: sha, state: 'APPROVED', submittedAt: '2026-10-10T00:00:00Z' }),
+    })).calls)).toHaveLength(0);
+    const movedHead = parkedHarness('PARKED on PR #12 review #991 head ' + sha);
+    expect(unitText((await movedHead.step({
+      readNamedPull: () => nativePull(false, 'b'.repeat(40)),
+      readNamedReview: () => ({ id: 991, commitSha: sha, state: 'APPROVED', submittedAt: '2026-10-10T00:00:00Z' }),
+    })).calls)).toHaveLength(0);
+  });
+
+  it('joins CI to a single current open PR head and treats completed failures as terminal', async () => {
+    const h = parkedHarness('PARKED on CI PR #12 head ' + sha);
+    const input = {
+      readNamedPull: () => nativePull(),
+      listOpenPulls: () => [{ number: 12, sha, ref: 'issue-2463' }],
+      checkRunsFinishedAt: () => 1234,
+    };
+    expectSafeWake((await h.step(input)).calls, 'checks-completed');
+    expect(unitText((await h.step(input)).calls)).toHaveLength(0);
+    const pending = parkedHarness('PARKED on CI PR #12 head ' + sha);
+    expect(unitText((await pending.step({
+      readNamedPull: () => nativePull(), checkRunsFinishedAt: () => undefined,
+    })).calls)).toHaveLength(0);
+    const ambiguous = parkedHarness('PARKED on CI on ' + sha);
+    expect(unitText((await ambiguous.step({
+      readNamedPull: () => nativePull(),
+      listOpenPulls: () => [
+        { number: 12, sha, ref: 'a' }, { number: 13, sha, ref: 'b' },
+      ],
+      checkRunsFinishedAt: () => 1234,
+    })).calls)).toHaveLength(0);
+  });
+
+  it('requires native merged=true, not a closed PR or absent merge agent', async () => {
+    const h = parkedHarness('PARKED on merge-12');
+    expectSafeWake((await h.step({ readNamedPull: () => nativePull(true) })).calls, 'merged');
+    const closed = parkedHarness('PARKED on PR #12 merged');
+    expect(unitText((await closed.step({
+      readNamedPull: () => ({ ...nativePull(), state: 'closed', merged: false }),
+    })).calls)).toHaveLength(0);
+    const conditional = parkedHarness('PARKED on merge-12 - resume when review settles');
+    const alarm = await conditional.step({ readNamedPull: () => nativePull(true) });
+    expect(unitText(alarm.calls)).toHaveLength(0);
+    expect(sendsTo(alarm.calls, 'coord')[0]?.join(' ')).toContain('park on unresolvable producer');
+  });
+
+  it('proves exact native terminal exit only, never disappearance or a bare idle shell', async () => {
+    const terminal: FleetTerminal = {
+      handle: 'producer-12', incarnationId: 'producer-inc', title: 'zsh',
+      worktreePath: '/elsewhere', status: 'exited',
+    };
+    const h = parkedHarness('PARKED on terminal producer-12 incarnation producer-inc', [terminal]);
+    expectSafeWake((await h.step()).calls, 'terminal-exited');
+    const gone = parkedHarness('PARKED on terminal producer-12 incarnation producer-inc');
+    const unknown = await gone.step();
+    expect(unitText(unknown.calls)).toHaveLength(0);
+    expect(sendsTo(unknown.calls, 'coord')[0]?.join(' ')).toContain('park on unresolvable producer');
+    const recycled = parkedHarness('PARKED on terminal producer-12 incarnation producer-inc',
+      [{ ...terminal, incarnationId: 'new-incarnation' }]);
+    expect(unitText((await recycled.step()).calls)).toHaveLength(0);
+    const formerShell = parkedHarness('PARKED on terminal producer-12 incarnation producer-inc',
+      [{ ...terminal, status: 'running' }]);
+    expect(unitText((await formerShell.step()).calls)).toHaveLength(0);
+    const merge = parkedHarness('PARKED on merge agent terminal producer-12 incarnation producer-inc PR #12', [terminal]);
+    expectSafeWake((await merge.step({ readNamedPull: () => nativePull() })).calls, 'terminal-exited');
+  });
+
+  it('rejects fallback Task, changed Task, busy pane, and missing coordinator without new unit sends', async () => {
+    const h = parkedHarness('PARKED on merge-12');
+    h.exact(false);
+    const fallback = await h.step({ readNamedPull: () => nativePull(true) });
+    expect(unitText(fallback.calls)).toHaveLength(0);
+    expect(sendsTo(fallback.calls, 'coord')[0]?.join(' ')).toContain('park on unresolvable producer');
+    h.exact(true);
+    h.task('next-task');
+    h.screens.one = 'Working\nesc interrupt';
+    expect(unitText((await h.step({ readNamedPull: () => nativePull(true) })).calls)).toHaveLength(0);
+    h.screens.one = 'PARKED on merge-12';
+    const noCoord = await h.step({
+      config: config({ orchestratorHandle: 'missing',
+        chatScope: { projectUrl: 'https://chatgpt.com/p/synthetic', repository } }),
+      readNamedPull: () => nativePull(true),
+    });
+    expect(noCoord.result.state).toBe('no_orchestrator');
+    expect(sends(noCoord.calls)).toHaveLength(0);
+  });
+
+  it('reminds at elapsed 30/60 minute slots only, preserving the first park epoch', async () => {
+    const terminal: FleetTerminal = { handle: 'alive', title: 'zsh', worktreePath: '/elsewhere',
+      incarnationId: 'alive-inc', status: 'running', agentIdentity: 'producer' };
+    const h = parkedHarness('PARKED on terminal alive incarnation alive-inc', [terminal]);
+    const one = await h.step();
+    expect(unitText(one.calls)).toHaveLength(0);
+    h.time(1_799_999);
+    expect(unitText((await h.step()).calls)).toHaveLength(0);
+    h.time(1_800_000);
+    const thirty = await h.step();
+    expect(unitText(thirty.calls)).toEqual([
+      'Reminder: parked 30 min on terminal-alive - re-check its envelope or PR or CI state yourself - continue only if ended otherwise re-park with the same line',
+    ]);
+    expect(unitText((await h.step()).calls)).toHaveLength(0);
+    h.time(3_599_999);
+    expect(unitText((await h.step()).calls)).toHaveLength(0);
+    h.time(3_600_000);
+    expect(unitText((await h.step()).calls)).toHaveLength(1);
+    expect(h.store.eventStatus.get([...h.store.eventStatus.keys()].find((key) => key.startsWith('reminder:'))!))
+      .toBe('sent');
+    h.screens.one = 'PARKED on terminal other incarnation future';
+    h.time(3_600_001);
+    expect(unitText((await h.step()).calls)).toHaveLength(0);
+    h.screens.one = 'PARKED on terminal alive incarnation alive-inc';
+    h.time(3_600_002);
+    expect(unitText((await h.step()).calls)).toHaveLength(0);
+  });
+
+  it('keeps pre-effect attempted_unverified after second-Enter failure and never replays', async () => {
+    const h = parkedHarness('PARKED on GPT turn ' + invocation);
+    const event: TerminalEnvelopeEvent = { path: '/tmp/opencode/partial-terminal.json',
+      invocationId: invocation, observedInvocationId: invocation, cwd: h.unit.worktreePath,
+      terminalHandle: 'one', delivery: 'landed' };
+    h.failSecond(true);
+    const first = await h.step({ listTerminalEnvelopes: () => [event] });
+    expect(unitText(first.calls)).toHaveLength(1);
+    expect([...h.store.eventStatus.values()]).toContain('attempted_unverified');
+    expect(sendsTo(first.calls, 'coord')[0]?.join(' ')).toContain('uncertain unit Wake');
+    h.failSecond(false);
+    const next = await h.step({ listTerminalEnvelopes: () => [event] });
+    expect(sendsTo(next.calls, 'one')).toHaveLength(0);
+    h.time(1_800_000);
+    const reminder = await h.step({ listTerminalEnvelopes: () => [event] });
+    expect(unitText(reminder.calls)[0]).toContain('Reminder: parked 30 min');
+    const xdg = mkdtempSync(join(tmpdir(), 'fleet-2463-partial-'));
+    try {
+      const oneStore = new FileFleetWakeStateStore('fixture-2463', { XDG_RUNTIME_DIR: xdg });
+      oneStore.markParkedWakeEvent('producer:one:fixture', 'attempted_unverified');
+      const restarted = new FileFleetWakeStateStore('fixture-2463', { XDG_RUNTIME_DIR: xdg });
+      expect(restarted.hasParkedWakeEvent('producer:one:fixture')).toBe(true);
+      const mark = readdirSync(restarted.root).find((filename) => filename.startsWith('parked-wake-'));
+      expect(readFileSync(join(restarted.root, mark!), 'utf8')).toContain('attempted_unverified');
+    } finally { rmSync(xdg, { recursive: true, force: true }); }
+  });
+
+  it.each(['idle', 'busy'])('limits unchanged %s coordinator alarms at 0/60/120/1800 seconds', async (mode) => {
+    const h = parkedHarness('PARKED on unsupported external dependency');
+    h.screens.coord = mode === 'idle' ? 'idle' : 'working\nctrl+c to stop';
+    const first = await h.step();
+    expect(first.result.state).toBe('sent');
+    h.time(60_000);
+    expect((await h.step()).result.state).toBe('same_stopped_set');
+    h.time(120_000);
+    expect((await h.step()).result.state).toBe('same_stopped_set');
+    h.time(1_800_000);
+    expect((await h.step()).result.state).toBe('sent');
+    h.screens.one = 'Question about next action?';
+    h.time(1_800_001);
+    expect((await h.step()).result.state).toBe('sent');
+  });
+});
+
 describe('Issue #2342 unloadable chat', () => {
   it('asks for a new chat instead of a same-chat continuation', () => {
     const banner = {
