@@ -1213,7 +1213,7 @@ async function runActivePayload(
   let baseline: PageObservationResult;
   try {
     if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
-    const composerState = await deps.waitForComposer(state.page, state.wholeSessionDeadline);
+    const composerState = await deps.waitForComposer(state.page, state.wholeSessionDeadline, true);
     if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
     if (composerState.state !== 'ready') return tuple(composerState.state, 'invocation', composerState.cause);
 
