@@ -23,6 +23,45 @@ only for verified seven-field live Task/Dispatch matches. Terminal disappearance
 and shell-idle status never count as producer completion. Unsupported, missing
 or ambiguous producer evidence is routed to a bounded coordinator alarm.
 
+Named `PARKED on GPT turn <id>` recognizes canonical lowercase UUIDs and a
+conservative 5–96-character `inv-` subset with lowercase ASCII alphanumeric
+segments separated by single hyphens (for example `inv-h` and
+`inv-wake-ok`). Only one complete own wait, optionally ending
+` (self-wake armed)`, qualifies. The upstream screen reader keeps the **last**
+own `PARKED` line and joins subsequent physical lines with spaces. It can
+preserve wraps **between** tokens, not splits **inside** an invocation ID;
+earlier discarded `PARKED` lines and quoted/tool output confer no additional
+evidence. Unsupported tokens or semantic tails remain unresolvable.
+
+For an exactly parsed GPT-named PARKED pane, only a **unique matching,
+wakeable terminal envelope** with the currently observed invocation, terminal
+handle and worktree may trigger its named unit re-check Wake. The independent
+legacy GPT envelope route is deliberately excluded **for that pane**, including
+foreign or duplicate events; it remains available to STOPPED panes and panes
+PARKED on another producer. This existing terminal evidence cannot prove
+historical launch-attempt identity or an atomic terminal-incarnation send.
+A missing/unsafe/ambiguous terminal envelope is still `unresolvable` and
+coordinator-visible; an ongoing GPT child may therefore repeatedly raise an
+alarm at the normal 30-minute unchanged-state interval. That throttle is
+**not proof of child health** or a safe reason to resend. Receipt-backed
+`pending` is deferred: the current handoff receipt does not provide an
+authoritative, discoverable invocation-to-attempt-to-Task/Dispatch/launch
+incarnation join. No receipt scan or inferred live-process status is performed.
+
+For named PR-dependent producers (merge, merge-agent terminal, review,
+pack-review and CI), the notifier selects the repository from the trusted
+project card rather than requiring the optional ChatGPT `chatScope`.
+A directly constructed `FleetWakeConfig` can intentionally omit `chatScope`
+and use `selectedRepository`; this is a **defensive API case**, not the
+normal service configuration. The standard `fleetWakeConfigFromEnv` supplies
+both repositories from the same project card. Older directly constructed
+configs without `selectedRepository` retain the `chatScope.repository`
+fallback. If both exist and disagree, all named repository-bound lookups
+and the legacy CI candidate scan fail closed, without changing independent
+GPT, Run-mail or ChatGPT-banner routes. A merged PR must be confirmed
+`merged=true`; an open merge PR remains pending and a closed-unmerged or
+unknown PR remains unresolvable.
+
 ## One-off sweep
 
 Run from the pack checkout with the Node major declared in `scripts/toolchain/node-version.json`:
