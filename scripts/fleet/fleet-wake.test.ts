@@ -1965,6 +1965,62 @@ describe('Issue #2471 local-chatgpt coordinator-only and one-attempt routing', (
     expect(store.parkedWakeEvents.size).toBe(2);
   });
 
+
+  it('preserves ordinary STOPPED alerts and cadence when a local mark write fails', async () => {
+    const store = new MemoryWakeStore();
+    const originalMark = store.markParkedWakeEvent.bind(store);
+    const markSpy = vi.spyOn(store, 'markParkedWakeEvent').mockImplementation((key, status) => {
+      if (key.startsWith('local-chat:')) throw new Error('synthetic local mark storage failure');
+      originalMark(key, status);
+    });
+    const screens = { coord: 'idle', one: 'A decision is needed', two: 'working\nesc interrupt' };
+    const changedScreens = { ...screens, two: 'Another decision is needed' };
+    const step = (at: number, paneScreens = screens) =>
+      tick({ config: settings, store, screens: paneScreens, now: () => at,
+        readChats: async () => [row(local)], listOpenPulls: () => [] });
+
+    const first = await step(0);
+    expect(first.result.state).toBe('sent');
+    expect(sendsTo(first.calls, 'coord')).toHaveLength(2);
+    expect(textTo(first.calls, 'coord')).toContain('STOPPED one');
+    expect(textTo(first.calls, 'coord')).not.toContain('local-chatgpt:');
+    expect(store.parkedWakeEvents.size).toBe(0);
+    expect(store.readLastSentSignature()).not.toContain(local);
+
+    const throttled = await step(60_000);
+    expect(throttled.result.state).toBe('same_stopped_set');
+    expect(sendsTo(throttled.calls, 'coord')).toHaveLength(0);
+
+    const changed = await step(60_001, changedScreens);
+    expect(changed.result.state).toBe('sent');
+    expect(textTo(changed.calls, 'coord')).toContain('STOPPED two');
+    expect(textTo(changed.calls, 'coord')).not.toContain(local);
+    markSpy.mockRestore();
+
+    // Storage recovery admits the still-unsent local warning without changing
+    // the independent ordinary signature or replaying any previously sent local.
+    const localSent = await step(60_002, changedScreens);
+    expect(localSent.result.state).toBe('sent');
+    expect(textTo(localSent.calls, 'coord')).toContain(local);
+    expect([...store.parkedWakeEvents].map((key) => store.readParkedWakeEventStatus(key))).toEqual(['sent']);
+    const after = await step(60_003, changedScreens);
+    expect(after.result.state).toBe('same_stopped_set');
+    expect(sendsTo(after.calls, 'coord')).toHaveLength(0);
+  });
+
+  it('withholds local-only notification if the pre-effect mark cannot be written', async () => {
+    const store = new MemoryWakeStore();
+    vi.spyOn(store, 'markParkedWakeEvent').mockImplementation(() => {
+      throw new Error('synthetic local mark write refusal');
+    });
+    const denied = await tick({ config: settings, store, screens: idle,
+      readChats: async () => [row(local)] });
+    expect(denied.result.state).toBe('send_failed');
+    expect(sendsTo(denied.calls, 'coord')).toHaveLength(0);
+    expect(store.parkedWakeEvents.size).toBe(0);
+    expect(store.readLastSentSignature()).toBeNull();
+  });
+
   it('never uses an unrelated terminal envelope, stale target or unbound DOM role as local identity', async () => {
     const store = new MemoryWakeStore();
     const envelope: TerminalEnvelopeEvent = {

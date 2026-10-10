@@ -1517,15 +1517,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     const deliverySignature = JSON.stringify([coordinator.handle, coordinator.incarnationId ?? '', signature]);
     const now = (options.now ?? Date.now)();
     const lastAt = store.readLastSentAt?.();
-    if (pendingLocal.length === 0 && store.readLastSentSignature() === deliverySignature
-      && lastAt !== undefined && Number.isFinite(now) && now - lastAt >= 0
-      && now - lastAt < REMINDER_INTERVAL_MS) {
-      log(`${coordinator.handle} same stopped set already queued`);
-      return { state: 'same_stopped_set', coordinator: coordinator.handle, signature };
-    }
-
-    const localWarnings = pendingLocal.map((banner) => `${banner.url} (${banner.kind})`);
-    const message = fleetAlarmMessage(coordinatorState, observations, routed, parkedAlerts, localWarnings);
+    let deliverLocal = pendingLocal;
     if (pendingLocal.length > 0) {
       if (!coordinatorStillSelected(coordinator, config, executor)) {
         log(`${coordinator.handle} changed before local chat warning send`);
@@ -1536,16 +1528,30 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
         for (const banner of pendingLocal) store.markParkedWakeEvent(banner.key, 'attempted_unverified');
       } catch {
         log(`${coordinator.handle} cannot persist local chat attempt before send`);
-        return { state: 'send_failed', coordinator: coordinator.handle };
+        if (stopped.length === 0 && routed.length === 0 && parkedAlerts.length === 0) {
+          return { state: 'send_failed', coordinator: coordinator.handle };
+        }
+        // Drop all local warnings when any pre-effect mark fails. Independent
+        // ordinary events keep their own coordinator sender and reminder cadence.
+        deliverLocal = [];
       }
     }
+    if (deliverLocal.length === 0 && store.readLastSentSignature() === deliverySignature
+      && lastAt !== undefined && Number.isFinite(now) && now - lastAt >= 0
+      && now - lastAt < REMINDER_INTERVAL_MS) {
+      log(`${coordinator.handle} same stopped set already queued`);
+      return { state: 'same_stopped_set', coordinator: coordinator.handle, signature };
+    }
+
+    const localWarnings = deliverLocal.map((banner) => `${banner.url} (${banner.kind})`);
+    const message = fleetAlarmMessage(coordinatorState, observations, routed, parkedAlerts, localWarnings);
     try {
       if (!sendCoordinator(executor, coordinator.handle, message)) {
         log(`${coordinator.handle} send failed`);
         return { state: 'send_failed', coordinator: coordinator.handle };
       }
       await sleepMs(4_000);
-      if (pendingLocal.length > 0 && !coordinatorStillSelected(coordinator, config, executor)) {
+      if (deliverLocal.length > 0 && !coordinatorStillSelected(coordinator, config, executor)) {
         log(`${coordinator.handle} changed before local chat second Enter`);
         return { state: 'send_failed', coordinator: coordinator.handle };
       }
@@ -1559,14 +1565,14 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     }
     // Mark successful delivery only after *both* terminal operations succeeded.
     try {
-      for (const banner of pendingLocal) store.markParkedWakeEvent(banner.key, 'sent');
+      for (const banner of deliverLocal) store.markParkedWakeEvent(banner.key, 'sent');
     } catch {
       log(`${coordinator.handle} local chat delivered but final mark unverified`);
       return { state: 'send_failed', coordinator: coordinator.handle };
     }
     store.writeLastSentSignature(deliverySignature);
     store.writeLastSentAt?.(now);
-    log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} need a step, ${routed.length} chat banner(s), ${pendingLocal.length} local warning(s)`);
+    log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} need a step, ${routed.length} chat banner(s), ${deliverLocal.length} local warning(s)`);
     return {
       state: 'sent',
       coordinator: coordinator.handle,
