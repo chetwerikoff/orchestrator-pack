@@ -19,6 +19,7 @@ import {
   type BrowserConfig,
 } from './ui-adapter.ts';
 import type { TurnState } from './contracts.ts';
+import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { profileDirs, sha256 } from './storage-common.ts';
 
 const STATE_LIGHT_FRESH_CLAIM_SCHEMA = 'state-light-fresh-claim/v1' as const;
@@ -35,6 +36,8 @@ export const STATE_LIGHT_MAX_TIMEOUT_MS = 1_800_000;
 /** Shared Playwright navigation budget for launcher-chain ChatGPT page loads. */
 export const STATE_LIGHT_NAVIGATION_TIMEOUT_MS = 120_000;
 export const STATE_LIGHT_SEND_SLOT_TTL_MS = 2_100_000;
+/** Cooperative owner-only send cutoff; NOT a competing waiter's reclaim TTL. */
+export const STATE_LIGHT_OWNER_PRE_DISPATCH_MS = 300_000;
 export const STATE_LIGHT_FRESH_CLAIM_GRACE_MS = 300_000;
 export const STATE_LIGHT_PASSIVE_FRESH_CLAIM_TTL_MS = 3_900_000;
 export const STATE_LIGHT_OWNERSHIP_RECOVERY_ATTEMPTS = 3;
@@ -615,13 +618,44 @@ async function sleepMs(ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
+export class StateLightSendSlotTimeoutError extends Error {
+  readonly send_slot_holder_invocation_id: string;
+  readonly send_slot_holder_phase: string;
+
+  constructor(holder: { invocationId: string; phase: string }) {
+    super('state_light_new_chat_send_slot_timeout');
+    this.name = 'StateLightSendSlotTimeoutError';
+    this.send_slot_holder_invocation_id = holder.invocationId;
+    this.send_slot_holder_phase = holder.phase;
+  }
+}
+
+/** Diagnostics only. Never use this observation to reclaim or replace a live holder. */
+function correlateSendSlotHolder(profileKey: string, slotPath: string): { invocationId: string; phase: string } {
+  const unknown = { invocationId: 'unknown', phase: 'unknown' };
+  try {
+    const first = readStateLightNewChatSendSlotRecord(slotPath);
+    if (!first || !/^[A-Za-z0-9-]{1,128}$/u.test(first.invocation_id)) return unknown;
+    const observation = readStateLightTurnObservation(profileKey, first.invocation_id);
+    const second = readStateLightNewChatSendSlotRecord(slotPath);
+    if (!second || JSON.stringify(first) !== JSON.stringify(second)
+      || observation.invocation_id !== first.invocation_id
+      || observation.profile_key !== profileKey) return unknown;
+    const observedAgain = readStateLightTurnObservation(profileKey, first.invocation_id);
+    if (JSON.stringify(observation) !== JSON.stringify(observedAgain)) return unknown;
+    return { invocationId: first.invocation_id, phase: observation.phase };
+  } catch {
+    return unknown;
+  }
+}
+
 export async function acquireStateLightNewChatSendSlot(
   profileKey: string,
   invocationId: string,
   timeoutMs: number,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<void> {
-  if (!newChatSendSlotEnabled(env)) return;
+): Promise<number> {
+  if (!newChatSendSlotEnabled(env)) return Date.now() + STATE_LIGHT_OWNER_PRE_DISPATCH_MS;
   const slotPath = stateLightNewChatSendSlotPath(profileKey);
   const deadline = Date.now() + Math.min(timeoutMs, 120_000);
   while (Date.now() < deadline) {
@@ -632,7 +666,7 @@ export async function acquireStateLightNewChatSendSlot(
       }
       const existing = existsSync(slotPath) ? readStateLightNewChatSendSlotRecord(slotPath) : null;
       if (existing?.invocation_id === invocationId && !isStateLightSendSlotRecordExpired(existing, nowMs)) {
-        return;
+        return Date.parse(existing.acquired_at) + STATE_LIGHT_OWNER_PRE_DISPATCH_MS;
       }
       if (existing && !isSendSlotRecordReclaimable(existing, invocationId, nowMs)) {
         break;
@@ -657,12 +691,12 @@ export async function acquireStateLightNewChatSendSlot(
       if (reread?.invocation_id === invocationId
         && reread.pid === process.pid
         && !isStateLightSendSlotRecordExpired(reread, Date.now())) {
-        return;
+        return acquiredAtMs + STATE_LIGHT_OWNER_PRE_DISPATCH_MS;
       }
     }
     await sleepMs(Math.min(SEND_SLOT_POLL_MS, Math.max(1, deadline - Date.now())));
   }
-  throw new Error('state_light_new_chat_send_slot_timeout');
+  throw new StateLightSendSlotTimeoutError(correlateSendSlotHolder(profileKey, slotPath));
 }
 
 export function releaseStateLightNewChatSendSlot(
