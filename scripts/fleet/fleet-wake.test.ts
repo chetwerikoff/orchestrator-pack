@@ -1843,7 +1843,12 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
     expectSafeWake((await h.step({ listTerminalEnvelopes: () => [envelope] })).calls, 'terminal-envelope');
     const broken = parkedHarness('PARKED on GPT turn inv-wake\n-ok');
     const unresolved = await broken.step({ listTerminalEnvelopes: () => [envelope] });
-    expect(unitText(unresolved.calls)).toHaveLength(0);
+    // Mid-ID wrapping is not a named GPT source. The old independent legacy
+    // route remains allowed because this pane's wait is not exactly parseable.
+    expect(unitText(unresolved.calls)).toEqual([
+      'Wake: GPT turn inv-wake-ok ended, read ' + envelope.path,
+    ]);
+    expect(unitText(unresolved.calls)[0]).not.toContain('GPT-turn-');
     expect(sendsTo(unresolved.calls, 'coord')[0]?.join(' ')).toContain('park on unresolvable producer');
     const last = parkedHarness('PARKED on GPT turn inv-owned\nPARKED on GPT turn inv-wake-ok');
     expectSafeWake((await last.step({ listTerminalEnvelopes: () => [envelope] })).calls, 'terminal-envelope');
