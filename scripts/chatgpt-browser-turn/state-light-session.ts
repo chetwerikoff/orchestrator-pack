@@ -39,6 +39,7 @@ import {
   prepareStateLightFreshConversation,
   projectConversationPrefix,
   releaseStateLightNewChatSendSlot,
+  recordStateLightAdvisoryWall,
 } from './state-light-fresh-conversation.ts';
 import { configuredProfileKey } from './storage-common.ts';
 import {
@@ -75,6 +76,7 @@ import {
   type BrowserConfig,
   type ProfileVerification,
   type TurnOperationBudget,
+  type ProductWallDiagnostic,
 } from './ui-adapter.ts';
 
 const MAX_SESSION_PAYLOADS = 32;
@@ -143,6 +145,7 @@ export interface SessionResultV1 {
   readonly new_chat_click_count: number;
   readonly navigation_count: number;
   readonly payloads: readonly SessionPayloadSummary[];
+  readonly product_wall_diagnostic: ProductWallDiagnostic;
 }
 
 interface SessionManifestItem {
@@ -192,6 +195,23 @@ interface SessionExecutionState {
   conversationId?: string;
   decisiveOrdinal?: number;
   stopped: boolean;
+  productWallDiagnostic: ProductWallDiagnostic;
+}
+
+function rememberSessionProductWall(
+  state: SessionExecutionState,
+  wall: ReturnType<typeof classifyProductWall>,
+  deps: StateLightSessionDependencies,
+): void {
+  if (!('wall_kind' in wall) || wall.wall_kind === 'none') return;
+  state.productWallDiagnostic = wall;
+  try {
+    recordStateLightAdvisoryWall(
+      deps.profileKey(state.config.browser.profile, state.config.browser.cdp),
+      wall.wall_kind, `${wall.wall_kind}_detected`,
+      state.invocationId, undefined, undefined, wall,
+    );
+  } catch { /* advisory I/O is non-blocking */ }
 }
 
 export interface SessionWritable {
@@ -867,8 +887,9 @@ async function observeAndPublish(
     try {
       const wallBudget = Math.min(800, Math.max(1, remainingMs(state, deps)));
       const wall = classifyProductWall(await productStatusText(state.page, wallBudget));
-      if (wall.state) {
-        return { terminal: tuple(wall.state, 'invocation', wall.cause ?? `${wall.state}_detected`) };
+      rememberSessionProductWall(state, wall, deps);
+      if (wall.state === 'recovery_required') {
+        return { terminal: tuple('recovery_required', 'invocation', wall.cause) };
       }
     } catch {
       // Product-wall diagnostics stay advisory when the transcript remains readable.
@@ -1171,9 +1192,9 @@ async function setupOwnedPage(
         state.navigation,
         state.wholeSessionDeadline,
         deps.now,
+        (wall) => rememberSessionProductWall(state, wall, deps),
       );
       if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
-      if (prepared.state === 'wall') return tuple(prepared.wallState, 'invocation', prepared.cause);
       if (prepared.state !== 'ready') return tuple('ui_contract_mismatch', 'invocation', prepared.cause);
     }
     return null;
@@ -1213,7 +1234,7 @@ async function runActivePayload(
   let baseline: PageObservationResult;
   try {
     if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
-    const composerState = await deps.waitForComposer(state.page, state.wholeSessionDeadline, true);
+    const composerState = await deps.waitForComposer(state.page, state.wholeSessionDeadline, true, (wall) => rememberSessionProductWall(state, wall, deps));
     if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
     if (composerState.state !== 'ready') return tuple(composerState.state, 'invocation', composerState.cause);
 
@@ -1311,6 +1332,7 @@ function buildSessionResult(
     goto_count: state.navigation.snapshotGoto(),
     new_chat_click_count: state.navigation.snapshotNewChatClick(),
     navigation_count: state.navigation.snapshot(),
+    product_wall_diagnostic: state.productWallDiagnostic,
     payloads: terminals.map((record): SessionPayloadSummary => ({
       ordinal: record.ordinal,
       input: record.input,
@@ -1383,6 +1405,7 @@ async function executeSession(
     writer: new SessionStdoutWriter(deps.stdout, wholeSessionDeadline, deps.now),
     wholeSessionDeadline,
     stopped: false,
+    productWallDiagnostic: { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' },
   };
 
   const freshSlotProfileKey = config.browser.newChat
