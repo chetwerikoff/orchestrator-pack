@@ -49,6 +49,7 @@ interface Harness {
   readonly metrics: { sends: number; pages: number; gotos: number; closes: number; releases: number };
   readonly messages: Array<{ role: 'user' | 'assistant'; text: string }>;
   readonly gotoTimeouts: Array<number | undefined>;
+  readonly gotoWaitUntil: Array<string | undefined>;
   nowMs: number;
   composerText: string;
 }
@@ -66,10 +67,13 @@ function makeHarness(
     readonly profileState?: 'verified' | 'unavailable' | 'mismatch';
     readonly atomicRows?: () => readonly { role: 'user' | 'assistant'; text: string; key?: string }[];
     readonly pageUrl?: () => string;
+    readonly failGoto?: boolean;
   } = {},
 ): Harness {
   const metrics = { sends: 0, pages: 0, gotos: 0, closes: 0, releases: 0 };
   const gotoTimeouts: Array<number | undefined> = [];
+  const gotoWaitUntil: Array<string | undefined> = [];
+  const optionsFailGoto = options.failGoto === true;
   const messages: Array<{ role: 'user' | 'assistant'; text: string }> = [];
   const snapshots = new Map<string, InputSnapshot>();
   payloads.forEach((text, index) => {
@@ -90,7 +94,16 @@ function makeHarness(
   const page = {
     __fakeBrowserGptPage: true,
     url: () => options.pageUrl?.() ?? 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111',
-    goto: async (_target: string, options?: { timeout?: number }) => { metrics.gotos += 1; gotoTimeouts.push(options?.timeout); },
+    goto: async (_target: string, options?: { timeout?: number; waitUntil?: string }) => {
+      metrics.gotos += 1;
+      gotoTimeouts.push(options?.timeout);
+      gotoWaitUntil.push(options?.waitUntil);
+      if (options?.waitUntil !== 'commit' || options.timeout === undefined || options.timeout <= 0) {
+        throw new Error('invalid_pre_send_navigation_options');
+      }
+      if (options?.timeout > STATE_LIGHT_NAVIGATION_TIMEOUT_MS) throw new Error('navigation_budget_exceeded');
+      if (optionsFailGoto) throw new Error('page.goto: Timeout waiting for commit');
+    },
     close: async () => { metrics.closes += 1; },
     waitForTimeout: async (ms: number) => { nowMs += ms; },
     locator: (selector: string) => {
@@ -222,6 +235,7 @@ function makeHarness(
     metrics,
     messages,
     gotoTimeouts,
+    gotoWaitUntil,
     get nowMs() { return nowMs; },
     set nowMs(value: number) { nowMs = value; },
     get composerText() { return composerText; },
@@ -245,7 +259,8 @@ describe('state-light explicit session mode', () => {
     expect(exit).toBe(0);
     expect(harness.metrics).toEqual({ sends: 3, pages: 1, gotos: 1, closes: 1, releases: 1 });
     expect(STATE_LIGHT_NAVIGATION_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
-    expect(harness.gotoTimeouts).toEqual([STATE_LIGHT_NAVIGATION_TIMEOUT_MS]);
+    expect(harness.gotoTimeouts).toEqual([60_000]);
+    expect(harness.gotoWaitUntil).toEqual(['commit']);
     const payloadRecords = records(harness.stream);
     expect(payloadRecords.map((record) => [record.ordinal, record.phase])).toEqual([
       [1, 'dispatch-latched'], [1, 'delivery-bound'], [1, 'terminal'],
@@ -302,6 +317,159 @@ describe('state-light explicit session mode', () => {
       cleanup: 'skipped',
       incidents: [],
     });
+  });
+
+  it('clamps the committed existing-chat goto to time remaining after profile verification', async () => {
+    const harness = makeHarness(['one'], { timeoutMs: 1_000 });
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      verifyProfile: async () => {
+        harness.nowMs += 400;
+        return { state: 'verified', cause: 'verified', evidence: 'test' };
+      },
+    };
+    await runStateLightSession(harness.argv, dependencies);
+    expect(harness.gotoWaitUntil).toEqual(['commit']);
+    expect(harness.gotoTimeouts).toEqual([600]);
+  });
+
+  it('dispatches an existing-chat payload after a 20-second composer mount without waiting for DCL', async () => {
+    const harness = makeHarness(['one']);
+    let composerDeadline: number | undefined;
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      waitForComposer: async (_page, deadline) => {
+        composerDeadline = deadline;
+        harness.nowMs += 20_000;
+        return { state: 'ready' };
+      },
+    };
+    const startedAt = harness.nowMs;
+    await runStateLightSession(harness.argv, dependencies);
+    expect(composerDeadline).toBe(startedAt + 60_000);
+    expect(harness.gotoWaitUntil).toEqual(['commit']);
+    expect(harness.metrics.sends).toBe(1);
+    expect(records(harness.stream).filter((record) => record.phase === 'dispatch-latched')).toHaveLength(1);
+  });
+
+  it('dispatches the first fresh-project payload after committed navigation and late hydration', async () => {
+    const projectUrl = 'https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-project/project';
+    const conversationUrl = 'https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-project/c/11111111-1111-1111-1111-111111111111';
+    let harness: Harness;
+    harness = makeHarness(['one'], { pageUrl: () => harness?.metrics.sends ? conversationUrl : projectUrl });
+    harness.argv.splice(harness.argv.indexOf('--chat-url'), 2, '--new-chat', '--project-url', projectUrl);
+    let prepareDeadline: number | undefined;
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      prepareFresh: async (_page, _config, _key, _inv, _nav, deadline) => {
+        prepareDeadline = deadline;
+        return { state: 'ready' };
+      },
+      waitForComposer: async () => {
+        harness.nowMs += 20_000;
+        return { state: 'ready' };
+      },
+    };
+    const startedAt = harness.nowMs;
+    await runStateLightSession(harness.argv, dependencies);
+    expect(prepareDeadline).toBe(startedAt + 60_000);
+    expect(harness.gotoWaitUntil).toEqual(['commit']);
+    expect(harness.gotoTimeouts).toEqual([60_000]);
+    expect(harness.metrics.sends).toBe(1);
+    expect(records(harness.stream).filter((record) => record.phase === 'dispatch-latched')).toHaveLength(1);
+  });
+
+  it('fails the first fresh-project payload before latch after a late foreign redirect', async () => {
+    const projectUrl = 'https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-project/project';
+    const foreignUrl = 'https://chatgpt.com/g/g-p-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-foreign/c/22222222-2222-2222-2222-222222222222';
+    let foreign = false;
+    const harness = makeHarness(['one'], { pageUrl: () => foreign ? foreignUrl : projectUrl });
+    harness.argv.splice(harness.argv.indexOf('--chat-url'), 2, '--new-chat', '--project-url', projectUrl);
+    const baseRead = harness.dependencies.readObservation!;
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      readObservation: async (...args) => {
+        const value = await baseRead(...args);
+        foreign = true;
+        return value;
+      },
+    };
+    await runStateLightSession(harness.argv, dependencies);
+    expect(foreign).toBe(true);
+    expect(harness.metrics.sends).toBe(0);
+    expect(records(harness.stream).some((item) => item.phase === 'dispatch-latched')).toBe(false);
+    expect(aggregate(harness.stream)).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'fresh_conversation_surface_unavailable',
+      total_send_count: 0,
+    });
+  });
+
+  it('fails an existing-chat payload before latch on a late foreign-chat redirect', async () => {
+    const chatUrl = 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111';
+    const foreignUrl = 'https://chatgpt.com/c/22222222-2222-2222-2222-222222222222';
+    let foreign = false;
+    const harness = makeHarness(['one'], { pageUrl: () => foreign ? foreignUrl : chatUrl });
+    const baseRead = harness.dependencies.readObservation!;
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      readObservation: async (...args) => {
+        const value = await baseRead(...args);
+        foreign = true;
+        return value;
+      },
+    };
+    await runStateLightSession(harness.argv, dependencies);
+    expect(harness.metrics.sends).toBe(0);
+    expect(records(harness.stream).some((item) => item.phase === 'dispatch-latched')).toBe(false);
+    expect(aggregate(harness.stream)).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'conversation_identity_changed',
+      total_send_count: 0,
+    });
+  });
+
+  it('passes the absolute session deadline through fresh setup and refuses expired preparation', async () => {
+    const projectUrl = 'https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-project/project';
+    const harness = makeHarness(['one'], { pageUrl: () => projectUrl, timeoutMs: 1_000 });
+    harness.argv.splice(harness.argv.indexOf('--chat-url'), 2, '--new-chat', '--project-url', projectUrl);
+    let observedDeadline: number | undefined;
+    let observedNow: (() => number) | undefined;
+    let composerCalled = false;
+    const startedAt = harness.nowMs;
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      prepareFresh: async (_page, _config, _key, _inv, _nav, deadline, now) => {
+        observedDeadline = deadline;
+        observedNow = now;
+        harness.nowMs += 1_000;
+        return { state: 'ready' };
+      },
+      waitForComposer: async () => {
+        composerCalled = true;
+        return { state: 'ready' };
+      },
+    };
+    await runStateLightSession(harness.argv, dependencies);
+    expect(observedDeadline).toBe(startedAt + 1_000);
+    expect(observedNow?.()).toBe(startedAt + 1_000);
+    expect(composerCalled).toBe(false);
+    expect(harness.metrics.sends).toBe(0);
+    expect(records(harness.stream).some((item) => item.phase === 'dispatch-latched')).toBe(false);
+    expect(aggregate(harness.stream)).toMatchObject({
+      state: 'stream_timeout',
+      cause: 'whole_session_deadline_exhausted',
+      total_send_count: 0,
+    });
+  });
+
+  it('preserves a no-commit failure as zero dispatch without latch', async () => {
+    const harness = makeHarness(['one'], { failGoto: true });
+    await runStateLightSession(harness.argv, harness.dependencies);
+    expect(harness.gotoWaitUntil).toEqual(['commit']);
+    expect(harness.metrics.sends).toBe(0);
+    expect(records(harness.stream).some((item) => item.phase === 'dispatch-latched')).toBe(false);
+    expect(aggregate(harness.stream)).toMatchObject({ total_send_count: 0 });
   });
 
   it('materializes ordinal 1 as active when profile setup fails', async () => {

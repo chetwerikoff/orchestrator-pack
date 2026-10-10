@@ -42,6 +42,7 @@ import {
   conversationUuidFromUrl,
   ownedConversationIdentityMatches,
   prepareStateLightFreshConversation,
+  isBlankProjectSurfaceUrl,
   projectConversationPrefix,
   recordStateLightAdvisoryWall,
   releaseStateLightFreshConversationClaim,
@@ -2061,10 +2062,13 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
   readonly sendWaitMs: number;
   readonly invocationDeadlineMs: number;
   readonly deliveryProofWaitMs?: number;
+  readonly preSendAlertsAlreadyMarked?: boolean;
   readonly onDispatch?: () => void;
   readonly onActionError?: (diagnostic: string) => void;
 }): Promise<{ sendCount: 0 | 1; witness: StateLightSendDeliveryWitness; actionError?: string }> {
-  await markPreSendAlerts(input.page, Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs));
+  if (!input.preSendAlertsAlreadyMarked) {
+    await markPreSendAlerts(input.page, Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs));
+  }
   input.onDispatch?.();
   let actionError: string | undefined;
   try {
@@ -2099,9 +2103,13 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
 async function waitForComposer(
   page: any,
   invocationDeadlineMs: number,
+  useWholePreSendDeadline = false,
 ): Promise<{ state: 'ready' } | { state: TurnState; cause: string }> {
-  const readinessStart = Date.now();
-  const readinessDeadline = Math.min(readinessStart + COMPOSER_READINESS_WAIT_MS, invocationDeadlineMs);
+  // Preserve the legacy two-argument helper contract used by in-process tests.
+  // Committed pre-send navigations explicitly opt into the whole invocation deadline.
+  const readinessDeadline = useWholePreSendDeadline
+    ? invocationDeadlineMs
+    : Math.min(Date.now() + COMPOSER_READINESS_WAIT_MS, invocationDeadlineMs);
   while (true) {
     let remainingMs = readinessDeadline - Date.now();
     if (remainingMs <= 0) break;
@@ -2314,15 +2322,18 @@ async function navigateOwnedTurnPage(
   page: any,
   config: BrowserConfig,
   navigation: StateLightNavigationCounter,
+  invocationDeadlineMs: number,
 ): Promise<void> {
   const target = config.newChat
     ? projectConversationPrefix(config.projectUrl ?? '')
     : normalizeConversationUrl(config.chatUrl ?? '');
   if (!target) throw new Error('ui_contract_mismatch:target_required');
+  const remainingMs = invocationDeadlineMs - Date.now();
+  if (remainingMs <= 0) throw new BrowserOperationTimeoutError('navigation');
   navigation.recordGoto();
   await page.goto(target, {
-    waitUntil: 'domcontentloaded',
-    timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
+    waitUntil: 'commit',
+    timeout: Math.min(STATE_LIGHT_NAVIGATION_TIMEOUT_MS, remainingMs),
   });
   if (!config.newChat && !ownedConversationIdentityMatches(page.url(), target)) {
     throw new Error('ui_contract_mismatch:conversation_redirect');
@@ -2655,7 +2666,7 @@ async function runTurn(
     }
     if (!page) {
       page = await createDedicatedTurnPage(browser, invocationBudget);
-      await navigateOwnedTurnPage(page, config, navigation);
+      await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs);
     }
 
     let baselineCount = 0;
@@ -2793,10 +2804,37 @@ async function runTurn(
       if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
-      remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-      if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
-      const sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+      let sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      await markPreSendAlerts(page, Math.min(MAX_LOCAL_READ_WAIT_MS, sendWaitMs));
+      sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+      if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      // Reapply existing read-only destination predicates after composer mutation
+      // and immediately before entering the actual dispatch boundary.
+      if (!config.newChat) {
+        const identity = readOwnedConversationIdentity(page, normalizeConversationUrl(config.chatUrl ?? ''));
+        if (!identity.matched) {
+          return returnOwnedConversationIdentityMismatch(
+            identity, page, browser, invocationId, profileKey, sendCount,
+            pollCount, navigation, incidents, journalWriteFailed, incident, false,
+          );
+        }
+      } else {
+        let currentUrl = '';
+        try { currentUrl = String(page.url()); } catch { /* fail closed */ }
+        if (!isBlankProjectSurfaceUrl(currentUrl, config.projectUrl ?? '')) {
+          incident('invocation_blocker', 'fresh_conversation_surface_unavailable', 'return_local_error');
+          return {
+            page,
+            browser,
+            result: compactResult(
+              'ui_contract_mismatch', 'invocation', 'fresh_conversation_surface_unavailable',
+              invocationId, profileKey, sendCount, pollCount, navigation, incidents, {},
+              journalWriteFailed,
+            ),
+          };
+        }
+      }
       const delivery = await dispatchStateLightSendAndObserveDelivery({
         page,
         browser,
@@ -2807,6 +2845,7 @@ async function runTurn(
         baselineUserNodeCount,
         sendWaitMs,
         invocationDeadlineMs,
+        preSendAlertsAlreadyMarked: true,
         onDispatch: () => {
           transitionStateLightTurnObservation({
             profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
@@ -2942,11 +2981,12 @@ async function runTurn(
           profileKey,
           invocationId,
           navigation,
+          invocationDeadlineMs,
         );
         const initialPrepareFailure = returnFreshPrepareFailure(initialPrepare);
         if (initialPrepareFailure) return initialPrepareFailure;
 
-        let composerState = await waitForComposer(page, invocationDeadlineMs);
+        let composerState = await waitForComposer(page, invocationDeadlineMs, true);
         const initialComposerFailure = returnComposerBlocker(composerState);
         if (initialComposerFailure) return initialComposerFailure;
 
@@ -3004,10 +3044,11 @@ async function runTurn(
               profileKey,
               invocationId,
               navigation,
+              invocationDeadlineMs,
             );
             const preparedFailure = returnFreshPrepareFailure(prepared);
             if (preparedFailure) return preparedFailure;
-            composerState = await waitForComposer(page, invocationDeadlineMs);
+            composerState = await waitForComposer(page, invocationDeadlineMs, true);
             const composerFailure = returnComposerBlocker(composerState);
             if (composerFailure) return composerFailure;
             sendAuthorized = true;
@@ -3292,7 +3333,7 @@ async function runTurn(
         );
       }
 
-      const composerState = await waitForComposer(page, invocationDeadlineMs);
+      const composerState = await waitForComposer(page, invocationDeadlineMs, true);
       if (composerState.state !== 'ready') {
         recordProductWallAdvisory(profileKey, composerState.state, composerState.cause, invocationId);
         incident('invocation_blocker', composerState.cause, 'return_local_error');
