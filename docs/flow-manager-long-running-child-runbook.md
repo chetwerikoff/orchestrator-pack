@@ -10,8 +10,11 @@ before acknowledging transport handoff.
 For every Browser-GPT attempt, the caller/orchestrator must mint and retain one
 non-empty invocation identity before invoking the adapter. The adapter validates
 `--invocation-id` before detached launch or handoff acceptance and forwards those
-exact bytes to the child. The same value is reused for supported recovery/harvest; its presence is
-common turn identity only.
+exact bytes to the child. The same value is reused for recovery/harvest of **that one attempt**, not
+for a second send: every real new Browser attempt must use a fresh invocation
+ID, even across run/attempt labels or profiles. An occupied key requires a
+fresh invocation ID, never deleting an old receipt or treating an old key as
+authorization to retry.
 
 ## Package commands
 
@@ -27,6 +30,8 @@ npm run --silent flow-manager-browser-gpt-long-run -- \
   --run-identity <opaque-run-id> \
   --attempt-identity <opaque-attempt-id> \
   --invocation-id <caller-owned-invocation-id> \
+  --owner-task-id <optional-opaque-task-id> \
+  --owner-dispatch-id <optional-opaque-dispatch-id> \
   --handoff-receipt /absolute/path/handoff-receipt.json \
   --terminal-envelope /absolute/path/<attempt>-terminal.json \
   --output /absolute/path/reply.txt \
@@ -52,7 +57,9 @@ Run Browser-GPT tooling from the trusted pack checkout (the operator's
 `orchestrator-pack` checkout on the default branch), never from a worker
 branch under change. That covers this adapter and launcher, the turn entry, and
 `browser-gpt-page-probe.ts`. Pass the worker worktree as `--cwd`; the child
-runs there, and the chat binding records it as the owning worktree:
+runs there. The indexed handoff's `child_cwd` is the resolved **Browser child**
+worktree only; it is not evidence of the invoking agent terminal's cwd,
+ownership or terminal incarnation:
 
 ```bash
 npm --prefix <pack-checkout> run --silent flow-manager-browser-gpt-long-run -- \
@@ -71,8 +78,13 @@ engine fixes; it is not the trusted engine.
 
 `flow-manager-long-running-child.ts launch` is the sole terminal-envelope writer.
 
-1. The Browser-GPT adapter validates the caller-owned invocation identity before
-   starting this launcher or acknowledging handoff.
+1. The Browser-GPT adapter forwards the exact caller-owned `--invocation-id`
+   to both launcher and Browser child. Optional `--owner-task-id` and
+   `--owner-dispatch-id` are independent, opaque caller assertions; no owner
+   is inferred from profile, cwd or environment. An inherited
+   `ORCA_TERMINAL_HANDLE` is snapshotted only as optional
+   `launching_terminal_handle` routing data, never a terminal incarnation
+   or permission to wake/stop the child.
 2. Validate pairwise-distinct receipt, envelope, and Browser `--output` destinations,
    and refuse (`terminal_envelope_name_not_wakeable`) an envelope whose file name
    does not end in `terminal.json`: fleet-wake discovers envelopes only by that
@@ -80,23 +92,81 @@ engine fixes; it is not the trusted engine.
    the same check before spawning the launcher. Nothing is sent and no file is
    written; the refusal carries `suggested_path` and a `hint` — re-run the same
    command with `--terminal-envelope <suggested_path>`.
-3. Atomically create one `flow-manager-long-running-child-handoff/v1` receipt
-   (`completion_mode: browser-turn-result-v1` fixed constant).
-4. Start the Browser-GPT child with stdin closed, stdout parsed in-process, stderr
+3. For an invocation-bearing launch, check the prospective global invocation key
+   and the same-profile, profile+CDP-keyed durable state-light observation
+   **before** Browser spawn. Refuse any occupied or uncertain key, including a
+   pre-index observation with no locator; supply a new ID rather than reusing
+   an old attempt. Atomically exclusive-create one small
+   `flow-manager-long-running-child-locator/v1` index under
+   `/tmp/opencode/browser-gpt-receipts/<sha256(invocation-id)>.json`.
+   This private (`0700` directory, `0600` index) navigation record stores
+   only invocation/run/attempt and pointers to the **original** handoff and
+   terminal paths. The index has no profile, CDP, prompt or chat transcript.
+   Invalid, occupied, aliased, symlinked, partial or non-private indexes fail
+   closed; a partial reservation stays occupied and requires a fresh ID.
+4. Atomically create the original `flow-manager-long-running-child-handoff/v1`
+   with unchanged existing keys and additive `invocation_id`, optional
+   `owner_task_id`/`owner_dispatch_id`, `child_cwd`,
+   `launcher_pid` from the actual launcher's `process.pid`, and an optional
+   `launching_terminal_handle` hint. Read back and cross-check the original
+   receipt/index before Browser spawn or adapter handoff acknowledgment.
+   The original receipt/terminal/output destinations remain caller-selected.
+5. Legacy direct `flow-manager-long-running-child.ts launch` with no invocation
+   continues its original receipt/terminal and explicit-path wait. It creates
+   no index and invents no invocation. A direct caller opting into an indexed
+   invocation also supplies `--profile` and `--cdp` for the same-profile
+   pre-spawn observation collision check.
+6. Start the Browser-GPT child with stdin closed, stdout parsed in-process, stderr
    to a null sink.
-5. Start with the shared bounded startup allowance. Accept the first valid
+7. Start with the shared bounded startup allowance. Accept the first valid
    phase-bearing `observation-heartbeat/v1` as event-loop liveness and then reset
    the recurring live-child deadline from each accepted heartbeat.
-6. Accept the first valid child-produced `turn-result/v1` from stdout as the sole
+8. Accept the first valid child-produced `turn-result/v1` from stdout as the sole
    completion authority, then use only the existing candidate exit grace.
-7. Classify startup silence as `child_startup_timeout`, recurring live-child silence
+9. Classify startup silence as `child_startup_timeout`, recurring live-child silence
    as `child_liveness_timeout`, and actual exit without a result as
    `child_terminal_result_missing`; none implies browser Stop-generating or resend.
-8. Atomically publish one `flow-manager-long-running-child-terminal/v1` envelope.
+10. Atomically publish one `flow-manager-long-running-child-terminal/v1` envelope.
 
 There is no completion-mode selector. Authority is fixed to `browser-turn-result-v1`.
 
-### Waiter (non-terminal)
+### Receipt locator, PID and waiter (non-terminal)
+
+The adapter prints the existing `flow-manager-browser-gpt-long-run-accepted/v1`
+keys plus `invocation_id`, `receipt_locator`, the original handoff's verified
+`launcher_pid` and `child_cwd`, and optional owner/terminal-handle data.
+The synchronous `OPK_FM_LONG_CHILD_DISABLE_DETACH=1` spawn returns a launcher
+**exit status**, not a PID. Detached spawn returns a shell-observed number.
+Neither return value is accepted as PID: both modes read the actual
+`process.pid` from the same identity-bound handoff. A committed handoff
+remains handoff evidence even if its Browser child later exits nonzero; it
+never proves a successful turn or delivery.
+
+Indexed wait uses **either** the exact invocation or the adapter-returned
+`receipt_locator`, with the original run/attempt to verify the single indexed
+attempt. It reads only the documented discovery root and existing original
+handoff/terminal files, including from a different cwd:
+
+```bash
+npm run --silent flow-manager-long-running-child -- wait \
+  --run-identity <id> --attempt-identity <id> \
+  --invocation-id <original-invocation-id> --deadline-ms 5000
+
+npm run --silent flow-manager-long-running-child -- wait \
+  --run-identity <id> --attempt-identity <id> \
+  --receipt-locator /tmp/opencode/browser-gpt-receipts/<sha256-id>.json \
+  --deadline-ms 5000
+```
+
+Do not combine locator selectors with the legacy explicit paths. An unindexed
+pre-upgrade or standalone direct receipt cannot be upgraded or silently
+looked up by ID; keep using its original explicit-path wait. The only test
+redirection is the existing two-part
+`OPK_FM_LONG_CHILD_TEST_GATE=fixture-root-v1` plus
+`OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT=<disposable-absolute-root>` fixture
+gate. A single environment variable cannot redirect production discovery.
+
+**Legacy explicit-path wait** remains unchanged:
 
 ```bash
 npm run --silent flow-manager-long-running-child -- wait \
@@ -131,7 +201,12 @@ explicitly unproven and out of scope for this version.
 - `landed` — authoritative witness/owned-prompt evidence in the child
   `turn-result/v1`.
 
-Ambiguous post-send loss never authorizes blind re-send. Locator-backed recovery
+Ambiguous post-send loss never authorizes blind re-send. A closed or
+unobservable original chat tab while child heartbeats are healthy is not
+an unrecoverability witness: the child may still reconnect, finish census,
+find an owned-marker successor and emit a valid `turn-result/v1`.
+No parent-side page-loss deadline, `chat_page_gone` terminal, child abort,
+tab close, or new wake/retry authority is introduced. Locator-backed recovery
 stays in the same conversation and does not rewrite the envelope. A heartbeat proves
 only Node event-loop liveness; browser/CDP/composer progress remains governed by its
 existing operation budgets. The heartbeat scheduler is turn-scoped, non-keepalive,
@@ -152,7 +227,11 @@ liveness-timeout, and actual-exit branches and do not create Stop-generating aut
 ## Rollback
 
 Rollback changes only future command selection. It does not rewrite receipts,
-Browser reply output, or terminal envelopes from prior attempts.
+the append-only invocation index, Browser reply output, or terminal envelopes
+from prior attempts. Older explicit-path launch/wait remains usable. An
+occupied/partial index is preserved as non-success evidence: repair the root
+permissions when needed and use a **new invocation ID** for any genuinely
+new Browser attempt, never unlink/resend an uncertain old attempt.
 
 After merge, recycle live flow-manager/worker sessions that must pick up changed
 tracked instructions.
