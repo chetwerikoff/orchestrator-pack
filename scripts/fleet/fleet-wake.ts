@@ -2,8 +2,8 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 import { createHash } from 'node:crypto';
 import { runProcessSync } from '../kernel/subprocess.ts';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, isAbsolute, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetContext } from '../lib/target-context.ts';
 import {
@@ -45,7 +45,11 @@ import {
 } from './chat-error-banners.ts';
 import { readChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
 import { readStateLightTurnObservation } from '../chatgpt-browser-turn/state-light-turn-observation.ts';
-import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath, type DeliveryState } from '../flow-manager-long-running-child.ts';
+import {
+  TERMINAL_ENVELOPE_ROOT, TERMINAL_SCHEMA, invocationReceiptLocatorPath,
+  isWakeableTerminalEnvelopePath, readInvocationReceiptLocator, readTerminalEnvelope,
+  type DeliveryState,
+} from '../flow-manager-long-running-child.ts';
 
 export interface FleetWakeConfig {
   readonly projectId: string;
@@ -270,6 +274,10 @@ export interface FleetAlarmTickOptions {
   readonly readNamedReview?: (repository: string, number: number, reviewId: number) => NativeReview | undefined;
   readonly readPackReviewStage?: (repository: string, sha: string) => PackReviewStageFact | undefined;
   readonly now?: () => number;
+  /** Synthetic GPT receipt root for offline tests; production uses the producer-defined root. */
+  readonly indexedGptTerminalRoot?: string;
+  /** Existence only, never process incarnation or progress. */
+  readonly probeIndexedGptPid?: (pid: number) => 'exists' | 'absent' | 'unknown';
 }
 
 export type FleetAlarmTickResult =
@@ -864,6 +872,12 @@ interface ProducerResolution {
   readonly terminalState?: string;
   readonly evidence?: string;
   readonly legacyKey?: string;
+  readonly indexedGpt?: boolean;
+  readonly reason?: string;
+  readonly vetoLegacyKey?: string;
+  readonly skipReminder?: boolean;
+  readonly ownerTaskId?: string;
+  readonly ownerDispatchId?: string;
 }
 
 // Only a complete, single, exact own response is a supported dependency.
@@ -957,6 +971,168 @@ function exactParkedTask(pane: FleetPaneObservation, projectId: string): readonl
   } catch { return undefined; }
 }
 
+
+// A PID-exists result is only short-lived corroboration: PIDs can be reused or zombie.
+function probeIndexedLauncherPid(pid: number): 'exists' | 'absent' | 'unknown' {
+  try { process.kill(pid, 0); return 'exists'; }
+  catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'absent' : 'unknown';
+  }
+}
+
+function indexedGptResolution(
+  producer: NamedProducer,
+  pane: FleetPaneObservation,
+  tuple: readonly string[],
+  claimants: readonly FleetPaneObservation[],
+  epoch: { key: string; since: number; started?: number } | undefined,
+  options: FleetAlarmTickOptions,
+): ProducerResolution | undefined {
+  const root = options.indexedGptTerminalRoot ?? TERMINAL_ENVELOPE_ROOT;
+  const path = invocationReceiptLocatorPath(producer.id!, root);
+  const reject = (reason: string, vetoLegacyKey?: string): ProducerResolution => ({
+    label: producer.label, state: 'unresolvable', indexedGpt: true, reason,
+    ...(vetoLegacyKey ? { vetoLegacyKey } : {}),
+    skipReminder: reason === 'ambiguous-gpt-owner',
+  });
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    return reject('invalid-receipt-or-index');
+  }
+  let chain: ReturnType<typeof readInvocationReceiptLocator>;
+  try {
+    const index = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    if (typeof index.run_identity !== 'string' || !index.run_identity
+      || typeof index.attempt_identity !== 'string' || !index.attempt_identity) return reject('invalid-receipt-or-index');
+    chain = readInvocationReceiptLocator({
+      invocationId: producer.id!, runIdentity: index.run_identity,
+      attemptIdentity: index.attempt_identity, terminalEnvelopeRoot: root,
+    });
+  } catch { return reject('invalid-receipt-or-index'); }
+
+  const { locator, receipt } = chain;
+  if (!isWakeableTerminalEnvelopePath(locator.terminal_envelope_path, root)
+    || receipt.invocation_id !== producer.id
+    || !Number.isFinite(Date.parse(receipt.launcher_started_at))
+    || !Number.isFinite(Date.parse(receipt.handoff_committed_at))
+    || (receipt.owner_task_id !== undefined && (!receipt.owner_task_id || typeof receipt.owner_task_id !== 'string'))
+    || (receipt.owner_dispatch_id !== undefined && (!receipt.owner_dispatch_id || typeof receipt.owner_dispatch_id !== 'string'))) {
+    return reject('invalid-receipt-or-index');
+  }
+  const legacyKey = 'gpt:' + locator.terminal_envelope_path;
+  // Observation order cannot elect a Task. Optional owner fields are caller
+  // assertions, accepted only when independently verified against native binding.
+  const exact = claimants.map((candidate) => ({ pane: candidate,
+    tuple: exactParkedTask(candidate, options.config.projectId) }));
+  const asserted = exact.filter((candidate) => candidate.tuple
+    && (!receipt.owner_task_id || candidate.tuple[5] === receipt.owner_task_id)
+    && (!receipt.owner_dispatch_id || candidate.tuple[6] === receipt.owner_dispatch_id));
+  let eligible = claimants.length === 1 && asserted.length === 1 && asserted[0]!.pane.handle === pane.handle;
+  if (claimants.length > 1) {
+    eligible = Boolean(receipt.owner_task_id && receipt.owner_dispatch_id
+      && asserted.length === 1 && asserted[0]!.pane.handle === pane.handle);
+  }
+  const ownerConflict = !eligible || tuple[5] !== (exact.find((x) => x.pane.handle === pane.handle)?.tuple?.[5])
+    || tuple[6] !== (exact.find((x) => x.pane.handle === pane.handle)?.tuple?.[6]);
+  let terminalExists = false;
+  try {
+    const stat = lstatSync(locator.terminal_envelope_path);
+    if (!stat.isFile()) return reject('terminal-unsafe');
+    terminalExists = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return reject('terminal-unsafe');
+  }
+  if (!terminalExists) {
+    if (ownerConflict) return reject('ambiguous-gpt-owner');
+    const at = (options.now ?? Date.now)();
+    const started = epoch?.started ?? epoch?.since;
+    if (started === undefined || !Number.isFinite(started)
+      || !Number.isFinite(at) || at < started) return reject('launcher-identity-unverifiable');
+    const state = (options.probeIndexedGptPid ?? probeIndexedLauncherPid)(receipt.launcher_pid!);
+    if (state === 'absent') return reject('launcher-gone; envelope-absent');
+    if (state !== 'exists') return reject('launcher-identity-unverifiable');
+    return at - started < REMINDER_INTERVAL_MS
+      ? { label: producer.label, state: 'pending', indexedGpt: true }
+      : reject('pid-identity-unverified; envelope-absent');
+  }
+  const envelope = readTerminalEnvelope(locator.terminal_envelope_path, {
+    runIdentity: locator.run_identity, attemptIdentity: locator.attempt_identity,
+  });
+  if (!envelope) return reject('terminal-identity-mismatch');
+  const relativeHandoff = typeof envelope.handoff_receipt_path === 'string'
+    && !isAbsolute(envelope.handoff_receipt_path);
+  const handoffMatches = typeof envelope.handoff_receipt_path === 'string'
+    && (relativeHandoff
+      ? basename(normalize(envelope.handoff_receipt_path)) === basename(locator.handoff_receipt_path)
+      : resolve(envelope.handoff_receipt_path) === locator.handoff_receipt_path);
+  if (envelope.completion_mode !== receipt.completion_mode
+    || envelope.launcher_started_at !== receipt.launcher_started_at
+    || envelope.handoff_committed_at !== receipt.handoff_committed_at
+    || !handoffMatches
+    || (envelope.observed_invocation_id !== undefined
+      && envelope.observed_invocation_id !== producer.id)
+    || !Number.isFinite(Date.parse(envelope.terminal_at))
+    || (envelope.lifecycle_outcome !== 'success' && envelope.lifecycle_outcome !== 'incident')) {
+    return reject('terminal-identity-mismatch');
+  }
+  const persisted = envelope.diagnostics?.persisted_observation as { profile_key?: unknown } | undefined;
+  const observedId = envelope.observed_invocation_id;
+  if (potentiallySentUnboundEnvelope({
+    path: locator.terminal_envelope_path,
+    invocationId: observedId ?? producer.id!, 
+    ...(observedId ? { observedInvocationId: observedId } : {}),
+    ...(envelope.send_count !== undefined ? { sendCount: envelope.send_count } : {}),
+    delivery: envelope.delivery,
+    ...(envelope.conversation_locator ? { conversationLocator: envelope.conversation_locator } : {}),
+    ...(typeof persisted?.profile_key === 'string' ? { persistedObservationProfileKey: persisted.profile_key } : {}),
+  })) return reject('terminal-unsafe');
+  if (ownerConflict) return reject('ambiguous-gpt-owner', legacyKey);
+  return {
+    label: producer.label, state: 'ended', indexedGpt: true,
+    terminalState: 'terminal-envelope', evidence: locator.terminal_envelope_path, legacyKey,
+    ...(receipt.owner_task_id ? { ownerTaskId: receipt.owner_task_id } : {}),
+    ...(receipt.owner_dispatch_id ? { ownerDispatchId: receipt.owner_dispatch_id } : {}),
+  };
+}
+
+// The second Orca sweep is read-only: no persisted polling, pane-wait, or
+// notification mutations. It reuses the actual native Task/Dispatch join and
+// own screen parser instead of treating an old fleet snapshot as a send lease.
+function freshIndexedGptOwner(
+  options: FleetAlarmTickOptions, executor: OrcaExecutor,
+  original: FleetPaneObservation, originalTuple: readonly string[],
+  invocationId: string, ownerTaskId?: string, ownerDispatchId?: string,
+): boolean {
+  try {
+    const currentTerminals = listFleetTerminals(executor);
+    const readOnly: FleetPollingStore = {
+      hasPollingMark: () => false, setPollingMark: () => {}, clearPollingMark: () => {},
+    };
+    const current = runFleetSweep({
+      primary: options.config.primary, projectId: options.config.projectId,
+      workspaceRe: options.config.workspaceRe, coordinatorHandle: options.config.orchestratorHandle,
+      coordinatorTitleRe: options.config.orchestratorTitleRe,
+      architectHandle: options.config.architectHandle, busyRe: options.config.busyRe,
+      terminals: currentTerminals, executor, store: readOnly,
+    });
+    const claimants = current.filter((pane) => pane.state === 'PARKED' && pane.wait
+      && parseNamedParkedProducer(pane.wait)?.kind === 'gpt'
+      && parseNamedParkedProducer(pane.wait)?.id === invocationId);
+    const matches = claimants.filter((pane) => {
+      const tuple = exactParkedTask(pane, options.config.projectId);
+      return tuple && (!ownerTaskId || tuple[5] === ownerTaskId)
+        && (!ownerDispatchId || tuple[6] === ownerDispatchId);
+    });
+    if (matches.length !== 1 || (claimants.length > 1 && (!ownerTaskId || !ownerDispatchId))) return false;
+    const target = matches[0]!;
+    const tuple = exactParkedTask(target, options.config.projectId);
+    return target.handle === original.handle && target.wait === original.wait
+      && JSON.stringify(tuple) === JSON.stringify(originalTuple);
+  } catch { return false; }
+}
+
 // Prefer the trusted selected project card for repository-bound producers.
 // Conflicting optional ChatGPT scope cannot authorize a GitHub lookup.
 function namedRepository(config: FleetWakeConfig): string | undefined {
@@ -970,6 +1146,9 @@ function resolveNamedProducer(
   pane: FleetPaneObservation,
   terminals: readonly FleetTerminal[],
   options: FleetAlarmTickOptions,
+  claimants: readonly FleetPaneObservation[] = [],
+  tuple?: readonly string[],
+  epoch?: { key: string; since: number; started?: number },
 ): ProducerResolution {
   const unknown: ProducerResolution = { state: 'unresolvable', label: producer.label };
   const pending: ProducerResolution = { state: 'pending', label: producer.label };
@@ -978,6 +1157,10 @@ function resolveNamedProducer(
     ...(legacyKey ? { legacyKey } : {}),
   });
   if (producer.kind === 'gpt') {
+    if (tuple) {
+      const indexed = indexedGptResolution(producer, pane, tuple, claimants, epoch, options);
+      if (indexed) return indexed;
+    }
     const events = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)();
     const matches = events.filter((event) => event.observedInvocationId === producer.id
       && isWakeableTerminalEnvelopePath(event.path, '/tmp/opencode'));
@@ -1080,6 +1263,7 @@ async function sendMarkedUnitMessage(
   executor: OrcaExecutor, sleepMs: (milliseconds: number) => void | Promise<void>,
   log: (line: string) => void,
   legacyKey?: string,
+  beforeSecondEnter?: () => boolean,
 ): Promise<boolean> {
   // Both marks must be durable before the first potentially effectful send.
   // An uncertain result forbids replays through either the named or legacy path.
@@ -1090,7 +1274,7 @@ async function sendMarkedUnitMessage(
   let delivered = false;
   try {
     delivered = sendCoordinator(executor, handle, message)
-      && (await sleepMs(4_000), submitCoordinator(executor, handle));
+      && (await sleepMs(4_000), (!beforeSecondEnter || beforeSecondEnter()) && submitCoordinator(executor, handle));
   } catch { /* A timeout can have delivered text; no automatic retry. */ }
   if (!delivered) { log('unit attempted_unverified: ' + key); return false; }
   try {
@@ -1114,6 +1298,17 @@ async function wakeNamedParkedProducers(
   const claimedLegacy = new Set<string>();
   const observed = new Map<string, string>();
   const now = (options.now ?? Date.now)();
+  // Census all currently observed exact claimants before the first indexed effect.
+  // Even a claimant without a verifiable native tuple counts as a collision.
+  const gptClaims = new Map<string, FleetPaneObservation[]>();
+  for (const candidate of observations) {
+    if (candidate.state !== 'PARKED' || !candidate.wait) continue;
+    const parsed = parseNamedParkedProducer(candidate.wait);
+    if (parsed?.kind !== 'gpt' || !parsed.id) continue;
+    const claims = gptClaims.get(parsed.id) ?? [];
+    claims.push(candidate);
+    gptClaims.set(parsed.id, claims);
+  }
   for (const pane of observations) {
     if (pane.state !== 'PARKED' || !pane.wait || /^PARKED on orchestrator answer:/u.test(pane.wait)) continue;
     const producer = parseNamedParkedProducer(pane.wait);
@@ -1136,32 +1331,65 @@ async function wakeNamedParkedProducers(
     }
     const episodeInstance = episode + ':' + String(epoch?.started ?? epoch?.since ?? now);
     let resolution: ProducerResolution;
-    try { resolution = resolveNamedProducer(producer, pane, terminals, options); }
+    try { resolution = resolveNamedProducer(producer, pane, terminals, options,
+      producer.id ? gptClaims.get(producer.id) ?? [] : [], tuple, epoch); }
     catch { resolution = { label: producer.label, state: 'unresolvable' }; }
-    if (resolution.state === 'unresolvable') {
+    const diagnostic = (reason: string): void => {
       alerts.push('park on unresolvable producer ' + (safeUnitAtom(pane.handle) ?? 'unknown')
+        + ' ' + episode.slice(0, 12) + ' ' + reason
+        + ' - inspect indexed receipt/terminal and current Task; re-check manually under existing authority');
+    };
+    if (resolution.state === 'unresolvable') {
+      if (resolution.indexedGpt) diagnostic(resolution.reason ?? 'missing-receipt-or-envelope');
+      else alerts.push('park on unresolvable producer ' + (safeUnitAtom(pane.handle) ?? 'unknown')
         + ' ' + episode.slice(0, 12));
     }
+    // This is an ephemeral same-tick named-to-legacy veto, NOT a global mark.
+    // It protects precisely the validated original indexed event even if a
+    // claimant changes before its first text+Enter.
+    if (resolution.vetoLegacyKey) claimedLegacy.add(resolution.vetoLegacyKey);
+    if (resolution.skipReminder) continue;
     const legacyCoalesced = Boolean(resolution.legacyKey
       && store.hasParkedWakeEvent(resolution.legacyKey));
     const eventKey = 'producer:' + pane.handle + ':' + episodeInstance + ':'
       + createHash('sha256').update(JSON.stringify(resolution)).digest('hex').slice(0, 32);
     const attempted = store.readParkedWakeEventStatus(eventKey);
-    // Preserve coordinator visibility after either Enter failure or a failed
-    // coordinator send/read. The normal signature clock throttles repeat alarms.
     if (attempted === 'attempted_unverified') {
       alerts.push('uncertain unit Wake ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' ' + episode.slice(0, 12));
     }
     if (resolution.state === 'ended' && resolution.legacyKey && attempted) {
       claimedLegacy.add(resolution.legacyKey);
     }
+    if (resolution.indexedGpt && legacyCoalesced && !attempted) {
+      diagnostic('legacy-event-already-attempted; recipient-unproven');
+    }
     if (resolution.state === 'ended' && !legacyCoalesced && !attempted) {
       const wake = safeUnitWakeText(producer.label, resolution.terminalState ?? '', resolution.evidence ?? '');
       if (!wake) {
+        if (resolution.indexedGpt) {
+          if (resolution.legacyKey) claimedLegacy.add(resolution.legacyKey);
+          diagnostic('unsafe-evidence; path-unrepresentable');
+          continue;
+        }
         alerts.push('park on unresolvable producer ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' unsafe-evidence');
       } else {
+        if (resolution.indexedGpt && (!producer.id || !freshIndexedGptOwner(
+          options, executor, pane, tuple, producer.id, resolution.ownerTaskId, resolution.ownerDispatchId
+        ))) {
+          if (resolution.legacyKey) claimedLegacy.add(resolution.legacyKey);
+          diagnostic('pane-changed-before-send');
+          continue;
+        }
+        let changedDuring = false;
+        const beforeSecond = resolution.indexedGpt ? () => {
+          const same = Boolean(producer.id && freshIndexedGptOwner(
+            options, executor, pane, tuple, producer.id, resolution.ownerTaskId, resolution.ownerDispatchId
+          ));
+          if (!same) changedDuring = true;
+          return same;
+        } : undefined;
         const sent = await sendMarkedUnitMessage(store, eventKey, pane.handle, wake, executor, sleepMs, log,
-          resolution.legacyKey);
+          resolution.legacyKey, beforeSecond);
         if (resolution.legacyKey && store.hasParkedWakeEvent(resolution.legacyKey)) {
           claimedLegacy.add(resolution.legacyKey);
         }
@@ -1170,7 +1398,8 @@ async function wakeNamedParkedProducers(
           store.clearPaneWait?.(pane.handle);
           continue;
         }
-        alerts.push('uncertain unit Wake ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' ' + episode.slice(0, 12));
+        if (changedDuring) diagnostic('pane-changed-during-wake; uncertain-unit-wake');
+        else alerts.push('uncertain unit Wake ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' ' + episode.slice(0, 12));
       }
     }
     // Park age is measured from first eligible observation or the last successful
