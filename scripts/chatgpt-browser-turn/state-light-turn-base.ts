@@ -2781,6 +2781,14 @@ async function runTurnCore(
     };
 
     const markedPayload = wrapOwnedPromptPayload(marker, snapshot.text);
+    // Committed navigations can mount a composer after the 12-second readiness
+    // window. Reserve the bounded insertion allowance for the normal mutation
+    // attempt even when no composer ever appears.
+    const composerReadinessDeadline = (): number => Math.max(
+      Date.now(),
+      invocationDeadlineMs - deriveComposerInsertionBudgetMs(markedPayload),
+    );
+
 
     // A URL is only a candidate. A complete conversation-local census and
     // exactly one owned user carrier/marker token are required before *any*
@@ -3018,7 +3026,7 @@ async function runTurnCore(
         const initialPrepareFailure = returnFreshPrepareFailure(initialPrepare);
         if (initialPrepareFailure) return initialPrepareFailure;
 
-        let composerState = await waitForComposer(page, invocationDeadlineMs, false, observeProductWall);
+        let composerState = await waitForComposer(page, composerReadinessDeadline(), true, observeProductWall);
         const initialComposerFailure = returnComposerBlocker(composerState);
         if (initialComposerFailure) return initialComposerFailure;
 
@@ -3082,7 +3090,7 @@ async function runTurnCore(
             );
             const preparedFailure = returnFreshPrepareFailure(prepared);
             if (preparedFailure) return preparedFailure;
-            composerState = await waitForComposer(page, invocationDeadlineMs, false, observeProductWall);
+            composerState = await waitForComposer(page, composerReadinessDeadline(), true, observeProductWall);
             const composerFailure = returnComposerBlocker(composerState);
             if (composerFailure) return composerFailure;
             sendAuthorized = true;
@@ -3367,7 +3375,7 @@ async function runTurnCore(
         );
       }
 
-      const composerState = await waitForComposer(page, invocationDeadlineMs, false, observeProductWall);
+      const composerState = await waitForComposer(page, composerReadinessDeadline(), true, observeProductWall);
       if (composerState.state !== 'ready' && composerState.cause !== 'composer_unavailable') {
         incident('invocation_blocker', composerState.cause, 'return_local_error');
         return {
