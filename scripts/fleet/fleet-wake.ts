@@ -781,6 +781,703 @@ function supervisedOwnerForPull(
   return owners.length === 1 ? owners[0] : undefined;
 }
 
+
+const REMINDER_INTERVAL_MS = 30 * 60 * 1_000;
+const SHA40 = /^[0-9a-f]{40}$/u;
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+
+type ProducerKind = 'gpt' | 'pack-review' | 'review' | 'ci' | 'merge' | 'terminal';
+interface NamedProducer {
+  readonly kind: ProducerKind;
+  readonly label: string;
+  readonly id?: string;
+  readonly number?: number;
+  readonly sha?: string;
+  readonly reviewId?: number;
+  readonly handle?: string;
+  readonly incarnation?: string;
+  readonly mergeAgent?: boolean;
+}
+interface ProducerResolution {
+  readonly state: 'ended' | 'pending' | 'unresolvable';
+  readonly label: string;
+  readonly terminalState?: string;
+  readonly evidence?: string;
+  readonly legacyKey?: string;
+}
+
+// Only a complete, single, exact own response is a supported dependency.
+// The one known suffix adds no condition; "resume when ..." and similar
+// semantic tails must not be discarded to make a producer appear resolved.
+export function parseNamedParkedProducer(wait: string): NamedProducer | undefined {
+  const source = wait.endsWith(' (self-wake armed)')
+    ? wait.slice(0, -' (self-wake armed)'.length) : wait;
+  let match = new RegExp('^PARKED on GPT turn (' + UUID + ')
+ * for parked FLEET units or unread Run mail. The event marks suppress repeat wakes.
+ */
+async function wakePanesOnEvents(
+  options: FleetAlarmTickOptions,
+  coordinator: FleetTerminal,
+  observations: readonly FleetPaneObservation[],
+  executor: OrcaExecutor,
+  store: FleetWakeStateStore,
+  log: (line: string) => void,
+  sleepMs: (milliseconds: number) => void | Promise<void>,
+): Promise<void> {
+  const wakes: Array<{ pane: FleetTerminal | FleetPaneObservation; key: string; message: string }> = [];
+  for (const envelope of (options.listTerminalEnvelopes ?? listTerminalEnvelopes)()) {
+    const key = `gpt:${envelope.path}`;
+    if (potentiallySentUnboundEnvelope(envelope)) {
+      log(`skip unsafe GPT terminal wake: owner_generation_unproven ${key}`);
+      continue;
+    }
+    const pane = envelope.terminalHandle !== undefined
+      ? observations.find((candidate) =>
+        candidate.handle === envelope.terminalHandle)
+      : envelope.cwd
+        ? envelopeOwner(envelope.cwd, observations)
+        : undefined;
+    if (!pane || !idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
+    wakes.push({ pane, key, message: `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}` });
+  }
+  const parkedEpisodes = observations.flatMap((pane) => {
+    if (!pane.worktreePath) return [];
+    const lastLine = pane.wait ?? '';
+    const parked = pane.state === 'PARKED' ? /^PARKED on orchestrator answer:\s*(.+)$/iu.exec(lastLine) : null;
+    return parked ? [{ pane, parked, key: `parked:${pane.handle}:${pane.taskBinding ?? pane.incarnationId ?? ''}:${lastLine}` }] : [];
+  });
+  const activeParkedKeyByHandle = new Map(
+    parkedEpisodes.map(({ pane, key }) => [pane.handle, key] as const),
+  );
+  const observedParkedKeys = new Map<string, string | null>();
+  for (const pane of observations) {
+    observedParkedKeys.set(pane.handle, activeParkedKeyByHandle.get(pane.handle) ?? null);
+  }
+  store.rearmParkedWakeEvents(observedParkedKeys);
+  for (const { pane, parked, key } of parkedEpisodes) {
+    if (!store.hasParkedWakeEvent(key)) {
+      wakes.push({ pane: coordinator, key, message: `Wake: FLEET unit ${pane.handle} parked on orchestrator answer: ${parked[1]}` });
+    }
+  }
+  const unread = options.listUnreadRunMessages
+    ? options.listUnreadRunMessages(coordinator.handle)
+    : listUnreadRunMessages(coordinator.handle, executor, options.config.projectId);
+  for (const event of unread) {
+    if (event.toHandle === coordinator.handle || !event.toHandle.startsWith('run:')) continue;
+    const key = `mail:${event.fromHandle}:${event.id}`;
+    if (store.hasParkedWakeEvent(key)) continue;
+    wakes.push({ pane: coordinator, key, message: `Wake: FLEET unit ${event.fromHandle} sent Run message: ${event.subject}` });
+  }
+  const repository = options.config.chatScope?.repository;
+  if (repository && observations.some(idlePane)) {
+    const finishedAt = options.checkRunsFinishedAt ?? checkRunsFinishedAt;
+    const ownerForPull = options.supervisedPullOwner ?? ((candidate, panes) => supervisedOwnerForPull(candidate, panes, executor));
+    const readHead = options.readWorktreeHead ?? readWorktreeHead;
+    const heads = new Map<string, string | undefined>();
+    const headOf = (worktreePath: string): string | undefined => {
+      if (!heads.has(worktreePath)) heads.set(worktreePath, readHead(worktreePath));
+      return heads.get(worktreePath);
+    };
+    for (const pull of (options.listOpenPulls ?? listOpenPullHeads)(repository)) {
+      const at = finishedAt(repository, pull.sha);
+      if (at === undefined) continue;
+      // An exact supervised manager wins; a manager started outside orchestration owns the PR by its head.
+      const pane = (pull.issue ? ownerForPull(pull, observations) : undefined) ?? pullOwner(pull, observations, headOf);
+      // A re-run of failed checks on the same head is a new event.
+      const key = `ci:${pull.number}:${pull.sha}:${at}`;
+      if (!pane) {
+        const unowned = `ci-unowned:${pull.number}:${pull.sha}:${at}`;
+        if (!store.hasParkedWakeEvent(unowned)) {
+          store.markParkedWakeEvent(unowned);
+          log(`no owner pane for PR #${pull.number}: CI finished on ${pull.sha}`);
+        }
+        continue;
+      }
+      if (!idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
+      wakes.push({ pane, key, message: `Wake: CI on ${pull.sha} finished for PR #${pull.number}` });
+    }
+  }
+  for (const { pane, key, message } of wakes) {
+    const delivered = sendCoordinator(executor, pane.handle, message)
+      && (await sleepMs(4_000), submitCoordinator(executor, pane.handle));
+    if (!delivered) {
+      log(`event wake send failed to ${pane.handle}: ${key}`);
+      continue;
+    }
+    store.markParkedWakeEvent(key);
+    if (pane.handle !== coordinator.handle) store.clearPaneWait?.(pane.handle);
+    log(`sent event wake to ${pane.handle}: ${key}`);
+  }
+}
+
+function defaultSleep(milliseconds: number): Promise<void> {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+}
+
+function sendCoordinator(
+  executor: OrcaExecutor,
+  handle: string,
+  message: string,
+): boolean {
+  return executor(['terminal', 'send', '--terminal', handle, '--text', message, '--enter']).ok;
+}
+
+function submitCoordinator(executor: OrcaExecutor, handle: string): boolean {
+  return executor(['terminal', 'send', '--terminal', handle, '--enter']).ok;
+}
+
+// A separate, read-only tick projection. It never receives delivery/actionable state,
+// and neither its rows nor its page evidence can become wake admission or retry authority.
+export interface FleetDiagnosticTickOptions {
+  readonly config: FleetWakeConfig;
+  readonly executor?: OrcaExecutor;
+  readonly store?: FleetPollingStore;
+  readonly terminals?: readonly FleetTerminal[];
+  readonly observations?: readonly FleetPaneObservation[];
+  readonly observedChats?: readonly ProjectChat[];
+  readonly now?: () => number;
+  readonly log?: (line: string) => void;
+  readonly readChats?: (cdpUrl: string, scope: ChatBannerScope) => Promise<ProjectChat[]>;
+}
+
+export async function runFleetDiagnosticTick(options: FleetDiagnosticTickOptions): Promise<void> {
+  const { config } = options;
+  const executor = options.executor ?? defaultOrcaExecutor;
+  const store = options.store ?? new FileFleetStateStore(config.projectId);
+  const log = options.log ?? ((line: string) => process.stdout.write(`${line}\n`));
+  let terminals: readonly FleetTerminal[];
+  try {
+    terminals = options.terminals ?? listFleetTerminals(executor);
+  } catch {
+    log('DIAG handle=none incarnation=unknown state=unverified reason=fleet_census_unreadable evidence=terminal list --json: incomplete_or_malformed');
+    return;
+  }
+  const rows = collectFleetDiagnostics({
+    projectId: config.projectId, primary: config.primary, workspaceRe: config.workspaceRe,
+    coordinatorHandle: config.orchestratorHandle,
+    coordinatorTitleRe: config.orchestratorTitleRe, architectHandle: config.architectHandle,
+    busyRe: config.busyRe, executor, store, terminals,
+    ...(options.observations ? { observations: options.observations } : {}),
+    ...(options.now ? { now: options.now } : {}),
+  });
+  for (const line of formatFleetDiagnostics(rows).split('\n').filter(Boolean)) log(line);
+
+  // Positive ORCH_HANDLE only selects an exact pane. An unpinned title match can
+  // be ambiguous; neither proves a live child agent or changes the old resolver.
+  const matches = terminals.filter((terminal) => {
+    config.orchestratorTitleRe.lastIndex = 0;
+    return Boolean(terminal.worktreePath) && samePath(terminal.worktreePath, config.primary)
+      && config.orchestratorTitleRe.test(terminal.title);
+  });
+  if (!config.orchestratorHandle && matches.length > 1) {
+    log(`DIAG reason=coordinator_ambiguous candidates=${matches.map((pane) => pane.handle).join(',')} evidence=primary-title-matches; no_live_agent_witness`);
+  } else {
+    const selected = config.orchestratorHandle
+      ? resolveCoordinatorPane(terminals, config)
+      : matches.length === 1 ? matches[0] : undefined;
+    log(`DIAG reason=coordinator_unverified selected=${selected?.handle ?? 'none'} evidence=${config.orchestratorHandle ? 'ORCH_HANDLE exact_selection_only' : 'primary-title-predicate_only'}; no_live_agent_witness`);
+  }
+
+  if (config.chatCdpUrl && config.chatScope) {
+    const chats = options.observedChats ?? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => []);
+    for (const chat of chats) {
+      for (const banner of chat.banners) {
+        log(`DIAG banner_kind=${banner.kind} url=${banner.url} retry_control_observed=${banner.retry === true} generation_observed=${chat.generating === true} attribution=tentative/unbound evidence=DOM_structure_only; banner_text_untrusted`);
+      }
+    }
+  }
+}
+
+export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise<FleetAlarmTickResult> {
+  const { config } = options;
+  const executor = options.executor ?? defaultOrcaExecutor;
+  const store = options.store ?? new FileFleetWakeStateStore(config.projectId);
+  const sleepMs = options.sleepMs ?? defaultSleep;
+  const log = options.log ?? ((line: string) => process.stdout.write(`${line}\n`));
+
+  let terminals: FleetTerminal[];
+  try {
+    terminals = listFleetTerminals(executor);
+  } catch {
+    log('DIAG handle=none incarnation=unknown state=unverified reason=fleet_census_unreadable evidence=terminal list --json: incomplete_or_malformed');
+    log('terminal list unreadable');
+    return { state: 'unreadable', handle: 'terminal-list' };
+  }
+
+  // Legacy events and banners run first; advisory reads never delay their effects.
+  // The same browser snapshot is reused for logging, with no second CDP scan.
+  let operationalObservations: FleetPaneObservation[] | undefined;
+  let activeChats: ProjectChat[] = [];
+  try {
+    const coordinator = resolveCoordinatorPane(terminals, config);
+    if (!coordinator) {
+      log('normal fleet result: no orchestrator pane found');
+      return { state: 'no_orchestrator' };
+    }
+
+    let observations: FleetPaneObservation[];
+    try {
+      observations = runFleetSweep({
+        primary: config.primary,
+        projectId: config.projectId,
+        workspaceRe: config.workspaceRe,
+        coordinatorHandle: coordinator.handle,
+        coordinatorTitleRe: config.orchestratorTitleRe,
+        architectHandle: config.architectHandle,
+        busyRe: config.busyRe,
+        executor,
+        store,
+        terminals,
+      });
+      operationalObservations = observations;
+    } catch (error) {
+      if (error instanceof FleetScreenReadError) {
+        log(`${error.handle} unreadable`);
+        return { state: 'unreadable', handle: error.handle };
+      }
+      log('fleet sweep unreadable');
+      return { state: 'unreadable', handle: 'fleet-sweep' };
+    }
+
+    await wakePanesOnEvents(options, coordinator, observations, executor, store, log, sleepMs);
+
+    const chats = config.chatCdpUrl && config.chatScope
+      ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])
+      : [];
+    const superseded = new Set(supersededChats(chats, (chat) => {
+      const owner = bannerOwnerPane(chat, terminals, config);
+      if (owner) return `pane ${owner.handle}`;
+      if (chat.issue) return `issue ${chat.issue}`;
+      return chat.pull ? `pull ${chat.pull}` : undefined;
+    }));
+    for (const chat of superseded) {
+      if (chat.generating) continue;
+      const closed = await (options.closeChat ?? closeChatTarget)(config.chatCdpUrl!, chat.targetId);
+      log(`${closed ? 'closed' : 'close failed for'} superseded chat ${chat.url}`);
+    }
+    activeChats = chats.filter((chat) => !superseded.has(chat));
+    const observed = activeChats.flatMap((chat) => chat.banners);
+    // A stalled chat must be seen on two consecutive ticks; page loads and turn
+    // starts briefly show neither Stop nor finished-reply actions.
+    const stalledNow = observed.filter((banner) => banner.kind === 'stalled').map((banner) => banner.url).sort();
+    const stalledBefore = new Set((store.readStalledSeen?.() ?? '').split('\n').filter(Boolean));
+    store.writeStalledSeen?.(stalledNow.join('\n'));
+    const seenUrls = new Set<string>();
+    const banners = observed.filter((banner) => (banner.kind !== 'stalled' || stalledBefore.has(banner.url))
+      && !seenUrls.has(banner.url) && Boolean(seenUrls.add(banner.url)));
+    const direct: Array<readonly [FleetTerminal, ChatErrorBanner]> = [];
+    const routed: ChatErrorBanner[] = [];
+    for (const banner of banners) {
+      const owner = bannerOwnerPane(banner, terminals, config);
+      if (owner) direct.push([owner, banner]);
+      else routed.push(banner);
+    }
+    const directSignature = direct
+      .map(([owner, banner]) => `${owner.handle} ${banner.url} ${banner.text}`)
+      .sort((left, right) => left.localeCompare(right))
+      .join('\n');
+    if (store.readBannerSignature?.() !== directSignature) {
+      for (const [owner, banner] of direct) {
+        const delivered = sendCoordinator(executor, owner.handle, managerBannerMessage(banner))
+          && (await sleepMs(4_000), submitCoordinator(executor, owner.handle));
+        log(`${delivered ? 'sent' : 'send failed'} chat banner to ${owner.handle}: ${banner.url}`);
+        if (!delivered) routed.push(banner);
+      }
+      store.writeBannerSignature?.(directSignature);
+    }
+
+    const stopped = actionablePanes(observations);
+    if (stopped.length === 0 && routed.length === 0) {
+      store.clearLastSentSignature();
+      log('nothing stopped');
+      return { state: 'nothing_stopped' };
+    }
+
+    let coordinatorScreen: string;
+    try {
+      coordinatorScreen = readFleetScreen(coordinator.handle, executor);
+    } catch {
+      log(`${coordinator.handle} unreadable`);
+      return { state: 'unreadable', handle: coordinator.handle };
+    }
+
+    const coordinatorState: 'idle' | 'busy' = isBusyScreen(coordinatorScreen, config.busyRe) ? 'busy' : 'idle';
+    const signature = [stoppedSignature(observations), chatBannerSignature(routed)].filter(Boolean).join('\n');
+    const deliverySignature = `${coordinator.handle}\n${signature}`;
+    if (coordinatorState === 'busy' && store.readLastSentSignature() === deliverySignature) {
+      log(`${coordinator.handle} same stopped set already queued`);
+      return { state: 'same_stopped_set', coordinator: coordinator.handle, signature };
+    }
+
+    const message = fleetAlarmMessage(coordinatorState, observations, routed);
+    if (!sendCoordinator(executor, coordinator.handle, message)) {
+      log(`${coordinator.handle} send failed`);
+      return { state: 'send_failed', coordinator: coordinator.handle };
+    }
+    await sleepMs(4_000);
+    if (!submitCoordinator(executor, coordinator.handle)) {
+      log(`${coordinator.handle} send failed`);
+      return { state: 'send_failed', coordinator: coordinator.handle };
+    }
+
+    store.writeLastSentSignature(deliverySignature);
+    log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} need a step, ${routed.length} chat banner(s)`);
+    return {
+      state: 'sent',
+      coordinator: coordinator.handle,
+      coordinatorState,
+      count: stopped.length,
+      signature,
+    };
+  } finally {
+    // Advisory history, screen reads, and formatting cannot abort the pre-existing tick.
+    try {
+      await runFleetDiagnosticTick({
+        config, executor, store, terminals, log, observedChats: activeChats,
+        ...(operationalObservations ? { observations: operationalObservations } : {}),
+      });
+    } catch {
+      log('DIAG state=unverified reason=diagnostic_unreadable evidence=read_only_projection_failure');
+    }
+  }
+}
+
+export function fleetWakeConfigFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  argv: readonly string[] = [],
+): FleetWakeConfig {
+  let projectId: string | undefined;
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === '--project') {
+      const value = argv[++index];
+      if (!value) throw new Error('--project requires an id');
+      projectId = value;
+      continue;
+    }
+    throw new Error(`unknown argument: ${token}`);
+  }
+  const target = resolveTargetContext({ projectId, env });
+  const intervalSeconds = env.FLEET_WAKE_INTERVAL?.trim() ? Number(env.FLEET_WAKE_INTERVAL) : 300;
+  if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
+    throw new Error('FLEET_WAKE_INTERVAL must be a positive number of seconds');
+  }
+  return {
+    projectId: target.projectId,
+    primary: target.primaryRoot,
+    workspaceRe: compileRegex(target.orcaWorkspacePattern, defaultWorkspaceRegex(target.primaryRoot)),
+    orchestratorTitleRe: compileRegex(target.orchestratorTitlePattern, DEFAULT_ORCHESTRATOR_TITLE_RE),
+    ...(env.ORCH_HANDLE?.trim() ? { orchestratorHandle: env.ORCH_HANDLE.trim() } : {}),
+    ...(env.ARCHITECT_HANDLE?.trim() ? { architectHandle: env.ARCHITECT_HANDLE.trim() } : {}),
+    busyRe: compileRegex(env.BUSY_RE, DEFAULT_BUSY_RE),
+    intervalSeconds,
+    chatCdpUrl: env.PACK_GPT_BROWSER_CDP?.trim() || DEFAULT_CHAT_CDP_URL,
+    chatScope: { projectUrl: target.browserGpt.projectUrl, repository: target.repository },
+  };
+}
+
+export async function runFleetWakeLoop(
+  config: FleetWakeConfig,
+  dependencies: Omit<FleetAlarmTickOptions, 'config'> = {},
+): Promise<never> {
+  const sleepMs = dependencies.sleepMs ?? defaultSleep;
+  const log = dependencies.log ?? ((line: string) => process.stdout.write(`${line}\n`));
+  log(`start ${config.projectId} interval=${config.intervalSeconds}s`);
+  while (true) {
+    try {
+      await runFleetAlarmTick({ ...dependencies, config, sleepMs, log });
+    } catch (error) {
+      log(`tick failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    await sleepMs(config.intervalSeconds * 1_000);
+  }
+}
+
+function isDirectExecution(): boolean {
+  return Boolean(process.argv[1]) && resolve(process.argv[1]!) === fileURLToPath(import.meta.url);
+}
+
+if (isDirectExecution()) {
+  runFleetWakeLoop(fleetWakeConfigFromEnv(process.env, process.argv.slice(2))).catch((error: unknown) => {
+    process.stderr.write(`fleet-wake: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}
+, 'u').exec(source);
+  if (match) return { kind: 'gpt', label: 'GPT-turn-' + match[1], id: match[1] };
+  match = /^PARKED on pack-review PR #([1-9]\d*) head ([0-9a-f]{40})$/u.exec(source);
+  if (match) return { kind: 'pack-review', label: 'pack-review-PR-' + match[1], number: Number(match[1]), sha: match[2] };
+  match = /^PARKED on PR #([1-9]\d*) review #([1-9]\d*) head ([0-9a-f]{40})$/u.exec(source);
+  if (match) return { kind: 'review', label: 'review-' + match[2] + '-PR-' + match[1], number: Number(match[1]), reviewId: Number(match[2]), sha: match[3] };
+  match = /^PARKED on CI PR #([1-9]\d*) head ([0-9a-f]{40})$/u.exec(source);
+  if (match) return { kind: 'ci', label: 'CI-PR-' + match[1], number: Number(match[1]), sha: match[2] };
+  match = /^PARKED on CI on ([0-9a-f]{40})$/u.exec(source);
+  if (match) return { kind: 'ci', label: 'CI-' + match[1], sha: match[1] };
+  match = /^PARKED on (?:merge-([1-9]\d*)|PR #([1-9]\d*) merged|#([1-9]\d*) merged into main)$/u.exec(source);
+  if (match) {
+    const number = Number(match[1] ?? match[2] ?? match[3]);
+    return { kind: 'merge', label: 'merge-PR-' + number, number };
+  }
+  match = /^PARKED on terminal ([A-Za-z0-9_.:-]+) incarnation ([A-Za-z0-9_.:-]+)$/u.exec(source);
+  if (match) return { kind: 'terminal', label: 'terminal-' + match[1], handle: match[1], incarnation: match[2] };
+  match = /^PARKED on merge agent terminal ([A-Za-z0-9_.:-]+) incarnation ([A-Za-z0-9_.:-]+) PR #([1-9]\d*)$/u.exec(source);
+  if (match) return { kind: 'terminal', label: 'merge-agent-terminal-' + match[1] + '-PR-' + match[3],
+    handle: match[1], incarnation: match[2], number: Number(match[3]), mergeAgent: true };
+  return undefined;
+}
+
+function githubJson(repository: string, endpoint: string): Record<string, unknown> | undefined {
+  const result = runProcessSync({
+    command: fileURLToPath(new URL('../gh', import.meta.url)),
+    args: ['api', 'repos/' + repository + '/' + endpoint],
+    timeoutMs: 15_000,
+    inheritParentEnv: true,
+  });
+  if (!result.ok) return undefined;
+  try {
+    const value: unknown = JSON.parse(result.stdout);
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown> : undefined;
+  } catch { return undefined; }
+}
+
+function readNativePull(repository: string, number: number): NativePull | undefined {
+  const row = githubJson(repository, 'pulls/' + number);
+  const head = row?.head as { sha?: unknown } | undefined;
+  if (row?.number !== number || !SHA40.test(String(head?.sha ?? ''))
+    || (row?.state !== 'open' && row?.state !== 'closed') || typeof row?.merged !== 'boolean') return undefined;
+  return { number, headSha: String(head!.sha), state: row.state, merged: row.merged };
+}
+
+function readNativeReview(repository: string, number: number, reviewId: number): NativeReview | undefined {
+  const row = githubJson(repository, 'pulls/' + number + '/reviews/' + reviewId);
+  if (row?.id !== reviewId || typeof row?.state !== 'string'
+    || !SHA40.test(String(row.commit_id ?? ''))) return undefined;
+  return {
+    id: reviewId, state: row.state, commitSha: String(row.commit_id),
+    ...(typeof row.submitted_at === 'string' ? { submittedAt: row.submitted_at } : {}),
+  };
+}
+
+function readPackReviewStatus(repository: string, sha: string): string | undefined {
+  const row = githubJson(repository, 'commits/' + sha + '/status');
+  const statuses = row?.statuses;
+  if (!Array.isArray(statuses)) return undefined;
+  const current = statuses.find((value: unknown) => Boolean(value) && typeof value === 'object'
+    && (value as { context?: string }).context === 'orchestrator-pack/pack-review') as
+    { state?: unknown } | undefined;
+  return typeof current?.state === 'string' ? current.state : undefined;
+}
+
+function exactParkedTask(pane: FleetPaneObservation, projectId: string): readonly string[] | undefined {
+  if (pane.state !== 'PARKED' || !pane.wait || !pane.incarnationId
+    || pane.status?.toLowerCase() === 'exited' || !pane.taskBinding) return undefined;
+  try {
+    const tuple: unknown = JSON.parse(pane.taskBinding);
+    if (!Array.isArray(tuple) || tuple.length !== 7
+      || !tuple.every((part) => typeof part === 'string' && part.length > 0)
+      || tuple[0] !== projectId || tuple[1] !== pane.handle || tuple[2] !== pane.incarnationId
+      || tuple[3] !== pane.worktreePath || tuple[4] !== pane.branch) return undefined;
+    return tuple as string[];
+  } catch { return undefined; }
+}
+
+function resolveNamedProducer(
+  producer: NamedProducer,
+  pane: FleetPaneObservation,
+  terminals: readonly FleetTerminal[],
+  options: FleetAlarmTickOptions,
+): ProducerResolution {
+  const unknown: ProducerResolution = { state: 'unresolvable', label: producer.label };
+  const pending: ProducerResolution = { state: 'pending', label: producer.label };
+  const ended = (state: string, evidence: string, legacyKey?: string): ProducerResolution => ({
+    state: 'ended', label: producer.label, terminalState: state, evidence,
+    ...(legacyKey ? { legacyKey } : {}),
+  });
+  if (producer.kind === 'gpt') {
+    const events = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)();
+    const matches = events.filter((event) => event.observedInvocationId === producer.id);
+    if (matches.length !== 1) return unknown;
+    const event = matches[0]!;
+    if (!event.terminalHandle || event.terminalHandle !== pane.handle || !event.cwd
+      || !samePath(event.cwd, pane.worktreePath) || potentiallySentUnboundEnvelope(event)) return unknown;
+    return ended('terminal-envelope', event.path, 'gpt:' + event.path);
+  }
+  const repository = options.config.chatScope?.repository;
+  if (producer.kind === 'terminal') {
+    if (!producer.handle || !producer.incarnation) return unknown;
+    if (producer.mergeAgent) {
+      if (!repository || !producer.number) return unknown;
+      const pull = (options.readNamedPull ?? readNativePull)(repository, producer.number);
+      if (!pull || pull.number !== producer.number) return unknown;
+    }
+    const found = terminals.filter((item) => item.handle === producer.handle
+      && item.incarnationId === producer.incarnation);
+    if (found.length !== 1) return unknown;
+    const term = found[0]!;
+    if (term.status?.toLowerCase() === 'exited') {
+      return ended('terminal-exited', 'orca://terminal/list/' + producer.handle + '/' + producer.incarnation);
+    }
+    return term.status?.toLowerCase() === 'running' && Boolean(term.agentIdentity) ? pending : unknown;
+  }
+  if (!repository) return unknown;
+  let number = producer.number;
+  if (producer.kind === 'ci' && number === undefined && producer.sha) {
+    const heads = (options.listOpenPulls ?? listOpenPullHeads)(repository)
+      .filter((pull) => pull.sha === producer.sha);
+    if (heads.length !== 1) return unknown;
+    number = heads[0]!.number;
+  }
+  if (!number || !Number.isSafeInteger(number)) return unknown;
+  const pull = (options.readNamedPull ?? readNativePull)(repository, number);
+  if (!pull || pull.number !== number) return unknown;
+  const url = 'https://github.com/' + repository + '/pull/' + number;
+  if (producer.kind === 'merge') {
+    if (pull.merged === true) return ended('merged', url);
+    return pull.state === 'open' ? pending : unknown;
+  }
+  if (pull.state !== 'open' || pull.headSha !== producer.sha || !SHA40.test(pull.headSha)) return unknown;
+  if (producer.kind === 'pack-review') {
+    const status = (options.readPackReviewStage ?? readPackReviewStatus)(repository, pull.headSha);
+    return status === 'success' ? ended('stage-complete', url) : status === 'pending' ? pending : unknown;
+  }
+  if (producer.kind === 'review') {
+    if (!producer.reviewId || !Number.isSafeInteger(producer.reviewId)) return unknown;
+    const review = (options.readNamedReview ?? readNativeReview)(repository, number, producer.reviewId);
+    if (!review || review.id !== producer.reviewId || review.commitSha !== pull.headSha) return unknown;
+    if (review.state === 'PENDING') return pending;
+    return review.submittedAt && ['COMMENTED', 'APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)
+      ? ended('review-submitted', url + '#pullrequestreview-' + review.id) : unknown;
+  }
+  const at = (options.checkRunsFinishedAt ?? checkRunsFinishedAt)(repository, pull.headSha);
+  return at !== undefined && Number.isFinite(at)
+    ? ended('checks-completed', url + '/checks', 'ci:' + number + ':' + pull.headSha + ':' + at)
+    : pending;
+}
+
+// All interpolations and the fixed words pass one physical-line whitelist.
+// Encode unsafe evidence bytes rather than reintroducing shell punctuation.
+function safeUnitAtom(input: string): string | undefined {
+  if (!input || input.length > 512) return undefined;
+  const encoded = Array.from(input).map((char) => /^[A-Za-z0-9_.:/%#=+-]$/u.test(char)
+    ? char : Array.from(Buffer.from(char)).map((byte) => '%' + byte.toString(16).padStart(2, '0')).join('')).join('');
+  return encoded.length <= 240 && /^[A-Za-z0-9_.:/%#=+-]+$/u.test(encoded) ? encoded : undefined;
+}
+
+export function safeUnitWakeText(producer: string, state: string, evidence: string): string | undefined {
+  const p = safeUnitAtom(producer), s = safeUnitAtom(state), e = safeUnitAtom(evidence);
+  if (!p || !s || !e) return undefined;
+  const message = 'Wake: ' + p + ' ended state ' + s + ' evidence ' + e
+    + ' - re-check the producer yourself before continuing';
+  return /^[A-Za-z0-9 _./:%#=+-]+$/u.test(message) ? message : undefined;
+}
+
+function safeUnitReminderText(producer: string): string | undefined {
+  const p = safeUnitAtom(producer);
+  if (!p) return undefined;
+  const message = 'Reminder: parked 30 min on ' + p
+    + ' - re-check its envelope or PR or CI state yourself - continue only if ended otherwise re-park with the same line';
+  return /^[A-Za-z0-9 _./:%#=+-]+$/u.test(message) ? message : undefined;
+}
+
+async function sendMarkedUnitMessage(
+  store: FleetWakeStateStore, key: string, handle: string, message: string,
+  executor: OrcaExecutor, sleepMs: (milliseconds: number) => void | Promise<void>,
+  log: (line: string) => void,
+): Promise<boolean> {
+  // A first text+Enter can land even when its receipt, or the second Enter,
+  // fails. Persist the uncertainty before either potentially effectful send.
+  try { store.markParkedWakeEvent(key, 'attempted_unverified'); }
+  catch { log('unit mark unwritable: ' + key); return false; }
+  let delivered = false;
+  try {
+    delivered = sendCoordinator(executor, handle, message)
+      && (await sleepMs(4_000), submitCoordinator(executor, handle));
+  } catch { /* A timeout can have delivered text; no automatic retry. */ }
+  if (!delivered) { log('unit attempted_unverified: ' + key); return false; }
+  try { store.markParkedWakeEvent(key, 'sent'); }
+  catch { log('unit sent but mark remains attempted_unverified: ' + key); return false; }
+  log('sent re-check to ' + handle + ': ' + key);
+  return true;
+}
+
+async function wakeNamedParkedProducers(
+  options: FleetAlarmTickOptions,
+  observations: readonly FleetPaneObservation[],
+  terminals: readonly FleetTerminal[],
+  store: FleetWakeStateStore,
+  executor: OrcaExecutor,
+  legacyAttempts: ReadonlyMap<string, string>,
+  sleepMs: (milliseconds: number) => void | Promise<void>,
+  log: (line: string) => void,
+): Promise<string[]> {
+  const alerts: string[] = [];
+  const observed = new Map<string, string>();
+  const now = (options.now ?? Date.now)();
+  for (const pane of observations) {
+    if (pane.state !== 'PARKED' || !pane.wait || /^PARKED on orchestrator answer:/u.test(pane.wait)) continue;
+    const producer = parseNamedParkedProducer(pane.wait);
+    const tuple = exactParkedTask(pane, options.config.projectId);
+    if (!tuple || !producer) {
+      alerts.push('park on unresolvable producer ' + (safeUnitAtom(pane.handle) ?? 'unknown')
+        + ' ' + createHash('sha256').update(pane.wait).digest('hex').slice(0, 12));
+      continue;
+    }
+    const episode = createHash('sha256').update(JSON.stringify([tuple, pane.wait])).digest('hex').slice(0, 32);
+    observed.set(pane.handle, episode);
+    let resolution: ProducerResolution;
+    try { resolution = resolveNamedProducer(producer, pane, terminals, options); }
+    catch { resolution = { label: producer.label, state: 'unresolvable' }; }
+    if (resolution.state === 'unresolvable') {
+      alerts.push('park on unresolvable producer ' + (safeUnitAtom(pane.handle) ?? 'unknown')
+        + ' ' + episode.slice(0, 12));
+    }
+    const legacyCoalesced = Boolean(resolution.legacyKey && (
+      store.hasParkedWakeEvent(resolution.legacyKey)
+      || legacyAttempts.get(resolution.legacyKey) === pane.handle
+    ));
+    if (legacyCoalesced && resolution.legacyKey && store.hasParkedWakeEvent(resolution.legacyKey)) {
+      store.clearParkedEpoch?.(pane.handle);
+      continue;
+    }
+    const eventKey = 'producer:' + pane.handle + ':' + episode + ':'
+      + createHash('sha256').update(JSON.stringify(resolution)).digest('hex').slice(0, 32);
+    if (resolution.state === 'ended' && !legacyCoalesced && !store.hasParkedWakeEvent(eventKey)) {
+      const wake = safeUnitWakeText(producer.label, resolution.terminalState ?? '', resolution.evidence ?? '');
+      if (!wake) {
+        alerts.push('park on unresolvable producer ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' unsafe-evidence');
+      } else {
+        const sent = await sendMarkedUnitMessage(store, eventKey, pane.handle, wake, executor, sleepMs, log);
+        if (sent) {
+          store.clearParkedEpoch?.(pane.handle);
+          store.clearPaneWait?.(pane.handle);
+          continue;
+        }
+        alerts.push('uncertain unit Wake ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' ' + episode.slice(0, 12));
+      }
+    }
+    // Park age is measured from first eligible observation, never a wall-clock
+    // half-hour bucket, and an uncertain event still permits a later reminder.
+    let epoch = store.readParkedEpoch?.(pane.handle);
+    if (epoch?.key !== episode) {
+      epoch = { key: episode, since: now };
+      store.writeParkedEpoch?.(pane.handle, epoch);
+    }
+    if (epoch && Number.isFinite(now) && now >= epoch.since + REMINDER_INTERVAL_MS) {
+      const slot = Math.floor((now - epoch.since) / REMINDER_INTERVAL_MS);
+      const reminderKey = 'reminder:' + pane.handle + ':' + episode + ':' + epoch.since + ':' + slot;
+      if (slot >= 1 && !store.hasParkedWakeEvent(reminderKey)) {
+        const message = safeUnitReminderText(producer.label);
+        if (!message || !await sendMarkedUnitMessage(store, reminderKey, pane.handle, message, executor, sleepMs, log)) {
+          alerts.push('uncertain unit Reminder ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' ' + episode.slice(0, 12));
+        }
+      }
+    }
+  }
+  store.pruneParkedEpochs?.(observed);
+  return alerts;
+}
+
 /**
  * Wakes idle panes for their own completed events and wakes the coordinator
  * for parked FLEET units or unread Run mail. The event marks suppress repeat wakes.
