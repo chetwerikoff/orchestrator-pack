@@ -1893,11 +1893,13 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
     try {
       const before = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: xdg });
       h.failSecond(true);
+      h.failCoordSend(true); // Force coordinator redelivery after the uncertain unit effect.
       const first = await h.step({ store: before, listTerminalEnvelopes: () => [event, foreign] });
       expect(unitText(first.calls)).toHaveLength(1);
       expect(before.readParkedWakeEventStatus('gpt:' + event.path)).toBe('attempted_unverified');
       expect(before.hasParkedWakeEvent('gpt:' + foreign.path)).toBe(false);
       h.failSecond(false);
+      h.failCoordSend(false);
       const after = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: xdg });
       const repeat = await h.step({ store: after, listTerminalEnvelopes: () => [event, foreign] });
       expect(unitText(repeat.calls)).toHaveLength(0);
