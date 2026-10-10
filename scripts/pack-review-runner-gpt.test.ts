@@ -1609,13 +1609,13 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     harnessEnv(storeRoot, capture);
     process.env.PACK_REVIEW_RUNNER_GPT_ENGAGEMENT_FILE = engagement;
 
-    const first = await runPackGptReviewCommand({ prNumber: 1111 }, {
+    const first = await runPackGptReviewCommand({ prNumber: 1111, reviewer: 'gpt' }, {
       env: process.env,
       stderr: { write: () => undefined },
       startReview: canonicalCommandRunner(storeRoot),
     });
     const secondStderr: string[] = [];
-    const second = await runPackGptReviewCommand({ prNumber: 1111 }, {
+    const second = await runPackGptReviewCommand({ prNumber: 1111, reviewer: 'gpt' }, {
       env: process.env,
       stderr: { write: (chunk) => secondStderr.push(chunk) },
       startReview: canonicalCommandRunner(storeRoot),
