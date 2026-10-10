@@ -206,10 +206,10 @@ describe('pack review 4773714081 product-owned wall detection', () => {
     expect(surface.composer).toBe(false);
     expect(surface.text).toBe('');
     expect(bodyReads).toBe(0);
-    expect(classifyProductWall(surface)).toEqual({});
+    expect(classifyProductWall(surface)).toEqual({ wall_kind: 'none', matched_text: 'none', matched_selector: 'none' });
   });
 
-  it('still recognizes a product-owned status surface without reading ordinary body text', async () => {
+  it('reports product-owned advisory provenance without reading ordinary body text', async () => {
     let bodyReads = 0;
     const page = {
       locator: (selector: string) => {
@@ -228,14 +228,16 @@ describe('pack review 4773714081 product-owned wall detection', () => {
     };
 
     const surface = await productStatusText(page);
-    expect(classifyProductWall(surface)).toEqual({ state: 'quota', cause: 'quota_detected' });
+    expect(classifyProductWall(surface)).toEqual({
+      wall_kind: 'quota',
+      matched_text: "You've reached the current usage limit",
+      matched_selector: '[role="alert"]',
+    });
     expect(bodyReads).toBe(0);
   });
 });
 
 describe('issue 1120 rate-limit product wall detection', () => {
-  const rateLimitCause = { state: 'rate_limit', cause: 'rate_limit_detected' } as const;
-
   it.each([
     'Too many requests',
     "You're making requests too quickly",
@@ -245,26 +247,38 @@ describe('issue 1120 rate-limit product wall detection', () => {
     "You're sending messages too quickly",
     'Rate limit exceeded',
     'temporarily limited access',
-  ])('classifies rate-limit wall copy %j', (copy) => {
-    expect(classifyProductWall({ text: copy, composer: true })).toEqual(rateLimitCause);
+  ])('diagnoses rate-limit copy without a terminal state %j', (copy) => {
+    expect(classifyProductWall({ text: copy, composer: true })).toEqual({
+      wall_kind: 'rate_limit', matched_text: copy, matched_selector: 'none',
+    });
   });
 
-  it('classifies mixed quota and rate-limit copy as quota when usage-limit signals are present', () => {
+  it('preserves quota diagnostic precedence for mixed usage-limit copy', () => {
     expect(classifyProductWall({
       text: 'Your access is temporarily limited because you have reached your usage limit',
       composer: true,
-    })).toEqual({ state: 'quota', cause: 'quota_detected' });
+    })).toEqual({
+      wall_kind: 'quota',
+      matched_text: 'Your access is temporarily limited because you have reached your usage limit',
+      matched_selector: 'none',
+    });
   });
 
   it('maps rate_limit through the shared turn exit-code contract', () => {
     expect(turnExitCode('rate_limit')).toBe(12);
   });
 
-  it('keeps exhausted-usage quota separate from temporary rate limiting', () => {
+  it('keeps explicit usage diagnostic distinct from generic retry copy', () => {
     expect(classifyProductWall({ text: "You've reached the current usage limit", composer: true }))
-      .toEqual({ state: 'quota', cause: 'quota_detected' });
+      .toEqual({ wall_kind: 'quota', matched_text: "You've reached the current usage limit", matched_selector: 'none' });
     expect(classifyProductWall({ text: 'please try again later', composer: true }))
-      .toEqual({ state: 'quota', cause: 'quota_detected' });
+      .toEqual({ wall_kind: 'none', matched_text: 'please try again later', matched_selector: 'none' });
+    const text = 'Something went wrong. Please try again later.';
+    expect(classifyProductWall({
+      text,
+      composer: true,
+      parts: [{ selector: '[role="alert"]', text }],
+    })).toEqual({ wall_kind: 'none', matched_text: text, matched_selector: '[role="alert"]' });
   });
 });
 

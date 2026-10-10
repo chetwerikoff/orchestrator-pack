@@ -240,15 +240,6 @@ function reclaimSafePreSend(profileKey: string): void {
   }
 }
 
-function wallState(cause: string | undefined): TurnState {
-  if (cause === 'quota') return 'quota';
-  if (cause === 'challenge') return 'challenge';
-  if (cause === 'login') return 'login';
-  if (cause === 'profile_mismatch') return 'profile_mismatch';
-  if (cause === 'chrome_not_running') return 'chrome_not_running';
-  return 'profile_busy';
-}
-
 function findProfileWall(profileKey: string): ReturnType<typeof listReadableIncidents>[number] | undefined {
   try {
     return listReadableIncidents(profileKey).find(({ record }) => record.kind === 'profile_wall');
@@ -296,17 +287,10 @@ function blockerBeforeSend(
   } catch {
     return { state: 'incompatible_record', scope: 'profile', cause: 'configured_profile_store_blocked' };
   }
-  const wall = incidents.find(({ record }) => record.kind === 'profile_wall');
-  if (wall) {
-    return {
-      state: wallState(wall.record.cause),
-      scope: 'profile',
-      cause: 'profile_wall_active',
-      incidentId: wall.identity,
-      generation: wall.record.generation,
-    };
-  }
-  const orphan = incidents.find(({ record }) => record.kind === 'fresh_orphan');
+  // Historical page-text walls are advisory records, never send-admission
+  // authority. Keep the independent orphan/delivery ownership gates below.
+  const actionableIncidents = incidents.filter(({ record }) => record.kind !== 'profile_wall');
+  const orphan = actionableIncidents.find(({ record }) => record.kind === 'fresh_orphan');
   if (orphan) {
     return {
       state: 'orphaned_fresh_turn',
@@ -316,7 +300,7 @@ function blockerBeforeSend(
       generation: orphan.record.generation,
     };
   }
-  const outputBlock = incidents.find(({ record }) => record.output_identity === outputIdentity && record.phase !== 'pre_send');
+  const outputBlock = actionableIncidents.find(({ record }) => record.output_identity === outputIdentity && record.phase !== 'pre_send');
   if (outputBlock) {
     return {
       state: 'recovery_required',
@@ -327,7 +311,7 @@ function blockerBeforeSend(
     };
   }
   if (conversationId) {
-    const conversationBlock = incidents.find(({ record }) => record.conversation_id === conversationId);
+    const conversationBlock = actionableIncidents.find(({ record }) => record.conversation_id === conversationId);
     if (conversationBlock) {
       return {
         state: 'conversation_busy',
@@ -552,7 +536,6 @@ async function runTurn(args: ParsedArgs): Promise<number> {
 
     const result = await sendTurn(turnPage, snapshot.text, config, opened.provisionalId, async () => {
       if (statusList(profileKey).state === 'profile_blocked') throw new Error('pre_send_profile_blocked');
-      if (findProfileWall(profileKey)) throw new Error('pre_send_profile_wall');
       if (witnessSurfaceProbeRequiresDowngrade(await runtimeWitnessSurfaceAvailable(turnPage, segmentBudget), freshConversation)) {
         throw new Error('pre_send_witness_unavailable');
       }
@@ -563,6 +546,10 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     }, segmentBudget, freshIdentity);
 
     if (result.userMessageId) retainedUserMessageId = result.userMessageId;
+    const productWallDiagnostic = result.product_wall_diagnostic
+      ? { product_wall_diagnostic: result.product_wall_diagnostic }
+      : {};
+
 
     if (!result.possibleDelivery) {
       await closeOwnedTurnPage(opened, { retainPage: false });
@@ -575,6 +562,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         reservation = null;
       } else {
         return emitTurnAndCode(turnResult('driver_error', 'invocation', 'pre_send_incident_cleanup_failed', invocationId, profileKey, {
+          ...productWallDiagnostic,
           incident_id: incidentId,
         }));
       }
@@ -582,11 +570,12 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       if (result.state === 'quota' || result.state === 'rate_limit' || result.state === 'challenge' || result.state === 'login') {
         const wall = ensureProfileWall(profileKey, result.state);
         return emitTurnAndCode(turnResult(result.state, 'profile', result.cause, invocationId, profileKey, {
+          ...productWallDiagnostic,
           incident_id: wall.identity,
           generation: wall.generation,
         }));
       }
-      return emitTurnAndCode(turnResult(result.state, 'invocation', result.cause, invocationId, profileKey));
+      return emitTurnAndCode(turnResult(result.state, 'invocation', result.cause, invocationId, profileKey, productWallDiagnostic));
     }
 
     const canonicalConversation = result.conversationId ?? conversationId;
@@ -604,6 +593,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       safeReleaseDestination(reservation);
       reservation = null;
       return emitTurnAndCode(turnResult('orphaned_fresh_turn', 'profile', 'canonical_fresh_conversation_unproven', invocationId, profileKey, {
+        ...productWallDiagnostic,
         provisional_id: opened.provisionalId,
         incident_id: incidentId,
         generation: incident.generation,
@@ -627,6 +617,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       safeReleaseDestination(reservation);
       reservation = null;
       return emitTurnAndCode(turnResult(result.state, 'conversation', result.cause, invocationId, profileKey, {
+        ...productWallDiagnostic,
         ...(canonicalConversation ? { conversation_id: canonicalConversation } : {}),
         ...(opened.provisionalId ? { provisional_id: opened.provisionalId } : {}),
         incident_id: incidentId,
@@ -669,6 +660,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         invocationId,
         profileKey,
         {
+          ...productWallDiagnostic,
           conversation_id: canonicalConversation,
           ...(opened.provisionalId ? { provisional_id: opened.provisionalId } : {}),
           incident_id: incidentId,
@@ -705,6 +697,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     }
 
     return emitTurnAndCode(turnResult('ok', 'none', provenanceDriftObserved ? 'browser_provenance_drift_observed' : 'completed', invocationId, profileKey, {
+      ...productWallDiagnostic,
       conversation_id: canonicalConversation,
       ...(opened.provisionalId ? { provisional_id: opened.provisionalId } : {}),
       output: {
@@ -738,13 +731,6 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       }
       if (message === 'pre_send_profile_blocked') {
         return emitTurnAndCode(turnResult('incompatible_record', 'profile', 'configured_profile_store_blocked', invocationId, profileKey));
-      }
-      if (message === 'pre_send_profile_wall') {
-        const wall = findProfileWall(profileKey);
-        const state = wall ? wallState(wall.record.cause) : 'profile_busy';
-        return emitTurnAndCode(turnResult(state, 'profile', wall ? 'profile_wall_active' : message, invocationId, profileKey, {
-          ...(wall ? { incident_id: wall.identity, generation: wall.record.generation } : {}),
-        }));
       }
       if (message === 'pre_send_witness_unavailable') {
         return emitTurnAndCode(turnResult('driver_error', 'invocation', 'pre_send_witness_unavailable', invocationId, profileKey));
