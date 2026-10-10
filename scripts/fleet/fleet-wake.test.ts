@@ -37,6 +37,7 @@ class MemoryWakeStore implements FleetWakeStateStore {
   readonly eventStatus = new Map<string, 'sent' | 'attempted_unverified'>();
   readonly epochs = new Map<string, { key: string; since: number }>();
   signature: string | null = null;
+  stalledSeen: string | null = null;
   sentAt: number | undefined;
   hasPollingMark(handle: string): boolean { return this.marks.has(handle); }
   setPollingMark(handle: string): void { this.marks.add(handle); }
@@ -47,6 +48,8 @@ class MemoryWakeStore implements FleetWakeStateStore {
   readLastSentAt(): number | undefined { return this.sentAt; }
   writeLastSentAt(at: number): void { this.sentAt = at; }
   clearLastSentAt(): void { this.sentAt = undefined; }
+  readStalledSeen(): string | null { return this.stalledSeen; }
+  writeStalledSeen(urls: string): void { this.stalledSeen = urls; }
   readParkedEpoch(handle: string): { key: string; since: number } | undefined { return this.epochs.get(handle); }
   writeParkedEpoch(handle: string, epoch: { key: string; since: number }): void { this.epochs.set(handle, epoch); }
   clearParkedEpoch(handle: string): void { this.epochs.delete(handle); }
