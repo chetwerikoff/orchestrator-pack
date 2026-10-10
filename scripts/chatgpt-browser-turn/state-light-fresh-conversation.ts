@@ -542,7 +542,7 @@ export function recordStateLightAdvisoryWall(
     recorded_at: new Date(nowMs).toISOString(),
     expires_at: new Date(nowMs + ttlMs).toISOString(),
     ...(invocationId ? { invocation_id: invocationId } : {}),
-    matched_text: diagnostic?.matched_text ?? 'none',
+    matched_text: (diagnostic?.matched_text ?? 'none').slice(0, 500),
     matched_selector: diagnostic?.matched_selector ?? 'none',
   };
   writeFileSync(stateLightAdvisoryWallPath(profileKey), `${JSON.stringify(record)}\n`, { mode: 0o600 });

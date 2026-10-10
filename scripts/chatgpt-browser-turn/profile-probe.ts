@@ -51,13 +51,14 @@ export async function probeProfileReady(config: BrowserConfig): Promise<ProfileR
     let productWallDiagnostic: ProfileReadyProbe['product_wall_diagnostic'];
     for (const page of pages) {
       const observation = await probePage(page);
-      if (observation?.ready === false) return observation;
+      // An unrelated tab without a composer is not a profile-wide blocker.
+      // Continue looking for a usable composer while retaining advisory evidence.
       if (observation?.ready) ready = true;
       if (observation?.product_wall_diagnostic) productWallDiagnostic = observation.product_wall_diagnostic;
     }
     return ready
       ? { ready: true, state: 'ready', cause: 'composer_ready_no_wall', ...(productWallDiagnostic ? { product_wall_diagnostic: productWallDiagnostic } : {}) }
-      : { ready: false, state: 'ui_contract_mismatch', cause: 'composer_unavailable' };
+      : { ready: false, state: 'ui_contract_mismatch', cause: 'composer_unavailable', ...(productWallDiagnostic ? { product_wall_diagnostic: productWallDiagnostic } : {}) };
   } catch {
     return { ready: false, state: 'driver_error', cause: 'profile_probe_failed' };
   } finally {
