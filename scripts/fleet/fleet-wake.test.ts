@@ -1684,9 +1684,9 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
   it('alarms changed STOPPED imperatives immediately but ignores a cosmetic TUI redraw', async () => {
     const store = new MemoryWakeStore();
     const screens = { coord: 'idle', one: 'Please approve staging deployment',
-      two: 'working\\nesc interrupt' };
+      two: 'working\nesc interrupt' };
     expect((await tick({ store, screens })).result.state).toBe('sent');
-    screens.one = 'Please approve staging deployment\\n╹▀▀▀▀▀▀▀▀▀▀';
+    screens.one = 'Please approve staging deployment\n╹▀▀▀▀▀▀▀▀▀▀';
     expect((await tick({ store, screens })).result.state).toBe('same_stopped_set');
     screens.one = 'Please approve production deployment';
     const changed = await tick({ store, screens });
