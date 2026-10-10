@@ -2740,6 +2740,7 @@ async function runTurn(
     const freshProjectMarkerProven = async (
       candidatePage: any,
       conversationUrl: string,
+      observationDeadlineMs: number,
     ): Promise<boolean> => {
       if (!config.newChat || !config.projectUrl
         || !projectConversationUrlMatchesProject(conversationUrl, config.projectUrl)) return false;
@@ -2747,7 +2748,7 @@ async function runTurn(
         const observedPageUrl = String(candidatePage.url());
         if (!projectConversationUrlMatchesProject(observedPageUrl, config.projectUrl)
           || conversationUuidFromUrl(observedPageUrl) !== conversationUuidFromUrl(conversationUrl)) return false;
-        const remainingMs = invocationDeadlineMs - Date.now();
+        const remainingMs = observationDeadlineMs - Date.now();
         if (remainingMs <= 0) return false;
         const census = await boundedBrowserRead(
           readRecoveryAuthoritativeUserMessages(candidatePage),
@@ -3144,7 +3145,7 @@ async function runTurn(
 
           // The early URL alone cannot bind an invocation. The incumbent
           // post-send observer can bind later once the marker becomes visible.
-          if (!(await freshProjectMarkerProven(page, conversationUrl))) {
+          if (!(await freshProjectMarkerProven(page, conversationUrl, invocationDeadlineMs))) {
             incident('send_observation_deferred', 'fresh_conversation_marker_unproven', 'continue_observing_after_send');
             claimed = true;
             break;
@@ -3555,7 +3556,7 @@ async function runTurn(
         deliveryProofPendingRecovery = false;
       }
       if (config.newChat && !ownedConversationUrl) {
-        if (!(await freshProjectMarkerProven(recovered.page, recovered.conversationUrl))) {
+        if (!(await freshProjectMarkerProven(recovered.page, recovered.conversationUrl, hardExhaustionDeadline))) {
           incident('post_send_observation_error', 'recovered_fresh_owner_marker_or_project_unproven', 'retain_page_no_resend');
           return {
             page: recovered.page,
