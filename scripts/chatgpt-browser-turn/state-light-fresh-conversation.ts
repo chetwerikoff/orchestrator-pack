@@ -722,11 +722,17 @@ async function probeProductWall(
   deadlineMs?: number,
   now: () => number = Date.now,
 ): Promise<ProductWallDiagnostic> {
-  const timeoutMs = Math.min(PRODUCT_WALL_PROBE_MS, requireFreshPreparationTime(deadlineMs, now));
-  const wall = classifyProductWall(await boundedFreshPreparation(
-    () => productStatusText(page, timeoutMs), deadlineMs, now,
-  ));
-  return 'wall_kind' in wall ? wall : { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
+  const none: ProductWallDiagnostic = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
+  try {
+    const timeoutMs = Math.min(PRODUCT_WALL_PROBE_MS, 250, requireFreshPreparationTime(deadlineMs, now));
+    const wall = classifyProductWall(await boundedFreshPreparation(
+      () => productStatusText(page, timeoutMs), deadlineMs, now,
+    ));
+    return 'wall_kind' in wall ? wall : none;
+  } catch {
+    // Failed/late status probes are not fresh-conversation preparation failures.
+    return none;
+  }
 }
 
 export async function openBlankProjectChatSurface(

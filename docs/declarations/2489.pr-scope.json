@@ -5,6 +5,7 @@
     "docs/declarations/2489.pr-scope.json",
     "scripts/browser-gpt-page-probe.test.ts",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-session.test.ts",
     "scripts/chatgpt-browser-turn/ui-adapter-base.ts",
     "scripts/chatgpt-browser-turn/ui-adapter.test.ts"
   ],

@@ -252,6 +252,29 @@ function aggregate(stream: CaptureStream): SessionResultV1 | undefined {
 }
 
 describe('state-light explicit session mode', () => {
+  it('keeps pre-send quota text advisory across the session send and terminal envelope', async () => {
+    const harness = makeHarness(['one']);
+    const evidence = {
+      wall_kind: 'quota' as const,
+      matched_text: "You've reached your usage limit",
+      matched_selector: '[role="alert"]',
+    };
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      waitForComposer: async (_page, _deadline, _useWhole, observe) => {
+        observe?.(evidence);
+        return { state: 'ready' };
+      },
+    };
+
+    const exit = await runStateLightSession(harness.argv, dependencies);
+    expect(exit).toBe(0);
+    expect(harness.metrics.sends).toBe(1);
+    expect(aggregate(harness.stream)).toMatchObject({
+      state: 'ok', total_send_count: 1, product_wall_diagnostic: evidence,
+    });
+  });
+
   it('uses one owned tab and one initial navigation for three ordered payloads', async () => {
     const harness = makeHarness();
     const exit = await runStateLightSession(harness.argv, harness.dependencies);
@@ -288,6 +311,7 @@ describe('state-light explicit session mode', () => {
       new_chat_click_count: 0,
       navigation_count: 1,
     });
+    expect(result.product_wall_diagnostic).toEqual({ wall_kind: 'none', matched_text: 'none', matched_selector: 'none' });
     expect(result.payloads.map((item) => item.input)).toEqual([
       digest('same'), digest('same'), digest('line 1\nline 2'),
     ]);

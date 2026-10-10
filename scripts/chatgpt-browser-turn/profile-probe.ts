@@ -9,12 +9,12 @@ import {
 
 export interface ProfileReadyProbe {
   readonly ready: boolean;
-  readonly state: 'ready' | 'chrome_not_running' | 'profile_mismatch' | 'quota' | 'rate_limit' | 'challenge' | 'login' | 'ui_contract_mismatch' | 'driver_error';
+  readonly state: 'ready' | 'chrome_not_running' | 'profile_mismatch' | 'ui_contract_mismatch' | 'driver_error';
   readonly cause: string;
   readonly product_wall_diagnostic?: { readonly wall_kind: string; readonly matched_text: string; readonly matched_selector: string };
 }
 
-async function probePage(page: any): Promise<ProfileReadyProbe | { ready: true; state: 'ready'; cause: 'composer_ready_no_wall' } | null> {
+async function probePage(page: any): Promise<ProfileReadyProbe | null> {
   const surface = await productStatusText(page);
   const wall = classifyProductWall(surface);
   // Execute-Issue recovery is conversation-local post-send evidence, not a
@@ -48,13 +48,15 @@ export async function probeProfileReady(config: BrowserConfig): Promise<ProfileR
     if (pages.length === 0) return { ready: false, state: 'ui_contract_mismatch', cause: 'no_existing_page' };
 
     let ready = false;
+    let productWallDiagnostic: ProfileReadyProbe['product_wall_diagnostic'];
     for (const page of pages) {
       const observation = await probePage(page);
       if (observation?.ready === false) return observation;
       if (observation?.ready) ready = true;
+      if (observation?.product_wall_diagnostic) productWallDiagnostic = observation.product_wall_diagnostic;
     }
     return ready
-      ? { ready: true, state: 'ready', cause: 'composer_ready_no_wall' }
+      ? { ready: true, state: 'ready', cause: 'composer_ready_no_wall', ...(productWallDiagnostic ? { product_wall_diagnostic: productWallDiagnostic } : {}) }
       : { ready: false, state: 'ui_contract_mismatch', cause: 'composer_unavailable' };
   } catch {
     return { ready: false, state: 'driver_error', cause: 'profile_probe_failed' };

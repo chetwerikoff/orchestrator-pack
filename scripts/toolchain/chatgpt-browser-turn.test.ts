@@ -935,6 +935,21 @@ describe('issue 964 UI ownership and profile walls — S7/S8/S9', () => {
     expect(result.product_wall_diagnostic).toMatchObject({ wall_kind: 'quota' });
   });
 
+  it('S8 still sends when the product-status reader itself throws', async () => {
+    const fixture = fakeTurnPage();
+    const originalLocator = fixture.page.locator.bind(fixture.page);
+    fixture.page.locator = (selector: string) => selector === '[role="alert"]'
+      ? { count: async () => { throw new Error('synthetic_status_reader_failure'); } }
+      : originalLocator(selector);
+    const result = await sendTurn(fixture.page, 'payload', {
+      cdp, profile: join(root, 'profile'),
+      chatUrl: 'https://chatgpt.com/c/example', newChat: false, timeoutMs: 100,
+    });
+    expect(fixture.getSendClicks()).toBe(1);
+    expect(result.state).not.toBe('quota');
+    expect(result.product_wall_diagnostic).toEqual({ wall_kind: 'none', matched_text: 'none', matched_selector: 'none' });
+  });
+
   it('S9 returns ui_contract_mismatch with zero send when composer is unavailable without a product wall', async () => {
     const fixture = fakeTurnPage({ composer: false, bodyText: 'ordinary page' });
     const result = await sendTurn(fixture.page, 'payload', {

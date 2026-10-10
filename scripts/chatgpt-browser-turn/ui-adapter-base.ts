@@ -1712,7 +1712,11 @@ async function pageWalls(
   waitSource?: OperationWaitSource,
   observe?: (diagnostic: ProductWallDiagnostic) => void,
 ): Promise<void> {
-  observe?.(classifyProductWall(await productStatusText(page, waitSource)));
+  try {
+    observe?.(classifyProductWall(await productStatusText(page, waitSource)));
+  } catch {
+    // Product-owned status probing is diagnostic-only and cannot veto sending.
+  }
 }
 
 async function semanticNodes(locator: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<SemanticNode[]> {
@@ -1987,7 +1991,10 @@ async function sendTurnWithDiagnostics(
   while (wallClock() < readyEndsAt) {
     const waitMs = loopOperationWaitMs(readyEndsAt, wallClock());
     if (waitMs <= 0) break;
-    await boundedPlaywrightOperation(waitMs, () => pageWalls(page, () => segmentOperationWait(segmentBudget, waitMs), observeDiagnostic));
+    const statusBudgetMs = Math.min(waitMs, 250);
+    await boundedPlaywrightOperation(statusBudgetMs, () => pageWalls(
+      page, () => Math.min(statusBudgetMs, segmentOperationWait(segmentBudget, statusBudgetMs)), observeDiagnostic,
+    )).catch(() => undefined);
     const composerVisible = await boundedLocatorCount(composer, waitMs);
     if (composerVisible) break;
     await witnessPollDelay(page, Math.min(500, waitMs));
@@ -2163,7 +2170,8 @@ async function sendTurnWithDiagnostics(
     if (replyWait <= 0) break;
     const wallWait = Math.min(replyWait, loopOperationWaitMs(deadline, wallClock()));
     if (wallWait <= 0) break;
-    await boundedPlaywrightOperation(wallWait, () => pageWalls(page, () => wallWait, observeDiagnostic));
+    const statusBudgetMs = Math.min(wallWait, 250);
+    await boundedPlaywrightOperation(statusBudgetMs, () => pageWalls(page, () => statusBudgetMs, observeDiagnostic)).catch(() => undefined);
     const canonicalUserIdEarly = canonicalSubmittedUserId(network, baselineIds);
     if (!canonicalUserIdEarly && boundDispatchCandidateIds(network).size > 1) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true, userMessageId: userId };
