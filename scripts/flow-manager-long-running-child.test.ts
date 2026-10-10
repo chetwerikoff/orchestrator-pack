@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  statSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -23,7 +24,9 @@ import {
   TERMINAL_SCHEMA,
   deriveDelivery,
   isWakeableTerminalEnvelopePath,
+  invocationReceiptLocatorPath,
   pathsAlias,
+  readInvocationReceiptLocator,
   readHandoffReceipt,
   readTerminalEnvelope,
   runLaunch,
@@ -1770,6 +1773,298 @@ describe('flow-manager long-running child (#1164)', () => {
     });
     expect(isWakeableTerminalEnvelopePath(paths.envelope, root)).toBe(true);
     expect(existsSync(childMarker)).toBe(true);
+  });
+});
+
+
+describe('Issue #2478: invocation-addressable launcher evidence', () => {
+  const profile = '/synthetic/browser-profile';
+  const cdp = 'http://127.0.0.1:9222';
+
+  it('commits one private index, exact owner metadata, child cwd and real PID; native wait resolves from another cwd', async () => {
+    const root = tempDir('opk-2478-index-');
+    const paths = launchPaths(root, 'first');
+    const marker = join(root, 'started.txt');
+    const invocation = 'inv-42';
+    const fixture = markedChildFixture(marker, makeTurnResult({ invocation_id: invocation }));
+    const outcome = await runLauncherCli([
+      ...cliLaunchArgs(paths, fixture).slice(0, -fixture.args.length - 1),
+      '--invocation-id', invocation, '--profile', profile, '--cdp', cdp,
+      '--owner-task-id', 'task-42', '--owner-dispatch-id', 'dispatch-9',
+      '--', ...fixture.args,
+    ], { ...cliFixtureEnv(root), CHATGPT_BROWSER_TURN_STATE_DIR: join(root, 'state') });
+    expect(outcome.code).toBe(0);
+    const locatorPath = invocationReceiptLocatorPath(invocation, root);
+    const indexed = readInvocationReceiptLocator({
+      invocationId: invocation, runIdentity: 'run-2440', attemptIdentity: 'attempt-2440',
+      terminalEnvelopeRoot: root,
+    });
+    expect(indexed.path).toBe(locatorPath);
+    expect(indexed.locator.handoff_receipt_path).toBe(paths.receipt);
+    expect(indexed.locator.terminal_envelope_path).toBe(paths.envelope);
+    expect(indexed.receipt).toMatchObject({
+      schema: HANDOFF_SCHEMA, invocation_id: invocation,
+      owner_task_id: 'task-42', owner_dispatch_id: 'dispatch-9',
+      child_cwd: repoRoot, launcher_pid: expect.any(Number),
+    });
+    expect(indexed.receipt.launcher_pid).toBeGreaterThan(1);
+    expect(indexed.receipt).not.toHaveProperty('launching_terminal_incarnation');
+    if (process.platform !== 'win32') {
+      expect(statSync(locatorPath).mode & 0o077).toBe(0);
+      expect(statSync(dirname(locatorPath)).mode & 0o077).toBe(0);
+    }
+    const waiter = await runProcess({
+      command: process.execPath,
+      args: ['--experimental-strip-types', launcherPath, 'wait',
+        '--run-identity', 'run-2440', '--attempt-identity', 'attempt-2440',
+        '--receipt-locator', locatorPath, '--deadline-ms', '300'],
+      cwd: root, env: cliFixtureEnv(root), inheritParentEnv: true,
+      allowEmptyStdout: false, timeoutMs: 10_000,
+    });
+    expect(waiter.ok).toBe(true);
+    const body = JSON.parse(waiter.stdout.trim()) as Record<string, unknown>;
+    expect(body.terminal).toBe(true);
+    expect((body.envelope as { lifecycle_outcome: string }).lifecycle_outcome).toBe('success');
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  it('keeps legacy direct launch unindexed and refuses reused IDs across attempts or profiles before child start', async () => {
+    const root = tempDir('opk-2478-reuse-');
+    const original = launchPaths(root, 'original');
+    const invocationId = 'inv-reuse';
+    const first = await runFixtureLaunch(root, {
+      runIdentity: 'run-1', attemptIdentity: 'attempt-1', invocationId, profile, cdp,
+      handoffReceiptPath: original.receipt, terminalEnvelopePath: original.envelope,
+      browserOutputPath: original.output, cwd: repoRoot, childCommand: process.execPath,
+      childArgs: nodeFixture('process.exit(0)').args,
+    });
+    expect(first).toBe(1); // no turn result; the ID must still remain occupied
+    const retry = launchPaths(root, 'different-attempt');
+    const marker = join(root, 'retry-sent.txt');
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const code = await runFixtureLaunch(root, {
+      runIdentity: 'run-2', attemptIdentity: 'attempt-2', invocationId,
+      profile: '/different/profile', cdp,
+      handoffReceiptPath: retry.receipt, terminalEnvelopePath: retry.envelope,
+      browserOutputPath: retry.output, cwd: repoRoot, childCommand: process.execPath,
+      childArgs: markedChildFixture(marker, makeTurnResult()).args,
+    });
+    const refusal = stderr.mock.calls.map((call) => String(call[0])).join('');
+    stderr.mockRestore();
+    expect(code).toBe(2);
+    expect(refusal).toContain('invocation_admission_failed_use_fresh_id');
+    expectNoLauncherEffects(retry, marker);
+    const legacy = launchPaths(root, 'legacy');
+    const legacyCode = await runFixtureLaunch(root, {
+      runIdentity: 'legacy-run', attemptIdentity: 'legacy-attempt',
+      handoffReceiptPath: legacy.receipt, terminalEnvelopePath: legacy.envelope,
+      browserOutputPath: legacy.output, cwd: repoRoot, childCommand: process.execPath,
+      childArgs: nodeFixture('process.exit(0)').args,
+    });
+    expect(legacyCode).toBe(1);
+    expect(readHandoffReceipt(legacy.receipt)).not.toHaveProperty('invocation_id');
+    expect(existsSync(invocationReceiptLocatorPath('legacy-run', root))).toBe(false);
+  });
+
+  it('refuses a same-profile pre-index durable observation even with no locator', async () => {
+    const root = tempDir('opk-2478-observation-');
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+    const invocationId = 'preindexed-42';
+    admitStateLightTurnObservation({
+      profileKey: configuredProfileKey(profile, cdp), invocationId, marker: 'owned-marker-42',
+    });
+    const paths = launchPaths(root, 'refused-observation');
+    const marker = join(root, 'must-not-send.txt');
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const code = await runFixtureLaunch(root, {
+      runIdentity: 'run-observation', attemptIdentity: 'attempt-1',
+      invocationId, profile, cdp,
+      handoffReceiptPath: paths.receipt, terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output, cwd: repoRoot, childCommand: process.execPath,
+      childArgs: markedChildFixture(marker, makeTurnResult()).args,
+    });
+    const refusal = stderr.mock.calls.map((call) => String(call[0])).join('');
+    stderr.mockRestore();
+    expect(code).toBe(2);
+    expect(refusal).toContain('invocation_observation_occupied');
+    expectNoLauncherEffects(paths, marker);
+    expect(existsSync(invocationReceiptLocatorPath(invocationId, root))).toBe(false);
+  });
+
+  it('rejects index symlinks, malformed contents, absent original receipts and identity mismatch', async () => {
+    const root = tempDir('opk-2478-index-invalid-');
+    const invocationId = 'index-negative';
+    const paths = launchPaths(root, 'negative');
+    const indexPath = invocationReceiptLocatorPath(invocationId, root);
+    mkdirSync(dirname(indexPath), { recursive: true, mode: 0o700 });
+    symlinkSync(join(root, 'non-existent.json'), indexPath);
+    const marker = join(root, 'must-not-start.txt');
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const code = await runFixtureLaunch(root, {
+      runIdentity: 'run-negative', attemptIdentity: 'attempt-negative', invocationId, profile, cdp,
+      handoffReceiptPath: paths.receipt, terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output, cwd: repoRoot, childCommand: process.execPath,
+      childArgs: markedChildFixture(marker, makeTurnResult()).args,
+    });
+    stderr.mockRestore();
+    expect(code).toBe(2);
+    expectNoLauncherEffects(paths, marker);
+    rmSync(indexPath);
+    const good = await runFixtureLaunch(root, {
+      runIdentity: 'run-negative', attemptIdentity: 'attempt-negative', invocationId, profile, cdp,
+      handoffReceiptPath: paths.receipt, terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output, cwd: repoRoot, childCommand: process.execPath,
+      childArgs: nodeFixture('process.exit(0)').args,
+    });
+    expect(good).toBe(1);
+    expect(() => readInvocationReceiptLocator({
+      invocationId, runIdentity: 'wrong-run', attemptIdentity: 'attempt-negative',
+      terminalEnvelopeRoot: root,
+    })).toThrow();
+    writeFileSync(indexPath, '{"wrong":"schema"}');
+    expect(() => readInvocationReceiptLocator({
+      invocationId, runIdentity: 'run-negative', attemptIdentity: 'attempt-negative',
+      terminalEnvelopeRoot: root,
+    })).toThrow();
+    const preserved = JSON.stringify({
+      schema: 'flow-manager-long-running-child-locator/v1', invocation_id: invocationId,
+      run_identity: 'run-negative', attempt_identity: 'attempt-negative',
+      handoff_receipt_path: paths.receipt, terminal_envelope_path: paths.envelope,
+    });
+    writeFileSync(indexPath, preserved);
+    rmSync(paths.receipt);
+    expect(() => readInvocationReceiptLocator({
+      invocationId, runIdentity: 'run-negative', attemptIdentity: 'attempt-negative',
+      terminalEnvelopeRoot: root,
+    })).toThrow(/receipt_locator_handoff_missing|ENOENT/u);
+  });
+
+  it.each([false, true])('adapter %s returns committed PID and optional owners despite launcher exit status', async (childFails) => {
+    const root = tempDir('opk-2478-adapter-');
+    const paths = launchPaths(root, childFails ? 'fail' : 'ok');
+    const invocationId = childFails ? 'adapter-failed-child' : 'adapter-success';
+    for (const [key, value] of Object.entries(cliFixtureEnv(root))) vi.stubEnv(key, value);
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+    vi.stubEnv('ORCA_TERMINAL_HANDLE', 'synthetic-terminal-handle');
+    vi.stubEnv('OPK_FM_LONG_CHILD_DISABLE_DETACH', '1');
+    const child = childFails
+      ? nodeFixture('process.exit(7)')
+      : markedChildFixture(join(root, 'adapter-started.txt'), makeTurnResult({ invocation_id: invocationId }));
+    const launch = vi.fn(async (args: readonly string[]) => {
+      expect(args).toContain('--invocation-id');
+      expect(args).toContain(invocationId);
+      expect(args).toContain('--owner-task-id');
+      expect(args).not.toContain('--owner-dispatch-id');
+      return await runFixtureLaunch(root, {
+        runIdentity: 'adapter-run', attemptIdentity: 'adapter-attempt',
+        invocationId, ownerTaskId: 'owner-42', profile, cdp,
+        handoffReceiptPath: paths.receipt, terminalEnvelopePath: paths.envelope,
+        browserOutputPath: paths.output, cwd: root, childCommand: process.execPath,
+        childArgs: child.args,
+      });
+    });
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const code = await runBrowserAdapter([
+      '--run-identity', 'adapter-run', '--attempt-identity', 'adapter-attempt',
+      '--invocation-id', invocationId, '--owner-task-id', 'owner-42',
+      '--handoff-receipt', paths.receipt, '--terminal-envelope', paths.envelope,
+      '--output', paths.output, '--profile', profile, '--cdp', cdp,
+      '--input', join(root, 'synthetic-prompt.txt'), '--cwd', root,
+    ], { spawnLauncher: launch });
+    const out = stdout.mock.calls.map((call) => String(call[0])).join('');
+    stdout.mockRestore();
+    expect(code).toBe(0);
+    const ack = JSON.parse(out.trim()) as Record<string, unknown>;
+    const receipt = readHandoffReceipt(paths.receipt)!;
+    expect(ack.schema).toBe('flow-manager-browser-gpt-long-run-accepted/v1');
+    expect(ack.receipt_locator).toBe(invocationReceiptLocatorPath(invocationId, root));
+    expect(ack.launcher_pid).toBe(receipt.launcher_pid);
+    expect(ack.launcher_pid).toBe(process.pid);
+    expect(ack.child_cwd).toBe(realpathSync(root));
+    expect(ack.owner_task_id).toBe('owner-42');
+    expect(ack).not.toHaveProperty('owner_dispatch_id');
+    expect(receipt.launching_terminal_handle).toBe('synthetic-terminal-handle');
+    expect(receipt).not.toHaveProperty('launching_terminal_incarnation');
+    if (childFails) {
+      expect(readTerminalEnvelope(paths.envelope)?.lifecycle_outcome).toBe('incident');
+      expect(readTerminalEnvelope(paths.envelope)?.child_exit_code).toBe(7);
+    }
+  });
+
+  it('does not preempt healthy recovery after the old page closed; late owned successor result wins', async () => {
+    const root = tempDir('opk-2478-recovery-');
+    const paths = launchPaths(root, 'recovery');
+    const invocationId = 'recovery-invocation';
+    const result = makeTurnResult({ invocation_id: invocationId });
+    const child = nodeFixture(`
+      let ticks = 0;
+      const tick = setInterval(() => {
+        process.stdout.write(JSON.stringify({
+          schema: 'observation-heartbeat/v1', phase: 'post_send_observation',
+          poll_count: ++ticks, observation_state: 'busy', stable_reads: 0,
+          completion_ready: false, original_page_closed: true, recovery_census_pending: true,
+        }) + '\\n');
+      }, 25);
+      setTimeout(() => {
+        clearInterval(tick);
+        process.stdout.write(JSON.stringify({ ...${JSON.stringify(result)}, owned_successor: true }) + '\\n',
+          () => process.exit(0));
+      }, 700);
+    `);
+    const code = await runFixtureLaunch(root, {
+      runIdentity: 'recovery-run', attemptIdentity: 'recovery-attempt',
+      invocationId, profile, cdp,
+      handoffReceiptPath: paths.receipt, terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output, cwd: repoRoot, childCommand: process.execPath,
+      childArgs: child.args,
+    });
+    expect(code).toBe(0);
+    const envelope = readTerminalEnvelope(paths.envelope);
+    expect(envelope?.lifecycle_outcome).toBe('success');
+    expect(envelope?.turn_result_state).toBe('ok');
+    expect(envelope?.observed_invocation_id).toBe(invocationId);
+    expect(envelope).not.toHaveProperty('incident');
+    expect(JSON.stringify(envelope)).not.toContain('chat_page_gone');
+  });
+
+  it('invocation wait before terminal is nonterminal, then returns the same original envelope', async () => {
+    const root = tempDir('opk-2478-wait-');
+    const paths = launchPaths(root, 'pending');
+    const invocationId = 'pending-invocation';
+    const result = makeTurnResult({ invocation_id: invocationId });
+    const child = nodeFixture(`
+      let count = 0;
+      const timer = setInterval(() => {
+        process.stdout.write(JSON.stringify({
+          schema: 'observation-heartbeat/v1', phase: 'post_send_observation',
+          poll_count: ++count, observation_state: 'busy', stable_reads: 0, completion_ready: false,
+        }) + '\\n');
+      }, 25);
+      setTimeout(() => { clearInterval(timer); process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n',
+        () => process.exit(0)); }, 600);
+    `);
+    const launch = runFixtureLaunch(root, {
+      runIdentity: 'wait-run', attemptIdentity: 'wait-attempt', invocationId, profile, cdp,
+      handoffReceiptPath: paths.receipt, terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output, cwd: repoRoot, childCommand: process.execPath,
+      childArgs: child.args,
+    });
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    await runWait({ runIdentity: 'wait-run', attemptIdentity: 'wait-attempt',
+      invocationId, terminalEnvelopeRoot: root, deadlineMs: 80 });
+    const before = stdout.mock.calls.map((call) => String(call[0])).join('');
+    stdout.mockClear();
+    expect(JSON.parse(before.trim())).toMatchObject({
+      terminal: false, non_terminal: true, envelope_absent: true,
+      no_success_authority: true, no_retry_authority: true,
+    });
+    expect(await launch).toBe(0);
+    await runWait({ runIdentity: 'wait-run', attemptIdentity: 'wait-attempt',
+      receiptLocator: invocationReceiptLocatorPath(invocationId, root),
+      terminalEnvelopeRoot: root, deadlineMs: 100 });
+    const after = stdout.mock.calls.map((call) => String(call[0])).join('');
+    stdout.mockRestore();
+    expect(JSON.parse(after.trim()).envelope.lifecycle_outcome).toBe('success');
   });
 });
 
