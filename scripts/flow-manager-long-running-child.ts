@@ -420,7 +420,7 @@ function isOccupiedPathError(error: unknown): boolean {
   return code === 'EEXIST';
 }
 
-function atomicCreateJson(path: string, body: Record<string, unknown>, kind: 'receipt' | 'envelope'): void {
+function atomicCreateJson(path: string, body: Record<string, unknown>, kind: 'receipt' | 'envelope' | 'index'): void {
   ensureParentWritable(path);
   if (kind === 'receipt' && process.env.OPK_FM_LONG_CHILD_FORCE_RECEIPT_CREATE_FAIL === '1') {
     throw new Error('forced_receipt_create_failure');
@@ -452,10 +452,14 @@ function atomicCreateJson(path: string, body: Record<string, unknown>, kind: 're
       // best effort
     }
   } catch (error) {
-    try {
-      unlinkSync(target);
-    } catch {
-      // best effort
+    // An uncertain, partly written index must stay occupied: never reuse the
+    // invocation ID after a failed reservation or a short write.
+    if (kind !== 'index') {
+      try {
+        unlinkSync(target);
+      } catch {
+        // best effort
+      }
     }
     throw error;
   } finally {
@@ -1073,6 +1077,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
   }
 
   const launcherStartedAt = nowIso();
+  const launchHandle = launchingTerminalHandle();
   const receipt: HandoffReceipt = {
     schema: HANDOFF_SCHEMA,
     run_identity: config.runIdentity,
@@ -1085,7 +1090,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     ...(config.ownerDispatchId ? { owner_dispatch_id: config.ownerDispatchId } : {}),
     child_cwd: realpathSync(config.cwd),
     launcher_pid: process.pid,
-    ...(launchingTerminalHandle() ? { launching_terminal_handle: launchingTerminalHandle() } : {}),
+    ...(launchHandle ? { launching_terminal_handle: launchHandle } : {}),
   };
   // Reserve the single global invocation key before publishing the original receipt or spawning the Browser.
   // A partial reservation is intentionally not recycled: retry with a fresh invocation ID.
@@ -1121,7 +1126,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
       if (canaries.some((value) => JSON.stringify(index).includes(value) || JSON.stringify(receipt).includes(value))) {
         throw new Error('canary_in_index_or_receipt');
       }
-      atomicCreateJson(indexedPath, index as unknown as Record<string, unknown>, 'receipt');
+      atomicCreateJson(indexedPath, index as unknown as Record<string, unknown>, 'index');
       const committed = readLocatorIndex(indexedPath, terminalRoot, {
         invocationId: config.invocationId,
         runIdentity: config.runIdentity,
@@ -1152,7 +1157,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
       }
     }
   } catch (error) {
-    refuse('receipt_create_or_index_readback_failed', {
+    refuse(indexedPath ? 'receipt_create_or_index_readback_failed' : 'receipt_create_failed', {
       message: error instanceof Error ? error.message : String(error),
     });
     return 2;
