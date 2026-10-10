@@ -4391,7 +4391,9 @@ export async function reconcileStalePackReviewRuns(
                 && provenFirstAttemptZeroSendCensus(
                   current, recovery.missingFirstAttemptIdentities ?? [],
                 )
-                && authority?.cycle?.cycleId === current.reviewCycleId
+                && authority?.cycle !== null
+                && authority?.cycle !== undefined
+                && authority.cycle.cycleId === current.reviewCycleId
                 && authority.currentHeadSha.toLowerCase() === current.targetSha.toLowerCase()
                 && authority.terminal?.runId !== current.id
                 && derivePackReviewNoJudgmentBudgetOutcome({
