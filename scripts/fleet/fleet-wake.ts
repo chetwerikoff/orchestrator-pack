@@ -150,7 +150,7 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
     try { entries = readdirSync(this.root, { withFileTypes: true }); }
     catch { return; }
     for (const entry of entries) {
-      if (!entry.isFile() || !/^parked-epoch-[0-9a-f]{32}\\.mark$/u.test(entry.name)) continue;
+      if (!entry.isFile() || !/^parked-epoch-[0-9a-f]{32}\.mark$/u.test(entry.name)) continue;
       const path = join(this.root, entry.name);
       try {
         const record = JSON.parse(readFileSync(path, 'utf8')) as { handle?: string; key?: string };
@@ -303,6 +303,17 @@ export function stoppedSignature(observations: readonly FleetPaneObservation[]):
     .join('\n');
 }
 
+// Operational alarm identity ignores repaint/progress churn, but captures a
+// changed own question, material error or status and the exact Task binding.
+function meaningfulStoppedSignature(observations: readonly FleetPaneObservation[]): string {
+  return actionablePanes(observations)
+    .map((pane) => JSON.stringify([
+      pane.state, pane.handle, pane.incarnationId, pane.branch, pane.taskBinding,
+      pane.lines.filter((line) => /\?|\b(?:error|failed|done|finished|blocked)\b/iu.test(line)).at(-1) ?? '',
+    ]))
+    .sort((left, right) => left.localeCompare(right)).join('\n');
+}
+
 function isWorkerPane(terminal: FleetTerminal, config: FleetWakeConfig): boolean {
   if (terminal.handle === config.architectHandle) return false;
   if (!terminal.worktreePath || samePath(terminal.worktreePath, config.primary)) return false;
@@ -430,6 +441,7 @@ export function fleetAlarmMessage(
   coordinatorState: 'idle' | 'busy',
   observations: readonly FleetPaneObservation[],
   banners: readonly ChatErrorBanner[] = [],
+  alerts: readonly string[] = [],
 ): string {
   const stopped = actionablePanes(observations);
   const panes = stopped.map((pane) => `${pane.state} ${pane.handle} ${pane.title}`).join('; ');
@@ -444,7 +456,9 @@ export function fleetAlarmMessage(
   const bannerText = continuable.length > 0
     ? ` ${continuable.length} ChatGPT chat(s) need a continuation (generation stopped): ${continuable.map((banner) => `${banner.url} "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}${banner.review ? ' (PR-review chat)' : ''}`).join('; ')}. Tell the manager that owns each chat to run GitHub-first reconciliation and send "${EXECUTION_CONTINUATION_TEXT}" in that same chat (runbook: Repeated product-error streak - two repeats, a fresh chat on the third continuation failure); for a PR-review chat send "${REVIEW_CONTINUATION_TEXT}" instead. Never press Retry.`
     : '';
-  return `Fleet alarm (${coordinatorState}):${paneText}${bannerText}${unloadableText}`;
+  const alertText = alerts.length ? ' ' + alerts.length + ' parked unit(s) need a producer re-check: '
+    + alerts.join('; ') + '. Check the named Task and producer before acting.' : '';
+  return `Fleet alarm (${coordinatorState}):${paneText}${bannerText}${unloadableText}${alertText}`;
 }
 
 
@@ -1098,7 +1112,8 @@ async function wakePanesOnEvents(
   store: FleetWakeStateStore,
   log: (line: string) => void,
   sleepMs: (milliseconds: number) => void | Promise<void>,
-): Promise<void> {
+): Promise<Map<string, string>> {
+  const legacyAttempts = new Map<string, string>();
   const wakes: Array<{ pane: FleetTerminal | FleetPaneObservation; key: string; message: string }> = [];
   for (const envelope of (options.listTerminalEnvelopes ?? listTerminalEnvelopes)()) {
     const key = `gpt:${envelope.path}`;
@@ -1173,6 +1188,7 @@ async function wakePanesOnEvents(
     }
   }
   for (const { pane, key, message } of wakes) {
+    if (key.startsWith('gpt:') || key.startsWith('ci:')) legacyAttempts.set(key, pane.handle);
     const delivered = sendCoordinator(executor, pane.handle, message)
       && (await sleepMs(4_000), submitCoordinator(executor, pane.handle));
     if (!delivered) {
@@ -1183,6 +1199,7 @@ async function wakePanesOnEvents(
     if (pane.handle !== coordinator.handle) store.clearPaneWait?.(pane.handle);
     log(`sent event wake to ${pane.handle}: ${key}`);
   }
+  return legacyAttempts;
 }
 
 function defaultSleep(milliseconds: number): Promise<void> {
@@ -1314,7 +1331,10 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       return { state: 'unreadable', handle: 'fleet-sweep' };
     }
 
-    await wakePanesOnEvents(options, coordinator, observations, executor, store, log, sleepMs);
+    const legacyAttempts = await wakePanesOnEvents(options, coordinator, observations, executor, store, log, sleepMs);
+    const parkedAlerts = await wakeNamedParkedProducers(
+      options, observations, terminals, store, executor, legacyAttempts, sleepMs, log,
+    );
 
     const chats = config.chatCdpUrl && config.chatScope
       ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])
@@ -1362,8 +1382,9 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     }
 
     const stopped = actionablePanes(observations);
-    if (stopped.length === 0 && routed.length === 0) {
+    if (stopped.length === 0 && routed.length === 0 && parkedAlerts.length === 0) {
       store.clearLastSentSignature();
+      store.clearLastSentAt?.();
       log('nothing stopped');
       return { state: 'nothing_stopped' };
     }
@@ -1377,14 +1398,19 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     }
 
     const coordinatorState: 'idle' | 'busy' = isBusyScreen(coordinatorScreen, config.busyRe) ? 'busy' : 'idle';
-    const signature = [stoppedSignature(observations), chatBannerSignature(routed)].filter(Boolean).join('\n');
-    const deliverySignature = `${coordinator.handle}\n${signature}`;
-    if (coordinatorState === 'busy' && store.readLastSentSignature() === deliverySignature) {
+    const signature = [meaningfulStoppedSignature(observations), chatBannerSignature(routed),
+      ...parkedAlerts.slice().sort()].filter(Boolean).join('\n');
+    const deliverySignature = JSON.stringify([coordinator.handle, coordinator.incarnationId ?? '', signature]);
+    const now = (options.now ?? Date.now)();
+    const lastAt = store.readLastSentAt?.();
+    if (store.readLastSentSignature() === deliverySignature
+      && lastAt !== undefined && Number.isFinite(now) && now - lastAt >= 0
+      && now - lastAt < REMINDER_INTERVAL_MS) {
       log(`${coordinator.handle} same stopped set already queued`);
       return { state: 'same_stopped_set', coordinator: coordinator.handle, signature };
     }
 
-    const message = fleetAlarmMessage(coordinatorState, observations, routed);
+    const message = fleetAlarmMessage(coordinatorState, observations, routed, parkedAlerts);
     if (!sendCoordinator(executor, coordinator.handle, message)) {
       log(`${coordinator.handle} send failed`);
       return { state: 'send_failed', coordinator: coordinator.handle };
@@ -1396,6 +1422,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     }
 
     store.writeLastSentSignature(deliverySignature);
+    store.writeLastSentAt?.(now);
     log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} need a step, ${routed.length} chat banner(s)`);
     return {
       state: 'sent',
