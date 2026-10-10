@@ -886,10 +886,14 @@ describe('fleet alarm', () => {
     expect(bannerOwnerPane({ url }, terminals, config(), () => ({ ...binding, terminal_handle: 'mgr' }))?.handle).toBe('mgr');
   });
 
-  it('wakes the launching pane named by a GPT terminal envelope even when the turn ran in another worktree', async () => {
+  it('excludes the old cross-worktree inv-h legacy route for an exact GPT-named PARKED pane (#2473)', async () => {
     const listTerminalEnvelopes = () => [{ path: '/tmp/opencode/fix-terminal.json', invocationId: 'inv-h', cwd: '/elsewhere/fix', terminalHandle: 'one' }];
-    const observed = await tick({ screens: { coord: 'idle', one: 'PARKED on anything', two: 'working\nesc interrupt' }, listTerminalEnvelopes });
-    expect(sendsTo(observed.calls, 'one')[0]).toContain('Wake: GPT turn inv-h ended, read /tmp/opencode/fix-terminal.json');
+    const observed = await tick({
+      screens: { coord: 'idle', one: 'PARKED on GPT turn inv-h', two: 'working\nesc interrupt' },
+      listTerminalEnvelopes,
+    });
+    expect(sendsTo(observed.calls, 'one')).toHaveLength(0);
+    expect(sendsTo(observed.calls, 'coord')[0]?.join(' ')).toContain('park on unresolvable producer');
   });
 
   it('does not use cwd to wake an unrelated pane when the explicit GPT owner is unobserved', async () => {
