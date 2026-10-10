@@ -44,7 +44,7 @@ import {
   type ProjectChat,
 } from './chat-error-banners.ts';
 import { readChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
-import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath, type DeliveryState } from '../flow-manager-long-running-child.ts';
+import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath } from '../flow-manager-long-running-child.ts';
 
 export interface FleetWakeConfig {
   readonly projectId: string;
@@ -490,12 +490,7 @@ export interface TerminalEnvelopeEvent {
   readonly invocationId: string;
   readonly cwd?: string;
   readonly terminalHandle?: string;
-  /** Only present if this is the producer's exact observed invocation, not an attempt-id guess. */
   readonly observedInvocationId?: string;
-  readonly sendCount?: number;
-  readonly delivery?: DeliveryState;
-  readonly conversationLocator?: string;
-  readonly persistedObservationProfileKey?: string;
 }
 
 export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeEvent[] {
@@ -524,33 +519,13 @@ export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeE
           && envelope.observed_invocation_id.length > 0
           ? envelope.observed_invocation_id
           : undefined;
-        const diagnostics = envelope.diagnostics;
-        const persistedObservation = diagnostics && typeof diagnostics === 'object' && !Array.isArray(diagnostics)
-          ? (diagnostics as Record<string, unknown>).persisted_observation : undefined;
-        const profileKey = persistedObservation && typeof persistedObservation === 'object' && !Array.isArray(persistedObservation)
-          ? (persistedObservation as Record<string, unknown>).profile_key : undefined;
-        const persistedObservationProfileKey = typeof profileKey === 'string' && profileKey.length > 0
-          ? profileKey : undefined;
-        if (envelope.schema !== TERMINAL_SCHEMA
-          || (!cwd && !terminalHandle && !persistedObservationProfileKey)) continue;
-        const invocationId = observedInvocationId
-          ?? String(envelope.attempt_identity ?? basename(path));
-        const sendCount = typeof envelope.send_count === 'number'
-          && Number.isSafeInteger(envelope.send_count) && envelope.send_count >= 0
-          ? envelope.send_count : undefined;
-        const delivery = envelope.delivery === 'POSSIBLY_DELIVERED'
-          || envelope.delivery === 'not-sent' || envelope.delivery === 'landed'
-          ? envelope.delivery : undefined;
+        if (envelope.schema !== TERMINAL_SCHEMA) continue;
+        const invocationId = observedInvocationId ?? String(envelope.attempt_identity ?? basename(path));
         events.push({
           path, invocationId,
           ...(cwd ? { cwd } : {}),
           ...(terminalHandle ? { terminalHandle } : {}),
           ...(observedInvocationId ? { observedInvocationId } : {}),
-          ...(sendCount !== undefined ? { sendCount } : {}),
-          ...(delivery ? { delivery } : {}),
-          ...(typeof envelope.conversation_locator === 'string' && envelope.conversation_locator.length > 0
-            ? { conversationLocator: envelope.conversation_locator } : {}),
-          ...(persistedObservationProfileKey ? { persistedObservationProfileKey } : {}),
         });
       } catch {
         // A partial or unrelated terminal artifact is not completion evidence.
@@ -1298,13 +1273,20 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       return { state: 'unreadable', handle: 'fleet-sweep' };
     }
 
-    const bareShellHandles = new Set(collectFleetDiagnostics({
-      projectId: config.projectId, primary: config.primary, workspaceRe: config.workspaceRe,
-      coordinatorHandle: coordinator.handle, architectHandle: config.architectHandle,
-      coordinatorTitleRe: config.orchestratorTitleRe, busyRe: config.busyRe,
-      terminals, observations, executor, store,
-    }).filter((row) => row.reason === 'suspected_bare_shell' && row.handle)
-      .map((row) => row.handle!));
+    let bareShellHandles = new Set<string>();
+    try {
+      bareShellHandles = new Set(collectFleetDiagnostics({
+        projectId: config.projectId, primary: config.primary, workspaceRe: config.workspaceRe,
+        coordinatorHandle: coordinator.handle, architectHandle: config.architectHandle,
+        coordinatorTitleRe: config.orchestratorTitleRe, busyRe: config.busyRe,
+        terminals, observations, executor, store,
+      }).filter((row) => row.reason === 'suspected_bare_shell' && row.handle)
+        .map((row) => row.handle!));
+    } catch {
+      // Advisory history cannot suppress ordinary fleet delivery. Shell-titled
+      // panes are already excluded from agent selection by the sweep.
+      log('DIAG state=unverified reason=diagnostic_unreadable evidence=read_only_projection_failure');
+    }
     await wakeNamedParkedProducers(options, observations, terminals, store, executor, sleepMs, log, bareShellHandles);
     await wakePanesOnEvents(options, coordinator, observations, executor, store, log, sleepMs, bareShellHandles);
 
