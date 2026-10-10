@@ -716,12 +716,7 @@ describe('Issue #2474 Claude same-ordinal child rollover and original budget', (
     expect(recordClaudeNativeChildFrame({ ...initial, reviewer: 'codex' }, binding)).toBe(false);
     expect(recordClaudeNativeChildFrame(initial, binding)).toBe(true);
 
-    let childPid!: number;
-    const pidReady = new Promise<number>((resolve) => {
-      const assign = (pid: number) => { childPid = pid; resolve(pid); };
-      // Start a private detached synthetic group; no live Claude or external review.
-      void assign;
-    });
+    // Start a private detached synthetic group; no live Claude or external review.
     // Using the existing process primitive keeps the group observation factual.
     let resolvePid!: (pid: number) => void;
     const spawned = new Promise<number>((resolve) => { resolvePid = resolve; });
@@ -777,8 +772,7 @@ describe('Issue #2474 Claude same-ordinal child rollover and original budget', (
     });
     const pid = await spawned;
     try {
-      const base: PackReviewRunRecord = {
-        ...gptRunForIssue2474(start),
+      const base = {
         nativeAttempt: {
           schema: 'pack-review-native-attempt/v1', reviewer: 'claude',
           invocationOrdinal: 2, startedAtUtc: arm2,
@@ -786,7 +780,7 @@ describe('Issue #2474 Claude same-ordinal child rollover and original budget', (
           wrapperPid: pid, processGroupId: pid,
           childPid: pid, childProcessGroupId: pid,
         },
-      };
+      } as PackReviewRunRecord;
       expect(observeNativePackReviewAttempt(base, Date.parse(arm2) + 9 * 60_000))
         .toMatchObject({ state: 'running', replacementEligible: false, elapsedMs: 540_000 });
       expect(observeNativePackReviewAttempt(base, Date.parse(arm2) + 10 * 60_000))
@@ -831,14 +825,6 @@ describe('Issue #2474 Claude same-ordinal child rollover and original budget', (
     expect(readPackReviewAuthority(prNumber, options)?.cycle?.consumedRoundOrdinals).toEqual([1]);
   });
 });
-
-function gptRunForIssue2474(startedAtUtc: string): PackReviewRunRecord {
-  return {
-    id: 'prr-test-2474', projectId: 'orchestrator-pack', prNumber: 2474,
-    headSha: HEAD, status: 'running', createdAt: startedAtUtc, updatedAt: startedAtUtc,
-    ...({} as PackReviewRunRecord),
-  };
-}
 
 describe('Issue #1826 native initial pre-spawn binding', () => {
   it('keeps a bounded retry clock if the runner dies after initial arm but before onSpawn', async () => {
