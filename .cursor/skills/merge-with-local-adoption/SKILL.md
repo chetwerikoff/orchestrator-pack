@@ -267,11 +267,17 @@ Read the PR body, changed paths/content, linked Issue, applicable migration note
 environment docs, runbooks, and rules-channel files. State the local post-merge work. Do not
 invent secrets, ports, or machine-local values.
 
-For `TARGET_REPOSITORY=PACK_REPOSITORY`, identify the smallest executable live check required by
-the linked Issue's current `Fixed means` / `smoke-test-plan` and express it as one or more
-exact argv arrays in `LIVE_CHECK_JSON`. It runs from `PRIMARY_ROOT` after adoption. If the
-Issue cannot bind an executable check, the pack Verify-effect step ends `effect_unverified`;
-Git ancestry, process existence, and prose inspection are not substitutes.
+For `TARGET_REPOSITORY=PACK_REPOSITORY`, collect only executable live-check candidates
+expressly declared in the linked Issue's **current** `Fixed means` / `smoke-test-plan`,
+keeping their exact argv and declared prerequisites. A `smoke-test-plan: not-applicable`
+or CI, prose, or earlier detached-checkout evidence is not an executable declaration;
+never invent a fallback check. This Step 4 inventory is **provisional**: do not assume
+the future `PRIMARY_ROOT` HEAD/status, decide eligibility here, or populate
+`LIVE_CHECK_JSON` yet. After Step 7, pack Verify effect selects the smallest eligible
+declared check/set for the actually adopted ordinary `PRIMARY_ROOT` and only then
+fills its existing one-or-more exact argv arrays. When nothing executable is
+declared, record that reason for the mandatory post-adoption Verify-effect decision;
+Git ancestry and process existence are not substitutes.
 
 For the #2445 fleet-wake pack merge class, the Issue binds the pack-only offline executable
 check to exactly `LIVE_CHECK_JSON='["npm","test","--","--maxWorkers=1","scripts/merge-adoption-effect.test.ts"]'`.
@@ -381,10 +387,42 @@ coordinator. Do not run the pack verifier or substitute pack process/registry ev
 Then continue to Step 8 and the unchanged exact-target cleanup in Step 9, subject to the
 existing delegated fail-closed rule.
 
-**Pack only (`TARGET_REPOSITORY=PACK_REPOSITORY`):** run the pack-owned verifier from
-`{PACK_ROOT}` against the pack `PRIMARY_ROOT`, using the exact Issue live check selected
-in Step 4. The remainder of this verifier block applies only to this pack route:
+**Pack only (`TARGET_REPOSITORY=PACK_REPOSITORY`):** immediately before the
+verifier handoff, evaluate the provisional linked-Issue checks against the **actual
+adopted, ordinary `PRIMARY_ROOT`** after Step 7, including its current HEAD, status,
+operator modifications, and other declared prerequisites. It may legitimately
+be dirty or ahead of `MERGE_SHA`. A candidate is eligible only when its known
+prerequisites are satisfied there without cleaning, resetting, detaching,
+switching branches, replacing the checkout, or discarding operator state.
+Categorically exclude any candidate that **requires** a clean checkout or a
+detached/exact-PR-head/exact-head checkout **even if** the primary is currently
+clean or at that head; a check merely *able* to run on a clean primary is not
+excluded if it does not require those conditions. Exclude unmet or unknown
+prerequisites. Do not rely on Step 4's forecast, an earlier detached-run PASS,
+or success in a separate checkout; add no validator or alternative checker.
 
+If **no declared candidate is primary-eligible** (none declared, `not-applicable`
+alone, all clean/exact-head-dependent, or unknown/unmet primary prerequisites),
+the mandatory Verify-effect **decision** reports the **skill-owned operator-level**
+`effect_unverified(no_primary_eligible_issue_check)` and
+`operationally_incomplete`, with the linked Issue, actual checkout state, and
+concrete absence/disqualification reason. **Do not invoke**
+`scripts/merge-adoption-effect.ts verify` or pass empty/null/`[]` or synthetic
+`--live-check-json`. Explicitly state that no Issue live check or verifier
+consumer control/read-back ran, and no verifier v1 JSON receipt or emitted
+`coordinatorMessage` exists. Surface the same substantive blocker to the direct
+operator or via the existing coordinator channel. Ask the linked Issue owner
+to declare a legitimate primary-valid live check and rerun the existing
+Verify-effect step when available under existing authority; until then keep
+the incomplete/unverified outcome. Delegated integration stops further mutation
+except already-supported component recovery; direct-user/orchestrator Task modes
+retain their existing Step 8–9 cleanup permissions. Never report
+`merge-<PR_NUMBER> done` for this unverified effect.
+
+Only **with** a primary-eligible declared check/set, select the smallest eligible
+one, bind its original one-or-more exact argv arrays into `LIVE_CHECK_JSON`
+**now**, and run the unchanged pack-owned verifier from `{PACK_ROOT}` against
+the pack `PRIMARY_ROOT` as follows:
 ```bash
 node --experimental-strip-types scripts/merge-adoption-effect.ts verify \
   --repo-root "$PRIMARY_ROOT" \
@@ -440,7 +478,7 @@ process to restart; their effect remains covered by the mandatory Issue live che
 Use `--supervisor-state-dir <path>` only when the live installation uses a non-default state
 root. Do not invent a state root or restart command.
 
-The verifier's JSON is the effect receipt. Success requires exactly
+On the primary-eligible path, the verifier's JSON is the effect receipt. Success requires exactly
 `effect_verified` and `operationally_complete`. Any
 `effect_unverified(<reason>)` is `operationally_incomplete`, even when Step 6 ancestry is
 green. Send the emitted `coordinatorMessage` to the coordinator when one exists; in direct
@@ -547,10 +585,17 @@ Report in the user's language:
 - for any waiver, the source of the direct operator authorization (channel/reference only,
   with private data omitted), plus the waiver status description and POST/read-back result;
 - operator-checkout adoption and preservation of existing changes;
-- for pack cards, the merge-effect receipt: mapped consumers, before/after start-time read-back,
-  the exact primary-checkout Issue live check, `effect_verified|effect_unverified(<reason>)`, and exactly
-  one `operationally_complete|operationally_incomplete` outcome; for an unverified effect,
-  include the coordinator message/blocker;
+- for pack cards, distinguish a real verifier JSON receipt (only when a declared
+  primary-eligible Issue check ran) from the skill-owned no-eligible operator report.
+  Give actual mapped-consumer/start-time and live-check/read-back evidence only when
+  observed, `effect_verified|effect_unverified(<reason>)`, and exactly one
+  `operationally_complete|operationally_incomplete` outcome. On no eligible check,
+  state `effect_unverified(no_primary_eligible_issue_check)` and
+  `operationally_incomplete`, the exact Issue/checkout disqualification, that no
+  verifier CLI/live check/consumer control/read-back or v1 JSON receipt/emitted
+  `coordinatorMessage` occurred, the existing operator/coordinator escalation,
+  and the Issue-owner primary-valid-check/rerun next action; for a genuine
+  verifier `effect_unverified`, include its emitted coordinator message/blocker;
 - for non-pack cards, the target-owned `{PRIMARY_ROOT}/AGENTS.md` adoption source, actions,
   named live check and its read-back (or no named check), residual blocker and next action;
 - target absolute path and why it was the selected non-primary worktree;
@@ -560,7 +605,7 @@ Report in the user's language:
 - final Git+Orca read-back and any external/technical refusal;
 - in delegated-integration mode, the marker PR/head/predecessor identity, sequencing result,
   production `READY_TO_MERGE` source/result, any projection-repair POST/read-back, adoption
-  source paths and live observations, adoption actions, the common Verify-effect receipt,
+  source paths and live observations, adoption actions, the actual verifier receipt or skill-owned no-eligible Verify-effect report,
   exact residual state/blocker, and next action.
 
 **Final own-response line (already-invoked actors only):** Preserve the
