@@ -3623,7 +3623,8 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   const currentHead = await readCheckedReviewPrHead(
     input, options.repoSlug, prNumber, authority.currentHeadSha,
   );
-  if (logicalFinalFindings && currentHead.toLowerCase() !== authority.currentHeadSha.toLowerCase()) {
+  if ((logicalFinalFindings || completedFinalFindings)
+      && currentHead.toLowerCase() !== authority.currentHeadSha.toLowerCase()) {
     try {
       authority = observePackReviewHead({
         prNumber,

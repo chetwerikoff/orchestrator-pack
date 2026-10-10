@@ -1815,6 +1815,49 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(readPackReviewAuthority(prNumber, f.options)?.transitionSeq).toBe(closed?.transitionSeq);
   });
 
+  it('Issue #2451: a settled strict descendant projects a later live head without reopening the review cap', async () => {
+    const f = fixture();
+    let liveHead = HEAD;
+    const statusByHead = new Map<string, string>();
+    f.input.fixtureCurrentPrHeadSha = HEAD;
+    f.input.fixtureReviewCompareStatus = 'ahead';
+    f.input.fixtureReadCurrentPrHead = async () => liveHead;
+    f.input.fixtureRequiredStatusReader = async (headSha: string) => statusByHead.get(headSha);
+    f.input.fixtureRequiredStatusWriter = async (request) => {
+      f.statuses.push(request);
+      statusByHead.set(liveHead, request.state);
+    };
+    const first = await reconcileStalePackReviewRuns(f.input);
+    expect(first.results).toContainEqual(expect.objectContaining({
+      settled: true, statusPublished: true, publicationHeadSha: HEAD,
+      reason: 'final_cap_descendant_settled',
+    }));
+    const beforeHeadAdvance = readPackReviewAuthority(prNumber, f.options);
+    expect(f.statuses).toHaveLength(1);
+
+    liveHead = 'd'.repeat(40);
+    const second = await reconcileStalePackReviewRuns(f.input);
+    expect(second.results).toContainEqual(expect.objectContaining({
+      settled: true, statusPublished: true, publicationHeadSha: liveHead,
+      reason: 'final_cap_descendant_settled',
+    }));
+    const current = readPackReviewAuthority(prNumber, f.options);
+    expect(current?.currentHeadSha).toBe(liveHead);
+    expect(current?.cycle).toMatchObject({
+      cycleId: beforeHeadAdvance?.cycle?.cycleId,
+      state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1, 2],
+    });
+    expect(statusByHead.get(liveHead)).toBe('success');
+    expect(f.statuses).toHaveLength(2);
+
+    const third = await reconcileStalePackReviewRuns(f.input);
+    expect(third.results).toContainEqual(expect.objectContaining({
+      settled: true, statusPublished: true, publicationHeadSha: liveHead,
+    }));
+    expect(f.statuses).toHaveLength(2);
+    expect(readPackReviewAuthority(prNumber, f.options)?.transitionSeq).toBe(current?.transitionSeq);
+  });
+
   it('Issue #2451: an acknowledged write without a GitHub success status stays unsettled and is retryable', async () => {
     const f = fixture();
     f.input.fixtureCurrentPrHeadSha = HEAD;
