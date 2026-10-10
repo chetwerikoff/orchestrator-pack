@@ -506,14 +506,18 @@ reporting `operationally_complete` or `merge-N done`:
    its `outcome=pass` with verified owned scratch cleanup counts.
 2. **Browser-GPT:** from the **actual Orca merge terminal**, invoke
    `npm run --silent chatgpt-browser-turn -- preflight --route pack-gpt-reviewer --project "$PROJECT_ID" --timeout-ms "$REMAINING_MS"`.
-   This selects **only** the pack GPT PR-review sender route, using the unchanged
-   `resolveGptBrowserConfig` and selected card for the *actual* profile/CDP pair
-   at invocation. Neither the skill nor operator supplies `--profile`,
-   `--cdp` or an alternative pair. The entrypoint uses only
-   `inspectCdpProfileBounded` (never writing `verifyProfile`) and bounded CDP
-   HTTP reachability, without opening tabs, claiming/sending messages, or
-   modifying the persistent CDP-owner record. `ORCA_TERMINAL_HANDLE` is
-   present/absent routing context only, **not** proof of its original generation.
+   Both existing canaries select their project via `--project "$PROJECT_ID"`; an unset or blank
+   `OPK_PROJECT_ID` is therefore not a mismatch for this preflight. A nonempty, different
+   environment selector still returns `project_selector_mismatch` before probing. This rule
+   is preflight-only and does not alter normal Browser-GPT turn/send behavior.
+   The Browser command selects only the pack GPT PR-review sender route, using the
+   unchanged `resolveGptBrowserConfig` and selected card for the *actual* profile/CDP pair
+   at invocation. Neither the skill nor operator supplies `--profile`, `--cdp` or an
+   alternative pair. The entrypoint uses only `inspectCdpProfileBounded` (never writing
+   `verifyProfile`) and bounded CDP HTTP reachability, without opening tabs,
+   claiming/sending messages, or modifying the persistent CDP-owner record.
+   `ORCA_TERMINAL_HANDLE` is present/absent routing context only, **not** proof of its
+   original generation.
    A different healthy Browser-GPT profile cannot rescue a failed selected pair.
    `probeProfileReady:no_existing_page` is not a failure proxy; zero existing
    tabs may be healthy for a new `turn`. A PASS does not certify future sends
