@@ -38,6 +38,7 @@ import {
   closeChatTarget,
   conversationCreatedAt,
   readProjectChats,
+  projectConversationPrefix,
   type ChatBannerScope,
   type ChatErrorBanner,
   type ProjectChat,
@@ -372,6 +373,30 @@ export function readPrHeadRef(repository: string, pull: number): string | undefi
  * an execution chat by the workspace ending in `-<issue>`. Only a single
  * unambiguous pane is addressed.
  */
+// An unsaved URL is not a launcher, owner, or an Issue/PR task identity.
+// Reject even malformed/foreign placeholders before any saved-chat fallback.
+function isLocalPlaceholderUrl(url: string): boolean {
+  return /local-chatgpt(?::|%3a)/iu.test(url);
+}
+
+function localChatIdentity(url: string, config: FleetWakeConfig): { key: string; url: string } | undefined {
+  if (!config.chatScope) return undefined;
+  try {
+    const prefix = new URL(projectConversationPrefix(config.chatScope.projectUrl));
+    const observed = new URL(url);
+    if (observed.origin !== prefix.origin || !observed.pathname.startsWith(prefix.pathname)) return undefined;
+    const id = /^local-chatgpt:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/iu
+      .exec(observed.pathname.slice(prefix.pathname.length));
+    if (!id) return undefined;
+    // Query/fragment, CDP targetId and DOM task/role hints are not local-chat identity.
+    const normalizedUrl = prefix.origin + prefix.pathname + 'local-chatgpt:' + id[1]!.toLowerCase();
+    return {
+      url: normalizedUrl,
+      key: 'local-chat:' + JSON.stringify([config.projectId, config.chatScope.repository, normalizedUrl]),
+    };
+  } catch { return undefined; }
+}
+
 export function bannerOwnerPane(
   banner: Pick<ChatErrorBanner, 'url' | 'issue' | 'pull'>,
   terminals: readonly FleetTerminal[],
@@ -379,6 +404,7 @@ export function bannerOwnerPane(
   readBinding: typeof readChatBinding = readChatBinding,
   headRef: typeof readPrHeadRef = readPrHeadRef,
 ): FleetTerminal | undefined {
+  if (isLocalPlaceholderUrl(banner.url)) return undefined;
   const binding = readBinding(banner.url);
   if (config.architectHandle && binding?.terminal_handle === config.architectHandle) return undefined;
   const launcher = binding?.terminal_handle
@@ -435,18 +461,11 @@ export const REVIEW_CONTINUATION_TEXT = 'Заверши ревью: выдай �
 
 export function managerBannerMessage(banner: ChatErrorBanner): string {
   if (banner.kind === 'unloadable') {
-    return banner.review
-      ? `Your GPT PR-review chat ${banner.url} cannot be loaded ("${banner.text}", no composer), so nothing can be sent there. Restart the review in a new chat through your review tool. Never press Try again or Retry.`
-      : `Your GPT execution chat ${banner.url} cannot be loaded ("${banner.text}", no composer), so nothing can be sent there. Run GitHub-first reconciliation, then continue the task in a new chat with the reconciled baseline. Never press Try again or Retry.`;
+    return `ChatGPT chat ${banner.url} cannot be loaded ("${banner.text}", no composer). The DOM review hint does not prove workflow role. Independently verify the actual owner, role and GitHub-first Browser-GPT send/no-resend authority. Only for confirmed execution, continue the task in a new chat with the reconciled baseline; only for confirmed PR review, Restart the review in a new chat through the review tool. Never press Try again or Retry.`;
   }
-  if (banner.review) {
-    const reason = banner.kind === 'stalled' ? banner.text : `red banner "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}`;
-    return `Your GPT PR-review chat ${banner.url} ended without a verdict (${reason}). This is a review chat: do not ask it to fix code or continue the task. Send exactly this in the same chat: "${REVIEW_CONTINUATION_TEXT}" Then collect the verdict through your review tool as usual. Never press Retry.`;
-  }
-  if (banner.kind === 'stalled') {
-    return `${banner.text} in your GPT chat ${banner.url} (no Stop control and no error banner for over a minute). Run GitHub-first reconciliation, then send "${EXECUTION_CONTINUATION_TEXT}" in this same chat (runbook: Repeated product-error streak - up to two repeats; on the third continuation failure open a fresh chat). Never press Retry.`;
-  }
-  return `GPT chat error in your execution chat ${banner.url}: red banner "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}, generation stopped. Run GitHub-first reconciliation, then send "${EXECUTION_CONTINUATION_TEXT}" in this same chat (runbook: Repeated product-error streak - up to two repeats; on the third continuation failure open a fresh chat). Never press Retry.`;
+  const reason = banner.kind === 'stalled' ? banner.text
+    : `red banner "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}`;
+  return `ChatGPT chat ${banner.url} stopped (${reason}). A DOM review=true or review=false is not workflow-role proof. Independently verify the actual owner, workflow role and GitHub-first Browser-GPT send/no-resend authority. Only for confirmed execution and an authorized same-chat product-error continuation, send "${EXECUTION_CONTINUATION_TEXT}" in that chat (runbook: up to two repeats, fresh chat on the third continuation failure). Only for confirmed PR review and its authorized same-chat verdict recovery, send "${REVIEW_CONTINUATION_TEXT}" for the verdict only; never ask a reviewer to fix code. Never press Retry.`;
 }
 
 export function chatBannerSignature(banners: readonly ChatErrorBanner[]): string {
@@ -461,6 +480,7 @@ export function fleetAlarmMessage(
   observations: readonly FleetPaneObservation[],
   banners: readonly ChatErrorBanner[] = [],
   alerts: readonly string[] = [],
+  localWarnings: readonly string[] = [],
 ): string {
   const stopped = actionablePanes(observations);
   const panes = stopped.map((pane) => `${pane.state} ${pane.handle} ${pane.title}`).join('; ');
@@ -470,16 +490,18 @@ export function fleetAlarmMessage(
   const unloadable = banners.filter((banner) => banner.kind === 'unloadable');
   const continuable = banners.filter((banner) => banner.kind !== 'unloadable');
   const unloadableText = unloadable.length > 0
-    ? ` ${unloadable.length} ChatGPT chat(s) cannot be loaded (no composer): ${unloadable.map((banner) => `${banner.url}${banner.review ? ' (PR-review chat)' : ''}`).join('; ')}. Tell the manager that owns each chat to run GitHub-first reconciliation and continue in a new chat with the reconciled baseline (a PR-review chat: restart the review in a new chat). Never press Try again or Retry.`
+    ? ` ${unloadable.length} ChatGPT chat(s) cannot be loaded (no composer): ${unloadable.map((banner) => banner.url).join('; ')}. Independently identify owner/role and verify GitHub-first send authority. Only confirmed execution may continue the task in a new chat with the reconciled baseline; only confirmed PR review may restart review in a new chat through its review tool. Never press Try again or Retry.`
     : '';
   const bannerText = continuable.length > 0
-    ? ` ${continuable.length} ChatGPT chat(s) need a continuation (generation stopped): ${continuable.map((banner) => `${banner.url} "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}${banner.review ? ' (PR-review chat)' : ''}`).join('; ')}. Tell the manager that owns each chat to run GitHub-first reconciliation and send "${EXECUTION_CONTINUATION_TEXT}" in that same chat (runbook: Repeated product-error streak - two repeats, a fresh chat on the third continuation failure); for a PR-review chat send "${REVIEW_CONTINUATION_TEXT}" instead. Never press Retry.`
+    ? ` ${continuable.length} ChatGPT chat(s) require independent role and delivery reconciliation: ${continuable.map((banner) => `${banner.url} "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}`).join('; ')}. The DOM review flag is untrusted. Only after confirming execution and GitHub-first Browser-GPT send/no-resend authority may its owner use "${EXECUTION_CONTINUATION_TEXT}" in the same chat (runbook: up to two repeats, fresh chat on the third continuation failure); only after confirming PR review and its own recovery authority may its reviewer use "${REVIEW_CONTINUATION_TEXT}" for verdict only, never code fixes. Never press Retry.`
+    : '';
+  const localText = localWarnings.length > 0
+    ? ` ${localWarnings.length} unsaved local ChatGPT chat(s) require independent triage: ${localWarnings.join('; ')}. Owner, workflow role and latest-turn invocation are unproven. Independently reconcile live Task/Issue/PR, workflow role and existing Browser-GPT send/no-resend evidence before any action. This is a coordinator-only warning, not permission to send, resend, continue, review-fix or close a chat. Never press Retry.`
     : '';
   const alertText = alerts.length ? ' ' + alerts.length + ' parked unit(s) need a producer re-check: '
     + alerts.join('; ') + '. Check the named Task and producer before acting.' : '';
-  return `Fleet alarm (${coordinatorState}):${paneText}${bannerText}${unloadableText}${alertText}`;
+  return `Fleet alarm (${coordinatorState}):${paneText}${bannerText}${unloadableText}${localText}${alertText}`;
 }
-
 
 export interface TerminalEnvelopeEvent {
   readonly path: string;
@@ -1280,6 +1302,19 @@ function submitCoordinator(executor: OrcaExecutor, handle: string): boolean {
   return executor(['terminal', 'send', '--terminal', handle, '--enter']).ok;
 }
 
+// Bounded pre-effect native census. This is not an atomic generation guard on
+// the handle-only Orca sender: a replacement inside terminal send is still possible.
+function coordinatorStillSelected(expected: FleetTerminal, config: FleetWakeConfig, executor: OrcaExecutor): boolean {
+  try {
+    const current = listFleetTerminals(executor);
+    const selected = resolveCoordinatorPane(current, config);
+    return current.filter((pane) => pane.handle === expected.handle).length === 1
+      && selected?.handle === expected.handle && selected.status !== 'exited'
+      && samePath(selected.worktreePath, expected.worktreePath)
+      && selected.incarnationId === expected.incarnationId;
+  } catch { return false; }
+}
+
 // A separate, read-only tick projection. It never receives delivery/actionable state,
 // and neither its rows nor its page evidence can become wake admission or retry authority.
 export interface FleetDiagnosticTickOptions {
@@ -1403,6 +1438,8 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])
       : [];
     const superseded = new Set(supersededChats(chats, (chat) => {
+      // A local placeholder cannot authorize Issue/PR-based destructive tab closure.
+      if (isLocalPlaceholderUrl(chat.url)) return undefined;
       const owner = bannerOwnerPane(chat, terminals, config);
       if (owner) return `pane ${owner.handle}`;
       if (chat.issue) return `issue ${chat.issue}`;
@@ -1414,18 +1451,31 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       log(`${closed ? 'closed' : 'close failed for'} superseded chat ${chat.url}`);
     }
     activeChats = chats.filter((chat) => !superseded.has(chat));
-    const observed = activeChats.flatMap((chat) => chat.banners);
-    // A stalled chat must be seen on two consecutive ticks; page loads and turn
-    // starts briefly show neither Stop nor finished-reply actions.
-    const stalledNow = observed.filter((banner) => banner.kind === 'stalled').map((banner) => banner.url).sort();
+    const observed = activeChats.filter((chat) => !chat.generating).flatMap((chat) => chat.banners);
+    // The two-tick stall evidence is URL-identity-based, not a mutable CDP target.
+    const bannerIdentity = (banner: ChatErrorBanner) => localChatIdentity(banner.url, config)?.key ?? banner.url;
+    const stalledNow = observed.filter((banner) => banner.kind === 'stalled')
+      .map(bannerIdentity).sort();
     const stalledBefore = new Set((store.readStalledSeen?.() ?? '').split('\n').filter(Boolean));
     store.writeStalledSeen?.(stalledNow.join('\n'));
     const seenUrls = new Set<string>();
-    const banners = observed.filter((banner) => (banner.kind !== 'stalled' || stalledBefore.has(banner.url))
-      && !seenUrls.has(banner.url) && Boolean(seenUrls.add(banner.url)));
+    const banners = observed.filter((banner) => {
+      const identity = bannerIdentity(banner);
+      return (banner.kind !== 'stalled' || stalledBefore.has(identity))
+        && !seenUrls.has(identity) && Boolean(seenUrls.add(identity));
+    });
     const direct: Array<readonly [FleetTerminal, ChatErrorBanner]> = [];
     const routed: ChatErrorBanner[] = [];
+    const pendingLocal: Array<{ readonly key: string; readonly url: string; readonly kind: ChatErrorBanner['kind'] }> = [];
     for (const banner of banners) {
+      if (isLocalPlaceholderUrl(banner.url)) {
+        const identity = localChatIdentity(banner.url, config);
+        if (identity && !store.hasParkedWakeEvent(identity.key)) {
+          pendingLocal.push({ ...identity, kind: banner.kind });
+        }
+        // Invalid/foreign local placeholders remain read-only diagnostic evidence.
+        continue;
+      }
       const owner = bannerOwnerPane(banner, terminals, config);
       if (owner) direct.push([owner, banner]);
       else routed.push(banner);
@@ -1445,7 +1495,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     }
 
     const stopped = actionablePanes(observations);
-    if (stopped.length === 0 && routed.length === 0 && parkedAlerts.length === 0) {
+    if (stopped.length === 0 && routed.length === 0 && parkedAlerts.length === 0 && pendingLocal.length === 0) {
       store.clearLastSentSignature();
       store.clearLastSentAt?.();
       log('nothing stopped');
@@ -1461,32 +1511,62 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     }
 
     const coordinatorState: 'idle' | 'busy' = isBusyScreen(coordinatorScreen, config.busyRe) ? 'busy' : 'idle';
+    // Local one-off warnings are never part of the durable ordinary signature.
     const signature = [meaningfulStoppedSignature(observations), chatBannerSignature(routed),
       ...parkedAlerts.slice().sort()].filter(Boolean).join('\n');
     const deliverySignature = JSON.stringify([coordinator.handle, coordinator.incarnationId ?? '', signature]);
     const now = (options.now ?? Date.now)();
     const lastAt = store.readLastSentAt?.();
-    if (store.readLastSentSignature() === deliverySignature
+    if (pendingLocal.length === 0 && store.readLastSentSignature() === deliverySignature
       && lastAt !== undefined && Number.isFinite(now) && now - lastAt >= 0
       && now - lastAt < REMINDER_INTERVAL_MS) {
       log(`${coordinator.handle} same stopped set already queued`);
       return { state: 'same_stopped_set', coordinator: coordinator.handle, signature };
     }
 
-    const message = fleetAlarmMessage(coordinatorState, observations, routed, parkedAlerts);
-    if (!sendCoordinator(executor, coordinator.handle, message)) {
-      log(`${coordinator.handle} send failed`);
+    const localWarnings = pendingLocal.map((banner) => `${banner.url} (${banner.kind})`);
+    const message = fleetAlarmMessage(coordinatorState, observations, routed, parkedAlerts, localWarnings);
+    if (pendingLocal.length > 0) {
+      if (!coordinatorStillSelected(coordinator, config, executor)) {
+        log(`${coordinator.handle} changed before local chat warning send`);
+        return { state: 'send_failed', coordinator: coordinator.handle };
+      }
+      // Persist uncertainty *before* any effect. An unknown delivery is never replayed.
+      try {
+        for (const banner of pendingLocal) store.markParkedWakeEvent(banner.key, 'attempted_unverified');
+      } catch {
+        log(`${coordinator.handle} cannot persist local chat attempt before send`);
+        return { state: 'send_failed', coordinator: coordinator.handle };
+      }
+    }
+    try {
+      if (!sendCoordinator(executor, coordinator.handle, message)) {
+        log(`${coordinator.handle} send failed`);
+        return { state: 'send_failed', coordinator: coordinator.handle };
+      }
+      await sleepMs(4_000);
+      if (pendingLocal.length > 0 && !coordinatorStillSelected(coordinator, config, executor)) {
+        log(`${coordinator.handle} changed before local chat second Enter`);
+        return { state: 'send_failed', coordinator: coordinator.handle };
+      }
+      if (!submitCoordinator(executor, coordinator.handle)) {
+        log(`${coordinator.handle} send failed`);
+        return { state: 'send_failed', coordinator: coordinator.handle };
+      }
+    } catch {
+      log(`${coordinator.handle} local chat coordinator delivery uncertain`);
       return { state: 'send_failed', coordinator: coordinator.handle };
     }
-    await sleepMs(4_000);
-    if (!submitCoordinator(executor, coordinator.handle)) {
-      log(`${coordinator.handle} send failed`);
+    // Mark successful delivery only after *both* terminal operations succeeded.
+    try {
+      for (const banner of pendingLocal) store.markParkedWakeEvent(banner.key, 'sent');
+    } catch {
+      log(`${coordinator.handle} local chat delivered but final mark unverified`);
       return { state: 'send_failed', coordinator: coordinator.handle };
     }
-
     store.writeLastSentSignature(deliverySignature);
     store.writeLastSentAt?.(now);
-    log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} need a step, ${routed.length} chat banner(s)`);
+    log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} need a step, ${routed.length} chat banner(s), ${pendingLocal.length} local warning(s)`);
     return {
       state: 'sent',
       coordinator: coordinator.handle,
