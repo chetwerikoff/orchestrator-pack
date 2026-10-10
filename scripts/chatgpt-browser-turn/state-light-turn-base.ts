@@ -5212,6 +5212,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   let retirementCleanupRequired = outcome.result.retirement_cleanup_required === true;
   const incidents = [...outcome.result.incidents];
   const pageLost = browserOrPageDefinitelyLost(outcome.page, outcome.browser);
+  let observedNotSent = false;
 
   // Only prepared state proves no dispatch. A dispatching record is possible
   // delivery even with a zero observed count; preserve its recovery identity.
@@ -5225,7 +5226,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
         outcome.result.configured_profile_key,
         outcome.result.invocation_id,
       );
-      if (observation.phase === 'prepared') {
+      if (observation.phase === 'prepared' && outcome.result.send_attempted !== true) {
         transitionStateLightTurnObservation({
           profileKey: outcome.result.configured_profile_key,
           invocationId: outcome.result.invocation_id,
@@ -5234,6 +5235,9 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
           sendCount: 0,
           sendWitness: 'numeric_send_count',
         });
+        observedNotSent = true;
+      } else if (observation.phase === 'not_sent' && outcome.result.send_attempted !== true) {
+        observedNotSent = true;
       }
       if (observation.phase === 'dispatching') {
         outcome = {
@@ -5280,9 +5284,38 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     pagePresent: cleanupAuthorityProven,
     pageLost,
   });
-  const pageAction = (outcome.result.send_count >= 1 || outcome.result.send_attempted === true) && outcome.result.state !== 'ok'
+  let pageAction = (outcome.result.send_count >= 1 || outcome.result.send_attempted === true) && outcome.result.state !== 'ok'
     ? 'preserve'
     : requestedPageAction;
+  if (pageAction === 'close' && outcome.result.send_count === 0 && outcome.ownedTypedPayload) {
+    // Only the exact text left by this invocation on its proven created tab
+    // can be removed, and only after a durable prepared -> not_sent proof.
+    let cleared = false;
+    if (observedNotSent && !pageLost && outcome.result.send_attempted !== true) {
+      try {
+        const composer = outcome.page.locator(COMPOSER_SELECTOR);
+        const text = await readComposerTextForSendDelivery(composer, Date.now() + MAX_LOCAL_READ_WAIT_MS);
+        if (text === outcome.ownedTypedPayload) {
+          await composer.fill('', { timeout: MAX_LOCAL_READ_WAIT_MS });
+          cleared = await readComposerTextForSendDelivery(
+            composer, Date.now() + MAX_LOCAL_READ_WAIT_MS,
+          ) === '';
+        }
+      } catch {
+        // Keep the tab and report that safe cleanup could not be confirmed.
+      }
+    }
+    if (!cleared) {
+      pageAction = 'preserve';
+      incidents.push('owned_composer_cleanup_unavailable');
+      const cleanupIncident: BrowserIncident = {
+        eventClass: 'owned_composer_cleanup_unavailable',
+        symptom: 'typed_payload_not_proven_cleared',
+        action: 'preserve_page_without_modifying_foreign_text',
+      };
+      if (!appendIncident(cleanupIncident, outcome.result.invocation_id)) journalWriteFailed = true;
+    }
+  }
   if (pageAction === 'close') {
     cleanup = await boundedResourceCleanup(
       () => outcome.page.close(),
