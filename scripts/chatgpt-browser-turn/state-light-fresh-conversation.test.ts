@@ -122,6 +122,7 @@ import { deriveComposerInsertionBudgetMs } from './state-light-turn-base.ts';
 import { wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
   EXPLICIT_CANCELLATION_AUTHORITY,
+  isSupportedChatGptConversationUrl,
   readRecoveryAuthoritativeUserMessages,
   stopOwnedGeneration,
 } from './state-light-cancellation.ts';
@@ -140,6 +141,7 @@ import {
 } from './product-page-selectors.ts';
 import {
   acquireStateLightNewChatSendSlot,
+  conversationUuidFromUrl,
   newChatSendSlotEnabled,
   isBlankProjectSurfaceUrl,
   openBlankProjectChatSurface,
@@ -1326,6 +1328,15 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(ownedConversationIdentityMatches(bare, project)).toBe(true);
   });
 
+  it('retains legacy-host existing-conversation UUID receipts without allowing a legacy-host fresh claim', () => {
+    const uuid = '11111111-1111-4111-8111-111111111111';
+    const legacy = `https://chat.openai.com/c/${uuid}`;
+    expect(conversationUuidFromUrl(legacy)).toBe(uuid);
+    expect(isSupportedChatGptConversationUrl(legacy)).toBe(true);
+    expect(ownedConversationIdentityMatches(legacy, `https://chatgpt.com/c/${uuid}`)).toBe(true);
+    expect(tryClaimStateLightFreshConversation('collision-profile', legacy, 'legacy-claim')).toBe('contended');
+  });
+
   it('rejects different conversation uuids', () => {
     const left = 'https://chatgpt.com/c/6a6c32b2-51a0-83ec-9fe6-521e171ba785';
     const right = 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111';
@@ -1418,6 +1429,51 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(prepared).toEqual({ state: 'ready' });
     expect(page.goto).not.toHaveBeenCalled();
     expect(navigation.snapshotGoto()).toBe(0);
+  });
+
+  it('preserves an unreadable canonical claim after a project navigation redirects back to a conversation', async () => {
+    const profileKey = 'redirected-canonical-claim';
+    const { writeFileSync } = await import('node:fs');
+    const { sha256 } = await import('./storage-common.ts');
+    const claimDir = join(stateDir, profileKey, 'state-light-fresh-claims');
+    mkdirSync(claimDir, { recursive: true });
+    const claimPath = join(claimDir, `${sha256(SHARED_CANONICAL_CONV)}.json`);
+    writeFileSync(claimPath, '{partially-written-wx-claim');
+
+    let currentUrl = SHARED_CONV;
+    const page = {
+      goto: vi.fn(async () => { currentUrl = SHARED_CONV; }),
+      url: vi.fn(() => currentUrl),
+      locator: vi.fn(() => scalarLocator({ count: vi.fn(async () => 0) })),
+    };
+    const result = await prepareStateLightFreshConversation(page, {
+      cdp: 'http://127.0.0.1:9222', profile: '/tmp/profile',
+      newChat: true, projectUrl: PROJECT_URL, timeoutMs: 5_000,
+    }, profileKey, 'other-invocation');
+
+    expect(result).toEqual({
+      state: 'ui_contract_mismatch', cause: 'fresh_conversation_surface_unavailable',
+    });
+    expect(page.goto).toHaveBeenCalled();
+    expect(readFileSync(claimPath, 'utf8')).toBe('{partially-written-wx-claim');
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CANONICAL_CONV, 'other-invocation')).toBe('contended');
+  });
+
+  it('never treats an unrelated nested project route as a ready blank composer', async () => {
+    const invalidRoute = PROJECT_CONVERSATION_ROOT + '/other-route';
+    const page = {
+      goto: vi.fn(async () => undefined),
+      url: vi.fn(() => invalidRoute),
+      locator: vi.fn(() => scalarLocator({ count: vi.fn(async () => 0) })),
+    };
+    const result = await prepareStateLightFreshConversation(page, {
+      cdp: 'http://127.0.0.1:9222', profile: '/tmp/profile',
+      newChat: true, projectUrl: PROJECT_URL, timeoutMs: 5_000,
+    }, 'nested-route', 'other-invocation');
+    expect(result).toEqual({
+      state: 'ui_contract_mismatch', cause: 'fresh_conversation_surface_unavailable',
+    });
+    expect(page.goto).toHaveBeenCalled();
   });
 
   it('enforces the per-invocation navigation budget', async () => {
@@ -1974,6 +2030,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     const output = join(integrationStateDir, 'recovered.txt');
     let sends = 0;
     let lost = false;
+    let recoveredClockAdvanced = false;
     let composerText = '';
     let initialUrl = PROJECT_URL;
 
@@ -2026,7 +2083,15 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     const recoveredPage: any = {
       __fakeBrowserGptPage: true,
       goto: vi.fn(async () => undefined),
-      url: vi.fn(() => SHARED_CONV),
+      url: vi.fn(() => {
+        if (lost && !recoveredClockAdvanced) {
+          // The invocation's 50-ms pre-send deadline has expired, while
+          // post-send recovery still has its own 2x observation window.
+          recoveredClockAdvanced = true;
+          mocks.nowMs += 60;
+        }
+        return SHARED_CONV;
+      }),
       isClosed: vi.fn(() => false),
       waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
       close: recoveredClose,
@@ -2099,6 +2164,8 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
       sha256: '574877027739d7ff52e587b7003cf11b863f623083bb43607417c82cc38cfd8b',
     });
     expect(sends).toBe(1);
+    expect(recoveredClockAdvanced).toBe(true);
+    expect(mocks.nowMs).toBeGreaterThanOrEqual(10_060);
     expect(mocks.browserQueue).toHaveLength(0);
     expect(initialClose).not.toHaveBeenCalled();
     expect(foreignStop).not.toHaveBeenCalled();
