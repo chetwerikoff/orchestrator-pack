@@ -4385,6 +4385,27 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
         send_count: 1,
       }),
     })],
+    ['contradictory-dispatch-phase', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot,
+      terminalResult: storedTerminalTurnResult('inv-2469-first-attempt', {
+        state: 'driver_error', cause: 'connect_over_cdp_failed', send_count: 0,
+        diagnostics: { persisted_observation: { phase: 'dispatching', send_count: 0 } },
+      }),
+    })],
+    ['conflicting-comment-provenance', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot,
+      terminalResult: storedTerminalTurnResult('inv-2469-first-attempt', {
+        state: 'driver_error', cause: 'connect_over_cdp_failed', send_count: 0,
+        source_comment_reconciliation: 'conflict',
+      }),
+    })],
+    ['contradictory-send-flag', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot,
+      terminalResult: storedTerminalTurnResult('inv-2469-first-attempt', {
+        state: 'driver_error', cause: 'connect_over_cdp_failed', send_count: 0,
+        send_attempted: 'unknown',
+      }),
+    })],
     ['started-without-terminal', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
       slotId: slot.slotId, ordinal: slot.ordinal, lifecycle: 'invocation_started' as const,
       attemptOrdinal: 1, invocationId: 'inv-2469-first-attempt',
@@ -4428,6 +4449,73 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
       expect(getPackReviewRun(f.runId, f.options)?.status).toBe('reviewing');
     },
   );
+
+  it('returns a parsable same-PR reconcile action, never retry/reset', async () => {
+    const f = seedOrphan();
+    f.expire();
+    const output = await reconcileStalePackReviewRuns(f.input);
+    const terminal = output.results.find((row) => row.runId === f.runId && row.terminalized === true)!;
+    const action = String(terminal.nextAction);
+    expect(action).toContain('node --experimental-strip-types scripts/pack-review-runner.ts reconcile');
+    expect(action).toContain('--pr-number 2469');
+    expect(action).not.toMatch(/\\b(?:retry|reset)\\b/);
+    const args = parseArgs(action.split(' ').slice(4));
+    expect(args).toMatchObject({ sourceRepoRoot: repoRoot, repoSlug, prNumber });
+  });
+
+  it('does not turn zero-judgment failure into permission to send without observation', async () => {
+    const f = seedOrphan();
+    f.expire();
+    await reconcileStalePackReviewRuns(f.input);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const invocations: string[] = [];
+    const result = await startPackReview({
+      ...f.options,
+      sourceRepoRoot: repoRoot, prNumber, headSha: HEAD_A,
+      tier: 'T2', claimMode: 'preacquired',
+      fixturePrState: 'OPEN', fixtureRepoSlug: repoSlug,
+      fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
+      fixtureIssueBody: '```complexity-tier\\ntier: T2\\n```',
+      fixtureIssueNumber: prNumber,
+      fixtureGptAttemptObserver: async () => ({
+        state: 'observation_unavailable' as const, replacementEligible: false,
+      }),
+      fixtureAfterGptInvocationBound: async ({ slotId }) => { invocations.push(slotId); },
+      fixtureRequiredStatusWriter: async () => {},
+    });
+    expect(result).toMatchObject({
+      ok: false, created: false, runId: f.runId,
+      reason: 'observation_unavailable', replacementEligible: false,
+    });
+    expect(invocations).toEqual([]);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([]);
+  });
+
+  it('preserves failure-only notification channel across repeated 0/3 reconciliation', async () => {
+    const f = seedOrphan();
+    updatePackReviewRun(f.runId, {
+      workerNotificationBinding: {
+        schemaVersion: 1, runtime: 'cursor', id: 'synthetic-worker-2469',
+        generation: 'synthetic-generation', workspacePath: '/synthetic/worktree',
+        headSha: HEAD_A,
+      },
+    } as unknown as Parameters<typeof updatePackReviewRun>[1], f.options);
+    f.expire();
+    const sent: string[] = [];
+    const input = {
+      ...f.input,
+      fixtureWorkerNotifier: async (request: { idempotencyKey: string }) => {
+        sent.push(request.idempotencyKey);
+        return { state: 'submitted' as const, reason: 'synthetic-notification-sent' };
+      },
+    };
+    await reconcileStalePackReviewRuns(input);
+    await reconcileStalePackReviewRuns(input);
+    expect(sent).toEqual([`worker-notification:no-judgment:${f.runId}:${HEAD_A}`]);
+    expect(getPackReviewRun(f.runId, f.options)?.deliveryOutcomes.noJudgmentWorkerNotification)
+      .toMatchObject({ state: 'succeeded' });
+  });
 
   it('republishes same-run pending after a delayed zero-judgment error finishes', async () => {
     const f = seedOrphan();
