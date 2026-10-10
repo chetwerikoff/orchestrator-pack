@@ -5364,6 +5364,9 @@ export const __testComposerMutation = {
 
 export const __testSendDelivery = {
   dispatchStateLightSendAndObserveDelivery,
+  affirmativePreActionabilityTimeout,
+  waitForFreshSendButton,
+  prepareFreshComposerDraft,
 };
 
 export type StateLightTurnDependencies = {
