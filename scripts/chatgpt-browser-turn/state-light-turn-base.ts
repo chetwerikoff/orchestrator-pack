@@ -2100,6 +2100,129 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
   };
 }
 
+const FRESH_SEND_WINDOW_MS = 30_000;
+const FRESH_SEND_RESERVE_MS = 2 * FRESH_SEND_WINDOW_MS;
+const FRESH_SEND_PREPARE_RESERVE_MS = 3 * MAX_LOCAL_READ_WAIT_MS;
+
+/** A Stop already present before our click is foreign/busy, not this turn's delivery. */
+async function readFreshStopVisible(page: any, deadlineMs: number): Promise<boolean | null> {
+  try {
+    const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+    if (waitMs <= 0) return null;
+    const control = page.locator(RENDERED_STOP_BUTTON_SELECTOR);
+    const count = await boundedBrowserRead(
+      Promise.resolve(control.count()), waitMs, 'fresh_stop_read_timeout',
+    );
+    if (!Number.isSafeInteger(count) || count < 0) return null;
+    if (count === 0) return false;
+    if (typeof control.isVisible !== 'function') return null;
+    return Boolean(await boundedBrowserRead(
+      Promise.resolve(control.isVisible()), waitMs, 'fresh_stop_visibility_timeout',
+    ));
+  } catch {
+    return null;
+  }
+}
+
+async function prepareFreshComposerDraft(
+  page: any,
+  deadlineMs: number,
+): Promise<'empty' | 'cleared' | 'unavailable'> {
+  const composer = page.locator(COMPOSER_SELECTOR);
+  const original = await readComposerTextForSendDelivery(composer, deadlineMs);
+  if (original === undefined) return 'unavailable';
+  if (original.length === 0) return 'empty';
+  try {
+    const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+    if (waitMs <= 0) return 'unavailable';
+    await composer.fill('', { timeout: waitMs });
+  } catch {
+    return 'unavailable';
+  }
+  return await readComposerTextForSendDelivery(composer, deadlineMs) === '' ? 'cleared' : 'unavailable';
+}
+
+async function waitForFreshSendButton(
+  page: any,
+  sendButton: any,
+  assertOwnerAndPage: () => void,
+): Promise<'enabled' | 'never_enabled' | 'busy'> {
+  const startedAt = Date.now();
+  // Both windows have their full 30s; polls do not sleep to a window boundary
+  // when a button becomes enabled.
+  for (let windowIndex = 1; windowIndex <= 2; windowIndex++) {
+    const windowEnd = startedAt + windowIndex * FRESH_SEND_WINDOW_MS;
+    while (Date.now() < windowEnd) {
+      assertOwnerAndPage();
+      const stop = await readFreshStopVisible(page, windowEnd);
+      if (stop !== false) return 'busy';
+      const remainingMs = windowEnd - Date.now();
+      if (remainingMs <= 0) break;
+      try {
+        const count = await boundedBrowserRead(
+          Promise.resolve(sendButton.count()),
+          Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs),
+          'fresh_send_button_count_timeout',
+        );
+        if (count === 1 && typeof sendButton.isVisible === 'function'
+          && typeof sendButton.isEnabled === 'function') {
+          const actionable = await boundedBrowserRead(
+            Promise.all([sendButton.isVisible(), sendButton.isEnabled()]),
+            Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, windowEnd - Date.now())),
+            'fresh_send_button_actionability_timeout',
+          );
+          if (actionable[0] === true && actionable[1] === true) {
+            assertOwnerAndPage();
+            return 'enabled';
+          }
+        }
+      } catch {
+        // An unreadable actionability state is not affirmative permission to click.
+        return 'busy';
+      }
+      const waitMs = Math.min(250, Math.max(0, windowEnd - Date.now()));
+      if (waitMs > 0) await sleep(page, waitMs);
+    }
+  }
+  return 'never_enabled';
+}
+
+/**
+ * Playwright's timeout name alone cannot prove no click. A positive actionability
+ * log saying the target was disabled is required; any recorded click action
+ * invalidates that proof. Missing/truncated logs fail closed.
+ */
+function affirmativePreActionabilityTimeout(actionError: string | undefined): boolean {
+  if (!actionError || !/^(?:TimeoutError):/u.test(actionError)
+    || !/Call log:/u.test(actionError)
+    || !/\belement is not enabled\b/u.test(actionError)
+    || /performing click action|click done|dispatch(?:ed|ing)/iu.test(actionError)) return false;
+  return true;
+}
+
+async function freshRetryDomGuards(input: {
+  page: any;
+  browser: any;
+  composer: any;
+  markerPayload: string;
+  baselineUserNodeCount: number;
+  deadlineMs: number;
+}): Promise<boolean> {
+  if (browserOrPageDefinitelyLost(input.page, input.browser)) return false;
+  try {
+    if (await readFreshStopVisible(input.page, input.deadlineMs) !== false) return false;
+    const typed = await readComposerTextForSendDelivery(input.composer, input.deadlineMs);
+    if (typed !== input.markerPayload) return false;
+    const observed = await readPageObservation(
+      input.page, undefined, undefined, true, input.deadlineMs,
+    );
+    return !observed.transcriptIncomplete && observed.snapshot?.complete === true
+      && observed.messages.filter((message) => message.role === 'user').length === input.baselineUserNodeCount;
+  } catch {
+    return false;
+  }
+}
+
 async function waitForComposer(
   page: any,
   invocationDeadlineMs: number,
