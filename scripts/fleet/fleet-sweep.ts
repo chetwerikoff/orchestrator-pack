@@ -718,7 +718,7 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
     const previous = store.readPaneWait?.(terminal.handle);
     // Acknowledgment-only retention belongs to the previous Task/incarnation.
     // A literal final PARKED line still needs no Task or generation proof.
-    const retained = outcome.acknowledgment && previous?.binding === binding ? previous.wait : undefined;
+    const retained = outcome.acknowledgment && previous && previous.binding === binding ? previous.wait : undefined;
     const baseState = classifyFleetPane(screen, terminal.handle, store, busyRe);
     // Only this new branch consults native OpenCode/liveness metadata; the
     // existing classifier and all other agents retain their original inputs.

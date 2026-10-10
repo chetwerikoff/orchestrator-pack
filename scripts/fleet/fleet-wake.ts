@@ -1573,7 +1573,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     }
     for (const pane of stopped) paneStates[pane.handle]!.sent = true;
     for (const handle of bareAlerts) paneStates[handle]!.sent = true;
-    store.writeLastSentSignature(nowSignature);
+    store.writeLastSentSignature(JSON.stringify({ panes: paneStates, routed: routedSignature, coordinator: coordinatorKey }));
     if (ordinaryDue) store.writeLastSentAt?.(now);
     log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} pane changes, ${bareAlerts.length} bare shells, ${pendingRouted.length} chat banner(s), ${deliverLocal.length} local warning(s), ${deliverPermission.length} permission warning(s)`);
     return {
