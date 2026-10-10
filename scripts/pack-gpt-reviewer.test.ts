@@ -10,7 +10,7 @@ import {
   runGptPackReview,
   type GptReviewDependencies,
 } from './lib/pack-gpt-reviewer.ts';
-import { runPackGptReviewCommand } from './pack-gpt-review.ts';
+import { packGptReviewUsage, parsePackGptReviewArgs, runPackGptReviewCommand } from './pack-gpt-review.ts';
 import {
   normalizePackReviewer,
   packReviewerSelectorErrorMessage,
@@ -451,4 +451,50 @@ describe('GPT pack reviewer adapter', () => {
     expect(execution.exitCode).toBe(1);
     expect(observedTimeout).toBe(1_200);
   });
+  it('does not bind GPT for the canonical route and forwards only a supplied explicit reviewer', async () => {
+    const ambient: NodeJS.ProcessEnv = {
+      HOME: '/tmp/fixture-home', PACK_REVIEWER: 'codex',
+      PACK_REVIEW_BOUND_REVIEWER: 'claude',
+    };
+    const original = { ...ambient };
+    const seen: Array<Parameters<typeof import('./pack-review-runner.ts').startPackReview>[0]> = [];
+    const startReview = vi.fn(async (input: Parameters<typeof import('./pack-review-runner.ts').startPackReview>[0]) => {
+      seen.push(input);
+      return { ok: false, created: false, reason: 'fixture-no-start', prNumber: input.prNumber };
+    });
+    await runPackGptReviewCommand({ prNumber: 99 }, {
+      env: ambient, startReview, stderr: { write: () => undefined },
+    });
+    await runPackGptReviewCommand({ prNumber: 99, reviewer: 'gpt' }, {
+      env: ambient, startReview, stderr: { write: () => undefined },
+    });
+    expect(startReview).toHaveBeenCalledTimes(2);
+    expect(seen[0]?.reviewerOverride).toBeUndefined();
+    expect(seen[1]?.reviewerOverride).toBe('gpt');
+    expect(ambient).toEqual(original);
+  });
+
+  it('validates CLI collisions, missing and invalid values before any runner launch', async () => {
+    expect(parsePackGptReviewArgs(['--pr-number', '42', '--reviewer', 'claude'])).toMatchObject({
+      prNumber: 42, reviewer: 'claude',
+    });
+    for (const args of [
+      ['--pr-number', '42', '--reviewer'],
+      ['--pr-number', '42', '--reviewer', ''],
+      ['--pr-number', '42', '--reviewer', '--timeout-seconds', '30'],
+      ['--pr-number', '42', '--reviewer', 'not-a-reviewer'],
+    ]) expect(() => parsePackGptReviewArgs(args)).toThrow(/--reviewer requires/);
+    expect(packGptReviewUsage()).not.toContain('binds GPT');
+    expect(packGptReviewUsage()).toContain('explicit --reviewer > explicit PACK_REVIEW_BOUND_REVIEWER');
+    const startReview = vi.fn(async () => ({ ok: true, created: true }));
+    const execution = await runPackGptReviewCommand({
+      prNumber: 42, reviewer: 'malformed' as 'gpt',
+    }, {
+      startReview, env: { PACK_REVIEW_BOUND_REVIEWER: 'claude' },
+      stderr: { write: () => undefined },
+    });
+    expect(execution).toMatchObject({ exitCode: 1, result: { created: false } });
+    expect(startReview).not.toHaveBeenCalled();
+  });
+
 });
