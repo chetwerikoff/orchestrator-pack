@@ -61,7 +61,7 @@ const INITIAL_FINAL_FORMAT = [
   'FINAL INSTRUCTION: Reply ONLY with exact NO_FINDINGS OR one whole {"findings":[...]} JSON object with at least one valid finding.',
 ].join('\n');
 
-function repairFormatPrompt(firstRaw: string): string {
+function repairFormatPrompt(firstRaw: string, source: ReviewSource): string {
   return [
     'Format correction only in the SAME Claude review session. Do not begin a new review.',
     'Preserve all real findings in the preceding answer; do not suppress or downgrade them.',
@@ -70,7 +70,7 @@ function repairFormatPrompt(firstRaw: string): string {
     'Output one entire JSON object with a nonempty findings array. Every finding requires',
     'type (scope-violation|spec|quality|test|ci|security), nonempty code,',
     'severity (blocking|non-blocking), path (nonempty string or null), nonempty summary,',
-    'and the exact invocation source. Optional details/suggested_fix must be strings.',
+    `and source exactly ${source}. Optional details/suggested_fix must be strings.`,
     'No prose, fences, wrapper, bare array, or further analysis. A repaired NO_FINDINGS',
     'is forbidden, even if the preceding answer narrates a clean result; fail closed.',
     'FINAL INSTRUCTION: Reply ONLY with one whole {"findings":[...]} JSON object containing at least one valid finding; NEVER NO_FINDINGS.',
@@ -160,7 +160,8 @@ export async function runClaudePackReview(
     return typeof child.exitCode === 'number' && child.exitCode > 0 ? child.exitCode : 1;
   }
 
-  const first = await callClaude(`${promptResult.reviewStdout}\n\n${INITIAL_FINAL_FORMAT}`, false);
+  const initialFormat = INITIAL_FINAL_FORMAT.replace('source: the invocation source;', `source: exactly ${source};`);
+  const first = await callClaude(`${promptResult.reviewStdout}\n\n${initialFormat}`, false);
   if (!first) return 1;
   if (!completedSuccessfully(first)) return reportChildFailure(first);
 
@@ -168,7 +169,7 @@ export async function runClaudePackReview(
   if (!acceptsClaudeRawReview(acceptedRaw, source, true)) {
     // An actual exit-zero empty answer is a format failure, not a transport failure.
     // Only this one format-specific second child may use the remaining original budget.
-    const repaired = await callClaude(repairFormatPrompt(first.stdout), true);
+    const repaired = await callClaude(repairFormatPrompt(first.stdout, source), true);
     if (!repaired) return 1;
     if (!completedSuccessfully(repaired)) return reportChildFailure(repaired);
     if (!acceptsClaudeRawReview(repaired.stdout, source, false)) {
