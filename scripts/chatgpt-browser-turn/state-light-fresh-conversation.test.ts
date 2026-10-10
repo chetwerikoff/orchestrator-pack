@@ -1423,7 +1423,9 @@ describe('state-light fresh conversation collision recovery', () => {
       expireOnNextClockRead?: boolean;
     };
     const scenarios: BranchScenario[] = [
-      { branch: 'readiness_before_click', ready: [true, false] },
+      // The composer remains present but unready through the new bounded
+      // click/fill attempt; a recovered composer is tested separately.
+      { branch: 'readiness_before_click', ready: [true, false, false] },
       { branch: 'budget_before_click', ready: [true, true], expireAfterEvaluate: 2 },
       { branch: 'after_click', ready: [true, true], expireAfterClick: true },
       { branch: 'budget_before_fill', ready: [true, true], expireAfterClick: true, expireOnNextClockRead: true },
@@ -1465,7 +1467,8 @@ describe('state-light fresh conversation collision recovery', () => {
         );
         expect(composer.evaluate).toHaveBeenCalled();
         expect(evaluateCount).toBe(scenario.ready.length);
-        expect(composer.click).toHaveBeenCalledTimes(scenario.branch === 'readiness_before_click' || scenario.branch === 'budget_before_click' ? 0 : 1);
+        expect(composer.click).toHaveBeenCalledTimes(scenario.branch === 'budget_before_click' ? 0 : 1);
+        expect(composer.fill).toHaveBeenCalledTimes(scenario.branch === 'readiness_before_click' ? 1 : 0);
         expect(result).toMatchObject({
           state: 'driver_error',
           cause: 'composer_mutation_budget_exhausted',
