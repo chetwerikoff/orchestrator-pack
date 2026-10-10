@@ -175,6 +175,62 @@ replay that same key after an uncertain/partial send. The current no-coordinator
 path returns `no_orchestrator` without any new unit Wake or Reminder.
 A failed terminal read skips that tick rather than acting on incomplete evidence.
 
+### Unsaved ChatGPT local banners — Issue #2471
+
+On the existing selected-project CDP snapshot, only a complete
+`/c/local-chatgpt:<uuid>` path under the exact configured project conversation
+prefix is eligible for the **coordinator-only** local banner warning. Query and
+fragment are discarded; UUID case is normalized. The once-per-local key includes
+the selected project, repository and the **full normalized provisional URL**, not
+a reusable CDP target ID. Missing/malformed/foreign local URLs remain read-only
+diagnostic evidence. Generating chats do not alarm; a stalled response requires
+two consecutive observations. A visible red error/Retry or an unloadable chat
+(no composer) may qualify immediately, but the notifier **never presses Retry**,
+Stop, or browser-send controls.
+
+**No local banner is delivered to a worker, manager or architect pane.** A
+`local-chatgpt:` placeholder cannot use a chat binding, a guessed Task/Issue/PR,
+branch, worktree, inherited `ORCA_TERMINAL_HANDLE` or native pane incarnation
+to select an owner, nor may it be closed through the Issue-based superseded-chat
+heuristic. A local warning explicitly states that its owner, workflow role and
+current-turn invocation are **unproven**; the coordinator independently verifies
+live Task/Issue/PR and existing Browser-GPT send/no-resend evidence before any
+continuation decision. The DOM's `review=true` or `review=false` is not
+workflow-role authority. Only **after** execution role and same-chat send
+authority are separately established can the existing execution continuation
+phrase apply; a separately confirmed PR reviewer can request only its existing
+verdict phrase, not code fixes. Unloadable chats use the authorized fresh-chat
+recovery instead. A warning never authorizes automatic resend or a new chat.
+
+The local warning is **at most one attempted coordinator notification per
+provisional chat**, including across later Retry changes, 30/60-minute ticks,
+unrelated STOPPED/POLLING/PARKED/Run-mail events and notifier-store restarts.
+Before the first potentially effectful text+Enter, the existing per-project
+wake-mark store records `attempted_unverified`. Only successful text+Enter
+**and** delayed second Enter change that mark to `sent`; failure, uncertain
+delivery or observed handle/incarnation replacement preserves uncertainty and
+does not automatically replay. A fresh local warning bypasses the ordinary
+30-minute coordinator throttle, but marked local URLs and banner text are
+excluded from all later **ordinary** coordinator messages **and signatures**.
+Successful mixed alarms persist the signature/time of the ordinary non-local
+events, so removing the one-shot section alone never creates another alarm.
+New independent events still follow the existing #2463 cadence.
+
+For a local warning the notifier reads the native coordinator census again
+before text+Enter and before the four-second-later Enter, checking the selected
+handle/project and current incarnation when observable. If the coordinator is
+missing, exited or replaced, it aborts further sends; a partially attempted
+delivery is not repeated. Native terminal send is **handle-only**, not an atomic
+incarnation guard: replacement within the send operation remains possible.
+The existing producer terminal envelopes, even `child_start_failed` with a
+matching-looking handoff/receipt, are **not** evidence that a particular local
+banner belongs to an observed invocation. No terminal-before-first-local-alarm
+suppression is promised; neither a profile key nor a local→saved URL binding
+exists on this fleet path. A subsequently saved canonical chat is **not** joined
+to the provisional URL, and keeps the previously shipped direct binding,
+PR/worktree fallback, producer wakes and superseded-saved-chat behavior.
+
+
 ## Coordinator prompt snippet
 
 At session start, check `systemctl --user status fleet-wake@<project>`. On every
