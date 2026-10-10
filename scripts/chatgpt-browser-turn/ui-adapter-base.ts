@@ -1575,59 +1575,45 @@ export async function productStatusText(page: any, waitSource?: OperationWaitSou
 const PRODUCT_RATE_LIMIT_WALL_RE = /too many requests|(?:making |sending )?requests too quickly|you(?:'|’)re (?:making requests|sending messages) too quickly|temporarily limited(?:\s+access)?(?:\s+to your conversations)?|(?:please )?wait(?: a)? few minutes before trying again|try again in a few minutes|you(?:'|’)re going too fast|rate limit exceeded/i;
 
 const PRODUCT_QUOTA_WALL_RE = /you(?:'|’)ve reached[^\n]{0,120}\blimit\b|\busage limit\b|\bmessage limit\b|\breached the current usage\b|\breached your usage limit\b/i;
-const PRODUCT_QUOTA_WARNING_RE = /\d+(?:[.,]\d+)?\s*%|\busage remaining\b|\b(?:messages?|requests?) remaining\b|\bremaining (?:usage|messages?|requests?)\b/i;
 const PRODUCT_WALL_TEXT_CAP = 500;
 
-type ProductWallState = 'quota' | 'rate_limit' | 'challenge' | 'login';
-export interface ProductWallClassification {
-  readonly state?: ProductWallState;
-  readonly cause?: string;
-  readonly matched_text?: string;
-  readonly matched_selector?: string;
+export type ProductWallKind = 'quota' | 'rate_limit' | 'challenge' | 'login';
+export interface ProductWallDiagnostic {
+  /** Advisory evidence only; a page-text match cannot become a terminal state. */
+  readonly wall_kind: ProductWallKind | 'none';
+  readonly matched_text: string;
+  readonly matched_selector: string;
+  readonly state?: never;
+  readonly cause?: never;
 }
+export type ProductWallClassification = ProductWallDiagnostic;
 
-/** A joined text match must be backed by one concrete product-status node. */
 function matchingProductStatusPart(
   surface: ProductStatusSurface,
   pattern: RegExp,
-  exclude?: RegExp,
 ): { readonly text: string; readonly selector?: string } | undefined {
-  if (!pattern.test(surface.text)) return undefined;
   const parts = surface.parts?.length ? surface.parts : [{ text: surface.text }];
-  return parts.find((part) => pattern.test(part.text) && !(exclude?.test(part.text)));
+  return parts.find((part) => pattern.test(part.text));
 }
 
-function productWallClassification(
-  state: ProductWallState,
-  cause: string,
-  matched: { readonly text: string; readonly selector?: string },
-): ProductWallClassification {
-  return {
-    state,
-    cause,
-    ...(matched.selector
-      ? { matched_text: matched.text.slice(0, PRODUCT_WALL_TEXT_CAP), matched_selector: matched.selector }
-      : {}),
-  };
-}
-
-export function classifyProductWall(surface: ProductStatusSurface): ProductWallClassification {
-  const challenge = matchingProductStatusPart(surface, /verify you are human|checking your browser|just a moment|unusual activity/i);
-  if (challenge) return productWallClassification('challenge', 'challenge_detected', challenge);
-
-  if (!surface.composer) {
-    const quota = matchingProductStatusPart(surface, PRODUCT_QUOTA_WALL_RE, PRODUCT_QUOTA_WARNING_RE);
-    if (quota) return productWallClassification('quota', 'quota_detected', quota);
+export function classifyProductWall(surface: ProductStatusSurface): ProductWallDiagnostic {
+  const patterns: readonly [ProductWallKind, RegExp][] = [
+    ['challenge', /verify you are human|checking your browser|just a moment|unusual activity/i],
+    ['quota', PRODUCT_QUOTA_WALL_RE],
+    ['rate_limit', PRODUCT_RATE_LIMIT_WALL_RE],
+    ['login', /log in|sign in/i],
+  ];
+  for (const [kind, pattern] of patterns) {
+    const matched = matchingProductStatusPart(surface, pattern);
+    if (matched) {
+      return {
+        wall_kind: kind,
+        matched_text: matched.text.slice(0, PRODUCT_WALL_TEXT_CAP),
+        matched_selector: matched.selector ?? 'none',
+      };
+    }
   }
-
-  const rateLimit = matchingProductStatusPart(surface, PRODUCT_RATE_LIMIT_WALL_RE);
-  if (rateLimit) return productWallClassification('rate_limit', 'rate_limit_detected', rateLimit);
-
-  if (!surface.composer) {
-    const login = matchingProductStatusPart(surface, /log in|sign in/i);
-    if (login) return productWallClassification('login', 'login_required', login);
-  }
-  return {};
+  return { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
 }
 
 export async function locateLastAssistantTurnContainer(
@@ -1721,8 +1707,12 @@ export async function readAssistantMessageCompletionReady(
   return readAssistantNodeCompletionReady(messages.nth(messageIndex), waitMs);
 }
 
-async function pageWalls(page: any, waitSource?: OperationWaitSource): Promise<{ state?: string; cause?: string }> {
-  return classifyProductWall(await productStatusText(page, waitSource));
+async function pageWalls(
+  page: any,
+  waitSource?: OperationWaitSource,
+  observe?: (diagnostic: ProductWallDiagnostic) => void,
+): Promise<void> {
+  observe?.(classifyProductWall(await productStatusText(page, waitSource)));
 }
 
 async function semanticNodes(locator: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<SemanticNode[]> {
@@ -1852,6 +1842,7 @@ export interface TurnBrowserResult {
   assistantMessageId?: string;
   reply?: string;
   possibleDelivery: boolean;
+  product_wall_diagnostic?: ProductWallDiagnostic;
 }
 
 
@@ -1966,6 +1957,23 @@ export async function sendTurn(
   segmentBudget?: TurnOperationBudget,
   freshIdentity?: FreshIdentityRetention,
 ): Promise<TurnBrowserResult> {
+  let diagnostic: ProductWallDiagnostic = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
+  const result = await sendTurnWithDiagnostics(page, text, config, provisionalId, onBeforeSend, segmentBudget, freshIdentity, (value) => {
+    if (value.wall_kind !== 'none') diagnostic = value;
+  });
+  return { ...result, product_wall_diagnostic: diagnostic };
+}
+
+async function sendTurnWithDiagnostics(
+  page: any,
+  text: string,
+  config: BrowserConfig,
+  provisionalId?: string,
+  onBeforeSend?: () => void | Promise<void>,
+  segmentBudget?: TurnOperationBudget,
+  freshIdentity?: FreshIdentityRetention,
+  observeDiagnostic?: (diagnostic: ProductWallDiagnostic) => void,
+): Promise<TurnBrowserResult> {
   const network = attachNetworkWitness(page);
   if (config.newChat && freshIdentity) {
     page.on('framenavigated', () => {
@@ -1979,8 +1987,7 @@ export async function sendTurn(
   while (wallClock() < readyEndsAt) {
     const waitMs = loopOperationWaitMs(readyEndsAt, wallClock());
     if (waitMs <= 0) break;
-    const wall = await boundedPlaywrightOperation(waitMs, () => pageWalls(page, () => segmentOperationWait(segmentBudget, waitMs)));
-    if (wall.state) return { state: wall.state as TurnBrowserResult['state'], cause: wall.cause!, possibleDelivery: false };
+    await boundedPlaywrightOperation(waitMs, () => pageWalls(page, () => segmentOperationWait(segmentBudget, waitMs), observeDiagnostic));
     const composerVisible = await boundedLocatorCount(composer, waitMs);
     if (composerVisible) break;
     await witnessPollDelay(page, Math.min(500, waitMs));
@@ -2156,7 +2163,7 @@ export async function sendTurn(
     if (replyWait <= 0) break;
     const wallWait = Math.min(replyWait, loopOperationWaitMs(deadline, wallClock()));
     if (wallWait <= 0) break;
-    const wall = await boundedPlaywrightOperation(wallWait, () => pageWalls(page, () => wallWait));
+    await boundedPlaywrightOperation(wallWait, () => pageWalls(page, () => wallWait, observeDiagnostic));
     const canonicalUserIdEarly = canonicalSubmittedUserId(network, baselineIds);
     if (!canonicalUserIdEarly && boundDispatchCandidateIds(network).size > 1) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true, userMessageId: userId };
@@ -2405,15 +2412,6 @@ export async function sendTurn(
       }
     }
 
-    if (wall.state) {
-      return {
-        state: 'recovery_required',
-        cause: `profile_wall:${wall.state}`,
-        possibleDelivery: true,
-        userMessageId: userId,
-        ...(boundAssistantId ? { assistantMessageId: boundAssistantId } : {}),
-      };
-    }
     replyWait = loopOperationWaitMs(deadline, wallClock());
     if (replyWait <= 0) break;
     await witnessPollDelay(page, Math.min(750, replyWait));

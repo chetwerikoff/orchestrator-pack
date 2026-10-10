@@ -11,6 +11,7 @@ export interface ProfileReadyProbe {
   readonly ready: boolean;
   readonly state: 'ready' | 'chrome_not_running' | 'profile_mismatch' | 'quota' | 'rate_limit' | 'challenge' | 'login' | 'ui_contract_mismatch' | 'driver_error';
   readonly cause: string;
+  readonly product_wall_diagnostic?: { readonly wall_kind: string; readonly matched_text: string; readonly matched_selector: string };
 }
 
 async function probePage(page: any): Promise<ProfileReadyProbe | { ready: true; state: 'ready'; cause: 'composer_ready_no_wall' } | null> {
@@ -22,8 +23,10 @@ async function probePage(page: any): Promise<ProfileReadyProbe | { ready: true; 
   if (wall.state === 'recovery_required') {
     return surface.composer ? { ready: true, state: 'ready', cause: 'composer_ready_no_wall' } : null;
   }
-  if (wall.state) return { ready: false, state: wall.state, cause: wall.cause! };
-  return surface.composer ? { ready: true, state: 'ready', cause: 'composer_ready_no_wall' } : null;
+  const diagnostic = 'wall_kind' in wall && wall.wall_kind !== 'none' ? { product_wall_diagnostic: wall } : {};
+  return surface.composer
+    ? { ready: true, state: 'ready', cause: 'composer_ready_no_wall', ...diagnostic }
+    : { ready: false, state: 'ui_contract_mismatch', cause: 'composer_unavailable', ...diagnostic };
 }
 
 export async function probeProfileReady(config: BrowserConfig): Promise<ProfileReadyProbe> {
