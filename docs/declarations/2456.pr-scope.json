@@ -1,0 +1,17 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2456,
+  "declared_paths": [
+    ".cursor/skills/merge-with-local-adoption/SKILL.md"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/merge-with-local-adoption/SKILL.md"
+  ],
+  "source_revision": "62d9eb9b8d826e90e3533d6f9d1ce9337e3fff3d"
+}
