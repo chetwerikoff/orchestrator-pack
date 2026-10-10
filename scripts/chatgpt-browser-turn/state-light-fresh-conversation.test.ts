@@ -117,7 +117,7 @@ import {
   type StateLightTestSnapshot,
 } from './state-light-turn.test-fixtures.ts';
 import { classifyPageObservation, classifySendLandingEvidence, readPageObservation, runStateLightTurn } from './state-light-turn.ts';
-import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
+import { admitStateLightTurnObservation, readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { deriveComposerInsertionBudgetMs } from './state-light-turn-base.ts';
 import { wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
@@ -163,6 +163,7 @@ import {
   verifyStateLightSendSlotOwnerFence,
   verifyStateLightFreshClaimOwnerFence,
   STATE_LIGHT_SEND_SLOT_TTL_MS,
+  STATE_LIGHT_OWNER_PRE_DISPATCH_MS,
   STATE_LIGHT_PASSIVE_FRESH_CLAIM_TTL_MS,
 } from './state-light-fresh-conversation.ts';
 
@@ -456,7 +457,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const output = join(stateDir, 'unowned-fresh-reply.txt');
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const ordinary = makeLoserPage(prompt, reply);
-    const outcome = await runNewChatTurn(ordinary.page, output, '5000', invocationId);
+    const outcome = await runNewChatTurn(ordinary.page, output, '90000', invocationId);
 
     expect(outcome).toMatchObject({ code: 0, result: { state: 'ok', send_count: 1 } });
     expect(ordinary.getSends()).toBe(1);
@@ -507,7 +508,7 @@ describe('state-light fresh conversation collision recovery', () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-LATE'));
     const solo = makeLoserPage('PROMPT-LATE', 'LATE-OK');
     solo.composer.count.mockImplementation(async () => mocks.nowMs >= 30_000 ? 1 : 0);
-    const outcome = await runNewChatTurn(solo.page, '/tmp/late-fresh.txt', '60000');
+    const outcome = await runNewChatTurn(solo.page, '/tmp/late-fresh.txt', '90000');
     expect(outcome.result.send_count).toBe(1);
     expect(solo.getSends()).toBe(1);
     expect(solo.page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), expect.objectContaining({
@@ -955,7 +956,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const invocationId = randomUUID();
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const outcome = await runNewChatTurn(page, output, '5000', invocationId);
+    const outcome = await runNewChatTurn(page, output, '90000', invocationId);
 
     expect(outcome.code).not.toBe(0);
     expect(outcome.result).toMatchObject({ send_count: 1 });
@@ -1332,7 +1333,7 @@ describe('state-light fresh conversation collision recovery', () => {
       mocks.failNextObservationMutationRmdir = true;
     });
 
-    const outcome = await runNewChatTurn(turn.page, output, '5000', invocationId);
+    const outcome = await runNewChatTurn(turn.page, output, '90000', invocationId);
 
     expect(outcome.result).toMatchObject({
       state: 'driver_error',
@@ -1840,7 +1841,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(
       page,
       '/tmp/fresh-landing-same-project.txt',
-      '3000',
+      '90000',
       randomUUID(),
       ISSUE_PROJECT_URL,
     );
@@ -1899,7 +1900,7 @@ describe('state-light fresh conversation collision recovery', () => {
     };
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const outcome = await runNewChatTurn(page, '/tmp/fresh-landing-mismatch.txt', '3000');
+    const outcome = await runNewChatTurn(page, '/tmp/fresh-landing-mismatch.txt', '90000');
 
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch',
@@ -2026,6 +2027,58 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
     // The fixture never materializes a canonical conversation URL; 2x timeout
     // is not permission to claim a project-root page or publish an unowned reply.
     expect(outcome.result.state).not.toBe('ok');
+  });
+
+  it('keeps the live prepared holder through 300s, reports its actual phase, and releases only as its owner (#2487)', async () => {
+    clearSendSlotDisableEnv();
+    const profileKey = 'collision-profile';
+    const holder = 'holder-2487';
+    admitStateLightTurnObservation({ profileKey, invocationId: holder, marker: TEST_OWNED_MARKER });
+    const bound = await acquireStateLightNewChatSendSlot(profileKey, holder, 90_000);
+    expect(bound).toBe(mocks.nowMs + STATE_LIGHT_OWNER_PRE_DISPATCH_MS);
+    mocks.nowMs += STATE_LIGHT_OWNER_PRE_DISPATCH_MS + 1;
+    // Neither a prepared/none observation nor elapsed cooperative owner time
+    // grants a foreign contender the physical slot before the original TTL.
+    const first = acquireStateLightNewChatSendSlot(profileKey, 'waiter-a-2487', 50);
+    const second = acquireStateLightNewChatSendSlot(profileKey, 'waiter-b-2487', 50);
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    mocks.nowMs += 60;
+    for (const pending of [first, second]) {
+      await expect(pending).rejects.toMatchObject({
+        message: 'state_light_new_chat_send_slot_timeout',
+        send_slot_holder_invocation_id: holder,
+        send_slot_holder_phase: 'prepared',
+      });
+    }
+    expect(verifyStateLightSendSlotOwnerFence(profileKey, holder)).toBe('valid');
+    releaseStateLightNewChatSendSlot(profileKey, holder);
+    await acquireStateLightNewChatSendSlot(profileKey, 'successor-2487', 50);
+    expect(verifyStateLightSendSlotOwnerFence(profileKey, 'successor-2487')).toBe('valid');
+    releaseStateLightNewChatSendSlot(profileKey, 'successor-2487');
+  });
+
+  it('stops a slow but progressing original owner after its own deadline without dispatch (#2487)', async () => {
+    clearSendSlotDisableEnv();
+    const prompt = 'PROMPT-OWNER-LATE';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'DO-NOT-SEND');
+    let expired = false;
+    turn.composer.evaluate.mockImplementation(async () => {
+      if (!expired) {
+        expired = true;
+        mocks.nowMs += STATE_LIGHT_OWNER_PRE_DISPATCH_MS + 1;
+      }
+      return { visible: true, enabled: true, contentEditable: true };
+    });
+    const outcome = await runNewChatTurn(turn.page, '/tmp/2487-late-owner.txt', '400000');
+    expect(outcome.result).toMatchObject({
+      state: 'driver_error', send_count: 0,
+      cause: 'state_light_new_chat_owner_pre_dispatch_deadline_exhausted',
+    });
+    expect(turn.getSends()).toBe(0);
+    // The original owner, not the waiter, returns through its slot finalizer.
+    await acquireStateLightNewChatSendSlot('collision-profile', 'later-admitted-2487', 100);
+    releaseStateLightNewChatSendSlot('collision-profile', 'later-admitted-2487');
   });
 
   it('recovers expired and corrupt ownership artifacts through bounded exclusive create', async () => {
