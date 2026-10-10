@@ -546,12 +546,15 @@ function safePermissionTarget(value: string): string | undefined {
   return value;
 }
 
-// The screen transport can prove only that a decision UI is visibly at the
-// bottom. Byte-identical forged/full copied UI cannot be distinguished here.
+// OpenCode v1.18.35 shows "△ Permission required" with a separate "→ Read"
+// tool line and a Path field. Recognize that structural UI, not a quoted phrase.
+// The screen transport cannot distinguish a byte-identical copied active UI.
+const PERMISSION_HEADER_RE = /^(?:△\s*)?Permission required(?:\s*[:—-]\s*.*)?$/iu;
+
 export function visibleOpenCodePermission(screen: string): FleetPermissionObservation | undefined {
   const lines = permissionUiLines(screen);
   const headers = lines.flatMap((line, index) =>
-    /^Permission required(?:\s*[:—-]\s*.*)?$/iu.test(line) ? [index] : []);
+    PERMISSION_HEADER_RE.test(line) ? [index] : []);
   if (headers.length === 0) return undefined;
   const start = headers.at(-1)!;
   // Reject an obvious quoted/tool-output or fenced occurrence.
@@ -559,13 +562,24 @@ export function visibleOpenCodePermission(screen: string): FleetPermissionObserv
   if (above.filter((line) => /^\x60\x60\x60/u.test(line)).length % 2 === 1
     || /^\s*(?:>|Tool:|Output:|\$)/iu.test(lines[start - 1] ?? '')) return undefined;
   const region = lines.slice(start).filter(Boolean);
-  if (region.length > 18) return undefined;
-  const actionText = region.slice(0, 5).join(' ');
-  const pair = /\b(Read|Write|Edit|Bash|Grep|Glob)\s+([^\s|┃│║"'\x60()<>]+)(?=\s|$)/iu.exec(actionText);
+  if (region.length < 3 || region.length > 18) return undefined;
+  // An inline header/tool label remains recognizable, but a separate Read
+  // request must have an associated matching native Path field. Do not search
+  // arbitrary quoted prose or the menu footer for a coincidental tool name.
+  const inline = /^(?:△\s*)?Permission required\s*[:—-]\s*(Read|Write|Edit|Bash|Grep|Glob)\s+(\S+)$/iu.exec(region[0]!);
+  const tool = region.slice(1, 5).map((line) =>
+    /^→\s*(Read|Write|Edit|Bash|Grep|Glob)\s+(\S+)$/iu.exec(line)).find(Boolean);
+  const pair = inline ?? tool;
   if (!pair) return undefined;
   const action = pair[1]!.slice(0, 32);
   const target = safePermissionTarget(pair[2]!);
   if (!target) return undefined;
+  const paths = region.slice(1, 7).filter((line) => /^Path:/iu.test(line));
+  if (paths.length > 1 || (!inline && paths.length !== 1)) return undefined;
+  if (paths.length === 1) {
+    const path = /^Path:\s*(\S+)$/iu.exec(paths[0]!);
+    if (!path || safePermissionTarget(path[1]!) !== target) return undefined;
+  }
   const controls = region.map((line) => line.toLowerCase());
   const once = controls.some((line) => /\b(?:allow\s+)?once\b/u.test(line));
   const always = controls.some((line) => /\b(?:allow\s+)?always\b/u.test(line));
@@ -573,9 +587,12 @@ export function visibleOpenCodePermission(screen: string): FleetPermissionObserv
   if (!once || !always || !reject) return undefined;
   const lastChoice = controls.reduce((index, line, i) =>
     /\b(?:once|always|reject|deny)\b/u.test(line) ? i : index, -1);
-  const footer = region.slice(lastChoice + 1);
-  if (!footer.some((line) => /^[╹╻▀▄█▌▐⬝■▣◆●•·─━═-]{3,}$/u.test(line)
-    || /(?:esc\s+interrupt|ctrl\+p\s+commands|tab\s+to\s+select|enter\s+to\s+confirm)/iu.test(line))) return undefined;
+  // In the actual captured pane, all three choice labels *and* the footer
+  // controls ("⇆ select  enter confirm") occupy the same physical line.
+  // A wrapped footer immediately following the choice line is also valid.
+  const footer = region.slice(lastChoice, lastChoice + 2).join(' ');
+  if (!/(?:ctrl\+f\s+fullscreen|⇆\s*select|tab\s+to\s+select)/iu.test(footer)
+    || !/\benter\s+(?:to\s+)?confirm\b/iu.test(footer)) return undefined;
   // The next own tool, user prompt or answer means this is old scrollback.
   if (region.slice(lastChoice + 1).some((line) =>
     !/^(?:[╹╻▀▄█▌▐⬝■▣◆●•·─━═\s-]*|.*(?:esc\s+interrupt|ctrl\+p\s+commands|\d+K\s*\(\d+%\)|tab\s+to\s+select|enter\s+to\s+confirm).*)$/iu.test(line))) return undefined;
@@ -618,9 +635,15 @@ function positivePermissionClearance(screen: string): boolean {
   // idle chrome, an incomplete pane or another permission dialog.
   const ownWork = /^(?:[→⚙]\s+\w+|Tool:\s+\w+|Assistant:\s+\S|\$\s+(?:git|gh|node|npm)\s+)/iu;
   const lastHeader = lines.reduce((index, line, i) =>
-    /^Permission required\b/iu.test(line) ? i : index, -1);
-  const work = lines.slice(lastHeader + 1).filter((line) => ownWork.test(line));
-  return work.length > 0;
+    PERMISSION_HEADER_RE.test(line) ? i : index, -1);
+  if (lastHeader >= 0) {
+    // The modal's own "→ Read" is a requested tool, not completed work.
+    // Require an observed decision menu followed by distinct own work.
+    const lastDecision = lines.reduce((index, line, i) =>
+      i > lastHeader && /\b(?:Allow once|Allow always|Reject|Deny)\b/iu.test(line) ? i : index, -1);
+    return lastDecision >= 0 && lines.slice(lastDecision + 1).some((line) => ownWork.test(line));
+  }
+  return lines.some((line) => ownWork.test(line));
 }
 
 export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[] {
