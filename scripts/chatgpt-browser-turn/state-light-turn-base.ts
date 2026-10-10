@@ -1860,10 +1860,10 @@ export async function classifySendLandingEvidence(
   if (await locatorCount(composer, deadlineMs) > 0) {
     remainingMs = deadlineMs - Date.now();
     if (remainingMs <= 0) return 'ambiguous';
-    const composerText = normalizeVisibleText(
+    const composerText = collapseUnicodeWhitespace(
       await locatorText(composer, Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs)),
     );
-    if (composerText === normalizedPrompt) return 'not_landed';
+    if (composerText === collapseUnicodeWhitespace(promptText)) return 'not_landed';
   }
   return 'ambiguous';
 }
@@ -2011,11 +2011,11 @@ async function readComposerTextForSendDelivery(
   if (waitMs <= 0) return undefined;
   const timeoutCause = 'send_delivery_composer_read_timeout';
   try {
-    return String(await boundedBrowserRead(
+    return collapseUnicodeWhitespace(String(await boundedBrowserRead(
       Promise.resolve(composer.innerText({ timeout: waitMs })),
       waitMs,
       timeoutCause,
-    ));
+    )));
   } catch (error) {
     if (isPostSendTargetCrash(error)) throw error;
     return undefined;
@@ -2163,13 +2163,7 @@ async function prepareFreshComposerDraft(
   const original = await readComposerTextForSendDelivery(composer, deadlineMs);
   assertOwnerAndPage?.();
   if (original === undefined) return 'unavailable';
-  if (original.length === 0) return 'empty';
-  // Read the current Stop and text again after the first awaited observation;
-  // a repurposed tab or rewritten draft is not ours to erase.
-  if (await readFreshStopVisible(page, deadlineMs) !== false) return 'unavailable';
-  const current = await readComposerTextForSendDelivery(composer, deadlineMs);
-  assertOwnerAndPage?.();
-  if (current !== original) return 'unavailable';
+  if (original.trim().length === 0) return 'empty';
   try {
     const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
     if (waitMs <= 0) return 'unavailable';
@@ -2179,7 +2173,7 @@ async function prepareFreshComposerDraft(
   } catch {
     return 'unavailable';
   }
-  return await readComposerTextForSendDelivery(composer, deadlineMs) === '' ? 'cleared' : 'unavailable';
+  return (await readComposerTextForSendDelivery(composer, deadlineMs))?.trim() === '' ? 'cleared' : 'unavailable';
 }
 
 async function waitForFreshSendButton(
@@ -2257,7 +2251,7 @@ async function freshRetryDomGuards(input: {
   try {
     if (await readFreshStopVisible(input.page, input.deadlineMs) !== false) return false;
     const typed = await readComposerTextForSendDelivery(input.composer, input.deadlineMs);
-    if (typed !== input.markerPayload) return false;
+    if (typed !== collapseUnicodeWhitespace(input.markerPayload)) return false;
     const observed = await readPageObservation(
       input.page, undefined, undefined, true, input.deadlineMs,
     );
@@ -3076,7 +3070,7 @@ async function runTurnCore(
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       const composer = page.locator(COMPOSER_SELECTOR);
-      if (await readComposerTextForSendDelivery(composer, invocationDeadlineMs) !== markedPayload) {
+      if (await readComposerTextForSendDelivery(composer, invocationDeadlineMs) !== collapseUnicodeWhitespace(markedPayload)) {
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
@@ -3131,7 +3125,7 @@ async function runTurnCore(
       // different draft as though it were the invocation's marked payload.
       if (await readComposerTextForSendDelivery(
         composer, Math.min(invocationDeadlineMs, readinessDeadlineMs),
-      ) !== markedPayload) throw new Error('ui_contract_mismatch:fresh_owned_payload_changed_before_click');
+      ) !== collapseUnicodeWhitespace(markedPayload)) throw new Error('ui_contract_mismatch:fresh_owned_payload_changed_before_click');
       assertFreshOwner();
       const sendAction = async () => await dispatchStateLightSendAndObserveDelivery({
         page, browser, composer, sendButton, hasSendButton: true, marker,
@@ -5388,14 +5382,15 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
         if (await safeComposerBoundary()) {
           const text = await readComposerTextForSendDelivery(composer, Date.now() + MAX_LOCAL_READ_WAIT_MS);
           // The empty composer is already clean if insertion never happened.
-          // A nonempty draft must still match this turn's exact marked payload.
-          if (text !== undefined && (text === '' || text === outcome.ownedTypedPayload)
+          // A nonempty draft must still match this turn's normalized marked payload.
+          if (text !== undefined && (text === '' || (outcome.ownedTypedPayload !== undefined
+            && text === collapseUnicodeWhitespace(outcome.ownedTypedPayload)))
             && await safeComposerBoundary()
             && await readComposerTextForSendDelivery(composer, Date.now() + MAX_LOCAL_READ_WAIT_MS) === text
             && stillOwnedBlankSurface()) {
-            if (text !== '') await composer.fill('', { timeout: MAX_LOCAL_READ_WAIT_MS });
+            if (text.trim() !== '') await composer.fill('', { timeout: MAX_LOCAL_READ_WAIT_MS });
             cleared = await safeComposerBoundary()
-              && await readComposerTextForSendDelivery(composer, Date.now() + MAX_LOCAL_READ_WAIT_MS) === ''
+              && (await readComposerTextForSendDelivery(composer, Date.now() + MAX_LOCAL_READ_WAIT_MS))?.trim() === ''
               && await safeComposerBoundary();
           }
         }
