@@ -76,6 +76,7 @@ import {
   PACK_REVIEW_ACTIVE_STATUSES,
   createPackReviewRun,
   derivePackReviewGptCoverage,
+  derivePackReviewNoJudgmentBudgetOutcome,
   getPackReviewRun,
   hasPersistedPackReviewVerdict,
   heartbeatPackReviewRun,
@@ -136,6 +137,7 @@ import {
   type PackReviewerLayerOverrides,
 } from './lib/resolve-pack-reviewer.ts';
 import { resolveGptBrowserConfig, resolveRepositorySlug } from './lib/pack-gpt-reviewer.ts';
+import { parsePersistedWorkerNotificationBinding } from './lib/pack-review-worker-notification.ts';
 import { resolveTargetContext, type TargetContext } from './lib/target-context.ts';
 import {
   createPackGptSourceCommentTransport,
@@ -200,6 +202,7 @@ interface StartInput {
     timeoutSeconds: number;
   }) => void | Promise<void>;
   fixtureCurrentPrHeadSha?: string;
+  fixtureReadCurrentPrHead?: () => string | Promise<string>;
   fixtureRequiredCi?: readonly string[];
   fixtureRequiredCiChecks?: Array<{ name?: string; workflow?: string; state?: string; conclusion?: string; status?: string }> | null;
   fixtureRequiredCiPolicy?: {
@@ -297,6 +300,7 @@ export interface ReconcileStalePackReviewRunsInput {
   settlePartialAfterGrace?: boolean;
   baseRef?: string;
   fixtureCurrentPrHeadSha?: string;
+  fixtureReadCurrentPrHead?: () => string | Promise<string>;
   fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
   fixtureBeforeGptRoundFreeze?: (event: {
     runId: string;
@@ -310,6 +314,8 @@ export interface ReconcileStalePackReviewRunsInput {
   fixtureGithubReviewId?: number;
   fixtureGithubReviewTransport?: GithubReviewTransport;
   fixtureRequiredStatusWriter?: PackReviewRequiredStatusWriter;
+  /** Offline GitHub commit-status read for final-cap publication confirmation. */
+  fixtureRequiredStatusReader?: (headSha: string) => string | undefined | Promise<string | undefined>;
   fixtureWorkerNotifier?: PackReviewWorkerNotifier;
   fixtureIssueBody?: string;
   fixtureIssueNumber?: number;
@@ -3437,6 +3443,160 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
     publicationDigest: sha256Bytes(stableJson({ comment, revision, terminalDigest: terminal.digest })) };
 }
 
+async function readCheckedReviewPrHead(
+  input: { sourceRepoRoot: string; fixtureCurrentPrHeadSha?: string;
+    fixtureReadCurrentPrHead?: () => string | Promise<string> },
+  repoSlug: string,
+  prNumber: number,
+  expectedSha: string,
+): Promise<string> {
+  if (input.fixtureReadCurrentPrHead) {
+    return trim(await input.fixtureReadCurrentPrHead()).toLowerCase();
+  }
+  if (process.env.OPK_VITEST_HARNESS === '1') {
+    return trim(input.fixtureCurrentPrHeadSha ?? expectedSha).toLowerCase();
+  }
+  return (await resolveCurrentPrHead(input.sourceRepoRoot, repoSlug, prNumber)).toLowerCase();
+}
+
+/** A read-time projection; launch disposition is not an accounting event. */
+function noJudgmentBudgetOutcome(
+  run: PackReviewRunRecord,
+  storeRoot: string,
+): 'non_consuming_no_judgment' | null {
+  const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
+  if (!authority?.cycle
+    || authority.currentHeadSha.toLowerCase() !== run.targetSha.toLowerCase()
+    || authority.cycle.cycleId !== run.reviewCycleId
+    || authority.terminal?.runId === run.id) return null;
+  return derivePackReviewNoJudgmentBudgetOutcome(
+    run,
+    authority.cycle.consumedRoundOrdinals ?? [],
+  );
+}
+
+/** Exactly one failure-only submission, independent of the eventual verdict. */
+async function notifyNoJudgmentWorker(options: {
+  run: PackReviewRunRecord;
+  projectId: string;
+  storeRoot: string;
+  notifier: PackReviewWorkerNotifier;
+}): Promise<{ state: 'submitted' | 'pre_dispatch_failure' | 'ambiguous' | 'skipped_unbound' | 'already_attempted' | 'not_applicable'; reason: string }> {
+  const { projectId, storeRoot, notifier } = options;
+  const read = () => getPackReviewRun(options.run.id, { projectId, storeRoot });
+  const current = read();
+  if (!current || !noJudgmentBudgetOutcome(current, storeRoot)) {
+    return { state: 'not_applicable', reason: 'no_judgment_census_or_cap_changed' };
+  }
+  // Only the durable, immutable worker binding is authoritative. Session strings
+  // and a caller-supplied recipient are never fallback transport identities.
+  if (!parsePersistedWorkerNotificationBinding(current)) {
+    return { state: 'skipped_unbound', reason: 'bound_worker_unavailable' };
+  }
+  const key = `worker-notification:no-judgment:${current.id}:${current.targetSha}`;
+  const claimed = updatePackReviewRunIf(
+    current.id,
+    (records) => {
+      const stored = records.find((candidate) => candidate.id === current.id);
+      return Boolean(stored
+        && !stored.deliveryOutcomes.noJudgmentWorkerNotification
+        && !hasPersistedPackReviewVerdict(stored)
+        && derivePackReviewGptCoverage(stored.reviewRound)?.kind === 'empty'
+        && ['failed', 'timed_out', 'cancelled'].includes(stored.status));
+    },
+    (stored) => ({
+      deliveryOutcomes: {
+        ...stored.deliveryOutcomes,
+        noJudgmentWorkerNotification: {
+          state: 'escalated' as const,
+          recordedAtUtc: new Date().toISOString(),
+          reason: 'submission_outcome_unresolved',
+          idempotencyKey: key,
+        },
+      },
+    }),
+    { projectId, storeRoot },
+  );
+  if (!claimed) return { state: 'already_attempted', reason: 'submission_fenced_by_persisted_channel' };
+  let state: 'submitted' | 'pre_dispatch_failure' | 'ambiguous' = 'ambiguous';
+  let reason = 'dispatch_outcome_unknown';
+  try {
+    const submission = await notifier({
+      message: [
+        `Pack review produced no completed reviewer judgment for PR #${current.prNumber}.`,
+        `Run: ${current.id}`,
+        `Head: ${current.targetSha}`,
+        `Cause: ${current.failureReason ?? 'gpt_source_non_complete'}`,
+        'The terminal source census did not consume a logical review round.',
+        'Next: inspect the exact run with scoped pack-review reconcile; do not resend a possible_delivery attempt.',
+        'This submission does not establish recipient receipt or authorize a new round.',
+      ].join('\n'),
+      idempotencyKey: key,
+      reviewRunId: current.id,
+    });
+    state = submission.state === 'submitted' || submission.state === 'delivered'
+      ? 'submitted'
+      : submission.state === 'pre_dispatch_failure' || submission.state === 'failed'
+        ? 'pre_dispatch_failure'
+        : 'ambiguous';
+    reason = submission.reason;
+  } catch (error) {
+    // A thrown call may have dispatched already; never blindly resend.
+    state = 'ambiguous';
+    reason = describeError(error);
+  }
+  updatePackReviewRun(current.id, {
+    deliveryOutcomes: {
+      noJudgmentWorkerNotification: {
+        state: state === 'submitted' ? 'succeeded' : state === 'pre_dispatch_failure' ? 'failed' : 'escalated',
+        recordedAtUtc: new Date().toISOString(),
+        reason,
+        idempotencyKey: key,
+      },
+    },
+  }, { projectId, storeRoot });
+  return { state, reason };
+}
+
+async function readFinalCapRequiredStatus(
+  input: ReconcileStalePackReviewRunsInput,
+  repoSlug: string,
+  headSha: string,
+): Promise<string | undefined> {
+  if (input.fixtureRequiredStatusReader) {
+    return trim(await input.fixtureRequiredStatusReader(headSha)).toLowerCase() || undefined;
+  }
+  const result = await runProcess({
+    command: resolveTrackedGhWrapper(),
+    args: ['api', `repos/${repoSlug}/commits/${headSha}/status`],
+    cwd: input.sourceRepoRoot,
+    inheritParentEnv: true,
+    allowEmptyStdout: false,
+    timeoutMs: 30_000,
+  });
+  const output = await requireProcess(result, `gh api commit status ${headSha}`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    throw new Error('final-cap commit status returned invalid JSON');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('final-cap commit status returned invalid object');
+  }
+  const statuses = (parsed as { statuses?: unknown }).statuses;
+  if (!Array.isArray(statuses)) {
+    throw new Error('final-cap commit status returned no status list');
+  }
+  // GitHub's combined-status endpoint orders commit statuses newest first.
+  // Inspect this one exact context, not the aggregate status of unrelated CI.
+  const current = statuses.find((entry: unknown) =>
+    entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+      && (entry as { context?: unknown }).context === PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+  ) as { state?: unknown } | undefined;
+  return current ? trim(current.state).toLowerCase() || undefined : undefined;
+}
+
 async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsInput, options: {
   projectId: string;
   storeRoot: string;
@@ -3450,14 +3610,21 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   const logicalFinalFindings = logicalAccounting
     && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
     && authority.terminal?.reviewVerdict === 'findings';
-  const sameHeadPublicationRetry = logicalAccounting && authority.cycle.state === 'closed'
-    && authority.cycle.settlementKind === 'same_head_issue_resolution'
-    && authority.publication?.status !== 'succeeded';
-  if (!logicalFinalFindings && !sameHeadPublicationRetry && authority.cycle.state !== 'at_cap_continuation_required') return null;
+  // A persisted publication receipt is not proof that GitHub still has the
+  // required status. A closed descendant must remain eligible for status-only
+  // reconciliation, without reopening settlement or consuming another round.
+  const completedFinalFindings = logicalAccounting && authority.cycle.state === 'closed'
+    && authority.cycle.reviewStageComplete === true
+    && authority.terminal?.reviewVerdict === 'findings'
+    && (authority.cycle.settlementKind === 'same_head_issue_resolution'
+      || authority.currentHeadSha !== authority.terminal.targetSha);
+  if (!logicalFinalFindings && !completedFinalFindings && authority.cycle.state !== 'at_cap_continuation_required') return null;
 
-  const currentHead = input.fixtureCurrentPrHeadSha
-    ?? await resolveCurrentPrHead(input.sourceRepoRoot, options.repoSlug, prNumber);
-  if (logicalFinalFindings && currentHead.toLowerCase() !== authority.currentHeadSha.toLowerCase()) {
+  const currentHead = await readCheckedReviewPrHead(
+    input, options.repoSlug, prNumber, authority.currentHeadSha,
+  );
+  if ((logicalFinalFindings || completedFinalFindings)
+      && currentHead.toLowerCase() !== authority.currentHeadSha.toLowerCase()) {
     try {
       authority = observePackReviewHead({
         prNumber,
@@ -3492,85 +3659,156 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     };
   }
 
+  const publishFinalCapStatus = async (
+    description: string,
+    digest: string,
+    successReason: string,
+  ): Promise<Record<string, unknown>> => {
+    const publicationHead = authority?.currentHeadSha ?? '';
+    const publicationCycle = authority?.cycle?.cycleId;
+    const validCurrent = async () => {
+      const liveHead = await readCheckedReviewPrHead(input, options.repoSlug, prNumber, publicationHead);
+      const latest = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot });
+      const liveRun = getPackReviewRun(priorRun.id, {
+        projectId: options.projectId, storeRoot: options.storeRoot,
+      });
+      return liveHead === publicationHead.toLowerCase()
+        && latest?.currentHeadSha.toLowerCase() === publicationHead.toLowerCase()
+        && latest.terminal?.runId === priorRun.id
+        && latest.terminal?.reviewVerdict === 'findings'
+        && latest.terminal?.targetSha === priorRun.targetSha
+        && latest.cycle?.cycleId === publicationCycle
+        && latest.cycle?.state === 'closed'
+        && latest.cycle?.reviewStageComplete === true
+        && latest.triage?.verdict !== 'BLOCK'
+        && liveRun?.reviewVerdict === 'findings'
+        && liveRun.reviewCycleId === publicationCycle
+        && liveRun.targetSha === priorRun.targetSha;
+    };
+    const unresolved = (detail: string): Record<string, unknown> => ({
+      prNumber, headSha: publicationHead, finalCapSettlement: true,
+      settled: false, reason: 'status_not_published', detail,
+      nextAction: 'retry current-head status projection with PR-led start or scoped reconcile; do not consume another round',
+    });
+    if (!(await validCurrent())) return unresolved('final_cap_head_or_authority_changed_before_status');
+    let confirmed: boolean;
+    try {
+      confirmed = await readFinalCapRequiredStatus(input, options.repoSlug, publicationHead) === 'success';
+    } catch (error) {
+      return unresolved(`final_cap_status_read_failed:${describeError(error)}`);
+    }
+    if (!(await validCurrent())) return unresolved('final_cap_head_or_authority_changed_before_status');
+    if (!confirmed) {
+      const request = {
+        state: 'success' as const, context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+        description, idempotencyKey: `final-cap:${priorRun.id}:${publicationHead}`,
+      };
+      try {
+        await (input.fixtureRequiredStatusWriter ?? ((value) => publishPackReviewRequiredStatus({
+          repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+          headSha: publicationHead, request: value,
+        })))(request);
+      } catch (error) {
+        return unresolved(`final_cap_status_write_failed:${describeError(error)}`);
+      }
+      if (!(await validCurrent())) return unresolved('final_cap_head_or_authority_changed_during_status');
+      try {
+        confirmed = await readFinalCapRequiredStatus(input, options.repoSlug, publicationHead) === 'success';
+      } catch (error) {
+        return unresolved(`final_cap_status_confirmation_failed:${describeError(error)}`);
+      }
+      if (!(await validCurrent())) return unresolved('final_cap_head_or_authority_changed_during_status');
+      if (!confirmed) return unresolved('final_cap_success_status_unconfirmed_on_current_head');
+    }
+    try {
+      const latest = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot });
+      if (!latest) return unresolved('final_cap_authority_missing_after_status');
+      // Confirmation of an already-published status must not append a new
+      // authority transition or another GitHub status on repeated reconcile.
+      authority = latest.publication?.status === 'succeeded'
+        && latest.publication.headSha === publicationHead
+        && latest.publication.terminalRunId === priorRun.id
+        ? latest
+        : recordPackReviewPublication({
+          prNumber, expectedTransitionSeq: latest.transitionSeq, nextPhase: 'external_published',
+          publication: {
+            headSha: publicationHead, terminalRunId: priorRun.id,
+            status: 'succeeded', publicationDigest: digest,
+            recordedAtUtc: new Date().toISOString(),
+          },
+          options: { storeRoot: options.storeRoot },
+        });
+    } catch (error) {
+      return unresolved(`final_cap_publication_record_failed:${describeError(error)}`);
+    }
+    if (!(await validCurrent())) return unresolved('final_cap_authority_or_head_changed_after_record');
+    return {
+      prNumber, headSha: publicationHead, finalCapSettlement: true, settled: true,
+      statusPublished: true, publicationHeadSha: publicationHead,
+      reason: successReason, settlementKind: authority.cycle?.settlementKind,
+    };
+  };
+
   if (logicalAccounting) {
     const reviewedHeadSha = authority.terminal.targetSha;
     if (authority.currentHeadSha === reviewedHeadSha) {
       try {
         const proof = await resolveSameHeadIssueResolution(input, options, authority, priorRun);
-        if (!sameHeadPublicationRetry) {
+        if (!completedFinalFindings) {
           authority = settleLogicalPackReviewFindingsByStrictDescendant({
             prNumber, expectedTransitionSeq: authority.transitionSeq, reviewedHeadSha,
             currentHeadSha: authority.currentHeadSha, reviewedHeadIsAncestor: false,
             sameHeadIssueResolution: proof, options: { storeRoot: options.storeRoot },
           });
         }
-        const request = { runId: priorRun.id, prNumber, headSha: authority.currentHeadSha,
-          state: 'success' as const, context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-          description: 'review_stage_complete: same-head Issue resolution',
-          idempotencyKey: `final-cap:${priorRun.id}:${authority.currentHeadSha}` };
-        await (input.fixtureRequiredStatusWriter ?? ((value) => publishPackReviewRequiredStatus({
-          repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug, headSha: request.headSha, request: value,
-        })))(request);
-        authority = recordPackReviewPublication({ prNumber, expectedTransitionSeq: authority.transitionSeq,
-          nextPhase: 'external_published', publication: { headSha: authority.currentHeadSha, terminalRunId: priorRun.id,
-            status: 'succeeded', publicationDigest: proof.publicationDigest, recordedAtUtc: new Date().toISOString() },
-          options: { storeRoot: options.storeRoot } });
-        return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true, settled: true,
-          reason: 'final_cap_same_head_issue_resolution_settled', settlementKind: authority.cycle?.settlementKind };
+        return await publishFinalCapStatus(
+          'review_stage_complete: same-head Issue resolution',
+          proof.publicationDigest,
+          'final_cap_same_head_issue_resolution_settled',
+        );
       } catch (error) {
         return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true, settled: false,
           reason: 'final_cap_strict_descendant_required', detail: describeError(error),
           nextAction: 'provide complete exact-run trusted Issue-only dispositions, post-terminal body revision and current-head green CI, or advance to a proven strict descendant; rerun scoped reconcile' };
       }
     }
-    const strictDescendant = await resolvePackReviewStrictDescendant({
-      repoRoot: input.sourceRepoRoot,
-      repoSlug: options.repoSlug,
-      reviewedHeadSha,
-      currentHeadSha: authority.currentHeadSha,
-      fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
-    });
-    if (!strictDescendant) {
-      return {
-        prNumber,
-        headSha: authority.currentHeadSha,
-        finalCapSettlement: true,
-        settled: false,
-        reason: 'final_cap_strict_descendant_required',
-        nextAction: 'advance the PR to a proven strict descendant of the reviewed findings head, then rerun scoped reconcile',
-      };
-    }
-    try {
-      authority = settleLogicalPackReviewFindingsByStrictDescendant({
-        prNumber,
-        expectedTransitionSeq: authority.transitionSeq,
+    if (!completedFinalFindings) {
+      const strictDescendant = await resolvePackReviewStrictDescendant({
+        repoRoot: input.sourceRepoRoot,
+        repoSlug: options.repoSlug,
         reviewedHeadSha,
         currentHeadSha: authority.currentHeadSha,
-        reviewedHeadIsAncestor: true,
-        options: { storeRoot: options.storeRoot },
+        fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
       });
-    } catch (error) {
-      return {
-        prNumber,
-        headSha: authority.currentHeadSha,
-        finalCapSettlement: true,
-        settled: false,
-        reason: `final_cap_settlement_incomplete:${describeError(error)}`,
-        nextAction: 'rerun scoped reconcile after confirming the current PR head',
-      };
+      if (!strictDescendant) {
+        return {
+          prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
+          settled: false, reason: 'final_cap_strict_descendant_required',
+          nextAction: 'advance the PR to a proven strict descendant of the reviewed findings head, then rerun scoped reconcile',
+        };
+      }
+      try {
+        authority = settleLogicalPackReviewFindingsByStrictDescendant({
+          prNumber, expectedTransitionSeq: authority.transitionSeq,
+          reviewedHeadSha, currentHeadSha: authority.currentHeadSha,
+          reviewedHeadIsAncestor: true, options: { storeRoot: options.storeRoot },
+        });
+      } catch (error) {
+        return {
+          prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
+          settled: false, reason: `final_cap_settlement_incomplete:${describeError(error)}`,
+          nextAction: 'rerun scoped reconcile after confirming the current PR head',
+        };
+      }
     }
-    return {
-      prNumber,
-      headSha: authority.currentHeadSha,
-      finalCapSettlement: true,
-      settled: authority.cycle?.reviewStageComplete === true,
-      reason: authority.cycle?.reviewStageComplete === true
-        ? 'final_cap_descendant_settled'
-        : 'final_cap_settlement_incomplete',
-      ...(authority.cycle?.reviewStageComplete === true
-        ? {}
-        : { nextAction: 'rerun scoped reconcile after confirming the current PR head' }),
-    };
+    return publishFinalCapStatus(
+      'Required pack-review stage completed; strict descendant of reviewed findings.',
+      sha256Bytes(stableJson({
+        runId: priorRun.id, reviewedHeadSha, publicationHead: authority.currentHeadSha,
+        settlementKind: 'strict_descendant',
+      })),
+      'final_cap_descendant_settled',
+    );
   }
 
   let issueNumber = input.fixtureIssueNumber;
@@ -4000,7 +4238,15 @@ export async function reconcileStalePackReviewRuns(
         continue;
       }
 
-      if (needsGptSourceRecovery) {
+      // Source recovery is still permitted on the same run, but a terminal
+      // zero-judgment census must also reach failure-notification and required
+      // error-status reconciliation when no credentialed comments are found.
+      const stillZeroJudgment = needsGptSourceRecovery
+        && isPackReviewUnfinishedTerminalRun(recoveredSnapshot)
+        && recoveredSnapshot.failureReason?.startsWith('gpt_source_non_complete:') === true
+        && recoveryCoverage?.kind === 'empty'
+        && noJudgmentBudgetOutcome(recoveredSnapshot, storeRoot) !== null;
+      if (needsGptSourceRecovery && !stillZeroJudgment) {
         results.push({
           runId: run.id,
           terminalized: false,
@@ -4013,6 +4259,7 @@ export async function reconcileStalePackReviewRuns(
         });
         continue;
       }
+      if (stillZeroJudgment) run = await bindRepositoryIdentity(recoveredSnapshot);
       if (activeGptRecovery && !activeStale) {
         results.push({
           runId: run.id,
@@ -4046,6 +4293,28 @@ export async function reconcileStalePackReviewRuns(
     }
 
     if (!isPackReviewUnfinishedTerminalRun(run)) continue;
+
+    // A previous zero-judgment terminal may have been reconciled before its
+    // dedicated worker submission could be attempted. The locked channel
+    // claim prevents a second submission, including after an ambiguous result.
+    const currentUnfinished = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
+    if (currentUnfinished.failureReason?.startsWith('gpt_source_non_complete:')
+        && noJudgmentBudgetOutcome(currentUnfinished, storeRoot)) {
+      const notification = await notifyNoJudgmentWorker({
+        run: currentUnfinished, projectId, storeRoot,
+        notifier: input.fixtureWorkerNotifier ?? ((request) => sendPackReviewWorkerNotification({
+          trustedPackRoot: currentUnfinished.trustedPackRoot,
+          sessionId: currentUnfinished.linkedSessionId,
+          projectId, storeRoot, request,
+        })),
+      });
+      if (notification.state !== 'already_attempted') {
+        results.push({
+          runId: run.id, noJudgmentWorkerNotification: notification,
+          budgetOutcome: 'non_consuming_no_judgment',
+        });
+      }
+    }
 
     const currentOrder = resolvePackReviewRunOrder(await readBoundRecords(), run);
     if (currentOrder.kind === 'ambiguous') {
@@ -4094,12 +4363,52 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
 
-    const authorizeStaleWrite = () => readBoundRecords().then((freshRecords) => (
-      resolvePackReviewRunOrder(freshRecords, run).kind === 'none'
-    ));
+    const zeroJudgmentStaleStatus = run.failureReason?.startsWith('gpt_source_non_complete:') === true;
+    const verifyNoJudgmentStatusTarget = async () => {
+      const current = getPackReviewRun(run.id, { projectId, storeRoot });
+      if (!current || !noJudgmentBudgetOutcome(current, storeRoot)) return false;
+      const head = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
+      const afterHeadRead = getPackReviewRun(run.id, { projectId, storeRoot });
+      return head === run.targetSha.toLowerCase()
+        && Boolean(afterHeadRead && noJudgmentBudgetOutcome(afterHeadRead, storeRoot));
+    };
+    const authorizeStaleWrite = async () => {
+      if (resolvePackReviewRunOrder(await readBoundRecords(), run).kind !== 'none') return false;
+      return !zeroJudgmentStaleStatus || await verifyNoJudgmentStatusTarget();
+    };
     const repairSupersededStaleWrite = async () => {
+      if (zeroJudgmentStaleStatus) {
+        const current = getPackReviewRun(run.id, { projectId, storeRoot });
+        const head = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
+        const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
+        if (current && hasPersistedPackReviewVerdict(current)
+          && head === run.targetSha.toLowerCase()
+          && authority?.currentHeadSha.toLowerCase() === head
+          && authority.terminal?.runId === current.id
+          && authority.cycle?.cycleId === current.reviewCycleId) {
+          // A same-run verdict is deliberately excluded by the newer-run
+          // ordering helper. It still supersedes this zero-judgment error.
+          const restored = await restorePackReviewAuthoritativeRequiredStatus({
+            run: current, projectId, storeRoot,
+            writeRequiredStatus: statusWriter, forceRepublish: true,
+          });
+          const after = getPackReviewRun(run.id, { projectId, storeRoot });
+          const afterHead = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
+          const afterAuthority = readPackReviewAuthority(run.prNumber, { storeRoot });
+          if (restored?.state === 'succeeded'
+            && after && hasPersistedPackReviewVerdict(after)
+            && afterHead === run.targetSha.toLowerCase()
+            && afterAuthority?.terminal?.runId === run.id
+            && afterAuthority.currentHeadSha.toLowerCase() === afterHead) {
+            return { reason: 'same_run_verdict_status_restored' };
+          }
+          return { reason: 'status_not_published:verdict_restoration_unverified; rerun scoped reconcile' };
+        }
+      }
       const restoration = await restoreLatestAuthority(run, statusWriter, true);
-      return { reason: restoration.reason };
+      return { reason: zeroJudgmentStaleStatus && restoration.reason === 'authority_not_newer'
+        ? 'status_not_published:head_or_same_run_authority_changed; rerun scoped reconcile or PR-led status projection'
+        : restoration.reason };
     };
 
     const outcome = await recordPackReviewStaleRequiredStatus({
@@ -4125,6 +4434,11 @@ export async function reconcileStalePackReviewRuns(
       terminalized,
       statusReconciled: needsStaleStatus && outcome.state === 'succeeded',
       reason: needsStaleStatus ? outcome.reason : 'status_already_reconciled',
+      ...(zeroJudgmentStaleStatus && needsStaleStatus && outcome.state !== 'succeeded' ? {
+        statusPublication: outcome.reason === 'same_run_verdict_status_restored'
+          ? 'authoritative_verdict_restored' : 'status_not_published',
+        nextAction: 'rerun scoped reconcile or PR-led current-head status projection; no additional review round',
+      } : {}),
     });
   }
 
@@ -4429,6 +4743,11 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     );
   }
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
+  const readProjectionHead = () => readCheckedReviewPrHead({
+    sourceRepoRoot: target.sourceRepoRoot,
+    fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
+    fixtureReadCurrentPrHead: input.fixtureReadCurrentPrHead,
+  }, target.repoSlug, target.prNumber, target.headSha);
   const productionRequiredCiStart = directCliStarts.has(input)
     || trim(input.surface) === 'pack-gpt-review'
     || trim(input.surface) === 'pr2-scheduler';
@@ -4568,7 +4887,44 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     options: Parameters<typeof recordPackReviewUnfinishedTerminalStatus>[0],
   ) => {
     terminalPersistenceAttempted = true;
-    await recordPackReviewUnfinishedTerminalStatus(options);
+    const zeroJudgment = options.failureReason?.startsWith('gpt_source_non_complete:') === true;
+    const originalWriter = options.writeRequiredStatus;
+    return recordPackReviewUnfinishedTerminalStatus({
+      ...options,
+      ...(zeroJudgment ? {
+        writeRequiredStatus: async (request: Parameters<PackReviewRequiredStatusWriter>[0]) => {
+          const freshBefore = getPackReviewRun(options.run.id, { projectId, storeRoot });
+          const headBefore = await readProjectionHead();
+          if (!freshBefore || !noJudgmentBudgetOutcome(freshBefore, storeRoot)
+            || headBefore !== target.headSha.toLowerCase()) {
+            throw new Error('status_not_published:no_judgment_or_current_head_changed_before_error; rerun scoped reconcile');
+          }
+          await originalWriter(request);
+          // GitHub status writes are not atomic with source recovery or head changes.
+          // A delayed stale error can otherwise land after the verdict's success.
+          const freshAfter = getPackReviewRun(options.run.id, { projectId, storeRoot });
+          const headAfter = await readProjectionHead();
+          if (headAfter !== target.headSha.toLowerCase()) {
+            throw new Error('status_not_published:pr_head_changed_during_error; restart PR-led projection');
+          }
+          if (!freshAfter || !noJudgmentBudgetOutcome(freshAfter, storeRoot)) {
+            if (freshAfter && hasPersistedPackReviewVerdict(freshAfter)) {
+              const restored = await restorePackReviewAuthoritativeRequiredStatus({
+                run: freshAfter,
+                projectId,
+                storeRoot,
+                writeRequiredStatus: originalWriter,
+                forceRepublish: true,
+              });
+              throw new Error(restored?.state === 'succeeded'
+                ? 'status_not_published:no_judgment_superseded; authoritative_verdict_status_restored'
+                : 'status_not_published:verdict_superseded_error; rerun scoped reconcile to restore verdict status');
+            }
+            throw new Error('status_not_published:no_judgment_superseded; rerun scoped reconcile');
+          }
+        },
+      } : {}),
+    });
   };
   const recordFallbackProcessFailure = async (fallbackResult: ProcessResult): Promise<never> => {
     if (!run) throw new Error('fallback reviewer failure occurred before run creation');
@@ -4766,18 +5122,47 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
 
     if (authority.cycle?.reviewStageComplete === true
         && authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) {
+      const cycleId = authority.cycle.cycleId;
+      const verifyStageCompleteHead = async () => {
+        const head = await readProjectionHead();
+        const latest = readPackReviewAuthority(target.prNumber, authorityOptions);
+        return head === target.headSha.toLowerCase()
+          && latest?.currentHeadSha.toLowerCase() === target.headSha.toLowerCase()
+          && latest.cycle?.cycleId === cycleId
+          && latest.cycle.reviewStageComplete === true
+          && latest.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
+      };
+      const unresolved = async (detail: string) => {
+        await releaseEarlyClaim('status_not_published');
+        return {
+          ok: false, created: false, reused: true,
+          reason: 'status_not_published', detail,
+          nextAction: 'restart PR-led pack review for the live head or rerun scoped reconcile; no extra review round',
+          prNumber: target.prNumber, headSha: target.headSha, cycleId, httpStatus: 409,
+        };
+      };
+      if (!(await verifyStageCompleteHead())) {
+        return unresolved('stage_complete_head_or_authority_changed_before_status');
+      }
       const writeRequiredStatus = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
         repoRoot: target.sourceRepoRoot,
         repoSlug: target.repoSlug,
         headSha: target.headSha,
         request,
       }));
-      await writeRequiredStatus({
-        state: 'success',
-        context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-        description: 'Required pack-review stage completed; no additional review round required.',
-        idempotencyKey: `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${target.headSha}:stage-complete:${authority.cycle.cycleId}`,
-      });
+      try {
+        await writeRequiredStatus({
+          state: 'success',
+          context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+          description: 'Required pack-review stage completed; no additional review round required.',
+          idempotencyKey: `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${target.headSha}:stage-complete:${cycleId}`,
+        });
+      } catch (error) {
+        return unresolved(`stage_complete_status_write_failed:${describeError(error)}`);
+      }
+      if (!(await verifyStageCompleteHead())) {
+        return unresolved('stage_complete_head_or_authority_changed_during_status');
+      }
       const stageCompleteReason = authority.terminal?.targetSha === target.headSha
         ? 'terminal_run_exists'
         : 'review_stage_complete';
@@ -4787,9 +5172,11 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         created: false,
         reused: true,
         reason: stageCompleteReason,
+        statusPublished: true,
+        publicationHeadSha: target.headSha,
         prNumber: target.prNumber,
         headSha: target.headSha,
-        cycleId: authority.cycle.cycleId,
+        cycleId,
         httpStatus: 200,
       };
     }
@@ -5696,7 +6083,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
             ? 'timed_out'
             : 'failed';
         const failureReason = `gpt_source_non_complete:${first.sourceSlotId}:${first.classification}`;
-        await recordUnfinishedTerminal({
+        const unfinished = await recordUnfinishedTerminal({
           run,
           status,
           failureReason,
@@ -5704,6 +6091,20 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           storeRoot,
           writeRequiredStatus,
         });
+        const persisted = getPackReviewRun(run.id, { projectId, storeRoot }) ?? unfinished.run;
+        const budgetOutcome = noJudgmentBudgetOutcome(persisted, storeRoot);
+        const notification = budgetOutcome
+          ? await notifyNoJudgmentWorker({
+              run: persisted, projectId, storeRoot,
+              notifier: input.fixtureWorkerNotifier ?? ((request) => sendPackReviewWorkerNotification({
+                trustedPackRoot: persisted.trustedPackRoot,
+                sessionId: persisted.linkedSessionId,
+                projectId,
+                storeRoot,
+                request,
+              })),
+            })
+          : { state: 'not_applicable' as const, reason: 'no_judgment_census_or_cap_changed' };
         terminal = true;
         const runs = listPackReviewRuns({ projectId, storeRoot });
         if (claimLease) await claimLease.release('run_started', runs);
@@ -5715,6 +6116,14 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           runId: run.id,
           status,
           coverage,
+          ...(budgetOutcome ? { budgetOutcome } : {}),
+          requiredStatusPublication: unfinished.deliveryOutcome.state === 'succeeded'
+            ? 'published' : 'status_not_published',
+          requiredStatusReason: unfinished.deliveryOutcome.reason,
+          ...(unfinished.deliveryOutcome.state === 'succeeded' ? {} : {
+            nextAction: 'rerun scoped reconcile or PR-led status projection; do not resend possible_delivery',
+          }),
+          noJudgmentWorkerNotification: notification,
           httpStatus: status === 'timed_out' ? 504 : 422,
         };
       }

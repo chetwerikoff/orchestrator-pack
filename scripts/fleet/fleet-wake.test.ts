@@ -11,6 +11,7 @@ import {
   FileFleetWakeStateStore,
   bannerOwnerPane,
   listTerminalEnvelopes,
+  potentiallySentUnboundEnvelope,
   fleetAlarmMessage,
   fleetWakeConfigFromEnv,
   managerBannerMessage,
@@ -698,7 +699,7 @@ describe('fleet alarm', () => {
     expect(sendsTo(repeated.calls, 'one')).toHaveLength(0);
   });
 
-  it.each(['throw', 'SIGTERM', 'SIGKILL'])('wakes the fake owner once for a real post-send %s envelope (#2416)', async (exit) => {
+  it.each(['throw', 'SIGTERM', 'SIGKILL'])('does not wake a guessed owner for a post-send %s envelope (#2434)', async (exit) => {
     const root = mkdtempSync(join(tmpdir(), 'fleet-wake-2416-'));
     try {
       vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
@@ -722,10 +723,110 @@ describe('fleet alarm', () => {
       const input = { store, screens: { coord: 'idle', one: `PARKED on GPT turn ${invocationId}`, two: 'working\nesc interrupt' },
         listTerminalEnvelopes: () => listTerminalEnvelopes(root) };
       const first = await tick(input);
-      expect(sendsTo(first.calls, 'one').filter((args) => args.includes('--text'))).toHaveLength(1);
+      expect(sendsTo(first.calls, 'one')).toHaveLength(0);
+      expect(first.logs.some((line) => line.includes('owner_generation_unproven'))).toBe(true);
       expect(sendsTo((await tick(input)).calls, 'one')).toHaveLength(0);
     } finally {
       vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+
+  it('suppresses both genuine no-result observation-pointer and pointerless ordinary sent-unbound events', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-wake-2434-owner-'));
+    try {
+      vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+      const profileKey = configuredProfileKey('synthetic-profile', 'http://127.0.0.1:1');
+      const invocationId = 'synthetic-invocation-no-result';
+      const record = admitStateLightTurnObservation({
+        profileKey, invocationId, marker: 'OPKTURNV100000000000000000000000000000001',
+      });
+      expect(record.profile_key).toBe(profileKey);
+      transitionStateLightTurnObservation({
+        profileKey, invocationId, phase: 'dispatching', reason: 'synthetic_dispatch',
+      });
+      transitionStateLightTurnObservation({
+        profileKey, invocationId, phase: 'sent_unbound', reason: 'synthetic_sent_once',
+        sendCount: 1, sendWitness: 'numeric_send_count',
+      });
+      const envelope = {
+        path: join(root, 'no-result-terminal.json'), invocationId,
+        observedInvocationId: invocationId, sendCount: 1,
+        persistedObservationProfileKey: profileKey, terminalHandle: 'one',
+      };
+      const pointerlessResult = {
+        path: join(root, 'ordinary-success-terminal.json'), invocationId,
+        observedInvocationId: invocationId, sendCount: 1, terminalHandle: 'one',
+      };
+      const pointerlessChildState = { ...pointerlessResult, path: join(root, 'child-state-terminal.json') };
+      const store = new MemoryWakeStore();
+      const input = {
+        store, screens: { coord: 'idle', one: 'PARKED on owner', two: 'working\\nesc interrupt' },
+        listTerminalEnvelopes: () => [envelope, pointerlessResult, pointerlessChildState],
+      };
+      expect(potentiallySentUnboundEnvelope(envelope)).toBe(true);
+      expect(potentiallySentUnboundEnvelope(pointerlessResult)).toBe(true);
+      const first = await tick(input);
+      expect(sendsTo(first.calls, 'one')).toHaveLength(0);
+      expect(first.logs.filter((line) => line.includes('owner_generation_unproven'))).toHaveLength(3);
+      expect(store.hasParkedWakeEvent(`gpt:${envelope.path}`)).toBe(false);
+      expect(sendsTo((await tick(input)).calls, 'one')).toHaveLength(0);
+
+      // An unknown/malformed legacy owner is still not a current launch witness.
+      const broken = { ...envelope, persistedObservationProfileKey: profileKey + '-missing' };
+      expect(potentiallySentUnboundEnvelope(broken)).toBe(true);
+      expect(potentiallySentUnboundEnvelope({ ...envelope, observedInvocationId: 'foreign' })).toBe(true);
+      expect(potentiallySentUnboundEnvelope({ path: 'other-event', invocationId: 'other', terminalHandle: 'one' })).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not route a producer-shaped zero-count possibly delivered send through a recycled terminal handle', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-wake-2434-zero-count-'));
+    try {
+      const possiblePath = join(root, 'possible-terminal.json');
+      const notSentPath = join(root, 'not-sent-terminal.json');
+      const base = {
+        schema: 'flow-manager-long-running-child-terminal/v1',
+        observed_invocation_id: 'synthetic-send-failed',
+        terminal_handle: 'one',
+        send_count: 0,
+      };
+      // Result-present send_failed: the composer action may have taken effect
+      // even though the numeric send witness was never established.
+      writeFileSync(possiblePath, JSON.stringify({
+        ...base, delivery: 'POSSIBLY_DELIVERED', turn_result_state: 'send_failed',
+      }));
+      writeFileSync(notSentPath, JSON.stringify({
+        ...base, observed_invocation_id: 'synthetic-before-send', delivery: 'not-sent',
+        turn_result_state: 'driver_error',
+      }));
+      const envelopes = listTerminalEnvelopes(root);
+      const possible = envelopes.find((event) => event.path === possiblePath);
+      const notSent = envelopes.find((event) => event.path === notSentPath);
+      expect(possible).toMatchObject({
+        sendCount: 0, delivery: 'POSSIBLY_DELIVERED', terminalHandle: 'one',
+        observedInvocationId: 'synthetic-send-failed',
+      });
+      expect(notSent).toMatchObject({ sendCount: 0, delivery: 'not-sent' });
+      expect(potentiallySentUnboundEnvelope(possible!)).toBe(true);
+      expect(potentiallySentUnboundEnvelope(notSent!)).toBe(false);
+      const store = new MemoryWakeStore();
+      const input = {
+        store, screens: { coord: 'idle', one: 'PARKED on another turn', two: 'working\\nesc interrupt' },
+        listTerminalEnvelopes: () => envelopes,
+      };
+      const first = await tick(input);
+      expect(first.logs.some((line) => line.includes(`owner_generation_unproven gpt:${possiblePath}`))).toBe(true);
+      const sentToRecycledHandle = sendsTo(first.calls, 'one');
+      expect(sentToRecycledHandle).toHaveLength(2);
+      expect(sentToRecycledHandle.flat().join(' ')).toContain(notSentPath);
+      expect(sentToRecycledHandle.flat().join(' ')).not.toContain(possiblePath);
+      expect(sendsTo((await tick(input)).calls, 'one')).toHaveLength(0);
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -802,7 +903,7 @@ describe('fleet alarm', () => {
       writeFileSync(join(root, 'unrouted-terminal.json'), JSON.stringify({ schema, observed_invocation_id: 'inv-b' }), 'utf8');
       writeFileSync(join(root, 'other-terminal.json'), JSON.stringify({ schema: 'x/v1', cwd: '/w/one' }), 'utf8');
 
-      expect(listTerminalEnvelopes(root)).toEqual([{ path: routed, invocationId: 'inv-a', cwd: '/w/one' }]);
+      expect(listTerminalEnvelopes(root)).toEqual([{ path: routed, invocationId: 'inv-a', observedInvocationId: 'inv-a', cwd: '/w/one' }]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

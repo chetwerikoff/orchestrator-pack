@@ -48,12 +48,10 @@ export function writeChatBinding(
   if (!id) return;
   const root = chatBindingsRoot(env);
   mkdirSync(root, { recursive: true });
-  const handle = launchingTerminalHandle(env);
   const binding: ChatBinding = {
     schema: 'chat-binding/v1',
     conversation_url: conversationUrl.split(/[?#]/)[0]!,
     worktree: resolve(worktree),
-    ...(handle ? { terminal_handle: handle } : {}),
     updated_at: new Date().toISOString(),
   };
   const target = join(root, `${id}.json`);

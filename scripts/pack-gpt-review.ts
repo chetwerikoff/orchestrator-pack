@@ -135,9 +135,18 @@ export async function runPackGptReviewCommand(
     });
 
     if (result.created !== true) {
+      // Non-created success is legitimate only for the runner's fresh,
+      // same-invocation status projection with post-await current-head proof.
+      // A generic terminal-run reuse has not established that status.
+      if (result.ok === true && result.reused === true && result.statusPublished === true
+          && result.publicationHeadSha === result.headSha
+          && (result.reason === 'review_stage_complete' || result.reason === 'terminal_run_exists')) {
+        return { exitCode: 0, result };
+      }
       return {
         exitCode: 1,
         result: {
+          ...result,
           ok: false,
           created: false,
           reused: Boolean(result.reused),

@@ -6,6 +6,7 @@ import {
   observeFreshConversationUrl,
   productStatusText,
   promoteFreshCanonicalIdentity,
+  projectConversationUrlMatchesProject,
 } from './ui-adapter.ts';
 import { generateOwnedPromptMarker, wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
@@ -167,4 +168,23 @@ describe('fresh project conversation identity', () => {
 
     expect(canonical).toBe(conversationUrl);
   });
+  it('accepts stable-id slug/unslugged canonical aliases, but not a foreign id or root /c', () => {
+    const stableProject = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4';
+    const sameId = `${stableProject}/c/${conversationUuid}`;
+    const foreignId = 'https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/c/' + conversationUuid;
+    expect(projectConversationUrlMatchesProject(conversationUrl, stableProject)).toBe(true);
+    expect(projectConversationUrlMatchesProject(sameId, projectUrl)).toBe(true);
+    expect(projectConversationUrlMatchesProject(foreignId, projectUrl)).toBe(false);
+    expect(projectConversationUrlMatchesProject('https://chatgpt.com/c/' + conversationUuid, projectUrl)).toBe(false);
+    expect(projectConversationUrlMatchesProject(sameId.replace('6ab8cb78-', 'xxxxxxxx-'), projectUrl)).toBe(false);
+    expect(projectConversationUrlMatchesProject(sameId.replace('chatgpt.com', 'example.com'), projectUrl)).toBe(false);
+    expect(projectConversationUrlMatchesProject(sameId.replace('chatgpt.com', 'chatgpt.com:8443'), projectUrl)).toBe(false);
+  });
+
+  it('rejects an unrelated nested route on the selected stable project', () => {
+    const project = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4';
+    expect(projectConversationUrlMatchesProject(project + '/other-route/c/' + conversationUuid, projectUrl)).toBe(false);
+    expect(projectConversationUrlMatchesProject(project + '/c/' + conversationUuid + '/other-route', projectUrl)).toBe(false);
+  });
+
 });

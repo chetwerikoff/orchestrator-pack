@@ -88,7 +88,8 @@ type Connection = {
 
 export class ModalWatcher {
   private readonly connections = new Map<string, Connection>();
-  private timer: ReturnType<typeof setInterval> | undefined;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private refreshing = false;
   private stopping = false;
   private hits = 0;
   private readonly cdp: string;
@@ -107,15 +108,31 @@ export class ModalWatcher {
   }
 
   public start(): void {
-    if (this.timer) return;
+    if (this.stopping || this.refreshing || this.timer) return;
     log('modal_watcher_started', { cdp: this.cdp, refresh_ms: PAGE_REFRESH_MS });
-    void this.refresh();
-    this.timer = setInterval(() => void this.refresh(), PAGE_REFRESH_MS);
+    void this.refreshAndSchedule();
+  }
+
+  private async refreshAndSchedule(): Promise<void> {
+    if (this.stopping || this.refreshing) return;
+    this.refreshing = true;
+    try {
+      await this.refresh();
+    } finally {
+      this.refreshing = false;
+      // The delay starts after settlement, including HTTP failures and timeouts.
+      if (!this.stopping) {
+        this.timer = setTimeout(() => {
+          this.timer = undefined;
+          void this.refreshAndSchedule();
+        }, PAGE_REFRESH_MS);
+      }
+    }
   }
 
   public async stop(): Promise<void> {
     this.stopping = true;
-    if (this.timer) clearInterval(this.timer);
+    if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     for (const connection of this.connections.values()) {
       try {
@@ -137,11 +154,14 @@ export class ModalWatcher {
       });
       if (!response.ok) throw new Error(`cdp_list_http_${response.status}`);
       const value: unknown = await response.json();
+      // stop() may have closed every socket while the fetch/JSON read was in flight.
+      if (this.stopping) return;
       if (!Array.isArray(value)) throw new Error('cdp_list_not_array');
       const pages = value.filter((page): page is CdpPage => pageIsChatGpt(page as CdpPage));
       log('modal_watcher_scan', { pages: pages.length });
       const seen = new Set(pages.map((page) => page.id));
       for (const page of pages) {
+        if (this.stopping) return;
         if (!this.connections.has(page.id)) this.attach(page);
         else this.connections.get(page.id)!.url = page.url ?? '';
       }
@@ -163,6 +183,7 @@ export class ModalWatcher {
   }
 
   private attach(page: CdpPage): void {
+    if (this.stopping) return;
     let socket: WebSocketLike;
     try {
       socket = new this.websocket(page.webSocketDebuggerUrl!);
@@ -180,6 +201,10 @@ export class ModalWatcher {
     };
     this.connections.set(page.id, connection);
     socket.addEventListener('open', () => {
+      if (this.stopping) {
+        try { socket.close(); } catch { /* already closed */ }
+        return;
+      }
       connection.alive = true;
       log('modal_watcher_page_attached', { page_id: page.id, url: connection.url });
     }, { once: true });
@@ -189,7 +214,7 @@ export class ModalWatcher {
   }
 
   private probe(connection: Connection): void {
-    if (!connection.alive || connection.pending) return;
+    if (this.stopping || !connection.alive || connection.pending) return;
     connection.pending = true;
     const id = ++connection.nextCommandId;
     try {

@@ -875,6 +875,128 @@ describe('Issue #1430 deterministic observation admission crash recovery', () =>
   });
 });
 
+describe('Issue #2457 unproven terminal locator', () => {
+  it('sends through the fake page as unowned and omits the handle from the chat binding', async () => {
+    const { randomUUID } = await import('node:crypto');
+    const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const fixture = await import('./state-light-turn.test-fixtures.ts');
+    const runtimeMocks = {
+      browserQueue: [] as any[],
+      cleanupOutcome: 'confirmed' as const,
+      releaseBrowser: vi.fn(async () => undefined),
+      verifyProfile: vi.fn(async () => ({ state: 'verified' as const })),
+    };
+    vi.doMock('./browser-session.ts', () => fixture.createBrowserSessionModuleMock(runtimeMocks));
+    vi.doMock('./coordination.ts', () => fixture.createCoordinationModuleMock());
+    vi.doMock('./input.ts', () => ({ readStableInput: vi.fn(() => fixture.stableTurnInput('synthetic prompt')) }));
+    vi.doMock('./ui-adapter.ts', async (original) => fixture.buildUiAdapterTestMock(
+      await original<typeof import('./ui-adapter.ts')>(), runtimeMocks,
+    ));
+    vi.resetModules();
+    const selectors = await import('./product-page-selectors.ts');
+    const { configuredProfileKey } = await import('./storage-common.ts');
+    const { readStateLightTurnObservation } = await import('./state-light-turn-observation.ts');
+    const { readChatBinding } = await import('./chat-bindings.ts');
+    const { runStateLightTurn } = await import('./state-light-turn.ts');
+    const root = mkdtempSync(join(tmpdir(), 'opk-2457-unowned-send-'));
+    const originalStateDir = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    const originalHome = process.env.HOME;
+    const originalHandle = process.env.ORCA_TERMINAL_HANDLE;
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = join(root, 'state');
+    process.env.HOME = join(root, 'home');
+    const profile = join(root, 'fake-profile');
+    const cdp = 'http://127.0.0.1:9222';
+    const input = join(root, 'input.txt');
+    const projectUrl = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111/project';
+    writeFileSync(input, 'synthetic prompt', 'utf8');
+    try {
+      for (const handle of ['pane-recycled', '', undefined]) {
+        if (handle === undefined) delete process.env.ORCA_TERMINAL_HANDLE;
+        else process.env.ORCA_TERMINAL_HANDLE = handle;
+        const invocationId = randomUUID();
+        const conversationUrl = `https://chatgpt.com/c/${randomUUID()}`;
+        let currentUrl = projectUrl;
+        let composerText = '';
+        let sent = false;
+        const composer = fixture.scalarLocator({
+          count: vi.fn(async () => 1),
+          fill: vi.fn(async (value: string) => { composerText = value; }),
+          innerText: vi.fn(async () => composerText),
+          textContent: vi.fn(async () => composerText),
+        });
+        const sendButton = fixture.scalarLocator({
+          count: vi.fn(async () => 1),
+          click: vi.fn(async () => { sent = true; currentUrl = conversationUrl; }),
+        });
+        const finalMessages = () => sent ? [
+          { role: 'user' as const, text: composerText },
+          { role: 'assistant' as const, text: 'synthetic reply', finalAction: true, finalActionInTurnContainer: true },
+        ] : [];
+        const page: any = {
+          __fakeBrowserGptPage: true,
+          goto: vi.fn(async (url: string) => { currentUrl = url; }),
+          url: vi.fn(() => currentUrl),
+          isClosed: vi.fn(() => false),
+          waitForTimeout: vi.fn(async () => undefined),
+          close: vi.fn(async () => undefined),
+          getByText: vi.fn(() => fixture.scalarLocator()),
+          getByRole: vi.fn(() => fixture.scalarLocator()),
+          locator: vi.fn((selector: string) => {
+            if (selector === selectors.COMPOSER_SELECTOR) return composer;
+            if (selector === selectors.SEND_BUTTON_SELECTOR) return sendButton;
+            if (selector === selectors.USER_MESSAGE_SELECTOR) return fixture.collectionLocator(
+              sent ? [{ role: 'user', text: composerText }] : [],
+            );
+            if (selector === selectors.MESSAGE_NODE_SELECTOR) return fixture.collectionLocator(finalMessages());
+            if (selector === selectors.ASSISTANT_MESSAGE_SELECTOR) return fixture.collectionLocator(
+              finalMessages().filter((message) => message.role === 'assistant'),
+            );
+            if (selector === selectors.ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+              const last = finalMessages().at(-1);
+              return last?.role === 'assistant' && last.finalActionInTurnContainer
+                ? fixture.messageLocator(last) : fixture.scalarLocator();
+            }
+            if (selectors.matchesNewChatControlSelector(selector)) return fixture.scalarLocator();
+            return fixture.scalarLocator();
+          }),
+        };
+        fixture.enqueueBrowserForTurn(runtimeMocks, page);
+        const profileKey = configuredProfileKey(profile, cdp);
+        const { code, result } = await fixture.runStateLightTurnWithStdoutCapture(
+          (argv) => runStateLightTurn(argv, { recordChatBinding: true }),
+          [
+            '--profile', profile, '--cdp', cdp, '--input', input,
+            '--output', join(root, invocationId + '.txt'), '--chat-url', conversationUrl,
+            '--invocation-id', invocationId,
+            '--timeout-ms', '5000', '--poll-ms', '1',
+          ],
+        );
+        expect(code, JSON.stringify(result)).toBe(0);
+        expect(sendButton.click).toHaveBeenCalledTimes(1);
+        expect(result).toMatchObject({ state: 'ok', send_count: 1 });
+        expect(readStateLightTurnObservation(profileKey, invocationId)).not.toHaveProperty('owner');
+        expect(readChatBinding(conversationUrl)).not.toHaveProperty('terminal_handle');
+      }
+    } finally {
+      vi.doUnmock('./browser-session.ts');
+      vi.doUnmock('./coordination.ts');
+      vi.doUnmock('./input.ts');
+      vi.doUnmock('./ui-adapter.ts');
+      vi.resetModules();
+      if (originalStateDir === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+      else process.env.CHATGPT_BROWSER_TURN_STATE_DIR = originalStateDir;
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalHandle === undefined) delete process.env.ORCA_TERMINAL_HANDLE;
+      else process.env.ORCA_TERMINAL_HANDLE = originalHandle;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+
 describe('existing generation behind a connection-recovery status', () => {
   function recoveryPage(recoveryShown: boolean) {
     const state = { stopped: false, recovery: recoveryShown };
