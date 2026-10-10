@@ -882,6 +882,17 @@ describe('Issue #2463 parked-producer compatibility with r05', () => {
     expect(textTo(run.calls)[0]).toContain('checks-completed');
   });
 
+  it('preserves native merged and submitted-review event re-checks without Task binding', async () => {
+    const merged = await tick({ config: setting, terminals: [terminals[0]!, terminals[1]!],
+      screens: { coord: 'idle', one: 'PARKED on PR #12 merged' },
+      readNamedPull: () => ({ number: 12, headSha: head, state: 'closed', merged: true }) });
+    expect(textTo(merged.calls)[0]).toContain('merged');
+    const review = await tick({ config: setting, terminals: [terminals[0]!, terminals[1]!],
+      screens: { coord: 'idle', one: 'PARKED on PR #12 review #14 head ' + head },
+      readNamedReview: () => ({ id: 14, state: 'COMMENTED', commitSha: head, submittedAt: '2026-10-10T00:00:00Z' }) });
+    expect(textTo(review.calls)[0]).toContain('review-submitted');
+  });
+
   it('keeps unmatched PARKED quiet and direct reminders at elapsed 30/60 minutes', async () => {
     const store = new MemoryWakeStore(), screens = { coord: 'idle', one: 'PARKED on missing-event' };
     const step = (now: number) => tick({ store, screens, now: () => now,
