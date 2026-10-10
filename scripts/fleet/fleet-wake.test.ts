@@ -1829,9 +1829,9 @@ describe('Issue #2471 local-chatgpt coordinator-only and one-attempt routing', (
     url: string, kind: ChatErrorBanner['kind'] = 'error_banner',
     extra: Partial<ProjectChat> = {},
   ): ProjectChat => ({
-    targetId: 'local-fixture', url, issue: 2471, pull: 2475, review: false,
+    targetId: 'local-fixture', url, issue: 2471, review: false,
     generating: false, banners: [{
-      url, issue: 2471, pull: 2475, review: false, kind,
+      url, issue: 2471, review: false, kind,
       text: kind === 'stalled' ? 'GPT stopped without a final reply'
         : kind === 'unloadable' ? 'Could not load this ChatGPT conversation' : 'Synthetic red failure',
       retry: kind === 'error_banner',
@@ -2002,8 +2002,9 @@ describe('Issue #2471 local-chatgpt coordinator-only and one-attempt routing', (
         readChats: async () => [row(local)] });
       expect(first.result.state).toBe('send_failed');
       const firstSend = sendsTo(first.calls, 'coord');
-      expect(firstSend).toHaveLength(caseName === 'before-first' ? 0 : 1);
-      expect(firstSend.every((args) => args.includes('--text'))).toBe(true);
+      expect(firstSend).toHaveLength(caseName === 'before-first' ? 0 : caseName === 'failed-second' ? 2 : 1);
+      if (firstSend.length > 0) expect(firstSend[0]).toContain('--text');
+      if (caseName === 'failed-second') expect(firstSend[1]).not.toContain('--text');
       const statuses = [...store.parkedWakeEvents].map((key) => store.readParkedWakeEventStatus(key));
       expect(statuses).toEqual(caseName === 'before-first' ? [] : ['attempted_unverified']);
       const recovery = await tick({ config: settings, store, screens: idle, readChats: async () => [row(local)] });
