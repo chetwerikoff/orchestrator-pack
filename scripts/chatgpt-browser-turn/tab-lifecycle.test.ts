@@ -1265,6 +1265,44 @@ describe('Issue #2461 selected pack-review CDP preflight', () => {
     expect(browserConfig).toHaveBeenCalledTimes(1);
   });
 
+  it('binds the actual unchanged pack-review resolver to the selected project card, never a foreign healthy pair', async () => {
+    const configRoot = mkdtempSync(join(tmpdir(), 'opk2461-card-'));
+    const cardDir = join(configRoot, 'orchestrator-pack', 'projects');
+    mkdirSync(cardDir, { recursive: true });
+    writeFileSync(join(cardDir, 'orchestrator-pack.json'), JSON.stringify({
+      projectId: 'orchestrator-pack',
+      repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: process.cwd(),
+      defaultBranch: 'main',
+      orcaWorkspacePattern: '.*',
+      orchestratorTitlePattern: '.*',
+      browserGpt: { projectUrl },
+    }));
+    const inspected: string[] = [];
+    const foreignPair = { profile: '/synthetic/foreign-B', cdp: cdpB, ownerMatches: true, reachable: true };
+    expect(foreignPair.ownerMatches && foreignPair.reachable).toBe(true);
+    try {
+      const result = await runPackReviewPreflight(args, {
+        inspectOwner: async (input) => {
+          inspected.push(input.cdp);
+          return { ok: input.cdp === foreignPair.cdp, reason: 'not_listening' };
+        },
+        isReachable: async (cdp) => cdp === foreignPair.cdp,
+      }, {
+        OPK_PROJECT_ID: 'orchestrator-pack',
+        XDG_CONFIG_HOME: configRoot,
+        PACK_GPT_BROWSER_PROFILE: '/synthetic/selected-A',
+        PACK_GPT_BROWSER_CDP: cdpA,
+      });
+      expect(result).toMatchObject({
+        route: 'pack-gpt-reviewer', outcome: 'incomplete', reason: 'owner_not_listening',
+      });
+      expect(inspected).toEqual([cdpA]);
+    } finally {
+      rmSync(configRoot, { recursive: true, force: true });
+    }
+  });
+
   it('uses the real additive pure owner inspector for success, mismatch, timeout and absent owner file', async () => {
     const verifier = await import(new URL('../../.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs', import.meta.url).href) as {
       inspectCdpProfileBounded: (
