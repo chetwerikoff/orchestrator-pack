@@ -33,15 +33,30 @@ class MemoryWakeStore implements FleetWakeStateStore {
   readonly root = '/xdg/fleet-sweep/project';
   readonly marks = new Set<string>();
   readonly parkedWakeEvents = new Set<string>();
+  readonly eventStatus = new Map<string, 'sent' | 'attempted_unverified'>();
+  readonly epochs = new Map<string, { key: string; since: number }>();
   signature: string | null = null;
+  sentAt: number | undefined;
   hasPollingMark(handle: string): boolean { return this.marks.has(handle); }
   setPollingMark(handle: string): void { this.marks.add(handle); }
   clearPollingMark(handle: string): void { this.marks.delete(handle); }
   readLastSentSignature(): string | null { return this.signature; }
   writeLastSentSignature(signature: string): void { this.signature = signature; }
   clearLastSentSignature(): void { this.signature = null; }
+  readLastSentAt(): number | undefined { return this.sentAt; }
+  writeLastSentAt(at: number): void { this.sentAt = at; }
+  clearLastSentAt(): void { this.sentAt = undefined; }
+  readParkedEpoch(handle: string): { key: string; since: number } | undefined { return this.epochs.get(handle); }
+  writeParkedEpoch(handle: string, epoch: { key: string; since: number }): void { this.epochs.set(handle, epoch); }
+  clearParkedEpoch(handle: string): void { this.epochs.delete(handle); }
+  pruneParkedEpochs(keys: ReadonlyMap<string, string>): void {
+    for (const [handle, epoch] of this.epochs) if (keys.get(handle) !== epoch.key) this.epochs.delete(handle);
+  }
   hasParkedWakeEvent(key: string): boolean { return this.parkedWakeEvents.has(key); }
-  markParkedWakeEvent(key: string): void { this.parkedWakeEvents.add(key); }
+  markParkedWakeEvent(key: string, status: 'sent' | 'attempted_unverified' = 'sent'): void {
+    this.parkedWakeEvents.add(key);
+    this.eventStatus.set(key, status);
+  }
   rearmParkedWakeEvents(observedKeys: ReadonlyMap<string, string | null>): void {
     for (const key of this.parkedWakeEvents) {
       for (const [handle, activeKey] of observedKeys) {
@@ -113,6 +128,10 @@ async function tick(input: {
   checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
   supervisedPullOwner?: (pull: OpenPullHead, panes: readonly FleetPaneObservation[]) => FleetPaneObservation | undefined;
   readWorktreeHead?: (worktreePath: string) => string | undefined;
+  readNamedPull?: FleetAlarmTickOptions['readNamedPull'];
+  readNamedReview?: FleetAlarmTickOptions['readNamedReview'];
+  readPackReviewStage?: FleetAlarmTickOptions['readPackReviewStage'];
+  now?: () => number;
 }) {
   const calls: string[][] = [];
   const logs: string[] = [];
@@ -132,6 +151,10 @@ async function tick(input: {
     ...(input.checkRunsFinishedAt ? { checkRunsFinishedAt: input.checkRunsFinishedAt } : {}),
     ...(input.supervisedPullOwner ? { supervisedPullOwner: input.supervisedPullOwner } : {}),
     readWorktreeHead: input.readWorktreeHead ?? (() => undefined),
+    ...(input.readNamedPull ? { readNamedPull: input.readNamedPull } : {}),
+    ...(input.readNamedReview ? { readNamedReview: input.readNamedReview } : {}),
+    ...(input.readPackReviewStage ? { readPackReviewStage: input.readPackReviewStage } : {}),
+    ...(input.now ? { now: input.now } : {}),
   });
   return { result, calls, logs, sleeps, store };
 }
@@ -505,7 +528,7 @@ describe('fleet alarm', () => {
     screens.one = 'May I deploy to staging?';
     expect((await tick({ screens, store })).result.state).toBe('sent');
   });
-  it('sends every idle interval, names only STOPPED/POLLING panes, and performs exactly text+enter then one extra enter', async () => {
+  it('throttles an unchanged idle alarm while preserving the two-Enter send', async () => {
     const store = new MemoryWakeStore();
     const screens = {
       coord: 'idle prompt',
@@ -523,8 +546,8 @@ describe('fleet alarm', () => {
     expect(message).not.toContain('manager two');
 
     const second = await tick({ screens, store });
-    expect(second.result).toMatchObject({ state: 'sent', coordinatorState: 'idle', count: 1 });
-    expect(sends(second.calls)).toHaveLength(2);
+    expect(second.result).toMatchObject({ state: 'same_stopped_set', coordinator: 'coord' });
+    expect(sends(second.calls)).toHaveLength(0);
   });
   it('excludes the coordinator while sweeping agent panes in the same primary worktree', async () => {
     const workspacePrimary = '/home/che/orca/workspaces/project/fixture';
