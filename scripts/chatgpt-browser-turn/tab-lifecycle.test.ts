@@ -1255,6 +1255,8 @@ describe('Issue #2461 selected pack-review CDP preflight', () => {
 
     const mismatch = await runPackReviewPreflight(args, fake, { OPK_PROJECT_ID: 'foreign' });
     expect(mismatch.reason).toBe('project_selector_mismatch');
+    const absent = await runPackReviewPreflight(args, fake, {});
+    expect(absent.reason).toBe('project_selector_mismatch');
     expect(browserConfig).toHaveBeenCalledTimes(1);
     const cardMismatch = await runPackReviewPreflight(args, {
       ...fake, resolveTarget: () => ({ ...selectedCard, repository: 'foreign/repository' }),
