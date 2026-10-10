@@ -1,5 +1,7 @@
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DEFAULT_WAKE_SUPERVISOR_PROJECT_ID } from './pr2-foundation/wake-supervisor-state-constants.mjs';
@@ -69,6 +71,7 @@ async function waitForWatchDelivery(): Promise<void> {
 function runHarnessedVitest(testPath: string, env: NodeJS.ProcessEnv): Promise<{
   exitCode: number | null;
   stderr: string;
+  stdout: string;
 }> {
   return runProcess({
     command: process.execPath,
@@ -81,7 +84,150 @@ function runHarnessedVitest(testPath: string, env: NodeJS.ProcessEnv): Promise<{
     cwd: repoRoot,
     env,
     inheritParentEnv: false,
-  }).then((result) => ({ exitCode: result.exitCode, stderr: result.stderr }));
+  }).then((result) => ({ exitCode: result.exitCode, stderr: result.stderr, stdout: result.stdout }));
+}
+
+
+const RUNTIME_SELECTORS = ['OPK_PROJECT_ID', 'GH_REPO', 'ORCA_TERMINAL_HANDLE'] as const;
+
+function setSyntheticParentSelectors(env: NodeJS.ProcessEnv, seeded: boolean): void {
+  if (seeded) {
+    Object.assign(env, {
+      OPK_PROJECT_ID: 'orchestrator-pack',
+      GH_REPO: 'chetwerikoff/orchestrator-pack',
+      ORCA_TERMINAL_HANDLE: 'synthetic-terminal',
+    });
+  } else {
+    for (const name of RUNTIME_SELECTORS) delete env[name];
+  }
+}
+
+function makeStartupRecorder(root: string): {
+  entryFile: string;
+  nodeOptions: string;
+  originalImport: string;
+  recorder: string;
+} {
+  const id = basename(root);
+  const originalImport = join(repoRoot, 'scripts', '.opk-parent-guard-original-' + id + '.mjs');
+  const recorder = join(repoRoot, 'scripts', '.opk-parent-guard-entry-' + id + '.mjs');
+  const entryFile = join(root, 'vitest-entry.json');
+  temporaryFiles.push(originalImport, recorder);
+  writeFileSync(originalImport, '// synthetic inherited Node preload\n', 'utf8');
+  writeFileSync(recorder, [
+    "import { writeFileSync } from 'node:fs';",
+    "const entry = String(process.argv[1] ?? '').replaceAll(String.fromCharCode(92), '/');",
+    "if (entry.endsWith('/node_modules/vitest/vitest.mjs')) {",
+    "  const names = ['OPK_PROJECT_ID', 'GH_REPO', 'ORCA_TERMINAL_HANDLE'];",
+    "  const selectors = Object.fromEntries(names.map((name) => [name, { present: Object.hasOwn(process.env, name), value: process.env[name] ?? null }]));",
+    "  writeFileSync(" + JSON.stringify(entryFile) + ", JSON.stringify({ entry, selectors, harnessRoot: process.env.OPK_VITEST_HARNESS_ROOT ?? null, harnessEnabled: process.env.OPK_VITEST_HARNESS ?? null, productionWakeRoot: process.env.OPK_VITEST_PRODUCTION_WAKE_ROOT ?? null, leaseRoot: process.env.OPK_TESTMODE_LEASE_ROOT ?? null, reentryRoot: process.env.OPK_VITEST_REENTRY_HARNESS_ROOT ?? null, nodeOptions: process.env.NODE_OPTIONS ?? '', ci: process.env.CI ?? null, xdgConfigHome: process.env.XDG_CONFIG_HOME ?? null }) + '\\n');",
+    '}',
+    '',
+  ].join('\n'), 'utf8');
+  return {
+    entryFile,
+    originalImport,
+    recorder,
+    nodeOptions: ['--import=' + pathToFileURL(originalImport).href, '--import=' + pathToFileURL(recorder).href].join(' '),
+  };
+}
+
+function assertPreSetupVitestEntry(
+  recorder: ReturnType<typeof makeStartupRecorder>,
+  parentEnv: NodeJS.ProcessEnv,
+): {
+  entry: string;
+  selectors: Record<string, { present: boolean; value: string | null }>;
+  harnessRoot: string;
+  reentryRoot: string | null;
+  ci: string | null;
+  xdgConfigHome: string | null;
+} {
+  // Missing/wrong-process output is fatal; only the actual vitest.mjs entry writes this file.
+  expect(existsSync(recorder.entryFile), 'Vitest startup recorder did not run').toBe(true);
+  const snapshot = JSON.parse(readFileSync(recorder.entryFile, 'utf8'));
+  expect(snapshot.entry).toMatch(/\/node_modules\/vitest\/vitest\.mjs$/);
+  for (const name of RUNTIME_SELECTORS) {
+    expect(snapshot.selectors[name], name + ' was inherited at Vitest entry').toEqual({
+      present: false,
+      value: null,
+    });
+  }
+  expect(snapshot.harnessEnabled).toBe('1');
+  expect(typeof snapshot.harnessRoot).toBe('string');
+  expect(snapshot.harnessRoot.length).toBeGreaterThan(0);
+  expect(snapshot.leaseRoot).toBe(join(snapshot.harnessRoot, 'state', 'testmode-fleet-leases'));
+  expect(snapshot.productionWakeRoot).toBe(parentEnv.OPK_VITEST_PRODUCTION_WAKE_ROOT);
+  expect(snapshot.nodeOptions).toContain(pathToFileURL(recorder.originalImport).href);
+  expect(snapshot.nodeOptions).toContain(pathToFileURL(recorder.recorder).href);
+  expect(snapshot.nodeOptions).toContain('vitest-live-store-preload.mjs');
+  return snapshot;
+}
+
+function makeOfflineProjectCard(configHome: string, primaryRoot: string, repository: string): string {
+  mkdirSync(primaryRoot, { recursive: true });
+  execFileSync('git', ['init', '--quiet', primaryRoot], { stdio: 'pipe' });
+  execFileSync('git', ['-C', primaryRoot, 'remote', 'add', 'origin', 'https://github.com/' + repository + '.git'], { stdio: 'pipe' });
+  const cardPath = join(configHome, 'orchestrator-pack', 'projects', 'fixture-project.json');
+  mkdirSync(join(configHome, 'orchestrator-pack', 'projects'), { recursive: true });
+  writeFileSync(cardPath, JSON.stringify({
+    projectId: 'fixture-project',
+    repository,
+    primaryRoot,
+    defaultBranch: 'main',
+    orcaWorkspacePattern: '.*',
+    orchestratorTitlePattern: '.*',
+    browserGpt: { projectUrl: 'https://example.test/project' },
+  }), 'utf8');
+  return cardPath;
+}
+
+function makeTransientEnvironmentProbe(
+  root: string,
+  parentConfigHome: string,
+  childConfigHome: string,
+  childCardPath: string,
+  sentinelCardPath: string,
+): { fixture: string; testFile: string } {
+  const testFile = join(root, 'vitest-test-observation.json');
+  const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-env-' + basename(root) + '.test.ts');
+  temporaryFiles.push(fixture);
+  writeFileSync(fixture, [
+    "import { expect, it, vi } from 'vitest';",
+    "import { existsSync, rmSync, writeFileSync } from 'node:fs';",
+    "import { launchingTerminalHandle } from './chatgpt-browser-turn/chat-bindings.ts';",
+    "import { resolveTargetContext } from './lib/target-context.ts';",
+    "it('sees no inherited selectors before test-local opt-in', () => {",
+    "  const names = ['OPK_PROJECT_ID', 'GH_REPO', 'ORCA_TERMINAL_HANDLE'];",
+    "  const selectors = Object.fromEntries(names.map((name) => [name, { present: Object.hasOwn(process.env, name), value: process.env[name] ?? null }]));",
+    "  for (const name of names) expect(selectors[name]).toEqual({ present: false, value: null });",
+    "  expect(launchingTerminalHandle(process.env)).toBeUndefined();",
+    "  expect(process.env.OPK_VITEST_HARNESS).toBe('1');",
+    "  expect(process.env.OPK_TESTMODE_LEASE_ROOT).toContain('testmode-fleet-leases');",
+    "  expect(process.env.NODE_OPTIONS).toContain('vitest-live-store-preload.mjs');",
+    "  writeFileSync(" + JSON.stringify(testFile) + ", JSON.stringify({ selectors, terminal: launchingTerminalHandle(process.env) ?? null, harnessRoot: process.env.OPK_VITEST_HARNESS_ROOT ?? null, leaseRoot: process.env.OPK_TESTMODE_LEASE_ROOT ?? null }));",
+    "  expect(process.env.XDG_CONFIG_HOME).toBe(" + JSON.stringify(parentConfigHome) + ");",
+    "  expect(existsSync(" + JSON.stringify(sentinelCardPath) + ")).toBe(true);",
+    "  expect(launchingTerminalHandle({ ORCA_TERMINAL_HANDLE: 'synthetic-terminal' })).toBe('synthetic-terminal');",
+    "  try {",
+    "    vi.stubEnv('ORCA_TERMINAL_HANDLE', 'synthetic-test-local-terminal');",
+    "    expect(launchingTerminalHandle(process.env)).toBe('synthetic-test-local-terminal');",
+    "    vi.stubEnv('XDG_CONFIG_HOME', " + JSON.stringify(childConfigHome) + ");",
+    "    vi.stubEnv('OPK_PROJECT_ID', 'fixture-project');",
+    "    vi.stubEnv('GH_REPO', 'example-co/selected');",
+    "    const resolved = resolveTargetContext();",
+    "    expect(resolved.cardPath).toBe(" + JSON.stringify(childCardPath) + ");",
+    "    expect(resolved.repository).toBe('example-co/selected');",
+    "    rmSync(" + JSON.stringify(childCardPath) + ");",
+    "    let missingError: unknown;",
+    "    try { resolveTargetContext(); } catch (error) { missingError = error; }",
+    "    expect(missingError).toMatchObject({ code: 'card-missing' });",
+    "  } finally { vi.unstubAllEnvs(); }",
+    "  expect(launchingTerminalHandle(process.env)).toBeUndefined();",
+    "});",
+    '',
+  ].join('\n'), 'utf8');
+  return { fixture, testFile };
 }
 
 function writeAtomicJournal(wakeRoot: string): void {
@@ -484,6 +630,68 @@ describe('parent live-store guard', () => {
     expect(child.stderr).toContain('unrelated-live-store-leak.json');
   });
 
+
+  it('removes inherited selectors at Vitest entry, before globalSetup, without erasing synthetic opt-ins', async () => {
+    for (const seeded of [true, false]) {
+      const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-entry-isolation-'));
+      temporaryRoots.push(root);
+      const environment = productionEnvironment(join(root, 'production'));
+      setSyntheticParentSelectors(environment, seeded);
+      const parentConfigHome = join(root, 'poisoned-parent-config');
+      const childConfigHome = join(root, 'child-owned-config');
+      const sentinel = makeOfflineProjectCard(parentConfigHome, join(root, 'sentinel-repo'), 'example-co/sentinel');
+      const card = makeOfflineProjectCard(childConfigHome, join(root, 'child-repo'), 'example-co/selected');
+      environment.XDG_CONFIG_HOME = parentConfigHome;
+      const recorder = makeStartupRecorder(root);
+      environment.NODE_OPTIONS = recorder.nodeOptions;
+      const probe = makeTransientEnvironmentProbe(root, parentConfigHome, childConfigHome, card, sentinel);
+      const parentSelectors = Object.fromEntries(RUNTIME_SELECTORS.map((name) => [name, environment[name]]));
+      const invokingSelectors = Object.fromEntries(RUNTIME_SELECTORS.map((name) => [name, process.env[name]]));
+      const child = await runHarnessedVitest(probe.fixture, environment);
+      expect(child.exitCode, child.stdout + '\n' + child.stderr).toBe(0);
+      const entry = assertPreSetupVitestEntry(recorder, environment);
+      expect(entry.xdgConfigHome).toBe(parentConfigHome);
+      expect(entry.reentryRoot).toBeNull();
+      const inTest = JSON.parse(readFileSync(probe.testFile, 'utf8'));
+      expect(inTest.selectors).toEqual(entry.selectors);
+      expect(inTest.terminal).toBeNull();
+      expect(inTest.harnessRoot).toBe(entry.harnessRoot);
+      expect(inTest.leaseRoot).toBe(join(entry.harnessRoot, 'state', 'testmode-fleet-leases'));
+      for (const name of RUNTIME_SELECTORS) {
+        expect(environment[name]).toBe(parentSelectors[name]);
+        expect(process.env[name]).toBe(invokingSelectors[name]);
+      }
+      expect(environment.NODE_OPTIONS).toBe(recorder.nodeOptions);
+    }
+  }, 120_000);
+
+  it('is also clean before globalSetup on the real Vitest CI contract launcher', async () => {
+    for (const seeded of [true, false]) {
+      const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-ci-entry-'));
+      temporaryRoots.push(root);
+      const environment = productionEnvironment(join(root, 'production'));
+      setSyntheticParentSelectors(environment, seeded);
+      const recorder = makeStartupRecorder(root);
+      environment.NODE_OPTIONS = recorder.nodeOptions;
+      const parentSelectors = Object.fromEntries(RUNTIME_SELECTORS.map((name) => [name, environment[name]]));
+      const child = await runProcess({
+        command: process.execPath,
+        args: ['--experimental-strip-types', join(repoRoot, 'scripts', 'vitest-ci-runner.ts'), 'contract'],
+        cwd: repoRoot,
+        env: environment,
+        inheritParentEnv: false,
+        timeoutMs: 110_000,
+      });
+      expect(child.exitCode, child.stdout + '\n' + child.stderr).toBe(0);
+      expect(child.stdout).toContain('[PASS] Vitest contract lane files=3');
+      const entry = assertPreSetupVitestEntry(recorder, environment);
+      expect(entry.reentryRoot).toBe(entry.harnessRoot);
+      expect(entry.ci).toBe('true');
+      for (const name of RUNTIME_SELECTORS) expect(environment[name]).toBe(parentSelectors[name]);
+      expect(environment.NODE_OPTIONS).toBe(recorder.nodeOptions);
+    }
+  }, 240_000);
+
   it('retains a child-originated live-store mutation when the watcher observes it', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-parent-guard-leak-'));
     temporaryRoots.push(root);
@@ -505,6 +713,9 @@ describe('parent live-store guard', () => {
       'utf8',
     );
     const childEnvironment = productionEnvironment(join(root, 'child-production'));
+    setSyntheticParentSelectors(childEnvironment, true);
+    const selectedParentValues = Object.fromEntries(RUNTIME_SELECTORS.map((name) => [name, childEnvironment[name]]));
+    const originalWakeRoot = childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT;
     childEnvironment.LEAK_PATH = join(
       childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!,
       'unclassified-child-leak.json',
@@ -513,6 +724,10 @@ describe('parent live-store guard', () => {
 
     expect(child.exitCode).not.toBe(0);
     expect(child.stderr).toContain('OPK_VITEST_LIVE_STORE_GUARD_FAILED');
+    for (const name of RUNTIME_SELECTORS) expect(childEnvironment[name]).toBe(selectedParentValues[name]);
+    expect(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT).toBe(originalWakeRoot);
+    expect(childEnvironment.OPK_VITEST_HARNESS).toBeUndefined();
+    expect(childEnvironment.OPK_VITEST_REENTRY_HARNESS_ROOT).toBeUndefined();
   });
 
 });
