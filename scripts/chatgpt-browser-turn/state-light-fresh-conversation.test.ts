@@ -120,7 +120,7 @@ import {
 import { classifyPageObservation, classifySendLandingEvidence, readPageObservation, runStateLightTurn } from './state-light-turn.ts';
 import { admitStateLightTurnObservation, readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { deriveDelivery } from '../flow-manager-long-running-child.ts';
-import { __testComposerMutation, deriveComposerInsertionBudgetMs } from './state-light-turn-base.ts';
+import { __testComposerMutation, __testSendDelivery, deriveComposerInsertionBudgetMs } from './state-light-turn-base.ts';
 import { wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
   EXPLICIT_CANCELLATION_AUTHORITY,
@@ -426,6 +426,49 @@ describe('state-light fresh conversation collision recovery', () => {
     ]);
   });
 
+  it.each(['\n', ' \t\n'])('sends from an empty ProseMirror composer reading %j (#2492)', async (emptyText) => {
+    const prompt = 'PROMPT-NEWLINE-COMPOSER';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'NEWLINE-OK');
+    turn.composer.innerText.mockResolvedValueOnce(emptyText);
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'newline-composer.txt'));
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(turn.getSends()).toBe(1);
+    expect(turn.composer.fill.mock.calls.map((args: unknown[]) => args[0])).toEqual([
+      expect.stringContaining(prompt),
+    ]);
+  });
+
+  it('clears abc to a newline-reading empty composer and sends (#2492)', async () => {
+    const prompt = 'PROMPT-ABC-COMPOSER';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'CLEARED-OK');
+    await turn.composer.fill('abc');
+    turn.composer.fill.mockClear();
+    const read = turn.composer.innerText.getMockImplementation()!;
+    turn.composer.innerText.mockImplementation(async () => (await read()) || '\n');
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'abc-composer.txt'));
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1, stale_composer_cleared: true });
+    expect(turn.getSends()).toBe(1);
+    expect(turn.composer.fill.mock.calls.map((args: unknown[]) => args[0])).toEqual([
+      '', expect.stringContaining(prompt),
+    ]);
+  });
+
+  it.each(['', '\n'])('sends a rendered five-newline separator and three-newline suffix for prompt suffix %j (#2492)', async (suffix) => {
+    const prompt = `Reply with the single word OK.${suffix}`;
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'OK');
+    const read = turn.composer.innerText.getMockImplementation()!;
+    turn.composer.innerText.mockImplementation(async () => {
+      const text = await read();
+      return text ? text.replace(/\n\n/u, '\n\n\n\n\n').trimEnd() + '\n\n\n' : '\n';
+    });
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'rendered-paragraphs.txt'));
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(turn.getSends()).toBe(1);
+  });
+
   it('blocks before clearing or typing if existing fresh composer content cannot be read (#2487)', async () => {
     const prompt = 'PROMPT-UNREADABLE-STALE-DRAFT';
     const invocationId = randomUUID();
@@ -488,24 +531,17 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.page.close).not.toHaveBeenCalled();
   });
 
-  it('never erases a stale composer that was rewritten between safe preflight reads (#2487)', async () => {
-    const prompt = 'PROMPT-STALE-REWRITTEN';
-    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const turn = makeLoserPage(prompt, 'UNREACHED');
-    await turn.composer.fill('SYNTHETIC-STALE-DRAFT');
-    turn.composer.fill.mockClear();
-    const read = turn.composer.innerText.getMockImplementation()!;
-    let draftReads = 0;
-    turn.composer.innerText.mockImplementation(async () => {
-      draftReads++;
-      if (draftReads === 2) await turn.composer.fill('SYNTHETIC-REPLACED-DRAFT');
-      return await read();
-    });
-    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'rewritten-stale-tab.txt'));
-    expect(outcome.result).toMatchObject({ send_count: 0, cause: 'fresh_composer_draft_unreadable' });
-    expect(turn.composer.fill.mock.calls.map((args: unknown[]) => args[0])).toEqual(['SYNTHETIC-REPLACED-DRAFT']);
-    expect(turn.sendButton.click).not.toHaveBeenCalled();
-    expect(turn.page.close).not.toHaveBeenCalled();
+  it('clears a fresh draft without a double read or Stop re-check (#2492)', async () => {
+    const composer = {
+      innerText: vi.fn().mockResolvedValueOnce('abc').mockResolvedValueOnce('\n'),
+      fill: vi.fn(async () => undefined),
+    };
+    const page = { locator: vi.fn(() => composer) };
+    expect(await __testSendDelivery.prepareFreshComposerDraft(page, mocks.nowMs + 8_000)).toBe('cleared');
+    expect(page.locator).toHaveBeenCalledTimes(1);
+    expect(page.locator).toHaveBeenCalledWith(COMPOSER_SELECTOR);
+    expect(composer.innerText).toHaveBeenCalledTimes(2);
+    expect(composer.fill).toHaveBeenCalledWith('', { timeout: 5_000 });
   });
   it('closes a proven owned, never-clicked draft only after 60s of disabled Send (#2487)', async () => {
     const prompt = 'PROMPT-FRESH-NEVER-ENABLED';
