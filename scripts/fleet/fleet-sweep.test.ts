@@ -97,15 +97,20 @@ describe('fleet sweep classification', () => {
 
   it.each([
     '> PARKED on PR #1 merged',
-    'User: End your turn with\nPARKED on PR #1 merged',
-    'Tool: orca terminal read --terminal foreign\nforeign output\nPARKED on PR #1 merged',
     'finished own task\n> foreign pane: PARKED on PR #1 merged',
     'PARKED on PR #1 merged\nfinished new work',
     'PARKED on PR #1 merged\nMay I deploy?',
     '```text\nPARKED on PR #1 merged\n```',
     'PARKED on PR #1 merged\n\nImplementation complete; no dependency remains.',
-  ])('does not treat quoted, foreign or superseded text as an own wait: %s', (screen) => {
+  ])('does not classify a non-final PARKED marker: %s', (screen) => {
     expect(classifyFleetPane(screen, 'p1', new MemoryPollingStore())).toBe('STOPPED');
+  });
+
+  it.each([
+    'User: End your turn with\nPARKED on 00000000-0000-4000-8000-000000000001',
+    'Tool: orca terminal read --terminal foreign\nPARKED on 00000000-0000-4000-8000-000000000001',
+  ])('r05: final visible PARKED line alone is park authority: %s', (screen) => {
+    expect(classifyFleetPane(screen, 'p1', new MemoryPollingStore())).toBe('PARKED');
   });
 
   it('recognizes a final rendered and wrapped own outcome', () => {
@@ -134,6 +139,20 @@ describe('fleet sweep classification', () => {
     expect(classifyFleetPane('real work\nesc interrupt', 'p1', store)).toBe('busy');
     expect(store.marks.has('p1')).toBe(false);
     expect(classifyFleetPane(screen, 'p1', store)).toBe('busy');
+  });
+
+  it('r05: recognizes a last-line UUID park without a Task, wait object, receipt or generation', () => {
+    const term = pane('solo', 'OpenCode manager');
+    const uuid = '12345678-1111-4222-8333-abcdef123456';
+    const screens = { solo: 'running\nPARKED on ' + uuid + '\n' };
+    const rows = runFleetSweep({
+      projectId: 'project', primary, terminals: [term], store: new MemoryPollingStore(),
+      executor: fakeExecutor([term], screens),
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.state).toBe('PARKED');
+    expect(rows[0]?.wait).toBe('PARKED on ' + uuid);
+    expect(rows[0]?.taskBinding).toBeUndefined();
   });
 
   it('clears a polling mark when polling text is stale scrollback behind newer busy work', () => {
@@ -523,7 +542,7 @@ describe('Issue #2441 observational-only fleet diagnostics', () => {
     expect(late[0]?.reason).toBe('agent_unverified');
   }));
 
-  it('mirrors retained PARKED acknowledgment and stale wait rejection without writing legacy task state', () => withStore((store) => {
+  it('mirrors retained PARKED acknowledgment and final-line PARKED despite stale binding without writing task state', () => withStore((store) => {
     const terminal = designated();
     const perform = (current: FleetTerminal, screen: string, now: number) => {
       const observations = runFleetSweep({ projectId: 'project', primary, terminals: [current], store,
@@ -538,16 +557,18 @@ describe('Issue #2441 observational-only fleet diagnostics', () => {
     const acknowledged = perform(terminal, 'Acknowledged', 300_000);
     expect(acknowledged).toEqual({ state: 'PARKED', diagnostic: 'PARKED' });
     const changed = perform({ ...terminal, incarnationId: 'inc-new' }, 'PARKED on PR #1 merged', 600_000);
-    expect(changed).toEqual({ state: 'STOPPED', diagnostic: 'STOPPED' });
+    expect(changed).toEqual({ state: 'PARKED', diagnostic: 'PARKED' });
   }));
 
-  it('does not assert a bound PARKED state for an unbound screen even if the old operational result says PARKED', () => withStore((store) => {
+  it('r05: reports PARKED without an Orca Task binding or incarnation', () => withStore((store) => {
     const unbound = { ...designated(), incarnationId: undefined };
     const observations = runFleetSweep({ projectId: 'project', primary, terminals: [unbound], store,
       executor: fakeExecutor([unbound], { agent: 'PARKED on PR #1 merged' }) });
     const rows = diagnose(store, [unbound], { agent: 'PARKED on PR #1 merged' }, 0, [], {}, observations);
     expect(observations[0]?.taskBinding).toBeUndefined();
-    expect(rows[0]?.state).toBeUndefined();
+    expect(observations[0]?.state).toBe('PARKED');
+    expect(observations[0]?.wait).toBe('PARKED on PR #1 merged');
+    expect(rows[0]?.state).toBe('PARKED');
     expect(rows[0]?.reason).toBe('agent_unverified');
   }));
 });
