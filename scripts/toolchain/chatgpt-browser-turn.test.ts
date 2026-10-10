@@ -3896,6 +3896,20 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     expect(evidence!.timeoutMs).toBeLessThanOrEqual(evidence!.remainingMs);
   });
 
+  it('Issue #2489 reaches bounded click/fill when the composer is genuinely absent', async () => {
+    const absent = makeComposerPage({ composerPresent: false });
+    const result = await __testComposerMutation.mutateComposerOrCause(absent.page, 'payload', 10_000);
+    expect(result).toBe('composer_unavailable');
+    expect(absent.composer.click).toHaveBeenCalledTimes(1);
+    expect(absent.composer.fill).toHaveBeenCalledTimes(1);
+
+    const rejected = makeComposerPage({ composerPresent: false, clickReject: true });
+    const failed = await __testComposerMutation.mutateComposerOrCause(rejected.page, 'payload', 10_000);
+    expect(failed).toBe('composer_unavailable');
+    expect(rejected.composer.click).toHaveBeenCalledTimes(1);
+    expect(rejected.composer.fill).not.toHaveBeenCalled();
+  });
+
   it('bounds the first post-readiness probe by the insertion phase', async () => {
     const fixture = makeComposerPage({ readinessDelayMs: COMPOSER_INSERTION_WAIT_MS });
     const failure = await __testComposerMutation.mutateComposerOrCause(fixture.page, 'payload', 10_000);

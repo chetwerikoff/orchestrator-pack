@@ -2187,7 +2187,30 @@ async function mutateComposerOrCause(
       return exhausted('readiness_before_click');
     }
     // Only positive missing-element evidence can classify composer_unavailable.
-    if (await locatorCount(composer, insertionDeadlineMs) === 0) return 'composer_unavailable';
+    // Even with a missing element, enter the normal bounded click/fill path
+    // once rather than treating readiness as an authority to skip mutation.
+    let composerAbsent = false;
+    try {
+      composerAbsent = await locatorCount(composer, insertionDeadlineMs) === 0;
+    } catch {
+      return exhausted('readiness_before_click');
+    }
+    if (composerAbsent) {
+      try {
+        let actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+        if (actionBudgetMs <= 0) return exhausted('budget_before_click');
+        await composer.click({ timeout: actionBudgetMs });
+        actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+        if (actionBudgetMs <= 0) return exhausted('budget_before_fill');
+        await composer.fill(text, { timeout: actionBudgetMs });
+        // A composer that appeared during the attempt may now continue to
+        // dispatch, but a still-absent node is proven not delivered.
+        if (await readComposerReadiness(page, insertionDeadlineMs)) return null;
+      } catch {
+        // The failed click/fill was attempted; the prior count proved absence.
+      }
+      return 'composer_unavailable';
+    }
     return exhausted('readiness_before_click');
   }
 
