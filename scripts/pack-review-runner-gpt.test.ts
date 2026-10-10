@@ -4458,8 +4458,11 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
     const action = String(terminal.nextAction);
     expect(action).toContain('node --experimental-strip-types scripts/pack-review-runner.ts reconcile');
     expect(action).toContain('--pr-number 2469');
-    expect(action).not.toMatch(/\\b(?:retry|reset)\\b/);
-    const args = parseArgs(action.split(' ').slice(4));
+    expect(action).not.toMatch(/(?:\\s)(?:retry|reset)(?:\\s|$)/);
+    const cliArgs = action.split(' ').slice(4);
+    // The CLI string quotes its actual repository root for shell safety.
+    cliArgs[1] = JSON.parse(cliArgs[1]!);
+    const args = parseArgs(cliArgs);
     expect(args).toMatchObject({ sourceRepoRoot: repoRoot, repoSlug, prNumber });
   });
 
@@ -4490,6 +4493,44 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
     });
     expect(invocations).toEqual([]);
     expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([]);
+  });
+
+  it('can consume ordinal 1 once only after independent existing same-head eligibility', async () => {
+    const f = seedOrphan();
+    f.expire();
+    await reconcileStalePackReviewRuns(f.input);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const launched: string[] = [];
+    const result = await startPackReview({
+      ...f.options,
+      sourceRepoRoot: repoRoot, prNumber, headSha: HEAD_A,
+      tier: 'T2', claimMode: 'preacquired',
+      fixturePrState: 'OPEN', fixtureRepoSlug: repoSlug,
+      fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
+      fixtureIssueBody: '```complexity-tier\\ntier: T2\\n```',
+      fixtureIssueNumber: prNumber,
+      fixtureGptAttemptObserver: async () => ({
+        state: 'replacement_eligible' as const, replacementEligible: true,
+        slotId: 'source-01',
+        replacementEligibleSlotIds: ['source-01'],
+        initialLaunchSlotIds: ['source-02', 'source-03'],
+      }),
+      fixtureAfterGptInvocationBound: async ({ slotId }) => { launched.push(slotId); },
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-source-01') }],
+        'source-02': [{ stdout: successfulCleanReviewPayload('inv-source-02') }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
+      },
+      fixtureRequiredStatusWriter: async () => {},
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      ok: true, runId: f.runId,
+    });
+    expect(launched).toEqual(['source-01', 'source-02', 'source-03']);
+    expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBe('clean');
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([1]);
   });
 
   it('preserves failure-only notification channel across repeated 0/3 reconciliation', async () => {
