@@ -18,9 +18,10 @@ across runtime modules.
 
 The canonical precedence is:
 
-1. `PACK_REVIEW_BOUND_REVIEWER` — an explicit reviewer bound to one invocation.
-2. The persistent user preference.
-3. Legacy `PACK_REVIEWER` — compatibility fallback only when no preference is saved.
+1. Validated `--reviewer gpt|claude|codex` on the canonical `pack-gpt-review` entrypoint — one invocation only.
+2. `PACK_REVIEW_BOUND_REVIEWER` — a nonempty explicit invocation binding.
+3. The persistent user preference.
+4. Legacy `PACK_REVIEWER` — compatibility fallback only when no preference is saved.
 
 The persistent preference is stored at:
 
@@ -34,8 +35,22 @@ When `XDG_CONFIG_HOME` is unset, the store uses
 The file is pack-owned, user-scoped, atomically replaced, and contains only
 the schema and selected reviewer.
 
-An invalid saved file fails closed. It must be repaired with this skill; an
-ambient environment value must not silently select a different reviewer.
+An invalid saved file fails closed when selection reaches the preference tier.
+A valid explicit CLI override (or explicit bound environment reviewer) is an
+intentional higher-priority one-shot exception. Malformed nonempty bound values
+fail closed unless a valid CLI reviewer was supplied. The canonical command
+name `pack-gpt-review` does **not** select GPT by itself.
+
+Before resuming delivery of a known journaled verdict, an invalid saved file or
+missing XDG/HOME configuration root fails closed even with a valid one-shot
+override. Repair the configuration and retry the **same** resume/reconcile; do
+not start another reviewer. The saved reviewer is not a retroactive substitute
+for the reviewer who produced the journaled verdict.
+
+Run read-back and the GitHub review comment distinguish selected reviewer,
+selection source, executed verdict reviewer, and the run that actually executed
+the reviewer. Conflict-free carry-over reports no invocation in the new run;
+historical runs lacking credible producer proof report `unrecorded`.
 
 ## Triggers
 
@@ -104,8 +119,9 @@ invocation time.
 
 ## One-shot exceptions
 
-For a deliberate one-review exception, use the runner's invocation-bound
-reviewer mechanism. Do not overwrite the persistent preference and do not
+For a deliberate one-review exception, pass `--reviewer gpt|claude|codex` to
+`npm run --silent pack-gpt-review -- --pr-number <n>` or use the runner's existing
+invocation-bound reviewer mechanism. Do not overwrite the persistent preference and do not
 leave a shell-level `PACK_REVIEWER` override behind.
 
 GPT uses the browser review adapter and does not silently fail over to Codex or

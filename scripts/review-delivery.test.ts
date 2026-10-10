@@ -27,6 +27,7 @@ import {
   projectPackReviewSemanticStatus,
   projectRunnerPackReviewStatusFromCombined,
   recordPackReviewPendingStatus,
+  restorePackReviewAuthoritativeRequiredStatus,
   resumePackReviewVerdictDelivery,
   semanticPackReviewRequiredStatusRequest,
   sendPackReviewWorkerNotification,
@@ -498,6 +499,80 @@ describe('runtime-neutral review delivery contract', () => {
   });
 });
 
+
+describe('Issue #2479 unchanged required-status wire contract', () => {
+  it('Issue #2479: retains all legacy required-status descriptions across selection and restoration', async () => {
+    const storeRoot = tempRoot('opk-status-2479-');
+    const run = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 2479,
+      headSha,
+      trustedPackRoot: process.cwd(),
+      sourceRepoRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      resolvedReviewer: 'claude',
+      resolvedReviewerSource: 'invocation-bound',
+    }).run;
+    const statuses: Array<{ state: string; description: string }> = [];
+    const writeRequiredStatus = async (request: { state: string; description: string }) => {
+      statuses.push({ state: request.state, description: request.description });
+    };
+    await recordPackReviewPendingStatus({
+      run, projectId: 'orchestrator-pack', storeRoot, writeRequiredStatus,
+    });
+    expect(statuses).toEqual([{
+      state: 'pending', description: 'Pack review is running for this exact head.',
+    }]);
+    expect(classifyPackReviewPayload({ verdict: 'clean', findingCount: 0, findings: [] }))
+      .toMatchObject({ requiredStatus: 'success', description: 'Pack review completed with no findings.' });
+    expect(classifyPackReviewPayload({
+      verdict: 'findings', findingCount: 1, findings: [{ severity: 'warning' }],
+    })).toMatchObject({
+      requiredStatus: 'success', description: 'Pack review completed with non-blocking findings.',
+    });
+    expect(classifyPackReviewPayload({
+      verdict: 'findings', findingCount: 1, findings: [{ severity: 'blocking' }],
+    })).toMatchObject({
+      requiredStatus: 'failure', description: 'Pack review found blocking issues.',
+    });
+
+    const persistedClean = updatePackReviewRun(run.id, {
+      status: 'up_to_date', latestRunStatus: 'up_to_date',
+      reviewVerdict: 'clean', findingCount: 0, findings: [],
+      journalOutcome: {
+        state: 'persisted', recordedAtUtc: '2026-10-10T00:00:00.000Z',
+        reason: 'verdict_persisted', idempotencyKey: `verdict:${run.id}:${headSha}`, attempts: 1,
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const restored = await restorePackReviewAuthoritativeRequiredStatus({
+      run: persistedClean, projectId: 'orchestrator-pack', storeRoot,
+      forceRepublish: true, writeRequiredStatus,
+    });
+    expect(restored?.state).toBe('succeeded');
+    expect(statuses.at(-1)).toEqual({
+      state: 'success', description: 'Pack review completed with no findings.',
+    });
+
+    const failed = createPackReviewRun({
+      projectId: 'orchestrator-pack', storeRoot, prNumber: 2480,
+      headSha, trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+    }).run;
+    const failedRun = updatePackReviewRun(failed.id, {
+      status: 'failed', latestRunStatus: 'failed',
+      failureReason: 'reviewer_process_timeout',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    await restorePackReviewAuthoritativeRequiredStatus({
+      run: failedRun, projectId: 'orchestrator-pack', storeRoot,
+      forceRepublish: true, writeRequiredStatus,
+    });
+    expect(statuses.at(-1)).toEqual({
+      state: 'error',
+      description: 'Pack review execution did not finish; no reviewer judgment was produced.',
+    });
+  });
+});
 
 describe('Issue #1419 direct GitHub pack-review semantics', () => {
   const h1 = '1'.repeat(40);

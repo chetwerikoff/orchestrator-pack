@@ -33,6 +33,8 @@ export interface PackReviewerLayerOverrides {
 }
 
 export interface ResolvePackReviewerOptions {
+  /** Validated one-shot CLI override, never copied into process.env. */
+  explicitReviewer?: PackReviewer;
   /** Harness-only legacy-layer fixture; production callers must omit it. */
   layerOverrides?: PackReviewerLayerOverrides;
   /** Harness-only ordering fixture; never probes host persistence. */
@@ -112,6 +114,25 @@ function resolvePackReviewer(
   options: ResolvePackReviewerOptions,
 ): PackReviewerResolution {
   const path = preferencePath(env, options);
+  if (options.explicitReviewer !== undefined) {
+    const explicit = normalizePackReviewer(options.explicitReviewer);
+    if (!explicit) {
+      return noAuthority(
+        trim(options.explicitReviewer),
+        `--reviewer has unrecognized value '${String(options.explicitReviewer)}'. Use gpt, claude, or codex.`,
+        path,
+        null,
+      );
+    }
+    return {
+      selectorValue: explicit,
+      reviewer: explicit,
+      source: 'invocation-bound',
+      preferencePath: path,
+      preference: null,
+      errorMessage: null,
+    };
+  }
   const boundRaw = trim(env[PACK_REVIEW_BOUND_REVIEWER_ENV]);
   if (boundRaw) {
     const bound = normalizePackReviewer(boundRaw);
@@ -183,6 +204,25 @@ function resolvePackReviewer(
     path,
     preference,
   );
+}
+
+/** A journaled delivery must not bypass a broken persistent authority via CLI/env. */
+export function packReviewResumeReviewerAuthorityError(
+  env: NodeJS.ProcessEnv = process.env,
+  options: ResolvePackReviewerOptions = {},
+): string | null {
+  const path = preferencePath(env, options);
+  if (!path) {
+    return 'OPK_PACK_REVIEW_RESUME_REVIEWER_AUTHORITY_INVALID: ' +
+      'OPK_REVIEWER_CONFIG_ROOT_MISSING: set XDG_CONFIG_HOME or HOME. ' +
+      'Repair the reviewer configuration root, then retry the same scoped resume/reconcile.';
+  }
+  const preference = readPreference(env, options);
+  if (preference.status === 'invalid') {
+    return `OPK_PACK_REVIEW_RESUME_REVIEWER_AUTHORITY_INVALID: ${preference.errorMessage} ` +
+      'Repair the saved reviewer preference, then retry the same scoped resume/reconcile.';
+  }
+  return null;
 }
 
 /** Canonical selector authority for pack review (Issue #1031). */

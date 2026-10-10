@@ -7,7 +7,7 @@ import { resolveReviewerBudgetDecision } from '../plugins/codex-pr-reviewer/lib/
 import { resolveTargetContext } from './lib/target-context.ts';
 import { startPackReview } from './pack-review-runner.ts';
 import { packReviewRunStaleMinutes } from './lib/pack-review-run-store.ts';
-import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.ts';
+import { normalizePackReviewer, type PackReviewer } from './lib/resolve-pack-reviewer.ts';
 
 type StartReview = (input: Parameters<typeof startPackReview>[0]) => ReturnType<typeof startPackReview>;
 
@@ -20,6 +20,7 @@ export interface PackGptReviewOptions {
   projectId?: string;
   sessionId?: string;
   timeoutSeconds?: number;
+  reviewer?: PackReviewer;
 }
 
 export interface PackGptReviewDependencies {
@@ -58,15 +59,16 @@ export function resolvePackGptReviewTimeoutSeconds(): number {
 
 export function packGptReviewUsage(): string {
   return [
-    'Canonical Browser-GPT pack review (Issue #1111)',
+    'Canonical pack review (historical command name; reviewer is configurable)',
     '',
     'Usage:',
-    '  npm run --silent pack-gpt-review -- [--project <id>] [--session-id <id>] --pr-number <n> [--timeout-seconds <n>]',
+    '  npm run --silent pack-gpt-review -- [--project <id>] [--session-id <id>] --pr-number <n> [--reviewer <gpt|claude|codex>] [--timeout-seconds <n>]',
     '  or select the card with OPK_PROJECT_ID for this invocation.',
     '',
-    'The command resolves the selected project card and live OPEN PR head, binds GPT for this invocation,',
-    'stays foregrounded until the existing pack-review runner returns, and leaves',
-    'GitHub publication to that runner. It does not accept a caller-supplied head SHA.',
+    'The command resolves the selected project card and live OPEN PR head. Reviewer priority:',
+    'explicit --reviewer > explicit PACK_REVIEW_BOUND_REVIEWER > saved preference > PACK_REVIEWER.',
+    'The route name does not select GPT. It stays foregrounded until the runner returns,',
+    'and leaves GitHub publication to that runner. It does not accept a caller-supplied head SHA.',
   ].join('\n');
 }
 
@@ -75,6 +77,7 @@ export function parsePackGptReviewArgs(argv: readonly string[]): PackGptReviewOp
   let projectId: string | undefined;
   let sessionId: string | undefined;
   let timeoutSeconds: number | undefined;
+  let reviewer: PackReviewer | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index]!;
     switch (flag) {
@@ -92,6 +95,12 @@ export function parsePackGptReviewArgs(argv: readonly string[]): PackGptReviewOp
       case '--timeout-seconds':
         timeoutSeconds = positiveInteger(argv[++index], '--timeout-seconds');
         break;
+      case '--reviewer': {
+        const value = argv[++index];
+        reviewer = value && !value.startsWith('--') ? normalizePackReviewer(value) ?? undefined : undefined;
+        if (!reviewer) throw new Error('--reviewer requires gpt, claude, or codex');
+        break;
+      }
       default:
         throw new Error(`unknown argument '${flag}'\n${packGptReviewUsage()}`);
     }
@@ -105,6 +114,7 @@ export function parsePackGptReviewArgs(argv: readonly string[]): PackGptReviewOp
     ...(projectId ? { projectId } : {}),
     ...(sessionId ? { sessionId } : {}),
     timeoutSeconds,
+    ...(reviewer ? { reviewer } : {}),
   };
 }
 
@@ -115,10 +125,13 @@ export async function runPackGptReviewCommand(
   const env = dependencies.env ?? process.env;
   const stderr = dependencies.stderr ?? process.stderr;
   const startReview = dependencies.startReview ?? startPackReview;
-  const previousBoundReviewer = env[PACK_REVIEW_BOUND_REVIEWER_ENV];
-  env[PACK_REVIEW_BOUND_REVIEWER_ENV] = 'gpt';
 
   try {
+    const reviewer = options.reviewer === undefined
+      ? undefined : normalizePackReviewer(options.reviewer);
+    if (options.reviewer !== undefined && !reviewer) {
+      throw new Error('--reviewer requires gpt, claude, or codex');
+    }
     const target = dependencies.startReview && !options.projectId && !trim(env.OPK_PROJECT_ID)
       ? undefined
       : resolveTargetContext({ projectId: options.projectId, env });
@@ -129,6 +142,7 @@ export async function runPackGptReviewCommand(
       timeoutSeconds: options.timeoutSeconds ?? resolvePackGptReviewTimeoutSeconds(),
       startReason: 'manual-browser-gpt',
       surface: 'pack-gpt-review',
+      ...(reviewer ? { reviewerOverride: reviewer } : {}),
       onRunStarted: ({ prNumber, headSha, runId, timeoutSeconds }) => {
         stderr.write(`[pack-gpt-review] started pr=${prNumber} head=${headSha} run=${runId} timeout_seconds=${timeoutSeconds}\n`);
       },
@@ -177,12 +191,6 @@ export async function runPackGptReviewCommand(
         prNumber: options.prNumber,
       },
     };
-  } finally {
-    if (previousBoundReviewer === undefined) {
-      delete env[PACK_REVIEW_BOUND_REVIEWER_ENV];
-    } else {
-      env[PACK_REVIEW_BOUND_REVIEWER_ENV] = previousBoundReviewer;
-    }
   }
 }
 

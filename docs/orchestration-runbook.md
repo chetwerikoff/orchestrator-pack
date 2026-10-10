@@ -311,11 +311,27 @@ Only the merge agent updates a branch from `origin/main`, once, immediately befo
 merge. Workers and coordinators never merge `main` merely to clear BEHIND.
 
 A new manual review
-`npm run --silent pack-gpt-review -- --project <PROJECT_ID> [--session-id <SESSION_ID>] --pr-number <PR_NUMBER>`
+`npm run --silent pack-gpt-review -- --project <PROJECT_ID> [--session-id <SESSION_ID>] --pr-number <PR_NUMBER> [--reviewer <gpt|claude|codex>]`
 starts only when review-independent required CI is green on the exact current head;
 `orchestrator-pack/pack-review` itself is excluded from that check. A supervised caller that will
 park on completion supplies its exact owned session id; an unbound caller omits the option and
 keeps the command foregrounded/observed instead of waiting for a notification target that does not exist.
+The historical `pack-gpt-review` command name does not imply GPT. Reviewer
+authority is selected once per newly admitted run: validated explicit `--reviewer`
+> explicit nonempty `PACK_REVIEW_BOUND_REVIEWER` > valid saved preference
+> legacy `PACK_REVIEWER`. A malformed selected tier fails closed; an invalid
+persistent preference cannot silently fall through to the legacy environment.
+The chosen reviewer and source remain frozen through native/GPT child launch.
+
+Run read-back and the GitHub review body separately expose the selected reviewer
+and selection source versus the reviewer and execution run that actually produced
+the accepted verdict. A conflict-free carry-over has no new reviewer invocation;
+if the source provenance is not provable, report `unrecorded` rather than
+crediting the current selection. For a known journaled-verdict delivery-only
+resume, missing config root or invalid present persistent preference is a
+repair-and-retry blocker even under an explicit override: do not republish, change
+the old provenance, or invoke a new reviewer. Required-status contexts,
+descriptions, round caps, CI, and settlement criteria remain unchanged.
 
 For a frozen three-source review round, 3/3 settles normally. After the existing
 stale/grace threshold, 2/3 may settle once as

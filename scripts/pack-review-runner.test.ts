@@ -24,6 +24,7 @@ import {
 } from './lib/pack-review-run-store.ts';
 import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 import { runProcess } from './kernel/subprocess.ts';
+import { getPackReviewerPreferencePath, writePackReviewerPreference } from './lib/pack-reviewer-preference.ts';
 import {
   boundIssueSnapshotArtifactPaths,
   captureBoundIssueSnapshot,
@@ -2067,5 +2068,241 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(retried.results).toContainEqual(expect.objectContaining({ settled: true }));
     expect(readPackReviewAuthority(prNumber, f.options)?.transitionSeq).toBe(before!.transitionSeq + 1);
     expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.consumedRoundOrdinals).toEqual([1, 2]);
+  });
+});
+
+describe('Issue #2479 frozen reviewer and accepted-verdict provenance', () => {
+  function harness(prNumber: number, head: string, storeRoot: string) {
+    return {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: process.cwd(),
+      prNumber,
+      headSha: head,
+      claimMode: 'preacquired' as const,
+      fixtureCurrentPrHeadSha: head,
+      fixturePostReviewHeadSha: head,
+      fixturePrState: 'OPEN' as const,
+      fixturePrBody: `Closes #${prNumber}`,
+      fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: prNumber,
+      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureReviewStdout: cleanPayload(),
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    };
+  }
+
+  function captureComment(bodies: string[]) {
+    const reviews: Array<{
+      id: number; state: string; userLogin: string; submittedAt: string;
+      body: string; commitId: string; url: string;
+    }> = [];
+    return {
+      resolveActorLogin: async () => 'fixture-pack-reviewer',
+      listReviews: async () => reviews.map((review) => ({ ...review })),
+      postReview: async (input: { body: string; commitId: string }) => {
+        const review = {
+          id: 247901 + reviews.length,
+          state: 'COMMENTED',
+          userLogin: 'fixture-pack-reviewer',
+          submittedAt: new Date().toISOString(),
+          body: input.body,
+          commitId: input.commitId,
+          url: `https://example.test/reviews/${247901 + reviews.length}`,
+        };
+        reviews.push(review);
+        bodies.push(input.body);
+        return { id: review.id, url: review.url };
+      },
+      dismissReview: async () => {},
+    };
+  }
+
+  it('freezes saved Claude selection despite a preference and ambient change at the pre-spawn boundary', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2479-frozen-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const config = getPackReviewerPreferencePath(process.env);
+    writePackReviewerPreference('claude', config);
+    process.env.PACK_REVIEWER = 'gpt';
+    const logPath = join(root, 'invocations.jsonl');
+    process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = logPath;
+    const comments: string[] = [];
+    const head = '4'.repeat(40);
+    const result = await startPackReview({
+      ...harness(247901, head, storeRoot),
+      fixtureGithubReviewTransport: captureComment(comments),
+      fixtureAfterNativeInitialArmed: async (run) => {
+        expect(run).toMatchObject({
+          resolvedReviewer: 'claude',
+          resolvedReviewerSource: 'persistent-preference',
+          executedReviewer: undefined,
+        });
+        writePackReviewerPreference('codex', config);
+        process.env.PACK_REVIEWER = 'codex';
+        process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
+      },
+    });
+    expect(result).toMatchObject({
+      ok: true, created: true, resolvedReviewer: 'claude',
+      resolvedReviewerSource: 'persistent-preference',
+      executedReviewer: 'claude', reviewerInvokedForThisRun: true,
+    });
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    expect(run).toMatchObject({
+      resolvedReviewer: 'claude', resolvedReviewerSource: 'persistent-preference',
+      executedReviewer: 'claude', reviewerExecutionRunId: result.runId,
+      reviewerInvokedForThisRun: true,
+    });
+    expect(JSON.parse(readFileSync(logPath, 'utf8').trim()).reviewer).toBe('claude');
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toContain('Selected reviewer: `claude`');
+    expect(comments[0]).toContain('Selection source: `persistent-preference`');
+    expect(comments[0]).toContain('Verdict reviewer: `claude`');
+    expect(comments[0]).toContain(`Verdict execution run: \`${result.runId}\``);
+  });
+
+  it('keeps selected Claude separate from a credentialed source GPT clean carry-over without new invocation', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2479-carryover-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const config = getPackReviewerPreferencePath(process.env);
+    writePackReviewerPreference('claude', config);
+    process.env.PACK_REVIEWER = 'gpt';
+    const head0 = '5'.repeat(40);
+    const head1 = '6'.repeat(40);
+    const prNumber = 247902;
+    const source = createPackReviewRun({
+      projectId: 'orchestrator-pack', storeRoot, prNumber,
+      headSha: head0, trustedPackRoot: process.cwd(),
+      sourceRepoRoot: process.cwd(), canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      resolvedReviewer: 'gpt', resolvedReviewerSource: 'legacy-env',
+    }).run;
+    updatePackReviewRun(source.id, {
+      status: 'up_to_date', latestRunStatus: 'up_to_date',
+      reviewVerdict: 'clean', findingCount: 0, findings: [],
+      executedReviewer: 'gpt', reviewerInvokedForThisRun: true, reviewerExecutionRunId: source.id,
+      journalOutcome: {
+        state: 'persisted', reason: 'verdict_persisted', recordedAtUtc: '2026-10-10T00:00:00.000Z',
+        idempotencyKey: `verdict:${source.id}:${head0}`, attempts: 1,
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const logPath = join(root, 'carryover-invocations.jsonl');
+    process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = logPath;
+    const comments: string[] = [];
+    const result = await startPackReview({
+      ...harness(prNumber, head1, storeRoot),
+      fixtureGithubReviewTransport: captureComment(comments),
+      fixtureCarryoverSourceCleanRunId: source.id,
+      fixtureCarryoverReplay: {
+        kind: 'conflict_free_carryover', sourceHeadSha: head0, targetHeadSha: head1,
+        mainSha: '7'.repeat(40), mergeBaseSha: '8'.repeat(40),
+        replayTreeSha: '9'.repeat(40), replayDigest: 'synthetic-replay',
+      },
+    });
+    expect(result).toMatchObject({
+      ok: true, created: true, resolvedReviewer: 'claude',
+      resolvedReviewerSource: 'persistent-preference',
+      executedReviewer: 'gpt', reviewerExecutionRunId: source.id,
+      reviewerInvokedForThisRun: false,
+    });
+    expect(existsSync(logPath)).toBe(false);
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    expect(run).toMatchObject({
+      resolvedReviewer: 'claude', resolvedReviewerSource: 'persistent-preference',
+      executedReviewer: 'gpt', reviewerExecutionRunId: source.id,
+      reviewerInvokedForThisRun: false,
+    });
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toContain('Selected reviewer: `claude`');
+    expect(comments[0]).toContain(`Reviewer invocation: none for this run; carried-over clean verdict from \`${source.id}\` by \`gpt\`.`);
+  });
+
+  it('validates new optional provenance and keeps historical v1 records unretagged', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2479-v1-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const old = createPackReviewRun({
+      projectId: 'orchestrator-pack', storeRoot, prNumber: 247903,
+      headSha: '3'.repeat(40), trustedPackRoot: process.cwd(),
+      sourceRepoRoot: process.cwd(), canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      resolvedReviewer: 'codex',
+    }).run;
+    const options = { projectId: 'orchestrator-pack', storeRoot };
+    expect(getPackReviewRun(old.id, options)).toMatchObject({
+      resolvedReviewer: 'codex', resolvedReviewerSource: undefined,
+      executedReviewer: undefined, reviewerExecutionRunId: undefined,
+      reviewerInvokedForThisRun: undefined,
+    });
+    expect(() => updatePackReviewRun(old.id, {
+      resolvedReviewerSource: 'forged' as 'invocation-bound',
+    }, options)).toThrow(/invalid resolvedReviewerSource/);
+    expect(() => updatePackReviewRun(old.id, {
+      executedReviewer: 'gpt', reviewerInvokedForThisRun: true,
+      reviewerExecutionRunId: old.id,
+    }, options)).toThrow(/fresh reviewer execution provenance mismatch/);
+    expect(() => updatePackReviewRun(old.id, {
+      reviewerInvokedForThisRun: 'false' as unknown as boolean,
+    }, options)).toThrow(/invalid reviewerInvokedForThisRun/);
+    expect(getPackReviewRun(old.id, options)?.resolvedReviewer).toBe('codex');
+  });
+
+  it('rejects journal-only scoped recovery before any status write for invalid saved preference or missing roots', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2479-resume-veto-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const head = '2'.repeat(40);
+    const prNumber = 247904;
+    const config = getPackReviewerPreferencePath(process.env);
+    const run = createPackReviewRun({
+      projectId: 'orchestrator-pack', storeRoot, prNumber,
+      headSha: head, trustedPackRoot: process.cwd(),
+      sourceRepoRoot: process.cwd(), canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      resolvedReviewer: 'gpt', resolvedReviewerSource: 'legacy-env',
+    }).run;
+    updatePackReviewRun(run.id, {
+      status: 'failed', latestRunStatus: 'failed',
+      reviewVerdict: 'clean', findingCount: 0, findings: [],
+      executedReviewer: 'gpt', reviewerExecutionRunId: run.id, reviewerInvokedForThisRun: true,
+      journalOutcome: {
+        state: 'persisted', reason: 'verdict_persisted', recordedAtUtc: '2026-10-10T00:00:00.000Z',
+        idempotencyKey: `verdict:${run.id}:${head}`, attempts: 1,
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const before = getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot });
+    const writeRequiredStatus = vi.fn(async () => {});
+    const common = {
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      sourceRepoRoot: process.cwd(),
+      projectId: 'orchestrator-pack', storeRoot, prNumber,
+      fixtureRequiredStatusWriter: writeRequiredStatus,
+      fixtureCurrentPrHeadSha: head,
+    };
+    writeFileSync(config, '{invalid-json');
+    await expect(reconcileStalePackReviewRuns(common))
+      .rejects.toThrow(/OPK_PACK_REVIEW_RESUME_REVIEWER_AUTHORITY_INVALID.*Repair/);
+    await expect(startPackReview({
+      ...harness(prNumber, head, storeRoot),
+      reviewerOverride: 'claude',
+      fixtureRequiredStatusWriter: writeRequiredStatus,
+    })).rejects.toThrow(/OPK_PACK_REVIEW_RESUME_REVIEWER_AUTHORITY_INVALID.*Repair/);
+    expect(writeRequiredStatus).not.toHaveBeenCalled();
+    expect(getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })).toEqual(before);
+    process.env.XDG_CONFIG_HOME = '';
+    process.env.HOME = '';
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'claude';
+    await expect(reconcileStalePackReviewRuns(common))
+      .rejects.toThrow(/OPK_PACK_REVIEW_RESUME_REVIEWER_AUTHORITY_INVALID.*CONFIG_ROOT_MISSING/);
+    expect(writeRequiredStatus).not.toHaveBeenCalled();
+    process.env.XDG_CONFIG_HOME = join(storeRoot, 'test-config');
+    writePackReviewerPreference('claude', config);
+    expect(getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot }))
+      .toMatchObject({ resolvedReviewer: 'gpt', executedReviewer: 'gpt' });
   });
 });
