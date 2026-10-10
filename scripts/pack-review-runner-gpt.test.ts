@@ -1270,13 +1270,14 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     });
   });
 
-  it('resolves a PR-only target, binds GPT above persistent layers, and emits one start indication', async () => {
+  it('resolves a PR-only target without imposing GPT and emits one start indication', async () => {
     const storeRoot = tempRoot('opk-issue-1111-fresh-');
     const capture = path.join(storeRoot, 'github-review.json');
     const engagement = path.join(storeRoot, 'gpt-engagements.jsonl');
     const invocationLog = path.join(storeRoot, 'invocations.jsonl');
     harnessEnv(storeRoot, capture);
     process.env.PACK_REVIEWER = 'codex';
+    process.env.XDG_CONFIG_HOME = path.join(storeRoot, 'isolated-reviewer-config');
     process.env.PACK_REVIEW_RUNNER_GPT_ENGAGEMENT_FILE = engagement;
     process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = invocationLog;
     const stderr: string[] = [];
@@ -1293,8 +1294,16 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     expect(stderr[0]).toMatch(new RegExp(
       `started pr=1111 head=${HEAD_A} run=prr-[a-z0-9]+ timeout_seconds=37`,
     ));
-    expect(JSON.parse(readFileSync(invocationLog, 'utf8').trim()).reviewer).toBe('gpt');
-    expect(readFileSync(engagement, 'utf8').trim().split('\n')).toHaveLength(1);
+    // The fixture's Win32 legacy User layer is claude; route name must not
+    // substitute GPT (or process-layer codex) for the real selector.
+    expect(JSON.parse(readFileSync(invocationLog, 'utf8').trim()).reviewer).toBe('claude');
+    expect(engagementCount(engagement)).toBe(0);
+    expect(execution.result).toMatchObject({
+      resolvedReviewer: 'claude',
+      resolvedReviewerSource: 'legacy-env',
+      executedReviewer: 'claude',
+      reviewerInvokedForThisRun: true,
+    });
     expect(process.env.PACK_REVIEWER).toBe('codex');
     expect(process.env[PACK_REVIEW_BOUND_REVIEWER_ENV]).toBeUndefined();
   });
