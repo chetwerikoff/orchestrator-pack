@@ -1307,6 +1307,73 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
     expect(text[0]).not.toMatch(/^[!$]/u);
   }
 
+  it('wakes the verified LeoPoker manager for its exact leopoker-272 GPT terminal envelope', async () => {
+    // Synthetic fleet-wake@leopoker; no LeoPoker service, terminal or GitHub reads.
+    const invocationId = '27227227-1111-4111-8111-272272272272';
+    const wrongInvocationId = '27227227-1111-4111-8111-272272272273';
+    const envelopePath = `/tmp/opencode/leopoker-272-${invocationId}-terminal.json`;
+    const leopokerPrimary = '/synthetic/LeoPoker';
+    const unit: FleetTerminal = {
+      handle: 'leopoker-manager-272', title: 'OpenCode manager',
+      worktreePath: '/synthetic/orca/workspaces/leopoker/272',
+      branch: 'refs/heads/issue-272', incarnationId: 'leopoker-inc-272',
+      status: 'running', agentIdentity: 'supervised-manager',
+    };
+    const coordinator: FleetTerminal = {
+      handle: 'leopoker-coordinator', title: 'Cursor coordinator', worktreePath: leopokerPrimary,
+    };
+    const fleet = [coordinator, unit];
+    const screens = { [coordinator.handle]: 'idle', [unit.handle]: `PARKED on GPT turn ${invocationId}` };
+    const base = fakeOrca(screens, [], fleet);
+    const executor: OrcaExecutor = (args) => {
+      if (args[0] === 'orchestration' && args[1] === 'worker-list') {
+        return commandResult(JSON.stringify({ ok: true, result: {
+          workers: [{ agentTerminalHandle: unit.handle, taskId: 'leopoker-task-272',
+            dispatchId: 'leopoker-dispatch-272', dispatchStatus: 'dispatched' }],
+          page: { hasMore: false },
+        } }));
+      }
+      if (args[0] === 'orchestration' && args[1] === 'worker-show') {
+        return commandResult(JSON.stringify({ ok: true, result: {
+          dispatch: { id: 'leopoker-dispatch-272', taskId: 'leopoker-task-272', status: 'dispatched' },
+          terminal: unit, observation: { status: 'live', exactWorker: true },
+        } }));
+      }
+      return base(args);
+    };
+    const envelope: TerminalEnvelopeEvent = {
+      path: envelopePath, invocationId, observedInvocationId: invocationId,
+      terminalHandle: unit.handle, cwd: unit.worktreePath, delivery: 'landed',
+    };
+    const options = {
+      screens, terminals: fleet, executor,
+      config: config({
+        projectId: 'leopoker', primary: leopokerPrimary,
+        workspaceRe: /orca\/workspaces\/leopoker\//u,
+        chatScope: { projectUrl: 'https://chatgpt.com/p/synthetic-leopoker', repository: 'chetwerikoff/LeoPoker' },
+      }),
+      listTerminalEnvelopes: () => [envelope],
+      listOpenPulls: () => [], listUnreadRunMessages: () => [],
+    };
+    const matched = await tick({ ...options, store: new MemoryWakeStore() });
+    expect(matched.calls).toContainEqual(['orchestration', 'worker-list', '--json']);
+    expect(matched.calls).toContainEqual(['orchestration', 'worker-show', '--dispatch', 'leopoker-dispatch-272', '--json']);
+    expect(sendsTo(matched.calls, unit.handle)).toEqual([
+      ['terminal', 'send', '--terminal', unit.handle, '--text',
+        `Wake: GPT-turn-${invocationId} ended state terminal-envelope evidence ${envelopePath} - re-check the producer yourself before continuing`, '--enter'],
+      ['terminal', 'send', '--terminal', unit.handle, '--enter'],
+    ]);
+    expect(sendsTo(matched.calls, coordinator.handle)).toHaveLength(0);
+
+    // A previously handled legacy envelope cannot validate a different parked UUID.
+    const legacySeen = new MemoryWakeStore();
+    legacySeen.markParkedWakeEvent(`gpt:${envelopePath}`);
+    screens[unit.handle] = `PARKED on GPT turn ${wrongInvocationId}`;
+    const wrong = await tick({ ...options, store: legacySeen });
+    expect(sendsTo(wrong.calls, unit.handle)).toHaveLength(0);
+    expect(sendsTo(wrong.calls, coordinator.handle)[0]?.join(' ')).toContain('park on unresolvable producer');
+  });
+
   it('wakes only one exact observed GPT invocation and coalesces legacy GPT wake', async () => {
     const h = parkedHarness('PARKED on GPT turn ' + invocation + ' (self-wake armed)');
     const event: TerminalEnvelopeEvent = {
