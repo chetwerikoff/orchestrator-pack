@@ -716,25 +716,34 @@ describe('state-light fresh conversation collision recovery', () => {
     }
   });
 
-  it('returns rate_limit from prepare without additional navigation rounds', async () => {
-    vi.mocked(uiAdapter.classifyProductWall).mockImplementation((surface) => {
-      const text = typeof surface === 'string' ? surface : surface.text;
-      if (/temporarily limited/i.test(text)) return { state: 'rate_limit', cause: 'rate_limit_detected' };
-      return {};
+  it('reports a pre-send rate-limit status as advisory while still sending once', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.productStatusText.mockResolvedValue({
+      text: 'temporarily limited access',
+      composer: false,
+      parts: [{ selector: '[role="alert"]', text: 'temporarily limited access' }],
     });
-    mocks.productStatusText.mockResolvedValue({ text: 'temporarily limited access', composer: false });
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-SOLO'));
     const solo = makeLoserPage('PROMPT-SOLO', 'SOLO-OK');
     const outcome = await runNewChatTurn(solo.page, '/tmp/rate-limit-prepare.txt');
 
-    expect(outcome.code).toBe(12);
+    expect(outcome.code).toBe(0);
     expect(outcome.result).toMatchObject({
-      state: 'rate_limit',
-      cause: 'rate_limit_detected',
-      send_count: 0,
+      state: 'ok',
+      send_count: 1,
+      product_wall_diagnostic: {
+        wall_kind: 'rate_limit',
+        matched_text: 'temporarily limited access',
+        matched_selector: '[role="alert"]',
+      },
     });
-    expect(outcome.result.navigation_count).toBeLessThanOrEqual(3);
-    expect(readStateLightAdvisoryWall('collision-profile')).toMatchObject({ state: 'rate_limit' });
+    expect(solo.getSends()).toBe(1);
+    expect(readStateLightAdvisoryWall('collision-profile')).toMatchObject({
+      state: 'rate_limit',
+      matched_text: 'temporarily limited access',
+      matched_selector: '[role="alert"]',
+    });
   });
 
   it('continues observing after fresh-conversation URL wait expiry without send_failed', async () => {

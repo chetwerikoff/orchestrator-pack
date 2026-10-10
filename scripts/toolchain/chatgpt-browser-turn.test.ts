@@ -891,7 +891,7 @@ describe('issue 964 UI ownership and profile walls — S7/S8/S9', () => {
     })).rejects.toThrow('ui_contract_mismatch:duplicate_tabs');
   });
 
-  it('S8 recognizes a product-owned quota alert before send', async () => {
+  it('S8 sends despite a product-owned quota alert and preserves advisory evidence', async () => {
     const fixture = fakeTurnPage({ alertText: "You've reached the current usage limit" });
     const result = await sendTurn(fixture.page, 'payload', {
       cdp,
@@ -900,8 +900,9 @@ describe('issue 964 UI ownership and profile walls — S7/S8/S9', () => {
       newChat: false,
       timeoutMs: 100,
     });
-    expect(result.state).toBe('quota');
-    expect(fixture.getSendClicks()).toBe(0);
+    expect(result.state).toBe('stream_timeout');
+    expect(fixture.getSendClicks()).toBe(1);
+    expect(result.product_wall_diagnostic).toMatchObject({ wall_kind: 'quota' });
   });
 
   it('S8 does not treat authored conversation wall phrases as product state while composer is healthy', async () => {
@@ -918,7 +919,7 @@ describe('issue 964 UI ownership and profile walls — S7/S8/S9', () => {
     expect(fixture.getSendClicks()).toBe(0);
   });
 
-  it('S8 preserves possible-delivery evidence when a product wall appears mid-turn', async () => {
+  it('S8 continues post-send observation despite a quota banner', async () => {
     const own = 'user-owned-12345678';
     const fixture = fakeTurnPage({ dispatchCandidateIds: [own], alertAfterSend: 'usage limit' });
     const result = await sendTurn(fixture.page, 'payload', {
@@ -928,9 +929,10 @@ describe('issue 964 UI ownership and profile walls — S7/S8/S9', () => {
       newChat: false,
       timeoutMs: 100,
     });
-    expect(result.state).toBe('recovery_required');
-    expect(result.cause).toBe('profile_wall:quota');
+    expect(result.state).toBe('stream_timeout');
+    expect(result.possibleDelivery).toBe(true);
     expect(result.userMessageId).toBe(own);
+    expect(result.product_wall_diagnostic).toMatchObject({ wall_kind: 'quota' });
   });
 
   it('S9 returns ui_contract_mismatch with zero send when composer is unavailable without a product wall', async () => {
@@ -943,6 +945,8 @@ describe('issue 964 UI ownership and profile walls — S7/S8/S9', () => {
       timeoutMs: 1,
     });
     expect(result.state).toBe('ui_contract_mismatch');
+    expect(result.cause).toBe('composer_unavailable');
+    expect(result.product_wall_diagnostic).toEqual({ wall_kind: 'none', matched_text: 'none', matched_selector: 'none' });
     expect(fixture.getSendClicks()).toBe(0);
   });
 });

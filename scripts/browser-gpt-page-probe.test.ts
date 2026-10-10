@@ -2576,21 +2576,21 @@ test('state-light terminal result propagates execute-Issue product recovery as c
   }
 });
 
-test('Issue #2489 preserves an active composer when quota-like status text is visible', () => {
-  assert.deepEqual(classifyProductWall({
-    text: 'Something went wrong. Please try again later.',
-    composer: true,
-  }), {});
-  assert.deepEqual(classifyProductWall({
-    text: 'You have 20% usage remaining',
-    composer: true,
-  }), {});
-  assert.deepEqual(classifyProductWall({
-    text: "You've reached your usage limit",
-    composer: true,
-  }), {});
-  assert.deepEqual(classifyProductWall({
-    text: "You've reached your usage limit",
-    composer: false,
-  }), { state: 'quota', cause: 'quota_detected' });
+test('Issue #2489 quota and generic status are nonterminal diagnostics with any composer state', () => {
+  const none = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
+  for (const composer of [true, false]) {
+    assert.deepEqual(classifyProductWall({
+      text: 'Something went wrong. Please try again later.', composer,
+    }), none);
+    assert.deepEqual(classifyProductWall({
+      text: 'You have 20% usage remaining', composer,
+    }), none);
+    assert.deepEqual(classifyProductWall({
+      text: "You've reached your usage limit", composer,
+    }), {
+      wall_kind: 'quota',
+      matched_text: "You've reached your usage limit",
+      matched_selector: 'none',
+    });
+  }
 });
