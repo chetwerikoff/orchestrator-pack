@@ -1831,7 +1831,7 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
 
   it('observes only upstream own-pane wrap/last-line authority, not reconstructed IDs (#2473)', async () => {
     const envelope: TerminalEnvelopeEvent = {
-      path: '/tmp/opencode/2473-wrap.json', invocationId: 'inv-wake-ok',
+      path: '/tmp/opencode/2473-wrap-terminal.json', invocationId: 'inv-wake-ok',
       observedInvocationId: 'inv-wake-ok', terminalHandle: 'one',
       cwd: terminals[1]!.worktreePath, delivery: 'landed',
     };
@@ -1856,11 +1856,11 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
   it('excludes foreign and duplicate legacy GPT sends on a named pane in the whole tick (#2473)', async () => {
     const h = parkedHarness('PARKED on GPT turn inv-wake-ok');
     const matched: TerminalEnvelopeEvent = {
-      path: '/tmp/opencode/2473-exact.json', invocationId: 'inv-wake-ok',
+      path: '/tmp/opencode/2473-exact-terminal.json', invocationId: 'inv-wake-ok',
       observedInvocationId: 'inv-wake-ok', terminalHandle: 'one',
       cwd: h.unit.worktreePath, delivery: 'landed',
     };
-    const foreign = { ...matched, path: '/tmp/opencode/2473-foreign.json',
+    const foreign = { ...matched, path: '/tmp/opencode/2473-foreign-terminal.json',
       invocationId: 'inv-foreign', observedInvocationId: 'inv-foreign' };
     const simultaneous = { listTerminalEnvelopes: () => [matched, foreign] };
     expectSafeWake((await h.step(simultaneous)).calls, 'terminal-envelope');
@@ -1874,7 +1874,7 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
     expect(sendsTo(wrong.calls, 'coord')[0]?.join(' ')).toContain('park on unresolvable producer');
     const duplicate = parkedHarness('PARKED on GPT turn inv-wake-ok');
     expect(sendsTo((await duplicate.step({ listTerminalEnvelopes: () =>
-      [matched, { ...matched, path: '/tmp/opencode/2473-duplicate.json' }] })).calls, 'one')).toHaveLength(0);
+      [matched, { ...matched, path: '/tmp/opencode/2473-duplicate-terminal.json' }] })).calls, 'one')).toHaveLength(0);
     const wrongOwner = parkedHarness('PARKED on GPT turn inv-wake-ok');
     expect(sendsTo((await wrongOwner.step({ listTerminalEnvelopes: () =>
       [{ ...matched, cwd: '/foreign/worktree' }] })).calls, 'one')).toHaveLength(0);
@@ -1883,11 +1883,11 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
   it('persists uncertain named attempts and never marks rejected foreign envelopes (#2473)', async () => {
     const h = parkedHarness('PARKED on GPT turn inv-wake-ok');
     const event: TerminalEnvelopeEvent = {
-      path: '/tmp/opencode/2473-uncertain.json', invocationId: 'inv-wake-ok',
+      path: '/tmp/opencode/2473-uncertain-terminal.json', invocationId: 'inv-wake-ok',
       observedInvocationId: 'inv-wake-ok', terminalHandle: 'one',
       cwd: h.unit.worktreePath, delivery: 'landed',
     };
-    const foreign = { ...event, path: '/tmp/opencode/2473-stale.json',
+    const foreign = { ...event, path: '/tmp/opencode/2473-stale-terminal.json',
       invocationId: 'inv-stale', observedInvocationId: 'inv-stale' };
     const xdg = mkdtempSync(join(tmpdir(), 'fleet-2473-'));
     try {
@@ -1911,11 +1911,11 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
   it.each(['Ready for a new Task', 'PARKED on unrelated producer'])(
     'retains legacy GPT delivery outside exact GPT-named PARKED: %s (#2473)', async (wait) => {
       const h = parkedHarness(wait);
-      const event: TerminalEnvelopeEvent = { path: '/tmp/opencode/2473-legacy.json',
+      const event: TerminalEnvelopeEvent = { path: '/tmp/opencode/2473-legacy-terminal.json',
         invocationId: 'inv-h', terminalHandle: 'one', cwd: h.unit.worktreePath };
       const observed = await h.step({ listTerminalEnvelopes: () => [event] });
       expect(unitText(observed.calls)).toEqual([
-        'Wake: GPT turn inv-h ended, read /tmp/opencode/2473-legacy.json',
+        'Wake: GPT turn inv-h ended, read /tmp/opencode/2473-legacy-terminal.json',
       ]);
       expect(h.store.readParkedWakeEventStatus('gpt:' + event.path)).toBe('sent');
     });
@@ -1992,7 +1992,7 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
     const independent = parkedHarness('PARKED on terminal producer-12 incarnation producer-inc', [terminal]);
     expectSafeWake((await independent.step({ config: configConflict })).calls, 'terminal-exited');
     const gpt = parkedHarness('PARKED on GPT turn inv-wake-ok');
-    const event: TerminalEnvelopeEvent = { path: '/tmp/opencode/2473-independent.json',
+    const event: TerminalEnvelopeEvent = { path: '/tmp/opencode/2473-independent-terminal.json',
       invocationId: 'inv-wake-ok', observedInvocationId: 'inv-wake-ok',
       terminalHandle: 'one', cwd: gpt.unit.worktreePath, delivery: 'landed' };
     expectSafeWake((await gpt.step({ config: configConflict, listTerminalEnvelopes: () => [event] })).calls,
