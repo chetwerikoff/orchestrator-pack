@@ -2679,7 +2679,9 @@ describe('Issue #2485 indexed GPT named PARKED owner, source and veto isolation'
       const store = new MemoryWakeStore();
       const first = await f.step({ store });
       expect(unitWake(first.calls)).toHaveLength(0);
-      expect(sendsTo(first.calls, 'coord')).toHaveLength(0);
+      // Pane C is independently STOPPED and may raise the ordinary coordinator alarm.
+      // The pending indexed GPT producer must not add a false PID-expiry reason.
+      expect(sendsTo(first.calls, 'coord').some((call) => call.join(' ').includes('pid-identity-unverified'))).toBe(false);
       f.time(60_000);
       expect(unitWake((await f.step({ store })).calls)).toHaveLength(0);
       f.time(1_800_000);
@@ -2703,16 +2705,22 @@ describe('Issue #2485 indexed GPT named PARKED owner, source and veto isolation'
       const reused = await f.step({ store });
       expect(sendsTo(reused.calls, 'coord').some((call) => call.join(' ').includes('pid-identity-unverified'))).toBe(true);
       const invalid = new MemoryWakeStore();
-      invalid.readParkedEpoch = () => ({ key: '', since: Number.NaN });
-      // Invalid native clock evidence must never establish indefinite pending.
-      expect(unitWake((await f.step({ store: invalid })).calls)).toHaveLength(0);
+      f.time(0);
+      await f.step({ store: invalid });
+      const nativeEpisode = invalid.epochs.get('one')!;
+      invalid.readParkedEpoch = () => ({ ...nativeEpisode, started: Number.NaN, since: Number.NaN });
+      f.time(1);
+      const badAge = await f.step({ store: invalid });
+      expect(unitWake(badAge.calls)).toHaveLength(0);
+      expect(sendsTo(badAge.calls, 'coord').some((call) =>
+        call.join(' ').includes('launcher-identity-unverifiable'))).toBe(true);
     } finally { f.cleanup(); }
   });
 
   it('joins only the original terminal, ignores launcher hints, encodes UTF-8 safely, and retains marks across restart', async () => {
     const f = fixture();
     try {
-      const weird = join(f.root, 'space;漢字', 'result-terminal.json');
+      const weird = join(f.root, 'space ;漢字', 'result-terminal.json');
       f.path(weird); f.writeOriginal(); f.land();
       const xdg = mkdtempSync(join(tmpdir(), 'fleet-2485-marks-'));
       try {
