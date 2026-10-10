@@ -10,6 +10,7 @@ import {
 } from './lib/pack-reviewer-preference.ts';
 import {
   resolvePackReviewerResolution,
+  packReviewResumeReviewerAuthorityError,
 } from './lib/resolve-pack-reviewer.ts';
 
 const temporaryRoots: string[] = [];
@@ -233,4 +234,58 @@ describe('persistent pack reviewer preference', () => {
       source: 'legacy-env',
     });
   });
+  it('gives valid explicit CLI selection precedence over conflicting or malformed bound env', () => {
+    const { filePath } = preferenceFixture();
+    writePackReviewerPreference('claude', filePath);
+    for (const bound of ['gpt', 'claude', 'not-a-reviewer']) {
+      const resolved = resolvePackReviewerResolution(
+        { PACK_REVIEWER: 'codex', PACK_REVIEW_BOUND_REVIEWER: bound },
+        { explicitReviewer: 'gpt', preferenceFilePath: filePath },
+      );
+      expect(resolved).toMatchObject({ reviewer: 'gpt', source: 'invocation-bound', errorMessage: null });
+    }
+    expect(readPackReviewerPreference(filePath)).toMatchObject({ reviewer: 'claude' });
+    expect(resolvePackReviewerResolution(
+      { PACK_REVIEWER: 'gpt', PACK_REVIEW_BOUND_REVIEWER: 'gpt' },
+      { explicitReviewer: 'claude', preferenceFilePath: filePath },
+    )).toMatchObject({ reviewer: 'claude', source: 'invocation-bound' });
+  });
+
+  it('fails closed on malformed bound env and preference without bypassing higher-priority validity', () => {
+    const { filePath } = preferenceFixture();
+    writePackReviewerPreference('claude', filePath);
+    expect(resolvePackReviewerResolution(
+      { PACK_REVIEW_BOUND_REVIEWER: 'invalid', PACK_REVIEWER: 'codex' },
+      { preferenceFilePath: filePath },
+    )).toMatchObject({ reviewer: null, source: 'none' });
+    expect(resolvePackReviewerResolution(
+      { PACK_REVIEW_BOUND_REVIEWER: '', PACK_REVIEWER: 'gpt' },
+      { preferenceFilePath: filePath },
+    )).toMatchObject({ reviewer: 'claude', source: 'persistent-preference' });
+    writeFileSync(filePath, '{not-json');
+    expect(resolvePackReviewerResolution(
+      { PACK_REVIEWER: 'gpt' }, { preferenceFilePath: filePath },
+    )).toMatchObject({ reviewer: null, source: 'none' });
+    expect(resolvePackReviewerResolution(
+      { PACK_REVIEW_BOUND_REVIEWER: 'codex', PACK_REVIEWER: 'gpt' },
+      { preferenceFilePath: filePath },
+    )).toMatchObject({ reviewer: 'codex', source: 'invocation-bound' });
+  });
+
+  it('vetoes a journal-only resume on invalid saved preference even with valid CLI override', () => {
+    const { filePath } = preferenceFixture();
+    writeFileSync(filePath, '{broken-json');
+    const env = { PACK_REVIEW_BOUND_REVIEWER: 'gpt', PACK_REVIEWER: 'gpt' };
+    expect(resolvePackReviewerResolution(env, {
+      explicitReviewer: 'claude', preferenceFilePath: filePath,
+    })).toMatchObject({ reviewer: 'claude', source: 'invocation-bound' });
+    expect(packReviewResumeReviewerAuthorityError(env, { preferenceFilePath: filePath }))
+      .toMatch(/OPK_PACK_REVIEW_RESUME_REVIEWER_AUTHORITY_INVALID: Invalid persistent reviewer preference.*Repair/);
+    writePackReviewerPreference('gpt', filePath);
+    expect(packReviewResumeReviewerAuthorityError(env, { preferenceFilePath: filePath })).toBeNull();
+    expect(packReviewResumeReviewerAuthorityError({
+      XDG_CONFIG_HOME: '', HOME: '', PACK_REVIEW_BOUND_REVIEWER: 'claude',
+    })).toMatch(/OPK_PACK_REVIEW_RESUME_REVIEWER_AUTHORITY_INVALID: OPK_REVIEWER_CONFIG_ROOT_MISSING/);
+  });
+
 });

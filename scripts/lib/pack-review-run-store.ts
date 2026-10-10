@@ -12,6 +12,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import type { PackReviewer, PackReviewerResolutionSource } from './resolve-pack-reviewer.ts';
 import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
 import {
   PACK_REVIEW_CAPS,
@@ -247,7 +248,12 @@ export interface PackReviewRunRecord {
   reviewCycleId?: string;
   logicalRoundOrdinal?: number;
   logicalRoundCap?: number;
-  resolvedReviewer?: 'gpt' | 'codex' | 'claude';
+  resolvedReviewer?: PackReviewer;
+  resolvedReviewerSource?: PackReviewerResolutionSource;
+  /** Reviewer that produced an accepted verdict, not a hypothetical reviewer selection. */
+  executedReviewer?: PackReviewer;
+  reviewerExecutionRunId?: string;
+  reviewerInvokedForThisRun?: boolean;
   nativeAttempt?: PackReviewNativeAttemptBinding;
   reviewTargetRoot?: string;
   runnerPid: number;
@@ -352,7 +358,8 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   reviewCycleId?: string;
   logicalRoundOrdinal?: number;
   logicalRoundCap?: number;
-  resolvedReviewer?: 'gpt' | 'codex' | 'claude';
+  resolvedReviewer?: PackReviewer;
+  resolvedReviewerSource?: PackReviewerResolutionSource;
   automaticBudgetDisposition?: PackReviewAutomaticBudgetDisposition;
   allowCompletedSameHeadReplay?: boolean;
   allowSameRoundReplacement?: boolean;
@@ -1421,6 +1428,40 @@ function parseRecord(
   if (resolvedReviewer !== undefined && !['gpt', 'codex', 'claude'].includes(resolvedReviewer)) {
     throw new Error(`corrupt pack review run record at ${path}: invalid resolvedReviewer`);
   }
+  const resolvedReviewerSource = raw.resolvedReviewerSource;
+  if (resolvedReviewerSource !== undefined
+      && !['invocation-bound', 'persistent-preference', 'legacy-env', 'none'].includes(String(resolvedReviewerSource))) {
+    throw new Error(`corrupt pack review run record at ${path}: invalid resolvedReviewerSource`);
+  }
+  if (resolvedReviewerSource !== undefined && !resolvedReviewer) {
+    throw new Error(`corrupt pack review run record at ${path}: reviewer source without selection`);
+  }
+  const executedReviewer = raw.executedReviewer;
+  if (executedReviewer !== undefined && !['gpt', 'codex', 'claude'].includes(String(executedReviewer))) {
+    throw new Error(`corrupt pack review run record at ${path}: invalid executedReviewer`);
+  }
+  const reviewerExecutionRunId = raw.reviewerExecutionRunId;
+  if (reviewerExecutionRunId !== undefined
+      && (typeof reviewerExecutionRunId !== 'string' || !reviewerExecutionRunId.trim())) {
+    throw new Error(`corrupt pack review run record at ${path}: invalid reviewerExecutionRunId`);
+  }
+  const reviewerInvokedForThisRun = raw.reviewerInvokedForThisRun;
+  if (reviewerInvokedForThisRun !== undefined && typeof reviewerInvokedForThisRun !== 'boolean') {
+    throw new Error(`corrupt pack review run record at ${path}: invalid reviewerInvokedForThisRun`);
+  }
+  if ((executedReviewer !== undefined && !reviewerExecutionRunId)
+      || (reviewerInvokedForThisRun !== undefined && !reviewerExecutionRunId)
+      || (reviewerExecutionRunId !== undefined && reviewerInvokedForThisRun === undefined)) {
+    throw new Error(`corrupt pack review run record at ${path}: incomplete reviewer execution provenance`);
+  }
+  if (reviewerInvokedForThisRun === true
+      && (reviewerExecutionRunId !== id || executedReviewer === undefined
+        || executedReviewer !== resolvedReviewer)) {
+    throw new Error(`corrupt pack review run record at ${path}: fresh reviewer execution provenance mismatch`);
+  }
+  if (reviewerInvokedForThisRun === false && reviewerExecutionRunId === id) {
+    throw new Error(`corrupt pack review run record at ${path}: carried-over verdict cannot have a fresh execution run`);
+  }
   const nativeAttempt = normalizePackReviewNativeAttempt(raw.nativeAttempt, path);
   if (nativeAttempt && resolvedReviewer && nativeAttempt.reviewer !== resolvedReviewer) {
     throw new Error(`corrupt pack review run record at ${path}: nativeAttempt reviewer mismatch`);
@@ -1485,6 +1526,10 @@ function parseRecord(
     logicalRoundOrdinal,
     logicalRoundCap,
     resolvedReviewer: resolvedReviewer as PackReviewRunRecord['resolvedReviewer'],
+    resolvedReviewerSource: resolvedReviewerSource as PackReviewRunRecord['resolvedReviewerSource'],
+    executedReviewer: executedReviewer as PackReviewRunRecord['executedReviewer'],
+    reviewerExecutionRunId: reviewerExecutionRunId as PackReviewRunRecord['reviewerExecutionRunId'],
+    reviewerInvokedForThisRun: reviewerInvokedForThisRun as PackReviewRunRecord['reviewerInvokedForThisRun'],
     nativeAttempt,
     reviewRound,
     runnerPid: Number(raw.runnerPid ?? 0),
@@ -1921,6 +1966,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       ...(input.logicalRoundOrdinal ? { logicalRoundOrdinal: input.logicalRoundOrdinal } : {}),
       ...(input.logicalRoundCap ? { logicalRoundCap: input.logicalRoundCap } : {}),
       ...(input.resolvedReviewer ? { resolvedReviewer: input.resolvedReviewer } : {}),
+      ...(input.resolvedReviewerSource ? { resolvedReviewerSource: input.resolvedReviewerSource } : {}),
       ...(input.reviewRound ? { reviewRound: input.reviewRound } : {}),
       runnerPid: process.pid,
       createdAt: now,
