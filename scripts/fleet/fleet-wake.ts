@@ -897,9 +897,34 @@ function resolveParkEvent(
     label: parked, terminalState: 'terminal-envelope', evidence: envelope.path,
     eventId: 'terminal:' + envelope.path,
   };
-  const producer = parseNamedParkedProducer(wait);
-  if (!producer) return undefined;
   const repo = namedRepository(options.config);
+  const producer = parseNamedParkedProducer(wait);
+  if (!producer) {
+    // Plain substring match over existing completed pack-review/CI event IDs,
+    // independent of any launch- or pane-ownership witness.
+    if (!repo || !/(?:pack-review|\bCI\b)/iu.test(parked)) return undefined;
+    for (const pull of (options.listOpenPulls ?? listOpenPullHeads)(repo)) {
+      const ci = (options.checkRunsFinishedAt ?? checkRunsFinishedAt)(repo, pull.sha);
+      if (ci !== undefined && Number.isFinite(ci)
+        && [`CI PR #${pull.number} head ${pull.sha}`,
+          `ci:${pull.number}:${pull.sha}:${ci}`, `CI #${pull.number}`]
+          .some((name) => name.includes(parked))) {
+        return { label: parked, terminalState: 'checks-completed',
+          evidence: `CI-${pull.sha}`,
+          eventId: `ci:${pull.number}:${pull.sha}:${ci}` };
+      }
+      const stage = (options.readPackReviewStage ?? readPackReviewStatus)(repo, pull.sha);
+      if (stage && (stage.state === 'success' || stage.state === 'failure')
+        && [`pack-review PR #${pull.number} head ${pull.sha}`,
+          `pack-review:${pull.number}:${pull.sha}:${stage.state}`,
+          `pack-review-PR-${pull.number}`].some((name) => name.includes(parked))) {
+        return { label: parked, terminalState: 'stage-' + stage.state,
+          evidence: `pack-review-${pull.sha}`,
+          eventId: `pack-review:${pull.number}:${pull.sha}:${stage.state}` };
+      }
+    }
+    return undefined;
+  }
   const resolved = (state: string, evidence: string, eventId: string): ProducerResolution => ({
     label: producer.label, terminalState: state, evidence, eventId,
   });
