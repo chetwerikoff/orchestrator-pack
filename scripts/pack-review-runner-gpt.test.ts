@@ -4463,7 +4463,7 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
     const action = String(terminal.nextAction);
     expect(action).toContain('node --experimental-strip-types scripts/pack-review-runner.ts reconcile');
     expect(action).toContain('--pr-number 2469');
-    expect(action).not.toMatch(/(?:\\s)(?:retry|reset)(?:\\s|$)/);
+    expect(action).not.toMatch(/(?:\s)(?:retry|reset)(?:\s|$)/);
     const cliArgs = action.split(' ').slice(4);
     // The CLI string quotes its actual repository root for shell safety.
     cliArgs[1] = JSON.parse(cliArgs[1]!);
