@@ -2,8 +2,9 @@
 
 import '../toolchain/native-entrypoint-preflight.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
+import { performance } from 'node:perf_hooks';
 import { join, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import { SUPPORTED_NODE_MAJOR } from '../toolchain/node-runtime-contract.mjs';
@@ -1798,6 +1799,165 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
   };
 }
 
+
+/**
+ * An operator-visible read-only diagnostic for the already-adopted pack primary.
+ * It never calls Orca, prepares a worktree, or starts a supervised Task.
+ */
+export interface OpenCodePrimaryProbeResult {
+  readonly route: 'manager/opencode/exact_terminal_worktree';
+  readonly outcome: 'pass' | 'incomplete';
+  readonly reason: string;
+  readonly elapsed_ms: number;
+  readonly cleanup_verified: boolean;
+}
+
+export interface OpenCodePrimaryProbeDependencies {
+  readonly resolveTarget?: typeof resolveTargetContext;
+  readonly resolveProfile?: typeof resolveLiveExecutorProfile;
+  readonly finalizeProfile?: typeof finalizeOpenCodeExecutorProfile;
+  readonly execute?: ChildExecutor;
+  readonly now?: () => number;
+  readonly snapshot?: (root: string, env: Readonly<NodeJS.ProcessEnv>) => string;
+}
+
+export function parseOpenCodePrimaryProbeArgs(argv: readonly string[]): { projectId: string; timeoutMs: number } {
+  const allowed = new Set(['--project', '--work-class', '--start-mode', '--timeout-ms']);
+  if (argv.length !== 8) throw new Error('probe_arguments_unverified');
+  const parsed = new Map<string, string>();
+  for (let i = 0; i < argv.length; i += 2) {
+    const name = argv[i] ?? '';
+    const value = argv[i + 1] ?? '';
+    if (!allowed.has(name) || parsed.has(name) || !value.trim() || value.startsWith('--')) {
+      throw new Error('probe_arguments_unverified');
+    }
+    parsed.set(name, value.trim());
+  }
+  if (parsed.get('--work-class') !== 'manager' || parsed.get('--start-mode') !== 'exact_terminal_worktree') {
+    throw new Error('probe_route_unverified');
+  }
+  const projectId = parsed.get('--project') ?? '';
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(projectId)) throw new Error('probe_project_unverified');
+  const rawBudget = parsed.get('--timeout-ms') ?? '';
+  if (!/^[1-9][0-9]*$/u.test(rawBudget)) throw new Error('probe_budget_unverified');
+  const timeoutMs = Number(rawBudget);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs > 50_000) throw new Error('probe_budget_unverified');
+  return { projectId, timeoutMs };
+}
+
+export async function runOpenCodePrimaryProbe(
+  argv: readonly string[],
+  dependencies: OpenCodePrimaryProbeDependencies = {},
+  inheritedEnv: Readonly<NodeJS.ProcessEnv> = process.env,
+): Promise<OpenCodePrimaryProbeResult> {
+  const now = dependencies.now ?? (() => performance.now());
+  const began = now();
+  let reason = 'probe_unverified';
+  let passed = false;
+  let cleanupVerified = true;
+  let targetRoot: string | undefined;
+  let env: Readonly<NodeJS.ProcessEnv> | undefined;
+  let originalConfig: string | undefined;
+  const ownedRoots = new Set<string>();
+  let timeoutMs = 0;
+  const remaining = (): number => Math.max(0, Math.floor(timeoutMs - (now() - began)));
+  const snapshot = dependencies.snapshot ?? configState;
+  try {
+    const args = parseOpenCodePrimaryProbeArgs(argv);
+    timeoutMs = args.timeoutMs;
+    if (inheritedEnv.OPK_PROJECT_ID?.trim() && inheritedEnv.OPK_PROJECT_ID.trim() !== args.projectId) {
+      throw new Error('project_selector_mismatch');
+    }
+    env = overlayExecutorProfileEnv({ ...inheritedEnv, OPK_PROJECT_ID: args.projectId });
+    const target = (dependencies.resolveTarget ?? resolveTargetContext)({ projectId: args.projectId, env });
+    if (target.projectId !== args.projectId || target.repository !== 'chetwerikoff/orchestrator-pack') {
+      throw new Error('selected_pack_card_mismatch');
+    }
+    targetRoot = target.primaryRoot;
+    const semantic = profileResolutionEdge('manager', env);
+    if (semantic.status !== 'ok' || semantic.value.family !== 'opencode') {
+      throw new Error('manager_opencode_profile_unverified');
+    }
+    originalConfig = snapshot(targetRoot, env);
+    const scratch = mkdtempSync(join(tmpdir(), 'opk-launch-canary-'));
+    ownedRoots.add(scratch);
+    // Only state/cache roots are disposable; keep the selected real config/home/card.
+    const diagnosticEnv = { ...env, XDG_STATE_HOME: join(scratch, 'state'), XDG_CACHE_HOME: join(scratch, 'cache') };
+    const execute: ChildExecutor = async (argv, requestedMs, extraEnv, cwd) => {
+      if (argv[0] !== 'opencode' && argv[0] !== process.execPath) {
+        throw new Error('probe_command_out_of_scope');
+      }
+      if (cwd && resolve(cwd) !== resolve(targetRoot!)) {
+        throw new Error('probe_checkout_mismatch');
+      }
+      const budget = Math.min(requestedMs ?? 15_000, remaining());
+      if (budget <= 0) throw new Error('probe_timeout');
+      if (extraEnv?.XDG_STATE_HOME) {
+        const state = extraEnv.XDG_STATE_HOME;
+        // The existing contextual verifier generates only these unique scratch roots.
+        if (!/^opk-opencode-state-[0-9a-f-]{36}$/u.test(state.split(/[\\/]/u).at(-1) ?? '')
+          || resolve(state, '..') !== resolve(tmpdir())) {
+          throw new Error('probe_state_root_unverified');
+        }
+        ownedRoots.add(state);
+      }
+      const commandEnv = { ...diagnosticEnv, ...extraEnv };
+      const before = snapshot(targetRoot!, env!);
+      const result = dependencies.execute
+        ? await dependencies.execute(argv, budget, commandEnv, targetRoot!)
+        : await child(argv, targetRoot!, diagnosticEnv, budget, extraEnv, targetRoot!);
+      if (before !== snapshot(targetRoot!, env!)) throw new Error('persistent_config_changed');
+      if (remaining() <= 0) throw new Error('probe_timeout');
+      return result;
+    };
+    const resolveProfile = dependencies.resolveProfile ?? resolveLiveExecutorProfile;
+    const resolved = await resolveProfile('manager', diagnosticEnv, 'exact_terminal_worktree', execute);
+    if (resolved.status !== 'ok' || resolved.value.family !== 'opencode'
+      || resolved.value.route !== 'exact_terminal_worktree') throw new Error('executor_route_unverified');
+    const finalized = await (dependencies.finalizeProfile ?? finalizeOpenCodeExecutorProfile)(
+      resolved.value, targetRoot, execute, () => true,
+    );
+    if (finalized.status !== 'ok' || finalized.value.family !== 'opencode'
+      || !finalized.evidence?.exactContext) throw new Error('opencode_overlay_unverified');
+    if (remaining() <= 0) throw new Error('probe_timeout');
+    passed = true;
+    reason = 'installed_primary_context_verified';
+  } catch (error) {
+    const candidate = error instanceof Error ? error.message : '';
+    const known = new Set([
+      'probe_arguments_unverified', 'probe_route_unverified', 'probe_project_unverified',
+      'probe_budget_unverified', 'project_selector_mismatch', 'selected_pack_card_mismatch',
+      'manager_opencode_profile_unverified', 'probe_command_out_of_scope', 'probe_checkout_mismatch',
+      'probe_timeout', 'probe_state_root_unverified', 'persistent_config_changed',
+      'executor_route_unverified', 'opencode_overlay_unverified',
+    ]);
+    reason = known.has(candidate) ? candidate : 'probe_unverified';
+  } finally {
+    // No rollback of operator files. Remove only the unique roots created for this probe.
+    for (const root of [...ownedRoots].reverse()) {
+      try {
+        rmSync(root, { recursive: true, force: true });
+        if (existsSync(root)) cleanupVerified = false;
+      } catch {
+        cleanupVerified = false;
+      }
+    }
+    if (targetRoot && env && originalConfig !== undefined) {
+      try { if (snapshot(targetRoot, env) !== originalConfig) { reason = 'persistent_config_changed'; passed = false; } }
+      catch { reason = 'persistent_config_unverified'; passed = false; }
+    }
+  }
+  if (!cleanupVerified) { reason = 'scratch_cleanup_unverified'; passed = false; }
+  if (timeoutMs && remaining() <= 0) { reason = 'probe_timeout'; passed = false; }
+  return {
+    route: 'manager/opencode/exact_terminal_worktree',
+    outcome: passed ? 'pass' : 'incomplete',
+    reason,
+    elapsed_ms: Math.max(0, Math.ceil(now() - began)),
+    cleanup_verified: cleanupVerified,
+  };
+}
+
 const LAUNCH_CLI_OPTIONS = new Set([
   '--project',
   '--repository',
@@ -1890,6 +2050,12 @@ export function parseLaunchAssistantCli(
 }
 
 async function main(argv = process.argv.slice(2)): Promise<void> {
+  if (argv[0] === 'probe') {
+    const result = await runOpenCodePrimaryProbe(argv.slice(1));
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    process.exitCode = result.outcome === 'pass' ? 0 : 1;
+    return;
+  }
   const input = parseLaunchAssistantCli(argv, process.env);
   const result = await runSupervisedTaskLaunchAssistant(input, await createProductionLaunchDependencies(input));
   process.stdout.write(`${JSON.stringify(result)}\n`);
