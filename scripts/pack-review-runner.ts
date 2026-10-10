@@ -4039,7 +4039,6 @@ export async function reconcileStalePackReviewRuns(
   // Guard journal-only recovery before any stale-status or review delivery write.
   if (records.some((run) =>
     run.canonicalRepository === repoSlug
-    && isPackReviewUnfinishedTerminalRun(run)
     && Boolean(packReviewJournaledPayload(run))
     && packReviewDeliveryNeedsResume(run))) {
     const invalidAuthority = packReviewResumeReviewerAuthorityError(process.env);

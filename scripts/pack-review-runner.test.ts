@@ -2273,6 +2273,11 @@ describe('Issue #2479 frozen reviewer and accepted-verdict provenance', () => {
     writeFileSync(config, '{invalid-json');
     await expect(reconcileStalePackReviewRuns(common))
       .rejects.toThrow(/OPK_PACK_REVIEW_RESUME_REVIEWER_AUTHORITY_INVALID.*Repair/);
+    await expect(startPackReview({
+      ...harness(prNumber, head, storeRoot),
+      reviewerOverride: 'claude',
+      fixtureRequiredStatusWriter: writeRequiredStatus,
+    })).rejects.toThrow(/OPK_PACK_REVIEW_RESUME_REVIEWER_AUTHORITY_INVALID.*Repair/);
     expect(writeRequiredStatus).not.toHaveBeenCalled();
     expect(getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })).toEqual(before);
     process.env.XDG_CONFIG_HOME = '';
