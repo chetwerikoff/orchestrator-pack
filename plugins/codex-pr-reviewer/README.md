@@ -52,6 +52,39 @@ network access for approved coworker delegation. GitHub Actions, omitted source,
 external PR workspaces, and CI signals remain read-only. Exfiltratable token and
 credential environment variables are removed from the child process in every mode.
 
+## Claude pack-review format correction
+
+The Claude-only wrapper appends its own **last** output instruction after the
+shared review prompt (and any conflict carry-over). A completed initial response
+is admitted only when its **whole raw stdout**, apart from surrounding whitespace,
+is exactly `NO_FINDINGS` (clean) or one JSON object with a nonempty
+`findings` array. Each finding requires `type` from
+`scope-violation|spec|quality|test|ci|security`, nonempty `code` and
+`summary`, `severity` exactly `blocking|non-blocking`, `path` exactly
+a nonempty string or `null`, and `source` matching the resolved invocation
+(`codex-local|codex-github-action`). Optional `details` and `suggested_fix`
+must be strings. Wrappers, fences, prose, bare arrays, empty findings,
+coercion, and extra clean text are invalid **before** the shared Codex parser.
+
+A completed malformed **first** answer may receive **one** format-only re-ask,
+which quotes the preceding answer as untrusted text and targets the *same
+explicit Claude UUID session* via `--resume`. Repair must return nonempty
+structured findings; **NO_FINDINGS is only permitted on the original reply**.
+Even a narrative-clean first reply followed by repaired `NO_FINDINGS` is
+refused as a failed non-judgment: preserving the meaning of arbitrary prose is
+not mechanically provable. A second malformed answer does not produce a review.
+
+Both native children share one original effective budget, without resetting
+the timer or creating another runner ordinal/logical review round. An exit-zero
+empty stdout is a completed format failure (repairable only for the first
+answer while time remains); nonzero exit, signal, timeout, cancellation, spawn
+failure, or ambiguous process outcome is **never** format-repair eligible.
+A failed/expired resume and an invalid repair exit nonzero with no terminal
+verdict. Native child PID/process-group evidence can change across the two
+children, but the same-ordinal observer's replacement clock stays on its
+persisted initial native-attempt start. Codex-native JSONL and fallback
+admission remain unchanged.
+
 ## Verdict selection
 
 The primary source is a valid `exited_review_mode.review_output` event from Codex
