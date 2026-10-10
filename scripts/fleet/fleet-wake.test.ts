@@ -2692,7 +2692,12 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
       // An incomplete modal's "→ Read" is not evidence of completed work:
       // it must neither classify PERMISSION nor re-arm the prior episode.
       screens.one = modal.replace('Allow once   Allow always   Reject', 'Allow once   Ask later   Reject');
-      expect(sendsTo((await step(3_600_003)).calls, 'coord')).toHaveLength(0);
+      const markedBefore = readdirSync(store.root).filter((name) => name.startsWith('parked-wake-')).sort();
+      const incomplete = await step(3_600_003);
+      // Fallback STOPPED may still raise its independent ordinary alarm;
+      // it is not a new PERMISSION episode and does not clear the mark.
+      expect(msg(incomplete.calls)).not.toContain('visible OpenCode permission UI');
+      expect(readdirSync(store.root).filter((name) => name.startsWith('parked-wake-')).sort()).toEqual(markedBefore);
       screens.one = modal;
       expect(sendsTo((await step(3_600_004)).calls, 'coord')).toHaveLength(0);
       screens.one = 'Assistant: completed a distinct ordinary step';
