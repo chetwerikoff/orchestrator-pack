@@ -151,6 +151,140 @@ describe('state-light send delivery accounting', () => {
   });
 });
 
+describe('Issue #2487 fresh-send readiness, positive non-dispatch evidence and Stop', () => {
+  it.each([2_000, 27_000, 31_000, 58_000])(
+    'observes an enabled button at %i ms without waiting for the end of a 30s window',
+    async (enabledAt) => {
+      let clock = 50_000;
+      const startedAt = clock;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      try {
+        const page = {
+          locator: vi.fn(() => ({ count: async () => 0 })),
+          waitForTimeout: vi.fn(async (ms: number) => { clock += ms; }),
+          __fakeBrowserGptPage: true,
+        };
+        const button = {
+          count: vi.fn(async () => 1),
+          isVisible: vi.fn(async () => true),
+          isEnabled: vi.fn(async () => clock - startedAt >= enabledAt),
+        };
+        expect(await __testSendDelivery.waitForFreshSendButton(
+          page, button, () => {}, startedAt,
+        )).toBe('enabled');
+        expect(clock - startedAt).toBeGreaterThanOrEqual(enabledAt);
+        expect(clock - startedAt).toBeLessThan(enabledAt + 500);
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
+
+  it('exhausts exactly 60 seconds when Send never becomes actionable', async () => {
+    let clock = 10_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    try {
+      const page = {
+        locator: vi.fn(() => ({ count: async () => 0 })),
+        waitForTimeout: vi.fn(async (ms: number) => { clock += ms; }),
+        __fakeBrowserGptPage: true,
+      };
+      const button = {
+        count: vi.fn(async () => 1),
+        isVisible: vi.fn(async () => true),
+        isEnabled: vi.fn(async () => false),
+      };
+      expect(await __testSendDelivery.waitForFreshSendButton(page, button, () => {}, 10_000))
+        .toBe('never_enabled');
+      expect(clock).toBe(70_000);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('requires actual positive Playwright pre-actionability proof, not timeout naming', () => {
+    const callLog = 'TimeoutError: locator.click: Timeout 5000ms exceeded\nCall log:\n - waiting for element to be visible, enabled and stable\n - element is not enabled';
+    expect(__testSendDelivery.affirmativePreActionabilityTimeout(callLog)).toBe(true);
+    expect(__testSendDelivery.affirmativePreActionabilityTimeout(
+      'TimeoutError: locator.click: Timeout 5000ms exceeded',
+    )).toBe(false);
+    expect(__testSendDelivery.affirmativePreActionabilityTimeout(
+      callLog + '\n - performing click action',
+    )).toBe(false);
+    expect(__testSendDelivery.affirmativePreActionabilityTimeout(
+      callLog + '\n - click action done',
+    )).toBe(false);
+    expect(__testSendDelivery.affirmativePreActionabilityTimeout(
+      callLog + '\n - scrolling into view',
+    )).toBe(false);
+    expect(__testSendDelivery.affirmativePreActionabilityTimeout(
+      callLog + '\n - unknown later actionability progress',
+    )).toBe(false);
+    expect(__testSendDelivery.affirmativePreActionabilityTimeout(
+      callLog.replace('element is not enabled', 'waiting for enabled element'),
+    )).toBe(false);
+    expect(__testSendDelivery.affirmativePreActionabilityTimeout(
+      callLog.replace('TimeoutError', 'Error'),
+    )).toBe(false);
+  });
+
+  it('accepts an attributable Stop discovered during delivery-proof polling after the first probe', async () => {
+    const harness = createHarness('click', 'none');
+    const previousLocator = harness.page.locator;
+    let stopReads = 0;
+    harness.page.locator = vi.fn((selector: string) => {
+      if (selector.includes('stop-button') || selector.includes('Stop')) {
+        return { count: vi.fn(async () => ++stopReads >= 3 ? 1 : 0), isVisible: vi.fn(async () => true) };
+      }
+      return previousLocator(selector);
+    });
+    const result = await __testSendDelivery.dispatchStateLightSendAndObserveDelivery({
+      page: harness.page,
+      composer: harness.composer,
+      sendButton: harness.sendButton,
+      hasSendButton: true,
+      marker: MARKER,
+      baselineUserNodeCount: 1,
+      sendWaitMs: 1_000,
+      invocationDeadlineMs: Date.now() + 1_000,
+      deliveryProofWaitMs: 150,
+      allowOwnedStopWitness: true,
+    });
+    expect(result).toMatchObject({ sendCount: 1, witness: 'owned_stop' });
+    expect(stopReads).toBeGreaterThanOrEqual(3);
+    expect(harness.sendButton.click).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats newly attributable Stop after an owned click as delivered without numeric user nodes', async () => {
+    const harness = createHarness('click', 'none');
+    let stopped = false;
+    const initialClick = harness.sendButton.click;
+    harness.sendButton.click = vi.fn(async () => {
+      await initialClick();
+      stopped = true;
+    });
+    harness.page.locator = vi.fn((selector: string) => {
+      if (selector.includes('stop-button') || selector.includes('Stop')) {
+        return { count: vi.fn(async () => stopped ? 1 : 0), isVisible: vi.fn(async () => stopped) };
+      }
+      return { count: vi.fn(async () => 0) };
+    });
+    expect(await __testSendDelivery.dispatchStateLightSendAndObserveDelivery({
+      page: harness.page,
+      composer: harness.composer,
+      sendButton: harness.sendButton,
+      hasSendButton: true,
+      marker: MARKER,
+      baselineUserNodeCount: 1,
+      sendWaitMs: 1_000,
+      invocationDeadlineMs: Date.now() + 1_000,
+      deliveryProofWaitMs: 10,
+      allowOwnedStopWitness: true,
+    })).toMatchObject({ sendCount: 1, witness: 'owned_stop' });
+    expect(harness.sendButton.click).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('production attempted-send result and durable envelope', () => {
   let root: string;
   beforeEach(() => {

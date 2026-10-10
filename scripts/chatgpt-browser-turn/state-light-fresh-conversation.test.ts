@@ -114,11 +114,13 @@ import {
   STATE_LIGHT_TURN_BASE_ARGV,
   TEST_OWNED_MARKER,
   type StateLightTestMessage,
+  type CapturedStateLightTurnResult,
   type StateLightTestSnapshot,
 } from './state-light-turn.test-fixtures.ts';
 import { classifyPageObservation, classifySendLandingEvidence, readPageObservation, runStateLightTurn } from './state-light-turn.ts';
-import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
-import { deriveComposerInsertionBudgetMs } from './state-light-turn-base.ts';
+import { admitStateLightTurnObservation, readStateLightTurnObservation } from './state-light-turn-observation.ts';
+import { deriveDelivery } from '../flow-manager-long-running-child.ts';
+import { __testComposerMutation, deriveComposerInsertionBudgetMs } from './state-light-turn-base.ts';
 import { wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
   EXPLICIT_CANCELLATION_AUTHORITY,
@@ -163,6 +165,7 @@ import {
   verifyStateLightSendSlotOwnerFence,
   verifyStateLightFreshClaimOwnerFence,
   STATE_LIGHT_SEND_SLOT_TTL_MS,
+  STATE_LIGHT_OWNER_PRE_DISPATCH_MS,
   STATE_LIGHT_PASSIVE_FRESH_CLAIM_TTL_MS,
 } from './state-light-fresh-conversation.ts';
 
@@ -201,6 +204,7 @@ function clearSendSlotDisableEnv(): void {
 function makeLoserPage(prompt: string, reply: string, onSend?: () => void) {
   let sends = 0;
   let sent = false;
+  let composerText = '';
   let url = PROJECT_URL;
   let observationIndex = 0;
   const snapshotFrames = readyTurnObservationFrames(prompt, reply).map((messages, index) => ({
@@ -212,9 +216,9 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void) {
   const composer = scalarLocator({
     count: vi.fn(async () => 1),
     click: vi.fn(async () => undefined),
-    fill: vi.fn(async () => undefined),
-    innerText: vi.fn(async () => (sent ? '' : prompt)),
-    textContent: vi.fn(async () => (sent ? '' : prompt)),
+    fill: vi.fn(async (value: string) => { composerText = value; }),
+    innerText: vi.fn(async () => (sent ? '' : composerText)),
+    textContent: vi.fn(async () => (sent ? '' : composerText)),
     press: vi.fn(async () => {
       sends++;
       sent = true;
@@ -285,7 +289,7 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void) {
 async function runNewChatTurn(
   page: any,
   outputPath: string,
-  timeoutMs = '5000',
+  timeoutMs = '90000',
   invocationId = randomUUID(),
   projectUrl = PROJECT_URL,
 ) {
@@ -408,6 +412,494 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(newChatSendSlotEnabled()).toBe(false);
   });
 
+  it('clears a foreign stale composer draft before typing only this invocation marker (#2487)', async () => {
+    const prompt = 'PROMPT-FRESH-DRAFT';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'DRAFT-CLEAR-OK');
+    await turn.composer.fill('SYNTHETIC-FOREIGN-DRAFT');
+    turn.composer.fill.mockClear();
+    const result = await runNewChatTurn(turn.page, '/tmp/fresh-draft-2487.txt');
+    expect(result.result).toMatchObject({ state: 'ok', send_count: 1, stale_composer_cleared: true });
+    expect(turn.getSends()).toBe(1);
+    expect(turn.composer.fill.mock.calls.map((args: unknown[]) => args[0])).toEqual([
+      '', expect.stringContaining(prompt),
+    ]);
+  });
+
+  it('blocks before clearing or typing if existing fresh composer content cannot be read (#2487)', async () => {
+    const prompt = 'PROMPT-UNREADABLE-STALE-DRAFT';
+    const invocationId = randomUUID();
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    turn.composer.innerText.mockRejectedValueOnce(new Error('synthetic unreadable composer'));
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, 'unreadable-stale-draft-2487.txt'), '90000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'fresh_composer_draft_unreadable', send_count: 0,
+    });
+    expect(turn.composer.fill).not.toHaveBeenCalled();
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
+  });
+
+  it('blocks before typing when a stale composer draft cannot be safely cleared (#2487)', async () => {
+    const prompt = 'PROMPT-UNCLEARABLE-STALE-DRAFT';
+    const invocationId = randomUUID();
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    await turn.composer.fill('SYNTHETIC-EXISTING-DRAFT');
+    turn.composer.fill.mockClear();
+    turn.composer.fill.mockRejectedValueOnce(new Error('synthetic composer clear failure'));
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, 'unclearable-stale-draft-2487.txt'), '90000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'fresh_composer_draft_unreadable', send_count: 0,
+    });
+    expect(turn.composer.fill.mock.calls.map((args: unknown[]) => args[0])).toEqual(['']);
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
+  });
+
+  it('never clears a stale draft after its selected tab is repurposed during the read (#2487)', async () => {
+    const prompt = 'PROMPT-STALE-TAB-REPURPOSED';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    await turn.composer.fill('SYNTHETIC-STALE-DRAFT');
+    turn.composer.fill.mockClear();
+    const originalUrl = turn.page.url.getMockImplementation()!;
+    const read = turn.composer.innerText.getMockImplementation()!;
+    let repurposed = false;
+    turn.page.url.mockImplementation(() => repurposed ? OTHER_PROJECT_CONVERSATION_URL : originalUrl());
+    turn.composer.innerText.mockImplementationOnce(async () => {
+      const text = await read();
+      repurposed = true;
+      return text;
+    });
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'repurposed-stale-tab.txt'));
+    expect(outcome.result).toMatchObject({ send_count: 0, cause: 'fresh_conversation_surface_unavailable' });
+    expect(turn.composer.fill).not.toHaveBeenCalled();
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.page.close).not.toHaveBeenCalled();
+  });
+
+  it('never erases a stale composer that was rewritten between safe preflight reads (#2487)', async () => {
+    const prompt = 'PROMPT-STALE-REWRITTEN';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    await turn.composer.fill('SYNTHETIC-STALE-DRAFT');
+    turn.composer.fill.mockClear();
+    const read = turn.composer.innerText.getMockImplementation()!;
+    let draftReads = 0;
+    turn.composer.innerText.mockImplementation(async () => {
+      draftReads++;
+      if (draftReads === 2) await turn.composer.fill('SYNTHETIC-REPLACED-DRAFT');
+      return await read();
+    });
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'rewritten-stale-tab.txt'));
+    expect(outcome.result).toMatchObject({ send_count: 0, cause: 'fresh_composer_draft_unreadable' });
+    expect(turn.composer.fill.mock.calls.map((args: unknown[]) => args[0])).toEqual(['SYNTHETIC-REPLACED-DRAFT']);
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.page.close).not.toHaveBeenCalled();
+  });
+  it('closes a proven owned, never-clicked draft only after 60s of disabled Send (#2487)', async () => {
+    const prompt = 'PROMPT-FRESH-NEVER-ENABLED';
+    const invocationId = randomUUID();
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'DO-NOT-SEND');
+    turn.sendButton.isEnabled.mockResolvedValue(false);
+    const outcome = await runNewChatTurn(turn.page, '/tmp/never-enabled-2487.txt', '90000', invocationId);
+    expect(outcome.result).toMatchObject({
+      state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
+    });
+    expect(turn.getSends()).toBe(0);
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.composer.fill).toHaveBeenLastCalledWith('', expect.objectContaining({ timeout: expect.any(Number) }));
+    expect(turn.page.close).toHaveBeenCalledTimes(1);
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
+  });
+
+  it('does not click Send when the owned marker is replaced during enablement polling (#2487)', async () => {
+    const prompt = 'PROMPT-PRECLICK-IDENTITY';
+    const invocationId = randomUUID();
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    turn.sendButton.isEnabled.mockImplementation(async () => {
+      await turn.composer.fill('SYNTHETIC-FOREIGN-COMPOSER-EDIT');
+      return true;
+    });
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, 'foreign-before-send.txt'), '90000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'ui_contract_mismatch:fresh_owned_payload_changed_before_click', send_count: 0,
+    });
+    expect(turn.getSends()).toBe(0);
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(turn.composer.fill).toHaveBeenLastCalledWith('SYNTHETIC-FOREIGN-COMPOSER-EDIT');
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
+  });
+
+  it('rechecks the complete 60s Send reserve after a delayed final Stop read (#2487)', async () => {
+    const prompt = 'PROMPT-SLOW-STOP-BOUNDARY';
+    const invocationId = randomUUID();
+    const invocationDeadlineMs = mocks.nowMs + 90_000;
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    const oldLocator = turn.page.locator.getMockImplementation()!;
+    let lateProbeInjected = false;
+    turn.page.locator.mockImplementation((selector: string) => {
+      if (selector.includes(STOP_BUTTON_TESTID)) {
+        return scalarLocator({ count: vi.fn(async () => {
+          if (!lateProbeInjected && turn.composer.fill.mock.calls.some((args: unknown[]) => String(args[0]).includes(prompt))) {
+            lateProbeInjected = true;
+            // Before the probe there is just over a full window left. Its
+            // async work consumes that reserve; no late Send is authorized.
+            mocks.nowMs = invocationDeadlineMs - 59_000;
+          }
+          return 0;
+        }) });
+      }
+      return oldLocator(selector);
+    });
+    turn.sendButton.isEnabled.mockImplementation(async () => mocks.nowMs >= invocationDeadlineMs + 500);
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, 'slow-stop-reserve.txt'), '90000', invocationId,
+    );
+    expect(lateProbeInjected).toBe(true);
+    expect(outcome.result).toMatchObject({
+      state: 'driver_error', cause: 'state_light_new_chat_send_budget_unavailable', send_count: 0,
+    });
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.page.close).toHaveBeenCalledTimes(1);
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
+  });
+
+  it('closes its already-empty created tab when the budget aborts before any fill (#2487)', async () => {
+    const prompt = 'PROMPT-PRE-FILL-BUDGET-FAILURE';
+    const invocationId = randomUUID();
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, 'empty-pre-fill.txt'), '61000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({
+      state: 'driver_error', cause: 'state_light_new_chat_send_budget_unavailable', send_count: 0,
+    });
+    expect(turn.composer.fill).not.toHaveBeenCalled();
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.page.close).toHaveBeenCalledTimes(1);
+    expect(outcome.result.incidents).not.toContain('owned_composer_cleanup_unavailable');
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
+  });
+
+  it('preserves a formerly owned tab that navigates during terminal composer cleanup (#2487)', async () => {
+    const prompt = 'PROMPT-CLEANUP-PAGE-REPLACED';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    turn.sendButton.isEnabled.mockResolvedValue(false);
+    const originalUrl = turn.page.url.getMockImplementation()!;
+    const read = turn.composer.innerText.getMockImplementation()!;
+    let repurposed = false;
+    turn.page.url.mockImplementation(() => repurposed ? OTHER_PROJECT_CONVERSATION_URL : originalUrl());
+    turn.composer.innerText.mockImplementation(async () => {
+      const text = await read();
+      if (mocks.nowMs >= 70_000) repurposed = true;
+      return text;
+    });
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'cleanup-tab-replaced.txt'));
+    expect(outcome.result).toMatchObject({
+      state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
+    });
+    expect(repurposed).toBe(true);
+    expect(turn.composer.fill).not.toHaveBeenLastCalledWith('', expect.anything());
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(outcome.result.incidents).toContain('owned_composer_cleanup_unavailable');
+  });
+  it('allows one and only one additional click after positive pre-actionability TimeoutError (#2487)', async () => {
+    const prompt = 'PROMPT-RETRY-PROVEN';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'RETRY-OK');
+    const clickEffect = turn.sendButton.click.getMockImplementation()!;
+    const firstClick = [
+      'locator.click: Timeout 5000ms exceeded',
+      'Call log:',
+      '  - waiting for element to be visible, enabled and stable',
+      '  - element is not enabled',
+    ].join('\n');
+    turn.sendButton.click.mockImplementationOnce(async () => {
+      throw Object.assign(new Error(firstClick), { name: 'TimeoutError' });
+    }).mockImplementationOnce(clickEffect);
+    const outcome = await runNewChatTurn(turn.page, '/tmp/retry-proven-2487.txt');
+    expect(outcome.result.send_count).toBe(1);
+    expect(turn.getSends()).toBe(1);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
+  });
+
+  it('never retries or clears an ambiguous first click (#2487)', async () => {
+    const prompt = 'PROMPT-RETRY-UNPROVEN';
+    const invocationId = randomUUID();
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'DO-NOT-SEND');
+    turn.sendButton.click.mockRejectedValue(Object.assign(new Error('locator.click: Timeout 5000ms exceeded'), {
+      name: 'TimeoutError',
+    }));
+    const outcome = await runNewChatTurn(turn.page, '/tmp/retry-unproven-2487.txt', '90000', invocationId);
+    expect(outcome.result).toMatchObject({ state: 'send_failed', send_count: 0, send_attempted: true });
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.composer.fill).not.toHaveBeenLastCalledWith('');
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
+  });
+
+
+  const expectPossibleEffect = (result: CapturedStateLightTurnResult): void => {
+    expect(deriveDelivery({
+      ...result,
+      resolved_send_count: result.send_count ?? 0,
+    }, false)).toBe('POSSIBLY_DELIVERED');
+  };
+
+  // A positive first-actionability timeout is the *only* possible retry
+  // admission witness. Every negative control below runs the production
+  // driver, not just the static timeout parser.
+  const provenPreActionabilityLog = [
+    'locator.click: Timeout 5000ms exceeded',
+    'Call log:',
+    '  - waiting for element to be visible, enabled and stable',
+    '  - element is not enabled',
+  ].join('\n');
+  const timeoutError = (message = provenPreActionabilityLog) =>
+    Object.assign(new Error(message), { name: 'TimeoutError' });
+
+  it.each([
+    ['generic TimeoutError', 'locator.click: Timeout 5000ms exceeded'],
+    ['missing Call log', 'locator.click: Timeout 5000ms exceeded\n - element is not enabled'],
+    ['truncated Call log', 'locator.click: Timeout 5000ms exceeded\nCall log:\n - waiting for element to be visible'],
+    ['post-dispatch action', provenPreActionabilityLog + '\n - performing click action'],
+    ['explicit dispatched action', provenPreActionabilityLog + '\n - click done'],
+    ['actual Playwright click completion', provenPreActionabilityLog + '\n - click action done'],
+    ['late click progression', provenPreActionabilityLog + '\n - scrolling into view'],
+  ] as const)('never retries or clears an unproven Playwright first action: %s (#2487)', async (_label, message) => {
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-2487-UNPROVEN-LOG';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    turn.sendButton.click.mockRejectedValueOnce(timeoutError(message));
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, invocationId + '-log-guard.txt'), '90000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'send_failed' });
+    expectPossibleEffect(outcome.result);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.getSends()).toBe(0);
+    expect(turn.composer.fill).not.toHaveBeenLastCalledWith('', expect.anything());
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
+  });
+
+  it.each(['marker_changed', 'user_baseline_changed', 'user_baseline_incomplete'] as const)(
+    'rejects an individually invalid first-click retry DOM guard: %s (#2487)',
+    async (scenario) => {
+      const invocationId = randomUUID();
+      const prompt = 'PROMPT-2487-DOM-GUARD';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      const baselineLocator = turn.page.locator.getMockImplementation()!;
+      let afterFirst = false;
+      turn.page.locator.mockImplementation((selector: string) => {
+        if (afterFirst && selector === MESSAGE_NODE_SELECTOR) {
+          if (scenario === 'user_baseline_changed') {
+            return collectionLocator([{ role: 'user', text: 'UNRELATED USER ENTRY' }]);
+          }
+          if (scenario === 'user_baseline_incomplete') {
+            return scalarLocator({
+              count: vi.fn(async () => { throw new Error('synthetic incomplete user census'); }),
+            });
+          }
+        }
+        return baselineLocator(selector);
+      });
+      turn.sendButton.click.mockImplementationOnce(async () => {
+        afterFirst = true;
+        if (scenario === 'marker_changed') await turn.composer.fill('FOREIGN EDITED DRAFT');
+        throw timeoutError();
+      });
+
+      const outcome = await runNewChatTurn(
+        turn.page, join(stateDir, invocationId + '-dom-guard.txt'), '90000', invocationId,
+      );
+      expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'send_failed' });
+      expectPossibleEffect(outcome.result);
+      expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+      expect(turn.getSends()).toBe(0);
+      expect(turn.page.close).not.toHaveBeenCalled();
+      expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
+    },
+  );
+
+  it('forbids retry after the original page identity changes during first click (#2487)', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-2487-PAGE-IDENTITY';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    let foreign = false;
+    const originalUrl = turn.page.url.getMockImplementation()!;
+    turn.page.url.mockImplementation(() => foreign ? OTHER_PROJECT_CONVERSATION_URL : originalUrl());
+    turn.sendButton.click.mockImplementationOnce(async () => { foreign = true; throw timeoutError(); });
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, invocationId + '-page-identity.txt'), '90000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({
+      send_count: 0, send_attempted: true, cause: 'fresh_conversation_surface_unavailable',
+    });
+    expectPossibleEffect(outcome.result);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
+  });
+
+  it('forbids retry when original slot owner identity is replaced (#2487)', async () => {
+    clearSendSlotDisableEnv();
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-2487-OWNER-IDENTITY';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    const { writeFileSync } = await import('node:fs');
+    turn.sendButton.click.mockImplementationOnce(async () => {
+      const now = mocks.nowMs;
+      writeFileSync(join(stateDir, 'collision-profile', 'locks', 'state-light-new-chat-send.slot'),
+        JSON.stringify({
+          schema: 'state-light-new-chat-send-slot/v1', version: 1,
+          invocation_id: 'foreign-owner-2487', pid: process.pid,
+          acquired_at: new Date(now).toISOString(),
+          expires_at: new Date(now + STATE_LIGHT_SEND_SLOT_TTL_MS).toISOString(),
+        }) + '\n');
+      throw timeoutError();
+    });
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, invocationId + '-owner-identity.txt'), '90000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({
+      send_count: 0, send_attempted: true, cause: 'state_light_new_chat_send_slot_owner_lost',
+    });
+    expectPossibleEffect(outcome.result);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
+  });
+
+  it('never makes a third attempt after even an affirmative second pre-actionability timeout (#2487)', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-2487-TWO-TIMEOUTS';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    turn.sendButton.click.mockImplementationOnce(async () => { throw timeoutError(); });
+    turn.sendButton.click.mockImplementationOnce(async () => { throw timeoutError(); });
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, invocationId + '-second-final.txt'), '90000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'send_failed' });
+    expectPossibleEffect(outcome.result);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
+    expect(turn.getSends()).toBe(0);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
+  });
+
+  it('uses a Stop appearing after the first click as delivery, never second-click authority (#2487)', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-2487-STOP-FIRST';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    let ownedStop = false;
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    turn.page.locator.mockImplementation((selector: string) => selector.includes(STOP_BUTTON_TESTID)
+      ? scalarLocator({
+        count: vi.fn(async () => ownedStop ? 1 : 0),
+        isVisible: vi.fn(async () => ownedStop),
+      })
+      : originalLocator(selector));
+    turn.sendButton.click.mockImplementationOnce(async () => {
+      ownedStop = true;
+      throw timeoutError();
+    });
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, invocationId + '-stop-first.txt'), '90000', invocationId,
+    );
+    expect(outcome.result.send_count).toBe(1);
+    expectPossibleEffect(outcome.result);
+    expect(outcome.result.cause).not.toBe('fresh_conversation_landing_mismatch');
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase)
+      .toMatch(/sent_unbound|sent_unharvested/);
+  });
+
+  it('attributes Stop after the permitted second click as delivery without cleanup or third attempt (#2487)', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-2487-STOP-SECOND';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    let ownedStop = false;
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    turn.page.locator.mockImplementation((selector: string) => selector.includes(STOP_BUTTON_TESTID)
+      ? scalarLocator({
+        count: vi.fn(async () => ownedStop ? 1 : 0),
+        isVisible: vi.fn(async () => ownedStop),
+      })
+      : originalLocator(selector));
+    turn.sendButton.click.mockImplementationOnce(async () => { throw timeoutError(); });
+    turn.sendButton.click.mockImplementationOnce(async () => { ownedStop = true; });
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, invocationId + '-stop-second.txt'), '90000', invocationId,
+    );
+    expect(outcome.result.send_count).toBe(1);
+    expectPossibleEffect(outcome.result);
+    expect(outcome.result.cause).not.toBe('fresh_conversation_landing_mismatch');
+    expect(outcome.result.poll_count).toBeGreaterThan(0);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
+    expect(turn.getSends()).toBe(0);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(turn.composer.fill).not.toHaveBeenLastCalledWith('', expect.anything());
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase)
+      .toMatch(/sent_unbound|sent_unharvested/);
+  });
+
+  it('does not attribute a foreign Stop visible before the new-chat send (#2487)', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-2487-FOREIGN-STOP';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    turn.page.locator.mockImplementation((selector: string) => selector.includes(STOP_BUTTON_TESTID)
+      ? scalarLocator({ count: vi.fn(async () => 1), isVisible: vi.fn(async () => true) })
+      : originalLocator(selector));
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, invocationId + '-foreign-stop.txt'), '90000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({
+      state: 'conversation_busy', send_count: 0, cause: 'fresh_conversation_busy_before_send',
+    });
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.getSends()).toBe(0);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
+  });
+
   it('terminates contended recovery without a second send when the prompt already landed', async () => {
     const profileKey = 'collision-profile';
     expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'winner-invocation')).toBe('claimed');
@@ -455,7 +947,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const output = join(stateDir, 'unowned-fresh-reply.txt');
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const ordinary = makeLoserPage(prompt, reply);
-    const outcome = await runNewChatTurn(ordinary.page, output, '5000', invocationId);
+    const outcome = await runNewChatTurn(ordinary.page, output, '90000', invocationId);
 
     expect(outcome).toMatchObject({ code: 0, result: { state: 'ok', send_count: 1 } });
     expect(ordinary.getSends()).toBe(1);
@@ -506,7 +998,7 @@ describe('state-light fresh conversation collision recovery', () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-LATE'));
     const solo = makeLoserPage('PROMPT-LATE', 'LATE-OK');
     solo.composer.count.mockImplementation(async () => mocks.nowMs >= 30_000 ? 1 : 0);
-    const outcome = await runNewChatTurn(solo.page, '/tmp/late-fresh.txt', '60000');
+    const outcome = await runNewChatTurn(solo.page, '/tmp/late-fresh.txt', '120000');
     expect(outcome.result.send_count).toBe(1);
     expect(solo.getSends()).toBe(1);
     expect(solo.page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), expect.objectContaining({
@@ -750,6 +1242,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const prompt = 'PROMPT-SOLO';
     const reply = 'SOLO-OK';
     let sent = false;
+    let composerText = '';
     let url = PROJECT_URL;
     let observationIndex = 0;
     const snapshotFrames = readyTurnObservationFrames(prompt, reply).map((messages, index) => ({
@@ -760,9 +1253,9 @@ describe('state-light fresh conversation collision recovery', () => {
     const composer = scalarLocator({
       count: vi.fn(async () => 1),
       click: vi.fn(async () => undefined),
-      fill: vi.fn(async () => undefined),
-      innerText: vi.fn(async () => (sent ? '' : prompt)),
-      textContent: vi.fn(async () => (sent ? '' : prompt)),
+      fill: vi.fn(async (value: string) => { composerText = value; }),
+      innerText: vi.fn(async () => (sent ? '' : composerText)),
+      textContent: vi.fn(async () => (sent ? '' : composerText)),
       press: vi.fn(async () => { sent = true; }),
     });
     const sendButton = scalarLocator({
@@ -829,7 +1322,7 @@ describe('state-light fresh conversation collision recovery', () => {
     continueGeneratingSequence: readonly boolean[] = [],
     observationOverrides: { incompleteReads?: readonly number[]; nonFinalReads?: readonly number[]; nonFinalFromRead?: number; includeOwnedUser?: boolean; keyedOwnedMessages?: boolean; markerlessOwnedUserFromRead?: number; assistantCarrierKeysByRead?: readonly string[]; neverMarkerProof?: boolean } = {},
   ) {
-    const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0 };
+    const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0, composerText: '' };
     const withCarrierKeys = (messages: StateLightTestMessage[]) => observationOverrides.keyedOwnedMessages
       ? messages.map((message) => ({ ...message, key: message.role === 'user' ? 'user-carrier-12345678' : 'assistant-carrier-12345678' }))
       : messages;
@@ -856,9 +1349,9 @@ describe('state-light fresh conversation collision recovery', () => {
     const composer = scalarLocator({
       count: vi.fn(async () => 1),
       click: vi.fn(async () => undefined),
-      fill: vi.fn(async () => undefined),
-      innerText: vi.fn(async () => (state.sent ? '' : prompt)),
-      textContent: vi.fn(async () => (state.sent ? '' : prompt)),
+      fill: vi.fn(async (value: string) => { state.composerText = value; }),
+      innerText: vi.fn(async () => (state.sent ? '' : state.composerText)),
+      textContent: vi.fn(async () => (state.sent ? '' : state.composerText)),
       press: vi.fn(async () => { state.sent = true; state.url = SHARED_CONV; }),
     });
     const sendButton = scalarLocator({
@@ -986,7 +1479,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const invocationId = randomUUID();
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const outcome = await runNewChatTurn(page, output, '5000', invocationId);
+    const outcome = await runNewChatTurn(page, output, '90000', invocationId);
 
     expect(outcome.code).not.toBe(0);
     expect(outcome.result).toMatchObject({ send_count: 1 });
@@ -1052,7 +1545,7 @@ describe('state-light fresh conversation collision recovery', () => {
     );
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
 
-    const outcome = await runNewChatTurn(page, output, '1000');
+    const outcome = await runNewChatTurn(page, output, '90000');
 
     expect(outcome.result.state).not.toBe('ok');
     expect(outcome.result.send_count).toBe(1);
@@ -1110,7 +1603,7 @@ describe('state-light fresh conversation collision recovery', () => {
     );
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
 
-    const outcome = await runNewChatTurn(page, output, '1000');
+    const outcome = await runNewChatTurn(page, output, '90000');
 
     expect(outcome.result.state).not.toBe('ok');
     expect(outcome.result.send_count).toBe(1);
@@ -1236,7 +1729,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false, true);
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const outcome = await runNewChatTurn(page, output, '1000');
+    const outcome = await runNewChatTurn(page, output, '90000');
 
     expect(outcome.result.state).not.toBe('ok');
     expect(outcome.result.send_count).toBe(1);
@@ -1338,7 +1831,7 @@ describe('state-light fresh conversation collision recovery', () => {
     };
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const outcome = await runNewChatTurn(page, output, '1000', invocationId);
+    const outcome = await runNewChatTurn(page, output, '90000', invocationId);
 
     expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0 });
     expect(outcome.result).toMatchObject({
@@ -1363,7 +1856,7 @@ describe('state-light fresh conversation collision recovery', () => {
       mocks.failNextObservationMutationRmdir = true;
     });
 
-    const outcome = await runNewChatTurn(turn.page, output, '5000', invocationId);
+    const outcome = await runNewChatTurn(turn.page, output, '90000', invocationId);
 
     expect(outcome.result).toMatchObject({
       state: 'driver_error',
@@ -1409,7 +1902,7 @@ describe('state-light fresh conversation collision recovery', () => {
     });
   });
 
-  it('records privacy-safe diagnostics for each composer mutation budget exit', async () => {
+  it('reports privacy-safe diagnostics from each composer mutation budget exit', async () => {
     const prompt = 'PROMPT-2405-SENTINEL';
     const markedPrompt = wrapOwnedPromptPayload(TEST_OWNED_MARKER, prompt);
     const insertionBudgetMs = deriveComposerInsertionBudgetMs(markedPrompt);
@@ -1457,27 +1950,22 @@ describe('state-light fresh conversation collision recovery', () => {
             if (!scenario.expireOnNextClockRead) mocks.nowMs = deadlineMs;
           }
         });
-        mocks.readStableInput.mockReturnValue(stableTurnInput(prompt));
-        const invocationId = randomUUID();
-        const { result } = await runNewChatTurn(
-          page,
-          join(stateDir, `${scenario.branch}.json`),
-          '5000',
-          invocationId,
+        const insertionContext: {
+          insertionDeadlineMs?: number;
+          diagnostic?: import('./contracts.ts').ComposerMutationDiagnosticV1;
+        } = {};
+        // The production path first performs a successful composer readiness
+        // check before invoking the mutation helper. Keep that preflight so
+        // its deliberate second/final readiness failure remains reachable.
+        expect(await __testComposerMutation.readComposerReadiness(page, deadlineMs)).toBe(true);
+        const cause = await __testComposerMutation.mutateComposerOrCause(
+          page, markedPrompt, deadlineMs, insertionContext,
         );
         expect(composer.evaluate).toHaveBeenCalled();
         expect(evaluateCount).toBe(scenario.ready.length);
         expect(composer.click).toHaveBeenCalledTimes(scenario.branch === 'budget_before_click' ? 0 : 1);
         expect(composer.fill).toHaveBeenCalledTimes(scenario.branch === 'readiness_before_click' ? 1 : 0);
-        expect(result).toMatchObject({
-          state: 'driver_error',
-          cause: 'composer_mutation_budget_exhausted',
-          send_count: 0,
-        });
-        expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
-          phase: 'not_sent',
-          send_count: 0,
-        });
+        expect(cause).toBe('composer_mutation_budget_exhausted');
         expect(getSends()).toBe(0);
         const expectedElapsed = scenario.branch === 'readiness_before_click'
           || scenario.branch === 'readiness_before_fill' ? 0 : 5_000;
@@ -1488,12 +1976,8 @@ describe('state-light fresh conversation collision recovery', () => {
           elapsedMs: expectedElapsed,
           remainingInvocationMs: expectedElapsed === 0 ? 5_000 : 0,
         };
-        expect(result.composer_mutation_diagnostic).toEqual(diagnostic);
-        expect(JSON.stringify(result.composer_mutation_diagnostic)).not.toContain(prompt);
-        const recurrenceRecord = mocks.appendFileSync.mock.calls
-          .map((call: unknown[]) => JSON.parse(String(call[1])))
-          .find((record: any) => record.invocation === invocationId);
-        expect(recurrenceRecord?.composer_mutation_diagnostic).toEqual(diagnostic);
+        expect(insertionContext.diagnostic).toEqual(diagnostic);
+        expect(JSON.stringify(insertionContext.diagnostic)).not.toContain(prompt);
       }
     } finally {
       if (priorHome === undefined) delete process.env.HOME;
@@ -1714,6 +2198,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const prompt = 'PROMPT-JOURNAL-DEFER';
     const reply = 'JOURNAL-OK';
     let sent = false;
+    let composerText = '';
     let url = PROJECT_URL;
     let observationIndex = 0;
     const snapshotFrames = readyTurnObservationFrames(prompt, reply).map((messages, index) => ({
@@ -1724,9 +2209,9 @@ describe('state-light fresh conversation collision recovery', () => {
     const composer = scalarLocator({
       count: vi.fn(async () => 1),
       click: vi.fn(async () => undefined),
-      fill: vi.fn(async () => undefined),
-      innerText: vi.fn(async () => (sent ? '' : prompt)),
-      textContent: vi.fn(async () => (sent ? '' : prompt)),
+      fill: vi.fn(async (value: string) => { composerText = value; }),
+      innerText: vi.fn(async () => (sent ? '' : composerText)),
+      textContent: vi.fn(async () => (sent ? '' : composerText)),
       press: vi.fn(async () => { sent = true; }),
     });
     const sendButton = scalarLocator({
@@ -1783,7 +2268,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result.state).not.toBe('ok');
     expect(page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), {
       waitUntil: 'commit',
-      timeout: 5_000,
+      timeout: expect.any(Number),
     });
     expect(outcome.result.incidents).toContain('send_observation_deferred');
     expect(outcome.result.state).not.toBe('send_failed');
@@ -1819,6 +2304,7 @@ describe('state-light fresh conversation collision recovery', () => {
   it('does not report fresh_conversation_landing_mismatch at the deadline when the same-project conversation is open', async () => {
     const prompt = 'PROMPT-LANDED-FRESH';
     let sent = false;
+    let composerText = '';
     let conversationAppearsAt = Number.POSITIVE_INFINITY;
     const staleAssistant: StateLightTestSnapshot = {
       messages: [{ role: 'assistant', text: 'foreign', finalAction: true, finalActionInTurnContainer: true }],
@@ -1827,7 +2313,8 @@ describe('state-light fresh conversation collision recovery', () => {
     const composer = scalarLocator({
       count: vi.fn(async () => 1),
       click: vi.fn(async () => undefined),
-      fill: vi.fn(async () => undefined),
+      fill: vi.fn(async (value: string) => { composerText = value; }),
+      innerText: vi.fn(async () => sent ? '' : composerText),
       press: vi.fn(async () => {
         sent = true;
         conversationAppearsAt = mocks.nowMs + 3_000;
@@ -1874,7 +2361,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(
       page,
       '/tmp/fresh-landing-same-project.txt',
-      '3000',
+      '90000',
       randomUUID(),
       ISSUE_PROJECT_URL,
     );
@@ -1887,6 +2374,7 @@ describe('state-light fresh conversation collision recovery', () => {
   it('returns fresh_conversation_landing_mismatch when url and owned prompt never materialize', async () => {
     const prompt = 'PROMPT-STUCK-FRESH';
     let sent = false;
+    let composerText = '';
     let url = PROJECT_URL;
     const staleAssistant: StateLightTestSnapshot = {
       messages: [{ role: 'assistant', text: 'foreign', finalAction: true, finalActionInTurnContainer: true }],
@@ -1895,7 +2383,8 @@ describe('state-light fresh conversation collision recovery', () => {
     const composer = scalarLocator({
       count: vi.fn(async () => 1),
       click: vi.fn(async () => undefined),
-      fill: vi.fn(async () => undefined),
+      fill: vi.fn(async (value: string) => { composerText = value; }),
+      innerText: vi.fn(async () => sent ? '' : composerText),
       press: vi.fn(async () => { sent = true; }),
     });
     const sendButton = scalarLocator({
@@ -1933,7 +2422,7 @@ describe('state-light fresh conversation collision recovery', () => {
     };
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const outcome = await runNewChatTurn(page, '/tmp/fresh-landing-mismatch.txt', '3000');
+    const outcome = await runNewChatTurn(page, '/tmp/fresh-landing-mismatch.txt', '90000');
 
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch',
@@ -1941,7 +2430,8 @@ describe('state-light fresh conversation collision recovery', () => {
       send_count: 1,
     });
     expect(outcome.result.incidents).toContain('conversation_landing_mismatch');
-    expect(outcome.result.poll_count).toBeLessThan(20);
+    // Longer accepted timeout leaves a larger legitimate post-send observation budget.
+    expect(outcome.result.poll_count).toBeLessThan(100);
   });
 
 });
@@ -1988,10 +2478,11 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
     expect(overOutcome.result.goto_count).toBe(0);
   });
 
-  it('treats 2x timeout-ms as a decision threshold that may return after an awaited pass', async () => {
+  it('does not dispatch when a short timeout cannot fit two full Send windows', async () => {
     const prompt = 'PROMPT-THRESHOLD';
     const reply = 'THRESHOLD-OK';
     let sent = false;
+    let composerText = '';
     let url = PROJECT_URL;
     let observationIndex = 0;
     const snapshotFrames = readyTurnObservationFrames(prompt, reply).map((messages, index) => ({
@@ -2002,9 +2493,9 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
     const composer = scalarLocator({
       count: vi.fn(async () => 1),
       click: vi.fn(async () => undefined),
-      fill: vi.fn(async () => undefined),
-      innerText: vi.fn(async () => (sent ? '' : prompt)),
-      textContent: vi.fn(async () => (sent ? '' : prompt)),
+      fill: vi.fn(async (value: string) => { composerText = value; }),
+      innerText: vi.fn(async () => (sent ? '' : composerText)),
+      textContent: vi.fn(async () => (sent ? '' : composerText)),
       press: vi.fn(async () => { sent = true; }),
     });
     const sendButton = scalarLocator({
@@ -2055,11 +2546,65 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
     const startedAt = mocks.nowMs;
     const outcome = await runNewChatTurn(page, '/tmp/threshold-after-2x.txt', '1000');
     expect(outcome.code).not.toBe(0);
-    expect(mocks.nowMs).toBeGreaterThanOrEqual(startedAt + 2000);
-    expect(outcome.result).toMatchObject({ send_count: 1 });
-    // The fixture never materializes a canonical conversation URL; 2x timeout
-    // is not permission to claim a project-root page or publish an unowned reply.
-    expect(outcome.result.state).not.toBe('ok');
+    expect(mocks.nowMs).toBeGreaterThanOrEqual(startedAt);
+    expect(outcome.result).toMatchObject({
+      send_count: 0, state: 'driver_error',
+      cause: 'state_light_new_chat_send_budget_unavailable',
+    });
+    // A short accepted timeout cannot buy an incomplete 60s Send reserve.
+    expect(sendButton.click).not.toHaveBeenCalled();
+  });
+
+  it('keeps the live prepared holder through 300s, reports its actual phase, and releases only as its owner (#2487)', async () => {
+    clearSendSlotDisableEnv();
+    const profileKey = 'collision-profile';
+    const holder = 'holder-2487';
+    admitStateLightTurnObservation({ profileKey, invocationId: holder, marker: TEST_OWNED_MARKER });
+    const bound = await acquireStateLightNewChatSendSlot(profileKey, holder, 90_000);
+    expect(bound).toBe(mocks.nowMs + STATE_LIGHT_OWNER_PRE_DISPATCH_MS);
+    mocks.nowMs += STATE_LIGHT_OWNER_PRE_DISPATCH_MS + 1;
+    // Neither a prepared/none observation nor elapsed cooperative owner time
+    // grants a foreign contender the physical slot before the original TTL.
+    const first = acquireStateLightNewChatSendSlot(profileKey, 'waiter-a-2487', 50);
+    const second = acquireStateLightNewChatSendSlot(profileKey, 'waiter-b-2487', 50);
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    mocks.nowMs += 60;
+    for (const pending of [first, second]) {
+      await expect(pending).rejects.toMatchObject({
+        message: 'state_light_new_chat_send_slot_timeout',
+        send_slot_holder_invocation_id: holder,
+        send_slot_holder_phase: 'prepared',
+      });
+    }
+    expect(verifyStateLightSendSlotOwnerFence(profileKey, holder)).toBe('valid');
+    releaseStateLightNewChatSendSlot(profileKey, holder);
+    await acquireStateLightNewChatSendSlot(profileKey, 'successor-2487', 50);
+    expect(verifyStateLightSendSlotOwnerFence(profileKey, 'successor-2487')).toBe('valid');
+    releaseStateLightNewChatSendSlot(profileKey, 'successor-2487');
+  });
+
+  it('stops a slow but progressing original owner after its own deadline without dispatch (#2487)', async () => {
+    clearSendSlotDisableEnv();
+    const prompt = 'PROMPT-OWNER-LATE';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'DO-NOT-SEND');
+    let expired = false;
+    turn.composer.evaluate.mockImplementation(async () => {
+      if (!expired) {
+        expired = true;
+        mocks.nowMs += STATE_LIGHT_OWNER_PRE_DISPATCH_MS + 1;
+      }
+      return { visible: true, enabled: true, contentEditable: true };
+    });
+    const outcome = await runNewChatTurn(turn.page, '/tmp/2487-late-owner.txt', '400000');
+    expect(outcome.result).toMatchObject({
+      state: 'driver_error', send_count: 0,
+      cause: 'state_light_new_chat_owner_pre_dispatch_deadline_exhausted',
+    });
+    expect(turn.getSends()).toBe(0);
+    // The original owner, not the waiter, returns through its slot finalizer.
+    await acquireStateLightNewChatSendSlot('collision-profile', 'later-admitted-2487', 100);
+    releaseStateLightNewChatSendSlot('collision-profile', 'later-admitted-2487');
   });
 
   it('recovers expired and corrupt ownership artifacts through bounded exclusive create', async () => {
@@ -2368,7 +2913,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     mocks.browserQueue.push(initialBrowser, recoveredBrowser);
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
 
-    const outcome = await runProductionNewChat(output, '50');
+    const outcome = await runProductionNewChat(output, '90000');
 
     expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0 });
     expect(outcome.result).toMatchObject({
@@ -2491,7 +3036,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     mocks.browserQueue.push(browserWithPages(ownedPage, [ownedPage, foreignPage], () => true));
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
 
-    const outcome = await runProductionNewChat(output, '5');
+    const outcome = await runProductionNewChat(output, '90000');
 
     expect(outcome.result).toMatchObject({
       state: 'no_reply',
@@ -2616,7 +3161,7 @@ describe('Issue #1752 production liveness regressions', () => {
     vi.restoreAllMocks();
   });
 
-  function livenessArgv(outputPath: string, timeoutMs = '5000') {
+  function livenessArgv(outputPath: string, timeoutMs = '90000') {
     return [
       ...STATE_LIGHT_TURN_BASE_ARGV,
       '--invocation-id', randomUUID(),
@@ -2673,7 +3218,7 @@ describe('Issue #1752 production liveness regressions', () => {
     }
   });
 
-  it('terminates a never-resolving locator count under the invocation budget while heartbeats stay healthy', async () => {
+  it('refuses an unresolved fresh Send actionability count with live heartbeats and zero clicks', async () => {
     const prompt = 'PROMPT-LIVENESS-LOCATOR-STALL';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const fake = makeLoserPage(prompt, 'UNREACHABLE');
@@ -2687,17 +3232,18 @@ describe('Issue #1752 production liveness regressions', () => {
     }) as typeof process.stdout.write);
     try {
       const code = await runStateLightTurn(
-        livenessArgv(join(livenessStateDir, 'locator-stall.txt'), '45'),
+        livenessArgv(join(livenessStateDir, 'locator-stall.txt'), '90000'),
         { entryLivenessHeartbeat: true },
       );
       expect(code).not.toBe(0);
+      expect(fake.sendButton.click).not.toHaveBeenCalled();
       const records = parseRecords(writes);
       const heartbeats = records.filter((record) => record.schema === 'observation-heartbeat/v1');
       expect(heartbeats.length).toBeGreaterThan(2);
       expect(records.at(-1)).toMatchObject({
         schema: 'turn-result/v1',
-        state: 'driver_error',
-        cause: 'browser_operation_timeout:locator_count',
+        state: 'ui_contract_mismatch',
+        cause: 'fresh_send_actionability_unknown_or_busy',
         send_count: 0,
       });
     } finally {
@@ -2934,11 +3480,16 @@ describe('Issue #1752 production liveness regressions', () => {
     }) as typeof process.stdout.write);
     try {
       const code = await runStateLightTurn(
-        livenessArgv(join(livenessStateDir, 'recovery-page.txt'), '50'),
+        livenessArgv(join(livenessStateDir, 'recovery-page.txt'), '90000'),
         {
           entryLivenessHeartbeat: true,
           recoveryHooks: {
-            faultActuator: () => { lost = true; },
+            faultActuator: () => {
+              lost = true;
+              // Reach the post-send deadline with only a bounded recovery
+              // newPage budget; the full 60s pre-send reserve was already met.
+              mocks.nowMs += (2 * 90_000) - 2_000;
+            },
           },
         },
       );

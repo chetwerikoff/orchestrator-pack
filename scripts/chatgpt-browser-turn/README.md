@@ -52,7 +52,7 @@ invalid in identity-bound mode.
 Every canonical turn creates a dedicated owned tab. This removes the old shared-
 tab cleanup ambiguity.
 
-- a pre-send terminal with `send_count: 0` may close the exact retained tab;
+- a positively not-sent terminal may clear only the exact invocation-marked composer payload and then close its provably created tab; a zero count or uncertain click never suffices;
 - a post-send turn closes that exact tab only after the final-path publisher returns
   `committed_ok`;
 - every post-send/no-publication result preserves the reachable retained tab and
@@ -115,6 +115,34 @@ Emitted records remain rollback-readable v1 with only optional additive
 read and skips on mismatch or expected expiry, so a successor present before that
 read survives. Replacement after final revalidation but before protected entry,
 or after final release read but before unlink, remains documented residual risk.
+
+A new-chat send-slot owner uses an additional **cooperative** 300,000 ms
+pre-dispatch cutoff from its own slot acquisition. After asynchronous preparation
+and immediately before entering dispatch it checks that cutoff and the original
+v1 owner fence; a suspended owner cannot promise physical slot release at 300 s.
+Waiters still use their existing maximum 120 s wait and the original 2,100,000 ms
+slot TTL; they do **not** revoke live owners from a `prepared/none/0` snapshot.
+A slot timeout keeps its canonical cause and not-sent waiter identity, and projects
+a stable correlated holder invocation and observation phase to terminal/v1,
+or explicit `unknown` when correlation is not possible.
+
+On a dedicated new-chat project tab, the pre-send composer is read before typing;
+a stale nonempty draft is cleared and re-read before the owned marker is inserted.
+Only positive evidence records `stale_composer_cleared: true` in terminal/v1.
+Prompt bytes, stale draft bytes and sibling tabs never enter that diagnostic.
+The full **60 s Send-readiness reserve** sits inside the original invocation
+timeout, separately from navigation/cleanup/insertion; insufficient remaining
+time ends safely before typing. Two 30 s readiness **maxima**, not sleeps, click
+immediately on an enabled visible Send button (no Enter fallback or third window).
+A first Playwright click timeout is possible delivery by default. A second and
+final click is allowed only when the actual Playwright actionability log proves
+the first action never physically dispatched and the exact marked composer,
+user-node baseline, absent Stop and current page/slot identity all still agree.
+Missing log proof or any ambiguity forbids retry and pre-send cleanup; a newly
+attributable Stop after click is delivery and continues normal observation.
+An unclicked never-enabled button can end not-sent; clear only identical owned
+payload and close only its proven dedicated tab, retaining any changed/foreign tab.
+Operator recovery must never blindly resend after possible delivery.
 
 These records are transport-local only. They do not authorize workflow
 progression, prove delivery, permit resend, or become durable recovery state.

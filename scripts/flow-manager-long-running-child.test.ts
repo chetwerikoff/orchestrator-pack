@@ -471,6 +471,62 @@ describe('observable post-send exits (#2416)', () => {
 });
 
 describe('flow-manager long-running child (#1164)', () => {
+  it('projects only bounded holder and stale-clear diagnostics through the persisted terminal (#2487)', async () => {
+    for (const [label, extras, expected] of [
+      ['stable', {
+        send_slot_holder_invocation_id: 'holder-2487',
+        send_slot_holder_phase: 'prepared',
+        stale_composer_cleared: true,
+      }, {
+        send_slot_holder_invocation_id: 'holder-2487',
+        send_slot_holder_phase: 'prepared',
+        stale_composer_cleared: true,
+      }],
+      ['uncorrelatable', {
+        send_slot_holder_invocation_id: 'invalid holder: private path',
+        send_slot_holder_phase: 'user supplied text',
+      }, {
+        send_slot_holder_invocation_id: 'unknown',
+        send_slot_holder_phase: 'unknown',
+      }],
+    ] as const) {
+      const root = tempDir('opk-2487-projection-');
+      const paths = launchPaths(root, label);
+      const result = makeTurnResult({
+        state: 'send_failed', scope: 'invocation',
+        cause: 'state_light_new_chat_send_slot_timeout',
+        invocation_id: 'waiter-2487',
+        observation_uncertainty_diagnostics: {
+          cause: 'state_light_new_chat_send_slot_timeout',
+          send_count: 0,
+          owned_prompt_seen: false,
+        },
+        ...extras,
+      });
+      const fixture = nodeFixture(`process.stdout.write(${JSON.stringify(JSON.stringify(result) + '\n')})`);
+      const code = await runFixtureLaunch(root, {
+        runIdentity: `run-2487-${label}`,
+        attemptIdentity: `attempt-2487-${label}`,
+        handoffReceiptPath: paths.receipt,
+        terminalEnvelopePath: paths.envelope,
+        browserOutputPath: paths.output,
+        cwd: repoRoot,
+        childCommand: fixture.command,
+        childArgs: fixture.args,
+      });
+      expect(code).toBe(1);
+      expect(readTerminalEnvelope(paths.envelope)).toMatchObject({
+        schema: TERMINAL_SCHEMA,
+        delivery: 'not-sent',
+        observed_invocation_id: 'waiter-2487',
+        turn_result_cause: 'state_light_new_chat_send_slot_timeout',
+        send_count: 0,
+        ...expected,
+      });
+      expect(readTerminalEnvelope(paths.envelope)?.send_slot_holder_invocation_id).not.toBe('waiter-2487');
+    }
+  });
+
   it('validates the shared startup/heartbeat/idle relation fail-closed (#1752)', () => {
     const timing = resolveBrowserTurnLivenessTiming();
     expect(timing.maxHealthyHeartbeatGapMs).toBeLessThan(timing.liveChildIdleWindowMs);
