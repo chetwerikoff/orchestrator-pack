@@ -426,6 +426,46 @@ describe('state-light fresh conversation collision recovery', () => {
     ]);
   });
 
+  it('blocks before clearing or typing if existing fresh composer content cannot be read (#2487)', async () => {
+    const prompt = 'PROMPT-UNREADABLE-STALE-DRAFT';
+    const invocationId = randomUUID();
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    turn.composer.innerText.mockRejectedValueOnce(new Error('synthetic unreadable composer'));
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, 'unreadable-stale-draft-2487.txt'), '90000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'fresh_composer_draft_unreadable', send_count: 0,
+    });
+    expect(turn.composer.fill).not.toHaveBeenCalled();
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
+  });
+
+  it('blocks before typing when a stale composer draft cannot be safely cleared (#2487)', async () => {
+    const prompt = 'PROMPT-UNCLEARABLE-STALE-DRAFT';
+    const invocationId = randomUUID();
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    await turn.composer.fill('SYNTHETIC-EXISTING-DRAFT');
+    turn.composer.fill.mockClear();
+    turn.composer.fill.mockRejectedValueOnce(new Error('synthetic composer clear failure'));
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, 'unclearable-stale-draft-2487.txt'), '90000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'fresh_composer_draft_unreadable', send_count: 0,
+    });
+    expect(turn.composer.fill.mock.calls.map((args: unknown[]) => args[0])).toEqual(['']);
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
+  });
+
   it('closes a proven owned, never-clicked draft only after 60s of disabled Send (#2487)', async () => {
     const prompt = 'PROMPT-FRESH-NEVER-ENABLED';
     const invocationId = randomUUID();
