@@ -5,6 +5,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -135,41 +136,58 @@ export function projectConversationPrefix(projectUrl: string): string {
   return normalizeConversationUrl(projectUrl).replace(/\/+$/, '');
 }
 
-function projectGptIdFromUrl(url: string): string | undefined {
-  const match = /\/g\/(g-p-[^/]+)/i.exec(normalizeConversationUrl(url));
-  return match?.[1]?.toLowerCase();
+const CANONICAL_UUID_PATH_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const STABLE_PROJECT_SEGMENT_RE = /^g-p-([0-9a-f]{32})(?:-[^/]+)?$/i;
+
+function stableProjectId(segment: string): string | undefined {
+  const match = STABLE_PROJECT_SEGMENT_RE.exec(segment);
+  return match ? `g-p-${match[1]!.toLowerCase()}` : undefined;
 }
 
-export function projectSurfaceUrlsEquivalent(observedUrl: string, projectUrl: string): boolean {
-  if (conversationUuidFromUrl(observedUrl)) return false;
-  const observed = normalizeConversationUrl(observedUrl);
-  const project = projectConversationPrefix(projectUrl);
-  if (observed === project) return true;
+function supportedChatGptUrl(value: string, allowLegacyConversationHost = false): URL | undefined {
   try {
-    const observedParsed = new URL(observed);
-    const projectParsed = new URL(project);
-    if (observedParsed.origin !== projectParsed.origin) return false;
-    const observedPath = observedParsed.pathname.replace(/\/+$/, '');
-    const projectPath = projectParsed.pathname.replace(/\/+$/, '');
-    if (observedPath === projectPath) return true;
-    const observedId = projectGptIdFromUrl(observed);
-    const projectId = projectGptIdFromUrl(project);
-    return observedId !== undefined
-      && observedId === projectId
-      && !/\/c\//i.test(observedPath);
+    const url = new URL(normalizeConversationUrl(value));
+    return (url.origin === 'https://chatgpt.com'
+      || (allowLegacyConversationHost && url.origin === 'https://chat.openai.com'))
+      && !url.username && !url.password ? url : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
+function projectSurfaceIdentity(value: string): string | undefined {
+  const url = supportedChatGptUrl(value);
+  const segment = url && /^\/g\/(g-p-[^/]+)(?:\/(?:project|draft))?$/i.exec(url.pathname)?.[1];
+  return segment ? stableProjectId(segment) : undefined;
+}
+
+export function projectSurfaceUrlsEquivalent(observedUrl: string, projectUrl: string): boolean {
+  const project = supportedChatGptUrl(projectUrl);
+  const observed = supportedChatGptUrl(observedUrl);
+  if (!project || !observed || project.origin !== observed.origin) return false;
+  const expected = projectSurfaceIdentity(projectUrl);
+  return expected !== undefined && projectSurfaceIdentity(observedUrl) === expected;
+}
+
 export function isBlankProjectSurfaceUrl(observedUrl: string, projectUrl: string): boolean {
-  if (!observedUrl.trim()) return false;
-  return projectSurfaceUrlsEquivalent(observedUrl, projectUrl);
+  return observedUrl.trim().length > 0 && projectSurfaceUrlsEquivalent(observedUrl, projectUrl);
 }
 
 export function conversationUuidFromUrl(value: string): string | undefined {
-  const match = /\/c\/([0-9a-f-]{36})$/i.exec(normalizeConversationUrl(value));
-  return match?.[1]?.toLowerCase();
+  // Existing chat/cancellation receipts may still use the explicitly supported legacy host.
+  // Fresh project identity and claim keys continue to require chatgpt.com only.
+  const url = supportedChatGptUrl(value, true);
+  const match = url && /\/c\/([^/]+)$/i.exec(url.pathname);
+  return match && CANONICAL_UUID_PATH_RE.test(match[1]!) ? match[1]!.toLowerCase() : undefined;
+}
+
+function canonicalFreshConversationKey(conversationUrl: string): string | undefined {
+  const url = supportedChatGptUrl(conversationUrl);
+  const match = url && /^\/g\/(g-p-[^/]+)\/c\/([^/]+)$/i.exec(url.pathname);
+  if (!match) return undefined;
+  const stable = stableProjectId(match[1]!);
+  if (!stable || !CANONICAL_UUID_PATH_RE.test(match[2]!)) return undefined;
+  return `${url!.origin}/g/${stable}/c/${match[2]!.toLowerCase()}`;
 }
 
 export function ownedConversationIdentityMatches(observedUrl: string, targetChatUrl: string): boolean {
@@ -329,6 +347,7 @@ export function verifyStateLightFreshClaimOwnerFence(
   acceptedTimeoutMs: number,
   nowMs = Date.now(),
 ): StateLightOwnerFenceResult {
+  if (!canonicalFreshConversationKey(conversationUrl)) return 'lost';
   const claimPath = stateLightFreshClaimPath(profileKey, conversationUrl);
   const record = existsSync(claimPath) ? readStateLightFreshClaimRecord(claimPath) : null;
   if (!record) return 'lost';
@@ -343,8 +362,63 @@ function stateLightFreshClaimsDir(profileKey: string): string {
 }
 
 function stateLightFreshClaimPath(profileKey: string, conversationUrl: string): string {
-  const normalized = normalizeConversationUrl(conversationUrl);
-  return join(stateLightFreshClaimsDir(profileKey), `${sha256(normalized)}.json`);
+  const key = canonicalFreshConversationKey(conversationUrl);
+  // Invalid URLs cannot claim; the defensive path fallback is read-only for older callers.
+  return join(stateLightFreshClaimsDir(profileKey), `${sha256(key ?? normalizeConversationUrl(conversationUrl))}.json`);
+}
+
+function equivalentLegacyClaimBlocks(
+  profileKey: string,
+  conversationUrl: string,
+  invocationId: string,
+  acceptedTimeoutMs: number,
+  nowMs: number,
+): boolean {
+  const canonical = canonicalFreshConversationKey(conversationUrl);
+  if (!canonical) return true;
+  const directory = stateLightFreshClaimsDir(profileKey);
+  const canonicalPath = stateLightFreshClaimPath(profileKey, canonical);
+  const suppliedLegacyPath = join(directory, `${sha256(normalizeConversationUrl(conversationUrl))}.json`);
+  let entries: string[];
+  try {
+    entries = readdirSync(directory).filter((name) => /^[0-9a-f]{64}\.json$/i.test(name));
+  } catch {
+    return true; // Unable to establish exclusion.
+  }
+  for (const filename of entries) {
+    const path = join(directory, filename);
+    if (path === canonicalPath) continue;
+    let candidate: unknown;
+    try {
+      candidate = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    } catch {
+      // An unrelated corrupt claim is not an alias witness; a known URL key is.
+      if (path === suppliedLegacyPath) return true;
+      continue;
+    }
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      if (path === suppliedLegacyPath) return true;
+      continue;
+    }
+    const legacyUrl = (candidate as { conversation_id?: unknown }).conversation_id;
+    const relevant = typeof legacyUrl === 'string'
+      && canonicalFreshConversationKey(legacyUrl) === canonical;
+    if (!relevant) {
+      if (path === suppliedLegacyPath) return true;
+      continue;
+    }
+    const record = readStateLightFreshClaimRecord(path);
+    if (!record
+      || filename !== `${sha256(normalizeConversationUrl(legacyUrl))}.json`) {
+      return true; // Relevant conflicting or malformed evidence fails closed.
+    }
+    if (record.invocation_id !== invocationId
+      && !isFreshClaimRecordReclaimable(record, invocationId, acceptedTimeoutMs, nowMs)) {
+      return true;
+    }
+    // The old record is left untouched, even when expired or owned by this invocation.
+  }
+  return false;
 }
 
 function stateLightNewChatSendSlotPath(profileKey: string): string {
@@ -475,22 +549,23 @@ export function tryClaimStateLightFreshConversation(
   invocationId: string,
   acceptedTimeoutMs: number = STATE_LIGHT_MAX_TIMEOUT_MS,
 ): StateLightFreshConversationClaimResult {
+  if (!canonicalFreshConversationKey(conversationUrl)) return 'contended';
   const normalized = normalizeConversationUrl(conversationUrl);
   const claimPath = stateLightFreshClaimPath(profileKey, normalized);
   const boundedTimeout = Math.min(acceptedTimeoutMs, STATE_LIGHT_MAX_TIMEOUT_MS);
   for (let attempt = 0; attempt < STATE_LIGHT_OWNERSHIP_RECOVERY_ATTEMPTS; attempt++) {
     const nowMs = Date.now();
-    if (readCorruptOwnershipArtifact(claimPath, readStateLightFreshClaimRecord)) {
-      cleanupReclaimableOwnershipArtifact(claimPath);
+    if (equivalentLegacyClaimBlocks(profileKey, normalized, invocationId, boundedTimeout, nowMs)) {
+      return 'contended';
     }
+    // A malformed canonical claim must never be silently discarded or replaced.
+    if (readCorruptOwnershipArtifact(claimPath, readStateLightFreshClaimRecord)) return 'contended';
     const existing = existsSync(claimPath) ? readStateLightFreshClaimRecord(claimPath) : null;
     if (existing) {
       if (existing.invocation_id === invocationId && !isStateLightFreshClaimRecordExpired(existing, boundedTimeout, nowMs)) {
         return 'owned';
       }
-      if (!isFreshClaimRecordReclaimable(existing, invocationId, boundedTimeout, nowMs)) {
-        return 'contended';
-      }
+      if (!isFreshClaimRecordReclaimable(existing, invocationId, boundedTimeout, nowMs)) return 'contended';
       cleanupReclaimableOwnershipArtifact(claimPath);
     }
     const claimedAtMs = nowMs;
@@ -526,7 +601,7 @@ export function releaseStateLightFreshConversationClaim(
   invocationId: string,
   acceptedTimeoutMs: number = STATE_LIGHT_MAX_TIMEOUT_MS,
 ): void {
-  if (!conversationUrl) return;
+  if (!conversationUrl || !canonicalFreshConversationKey(conversationUrl)) return;
   const claimPath = stateLightFreshClaimPath(profileKey, normalizeConversationUrl(conversationUrl));
   const existing = existsSync(claimPath) ? readStateLightFreshClaimRecord(claimPath) : null;
   if (!existing) return;
@@ -674,15 +749,23 @@ export async function prepareStateLightFreshConversation(
       }
     }
     const conversationUuid = conversationUuidFromUrl(currentUrl);
-    if (!conversationUuid) return { state: 'ready' };
+    if (!conversationUuid) {
+      if (isBlankProjectSurfaceUrl(currentUrl, config.projectUrl)) return { state: 'ready' };
+      continue;
+    }
+    // Navigation may redirect back to a conversation; it is not a blank composer.
+    // Never inspect/clean claims belonging to foreign or unsupported surfaces.
+    if (!projectConversationUrlMatchesProject(currentUrl, config.projectUrl)) continue;
     const claimPath = stateLightFreshClaimPath(profileKey, currentUrl);
     if (readCorruptOwnershipArtifact(claimPath, readStateLightFreshClaimRecord)) {
-      cleanupReclaimableOwnershipArtifact(claimPath);
+      // A concurrent wx writer may still be filling this canonical fence.
+      return { state: 'ui_contract_mismatch', cause: 'fresh_conversation_surface_unavailable' };
     }
     const existing = existsSync(claimPath) ? readStateLightFreshClaimRecord(claimPath) : null;
     if (existing?.invocation_id === invocationId
       && !isStateLightFreshClaimRecordExpired(existing, config.timeoutMs, Date.now())) {
-      return { state: 'ready' };
+      // Even our own active claim does not turn an existing conversation into a blank composer.
+      continue;
     }
     if (existing
       && existing.invocation_id !== invocationId

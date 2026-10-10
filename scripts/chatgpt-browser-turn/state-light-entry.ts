@@ -16,6 +16,10 @@ export async function runStateLightEntry(
   const runTurn = deps.runTurn ?? runStateLightTurn;
   const turnOptions = { entryLivenessHeartbeat: true, recordChatBinding: true } as const;
   if (command === 'turn') return runTurn(turnArgs, turnOptions);
+  if (command === 'cancel') {
+    const { runStateLightCancellation } = await import('./state-light-cancellation.ts');
+    return runStateLightCancellation(turnArgs);
+  }
   if (command === 'session') {
     const { runStateLightSession } = await import('./state-light-session.ts');
     return runStateLightSession(turnArgs);

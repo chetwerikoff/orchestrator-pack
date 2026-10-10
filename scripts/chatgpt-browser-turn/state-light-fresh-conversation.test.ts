@@ -122,6 +122,7 @@ import { deriveComposerInsertionBudgetMs } from './state-light-turn-base.ts';
 import { wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
   EXPLICIT_CANCELLATION_AUTHORITY,
+  isSupportedChatGptConversationUrl,
   readRecoveryAuthoritativeUserMessages,
   stopOwnedGeneration,
 } from './state-light-cancellation.ts';
@@ -140,6 +141,7 @@ import {
 } from './product-page-selectors.ts';
 import {
   acquireStateLightNewChatSendSlot,
+  conversationUuidFromUrl,
   newChatSendSlotEnabled,
   isBlankProjectSurfaceUrl,
   openBlankProjectChatSurface,
@@ -164,14 +166,25 @@ import {
   STATE_LIGHT_PASSIVE_FRESH_CLAIM_TTL_MS,
 } from './state-light-fresh-conversation.ts';
 
-const PROJECT_URL = 'https://chatgpt.com/g/g-p-test/project';
-const PROJECT_CONVERSATION_ROOT = 'https://chatgpt.com/g/g-p-test';
+const PROJECT_URL = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test/project';
+const PROJECT_CONVERSATION_ROOT = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test';
 const SHARED_CONV = `${PROJECT_CONVERSATION_ROOT}/c/11111111-1111-4111-8111-111111111111`;
+const SHARED_CANONICAL_CONV = SHARED_CONV.replace('-test/c/', '/c/');
 const LOSER_CONV = `${PROJECT_CONVERSATION_ROOT}/c/22222222-2222-4222-8222-222222222222`;
 const ISSUE_PROJECT_URL = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project';
 const ISSUE_CONVERSATION_URL = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/c/6ab8cb78-4e14-83ec-92ff-3e7b67611185';
 const OTHER_PROJECT_CONVERSATION_URL = 'https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-other/c/6ab8cb78-4e14-83ec-92ff-3e7b67611185';
 const OTHER_ORIGIN_CONVERSATION_URL = 'https://example.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/c/6ab8cb78-4e14-83ec-92ff-3e7b67611185';
+
+// Synthetic fresh-chat turns exercise the locator-absent path. A real launcher
+// locator must continue to fail closed in production until its original generation
+// is independently proven; never inherit the test runner's terminal handle here.
+beforeEach(() => {
+  vi.stubEnv('ORCA_TERMINAL_HANDLE', undefined);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function disableSendSlotForTest(): void {
   process.env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT = '1';
@@ -236,6 +249,11 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void) {
     locator: vi.fn((selector: string) => {
       if (selector === COMPOSER_SELECTOR) return composer;
       if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+      if (selector === USER_MESSAGE_SELECTOR) {
+        return collectionLocator(sent
+          ? [{ role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` }]
+          : []);
+      }
       if (matchesNewChatControlSelector(selector)) {
         return scalarLocator({ count: vi.fn(async () => 0) });
       }
@@ -318,6 +336,43 @@ describe('state-light fresh conversation collision recovery', () => {
     releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'loser');
   });
 
+  it('fences slug aliases with one canonical claim, distinct projects and legacy URL hashes', async () => {
+    const profileKey = 'alias-exclusion';
+    const alternateAlias = SHARED_CANONICAL_CONV;
+    const foreign = SHARED_CANONICAL_CONV.replace('g-p-11111111111111111111111111111111', 'g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    const legacyFile = join(stateDir, profileKey, 'state-light-fresh-claims', `${(await import('./storage-common.ts')).sha256(SHARED_CONV)}.json`);
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'current-owner')).toBe('claimed');
+    expect(tryClaimStateLightFreshConversation(profileKey, alternateAlias, 'foreign-owner')).toBe('contended');
+    expect(tryClaimStateLightFreshConversation(profileKey, foreign, 'foreign-owner')).toBe('claimed');
+    releaseStateLightFreshConversationClaim(profileKey, alternateAlias, 'foreign-owner');
+    expect(verifyStateLightFreshClaimOwnerFence(profileKey, SHARED_CONV, 'current-owner', 5_000)).toBe('valid');
+    releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'current-owner');
+    releaseStateLightFreshConversationClaim(profileKey, foreign, 'foreign-owner');
+
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(legacyFile, JSON.stringify({
+      schema: 'state-light-fresh-claim/v1',
+      version: 1,
+      invocation_id: 'legacy-owner',
+      conversation_id: SHARED_CONV,
+      pid: process.pid,
+      claimed_at: new Date(mocks.nowMs).toISOString(),
+    }) + '\n');
+    expect(tryClaimStateLightFreshConversation(profileKey, alternateAlias, 'new-owner')).toBe('contended');
+    expect(JSON.parse(readFileSync(legacyFile, 'utf8')).invocation_id).toBe('legacy-owner');
+    writeFileSync(legacyFile, JSON.stringify({
+      schema: 'state-light-fresh-claim/v1',
+      version: 1,
+      invocation_id: 'legacy-owner',
+      conversation_id: SHARED_CONV,
+      pid: process.pid,
+      claimed_at: new Date(mocks.nowMs - STATE_LIGHT_PASSIVE_FRESH_CLAIM_TTL_MS - 1).toISOString(),
+    }) + '\n');
+    expect(tryClaimStateLightFreshConversation(profileKey, alternateAlias, 'new-owner')).toBe('claimed');
+    releaseStateLightFreshConversationClaim(profileKey, alternateAlias, 'new-owner');
+    expect(existsSync(legacyFile)).toBe(true);
+  });
+
   it('blocks a second new-chat invocation while the profile send slot is held', async () => {
     clearSendSlotDisableEnv();
     const profileKey = 'collision-profile';
@@ -390,6 +445,24 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(outcome.result.goto_count).toBeGreaterThan(0);
     expect(loser.page.goto).toHaveBeenCalled();
+  });
+
+  it('permits an ordinary unowned fresh send when the terminal locator is absent', async () => {
+    expect(process.env.ORCA_TERMINAL_HANDLE).toBeUndefined();
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-UNOWNED';
+    const reply = 'UNOWNED-OK';
+    const output = join(stateDir, 'unowned-fresh-reply.txt');
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const ordinary = makeLoserPage(prompt, reply);
+    const outcome = await runNewChatTurn(ordinary.page, output, '5000', invocationId);
+
+    expect(outcome).toMatchObject({ code: 0, result: { state: 'ok', send_count: 1 } });
+    expect(ordinary.getSends()).toBe(1);
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+    const observation = readStateLightTurnObservation('collision-profile', invocationId);
+    expect(observation).toMatchObject({ invocation_id: invocationId, send_count: 1 });
+    expect(observation).not.toHaveProperty('owner');
   });
 
   it('regresses if a stored wall becomes an invocation refusal again', async () => {
@@ -516,12 +589,10 @@ describe('state-light fresh conversation collision recovery', () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const outcome = await runNewChatTurn(page, '/tmp/url-wait-expiry.txt');
 
-    expect(outcome.code).toBe(0);
-    expect(outcome.result).toMatchObject({
-      state: 'ok',
-      send_count: 1,
-    });
+    expect(outcome.code).not.toBe(0);
+    expect(outcome.result).toMatchObject({ send_count: 1 });
     expect(outcome.result.state).not.toBe('send_failed');
+    expect(outcome.result.state).not.toBe('ok');
     expect(outcome.result.incidents).toContain('send_observation_deferred');
   });
 
@@ -533,14 +604,16 @@ describe('state-light fresh conversation collision recovery', () => {
     streamRecoveryAlert: string | false = false,
     replySequence: readonly string[] = [reply],
     continueGeneratingSequence: readonly boolean[] = [],
-    observationOverrides: { incompleteReads?: readonly number[]; nonFinalReads?: readonly number[]; nonFinalFromRead?: number; includeOwnedUser?: boolean; keyedOwnedMessages?: boolean; markerlessOwnedUserFromRead?: number; assistantCarrierKeysByRead?: readonly string[] } = {},
+    observationOverrides: { incompleteReads?: readonly number[]; nonFinalReads?: readonly number[]; nonFinalFromRead?: number; includeOwnedUser?: boolean; keyedOwnedMessages?: boolean; markerlessOwnedUserFromRead?: number; assistantCarrierKeysByRead?: readonly string[]; neverMarkerProof?: boolean } = {},
   ) {
     const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0 };
     const withCarrierKeys = (messages: StateLightTestMessage[]) => observationOverrides.keyedOwnedMessages
       ? messages.map((message) => ({ ...message, key: message.role === 'user' ? 'user-carrier-12345678' : 'assistant-carrier-12345678' }))
       : messages;
-    const working = withCarrierKeys(readyTurnObservationFrames(prompt, reply)[0]!);
-    const final = withCarrierKeys(readyTurnObservationFrames(prompt, reply).at(-1)!);
+    const working = withCarrierKeys(readyTurnObservationFrames(prompt, reply)[0]!)
+      .filter((message) => !observationOverrides.neverMarkerProof || message.role !== 'user');
+    const final = withCarrierKeys(readyTurnObservationFrames(prompt, reply).at(-1)!)
+      .filter((message) => !observationOverrides.neverMarkerProof || message.role !== 'user');
     const assistantOnlyFor = (text: string) => {
       const messages = [
         ...(ambiguousAssistant ? [{ role: 'assistant' as const, text: 'EARLIER ANSWER' }] : []),
@@ -584,6 +657,11 @@ describe('state-light fresh conversation collision recovery', () => {
       locator: vi.fn((selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (selector === USER_MESSAGE_SELECTOR) {
+          return collectionLocator(state.sent && !observationOverrides.neverMarkerProof
+            ? [{ role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` }]
+            : []);
+        }
         if (matchesNewChatControlSelector(selector)) return scalarLocator({ count: vi.fn(async () => 0) });
         if (selector === MESSAGE_NODE_SELECTOR) {
           if (!state.sent) return collectionLocator([]);
@@ -677,21 +755,26 @@ describe('state-light fresh conversation collision recovery', () => {
     return { page, state };
   }
 
-  it('harvests the single finished reply of an owned fresh chat that renders no user message, without reload', async () => {
+  it('never publishes a newly discovered fresh assistant-only reply without a proven marker', async () => {
     const prompt = 'PROMPT-FRESH-UNRENDERED';
     const reply = 'FRESH-UNRENDERED-OK';
     const output = join(stateDir, 'fresh-unrendered-owned-message.txt');
-    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false);
+    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false, false, false, [reply], [], { neverMarkerProof: true });
+    const invocationId = randomUUID();
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const outcome = await runNewChatTurn(page, output);
-    const diagnostic = await readPageObservation(page, TEST_OWNED_MARKER, 0);
-    expect(diagnostic).toMatchObject({ ownedWindowCompletionReady: true, transcriptIncomplete: false });
+    const outcome = await runNewChatTurn(page, output, '5000', invocationId);
 
-    expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0 });
-    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.code).not.toBe(0);
+    expect(outcome.result).toMatchObject({ send_count: 1 });
+    expect(outcome.result.state).not.toBe('ok');
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'sent_unbound',
+      conversation_url: null,
+      send_count: 1,
+    });
     expect(state.reloads).toBe(0);
-    expect(readFileSync(output, 'utf8')).toBe(reply);
+    expect(existsSync(output)).toBe(false);
   });
 
   it('publishes the full final owned reply once through the atomic evaluateAll observation', async () => {
@@ -994,6 +1077,13 @@ describe('state-light fresh conversation collision recovery', () => {
       locator: vi.fn((selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (selector === USER_MESSAGE_SELECTOR) {
+          // Independent user-carrier census: a foreign surface cannot authenticate
+          // our marker even when a URL was observed first.
+          return collectionLocator(sent && surface === 'owned'
+            ? [{ role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` }]
+            : sent && surface === 'foreign' ? foreignMessages.filter((message) => message.role === 'user') : []);
+        }
         if (matchesNewChatControlSelector(selector)) return scalarLocator({ count: vi.fn(async () => 0) });
         if (selector === MESSAGE_NODE_SELECTOR) {
           if (!sent) return collectionLocator([]);
@@ -1232,10 +1322,19 @@ describe('state-light fresh conversation collision recovery', () => {
 
   it('matches project-scoped and bare conversation urls with the same uuid', () => {
     const uuid = '6a6c32b2-51a0-83ec-9fe6-521e171ba785';
-    const project = `https://chatgpt.com/g/g-p-test-project/c/${uuid}`;
+    const project = `https://chatgpt.com/g/g-p-11111111111111111111111111111111-test-project/c/${uuid}`;
     const bare = `https://chatgpt.com/c/${uuid}`;
     expect(ownedConversationIdentityMatches(project, bare)).toBe(true);
     expect(ownedConversationIdentityMatches(bare, project)).toBe(true);
+  });
+
+  it('retains legacy-host existing-conversation UUID receipts without allowing a legacy-host fresh claim', () => {
+    const uuid = '11111111-1111-4111-8111-111111111111';
+    const legacy = `https://chat.openai.com/c/${uuid}`;
+    expect(conversationUuidFromUrl(legacy)).toBe(uuid);
+    expect(isSupportedChatGptConversationUrl(legacy)).toBe(true);
+    expect(ownedConversationIdentityMatches(legacy, `https://chatgpt.com/c/${uuid}`)).toBe(true);
+    expect(tryClaimStateLightFreshConversation('collision-profile', legacy, 'legacy-claim')).toBe('contended');
   });
 
   it('rejects different conversation uuids', () => {
@@ -1251,6 +1350,10 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(projectSurfaceUrlsEquivalent(`${canonical}#composer`, canonical)).toBe(true);
     expect(isBlankProjectSurfaceUrl(canonical, canonical)).toBe(true);
     expect(projectSurfaceUrlsEquivalent(SHARED_CONV, canonical)).toBe(false);
+    expect(isBlankProjectSurfaceUrl(PROJECT_CONVERSATION_ROOT, canonical)).toBe(true);
+    expect(isBlankProjectSurfaceUrl(PROJECT_CONVERSATION_ROOT + '/draft', canonical)).toBe(true);
+    expect(isBlankProjectSurfaceUrl(PROJECT_CONVERSATION_ROOT + '/other-route', canonical)).toBe(false);
+    expect(isBlankProjectSurfaceUrl(canonical.replace('chatgpt.com', 'chatgpt.com:8443'), canonical)).toBe(false);
   });
 
   it('binds every launcher-chain goto to the shared navigation timeout', () => {
@@ -1326,6 +1429,51 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(prepared).toEqual({ state: 'ready' });
     expect(page.goto).not.toHaveBeenCalled();
     expect(navigation.snapshotGoto()).toBe(0);
+  });
+
+  it('preserves an unreadable canonical claim after a project navigation redirects back to a conversation', async () => {
+    const profileKey = 'redirected-canonical-claim';
+    const { writeFileSync } = await import('node:fs');
+    const { sha256 } = await import('./storage-common.ts');
+    const claimDir = join(stateDir, profileKey, 'state-light-fresh-claims');
+    mkdirSync(claimDir, { recursive: true });
+    const claimPath = join(claimDir, `${sha256(SHARED_CANONICAL_CONV)}.json`);
+    writeFileSync(claimPath, '{partially-written-wx-claim');
+
+    let currentUrl = SHARED_CONV;
+    const page = {
+      goto: vi.fn(async () => { currentUrl = SHARED_CONV; }),
+      url: vi.fn(() => currentUrl),
+      locator: vi.fn(() => scalarLocator({ count: vi.fn(async () => 0) })),
+    };
+    const result = await prepareStateLightFreshConversation(page, {
+      cdp: 'http://127.0.0.1:9222', profile: '/tmp/profile',
+      newChat: true, projectUrl: PROJECT_URL, timeoutMs: 5_000,
+    }, profileKey, 'other-invocation');
+
+    expect(result).toEqual({
+      state: 'ui_contract_mismatch', cause: 'fresh_conversation_surface_unavailable',
+    });
+    expect(page.goto).toHaveBeenCalled();
+    expect(readFileSync(claimPath, 'utf8')).toBe('{partially-written-wx-claim');
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CANONICAL_CONV, 'other-invocation')).toBe('contended');
+  });
+
+  it('never treats an unrelated nested project route as a ready blank composer', async () => {
+    const invalidRoute = PROJECT_CONVERSATION_ROOT + '/other-route';
+    const page = {
+      goto: vi.fn(async () => undefined),
+      url: vi.fn(() => invalidRoute),
+      locator: vi.fn(() => scalarLocator({ count: vi.fn(async () => 0) })),
+    };
+    const result = await prepareStateLightFreshConversation(page, {
+      cdp: 'http://127.0.0.1:9222', profile: '/tmp/profile',
+      newChat: true, projectUrl: PROJECT_URL, timeoutMs: 5_000,
+    }, 'nested-route', 'other-invocation');
+    expect(result).toEqual({
+      state: 'ui_contract_mismatch', cause: 'fresh_conversation_surface_unavailable',
+    });
+    expect(page.goto).toHaveBeenCalled();
   });
 
   it('enforces the per-invocation navigation budget', async () => {
@@ -1410,8 +1558,11 @@ describe('state-light fresh conversation collision recovery', () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const outcome = await runNewChatTurn(page, '/tmp/journal-defer-replay.txt');
 
-    expect(outcome.code).toBe(0);
-    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    // A deferred URL that never materializes into a canonical project /c/UUID
+    // cannot become an owned fresh conversation, even if a reply looks ready.
+    expect(outcome.code).not.toBe(0);
+    expect(outcome.result).toMatchObject({ send_count: 1 });
+    expect(outcome.result.state).not.toBe('ok');
     expect(page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), {
       waitUntil: 'domcontentloaded',
       timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
@@ -1685,9 +1836,12 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const startedAt = mocks.nowMs;
     const outcome = await runNewChatTurn(page, '/tmp/threshold-after-2x.txt', '1000');
-    expect(outcome.code).toBe(0);
+    expect(outcome.code).not.toBe(0);
     expect(mocks.nowMs).toBeGreaterThanOrEqual(startedAt + 2000);
-    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result).toMatchObject({ send_count: 1 });
+    // The fixture never materializes a canonical conversation URL; 2x timeout
+    // is not permission to claim a project-root page or publish an unowned reply.
+    expect(outcome.result.state).not.toBe('ok');
   });
 
   it('recovers expired and corrupt ownership artifacts through bounded exclusive create', async () => {
@@ -1713,12 +1867,14 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
 
     const claimDir = join(stateDir, profileKey, 'state-light-fresh-claims');
     mkdirSync(claimDir, { recursive: true });
-    const claimPath = join(claimDir, `${sha256(SHARED_CONV)}.json`);
+    const claimPath = join(claimDir, `${sha256(SHARED_CANONICAL_CONV)}.json`);
     writeFileSync(claimPath, '{not-json');
-    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'successor-claim', 5_000)).toBe('claimed');
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'successor-claim', 5_000)).toBe('contended');
     writeFileSync(claimPath, '{}\n');
-    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'successor-claim-schema-invalid', 5_000)).toBe('claimed');
-    releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'successor-claim-schema-invalid', 5_000);
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'successor-claim-schema-invalid', 5_000)).toBe('contended');
+    rmSync(claimPath);
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'successor-claim', 5_000)).toBe('claimed');
+    releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'successor-claim', 5_000);
     writeFileSync(claimPath, `${JSON.stringify({
       schema: 'state-light-fresh-claim/v1',
       version: 1,
@@ -1754,7 +1910,7 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
       stateDir,
       profileKey,
       'state-light-fresh-claims',
-      (await import('./storage-common.ts')).sha256(SHARED_CONV) + '.json',
+      (await import('./storage-common.ts')).sha256(SHARED_CANONICAL_CONV) + '.json',
     );
     const claim = JSON.parse(readFileSync(claimPath, 'utf8'));
     expect(claim.schema).toBe('state-light-fresh-claim/v1');
@@ -1798,7 +1954,7 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
     const { writeFileSync } = await import('node:fs');
     const { sha256 } = await import('./storage-common.ts');
     expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'owner', 5_000)).toBe('claimed');
-    const claimPath = join(stateDir, profileKey, 'state-light-fresh-claims', `${sha256(SHARED_CONV)}.json`);
+    const claimPath = join(stateDir, profileKey, 'state-light-fresh-claims', `${sha256(SHARED_CANONICAL_CONV)}.json`);
     writeFileSync(claimPath, `${JSON.stringify({
       schema: 'state-light-fresh-claim/v1',
       version: 1,
@@ -1874,6 +2030,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     const output = join(integrationStateDir, 'recovered.txt');
     let sends = 0;
     let lost = false;
+    let recoveredClockAdvanced = false;
     let composerText = '';
     let initialUrl = PROJECT_URL;
 
@@ -1926,7 +2083,15 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     const recoveredPage: any = {
       __fakeBrowserGptPage: true,
       goto: vi.fn(async () => undefined),
-      url: vi.fn(() => SHARED_CONV),
+      url: vi.fn(() => {
+        if (lost && !recoveredClockAdvanced) {
+          // The invocation's 50-ms pre-send deadline has expired, while
+          // post-send recovery still has its own 2x observation window.
+          recoveredClockAdvanced = true;
+          mocks.nowMs += 60;
+        }
+        return SHARED_CONV;
+      }),
       isClosed: vi.fn(() => false),
       waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
       close: recoveredClose,
@@ -1999,6 +2164,8 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
       sha256: '574877027739d7ff52e587b7003cf11b863f623083bb43607417c82cc38cfd8b',
     });
     expect(sends).toBe(1);
+    expect(recoveredClockAdvanced).toBe(true);
+    expect(mocks.nowMs).toBeGreaterThanOrEqual(10_060);
     expect(mocks.browserQueue).toHaveLength(0);
     expect(initialClose).not.toHaveBeenCalled();
     expect(foreignStop).not.toHaveBeenCalled();
@@ -2096,9 +2263,12 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
         })
         : scalarLocator()),
     };
+    // URL/visible Stop is not an original-tab and active-generation witness.
+    // Explicit cancellation must be a no-effect refusal even on this singleton.
     expect(await stopOwnedGeneration(stopProbePage, EXPLICIT_CANCELLATION_AUTHORITY))
-      .toBe('confirmed');
-    expect(stopProbeClick).toHaveBeenCalledTimes(1);
+      .toBe('not_attempted_identity_unproven');
+    expect(stopProbeClick).not.toHaveBeenCalled();
+    expect(stopProbePage.locator).not.toHaveBeenCalled();
 
     mocks.browserQueue.push(browserWithPages(ownedPage, [ownedPage, foreignPage], () => true));
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
@@ -2114,6 +2284,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     expect(outcome.result.incidents).toContain('observation_exhausted');
     expect(ownedStop, JSON.stringify(outcome)).not.toHaveBeenCalled();
     expect(outcome.result.incidents).toEqual([
+      'send_observation_deferred',
       'observation_exhausted',
       'owned_generation_stop_not_attempted_authority_absent',
     ]);
