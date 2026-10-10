@@ -1012,7 +1012,7 @@ describe('Issue #2467 committed composer readiness under the absolute deadline',
         locator: (selector: string) => selector === COMPOSER_SELECTOR ? composer : scalarLocator(),
         waitForTimeout: async (ms: number) => { now += ms; },
       };
-      const result = await __testComposerMutation.waitForComposer(page, 45_000);
+      const result = await __testComposerMutation.waitForComposer(page, 45_000, true);
       expect(result).toEqual({ state: 'ready' });
       expect(now).toBeGreaterThanOrEqual(30_000);
       expect(now).toBeLessThan(45_000);
@@ -1030,7 +1030,7 @@ describe('Issue #2467 committed composer readiness under the absolute deadline',
         locator: () => scalarLocator({ count: vi.fn(async () => 0) }),
         waitForTimeout: async (ms: number) => { now += ms; },
       };
-      const result = await __testComposerMutation.waitForComposer(page, 24_000);
+      const result = await __testComposerMutation.waitForComposer(page, 24_000, true);
       expect(result).toEqual({ state: 'ui_contract_mismatch', cause: 'composer_unavailable' });
       expect(now).toBe(24_000);
     } finally {
