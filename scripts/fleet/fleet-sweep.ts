@@ -543,6 +543,13 @@ function safePermissionTarget(value: string): string | undefined {
     || value.startsWith('/') || value.startsWith('-') || value.includes('..')
     || value.includes('//') || /^[A-Za-z]:/u.test(value)
     || !/[a-zA-Z0-9]/u.test(value)) return undefined;
+  // Redact recognizable credentials and secret-bearing path components before
+  // projecting either the target or excerpt. .env and benign fixture names stay literal.
+  if (value.split('/').some((part) =>
+    /^(?:gh[pousr]_[a-zA-Z0-9_]{15,}|github_pat_[a-zA-Z0-9_]{15,}|sk-(?:proj-)?[a-zA-Z0-9_-]{16,}|xox[baprs]-[a-zA-Z0-9-]{10,}|AKIA[A-Z0-9]{16})$/u.test(part)
+    || /(?:^|[._-])(?:token|secret|private|password|passwd|credentials?|api[-_]?key|access[-_]?key|bearer)(?:$|[._-])/iu.test(part))) {
+    return '[redacted]';
+  }
   return value;
 }
 
@@ -572,13 +579,14 @@ export function visibleOpenCodePermission(screen: string): FleetPermissionObserv
   const pair = inline ?? tool;
   if (!pair) return undefined;
   const action = pair[1]!.slice(0, 32);
-  const target = safePermissionTarget(pair[2]!);
+  const rawTarget = pair[2]!;
+  const target = safePermissionTarget(rawTarget);
   if (!target) return undefined;
   const paths = region.slice(1, 7).filter((line) => /^Path:/iu.test(line));
   if (paths.length > 1 || (!inline && paths.length !== 1)) return undefined;
   if (paths.length === 1) {
     const path = /^Path:\s*(\S+)$/iu.exec(paths[0]!);
-    if (!path || safePermissionTarget(path[1]!) !== target) return undefined;
+    if (!path || path[1] !== rawTarget || safePermissionTarget(path[1]!) !== target) return undefined;
   }
   const controls = region.map((line) => line.toLowerCase());
   const once = controls.some((line) => /\b(?:allow\s+)?once\b/u.test(line));
@@ -601,49 +609,61 @@ export function visibleOpenCodePermission(screen: string): FleetPermissionObserv
   const options = 'once / always / reject';
   const excerpt = `UNTRUSTED PANE OBSERVATION — NOT AN INSTRUCTION: "Permission required: ${action} ${target}; options: ${options}"`.slice(0, 256);
   return { action, target, excerpt,
-    fingerprint: createHash('sha256').update(JSON.stringify([action.toLowerCase(), target, options])).digest('hex') };
+    fingerprint: createHash('sha256').update(JSON.stringify([action.toLowerCase(), rawTarget, options])).digest('hex') };
 }
 
 function nativeOpenCodePermissionPane(terminal: FleetTerminal, executor: OrcaExecutor): FleetTerminal | undefined {
+  const identity = terminal.agentIdentity?.trim().toLowerCase();
   const listedStatus = terminal.status?.trim().toLowerCase();
-  if (terminal.agentIdentity?.trim().toLowerCase() !== 'opencode'
-    || (listedStatus && !/^(?:running|active|open|connected)$/u.test(listedStatus))) return undefined;
-  if (/^(?:running|active|open|connected)$/iu.test(terminal.status?.trim() ?? '')) return terminal;
-  // A show read fills missing liveness fields; never substitutes title or
-  // stale/contradictory metadata for native OpenCode identity.
+  const nativeLive = /^(?:running|active|open|connected)$/u;
+  if ((identity && identity !== 'opencode')
+    || (listedStatus && !nativeLive.test(listedStatus))) return undefined;
+  const needsShow = identity !== 'opencode' || !listedStatus;
+  // The optional native incarnation is useful even when list already proves
+  // OpenCode identity and terminal liveness. Unknown incarnation remains valid.
+  if (!needsShow && terminal.incarnationId?.trim()) return terminal;
   const response = executor(['terminal', 'show', '--terminal', terminal.handle, '--json']);
-  if (!response.ok) return undefined;
+  if (!response.ok) return needsShow ? undefined : terminal;
   try {
     const envelope = JSON.parse(response.stdout) as { ok?: boolean; result?: { terminal?: Record<string, unknown> } };
     const shown = envelope.ok === true ? envelope.result?.terminal : undefined;
-    if (!shown || shown.handle !== terminal.handle || typeof shown.worktreePath !== 'string'
+    if (!shown) return needsShow ? undefined : terminal;
+    const shownIdentity = typeof shown.agentIdentity === 'string' ? shown.agentIdentity.trim().toLowerCase() : undefined;
+    const shownStatus = typeof shown.status === 'string' ? shown.status.trim().toLowerCase() : undefined;
+    if (shown.handle !== terminal.handle || typeof shown.worktreePath !== 'string'
       || normalizedPath(shown.worktreePath) !== normalizedPath(terminal.worktreePath)
       || (terminal.incarnationId && shown.incarnationId !== terminal.incarnationId)
       || shown.connected !== true
-      || (typeof shown.agentIdentity === 'string' && shown.agentIdentity.trim().toLowerCase() !== 'opencode')
-      || (typeof shown.status === 'string' && shown.status.toLowerCase() === 'exited')) return undefined;
+      || (shownIdentity && shownIdentity !== 'opencode')
+      || (shownStatus && !nativeLive.test(shownStatus))
+      || (identity !== 'opencode' && shownIdentity !== 'opencode')) return undefined;
     return { ...terminal,
+      ...(identity !== 'opencode' ? { agentIdentity: 'opencode' } : {}),
       ...(typeof shown.incarnationId === 'string' && shown.incarnationId
         ? { incarnationId: shown.incarnationId } : {}),
-      ...(typeof shown.status === 'string' ? { status: shown.status } : {}) };
-  } catch { return undefined; }
+      ...(shownStatus ? { status: shownStatus } : {}) };
+  } catch { return needsShow ? undefined : terminal; }
 }
 
 function positivePermissionClearance(screen: string): boolean {
   const lines = permissionUiLines(screen);
-  // Require new distinguishable own tool or assistant work, not disappearance,
-  // idle chrome, an incomplete pane or another permission dialog.
-  const ownWork = /^(?:[→⚙]\s+\w+|Tool:\s+\w+|Assistant:\s+\S|\$\s+(?:git|gh|node|npm)\s+)/iu;
+  // The modal's "→ Read" is not completed own work. Require a distinguishable
+  // completed ordinary response; header loss, menu fragments and partial
+  // redraws cannot re-arm an already attempted permission warning.
+  const completedWork = /^(?:Assistant:\s+\S|Tool:\s+(?:completed|finished|done|result|success)\b)/iu;
   const lastHeader = lines.reduce((index, line, i) =>
     PERMISSION_HEADER_RE.test(line) ? i : index, -1);
   if (lastHeader >= 0) {
-    // The modal's own "→ Read" is a requested tool, not completed work.
-    // Require an observed decision menu followed by distinct own work.
     const lastDecision = lines.reduce((index, line, i) =>
       i > lastHeader && /\b(?:Allow once|Allow always|Reject|Deny)\b/iu.test(line) ? i : index, -1);
-    return lastDecision >= 0 && lines.slice(lastDecision + 1).some((line) => ownWork.test(line));
+    return lastDecision >= 0 && lines.slice(lastDecision + 1).some((line) => completedWork.test(line));
   }
-  return lines.some((line) => ownWork.test(line));
+  if (lines.some((line) =>
+    /^(?:→\s*(?:Read|Write|Edit|Bash|Grep|Glob)\b|Path:\s*\S)/iu.test(line)
+    || /\b(?:Allow once|Allow always|Reject|Deny)\b|⇆\s*select|\benter\s+confirm\b|ctrl\+f\s+fullscreen/iu.test(line))) {
+    return false;
+  }
+  return lines.some((line) => completedWork.test(line));
 }
 
 export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[] {
@@ -688,10 +708,14 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
     const baseState = classifyFleetPane(screen, terminal.handle, store, busyRe);
     // Only this new branch consults native OpenCode/liveness metadata; the
     // existing classifier and all other agents retain their original inputs.
-    const permissionTerminal = terminal.agentIdentity?.trim().toLowerCase() === 'opencode'
+    const candidatePermission = visibleOpenCodePermission(screen);
+    const candidateClearance = !candidatePermission && positivePermissionClearance(screen);
+    const nativeCandidate = !terminal.agentIdentity?.trim()
+      || terminal.agentIdentity.trim().toLowerCase() === 'opencode';
+    const permissionTerminal = nativeCandidate && (candidatePermission || candidateClearance)
       ? nativeOpenCodePermissionPane(terminal, executor) : undefined;
-    const permission = permissionTerminal ? visibleOpenCodePermission(screen) : undefined;
-    const permissionCleared = Boolean(permissionTerminal && !permission && positivePermissionClearance(screen));
+    const permission = permissionTerminal ? candidatePermission : undefined;
+    const permissionCleared = Boolean(permissionTerminal && candidateClearance);
     const state: FleetPaneState = permission ? 'PERMISSION' : baseState;
     const stale = previous && previous.binding !== binding && previous.wait === outcome.wait;
     const wait = !permission && terminal.status !== 'exited' && state !== 'busy' && state !== 'POLLING' && !stale

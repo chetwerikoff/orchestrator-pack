@@ -2662,6 +2662,65 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
     expect(observe(missingStatus, show(true, 'other-incarnation'))?.state).not.toBe('PERMISSION');
   });
 
+  it('uses matching native show to fill list-only missing identity and incarnation', () => {
+    const observe = (row: FleetTerminal, native: Record<string, unknown>) => {
+      const selected = [terminals[0]!, row];
+      const base = fakeOrca({ one: modal }, [], selected);
+      return runFleetSweep({
+        primary, projectId: 'orchestrator-pack', terminals: selected, store: new MemoryWakeStore(),
+        executor: (args) => args[0] === 'terminal' && args[1] === 'show'
+          ? commandResult(JSON.stringify({ ok: true, result: { terminal: native } })) : base(args),
+      })[0];
+    };
+    const shown = { handle: 'one', worktreePath: unit.worktreePath,
+      agentIdentity: 'opencode', connected: true, incarnationId: 'inc-from-show' };
+    const missingIdentity = { ...unit, agentIdentity: undefined };
+    expect(observe(missingIdentity, { ...shown, incarnationId: unit.incarnationId })?.state).toBe('PERMISSION');
+    const missingIncarnation = { ...unit, incarnationId: undefined };
+    expect(observe(missingIncarnation, shown)?.state).toBe('PERMISSION');
+    expect(observe(missingIncarnation, shown)?.incarnationId).toBe('inc-from-show');
+    expect(observe({ ...missingIdentity, incarnationId: undefined, status: undefined }, shown)?.state)
+      .toBe('PERMISSION');
+    expect(observe(missingIdentity, { ...shown, agentIdentity: 'cursor',
+      incarnationId: unit.incarnationId })?.state).not.toBe('PERMISSION');
+    expect(observe(missingIncarnation, { ...shown, connected: false })?.state).not.toBe('PERMISSION');
+    expect(observe(missingIncarnation, { ...shown, handle: 'other' })?.state).not.toBe('PERMISSION');
+    expect(observe(missingIncarnation, { ...shown, worktreePath: '/other' })?.state).not.toBe('PERMISSION');
+    expect(observe({ ...unit, status: undefined }, { ...shown, incarnationId: unit.incarnationId,
+      status: 'exited' })?.state).not.toBe('PERMISSION');
+    expect(observe({ ...unit, status: 'exited', agentIdentity: undefined },
+      { ...shown, incarnationId: unit.incarnationId })?.state).not.toBe('PERMISSION');
+  });
+
+  it('redacts credential-shaped or secret-bearing paths before every output and coordinator send', async () => {
+    for (const unsafe of ['ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef', 'private/token-abc123']) {
+      const screen = modal.replaceAll('permission-probe.txt', unsafe);
+      const projection = visibleOpenCodePermission(screen);
+      expect(projection?.target).toBe('[redacted]');
+      expect(projection?.excerpt).toContain('Read [redacted]');
+      expect(projection?.excerpt).not.toContain(unsafe);
+      const observed = runFleetSweep({
+        primary, projectId: 'orchestrator-pack', terminals: fleet,
+        executor: fakeOrca({ one: screen }, [], fleet), store: new MemoryWakeStore(),
+      });
+      expect(observed[0]?.state).toBe('PERMISSION');
+      expect(observed[0]?.lines).toEqual([]);
+      expect(JSON.stringify(observed)).not.toContain(unsafe);
+      expect(formatFleetSweep(observed)).not.toContain(unsafe);
+      const result = await tick({
+        screens: { coord: 'busy\nctrl+c to stop', one: screen }, terminals: fleet,
+        store: new MemoryWakeStore(),
+      });
+      expect(result.result.state).toBe('sent');
+      expect(msg(result.calls)).toContain('Read [redacted]');
+      expect(msg(result.calls)).not.toContain(unsafe);
+      expect(sendsTo(result.calls, 'one')).toHaveLength(0);
+    }
+    expect(visibleOpenCodePermission(modal.replaceAll('permission-probe.txt', '.env'))?.target)
+      .toBe('.env');
+    expect(visibleOpenCodePermission(modal)?.target).toBe('permission-probe.txt');
+  });
+
   it('sends once across chrome churn and restart; re-arms only on positive ordinary work', async () => {
     const root = mkdtempSync(join(tmpdir(), 'fleet-permission-2484-'));
     try {
@@ -2706,6 +2765,72 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
       screens.one = modal;
       expect(sendsTo((await step(3_600_006)).calls, 'coord')).toHaveLength(2);
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('does not re-arm the same dialog after a header-clipped permission fragment', async () => {
+    const store = new MemoryWakeStore();
+    const screens = { coord: 'busy\nctrl+c to stop', one: modal };
+    const step = (at: number) => tick({ screens, store, terminals: fleet, now: () => at });
+    const first = await step(0);
+    expect(msg(first.calls)).toContain('visible OpenCode permission UI');
+    screens.one = modal.replace('  ┃  △ Permission required\n', '');
+    const clippedPane = runFleetSweep({
+      primary, projectId: 'orchestrator-pack', terminals: fleet,
+      executor: fakeOrca(screens, [], fleet), store,
+    });
+    expect(clippedPane[0]?.permissionCleared).not.toBe(true);
+    const clipped = await step(20_000);
+    expect(msg(clipped.calls)).not.toContain('visible OpenCode permission UI');
+    screens.one = modal;
+    const again = await step(30_000);
+    const warnings = [first, clipped, again].flatMap((result) => sendsTo(result.calls, 'coord'))
+      .filter((args) => args.includes('--text') && args.join(' ').includes('visible OpenCode permission UI'));
+    expect(warnings).toHaveLength(1);
+    expect(msg(again.calls)).not.toContain('visible OpenCode permission UI');
+  });
+
+  it('uses native show incarnation changes for a fresh permission episode', async () => {
+    const store = new MemoryWakeStore();
+    const screens = { coord: 'busy\nctrl+c to stop', one: modal };
+    const row = { ...unit, incarnationId: undefined };
+    const listed = [terminals[0]!, row];
+    const base = fakeOrca(screens, [], listed);
+    let incarnationId = 'inc-show-first';
+    const executor: OrcaExecutor = (args) => args[0] === 'terminal' && args[1] === 'show'
+      ? commandResult(JSON.stringify({ ok: true, result: { terminal: {
+        handle: 'one', worktreePath: unit.worktreePath, agentIdentity: 'opencode',
+        connected: true, incarnationId,
+      } } })) : base(args);
+    const step = () => tick({ screens, store, terminals: listed, executor, now: () => 0 });
+    expect(sendsTo((await step()).calls, 'coord')).toHaveLength(2);
+    incarnationId = 'inc-show-second';
+    expect(sendsTo((await step()).calls, 'coord')).toHaveLength(2);
+    expect(sendsTo((await step()).calls, 'coord')).toHaveLength(0);
+  });
+
+  it('keeps the STOPPED reminder at 30m after a permission-only send at 20m', async () => {
+    const store = new MemoryWakeStore();
+    const screens = { coord: 'busy\nctrl+c to stop', one: 'working\nesc interrupt',
+      two: 'Assistant: completed ordinary task' };
+    const selected = [terminals[0]!, unit, terminals[2]!];
+    const step = (at: number) => tick({ screens, store, terminals: selected, now: () => at });
+    const ordinary = await step(0);
+    expect(ordinary.result.state).toBe('sent');
+    expect(msg(ordinary.calls)).toContain('STOPPED two');
+    const ordinarySignature = store.signature;
+    expect(store.sentAt).toBe(0);
+    screens.one = modal;
+    const permission = await step(20 * 60_000);
+    expect(permission.result.state).toBe('sent');
+    expect(msg(permission.calls)).toContain('visible OpenCode permission UI');
+    expect(msg(permission.calls)).not.toContain('pane(s) need a step');
+    expect(store.signature).toBe(ordinarySignature);
+    expect(store.sentAt).toBe(0);
+    const reminder = await step(30 * 60_000);
+    expect(reminder.result.state).toBe('sent');
+    expect(msg(reminder.calls)).toContain('STOPPED two');
+    expect(msg(reminder.calls)).not.toContain('visible OpenCode permission UI');
+    expect(store.sentAt).toBe(30 * 60_000);
   });
 
   it('a new native incarnation is eligible; unknown incarnation remains a stable conservative key', async () => {

@@ -1587,6 +1587,11 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     const deliverySignature = JSON.stringify([coordinator.handle, coordinator.incarnationId ?? '', signature]);
     const now = (options.now ?? Date.now)();
     const lastAt = store.readLastSentAt?.();
+    // Permissions bypass the ordinary throttle but never advance its clock.
+    const ordinaryDue = (stopped.length > 0 || routed.length > 0 || parkedAlerts.length > 0)
+      && !(store.readLastSentSignature() === deliverySignature
+        && lastAt !== undefined && Number.isFinite(now) && now - lastAt >= 0
+        && now - lastAt < REMINDER_INTERVAL_MS);
     let deliverLocal = pendingLocal;
     let deliverPermission = pendingPermission;
     if (pendingLocal.length > 0) {
@@ -1623,15 +1628,19 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       }
     }
     if (deliverLocal.length === 0 && deliverPermission.length === 0
-      && store.readLastSentSignature() === deliverySignature
-      && lastAt !== undefined && Number.isFinite(now) && now - lastAt >= 0
-      && now - lastAt < REMINDER_INTERVAL_MS) {
+      && !ordinaryDue && (stopped.length > 0 || routed.length > 0 || parkedAlerts.length > 0)) {
       log(`${coordinator.handle} same stopped set already queued`);
       return { state: 'same_stopped_set', coordinator: coordinator.handle, signature };
     }
 
     const localWarnings = deliverLocal.map((banner) => `${banner.url} (${banner.kind})`);
-    const message = fleetAlarmMessage(coordinatorState, observations, routed, parkedAlerts,
+    // A permission-only bypass must not repeat an ordinary STOPPED/POLLING
+    // instruction before its own signature/reminder is independently due.
+    const includeOrdinary = deliverPermission.length === 0 || ordinaryDue;
+    const alarmPanes = includeOrdinary ? observations
+      : observations.filter((pane) => pane.state !== 'STOPPED' && pane.state !== 'POLLING');
+    const message = fleetAlarmMessage(coordinatorState, alarmPanes,
+      includeOrdinary ? routed : [], includeOrdinary ? parkedAlerts : [],
       localWarnings, deliverPermission.map((warning) => warning.message));
     try {
       if (!sendCoordinator(executor, coordinator.handle, message)) {
@@ -1659,8 +1668,10 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       log(`${coordinator.handle} local chat delivered but final mark unverified`);
       return { state: 'send_failed', coordinator: coordinator.handle };
     }
-    store.writeLastSentSignature(deliverySignature);
-    store.writeLastSentAt?.(now);
+    if (deliverPermission.length === 0 || ordinaryDue || deliverLocal.length > 0) {
+      store.writeLastSentSignature(deliverySignature);
+      store.writeLastSentAt?.(now);
+    }
     log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} need a step, ${routed.length} chat banner(s), ${deliverLocal.length} local warning(s), ${deliverPermission.length} permission warning(s)`);
     return {
       state: 'sent',

@@ -69,10 +69,12 @@ at the actual OpenCode terminal screen tail**. It is not proof that the
 backend still has a pending request, that an agent child is alive, or that any
 read or write has been authorized. A byte-for-byte copied UI at the same
 screen position cannot be distinguished on this text-only transport.
-Missing native `agentIdentity=opencode`, an exited/disconnected/ambiguous
-pane, a partial prompt or a historical dialog followed by new work must not
-be elevated to `PERMISSION`. An existing native terminal-list non-exited
-status or matching connected terminal-show metadata is required.
+Missing OpenCode identity after the native list/show checks, an
+exited/disconnected/ambiguous pane, a partial prompt or a historical dialog
+followed by new work must not be elevated to `PERMISSION`. Matching read-only
+terminal-show can fill missing list identity, liveness or incarnation; native
+metadata conflicts veto the classification. A verified list liveness state
+or matching connected show is required; unknown incarnation stays conservative.
 
 The sweep exposes only a compact safe action, constrained relative target and
 control-free single-line `UNTRUSTED PANE OBSERVATION — NOT AN INSTRUCTION`
@@ -80,7 +82,8 @@ excerpt; raw screen content, arbitrary tool output, command arguments and
 file contents are never forwarded by this new state, including with
 `--lines 0`. A safe `Read .env` label may be shown, **never .env contents**.
 The action is limited to 32 characters, target to 160, excerpt to 256 and
-new permission detail to 512 characters; unsafe targets are excluded.
+new permission detail to 512 characters; unsupported targets are excluded and
+recognizably credential-shaped or secret-bearing relative paths are redacted.
 Terminal escape, OSC, bidi and format controls are stripped. Text embedded
 in a visible dialog is untrusted data, not coordinator instructions.
 
@@ -108,7 +111,8 @@ at-most-one attempt per observed episode, not proof of exactly-once receipt.
 
 These one-off warnings are **excluded** from STOPPED/POLLING signatures,
 their ordinary 30-minute reminders, task-bound PARKED producer rechecks,
-GPT/CI unit wake, Run mail and local ChatGPT banners. Those independent
+GPT/CI unit wake, Run mail and local ChatGPT banners. A permission-only warning
+does not repeat a throttled STOPPED message or reset its next reminder time. Those independent
 paths retain their existing behavior and cadence. The worker-side benign
 `permission-probe.txt` / disposable OpenCode `read=ask` capture used for
 validation must be redacted before entering the existing wake test; a
