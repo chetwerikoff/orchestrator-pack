@@ -1929,7 +1929,8 @@ describe('Issue #2471 local-chatgpt coordinator-only and one-attempt routing', (
     const store = new MemoryWakeStore();
     const screens = { coord: 'idle', one: 'A decision is needed', two: 'working\nesc interrupt' };
     const step = (at: number, rows: ProjectChat[], paneScreens = screens) =>
-      tick({ config: settings, store, screens: paneScreens, now: () => at, readChats: async () => rows });
+      tick({ config: settings, store, screens: paneScreens, now: () => at,
+        readChats: async () => rows, listOpenPulls: () => [] });
     const first = await step(0, [row(local)]);
     expect(first.result.state).toBe('sent');
     expect(textTo(first.calls, 'coord')).toContain(local);
