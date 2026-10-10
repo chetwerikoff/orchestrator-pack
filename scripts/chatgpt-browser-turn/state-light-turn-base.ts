@@ -2181,8 +2181,12 @@ async function mutateComposerOrCause(
     return 'composer_mutation_budget_exhausted';
   };
   if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
-    // Readiness failure reaches the ordinary mutation path. Distinguish a
-    // genuinely absent composer from a slow or blocked existing element.
+    // A late readiness read must not open another browser operation after
+    // the insertion/invocation budget has expired.
+    if (remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs) <= 0) {
+      return exhausted('readiness_before_click');
+    }
+    // Only positive missing-element evidence can classify composer_unavailable.
     if (await locatorCount(composer, insertionDeadlineMs) === 0) return 'composer_unavailable';
     return exhausted('readiness_before_click');
   }

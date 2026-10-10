@@ -4003,8 +4003,12 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     ]);
     const result = JSON.parse(writes.join(''));
 
-    expect(exitCode).toBe(10);
-    expect(result.cause).toBe('composer_unavailable');
+    // The time budget expired during CDP/nav, not because an absent composer
+    // was positively observed. Preserve the strict no-post-deadline action.
+    expect(exitCode).toBe(13);
+    expect(result.state).toBe('driver_error');
+    expect(result.cause).toBe('composer_mutation_budget_exhausted');
+    expect(result.send_count).toBe(0);
     expect(connectAt).toBeGreaterThanOrEqual(1_000);
     expect(connectAt).toBeLessThan(2_000);
     expect(navigateAt).toBeGreaterThanOrEqual(7_000);
