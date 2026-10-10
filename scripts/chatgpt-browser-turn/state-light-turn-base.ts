@@ -2677,6 +2677,7 @@ async function runTurn(
   const incidents: BrowserIncident[] = [];
   let afterSend = false;
   let sendAttempted = false;
+  let ownedStopDeliveryObserved = false;
   let deliveryProofPendingRecovery = false;
   let ownershipForfeited = false;
   let sendSlotOwnerDeadlineMs = Infinity;
@@ -3077,6 +3078,7 @@ async function runTurn(
         };
       }
       sendCount += delivery.sendCount;
+      if (delivery.witness === 'owned_stop') ownedStopDeliveryObserved = true;
       afterSend = true;
       setHeartbeatPhase('post_send_observation');
       transitionStateLightTurnObservation({
@@ -3427,7 +3429,7 @@ async function runTurn(
                 lastAttemptConversationUrl,
                 invocationDeadlineMs,
               );
-              if (landingEvidence === 'not_landed' && !pageConversationUrl(page)) {
+              if (landingEvidence === 'not_landed' && !ownedStopDeliveryObserved && !pageConversationUrl(page)) {
                 return returnFreshConversationLandingMismatch(
                   page,
                   browser,
