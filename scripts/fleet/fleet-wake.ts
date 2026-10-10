@@ -44,7 +44,7 @@ import {
 } from './chat-error-banners.ts';
 import { readChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
 import { readStateLightTurnObservation } from '../chatgpt-browser-turn/state-light-turn-observation.ts';
-import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath } from '../flow-manager-long-running-child.ts';
+import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath, type DeliveryState } from '../flow-manager-long-running-child.ts';
 
 export interface FleetWakeConfig {
   readonly projectId: string;
@@ -387,6 +387,7 @@ export interface TerminalEnvelopeEvent {
   /** Only present if this is the producer's exact observed invocation, not an attempt-id guess. */
   readonly observedInvocationId?: string;
   readonly sendCount?: number;
+  readonly delivery?: DeliveryState;
   readonly conversationLocator?: string;
   readonly persistedObservationProfileKey?: string;
 }
@@ -431,12 +432,16 @@ export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeE
         const sendCount = typeof envelope.send_count === 'number'
           && Number.isSafeInteger(envelope.send_count) && envelope.send_count >= 0
           ? envelope.send_count : undefined;
+        const delivery = envelope.delivery === 'POSSIBLY_DELIVERED'
+          || envelope.delivery === 'not-sent' || envelope.delivery === 'landed'
+          ? envelope.delivery : undefined;
         events.push({
           path, invocationId,
           ...(cwd ? { cwd } : {}),
           ...(terminalHandle ? { terminalHandle } : {}),
           ...(observedInvocationId ? { observedInvocationId } : {}),
           ...(sendCount !== undefined ? { sendCount } : {}),
+          ...(delivery ? { delivery } : {}),
           ...(typeof envelope.conversation_locator === 'string' && envelope.conversation_locator.length > 0
             ? { conversationLocator: envelope.conversation_locator } : {}),
           ...(persistedObservationProfileKey ? { persistedObservationProfileKey } : {}),
@@ -456,6 +461,8 @@ export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeE
  * legacy terminal-handle/cwd wake, which targets a potentially recycled pane.
  */
 export function potentiallySentUnboundEnvelope(event: TerminalEnvelopeEvent): boolean {
+  // A send action may have taken effect before a numeric witness was established.
+  if (event.delivery === 'POSSIBLY_DELIVERED' && !event.conversationLocator) return true;
   if (event.sendCount !== undefined && event.sendCount >= 1 && !event.conversationLocator) return true;
   if (!event.persistedObservationProfileKey) return false;
   // No pointer scan or fallback to an environment/current-handle occupant.
