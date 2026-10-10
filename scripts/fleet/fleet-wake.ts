@@ -316,24 +316,6 @@ export function stoppedSignature(observations: readonly FleetPaneObservation[]):
     .join('\n');
 }
 
-// The sweep has already stripped TUI framing/status bars. Fingerprint the
-// normalized own output, including unpunctuated action requests, not only
-// lines matching a limited question/error vocabulary.
-function meaningfulStoppedSignature(observations: readonly FleetPaneObservation[]): string {
-  return actionablePanes(observations)
-    .map((pane) => {
-      const response = pane.lines
-        .map((line) => line.replace(/\s+/gu, ' ').trim())
-        .filter((line) => line && line !== '>' && !/^[─━═▀▄╹╻┃│\-]{6,}$/u.test(line))
-        .join('\n');
-      return JSON.stringify([
-        pane.state, pane.handle, pane.incarnationId, pane.branch, pane.taskBinding,
-        createHash('sha256').update(response).digest('hex').slice(0, 24),
-      ]);
-    })
-    .sort((left, right) => left.localeCompare(right)).join('\n');
-}
-
 function isWorkerPane(terminal: FleetTerminal, config: FleetWakeConfig): boolean {
   if (terminal.handle === config.architectHandle) return false;
   if (!terminal.worktreePath || samePath(terminal.worktreePath, config.primary)) return false;
@@ -498,8 +480,8 @@ export function fleetAlarmMessage(
   const localText = localWarnings.length > 0
     ? ` ${localWarnings.length} unsaved local ChatGPT chat(s) require independent triage: ${localWarnings.join('; ')}. Owner, workflow role and latest-turn invocation are unproven. Independently reconcile live Task/Issue/PR, workflow role and existing Browser-GPT send/no-resend evidence before any action. This is a coordinator-only warning, not permission to send, resend, continue, review-fix or close a chat. Never press Retry.`
     : '';
-  const alertText = alerts.length ? ' ' + alerts.length + ' parked unit(s) need a producer re-check: '
-    + alerts.join('; ') + '. Check the named Task and producer before acting.' : '';
+  const alertText = alerts.length ? ' ' + alerts.length + ' pane safety alarm(s): '
+    + alerts.join('; ') + '. Never send Wake text to a bare shell.' : '';
   return `Fleet alarm (${coordinatorState}):${paneText}${bannerText}${unloadableText}${localText}${alertText}`;
 }
 
@@ -1325,7 +1307,6 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       .map((row) => row.handle!));
     await wakeNamedParkedProducers(options, observations, terminals, store, executor, sleepMs, log, bareShellHandles);
     await wakePanesOnEvents(options, coordinator, observations, executor, store, log, sleepMs, bareShellHandles);
-    const parkedAlerts: string[] = [];
 
     const chats = config.chatCdpUrl && config.chatScope
       ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])
@@ -1387,57 +1368,79 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       store.writeBannerSignature?.(directSignature);
     }
 
-    const stopped = actionablePanes(observations);
-    if (stopped.length === 0 && routed.length === 0 && parkedAlerts.length === 0 && pendingLocal.length === 0) {
-      store.clearLastSentSignature();
-      store.clearLastSentAt?.();
-      log('nothing stopped');
-      return { state: 'nothing_stopped' };
-    }
-
-    let coordinatorScreen: string;
+    // The persisted signature is a per-pane state map, not a digest of the
+    // entire alarm set. Updating pane A cannot mark pane B as newly actionable.
+    type PaneState = { state: string; sent: boolean };
+    type History = { panes: Record<string, PaneState>; routed: string };
+    let previous: History = { panes: {}, routed: '' };
     try {
-      coordinatorScreen = readFleetScreen(coordinator.handle, executor);
-    } catch {
-      log(`${coordinator.handle} unreadable`);
-      return { state: 'unreadable', handle: coordinator.handle };
+      const parsed: unknown = JSON.parse(store.readLastSentSignature() ?? 'null');
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        && 'panes' in parsed && 'routed' in parsed) {
+        const row = parsed as History;
+        if (row.panes && typeof row.panes === 'object' && typeof row.routed === 'string') previous = row;
+      }
+    } catch { /* An old whole-set digest is not a per-pane notification. */ }
+    const paneStates: Record<string, PaneState> = Object.create(null) as Record<string, PaneState>;
+    for (const pane of observations) {
+      const state = pane.state;
+      paneStates[pane.handle] = { state, sent: previous.panes[pane.handle]?.state === state
+        && previous.panes[pane.handle]?.sent === true };
     }
-
-    const coordinatorState: 'idle' | 'busy' = isBusyScreen(coordinatorScreen, config.busyRe) ? 'busy' : 'idle';
-    // Local one-off warnings are never part of the durable ordinary signature.
-    const signature = [meaningfulStoppedSignature(observations), chatBannerSignature(routed),
-      ...parkedAlerts.slice().sort()].filter(Boolean).join('\n');
-    const deliverySignature = JSON.stringify([coordinator.handle, coordinator.incarnationId ?? '', signature]);
-    const now = (options.now ?? Date.now)();
-    const lastAt = store.readLastSentAt?.();
+    for (const handle of bareShellHandles) {
+      paneStates[handle] = { state: 'suspected_bare_shell',
+        sent: previous.panes[handle]?.state === 'suspected_bare_shell'
+          && previous.panes[handle]?.sent === true };
+    }
+    const stopped = actionablePanes(observations)
+      .filter((pane) => !bareShellHandles.has(pane.handle) && !paneStates[pane.handle]?.sent);
+    const bareAlerts = [...bareShellHandles].filter((handle) => !paneStates[handle]?.sent);
+    const routedSignature = chatBannerSignature(routed);
+    const pendingRouted = routedSignature !== previous.routed ? routed : [];
+    const nowSignature = JSON.stringify({ panes: paneStates, routed: routedSignature });
+    const signature = JSON.stringify({
+      panes: stopped.map((pane) => [pane.handle, pane.state]),
+      bareShells: bareAlerts, routed: routedSignature,
+    });
     let deliverLocal = pendingLocal;
     if (pendingLocal.length > 0) {
       if (!coordinatorStillSelected(coordinator, config, executor)) {
         log(`${coordinator.handle} changed before local chat warning send`);
         return { state: 'send_failed', coordinator: coordinator.handle };
       }
-      // Persist uncertainty *before* any effect. An unknown delivery is never replayed.
       try {
         for (const banner of pendingLocal) store.markParkedWakeEvent(banner.key, 'attempted_unverified');
       } catch {
         log(`${coordinator.handle} cannot persist local chat attempt before send`);
-        if (stopped.length === 0 && routed.length === 0 && parkedAlerts.length === 0) {
+        if (stopped.length === 0 && pendingRouted.length === 0 && bareAlerts.length === 0) {
           return { state: 'send_failed', coordinator: coordinator.handle };
         }
-        // Drop all local warnings when any pre-effect mark fails. Independent
-        // ordinary events keep their own coordinator sender and reminder cadence.
         deliverLocal = [];
       }
     }
-    if (deliverLocal.length === 0 && store.readLastSentSignature() === deliverySignature
-      && lastAt !== undefined && Number.isFinite(now) && now - lastAt >= 0
-      && now - lastAt < REMINDER_INTERVAL_MS) {
-      log(`${coordinator.handle} same stopped set already queued`);
-      return { state: 'same_stopped_set', coordinator: coordinator.handle, signature };
+    if (stopped.length === 0 && pendingRouted.length === 0 && bareAlerts.length === 0
+      && deliverLocal.length === 0) {
+      // Record even quiet PARKED/busy transitions, so the next STOPPED entry
+      // becomes a new alarm regardless of other panes' existing states.
+      store.writeLastSentSignature(nowSignature);
+      if (actionablePanes(observations).length > 0 || bareShellHandles.size > 0) {
+        log(`${coordinator.handle} unchanged pane states already notified`);
+        return { state: 'same_stopped_set', coordinator: coordinator.handle, signature };
+      }
+      log('nothing stopped');
+      return { state: 'nothing_stopped' };
     }
 
+    let coordinatorScreen: string;
+    try { coordinatorScreen = readFleetScreen(coordinator.handle, executor); }
+    catch {
+      log(`${coordinator.handle} unreadable`);
+      return { state: 'unreadable', handle: coordinator.handle };
+    }
+    const coordinatorState: 'idle' | 'busy' = isBusyScreen(coordinatorScreen, config.busyRe) ? 'busy' : 'idle';
     const localWarnings = deliverLocal.map((banner) => `${banner.url} (${banner.kind})`);
-    const message = fleetAlarmMessage(coordinatorState, observations, routed, parkedAlerts, localWarnings);
+    const message = fleetAlarmMessage(coordinatorState, stopped, pendingRouted,
+      bareAlerts.map((handle) => 'suspected_bare_shell ' + handle), localWarnings);
     try {
       if (!sendCoordinator(executor, coordinator.handle, message)) {
         log(`${coordinator.handle} send failed`);
@@ -1463,9 +1466,10 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       log(`${coordinator.handle} local chat delivered but final mark unverified`);
       return { state: 'send_failed', coordinator: coordinator.handle };
     }
-    store.writeLastSentSignature(deliverySignature);
-    store.writeLastSentAt?.(now);
-    log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} need a step, ${routed.length} chat banner(s), ${deliverLocal.length} local warning(s)`);
+    for (const pane of stopped) paneStates[pane.handle]!.sent = true;
+    for (const handle of bareAlerts) paneStates[handle]!.sent = true;
+    store.writeLastSentSignature(JSON.stringify({ panes: paneStates, routed: routedSignature }));
+    log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} pane changes, ${bareAlerts.length} bare shells, ${pendingRouted.length} chat banner(s)`);
     return {
       state: 'sent',
       coordinator: coordinator.handle,
