@@ -103,6 +103,11 @@ export interface TurnResultV1 {
   scope: FailureScope;
   cause: string;
   composer_mutation_diagnostic?: ComposerMutationDiagnosticV1;
+  /** Diagnostics for only the canonical new-chat send-slot timeout. */
+  send_slot_holder_invocation_id?: string;
+  send_slot_holder_phase?: string;
+  /** True only when this invocation verified removal of a pre-existing draft. */
+  stale_composer_cleared?: true;
   /** Dispatch was attempted; zero observed sends does not prove non-delivery. */
   send_attempted?: boolean;
   invocation_id: string;
