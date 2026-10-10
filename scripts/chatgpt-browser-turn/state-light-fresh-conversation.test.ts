@@ -720,6 +720,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const prompt = 'PROMPT-SOLO';
     const reply = 'SOLO-OK';
     let sent = false;
+    let composerText = '';
     let url = PROJECT_URL;
     let observationIndex = 0;
     const snapshotFrames = readyTurnObservationFrames(prompt, reply).map((messages, index) => ({
@@ -730,9 +731,9 @@ describe('state-light fresh conversation collision recovery', () => {
     const composer = scalarLocator({
       count: vi.fn(async () => 1),
       click: vi.fn(async () => undefined),
-      fill: vi.fn(async () => undefined),
-      innerText: vi.fn(async () => (sent ? '' : prompt)),
-      textContent: vi.fn(async () => (sent ? '' : prompt)),
+      fill: vi.fn(async (value: string) => { composerText = value; }),
+      innerText: vi.fn(async () => (sent ? '' : composerText)),
+      textContent: vi.fn(async () => (sent ? '' : composerText)),
       press: vi.fn(async () => { sent = true; }),
     });
     const sendButton = scalarLocator({
@@ -799,7 +800,7 @@ describe('state-light fresh conversation collision recovery', () => {
     continueGeneratingSequence: readonly boolean[] = [],
     observationOverrides: { incompleteReads?: readonly number[]; nonFinalReads?: readonly number[]; nonFinalFromRead?: number; includeOwnedUser?: boolean; keyedOwnedMessages?: boolean; markerlessOwnedUserFromRead?: number; assistantCarrierKeysByRead?: readonly string[]; neverMarkerProof?: boolean } = {},
   ) {
-    const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0 };
+    const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0, composerText: '' };
     const withCarrierKeys = (messages: StateLightTestMessage[]) => observationOverrides.keyedOwnedMessages
       ? messages.map((message) => ({ ...message, key: message.role === 'user' ? 'user-carrier-12345678' : 'assistant-carrier-12345678' }))
       : messages;
@@ -826,9 +827,9 @@ describe('state-light fresh conversation collision recovery', () => {
     const composer = scalarLocator({
       count: vi.fn(async () => 1),
       click: vi.fn(async () => undefined),
-      fill: vi.fn(async () => undefined),
-      innerText: vi.fn(async () => (state.sent ? '' : prompt)),
-      textContent: vi.fn(async () => (state.sent ? '' : prompt)),
+      fill: vi.fn(async (value: string) => { state.composerText = value; }),
+      innerText: vi.fn(async () => (state.sent ? '' : state.composerText)),
+      textContent: vi.fn(async () => (state.sent ? '' : state.composerText)),
       press: vi.fn(async () => { state.sent = true; state.url = SHARED_CONV; }),
     });
     const sendButton = scalarLocator({
@@ -1022,7 +1023,7 @@ describe('state-light fresh conversation collision recovery', () => {
     );
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
 
-    const outcome = await runNewChatTurn(page, output, '1000');
+    const outcome = await runNewChatTurn(page, output, '90000');
 
     expect(outcome.result.state).not.toBe('ok');
     expect(outcome.result.send_count).toBe(1);
@@ -1080,7 +1081,7 @@ describe('state-light fresh conversation collision recovery', () => {
     );
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
 
-    const outcome = await runNewChatTurn(page, output, '1000');
+    const outcome = await runNewChatTurn(page, output, '90000');
 
     expect(outcome.result.state).not.toBe('ok');
     expect(outcome.result.send_count).toBe(1);
@@ -1206,7 +1207,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false, true);
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const outcome = await runNewChatTurn(page, output, '1000');
+    const outcome = await runNewChatTurn(page, output, '90000');
 
     expect(outcome.result.state).not.toBe('ok');
     expect(outcome.result.send_count).toBe(1);
@@ -1308,7 +1309,7 @@ describe('state-light fresh conversation collision recovery', () => {
     };
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const outcome = await runNewChatTurn(page, output, '1000', invocationId);
+    const outcome = await runNewChatTurn(page, output, '90000', invocationId);
 
     expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0 });
     expect(outcome.result).toMatchObject({
@@ -1681,6 +1682,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const prompt = 'PROMPT-JOURNAL-DEFER';
     const reply = 'JOURNAL-OK';
     let sent = false;
+    let composerText = '';
     let url = PROJECT_URL;
     let observationIndex = 0;
     const snapshotFrames = readyTurnObservationFrames(prompt, reply).map((messages, index) => ({
@@ -1691,9 +1693,9 @@ describe('state-light fresh conversation collision recovery', () => {
     const composer = scalarLocator({
       count: vi.fn(async () => 1),
       click: vi.fn(async () => undefined),
-      fill: vi.fn(async () => undefined),
-      innerText: vi.fn(async () => (sent ? '' : prompt)),
-      textContent: vi.fn(async () => (sent ? '' : prompt)),
+      fill: vi.fn(async (value: string) => { composerText = value; }),
+      innerText: vi.fn(async () => (sent ? '' : composerText)),
+      textContent: vi.fn(async () => (sent ? '' : composerText)),
       press: vi.fn(async () => { sent = true; }),
     });
     const sendButton = scalarLocator({
@@ -1750,7 +1752,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result.state).not.toBe('ok');
     expect(page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), {
       waitUntil: 'commit',
-      timeout: 5_000,
+      timeout: expect.any(Number),
     });
     expect(outcome.result.incidents).toContain('send_observation_deferred');
     expect(outcome.result.state).not.toBe('send_failed');
@@ -1786,6 +1788,7 @@ describe('state-light fresh conversation collision recovery', () => {
   it('does not report fresh_conversation_landing_mismatch at the deadline when the same-project conversation is open', async () => {
     const prompt = 'PROMPT-LANDED-FRESH';
     let sent = false;
+    let composerText = '';
     let conversationAppearsAt = Number.POSITIVE_INFINITY;
     const staleAssistant: StateLightTestSnapshot = {
       messages: [{ role: 'assistant', text: 'foreign', finalAction: true, finalActionInTurnContainer: true }],
@@ -1794,7 +1797,8 @@ describe('state-light fresh conversation collision recovery', () => {
     const composer = scalarLocator({
       count: vi.fn(async () => 1),
       click: vi.fn(async () => undefined),
-      fill: vi.fn(async () => undefined),
+      fill: vi.fn(async (value: string) => { composerText = value; }),
+      innerText: vi.fn(async () => sent ? '' : composerText),
       press: vi.fn(async () => {
         sent = true;
         conversationAppearsAt = mocks.nowMs + 3_000;
@@ -1854,6 +1858,7 @@ describe('state-light fresh conversation collision recovery', () => {
   it('returns fresh_conversation_landing_mismatch when url and owned prompt never materialize', async () => {
     const prompt = 'PROMPT-STUCK-FRESH';
     let sent = false;
+    let composerText = '';
     let url = PROJECT_URL;
     const staleAssistant: StateLightTestSnapshot = {
       messages: [{ role: 'assistant', text: 'foreign', finalAction: true, finalActionInTurnContainer: true }],
@@ -1862,7 +1867,8 @@ describe('state-light fresh conversation collision recovery', () => {
     const composer = scalarLocator({
       count: vi.fn(async () => 1),
       click: vi.fn(async () => undefined),
-      fill: vi.fn(async () => undefined),
+      fill: vi.fn(async (value: string) => { composerText = value; }),
+      innerText: vi.fn(async () => sent ? '' : composerText),
       press: vi.fn(async () => { sent = true; }),
     });
     const sendButton = scalarLocator({
@@ -1955,10 +1961,11 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
     expect(overOutcome.result.goto_count).toBe(0);
   });
 
-  it('treats 2x timeout-ms as a decision threshold that may return after an awaited pass', async () => {
+  it('does not dispatch when a short timeout cannot fit two full Send windows', async () => {
     const prompt = 'PROMPT-THRESHOLD';
     const reply = 'THRESHOLD-OK';
     let sent = false;
+    let composerText = '';
     let url = PROJECT_URL;
     let observationIndex = 0;
     const snapshotFrames = readyTurnObservationFrames(prompt, reply).map((messages, index) => ({
@@ -1969,9 +1976,9 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
     const composer = scalarLocator({
       count: vi.fn(async () => 1),
       click: vi.fn(async () => undefined),
-      fill: vi.fn(async () => undefined),
-      innerText: vi.fn(async () => (sent ? '' : prompt)),
-      textContent: vi.fn(async () => (sent ? '' : prompt)),
+      fill: vi.fn(async (value: string) => { composerText = value; }),
+      innerText: vi.fn(async () => (sent ? '' : composerText)),
+      textContent: vi.fn(async () => (sent ? '' : composerText)),
       press: vi.fn(async () => { sent = true; }),
     });
     const sendButton = scalarLocator({
@@ -2022,11 +2029,13 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
     const startedAt = mocks.nowMs;
     const outcome = await runNewChatTurn(page, '/tmp/threshold-after-2x.txt', '1000');
     expect(outcome.code).not.toBe(0);
-    expect(mocks.nowMs).toBeGreaterThanOrEqual(startedAt + 2000);
-    expect(outcome.result).toMatchObject({ send_count: 1 });
-    // The fixture never materializes a canonical conversation URL; 2x timeout
-    // is not permission to claim a project-root page or publish an unowned reply.
-    expect(outcome.result.state).not.toBe('ok');
+    expect(mocks.nowMs).toBeGreaterThanOrEqual(startedAt);
+    expect(outcome.result).toMatchObject({
+      send_count: 0, state: 'driver_error',
+      cause: 'state_light_new_chat_send_budget_unavailable',
+    });
+    // A short accepted timeout cannot buy an incomplete 60s Send reserve.
+    expect(sendButton.click).not.toHaveBeenCalled();
   });
 
   it('keeps the live prepared holder through 300s, reports its actual phase, and releases only as its owner (#2487)', async () => {
@@ -2635,7 +2644,7 @@ describe('Issue #1752 production liveness regressions', () => {
     vi.restoreAllMocks();
   });
 
-  function livenessArgv(outputPath: string, timeoutMs = '5000') {
+  function livenessArgv(outputPath: string, timeoutMs = '90000') {
     return [
       ...STATE_LIGHT_TURN_BASE_ARGV,
       '--invocation-id', randomUUID(),
