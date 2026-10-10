@@ -4247,3 +4247,240 @@ describe('Issue #2451 final-cap fixer regressions', () => {
       .toEqual([1]);
   });
 });
+
+describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
+  const projectId = 'orchestrator-pack';
+  const repoSlug = 'chetwerikoff/orchestrator-pack';
+  const prNumber = 2469;
+  const failure = 'gpt_source_non_complete:after_grace_zero_usable:0/3';
+
+  function seedOrphan(slotMode: 'planned' | 'first-attempt' | 'prelaunch' = 'first-attempt') {
+    const storeRoot = tempRoot('opk-2469-orphan-');
+    harnessEnv(storeRoot, path.join(storeRoot, 'review.json'));
+    process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-10T08:00:00.000Z'));
+    const options = { projectId, storeRoot };
+    const authority = initializePackReviewAuthority({
+      prNumber, headSha: HEAD_A, tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options: { storeRoot },
+    });
+    const round = plannedStoredGptRound();
+    round.tier = 'T2';
+    round.issueNumber = prNumber;
+    if (slotMode === 'first-attempt') {
+      round.sourceSlots[0] = {
+        ...round.sourceSlots[0]!,
+        lifecycle: 'terminal',
+        invocationId: 'inv-2469-first-attempt',
+        attemptOrdinal: 1,
+        terminalClass: 'driver_error:connect_over_cdp_failed',
+        terminalResult: storedTerminalTurnResult('inv-2469-first-attempt', {
+          state: 'driver_error', cause: 'connect_over_cdp_failed', send_count: 0,
+        }),
+      };
+    }
+    if (slotMode === 'prelaunch') {
+      round.sourceSlots[0] = {
+        ...round.sourceSlots[0]!,
+        lifecycle: 'terminal',
+        terminalClass: 'pre_launch_interrupted',
+        terminalResult: { kind: 'stale_pre_launch_interruption', noResend: true },
+      };
+    }
+    const created = createPackReviewRun({
+      ...options, prNumber, headSha: HEAD_A,
+      canonicalRepository: repoSlug,
+      trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      automaticBudgetDisposition: 'consume',
+      resolvedReviewer: 'gpt', reviewRound: round,
+    }).run;
+    updatePackReviewRun(created.id, {
+      status: 'reviewing', latestRunStatus: 'reviewing',
+      runnerPid: 2147483647,
+    }, options);
+    const emptyComments: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'synthetic-reviewer',
+      listComments: async () => [],
+      getComment: async () => { throw new Error('no comment for exact invocation'); },
+    };
+    const input: Parameters<typeof reconcileStalePackReviewRuns>[0] = {
+      ...options, prNumber, sourceRepoRoot: repoRoot, repoSlug,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixtureGptSourceCommentTransport: emptyComments,
+      fixtureRequiredStatusWriter: async () => {},
+    };
+    return {
+      runId: created.id, options, input,
+      expire: () => vi.setSystemTime(new Date('2026-10-10T08:05:00.000Z')),
+    };
+  }
+
+  it.each(['planned', 'first-attempt', 'prelaunch'] as const)(
+    'terminalizes only proven dead-runner after grace: %s', async (mode) => {
+      const f = seedOrphan(mode);
+      const written: string[] = [];
+      const before = await reconcileStalePackReviewRuns({
+        ...f.input, immediate: true,
+      });
+      expect(before.results).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ runId: f.runId, terminalized: true }),
+      ]));
+      expect(getPackReviewRun(f.runId, f.options)?.status).toBe('reviewing');
+      f.expire();
+      updatePackReviewRun(f.runId, { runnerPid: process.pid }, f.options);
+      await reconcileStalePackReviewRuns({ ...f.input, immediate: true });
+      expect(getPackReviewRun(f.runId, f.options)?.status).toBe('reviewing');
+      updatePackReviewRun(f.runId, { runnerPid: 2147483647 }, f.options);
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input,
+        fixtureRequiredStatusWriter: async ({ state }) => { written.push(state); },
+      });
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ runId: f.runId, terminalized: true, statusReconciled: true }),
+      ]));
+      const stored = getPackReviewRun(f.runId, f.options)!;
+      expect(stored).toMatchObject({
+        status: 'failed', failureReason: failure,
+        automaticBudgetDisposition: 'consume',
+        deliveryOutcomes: { requiredStatus: { state: 'succeeded' } },
+      });
+      expect(stored.reviewVerdict).toBeUndefined();
+      expect(stored.journalOutcome).toBeUndefined();
+      expect(stored.reviewRound?.sourceSlots).toHaveLength(3);
+      expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([]);
+      expect(written).toEqual(['error']);
+    },
+  );
+
+  it.each([
+    ['second-attempt-without-prior-proof', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, attemptOrdinal: 2,
+    })],
+    ['summary-history-only', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, attemptHistory: [{
+        invocationId: 'inv-prior', attemptOrdinal: 1, terminalClass: 'driver_error:connect_over_cdp_failed',
+      }],
+    })],
+    ['possible-delivery-zero-send', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, terminalClass: 'possible_delivery',
+      terminalResult: storedTerminalTurnResult('inv-2469-first-attempt', {
+        state: 'driver_error', cause: 'connect_over_cdp_failed',
+        send_count: 0, send_attempted: true,
+      }),
+    })],
+    ['possible-delivery-send-one', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, terminalClass: 'possible_delivery',
+      terminalResult: storedTerminalTurnResult('inv-2469-first-attempt', {
+        state: 'driver_error', cause: 'connect_over_cdp_failed',
+        send_count: 1,
+      }),
+    })],
+    ['started-without-terminal', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      slotId: slot.slotId, ordinal: slot.ordinal, lifecycle: 'invocation_started' as const,
+      attemptOrdinal: 1, invocationId: slot.invocationId,
+    })],
+  ])('does not classify unsafe 0/3 witness: %s', async (_name, mutate) => {
+    const f = seedOrphan();
+    const stored = getPackReviewRun(f.runId, f.options)!;
+    const round = stored.reviewRound!;
+    updatePackReviewRun(f.runId, {
+      reviewRound: {
+        ...round,
+        sourceSlots: round.sourceSlots.map((slot, index) => index === 0 ? mutate(slot) : slot),
+      },
+    }, f.options);
+    f.expire();
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, terminalized: false, statusReconciled: false,
+        reason: 'gpt_zero_judgment_first_attempt_or_comment_census_unproven',
+      }),
+    ]));
+    expect(getPackReviewRun(f.runId, f.options)?.status).toBe('reviewing');
+  });
+
+  it.each(['actor-failure', 'census-failure'] as const)(
+    'fails closed on incomplete typed comment witness (%s)', async (mode) => {
+      const f = seedOrphan();
+      f.expire();
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input,
+        fixtureGptSourceCommentTransport: {
+          resolveActorLogin: async () => {
+            if (mode === 'actor-failure') throw new Error('synthetic actor offline');
+            return 'synthetic-reviewer';
+          },
+          listComments: async () => {
+            if (mode === 'census-failure') throw new Error('synthetic page failed');
+            return [];
+          },
+          getComment: async () => { throw new Error('not credentialed'); },
+        },
+      });
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ runId: f.runId, terminalized: false, statusReconciled: false }),
+      ]));
+      expect(getPackReviewRun(f.runId, f.options)?.status).toBe('reviewing');
+    },
+  );
+
+  it('republishes same-run pending after a delayed zero-judgment error finishes', async () => {
+    const f = seedOrphan();
+    f.expire();
+    const external: string[] = [];
+    let requeued = false;
+    const result = await reconcileStalePackReviewRuns({
+      ...f.input,
+      fixtureRequiredStatusWriter: async (request) => {
+        if (request.state === 'error' && !requeued) {
+          requeued = true;
+          updatePackReviewRun(f.runId, {
+            status: 'queued', latestRunStatus: 'queued',
+            failureReason: undefined, stale: undefined,
+          }, f.options);
+          external.push('pending');
+        }
+        external.push(request.state);
+      },
+    });
+    expect(external).toEqual(['pending', 'error', 'pending']);
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, statusReconciled: false,
+        reason: 'same_run_pending_status_restored',
+        statusPublication: 'authoritative_pending_restored',
+      }),
+    ]));
+    expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+      status: 'queued', deliveryOutcomes: { requiredStatus: { state: 'succeeded' } },
+    });
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([]);
+  });
+
+  it.each(['write-failed', 'head-advanced'] as const)(
+    'never claims 0/3 error publication without verified status (%s)', async (mode) => {
+      const f = seedOrphan();
+      f.expire();
+      let head = HEAD_A;
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input,
+        fixtureReadCurrentPrHead: async () => head,
+        fixtureRequiredStatusWriter: async (request) => {
+          if (request.state !== 'error') return;
+          if (mode === 'write-failed') throw new Error('synthetic status outage');
+          head = HEAD_B;
+        },
+      });
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ runId: f.runId, statusReconciled: false }),
+      ]));
+      expect(getPackReviewRun(f.runId, f.options)?.failureReason).toBe(failure);
+    },
+  );
+});
