@@ -1,0 +1,21 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2465,
+  "declared_paths": [
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "docs/pr-scope-declaration.md",
+    "prompts/gpt_pack_review_prompt.md"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "docs/pr-scope-declaration.md",
+    "prompts/gpt_pack_review_prompt.md"
+  ],
+  "source_revision": "e296aaf89d1767c2ec9f13107388ef7aef3f8327"
+}
