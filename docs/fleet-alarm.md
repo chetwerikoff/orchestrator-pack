@@ -1,16 +1,27 @@
 # Coordinator fleet alarm
 
-The fleet alarm is an operator-installed, per-project advisory. It reads rendered
-Orca terminal screens for agent panes and may send one plain-text wake only to the
-project coordinator pane. It never sends to units, reads or mutates
-Task/Dispatch/assignment/PR/GitHub state, authorizes an effect, or joins the
-scheduler, supervisor, or side-process registry.
+The fleet alarm is an operator-installed, per-project advisory notifier on the
+existing fleet-wake tick. It reads agent panes and existing Orca worker/Task/Dispatch
+and terminal evidence, GPT terminal envelopes and selected-repository PR/review/CI
+status through tracked GitHub transport. It already sends direct GPT/CI event
+messages to eligible units; it also sends narrowly verified PARKED producer Wake
+and elapsed-park Reminder messages to the exact live Task/Dispatch unit. Each new
+unit message requests an **independent producer re-check**, not execution,
+resend, merge, approval or continuation authority. Failed/ambiguous evidence
+goes to the coordinator, never an invented producer completion.
+
+The tick only writes its existing ephemeral per-project notifier marks, park
+clock and coordinator-signature state. It does not mutate GitHub, Task/Dispatch
+or runtime business state, install services, create a second transport, or join
+the scheduler, supervisor or side-process registry.
 
 `fleet-sweep.ts` reports matching project agent panes as `busy`, `STOPPED`,
 `POLLING`, or `PARKED`. `POLLING` needs polling evidence on two consecutive
 sweeps; its previous-sweep marks are ephemeral under
-`$XDG_RUNTIME_DIR/fleet-sweep/<project>/`. `PARKED` panes are reported but do not
-wake the coordinator.
+`$XDG_RUNTIME_DIR/fleet-sweep/<project>/`. `PARKED` panes retain their own wait; supported named producers are checked
+only for verified seven-field live Task/Dispatch matches. Terminal disappearance
+and shell-idle status never count as producer completion. Unsupported, missing
+or ambiguous producer evidence is routed to a bounded coordinator alarm.
 
 ## One-off sweep
 
@@ -82,12 +93,23 @@ systemctl --user daemon-reload
 systemctl --user restart fleet-wake@my-project
 ```
 
-Workers and integration actors do not edit local env files, install the drop-in,
-or restart the service. Notify the operator after merge/adoption and await its
-activation before invoking any verifier that could automatically restart the
-service. Runtime readback follows activation and must exercise the linked Issue's
-fleet regression; a clean-checkout pointer check is implementation proof only.
-The public example contains no machine-specific values.
+This manual configuration and activation procedure applies to fresh, inactive,
+uninstalled or changed service-template cases. Ordinary eligible fleet ticks
+require no operator approval. After a separately authorized **code-only merge**
+and filesystem adoption, the existing merge-adoption verifier may automatically
+use `systemctl --user try-restart` **only** for an already active, registered,
+stale fleet-wake unit whose exact project, mapped adopted checkout, MainPID and
+process identity have been verified and rechecked before control. It must then
+read back a distinct fresh running identity. It never starts an inactive
+instance, repairs a failed/mismatched/unverified one or installs/edits env files,
+drop-ins or templates; those cases remain `operationally_incomplete` with the
+exact adoption remainder for the operator. A fresh already-running process needs
+no restart. No operation from a feature worktree is authorized.
+
+Runtime readback after any actual activation must exercise the linked Issue's
+fleet regression; a clean-checkout pointer check alone is implementation proof,
+not operational verification. The public example contains no machine-specific
+values.
 
 Check the service and log:
 
@@ -101,10 +123,18 @@ project has no matching coordinator pane, it logs `normal fleet result: no
 orchestrator pane found` and returns without sending a wake. This is a normal
 result for projects without a coordinator pane; it does not log `nothing stopped`
 for that tick. When an agent pane is `STOPPED` or `POLLING`, the coordinator
-receives a `Fleet alarm (idle|busy)` message naming all actionable panes. An idle
-coordinator receives the alarm each interval; a busy coordinator receives a
-queued follow-up only when the stopped/polling set changed since the last send. A
-failed terminal read skips that tick rather than acting on incomplete evidence.
+receives a `Fleet alarm (idle|busy)` message naming all actionable panes. Both idle and busy coordinators receive the first meaningful alarm once, then
+another only when the actionable state/question/producer changes or an unchanged
+alarm reaches 30 minutes. Cosmetic TUI redraws do not reset that cadence.
+Unresolvable or uncertain PARKED producer notifications share the same throttle.
+Exact eligible unchanged PARKED units instead receive a shell-inert re-check-only
+Reminder once at elapsed 30 minutes, once at 60 minutes, and once in each later
+elapsed 30-minute slot; successful producer Wake or a changed park/Task resets
+the Reminder clock. New unit effects use a persistent
+`attempted_unverified` mark **before** the first send and never automatically
+replay that same key after an uncertain/partial send. The current no-coordinator
+path returns `no_orchestrator` without any new unit Wake or Reminder.
+A failed terminal read skips that tick rather than acting on incomplete evidence.
 
 ## Coordinator prompt snippet
 
@@ -112,7 +142,10 @@ At session start, check `systemctl --user status fleet-wake@<project>`. On every
 fleet alarm, first process orchestration mail, then run the full `fleet-sweep`.
 Give every `STOPPED` or `POLLING` pane its next step in the same turn. A question a
 unit typed in its own pane is addressed to the coordinator and must be answered.
-Leave `PARKED` panes parked until their declared dependency lands, then resume them.
+For `PARKED` panes, independently recheck each declared producer when a
+Wake or Reminder arrives. Never resume, resend or merge solely because the
+fleet notifier reported an event; uncertain producer evidence requires
+coordinator investigation instead.
 
 ## Stop or uninstall
 
