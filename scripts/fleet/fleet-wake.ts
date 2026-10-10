@@ -68,8 +68,15 @@ export interface FleetWakeStateStore extends FleetPollingStore {
   readStalledSeen?(): string | null;
   writeStalledSeen?(urls: string): void;
   hasParkedWakeEvent(key: string): boolean;
-  markParkedWakeEvent(key: string): void;
+  markParkedWakeEvent(key: string, status?: 'sent' | 'attempted_unverified'): void;
   rearmParkedWakeEvents(observedKeys: ReadonlyMap<string, string | null>): void;
+  readLastSentAt?(): number | undefined;
+  writeLastSentAt?(at: number): void;
+  clearLastSentAt?(): void;
+  readParkedEpoch?(handle: string): { key: string; since: number } | undefined;
+  writeParkedEpoch?(handle: string, epoch: { key: string; since: number }): void;
+  clearParkedEpoch?(handle: string): void;
+  pruneParkedEpochs?(keys: ReadonlyMap<string, string>): void;
 }
 
 export class FileFleetWakeStateStore extends FileFleetStateStore implements FleetWakeStateStore {
@@ -92,6 +99,64 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
 
   clearLastSentSignature(): void {
     rmSync(this.signaturePath(), { force: true });
+  }
+
+  private sentAtPath(): string {
+    return join(this.root, 'last-sent.at');
+  }
+
+  readLastSentAt(): number | undefined {
+    try {
+      const value = Number(readFileSync(this.sentAtPath(), 'utf8'));
+      return Number.isFinite(value) && value >= 0 ? value : undefined;
+    } catch { return undefined; }
+  }
+
+  writeLastSentAt(at: number): void {
+    mkdirSync(this.root, { recursive: true });
+    writeFileSync(this.sentAtPath(), String(at), 'utf8');
+  }
+
+  clearLastSentAt(): void {
+    rmSync(this.sentAtPath(), { force: true });
+  }
+
+  private parkedEpochPath(handle: string): string {
+    const digest = createHash('sha256').update(handle).digest('hex').slice(0, 32);
+    return join(this.root, `parked-epoch-${digest}.mark`);
+  }
+
+  readParkedEpoch(handle: string): { key: string; since: number } | undefined {
+    try {
+      const record = JSON.parse(readFileSync(this.parkedEpochPath(handle), 'utf8')) as
+        { handle?: unknown; key?: unknown; since?: unknown };
+      return record.handle === handle && typeof record.key === 'string'
+        && typeof record.since === 'number' && Number.isFinite(record.since)
+        ? { key: record.key, since: record.since } : undefined;
+    } catch { return undefined; }
+  }
+
+  writeParkedEpoch(handle: string, epoch: { key: string; since: number }): void {
+    mkdirSync(this.root, { recursive: true });
+    writeFileSync(this.parkedEpochPath(handle), JSON.stringify({ handle, ...epoch }), 'utf8');
+  }
+
+  clearParkedEpoch(handle: string): void {
+    rmSync(this.parkedEpochPath(handle), { force: true });
+  }
+
+  pruneParkedEpochs(keys: ReadonlyMap<string, string>): void {
+    let entries;
+    try { entries = readdirSync(this.root, { withFileTypes: true }); }
+    catch { return; }
+    for (const entry of entries) {
+      if (!entry.isFile() || !/^parked-epoch-[0-9a-f]{32}\\.mark$/u.test(entry.name)) continue;
+      const path = join(this.root, entry.name);
+      try {
+        const record = JSON.parse(readFileSync(path, 'utf8')) as { handle?: string; key?: string };
+        if (!record.handle || keys.get(record.handle) !== record.key) rmSync(path, { force: true });
+      } catch { rmSync(path, { force: true }); }
+    }
   }
 
   private bannerSignaturePath(): string {
@@ -137,9 +202,9 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
     return existsSync(this.parkedWakeEventPath(key));
   }
 
-  markParkedWakeEvent(key: string): void {
+  markParkedWakeEvent(key: string, status: 'sent' | 'attempted_unverified' = 'sent'): void {
     mkdirSync(this.root, { recursive: true });
-    writeFileSync(this.parkedWakeEventPath(key), `${key}\n`, 'utf8');
+    writeFileSync(this.parkedWakeEventPath(key), `${key}\n${status}\n`, 'utf8');
   }
 
   rearmParkedWakeEvents(observedKeys: ReadonlyMap<string, string | null>): void {
@@ -153,7 +218,7 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
       if (!entry.isFile() || !entry.name.startsWith('parked-wake-') || !entry.name.endsWith('.mark')) continue;
       const path = join(this.root, entry.name);
       try {
-        const key = readFileSync(path, 'utf8').trim();
+        const key = readFileSync(path, 'utf8').split('\n', 1)[0] ?? '';
         for (const [handle, activeKey] of observedKeys) {
           if (!key.startsWith(`parked:${handle}:`)) continue;
           if (key !== activeKey) rmSync(path, { force: true });
@@ -187,6 +252,10 @@ export interface FleetAlarmTickOptions {
   readonly checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
   readonly supervisedPullOwner?: (pull: OpenPullHead, panes: readonly FleetPaneObservation[]) => FleetPaneObservation | undefined;
   readonly readWorktreeHead?: (worktreePath: string) => string | undefined;
+  readonly readNamedPull?: (repository: string, number: number) => NativePull | undefined;
+  readonly readNamedReview?: (repository: string, number: number, reviewId: number) => NativeReview | undefined;
+  readonly readPackReviewStage?: (repository: string, sha: string) => string | undefined;
+  readonly now?: () => number;
 }
 
 export type FleetAlarmTickResult =
@@ -477,6 +546,20 @@ export function potentiallySentUnboundEnvelope(event: TerminalEnvelopeEvent): bo
     // Unreadable owner of a known no-result event gives no effect, not fallback.
     return true;
   }
+}
+
+export interface NativePull {
+  readonly number: number;
+  readonly headSha: string;
+  readonly state: 'open' | 'closed';
+  readonly merged: boolean;
+}
+
+export interface NativeReview {
+  readonly id: number;
+  readonly state: string;
+  readonly commitSha: string;
+  readonly submittedAt?: string;
 }
 
 export interface OpenPullHead {
