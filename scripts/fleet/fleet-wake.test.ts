@@ -14,6 +14,7 @@ import {
   potentiallySentUnboundEnvelope,
   fleetAlarmMessage,
   fleetWakeConfigFromEnv,
+  parseNamedParkedProducer,
   managerBannerMessage,
   runFleetAlarmTick,
   runFleetDiagnosticTick,
@@ -278,6 +279,8 @@ describe('fleet alarm', () => {
       const settings = fleetWakeConfigFromEnv(env, ['--project', 'fixture']);
       expect(settings.architectHandle).toBe(exclude ? architectHandle : undefined);
       expect(settings.orchestratorHandle).toBe('coord');
+      expect(settings.selectedRepository).toBe('test/project');
+      expect(settings.chatScope?.repository).toBe('test/project');
       const calls: string[][] = [];
       const result = await runFleetAlarmTick({
         config: settings, executor: fakeOrca({ coord: 'idle', [architectHandle]: 'Ready.\n>' }, calls, [terminals[0]!, architect]),
@@ -1502,12 +1505,9 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
     const wrong = await foreign.step({
       listTerminalEnvelopes: () => [{ ...event, observedInvocationId: 'ffffffff-bbbb-4ccc-8ddd-eeeeeeeeeeee' }],
     });
-    // The strict Task/Dispatch wake is withheld for a mismatched UUID.
-    // The pre-existing legacy GPT envelope route is a separate preserved effect.
-    expect(unitText(wrong.calls)).toEqual([
-      'Wake: GPT turn ' + invocation + ' ended, read ' + event.path,
-    ]);
-    expect(unitText(wrong.calls)[0]).not.toContain('GPT-turn-');
+    // An exactly named GPT-PARKED pane excludes the independent legacy route.
+    expect(unitText(wrong.calls)).toHaveLength(0);
+    expect(foreign.store.hasParkedWakeEvent('gpt:' + event.path)).toBe(false);
     expect(sendsTo(wrong.calls, 'coord')[0]?.join(' ')).toContain('park on unresolvable producer');
     const unsafe = parkedHarness('PARKED on GPT turn ' + invocation);
     const uncertain = await unsafe.step({
@@ -1811,6 +1811,208 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
     h.time(1_800_001);
     expect((await h.step()).result.state).toBe('sent');
   });
+
+  it.each(['inv-h', 'inv-owned', 'inv-wake-ok', 'inv-2416-throw', 'inv-' + 'a'.repeat(92)])(
+    'parses complete shipped-shape GPT ID %s and the single known suffix (#2473)', (id) => {
+      for (const suffix of ['', ' (self-wake armed)']) {
+        expect(parseNamedParkedProducer('PARKED on GPT turn ' + id + suffix))
+          .toMatchObject({ kind: 'gpt', id });
+      }
+    });
+
+  it.each([
+    'inv-', 'inv--bad', 'inv-bad-', 'inv-Bad', 'inv-bad_upper',
+    'inv-' + 'a'.repeat(93), 'inv-ab cd', 'inv-bad\n-other',
+    'inv-h another', 'inv-h (self-wake armed) now', 'inv-h (self-wake armed) (self-wake armed)',
+    'inv-h;node', 'inv-h\x00',
+  ])('rejects unsupported GPT token/tail %s instead of guessing (#2473)', (id) => {
+    expect(parseNamedParkedProducer('PARKED on GPT turn ' + id)).toBeUndefined();
+  });
+
+  it('observes only upstream own-pane wrap/last-line authority, not reconstructed IDs (#2473)', async () => {
+    const envelope: TerminalEnvelopeEvent = {
+      path: '/tmp/opencode/2473-wrap.json', invocationId: 'inv-wake-ok',
+      observedInvocationId: 'inv-wake-ok', terminalHandle: 'one',
+      cwd: terminals[1]!.worktreePath, delivery: 'landed',
+    };
+    const h = parkedHarness('PARKED on GPT turn\ninv-wake-ok');
+    expectSafeWake((await h.step({ listTerminalEnvelopes: () => [envelope] })).calls, 'terminal-envelope');
+    const broken = parkedHarness('PARKED on GPT turn inv-wake\n-ok');
+    const unresolved = await broken.step({ listTerminalEnvelopes: () => [envelope] });
+    expect(unitText(unresolved.calls)).toHaveLength(0);
+    expect(sendsTo(unresolved.calls, 'coord')[0]?.join(' ')).toContain('park on unresolvable producer');
+    const last = parkedHarness('PARKED on GPT turn inv-owned\nPARKED on GPT turn inv-wake-ok');
+    expectSafeWake((await last.step({ listTerminalEnvelopes: () => [envelope] })).calls, 'terminal-envelope');
+    for (const wait of [
+      'PARKED on GPT turn inv-wake-ok another producer',
+      'User: PARKED on GPT turn inv-wake-ok',
+      'Tool: PARKED on GPT turn inv-wake-ok',
+    ]) {
+      const noAuthority = parkedHarness(wait);
+      expect(unitText((await noAuthority.step({ listTerminalEnvelopes: () => [] })).calls)).toHaveLength(0);
+    }
+  });
+
+  it('excludes foreign and duplicate legacy GPT sends on a named pane in the whole tick (#2473)', async () => {
+    const h = parkedHarness('PARKED on GPT turn inv-wake-ok');
+    const matched: TerminalEnvelopeEvent = {
+      path: '/tmp/opencode/2473-exact.json', invocationId: 'inv-wake-ok',
+      observedInvocationId: 'inv-wake-ok', terminalHandle: 'one',
+      cwd: h.unit.worktreePath, delivery: 'landed',
+    };
+    const foreign = { ...matched, path: '/tmp/opencode/2473-foreign.json',
+      invocationId: 'inv-foreign', observedInvocationId: 'inv-foreign' };
+    const simultaneous = { listTerminalEnvelopes: () => [matched, foreign] };
+    expectSafeWake((await h.step(simultaneous)).calls, 'terminal-envelope');
+    expect(h.store.readParkedWakeEventStatus('gpt:' + matched.path)).toBe('sent');
+    expect(h.store.hasParkedWakeEvent('gpt:' + foreign.path)).toBe(false);
+    expect(sendsTo((await h.step(simultaneous)).calls, 'one')).toHaveLength(0);
+    const wrongOnly = parkedHarness('PARKED on GPT turn inv-wake-ok');
+    const wrong = await wrongOnly.step({ listTerminalEnvelopes: () => [foreign] });
+    expect(sendsTo(wrong.calls, 'one')).toHaveLength(0);
+    expect(wrongOnly.store.hasParkedWakeEvent('gpt:' + foreign.path)).toBe(false);
+    expect(sendsTo(wrong.calls, 'coord')[0]?.join(' ')).toContain('park on unresolvable producer');
+    const duplicate = parkedHarness('PARKED on GPT turn inv-wake-ok');
+    expect(sendsTo((await duplicate.step({ listTerminalEnvelopes: () =>
+      [matched, { ...matched, path: '/tmp/opencode/2473-duplicate.json' }] })).calls, 'one')).toHaveLength(0);
+    const wrongOwner = parkedHarness('PARKED on GPT turn inv-wake-ok');
+    expect(sendsTo((await wrongOwner.step({ listTerminalEnvelopes: () =>
+      [{ ...matched, cwd: '/foreign/worktree' }] })).calls, 'one')).toHaveLength(0);
+  });
+
+  it('persists uncertain named attempts and never marks rejected foreign envelopes (#2473)', async () => {
+    const h = parkedHarness('PARKED on GPT turn inv-wake-ok');
+    const event: TerminalEnvelopeEvent = {
+      path: '/tmp/opencode/2473-uncertain.json', invocationId: 'inv-wake-ok',
+      observedInvocationId: 'inv-wake-ok', terminalHandle: 'one',
+      cwd: h.unit.worktreePath, delivery: 'landed',
+    };
+    const foreign = { ...event, path: '/tmp/opencode/2473-stale.json',
+      invocationId: 'inv-stale', observedInvocationId: 'inv-stale' };
+    const xdg = mkdtempSync(join(tmpdir(), 'fleet-2473-'));
+    try {
+      const before = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: xdg });
+      h.failSecond(true);
+      const first = await h.step({ store: before, listTerminalEnvelopes: () => [event, foreign] });
+      expect(unitText(first.calls)).toHaveLength(1);
+      expect(before.readParkedWakeEventStatus('gpt:' + event.path)).toBe('attempted_unverified');
+      expect(before.hasParkedWakeEvent('gpt:' + foreign.path)).toBe(false);
+      h.failSecond(false);
+      const after = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: xdg });
+      const repeat = await h.step({ store: after, listTerminalEnvelopes: () => [event, foreign] });
+      expect(unitText(repeat.calls)).toHaveLength(0);
+      expect(after.hasParkedWakeEvent('gpt:' + foreign.path)).toBe(false);
+      expect(sendsTo(repeat.calls, 'coord')[0]?.join(' ')).toContain('uncertain unit Wake');
+    } finally { rmSync(xdg, { recursive: true, force: true }); }
+  });
+
+  it.each(['Ready for a new Task', 'PARKED on unrelated producer'])(
+    'retains legacy GPT delivery outside exact GPT-named PARKED: %s (#2473)', async (wait) => {
+      const h = parkedHarness(wait);
+      const event: TerminalEnvelopeEvent = { path: '/tmp/opencode/2473-legacy.json',
+        invocationId: 'inv-h', terminalHandle: 'one', cwd: h.unit.worktreePath };
+      const observed = await h.step({ listTerminalEnvelopes: () => [event] });
+      expect(unitText(observed.calls)).toEqual([
+        'Wake: GPT turn inv-h ended, read /tmp/opencode/2473-legacy.json',
+      ]);
+      expect(h.store.readParkedWakeEventStatus('gpt:' + event.path)).toBe('sent');
+    });
+
+  it('uses a direct-config selected repository without optional chatScope (#2473)', async () => {
+    const repo = 'chetwerikoff/orchestrator-pack';
+    const opts = config({ selectedRepository: repo });
+    for (const mode of ['open', 'merged', 'closed', 'missing'] as const) {
+      const h = parkedHarness('PARKED on merge-12');
+      const reads: string[] = [];
+      const resolved = await h.step({
+        config: opts,
+        readNamedPull: (r, number) => {
+          reads.push(r + '#' + number);
+          if (mode === 'missing') return undefined;
+          return { number, headSha: sha, state: mode === 'open' ? 'open' : 'closed',
+            merged: mode === 'merged' };
+        },
+        listOpenPulls: () => [],
+      });
+      expect(reads).toEqual([repo + '#12']);
+      if (mode === 'merged') expectSafeWake(resolved.calls, 'merged');
+      else {
+        expect(unitText(resolved.calls)).toHaveLength(0);
+        if (mode === 'open') expect(sendsTo(resolved.calls, 'coord')).toHaveLength(0);
+        else expect(sendsTo(resolved.calls, 'coord')[0]?.join(' ')).toContain('park on unresolvable producer');
+      }
+    }
+    const previous = parkedHarness('PARKED on merge-12');
+    expectSafeWake((await previous.step({ readNamedPull: () => nativePull(true) })).calls, 'merged');
+    const matching = parkedHarness('PARKED on merge-12');
+    expectSafeWake((await matching.step({
+      config: config({ selectedRepository: repository, chatScope:
+        { projectUrl: 'https://chatgpt.com/p/synthetic', repository } }),
+      readNamedPull: () => nativePull(true),
+    })).calls, 'merged');
+  });
+
+  it.each([
+    'PARKED on merge-12',
+    'PARKED on merge agent terminal producer-12 incarnation producer-inc PR #12',
+    'PARKED on CI PR #12 head ' + sha,
+    'PARKED on CI on ' + sha,
+    'PARKED on PR #12 review #991 head ' + sha,
+    'PARKED on pack-review PR #12 head ' + sha,
+  ])('rejects conflicting repositories for %s and skips the legacy CI scan (#2473)', async (wait) => {
+    const terminal: FleetTerminal = {
+      handle: 'producer-12', title: 'zsh', worktreePath: '/elsewhere',
+      incarnationId: 'producer-inc', status: 'exited',
+    };
+    const h = parkedHarness(wait, [terminal]);
+    const seen: string[] = [];
+    const observed = await h.step({
+      config: config({ selectedRepository: 'chetwerikoff/orchestrator-pack',
+        chatScope: { projectUrl: 'https://chatgpt.com/p/synthetic', repository: 'foreign/repository' } }),
+      listOpenPulls: (repo) => { seen.push('list ' + repo); return [{ number: 12, sha, ref: 'x' }]; },
+      readNamedPull: (repo) => { seen.push('pull ' + repo); return nativePull(true); },
+      readNamedReview: (repo) => { seen.push('review ' + repo); return undefined; },
+      readPackReviewStage: (repo) => { seen.push('stage ' + repo); return undefined; },
+      checkRunsFinishedAt: (repo) => { seen.push('checks ' + repo); return 10; },
+    });
+    expect(seen).toEqual([]);
+    expect(unitText(observed.calls)).toHaveLength(0);
+    expect(sendsTo(observed.calls, 'coord')[0]?.join(' ')).toContain('park on unresolvable producer');
+  });
+
+  it('keeps non-repository terminal wake, GPT and mixed coordinator/banner routing separate (#2473)', async () => {
+    const terminal: FleetTerminal = {
+      handle: 'producer-12', title: 'zsh', worktreePath: '/elsewhere',
+      incarnationId: 'producer-inc', status: 'exited',
+    };
+    const configConflict = config({ selectedRepository: 'selected/project',
+      chatScope: { projectUrl: 'https://chatgpt.com/p/synthetic', repository: 'foreign/repository' } });
+    const independent = parkedHarness('PARKED on terminal producer-12 incarnation producer-inc', [terminal]);
+    expectSafeWake((await independent.step({ config: configConflict })).calls, 'terminal-exited');
+    const gpt = parkedHarness('PARKED on GPT turn inv-wake-ok');
+    const event: TerminalEnvelopeEvent = { path: '/tmp/opencode/2473-independent.json',
+      invocationId: 'inv-wake-ok', observedInvocationId: 'inv-wake-ok',
+      terminalHandle: 'one', cwd: gpt.unit.worktreePath, delivery: 'landed' };
+    expectSafeWake((await gpt.step({ config: configConflict, listTerminalEnvelopes: () => [event] })).calls,
+      'terminal-envelope');
+    const mixed = parkedHarness('PARKED on GPT turn inv-wake-ok');
+    mixed.fleet.push({ ...terminals[2]!, incarnationId: 'inc-two' });
+    mixed.screens.two = 'Need a decision';
+    const localUrl = 'https://chatgpt.com/p/synthetic/c/local-fixture';
+    const alarm = await mixed.step({
+      config: config({ chatCdpUrl: 'http://127.0.0.1:9222',
+        chatScope: { projectUrl: 'https://chatgpt.com/p/synthetic', repository } }),
+      listTerminalEnvelopes: () => [{ ...event, observedInvocationId: 'inv-foreign' }],
+      readChats: async () => [{ targetId: 'local-test', url: localUrl, generating: false,
+        banners: [{ kind: 'error_banner', url: localUrl, text: 'Synthetic red banner', retry: true }] }],
+    });
+    expect(sendsTo(alarm.calls, 'one')).toHaveLength(0);
+    const notice = sendsTo(alarm.calls, 'coord').find((call) => call.includes('--text'))?.join(' ') ?? '';
+    expect(notice).toContain('park on unresolvable producer');
+    expect(notice).toContain('two');
+    expect(notice).toContain('Synthetic red banner');
+  });
+
 });
 
 describe('Issue #2342 unloadable chat', () => {
