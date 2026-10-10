@@ -2062,10 +2062,13 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
   readonly sendWaitMs: number;
   readonly invocationDeadlineMs: number;
   readonly deliveryProofWaitMs?: number;
+  readonly preSendAlertsAlreadyMarked?: boolean;
   readonly onDispatch?: () => void;
   readonly onActionError?: (diagnostic: string) => void;
 }): Promise<{ sendCount: 0 | 1; witness: StateLightSendDeliveryWitness; actionError?: string }> {
-  await markPreSendAlerts(input.page, Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs));
+  if (!input.preSendAlertsAlreadyMarked) {
+    await markPreSendAlerts(input.page, Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs));
+  }
   input.onDispatch?.();
   let actionError: string | undefined;
   try {
@@ -2801,9 +2804,10 @@ async function runTurn(
       if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
-      remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-      if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
-      const sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+      let sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+      if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      await markPreSendAlerts(page, Math.min(MAX_LOCAL_READ_WAIT_MS, sendWaitMs));
+      sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       // Reapply existing read-only destination predicates after composer mutation
       // and immediately before entering the actual dispatch boundary.
@@ -2841,6 +2845,7 @@ async function runTurn(
         baselineUserNodeCount,
         sendWaitMs,
         invocationDeadlineMs,
+        preSendAlertsAlreadyMarked: true,
         onDispatch: () => {
           transitionStateLightTurnObservation({
             profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',

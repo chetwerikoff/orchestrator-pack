@@ -541,7 +541,7 @@ describe('state-light fresh conversation collision recovery', () => {
   it('rejects a late foreign-project redirect after composer mutation, before fresh dispatch', async () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-REDIRECT'));
     const solo = makeLoserPage('PROMPT-REDIRECT', 'SHOULD-NOT-SEND');
-    const initialUrl = solo.page.url;
+    const initialUrl = solo.page.url.getMockImplementation()!;
     let redirected = false;
     solo.page.url.mockImplementation(() => redirected ? OTHER_PROJECT_CONVERSATION_URL : initialUrl());
     solo.composer.fill.mockImplementation(async () => { redirected = true; });
@@ -558,7 +558,7 @@ describe('state-light fresh conversation collision recovery', () => {
   it('rejects a late foreign existing-chat redirect after readiness and baseline', async () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-REDIRECT'));
     const solo = makeLoserPage('PROMPT-REDIRECT', 'SHOULD-NOT-SEND');
-    const initialUrl = solo.page.url;
+    const initialUrl = solo.page.url.getMockImplementation()!;
     let redirected = false;
     solo.page.url.mockImplementation(() => redirected ? LOSER_CONV : initialUrl());
     solo.composer.fill.mockImplementation(async () => { redirected = true; });
@@ -578,6 +578,48 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(solo.getSends()).toBe(0);
     expect(redirected).toBe(true);
+  });
+
+  it('rejects an existing-chat redirect during the final pre-send alert probe', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-ALERT-REDIRECT'));
+    const solo = makeLoserPage('PROMPT-ALERT-REDIRECT', 'SHOULD-NOT-SEND');
+    const initialUrl = solo.page.url.getMockImplementation()!;
+    let redirected = false;
+    solo.page.url.mockImplementation(() => redirected ? LOSER_CONV : initialUrl());
+    solo.page.evaluate = vi.fn(async () => { redirected = true; });
+    enqueueBrowserForTurn(mocks, solo.page);
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', '/tmp/late-alert-redirect-existing.txt',
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '60000',
+      '--poll-ms', '1',
+    ]);
+    expect(solo.page.evaluate).toHaveBeenCalledTimes(1);
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'owned_conversation_identity_mismatch',
+      send_count: 0,
+    });
+    expect(solo.getSends()).toBe(0);
+  });
+
+  it('rejects a fresh-project redirect during the final pre-send alert probe', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-ALERT-REDIRECT'));
+    const solo = makeLoserPage('PROMPT-ALERT-REDIRECT', 'SHOULD-NOT-SEND');
+    const initialUrl = solo.page.url.getMockImplementation()!;
+    let redirected = false;
+    solo.page.url.mockImplementation(() => redirected ? OTHER_PROJECT_CONVERSATION_URL : initialUrl());
+    solo.page.evaluate = vi.fn(async () => { redirected = true; });
+    const outcome = await runNewChatTurn(solo.page, '/tmp/late-alert-redirect-fresh.txt');
+    expect(solo.page.evaluate).toHaveBeenCalledTimes(1);
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'fresh_conversation_surface_unavailable',
+      send_count: 0,
+    });
+    expect(solo.getSends()).toBe(0);
   });
 
   it('uses the remaining absolute budget for a committed project goto', async () => {
@@ -1706,7 +1748,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result.state).not.toBe('ok');
     expect(page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), {
       waitUntil: 'commit',
-      timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
+      timeout: 5_000,
     });
     expect(outcome.result.incidents).toContain('send_observation_deferred');
     expect(outcome.result.state).not.toBe('send_failed');
