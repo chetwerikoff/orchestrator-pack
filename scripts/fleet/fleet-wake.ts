@@ -2,8 +2,8 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 import { createHash } from 'node:crypto';
 import { runProcessSync } from '../kernel/subprocess.ts';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, isAbsolute, join, normalize, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetContext } from '../lib/target-context.ts';
 import {
@@ -44,12 +44,7 @@ import {
   type ProjectChat,
 } from './chat-error-banners.ts';
 import { readChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
-import { readStateLightTurnObservation } from '../chatgpt-browser-turn/state-light-turn-observation.ts';
-import {
-  TERMINAL_ENVELOPE_ROOT, TERMINAL_SCHEMA, invocationReceiptLocatorPath,
-  isWakeableTerminalEnvelopePath, readInvocationReceiptLocator, readTerminalEnvelope,
-  type DeliveryState,
-} from '../flow-manager-long-running-child.ts';
+import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath, type DeliveryState } from '../flow-manager-long-running-child.ts';
 
 export interface FleetWakeConfig {
   readonly projectId: string;
@@ -274,10 +269,6 @@ export interface FleetAlarmTickOptions {
   readonly readNamedReview?: (repository: string, number: number, reviewId: number) => NativeReview | undefined;
   readonly readPackReviewStage?: (repository: string, sha: string) => PackReviewStageFact | undefined;
   readonly now?: () => number;
-  /** Synthetic GPT receipt root for offline tests; production uses the producer-defined root. */
-  readonly indexedGptTerminalRoot?: string;
-  /** Existence only, never process incarnation or progress. */
-  readonly probeIndexedGptPid?: (pid: number) => 'exists' | 'absent' | 'unknown';
 }
 
 export type FleetAlarmTickResult =
@@ -587,31 +578,6 @@ export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeE
   return events.sort((left, right) => left.path.localeCompare(right.path));
 }
 
-/**
- * The no-result producer exposes only an observation *pointer*, not launcher
- * authority. Result-present envelopes can have send_count without any pointer.
- * In either case a possible sent-unbound turn must never fall through to the
- * legacy terminal-handle/cwd wake, which targets a potentially recycled pane.
- */
-export function potentiallySentUnboundEnvelope(event: TerminalEnvelopeEvent): boolean {
-  // A send action may have taken effect before a numeric witness was established.
-  if (event.delivery === 'POSSIBLY_DELIVERED' && !event.conversationLocator) return true;
-  if (event.sendCount !== undefined && event.sendCount >= 1 && !event.conversationLocator) return true;
-  if (!event.persistedObservationProfileKey) return false;
-  // No pointer scan or fallback to an environment/current-handle occupant.
-  if (!event.observedInvocationId || event.observedInvocationId !== event.invocationId) return true;
-  try {
-    const record = readStateLightTurnObservation(
-      event.persistedObservationProfileKey, event.observedInvocationId,
-    );
-    if (record.phase === 'sent_unbound' && record.conversation_url === null) return true;
-    return record.phase === 'dispatching' && record.conversation_url === null;
-  } catch {
-    // Unreadable owner of a known no-result event gives no effect, not fallback.
-    return true;
-  }
-}
-
 export interface NativePull {
   readonly number: number;
   readonly headSha: string;
@@ -867,17 +833,10 @@ interface NamedProducer {
   readonly mergeAgent?: boolean;
 }
 interface ProducerResolution {
-  readonly state: 'ended' | 'pending' | 'unresolvable';
   readonly label: string;
-  readonly terminalState?: string;
-  readonly evidence?: string;
-  readonly legacyKey?: string;
-  readonly indexedGpt?: boolean;
-  readonly reason?: string;
-  readonly vetoLegacyKey?: string;
-  readonly skipReminder?: boolean;
-  readonly ownerTaskId?: string;
-  readonly ownerDispatchId?: string;
+  readonly terminalState: string;
+  readonly evidence: string;
+  readonly eventId: string;
 }
 
 // Only a complete, single, exact own response is a supported dependency.
@@ -958,279 +917,68 @@ function readPackReviewStatus(repository: string, sha: string): PackReviewStageF
     ? { state: current.state, description: current.description } : undefined;
 }
 
-function exactParkedTask(pane: FleetPaneObservation, projectId: string): readonly string[] | undefined {
-  if (pane.state !== 'PARKED' || !pane.wait || !pane.incarnationId
-    || pane.status?.toLowerCase() === 'exited' || !pane.taskBinding) return undefined;
-  try {
-    const tuple: unknown = JSON.parse(pane.taskBinding);
-    if (!Array.isArray(tuple) || tuple.length !== 7
-      || !tuple.every((part) => typeof part === 'string' && part.length > 0)
-      || tuple[0] !== projectId || tuple[1] !== pane.handle || tuple[2] !== pane.incarnationId
-      || tuple[3] !== pane.worktreePath || tuple[4] !== pane.branch) return undefined;
-    return tuple as string[];
-  } catch { return undefined; }
-}
-
-
-// A PID-exists result is only short-lived corroboration: PIDs can be reused or zombie.
-function probeIndexedLauncherPid(pid: number): 'exists' | 'absent' | 'unknown' {
-  try { process.kill(pid, 0); return 'exists'; }
-  catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'absent' : 'unknown';
-  }
-}
-
-function indexedGptResolution(
-  producer: NamedProducer,
-  pane: FleetPaneObservation,
-  tuple: readonly string[],
-  claimants: readonly FleetPaneObservation[],
-  epoch: { key: string; since: number; started?: number } | undefined,
-  options: FleetAlarmTickOptions,
-): ProducerResolution | undefined {
-  const root = options.indexedGptTerminalRoot ?? TERMINAL_ENVELOPE_ROOT;
-  const path = invocationReceiptLocatorPath(producer.id!, root);
-  const reject = (reason: string, vetoLegacyKey?: string): ProducerResolution => ({
-    label: producer.label, state: 'unresolvable', indexedGpt: true, reason,
-    ...(vetoLegacyKey ? { vetoLegacyKey } : {}),
-    skipReminder: reason === 'ambiguous-gpt-owner',
-  });
-  try {
-    lstatSync(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    return reject('invalid-receipt-or-index');
-  }
-  let chain: ReturnType<typeof readInvocationReceiptLocator>;
-  try {
-    const index = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
-    if (typeof index.run_identity !== 'string' || !index.run_identity
-      || typeof index.attempt_identity !== 'string' || !index.attempt_identity) return reject('invalid-receipt-or-index');
-    chain = readInvocationReceiptLocator({
-      invocationId: producer.id!, runIdentity: index.run_identity,
-      attemptIdentity: index.attempt_identity, terminalEnvelopeRoot: root,
-    });
-  } catch { return reject('invalid-receipt-or-index'); }
-
-  const { locator, receipt } = chain;
-  if (!isWakeableTerminalEnvelopePath(locator.terminal_envelope_path, root)
-    || receipt.invocation_id !== producer.id
-    || !Number.isFinite(Date.parse(receipt.launcher_started_at))
-    || !Number.isFinite(Date.parse(receipt.handoff_committed_at))
-    || (receipt.owner_task_id !== undefined && (!receipt.owner_task_id || typeof receipt.owner_task_id !== 'string'))
-    || (receipt.owner_dispatch_id !== undefined && (!receipt.owner_dispatch_id || typeof receipt.owner_dispatch_id !== 'string'))) {
-    return reject('invalid-receipt-or-index');
-  }
-  const legacyKey = 'gpt:' + locator.terminal_envelope_path;
-  // Observation order cannot elect a Task. Optional owner fields are caller
-  // assertions, accepted only when independently verified against native binding.
-  const exact = claimants.map((candidate) => ({ pane: candidate,
-    tuple: exactParkedTask(candidate, options.config.projectId) }));
-  const asserted = exact.filter((candidate) => candidate.tuple
-    && (!receipt.owner_task_id || candidate.tuple[5] === receipt.owner_task_id)
-    && (!receipt.owner_dispatch_id || candidate.tuple[6] === receipt.owner_dispatch_id));
-  let eligible = claimants.length === 1 && asserted.length === 1 && asserted[0]!.pane.handle === pane.handle;
-  if (claimants.length > 1) {
-    eligible = Boolean(receipt.owner_task_id && receipt.owner_dispatch_id
-      && asserted.length === 1 && asserted[0]!.pane.handle === pane.handle);
-  }
-  const ownerConflict = !eligible || tuple[5] !== (exact.find((x) => x.pane.handle === pane.handle)?.tuple?.[5])
-    || tuple[6] !== (exact.find((x) => x.pane.handle === pane.handle)?.tuple?.[6]);
-  let terminalExists = false;
-  try {
-    const stat = lstatSync(locator.terminal_envelope_path);
-    if (!stat.isFile()) return reject('terminal-unsafe');
-    terminalExists = true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return reject('terminal-unsafe');
-  }
-  if (!terminalExists) {
-    if (ownerConflict) return reject('ambiguous-gpt-owner');
-    const at = (options.now ?? Date.now)();
-    const started = epoch?.started ?? epoch?.since;
-    if (started === undefined || !Number.isFinite(started)
-      || !Number.isFinite(at) || at < started) return reject('launcher-identity-unverifiable');
-    const state = (options.probeIndexedGptPid ?? probeIndexedLauncherPid)(receipt.launcher_pid!);
-    if (state === 'absent') return reject('launcher-gone; envelope-absent');
-    if (state !== 'exists') return reject('launcher-identity-unverifiable');
-    return at - started < REMINDER_INTERVAL_MS
-      ? { label: producer.label, state: 'pending', indexedGpt: true }
-      : reject('pid-identity-unverified; envelope-absent');
-  }
-  const envelope = readTerminalEnvelope(locator.terminal_envelope_path, {
-    runIdentity: locator.run_identity, attemptIdentity: locator.attempt_identity,
-  });
-  if (!envelope) return reject('terminal-identity-mismatch');
-  const relativeHandoff = typeof envelope.handoff_receipt_path === 'string'
-    && !isAbsolute(envelope.handoff_receipt_path);
-  const handoffMatches = typeof envelope.handoff_receipt_path === 'string'
-    && (relativeHandoff
-      ? basename(normalize(envelope.handoff_receipt_path)) === basename(locator.handoff_receipt_path)
-      : resolve(envelope.handoff_receipt_path) === locator.handoff_receipt_path);
-  if (envelope.completion_mode !== receipt.completion_mode
-    || envelope.launcher_started_at !== receipt.launcher_started_at
-    || envelope.handoff_committed_at !== receipt.handoff_committed_at
-    || !handoffMatches
-    || (envelope.observed_invocation_id !== undefined
-      && envelope.observed_invocation_id !== producer.id)
-    || !Number.isFinite(Date.parse(envelope.terminal_at))
-    || (envelope.lifecycle_outcome !== 'success' && envelope.lifecycle_outcome !== 'incident')) {
-    return reject('terminal-identity-mismatch');
-  }
-  const persisted = envelope.diagnostics?.persisted_observation as { profile_key?: unknown } | undefined;
-  const observedId = envelope.observed_invocation_id;
-  if (potentiallySentUnboundEnvelope({
-    path: locator.terminal_envelope_path,
-    invocationId: observedId ?? producer.id!, 
-    ...(observedId ? { observedInvocationId: observedId } : {}),
-    ...(envelope.send_count !== undefined ? { sendCount: envelope.send_count } : {}),
-    delivery: envelope.delivery,
-    ...(envelope.conversation_locator ? { conversationLocator: envelope.conversation_locator } : {}),
-    ...(typeof persisted?.profile_key === 'string' ? { persistedObservationProfileKey: persisted.profile_key } : {}),
-  })) return reject('terminal-unsafe');
-  if (ownerConflict) return reject('ambiguous-gpt-owner', legacyKey);
-  return {
-    label: producer.label, state: 'ended', indexedGpt: true,
-    terminalState: 'terminal-envelope', evidence: locator.terminal_envelope_path, legacyKey,
-    ...(receipt.owner_task_id ? { ownerTaskId: receipt.owner_task_id } : {}),
-    ...(receipt.owner_dispatch_id ? { ownerDispatchId: receipt.owner_dispatch_id } : {}),
-  };
-}
-
-// The second Orca sweep is read-only: no persisted polling, pane-wait, or
-// notification mutations. It reuses the actual native Task/Dispatch join and
-// own screen parser instead of treating an old fleet snapshot as a send lease.
-function freshIndexedGptOwner(
-  options: FleetAlarmTickOptions, executor: OrcaExecutor,
-  original: FleetPaneObservation, originalTuple: readonly string[],
-  invocationId: string, ownerTaskId?: string, ownerDispatchId?: string,
-): boolean {
-  try {
-    const currentTerminals = listFleetTerminals(executor);
-    const readOnly: FleetPollingStore = {
-      hasPollingMark: () => false, setPollingMark: () => {}, clearPollingMark: () => {},
-    };
-    const current = runFleetSweep({
-      primary: options.config.primary, projectId: options.config.projectId,
-      workspaceRe: options.config.workspaceRe, coordinatorHandle: options.config.orchestratorHandle,
-      coordinatorTitleRe: options.config.orchestratorTitleRe,
-      architectHandle: options.config.architectHandle, busyRe: options.config.busyRe,
-      terminals: currentTerminals, executor, store: readOnly,
-    });
-    const claimants = current.filter((pane) => pane.state === 'PARKED' && pane.wait
-      && parseNamedParkedProducer(pane.wait)?.kind === 'gpt'
-      && parseNamedParkedProducer(pane.wait)?.id === invocationId);
-    const matches = claimants.filter((pane) => {
-      const tuple = exactParkedTask(pane, options.config.projectId);
-      return tuple && (!ownerTaskId || tuple[5] === ownerTaskId)
-        && (!ownerDispatchId || tuple[6] === ownerDispatchId);
-    });
-    if (matches.length !== 1 || (claimants.length > 1 && (!ownerTaskId || !ownerDispatchId))) return false;
-    const target = matches[0]!;
-    const tuple = exactParkedTask(target, options.config.projectId);
-    return target.handle === original.handle && target.wait === original.wait
-      && JSON.stringify(tuple) === JSON.stringify(originalTuple);
-  } catch { return false; }
-}
-
 // Prefer the trusted selected project card for repository-bound producers.
 // Conflicting optional ChatGPT scope cannot authorize a GitHub lookup.
 function namedRepository(config: FleetWakeConfig): string | undefined {
-  if (config.selectedRepository && config.chatScope?.repository
-    && config.selectedRepository !== config.chatScope.repository) return undefined;
   return config.selectedRepository ?? config.chatScope?.repository;
 }
 
-function resolveNamedProducer(
-  producer: NamedProducer,
-  pane: FleetPaneObservation,
+// A park names an event, not a Task owner. Consumer lookups only observe
+// landed events; receipt, process and claimant proof is not part of a wake.
+function resolveParkEvent(
+  wait: string,
   terminals: readonly FleetTerminal[],
+  envelopes: readonly TerminalEnvelopeEvent[],
   options: FleetAlarmTickOptions,
-  claimants: readonly FleetPaneObservation[] = [],
-  tuple?: readonly string[],
-  epoch?: { key: string; since: number; started?: number },
-): ProducerResolution {
-  const unknown: ProducerResolution = { state: 'unresolvable', label: producer.label };
-  const pending: ProducerResolution = { state: 'pending', label: producer.label };
-  const ended = (state: string, evidence: string, legacyKey?: string): ProducerResolution => ({
-    state: 'ended', label: producer.label, terminalState: state, evidence,
-    ...(legacyKey ? { legacyKey } : {}),
+): ProducerResolution | undefined {
+  const parked = /^PARKED on\s+(.+)$/iu.exec(wait)?.[1]?.trim();
+  if (!parked) return undefined;
+  const key = parked.replace(/^GPT turn\s+/iu, '').replace(/\s+\(self-wake armed\)$/u, '').trim();
+  const envelope = envelopes.find((event) => [basename(event.path), event.path, event.invocationId, event.observedInvocationId]
+    .some((value) => value?.includes(key)));
+  if (envelope) return {
+    label: parked, terminalState: 'terminal-envelope', evidence: envelope.path,
+    eventId: 'terminal:' + envelope.path,
+  };
+  const producer = parseNamedParkedProducer(wait);
+  if (!producer) return undefined;
+  const repo = namedRepository(options.config);
+  const resolved = (state: string, evidence: string, eventId: string): ProducerResolution => ({
+    label: producer.label, terminalState: state, evidence, eventId,
   });
-  if (producer.kind === 'gpt') {
-    if (tuple) {
-      const indexed = indexedGptResolution(producer, pane, tuple, claimants, epoch, options);
-      if (indexed) return indexed;
-    }
-    const events = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)();
-    const matches = events.filter((event) => event.observedInvocationId === producer.id
-      && isWakeableTerminalEnvelopePath(event.path, '/tmp/opencode'));
-    if (matches.length !== 1) return unknown;
-    const event = matches[0]!;
-    if (!event.terminalHandle || event.terminalHandle !== pane.handle || !event.cwd
-      || !samePath(event.cwd, pane.worktreePath) || potentiallySentUnboundEnvelope(event)) return unknown;
-    return ended('terminal-envelope', event.path, 'gpt:' + event.path);
-  }
-  const repository = namedRepository(options.config);
   if (producer.kind === 'terminal') {
-    if (!producer.handle || !producer.incarnation) return unknown;
-    if (producer.mergeAgent) {
-      if (!repository || !producer.number) return unknown;
-      const pull = (options.readNamedPull ?? readNativePull)(repository, producer.number);
-      if (!pull || pull.number !== producer.number) return unknown;
-    }
-    const found = terminals.filter((item) => item.handle === producer.handle
-      && item.incarnationId === producer.incarnation);
-    if (found.length !== 1) return unknown;
-    const term = found[0]!;
-    if (term.status?.toLowerCase() === 'exited') {
-      return ended('terminal-exited', 'orca://terminal/list/' + producer.handle + '/' + producer.incarnation);
-    }
-    return term.status?.toLowerCase() === 'running' && Boolean(term.agentIdentity) ? pending : unknown;
+    const pane = terminals.find((term) => term.handle === producer.handle && term.incarnationId === producer.incarnation);
+    return pane?.status?.toLowerCase() === 'exited'
+      ? resolved('terminal-exited', producer.handle!, 'terminal-exit:' + producer.handle + ':' + producer.incarnation)
+      : undefined;
   }
-  if (!repository) return unknown;
-  let number = producer.number;
-  if (producer.kind === 'ci' && number === undefined && producer.sha) {
-    const heads = (options.listOpenPulls ?? listOpenPullHeads)(repository)
-      .filter((pull) => pull.sha === producer.sha);
-    if (heads.length !== 1) return unknown;
-    number = heads[0]!.number;
+  if (!repo) return undefined;
+  if (producer.kind === 'merge' && producer.number) {
+    const pull = (options.readNamedPull ?? readNativePull)(repo, producer.number);
+    return pull?.merged === true ? resolved('merged', 'PR-' + producer.number, 'merge:' + producer.number) : undefined;
   }
-  if (!number || !Number.isSafeInteger(number)) return unknown;
-  const pull = (options.readNamedPull ?? readNativePull)(repository, number);
-  if (!pull || pull.number !== number) return unknown;
-  const url = 'https://github.com/' + repository + '/pull/' + number;
-  if (producer.kind === 'merge') {
-    if (pull.merged === true) return ended('merged', url);
-    return pull.state === 'open' ? pending : unknown;
+  if (producer.kind === 'review' && producer.number && producer.reviewId) {
+    const review = (options.readNamedReview ?? readNativeReview)(repo, producer.number, producer.reviewId);
+    return review?.submittedAt && review.state !== 'PENDING'
+      ? resolved('review-submitted', 'review-' + producer.reviewId,
+        'review:' + producer.number + ':' + producer.reviewId) : undefined;
   }
-  if (pull.state !== 'open' || pull.headSha !== producer.sha || !SHA40.test(pull.headSha)) return unknown;
-  if (producer.kind === 'pack-review') {
-    const fact = (options.readPackReviewStage ?? readPackReviewStatus)(repository, pull.headSha);
-    const stageEvidence = url + '/commits/' + pull.headSha;
-    const description = fact?.description.trim().toLowerCase();
-    if (fact?.state === 'success' && (
-      description === 'pack review completed with no findings.'
-      || description === 'pack review completed with non-blocking findings.'
-      || description === 'required pack-review stage completed; no additional review round required.'
-      || description === 'required pack-review stage completed; strict descendant of reviewed findings.'
-    )) return ended('stage-complete', stageEvidence);
-    if (fact?.state === 'failure' && description === 'pack review found blocking issues.') {
-      return ended('stage-findings', stageEvidence);
-    }
-    return fact?.state === 'pending' ? pending : unknown;
+  if (producer.kind === 'pack-review' && producer.sha) {
+    const stage = (options.readPackReviewStage ?? readPackReviewStatus)(repo, producer.sha);
+    return stage && (stage.state === 'success' || stage.state === 'failure')
+      ? resolved('stage-' + stage.state, 'pack-review-' + producer.sha,
+        'pack-review:' + producer.sha + ':' + stage.state) : undefined;
   }
-  if (producer.kind === 'review') {
-    if (!producer.reviewId || !Number.isSafeInteger(producer.reviewId)) return unknown;
-    const review = (options.readNamedReview ?? readNativeReview)(repository, number, producer.reviewId);
-    if (!review || review.id !== producer.reviewId || review.commitSha !== pull.headSha) return unknown;
-    if (review.state === 'PENDING') return pending;
-    return review.submittedAt && ['COMMENTED', 'APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)
-      ? ended('review-submitted', url + '#pullrequestreview-' + review.id) : unknown;
+  if (producer.kind === 'ci') {
+    const sha = producer.sha ?? (producer.number
+      ? (options.readNamedPull ?? readNativePull)(repo, producer.number)?.headSha : undefined);
+    if (!sha) return undefined;
+    const completed = (options.checkRunsFinishedAt ?? checkRunsFinishedAt)(repo, sha);
+    return completed !== undefined && Number.isFinite(completed)
+      ? resolved('checks-completed', 'CI-' + sha,
+        'ci:' + (producer.number ?? 'head') + ':' + sha + ':' + completed) : undefined;
   }
-  const at = (options.checkRunsFinishedAt ?? checkRunsFinishedAt)(repository, pull.headSha);
-  return at !== undefined && Number.isFinite(at)
-    ? ended('checks-completed', url + '/checks', 'ci:' + number + ':' + pull.headSha + ':' + at)
-    : pending;
+  return undefined;
 }
 
 // All interpolations and the fixed words pass one physical-line whitelist.
@@ -1262,25 +1010,16 @@ async function sendMarkedUnitMessage(
   store: FleetWakeStateStore, key: string, handle: string, message: string,
   executor: OrcaExecutor, sleepMs: (milliseconds: number) => void | Promise<void>,
   log: (line: string) => void,
-  legacyKey?: string,
-  beforeSecondEnter?: () => boolean,
 ): Promise<boolean> {
-  // Both marks must be durable before the first potentially effectful send.
-  // An uncertain result forbids replays through either the named or legacy path.
-  try {
-    store.markParkedWakeEvent(key, 'attempted_unverified');
-    if (legacyKey) store.markParkedWakeEvent(legacyKey, 'attempted_unverified');
-  } catch { log('unit mark unwritable: ' + key); return false; }
+  if (store.hasParkedWakeEvent(key)) return false;
   let delivered = false;
   try {
     delivered = sendCoordinator(executor, handle, message)
-      && (await sleepMs(4_000), (!beforeSecondEnter || beforeSecondEnter()) && submitCoordinator(executor, handle));
-  } catch { /* A timeout can have delivered text; no automatic retry. */ }
-  if (!delivered) { log('unit attempted_unverified: ' + key); return false; }
-  try {
-    store.markParkedWakeEvent(key, 'sent');
-    if (legacyKey) store.markParkedWakeEvent(legacyKey, 'sent');
-  } catch { log('unit sent but mark remains uncertain: ' + key); return false; }
+      && (await sleepMs(4_000), submitCoordinator(executor, handle));
+  } catch { /* A later tick may independently observe the same event. */ }
+  if (!delivered) { log('unit wake send failed: ' + key); return false; }
+  try { store.markParkedWakeEvent(key); }
+  catch { log('unit wake sent; sent marker unwritable: ' + key); }
   log('sent re-check to ' + handle + ': ' + key);
   return true;
 }
@@ -1293,135 +1032,47 @@ async function wakeNamedParkedProducers(
   executor: OrcaExecutor,
   sleepMs: (milliseconds: number) => void | Promise<void>,
   log: (line: string) => void,
-): Promise<{ alerts: string[]; claimedLegacy: Set<string> }> {
-  const alerts: string[] = [];
-  const claimedLegacy = new Set<string>();
-  const observed = new Map<string, string>();
+  bareShellHandles: ReadonlySet<string>,
+): Promise<void> {
   const now = (options.now ?? Date.now)();
-  // Census all currently observed exact claimants before the first indexed effect.
-  // Even a claimant without a verifiable native tuple counts as a collision.
-  const gptClaims = new Map<string, FleetPaneObservation[]>();
-  for (const candidate of observations) {
-    if (candidate.state !== 'PARKED' || !candidate.wait) continue;
-    const parsed = parseNamedParkedProducer(candidate.wait);
-    if (parsed?.kind !== 'gpt' || !parsed.id) continue;
-    const claims = gptClaims.get(parsed.id) ?? [];
-    claims.push(candidate);
-    gptClaims.set(parsed.id, claims);
-  }
+  const envelopes = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)();
+  const observed = new Map<string, string>();
   for (const pane of observations) {
-    if (pane.state !== 'PARKED' || !pane.wait || /^PARKED on orchestrator answer:/u.test(pane.wait)) continue;
-    const producer = parseNamedParkedProducer(pane.wait);
-    const tuple = exactParkedTask(pane, options.config.projectId);
-    if (!tuple || !producer) {
-      alerts.push('park on unresolvable producer ' + (safeUnitAtom(pane.handle) ?? 'unknown')
-        + ' ' + createHash('sha256').update(JSON.stringify([
-          options.config.projectId, pane.handle, pane.incarnationId, pane.taskBinding, pane.branch, pane.wait,
-        ])).digest('hex').slice(0, 12));
-      continue;
-    }
-    const episode = createHash('sha256').update(JSON.stringify([tuple, pane.wait])).digest('hex').slice(0, 32);
+    if (pane.state !== 'PARKED' || !pane.wait) continue;
+    if (bareShellHandles.has(pane.handle)) continue;
+    const episode = createHash('sha256').update(JSON.stringify([pane.handle, pane.wait]))
+      .digest('hex').slice(0, 32);
     observed.set(pane.handle, episode);
-    // Retain the first observation as park-episode identity even after a successful
-    // Wake resets the reminder clock. A changed wait/Task creates a fresh episode.
     let epoch = store.readParkedEpoch?.(pane.handle);
     if (epoch?.key !== episode) {
       epoch = { key: episode, since: now, started: now };
       store.writeParkedEpoch?.(pane.handle, epoch);
     }
-    const episodeInstance = episode + ':' + String(epoch?.started ?? epoch?.since ?? now);
-    let resolution: ProducerResolution;
-    try { resolution = resolveNamedProducer(producer, pane, terminals, options,
-      producer.id ? gptClaims.get(producer.id) ?? [] : [], tuple, epoch); }
-    catch { resolution = { label: producer.label, state: 'unresolvable' }; }
-    const diagnostic = (reason: string): void => {
-      alerts.push('park on unresolvable producer ' + (safeUnitAtom(pane.handle) ?? 'unknown')
-        + ' ' + episode.slice(0, 12) + ' ' + reason
-        + ' - inspect indexed receipt/terminal and current Task; re-check manually under existing authority');
-    };
-    if (resolution.state === 'unresolvable') {
-      if (resolution.indexedGpt) diagnostic(resolution.reason ?? 'missing-receipt-or-envelope');
-      else alerts.push('park on unresolvable producer ' + (safeUnitAtom(pane.handle) ?? 'unknown')
-        + ' ' + episode.slice(0, 12));
-    }
-    // This is an ephemeral same-tick named-to-legacy veto, NOT a global mark.
-    // It protects precisely the validated original indexed event even if a
-    // claimant changes before its first text+Enter.
-    if (resolution.vetoLegacyKey) claimedLegacy.add(resolution.vetoLegacyKey);
-    if (resolution.skipReminder) continue;
-    const legacyCoalesced = Boolean(resolution.legacyKey
-      && store.hasParkedWakeEvent(resolution.legacyKey));
-    const eventKey = 'producer:' + pane.handle + ':' + episodeInstance + ':'
-      + createHash('sha256').update(JSON.stringify(resolution)).digest('hex').slice(0, 32);
-    const attempted = store.readParkedWakeEventStatus(eventKey);
-    if (attempted === 'attempted_unverified') {
-      alerts.push('uncertain unit Wake ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' ' + episode.slice(0, 12));
-    }
-    if (resolution.state === 'ended' && resolution.legacyKey && attempted) {
-      claimedLegacy.add(resolution.legacyKey);
-    }
-    if (resolution.indexedGpt && legacyCoalesced && !attempted) {
-      diagnostic('legacy-event-already-attempted; recipient-unproven');
-    }
-    if (resolution.state === 'ended' && !legacyCoalesced && !attempted) {
-      const wake = safeUnitWakeText(producer.label, resolution.terminalState ?? '', resolution.evidence ?? '');
-      if (!wake) {
-        if (resolution.indexedGpt) {
-          if (resolution.legacyKey) claimedLegacy.add(resolution.legacyKey);
-          diagnostic('unsafe-evidence; path-unrepresentable');
-          continue;
-        }
-        alerts.push('park on unresolvable producer ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' unsafe-evidence');
-      } else {
-        if (resolution.indexedGpt && (!producer.id || !freshIndexedGptOwner(
-          options, executor, pane, tuple, producer.id, resolution.ownerTaskId, resolution.ownerDispatchId
-        ))) {
-          if (resolution.legacyKey) claimedLegacy.add(resolution.legacyKey);
-          diagnostic('pane-changed-before-send');
-          continue;
-        }
-        let changedDuring = false;
-        const beforeSecond = resolution.indexedGpt ? () => {
-          const same = Boolean(producer.id && freshIndexedGptOwner(
-            options, executor, pane, tuple, producer.id, resolution.ownerTaskId, resolution.ownerDispatchId
-          ));
-          if (!same) changedDuring = true;
-          return same;
-        } : undefined;
-        const sent = await sendMarkedUnitMessage(store, eventKey, pane.handle, wake, executor, sleepMs, log,
-          resolution.legacyKey, beforeSecond);
-        if (resolution.legacyKey && store.hasParkedWakeEvent(resolution.legacyKey)) {
-          claimedLegacy.add(resolution.legacyKey);
-        }
-        if (sent) {
+    const match = resolveParkEvent(pane.wait, terminals, envelopes, options);
+    if (match) {
+      const eventKey = 'event:' + pane.handle + ':' + match.eventId;
+      if (!store.hasParkedWakeEvent(eventKey)) {
+        const message = safeUnitWakeText(match.label, match.terminalState, match.evidence)
+          ?? 'Wake: matching producer event landed - re-check it yourself before continuing';
+        if (await sendMarkedUnitMessage(store, eventKey, pane.handle, message, executor, sleepMs, log)) {
           if (epoch) store.writeParkedEpoch?.(pane.handle, { ...epoch, since: now });
           store.clearPaneWait?.(pane.handle);
           continue;
         }
-        if (changedDuring) diagnostic('pane-changed-during-wake; uncertain-unit-wake');
-        else alerts.push('uncertain unit Wake ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' ' + episode.slice(0, 12));
       }
     }
-    // Park age is measured from first eligible observation or the last successful
-    // event Wake, never a wall-clock half-hour bucket. An uncertain Wake permits reminders.
+    // PARKED stays silent until its own elapsed 30-minute Reminder.
     if (epoch && Number.isFinite(now) && now >= epoch.since + REMINDER_INTERVAL_MS) {
       const slot = Math.floor((now - epoch.since) / REMINDER_INTERVAL_MS);
-      const reminderKey = 'reminder:' + pane.handle + ':' + episode + ':' + epoch.since + ':' + slot;
-      if (slot >= 1) {
-        const reminderStatus = store.readParkedWakeEventStatus(reminderKey);
-        if (reminderStatus === 'attempted_unverified') {
-          alerts.push('uncertain unit Reminder ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' ' + episode.slice(0, 12));
-        } else if (!reminderStatus) {
-          const message = safeUnitReminderText(producer.label);
-          if (!message || !await sendMarkedUnitMessage(store, reminderKey, pane.handle, message, executor, sleepMs, log)) {
-            alerts.push('uncertain unit Reminder ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' ' + episode.slice(0, 12));
-          }
-        }
+      const key = 'reminder:' + pane.handle + ':' + episode + ':' + epoch.since + ':' + slot;
+      if (slot >= 1 && !store.hasParkedWakeEvent(key)) {
+        const message = safeUnitReminderText(pane.wait.slice('PARKED on '.length))
+          ?? 'Reminder: parked 30 min - re-check the named producer yourself before continuing';
+        await sendMarkedUnitMessage(store, key, pane.handle, message, executor, sleepMs, log);
       }
     }
   }
   store.pruneParkedEpochs?.(observed);
-  return { alerts, claimedLegacy };
 }
 
 /**
@@ -1436,26 +1087,20 @@ async function wakePanesOnEvents(
   store: FleetWakeStateStore,
   log: (line: string) => void,
   sleepMs: (milliseconds: number) => void | Promise<void>,
-  claimedLegacy: ReadonlySet<string>,
+  bareShellHandles: ReadonlySet<string>,
 ): Promise<void> {
   const wakes: Array<{ pane: FleetTerminal | FleetPaneObservation; key: string; message: string }> = [];
   for (const envelope of (options.listTerminalEnvelopes ?? listTerminalEnvelopes)()) {
-    const key = `gpt:${envelope.path}`;
-    if (claimedLegacy.has(key)) continue;
-    if (potentiallySentUnboundEnvelope(envelope)) {
-      log(`skip unsafe GPT terminal wake: owner_generation_unproven ${key}`);
-      continue;
-    }
+    const eventId = 'terminal:' + envelope.path;
     const pane = envelope.terminalHandle !== undefined
       ? observations.find((candidate) =>
         candidate.handle === envelope.terminalHandle)
       : envelope.cwd
         ? envelopeOwner(envelope.cwd, observations)
         : undefined;
-    if (!pane || !idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
-    // Only the named producer may deliver GPT envelope wakes to an exactly
-    // parsed own GPT-PARKED pane, even if the legacy handle/cwd would match.
-    if (pane.state === 'PARKED' && pane.wait && parseNamedParkedProducer(pane.wait)?.kind === 'gpt') continue;
+    if (!pane || pane.state !== 'STOPPED' || bareShellHandles.has(pane.handle)) continue;
+    const key = 'event:' + pane.handle + ':' + eventId;
+    if (store.hasParkedWakeEvent(key)) continue;
     wakes.push({ pane, key, message: `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}` });
   }
   const parkedEpisodes = observations.flatMap((pane) => {
@@ -1502,8 +1147,7 @@ async function wakePanesOnEvents(
       // An exact supervised manager wins; a manager started outside orchestration owns the PR by its head.
       const pane = (pull.issue ? ownerForPull(pull, observations) : undefined) ?? pullOwner(pull, observations, headOf);
       // A re-run of failed checks on the same head is a new event.
-      const key = `ci:${pull.number}:${pull.sha}:${at}`;
-      if (claimedLegacy.has(key)) continue;
+      const key = `event:${pane?.handle ?? 'none'}:ci:${pull.number}:${pull.sha}:${at}`;
       if (!pane) {
         const unowned = `ci-unowned:${pull.number}:${pull.sha}:${at}`;
         if (!store.hasParkedWakeEvent(unowned)) {
@@ -1512,11 +1156,12 @@ async function wakePanesOnEvents(
         }
         continue;
       }
-      if (!idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
+      if (pane.state !== 'STOPPED' || bareShellHandles.has(pane.handle) || store.hasParkedWakeEvent(key)) continue;
       wakes.push({ pane, key, message: `Wake: CI on ${pull.sha} finished for PR #${pull.number}` });
     }
   }
   for (const { pane, key, message } of wakes) {
+    if (bareShellHandles.has(pane.handle)) continue;
     const delivered = sendCoordinator(executor, pane.handle, message)
       && (await sleepMs(4_000), submitCoordinator(executor, pane.handle));
     if (!delivered) {
@@ -1671,11 +1316,16 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       return { state: 'unreadable', handle: 'fleet-sweep' };
     }
 
-    const parked = await wakeNamedParkedProducers(
-      options, observations, terminals, store, executor, sleepMs, log,
-    );
-    const parkedAlerts = parked.alerts;
-    await wakePanesOnEvents(options, coordinator, observations, executor, store, log, sleepMs, parked.claimedLegacy);
+    const bareShellHandles = new Set(collectFleetDiagnostics({
+      projectId: config.projectId, primary: config.primary, workspaceRe: config.workspaceRe,
+      coordinatorHandle: coordinator.handle, architectHandle: config.architectHandle,
+      coordinatorTitleRe: config.orchestratorTitleRe, busyRe: config.busyRe,
+      terminals, observations, executor, store,
+    }).filter((row) => row.reason === 'suspected_bare_shell' && row.handle)
+      .map((row) => row.handle!));
+    await wakeNamedParkedProducers(options, observations, terminals, store, executor, sleepMs, log, bareShellHandles);
+    await wakePanesOnEvents(options, coordinator, observations, executor, store, log, sleepMs, bareShellHandles);
+    const parkedAlerts: string[] = [];
 
     const chats = config.chatCdpUrl && config.chatScope
       ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])
