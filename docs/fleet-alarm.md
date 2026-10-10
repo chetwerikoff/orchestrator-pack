@@ -33,20 +33,64 @@ preserve wraps **between** tokens, not splits **inside** an invocation ID;
 earlier discarded `PARKED` lines and quoted/tool output confer no additional
 evidence. Unsupported tokens or semantic tails remain unresolvable.
 
-For an exactly parsed GPT-named PARKED pane, only a **unique matching,
-wakeable terminal envelope** with the currently observed invocation, terminal
-handle and worktree may trigger its named unit re-check Wake. The independent
-legacy GPT envelope route is deliberately excluded **for that pane**, including
-foreign or duplicate events; it remains available to STOPPED panes and panes
-PARKED on another producer. This existing terminal evidence cannot prove
-historical launch-attempt identity or an atomic terminal-incarnation send.
-A missing/unsafe/ambiguous terminal envelope is still `unresolvable` and
-coordinator-visible; an ongoing GPT child may therefore repeatedly raise an
-alarm at the normal 30-minute unchanged-state interval. That throttle is
-**not proof of child health** or a safe reason to resend. Receipt-backed
-`pending` is deferred: the current handoff receipt does not provide an
-authoritative, discoverable invocation-to-attempt-to-Task/Dispatch/launch
-incarnation join. No receipt scan or inferred live-process status is performed.
+For an exactly parsed GPT-named PARKED pane, fleet wake first checks
+#2478's deterministic invocation index under
+`/tmp/opencode/browser-gpt-receipts/<sha256(invocation-id)>.json`. A present
+index must validate the one private original handoff, run/attempt, launcher
+PID and original terminal path; an invalid index never falls through to an
+older lookalike envelope. The original terminal/v1 must match the original
+handoff pointer and timestamps; its child cwd and launching terminal handle
+are **not** native Task ownership witnesses. With no index, the exact old
+#2473 unique matching observed-invocation + handle/worktree route remains.
+
+All simultaneously observed exact native GPT-PARKED claimants are counted
+before a named indexed effect. One independently bound Task/Dispatch can
+qualify without optional owner IDs; multiple claimants can qualify **only**
+when both caller-asserted owner Task and Dispatch IDs uniquely match one
+native claimant. Ambiguous owners and mismatching assertions alarm the
+coordinator, never elect a recipient by iteration order. The already-global
+`gpt:<original-terminal-path>` mark has no recorded recipient: if previously
+consumed, the new named Wake is suppressed with
+`legacy-event-already-attempted; recipient-unproven`, even when the earlier
+legacy recipient was a different launcher/child pane. Nothing clears or
+reassigns that mark. If there was no indexed GPT-PARKED claimant in the
+earlier tick, normal legacy delivery and consumption still apply.
+
+An absent original envelope with sound receipt and positive PID-*exists*
+observation is only provisional `pending` while the existing native park
+epoch is younger than 30 minutes; reused/zombie PIDs cannot attest original
+launcher identity. At 30 minutes it instead alarms
+`pid-identity-unverified; envelope-absent` and retains the ordinary Reminder.
+An absent PID alarms `launcher-gone; envelope-absent`; EPERM/unknown PID or
+unreadable epoch alarms `launcher-identity-unverifiable`. Invalid receipt/
+index, terminal identity, unsafe terminal or missing evidence use bounded
+coordinator diagnostics. These are operator re-check prompts, not inferred
+success, resend or recovery authority.
+
+For a validated original terminal and an unconsumed global event, the named
+Wake can send only to the uniquely eligible native Task. Its **display-only**
+original absolute path is percent-encoded as UTF-8 lowercase `%xx` for
+disallowed characters; the existing safe atom caps are 512 input characters
+and 240 encoded ASCII characters. Unrepresentable evidence raises
+`unsafe-evidence; path-unrepresentable`, with no unit send or new event mark.
+A fresh read-only terminal census, own screen and native Task/Dispatch check
+precedes text+Enter, and another follows the four-second delay before the
+second Enter. Observable replacement before the first effect raises
+`pane-changed-before-send` with zero marks; replacement during the delay
+raises `pane-changed-during-wake; uncertain-unit-wake`, leaves both
+pre-effect `attempted_unverified` marks and skips the second Enter. Handle-only
+sends still have a non-atomic read/send race.
+
+When a validated original indexed terminal is vetoed in the **same tick**
+by owner ambiguity, unrepresentable evidence or a detectable pre-send
+identity change, the subsequent independent legacy GPT route skips *only*
+that terminal event before recipient selection, even if a third eligible
+launcher pane matches its handle/cwd. This is an ephemeral handoff, not a
+durable `gpt:<path>` mark; unrelated legacy events continue. The coordinator
+gets the fixed reason and opaque episode digest, with instruction to inspect
+the indexed receipt/terminal and current Task and continue/recover manually
+only under existing authority. Existing 30-minute coordinator throttle,
+reminders, other PARKED kinds and permission alarms remain independent.
 
 For named PR-dependent producers (merge, merge-agent terminal, review,
 pack-review and CI), the notifier selects the repository from the trusted
