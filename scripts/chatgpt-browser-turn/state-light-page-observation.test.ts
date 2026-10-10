@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import './too-many-requests-capture.test-cases.ts';
 import {
+  COMPOSER_SELECTOR,
   readAssistantTurnCompletionReady,
   readAssistantTurnGenerating,
 } from './ui-adapter.ts';
@@ -16,7 +17,7 @@ import {
   RENDERED_STOP_BUTTON_SELECTOR,
   matchesStopButtonSelector,
 } from './product-page-selectors.ts';
-import { __testWaitForExistingGeneration } from './state-light-turn-base.ts';
+import { __testComposerMutation, __testWaitForExistingGeneration } from './state-light-turn-base.ts';
 import {
   buildObservationHeartbeat,
   classifyBrowserGptPageTurnStatus,
@@ -996,6 +997,47 @@ describe('Issue #2457 unproven terminal locator', () => {
   });
 });
 
+
+describe('Issue #2467 committed composer readiness under the absolute deadline', () => {
+  it('accepts a composer that mounts after 20 seconds while DCL is still pending', async () => {
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const composer = scalarLocator({
+        count: vi.fn(async () => now >= 30_000 ? 1 : 0),
+        evaluate: vi.fn(async () => ({ visible: true, enabled: true, contentEditable: true })),
+      });
+      const page = {
+        __fakeBrowserGptPage: true,
+        locator: (selector: string) => selector === COMPOSER_SELECTOR ? composer : scalarLocator(),
+        waitForTimeout: async (ms: number) => { now += ms; },
+      };
+      const result = await __testComposerMutation.waitForComposer(page, 45_000, true);
+      expect(result).toEqual({ state: 'ready' });
+      expect(now).toBeGreaterThanOrEqual(30_000);
+      expect(now).toBeLessThan(45_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('terminates truthfully with composer_unavailable only when the shared deadline expires', async () => {
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const page = {
+        __fakeBrowserGptPage: true,
+        locator: () => scalarLocator({ count: vi.fn(async () => 0) }),
+        waitForTimeout: async (ms: number) => { now += ms; },
+      };
+      const result = await __testComposerMutation.waitForComposer(page, 24_000, true);
+      expect(result).toEqual({ state: 'ui_contract_mismatch', cause: 'composer_unavailable' });
+      expect(now).toBe(24_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+});
 
 describe('existing generation behind a connection-recovery status', () => {
   function recoveryPage(recoveryShown: boolean) {

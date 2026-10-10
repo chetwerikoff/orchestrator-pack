@@ -502,6 +502,197 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(solo.page.goto).toHaveBeenCalledTimes(1);
   });
 
+  it('dispatches a late-mounted fresh composer after commit without DCL', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-LATE'));
+    const solo = makeLoserPage('PROMPT-LATE', 'LATE-OK');
+    solo.composer.count.mockImplementation(async () => mocks.nowMs >= 30_000 ? 1 : 0);
+    const outcome = await runNewChatTurn(solo.page, '/tmp/late-fresh.txt', '60000');
+    expect(outcome.result.send_count).toBe(1);
+    expect(solo.getSends()).toBe(1);
+    expect(solo.page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), expect.objectContaining({
+      waitUntil: 'commit',
+      timeout: expect.any(Number),
+    }));
+    expect(mocks.nowMs).toBeGreaterThanOrEqual(30_000);
+  });
+
+  it('dispatches an existing-chat composer mounted 20 seconds after commit without DCL', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-LATE-EXISTING'));
+    const owned = makeLoserPage('PROMPT-LATE-EXISTING', 'LATE-EXISTING-OK');
+    owned.composer.count.mockImplementation(async () => mocks.nowMs >= 30_000 ? 1 : 0);
+    enqueueBrowserForTurn(mocks, owned.page);
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', '/tmp/late-existing.txt',
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '60000',
+      '--poll-ms', '1',
+    ]);
+    expect(owned.page.goto).toHaveBeenCalledWith(SHARED_CONV, expect.objectContaining({
+      waitUntil: 'commit',
+      timeout: expect.any(Number),
+    }));
+    expect(outcome.result.send_count).toBe(1);
+    expect(owned.getSends()).toBe(1);
+    expect(mocks.nowMs).toBeGreaterThanOrEqual(30_000);
+  });
+
+  it('rejects a late foreign-project redirect after composer mutation, before fresh dispatch', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-REDIRECT'));
+    const solo = makeLoserPage('PROMPT-REDIRECT', 'SHOULD-NOT-SEND');
+    const initialUrl = solo.page.url.getMockImplementation()!;
+    let redirected = false;
+    solo.page.url.mockImplementation(() => redirected ? OTHER_PROJECT_CONVERSATION_URL : initialUrl());
+    solo.composer.fill.mockImplementation(async () => { redirected = true; });
+    const outcome = await runNewChatTurn(solo.page, '/tmp/late-redirect-fresh.txt');
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'fresh_conversation_surface_unavailable',
+      send_count: 0,
+    });
+    expect(solo.getSends()).toBe(0);
+    expect(redirected).toBe(true);
+  });
+
+  it('rejects a late foreign existing-chat redirect after readiness and baseline', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-REDIRECT'));
+    const solo = makeLoserPage('PROMPT-REDIRECT', 'SHOULD-NOT-SEND');
+    const initialUrl = solo.page.url.getMockImplementation()!;
+    let redirected = false;
+    solo.page.url.mockImplementation(() => redirected ? LOSER_CONV : initialUrl());
+    solo.composer.fill.mockImplementation(async () => { redirected = true; });
+    enqueueBrowserForTurn(mocks, solo.page);
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', '/tmp/late-redirect-existing.txt',
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '60000',
+      '--poll-ms', '1',
+    ]);
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'owned_conversation_identity_mismatch',
+      send_count: 0,
+    });
+    expect(solo.getSends()).toBe(0);
+    expect(redirected).toBe(true);
+  });
+
+  it('rejects an existing-chat redirect during the final pre-send alert probe', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-ALERT-REDIRECT'));
+    const solo = makeLoserPage('PROMPT-ALERT-REDIRECT', 'SHOULD-NOT-SEND');
+    const initialUrl = solo.page.url.getMockImplementation()!;
+    let redirected = false;
+    solo.page.url.mockImplementation(() => redirected ? LOSER_CONV : initialUrl());
+    solo.page.evaluate = vi.fn(async () => { redirected = true; });
+    enqueueBrowserForTurn(mocks, solo.page);
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', '/tmp/late-alert-redirect-existing.txt',
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '60000',
+      '--poll-ms', '1',
+    ]);
+    expect(solo.page.evaluate).toHaveBeenCalledTimes(1);
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'owned_conversation_identity_mismatch',
+      send_count: 0,
+    });
+    expect(solo.getSends()).toBe(0);
+  });
+
+  it('rejects a fresh-project redirect during the final pre-send alert probe', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-ALERT-REDIRECT'));
+    const solo = makeLoserPage('PROMPT-ALERT-REDIRECT', 'SHOULD-NOT-SEND');
+    const initialUrl = solo.page.url.getMockImplementation()!;
+    let redirected = false;
+    solo.page.url.mockImplementation(() => redirected ? OTHER_PROJECT_CONVERSATION_URL : initialUrl());
+    solo.page.evaluate = vi.fn(async () => { redirected = true; });
+    const outcome = await runNewChatTurn(solo.page, '/tmp/late-alert-redirect-fresh.txt');
+    expect(solo.page.evaluate).toHaveBeenCalledTimes(1);
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'fresh_conversation_surface_unavailable',
+      send_count: 0,
+    });
+    expect(solo.getSends()).toBe(0);
+  });
+
+  it('uses the remaining absolute budget for a committed project goto', async () => {
+    let url = SHARED_CONV;
+    const navigation = new StateLightNavigationCounter();
+    const goto = vi.fn(async (target: string) => { url = target; });
+    const page = {
+      url: () => url,
+      goto,
+      locator: () => scalarLocator({ count: vi.fn(async () => 0) }),
+    };
+    await openBlankProjectChatSurface(page, PROJECT_URL, navigation, mocks.nowMs + 900, () => mocks.nowMs);
+    expect(goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), {
+      waitUntil: 'commit',
+      timeout: 900,
+    });
+    expect(navigation.snapshotGoto()).toBe(1);
+  });
+
+  it('stops at the same deadline after commit without starting wall or locator work', async () => {
+    const deadline = mocks.nowMs + 1;
+    let url = SHARED_CONV;
+    const goto = vi.fn(async (target: string) => {
+      url = target;
+      mocks.nowMs = deadline;
+    });
+    const locator = vi.fn(() => scalarLocator({ count: vi.fn(async () => 0) }));
+    const page = { url: () => url, goto, locator };
+    const prepared = await prepareStateLightFreshConversation(
+      page,
+      { newChat: true, projectUrl: PROJECT_URL, timeoutMs: 60_000 } as uiAdapter.BrowserConfig,
+      'collision-profile', 'near-expiry', new StateLightNavigationCounter(),
+      deadline, () => mocks.nowMs,
+    );
+    expect(prepared).toMatchObject({ state: 'ui_contract_mismatch', cause: 'fresh_conversation_surface_unavailable' });
+    expect(goto).toHaveBeenCalledTimes(1);
+    expect(locator).not.toHaveBeenCalled();
+    expect(mocks.productStatusText).not.toHaveBeenCalled();
+  });
+
+  it('bounds an unresolved new-chat control count and starts no click or retry', async () => {
+    const navigation = new StateLightNavigationCounter();
+    let url = SHARED_CONV;
+    const goto = vi.fn(async (target: string) => { url = target; });
+    const count = vi.fn(() => new Promise<number>(() => {}));
+    const click = vi.fn(async () => undefined);
+    const locator = vi.fn(() => ({ first: () => ({ count, click }) }));
+    const page = { url: () => url, goto, locator };
+    const prepared = await prepareStateLightFreshConversation(
+      page,
+      { newChat: true, projectUrl: PROJECT_URL, timeoutMs: 60_000 } as uiAdapter.BrowserConfig,
+      'collision-profile', 'unresolved-locator', navigation,
+      mocks.nowMs + 30, () => mocks.nowMs,
+    );
+    expect(prepared).toMatchObject({ state: 'ui_contract_mismatch', cause: 'fresh_conversation_surface_unavailable' });
+    expect(count).toHaveBeenCalledTimes(1);
+    expect(click).not.toHaveBeenCalled();
+    expect(locator).toHaveBeenCalledTimes(1);
+    expect(goto).toHaveBeenCalledTimes(1);
+    expect(navigation.snapshotNewChatClick()).toBe(0);
+    expect(mocks.productStatusText).not.toHaveBeenCalled();
+  });
+
+  it('keeps a failed no-commit navigation at zero send', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-NOCOMMIT'));
+    const solo = makeLoserPage('PROMPT-NOCOMMIT', 'SHOULD-NOT-SEND');
+    solo.page.goto.mockRejectedValueOnce(new Error('page.goto: Timeout while waiting for commit'));
+    const outcome = await runNewChatTurn(solo.page, '/tmp/no-commit.txt');
+    expect(outcome.result.send_count).toBe(0);
+    expect(outcome.result.state).not.toBe('ok');
+    expect(solo.getSends()).toBe(0);
+  });
+
   it('returns rate_limit from prepare without additional navigation rounds', async () => {
     vi.mocked(uiAdapter.classifyProductWall).mockImplementation((surface) => {
       const text = typeof surface === 'string' ? surface : surface.text;
@@ -1356,28 +1547,20 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(isBlankProjectSurfaceUrl(canonical.replace('chatgpt.com', 'chatgpt.com:8443'), canonical)).toBe(false);
   });
 
-  it('binds every launcher-chain goto to the shared navigation timeout', () => {
-    expect(STATE_LIGHT_NAVIGATION_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
-    const sources = [
-      ['state-light-session.ts', 1],
-      ['state-light-fresh-conversation.ts', 2],
-      ['state-light-turn-base.ts', 3],
+  it('limits commit navigation to three pre-send sites; post-send still waits for DCL', () => {
+    expect(STATE_LIGHT_NAVIGATION_TIMEOUT_MS).toBe(120_000);
+    const sites = [
+      ['state-light-session.ts', 0],
+      ['state-light-fresh-conversation.ts', 1],
+      ['state-light-turn-base.ts', 2],
     ] as const;
-
-    for (const [file, expectedCallsites] of sources) {
+    for (const [file, expectedPostSendDcl] of sites) {
       const source = readFileSync(
         join(process.cwd(), 'scripts', 'chatgpt-browser-turn', file),
         'utf8',
       );
-      const gotoCallsites = source.match(
-        /(?:state\.page|page|successor)\.goto\([\s\S]*?\n\s*\}\);/gu,
-      ) ?? [];
-      expect(gotoCallsites, file).toHaveLength(expectedCallsites);
-      for (const callsite of gotoCallsites) {
-        expect(callsite, file).toContain(
-          'timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS',
-        );
-      }
+      expect(source.match(/waitUntil: 'commit'/gu), file).toHaveLength(1);
+      expect(source.match(/waitUntil: 'domcontentloaded'/gu) ?? [], file).toHaveLength(expectedPostSendDcl);
     }
   });
 
@@ -1397,7 +1580,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(page.goto).toHaveBeenCalledTimes(1);
     expect(STATE_LIGHT_NAVIGATION_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
     expect(page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), {
-      waitUntil: 'domcontentloaded',
+      waitUntil: 'commit',
       timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
     });
     expect(navigation.snapshotGoto()).toBe(1);
@@ -1564,8 +1747,8 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({ send_count: 1 });
     expect(outcome.result.state).not.toBe('ok');
     expect(page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), {
-      waitUntil: 'domcontentloaded',
-      timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
+      waitUntil: 'commit',
+      timeout: 5_000,
     });
     expect(outcome.result.incidents).toContain('send_observation_deferred');
     expect(outcome.result.state).not.toBe('send_failed');

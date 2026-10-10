@@ -34,6 +34,7 @@ import {
   StateLightNavigationCounter,
   acquireStateLightNewChatSendSlot,
   conversationUuidFromUrl,
+  isBlankProjectSurfaceUrl,
   ownedConversationIdentityMatches,
   prepareStateLightFreshConversation,
   projectConversationPrefix,
@@ -681,6 +682,18 @@ function conversationIdentityContinuity(state: SessionExecutionState): SessionTe
   return null;
 }
 
+function firstFreshPayloadDestinationContinuity(state: SessionExecutionState): SessionTerminalTuple | null {
+  try {
+    if (isBlankProjectSurfaceUrl(
+      String(state.page.url()),
+      state.config.browser.projectUrl ?? '',
+    )) return null;
+  } catch {
+    // Unreadable or changed destination cannot authorize the first fresh dispatch.
+  }
+  return tuple('ui_contract_mismatch', 'invocation', 'fresh_conversation_surface_unavailable');
+}
+
 function predecessorContinuity(
   state: SessionExecutionState,
   predecessor: MutablePayloadState,
@@ -762,7 +775,9 @@ async function dispatchOnce(
   }
   const dispatchContinuity = ordinalIndex > 0
     ? await preactivationCheck(state, ordinalIndex, deps)
-    : conversationIdentityContinuity(state);
+    : state.config.browser.newChat
+      ? firstFreshPayloadDestinationContinuity(state)
+      : conversationIdentityContinuity(state);
   if (dispatchContinuity) return dispatchContinuity;
   payload.sendCount = 1;
   payload.deliveryState = 'delivery_unknown';
@@ -1130,10 +1145,12 @@ async function setupOwnedPage(
       ? projectConversationPrefix(state.config.browser.projectUrl ?? '')
       : normalizeConversationUrl(state.config.browser.chatUrl ?? '');
     if (!target) throw new Error('ui_contract_mismatch:target_required');
+    const navigationMs = remainingMs(state, deps);
+    if (navigationMs <= 0) throw new Error('whole_session_deadline_exhausted');
     state.navigation.recordGoto();
     await state.page.goto(target, {
-      waitUntil: 'domcontentloaded',
-      timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
+      waitUntil: 'commit',
+      timeout: Math.min(STATE_LIGHT_NAVIGATION_TIMEOUT_MS, navigationMs),
     });
     if (!deadlineOpen(state, deps)) throw new Error('whole_session_deadline_exhausted');
     if (!state.config.browser.newChat) {
@@ -1152,6 +1169,8 @@ async function setupOwnedPage(
         deps.profileKey(remainingConfig.profile, remainingConfig.cdp),
         state.invocationId,
         state.navigation,
+        state.wholeSessionDeadline,
+        deps.now,
       );
       if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
       if (prepared.state === 'wall') return tuple(prepared.wallState, 'invocation', prepared.cause);
@@ -1194,7 +1213,7 @@ async function runActivePayload(
   let baseline: PageObservationResult;
   try {
     if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
-    const composerState = await deps.waitForComposer(state.page, state.wholeSessionDeadline);
+    const composerState = await deps.waitForComposer(state.page, state.wholeSessionDeadline, true);
     if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
     if (composerState.state !== 'ready') return tuple(composerState.state, 'invocation', composerState.cause);
 
