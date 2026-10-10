@@ -2095,12 +2095,26 @@ describe('Issue #2479 frozen reviewer and accepted-verdict provenance', () => {
   }
 
   function captureComment(bodies: string[]) {
+    const reviews: Array<{
+      id: number; state: string; userLogin: string; submittedAt: string;
+      body: string; commitId: string; url: string;
+    }> = [];
     return {
       resolveActorLogin: async () => 'fixture-pack-reviewer',
-      listReviews: async () => [],
-      postReview: async (input: { body: string }) => {
+      listReviews: async () => reviews.map((review) => ({ ...review })),
+      postReview: async (input: { body: string; commitId: string }) => {
+        const review = {
+          id: 247901 + reviews.length,
+          state: 'COMMENTED',
+          userLogin: 'fixture-pack-reviewer',
+          submittedAt: new Date().toISOString(),
+          body: input.body,
+          commitId: input.commitId,
+          url: `https://example.test/reviews/${247901 + reviews.length}`,
+        };
+        reviews.push(review);
         bodies.push(input.body);
-        return { id: 247901, url: 'https://example.test/reviews/247901' };
+        return { id: review.id, url: review.url };
       },
       dismissReview: async () => {},
     };
