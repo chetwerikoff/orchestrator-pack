@@ -5064,7 +5064,6 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     emulateWin32: input.fixtureEmulateWin32Selector,
   });
   const reviewer = reviewerResolution.reviewer;
-  if (!reviewer) throw new Error(reviewerResolution.errorMessage ?? 'pack review reviewer selector did not resolve');
 
   const recoverableGptFixture = process.env.OPK_VITEST_HARNESS === '1'
     && listPackReviewRunRecordsRaw({ projectId, storeRoot }).some((candidate) => (
@@ -5086,6 +5085,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     const invalidAuthority = packReviewResumeReviewerAuthorityError(process.env);
     if (invalidAuthority) throw new Error(invalidAuthority);
   }
+  if (!reviewer) throw new Error(reviewerResolution.errorMessage ?? 'pack review reviewer selector did not resolve');
   await reconcileStalePackReviewRuns({
     repoSlug: target.repoSlug,
     sourceRepoRoot: target.sourceRepoRoot,
