@@ -75,7 +75,7 @@ export interface GithubCommentReviewReconciliation {
   lastError?: string;
 }
 
-export type PackReviewDeliveryChannel = 'githubComment' | 'requiredStatus' | 'workerNotification';
+export type PackReviewDeliveryChannel = 'githubComment' | 'requiredStatus' | 'workerNotification' | 'noJudgmentWorkerNotification';
 export type PackReviewDeliveryState = 'succeeded' | 'delivered' | 'failed' | 'escalated';
 
 export interface PackReviewDeliveryOutcome {
@@ -188,6 +188,29 @@ export function derivePackReviewGptCoverage(round: PackReviewGptRoundRecord | un
     completedSourceSlotIds: completed.map((slot) => slot.slotId),
     incompleteSources,
   };
+}
+
+/**
+ * An unfinished GPT source census is not a logical review round charge.
+ * This is a read-time outcome, never a mutable run disposition. Callers must
+ * supply the current canonical consumed ordinals rather than inferring a cap
+ * charge from automaticBudgetDisposition (verdict eligibility).
+ */
+export function derivePackReviewNoJudgmentBudgetOutcome(
+  run: PackReviewRunRecord,
+  consumedRoundOrdinals: readonly number[],
+): 'non_consuming_no_judgment' | null {
+  const coverage = derivePackReviewGptCoverage(run.reviewRound);
+  if (run.accountingVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    || !Number.isInteger(run.logicalRoundOrdinal)
+    || !['failed', 'timed_out', 'cancelled'].includes(run.status)
+    || run.automaticBudgetDisposition !== 'consume'
+    || !coverage || coverage.kind !== 'empty'
+    || hasPersistedPackReviewVerdict(run)
+    || run.reviewVerdict !== undefined
+    || run.journalOutcome?.state === 'persisted'
+    || consumedRoundOrdinals.includes(run.logicalRoundOrdinal!)) return null;
+  return 'non_consuming_no_judgment';
 }
 
 export interface PackReviewNativeAttemptBinding {
@@ -1918,9 +1941,56 @@ function buildUpdatedPackReviewRun(
   path: string,
   updatedAt: string,
 ): PackReviewRunRecord {
+  const staleNoJudgmentTerminal = fields.failureReason?.startsWith('gpt_source_non_complete:') === true
+    && hasPersistedPackReviewVerdict(existing);
+  // Delivery writers frequently carry an entire map loaded before another
+  // independent channel completed. Rebase every channel under the store lock,
+  // including stale values for the *same* channel, not just disjoint keys.
+  const mergedDeliveryOutcomes: PackReviewRunRecord['deliveryOutcomes'] = {
+    ...existing.deliveryOutcomes,
+  };
+  for (const channel of Object.keys(fields.deliveryOutcomes ?? {}) as PackReviewDeliveryChannel[]) {
+    const incoming = fields.deliveryOutcomes?.[channel];
+    if (!incoming) continue;
+    const current = existing.deliveryOutcomes[channel];
+    const currentAt = current ? Date.parse(current.recordedAtUtc) : NaN;
+    const incomingAt = Date.parse(incoming.recordedAtUtc);
+    const sameKey = current?.idempotencyKey === incoming.idempotencyKey;
+    // Timestamp precedence only applies to the *same* delivery attempt.
+    // Different keys can legitimately replace an earlier pending projection
+    // even when an injected or imported fixture has an older timestamp.
+    const olderSnapshot = current && sameKey
+      && Number.isFinite(currentAt) && Number.isFinite(incomingAt)
+      && incomingAt < currentAt;
+    // A stale in-flight claim cannot undo a proven submission, including
+    // equal-clock writer races. A deliberate failed delivery correction with
+    // its own evidence is not a stale 'escalated' claim.
+    const submittedDowngrade = current && sameKey
+      && (current.state === 'succeeded' || current.state === 'delivered')
+      && incoming.state === 'escalated';
+    // Credentialed same-run recovery owns the verdict projection even if an
+    // unfinished writer's stale snapshot happens to have an equal timestamp.
+    const obsoleteVerdictStatus = channel === 'requiredStatus'
+      && current
+      && hasPersistedPackReviewVerdict(existing)
+      && current.idempotencyKey === `required-status:orchestrator-pack/pack-review:${existing.targetSha}`
+      && incoming.idempotencyKey !== current.idempotencyKey;
+    if (olderSnapshot || submittedDowngrade || obsoleteVerdictStatus) continue;
+    mergedDeliveryOutcomes[channel] = incoming;
+  }
   const candidate: Record<string, unknown> = {
     ...existing,
     ...fields,
+    ...(staleNoJudgmentTerminal ? {
+      status: existing.status,
+      latestRunStatus: existing.latestRunStatus,
+      failureReason: existing.failureReason,
+      completedAtUtc: existing.completedAtUtc,
+      exitCode: existing.exitCode,
+    } : {}),
+    // Delivery writers may have independently loaded stale whole-record maps.
+    // Rebase each supplied channel on the most recent record under this lock.
+    deliveryOutcomes: mergedDeliveryOutcomes,
     automaticBudgetDisposition: existing.automaticBudgetDisposition,
     sameKeyOrder: existing.sameKeyOrder,
     id: existing.id,
