@@ -1939,29 +1939,33 @@ describe('Issue #2478: invocation-addressable launcher evidence', () => {
     })).toThrow(/receipt_locator_handoff_missing|ENOENT/u);
   });
 
-  it.each([false, true])('adapter %s returns committed PID and optional owners despite launcher exit status', async (childFails) => {
+  it.each([
+    ['detached-success', false, false],
+    ['synchronous-success', true, false],
+    ['synchronous-failing-child', true, true],
+  ] as const)('adapter %s publishes the real child-launcher process PID, not shell PID or exit status', async (mode, synchronous, childFails) => {
     const root = tempDir('opk-2478-adapter-');
-    const paths = launchPaths(root, childFails ? 'fail' : 'ok');
-    const invocationId = childFails ? 'adapter-failed-child' : 'adapter-success';
+    const paths = launchPaths(root, mode);
+    const invocationId = 'adapter-' + mode;
     for (const [key, value] of Object.entries(cliFixtureEnv(root))) vi.stubEnv(key, value);
     vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
     vi.stubEnv('ORCA_TERMINAL_HANDLE', 'synthetic-terminal-handle');
-    vi.stubEnv('OPK_FM_LONG_CHILD_DISABLE_DETACH', '1');
+    if (synchronous) vi.stubEnv('OPK_FM_LONG_CHILD_DISABLE_DETACH', '1');
     const child = childFails
       ? nodeFixture('process.exit(7)')
       : markedChildFixture(join(root, 'adapter-started.txt'), makeTurnResult({ invocation_id: invocationId }));
+    // Preserve the actual launcher/adapter/receipt behavior; substitute only synthetic Browser child.
     const launch = vi.fn(async (args: readonly string[]) => {
       expect(args).toContain('--invocation-id');
       expect(args).toContain(invocationId);
       expect(args).toContain('--owner-task-id');
       expect(args).not.toContain('--owner-dispatch-id');
-      return await runFixtureLaunch(root, {
-        runIdentity: 'adapter-run', attemptIdentity: 'adapter-attempt',
-        invocationId, ownerTaskId: 'owner-42', profile, cdp,
-        handoffReceiptPath: paths.receipt, terminalEnvelopePath: paths.envelope,
-        browserOutputPath: paths.output, cwd: root, childCommand: process.execPath,
-        childArgs: child.args,
-      });
+      const childCommandIndex = args.indexOf('--child-command');
+      expect(childCommandIndex).toBeGreaterThan(0);
+      return await spawnDetachedLauncher([
+        ...args.slice(0, childCommandIndex),
+        '--child-command', child.command, '--', ...child.args,
+      ]);
     });
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const code = await runBrowserAdapter([
@@ -1979,16 +1983,49 @@ describe('Issue #2478: invocation-addressable launcher evidence', () => {
     expect(ack.schema).toBe('flow-manager-browser-gpt-long-run-accepted/v1');
     expect(ack.receipt_locator).toBe(invocationReceiptLocatorPath(invocationId, root));
     expect(ack.launcher_pid).toBe(receipt.launcher_pid);
-    expect(ack.launcher_pid).toBe(process.pid);
+    expect(receipt.launcher_pid).toBeGreaterThan(1);
+    expect(receipt.launcher_pid).not.toBe(process.pid); // real separate launcher process
     expect(ack.child_cwd).toBe(realpathSync(root));
     expect(ack.owner_task_id).toBe('owner-42');
     expect(ack).not.toHaveProperty('owner_dispatch_id');
     expect(receipt.launching_terminal_handle).toBe('synthetic-terminal-handle');
     expect(receipt).not.toHaveProperty('launching_terminal_incarnation');
-    if (childFails) {
-      expect(readTerminalEnvelope(paths.envelope)?.lifecycle_outcome).toBe('incident');
-      expect(readTerminalEnvelope(paths.envelope)?.child_exit_code).toBe(7);
+    if (synchronous) {
+      expect(readTerminalEnvelope(paths.envelope)?.lifecycle_outcome)
+        .toBe(childFails ? 'incident' : 'success');
+      expect(readTerminalEnvelope(paths.envelope)?.child_exit_code)
+        .toBe(childFails ? 7 : 0);
     }
+  });
+
+  it('keeps an indexed key occupied after the original handoff write fails before send', async () => {
+    const root = tempDir('opk-2478-partial-');
+    const invocationId = 'partial-reservation-invocation';
+    const paths = launchPaths(root, 'reservation');
+    const childMarker = join(root, 'should-not-send.txt');
+    process.env.OPK_FM_LONG_CHILD_FORCE_RECEIPT_CREATE_FAIL = '1';
+    const input = {
+      runIdentity: 'reservation-run', attemptIdentity: 'reservation-attempt',
+      invocationId, profile, cdp,
+      handoffReceiptPath: paths.receipt, terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output, cwd: repoRoot, childCommand: process.execPath,
+      childArgs: markedChildFixture(childMarker, makeTurnResult()).args,
+    };
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const initial = await runFixtureLaunch(root, input);
+    expect(initial).toBe(2);
+    expect(existsSync(invocationReceiptLocatorPath(invocationId, root))).toBe(true);
+    expectNoLauncherEffects(paths, childMarker);
+    delete process.env.OPK_FM_LONG_CHILD_FORCE_RECEIPT_CREATE_FAIL;
+    const second = await runFixtureLaunch(root, {
+      ...input, ...launchPaths(root, 'second'),
+      handoffReceiptPath: launchPaths(root, 'second').receipt,
+      terminalEnvelopePath: launchPaths(root, 'second').envelope,
+      browserOutputPath: launchPaths(root, 'second').output,
+    });
+    stderr.mockRestore();
+    expect(second).toBe(2);
+    expect(existsSync(childMarker)).toBe(false);
   });
 
   it('does not preempt healthy recovery after the old page closed; late owned successor result wins', async () => {
