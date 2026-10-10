@@ -486,6 +486,76 @@ operator mode surface the same blocker in the final report. Delegated-integratio
 keeps its existing post-merge fail-closed rule: after an unverified effect, stop further
 mutation unless an already-supported component recovery path applies.
 
+## Pack-only post-adoption diagnostic canaries (after Verify effect, before Step 10)
+
+For **pack-repository merges through this skill only**, the **same merge actor**
+checks the adopted selected `PRIMARY_ROOT` and selected `PROJECT_ID` after Step 7
+and the unchanged Verify-effect decision. This is not an admission gate before merge
+and never applies to non-pack target-owned adoption or other merge entrypoints.
+An existing `effect_unverified` is already `operationally_incomplete`: preserve
+that original outcome and next action; do not treat a diagnostic PASS as a
+replacement effect witness or run more child commands after a delegated post-failure
+stop. With `effect_verified`, perform **both** current-context checks before
+reporting `operationally_complete` or `merge-N done`:
+
+1. **OpenCode:** from `{PACK_ROOT}`, invoke
+   `node --experimental-strip-types scripts/pr2-foundation/supervised-task-launch-assistant.ts probe --project "$PROJECT_ID" --work-class manager --start-mode exact_terminal_worktree --timeout-ms "$REMAINING_MS"`.
+   The probe reads the selected card and the installed manager/OpenCode profile in
+   its actual adopted primary checkout. It uses no Task, Dispatch, terminal,
+   worktree, worker start, or future prepared-worktree equivalence witness. Only
+   its `outcome=pass` with verified owned scratch cleanup counts.
+2. **Browser-GPT:** from the **actual Orca merge terminal**, invoke
+   `npm run --silent chatgpt-browser-turn -- preflight --route pack-gpt-reviewer --project "$PROJECT_ID" --timeout-ms "$REMAINING_MS"`.
+   This selects **only** the pack GPT PR-review sender route, using the unchanged
+   `resolveGptBrowserConfig` and selected card for the *actual* profile/CDP pair
+   at invocation. Neither the skill nor operator supplies `--profile`,
+   `--cdp` or an alternative pair. The entrypoint uses only
+   `inspectCdpProfileBounded` (never writing `verifyProfile`) and bounded CDP
+   HTTP reachability, without opening tabs, claiming/sending messages, or
+   modifying the persistent CDP-owner record. `ORCA_TERMINAL_HANDLE` is
+   present/absent routing context only, **not** proof of its original generation.
+   A different healthy Browser-GPT profile cannot rescue a failed selected pair.
+   `probeProfileReady:no_existing_page` is not a failure proxy; zero existing
+   tabs may be healthy for a new `turn`. A PASS does not certify future sends
+   or other manager/standalone Browser-GPT routes.
+
+Use **one best-effort 50,000-ms monotonic budget** for *both* subprocesses and
+their owned teardown (not 50 seconds separately). Capture one
+`process.hrtime.bigint()` origin before the first call, calculate
+`REMAINING_MS = max(0, floor(50000 - elapsed_ms))` from that same origin
+immediately before each command, and pass a strictly positive remaining value
+to the CLI. Use a bounded child/process-group invocation with TERM then
+bounded KILL **only for the child processes this actor started**, and account
+for its cleanup in the same elapsed budget. Do not signal an existing Orca,
+Chrome, operator terminal, or sibling process. An operator can implement the
+portable remaining-time calculation as:
+
+```bash
+CANARY_STARTED_NS=$(node -e 'process.stdout.write(process.hrtime.bigint().toString())')
+remaining_canary_ms() {
+  node -e 'const elapsed=Number(process.hrtime.bigint()-BigInt(process.argv[1]))/1e6; process.stdout.write(String(Math.max(0,Math.floor(50000-elapsed))))' "$CANARY_STARTED_NS"
+}
+REMAINING_MS=$(remaining_canary_ms)
+# Only when REMAINING_MS > 0: run the OpenCode probe above, with bounded owned-child cancellation.
+REMAINING_MS=$(remaining_canary_ms)
+# Only when REMAINING_MS > 0: run the route-bound Browser-GPT preflight above, with the same bound.
+# After both children are settled/cleaned, check remaining_canary_ms again.
+```
+
+Require both child exit codes `0`, both scrubbed JSON `outcome=pass`
+and their expected route identity, plus no observed deadline overrun or unknown
+owned child/scratch residue. A child failure, nonzero exit, timeout, malformed
+result, mismatched project/route, uncertain teardown, or overrun is
+`operationally_incomplete`; do not invent a hard OS/process-tree deadline.
+Retain the already-observed merged PR and exact Verify-effect report. Send the
+specific missing installed OpenCode context or selected pack-review browser/CDP
+repair through the **existing** coordinator/operator channel. A suspected
+regression rollback requires **separate explicit authority**; never create,
+commit, status-write, merge or revert a PR under the original merge grant.
+Continue only the previously authorized Step 8/9 advisory and exact-target
+cleanup, respecting the unchanged delegated post-failure stop rule. Do not
+create a canary ledger, new receipt, watcher, Task or automatic retry.
+
 ## Step 8 — Sibling advisory
 
 When `RULES_TOUCHED=yes`, report how far non-primary manager worktrees are behind and their agent

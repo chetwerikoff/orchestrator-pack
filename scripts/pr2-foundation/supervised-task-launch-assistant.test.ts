@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +19,8 @@ import {
   resolveExecutorProfile,
   resolveLiveExecutorProfile,
   finalizeOpenCodeExecutorProfile,
+  parseOpenCodePrimaryProbeArgs,
+  runOpenCodePrimaryProbe,
   runSupervisedTaskLaunchAssistant,
   LAUNCH_STARTUP_OBSERVATION_WINDOW_MS,
   repoCanonicalKey,
@@ -2483,6 +2486,132 @@ The words Firefighter universal appear here only as prose.`;
     ['unknown option', ['--repository', 'chetwerikoff/orchestrator-pack', '--work-class', 't2', '--unexpected', 'value']],
   ] as const)('CLI rejects malformed invocation: %s', (_label, argv) => {
     expect(() => parseLaunchAssistantCli(argv)).toThrow();
+  });
+});
+
+
+describe('Issue #2461 bounded pack OpenCode primary probe', () => {
+  const args = ['--project', 'orchestrator-pack', '--work-class', 'manager',
+    '--start-mode', 'exact_terminal_worktree', '--timeout-ms', '50000'];
+
+  it('rejects unrelated work class, provider route, arguments and zero budget before an action', () => {
+    expect(parseOpenCodePrimaryProbeArgs(args)).toEqual({ projectId: 'orchestrator-pack', timeoutMs: 50_000 });
+    for (const bad of [
+      [...args.slice(0, 3), 't2', ...args.slice(4)],
+      [...args.slice(0, 5), 'provider_new_top_level', ...args.slice(6)],
+      [...args.slice(0, -1), '0'],
+      [...args, '--repository', 'other/repo'],
+    ]) expect(() => parseOpenCodePrimaryProbeArgs(bad)).toThrow();
+  });
+
+  function syntheticTarget(root: string) {
+    return {
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: root,
+    } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>;
+  }
+
+  it('passes only an adopted pack manager OpenCode route, watches actual debug config and removes owned scratch', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk2461-primary-'));
+    const scratch = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
+    const commands: string[] = [];
+    let persistentState = 'unchanged';
+    const profile = await resolveLiveExecutorProfile('manager', opencodeProfileEnv('manager'), 'exact_terminal_worktree', async (args) => opencodeProbeResult(args, true));
+    if (profile.status !== 'ok') throw new Error('fixture profile failed');
+    try {
+      const result = await runOpenCodePrimaryProbe(args, {
+        resolveTarget: () => syntheticTarget(root),
+        resolveProfile: async (_class, _env, _mode, execute) => {
+          const catalog = await execute(['opencode', 'models'], 5000);
+          if (!catalog.ok) throw new Error('synthetic catalog failed');
+          return profile;
+        },
+        finalizeProfile: async (selected, primaryRoot, execute) => {
+          expect(primaryRoot).toBe(root);
+          await execute(['opencode', 'debug', 'config'], 5000, { XDG_STATE_HOME: scratch }, primaryRoot);
+          return { status: 'ok', value: selected, evidence: { exactContext: true } };
+        },
+        execute: async (command, timeoutMs, env, cwd) => {
+          expect(timeoutMs).toBeGreaterThan(0);
+          expect(cwd).toBe(root);
+          expect(env?.XDG_CACHE_HOME).toMatch(/opk-launch-canary-/u);
+          commands.push(command.join(' '));
+          if (command[2] === 'config') {
+            mkdirSync(scratch, { recursive: true });
+            writeFileSync(join(scratch, 'scratch'), 'owned');
+          }
+          return { ok: true, stdout: 'synthetic', stderr: '' };
+        },
+        snapshot: () => persistentState,
+      }, opencodeProfileEnv('manager'));
+      expect(result).toMatchObject({
+        route: 'manager/opencode/exact_terminal_worktree', outcome: 'pass',
+        reason: 'installed_primary_context_verified', cleanup_verified: true,
+      });
+      expect(commands).toEqual(['opencode models', 'opencode debug config']);
+      expect(existsSync(scratch)).toBe(false);
+      expect(persistentState).toBe('unchanged');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails before any executor action on a non-OpenCode manager selection or wrong pack card', async () => {
+    const execute = vi.fn(async () => ({ ok: true, stdout: 'irrelevant', stderr: '' }));
+    const root = mkdtempSync(join(tmpdir(), 'opk2461-reject-'));
+    try {
+      const refused = await runOpenCodePrimaryProbe(args, {
+        resolveTarget: () => syntheticTarget(root),
+        execute,
+      }, profileEnv());
+      expect(refused).toMatchObject({ outcome: 'incomplete', reason: 'manager_opencode_profile_unverified' });
+      const wrong = await runOpenCodePrimaryProbe(args, {
+        resolveTarget: () => ({ ...syntheticTarget(root), repository: 'foreign/repository' }),
+        execute,
+      }, opencodeProfileEnv('manager'));
+      expect(wrong).toMatchObject({ outcome: 'incomplete', reason: 'selected_pack_card_mismatch' });
+      expect(execute).not.toHaveBeenCalled();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('flags a persistent config write, timeout and never starts an Orca Task or terminal', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk2461-snapshot-'));
+    const profile = await resolveLiveExecutorProfile('manager', opencodeProfileEnv('manager'), 'exact_terminal_worktree', async (args) => opencodeProbeResult(args, true));
+    if (profile.status !== 'ok') throw new Error('fixture profile failed');
+    let persistentState = 'before';
+    const calls: string[][] = [];
+    try {
+      const result = await runOpenCodePrimaryProbe(args, {
+        resolveTarget: () => syntheticTarget(root),
+        resolveProfile: async (_class, _env, _mode, execute) => {
+          await execute(['opencode', 'debug', 'config'], 2000);
+          return profile;
+        },
+        execute: async (command) => {
+          calls.push([...command]);
+          persistentState = 'changed';
+          return { ok: true, stdout: '', stderr: '' };
+        },
+        snapshot: () => persistentState,
+      }, opencodeProfileEnv('manager'));
+      expect(result).toMatchObject({ outcome: 'incomplete', reason: 'persistent_config_changed' });
+      expect(calls).toEqual([['opencode', 'debug', 'config']]);
+      expect(calls.some((c) => c.includes('orca') || c.includes('start') || c.includes('spawn'))).toBe(false);
+
+      let now = 0;
+      const timeout = await runOpenCodePrimaryProbe(
+        [...args.slice(0, -1), '100'],
+        {
+          now: () => (now += 150),
+          resolveTarget: () => syntheticTarget(root),
+          snapshot: () => 'constant',
+          execute: async () => ({ ok: true, stdout: '', stderr: '' }),
+        },
+        opencodeProfileEnv('manager'),
+      );
+      expect(timeout).toMatchObject({ outcome: 'incomplete', reason: 'probe_timeout' });
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
 

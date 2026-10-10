@@ -138,6 +138,19 @@ The Issue body uses this order:
 13. **Verification** mapped to ACs;
 14. `contract-evidence` fence or accepted explicit none.
 
+For ordinary Issue-linked declaration-required PRs, apply the **pack-owned**
+[PR scope declaration authoring convention](https://github.com/chetwerikoff/orchestrator-pack/blob/main/docs/pr-scope-declaration.md)
+(`chetwerikoff/orchestrator-pack`, not the reviewed target repository).
+In **Files in scope**, identify the Issue's default generated-only
+`docs/declarations/<N>.pr-scope.json`, except that exact file in **Files out of
+scope** even under a `docs/**` ban, keep the Issue `denylist` nonconflicting,
+and reserve `allowed-roots` for editable implementation paths. A one-file AC
+must count one *editable implementation file* plus the generated control path,
+not one total changed PR path. If the existing live Issue prohibits the
+artifact or its total-PR-path AC conflicts, require Issue-owner amendment
+before treating the declaration as authorized; never silently reinterpret
+the prohibition.
+
 ### Smoke plan by change kind
 
 An Issue limited to documentation, policy, prompt, or skill text must declare its

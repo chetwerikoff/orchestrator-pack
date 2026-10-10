@@ -1,5 +1,5 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import * as ts from 'typescript';
 import assert from 'node:assert/strict';
@@ -15,7 +15,7 @@ import {
   runStateLightTurn,
 } from './state-light-turn.ts';
 import { BEFORE_CDP_BROWSER_RELEASE, releaseCdpBrowser } from './browser-session.ts';
-import { runStateLightEntry } from './state-light-entry.ts';
+import { parsePackReviewPreflightArgs, runPackReviewPreflight, runStateLightEntry } from './state-light-entry.ts';
 import { readChatBinding } from './chat-bindings.ts';
 import { configuredProfileKey } from './storage-common.ts';
 import { admitStateLightTurnObservation, transitionStateLightTurnObservation } from './state-light-turn-observation.ts';
@@ -1204,3 +1204,208 @@ describe('Issue #1377 production runStateLightTurn recovery integration', () => 
     expect(outcome.result).toMatchObject({ cleanup: 'skipped', send_count: 1 });
   });
 });
+
+describe('Issue #2461 selected pack-review CDP preflight', () => {
+  const args = ['--route', 'pack-gpt-reviewer', '--project', 'orchestrator-pack', '--timeout-ms', '5000'];
+  const cdpA = 'http://127.0.0.1:49221';
+  const cdpB = 'http://127.0.0.1:49222';
+  const projectUrl = 'https://example.test/project';
+  const selectedCard = {
+    projectId: 'orchestrator-pack',
+    repository: 'chetwerikoff/orchestrator-pack',
+    browserGpt: { projectUrl },
+  } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>;
+
+  it('accepts only the named route, exact card and bounded project; rejects arbitrary browser overrides', () => {
+    expect(parsePackReviewPreflightArgs(args)).toEqual({ projectId: 'orchestrator-pack', timeoutMs: 5000 });
+    for (const invalid of [
+      [...args, '--profile', '/tmp/foreign'],
+      [...args, '--cdp', cdpB],
+      [...args.slice(0, 1), 'manager', ...args.slice(2)],
+      [...args.slice(0, -1), '0'],
+    ]) expect(() => parsePackReviewPreflightArgs(invalid)).toThrow();
+  });
+
+  it('proves selected pair A only; a second individually healthy pair B cannot rescue failed A', async () => {
+    const inspected: string[] = [];
+    const reached: string[] = [];
+    const browserConfig = vi.fn((env: NodeJS.ProcessEnv) => {
+      expect(env.OPK_PROJECT_ID).toBe('orchestrator-pack');
+      return { profile: '/synthetic/selected-A', cdpUrl: cdpA, projectUrl };
+    });
+    const fake = {
+      resolveTarget: () => selectedCard,
+      resolveBrowserConfig: browserConfig,
+      inspectOwner: async ({ cdp }: { cdp: string }) => {
+        inspected.push(cdp);
+        return { ok: cdp === cdpB, reason: 'not_listening' };
+      },
+      isReachable: async (cdp: string) => {
+        reached.push(cdp);
+        return cdp === cdpB;
+      },
+    };
+    const result = await runPackReviewPreflight(args, fake, { OPK_PROJECT_ID: 'orchestrator-pack' });
+    expect(result).toMatchObject({
+      route: 'pack-gpt-reviewer', outcome: 'incomplete', reason: 'owner_not_listening', handle_present: false,
+    });
+    expect(inspected).toEqual([cdpA]);
+    expect(reached).toEqual([]);
+    expect(browserConfig).toHaveBeenCalledTimes(1);
+
+    const mismatch = await runPackReviewPreflight(args, fake, { OPK_PROJECT_ID: 'foreign' });
+    expect(mismatch.reason).toBe('project_selector_mismatch');
+    const absent = await runPackReviewPreflight(args, fake, {});
+    expect(absent.reason).toBe('project_selector_mismatch');
+    expect(browserConfig).toHaveBeenCalledTimes(1);
+    const cardMismatch = await runPackReviewPreflight(args, {
+      ...fake, resolveTarget: () => ({ ...selectedCard, repository: 'foreign/repository' }),
+    }, { OPK_PROJECT_ID: 'orchestrator-pack' });
+    expect(cardMismatch.reason).toBe('selected_pack_card_mismatch');
+    expect(browserConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it('binds the actual unchanged pack-review resolver to the selected project card, never a foreign healthy pair', async () => {
+    const configRoot = mkdtempSync(join(tmpdir(), 'opk2461-card-'));
+    const cardDir = join(configRoot, 'orchestrator-pack', 'projects');
+    mkdirSync(cardDir, { recursive: true });
+    writeFileSync(join(cardDir, 'orchestrator-pack.json'), JSON.stringify({
+      projectId: 'orchestrator-pack',
+      repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: process.cwd(),
+      defaultBranch: 'main',
+      orcaWorkspacePattern: '.*',
+      orchestratorTitlePattern: '.*',
+      browserGpt: { projectUrl },
+    }));
+    const inspected: string[] = [];
+    const foreignPair = { profile: '/synthetic/foreign-B', cdp: cdpB, ownerMatches: true, reachable: true };
+    expect(foreignPair.ownerMatches && foreignPair.reachable).toBe(true);
+    try {
+      const result = await runPackReviewPreflight(args, {
+        inspectOwner: async (input) => {
+          inspected.push(input.cdp);
+          return { ok: input.cdp === foreignPair.cdp, reason: 'not_listening' };
+        },
+        isReachable: async (cdp) => cdp === foreignPair.cdp,
+      }, {
+        OPK_PROJECT_ID: 'orchestrator-pack',
+        XDG_CONFIG_HOME: configRoot,
+        PACK_GPT_BROWSER_PROFILE: '/synthetic/selected-A',
+        PACK_GPT_BROWSER_CDP: cdpA,
+      });
+      expect(result).toMatchObject({
+        route: 'pack-gpt-reviewer', outcome: 'incomplete', reason: 'owner_not_listening',
+      });
+      expect(inspected).toEqual([cdpA]);
+    } finally {
+      rmSync(configRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the real additive pure owner inspector for success, mismatch, timeout and absent owner file', async () => {
+    const verifier = await import(new URL('../../.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs', import.meta.url).href) as {
+      inspectCdpProfileBounded: (
+        options: { cdp: string; profile: string; timeoutMs: number },
+        observer?: { findListenerPid?: () => Promise<string>; readCommandLine?: () => Promise<string> },
+      ) => Promise<{ ok: boolean; reason?: string; timedOut?: boolean }>;
+      verifyCdpProfileBounded: (
+        options: { cdp: string; profile: string; timeoutMs: number },
+        observer?: { findListenerPid?: () => Promise<string>; readCommandLine?: () => Promise<string> },
+      ) => Promise<{ ok: boolean }>;
+    };
+    const root = mkdtempSync(join(tmpdir(), 'opk2461-owner-'));
+    const ownerFile = join(root, '.local/state/discuss-with-gpt', 'cdp-49221-owner.json');
+    const sentinel = 'literal-existing-owner-sentinel\\n';
+    const profile = join(root, 'selected-A');
+    const observer = {
+      findListenerPid: async () => '4242',
+      readCommandLine: async () => `chrome --user-data-dir="${profile}" --remote-debugging-port=49221`,
+    };
+    // The fixture state is isolated. The production preflight never redirects HOME.
+    vi.stubEnv('HOME', root);
+    try {
+      mkdirSync(join(root, '.local/state/discuss-with-gpt'), { recursive: true });
+      writeFileSync(ownerFile, sentinel);
+      const success = await verifier.inspectCdpProfileBounded({ cdp: cdpA, profile, timeoutMs: 1000 }, observer);
+      expect(success).toMatchObject({ ok: true });
+      expect(readFileSync(ownerFile, 'utf8')).toBe(sentinel);
+      const mismatch = await verifier.inspectCdpProfileBounded({
+        cdp: cdpA, profile: join(root, 'foreign-B'), timeoutMs: 1000,
+      }, observer);
+      expect(mismatch).toMatchObject({ ok: false, reason: 'profile_mismatch' });
+      expect(readFileSync(ownerFile, 'utf8')).toBe(sentinel);
+      const timeout = await verifier.inspectCdpProfileBounded({ cdp: cdpA, profile, timeoutMs: 0 }, observer);
+      expect(timeout).toMatchObject({ ok: false, timedOut: true });
+      expect(readFileSync(ownerFile, 'utf8')).toBe(sentinel);
+      rmSync(ownerFile);
+      const absent = await verifier.inspectCdpProfileBounded({ cdp: cdpA, profile, timeoutMs: 1000 }, observer);
+      expect(absent.ok).toBe(true);
+      expect(existsSync(ownerFile)).toBe(false);
+      // The unchanged normal writer is deliberately *not* pure on success.
+      // Verify its real write against the fixture-only HOME, never the operator's.
+      expect(homedir()).toBe(root);
+      const writing = await verifier.verifyCdpProfileBounded({ cdp: cdpA, profile, timeoutMs: 1000 }, observer);
+      expect(writing.ok).toBe(true);
+      expect(existsSync(ownerFile)).toBe(true);
+      expect(JSON.parse(readFileSync(ownerFile, 'utf8'))).toMatchObject({ port: '49221' });
+      // The old normal writer retains its recordCdpOwner-on-success call.
+      const original = readFileSync(new URL('../../.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs', import.meta.url), 'utf8');
+      expect(original).toMatch(/if \(result\.ok\) recordCdpOwner/u);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('preflight emits only scrubbed selected-route evidence and never enters normal turn', async () => {
+    const writes: string[] = [];
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    const runTurn = vi.fn(async () => 0);
+    vi.stubEnv('OPK_PROJECT_ID', 'orchestrator-pack');
+    vi.stubEnv('ORCA_TERMINAL_HANDLE', 'synthetic-terminal-locator');
+    try {
+      const result = await runStateLightEntry(['preflight', ...args], {
+        runTurn,
+        preflight: {
+          resolveTarget: () => selectedCard,
+          resolveBrowserConfig: () => ({ profile: '/secret/selected-profile', cdpUrl: cdpA, projectUrl }),
+          inspectOwner: async () => ({ ok: true }),
+          isReachable: async () => true,
+        },
+      });
+      expect(result).toBe(0);
+      const report = JSON.parse(writes.join('')) as Record<string, unknown>;
+      expect(report).toMatchObject({
+        route: 'pack-gpt-reviewer', outcome: 'pass',
+        reason: 'selected_route_reachable', handle_present: true,
+      });
+      expect(writes.join('')).not.toMatch(/secret|49221|synthetic-terminal-locator|profile|cdpUrl/u);
+      expect(runTurn).not.toHaveBeenCalled();
+      expect(Object.keys(report).sort()).toEqual(['elapsed_ms', 'handle_present', 'outcome', 'reason', 'route']);
+    } finally {
+      output.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('treats owner and reachability timeouts as incomplete, not a future-send PASS', async () => {
+    const common = {
+      resolveTarget: () => selectedCard,
+      resolveBrowserConfig: () => ({ profile: '/selected', cdpUrl: cdpA, projectUrl }),
+    };
+    expect((await runPackReviewPreflight(args, {
+      ...common, inspectOwner: async () => ({ ok: false, timedOut: true }),
+      isReachable: async () => true,
+    }, { OPK_PROJECT_ID: 'orchestrator-pack' })).reason).toBe('owner_probe_timeout');
+    const late = await runPackReviewPreflight(args, {
+      ...common, inspectOwner: async () => ({ ok: true }),
+      isReachable: async () => { throw Object.assign(new Error('cdp_reachability_timeout'), { name: 'CdpReachabilityTimeoutError' }); },
+    }, { OPK_PROJECT_ID: 'orchestrator-pack' });
+    expect(late).toMatchObject({ outcome: 'incomplete', reason: 'cdp_reachability_timeout' });
+  });
+});
+
