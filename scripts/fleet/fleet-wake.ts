@@ -44,8 +44,7 @@ import {
   type ProjectChat,
 } from './chat-error-banners.ts';
 import { readChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
-import { readStateLightTurnObservation } from '../chatgpt-browser-turn/state-light-turn-observation.ts';
-import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath, type DeliveryState } from '../flow-manager-long-running-child.ts';
+import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath } from '../flow-manager-long-running-child.ts';
 
 export interface FleetWakeConfig {
   readonly projectId: string;
@@ -333,24 +332,6 @@ export function stoppedSignature(observations: readonly FleetPaneObservation[]):
     .join('\n');
 }
 
-// The sweep has already stripped TUI framing/status bars. Fingerprint the
-// normalized own output, including unpunctuated action requests, not only
-// lines matching a limited question/error vocabulary.
-function meaningfulStoppedSignature(observations: readonly FleetPaneObservation[]): string {
-  return actionablePanes(observations)
-    .map((pane) => {
-      const response = pane.lines
-        .map((line) => line.replace(/\s+/gu, ' ').trim())
-        .filter((line) => line && line !== '>' && !/^[─━═▀▄╹╻┃│\-]{6,}$/u.test(line))
-        .join('\n');
-      return JSON.stringify([
-        pane.state, pane.handle, pane.incarnationId, pane.branch, pane.taskBinding,
-        createHash('sha256').update(response).digest('hex').slice(0, 24),
-      ]);
-    })
-    .sort((left, right) => left.localeCompare(right)).join('\n');
-}
-
 function isWorkerPane(terminal: FleetTerminal, config: FleetWakeConfig): boolean {
   if (terminal.handle === config.architectHandle) return false;
   if (!terminal.worktreePath || samePath(terminal.worktreePath, config.primary)) return false;
@@ -516,8 +497,8 @@ export function fleetAlarmMessage(
   const localText = localWarnings.length > 0
     ? ` ${localWarnings.length} unsaved local ChatGPT chat(s) require independent triage: ${localWarnings.join('; ')}. Owner, workflow role and latest-turn invocation are unproven. Independently reconcile live Task/Issue/PR, workflow role and existing Browser-GPT send/no-resend evidence before any action. This is a coordinator-only warning, not permission to send, resend, continue, review-fix or close a chat. Never press Retry.`
     : '';
-  const alertText = alerts.length ? ' ' + alerts.length + ' parked unit(s) need a producer re-check: '
-    + alerts.join('; ') + '. Check the named Task and producer before acting.' : '';
+  const alertText = alerts.length ? ' ' + alerts.length + ' pane safety alarm(s): '
+    + alerts.join('; ') + '. Never send Wake text to a bare shell.' : '';
   const permissionText = permissionWarnings.length
     ? ' ' + permissionWarnings.length + ' visible OpenCode permission UI(s): '
       + permissionWarnings.join('; ')
@@ -531,12 +512,7 @@ export interface TerminalEnvelopeEvent {
   readonly invocationId: string;
   readonly cwd?: string;
   readonly terminalHandle?: string;
-  /** Only present if this is the producer's exact observed invocation, not an attempt-id guess. */
   readonly observedInvocationId?: string;
-  readonly sendCount?: number;
-  readonly delivery?: DeliveryState;
-  readonly conversationLocator?: string;
-  readonly persistedObservationProfileKey?: string;
 }
 
 export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeEvent[] {
@@ -565,33 +541,13 @@ export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeE
           && envelope.observed_invocation_id.length > 0
           ? envelope.observed_invocation_id
           : undefined;
-        const diagnostics = envelope.diagnostics;
-        const persistedObservation = diagnostics && typeof diagnostics === 'object' && !Array.isArray(diagnostics)
-          ? (diagnostics as Record<string, unknown>).persisted_observation : undefined;
-        const profileKey = persistedObservation && typeof persistedObservation === 'object' && !Array.isArray(persistedObservation)
-          ? (persistedObservation as Record<string, unknown>).profile_key : undefined;
-        const persistedObservationProfileKey = typeof profileKey === 'string' && profileKey.length > 0
-          ? profileKey : undefined;
-        if (envelope.schema !== TERMINAL_SCHEMA
-          || (!cwd && !terminalHandle && !persistedObservationProfileKey)) continue;
-        const invocationId = observedInvocationId
-          ?? String(envelope.attempt_identity ?? basename(path));
-        const sendCount = typeof envelope.send_count === 'number'
-          && Number.isSafeInteger(envelope.send_count) && envelope.send_count >= 0
-          ? envelope.send_count : undefined;
-        const delivery = envelope.delivery === 'POSSIBLY_DELIVERED'
-          || envelope.delivery === 'not-sent' || envelope.delivery === 'landed'
-          ? envelope.delivery : undefined;
+        if (envelope.schema !== TERMINAL_SCHEMA) continue;
+        const invocationId = observedInvocationId ?? String(envelope.attempt_identity ?? basename(path));
         events.push({
           path, invocationId,
           ...(cwd ? { cwd } : {}),
           ...(terminalHandle ? { terminalHandle } : {}),
           ...(observedInvocationId ? { observedInvocationId } : {}),
-          ...(sendCount !== undefined ? { sendCount } : {}),
-          ...(delivery ? { delivery } : {}),
-          ...(typeof envelope.conversation_locator === 'string' && envelope.conversation_locator.length > 0
-            ? { conversationLocator: envelope.conversation_locator } : {}),
-          ...(persistedObservationProfileKey ? { persistedObservationProfileKey } : {}),
         });
       } catch {
         // A partial or unrelated terminal artifact is not completion evidence.
@@ -599,31 +555,6 @@ export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeE
     }
   }
   return events.sort((left, right) => left.path.localeCompare(right.path));
-}
-
-/**
- * The no-result producer exposes only an observation *pointer*, not launcher
- * authority. Result-present envelopes can have send_count without any pointer.
- * In either case a possible sent-unbound turn must never fall through to the
- * legacy terminal-handle/cwd wake, which targets a potentially recycled pane.
- */
-export function potentiallySentUnboundEnvelope(event: TerminalEnvelopeEvent): boolean {
-  // A send action may have taken effect before a numeric witness was established.
-  if (event.delivery === 'POSSIBLY_DELIVERED' && !event.conversationLocator) return true;
-  if (event.sendCount !== undefined && event.sendCount >= 1 && !event.conversationLocator) return true;
-  if (!event.persistedObservationProfileKey) return false;
-  // No pointer scan or fallback to an environment/current-handle occupant.
-  if (!event.observedInvocationId || event.observedInvocationId !== event.invocationId) return true;
-  try {
-    const record = readStateLightTurnObservation(
-      event.persistedObservationProfileKey, event.observedInvocationId,
-    );
-    if (record.phase === 'sent_unbound' && record.conversation_url === null) return true;
-    return record.phase === 'dispatching' && record.conversation_url === null;
-  } catch {
-    // Unreadable owner of a known no-result event gives no effect, not fallback.
-    return true;
-  }
 }
 
 export interface NativePull {
@@ -692,10 +623,6 @@ export function checkRunsFinishedAt(repository: string, sha: string): number | u
   if (rows.length === 0 || rows.some(([status]) => status !== 'completed')) return undefined;
   const times = rows.map(([, completedAt]) => Date.parse(completedAt ?? '')).filter(Number.isFinite);
   return times.length > 0 ? Math.max(...times) : undefined;
-}
-
-function idlePane(pane: FleetPaneObservation): boolean {
-  return pane.state === 'STOPPED' || pane.state === 'PARKED';
 }
 
 function onlyPane(panes: readonly FleetPaneObservation[]): FleetPaneObservation | undefined {
@@ -881,11 +808,10 @@ interface NamedProducer {
   readonly mergeAgent?: boolean;
 }
 interface ProducerResolution {
-  readonly state: 'ended' | 'pending' | 'unresolvable';
   readonly label: string;
-  readonly terminalState?: string;
-  readonly evidence?: string;
-  readonly legacyKey?: string;
+  readonly terminalState: string;
+  readonly evidence: string;
+  readonly eventId: string;
 }
 
 // Only a complete, single, exact own response is a supported dependency.
@@ -966,110 +892,93 @@ function readPackReviewStatus(repository: string, sha: string): PackReviewStageF
     ? { state: current.state, description: current.description } : undefined;
 }
 
-function exactParkedTask(pane: FleetPaneObservation, projectId: string): readonly string[] | undefined {
-  if (pane.state !== 'PARKED' || !pane.wait || !pane.incarnationId
-    || pane.status?.toLowerCase() === 'exited' || !pane.taskBinding) return undefined;
-  try {
-    const tuple: unknown = JSON.parse(pane.taskBinding);
-    if (!Array.isArray(tuple) || tuple.length !== 7
-      || !tuple.every((part) => typeof part === 'string' && part.length > 0)
-      || tuple[0] !== projectId || tuple[1] !== pane.handle || tuple[2] !== pane.incarnationId
-      || tuple[3] !== pane.worktreePath || tuple[4] !== pane.branch) return undefined;
-    return tuple as string[];
-  } catch { return undefined; }
-}
-
 // Prefer the trusted selected project card for repository-bound producers.
 // Conflicting optional ChatGPT scope cannot authorize a GitHub lookup.
 function namedRepository(config: FleetWakeConfig): string | undefined {
-  if (config.selectedRepository && config.chatScope?.repository
-    && config.selectedRepository !== config.chatScope.repository) return undefined;
   return config.selectedRepository ?? config.chatScope?.repository;
 }
 
-function resolveNamedProducer(
-  producer: NamedProducer,
-  pane: FleetPaneObservation,
+// A park names an event, not a Task owner. Consumer lookups only observe
+// landed events; receipt, process and claimant proof is not part of a wake.
+function resolveParkEvent(
+  wait: string,
   terminals: readonly FleetTerminal[],
+  envelopes: readonly TerminalEnvelopeEvent[],
   options: FleetAlarmTickOptions,
-): ProducerResolution {
-  const unknown: ProducerResolution = { state: 'unresolvable', label: producer.label };
-  const pending: ProducerResolution = { state: 'pending', label: producer.label };
-  const ended = (state: string, evidence: string, legacyKey?: string): ProducerResolution => ({
-    state: 'ended', label: producer.label, terminalState: state, evidence,
-    ...(legacyKey ? { legacyKey } : {}),
+): ProducerResolution | undefined {
+  const parked = /^PARKED on\s+(.+)$/iu.exec(wait)?.[1]?.trim();
+  if (!parked) return undefined;
+  const key = parked.replace(/^GPT turn\s+/iu, '').replace(/\s+\(self-wake armed\)$/u, '').trim();
+  const envelope = envelopes.find((event) => [basename(event.path), event.path, event.invocationId, event.observedInvocationId]
+    .some((value) => value?.includes(key)));
+  if (envelope) return {
+    label: parked, terminalState: 'terminal-envelope', evidence: envelope.path,
+    eventId: 'terminal:' + envelope.path,
+  };
+  const repo = namedRepository(options.config);
+  const producer = parseNamedParkedProducer(wait);
+  if (!producer) {
+    // Plain substring match over existing completed pack-review/CI event IDs,
+    // independent of any launch- or pane-ownership witness.
+    if (!repo) return undefined;
+    for (const pull of (options.listOpenPulls ?? listOpenPullHeads)(repo)) {
+      const ci = (options.checkRunsFinishedAt ?? checkRunsFinishedAt)(repo, pull.sha);
+      if (ci !== undefined && Number.isFinite(ci)
+        && [`CI PR #${pull.number} head ${pull.sha}`,
+          `ci:${pull.number}:${pull.sha}:${ci}`, `CI #${pull.number}`]
+          .some((name) => name.includes(parked))) {
+        return { label: parked, terminalState: 'checks-completed',
+          evidence: `CI-${pull.sha}`,
+          eventId: `ci:${pull.number}:${pull.sha}:${ci}` };
+      }
+      const stage = (options.readPackReviewStage ?? readPackReviewStatus)(repo, pull.sha);
+      if (stage && (stage.state === 'success' || stage.state === 'failure')
+        && [`pack-review PR #${pull.number} head ${pull.sha}`,
+          `pack-review:${pull.number}:${pull.sha}:${stage.state}`,
+          `pack-review-PR-${pull.number}`].some((name) => name.includes(parked))) {
+        return { label: parked, terminalState: 'stage-' + stage.state,
+          evidence: `pack-review-${pull.sha}`,
+          eventId: `pack-review:${pull.number}:${pull.sha}:${stage.state}` };
+      }
+    }
+    return undefined;
+  }
+  const resolved = (state: string, evidence: string, eventId: string): ProducerResolution => ({
+    label: producer.label, terminalState: state, evidence, eventId,
   });
-  if (producer.kind === 'gpt') {
-    const events = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)();
-    const matches = events.filter((event) => event.observedInvocationId === producer.id
-      && isWakeableTerminalEnvelopePath(event.path, '/tmp/opencode'));
-    if (matches.length !== 1) return unknown;
-    const event = matches[0]!;
-    if (!event.terminalHandle || event.terminalHandle !== pane.handle || !event.cwd
-      || !samePath(event.cwd, pane.worktreePath) || potentiallySentUnboundEnvelope(event)) return unknown;
-    return ended('terminal-envelope', event.path, 'gpt:' + event.path);
-  }
-  const repository = namedRepository(options.config);
   if (producer.kind === 'terminal') {
-    if (!producer.handle || !producer.incarnation) return unknown;
-    if (producer.mergeAgent) {
-      if (!repository || !producer.number) return unknown;
-      const pull = (options.readNamedPull ?? readNativePull)(repository, producer.number);
-      if (!pull || pull.number !== producer.number) return unknown;
-    }
-    const found = terminals.filter((item) => item.handle === producer.handle
-      && item.incarnationId === producer.incarnation);
-    if (found.length !== 1) return unknown;
-    const term = found[0]!;
-    if (term.status?.toLowerCase() === 'exited') {
-      return ended('terminal-exited', 'orca://terminal/list/' + producer.handle + '/' + producer.incarnation);
-    }
-    return term.status?.toLowerCase() === 'running' && Boolean(term.agentIdentity) ? pending : unknown;
+    const pane = terminals.find((term) => term.handle === producer.handle && term.incarnationId === producer.incarnation);
+    return pane?.status?.toLowerCase() === 'exited'
+      ? resolved('terminal-exited', producer.handle!, 'terminal-exit:' + producer.handle + ':' + producer.incarnation)
+      : undefined;
   }
-  if (!repository) return unknown;
-  let number = producer.number;
-  if (producer.kind === 'ci' && number === undefined && producer.sha) {
-    const heads = (options.listOpenPulls ?? listOpenPullHeads)(repository)
-      .filter((pull) => pull.sha === producer.sha);
-    if (heads.length !== 1) return unknown;
-    number = heads[0]!.number;
+  if (!repo) return undefined;
+  if (producer.kind === 'merge' && producer.number) {
+    const pull = (options.readNamedPull ?? readNativePull)(repo, producer.number);
+    return pull?.merged === true ? resolved('merged', 'PR-' + producer.number, 'merge:' + producer.number) : undefined;
   }
-  if (!number || !Number.isSafeInteger(number)) return unknown;
-  const pull = (options.readNamedPull ?? readNativePull)(repository, number);
-  if (!pull || pull.number !== number) return unknown;
-  const url = 'https://github.com/' + repository + '/pull/' + number;
-  if (producer.kind === 'merge') {
-    if (pull.merged === true) return ended('merged', url);
-    return pull.state === 'open' ? pending : unknown;
+  if (producer.kind === 'review' && producer.number && producer.reviewId) {
+    const review = (options.readNamedReview ?? readNativeReview)(repo, producer.number, producer.reviewId);
+    return review?.submittedAt && review.state !== 'PENDING'
+      ? resolved('review-submitted', 'review-' + producer.reviewId,
+        'review:' + producer.number + ':' + producer.reviewId) : undefined;
   }
-  if (pull.state !== 'open' || pull.headSha !== producer.sha || !SHA40.test(pull.headSha)) return unknown;
-  if (producer.kind === 'pack-review') {
-    const fact = (options.readPackReviewStage ?? readPackReviewStatus)(repository, pull.headSha);
-    const stageEvidence = url + '/commits/' + pull.headSha;
-    const description = fact?.description.trim().toLowerCase();
-    if (fact?.state === 'success' && (
-      description === 'pack review completed with no findings.'
-      || description === 'pack review completed with non-blocking findings.'
-      || description === 'required pack-review stage completed; no additional review round required.'
-      || description === 'required pack-review stage completed; strict descendant of reviewed findings.'
-    )) return ended('stage-complete', stageEvidence);
-    if (fact?.state === 'failure' && description === 'pack review found blocking issues.') {
-      return ended('stage-findings', stageEvidence);
-    }
-    return fact?.state === 'pending' ? pending : unknown;
+  if (producer.kind === 'pack-review' && producer.sha) {
+    const stage = (options.readPackReviewStage ?? readPackReviewStatus)(repo, producer.sha);
+    return stage && (stage.state === 'success' || stage.state === 'failure')
+      ? resolved('stage-' + stage.state, 'pack-review-' + producer.sha,
+        'pack-review:' + producer.sha + ':' + stage.state) : undefined;
   }
-  if (producer.kind === 'review') {
-    if (!producer.reviewId || !Number.isSafeInteger(producer.reviewId)) return unknown;
-    const review = (options.readNamedReview ?? readNativeReview)(repository, number, producer.reviewId);
-    if (!review || review.id !== producer.reviewId || review.commitSha !== pull.headSha) return unknown;
-    if (review.state === 'PENDING') return pending;
-    return review.submittedAt && ['COMMENTED', 'APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)
-      ? ended('review-submitted', url + '#pullrequestreview-' + review.id) : unknown;
+  if (producer.kind === 'ci') {
+    const sha = producer.sha ?? (producer.number
+      ? (options.readNamedPull ?? readNativePull)(repo, producer.number)?.headSha : undefined);
+    if (!sha) return undefined;
+    const completed = (options.checkRunsFinishedAt ?? checkRunsFinishedAt)(repo, sha);
+    return completed !== undefined && Number.isFinite(completed)
+      ? resolved('checks-completed', 'CI-' + sha,
+        'ci:' + (producer.number ?? 'head') + ':' + sha + ':' + completed) : undefined;
   }
-  const at = (options.checkRunsFinishedAt ?? checkRunsFinishedAt)(repository, pull.headSha);
-  return at !== undefined && Number.isFinite(at)
-    ? ended('checks-completed', url + '/checks', 'ci:' + number + ':' + pull.headSha + ':' + at)
-    : pending;
+  return undefined;
 }
 
 // All interpolations and the fixed words pass one physical-line whitelist.
@@ -1101,24 +1010,16 @@ async function sendMarkedUnitMessage(
   store: FleetWakeStateStore, key: string, handle: string, message: string,
   executor: OrcaExecutor, sleepMs: (milliseconds: number) => void | Promise<void>,
   log: (line: string) => void,
-  legacyKey?: string,
 ): Promise<boolean> {
-  // Both marks must be durable before the first potentially effectful send.
-  // An uncertain result forbids replays through either the named or legacy path.
-  try {
-    store.markParkedWakeEvent(key, 'attempted_unverified');
-    if (legacyKey) store.markParkedWakeEvent(legacyKey, 'attempted_unverified');
-  } catch { log('unit mark unwritable: ' + key); return false; }
+  if (store.hasParkedWakeEvent(key)) return false;
   let delivered = false;
   try {
     delivered = sendCoordinator(executor, handle, message)
       && (await sleepMs(4_000), submitCoordinator(executor, handle));
-  } catch { /* A timeout can have delivered text; no automatic retry. */ }
-  if (!delivered) { log('unit attempted_unverified: ' + key); return false; }
-  try {
-    store.markParkedWakeEvent(key, 'sent');
-    if (legacyKey) store.markParkedWakeEvent(legacyKey, 'sent');
-  } catch { log('unit sent but mark remains uncertain: ' + key); return false; }
+  } catch { /* A later tick may independently observe the same event. */ }
+  if (!delivered) { log('unit wake send failed: ' + key); return false; }
+  try { store.markParkedWakeEvent(key); }
+  catch { log('unit wake sent; sent marker unwritable: ' + key); }
   log('sent re-check to ' + handle + ': ' + key);
   return true;
 }
@@ -1131,90 +1032,47 @@ async function wakeNamedParkedProducers(
   executor: OrcaExecutor,
   sleepMs: (milliseconds: number) => void | Promise<void>,
   log: (line: string) => void,
-): Promise<{ alerts: string[]; claimedLegacy: Set<string> }> {
-  const alerts: string[] = [];
-  const claimedLegacy = new Set<string>();
-  const observed = new Map<string, string>();
+  bareShellHandles: ReadonlySet<string>,
+): Promise<void> {
   const now = (options.now ?? Date.now)();
+  const envelopes = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)();
+  const observed = new Map<string, string>();
   for (const pane of observations) {
-    if (pane.state !== 'PARKED' || !pane.wait || /^PARKED on orchestrator answer:/u.test(pane.wait)) continue;
-    const producer = parseNamedParkedProducer(pane.wait);
-    const tuple = exactParkedTask(pane, options.config.projectId);
-    if (!tuple || !producer) {
-      alerts.push('park on unresolvable producer ' + (safeUnitAtom(pane.handle) ?? 'unknown')
-        + ' ' + createHash('sha256').update(JSON.stringify([
-          options.config.projectId, pane.handle, pane.incarnationId, pane.taskBinding, pane.branch, pane.wait,
-        ])).digest('hex').slice(0, 12));
-      continue;
-    }
-    const episode = createHash('sha256').update(JSON.stringify([tuple, pane.wait])).digest('hex').slice(0, 32);
+    if (pane.state !== 'PARKED' || !pane.wait) continue;
+    if (bareShellHandles.has(pane.handle)) continue;
+    const episode = createHash('sha256').update(JSON.stringify([pane.handle, pane.wait]))
+      .digest('hex').slice(0, 32);
     observed.set(pane.handle, episode);
-    // Retain the first observation as park-episode identity even after a successful
-    // Wake resets the reminder clock. A changed wait/Task creates a fresh episode.
     let epoch = store.readParkedEpoch?.(pane.handle);
     if (epoch?.key !== episode) {
       epoch = { key: episode, since: now, started: now };
       store.writeParkedEpoch?.(pane.handle, epoch);
     }
-    const episodeInstance = episode + ':' + String(epoch?.started ?? epoch?.since ?? now);
-    let resolution: ProducerResolution;
-    try { resolution = resolveNamedProducer(producer, pane, terminals, options); }
-    catch { resolution = { label: producer.label, state: 'unresolvable' }; }
-    if (resolution.state === 'unresolvable') {
-      alerts.push('park on unresolvable producer ' + (safeUnitAtom(pane.handle) ?? 'unknown')
-        + ' ' + episode.slice(0, 12));
-    }
-    const legacyCoalesced = Boolean(resolution.legacyKey
-      && store.hasParkedWakeEvent(resolution.legacyKey));
-    const eventKey = 'producer:' + pane.handle + ':' + episodeInstance + ':'
-      + createHash('sha256').update(JSON.stringify(resolution)).digest('hex').slice(0, 32);
-    const attempted = store.readParkedWakeEventStatus(eventKey);
-    // Preserve coordinator visibility after either Enter failure or a failed
-    // coordinator send/read. The normal signature clock throttles repeat alarms.
-    if (attempted === 'attempted_unverified') {
-      alerts.push('uncertain unit Wake ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' ' + episode.slice(0, 12));
-    }
-    if (resolution.state === 'ended' && resolution.legacyKey && attempted) {
-      claimedLegacy.add(resolution.legacyKey);
-    }
-    if (resolution.state === 'ended' && !legacyCoalesced && !attempted) {
-      const wake = safeUnitWakeText(producer.label, resolution.terminalState ?? '', resolution.evidence ?? '');
-      if (!wake) {
-        alerts.push('park on unresolvable producer ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' unsafe-evidence');
-      } else {
-        const sent = await sendMarkedUnitMessage(store, eventKey, pane.handle, wake, executor, sleepMs, log,
-          resolution.legacyKey);
-        if (resolution.legacyKey && store.hasParkedWakeEvent(resolution.legacyKey)) {
-          claimedLegacy.add(resolution.legacyKey);
-        }
-        if (sent) {
+    const match = resolveParkEvent(pane.wait, terminals, envelopes, options);
+    if (match) {
+      const eventKey = 'event:' + pane.handle + ':' + match.eventId;
+      if (!store.hasParkedWakeEvent(eventKey)) {
+        const message = safeUnitWakeText(match.label, match.terminalState, match.evidence)
+          ?? 'Wake: matching producer event landed - re-check it yourself before continuing';
+        if (await sendMarkedUnitMessage(store, eventKey, pane.handle, message, executor, sleepMs, log)) {
           if (epoch) store.writeParkedEpoch?.(pane.handle, { ...epoch, since: now });
           store.clearPaneWait?.(pane.handle);
           continue;
         }
-        alerts.push('uncertain unit Wake ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' ' + episode.slice(0, 12));
       }
     }
-    // Park age is measured from first eligible observation or the last successful
-    // event Wake, never a wall-clock half-hour bucket. An uncertain Wake permits reminders.
+    // PARKED stays silent until its own elapsed 30-minute Reminder.
     if (epoch && Number.isFinite(now) && now >= epoch.since + REMINDER_INTERVAL_MS) {
       const slot = Math.floor((now - epoch.since) / REMINDER_INTERVAL_MS);
-      const reminderKey = 'reminder:' + pane.handle + ':' + episode + ':' + epoch.since + ':' + slot;
-      if (slot >= 1) {
-        const reminderStatus = store.readParkedWakeEventStatus(reminderKey);
-        if (reminderStatus === 'attempted_unverified') {
-          alerts.push('uncertain unit Reminder ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' ' + episode.slice(0, 12));
-        } else if (!reminderStatus) {
-          const message = safeUnitReminderText(producer.label);
-          if (!message || !await sendMarkedUnitMessage(store, reminderKey, pane.handle, message, executor, sleepMs, log)) {
-            alerts.push('uncertain unit Reminder ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' ' + episode.slice(0, 12));
-          }
-        }
+      const key = 'reminder:' + pane.handle + ':' + episode + ':' + epoch.since + ':' + slot;
+      if (slot >= 1 && !store.hasParkedWakeEvent(key)) {
+        const message = safeUnitReminderText(pane.wait.slice('PARKED on '.length))
+          ?? 'Reminder: parked 30 min - re-check the named producer yourself before continuing';
+        await sendMarkedUnitMessage(store, key, pane.handle, message, executor, sleepMs, log);
       }
     }
   }
   store.pruneParkedEpochs?.(observed);
-  return { alerts, claimedLegacy };
 }
 
 /**
@@ -1229,26 +1087,20 @@ async function wakePanesOnEvents(
   store: FleetWakeStateStore,
   log: (line: string) => void,
   sleepMs: (milliseconds: number) => void | Promise<void>,
-  claimedLegacy: ReadonlySet<string>,
+  bareShellHandles: ReadonlySet<string>,
 ): Promise<void> {
   const wakes: Array<{ pane: FleetTerminal | FleetPaneObservation; key: string; message: string }> = [];
   for (const envelope of (options.listTerminalEnvelopes ?? listTerminalEnvelopes)()) {
-    const key = `gpt:${envelope.path}`;
-    if (claimedLegacy.has(key)) continue;
-    if (potentiallySentUnboundEnvelope(envelope)) {
-      log(`skip unsafe GPT terminal wake: owner_generation_unproven ${key}`);
-      continue;
-    }
+    const eventId = 'terminal:' + envelope.path;
     const pane = envelope.terminalHandle !== undefined
       ? observations.find((candidate) =>
         candidate.handle === envelope.terminalHandle)
       : envelope.cwd
         ? envelopeOwner(envelope.cwd, observations)
         : undefined;
-    if (!pane || !idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
-    // Only the named producer may deliver GPT envelope wakes to an exactly
-    // parsed own GPT-PARKED pane, even if the legacy handle/cwd would match.
-    if (pane.state === 'PARKED' && pane.wait && parseNamedParkedProducer(pane.wait)?.kind === 'gpt') continue;
+    if (!pane || pane.state !== 'STOPPED' || bareShellHandles.has(pane.handle)) continue;
+    const key = 'event:' + pane.handle + ':' + eventId;
+    if (store.hasParkedWakeEvent(key)) continue;
     wakes.push({ pane, key, message: `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}` });
   }
   const parkedEpisodes = observations.flatMap((pane) => {
@@ -1280,7 +1132,7 @@ async function wakePanesOnEvents(
     wakes.push({ pane: coordinator, key, message: `Wake: FLEET unit ${event.fromHandle} sent Run message: ${event.subject}` });
   }
   const repository = namedRepository(options.config);
-  if (repository && observations.some(idlePane)) {
+  if (repository && observations.some((pane) => pane.state === 'STOPPED')) {
     const finishedAt = options.checkRunsFinishedAt ?? checkRunsFinishedAt;
     const ownerForPull = options.supervisedPullOwner ?? ((candidate, panes) => supervisedOwnerForPull(candidate, panes, executor));
     const readHead = options.readWorktreeHead ?? readWorktreeHead;
@@ -1295,8 +1147,7 @@ async function wakePanesOnEvents(
       // An exact supervised manager wins; a manager started outside orchestration owns the PR by its head.
       const pane = (pull.issue ? ownerForPull(pull, observations) : undefined) ?? pullOwner(pull, observations, headOf);
       // A re-run of failed checks on the same head is a new event.
-      const key = `ci:${pull.number}:${pull.sha}:${at}`;
-      if (claimedLegacy.has(key)) continue;
+      const key = `event:${pane?.handle ?? 'none'}:ci:${pull.number}:${pull.sha}:${at}`;
       if (!pane) {
         const unowned = `ci-unowned:${pull.number}:${pull.sha}:${at}`;
         if (!store.hasParkedWakeEvent(unowned)) {
@@ -1305,11 +1156,14 @@ async function wakePanesOnEvents(
         }
         continue;
       }
-      if (!idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
+      // A PARKED pane is eligible only through its own X/event-name match above.
+      // This also coalesces a matching CI completion across the two routes.
+      if (pane.state !== 'STOPPED' || bareShellHandles.has(pane.handle) || store.hasParkedWakeEvent(key)) continue;
       wakes.push({ pane, key, message: `Wake: CI on ${pull.sha} finished for PR #${pull.number}` });
     }
   }
   for (const { pane, key, message } of wakes) {
+    if (bareShellHandles.has(pane.handle)) continue;
     const delivered = sendCoordinator(executor, pane.handle, message)
       && (await sleepMs(4_000), submitCoordinator(executor, pane.handle));
     if (!delivered) {
@@ -1496,11 +1350,22 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       return { state: 'unreadable', handle: 'fleet-sweep' };
     }
 
-    const parked = await wakeNamedParkedProducers(
-      options, observations, terminals, store, executor, sleepMs, log,
-    );
-    const parkedAlerts = parked.alerts;
-    await wakePanesOnEvents(options, coordinator, observations, executor, store, log, sleepMs, parked.claimedLegacy);
+    let bareShellHandles = new Set<string>();
+    try {
+      bareShellHandles = new Set(collectFleetDiagnostics({
+        projectId: config.projectId, primary: config.primary, workspaceRe: config.workspaceRe,
+        coordinatorHandle: coordinator.handle, architectHandle: config.architectHandle,
+        coordinatorTitleRe: config.orchestratorTitleRe, busyRe: config.busyRe,
+        terminals, observations, executor, store,
+      }).filter((row) => row.reason === 'suspected_bare_shell' && row.handle)
+        .map((row) => row.handle!));
+    } catch {
+      // Advisory history cannot suppress ordinary fleet delivery. Shell-titled
+      // panes are already excluded from agent selection by the sweep.
+      log('DIAG state=unverified reason=diagnostic_unreadable evidence=read_only_projection_failure');
+    }
+    await wakeNamedParkedProducers(options, observations, terminals, store, executor, sleepMs, log, bareShellHandles);
+    await wakePanesOnEvents(options, coordinator, observations, executor, store, log, sleepMs, bareShellHandles);
 
     const chats = config.chatCdpUrl && config.chatScope
       ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])
@@ -1562,36 +1427,63 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       store.writeBannerSignature?.(directSignature);
     }
 
-    const stopped = actionablePanes(observations);
+    // Persist one notification state per pane; one pane changing cannot re-alarm another.
+    type PaneState = { state: string; sent: boolean };
+    type History = { panes: Record<string, PaneState>; routed: string; coordinator?: string };
+    let previous: History = { panes: {}, routed: '' };
     const pendingPermission = observedPermissionWarnings(observations, config.projectId, store);
-    if (stopped.length === 0 && routed.length === 0 && parkedAlerts.length === 0
-      && pendingLocal.length === 0 && pendingPermission.length === 0) {
-      store.clearLastSentSignature();
-      store.clearLastSentAt?.();
-      log('nothing stopped');
-      return { state: 'nothing_stopped' };
-    }
-
-    let coordinatorScreen: string;
     try {
-      coordinatorScreen = readFleetScreen(coordinator.handle, executor);
-    } catch {
-      log(`${coordinator.handle} unreadable`);
-      return { state: 'unreadable', handle: coordinator.handle };
+      const parsed: unknown = JSON.parse(store.readLastSentSignature() ?? 'null');
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        && 'panes' in parsed && 'routed' in parsed) {
+        const row = parsed as History;
+        if (row.panes && typeof row.panes === 'object' && typeof row.routed === 'string') previous = row;
+      }
+    } catch { /* An old whole-set digest is not a per-pane notification. */ }
+    const coordinatorKey = JSON.stringify([
+      coordinator.handle, coordinator.incarnationId ?? '', coordinator.worktreePath,
+    ]);
+    const sameCoordinator = previous.coordinator === coordinatorKey;
+    const paneStates: Record<string, PaneState> = Object.create(null) as Record<string, PaneState>;
+    const paneStateKey = (pane: FleetPaneObservation): string =>
+      JSON.stringify([pane.state, pane.incarnationId ?? '']);
+    for (const pane of observations) {
+      // PERMISSION emits no ordinary alert, but its interval must be remembered:
+      // STOPPED -> PERMISSION -> STOPPED is a new ordinary state transition.
+      const state = paneStateKey(pane);
+      paneStates[pane.handle] = { state, sent: sameCoordinator
+        && previous.panes[pane.handle]?.state === state
+        && previous.panes[pane.handle]?.sent === true };
     }
-
-    const coordinatorState: 'idle' | 'busy' = isBusyScreen(coordinatorScreen, config.busyRe) ? 'busy' : 'idle';
-    // Local one-off warnings are never part of the durable ordinary signature.
-    const signature = [meaningfulStoppedSignature(observations), chatBannerSignature(routed),
-      ...parkedAlerts.slice().sort()].filter(Boolean).join('\n');
-    const deliverySignature = JSON.stringify([coordinator.handle, coordinator.incarnationId ?? '', signature]);
+    for (const handle of bareShellHandles) {
+      paneStates[handle] = { state: 'suspected_bare_shell',
+        sent: sameCoordinator && previous.panes[handle]?.state === 'suspected_bare_shell'
+          && previous.panes[handle]?.sent === true };
+    }
     const now = (options.now ?? Date.now)();
     const lastAt = store.readLastSentAt?.();
-    // Permissions bypass the ordinary throttle but never advance its clock.
-    const ordinaryDue = (stopped.length > 0 || routed.length > 0 || parkedAlerts.length > 0)
-      && !(store.readLastSentSignature() === deliverySignature
-        && lastAt !== undefined && Number.isFinite(now) && now - lastAt >= 0
-        && now - lastAt < REMINDER_INTERVAL_MS);
+    const reminderDue = lastAt !== undefined && Number.isFinite(lastAt) && Number.isFinite(now)
+      && now >= lastAt + REMINDER_INTERVAL_MS;
+    const stopped = actionablePanes(observations)
+      .filter((pane) => !bareShellHandles.has(pane.handle)
+        && (!paneStates[pane.handle]?.sent || reminderDue));
+    const bareAlerts = [...bareShellHandles].filter((handle) => !paneStates[handle]?.sent);
+    const routedSignature = chatBannerSignature(routed);
+    const pendingRouted = !sameCoordinator || routedSignature !== previous.routed ? routed : [];
+    const ordinaryDue = stopped.length > 0 || bareAlerts.length > 0 || pendingRouted.length > 0;
+    const nowSignature = JSON.stringify({ panes: paneStates, routed: routedSignature, coordinator: coordinatorKey });
+    if (observations.some((pane) => pane.state === 'PERMISSION'
+      && previous.panes[pane.handle]?.state !== paneStates[pane.handle]?.state)) {
+      // Persist the intervening state even if the separate permission alert
+      // fails. Keep unsent routed messages and coordinator transfer unacknowledged.
+      store.writeLastSentSignature(JSON.stringify({
+        panes: paneStates, routed: previous.routed, coordinator: previous.coordinator,
+      }));
+    }
+    const signature = JSON.stringify({
+      panes: stopped.map((pane) => [pane.handle, pane.state]),
+      bareShells: bareAlerts, routed: routedSignature,
+    });
     let deliverLocal = pendingLocal;
     let deliverPermission = pendingPermission;
     if (pendingLocal.length > 0) {
@@ -1599,16 +1491,10 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
         log(`${coordinator.handle} changed before local chat warning send`);
         return { state: 'send_failed', coordinator: coordinator.handle };
       }
-      // Persist uncertainty *before* any effect. An unknown delivery is never replayed.
       try {
         for (const banner of pendingLocal) store.markParkedWakeEvent(banner.key, 'attempted_unverified');
       } catch {
         log(`${coordinator.handle} cannot persist local chat attempt before send`);
-        if (stopped.length === 0 && routed.length === 0 && parkedAlerts.length === 0) {
-          return { state: 'send_failed', coordinator: coordinator.handle };
-        }
-        // Drop all local warnings when any pre-effect mark fails. Independent
-        // ordinary events keep their own coordinator sender and reminder cadence.
         deliverLocal = [];
       }
     }
@@ -1623,24 +1509,41 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       } catch {
         log('permission mark unwritable; no permission alert sent');
         deliverPermission = [];
-        if (stopped.length === 0 && routed.length === 0 && parkedAlerts.length === 0
+        if (stopped.length === 0 && pendingRouted.length === 0 && bareAlerts.length === 0
           && deliverLocal.length === 0) return { state: 'send_failed', coordinator: coordinator.handle };
       }
     }
-    if (deliverLocal.length === 0 && deliverPermission.length === 0
-      && !ordinaryDue && (stopped.length > 0 || routed.length > 0 || parkedAlerts.length > 0)) {
-      log(`${coordinator.handle} same stopped set already queued`);
-      return { state: 'same_stopped_set', coordinator: coordinator.handle, signature };
+    if (pendingLocal.length > 0 && deliverLocal.length === 0
+      && deliverPermission.length === 0 && !ordinaryDue
+      && actionablePanes(observations).length === 0 && bareShellHandles.size === 0) {
+      return { state: 'send_failed', coordinator: coordinator.handle };
+    }
+    if (deliverLocal.length === 0 && deliverPermission.length === 0 && !ordinaryDue) {
+      // Record quiet PARKED/busy transitions without re-firing another pane's alarm.
+      store.writeLastSentSignature(nowSignature);
+      if (actionablePanes(observations).length > 0 || bareShellHandles.size > 0) {
+        log(`${coordinator.handle} unchanged pane states already notified`);
+        return { state: 'same_stopped_set', coordinator: coordinator.handle, signature };
+      }
+      log('nothing stopped');
+      return { state: 'nothing_stopped' };
     }
 
+    let coordinatorScreen: string;
+    try { coordinatorScreen = readFleetScreen(coordinator.handle, executor); }
+    catch {
+      log(`${coordinator.handle} unreadable`);
+      return { state: 'unreadable', handle: coordinator.handle };
+    }
+    const coordinatorState: 'idle' | 'busy' = isBusyScreen(coordinatorScreen, config.busyRe) ? 'busy' : 'idle';
     const localWarnings = deliverLocal.map((banner) => `${banner.url} (${banner.kind})`);
-    // A permission-only bypass must not repeat an ordinary STOPPED/POLLING
-    // instruction before its own signature/reminder is independently due.
+    // A permission-only bypass must not repeat ordinary alerts before their
+    // per-pane state transition or reminder is independently due.
     const includeOrdinary = deliverPermission.length === 0 || ordinaryDue;
-    const alarmPanes = includeOrdinary ? observations
-      : observations.filter((pane) => pane.state !== 'STOPPED' && pane.state !== 'POLLING');
+    const alarmPanes = includeOrdinary ? stopped : [];
     const message = fleetAlarmMessage(coordinatorState, alarmPanes,
-      includeOrdinary ? routed : [], includeOrdinary ? parkedAlerts : [],
+      includeOrdinary ? pendingRouted : [],
+      includeOrdinary ? bareAlerts.map((handle) => 'suspected_bare_shell ' + handle) : [],
       localWarnings, deliverPermission.map((warning) => warning.message));
     try {
       if (!sendCoordinator(executor, coordinator.handle, message)) {
@@ -1668,11 +1571,11 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       log(`${coordinator.handle} local chat delivered but final mark unverified`);
       return { state: 'send_failed', coordinator: coordinator.handle };
     }
-    if (deliverPermission.length === 0 || ordinaryDue || deliverLocal.length > 0) {
-      store.writeLastSentSignature(deliverySignature);
-      store.writeLastSentAt?.(now);
-    }
-    log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} need a step, ${routed.length} chat banner(s), ${deliverLocal.length} local warning(s), ${deliverPermission.length} permission warning(s)`);
+    for (const pane of stopped) paneStates[pane.handle]!.sent = true;
+    for (const handle of bareAlerts) paneStates[handle]!.sent = true;
+    store.writeLastSentSignature(JSON.stringify({ panes: paneStates, routed: routedSignature, coordinator: coordinatorKey }));
+    if (ordinaryDue) store.writeLastSentAt?.(now);
+    log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} pane changes, ${bareAlerts.length} bare shells, ${pendingRouted.length} chat banner(s), ${deliverLocal.length} local warning(s), ${deliverPermission.length} permission warning(s)`);
     return {
       state: 'sent',
       coordinator: coordinator.handle,

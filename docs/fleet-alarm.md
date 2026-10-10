@@ -1,66 +1,51 @@
 # Coordinator fleet alarm
 
-The fleet alarm is an operator-installed, per-project advisory notifier on the
-existing fleet-wake tick. It reads agent panes and existing Orca worker/Task/Dispatch
-and terminal evidence, GPT terminal envelopes and selected-repository PR/review/CI
-status through tracked GitHub transport. It already sends direct GPT/CI event
-messages to eligible units; it also sends narrowly verified PARKED producer Wake
-and elapsed-park Reminder messages to the exact live Task/Dispatch unit. Each new
-unit message requests an **independent producer re-check**, not execution,
-resend, merge, approval or continuation authority. Failed/ambiguous evidence
-goes to the coordinator, never an invented producer completion.
+Fleet sweep/wake is a per-project operator notifier. A selected agent pane
+whose **last non-empty content line** is `PARKED on <X>` is `PARKED`.
+Task binding, a separate `wait` object, a producer receipt, invocation index,
+owner/generation assertion or PID identity is **not** required. The last line
+wins over earlier scrollback and the regular busy/STOPPED classification.
 
-The tick only writes its existing ephemeral per-project notifier marks, park
-clock and coordinator-signature state. It does not mutate GitHub, Task/Dispatch
-or runtime business state, install services, create a second transport, or join
-the scheduler, supervisor or side-process registry.
+A parked dependency is a plain event-name match: `X` is matched against the
+eligible terminal-envelope filename or invocation ID, a finished pack-review
+run, or a finished CI result. A match sends one ordinary `Wake: ... re-check`
+message to **that parked pane**, not an instruction to resume or resend a
+Browser-GPT turn. The only Wake safety exclusion is a pane detected as
+`suspected_bare_shell`: the notifier must never type Wake text into that
+shell (it could execute the line as a command). It sends one coordinator
+alarm identifying the pane instead. No other ownership, receipt, launcher,
+Task, process, generation or claimant proof is required. No receipt/locator
+index is maintained in the fleet notifier.
 
-`fleet-sweep.ts` reports matching project agent panes as `busy`, `STOPPED`,
-`POLLING`, or `PARKED`. `POLLING` needs polling evidence on two consecutive
-sweeps; its previous-sweep marks are ephemeral under
-`$XDG_RUNTIME_DIR/fleet-sweep/<project>/`. `PARKED` panes retain their own wait; supported named producers are checked
-only for verified seven-field live Task/Dispatch matches. Terminal disappearance
-and shell-idle status never count as producer completion. Unsupported, missing
-or ambiguous producer evidence is routed to a bounded coordinator alarm.
+Each successful named Wake records one simple `(pane,event)` sent marker.
+A repeat tick does not resend the same event to the same pane; a different
+pane parked on the same event can be woken independently. A changed event
+can generate another Wake. Any substring of a completed CI or pack-review
+event name (for example, `PR #42`) may match X; X need not spell the event
+type. The legacy PR-owner CI route is limited to STOPPED panes, so an
+unrelated PARKED pane is never woken and a matching one cannot receive the
+same CI completion through both routes. The normal 30-minute parked Reminder remains
+available for unresolved dependencies; a PARKED pane does **not** raise
+an immediate coordinator alarm for missing or unresolvable producer evidence.
 
-Named `PARKED on GPT turn <id>` recognizes canonical lowercase UUIDs and a
-conservative 5–96-character `inv-` subset with lowercase ASCII alphanumeric
-segments separated by single hyphens (for example `inv-h` and
-`inv-wake-ok`). Only one complete own wait, optionally ending
-` (self-wake armed)`, qualifies. The upstream screen reader keeps the **last**
-own `PARKED` line and joins subsequent physical lines with spaces. It can
-preserve wraps **between** tokens, not splits **inside** an invocation ID;
-earlier discarded `PARKED` lines and quoted/tool output confer no additional
-evidence. Unsupported tokens or semantic tails remain unresolvable.
+Coordinator alarms are keyed by **individual pane state**, not the hash of
+the entire stopped-pane set. A pane becoming STOPPED or POLLING raises one
+alarm for that change; an unchanged pane is not re-alarmed merely because
+another pane changes between busy, PARKED and STOPPED. PARKED is silent
+until its existing 30-minute Reminder. Bare-shell suspicion produces one
+coordinator alarm per pane/state change. On coordinator replacement (handle
+or observed incarnation), unchanged actionable pane alarms must reach the new
+recipient. PERMISSION is recorded as an intervening per-pane state so a
+STOPPED -> PERMISSION -> STOPPED transition produces a new STOPPED alarm;
+its separate warning marks and ordinary reminder cadence remain unchanged.
+A failed advisory history write cannot erase an observed bare-shell alarm.
+ChatGPT banner and Run-mail notifications retain their separate routing
+and marks.
 
-For an exactly parsed GPT-named PARKED pane, only a **unique matching,
-wakeable terminal envelope** with the currently observed invocation, terminal
-handle and worktree may trigger its named unit re-check Wake. The independent
-legacy GPT envelope route is deliberately excluded **for that pane**, including
-foreign or duplicate events; it remains available to STOPPED panes and panes
-PARKED on another producer. This existing terminal evidence cannot prove
-historical launch-attempt identity or an atomic terminal-incarnation send.
-A missing/unsafe/ambiguous terminal envelope is still `unresolvable` and
-coordinator-visible; an ongoing GPT child may therefore repeatedly raise an
-alarm at the normal 30-minute unchanged-state interval. That throttle is
-**not proof of child health** or a safe reason to resend. Receipt-backed
-`pending` is deferred: the current handoff receipt does not provide an
-authoritative, discoverable invocation-to-attempt-to-Task/Dispatch/launch
-incarnation join. No receipt scan or inferred live-process status is performed.
-
-For named PR-dependent producers (merge, merge-agent terminal, review,
-pack-review and CI), the notifier selects the repository from the trusted
-project card rather than requiring the optional ChatGPT `chatScope`.
-A directly constructed `FleetWakeConfig` can intentionally omit `chatScope`
-and use `selectedRepository`; this is a **defensive API case**, not the
-normal service configuration. The standard `fleetWakeConfigFromEnv` supplies
-both repositories from the same project card. Older directly constructed
-configs without `selectedRepository` retain the `chatScope.repository`
-fallback. If both exist and disagree, all named repository-bound lookups
-and the legacy CI candidate scan fail closed, without changing independent
-GPT, Run-mail or ChatGPT-banner routes. A merged PR must be confirmed
-`merged=true`; an open merge PR remains pending and a closed-unmerged or
-unknown PR remains unresolvable.
+The notifier itself makes no GitHub, Task/Dispatch, scheduler or supervisor
+mutation and grants no authority to automatically continue, merge, retry or
+send a Browser-GPT prompt. The #2484 PERMISSION classification is separate
+from this park/wake policy and is not changed.
 
 ## Visible OpenCode permission UI (Issue #2484)
 
@@ -213,23 +198,18 @@ systemctl --user status fleet-wake@my-project
 tail -f ~/.local/state/orchestrator-fleet/my-project.fleet-wake.log
 ```
 
-A healthy tick logs `nothing stopped` when there is no actionable pane. If the
-project has no matching coordinator pane, it logs `normal fleet result: no
-orchestrator pane found` and returns without sending a wake. This is a normal
-result for projects without a coordinator pane; it does not log `nothing stopped`
-for that tick. When an agent pane is `STOPPED` or `POLLING`, the coordinator
-receives a `Fleet alarm (idle|busy)` message naming all actionable panes. Both idle and busy coordinators receive the first meaningful alarm once, then
-another only when the actionable state/question/producer changes or an unchanged
-alarm reaches 30 minutes. Cosmetic TUI redraws do not reset that cadence.
-Unresolvable or uncertain PARKED producer notifications share the same throttle.
-Exact eligible unchanged PARKED units instead receive a shell-inert re-check-only
-Reminder once at elapsed 30 minutes, once at 60 minutes, and once in each later
-elapsed 30-minute slot; successful producer Wake or a changed park/Task resets
-the Reminder clock. New unit effects use a persistent
-`attempted_unverified` mark **before** the first send and never automatically
-replay that same key after an uncertain/partial send. The current no-coordinator
-path returns `no_orchestrator` without any new unit Wake or Reminder.
-A failed terminal read skips that tick rather than acting on incomplete evidence.
+A healthy tick logs `nothing stopped` when there is no newly
+actionable pane. A project with no matching coordinator logs
+`normal fleet result: no orchestrator pane found` and returns without sending
+a Wake. STOPPED/POLLING alarms are per-pane and fire once per state transition.
+Changes to another pane do not duplicate an existing alarm. PARKED never
+causes an immediate coordinator alarm; a matching producer event sends
+a direct re-check Wake to its pane, and an unresolved park receives its
+existing Reminder on elapsed 30-minute slots. `suspected_bare_shell`
+is the one exception: send no Wake text to the shell and alarm the
+coordinator once for that pane's state change. The notifier uses per-(pane,
+event) sent marks, not owner proofs or an alarm-set digest. An unreadable
+required pane screen skips that sweep tick.
 
 ### Unsaved ChatGPT local banners — Issue #2471
 
@@ -293,10 +273,10 @@ At session start, check `systemctl --user status fleet-wake@<project>`. On every
 fleet alarm, first process orchestration mail, then run the full `fleet-sweep`.
 Give every `STOPPED` or `POLLING` pane its next step in the same turn. A question a
 unit typed in its own pane is addressed to the coordinator and must be answered.
-For `PARKED` panes, independently recheck each declared producer when a
-Wake or Reminder arrives. Never resume, resend or merge solely because the
-fleet notifier reported an event; uncertain producer evidence requires
-coordinator investigation instead.
+For `PARKED` panes, independently re-check the named dependency on
+Wake or Reminder. Never resume, resend or merge solely because the fleet
+notifier reported an event. Treat bare-shell coordinator alarms as
+operator investigation, never as permission to type into a shell.
 
 ## Stop or uninstall
 
