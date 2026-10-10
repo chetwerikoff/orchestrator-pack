@@ -1549,6 +1549,8 @@ export async function runtimeWitnessSurfaceAvailable(
 export interface ProductStatusSurface {
   readonly text: string;
   readonly composer: boolean;
+  /** Preserve each product-owned node's selector for bounded wall diagnostics. */
+  readonly parts?: readonly { readonly selector: string; readonly text: string }[];
 }
 
 export async function productStatusText(page: any, waitSource?: OperationWaitSource): Promise<ProductStatusSurface> {
@@ -1556,7 +1558,7 @@ export async function productStatusText(page: any, waitSource?: OperationWaitSou
     page.locator(COMPOSER_SELECTOR),
     requireOperationWait(waitSource, 'product_status'),
   )) > 0;
-  const parts: string[] = [];
+  const parts: { selector: string; text: string }[] = [];
   for (const selector of PRODUCT_STATUS_PROBE_SELECTORS) {
     const locator = page.locator(selector);
     const countWait = requireOperationWait(waitSource, 'product_status');
@@ -1564,25 +1566,67 @@ export async function productStatusText(page: any, waitSource?: OperationWaitSou
     for (let index = 0; index < count; index++) {
       const textWait = requireOperationWait(waitSource, 'product_status');
       const text = await boundedPlaywrightOperation(textWait, () => locator.nth(index).innerText(playwrightTimeout(textWait)!));
-      if (text) parts.push(String(text));
+      if (text) parts.push({ selector, text: String(text) });
     }
   }
-  return { text: parts.join('\n'), composer };
+  return { text: parts.map((part) => part.text).join('\n'), composer, parts };
 }
 
 const PRODUCT_RATE_LIMIT_WALL_RE = /too many requests|(?:making |sending )?requests too quickly|you(?:'|’)re (?:making requests|sending messages) too quickly|temporarily limited(?:\s+access)?(?:\s+to your conversations)?|(?:please )?wait(?: a)? few minutes before trying again|try again in a few minutes|you(?:'|’)re going too fast|rate limit exceeded/i;
 
-export function classifyProductWall(surface: ProductStatusSurface): { state?: 'quota'|'rate_limit'|'challenge'|'login'; cause?: string } {
-  if (/verify you are human|checking your browser|just a moment|unusual activity/i.test(surface.text)) {
-    return { state: 'challenge', cause: 'challenge_detected' };
+const PRODUCT_QUOTA_WALL_RE = /you(?:'|’)ve reached[^\n]{0,120}\blimit\b|\busage limit\b|\bmessage limit\b|\breached the current usage\b|\breached your usage limit\b/i;
+const PRODUCT_QUOTA_WARNING_RE = /\d+(?:[.,]\d+)?\s*%|\busage remaining\b|\b(?:messages?|requests?) remaining\b|\bremaining (?:usage|messages?|requests?)\b/i;
+const PRODUCT_WALL_TEXT_CAP = 500;
+
+type ProductWallState = 'quota' | 'rate_limit' | 'challenge' | 'login';
+export interface ProductWallClassification {
+  readonly state?: ProductWallState;
+  readonly cause?: string;
+  readonly matched_text?: string;
+  readonly matched_selector?: string;
+}
+
+/** A joined text match must be backed by one concrete product-status node. */
+function matchingProductStatusPart(
+  surface: ProductStatusSurface,
+  pattern: RegExp,
+  exclude?: RegExp,
+): { readonly text: string; readonly selector?: string } | undefined {
+  if (!pattern.test(surface.text)) return undefined;
+  const parts = surface.parts?.length ? surface.parts : [{ text: surface.text }];
+  return parts.find((part) => pattern.test(part.text) && !(exclude?.test(part.text)));
+}
+
+function productWallClassification(
+  state: ProductWallState,
+  cause: string,
+  matched: { readonly text: string; readonly selector?: string },
+): ProductWallClassification {
+  return {
+    state,
+    cause,
+    ...(matched.selector
+      ? { matched_text: matched.text.slice(0, PRODUCT_WALL_TEXT_CAP), matched_selector: matched.selector }
+      : {}),
+  };
+}
+
+export function classifyProductWall(surface: ProductStatusSurface): ProductWallClassification {
+  const challenge = matchingProductStatusPart(surface, /verify you are human|checking your browser|just a moment|unusual activity/i);
+  if (challenge) return productWallClassification('challenge', 'challenge_detected', challenge);
+
+  if (!surface.composer) {
+    const quota = matchingProductStatusPart(surface, PRODUCT_QUOTA_WALL_RE, PRODUCT_QUOTA_WARNING_RE);
+    if (quota) return productWallClassification('quota', 'quota_detected', quota);
   }
-  if (/you(?:'|’)ve reached|usage limit|message limit|reached the current usage|reached your usage limit|please try again later/i.test(surface.text)) {
-    return { state: 'quota', cause: 'quota_detected' };
+
+  const rateLimit = matchingProductStatusPart(surface, PRODUCT_RATE_LIMIT_WALL_RE);
+  if (rateLimit) return productWallClassification('rate_limit', 'rate_limit_detected', rateLimit);
+
+  if (!surface.composer) {
+    const login = matchingProductStatusPart(surface, /log in|sign in/i);
+    if (login) return productWallClassification('login', 'login_required', login);
   }
-  if (PRODUCT_RATE_LIMIT_WALL_RE.test(surface.text)) {
-    return { state: 'rate_limit', cause: 'rate_limit_detected' };
-  }
-  if (!surface.composer && /log in|sign in/i.test(surface.text)) return { state: 'login', cause: 'login_required' };
   return {};
 }
 

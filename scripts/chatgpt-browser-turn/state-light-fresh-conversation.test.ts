@@ -693,6 +693,29 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(solo.getSends()).toBe(0);
   });
 
+  it('continues a fresh send when a usage-remaining banner leaves the composer usable', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    const classifier = vi.mocked(uiAdapter.classifyProductWall);
+    const previousImplementation = classifier.getMockImplementation();
+    classifier.mockImplementation(actual.classifyProductWall);
+    try {
+      mocks.productStatusText.mockResolvedValue({
+        text: 'You have 20% usage remaining',
+        composer: true,
+        parts: [{ selector: '[role="alert"]', text: 'You have 20% usage remaining' }],
+      });
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-REMAINING'));
+      const solo = makeLoserPage('PROMPT-REMAINING', 'REMAINING-OK');
+      const outcome = await runNewChatTurn(solo.page, '/tmp/remaining-warning.txt');
+
+      expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+      expect(solo.getSends()).toBe(1);
+      expect(readStateLightAdvisoryWall('collision-profile')).toBeNull();
+    } finally {
+      classifier.mockImplementation(previousImplementation ?? (() => ({})));
+    }
+  });
+
   it('returns rate_limit from prepare without additional navigation rounds', async () => {
     vi.mocked(uiAdapter.classifyProductWall).mockImplementation((surface) => {
       const text = typeof surface === 'string' ? surface : surface.text;

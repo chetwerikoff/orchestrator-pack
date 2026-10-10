@@ -127,6 +127,96 @@ describe('owned-turn product recovery confirmation', () => {
 });
 
 
+describe('Issue #2489 product-wall classification', () => {
+  for (const [label, text, composer] of [
+    ['generic error toast', 'Something went wrong. Please try again later.', true],
+    ['usage-remaining warning', 'You have 20% usage remaining', true],
+    ['percentage warning without composer', "You've reached 80% of your usage limit", false],
+    ['exhausted usage with live composer', "You've reached your usage limit", true],
+    ['unrelated reached phrase', "You've reached a milestone", false],
+  ] as const) {
+    it(`does not classify ${label} as a product wall`, () => {
+      expect(classifyProductWall({ text, composer })).toEqual({});
+    });
+  }
+
+  it('classifies explicit exhausted usage only when the composer is blocked', () => {
+    expect(classifyProductWall({ text: "You've reached your usage limit", composer: false }))
+      .toEqual({ state: 'quota', cause: 'quota_detected' });
+    expect(classifyProductWall({ text: 'reached the current usage', composer: false }))
+      .toEqual({ state: 'quota', cause: 'quota_detected' });
+  });
+
+  it('keeps challenge, rate-limit, and login precedence/conditions', () => {
+    expect(classifyProductWall({ text: 'Verify you are human; usage limit', composer: false }))
+      .toEqual({ state: 'challenge', cause: 'challenge_detected' });
+    expect(classifyProductWall({ text: 'Too many requests', composer: true }))
+      .toEqual({ state: 'rate_limit', cause: 'rate_limit_detected' });
+    expect(classifyProductWall({ text: 'Sign in to continue', composer: true })).toEqual({});
+    expect(classifyProductWall({ text: 'Sign in to continue', composer: false }))
+      .toEqual({ state: 'login', cause: 'login_required' });
+    expect(classifyProductWall({
+      text: 'Your access is temporarily limited because you have reached your usage limit',
+      composer: true,
+    })).toEqual({ state: 'rate_limit', cause: 'rate_limit_detected' });
+  });
+
+  for (const { state, cause, text, selector, composer } of [
+    { state: 'challenge', cause: 'challenge_detected', text: 'Verify you are human', selector: '[role="dialog"]', composer: true },
+    { state: 'quota', cause: 'quota_detected', text: "You've reached your usage limit", selector: '[data-testid*="limit"]', composer: false },
+    { state: 'rate_limit', cause: 'rate_limit_detected', text: 'Too many requests', selector: '[data-testid*="error"]', composer: true },
+    { state: 'login', cause: 'login_required', text: 'Sign in to continue', selector: '[data-testid*="login"]', composer: false },
+  ] as const) {
+    it(`retains the exact matched ${state} node and selector`, async () => {
+      const page = {
+        locator: (requested: string) => ({
+          count: async () => requested === COMPOSER_SELECTOR ? Number(composer) : Number(requested === selector),
+          nth: () => ({ innerText: async () => text }),
+        }),
+      };
+      const surface = await productStatusText(page);
+      expect(surface).toEqual({ text, composer, parts: [{ selector, text }] });
+      expect(classifyProductWall(surface)).toEqual({
+        state, cause, matched_text: text, matched_selector: selector,
+      });
+    });
+  }
+
+  it('bounds reported evidence at 500 characters without changing classification', async () => {
+    const text = `Too many requests ${'X'.repeat(700)}`;
+    const selector = '[role="alert"]';
+    const page = {
+      locator: (requested: string) => ({
+        count: async () => Number(requested === selector || requested === COMPOSER_SELECTOR),
+        nth: () => ({ innerText: async () => text }),
+      }),
+    };
+    const surface = await productStatusText(page);
+    expect(classifyProductWall(surface)).toEqual({
+      state: 'rate_limit',
+      cause: 'rate_limit_detected',
+      matched_text: text.slice(0, 500),
+      matched_selector: selector,
+    });
+  });
+
+  it('retains challenge priority across distinct product-status selectors', () => {
+    expect(classifyProductWall({
+      text: "You've reached your usage limit\nVerify you are human",
+      composer: false,
+      parts: [
+        { selector: '[role="alert"]', text: "You've reached your usage limit" },
+        { selector: '[role="dialog"]', text: 'Verify you are human' },
+      ],
+    })).toEqual({
+      state: 'challenge',
+      cause: 'challenge_detected',
+      matched_text: 'Verify you are human',
+      matched_selector: '[role="dialog"]',
+    });
+  });
+});
+
 describe('fresh project conversation identity', () => {
   const projectUrl = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project';
   const conversationUuid = '6ab8cb78-4e14-83ec-92ff-3e7b67611185';
