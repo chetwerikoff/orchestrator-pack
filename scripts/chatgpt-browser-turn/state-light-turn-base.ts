@@ -2186,32 +2186,27 @@ async function mutateComposerOrCause(
     if (remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs) <= 0) {
       return exhausted('readiness_before_click');
     }
-    // Only positive missing-element evidence can classify composer_unavailable.
-    // Even with a missing element, enter the normal bounded click/fill path
-    // once rather than treating readiness as an authority to skip mutation.
+    // Distinguish proven absence from a present-but-unready node only when
+    // classifying failure, not as a veto on the ordinary click/fill attempt.
     let composerAbsent = false;
     try {
       composerAbsent = await locatorCount(composer, insertionDeadlineMs) === 0;
     } catch {
       return exhausted('readiness_before_click');
     }
-    if (composerAbsent) {
-      try {
-        let actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-        if (actionBudgetMs <= 0) return exhausted('budget_before_click');
-        await composer.click({ timeout: actionBudgetMs });
-        actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-        if (actionBudgetMs <= 0) return exhausted('budget_before_fill');
-        await composer.fill(text, { timeout: actionBudgetMs });
-        // A composer that appeared during the attempt may now continue to
-        // dispatch, but a still-absent node is proven not delivered.
-        if (await readComposerReadiness(page, insertionDeadlineMs)) return null;
-      } catch {
-        // The failed click/fill was attempted; the prior count proved absence.
-      }
-      return 'composer_unavailable';
+    try {
+      let actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+      if (actionBudgetMs <= 0) return exhausted('budget_before_click');
+      await composer.click({ timeout: actionBudgetMs });
+      actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+      if (actionBudgetMs <= 0) return exhausted('budget_before_fill');
+      await composer.fill(text, { timeout: actionBudgetMs });
+      // If readiness recovered during the attempt, proceed to dispatch.
+      if (await readComposerReadiness(page, insertionDeadlineMs)) return null;
+    } catch {
+      // The mutation was attempted; classify from the pre-attempt presence proof.
     }
-    return exhausted('readiness_before_click');
+    return composerAbsent ? 'composer_unavailable' : exhausted('readiness_before_click');
   }
 
   try {

@@ -80,11 +80,16 @@ vi.mock('./ui-adapter.ts', async (importOriginal) => {
   const { buildUiAdapterTestMock } = await import('./state-light-turn.test-fixtures.ts');
   return buildUiAdapterTestMock(actual, mocks, {
     classifyProductWall: (text: string) => {
-      if (/quota/i.test(text)) return { state: 'quota', cause: 'quota_detected' };
-      if (/challenge/i.test(text)) return { state: 'challenge', cause: 'challenge_detected' };
-      if (/rate.?limit|temporarily limited/i.test(text)) return { state: 'rate_limit', cause: 'rate_limit_detected' };
-      if (/login/i.test(text)) return { state: 'login', cause: 'login_detected' };
-      return {};
+      const wall_kind = /quota|usage limit/i.test(text) ? 'quota'
+        : /challenge/i.test(text) ? 'challenge'
+        : /rate.?limit|temporarily limited/i.test(text) ? 'rate_limit'
+        : /login/i.test(text) ? 'login'
+        : 'none';
+      return {
+        wall_kind,
+        matched_text: wall_kind === 'none' ? 'none' : text,
+        matched_selector: wall_kind === 'none' ? 'none' : '[role="alert"]',
+      };
     },
     normalizeConversationUrl: (value: string) => value,
     productStatusText: async (page: any) => String(page.__productStatusText?.() ?? ''),
@@ -522,26 +527,26 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(mocks.writeFileSync.mock.calls[0]?.[1]).toBe('FINAL');
   });
 
-  it('returns a post-send product blocker after observing the owned prompt', async () => {
-    const working: StateLightTestSnapshot = {
-      messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
-      generating: true,
-    };
-    const fake = makePage([working, working], { wallText: 'quota wall', wallAfterPoll: 2 });
+  it('keeps post-send quota copy advisory and completes the owned reply', async () => {
+    const text = "You've reached your usage limit";
+    const fake = makePage(readySnapshots(), { wallText: text, wallAfterPoll: 1 });
     const outcome = await runAndCapture(fake.page);
 
     expect(outcome.result).toMatchObject({
-      state: 'quota',
-      scope: 'invocation',
-      cause: 'quota_detected',
+      state: 'ok',
+      cause: 'completed_page_only',
       send_count: 1,
       cleanup: 'confirmed',
+      product_wall_diagnostic: {
+        wall_kind: 'quota',
+        matched_text: text,
+        matched_selector: '[role="alert"]',
+      },
     });
-    expect(outcome.result.incidents).toContain('invocation_blocker');
-    expect(fake.metrics.polls).toBeGreaterThanOrEqual(2);
+    expect(outcome.result.incidents).not.toContain('invocation_blocker');
     expect(fake.metrics.sends).toBe(1);
     expect(fake.metrics.closes).toBe(1);
-    expect(mocks.linkSync).not.toHaveBeenCalled();
+    expect(mocks.linkSync).toHaveBeenCalledTimes(1);
   });
 
   it('does not publish a stable intermediate node while page-level tool activity is still in progress', async () => {
@@ -1732,22 +1737,22 @@ describe('browser-turn recurrence journal fixture coverage', () => {
     expect(fake.metrics.closes).toBe(1);
   });
 
-  it('replays rate_limit invocation_blocker symptoms', async () => {
-    const working: StateLightTestSnapshot = {
-      messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
-      generating: true,
-    };
-    const fake = makePage(Array.from({ length: 6 }, () => working), {
-      wallText: 'temporarily limited',
-      wallAfterPoll: 1,
-    });
+  it('keeps post-send rate-limit copy advisory and retains delivery', async () => {
+    const text = 'temporarily limited';
+    const fake = makePage(readySnapshots(), { wallText: text, wallAfterPoll: 1 });
     const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
     expect(outcome.result).toMatchObject({
-      state: 'rate_limit',
-      cause: 'rate_limit_detected',
+      state: 'ok',
+      cause: 'completed_page_only',
       send_count: 1,
+      product_wall_diagnostic: {
+        wall_kind: 'rate_limit',
+        matched_text: text,
+        matched_selector: '[role="alert"]',
+      },
     });
-    expect(outcome.result.incidents).toContain('invocation_blocker');
+    expect(outcome.result.incidents).not.toContain('invocation_blocker');
   });
 
   it('replays helper_failure_before_send argument symptoms', async () => {

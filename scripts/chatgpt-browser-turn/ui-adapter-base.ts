@@ -1987,7 +1987,14 @@ async function sendTurnWithDiagnostics(
     });
   }
   const composer = page.locator(COMPOSER_SELECTOR);
-  const readyEndsAt = segmentBudget?.endsAtMs ?? wallClock() + Math.min(config.timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS);
+  // A missing composer must not exhaust the pre-send budget before baseline
+  // establishment and the bounded click/fill attempt.
+  const readinessReserveMs = segmentBudget
+    ? Math.min(6_000, Math.max(1, Math.floor(segmentBudget.remainingMs() / 2)))
+    : 0;
+  const readyEndsAt = segmentBudget
+    ? Math.max(wallClock(), segmentBudget.endsAtMs - readinessReserveMs)
+    : wallClock() + Math.min(config.timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS);
   while (wallClock() < readyEndsAt) {
     const waitMs = loopOperationWaitMs(readyEndsAt, wallClock());
     if (waitMs <= 0) break;

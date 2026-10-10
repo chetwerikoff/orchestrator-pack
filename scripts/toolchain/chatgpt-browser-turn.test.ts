@@ -980,6 +980,50 @@ describe('issue 964 UI ownership and profile walls — S7/S8/S9', () => {
     });
   });
 
+  it('S9 reserves production pre-send budget for baseline and absent-composer mutation', async () => {
+    const evidence = "You've reached your usage limit";
+    const fixture = fakeTurnPage({ composer: false, alertText: evidence });
+    const originalLocator = fixture.page.locator.bind(fixture.page);
+    let clickAttempts = 0;
+    let fillAttempts = 0;
+    fixture.page.locator = (selector: string) => selector === COMPOSER_SELECTOR
+      ? {
+        ...originalLocator(selector),
+        click: async (options: { timeout: number }) => {
+          expect(options.timeout).toBeGreaterThan(0);
+          clickAttempts++;
+        },
+        fill: async (_text: string, options: { timeout: number }) => {
+          expect(options.timeout).toBeGreaterThan(0);
+          fillAttempts++;
+          throw new Error('synthetic_absent_composer');
+        },
+      }
+      : originalLocator(selector);
+    const segmentBudget = createPreSendSegmentBudget(1_500);
+    const result = await sendTurn(fixture.page, 'payload', {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: 'https://chatgpt.com/c/example',
+      newChat: false,
+      timeoutMs: 30_000,
+    }, undefined, undefined, segmentBudget);
+
+    expect(clickAttempts).toBe(1);
+    expect(fillAttempts).toBe(1);
+    expect(fixture.getSendClicks()).toBe(0);
+    expect(result).toMatchObject({
+      state: 'send_failed',
+      cause: 'composer_unavailable',
+      possibleDelivery: false,
+      product_wall_diagnostic: {
+        wall_kind: 'quota',
+        matched_text: evidence,
+        matched_selector: '[role="alert"]',
+      },
+    });
+  });
+
   it('S9 no composer and no status text attempts ordinary mutation then reports not-sent', async () => {
     const fixture = fakeTurnPage({ composer: false, bodyText: 'ordinary page' });
     const originalLocator = fixture.page.locator.bind(fixture.page);
@@ -3908,6 +3952,22 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     expect(failed).toBe('composer_unavailable');
     expect(rejected.composer.click).toHaveBeenCalledTimes(1);
     expect(rejected.composer.fill).not.toHaveBeenCalled();
+  });
+
+  it('Issue #2489 attempts click/fill on present-but-unready composers within budget', async () => {
+    for (const option of [{ visible: false }, { enabled: false }, { contentEditable: false }]) {
+      const fixture = makeComposerPage(option);
+      const failure = await __testComposerMutation.mutateComposerOrCause(fixture.page, 'payload', 10_000);
+      expect(failure).toBe('composer_mutation_budget_exhausted');
+      expect(fixture.composer.click).toHaveBeenCalledTimes(1);
+      expect(fixture.composer.fill).toHaveBeenCalledTimes(1);
+      expect(fixture.composer.click.mock.calls[0]?.[0]?.timeout).toBeGreaterThan(0);
+    }
+
+    const recovered = makeComposerPage({ readinessSequence: [false, true] });
+    expect(await __testComposerMutation.mutateComposerOrCause(recovered.page, 'payload', 10_000)).toBeNull();
+    expect(recovered.composer.click).toHaveBeenCalledTimes(1);
+    expect(recovered.composer.fill).toHaveBeenCalledTimes(1);
   });
 
   it('bounds the first post-readiness probe by the insertion phase', async () => {
