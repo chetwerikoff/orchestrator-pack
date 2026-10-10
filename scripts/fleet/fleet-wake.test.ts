@@ -24,6 +24,7 @@ import {
   type TerminalEnvelopeEvent,
 } from './fleet-wake.ts';
 import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
+import type { ChatErrorBanner, ProjectChat } from './chat-error-banners.ts';
 import { FileFleetStateStore, type FleetPaneObservation, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
 import { runLaunch, readTerminalEnvelope } from '../flow-manager-long-running-child.ts';
 import { configuredProfileKey } from '../chatgpt-browser-turn/storage-common.ts';
@@ -125,6 +126,7 @@ async function tick(input: {
   terminals?: readonly FleetTerminal[];
   executor?: OrcaExecutor;
   readChats?: FleetAlarmTickOptions['readChats'];
+  closeChat?: FleetAlarmTickOptions['closeChat'];
   listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
   listUnreadRunMessages?: () => readonly { id: string; subject: string; toHandle: string; fromHandle: string }[];
   listOpenPulls?: (repository: string) => readonly OpenPullHead[];
@@ -148,6 +150,7 @@ async function tick(input: {
     sleepMs: async (ms) => { sleeps.push(ms); },
     log: (line) => { logs.push(line); },
     ...(input.readChats ? { readChats: input.readChats } : {}),
+    ...(input.closeChat ? { closeChat: input.closeChat } : {}),
     listTerminalEnvelopes: input.listTerminalEnvelopes ?? (() => []),
     ...(input.listUnreadRunMessages ? { listUnreadRunMessages: input.listUnreadRunMessages } : {}),
     ...(input.listOpenPulls ? { listOpenPulls: input.listOpenPulls } : {}),
@@ -1810,6 +1813,255 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
     h.screens.one = 'Question about next action?';
     h.time(1_800_001);
     expect((await h.step()).result.state).toBe('sent');
+  });
+});
+
+describe('Issue #2471 local-chatgpt coordinator-only and one-attempt routing', () => {
+  const projectUrl = 'https://chatgpt.com/g/g-p/project/test';
+  const localScope = { projectUrl, repository: 'test/project' };
+  const uuid1 = '123e4567-e89b-12d3-a456-426614174042';
+  const uuid2 = '223e4567-e89b-12d3-a456-426614174042';
+  const local = `${projectUrl}/c/local-chatgpt:${uuid1}`;
+  const saved = `${projectUrl}/c/6ac03300-098c-83ec-a6d5-f9d0cec30a5f`;
+  const settings = config({ chatCdpUrl: 'http://127.0.0.1:9222', chatScope: localScope });
+  const idle = { coord: 'idle', one: 'working\nesc interrupt', two: 'working\nesc interrupt' };
+  const row = (
+    url: string, kind: ChatErrorBanner['kind'] = 'error_banner',
+    extra: Partial<ProjectChat> = {},
+  ): ProjectChat => ({
+    targetId: 'local-fixture', url, issue: 2471, pull: 2475, review: false,
+    generating: false, banners: [{
+      url, issue: 2471, pull: 2475, review: false, kind,
+      text: kind === 'stalled' ? 'GPT stopped without a final reply'
+        : kind === 'unloadable' ? 'Could not load this ChatGPT conversation' : 'Synthetic red failure',
+      retry: kind === 'error_banner',
+    }], ...extra,
+  });
+  const textTo = (calls: readonly string[][], target: string): string =>
+    sendsTo(calls, target).find((call) => call.includes('--text'))?.at(-2) ?? '';
+
+  it('rejects local ownership even with a convincing live launcher, branch, PR or Issue fallback', () => {
+    const manager = { ...terminals[1]!, worktreePath: `${workerBase}/one-2471`,
+      incarnationId: 'current-manager-generation', branch: 'refs/heads/current' };
+    let bindingReads = 0;
+    const binding = () => {
+      bindingReads += 1;
+      return { schema: 'chat-binding/v1' as const, conversation_url: local,
+        worktree: manager.worktreePath, updated_at: '2026-10-10T00:00:00Z',
+        terminal_handle: manager.handle };
+    };
+    expect(bannerOwnerPane({ url: local, issue: 2471, pull: 2475 }, [manager], settings, binding)).toBeUndefined();
+    expect(bannerOwnerPane({ url: local.replace('local-chatgpt:', 'local-chatgpt%3A'), issue: 2471 },
+      [manager], settings, binding)).toBeUndefined();
+    expect(bindingReads).toBe(0);
+    expect(bannerOwnerPane({ url: saved, issue: 2471 }, [manager], settings, () => undefined)?.handle).toBe('one');
+  });
+
+  it('emits a role-neutral coordinator warning once for duplicate CDP rows, not to the tempting unit', async () => {
+    const store = new MemoryWakeStore();
+    const workers = [terminals[0]!, {
+      ...terminals[1]!, worktreePath: `${workerBase}/one-2471`, branch: 'refs/heads/target',
+      incarnationId: 'inc-mgr', status: 'running',
+    }, terminals[2]!];
+    const localUpper = local.replace(uuid1, uuid1.toUpperCase()) + '?ctx=1#fragment';
+    const candidates = [row(localUpper, 'error_banner', { targetId: 'first', review: true }),
+      row(local, 'error_banner', { targetId: 'second' })];
+    const first = await tick({ config: settings, store, terminals: workers, screens: idle,
+      readChats: async () => candidates, now: () => 0 });
+    expect(first.result.state).toBe('sent');
+    expect(sendsTo(first.calls, 'one')).toHaveLength(0);
+    expect(sendsTo(first.calls, 'two')).toHaveLength(0);
+    expect(sendsTo(first.calls, 'coord')).toHaveLength(2);
+    const message = textTo(first.calls, 'coord');
+    expect(message).toContain(local);
+    expect(message).toContain('Owner, workflow role and latest-turn invocation are unproven');
+    expect(message).toContain('Never press Retry');
+    expect(message).not.toContain('Synthetic red failure');
+    expect(message).not.toContain('Доделай и сообщи статус');
+    expect(message).not.toContain('Заверши ревью:');
+    expect(message).not.toContain('one-2471');
+    expect(store.parkedWakeEvents.size).toBe(1);
+    const key = [...store.parkedWakeEvents][0]!;
+    expect(key).toContain(local);
+    expect(store.readParkedWakeEventStatus(key)).toBe('sent');
+    expect(store.readLastSentSignature()).not.toContain(local);
+    const duplicate = await tick({ config: settings, store, terminals: workers, screens: idle,
+      readChats: async () => [row(local, 'error_banner', { targetId: 'recycled-target' })], now: () => 60_000 });
+    expect(sendsTo(duplicate.calls, 'coord')).toHaveLength(0);
+    expect(store.parkedWakeEvents.size).toBe(1);
+    const next = await tick({ config: settings, store, terminals: workers, screens: idle,
+      readChats: async () => [row(local.replace(uuid1, uuid2), 'unloadable', { targetId: 'first' })], now: () => 60_100 });
+    expect(textTo(next.calls, 'coord')).toContain('local-chatgpt:' + uuid2);
+    expect(store.parkedWakeEvents.size).toBe(2);
+  });
+
+  it('preserves two-tick stalled admission, generating suppression and malformed/foreign read-only behavior', async () => {
+    const store = new MemoryWakeStore();
+    const sources = [
+      row(local, 'error_banner', { generating: true }),
+      row(local.replace(uuid1, 'bad-id')),
+      row(local.replace('/project/test/', '/project/foreign/')),
+      row('https://elsewhere.invalid/c/local-chatgpt:' + uuid1),
+      row(local.replace('local-chatgpt:', 'local-chatgpt%3A')),
+    ];
+    const invalid = await tick({ config: settings, store, screens: idle,
+      readChats: async () => sources });
+    expect(invalid.result.state).toBe('nothing_stopped');
+    expect(sends(invalid.calls)).toHaveLength(0);
+    expect(store.parkedWakeEvents.size).toBe(0);
+    const first = await tick({ config: settings, store, screens: idle, readChats: async () => [row(local, 'stalled')] });
+    expect(first.result.state).toBe('nothing_stopped');
+    const second = await tick({ config: settings, store, screens: idle,
+      readChats: async () => [row(local.replace(uuid1, uuid1.toUpperCase()), 'stalled')] });
+    expect(textTo(second.calls, 'coord')).toContain('local-chatgpt:' + uuid1);
+    expect(sendsTo(second.calls, 'one')).toHaveLength(0);
+    expect(sendsTo((await tick({ config: settings, store, screens: idle,
+      readChats: async () => [row(local, 'stalled')] })).calls, 'coord')).toHaveLength(0);
+    const withoutCoordinator = new MemoryWakeStore();
+    const absent = await tick({ config: settings, store: withoutCoordinator,
+      screens: { one: 'working\nesc interrupt', two: 'working\nesc interrupt' },
+      terminals: terminals.slice(1), readChats: async () => [row(local)] });
+    expect(absent.result.state).toBe('no_orchestrator');
+    expect(withoutCoordinator.parkedWakeEvents.size).toBe(0);
+  });
+
+  it('isolates local attempts from changed STOPPED state, ordinary 30-minute cadence and fresh local IDs', async () => {
+    const store = new MemoryWakeStore();
+    const screens = { coord: 'idle', one: 'A decision is needed', two: 'working\nesc interrupt' };
+    const step = (at: number, rows: ProjectChat[], paneScreens = screens) =>
+      tick({ config: settings, store, screens: paneScreens, now: () => at, readChats: async () => rows });
+    const first = await step(0, [row(local)]);
+    expect(first.result.state).toBe('sent');
+    expect(textTo(first.calls, 'coord')).toContain(local);
+    const same = await step(60_000, [row(local, 'error_banner', {
+      banners: [{ ...row(local).banners[0]!, text: 'Retry changed' }],
+    })]);
+    expect(same.result.state).toBe('same_stopped_set');
+    expect(sendsTo(same.calls, 'coord')).toHaveLength(0);
+    const changed = await step(60_001, [row(local)], {
+      coord: 'idle', one: 'A decision is needed', two: 'Another decision needed',
+    });
+    expect(changed.result.state).toBe('sent');
+    expect(textTo(changed.calls, 'coord')).toContain('STOPPED two');
+    expect(textTo(changed.calls, 'coord')).not.toContain(local);
+    expect(changed.result.state === 'sent' ? changed.result.signature : '').not.toContain(local);
+    const cadence = await step(1_860_002, [row(local)], {
+      coord: 'idle', one: 'A decision is needed', two: 'Another decision needed',
+    });
+    expect(cadence.result.state).toBe('sent');
+    expect(textTo(cadence.calls, 'coord')).not.toContain(local);
+    const newChat = await step(1_860_010, [row(local.replace(uuid1, uuid2))], {
+      coord: 'idle', one: 'A decision is needed', two: 'Another decision needed',
+    });
+    expect(textTo(newChat.calls, 'coord')).toContain('local-chatgpt:' + uuid2);
+    const repeat = await step(3_660_015, [row(local), row(local.replace(uuid1, uuid2))], {
+      coord: 'idle', one: 'A decision is needed', two: 'Another decision needed',
+    });
+    expect(textTo(repeat.calls, 'coord')).not.toContain('local-chatgpt:');
+    expect(store.parkedWakeEvents.size).toBe(2);
+  });
+
+  it('never uses an unrelated terminal envelope, stale target or unbound DOM role as local identity', async () => {
+    const store = new MemoryWakeStore();
+    const envelope: TerminalEnvelopeEvent = {
+      path: '/tmp/opencode/child-start-failed-terminal.json', invocationId: 'inv-child-start-failed',
+      terminalHandle: 'missing', cwd: '/foreign/worktree', delivery: 'not-sent',
+      // A child_start_failed envelope need not carry observedInvocationId.
+    };
+    const first = await tick({ config: settings, store, screens: idle,
+      readChats: async () => [row(local, 'unloadable', { review: true, targetId: 'recycled' })],
+      listTerminalEnvelopes: () => [envelope] });
+    expect(textTo(first.calls, 'coord')).toContain(local);
+    expect(textTo(first.calls, 'coord')).toContain('unproven');
+    expect(sendsTo(first.calls, 'one')).toHaveLength(0);
+    const after = await tick({ config: settings, store, screens: idle,
+      readChats: async () => [row(local, 'error_banner', { review: false, targetId: 'new-target' })],
+      listTerminalEnvelopes: () => [{ ...envelope, observedInvocationId: 'inv-child-start-failed' }] });
+    expect(sendsTo(after.calls, 'coord')).toHaveLength(0);
+    expect(store.parkedWakeEvents.size).toBe(1);
+  });
+
+  it.each(['before-first', 'between-enters', 'failed-second', 'thrown-first'])(
+    'does not replay uncertain effects when coordinator changes or send fails: %s', async (caseName) => {
+      const store = new MemoryWakeStore();
+      const initial = [{ ...terminals[0]!, incarnationId: 'coordinator-1', status: 'running' },
+        terminals[1]!, terminals[2]!];
+      const replacement = [{ ...initial[0]!, incarnationId: 'coordinator-2' }, ...initial.slice(1)];
+      let censusCount = 0;
+      const executor: OrcaExecutor = (args) => {
+        if (args[0] === 'terminal' && args[1] === 'list') censusCount++;
+        if (args[0] === 'terminal' && args[1] === 'send') {
+          if (caseName === 'thrown-first' && args.includes('--text')) throw Error('unknown delivery');
+          if (caseName === 'failed-second' && !args.includes('--text')) return commandResult('', false);
+        }
+        const changed = caseName === 'before-first' && censusCount >= 2
+          || caseName === 'between-enters' && censusCount >= 3;
+        return fakeOrca(idle, [], changed ? replacement : initial)(args);
+      };
+      const first = await tick({ config: settings, store, executor, screens: idle,
+        readChats: async () => [row(local)] });
+      expect(first.result.state).toBe('send_failed');
+      const firstSend = sendsTo(first.calls, 'coord');
+      expect(firstSend).toHaveLength(caseName === 'before-first' ? 0 : 1);
+      expect(firstSend.every((args) => args.includes('--text'))).toBe(true);
+      const statuses = [...store.parkedWakeEvents].map((key) => store.readParkedWakeEventStatus(key));
+      expect(statuses).toEqual(caseName === 'before-first' ? [] : ['attempted_unverified']);
+      const recovery = await tick({ config: settings, store, screens: idle, readChats: async () => [row(local)] });
+      expect(sendsTo(recovery.calls, 'coord')).toHaveLength(caseName === 'before-first' ? 2 : 0);
+      if (caseName !== 'before-first') expect([...store.parkedWakeEvents].map((key) =>
+        store.readParkedWakeEventStatus(key))).toEqual(['attempted_unverified']);
+    },
+  );
+
+  it('persists local attempts across a file-store restart while preserving saved-URL ownership and closure', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-local-2471-'));
+    try {
+      const store = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: root });
+      const first = await tick({ config: settings, store, screens: idle,
+        readChats: async () => [row(local)] });
+      expect(textTo(first.calls, 'coord')).toContain(local);
+      const reloaded = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: root });
+      const repeat = await tick({ config: settings, store: reloaded, screens: idle,
+        readChats: async () => [row(local)] });
+      expect(sendsTo(repeat.calls, 'coord')).toHaveLength(0);
+      const owner = { ...terminals[1]!, worktreePath: `${workerBase}/one-2471` };
+      const prior = row(saved.replace('6ac03300', '5ac03300'), 'error_banner',
+        { banners: [], targetId: 'older-saved' });
+      const newest = row(saved, 'error_banner', { banners: [], targetId: 'newer-saved' });
+      const closed: string[] = [];
+      const liveSaved = await tick({ config: settings, store: reloaded,
+        terminals: [terminals[0]!, owner, terminals[2]!], screens: idle,
+        readChats: async () => [prior, newest, row(local)],
+        closeChat: async (_cdp, target) => { closed.push(target); return true; } });
+      expect(closed).toEqual(['older-saved']);
+      expect(sendsTo(liveSaved.calls, 'one')).toHaveLength(0);
+      expect(sendsTo(liveSaved.calls, 'coord')).toHaveLength(0);
+      const canonical = await tick({ config: settings, store: reloaded,
+        terminals: [terminals[0]!, owner, terminals[2]!], screens: idle,
+        readChats: async () => [row(saved)] });
+      expect(sendsTo(canonical.calls, 'one')).toHaveLength(2);
+      expect(textTo(canonical.calls, 'one')).toContain('Only for confirmed execution');
+      expect(textTo(canonical.calls, 'one')).toContain('Only for confirmed PR review');
+      expect(textTo(canonical.calls, 'one')).not.toContain('This is a review chat');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('keeps saved-role guidance conditional even when DOM heading suggests an executable role', () => {
+    const base = row(saved).banners[0]!;
+    const message = managerBannerMessage(base);
+    expect(managerBannerMessage({ ...base, review: true })).toBe(message);
+    expect(message).toContain('Only for confirmed execution');
+    expect(message).toContain('Only for confirmed PR review');
+    expect(message).toContain('Доделай и сообщи статус');
+    expect(message).toContain('Заверши ревью:');
+    const unloadable = managerBannerMessage({ ...base, kind: 'unloadable', review: false });
+    expect(unloadable).toContain('continue the task in a new chat');
+    expect(unloadable).toContain('Restart the review in a new chat');
+    expect(unloadable).not.toContain('same chat');
+    const generic = fleetAlarmMessage('idle', [], [{ ...base, review: true }]);
+    expect(generic).toContain('independent role and delivery reconciliation');
+    expect(generic).toContain('Only after confirming execution');
+    expect(generic).toContain('only after confirming PR review');
   });
 });
 
