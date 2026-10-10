@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -28,6 +28,7 @@ import {
   readTerminalEnvelope,
   runLaunch,
   runWait,
+  type LaunchConfig,
   type ParsedTurnResult,
 } from './flow-manager-long-running-child.ts';
 import {
@@ -58,6 +59,48 @@ const browserReadmePath = join(repoRoot, 'scripts/chatgpt-browser-turn/README.md
 const livenessContractUrl = pathToFileURL(join(repoRoot, 'scripts/chatgpt-browser-turn/liveness-contract.ts')).href;
 const packageJsonPath = join(repoRoot, 'package.json');
 
+// Module-evaluation preflight: a legacy live-root allocator must fail before any fixture is created.
+// Inspect this source file only; never stat, list or resolve the live wake-root itself.
+function assertAllocatorSourceSafe(source: string): void {
+  if (/function\s+tempDir\s*\([^)]*\bbase\s*:\s*string\s*=\s*TERMINAL_ENVELOPE_ROOT/u.test(source)
+    || /mkdtempSync\s*\(\s*join\s*\(\s*TERMINAL_ENVELOPE_ROOT/u.test(source)) {
+    throw new Error('unsafe_fixture_allocator_live_wake_root');
+  }
+}
+assertAllocatorSourceSafe(readFileSync(fileURLToPath(import.meta.url), 'utf8'));
+
+const CLI_FIXTURE_GATE_ENV = 'OPK_FM_LONG_CHILD_TEST_GATE';
+const CLI_FIXTURE_ROOT_ENV = 'OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT';
+function cliFixtureEnv(root: string): Record<string, string> {
+  return { [CLI_FIXTURE_GATE_ENV]: 'fixture-root-v1', [CLI_FIXTURE_ROOT_ENV]: root };
+}
+
+// Validate the full mkdtemp prefix (including the effective parent) before any filesystem mutation.
+// Canonicalize only the wake root's safe parent, not the live wake root or its artifacts.
+function plannedFixturePrefix(prefix: string, parent: string, protectedRoot = TERMINAL_ENVELOPE_ROOT): string {
+  if (!prefix || prefix === '.' || prefix === '..' || isAbsolute(prefix) || /[/\\]/u.test(prefix)
+    || basename(prefix) !== prefix) {
+    throw new Error('unsafe_fixture_prefix');
+  }
+  const protectedPath = resolve(protectedRoot);
+  const parentPath = resolve(parent);
+  const plannedPath = resolve(parentPath, prefix);
+  const inside = (candidate: string, root: string): boolean =>
+    candidate === root || candidate.startsWith(root + sep);
+  if (inside(parentPath, protectedPath) || inside(plannedPath, protectedPath)) {
+    throw new Error('unsafe_fixture_live_wake_destination');
+  }
+  const canonicalProtected = protectedRoot === TERMINAL_ENVELOPE_ROOT
+    ? join(realpathSync(dirname(protectedPath)), basename(protectedPath))
+    : realpathSync(protectedPath);
+  const canonicalParent = realpathSync(parentPath);
+  if (inside(canonicalParent, canonicalProtected)
+    || inside(resolve(canonicalParent, prefix), canonicalProtected)) {
+    throw new Error('unsafe_fixture_canonical_wake_destination');
+  }
+  return join(canonicalParent, prefix);
+}
+
 const cleanupDirs: string[] = [];
 
 beforeEach(() => {
@@ -66,11 +109,17 @@ beforeEach(() => {
   process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '150';
 });
 
-function tempDir(prefix = 'opk-fm-long-child-', base: string = TERMINAL_ENVELOPE_ROOT): string {
-  mkdirSync(base, { recursive: true });
-  const dir = mkdtempSync(join(base, prefix));
+function tempDir(prefix = 'opk-fm-long-child-'): string {
+  const dir = mkdtempSync(plannedFixturePrefix(prefix, tmpdir()));
   cleanupDirs.push(dir);
   return dir;
+}
+
+function runFixtureLaunch(root: string, config: LaunchConfig): Promise<number> {
+  if (!cleanupDirs.includes(root) || !resolve(config.terminalEnvelopePath).startsWith(resolve(root) + sep)) {
+    throw new Error('launcher_fixture_root_not_allocated');
+  }
+  return runLaunch({ ...config, terminalEnvelopeRoot: root });
 }
 
 afterEach(() => {
@@ -136,12 +185,32 @@ async function runLauncherCli(args: string[], env: Record<string, string> = {}):
     command: process.execPath,
     args: ['--experimental-strip-types', launcherPath, ...args],
     cwd: repoRoot,
-    env: { ...process.env, ...env },
-    inheritParentEnv: true,
+    env,
+    inheritParentEnv: false, // drop inherited fixture gates, NODE_OPTIONS and test-runner signals
     allowEmptyStdout: true,
     timeoutMs: 120_000,
   });
   return { code: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
+}
+
+function cliLaunchArgs(paths: ReturnType<typeof launchPaths>, fixture: ReturnType<typeof nodeFixture>): string[] {
+  return [
+    'launch', '--run-identity', 'run-2440', '--attempt-identity', 'attempt-2440',
+    '--handoff-receipt', paths.receipt, '--terminal-envelope', paths.envelope,
+    '--browser-output', paths.output, '--cwd', repoRoot, '--child-command', fixture.command,
+    '--', ...fixture.args,
+  ];
+}
+
+function markedChildFixture(marker: string, result: TurnResultV1): ReturnType<typeof nodeFixture> {
+  return nodeFixture('require("node:fs").writeFileSync(' + JSON.stringify(marker) + ', "started");'
+    + 'process.stdout.write(JSON.stringify(' + JSON.stringify(result) + ') + "\\n", () => process.exit(0));');
+}
+
+function expectNoLauncherEffects(paths: ReturnType<typeof launchPaths>, marker: string, envelope = paths.envelope): void {
+  for (const artifact of [paths.receipt, envelope, paths.output, marker]) {
+    expect(existsSync(artifact)).toBe(false);
+  }
 }
 
 function makeParsedTurnResult(
@@ -172,7 +241,7 @@ async function launchReceiptScenario(input: {
     process.stdout.write(JSON.stringify(${JSON.stringify(input.receipt)}) + '\\n', () => process.exit(0));
   `);
   process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '200';
-  const code = await runLaunch({
+  const code = await runFixtureLaunch(root, {
     runIdentity: `run-${input.id}`,
     attemptIdentity: `attempt-${input.id}`,
     handoffReceiptPath: paths.receipt,
@@ -192,9 +261,59 @@ async function launchReceiptScenario(input: {
   return readTerminalEnvelope(paths.envelope);
 }
 
+describe('safe fixture allocator preflight (#2440)', () => {
+  // Simulated mutation stage: rejected destinations must never reach any filesystem-writing operation.
+  function expectRejectedWithoutWrites(validate: () => string): void {
+    const mkdir = vi.fn();
+    const mkdtemp = vi.fn();
+    const write = vi.fn();
+    const cleanup = vi.fn();
+    expect(() => {
+      const planned = validate();
+      mkdir(planned); mkdtemp(planned); write(planned); cleanup(planned);
+    }).toThrow(/unsafe_fixture_/u);
+    for (const op of [mkdir, mkdtemp, write, cleanup]) expect(op).not.toHaveBeenCalled();
+  }
+
+  it('rejects the legacy default and direct live-root mkdtemp by read-only source inspection', () => {
+    const oldDefault = 'function tempDir(prefix = "old-", base: string = '
+      + 'TERMINAL_ENVELOPE_ROOT) { return mkdtempSync(join(base, prefix)); }';
+    const directRoot = 'function tempDir(prefix: string) { return '
+      + 'mkdtempSync(join(' + 'TERMINAL_ENVELOPE_ROOT, prefix)); }';
+    expect(() => assertAllocatorSourceSafe(oldDefault)).toThrow('unsafe_fixture_allocator_live_wake_root');
+    expect(() => assertAllocatorSourceSafe(directRoot)).toThrow('unsafe_fixture_allocator_live_wake_root');
+    expect(() => assertAllocatorSourceSafe(readFileSync(fileURLToPath(import.meta.url), 'utf8'))).not.toThrow();
+  });
+
+  it.each(['', '.', '..', '/tmp/opencode/fixture-', 'opencode/fixture-', '../opencode/fixture-', '\\opencode\\fixture-'])(
+    'rejects a non-basename allocation prefix without any write: %s', (prefix) => {
+      expectRejectedWithoutWrites(() => plannedFixturePrefix(prefix, tmpdir()));
+    },
+  );
+
+  it('rejects a literal live wake-root parent lexically, without inspecting that directory', () => {
+    expectRejectedWithoutWrites(() => plannedFixturePrefix('fixture-', TERMINAL_ENVELOPE_ROOT));
+    expectRejectedWithoutWrites(() => plannedFixturePrefix('fixture-', join(TERMINAL_ENVELOPE_ROOT, 'nested')));
+  });
+
+  it('rejects a synthetic protected destination and symlink-parent aliases canonically', () => {
+    const root = tempDir('opk-2440-guard-');
+    const protectedRoot = join(root, 'protected');
+    const alias = join(root, 'alias');
+    const suppliedParent = join(root, 'supplied-parent');
+    mkdirSync(protectedRoot);
+    symlinkSync(protectedRoot, alias);
+    symlinkSync(alias, suppliedParent);
+    expectRejectedWithoutWrites(() => plannedFixturePrefix('protected', root, protectedRoot));
+    expectRejectedWithoutWrites(() => plannedFixturePrefix('fixture-', protectedRoot, protectedRoot));
+    expectRejectedWithoutWrites(() => plannedFixturePrefix('fixture-', alias, protectedRoot));
+    expectRejectedWithoutWrites(() => plannedFixturePrefix('fixture-', suppliedParent, protectedRoot));
+  });
+});
+
 describe('observable post-send exits (#2416)', () => {
   it.each(['throw', 'SIGTERM', 'SIGKILL', 'timeout', 'launcher-SIGTERM'] as const)('preserves persisted sent_unbound evidence after %s', async (exit) => {
-    const root = tempDir('opk-2416-', tmpdir());
+    const root = tempDir('opk-2416-');
     vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
     // Leave room for cold module startup and filesystem-backed observation writes under parallel CI load.
     // A post-send heartbeat distinguishes the persistence scenario from startup timeout behavior.
@@ -247,7 +366,7 @@ describe('observable post-send exits (#2416)', () => {
 
   it.each(['unique', 'unrelated', 'duplicate', 'closed', 'incomplete', 'launcher-exception'])('recovery requires unique exact owned-tab proof: %s', async (mode) => {
     const owned = mode === 'unique' || mode === 'launcher-exception';
-    const root = tempDir('opk-2416-owned-', tmpdir());
+    const root = tempDir('opk-2416-owned-');
     vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
     const paths = launchPaths(root, 'owned');
     const profile = join(root, 'profile');
@@ -262,7 +381,7 @@ describe('observable post-send exits (#2416)', () => {
     const stop = vi.fn();
     const releaseBrowser = vi.fn(async () => {});
     const fixture = nodeFixture('throw new Error("post-send");');
-    await runLaunch({ runIdentity: 'run', attemptIdentity: 'attempt', handoffReceiptPath: paths.receipt,
+    await runFixtureLaunch(root, { runIdentity: 'run', attemptIdentity: 'attempt', handoffReceiptPath: paths.receipt,
       terminalEnvelopePath: paths.envelope, terminalEnvelopeRoot: root, browserOutputPath: paths.output,
       cwd: repoRoot, childCommand: mode === 'launcher-exception' ? '' : fixture.command,
       childArgs: [...fixture.args, '--', '--profile', profile, '--cdp', cdp, '--invocation-id', invocationId],
@@ -282,7 +401,7 @@ describe('observable post-send exits (#2416)', () => {
   });
 
   it('preserves an authoritative result completing across launcher SIGTERM (review race)', async () => {
-    const root = tempDir('opk-2416-race-', tmpdir());
+    const root = tempDir('opk-2416-race-');
     vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
     vi.stubEnv('OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS', '300');
     vi.stubEnv('OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS', '300');
@@ -319,7 +438,7 @@ describe('observable post-send exits (#2416)', () => {
   });
 
   it('retains cancellation and heartbeat witnesses alongside the exact persisted phase', async () => {
-    const root = tempDir('opk-2416-combined-', tmpdir());
+    const root = tempDir('opk-2416-combined-');
     vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
     const paths = launchPaths(root, 'combined');
     const profile = join(root, 'profile');
@@ -334,7 +453,7 @@ describe('observable post-send exits (#2416)', () => {
     const receipt = buildBrowserTurnCancellationReceipt({ invocationId, profileKey, marker, conversationUrl, sendCount: 1 });
     const heartbeat = { schema: 'observation-heartbeat/v1', phase: 'post_send_observation', poll_count: 1, observation_state: 'busy', stable_reads: 0, completion_ready: false };
     const fixture = nodeFixture(`process.stdout.write(${JSON.stringify(JSON.stringify(receipt) + '\n' + JSON.stringify(heartbeat) + '\n')});`);
-    await runLaunch({ runIdentity: 'run', attemptIdentity: 'attempt', handoffReceiptPath: paths.receipt,
+    await runFixtureLaunch(root, { runIdentity: 'run', attemptIdentity: 'attempt', handoffReceiptPath: paths.receipt,
       terminalEnvelopePath: paths.envelope, terminalEnvelopeRoot: root, browserOutputPath: paths.output, cwd: repoRoot,
       childCommand: fixture.command, childArgs: [...fixture.args, '--', '--profile', profile, '--cdp', cdp, '--invocation-id', invocationId] });
     expect(readTerminalEnvelope(paths.envelope)).toMatchObject({
@@ -386,11 +505,10 @@ describe('flow-manager long-running child (#1164)', () => {
     const root = tempDir();
     const paths = launchPaths(root, 'detach-launcher');
     const result = makeTurnResult();
-    const fixture = nodeFixture(`
-      process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n');
-      process.exit(0);
-    `);
+    const childMarker = join(root, 'detach-child-started.txt');
+    const fixture = markedChildFixture(childMarker, result);
     process.env.OPK_FM_LONG_CHILD_DISABLE_DETACH = '1';
+    for (const [key, value] of Object.entries(cliFixtureEnv(root))) vi.stubEnv(key, value);
     vi.stubEnv('ORCA_TERMINAL_HANDLE', 'term_launcher');
     const code = await spawnDetachedLauncher([
       'launch',
@@ -405,6 +523,8 @@ describe('flow-manager long-running child (#1164)', () => {
     ]);
     expect(code).toBe(0);
     expect(readHandoffReceipt(paths.receipt)?.schema).toBe(HANDOFF_SCHEMA);
+    expect(existsSync(childMarker)).toBe(true);
+    expect(isWakeableTerminalEnvelopePath(paths.envelope, root)).toBe(true);
     expect(readTerminalEnvelope(paths.envelope)?.lifecycle_outcome).toBe('success');
     expect(readTerminalEnvelope(paths.envelope)?.cwd).toBe(repoRoot);
     expect(readTerminalEnvelope(paths.envelope)?.terminal_handle).toBe('term_launcher');
@@ -413,8 +533,10 @@ describe('flow-manager long-running child (#1164)', () => {
   it('refuses before handoff when artifact paths alias', async () => {
     const root = tempDir();
     const paths = launchPaths(root, 'alias');
-    const fixture = nodeFixture('process.exit(0)');
-    const code = await runLaunch({
+    const childMarker = join(root, 'alias-child-started.txt');
+    const fixture = markedChildFixture(childMarker, makeTurnResult());
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run',
       attemptIdentity: 'attempt',
       handoffReceiptPath: paths.envelope,
@@ -424,8 +546,12 @@ describe('flow-manager long-running child (#1164)', () => {
       childCommand: fixture.command,
       childArgs: fixture.args,
     });
+    const refusal = stderr.mock.calls.map((call) => String(call[0])).join('');
+    stderr.mockRestore();
     expect(code).toBe(2);
-    expect(existsSync(paths.envelope)).toBe(false);
+    expect(refusal).toContain('preflight_failed');
+    expect(refusal).toContain('artifact_path_alias');
+    expectNoLauncherEffects(paths, childMarker);
   });
 
   it('refuses an envelope name fleet-wake cannot discover before any effect (#2378)', async () => {
@@ -434,7 +560,7 @@ describe('flow-manager long-running child (#1164)', () => {
     const envelope = join(root, 'unwakeable', 'issue-2376-envelope.json');
     const fixture = nodeFixture('process.exit(0)');
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run',
       attemptIdentity: 'attempt',
       handoffReceiptPath: paths.receipt,
@@ -483,7 +609,7 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(isWakeableTerminalEnvelopePath('/tmp/opencode/terminal-envelope.json')).toBe(false);
   });
   it('rejects wakeable envelope names outside fleet-wake discovery root and suggests the scanned location', async () => {
-    const root = tempDir('outside-root-', tmpdir());
+    const root = tempDir('outside-root-');
     const paths = launchPaths(root, 'outside-root');
     const envelope = join(root, 'outside-root', 'issue-terminal.json');
     const fixture = nodeFixture('process.exit(0)');
@@ -508,12 +634,60 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(existsSync(envelope)).toBe(false);
   });
 
+  it.each([
+    ['unoverridden', 'none'],
+    ['root-only', 'root'],
+    ['gate-only', 'gate'],
+  ] as const)('real native CLI refuses a suffix-valid off-root terminal without the gate pair: %s', async (id, mode) => {
+    const root = tempDir('opk-2440-ungated-');
+    const paths = launchPaths(root, id);
+    const marker = join(root, 'should-not-start.txt');
+    const fixture = markedChildFixture(marker, makeTurnResult());
+    const env: Record<string, string> = mode === 'root' ? { [CLI_FIXTURE_ROOT_ENV]: root }
+      : mode === 'gate' ? { [CLI_FIXTURE_GATE_ENV]: 'fixture-root-v1' } : {};
+    const outcome = await runLauncherCli(cliLaunchArgs(paths, fixture), env);
+    expect(isWakeableTerminalEnvelopePath(paths.envelope, root)).toBe(true);
+    expect(outcome.code).toBe(2);
+    expect(outcome.stderr).toContain('terminal_envelope_name_not_wakeable');
+    expectNoLauncherEffects(paths, marker);
+  });
+
+  it('accepts a real native CLI launch only with the discriminator and disposable root pair', async () => {
+    const root = tempDir('opk-2440-gated-');
+    const paths = launchPaths(root, 'gated');
+    const marker = join(root, 'child-started.txt');
+    const outcome = await runLauncherCli(cliLaunchArgs(paths, markedChildFixture(marker, makeTurnResult())), cliFixtureEnv(root));
+    expect(outcome.code).toBe(0);
+    expect(readHandoffReceipt(paths.receipt)?.schema).toBe(HANDOFF_SCHEMA);
+    expect(readTerminalEnvelope(paths.envelope)).toMatchObject({
+      lifecycle_outcome: 'success', delivery: 'landed', turn_result_state: 'ok',
+    });
+    expect(isWakeableTerminalEnvelopePath(paths.envelope, root)).toBe(true);
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  it('keeps suffix refusal ahead of effects even with both real CLI fixture gates set', async () => {
+    const root = tempDir('opk-2440-bad-suffix-');
+    const paths = launchPaths(root, 'invalid-suffix');
+    const invalidEnvelope = join(root, 'invalid-suffix', 'not-wakeable.json');
+    const marker = join(root, 'should-not-start.txt');
+    const outcome = await runLauncherCli(
+      cliLaunchArgs({ ...paths, envelope: invalidEnvelope }, markedChildFixture(marker, makeTurnResult())),
+      cliFixtureEnv(root),
+    );
+    expect(outcome.code).toBe(2);
+    expect(outcome.stderr).toContain('terminal_envelope_name_not_wakeable');
+    expectNoLauncherEffects(paths, marker, invalidEnvelope);
+  });
+
   it('refuses when receipt create fails after preflight', async () => {
     const root = tempDir();
     const paths = launchPaths(root, 'receipt-fail');
-    const fixture = nodeFixture('process.exit(0)');
+    const childMarker = join(root, 'receipt-fail-child-started.txt');
+    const fixture = markedChildFixture(childMarker, makeTurnResult());
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     process.env.OPK_FM_LONG_CHILD_FORCE_RECEIPT_CREATE_FAIL = '1';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run',
       attemptIdentity: 'attempt',
       handoffReceiptPath: paths.receipt,
@@ -523,8 +697,11 @@ describe('flow-manager long-running child (#1164)', () => {
       childCommand: fixture.command,
       childArgs: fixture.args,
     });
+    const refusal = stderr.mock.calls.map((call) => String(call[0])).join('');
+    stderr.mockRestore();
     expect(code).toBe(2);
-    expect(existsSync(paths.receipt)).toBe(false);
+    expect(refusal).toContain('receipt_create_failed');
+    expectNoLauncherEffects(paths, childMarker);
   });
 
   it('creates receipt before child start and succeeds on valid turn-result', async () => {
@@ -535,7 +712,7 @@ describe('flow-manager long-running child (#1164)', () => {
       process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n');
       process.exit(0);
     `);
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-ok',
       attemptIdentity: 'attempt-ok',
       handoffReceiptPath: paths.receipt,
@@ -560,7 +737,7 @@ describe('flow-manager long-running child (#1164)', () => {
     const paths = launchPaths(root, 'missing');
     const fixture = nodeFixture('process.exit(0)');
     process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '500';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-miss',
       attemptIdentity: 'attempt-miss',
       handoffReceiptPath: paths.receipt,
@@ -585,7 +762,7 @@ describe('flow-manager long-running child (#1164)', () => {
       process.exit(0);
     `);
     process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '1000';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-dup',
       attemptIdentity: 'attempt-dup',
       handoffReceiptPath: paths.receipt,
@@ -609,7 +786,7 @@ describe('flow-manager long-running child (#1164)', () => {
       setInterval(() => {}, 1000);
     `);
     process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '300';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-hang',
       attemptIdentity: 'attempt-hang',
       handoffReceiptPath: paths.receipt,
@@ -642,7 +819,7 @@ describe('flow-manager long-running child (#1164)', () => {
       setInterval(() => {}, 1000);
     `);
     process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '300';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-driver-error-retain',
       attemptIdentity: 'attempt-driver-error-retain',
       handoffReceiptPath: paths.receipt,
@@ -686,7 +863,7 @@ describe('flow-manager long-running child (#1164)', () => {
       setInterval(() => {}, 1000);
     `);
     process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '300';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-ok-retained-page',
       attemptIdentity: 'attempt-ok-retained-page',
       handoffReceiptPath: paths.receipt,
@@ -714,7 +891,7 @@ describe('flow-manager long-running child (#1164)', () => {
     `);
     process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '2000';
     process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '2000';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-delay',
       attemptIdentity: 'attempt-delay',
       handoffReceiptPath: paths.receipt,
@@ -758,7 +935,7 @@ describe('flow-manager long-running child (#1164)', () => {
     };
     process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '100';
     process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '100';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-heartbeat-success',
       attemptIdentity: 'attempt-heartbeat-success',
       handoffReceiptPath: paths.receipt,
@@ -796,7 +973,7 @@ describe('flow-manager long-running child (#1164)', () => {
         process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n', () => process.exit(0));
       }, 240);
     `);
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-heartbeat-refresh-arrival',
       attemptIdentity: 'attempt-heartbeat-refresh-arrival',
       handoffReceiptPath: paths.receipt,
@@ -834,7 +1011,7 @@ describe('flow-manager long-running child (#1164)', () => {
     process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '10';
     process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '30';
 
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-late-startup-heartbeat',
       attemptIdentity: 'attempt-late-startup-heartbeat',
       handoffReceiptPath: paths.receipt,
@@ -874,7 +1051,7 @@ describe('flow-manager long-running child (#1164)', () => {
     process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '10';
     process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '30';
 
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-late-recurring-heartbeat',
       attemptIdentity: 'attempt-late-recurring-heartbeat',
       handoffReceiptPath: paths.receipt,
@@ -915,7 +1092,7 @@ describe('flow-manager long-running child (#1164)', () => {
     process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '10';
     process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '30';
 
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-late-recurring-result',
       attemptIdentity: 'attempt-late-recurring-result',
       handoffReceiptPath: paths.receipt,
@@ -953,7 +1130,7 @@ describe('flow-manager long-running child (#1164)', () => {
     `);
     process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '30';
     process.env.OPK_FM_LONG_CHILD_HARD_DEADLINE_MS = '300';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-complete-without-signal',
       attemptIdentity: 'attempt-complete-without-signal',
       handoffReceiptPath: paths.receipt,
@@ -991,7 +1168,7 @@ describe('flow-manager long-running child (#1164)', () => {
     process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '100';
     process.env.OPK_FM_LONG_CHILD_HARD_DEADLINE_MS = '160';
     const startedAt = Date.now();
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-hard-timeout',
       attemptIdentity: 'attempt-hard-timeout',
       handoffReceiptPath: paths.receipt,
@@ -1017,7 +1194,7 @@ describe('flow-manager long-running child (#1164)', () => {
     const fixture = nodeFixture('setInterval(() => {}, 1000);');
     process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '100';
     process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '100';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-silent',
       attemptIdentity: 'attempt-silent',
       handoffReceiptPath: paths.receipt,
@@ -1052,7 +1229,7 @@ describe('flow-manager long-running child (#1164)', () => {
     process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '100';
     process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '100';
     const startedAt = Date.now();
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-heartbeat-idle',
       attemptIdentity: 'attempt-heartbeat-idle',
       handoffReceiptPath: paths.receipt,
@@ -1092,7 +1269,7 @@ describe('flow-manager long-running child (#1164)', () => {
       process.stdout.write(JSON.stringify(${JSON.stringify(valid)}) + '\\n');
       setInterval(() => process.stdout.write(JSON.stringify(${JSON.stringify(malformed)}) + '\\n'), 25);
     `);
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-malformed-heartbeat',
       attemptIdentity: 'attempt-malformed-heartbeat',
       handoffReceiptPath: paths.receipt,
@@ -1115,7 +1292,7 @@ describe('flow-manager long-running child (#1164)', () => {
     const paths = launchPaths(root, 'new-chat-before-receipt');
     const fixture = nodeFixture('setInterval(() => {}, 1000);');
     process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '200';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-new-chat-before-receipt',
       attemptIdentity: 'attempt-new-chat-before-receipt',
       handoffReceiptPath: paths.receipt,
@@ -1178,7 +1355,7 @@ describe('flow-manager long-running child (#1164)', () => {
       process.stderr.write('${canary}');
       process.exit(0);
     `);
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-canary',
       attemptIdentity: 'attempt-canary',
       handoffReceiptPath: paths.receipt,
@@ -1205,7 +1382,7 @@ describe('flow-manager long-running child (#1164)', () => {
       process.exit(0);
     `);
     process.env.OPK_FM_LONG_CHILD_FORCE_ENVELOPE_CREATE_FAIL = '1';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-store',
       attemptIdentity: 'attempt-store',
       handoffReceiptPath: paths.receipt,
@@ -1251,7 +1428,7 @@ describe('flow-manager long-running child (#1164)', () => {
     const paths = launchPaths(root, 'missing-result');
     const fixture = nodeFixture('process.exit(0);');
     process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '200';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-missing',
       attemptIdentity: 'attempt-missing',
       handoffReceiptPath: paths.receipt,
@@ -1284,7 +1461,7 @@ describe('flow-manager long-running child (#1164)', () => {
       process.exit(1);
     `);
     process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '200';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-post-send-missing',
       attemptIdentity: 'attempt-post-send-missing',
       handoffReceiptPath: paths.receipt,
@@ -1318,7 +1495,7 @@ describe('flow-manager long-running child (#1164)', () => {
     `);
     process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '2000';
     process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '2000';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-post-exit',
       attemptIdentity: 'attempt-post-exit',
       handoffReceiptPath: paths.receipt,
@@ -1358,8 +1535,8 @@ describe('flow-manager long-running child (#1164)', () => {
     };
     process.env.OPK_FM_LONG_CHILD_DISABLE_DETACH = '1';
     const [firstCode, secondCode] = await Promise.all([
-      runLaunch(launchConfig),
-      runLaunch(launchConfig),
+      runFixtureLaunch(root, launchConfig),
+      runFixtureLaunch(root, launchConfig),
     ]);
     expect(existsSync(paths.receipt)).toBe(true);
     expect(readHandoffReceipt(paths.receipt)?.schema).toBe(HANDOFF_SCHEMA);
@@ -1389,7 +1566,7 @@ describe('flow-manager long-running child (#1164)', () => {
       process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n');
       process.exit(0);
     `);
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-fresh',
       attemptIdentity: 'attempt-fresh',
       handoffReceiptPath: paths.receipt,
@@ -1428,7 +1605,7 @@ describe('flow-manager long-running child (#1164)', () => {
       process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n');
       process.exit(0);
     `);
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-zero-send-observed-result',
       attemptIdentity: 'attempt-zero-send-observed-result',
       handoffReceiptPath: paths.receipt,
@@ -1524,7 +1701,7 @@ describe('flow-manager long-running child (#1164)', () => {
       }, 200);
     `);
     process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '500';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-dup-grace',
       attemptIdentity: 'attempt-dup-grace',
       handoffReceiptPath: paths.receipt,
@@ -1553,10 +1730,8 @@ describe('flow-manager long-running child (#1164)', () => {
     const root = tempDir();
     const paths = launchPaths(root, 'survival');
     const result = makeTurnResult();
-    const fixture = nodeFixture(`
-      process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n');
-      process.exit(0);
-    `);
+    const childMarker = join(root, 'survival-child-started.txt');
+    const fixture = markedChildFixture(childMarker, result);
     const detachResult = await runProcess({
       command: '/bin/sh',
       args: [
@@ -1576,18 +1751,25 @@ describe('flow-manager long-running child (#1164)', () => {
         '--', ...fixture.args,
       ],
       cwd: repoRoot,
+      env: cliFixtureEnv(root),
       inheritParentEnv: true,
       allowEmptyStdout: false,
       timeoutMs: 10_000,
     });
     expect(detachResult.ok).toBe(true);
+    expect(detachResult.stdout.trim()).toMatch(/^\d+$/u);
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
       const envelope = readTerminalEnvelope(paths.envelope);
       if (envelope?.lifecycle_outcome === 'success') break;
       await new Promise((r) => setTimeout(r, 50));
     }
-    expect(readTerminalEnvelope(paths.envelope)?.lifecycle_outcome).toBe('success');
+    expect(readHandoffReceipt(paths.receipt)?.schema).toBe(HANDOFF_SCHEMA);
+    expect(readTerminalEnvelope(paths.envelope)).toMatchObject({
+      lifecycle_outcome: 'success', delivery: 'landed', turn_result_state: 'ok',
+    });
+    expect(isWakeableTerminalEnvelopePath(paths.envelope, root)).toBe(true);
+    expect(existsSync(childMarker)).toBe(true);
   });
 });
 
@@ -1636,7 +1818,7 @@ describe('Issue #1377 long-running child abandonment proof', () => {
     }));
     const stop = vi.fn(async () => 'confirmed' as const);
     process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '200';
-    const code = await runLaunch({
+    const code = await runFixtureLaunch(root, {
       runIdentity: 'run-1377',
       attemptIdentity: 'attempt-1377',
       handoffReceiptPath: paths.receipt,

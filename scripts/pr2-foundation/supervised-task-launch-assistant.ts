@@ -960,7 +960,49 @@ export async function finalizeOpenCodeExecutorProfile(
   if (!modelMatch?.[1] || !effortMatch?.[1]) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
   const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model: modelMatch[1], effort: effortMatch[1], stateRoot });
-  const expected = { ...baselineValue, permission: withOpenCodeFleetBrowserDenies(openCodeAgentConfigFromInfo(baselineValue).permission) };
+  // OpenCode 1.18.35 appends its runtime tool-output allow after the overlay rules.
+  // Leave every other permission's ordered semantics unchanged.
+  // Match only the OpenCode runtime tool-output allow from this user's home;
+  // append the exact observed tuple, not a normalized or wildcard substitute.
+  const runtimeToolOutputPatterns = new Set([
+    '~/.local/share/opencode/tool-output/*',
+    join(homedir(), '.local', 'share', 'opencode', 'tool-output', '*'),
+  ]);
+  const matchingRuntimeRules = Array.isArray(baselineValue.permission)
+    ? baselineValue.permission.filter((rule) => record(rule)
+      && rule.permission === 'external_directory' && rule.action === 'allow'
+      && typeof rule.pattern === 'string' && runtimeToolOutputPatterns.has(rule.pattern))
+    : [];
+  // OpenCode may emit the identical tool-output allow twice in the raw
+  // baseline. Its last-wins config projection retains the first rule position.
+  const runtimeRule = matchingRuntimeRules.length > 0
+    && matchingRuntimeRules.every((rule) => rule.pattern === matchingRuntimeRules[0]?.pattern)
+    ? matchingRuntimeRules.at(-1) : null;
+  const baselinePermission = openCodeAgentConfigFromInfo(baselineValue).permission;
+  const inheritedPermission = record(baselinePermission) ? baselinePermission : {};
+  const externalDirectory = inheritedPermission.external_directory;
+  const toolOutputPattern = record(runtimeRule) && typeof runtimeRule.pattern === 'string'
+    && record(externalDirectory) && externalDirectory[runtimeRule.pattern] === 'allow'
+    ? runtimeRule.pattern : undefined;
+  const withoutToolOutputAllow = toolOutputPattern && record(externalDirectory)
+    ? {
+      ...inheritedPermission,
+      external_directory: Object.fromEntries(Object.entries(externalDirectory).filter(([pattern]) => pattern !== toolOutputPattern)),
+    }
+    : inheritedPermission;
+  const narrowedPermission = withOpenCodeFleetBrowserDenies(withoutToolOutputAllow);
+  const expected = {
+    ...baselineValue,
+    permission: toolOutputPattern && runtimeRule
+      ? [
+        ...Object.entries(narrowedPermission).flatMap(([permission, value]) => (
+          typeof value === 'string' ? [{ permission, pattern: '*', action: value }]
+            : record(value) ? Object.entries(value).map(([pattern, action]) => ({ permission, pattern, action })) : []
+        )),
+        runtimeRule,
+      ]
+      : narrowedPermission,
+  };
   const resolved = await execute(['opencode', 'debug', 'agent', agentName], 15_000, { ...isolatedEnv, OPENCODE_CONFIG_CONTENT: overlay.inlineConfigJson! }, worktreePath);
   const resolvedValue = resolvedAgent(resolved.stdout);
   const model = resolvedValue && record(resolvedValue.model) ? resolvedValue.model : null;

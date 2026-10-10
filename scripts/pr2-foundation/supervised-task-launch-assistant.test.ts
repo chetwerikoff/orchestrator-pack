@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
@@ -30,6 +30,7 @@ import {
   buildExecutorCommand,
   buildOpenCodeAgentOverlay,
   openCodeAgentConfigFromInfo,
+  withOpenCodeFleetBrowserDenies,
   buildProviderInvocation,
   catalogIdentityForProfile,
   openCodeAgentSemantics,
@@ -746,6 +747,150 @@ describe('supervised Task launch assistant', () => {
     });
     expect(result).toMatchObject({ status: 'continue', cause: 'executor_effort_channel_unavailable' });
     expect(calls).toEqual([]);
+  });
+
+  it.each([
+    ['real 1.18.35 normal-config TO-only ordering', 'none', true, 'home'],
+    ['tilde runtime allow, only TO moved', 'none', true, 'tilde'],
+    ['unrelated rule reordering', 'other-order', false, 'home'],
+    ['an extra allow', 'extra-allow', false, 'home'],
+    ['an unchanged inherited external-directory allow', 'inherited-allow', true, 'home'],
+    ['a changed inherited external-directory allow', 'inherited-drift', false, 'home'],
+    ['a missing deny', 'missing-deny', false, 'home'],
+    ['a non-terminal deny', 'non-terminal-deny', false, 'home'],
+    ['a changed tool-output action', 'changed-action', false, 'home'],
+    ['a changed tool-output path', 'changed-path', false, 'home'],
+    ['an unrelated home path', 'none', false, 'foreign'],
+    ['model drift', 'model', false, 'home'],
+    ['option drift', 'options', false, 'home'],
+  ] as const)('contextual tool-output order regression: %s', async (_label, drift, accepted, pathKind) => {
+    type FixtureRule = { permission: string; pattern: string; action: string };
+    type FixtureAgent = {
+      name: string; mode: string; prompt: string; description?: string;
+      model: { providerID: string; modelID: string }; variant: string;
+      options: Record<string, unknown>; permission: FixtureRule[];
+    };
+    const fixture = JSON.parse(readFileSync(new URL('./fixtures/opencode-1.18.35-tool-output-order.json', import.meta.url), 'utf8')) as {
+      baseline: FixtureAgent; contextual: FixtureAgent;
+    };
+    const runtimePattern = pathKind === 'tilde' ? '~/.local/share/opencode/tool-output/*'
+      : pathKind === 'foreign' ? join(homedir(), 'unrelated-home', '.local', 'share', 'opencode', 'tool-output', '*')
+        : join(homedir(), '.local', 'share', 'opencode', 'tool-output', '*');
+    const toolOutput = { permission: 'external_directory', pattern: runtimePattern, action: 'allow' };
+    for (const agent of [fixture.baseline, fixture.contextual]) {
+      for (const rule of agent.permission) {
+        if (rule.permission === 'external_directory' && rule.pattern === '<home>/.local/share/opencode/tool-output/*') {
+          rule.pattern = runtimePattern;
+        }
+      }
+    }
+    // Replay exactly the 104 raw baseline tuples and 97 contextual canonical
+    // tuples supplied by OpenCode 1.18.35 (no Hn alignment or sorting).
+    expect(fixture.baseline.permission).toHaveLength(104);
+    expect(fixture.contextual.permission).toHaveLength(97);
+    expect(fixture.baseline.permission[3]).toEqual(toolOutput);
+    expect(fixture.baseline.permission[103]).toEqual(toolOutput);
+    expect(fixture.contextual.permission[96]).toEqual(toolOutput);
+    expect(fixture.contextual.permission.slice(4, 73)).toEqual(fixture.baseline.permission.slice(5, 74));
+
+    const baselineCanonical = openCodeAgentConfigFromInfo(fixture.baseline).permission;
+    const legacyExpected = withOpenCodeFleetBrowserDenies(baselineCanonical);
+    const legacyRules = Object.entries(legacyExpected).flatMap(([permission, rules]) =>
+      typeof rules === 'string' ? [{ permission, pattern: '*', action: rules }]
+        : typeof rules === 'object' && rules !== null
+          ? Object.entries(rules).map(([pattern, action]) => ({ permission, pattern, action: String(action) }))
+          : []);
+    expect(legacyRules).toHaveLength(97);
+    expect(legacyRules[3]).toEqual(toolOutput);
+    const withoutToolOutput = legacyRules.filter((rule) =>
+      !(rule.permission === toolOutput.permission && rule.pattern === toolOutput.pattern && rule.action === toolOutput.action));
+    // This is the precise r02 difference: strict old-main parity fails, while
+    // removing only TO preserves every remaining rule's exact position.
+    expect(withoutToolOutput).toEqual(fixture.contextual.permission.slice(0, -1));
+    expect(openCodeAgentSemantics({ ...fixture.baseline, permission: legacyExpected }))
+      .not.toBe(openCodeAgentSemantics(fixture.contextual));
+    expect(openCodeAgentSemantics({ ...fixture.baseline, permission: [...withoutToolOutput, toolOutput] }))
+      .toBe(openCodeAgentSemantics(fixture.contextual));
+    if (drift === 'inherited-allow') {
+      const inherited = { permission: 'external_directory', pattern: '~/already-allowed/*', action: 'allow' };
+      const baselineIndex = fixture.baseline.permission.findIndex((rule) => rule.permission === 'question');
+      const contextualIndex = fixture.contextual.permission.findIndex((rule) => rule.permission === 'question');
+      fixture.baseline.permission.splice(baselineIndex, 0, inherited);
+      fixture.contextual.permission.splice(contextualIndex, 0, { ...inherited });
+    }
+
+    const sandbox = mkdtempSync(join(tmpdir(), 'opk2447-offline-'));
+    vi.stubEnv('XDG_CONFIG_HOME', sandbox);
+    vi.stubEnv('OPENCODE_CONFIG_DIR', join(sandbox, 'opencode'));
+    vi.stubEnv('OPENCODE_CONFIG', join(sandbox, 'synthetic.json'));
+    try {
+      const env = profileEnv({
+        PACK_EXECUTOR_T2_AGENT: 'opencode',
+        PACK_EXECUTOR_T2_MODEL: 'gpt-6-luna',
+        PACK_EXECUTOR_T2_EFFORT: 'medium',
+      });
+      const profile = await resolveLiveExecutorProfile('t2', env, undefined, async (args) => {
+        const probe = opencodeProbeResult(args);
+        return { ...probe, stdout: probe.stdout.replaceAll('fixture-opencode-model', 'gpt-6-luna')
+          .replaceAll('fixture-opencode-effort', 'medium') };
+      });
+      if (profile.status !== 'ok') throw new Error('fixture model/variant should resolve');
+
+      const result = await finalizeOpenCodeExecutorProfile(profile.value, join(sandbox, 'worktree'),
+        async (args, _timeoutMs, envOverride) => {
+          if (args[2] === 'config') return { ok: true, stdout: JSON.stringify({ default_agent: 'build' }), stderr: '' };
+          if (args[2] === 'paths') return { ok: true, stdout: envOverride?.XDG_STATE_HOME ?? '', stderr: '' };
+          if (args[2] === 'agent' && args[3] === 'build' && !envOverride?.OPENCODE_CONFIG_CONTENT) {
+            return { ok: true, stdout: JSON.stringify(fixture.baseline), stderr: '' };
+          }
+          if (args[2] === 'agent') {
+            const name = args[3] ?? '';
+            const resolved = JSON.parse(JSON.stringify(fixture.contextual)) as FixtureAgent;
+            resolved.name = name;
+            if (name !== 'general' && name !== 'explore') {
+              if (drift === 'other-order') {
+                const question = resolved.permission.findIndex((rule) => rule.permission === 'question');
+                const planEnter = resolved.permission.findIndex((rule) => rule.permission === 'plan_enter');
+                if (question >= 0 && planEnter >= 0) {
+                  [resolved.permission[question], resolved.permission[planEnter]] =
+                    [resolved.permission[planEnter]!, resolved.permission[question]!];
+                }
+              }
+              if (drift === 'extra-allow') {
+                resolved.permission.push({ permission: 'external_directory', pattern: '~/unrelated/*', action: 'allow' });
+              }
+              if (drift === 'inherited-drift') {
+                const inherited = resolved.permission.find((rule) =>
+                  rule.permission === 'external_directory' && rule.pattern === '<home>/redacted-2/*');
+                if (inherited) inherited.action = 'deny';
+              }
+              if (drift === 'missing-deny') {
+                resolved.permission = resolved.permission.filter((rule) => !(rule.permission === 'bash' && rule.pattern === 'bsk *'));
+              }
+              if (drift === 'non-terminal-deny') {
+                resolved.permission.push({ permission: 'bash', pattern: '*', action: 'allow' });
+              }
+              if (drift === 'changed-action' || drift === 'changed-path') {
+                const rule = resolved.permission.find((item) => item.permission === toolOutput.permission && item.pattern === toolOutput.pattern);
+                if (rule) {
+                  if (drift === 'changed-action') rule.action = 'ask';
+                  else rule.pattern = join(homedir(), '.local', 'share', 'opencode', 'unrelated-output', '*');
+                }
+              }
+              if (drift === 'model') resolved.model.modelID = 'different-model';
+              if (drift === 'options') resolved.options = { ...resolved.options, extra: true };
+            }
+            return { ok: true, stdout: JSON.stringify(resolved), stderr: '' };
+          }
+          return { ok: false, stdout: '', stderr: 'unexpected fixture probe' };
+        }, () => true);
+      expect(result).toMatchObject(accepted
+        ? { status: 'ok', evidence: { exactContext: true } }
+        : { status: 'continue', cause: 'executor_effort_channel_unavailable' });
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(sandbox, { recursive: true, force: true });
+    }
   });
 
   it('accepts contextual OpenCode probes after a no-write proof', async () => {
