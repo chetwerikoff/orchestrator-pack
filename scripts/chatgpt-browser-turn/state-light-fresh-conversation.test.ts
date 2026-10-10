@@ -477,6 +477,232 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
   });
 
+
+  // A positive first-actionability timeout is the *only* possible retry
+  // admission witness. Every negative control below runs the production
+  // driver, not just the static timeout parser.
+  const provenPreActionabilityLog = [
+    'locator.click: Timeout 5000ms exceeded',
+    'Call log:',
+    '  - waiting for element to be visible, enabled and stable',
+    '  - element is not enabled',
+  ].join('\n');
+  const timeoutError = (message = provenPreActionabilityLog) =>
+    Object.assign(new Error(message), { name: 'TimeoutError' });
+
+  it.each([
+    ['generic TimeoutError', 'locator.click: Timeout 5000ms exceeded'],
+    ['missing Call log', 'locator.click: Timeout 5000ms exceeded\n - element is not enabled'],
+    ['truncated Call log', 'locator.click: Timeout 5000ms exceeded\nCall log:\n - waiting for element to be visible'],
+    ['post-dispatch action', provenPreActionabilityLog + '\n - performing click action'],
+    ['explicit dispatched action', provenPreActionabilityLog + '\n - click done'],
+  ] as const)('never retries or clears an unproven Playwright first action: %s (#2487)', async (_label, message) => {
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-2487-UNPROVEN-LOG';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    turn.sendButton.click.mockRejectedValueOnce(timeoutError(message));
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, invocationId + '-log-guard.txt'), '90000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'send_failed' });
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.getSends()).toBe(0);
+    expect(turn.composer.fill).not.toHaveBeenLastCalledWith('', expect.anything());
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
+  });
+
+  it.each(['marker_changed', 'user_baseline_changed', 'user_baseline_incomplete'] as const)(
+    'rejects an individually invalid first-click retry DOM guard: %s (#2487)',
+    async (scenario) => {
+      const invocationId = randomUUID();
+      const prompt = 'PROMPT-2487-DOM-GUARD';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      const baselineLocator = turn.page.locator.getMockImplementation()!;
+      let afterFirst = false;
+      turn.page.locator.mockImplementation((selector: string) => {
+        if (afterFirst && selector === MESSAGE_NODE_SELECTOR) {
+          if (scenario === 'user_baseline_changed') {
+            return collectionLocator([{ role: 'user', text: 'UNRELATED USER ENTRY' }]);
+          }
+          if (scenario === 'user_baseline_incomplete') {
+            return scalarLocator({
+              count: vi.fn(async () => { throw new Error('synthetic incomplete user census'); }),
+            });
+          }
+        }
+        return baselineLocator(selector);
+      });
+      turn.sendButton.click.mockImplementationOnce(async () => {
+        afterFirst = true;
+        if (scenario === 'marker_changed') await turn.composer.fill('FOREIGN EDITED DRAFT');
+        throw timeoutError();
+      });
+
+      const outcome = await runNewChatTurn(
+        turn.page, join(stateDir, invocationId + '-dom-guard.txt'), '90000', invocationId,
+      );
+      expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'send_failed' });
+      expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+      expect(turn.getSends()).toBe(0);
+      expect(turn.page.close).not.toHaveBeenCalled();
+      expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
+    },
+  );
+
+  it('forbids retry after the original page identity changes during first click (#2487)', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-2487-PAGE-IDENTITY';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    let foreign = false;
+    const originalUrl = turn.page.url.getMockImplementation()!;
+    turn.page.url.mockImplementation(() => foreign ? OTHER_PROJECT_CONVERSATION_URL : originalUrl());
+    turn.sendButton.click.mockImplementationOnce(async () => { foreign = true; throw timeoutError(); });
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, invocationId + '-page-identity.txt'), '90000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({
+      send_count: 0, send_attempted: true, cause: 'fresh_conversation_surface_unavailable',
+    });
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
+  });
+
+  it('forbids retry when original slot owner identity is replaced (#2487)', async () => {
+    clearSendSlotDisableEnv();
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-2487-OWNER-IDENTITY';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    const { writeFileSync } = await import('node:fs');
+    turn.sendButton.click.mockImplementationOnce(async () => {
+      const now = mocks.nowMs;
+      writeFileSync(join(stateDir, 'collision-profile', 'locks', 'state-light-new-chat-send.slot'),
+        JSON.stringify({
+          schema: 'state-light-new-chat-send-slot/v1', version: 1,
+          invocation_id: 'foreign-owner-2487', pid: process.pid,
+          acquired_at: new Date(now).toISOString(),
+          expires_at: new Date(now + STATE_LIGHT_SEND_SLOT_TTL_MS).toISOString(),
+        }) + '\n');
+      throw timeoutError();
+    });
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, invocationId + '-owner-identity.txt'), '90000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({
+      send_count: 0, send_attempted: true, cause: 'state_light_new_chat_send_slot_owner_lost',
+    });
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
+  });
+
+  it('never makes a third attempt after even an affirmative second pre-actionability timeout (#2487)', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-2487-TWO-TIMEOUTS';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    turn.sendButton.click.mockImplementationOnce(async () => { throw timeoutError(); });
+    turn.sendButton.click.mockImplementationOnce(async () => { throw timeoutError(); });
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, invocationId + '-second-final.txt'), '90000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'send_failed' });
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
+    expect(turn.getSends()).toBe(0);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
+  });
+
+  it('uses a Stop appearing after the first click as delivery, never second-click authority (#2487)', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-2487-STOP-FIRST';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    let ownedStop = false;
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    turn.page.locator.mockImplementation((selector: string) => selector.includes(STOP_BUTTON_TESTID)
+      ? scalarLocator({
+        count: vi.fn(async () => ownedStop ? 1 : 0),
+        isVisible: vi.fn(async () => ownedStop),
+      })
+      : originalLocator(selector));
+    turn.sendButton.click.mockImplementationOnce(async () => {
+      ownedStop = true;
+      throw timeoutError();
+    });
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, invocationId + '-stop-first.txt'), '90000', invocationId,
+    );
+    expect(outcome.result.send_count).toBe(1);
+    expect(outcome.result.cause).not.toBe('fresh_conversation_landing_mismatch');
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase)
+      .toMatch(/sent_unbound|sent_unharvested/);
+  });
+
+  it('attributes Stop after the permitted second click as delivery without cleanup or third attempt (#2487)', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-2487-STOP-SECOND';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    let ownedStop = false;
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    turn.page.locator.mockImplementation((selector: string) => selector.includes(STOP_BUTTON_TESTID)
+      ? scalarLocator({
+        count: vi.fn(async () => ownedStop ? 1 : 0),
+        isVisible: vi.fn(async () => ownedStop),
+      })
+      : originalLocator(selector));
+    turn.sendButton.click.mockImplementationOnce(async () => { throw timeoutError(); });
+    turn.sendButton.click.mockImplementationOnce(async () => { ownedStop = true; });
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, invocationId + '-stop-second.txt'), '90000', invocationId,
+    );
+    expect(outcome.result.send_count).toBe(1);
+    expect(outcome.result.cause).not.toBe('fresh_conversation_landing_mismatch');
+    expect(outcome.result.poll_count).toBeGreaterThan(0);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
+    expect(turn.getSends()).toBe(0);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(turn.composer.fill).not.toHaveBeenLastCalledWith('', expect.anything());
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase)
+      .toMatch(/sent_unbound|sent_unharvested/);
+  });
+
+  it('does not attribute a foreign Stop visible before the new-chat send (#2487)', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-2487-FOREIGN-STOP';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    turn.page.locator.mockImplementation((selector: string) => selector.includes(STOP_BUTTON_TESTID)
+      ? scalarLocator({ count: vi.fn(async () => 1), isVisible: vi.fn(async () => true) })
+      : originalLocator(selector));
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, invocationId + '-foreign-stop.txt'), '90000', invocationId,
+    );
+    expect(outcome.result).toMatchObject({
+      state: 'conversation_busy', send_count: 0, cause: 'fresh_conversation_busy_before_send',
+    });
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.getSends()).toBe(0);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
+  });
+
   it('terminates contended recovery without a second send when the prompt already landed', async () => {
     const profileKey = 'collision-profile';
     expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'winner-invocation')).toBe('claimed');
