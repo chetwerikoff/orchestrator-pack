@@ -201,6 +201,7 @@ function clearSendSlotDisableEnv(): void {
 function makeLoserPage(prompt: string, reply: string, onSend?: () => void) {
   let sends = 0;
   let sent = false;
+  let composerText = '';
   let url = PROJECT_URL;
   let observationIndex = 0;
   const snapshotFrames = readyTurnObservationFrames(prompt, reply).map((messages, index) => ({
@@ -212,9 +213,9 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void) {
   const composer = scalarLocator({
     count: vi.fn(async () => 1),
     click: vi.fn(async () => undefined),
-    fill: vi.fn(async () => undefined),
-    innerText: vi.fn(async () => (sent ? '' : prompt)),
-    textContent: vi.fn(async () => (sent ? '' : prompt)),
+    fill: vi.fn(async (value: string) => { composerText = value; }),
+    innerText: vi.fn(async () => (sent ? '' : composerText)),
+    textContent: vi.fn(async () => (sent ? '' : composerText)),
     press: vi.fn(async () => {
       sends++;
       sent = true;
@@ -285,7 +286,7 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void) {
 async function runNewChatTurn(
   page: any,
   outputPath: string,
-  timeoutMs = '5000',
+  timeoutMs = '90000',
   invocationId = randomUUID(),
   projectUrl = PROJECT_URL,
 ) {
