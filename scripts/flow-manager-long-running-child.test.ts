@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -513,7 +513,7 @@ describe('flow-manager long-running child (#1164)', () => {
     process.env.OPK_FM_LONG_CHILD_DISABLE_DETACH = '1';
     for (const [key, value] of Object.entries(cliFixtureEnv(root))) vi.stubEnv(key, value);
     vi.stubEnv('ORCA_TERMINAL_HANDLE', 'term_launcher');
-    const code = await spawnDetachedLauncher([
+    const spawned = await spawnDetachedLauncher([
       'launch',
       '--run-identity', 'run-detach',
       '--attempt-identity', 'attempt-detach',
@@ -524,7 +524,8 @@ describe('flow-manager long-running child (#1164)', () => {
       '--child-command', fixture.command,
       '--', ...fixture.args,
     ]);
-    expect(code).toBe(0);
+    expect(spawned.exitCode).toBe(0);
+    expect(spawned.launcherPid).toBe(readHandoffReceipt(paths.receipt)?.launcher_pid);
     expect(readHandoffReceipt(paths.receipt)?.schema).toBe(HANDOFF_SCHEMA);
     expect(existsSync(childMarker)).toBe(true);
     expect(isWakeableTerminalEnvelopePath(paths.envelope, root)).toBe(true);
@@ -585,7 +586,7 @@ describe('flow-manager long-running child (#1164)', () => {
 
   it('adapter refuses an unwakeable envelope name without spawning the launcher (#2378)', async () => {
     const root = tempDir();
-    const spawnLauncher = vi.fn(async () => 1);
+    const spawnLauncher = vi.fn(async () => ({ launcherPid: process.pid }));
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const code = await runBrowserAdapter([
       '--run-identity', 'r',
@@ -1996,6 +1997,117 @@ describe('Issue #2478: invocation-addressable launcher evidence', () => {
       expect(readTerminalEnvelope(paths.envelope)?.child_exit_code)
         .toBe(childFails ? 7 : 0);
     }
+  });
+
+
+  it.each(['detached', 'synchronous'] as const)(
+    'refuses exact replay and changed profile/output/receipt for %s before a second Browser spawn',
+    async (mode) => {
+      const root = tempDir('opk-2478-replay-');
+      const paths = launchPaths(root, mode);
+      const invocationId = 'invocation-replay-' + mode;
+      const childMarker = join(root, 'original-child-started.txt');
+      for (const [key, value] of Object.entries(cliFixtureEnv(root))) vi.stubEnv(key, value);
+      vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+      if (mode === 'synchronous') vi.stubEnv('OPK_FM_LONG_CHILD_DISABLE_DETACH', '1');
+      const fixture = markedChildFixture(childMarker, makeTurnResult({ invocation_id: invocationId }));
+      const launch = vi.fn(async (args: readonly string[]) => {
+        const childCommandIndex = args.indexOf('--child-command');
+        return await spawnDetachedLauncher([
+          ...args.slice(0, childCommandIndex),
+          '--child-command', fixture.command, '--', ...fixture.args,
+        ]);
+      });
+      const args = [
+        '--run-identity', 'same-run', '--attempt-identity', 'same-attempt',
+        '--invocation-id', invocationId,
+        '--owner-task-id', 'same-task', '--owner-dispatch-id', 'same-dispatch',
+        '--handoff-receipt', paths.receipt, '--terminal-envelope', paths.envelope,
+        '--output', paths.output, '--profile', profile, '--cdp', cdp,
+        '--input', join(root, 'synthetic-prompt.txt'), '--cwd', root,
+      ];
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        expect(await runBrowserAdapter(args, { spawnLauncher: launch })).toBe(0);
+        const firstAck = stdout.mock.calls.map((call) => String(call[0])).join('');
+        expect(JSON.parse(firstAck.trim()).launcher_pid).toBe(readHandoffReceipt(paths.receipt)?.launcher_pid);
+        stdout.mockClear();
+        // Detached acceptance may precede the original Browser child terminal.
+        for (let tick = 0; tick < 100 && !existsSync(paths.envelope); tick += 1) {
+          await new Promise((done) => setTimeout(done, 30));
+        }
+        expect(readTerminalEnvelope(paths.envelope)?.lifecycle_outcome).toBe('success');
+        const firstPid = readHandoffReceipt(paths.receipt)?.launcher_pid;
+        const originalBytes = readFileSync(paths.receipt, 'utf8');
+        const alternateReceipt = launchPaths(root, 'new-receipt');
+        const scenarios = [
+          args,
+          args.map((token, i) => i === args.indexOf('--profile') + 1 ? profile + '-changed' : token),
+          args.map((token, i) => i === args.indexOf('--output') + 1 ? join(root, 'changed-output.txt') : token),
+          args.map((token, i) => i === args.indexOf('--handoff-receipt') + 1 ? alternateReceipt.receipt : token),
+        ];
+        for (const replayArgs of scenarios) {
+          expect(await runBrowserAdapter(replayArgs, { spawnLauncher: launch })).toBe(2);
+          expect(stdout.mock.calls.map((call) => String(call[0])).join('')).not.toContain(
+            'flow-manager-browser-gpt-long-run-accepted/v1',
+          );
+          stdout.mockClear();
+        }
+        expect(launch).toHaveBeenCalledTimes(1);
+        expect(readFileSync(paths.receipt, 'utf8')).toBe(originalBytes);
+        expect(readHandoffReceipt(paths.receipt)?.launcher_pid).toBe(firstPid);
+        expect(readFileSync(childMarker, 'utf8')).toBe('started');
+        expect(existsSync(alternateReceipt.receipt)).toBe(false);
+        expect(existsSync(join(root, 'changed-output.txt'))).toBe(false);
+        expect(stderr.mock.calls.map((call) => String(call[0])).join('')).toContain(
+          'occupied_handoff_or_invocation_use_fresh_id',
+        );
+      } finally {
+        stdout.mockRestore();
+        stderr.mockRestore();
+      }
+    },
+  );
+
+  it('resolves an indexed direct-launch terminal with an original relative receipt from another cwd', async () => {
+    const root = tempDir('opk-2478-relative-receipt-');
+    const paths = launchPaths(root, 'relative');
+    const invocationId = 'relative-receipt-invocation';
+    const relativeReceipt = relative(repoRoot, paths.receipt);
+    expect(isAbsolute(relativeReceipt)).toBe(false);
+    const fixture = nodeFixture(
+      'process.stdout.write(JSON.stringify(' +
+      JSON.stringify(makeTurnResult({ invocation_id: invocationId })) +
+      ') + "\\n", () => process.exit(0));',
+    );
+    const launched = await runLauncherCli([
+      ...cliLaunchArgs({ ...paths, receipt: relativeReceipt }, fixture).slice(0, -fixture.args.length - 1),
+      '--invocation-id', invocationId, '--profile', profile, '--cdp', cdp, '--', ...fixture.args,
+    ], { ...cliFixtureEnv(root), CHATGPT_BROWSER_TURN_STATE_DIR: join(root, 'state') });
+    expect(launched.code).toBe(0);
+    expect(readHandoffReceipt(paths.receipt)?.invocation_id).toBe(invocationId);
+    expect(readTerminalEnvelope(paths.envelope)?.handoff_receipt_path).toBe(relativeReceipt);
+    const waited = await runProcess({
+      command: process.execPath,
+      args: [
+        '--experimental-strip-types', launcherPath, 'wait',
+        '--run-identity', 'run-2440', '--attempt-identity', 'attempt-2440',
+        '--invocation-id', invocationId, '--deadline-ms', '300',
+      ],
+      cwd: root,
+      env: { ...cliFixtureEnv(root), CHATGPT_BROWSER_TURN_STATE_DIR: join(root, 'state') },
+      inheritParentEnv: false,
+      allowEmptyStdout: false,
+      timeoutMs: 10_000,
+    });
+    expect(waited.ok).toBe(true);
+    const response = JSON.parse(waited.stdout.trim());
+    expect(response.terminal).toBe(true);
+    expect(response.envelope.handoff_receipt_path).toBe(relativeReceipt);
+    expect(response.envelope.lifecycle_outcome).toBe('success');
+    expect(response.no_success_authority).toBe(false);
+    expect(response.no_retry_authority).toBe(true);
   });
 
   it('keeps an indexed key occupied after the original handoff write fails before send', async () => {
