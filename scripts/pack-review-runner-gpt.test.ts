@@ -4273,6 +4273,9 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
     const round = plannedStoredGptRound();
     round.tier = 'T2';
     round.issueNumber = prNumber;
+    round.boundIssueSnapshotDigest = computeBoundIssueSnapshotHash(
+      ['```complexity-tier', 'tier: T2', '```'].join('\n'),
+    );
     if (slotMode === 'first-attempt') {
       round.sourceSlots[0] = {
         ...round.sourceSlots[0]!,
@@ -4473,6 +4476,8 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
     const f = seedOrphan();
     f.expire();
     await reconcileStalePackReviewRuns(f.input);
+    vi.useRealTimers();
+    selectProjectCard(f.options.storeRoot);
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
     const invocations: string[] = [];
@@ -4502,6 +4507,8 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
     const f = seedOrphan();
     f.expire();
     await reconcileStalePackReviewRuns(f.input);
+    vi.useRealTimers();
+    selectProjectCard(f.options.storeRoot);
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
     const launched: string[] = [];
