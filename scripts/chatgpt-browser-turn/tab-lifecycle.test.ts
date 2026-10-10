@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import * as ts from 'typescript';
 import assert from 'node:assert/strict';
@@ -1269,6 +1269,10 @@ describe('Issue #2461 selected pack-review CDP preflight', () => {
         options: { cdp: string; profile: string; timeoutMs: number },
         observer?: { findListenerPid?: () => Promise<string>; readCommandLine?: () => Promise<string> },
       ) => Promise<{ ok: boolean; reason?: string; timedOut?: boolean }>;
+      verifyCdpProfileBounded: (
+        options: { cdp: string; profile: string; timeoutMs: number },
+        observer?: { findListenerPid?: () => Promise<string>; readCommandLine?: () => Promise<string> },
+      ) => Promise<{ ok: boolean }>;
     };
     const root = mkdtempSync(join(tmpdir(), 'opk2461-owner-'));
     const ownerFile = join(root, '.local/state/discuss-with-gpt', 'cdp-49221-owner.json');
@@ -1298,6 +1302,13 @@ describe('Issue #2461 selected pack-review CDP preflight', () => {
       const absent = await verifier.inspectCdpProfileBounded({ cdp: cdpA, profile, timeoutMs: 1000 }, observer);
       expect(absent.ok).toBe(true);
       expect(existsSync(ownerFile)).toBe(false);
+      // The unchanged normal writer is deliberately *not* pure on success.
+      // Verify its real write against the fixture-only HOME, never the operator's.
+      expect(homedir()).toBe(root);
+      const writing = await verifier.verifyCdpProfileBounded({ cdp: cdpA, profile, timeoutMs: 1000 }, observer);
+      expect(writing.ok).toBe(true);
+      expect(existsSync(ownerFile)).toBe(true);
+      expect(JSON.parse(readFileSync(ownerFile, 'utf8'))).toMatchObject({ port: '49221' });
       // The old normal writer retains its recordCdpOwner-on-success call.
       const original = readFileSync(new URL('../../.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs', import.meta.url), 'utf8');
       expect(original).toMatch(/if \(result\.ok\) recordCdpOwner/u);
