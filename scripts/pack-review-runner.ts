@@ -4424,7 +4424,8 @@ export async function reconcileStalePackReviewRuns(
             // External publication performs another exact-head/current-authority
             // check. Re-read here as well to avoid reporting a stale winner.
             const afterCasAuthority = readPackReviewAuthority(run.prNumber, { storeRoot });
-            if (afterCasAuthority?.cycle?.cycleId === changed.reviewCycleId
+            if (afterCasAuthority?.cycle
+              && afterCasAuthority.cycle.cycleId === changed.reviewCycleId
               && afterCasAuthority.currentHeadSha.toLowerCase() === changed.targetSha.toLowerCase()
               && afterCasAuthority.terminal?.runId !== changed.id) {
               terminalized = true;
