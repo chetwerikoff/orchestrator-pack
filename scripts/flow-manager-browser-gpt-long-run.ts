@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import './toolchain/native-entrypoint-preflight.ts';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { settleCliMain } from './chatgpt-browser-turn/cli-main.ts';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
@@ -148,7 +148,13 @@ export async function runBrowserAdapter(
 
   const invocationId = requiredOption(options, 'invocation-id');
   const terminalEnvelope = requiredOption(options, 'terminal-envelope');
-  if (!isWakeableTerminalEnvelopePath(terminalEnvelope)) {
+  // Mirror the launcher's existing two-part fixture gate; never relax production wake-path checks.
+  const fixtureRoot = process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT;
+  const trustedFixtureRoot = process.env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
+    && typeof fixtureRoot === 'string' && isAbsolute(fixtureRoot)
+    ? resolve(fixtureRoot)
+    : undefined;
+  if (!isWakeableTerminalEnvelopePath(terminalEnvelope, trustedFixtureRoot)) {
     return refuse('terminal_envelope_name_not_wakeable: ' + unwakeableTerminalEnvelopeHint(terminalEnvelope).hint);
   }
   const browserOutput = requiredOption(options, 'output');
