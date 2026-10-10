@@ -490,12 +490,23 @@ function liveTaskBinding(terminal: FleetTerminal, projectId: string, executor: O
     || observed.worktreePath !== terminal.worktreePath || observed.branch !== terminal.branch) return undefined;
   return JSON.stringify([projectId, terminal.handle, terminal.incarnationId, terminal.worktreePath, terminal.branch, row.taskId, row.dispatchId]);
 }
+/** The final non-empty content line, not a Task/receipt, is park authority. */
+export function lastFleetParkedLine(screen: string): string | undefined {
+  const last = nonChromeLines(screen).at(-1)?.trim() ?? '';
+  return /^PARKED on\s+\S.+$/u.test(last) || /^PARKED on\s+\S$/u.test(last) ? last : undefined;
+}
+
 export function classifyFleetPane(
   screen: string,
   handle: string,
   store: FleetPollingStore,
   busyRe: RegExp = DEFAULT_BUSY_RE,
 ): FleetPaneState {
+  const parked = lastFleetParkedLine(screen);
+  if (parked) {
+    store.clearPollingMark(handle);
+    return 'PARKED';
+  }
   const busy = isBusyScreen(screen, busyRe);
   if (!busy) {
     store.clearPollingMark(handle);
@@ -545,6 +556,7 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
       throw error;
     }
     const outcome = ownPaneOutcome(screen);
+    const parkedLine = lastFleetParkedLine(screen);
     const binding = terminal.incarnationId && terminal.status !== 'exited'
       ? liveTaskBinding(terminal, options.projectId ?? '', bindingExecutor)
         ?? JSON.stringify([options.projectId ?? '', terminal.handle, terminal.incarnationId, terminal.worktreePath, terminal.branch])
@@ -553,8 +565,8 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
     const retained = binding && previous?.binding === binding && outcome.acknowledgment ? previous.wait : undefined;
     const state = classifyFleetPane(screen, terminal.handle, store, busyRe);
     const stale = previous && previous.binding !== binding && previous.wait === outcome.wait;
-    const wait = terminal.status !== 'exited' && state !== 'busy' && state !== 'POLLING' && !stale
-      ? outcome.wait ?? retained : undefined;
+    const wait = terminal.status !== 'exited' && state !== 'busy' && state !== 'POLLING'
+      ? parkedLine ?? (!stale ? outcome.wait ?? retained : undefined) : undefined;
     if (state !== 'busy' && state !== 'POLLING') {
       if (binding && wait) store.writePaneWait?.(terminal.handle, { binding, wait });
       // Keep a mismatched old outcome only as rejection evidence until it leaves the screen.
@@ -673,15 +685,12 @@ export function collectFleetDiagnostics(options: FleetDiagnosticOptions): FleetD
       continue;
     }
     const busy = isBusyScreen(screen, options.busyRe ?? DEFAULT_BUSY_RE);
-    // Only the existing operational sweep can establish retained or rejected
-    // task-bound PARKED. Without that witness, idle/wait text remains unverified.
+    // A final PARKED line is enough; Task/receipt binding is not park authority.
     const operational = options.observations?.find((pane) =>
       pane.handle === terminal.handle && pane.incarnationId === terminal.incarnationId
       && normalizedPath(pane.worktreePath) === normalizedPath(terminal.worktreePath));
-    const operationalState = operational?.state === 'PARKED' && (!operational.taskBinding || !operational.wait)
-      ? undefined : operational?.state;
-    const state: FleetPaneState | undefined = operationalState
-      ?? (formerAgentShell ? 'STOPPED'
+    const state: FleetPaneState | undefined = formerAgentShell ? 'STOPPED'
+      : operational?.state ?? (lastFleetParkedLine(screen) ? 'PARKED'
         : busy ? (hasPollingEvidence(screen) && store.hasPollingMark(terminal.handle) ? 'POLLING' : 'busy')
           : undefined);
     // Ignore TUI chrome, clocks and status bars; cap retained content and hash it.
