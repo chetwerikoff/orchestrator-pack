@@ -2278,6 +2278,7 @@ describe('issue 1025 Half A proven non-delivery', () => {
       state: 'send_failed',
       cause: 'dispatch_request_not_issued',
       possibleDelivery: false,
+      product_wall_diagnostic: { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' },
     });
   });
 
@@ -2312,6 +2313,7 @@ describe('issue 1025 Half A proven non-delivery', () => {
       state: 'send_failed',
       cause: 'dispatch_request_not_issued',
       possibleDelivery: false,
+      product_wall_diagnostic: { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' },
     });
   });
 

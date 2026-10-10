@@ -1895,7 +1895,7 @@ async function readPostSendObservation(
     false,
     deadlineMs,
   );
-  let wall: ReturnType<typeof classifyProductWall> = {};
+  let wall: ReturnType<typeof classifyProductWall> = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
   try {
     const wallProbeMs = Math.min(POST_SEND_PRODUCT_WALL_PROBE_MS, deadlineMs - Date.now());
     if (wallProbeMs > 0) {
@@ -3822,17 +3822,16 @@ async function runTurnCore(
           incident,
         );
       }
-      if (wall.state === 'recovery_required' && (recoveryBannerTrusted || !(
-        wall.state === 'recovery_required'
-        && (wall.cause === 'stream_recovery_polling_timed_out' || wall.cause === 'message_stream_error')
-      ))) {
-        const cause = wall.cause ?? `${wall.state}_detected`;
+      if (wall.state === 'recovery_required' && (
+        recoveryBannerTrusted || (wall.cause !== 'stream_recovery_polling_timed_out' && wall.cause !== 'message_stream_error')
+      )) {
+        const cause = wall.cause;
         incident('invocation_blocker', cause, 'return_local_error');
         return {
           page,
           browser,
           result: compactResult(
-            wall.state,
+            'recovery_required',
             'invocation',
             cause,
             invocationId,
