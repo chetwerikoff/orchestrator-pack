@@ -784,6 +784,53 @@ describe('fleet alarm', () => {
     }
   });
 
+  it('does not route a producer-shaped zero-count possibly delivered send through a recycled terminal handle', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-wake-2434-zero-count-'));
+    try {
+      const possiblePath = join(root, 'possible-terminal.json');
+      const notSentPath = join(root, 'not-sent-terminal.json');
+      const base = {
+        schema: 'flow-manager-long-running-child-terminal/v1',
+        observed_invocation_id: 'synthetic-send-failed',
+        terminal_handle: 'one',
+        send_count: 0,
+      };
+      // Result-present send_failed: the composer action may have taken effect
+      // even though the numeric send witness was never established.
+      writeFileSync(possiblePath, JSON.stringify({
+        ...base, delivery: 'POSSIBLY_DELIVERED', turn_result_state: 'send_failed',
+      }));
+      writeFileSync(notSentPath, JSON.stringify({
+        ...base, observed_invocation_id: 'synthetic-before-send', delivery: 'not-sent',
+        turn_result_state: 'driver_error',
+      }));
+      const envelopes = listTerminalEnvelopes(root);
+      const possible = envelopes.find((event) => event.path === possiblePath);
+      const notSent = envelopes.find((event) => event.path === notSentPath);
+      expect(possible).toMatchObject({
+        sendCount: 0, delivery: 'POSSIBLY_DELIVERED', terminalHandle: 'one',
+        observedInvocationId: 'synthetic-send-failed',
+      });
+      expect(notSent).toMatchObject({ sendCount: 0, delivery: 'not-sent' });
+      expect(potentiallySentUnboundEnvelope(possible!)).toBe(true);
+      expect(potentiallySentUnboundEnvelope(notSent!)).toBe(false);
+      const store = new MemoryWakeStore();
+      const input = {
+        store, screens: { coord: 'idle', one: 'PARKED on another turn', two: 'working\\nesc interrupt' },
+        listTerminalEnvelopes: () => envelopes,
+      };
+      const first = await tick(input);
+      expect(first.logs.some((line) => line.includes(`owner_generation_unproven gpt:${possiblePath}`))).toBe(true);
+      const sentToRecycledHandle = sendsTo(first.calls, 'one');
+      expect(sentToRecycledHandle).toHaveLength(2);
+      expect(sentToRecycledHandle.flat().join(' ')).toContain(notSentPath);
+      expect(sentToRecycledHandle.flat().join(' ')).not.toContain(possiblePath);
+      expect(sendsTo((await tick(input)).calls, 'one')).toHaveLength(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('routes a chat banner to the launching pane named by its binding, whatever worktree the turn ran in', () => {
     const fixWorktree = `${workerBase}/issue-132-ruff-format-fix`;
     const terminals: FleetTerminal[] = [
