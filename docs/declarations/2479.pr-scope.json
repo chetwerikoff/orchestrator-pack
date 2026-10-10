@@ -1,0 +1,37 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2479,
+  "declared_paths": [
+    ".cursor/skills/switch-pack-reviewer/SKILL.md",
+    "docs/orchestration-runbook.md",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/lib/resolve-pack-reviewer.ts",
+    "scripts/pack-gpt-review.ts",
+    "scripts/pack-gpt-reviewer.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-reviewer-preference.test.ts",
+    "scripts/review-delivery.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/switch-pack-reviewer/SKILL.md",
+    "docs/orchestration-runbook.md",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/lib/resolve-pack-reviewer.ts",
+    "scripts/pack-gpt-review.ts",
+    "scripts/pack-gpt-reviewer.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-reviewer-preference.test.ts",
+    "scripts/review-delivery.test.ts"
+  ],
+  "source_revision": "78e7c9d9647a02811b6a51f8f3ea9fa53f2a1639"
+}
