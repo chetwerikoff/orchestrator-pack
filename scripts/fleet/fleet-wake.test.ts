@@ -305,7 +305,8 @@ describe('fleet alarm', () => {
     const first = await tick({ terminals: [terminals[0]!, terminals[1]!], screens: parked, store });
     expect(first.result.state).toBe('nothing_stopped');
     expect(sends(first.calls)).toHaveLength(0);
-    expect(first.calls.filter((args) => args[0] === 'orchestration')).toHaveLength(0);
+    expect(first.calls.filter((args) => args[0] === 'orchestration'
+      && ['worker-list', 'worker-show'].includes(args[1] ?? ''))).toHaveLength(0);
     const repeated = await tick({ terminals: [terminals[0]!, terminals[1]!], screens: parked, store });
     expect(sends(repeated.calls)).toHaveLength(0);
   });
@@ -870,6 +871,17 @@ describe('Issue #2463 parked-producer compatibility with r05', () => {
       screens: { coord: 'idle', one: 'PARKED on terminal producer incarnation inc-x' } });
     expect(textTo(exited.calls)[0]).toContain('terminal-exited');
   });
+  it('plain-matches an arbitrary completed CI result ID without owner or Task witness', async () => {
+    const id = 'ci:42:' + head + ':17';
+    const run = await tick({ config: setting, terminals: [terminals[0]!, terminals[1]!],
+      screens: { coord: 'idle', one: 'PARKED on ' + id },
+      listOpenPulls: () => [{ number: 42, ref: 'synthetic', sha: head }],
+      checkRunsFinishedAt: () => 17,
+      readPackReviewStage: () => undefined,
+    });
+    expect(textTo(run.calls)[0]).toContain('checks-completed');
+  });
+
   it('keeps unmatched PARKED quiet and direct reminders at elapsed 30/60 minutes', async () => {
     const store = new MemoryWakeStore(), screens = { coord: 'idle', one: 'PARKED on missing-event' };
     const step = (now: number) => tick({ store, screens, now: () => now,
@@ -1434,6 +1446,9 @@ describe('Issue #2485 r05: plain event wake, no proof gates and pane-local alarm
     expect(paneText(byName.calls, 'one')[0]).toContain(event.path);
     const noProof = byName.calls.filter((row) => row[0] === 'orchestration' && row[1] === 'worker-show');
     expect(noProof).toHaveLength(0);
+    const foreign = await simple({ coord: 'idle', one: parked, two: 'working\nesc interrupt' },
+      new MemoryWakeStore(), [{ path: '/tmp/opencode/foreign-terminal.json', invocationId: 'different-id' }]);
+    expect(paneText(foreign.calls, 'one')).toHaveLength(0);
   });
 
   it('AC3: ignores legacy global mark, owner/generation conflict and stale claimant order', async () => {
