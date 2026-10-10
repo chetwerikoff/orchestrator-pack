@@ -918,7 +918,8 @@ function resolveNamedProducer(
   });
   if (producer.kind === 'gpt') {
     const events = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)();
-    const matches = events.filter((event) => event.observedInvocationId === producer.id);
+    const matches = events.filter((event) => event.observedInvocationId === producer.id
+      && isWakeableTerminalEnvelopePath(event.path, '/tmp/opencode'));
     if (matches.length !== 1) return unknown;
     const event = matches[0]!;
     if (!event.terminalHandle || event.terminalHandle !== pane.handle || !event.cwd
