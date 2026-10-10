@@ -4341,6 +4341,9 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
       await reconcileStalePackReviewRuns({ ...f.input, immediate: true });
       expect(getPackReviewRun(f.runId, f.options)?.status).toBe('reviewing');
       updatePackReviewRun(f.runId, { runnerPid: 2147483647 }, f.options);
+      // An active-run update legitimately refreshes its heartbeat. Age the
+      // dead runner again before testing the post-grace transition.
+      vi.setSystemTime(new Date('2026-10-10T08:10:00.000Z'));
       const result = await reconcileStalePackReviewRuns({
         ...f.input,
         fixtureRequiredStatusWriter: async ({ state }) => { written.push(state); },
