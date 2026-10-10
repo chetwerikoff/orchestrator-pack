@@ -1,0 +1,19 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2469,
+  "declared_paths": [
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.ts"
+  ],
+  "source_revision": "316508c7c78c1a956fe8827bc667bfca677c83ec"
+}

@@ -4247,3 +4247,377 @@ describe('Issue #2451 final-cap fixer regressions', () => {
       .toEqual([1]);
   });
 });
+
+describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
+  const projectId = 'orchestrator-pack';
+  const repoSlug = 'chetwerikoff/orchestrator-pack';
+  const prNumber = 2469;
+  const failure = 'gpt_source_non_complete:after_grace_zero_usable:0/3';
+  const issueBody = ['```complexity-tier', 'tier: T2', '```'].join('\n');
+
+  function seedOrphan(
+    slotMode: 'planned' | 'first-attempt' | 'prelaunch' = 'first-attempt',
+    firstSlotOverride?: (slot: PackReviewGptRoundRecord['sourceSlots'][number]) =>
+      PackReviewGptRoundRecord['sourceSlots'][number],
+  ) {
+    const storeRoot = tempRoot('opk-2469-orphan-');
+    harnessEnv(storeRoot, path.join(storeRoot, 'review.json'));
+    process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-10T08:00:00.000Z'));
+    const options = { projectId, storeRoot };
+    const authority = initializePackReviewAuthority({
+      prNumber, headSha: HEAD_A, tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options: { storeRoot },
+    });
+    const round = plannedStoredGptRound();
+    round.tier = 'T2';
+    round.issueNumber = prNumber;
+    round.boundIssueSnapshotDigest = computeBoundIssueSnapshotHash(issueBody);
+    if (slotMode === 'first-attempt') {
+      round.sourceSlots[0] = {
+        ...round.sourceSlots[0]!,
+        lifecycle: 'terminal',
+        invocationId: 'inv-2469-first-attempt',
+        attemptOrdinal: 1,
+        terminalClass: 'driver_error:connect_over_cdp_failed',
+        terminalResult: storedTerminalTurnResult('inv-2469-first-attempt', {
+          state: 'driver_error', cause: 'connect_over_cdp_failed', send_count: 0,
+        }),
+      };
+    }
+    if (slotMode === 'prelaunch') {
+      round.sourceSlots[0] = {
+        ...round.sourceSlots[0]!,
+        lifecycle: 'terminal',
+        terminalClass: 'pre_launch_interrupted',
+        terminalResult: { kind: 'stale_pre_launch_interruption', noResend: true },
+      };
+    }
+    if (firstSlotOverride) round.sourceSlots[0] = firstSlotOverride(round.sourceSlots[0]!);
+    const created = createPackReviewRun({
+      ...options, prNumber, headSha: HEAD_A,
+      canonicalRepository: repoSlug,
+      trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      automaticBudgetDisposition: 'consume',
+      resolvedReviewer: 'gpt', reviewRound: round,
+    }).run;
+    updatePackReviewRun(created.id, {
+      status: 'reviewing', latestRunStatus: 'reviewing',
+      runnerPid: 2147483647,
+    }, options);
+    const emptyComments: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'synthetic-reviewer',
+      listComments: async () => [],
+      getComment: async () => { throw new Error('no comment for exact invocation'); },
+    };
+    const input: Parameters<typeof reconcileStalePackReviewRuns>[0] = {
+      ...options, prNumber, sourceRepoRoot: repoRoot, repoSlug,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixtureGptSourceCommentTransport: emptyComments,
+      fixtureRequiredStatusWriter: async () => {},
+    };
+    return {
+      runId: created.id, options, input,
+      expire: () => vi.setSystemTime(new Date('2026-10-10T08:05:00.000Z')),
+    };
+  }
+
+  it.each(['planned', 'first-attempt', 'prelaunch'] as const)(
+    'terminalizes only proven dead-runner after grace: %s', async (mode) => {
+      const f = seedOrphan(mode);
+      const written: string[] = [];
+      const before = await reconcileStalePackReviewRuns({
+        ...f.input, immediate: true,
+      });
+      expect(before.results).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ runId: f.runId, terminalized: true }),
+      ]));
+      expect(getPackReviewRun(f.runId, f.options)?.status).toBe('reviewing');
+      f.expire();
+      updatePackReviewRun(f.runId, { runnerPid: process.pid }, f.options);
+      await reconcileStalePackReviewRuns({ ...f.input, immediate: true });
+      expect(getPackReviewRun(f.runId, f.options)?.status).toBe('reviewing');
+      updatePackReviewRun(f.runId, { runnerPid: 2147483647 }, f.options);
+      // An active-run update legitimately refreshes its heartbeat. Age the
+      // dead runner again before testing the post-grace transition.
+      vi.setSystemTime(new Date('2026-10-10T08:10:00.000Z'));
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input,
+        fixtureRequiredStatusWriter: async ({ state }) => { written.push(state); },
+      });
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ runId: f.runId, terminalized: true, statusReconciled: true }),
+      ]));
+      const stored = getPackReviewRun(f.runId, f.options)!;
+      expect(stored).toMatchObject({
+        status: 'failed', failureReason: failure,
+        automaticBudgetDisposition: 'consume',
+        deliveryOutcomes: { requiredStatus: { state: 'succeeded' } },
+      });
+      expect(stored.reviewVerdict).toBeUndefined();
+      expect(stored.journalOutcome).toBeUndefined();
+      expect(stored.reviewRound?.sourceSlots).toHaveLength(3);
+      expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([]);
+      expect(written).toEqual(['error']);
+    },
+  );
+
+  it.each([
+    ['second-attempt-without-prior-proof', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, attemptOrdinal: 2,
+    })],
+    ['summary-history-only', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, attemptHistory: [{
+        invocationId: 'inv-prior', attemptOrdinal: 1, terminalClass: 'driver_error:connect_over_cdp_failed',
+      }],
+    })],
+    ['possible-delivery-zero-send', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, terminalClass: 'possible_delivery',
+      terminalResult: storedTerminalTurnResult('inv-2469-first-attempt', {
+        state: 'driver_error', cause: 'connect_over_cdp_failed',
+        send_count: 0, send_attempted: true,
+      }),
+    })],
+    ['possible-delivery-send-one', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, terminalClass: 'possible_delivery',
+      terminalResult: storedTerminalTurnResult('inv-2469-first-attempt', {
+        state: 'driver_error', cause: 'connect_over_cdp_failed',
+        send_count: 1,
+      }),
+    })],
+    ['contradictory-dispatch-phase', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot,
+      terminalResult: storedTerminalTurnResult('inv-2469-first-attempt', {
+        state: 'driver_error', cause: 'connect_over_cdp_failed', send_count: 0,
+        diagnostics: { persisted_observation: { phase: 'dispatching', send_count: 0 } },
+      }),
+    })],
+    ['conflicting-comment-provenance', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot,
+      terminalResult: storedTerminalTurnResult('inv-2469-first-attempt', {
+        state: 'driver_error', cause: 'connect_over_cdp_failed', send_count: 0,
+        source_comment_reconciliation: 'conflict',
+      }),
+    })],
+    ['contradictory-send-flag', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot,
+      terminalResult: storedTerminalTurnResult('inv-2469-first-attempt', {
+        state: 'driver_error', cause: 'connect_over_cdp_failed', send_count: 0,
+        send_attempted: 'unknown',
+      }),
+    })],
+    ['started-without-terminal', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      slotId: slot.slotId, ordinal: slot.ordinal, lifecycle: 'invocation_started' as const,
+      attemptOrdinal: 1, invocationId: 'inv-2469-first-attempt',
+    })],
+  ])('does not classify unsafe 0/3 witness: %s', async (name, mutate) => {
+    // Build persisted negative evidence directly. The incumbent store rightly
+    // rejects overwriting terminal attempt results after they are recorded.
+    const f = seedOrphan(name === 'started-without-terminal' ? 'planned' : 'first-attempt', mutate);
+    f.expire();
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, terminalized: false, statusReconciled: false,
+        reason: 'gpt_zero_judgment_first_attempt_or_comment_census_unproven',
+      }),
+    ]));
+    expect(getPackReviewRun(f.runId, f.options)?.status).toBe('reviewing');
+  });
+
+  it.each(['actor-failure', 'census-failure'] as const)(
+    'fails closed on incomplete typed comment witness (%s)', async (mode) => {
+      const f = seedOrphan();
+      f.expire();
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input,
+        fixtureGptSourceCommentTransport: {
+          resolveActorLogin: async () => {
+            if (mode === 'actor-failure') throw new Error('synthetic actor offline');
+            return 'synthetic-reviewer';
+          },
+          listComments: async () => {
+            if (mode === 'census-failure') throw new Error('synthetic page failed');
+            return [];
+          },
+          getComment: async () => { throw new Error('not credentialed'); },
+        },
+      });
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ runId: f.runId, terminalized: false, statusReconciled: false }),
+      ]));
+      expect(getPackReviewRun(f.runId, f.options)?.status).toBe('reviewing');
+    },
+  );
+
+  it('returns a parsable same-PR reconcile action, never retry/reset', async () => {
+    const f = seedOrphan();
+    f.expire();
+    const output = await reconcileStalePackReviewRuns(f.input);
+    const terminal = output.results.find((row) => row.runId === f.runId && row.terminalized === true)!;
+    const action = String(terminal.nextAction);
+    expect(action).toContain('node --experimental-strip-types scripts/pack-review-runner.ts reconcile');
+    expect(action).toContain('--pr-number 2469');
+    expect(action).not.toMatch(/(?:\s)(?:retry|reset)(?:\s|$)/);
+    const cliArgs = action.split(' ').slice(4);
+    // The CLI string quotes its actual repository root for shell safety.
+    cliArgs[1] = JSON.parse(cliArgs[1]!);
+    const args = parseArgs(cliArgs);
+    expect(args).toMatchObject({ sourceRepoRoot: repoRoot, repoSlug, prNumber });
+  });
+
+  it('does not turn zero-judgment failure into permission to send without observation', async () => {
+    const f = seedOrphan();
+    f.expire();
+    await reconcileStalePackReviewRuns(f.input);
+    vi.useRealTimers();
+    selectProjectCard(f.options.storeRoot);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const invocations: string[] = [];
+    const result = await startPackReview({
+      ...f.options,
+      sourceRepoRoot: repoRoot, prNumber, headSha: HEAD_A,
+      tier: 'T2', claimMode: 'preacquired',
+      fixturePrState: 'OPEN', fixtureRepoSlug: repoSlug,
+      fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
+      fixtureIssueBody: issueBody,
+      fixtureIssueNumber: prNumber,
+      fixtureGptAttemptObserver: async () => ({
+        state: 'observation_unavailable' as const, replacementEligible: false,
+      }),
+      fixtureAfterGptInvocationBound: async ({ slotId }) => { invocations.push(slotId); },
+      fixtureRequiredStatusWriter: async () => {},
+    });
+    expect(result).toMatchObject({
+      ok: false, created: false, runId: f.runId,
+      reason: 'observation_unavailable', replacementEligible: false,
+    });
+    expect(invocations).toEqual([]);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([]);
+  });
+
+  it('can consume ordinal 1 once only after independent existing same-head eligibility', async () => {
+    const f = seedOrphan();
+    f.expire();
+    await reconcileStalePackReviewRuns(f.input);
+    vi.useRealTimers();
+    selectProjectCard(f.options.storeRoot);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const launched: string[] = [];
+    const result = await startPackReview({
+      ...f.options,
+      sourceRepoRoot: repoRoot, prNumber, headSha: HEAD_A,
+      tier: 'T2', claimMode: 'preacquired',
+      fixturePrState: 'OPEN', fixtureRepoSlug: repoSlug,
+      fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
+      fixtureIssueBody: issueBody,
+      fixtureIssueNumber: prNumber,
+      fixtureGptAttemptObserver: async () => ({
+        state: 'replacement_eligible' as const, replacementEligible: true,
+        slotId: 'source-01',
+        replacementEligibleSlotIds: ['source-01'],
+        initialLaunchSlotIds: ['source-02', 'source-03'],
+      }),
+      fixtureAfterGptInvocationBound: async ({ slotId }) => { launched.push(slotId); },
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-source-01') }],
+        'source-02': [{ stdout: successfulCleanReviewPayload('inv-source-02') }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
+      },
+      fixtureRequiredStatusWriter: async () => {},
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      ok: true, runId: f.runId,
+    });
+    expect(launched).toEqual(['source-01', 'source-02', 'source-03']);
+    expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBe('clean');
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([1]);
+  });
+
+  it('preserves failure-only notification channel across repeated 0/3 reconciliation', async () => {
+    const f = seedOrphan();
+    updatePackReviewRun(f.runId, {
+      workerNotificationBinding: {
+        schemaVersion: 1, runtime: 'cursor', id: 'synthetic-worker-2469',
+        generation: 'synthetic-generation', workspacePath: '/synthetic/worktree',
+        headSha: HEAD_A,
+      },
+    } as unknown as Parameters<typeof updatePackReviewRun>[1], f.options);
+    f.expire();
+    const sent: string[] = [];
+    const input = {
+      ...f.input,
+      fixtureWorkerNotifier: async (request: { idempotencyKey: string }) => {
+        sent.push(request.idempotencyKey);
+        return { state: 'submitted' as const, reason: 'synthetic-notification-sent' };
+      },
+    };
+    await reconcileStalePackReviewRuns(input);
+    await reconcileStalePackReviewRuns(input);
+    expect(sent).toEqual([`worker-notification:no-judgment:${f.runId}:${HEAD_A}`]);
+    expect(getPackReviewRun(f.runId, f.options)?.deliveryOutcomes.noJudgmentWorkerNotification)
+      .toMatchObject({ state: 'succeeded' });
+  });
+
+  it('republishes same-run pending after a delayed zero-judgment error finishes', async () => {
+    const f = seedOrphan();
+    f.expire();
+    const external: string[] = [];
+    let requeued = false;
+    const result = await reconcileStalePackReviewRuns({
+      ...f.input,
+      fixtureRequiredStatusWriter: async (request) => {
+        if (request.state === 'error' && !requeued) {
+          requeued = true;
+          updatePackReviewRun(f.runId, {
+            status: 'queued', latestRunStatus: 'queued',
+            failureReason: undefined, stale: undefined,
+          }, f.options);
+          external.push('pending');
+        }
+        external.push(request.state);
+      },
+    });
+    expect(external).toEqual(['pending', 'error', 'pending']);
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, statusReconciled: false,
+        reason: 'same_run_pending_status_restored',
+        statusPublication: 'authoritative_pending_restored',
+      }),
+    ]));
+    expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+      status: 'queued', deliveryOutcomes: { requiredStatus: { state: 'succeeded' } },
+    });
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([]);
+  });
+
+  it.each(['write-failed', 'head-advanced'] as const)(
+    'never claims 0/3 error publication without verified status (%s)', async (mode) => {
+      const f = seedOrphan();
+      f.expire();
+      let head = HEAD_A;
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input,
+        fixtureReadCurrentPrHead: async () => head,
+        fixtureRequiredStatusWriter: async (request) => {
+          if (request.state !== 'error') return;
+          if (mode === 'write-failed') throw new Error('synthetic status outage');
+          head = HEAD_B;
+        },
+      });
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ runId: f.runId, statusReconciled: false }),
+      ]));
+      expect(getPackReviewRun(f.runId, f.options)?.failureReason).toBe(failure);
+    },
+  );
+});

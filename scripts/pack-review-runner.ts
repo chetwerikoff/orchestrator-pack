@@ -2794,6 +2794,82 @@ interface GptSourceRecoveryResult {
   usableSourceCount: number;
   graceExpired: boolean;
   nextAction?: string;
+  /** Volatile results of complete, typed comment scans for exact invoked identities. */
+  missingFirstAttemptIdentities?: string[];
+}
+
+/**
+ * Failure-only proof. This does not use authoritativePreSend and does not admit
+ * a source launch: historical slot summaries cannot establish prior send counts.
+ */
+function provenFirstAttemptZeroSendCensus(
+  run: PackReviewRunRecord,
+  missingFirstAttemptIdentities: readonly string[],
+): boolean {
+  const round = run.reviewRound;
+  if (!round || round.reviewer !== 'gpt' || round.cardinality !== 3
+    || round.sourceSlots.length !== 3 || round.settledSourceCount !== undefined
+    || gptUsableSourceCount(round) !== 0 || hasPersistedPackReviewVerdict(run)
+    || run.reviewVerdict !== undefined || run.journalOutcome !== undefined
+    || run.githubReviewId !== undefined || run.githubReviewUrl !== undefined
+    || run.findings.length > 0) return false;
+  const missing = new Set(missingFirstAttemptIdentities);
+  return round.sourceSlots.every((slot) => {
+    if (slot.payload !== undefined
+      || (slot.attemptHistory !== undefined
+        && (!Array.isArray(slot.attemptHistory) || slot.attemptHistory.length !== 0))) return false;
+    if (slot.lifecycle === 'planned') {
+      return !slot.invocationId && slot.attemptOrdinal === undefined
+        && !slot.admissionStartedAtUtc && !slot.launchProfileKey && !slot.launchCdpUrl
+        && slot.terminalClass === undefined && slot.terminalResult === undefined;
+    }
+    if (slot.lifecycle !== 'terminal') return false;
+    if (slot.terminalClass === 'pre_launch_interrupted') {
+      const result = slot.terminalResult;
+      return !slot.invocationId && slot.attemptOrdinal === undefined
+        && !slot.admissionStartedAtUtc && !slot.launchProfileKey && !slot.launchCdpUrl
+        && !!result && typeof result === 'object' && !Array.isArray(result)
+        && (result as Record<string, unknown>).kind === 'stale_pre_launch_interruption'
+        && (result as Record<string, unknown>).noResend === true;
+    }
+    if (!slot.invocationId || slot.attemptOrdinal !== 1 || !slot.terminalClass
+      || slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings'
+      || slot.terminalClass.startsWith('possible_delivery')
+      || slot.terminalClass.includes('harvest')
+      || !missing.has(`${slot.slotId}:${slot.invocationId}`)) return false;
+    const terminal = slot.terminalResult;
+    if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)) return false;
+    const proof = terminal as Record<string, unknown>;
+    if (proof.schema !== 'turn-result/v1'
+      || proof.invocation_id !== slot.invocationId
+      || !['invocation', 'profile'].includes(String(proof.scope))
+      || proof.send_count !== 0 || terminalHasPossibleDelivery(proof)
+      || (proof.send_attempted !== undefined && proof.send_attempted !== false)
+      || proof.cause === 'send_delivery_unproven'
+      || proof.review_harvest_class !== undefined || proof.review_evidence !== undefined
+      || proof.source_comment_authority !== undefined || proof.source_comment_receipt !== undefined
+      || proof.state === 'ok' || proof.state === 'no_reply'
+      || (proof.delivery !== undefined && !['not_sent', 'NOT_SENT'].includes(String(proof.delivery)))
+      || (proof.source_comment_reconciliation !== undefined
+        && proof.source_comment_reconciliation !== 'missing')) return false;
+    const diagnostics = proof.diagnostics;
+    if (diagnostics !== undefined && (!diagnostics || typeof diagnostics !== 'object'
+      || Array.isArray(diagnostics))) return false;
+    const observed = (diagnostics as { persisted_observation?: unknown } | undefined)?.persisted_observation;
+    if (observed !== undefined) {
+      if (!observed || typeof observed !== 'object' || Array.isArray(observed)) return false;
+      const observation = observed as Record<string, unknown>;
+      if (!['prepared', 'not_sent'].includes(String(observation.phase))
+        || observation.transition_reason === 'send_delivery_unproven'
+        || (observation.send_count !== undefined && observation.send_count !== 0)
+        || (observation.send_attempted !== undefined && observation.send_attempted !== false)
+        || (observation.delivery !== undefined
+          && !['not_sent', 'NOT_SENT'].includes(String(observation.delivery)))
+        || (observation.invocation_id !== undefined
+          && observation.invocation_id !== slot.invocationId)) return false;
+    }
+    return true;
+  });
 }
 
 async function recoverStaleGptSourceComments(options: {
@@ -2863,6 +2939,7 @@ async function recoverStaleGptSourceComments(options: {
   let round = initialRound;
   let hydratedSourceCount = 0;
   const unresolved: string[] = [];
+  const missingFirstAttemptIdentities: string[] = [];
   if (!resumeFrozenRound) {
     const transport = options.input.fixtureGptSourceCommentTransport
       ?? createPackGptSourceCommentTransport({
@@ -2896,6 +2973,9 @@ async function recoverStaleGptSourceComments(options: {
         continue;
       }
       if (resolution.kind !== 'credentialed') {
+        if (resolution.kind === 'missing') {
+          missingFirstAttemptIdentities.push(`${currentSlot.slotId}:${invocationId}`);
+        }
         unresolved.push(`${currentSlot.slotId}:${resolution.reason}`);
         continue;
       }
@@ -2959,6 +3039,7 @@ async function recoverStaleGptSourceComments(options: {
       hydratedSourceCount,
       usableSourceCount,
       graceExpired,
+      missingFirstAttemptIdentities,
       nextAction: round.cardinality >= 3 && !graceExpired
         ? 'rerun scoped reconcile after the shared grace threshold or when the missing source publishes'
         : `reconcile or retry the missing source work (${unresolved.join(', ') || 'missing source comment'})`,
@@ -3913,6 +3994,8 @@ export async function reconcileStalePackReviewRuns(
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
   const repoSlug = trim(input.repoSlug);
   if (!repoSlug) throw new Error('pack review stale reconciliation requires a canonical repository slug');
+  const scopedReconcileAction = (prNumber: number) =>
+    `node --experimental-strip-types scripts/pack-review-runner.ts reconcile --source-repo-root ${JSON.stringify(input.sourceRepoRoot)} --repo-slug ${repoSlug} --pr-number ${prNumber}`;
   const resolveSlug = input.resolveRepositorySlug ?? resolveRepositorySlug;
   const bindRepositoryIdentity = async (record: PackReviewRunRecord): Promise<PackReviewRunRecord> => {
     if (record.canonicalRepository) return record;
@@ -4274,7 +4357,95 @@ export async function reconcileStalePackReviewRuns(
         });
         continue;
       }
-      if (activeStale) {
+      if (activeStale && recoveryCoverage?.kind === 'empty'
+          && run.reviewRound?.reviewer === 'gpt') {
+        // Unlike an unfinished terminal, an active 0/3 orphan must prove both
+        // that each attempt stopped before send AND that GitHub has no source
+        // comment for any invoked identity. An incomplete census is a veto.
+        const beforeZero = getPackReviewRun(run.id, { projectId, storeRoot });
+        let currentHead = '';
+        try {
+          currentHead = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
+        } catch {
+          // GitHub unavailable: never infer a clean first-attempt census.
+        }
+        const failedReason = 'gpt_source_non_complete:after_grace_zero_usable:0/3';
+        const virtualFailed = beforeZero
+          ? { ...beforeZero, status: 'failed' as const, failureReason: failedReason }
+          : null;
+        const authorized = recovery.graceExpired
+          && recovery.reason === 'gpt_sources_incomplete_after_grace:0/3'
+          && beforeZero && isPackReviewRunStale(beforeZero)
+          && currentHead === beforeZero.targetSha.toLowerCase()
+          && provenFirstAttemptZeroSendCensus(
+            beforeZero, recovery.missingFirstAttemptIdentities ?? [],
+          )
+          && virtualFailed && noJudgmentBudgetOutcome(virtualFailed, storeRoot)
+          && resolvePackReviewRunOrder(await readBoundRecords(), beforeZero).kind === 'none';
+        if (authorized && beforeZero) {
+          const snapshotRound = stableJson(beforeZero.reviewRound);
+          // Authority and run-store share one filesystem lock. Read authority
+          // immediately before entering the run-store CAS; never nest the
+          // authority reader inside that lock.
+          const authorityAtCas = readPackReviewAuthority(run.prNumber, { storeRoot });
+          const changed = updatePackReviewRunIf(
+            run.id,
+            (all) => {
+              const current = all.find((item) => item.id === run.id);
+              return Boolean(current && isPackReviewRunStale(current)
+                && current.targetSha === beforeZero.targetSha
+                && current.reviewCycleId === beforeZero.reviewCycleId
+                && current.canonicalRepository === beforeZero.canonicalRepository
+                && stableJson(current.reviewRound) === snapshotRound
+                && provenFirstAttemptZeroSendCensus(
+                  current, recovery.missingFirstAttemptIdentities ?? [],
+                )
+                && authorityAtCas?.cycle !== null
+                && authorityAtCas?.cycle !== undefined
+                && authorityAtCas.cycle.cycleId === current.reviewCycleId
+                && authorityAtCas.currentHeadSha.toLowerCase() === current.targetSha.toLowerCase()
+                && authorityAtCas.terminal?.runId !== current.id
+                && derivePackReviewNoJudgmentBudgetOutcome({
+                  ...current, status: 'failed', failureReason: failedReason,
+                }, authorityAtCas.cycle.consumedRoundOrdinals ?? []) !== null
+                && resolvePackReviewRunOrder(all, current).kind === 'none');
+            },
+            {
+              status: 'failed',
+              latestRunStatus: 'failed',
+              failureReason: failedReason,
+              stale: true,
+              exitCode: 1,
+              completedAtUtc: new Date().toISOString(),
+            },
+            { projectId, storeRoot },
+          );
+          if (changed) {
+            // External publication performs another exact-head/current-authority
+            // check. Re-read here as well to avoid reporting a stale winner.
+            const afterCasAuthority = readPackReviewAuthority(run.prNumber, { storeRoot });
+            if (afterCasAuthority?.cycle
+              && afterCasAuthority.cycle.cycleId === changed.reviewCycleId
+              && afterCasAuthority.currentHeadSha.toLowerCase() === changed.targetSha.toLowerCase()
+              && afterCasAuthority.terminal?.runId !== changed.id) {
+              terminalized = true;
+              run = await bindRepositoryIdentity(changed);
+            }
+          }
+        }
+        if (!terminalized) {
+          results.push({
+            runId: run.id,
+            terminalized: false,
+            statusReconciled: false,
+            reason: 'gpt_zero_judgment_first_attempt_or_comment_census_unproven',
+            recoveryReason: recovery.reason,
+            nextAction: scopedReconcileAction(run.prNumber),
+          });
+          continue;
+        }
+      }
+      if (activeStale && !terminalized) {
         const terminalizationResult = terminalizePackReviewStaleRun(run.id, { projectId, storeRoot });
         terminalized = terminalizationResult.changed;
         run = await bindRepositoryIdentity(
@@ -4370,7 +4541,10 @@ export async function reconcileStalePackReviewRuns(
       const head = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
       const afterHeadRead = getPackReviewRun(run.id, { projectId, storeRoot });
       return head === run.targetSha.toLowerCase()
-        && Boolean(afterHeadRead && noJudgmentBudgetOutcome(afterHeadRead, storeRoot));
+        && current.status === run.status && current.failureReason === run.failureReason
+        && Boolean(afterHeadRead && afterHeadRead.status === run.status
+          && afterHeadRead.failureReason === run.failureReason
+          && noJudgmentBudgetOutcome(afterHeadRead, storeRoot));
     };
     const authorizeStaleWrite = async () => {
       if (resolvePackReviewRunOrder(await readBoundRecords(), run).kind !== 'none') return false;
@@ -4404,6 +4578,31 @@ export async function reconcileStalePackReviewRuns(
           }
           return { reason: 'status_not_published:verdict_restoration_unverified; rerun scoped reconcile' };
         }
+        if (current && PACK_REVIEW_ACTIVE_STATUSES.has(current.status)
+          && head === run.targetSha.toLowerCase()
+          && authority?.currentHeadSha.toLowerCase() === head
+          && authority.cycle?.cycleId === current.reviewCycleId
+          && resolvePackReviewRunOrder(await readBoundRecords(), run).kind === 'none') {
+          // A same-ID requeue can publish pending while an older error is
+          // in flight. The last external write wins: republish that pending.
+          const projection = packReviewRequiredStatusProjectionKey(current);
+          const restored = await restorePackReviewAuthoritativeRequiredStatus({
+            run: current, projectId, storeRoot,
+            writeRequiredStatus: statusWriter, forceRepublish: true,
+          });
+          const after = getPackReviewRun(run.id, { projectId, storeRoot });
+          const afterHead = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
+          const afterAuthority = readPackReviewAuthority(run.prNumber, { storeRoot });
+          if (restored?.state === 'succeeded' && after
+            && PACK_REVIEW_ACTIVE_STATUSES.has(after.status)
+            && packReviewRequiredStatusProjectionKey(after) === projection
+            && afterHead === head && afterAuthority?.currentHeadSha.toLowerCase() === head
+            && afterAuthority.cycle?.cycleId === after.reviewCycleId
+            && resolvePackReviewRunOrder(await readBoundRecords(), run).kind === 'none') {
+            return { reason: 'same_run_pending_status_restored' };
+          }
+          return { reason: 'status_not_published:same_run_pending_restoration_unverified; rerun scoped reconcile' };
+        }
       }
       const restoration = await restoreLatestAuthority(run, statusWriter, true);
       return { reason: zeroJudgmentStaleStatus && restoration.reason === 'authority_not_newer'
@@ -4434,10 +4633,13 @@ export async function reconcileStalePackReviewRuns(
       terminalized,
       statusReconciled: needsStaleStatus && outcome.state === 'succeeded',
       reason: needsStaleStatus ? outcome.reason : 'status_already_reconciled',
+      ...(zeroJudgmentStaleStatus && terminalized ? { nextAction: scopedReconcileAction(run.prNumber) } : {}),
       ...(zeroJudgmentStaleStatus && needsStaleStatus && outcome.state !== 'succeeded' ? {
         statusPublication: outcome.reason === 'same_run_verdict_status_restored'
-          ? 'authoritative_verdict_restored' : 'status_not_published',
-        nextAction: 'rerun scoped reconcile or PR-led current-head status projection; no additional review round',
+          ? 'authoritative_verdict_restored'
+          : outcome.reason === 'same_run_pending_status_restored'
+            ? 'authoritative_pending_restored' : 'status_not_published',
+        nextAction: scopedReconcileAction(run.prNumber),
       } : {}),
     });
   }
