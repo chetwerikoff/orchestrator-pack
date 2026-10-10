@@ -132,7 +132,8 @@ import {
 import {
   PACK_REVIEW_BOUND_REVIEWER_ENV,
   packReviewEntrypointRelativePath,
-  resolvePackReviewerFromEnv,
+  packReviewResumeReviewerAuthorityError,
+  resolvePackReviewerResolution,
   type PackReviewer,
   type PackReviewerLayerOverrides,
 } from './lib/resolve-pack-reviewer.ts';
@@ -191,6 +192,7 @@ interface StartInput {
   baseRef?: string;
   startReason?: string;
   surface?: string;
+  reviewerOverride?: PackReviewer;
   storeRoot?: string;
   timeoutSeconds?: unknown;
   tier?: 'T1' | 'T2' | 'T3';
@@ -1989,8 +1991,7 @@ async function invokeReviewer(options: {
   fixtureReviewExitCode?: number;
   fixtureReviewTimedOut?: boolean;
   headSha: string;
-  fixtureReviewerLayerOverrides?: PackReviewerLayerOverrides;
-  fixtureEmulateWin32Selector?: boolean;
+  reviewer: PackReviewer | null;
   carryoverBundlePath?: string;
   sourceSlotId?: string;
   attemptOrdinal?: number;
@@ -1998,10 +1999,7 @@ async function invokeReviewer(options: {
   frozenScope?: ResolvedScopeContext;
   nativeInvocationOrdinal?: number;
 }): Promise<{ result: ProcessResult; resolvedReviewer: PackReviewer | null }> {
-  const resolvedReviewer = resolvePackReviewerFromEnv(process.env, {
-    layerOverrides: options.fixtureReviewerLayerOverrides,
-    emulateWin32: options.fixtureEmulateWin32Selector,
-  });
+  const resolvedReviewer = options.reviewer;
   const adapterArgs = [
     '--repo-root', options.reviewTargetRoot,
     '--base', options.baseRef,
@@ -2440,6 +2438,7 @@ async function runGptSourceBatch(options: {
   carryoverBundlePath: string;
   frozenScope: ResolvedScopeContext;
   sameRoundEligibleSlotIds?: ReadonlySet<string>;
+  reviewer: PackReviewer | null;
 }): Promise<ReviewPayload> {
   const harness = process.env.OPK_VITEST_HARNESS === '1';
   const admissionInterval = harness && !options.input.fixtureGptAdmissionReadObservation
@@ -2579,8 +2578,7 @@ async function runGptSourceBatch(options: {
           fixtureReviewStdout: fixtureAttempt?.stdout ?? options.input.fixtureReviewStdout,
           fixtureReviewExitCode: fixtureAttempt?.exitCode ?? options.input.fixtureReviewExitCode,
           fixtureReviewTimedOut: fixtureAttempt?.timedOut ?? options.input.fixtureReviewTimedOut,
-          fixtureReviewerLayerOverrides: options.input.fixtureReviewerLayerOverrides,
-          fixtureEmulateWin32Selector: options.input.fixtureEmulateWin32Selector,
+          reviewer: options.reviewer,
           carryoverBundlePath: options.carryoverBundlePath,
           headSha: options.target.headSha,
           sourceSlotId: slotId,
@@ -4021,6 +4019,15 @@ export async function reconcileStalePackReviewRuns(
       .map(bindRepositoryIdentity),
   );
   const records = await readBoundRecords();
+  // Guard journal-only recovery before any stale-status or review delivery write.
+  if (records.some((run) =>
+    run.canonicalRepository === repoSlug
+    && isPackReviewUnfinishedTerminalRun(run)
+    && Boolean(packReviewJournaledPayload(run))
+    && packReviewDeliveryNeedsResume(run))) {
+    const invalidAuthority = packReviewResumeReviewerAuthorityError(process.env);
+    if (invalidAuthority) throw new Error(invalidAuthority);
+  }
   const results: Array<Record<string, unknown>> = [];
   const restoreLatestAuthority = async (
     staleRun: PackReviewRunRecord,
@@ -5034,13 +5041,13 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     };
   }
 
-  const reviewer = resolvePackReviewerFromEnv(process.env, {
+  const reviewerResolution = resolvePackReviewerResolution(process.env, {
+    ...(input.reviewerOverride !== undefined ? { explicitReviewer: input.reviewerOverride } : {}),
     layerOverrides: input.fixtureReviewerLayerOverrides,
     emulateWin32: input.fixtureEmulateWin32Selector,
   });
-  if (!reviewer && process.env.OPK_VITEST_HARNESS !== '1') {
-    throw new Error('pack review reviewer selector did not resolve');
-  }
+  const reviewer = reviewerResolution.reviewer;
+  if (!reviewer) throw new Error(reviewerResolution.errorMessage ?? 'pack review reviewer selector did not resolve');
 
   const recoverableGptFixture = process.env.OPK_VITEST_HARNESS === '1'
     && listPackReviewRunRecordsRaw({ projectId, storeRoot }).some((candidate) => (
@@ -5054,6 +5061,14 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         && !packReviewJournaledPayload(candidate)
         && packReviewDeliveryNeedsResume(candidate))
     ));
+  const journaledResumeBeforeReconcile = await findJournaledDeliveryResumeCandidate({
+    projectId, storeRoot, prNumber: target.prNumber, headSha: target.headSha,
+    repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot, resolveSlug,
+  });
+  if (journaledResumeBeforeReconcile) {
+    const invalidAuthority = packReviewResumeReviewerAuthorityError(process.env);
+    if (invalidAuthority) throw new Error(invalidAuthority);
+  }
   await reconcileStalePackReviewRuns({
     repoSlug: target.repoSlug,
     sourceRepoRoot: target.sourceRepoRoot,
@@ -5793,7 +5808,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         logicalRoundOrdinal: roundOrdinal,
         logicalRoundCap: authority.cycle!.frozenCap,
       } : {}),
-      ...(reviewer ? { resolvedReviewer: reviewer } : {}),
+      ...(reviewer ? { resolvedReviewer: reviewer, resolvedReviewerSource: reviewerResolution.source } : {}),
       ...(gptRound ? { reviewRound: gptRound } : {}),
       ...(allowSameRoundReplacement ? { allowSameRoundReplacement: true } : {}),
       });
@@ -5902,6 +5917,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           carryoverBundlePath,
           frozenScope: authoritative.frozenScope,
           sameRoundEligibleSlotIds: sameRoundGptEligibleSlotIds,
+          reviewer,
         });
         result = {
           outcome: 'exit' as const,
@@ -5944,8 +5960,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           fixtureReviewStdout: input.fixtureReviewStdout,
           fixtureReviewExitCode: input.fixtureReviewExitCode,
           fixtureReviewTimedOut: input.fixtureReviewTimedOut,
-          fixtureReviewerLayerOverrides: input.fixtureReviewerLayerOverrides,
-          fixtureEmulateWin32Selector: input.fixtureEmulateWin32Selector,
+          reviewer,
           carryoverBundlePath,
           headSha: target.headSha,
           frozenScope: authoritative.frozenScope,
@@ -6071,8 +6086,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           fixtureReviewStdout: input.fixtureFallbackReviewStdout ?? input.fixtureReviewStdout,
           fixtureReviewExitCode: input.fixtureFallbackReviewExitCode ?? input.fixtureReviewExitCode,
           fixtureReviewTimedOut: input.fixtureFallbackReviewTimedOut ?? input.fixtureReviewTimedOut,
-          fixtureReviewerLayerOverrides: input.fixtureReviewerLayerOverrides,
-          fixtureEmulateWin32Selector: input.fixtureEmulateWin32Selector,
+          reviewer,
           headSha: target.headSha,
           frozenScope: authoritative.frozenScope,
           nativeInvocationOrdinal: 2,
