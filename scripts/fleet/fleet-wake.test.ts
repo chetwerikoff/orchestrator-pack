@@ -918,11 +918,12 @@ describe('fleet alarm', () => {
       listTerminalEnvelopes,
     };
     const delivered = await tick(withOwner);
-    expect(sends(delivered.calls)).toEqual([[
+    expect(sendsTo(delivered.calls, 'two')).toEqual([[
       'terminal', 'send', '--terminal', 'two',
       '--text', `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}`,
       '--enter',
     ], ['terminal', 'send', '--terminal', 'two', '--enter']]);
+    expect(sendsTo(delivered.calls, 'one')).toHaveLength(0);
     expect(store.hasParkedWakeEvent(`gpt:${envelope.path}`)).toBe(true);
 
     const repeated = await tick(withOwner);
