@@ -503,7 +503,7 @@ describe('flow-manager long-running child (#1164)', () => {
         },
         ...extras,
       });
-      const fixture = nodeFixture(`process.stdout.write(${JSON.stringify(JSON.stringify(result) + '\\n')})`);
+      const fixture = nodeFixture(`process.stdout.write(${JSON.stringify(JSON.stringify(result) + '\n')})`);
       const code = await runFixtureLaunch(root, {
         runIdentity: `run-2487-${label}`,
         attemptIdentity: `attempt-2487-${label}`,
