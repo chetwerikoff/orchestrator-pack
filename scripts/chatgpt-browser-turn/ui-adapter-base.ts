@@ -1549,6 +1549,8 @@ export async function runtimeWitnessSurfaceAvailable(
 export interface ProductStatusSurface {
   readonly text: string;
   readonly composer: boolean;
+  /** Preserve each product-owned node's selector for bounded wall diagnostics. */
+  readonly parts?: readonly { readonly selector: string; readonly text: string }[];
 }
 
 export async function productStatusText(page: any, waitSource?: OperationWaitSource): Promise<ProductStatusSurface> {
@@ -1556,7 +1558,7 @@ export async function productStatusText(page: any, waitSource?: OperationWaitSou
     page.locator(COMPOSER_SELECTOR),
     requireOperationWait(waitSource, 'product_status'),
   )) > 0;
-  const parts: string[] = [];
+  const parts: { selector: string; text: string }[] = [];
   for (const selector of PRODUCT_STATUS_PROBE_SELECTORS) {
     const locator = page.locator(selector);
     const countWait = requireOperationWait(waitSource, 'product_status');
@@ -1564,26 +1566,64 @@ export async function productStatusText(page: any, waitSource?: OperationWaitSou
     for (let index = 0; index < count; index++) {
       const textWait = requireOperationWait(waitSource, 'product_status');
       const text = await boundedPlaywrightOperation(textWait, () => locator.nth(index).innerText(playwrightTimeout(textWait)!));
-      if (text) parts.push(String(text));
+      if (text) parts.push({ selector, text: String(text) });
     }
   }
-  return { text: parts.join('\n'), composer };
+  return { text: parts.map((part) => part.text).join('\n'), composer, parts };
 }
 
 const PRODUCT_RATE_LIMIT_WALL_RE = /too many requests|(?:making |sending )?requests too quickly|you(?:'|’)re (?:making requests|sending messages) too quickly|temporarily limited(?:\s+access)?(?:\s+to your conversations)?|(?:please )?wait(?: a)? few minutes before trying again|try again in a few minutes|you(?:'|’)re going too fast|rate limit exceeded/i;
 
-export function classifyProductWall(surface: ProductStatusSurface): { state?: 'quota'|'rate_limit'|'challenge'|'login'; cause?: string } {
-  if (/verify you are human|checking your browser|just a moment|unusual activity/i.test(surface.text)) {
-    return { state: 'challenge', cause: 'challenge_detected' };
+const PRODUCT_QUOTA_WALL_RE = /you(?:'|’)ve reached[^\n]{0,120}\blimit\b|\busage limit\b|\bmessage limit\b|\breached the current usage\b|\breached your usage limit\b/i;
+const PRODUCT_WALL_TEXT_CAP = 500;
+
+export type ProductWallKind = 'quota' | 'rate_limit' | 'challenge' | 'login';
+export interface ProductWallDiagnostic {
+  /** Advisory evidence only; a page-text match cannot become a terminal state. */
+  readonly wall_kind: ProductWallKind | 'none';
+  readonly matched_text: string;
+  readonly matched_selector: string;
+  readonly state?: never;
+  readonly cause?: never;
+}
+export type ProductWallClassification = ProductWallDiagnostic;
+
+function matchingProductStatusPart(
+  surface: ProductStatusSurface,
+  pattern: RegExp,
+): { readonly text: string; readonly selector?: string } | undefined {
+  const parts = surface.parts?.length ? surface.parts : [{ text: surface.text }];
+  return parts.find((part) => pattern.test(part.text));
+}
+
+export function classifyProductWall(surface: ProductStatusSurface): ProductWallDiagnostic {
+  const patterns: readonly [ProductWallKind, RegExp][] = [
+    ['challenge', /verify you are human|checking your browser|just a moment|unusual activity/i],
+    ['quota', PRODUCT_QUOTA_WALL_RE],
+    ['rate_limit', PRODUCT_RATE_LIMIT_WALL_RE],
+    ['login', /log in|sign in/i],
+  ];
+  for (const [kind, pattern] of patterns) {
+    const matched = matchingProductStatusPart(surface, pattern);
+    if (matched) {
+      return {
+        wall_kind: kind,
+        matched_text: matched.text.slice(0, PRODUCT_WALL_TEXT_CAP),
+        matched_selector: matched.selector ?? 'none',
+      };
+    }
   }
-  if (/you(?:'|’)ve reached|usage limit|message limit|reached the current usage|reached your usage limit|please try again later/i.test(surface.text)) {
-    return { state: 'quota', cause: 'quota_detected' };
+  // A generic retry toast is product-owned diagnostic evidence, not a usage
+  // wall. Retain its original node and selector without terminal classification.
+  const genericRetry = matchingProductStatusPart(surface, /please try again later/i);
+  if (genericRetry) {
+    return {
+      wall_kind: 'none',
+      matched_text: genericRetry.text.slice(0, PRODUCT_WALL_TEXT_CAP),
+      matched_selector: genericRetry.selector ?? 'none',
+    };
   }
-  if (PRODUCT_RATE_LIMIT_WALL_RE.test(surface.text)) {
-    return { state: 'rate_limit', cause: 'rate_limit_detected' };
-  }
-  if (!surface.composer && /log in|sign in/i.test(surface.text)) return { state: 'login', cause: 'login_required' };
-  return {};
+  return { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
 }
 
 export async function locateLastAssistantTurnContainer(
@@ -1677,8 +1717,16 @@ export async function readAssistantMessageCompletionReady(
   return readAssistantNodeCompletionReady(messages.nth(messageIndex), waitMs);
 }
 
-async function pageWalls(page: any, waitSource?: OperationWaitSource): Promise<{ state?: string; cause?: string }> {
-  return classifyProductWall(await productStatusText(page, waitSource));
+async function pageWalls(
+  page: any,
+  waitSource?: OperationWaitSource,
+  observe?: (diagnostic: ProductWallDiagnostic) => void,
+): Promise<void> {
+  try {
+    observe?.(classifyProductWall(await productStatusText(page, waitSource)));
+  } catch {
+    // Product-owned status probing is diagnostic-only and cannot veto sending.
+  }
 }
 
 async function semanticNodes(locator: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<SemanticNode[]> {
@@ -1808,6 +1856,7 @@ export interface TurnBrowserResult {
   assistantMessageId?: string;
   reply?: string;
   possibleDelivery: boolean;
+  product_wall_diagnostic?: ProductWallDiagnostic;
 }
 
 
@@ -1922,6 +1971,23 @@ export async function sendTurn(
   segmentBudget?: TurnOperationBudget,
   freshIdentity?: FreshIdentityRetention,
 ): Promise<TurnBrowserResult> {
+  let diagnostic: ProductWallDiagnostic = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
+  const result = await sendTurnWithDiagnostics(page, text, config, provisionalId, onBeforeSend, segmentBudget, freshIdentity, (value) => {
+    if (value.matched_text !== 'none') diagnostic = value;
+  });
+  return { ...result, product_wall_diagnostic: diagnostic };
+}
+
+async function sendTurnWithDiagnostics(
+  page: any,
+  text: string,
+  config: BrowserConfig,
+  provisionalId?: string,
+  onBeforeSend?: () => void | Promise<void>,
+  segmentBudget?: TurnOperationBudget,
+  freshIdentity?: FreshIdentityRetention,
+  observeDiagnostic?: (diagnostic: ProductWallDiagnostic) => void,
+): Promise<TurnBrowserResult> {
   const network = attachNetworkWitness(page);
   if (config.newChat && freshIdentity) {
     page.on('framenavigated', () => {
@@ -1931,23 +1997,29 @@ export async function sendTurn(
     });
   }
   const composer = page.locator(COMPOSER_SELECTOR);
-  const readyEndsAt = segmentBudget?.endsAtMs ?? wallClock() + Math.min(config.timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS);
+  // A missing composer must not exhaust the pre-send budget before baseline
+  // establishment and the bounded click/fill attempt.
+  const readinessReserveMs = segmentBudget
+    ? Math.min(6_000, Math.max(1, Math.floor(segmentBudget.remainingMs() / 2)))
+    : 0;
+  const readyEndsAt = segmentBudget
+    ? Math.max(wallClock(), segmentBudget.endsAtMs - readinessReserveMs)
+    : wallClock() + Math.min(config.timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS);
   while (wallClock() < readyEndsAt) {
     const waitMs = loopOperationWaitMs(readyEndsAt, wallClock());
     if (waitMs <= 0) break;
-    const wall = await boundedPlaywrightOperation(waitMs, () => pageWalls(page, () => segmentOperationWait(segmentBudget, waitMs)));
-    if (wall.state) return { state: wall.state as TurnBrowserResult['state'], cause: wall.cause!, possibleDelivery: false };
+    const statusBudgetMs = Math.min(waitMs, 250);
+    await boundedPlaywrightOperation(statusBudgetMs, () => pageWalls(
+      page, () => Math.min(statusBudgetMs, segmentOperationWait(segmentBudget, statusBudgetMs)), observeDiagnostic,
+    )).catch(() => undefined);
     const composerVisible = await boundedLocatorCount(composer, waitMs);
     if (composerVisible) break;
     await witnessPollDelay(page, Math.min(500, waitMs));
   }
   const composerReadyWait = loopOperationWaitMs(readyEndsAt, wallClock());
-  if (!(await boundedLocatorCount(composer, composerReadyWait))) {
-    if (segmentBudget && wallClock() >= readyEndsAt) {
-      throw new BrowserOperationTimeoutError('composer_readiness');
-    }
-    return { state: 'ui_contract_mismatch', cause: 'composer_unavailable', possibleDelivery: false };
-  }
+  // An absent composer must be established through the ordinary mutation
+  // attempt, never short-circuited by the diagnostic product-status probe.
+  const composerWasMissing = (await boundedLocatorCount(composer, composerReadyWait)) === 0;
 
   const baseline = page.locator(MESSAGE_NODE_SELECTOR);
   const baselineIds = new Set<string>();
@@ -2002,13 +2074,19 @@ export async function sendTurn(
   }
 
   let mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
-  if (segmentBudget && mutationWait <= 0) throw new BrowserOperationTimeoutError('pre_send_mutation');
+  if (segmentBudget && mutationWait <= 0) {
+    if (composerWasMissing) return { state: 'send_failed', cause: 'composer_unavailable', possibleDelivery: false };
+    throw new BrowserOperationTimeoutError('pre_send_mutation');
+  }
   try {
     await composer.click(playwrightTimeout(mutationWait)!);
     mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
     if (segmentBudget && mutationWait <= 0) throw new BrowserOperationTimeoutError('pre_send_mutation');
     await composer.fill(text, playwrightTimeout(mutationWait)!);
   } catch (error) {
+    if (composerWasMissing && (await boundedLocatorCount(composer, 250)) === 0) {
+      return { state: 'send_failed', cause: 'composer_unavailable', possibleDelivery: false };
+    }
     throw coerceBrowserOperationTimeout(error, 'pre_send_mutation');
   }
   const send = page.locator(SEND_BUTTON_SELECTOR);
@@ -2112,7 +2190,8 @@ export async function sendTurn(
     if (replyWait <= 0) break;
     const wallWait = Math.min(replyWait, loopOperationWaitMs(deadline, wallClock()));
     if (wallWait <= 0) break;
-    const wall = await boundedPlaywrightOperation(wallWait, () => pageWalls(page, () => wallWait));
+    const statusBudgetMs = Math.min(wallWait, 250);
+    await boundedPlaywrightOperation(statusBudgetMs, () => pageWalls(page, () => statusBudgetMs, observeDiagnostic)).catch(() => undefined);
     const canonicalUserIdEarly = canonicalSubmittedUserId(network, baselineIds);
     if (!canonicalUserIdEarly && boundDispatchCandidateIds(network).size > 1) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true, userMessageId: userId };
@@ -2361,15 +2440,6 @@ export async function sendTurn(
       }
     }
 
-    if (wall.state) {
-      return {
-        state: 'recovery_required',
-        cause: `profile_wall:${wall.state}`,
-        possibleDelivery: true,
-        userMessageId: userId,
-        ...(boundAssistantId ? { assistantMessageId: boundAssistantId } : {}),
-      };
-    }
     replyWait = loopOperationWaitMs(deadline, wallClock());
     if (replyWait <= 0) break;
     await witnessPollDelay(page, Math.min(750, replyWait));

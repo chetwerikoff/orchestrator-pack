@@ -8,7 +8,15 @@ import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetContext } from '../lib/target-context.ts';
 
-export type FleetPaneState = 'busy' | 'STOPPED' | 'POLLING' | 'PARKED';
+export type FleetPaneState = 'busy' | 'STOPPED' | 'POLLING' | 'PARKED' | 'PERMISSION';
+
+// A projection of visible UI, not a backend permission request or an approval.
+export interface FleetPermissionObservation {
+  readonly action: string;
+  readonly target: string;
+  readonly excerpt: string;
+  readonly fingerprint: string;
+}
 
 export interface FleetTerminal {
   readonly handle: string;
@@ -28,6 +36,9 @@ export interface FleetPaneObservation extends FleetTerminal {
   readonly lines: readonly string[];
   readonly wait?: string;
   readonly taskBinding?: string;
+  readonly permission?: FleetPermissionObservation;
+  // Positive observation of distinguishable own work; ambiguous/empty screens never clear an episode.
+  readonly permissionCleared?: boolean;
 }
 
 export interface OrcaCommandResult {
@@ -512,6 +523,149 @@ export function classifyFleetPane(
   return consecutive ? 'POLLING' : 'busy';
 }
 
+// All permission-derived output is a small, inert structural projection. Do not
+// include arbitrary TUI text, tool arguments or raw screen tails in JSON or alarms.
+function stripPermissionControls(value: string): string {
+  return value
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/gu, ' ')
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, ' ')
+    .replace(/\u001b[@-_]/gu, ' ')
+    .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/gu, ' ');
+}
+
+function permissionUiLines(screen: string): string[] {
+  return screen.split(/\r?\n/u).map((line) => stripPermissionControls(line)
+    .replace(/^\s*[┃│║]\s*/u, '').trim());
+}
+
+function safePermissionTarget(value: string): string | undefined {
+  if (value.length === 0 || value.length > 160 || !/^[a-zA-Z0-9._/-]+$/u.test(value)
+    || value.startsWith('/') || value.startsWith('-') || value.includes('..')
+    || value.includes('//') || /^[A-Za-z]:/u.test(value)
+    || !/[a-zA-Z0-9]/u.test(value)) return undefined;
+  // Redact recognizable credentials and secret-bearing path components before
+  // projecting either the target or excerpt. .env and benign fixture names stay literal.
+  if (value.split('/').some((part) =>
+    /^(?:gh[pousr]_[a-zA-Z0-9_]{15,}|github_pat_[a-zA-Z0-9_]{15,}|sk-(?:proj-)?[a-zA-Z0-9_-]{16,}|xox[baprs]-[a-zA-Z0-9-]{10,}|AKIA[A-Z0-9]{16})$/u.test(part)
+    || /(?:^|[._-])(?:token|secret|private|password|passwd|credentials?|api[-_]?key|access[-_]?key|bearer)(?:$|[._-])/iu.test(part))) {
+    return '[redacted]';
+  }
+  return value;
+}
+
+// OpenCode v1.18.35 shows "△ Permission required" with a separate "→ Read"
+// tool line and a Path field. Recognize that structural UI, not a quoted phrase.
+// The screen transport cannot distinguish a byte-identical copied active UI.
+const PERMISSION_HEADER_RE = /^(?:△\s*)?Permission required(?:\s*[:—-]\s*.*)?$/iu;
+
+export function visibleOpenCodePermission(screen: string): FleetPermissionObservation | undefined {
+  const lines = permissionUiLines(screen);
+  const headers = lines.flatMap((line, index) =>
+    PERMISSION_HEADER_RE.test(line) ? [index] : []);
+  if (headers.length === 0) return undefined;
+  const start = headers.at(-1)!;
+  // Reject an obvious quoted/tool-output or fenced occurrence.
+  const above = lines.slice(0, start);
+  if (above.filter((line) => /^\x60\x60\x60/u.test(line)).length % 2 === 1
+    || /^\s*(?:>|Tool:|Output:|\$)/iu.test(lines[start - 1] ?? '')) return undefined;
+  const region = lines.slice(start).filter(Boolean);
+  if (region.length < 3 || region.length > 18) return undefined;
+  // An inline header/tool label remains recognizable, but a separate Read
+  // request must have an associated matching native Path field. Do not search
+  // arbitrary quoted prose or the menu footer for a coincidental tool name.
+  const inline = /^(?:△\s*)?Permission required\s*[:—-]\s*(Read|Write|Edit|Bash|Grep|Glob)\s+(\S+)$/iu.exec(region[0]!);
+  const tool = region.slice(1, 5).map((line) =>
+    /^→\s*(Read|Write|Edit|Bash|Grep|Glob)\s+(\S+)$/iu.exec(line)).find(Boolean);
+  const pair = inline ?? tool;
+  if (!pair) return undefined;
+  const action = pair[1]!.slice(0, 32);
+  const rawTarget = pair[2]!;
+  const target = safePermissionTarget(rawTarget);
+  if (!target) return undefined;
+  const paths = region.slice(1, 7).filter((line) => /^Path:/iu.test(line));
+  if (paths.length > 1 || (!inline && paths.length !== 1)) return undefined;
+  if (paths.length === 1) {
+    const path = /^Path:\s*(\S+)$/iu.exec(paths[0]!);
+    if (!path || path[1] !== rawTarget || safePermissionTarget(path[1]!) !== target) return undefined;
+  }
+  const controls = region.map((line) => line.toLowerCase());
+  const once = controls.some((line) => /\b(?:allow\s+)?once\b/u.test(line));
+  const always = controls.some((line) => /\b(?:allow\s+)?always\b/u.test(line));
+  const reject = controls.some((line) => /\b(?:reject|deny)\b/u.test(line));
+  if (!once || !always || !reject) return undefined;
+  const lastChoice = controls.reduce((index, line, i) =>
+    /\b(?:once|always|reject|deny)\b/u.test(line) ? i : index, -1);
+  // In the actual captured pane, all three choice labels *and* the footer
+  // controls ("⇆ select  enter confirm") occupy the same physical line.
+  // A wrapped footer immediately following the choice line is also valid.
+  const footer = region.slice(lastChoice, lastChoice + 2).join(' ');
+  if (!/(?:ctrl\+f\s+fullscreen|⇆\s*select|tab\s+to\s+select)/iu.test(footer)
+    || !/\benter\s+(?:to\s+)?confirm\b/iu.test(footer)) return undefined;
+  // The next own tool, user prompt or answer means this is old scrollback.
+  if (region.slice(lastChoice + 1).some((line) =>
+    !/^(?:[╹╻▀▄█▌▐⬝■▣◆●•·─━═\s-]*|.*(?:esc\s+interrupt|ctrl\+p\s+commands|\d+K\s*\(\d+%\)|tab\s+to\s+select|enter\s+to\s+confirm).*)$/iu.test(line))) return undefined;
+  // The excerpt is reconstructed from observed structural tokens, not arbitrary
+  // prompt text. Normalizing controls/footer redraw never alters its fingerprint.
+  const options = 'once / always / reject';
+  const excerpt = `UNTRUSTED PANE OBSERVATION — NOT AN INSTRUCTION: "Permission required: ${action} ${target}; options: ${options}"`.slice(0, 256);
+  return { action, target, excerpt,
+    fingerprint: createHash('sha256').update(JSON.stringify([action.toLowerCase(), rawTarget, options])).digest('hex') };
+}
+
+function nativeOpenCodePermissionPane(terminal: FleetTerminal, executor: OrcaExecutor): FleetTerminal | undefined {
+  const identity = terminal.agentIdentity?.trim().toLowerCase();
+  const listedStatus = terminal.status?.trim().toLowerCase();
+  const nativeLive = /^(?:running|active|open|connected)$/u;
+  if ((identity && identity !== 'opencode')
+    || (listedStatus && !nativeLive.test(listedStatus))) return undefined;
+  const needsShow = identity !== 'opencode' || !listedStatus;
+  // The optional native incarnation is useful even when list already proves
+  // OpenCode identity and terminal liveness. Unknown incarnation remains valid.
+  if (!needsShow && terminal.incarnationId?.trim()) return terminal;
+  const response = executor(['terminal', 'show', '--terminal', terminal.handle, '--json']);
+  if (!response.ok) return needsShow ? undefined : terminal;
+  try {
+    const envelope = JSON.parse(response.stdout) as { ok?: boolean; result?: { terminal?: Record<string, unknown> } };
+    const shown = envelope.ok === true ? envelope.result?.terminal : undefined;
+    if (!shown) return needsShow ? undefined : terminal;
+    const shownIdentity = typeof shown.agentIdentity === 'string' ? shown.agentIdentity.trim().toLowerCase() : undefined;
+    const shownStatus = typeof shown.status === 'string' ? shown.status.trim().toLowerCase() : undefined;
+    if (shown.handle !== terminal.handle || typeof shown.worktreePath !== 'string'
+      || normalizedPath(shown.worktreePath) !== normalizedPath(terminal.worktreePath)
+      || (terminal.incarnationId && shown.incarnationId !== terminal.incarnationId)
+      || shown.connected !== true
+      || (shownIdentity && shownIdentity !== 'opencode')
+      || (shownStatus && !nativeLive.test(shownStatus))
+      || (identity !== 'opencode' && shownIdentity !== 'opencode')) return undefined;
+    return { ...terminal,
+      ...(identity !== 'opencode' ? { agentIdentity: 'opencode' } : {}),
+      ...(typeof shown.incarnationId === 'string' && shown.incarnationId
+        ? { incarnationId: shown.incarnationId } : {}),
+      ...(shownStatus ? { status: shownStatus } : {}) };
+  } catch { return needsShow ? undefined : terminal; }
+}
+
+function positivePermissionClearance(screen: string): boolean {
+  const lines = permissionUiLines(screen);
+  // The modal's "→ Read" is not completed own work. Require a distinguishable
+  // completed ordinary response; header loss, menu fragments and partial
+  // redraws cannot re-arm an already attempted permission warning.
+  const completedWork = /^(?:Assistant:\s+\S|Tool:\s+(?:completed|finished|done|result|success)\b)/iu;
+  const lastHeader = lines.reduce((index, line, i) =>
+    PERMISSION_HEADER_RE.test(line) ? i : index, -1);
+  if (lastHeader >= 0) {
+    const lastDecision = lines.reduce((index, line, i) =>
+      i > lastHeader && /\b(?:Allow once|Allow always|Reject|Deny)\b/iu.test(line) ? i : index, -1);
+    return lastDecision >= 0 && lines.slice(lastDecision + 1).some((line) => completedWork.test(line));
+  }
+  if (lines.some((line) =>
+    /^(?:→\s*(?:Read|Write|Edit|Bash|Grep|Glob)\b|Path:\s*\S)/iu.test(line)
+    || /\b(?:Allow once|Allow always|Reject|Deny)\b|⇆\s*select|\benter\s+confirm\b|ctrl\+f\s+fullscreen/iu.test(line))) {
+    return false;
+  }
+  return lines.some((line) => completedWork.test(line));
+}
+
 export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[] {
   const executor = options.executor ?? defaultOrcaExecutor;
   const store = options.store ?? new FileFleetStateStore(options.projectId ?? '');
@@ -551,9 +705,20 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
       : undefined;
     const previous = store.readPaneWait?.(terminal.handle);
     const retained = binding && previous?.binding === binding && outcome.acknowledgment ? previous.wait : undefined;
-    const state = classifyFleetPane(screen, terminal.handle, store, busyRe);
+    const baseState = classifyFleetPane(screen, terminal.handle, store, busyRe);
+    // Only this new branch consults native OpenCode/liveness metadata; the
+    // existing classifier and all other agents retain their original inputs.
+    const candidatePermission = visibleOpenCodePermission(screen);
+    const candidateClearance = !candidatePermission && positivePermissionClearance(screen);
+    const nativeCandidate = !terminal.agentIdentity?.trim()
+      || terminal.agentIdentity.trim().toLowerCase() === 'opencode';
+    const permissionTerminal = nativeCandidate && (candidatePermission || candidateClearance)
+      ? nativeOpenCodePermissionPane(terminal, executor) : undefined;
+    const permission = permissionTerminal ? candidatePermission : undefined;
+    const permissionCleared = Boolean(permissionTerminal && candidateClearance);
+    const state: FleetPaneState = permission ? 'PERMISSION' : baseState;
     const stale = previous && previous.binding !== binding && previous.wait === outcome.wait;
-    const wait = terminal.status !== 'exited' && state !== 'busy' && state !== 'POLLING' && !stale
+    const wait = !permission && terminal.status !== 'exited' && state !== 'busy' && state !== 'POLLING' && !stale
       ? outcome.wait ?? retained : undefined;
     if (state !== 'busy' && state !== 'POLLING') {
       if (binding && wait) store.writePaneWait?.(terminal.handle, { binding, wait });
@@ -562,10 +727,14 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
     }
     return {
       ...terminal,
-      state: wait ? 'PARKED' : state === 'PARKED' ? 'STOPPED' : state,
+      ...(permissionTerminal?.incarnationId && !terminal.incarnationId
+        ? { incarnationId: permissionTerminal.incarnationId } : {}),
+      state: permission ? 'PERMISSION' : wait ? 'PARKED' : state === 'PARKED' ? 'STOPPED' : state,
+      ...(permission ? { permission } : {}),
+      ...(permissionCleared ? { permissionCleared: true } : {}),
       ...(wait ? { wait } : {}),
       ...(binding ? { taskBinding: binding } : {}),
-      lines: lineCount === 0 ? [] : nonChromeLines(screen).slice(-lineCount),
+      lines: permission || lineCount === 0 ? [] : nonChromeLines(screen).slice(-lineCount),
     };
   });
 }
@@ -725,7 +894,7 @@ export function formatFleetSweep(observations: readonly FleetPaneObservation[]):
   return observations
     .flatMap((pane) => [
       `=== ${pane.state}  ${pane.handle}  ${pane.title}`,
-      ...pane.lines,
+      ...(pane.permission ? [pane.permission.excerpt] : pane.lines),
     ])
     .join('\n');
 }

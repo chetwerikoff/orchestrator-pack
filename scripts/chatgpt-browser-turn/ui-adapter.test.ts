@@ -119,13 +119,110 @@ describe('owned-turn product recovery confirmation', () => {
     try {
       const surface = await productStatusText(fake.page, 2_000);
       expect(fake.getReads()).toBe(1);
-      expect(classifyProductWall(surface)).toEqual({});
+      expect(classifyProductWall(surface)).toEqual({ wall_kind: 'none', matched_text: 'none', matched_selector: 'none' });
     } finally {
       leaveScope();
     }
   });
 });
 
+
+describe('Issue #2489 product-status advisory classification', () => {
+  const none = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
+  for (const record of [
+    { label: 'generic error toast', text: 'Something went wrong. Please try again later.', expected: 'none' },
+    { label: 'usage-remaining warning', text: 'You have 20% usage remaining', expected: 'none' },
+    { label: 'unrelated reached phrase', text: "You've reached a milestone", expected: 'none' },
+    { label: 'explicit exhausted quota', text: "You've reached your usage limit", expected: 'quota' },
+    { label: 'rate limiting', text: 'Too many requests', expected: 'rate_limit' },
+    { label: 'human challenge', text: 'Verify you are human', expected: 'challenge' },
+    { label: 'login prompt', text: 'Sign in to continue', expected: 'login' },
+  ] as const) {
+    for (const composer of [true, false]) {
+      it(record.label + ' with composer=' + composer + ' never becomes a terminal state', () => {
+        const classified = classifyProductWall({ text: record.text, composer });
+        expect(classified).toEqual(record.label === 'generic error toast'
+          ? { wall_kind: 'none', matched_text: record.text, matched_selector: 'none' }
+          : record.expected === 'none'
+            ? none
+            : { wall_kind: record.expected, matched_text: record.text, matched_selector: 'none' });
+        expect(classified).not.toHaveProperty('state');
+      });
+    }
+  }
+
+  for (const { kind, text, selector, composer } of [
+    { kind: 'challenge', text: 'Verify you are human', selector: '[role="dialog"]', composer: true },
+    { kind: 'quota', text: "You've reached your usage limit", selector: '[data-testid*="limit"]', composer: false },
+    { kind: 'rate_limit', text: 'Too many requests', selector: '[data-testid*="error"]', composer: true },
+    { kind: 'login', text: 'Sign in to continue', selector: '[data-testid*="login"]', composer: false },
+  ] as const) {
+    it('retains the exact matched ' + kind + ' node and selector', async () => {
+      const page = {
+        locator: (requested: string) => ({
+          count: async () => requested === COMPOSER_SELECTOR ? Number(composer) : Number(requested === selector),
+          nth: () => ({ innerText: async () => text }),
+        }),
+      };
+      const surface = await productStatusText(page);
+      expect(surface).toEqual({ text, composer, parts: [{ selector, text }] });
+      expect(classifyProductWall(surface)).toEqual({
+        wall_kind: kind, matched_text: text, matched_selector: selector,
+      });
+    });
+  }
+
+  it('retains the exact generic retry alert node without a terminal state', async () => {
+    const text = 'Something went wrong. Please try again later.';
+    const selector = '[role="alert"]';
+    const page = {
+      locator: (requested: string) => ({
+        count: async () => requested === COMPOSER_SELECTOR ? 1 : Number(requested === selector),
+        nth: () => ({ innerText: async () => text }),
+      }),
+    };
+    const surface = await productStatusText(page);
+    expect(surface).toEqual({ text, composer: true, parts: [{ selector, text }] });
+    const diagnostic = classifyProductWall(surface);
+    expect(diagnostic).toEqual({ wall_kind: 'none', matched_text: text, matched_selector: selector });
+    expect(diagnostic).not.toHaveProperty('state');
+    expect(diagnostic).not.toHaveProperty('cause');
+    expect(classifyProductWall({ ...surface, text: text + 'X'.repeat(600), parts: [{ selector, text: text + 'X'.repeat(600) }] }).matched_text)
+      .toBe((text + 'X'.repeat(600)).slice(0, 500));
+  });
+
+  it('bounds the exact matched node to 500 characters while preserving its source', async () => {
+    const text = `Too many requests XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX`;
+    const selector = '[role="alert"]';
+    const page = {
+      locator: (requested: string) => ({
+        count: async () => Number(requested === selector || requested === COMPOSER_SELECTOR),
+        nth: () => ({ innerText: async () => text }),
+      }),
+    };
+    const surface = await productStatusText(page);
+    expect(classifyProductWall(surface)).toEqual({
+      wall_kind: 'rate_limit',
+      matched_text: text.slice(0, 500),
+      matched_selector: selector,
+    });
+  });
+
+  it('keeps challenge preference across separate product-owned selectors', () => {
+    expect(classifyProductWall({
+      text: "You've reached your usage limit\nVerify you are human",
+      composer: false,
+      parts: [
+        { selector: '[role="alert"]', text: "You've reached your usage limit" },
+        { selector: '[role="dialog"]', text: 'Verify you are human' },
+      ],
+    })).toEqual({
+      wall_kind: 'challenge',
+      matched_text: 'Verify you are human',
+      matched_selector: '[role="dialog"]',
+    });
+  });
+});
 
 describe('fresh project conversation identity', () => {
   const projectUrl = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project';
