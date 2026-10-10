@@ -1029,11 +1029,11 @@ async function wakeNamedParkedProducers(
   terminals: readonly FleetTerminal[],
   store: FleetWakeStateStore,
   executor: OrcaExecutor,
-  legacyAttempts: ReadonlyMap<string, string>,
   sleepMs: (milliseconds: number) => void | Promise<void>,
   log: (line: string) => void,
-): Promise<string[]> {
+): Promise<{ alerts: string[]; claimedLegacy: Set<string> }> {
   const alerts: string[] = [];
+  const claimedLegacy = new Set<string>();
   const observed = new Map<string, string>();
   const now = (options.now ?? Date.now)();
   for (const pane of observations) {
@@ -1054,10 +1054,8 @@ async function wakeNamedParkedProducers(
       alerts.push('park on unresolvable producer ' + (safeUnitAtom(pane.handle) ?? 'unknown')
         + ' ' + episode.slice(0, 12));
     }
-    const legacyCoalesced = Boolean(resolution.legacyKey && (
-      store.hasParkedWakeEvent(resolution.legacyKey)
-      || legacyAttempts.get(resolution.legacyKey) === pane.handle
-    ));
+    const legacyCoalesced = Boolean(resolution.legacyKey
+      && store.hasParkedWakeEvent(resolution.legacyKey));
     if (legacyCoalesced && resolution.legacyKey && store.hasParkedWakeEvent(resolution.legacyKey)) {
       store.clearParkedEpoch?.(pane.handle);
       continue;
@@ -1065,6 +1063,7 @@ async function wakeNamedParkedProducers(
     const eventKey = 'producer:' + pane.handle + ':' + episode + ':'
       + createHash('sha256').update(JSON.stringify(resolution)).digest('hex').slice(0, 32);
     if (resolution.state === 'ended' && !legacyCoalesced && !store.hasParkedWakeEvent(eventKey)) {
+      if (resolution.legacyKey) claimedLegacy.add(resolution.legacyKey);
       const wake = safeUnitWakeText(producer.label, resolution.terminalState ?? '', resolution.evidence ?? '');
       if (!wake) {
         alerts.push('park on unresolvable producer ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' unsafe-evidence');
@@ -1097,7 +1096,7 @@ async function wakeNamedParkedProducers(
     }
   }
   store.pruneParkedEpochs?.(observed);
-  return alerts;
+  return { alerts, claimedLegacy };
 }
 
 /**
@@ -1112,11 +1111,12 @@ async function wakePanesOnEvents(
   store: FleetWakeStateStore,
   log: (line: string) => void,
   sleepMs: (milliseconds: number) => void | Promise<void>,
-): Promise<Map<string, string>> {
-  const legacyAttempts = new Map<string, string>();
+  claimedLegacy: ReadonlySet<string>,
+): Promise<void> {
   const wakes: Array<{ pane: FleetTerminal | FleetPaneObservation; key: string; message: string }> = [];
   for (const envelope of (options.listTerminalEnvelopes ?? listTerminalEnvelopes)()) {
     const key = `gpt:${envelope.path}`;
+    if (claimedLegacy.has(key)) continue;
     if (potentiallySentUnboundEnvelope(envelope)) {
       log(`skip unsafe GPT terminal wake: owner_generation_unproven ${key}`);
       continue;
@@ -1175,6 +1175,7 @@ async function wakePanesOnEvents(
       const pane = (pull.issue ? ownerForPull(pull, observations) : undefined) ?? pullOwner(pull, observations, headOf);
       // A re-run of failed checks on the same head is a new event.
       const key = `ci:${pull.number}:${pull.sha}:${at}`;
+      if (claimedLegacy.has(key)) continue;
       if (!pane) {
         const unowned = `ci-unowned:${pull.number}:${pull.sha}:${at}`;
         if (!store.hasParkedWakeEvent(unowned)) {
@@ -1188,7 +1189,6 @@ async function wakePanesOnEvents(
     }
   }
   for (const { pane, key, message } of wakes) {
-    if (key.startsWith('gpt:') || key.startsWith('ci:')) legacyAttempts.set(key, pane.handle);
     const delivered = sendCoordinator(executor, pane.handle, message)
       && (await sleepMs(4_000), submitCoordinator(executor, pane.handle));
     if (!delivered) {
@@ -1199,9 +1199,8 @@ async function wakePanesOnEvents(
     if (pane.handle !== coordinator.handle) store.clearPaneWait?.(pane.handle);
     log(`sent event wake to ${pane.handle}: ${key}`);
   }
-  return legacyAttempts;
 }
-
+ 
 function defaultSleep(milliseconds: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
@@ -1331,10 +1330,11 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       return { state: 'unreadable', handle: 'fleet-sweep' };
     }
 
-    const legacyAttempts = await wakePanesOnEvents(options, coordinator, observations, executor, store, log, sleepMs);
-    const parkedAlerts = await wakeNamedParkedProducers(
-      options, observations, terminals, store, executor, legacyAttempts, sleepMs, log,
+    const parked = await wakeNamedParkedProducers(
+      options, observations, terminals, store, executor, sleepMs, log,
     );
+    const parkedAlerts = parked.alerts;
+    await wakePanesOnEvents(options, coordinator, observations, executor, store, log, sleepMs, parked.claimedLegacy);
 
     const chats = config.chatCdpUrl && config.chatScope
       ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])
