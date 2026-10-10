@@ -494,7 +494,7 @@ describe('Issue #2359 review chat binding', () => {
     try {
       recordChatBindings(`${JSON.stringify({ schema: 'turn-result/v1', conversation_id: chatUrl })}\n`);
       expect(readChatBinding(chatUrl)?.worktree).toBe(manager);
-      expect(readChatBinding(chatUrl)?.terminal_handle).toBe('term_manager');
+      expect(readChatBinding(chatUrl)).not.toHaveProperty('terminal_handle');
     } finally {
       vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
