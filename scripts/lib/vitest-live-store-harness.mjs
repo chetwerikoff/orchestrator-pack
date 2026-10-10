@@ -212,6 +212,12 @@ export function applyOpkVitestHarnessEnv(rootPath, env = process.env) {
   const root = canonicalizeStorePath(rootPath);
   if (!root) throw new Error('harness root is required');
 
+  // The spawning caller passes a cloned environment. Drop only inherited test selectors
+  // before Vitest starts; synthetic selections made by tests after bootstrap still work.
+  for (const name of ['OPK_PROJECT_ID', 'GH_REPO', 'ORCA_TERMINAL_HANDLE']) {
+    delete env[name];
+  }
+
   const originalHome = productionHome(env);
   const originalTmp = productionTmp(env);
   const originalWake = productionWakeRoot(env);
