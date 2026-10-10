@@ -144,11 +144,12 @@ function stableProjectId(segment: string): string | undefined {
   return match ? `g-p-${match[1]!.toLowerCase()}` : undefined;
 }
 
-function supportedChatGptUrl(value: string): URL | undefined {
+function supportedChatGptUrl(value: string, allowLegacyConversationHost = false): URL | undefined {
   try {
     const url = new URL(normalizeConversationUrl(value));
-    return url.origin === 'https://chatgpt.com' && !url.username && !url.password
-      ? url : undefined;
+    return (url.origin === 'https://chatgpt.com'
+      || (allowLegacyConversationHost && url.origin === 'https://chat.openai.com'))
+      && !url.username && !url.password ? url : undefined;
   } catch {
     return undefined;
   }
@@ -173,7 +174,9 @@ export function isBlankProjectSurfaceUrl(observedUrl: string, projectUrl: string
 }
 
 export function conversationUuidFromUrl(value: string): string | undefined {
-  const url = supportedChatGptUrl(value);
+  // Existing chat/cancellation receipts may still use the explicitly supported legacy host.
+  // Fresh project identity and claim keys continue to require chatgpt.com only.
+  const url = supportedChatGptUrl(value, true);
   const match = url && /\/c\/([^/]+)$/i.exec(url.pathname);
   return match && CANONICAL_UUID_PATH_RE.test(match[1]!) ? match[1]!.toLowerCase() : undefined;
 }
@@ -746,15 +749,23 @@ export async function prepareStateLightFreshConversation(
       }
     }
     const conversationUuid = conversationUuidFromUrl(currentUrl);
-    if (!conversationUuid) return { state: 'ready' };
+    if (!conversationUuid) {
+      if (isBlankProjectSurfaceUrl(currentUrl, config.projectUrl)) return { state: 'ready' };
+      continue;
+    }
+    // Navigation may redirect back to a conversation; it is not a blank composer.
+    // Never inspect/clean claims belonging to foreign or unsupported surfaces.
+    if (!projectConversationUrlMatchesProject(currentUrl, config.projectUrl)) continue;
     const claimPath = stateLightFreshClaimPath(profileKey, currentUrl);
     if (readCorruptOwnershipArtifact(claimPath, readStateLightFreshClaimRecord)) {
-      cleanupReclaimableOwnershipArtifact(claimPath);
+      // A concurrent wx writer may still be filling this canonical fence.
+      return { state: 'ui_contract_mismatch', cause: 'fresh_conversation_surface_unavailable' };
     }
     const existing = existsSync(claimPath) ? readStateLightFreshClaimRecord(claimPath) : null;
     if (existing?.invocation_id === invocationId
       && !isStateLightFreshClaimRecordExpired(existing, config.timeoutMs, Date.now())) {
-      return { state: 'ready' };
+      // Even our own active claim does not turn an existing conversation into a blank composer.
+      continue;
     }
     if (existing
       && existing.invocation_id !== invocationId
