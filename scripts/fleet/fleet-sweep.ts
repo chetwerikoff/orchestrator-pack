@@ -557,7 +557,7 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
     }
     const outcome = ownPaneOutcome(screen);
     const parkedLine = lastFleetParkedLine(screen);
-    const binding = terminal.incarnationId && terminal.status !== 'exited'
+    const binding = !parkedLine && terminal.incarnationId && terminal.status !== 'exited'
       ? liveTaskBinding(terminal, options.projectId ?? '', bindingExecutor)
         ?? JSON.stringify([options.projectId ?? '', terminal.handle, terminal.incarnationId, terminal.worktreePath, terminal.branch])
       : undefined;
@@ -565,8 +565,9 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
     const retained = binding && previous?.binding === binding && outcome.acknowledgment ? previous.wait : undefined;
     const state = classifyFleetPane(screen, terminal.handle, store, busyRe);
     const stale = previous && previous.binding !== binding && previous.wait === outcome.wait;
-    const wait = terminal.status !== 'exited' && state !== 'busy' && state !== 'POLLING'
-      ? parkedLine ?? (!stale ? outcome.wait ?? retained : undefined) : undefined;
+    const wait = state !== 'busy' && state !== 'POLLING'
+      ? parkedLine ?? (terminal.status !== 'exited' && !stale ? outcome.wait ?? retained : undefined)
+      : undefined;
     if (state !== 'busy' && state !== 'POLLING') {
       if (binding && wait) store.writePaneWait?.(terminal.handle, { binding, wait });
       // Keep a mismatched old outcome only as rejection evidence until it leaves the screen.
