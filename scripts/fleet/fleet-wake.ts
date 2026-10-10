@@ -73,8 +73,8 @@ export interface FleetWakeStateStore extends FleetPollingStore {
   readLastSentAt?(): number | undefined;
   writeLastSentAt?(at: number): void;
   clearLastSentAt?(): void;
-  readParkedEpoch?(handle: string): { key: string; since: number } | undefined;
-  writeParkedEpoch?(handle: string, epoch: { key: string; since: number }): void;
+  readParkedEpoch?(handle: string): { key: string; since: number; started?: number } | undefined;
+  writeParkedEpoch?(handle: string, epoch: { key: string; since: number; started?: number }): void;
   clearParkedEpoch?(handle: string): void;
   pruneParkedEpochs?(keys: ReadonlyMap<string, string>): void;
 }
@@ -126,17 +126,17 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
     return join(this.root, `parked-epoch-${digest}.mark`);
   }
 
-  readParkedEpoch(handle: string): { key: string; since: number } | undefined {
+  readParkedEpoch(handle: string): { key: string; since: number; started?: number } | undefined {
     try {
       const record = JSON.parse(readFileSync(this.parkedEpochPath(handle), 'utf8')) as
-        { handle?: unknown; key?: unknown; since?: unknown };
+        { handle?: unknown; key?: unknown; since?: unknown; started?: unknown };
       return record.handle === handle && typeof record.key === 'string'
         && typeof record.since === 'number' && Number.isFinite(record.since)
-        ? { key: record.key, since: record.since } : undefined;
+        ? { key: record.key, since: record.since, ...(typeof record.started === 'number' && Number.isFinite(record.started) ? { started: record.started } : {}) } : undefined;
     } catch { return undefined; }
   }
 
-  writeParkedEpoch(handle: string, epoch: { key: string; since: number }): void {
+  writeParkedEpoch(handle: string, epoch: { key: string; since: number; started?: number }): void {
     mkdirSync(this.root, { recursive: true });
     writeFileSync(this.parkedEpochPath(handle), JSON.stringify({ handle, ...epoch }), 'utf8');
   }
@@ -1047,6 +1047,14 @@ async function wakeNamedParkedProducers(
     }
     const episode = createHash('sha256').update(JSON.stringify([tuple, pane.wait])).digest('hex').slice(0, 32);
     observed.set(pane.handle, episode);
+    // Retain the first observation as park-episode identity even after a successful
+    // Wake resets the reminder clock. A changed wait/Task creates a fresh episode.
+    let epoch = store.readParkedEpoch?.(pane.handle);
+    if (epoch?.key !== episode) {
+      epoch = { key: episode, since: now, started: now };
+      store.writeParkedEpoch?.(pane.handle, epoch);
+    }
+    const episodeInstance = episode + ':' + String(epoch?.started ?? epoch?.since ?? now);
     let resolution: ProducerResolution;
     try { resolution = resolveNamedProducer(producer, pane, terminals, options); }
     catch { resolution = { label: producer.label, state: 'unresolvable' }; }
@@ -1056,12 +1064,12 @@ async function wakeNamedParkedProducers(
     }
     const legacyCoalesced = Boolean(resolution.legacyKey
       && store.hasParkedWakeEvent(resolution.legacyKey));
-    if (legacyCoalesced && resolution.legacyKey && store.hasParkedWakeEvent(resolution.legacyKey)) {
-      store.clearParkedEpoch?.(pane.handle);
-      continue;
-    }
-    const eventKey = 'producer:' + pane.handle + ':' + episode + ':'
+    const eventKey = 'producer:' + pane.handle + ':' + episodeInstance + ':'
       + createHash('sha256').update(JSON.stringify(resolution)).digest('hex').slice(0, 32);
+    // A possibly delivered new Wake also suppresses the old event sender on
+    // subsequent ticks, including after restart and partial/unknown receipt.
+    if (resolution.state === 'ended' && !legacyCoalesced && store.hasParkedWakeEvent(eventKey)
+      && resolution.legacyKey) claimedLegacy.add(resolution.legacyKey);
     if (resolution.state === 'ended' && !legacyCoalesced && !store.hasParkedWakeEvent(eventKey)) {
       if (resolution.legacyKey) claimedLegacy.add(resolution.legacyKey);
       const wake = safeUnitWakeText(producer.label, resolution.terminalState ?? '', resolution.evidence ?? '');
@@ -1070,20 +1078,15 @@ async function wakeNamedParkedProducers(
       } else {
         const sent = await sendMarkedUnitMessage(store, eventKey, pane.handle, wake, executor, sleepMs, log);
         if (sent) {
-          store.clearParkedEpoch?.(pane.handle);
+          if (epoch) store.writeParkedEpoch?.(pane.handle, { ...epoch, since: now });
           store.clearPaneWait?.(pane.handle);
           continue;
         }
         alerts.push('uncertain unit Wake ' + (safeUnitAtom(pane.handle) ?? 'unknown') + ' ' + episode.slice(0, 12));
       }
     }
-    // Park age is measured from first eligible observation, never a wall-clock
-    // half-hour bucket, and an uncertain event still permits a later reminder.
-    let epoch = store.readParkedEpoch?.(pane.handle);
-    if (epoch?.key !== episode) {
-      epoch = { key: episode, since: now };
-      store.writeParkedEpoch?.(pane.handle, epoch);
-    }
+    // Park age is measured from first eligible observation or the last successful
+    // event Wake, never a wall-clock half-hour bucket. An uncertain Wake permits reminders.
     if (epoch && Number.isFinite(now) && now >= epoch.since + REMINDER_INTERVAL_MS) {
       const slot = Math.floor((now - epoch.since) / REMINDER_INTERVAL_MS);
       const reminderKey = 'reminder:' + pane.handle + ':' + episode + ':' + epoch.since + ':' + slot;
