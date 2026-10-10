@@ -990,15 +990,16 @@ function resolveNamedProducer(
   if (pull.state !== 'open' || pull.headSha !== producer.sha || !SHA40.test(pull.headSha)) return unknown;
   if (producer.kind === 'pack-review') {
     const fact = (options.readPackReviewStage ?? readPackReviewStatus)(repository, pull.headSha);
+    const stageEvidence = url + '/commits/' + pull.headSha;
     const description = fact?.description.trim().toLowerCase();
     if (fact?.state === 'success' && (
       description === 'pack review completed with no findings.'
       || description === 'pack review completed with non-blocking findings.'
       || description === 'required pack-review stage completed; no additional review round required.'
       || description === 'required pack-review stage completed; strict descendant of reviewed findings.'
-    )) return ended('stage-complete', url);
+    )) return ended('stage-complete', stageEvidence);
     if (fact?.state === 'failure' && description === 'pack review found blocking issues.') {
-      return ended('stage-findings', url);
+      return ended('stage-findings', stageEvidence);
     }
     return fact?.state === 'pending' ? pending : unknown;
   }

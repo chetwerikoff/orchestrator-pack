@@ -1385,6 +1385,107 @@ describe('Issue #2463 parked-producer wake, reminders and alarm cadence', () => 
     expect(sendsTo(wrong.calls, coordinator.handle)[0]?.join(' ')).toContain('park on unresolvable producer');
   });
 
+  it('wakes fleet-wake@leopoker only when pack-gpt-review PR #268 finishes at the exact head', async () => {
+    // Synthetic live-shaped LeoPoker unit and GitHub stage; no live service or PR is contacted.
+    const repository = 'chetwerikoff/LeoPoker';
+    const head = '268'.repeat(13) + '2';
+    const wait = 'PARKED on pack-review PR #268 head ' + head;
+    const primaryRoot = '/synthetic/LeoPoker';
+    const unit: FleetTerminal = {
+      handle: 'leopoker-manager-268', title: 'OpenCode manager',
+      worktreePath: '/synthetic/orca/workspaces/leopoker/272',
+      branch: 'refs/heads/issue-272', incarnationId: 'leopoker-inc-272',
+      status: 'running', agentIdentity: 'supervised-manager',
+    };
+    const coordinator: FleetTerminal = {
+      handle: 'leopoker-coordinator', title: 'Cursor coordinator', worktreePath: primaryRoot,
+    };
+    const fleet = [coordinator, unit];
+    const screens: Record<string, string> = { [coordinator.handle]: 'idle', [unit.handle]: wait };
+    const base = fakeOrca(screens, [], fleet);
+    const executor: OrcaExecutor = (args) => {
+      if (args[0] === 'orchestration' && args[1] === 'worker-list') {
+        return commandResult(JSON.stringify({ ok: true, result: {
+          workers: [{ agentTerminalHandle: unit.handle, taskId: 'leopoker-task-272',
+            dispatchId: 'leopoker-dispatch-272', dispatchStatus: 'dispatched' }],
+          page: { hasMore: false },
+        } }));
+      }
+      if (args[0] === 'orchestration' && args[1] === 'worker-show') {
+        return commandResult(JSON.stringify({ ok: true, result: {
+          dispatch: { id: 'leopoker-dispatch-272', taskId: 'leopoker-task-272', status: 'dispatched' },
+          terminal: unit, observation: { status: 'live', exactWorker: true },
+        } }));
+      }
+      return base(args);
+    };
+    let currentHead = head;
+    let stage = { state: 'success', description: 'Pack review completed with no findings.' };
+    const reads: string[] = [];
+    const readNamedPull: NonNullable<FleetAlarmTickOptions['readNamedPull']> = (selectedRepo, number) => {
+      reads.push('pull:' + selectedRepo + ':#' + number);
+      return selectedRepo === repository && number === 268
+        ? { number: 268, headSha: currentHead, state: 'open', merged: false } : undefined;
+    };
+    const readPackReviewStage: NonNullable<FleetAlarmTickOptions['readPackReviewStage']> = (selectedRepo, sha) => {
+      reads.push('stage:' + selectedRepo + ':' + sha);
+      return selectedRepo === repository && sha === currentHead ? stage : undefined;
+    };
+    const readNamedReview = vi.fn(() => ({
+      id: 991, commitSha: head, state: 'APPROVED', submittedAt: '2026-10-10T00:00:00Z',
+    }));
+    const projectConfig = (selectedRepo = repository) => config({
+      projectId: 'leopoker', primary: primaryRoot,
+      workspaceRe: /orca\/workspaces\/leopoker\//u,
+      chatScope: { projectUrl: 'https://chatgpt.com/p/synthetic-leopoker', repository: selectedRepo },
+    });
+    const options = {
+      screens, terminals: fleet, executor, config: projectConfig(),
+      readNamedPull, readNamedReview, readPackReviewStage,
+      listTerminalEnvelopes: () => [], listOpenPulls: () => [],
+      listUnreadRunMessages: () => [], checkRunsFinishedAt: () => undefined,
+      now: () => 0,
+    };
+    const matched = await tick({ ...options, store: new MemoryWakeStore() });
+    expect(matched.calls).toContainEqual(['orchestration', 'worker-list', '--json']);
+    expect(matched.calls).toContainEqual([
+      'orchestration', 'worker-show', '--dispatch', 'leopoker-dispatch-272', '--json',
+    ]);
+    expect(reads).toEqual(['pull:' + repository + ':#268', 'stage:' + repository + ':' + head]);
+    const wake = 'Wake: pack-review-PR-268 ended state stage-complete evidence '
+      + 'https://github.com/chetwerikoff/LeoPoker/pull/268/commits/' + head
+      + ' - re-check the producer yourself before continuing';
+    expect(sendsTo(matched.calls, unit.handle)).toEqual([
+      ['terminal', 'send', '--terminal', unit.handle, '--text', wake, '--enter'],
+      ['terminal', 'send', '--terminal', unit.handle, '--enter'],
+    ]);
+    expect(wake).toMatch(/^[A-Za-z0-9 _./:%#=+-]+$/u);
+    expect(wake).not.toMatch(/[;&|$'"()<>*?\\\x00-\x1f\x7f]/u);
+    expect(sendsTo(matched.calls, coordinator.handle)).toHaveLength(0);
+    expect(sends(matched.calls)).toHaveLength(2);
+    expect(readNamedReview).not.toHaveBeenCalled();
+    // A completed named stage is delivered once, not once per fleet tick.
+    expect(sendsTo((await tick({ ...options, store: matched.store })).calls, unit.handle)).toHaveLength(0);
+
+    // A direct submitted review can be semantically successful while the named
+    // pack-owned runner is still active: neither that review nor a generic status ends the stage.
+    stage = { state: 'success', description: 'pack review evidence is complete for current facts' };
+    expect(sendsTo((await tick({ ...options, store: new MemoryWakeStore() })).calls, unit.handle)).toHaveLength(0);
+    stage = { state: 'pending', description: 'Pack review is running for this exact head.' };
+    expect(sendsTo((await tick({ ...options, store: new MemoryWakeStore() })).calls, unit.handle)).toHaveLength(0);
+    expect(readNamedReview).not.toHaveBeenCalled();
+
+    stage = { state: 'success', description: 'Pack review completed with no findings.' };
+    const foreign = await tick({ ...options, config: projectConfig('chetwerikoff/OtherPoker'),
+      store: new MemoryWakeStore() });
+    expect(sendsTo(foreign.calls, unit.handle)).toHaveLength(0);
+    screens[unit.handle] = 'PARKED on pack-review PR #269 head ' + head;
+    expect(sendsTo((await tick({ ...options, store: new MemoryWakeStore() })).calls, unit.handle)).toHaveLength(0);
+    screens[unit.handle] = wait;
+    currentHead = 'b'.repeat(40);
+    expect(sendsTo((await tick({ ...options, store: new MemoryWakeStore() })).calls, unit.handle)).toHaveLength(0);
+  });
+
   it('wakes only one exact observed GPT invocation and coalesces legacy GPT wake', async () => {
     const h = parkedHarness('PARKED on GPT turn ' + invocation + ' (self-wake armed)');
     const event: TerminalEnvelopeEvent = {
