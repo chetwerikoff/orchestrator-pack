@@ -679,8 +679,48 @@ export function releaseStateLightNewChatSendSlot(
   cleanupReclaimableOwnershipArtifact(slotPath);
 }
 
-async function probeProductWall(page: any): Promise<{ state: TurnState; cause: string } | null> {
-  const wall = classifyProductWall(await productStatusText(page, PRODUCT_WALL_PROBE_MS));
+const FRESH_PREPARATION_DEADLINE_EXHAUSTED = 'fresh_preparation_deadline_exhausted';
+
+function freshPreparationRemainingMs(deadlineMs: number | undefined, now: () => number): number {
+  return deadlineMs === undefined ? Infinity : deadlineMs - now();
+}
+
+function requireFreshPreparationTime(deadlineMs: number | undefined, now: () => number): number {
+  const remaining = freshPreparationRemainingMs(deadlineMs, now);
+  if (remaining <= 0) throw new Error(FRESH_PREPARATION_DEADLINE_EXHAUSTED);
+  return remaining;
+}
+
+/** A locator count() can hang without accepting a Playwright timeout. */
+async function boundedFreshPreparation<T>(
+  operation: () => Promise<T>,
+  deadlineMs: number | undefined,
+  now: () => number,
+): Promise<T> {
+  const remaining = requireFreshPreparationTime(deadlineMs, now);
+  if (!Number.isFinite(remaining)) return operation();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(FRESH_PREPARATION_DEADLINE_EXHAUSTED)), remaining);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function probeProductWall(
+  page: any,
+  deadlineMs?: number,
+  now: () => number = Date.now,
+): Promise<{ state: TurnState; cause: string } | null> {
+  const timeoutMs = Math.min(PRODUCT_WALL_PROBE_MS, requireFreshPreparationTime(deadlineMs, now));
+  const wall = classifyProductWall(await boundedFreshPreparation(
+    () => productStatusText(page, timeoutMs), deadlineMs, now,
+  ));
   if (!wall.state) return null;
   return { state: wall.state, cause: wall.cause ?? `${wall.state}_detected` };
 }
@@ -689,7 +729,10 @@ export async function openBlankProjectChatSurface(
   page: any,
   projectUrl: string,
   navigation?: StateLightNavigationCounter,
+  deadlineMs?: number,
+  now: () => number = Date.now,
 ): Promise<void> {
+  requireFreshPreparationTime(deadlineMs, now);
   const projectPrefix = projectConversationPrefix(projectUrl);
   let currentUrl = '';
   try {
@@ -698,21 +741,29 @@ export async function openBlankProjectChatSurface(
     currentUrl = '';
   }
   if (!isBlankProjectSurfaceUrl(currentUrl, projectUrl)) {
+    const navigationMs = Math.min(STATE_LIGHT_NAVIGATION_TIMEOUT_MS, requireFreshPreparationTime(deadlineMs, now));
     navigation?.recordGoto();
-    await page.goto(projectPrefix, {
-      waitUntil: 'domcontentloaded',
-      timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
-    });
+    await boundedFreshPreparation(
+      () => page.goto(projectPrefix, { waitUntil: 'commit', timeout: navigationMs }),
+      deadlineMs,
+      now,
+    );
   }
   for (const selector of NEW_CHAT_CONTROL_SELECTORS) {
+    requireFreshPreparationTime(deadlineMs, now);
     const control = page.locator(selector).first();
     try {
-      if (Number(await control.count()) <= 0) continue;
-      await control.click({ timeout: 500 });
+      if (Number(await boundedFreshPreparation(() => control.count(), deadlineMs, now)) <= 0) continue;
+      const clickMs = Math.min(500, requireFreshPreparationTime(deadlineMs, now));
+      await boundedFreshPreparation(() => control.click({ timeout: clickMs }), deadlineMs, now);
       navigation?.recordNewChatActivation();
       break;
-    } catch {
-      // try the next selector
+    } catch (error) {
+      if ((error instanceof Error && error.message === FRESH_PREPARATION_DEADLINE_EXHAUSTED)
+        || freshPreparationRemainingMs(deadlineMs, now) <= 0) {
+        throw new Error(FRESH_PREPARATION_DEADLINE_EXHAUSTED);
+      }
+      // Keep the existing opportunistic selector fallback while the deadline is open.
     }
   }
 }
@@ -723,14 +774,23 @@ export async function prepareStateLightFreshConversation(
   profileKey: string,
   invocationId: string,
   navigation?: StateLightNavigationCounter,
+  deadlineMs?: number,
+  now: () => number = Date.now,
 ): Promise<StateLightFreshPrepareResult> {
   if (!config.newChat || !config.projectUrl) {
     return { state: 'ui_contract_mismatch', cause: 'project_url_required' };
   }
-  for (let attempt = 0; attempt < STATE_LIGHT_FRESH_PREPARE_ATTEMPTS; attempt++) {
-    if (attempt > 0) {
-      await sleepMs(STATE_LIGHT_FRESH_PREPARE_BACKOFF_BASE_MS * (2 ** (attempt - 1)));
-    }
+  try {
+    for (let attempt = 0; attempt < STATE_LIGHT_FRESH_PREPARE_ATTEMPTS; attempt++) {
+      requireFreshPreparationTime(deadlineMs, now);
+      if (attempt > 0) {
+        await boundedFreshPreparation(
+          () => sleepMs(STATE_LIGHT_FRESH_PREPARE_BACKOFF_BASE_MS * (2 ** (attempt - 1))),
+          deadlineMs,
+          now,
+        );
+      }
+      requireFreshPreparationTime(deadlineMs, now);
     let currentUrl = '';
     try {
       currentUrl = normalizeConversationUrl(page.url());
@@ -739,8 +799,8 @@ export async function prepareStateLightFreshConversation(
     }
     const needsSurface = !currentUrl || !isBlankProjectSurfaceUrl(currentUrl, config.projectUrl);
     if (needsSurface) {
-      await openBlankProjectChatSurface(page, config.projectUrl, navigation);
-      const wall = await probeProductWall(page);
+      await openBlankProjectChatSurface(page, config.projectUrl, navigation, deadlineMs, now);
+      const wall = await probeProductWall(page, deadlineMs, now);
       if (wall) return { state: 'wall', wallState: wall.state, cause: wall.cause };
       try {
         currentUrl = normalizeConversationUrl(page.url());
@@ -748,6 +808,7 @@ export async function prepareStateLightFreshConversation(
         currentUrl = '';
       }
     }
+    requireFreshPreparationTime(deadlineMs, now);
     const conversationUuid = conversationUuidFromUrl(currentUrl);
     if (!conversationUuid) {
       if (isBlankProjectSurfaceUrl(currentUrl, config.projectUrl)) return { state: 'ready' };
@@ -773,6 +834,9 @@ export async function prepareStateLightFreshConversation(
       continue;
     }
     if (existing) cleanupReclaimableOwnershipArtifact(claimPath);
+    }
+  } catch (error) {
+    if (!(error instanceof Error && error.message === FRESH_PREPARATION_DEADLINE_EXHAUSTED)) throw error;
   }
   return { state: 'ui_contract_mismatch', cause: 'fresh_conversation_surface_unavailable' };
 }
