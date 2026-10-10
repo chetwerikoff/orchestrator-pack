@@ -19,8 +19,10 @@ import { join, resolve } from 'node:path';
 import {
   buildSmokeGhChildEnv,
   checkSmokeTestPlan,
+  classifyDeclaredScenarioNonPassCause,
   formatSmokeReportComment,
   hasPreexistingTrackedDirtiness,
+  isSmokeNonPassCause,
   isWorkerSmokeScenarioCauseFamily,
   normalizeSmokeReport,
   parseSmokeAgentReport,
@@ -28,6 +30,7 @@ import {
   resolveSmokeRequirement,
   scrubForwardedGhSecrets,
   scrubSmokeOutput,
+  smokeResultForWorkerSmokeCauseFamily,
   SMOKE_REPORT_PRODUCER,
   trackedPorcelainPaths,
   type SmokeReport,
@@ -908,6 +911,22 @@ export function resolvePublishSmokeTarget(options: CliOptions): PublishSmokeTarg
   return { repositorySlug, issueNumber: options.issueNumber, prNumber: options.prNumber, issueBody };
 }
 
+function inspectRawSealedNonPassCause(text: string): { present: boolean; error?: string } {
+  let present = false;
+  for (const line of text.split(/\r?\n/u)) {
+    // Inspect original sealed bytes: the generic parser otherwise drops unknown
+    // values and silently keeps the last duplicate key.
+    if (!/^\s*(?:-\s+)?non[-_ ]?pass[-_ ]?cause\b/iu.test(line)) continue;
+    const match = line.match(/^\s*non-pass-cause\s*:\s*([a-z][a-z0-9_]*)\s*$/iu);
+    if (!match || !isSmokeNonPassCause(match[1]!)) {
+      return { present: true, error: 'non_pass_cause_explicit_invalid' };
+    }
+    if (present) return { present: true, error: 'non_pass_cause_duplicate' };
+    present = true;
+  }
+  return { present };
+}
+
 function reportCorrespondenceReason(partial: Partial<SmokeReport>, plan: SmokeTestPlan): string | null {
   const rows = partial.scenarios ?? [];
   if (rows.length === 0) return 'report_scenarios_missing';
@@ -936,6 +955,15 @@ function reportCorrespondenceReason(partial: Partial<SmokeReport>, plan: SmokeTe
       return 'non_pass_terminal_row_missing';
     }
     if (!isWorkerSmokeScenarioCauseFamily(terminal.causeFamily)) return 'non_pass_terminal_cause_family_invalid';
+    if ((result === 'FAIL' && terminal.outcome !== 'fail')
+        || (result === 'BLOCKED' && terminal.outcome !== 'blocked')
+        || smokeResultForWorkerSmokeCauseFamily(terminal.causeFamily) !== result) {
+      return 'non_pass_result_terminal_mismatch';
+    }
+    if (terminal.causeFamily === 'scenario_precondition_unavailable'
+        && partial.nonPassCause !== 'scenario_precondition_unavailable') {
+      return 'precondition_non_pass_cause_mismatch';
+    }
     if (!partial.nonPassCause) return 'non_pass_cause_missing_or_invalid';
   }
   return null;
@@ -978,8 +1006,18 @@ export async function runPublishSmoke(
     throw new Error('publish requires a required scenario-bearing smoke-test-plan');
   }
   const readReportFile = dependencies.readReportFile ?? ((path: string) => readFileSync(resolve(path), 'utf8'));
-  const partial = parseSealedSmokeAgentReport(readReportFile(options.reportFile));
+  const rawReport = readReportFile(options.reportFile);
+  const rawCause = inspectRawSealedNonPassCause(rawReport);
+  if (rawCause.error) throw new Error('report_file_invalid: ' + rawCause.error);
+  const partial = parseSealedSmokeAgentReport(rawReport);
   if (!partial) throw new Error('report_file_invalid: worker-smoke-report grammar not found');
+  if (!rawCause.present && partial.result === 'BLOCKED') {
+    const derived = classifyDeclaredScenarioNonPassCause({
+      partial,
+      agentActivityObserved: false,
+    });
+    if (derived === 'scenario_precondition_unavailable') partial.nonPassCause = derived;
+  }
   const correspondence = reportCorrespondenceReason(partial, plan);
   if (correspondence) throw new Error(`report_plan_mismatch: ${correspondence}`);
   const status = (dependencies.gitStatus ?? gitPorcelain)(options.repoRoot);

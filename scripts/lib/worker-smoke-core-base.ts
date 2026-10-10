@@ -1530,6 +1530,7 @@ export type SmokeManagerProjectionNonPassCause =
   | 'malformed_producer_output';
 
 export type SmokeNonPassCause =
+  | 'scenario_precondition_unavailable'
   | 'zero_parsed_scenarios'
   | 'missing_agent_report'
   | 'executed_scenario_failure'
@@ -1539,7 +1540,8 @@ export type SmokeNonPassCause =
   | SmokePhaseControlPlaneCause;
 
 export function isSmokeNonPassCause(value: string): value is SmokeNonPassCause {
-  return value === 'zero_parsed_scenarios'
+  return value === 'scenario_precondition_unavailable'
+    || value === 'zero_parsed_scenarios'
     || value === 'missing_agent_report'
     || value === 'executed_scenario_failure'
     || value === 'trusted_target_stale'
@@ -1616,9 +1618,23 @@ export function classifySmokeNonPassCause(input: {
     }
     return undefined;
   }
-  const hasFailedDeclaredScenario = declaredSmokeScenarios(input.partial)
-    .some((scenario) => scenario.outcome === 'fail');
-  if (hasFailedDeclaredScenario) {
+  const scenarios = declaredSmokeScenarios(input.partial);
+  const terminal = scenarios.at(-1);
+  if (!terminal || !scenarios.slice(0, -1).every((scenario) => scenario.outcome === 'pass')) {
+    return undefined;
+  }
+  if (
+    input.partial.result === 'BLOCKED'
+    && terminal.outcome === 'blocked'
+    && terminal.causeFamily === 'scenario_precondition_unavailable'
+  ) {
+    return 'scenario_precondition_unavailable';
+  }
+  if (
+    input.partial.result === 'FAIL'
+    && terminal.outcome === 'fail'
+    && terminal.causeFamily === 'scenario_assertion_failed'
+  ) {
     return 'executed_scenario_failure';
   }
   return undefined;
