@@ -42,6 +42,7 @@ import {
   conversationUuidFromUrl,
   ownedConversationIdentityMatches,
   prepareStateLightFreshConversation,
+  isBlankProjectSurfaceUrl,
   projectConversationPrefix,
   recordStateLightAdvisoryWall,
   releaseStateLightFreshConversationClaim,
@@ -2100,8 +2101,9 @@ async function waitForComposer(
   page: any,
   invocationDeadlineMs: number,
 ): Promise<{ state: 'ready' } | { state: TurnState; cause: string }> {
-  const readinessStart = Date.now();
-  const readinessDeadline = Math.min(readinessStart + COMPOSER_READINESS_WAIT_MS, invocationDeadlineMs);
+  // A committed document can hydrate later than the old 12-second local horizon.
+  // Pre-send readiness is governed by the existing whole-invocation deadline.
+  const readinessDeadline = invocationDeadlineMs;
   while (true) {
     let remainingMs = readinessDeadline - Date.now();
     if (remainingMs <= 0) break;
@@ -2314,15 +2316,18 @@ async function navigateOwnedTurnPage(
   page: any,
   config: BrowserConfig,
   navigation: StateLightNavigationCounter,
+  invocationDeadlineMs: number,
 ): Promise<void> {
   const target = config.newChat
     ? projectConversationPrefix(config.projectUrl ?? '')
     : normalizeConversationUrl(config.chatUrl ?? '');
   if (!target) throw new Error('ui_contract_mismatch:target_required');
+  const remainingMs = invocationDeadlineMs - Date.now();
+  if (remainingMs <= 0) throw new BrowserOperationTimeoutError('navigation');
   navigation.recordGoto();
   await page.goto(target, {
-    waitUntil: 'domcontentloaded',
-    timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
+    waitUntil: 'commit',
+    timeout: Math.min(STATE_LIGHT_NAVIGATION_TIMEOUT_MS, remainingMs),
   });
   if (!config.newChat && !ownedConversationIdentityMatches(page.url(), target)) {
     throw new Error('ui_contract_mismatch:conversation_redirect');
@@ -2655,7 +2660,7 @@ async function runTurn(
     }
     if (!page) {
       page = await createDedicatedTurnPage(browser, invocationBudget);
-      await navigateOwnedTurnPage(page, config, navigation);
+      await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs);
     }
 
     let baselineCount = 0;
@@ -2797,6 +2802,32 @@ async function runTurn(
       if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       const sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      // Reapply existing read-only destination predicates after composer mutation
+      // and immediately before entering the actual dispatch boundary.
+      if (!config.newChat) {
+        const identity = readOwnedConversationIdentity(page, normalizeConversationUrl(config.chatUrl ?? ''));
+        if (!identity.matched) {
+          return returnOwnedConversationIdentityMismatch(
+            identity, page, browser, invocationId, profileKey, sendCount,
+            pollCount, navigation, incidents, journalWriteFailed, incident, false,
+          );
+        }
+      } else {
+        let currentUrl = '';
+        try { currentUrl = String(page.url()); } catch { /* fail closed */ }
+        if (!isBlankProjectSurfaceUrl(currentUrl, config.projectUrl ?? '')) {
+          incident('invocation_blocker', 'fresh_conversation_surface_unavailable', 'return_local_error');
+          return {
+            page,
+            browser,
+            result: compactResult(
+              'ui_contract_mismatch', 'invocation', 'fresh_conversation_surface_unavailable',
+              invocationId, profileKey, sendCount, pollCount, navigation, incidents, {},
+              journalWriteFailed,
+            ),
+          };
+        }
+      }
       const delivery = await dispatchStateLightSendAndObserveDelivery({
         page,
         browser,
@@ -2942,6 +2973,7 @@ async function runTurn(
           profileKey,
           invocationId,
           navigation,
+          invocationDeadlineMs,
         );
         const initialPrepareFailure = returnFreshPrepareFailure(initialPrepare);
         if (initialPrepareFailure) return initialPrepareFailure;
@@ -3004,6 +3036,7 @@ async function runTurn(
               profileKey,
               invocationId,
               navigation,
+              invocationDeadlineMs,
             );
             const preparedFailure = returnFreshPrepareFailure(prepared);
             if (preparedFailure) return preparedFailure;
