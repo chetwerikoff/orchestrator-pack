@@ -1223,6 +1223,10 @@ describe('Issue #2461 selected pack-review CDP preflight', () => {
       [...args, '--cdp', cdpB],
       [...args.slice(0, 1), 'manager', ...args.slice(2)],
       [...args.slice(0, -1), '0'],
+      [...args.slice(0, -1), '50001'],
+      ['--route', 'pack-gpt-reviewer', '--timeout-ms', '5000'],
+      ['--route', 'pack-gpt-reviewer', '--project', 'foreign/project', '--timeout-ms', '5000'],
+      ['--route', 'pack-gpt-reviewer', '--project', 'orchestrator-pack', '--project', 'foreign'],
     ]) expect(() => parsePackReviewPreflightArgs(invalid)).toThrow();
   });
 
@@ -1299,6 +1303,63 @@ describe('Issue #2461 selected pack-review CDP preflight', () => {
     expect(browserConfig).toHaveBeenCalledTimes(2);
   });
 
+
+  it('preserves selected card and configuration refusals before any owner/CDP probing', async () => {
+    const config = { profile: '/synthetic/selected-A', cdpUrl: cdpA, projectUrl };
+    const cases = [
+      { card: { ...selectedCard, projectId: 'foreign' }, config, reason: 'selected_pack_card_mismatch' },
+      { card: { ...selectedCard, repository: 'foreign/repo' }, config, reason: 'selected_pack_card_mismatch' },
+      { card: { ...selectedCard, browserGpt: { projectUrl: '' } }, config: { ...config, projectUrl: '' }, reason: 'route_configuration_unverified' },
+      { card: selectedCard, config: { ...config, projectUrl: 'https://example.test/wrong' }, reason: 'route_configuration_unverified' },
+      { card: selectedCard, config: { ...config, profile: '' }, reason: 'route_configuration_unverified' },
+      { card: selectedCard, config: { ...config, cdpUrl: '' }, reason: 'route_configuration_unverified' },
+      { card: selectedCard, config: { ...config, cdpUrl: 'file:///tmp/browser' }, reason: 'route_configuration_unverified' },
+      { card: selectedCard, config: { ...config, cdpUrl: 'http://user:password@127.0.0.1:49221' }, reason: 'route_configuration_unverified' },
+    ];
+    for (const scenario of cases) {
+      const inspectOwner = vi.fn(async () => ({ ok: true }));
+      const isReachable = vi.fn(async () => true);
+      const result = await runPackReviewPreflight(args, {
+        resolveTarget: () => scenario.card,
+        resolveBrowserConfig: () => scenario.config,
+        inspectOwner, isReachable,
+      }, {});
+      expect(result).toMatchObject({ outcome: 'incomplete', reason: scenario.reason });
+      expect(inspectOwner).not.toHaveBeenCalled();
+      expect(isReachable).not.toHaveBeenCalled();
+    }
+    const inspectOwner = vi.fn(async () => ({ ok: true }));
+    const missing = await runPackReviewPreflight(args, {
+      resolveTarget: () => { throw new Error('card-missing'); },
+      inspectOwner,
+    }, {});
+    expect(missing).toMatchObject({ outcome: 'incomplete', reason: 'route_unverified' });
+    expect(inspectOwner).not.toHaveBeenCalled();
+  });
+
+  it('preserves owner/profile mismatch and selected CDP unreachability without fallback', async () => {
+    const common = {
+      resolveTarget: () => selectedCard,
+      resolveBrowserConfig: () => ({ profile: '/synthetic/selected-A', cdpUrl: cdpA, projectUrl }),
+    };
+    const mismatchReach = vi.fn(async () => true);
+    const mismatch = await runPackReviewPreflight(args, {
+      ...common,
+      inspectOwner: async () => ({ ok: false, reason: 'profile_mismatch' }),
+      isReachable: mismatchReach,
+    }, {});
+    expect(mismatch).toMatchObject({ outcome: 'incomplete', reason: 'owner_profile_mismatch' });
+    expect(mismatchReach).not.toHaveBeenCalled();
+    const reached: string[] = [];
+    const unreachable = await runPackReviewPreflight(args, {
+      ...common,
+      inspectOwner: async () => ({ ok: true }),
+      isReachable: async (cdp) => { reached.push(cdp); return false; },
+    }, {});
+    expect(unreachable).toMatchObject({ outcome: 'incomplete', reason: 'cdp_unreachable' });
+    expect(reached).toEqual([cdpA]);
+  });
+
   it('binds the actual unchanged pack-review resolver to the selected project card, never a foreign healthy pair', async () => {
     const configRoot = mkdtempSync(join(tmpdir(), 'opk2461-card-'));
     const cardDir = join(configRoot, 'orchestrator-pack', 'projects');
@@ -1323,7 +1384,6 @@ describe('Issue #2461 selected pack-review CDP preflight', () => {
         },
         isReachable: async (cdp) => cdp === foreignPair.cdp,
       }, {
-        OPK_PROJECT_ID: 'orchestrator-pack',
         XDG_CONFIG_HOME: configRoot,
         PACK_GPT_BROWSER_PROFILE: '/synthetic/selected-A',
         PACK_GPT_BROWSER_CDP: cdpA,
@@ -1332,6 +1392,26 @@ describe('Issue #2461 selected pack-review CDP preflight', () => {
         route: 'pack-gpt-reviewer', outcome: 'incomplete', reason: 'owner_not_listening',
       });
       expect(inspected).toEqual([cdpA]);
+
+      // A valid updated card and healthy configured pair are the currently selected route.
+      writeFileSync(join(cardDir, 'orchestrator-pack.json'), JSON.stringify({
+        projectId: 'orchestrator-pack',
+        repository: 'chetwerikoff/orchestrator-pack',
+        primaryRoot: process.cwd(),
+        defaultBranch: 'main',
+        orcaWorkspacePattern: '.*',
+        orchestratorTitlePattern: '.*',
+        browserGpt: { projectUrl: 'https://example.test/updated-selected-card' },
+      }));
+      const current = await runPackReviewPreflight(args, {
+        inspectOwner: async ({ cdp, profile }) => ({ ok: cdp === cdpB && profile === '/synthetic/current-B' }),
+        isReachable: async (cdp) => cdp === cdpB,
+      }, {
+        XDG_CONFIG_HOME: configRoot,
+        PACK_GPT_BROWSER_PROFILE: '/synthetic/current-B',
+        PACK_GPT_BROWSER_CDP: cdpB,
+      });
+      expect(current).toMatchObject({ outcome: 'pass', reason: 'selected_route_reachable' });
     } finally {
       rmSync(configRoot, { recursive: true, force: true });
     }
@@ -1399,7 +1479,7 @@ describe('Issue #2461 selected pack-review CDP preflight', () => {
       return true;
     }) as typeof process.stdout.write);
     const runTurn = vi.fn(async () => 0);
-    vi.stubEnv('OPK_PROJECT_ID', 'orchestrator-pack');
+    vi.stubEnv('OPK_PROJECT_ID', undefined);
     vi.stubEnv('ORCA_TERMINAL_HANDLE', 'synthetic-terminal-locator');
     try {
       const result = await runStateLightEntry(['preflight', ...args], {
@@ -1420,6 +1500,18 @@ describe('Issue #2461 selected pack-review CDP preflight', () => {
       expect(writes.join('')).not.toMatch(/secret|49221|synthetic-terminal-locator|profile|cdpUrl/u);
       expect(runTurn).not.toHaveBeenCalled();
       expect(Object.keys(report).sort()).toEqual(['elapsed_ms', 'handle_present', 'outcome', 'reason', 'route']);
+      writes.length = 0;
+      vi.stubEnv('OPK_PROJECT_ID', 'foreign-project');
+      const rejected = await runStateLightEntry(['preflight', ...args], {
+        runTurn,
+        preflight: { resolveTarget: () => { throw new Error('must_not_resolve_after_conflict'); } },
+      });
+      expect(rejected).toBe(1);
+      expect(JSON.parse(writes.join(''))).toMatchObject({
+        route: 'pack-gpt-reviewer', outcome: 'incomplete',
+        reason: 'project_selector_mismatch', handle_present: true,
+      });
+      expect(runTurn).not.toHaveBeenCalled();
     } finally {
       output.mockRestore();
       vi.unstubAllEnvs();
