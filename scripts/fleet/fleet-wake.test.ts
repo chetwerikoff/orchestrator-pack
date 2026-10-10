@@ -11,7 +11,6 @@ import {
   FileFleetWakeStateStore,
   bannerOwnerPane,
   listTerminalEnvelopes,
-  potentiallySentUnboundEnvelope,
   fleetAlarmMessage,
   fleetWakeConfigFromEnv,
   parseNamedParkedProducer,
@@ -140,8 +139,6 @@ async function tick(input: {
   readNamedPull?: FleetAlarmTickOptions['readNamedPull'];
   readNamedReview?: FleetAlarmTickOptions['readNamedReview'];
   readPackReviewStage?: FleetAlarmTickOptions['readPackReviewStage'];
-  indexedGptTerminalRoot?: string;
-  probeIndexedGptPid?: FleetAlarmTickOptions['probeIndexedGptPid'];
   sleepMs?: (ms: number) => void | Promise<void>;
   now?: () => number;
 }) {
@@ -168,8 +165,6 @@ async function tick(input: {
     ...(input.readNamedReview ? { readNamedReview: input.readNamedReview } : {}),
     ...(input.readPackReviewStage ? { readPackReviewStage: input.readPackReviewStage } : {}),
     ...(input.now ? { now: input.now } : {}),
-    ...(input.indexedGptTerminalRoot ? { indexedGptTerminalRoot: input.indexedGptTerminalRoot } : {}),
-    ...(input.probeIndexedGptPid ? { probeIndexedGptPid: input.probeIndexedGptPid } : {}),
   });
   return { result, calls, logs, sleeps, store };
 }
@@ -308,237 +303,15 @@ describe('fleet alarm', () => {
   });
 
 
-  it.each(['idle acknowledgment', 'busy mid-answer', 'polling mid-answer', 'tool summary', 'raw tool gutter', 'gear tool',
-    'gutter # Running inspection', 'gutter → Read scripts/example.ts', 'gutter ⚙ hashline_edit scripts/example.ts',
-    'gutter Click to expand', 'gutter { "state": "closed" }'])(
-    'attributes the exact real OpenCode fixture across %s', async (mode) => {
-      const fixture = realOpenCodePane('ack');
-      const root = mkdtempSync(join(tmpdir(), 'fleet-2398-real-pane-'));
-      const store = new FileFleetWakeStateStore('real-pane', { XDG_RUNTIME_DIR: root });
-      const unit = { ...terminals[1]!, incarnationId: 'real-incarnation', status: 'running', branch: 'manager' };
-      const fleet = [terminals[0]!, unit];
-      const screens = { coord: 'working\nctrl+c to stop', one: fixture.split('\n').slice(0, 7).join('\n') };
-      const executor = fakeOrca(screens, [], fleet);
-      const step = () => tick({ screens, store, terminals: fleet, executor });
-      try {
-        await step();
-        const before = store.readPaneWait('one');
-        expect(before?.wait).toContain('PARKED on #222 merged');
-        if (mode.includes('mid-answer')) {
-          const writes = vi.spyOn(store, 'writePaneWait');
-          const clears = vi.spyOn(store, 'clearPaneWait');
-          screens.one = `${fixture.split('\n').slice(0, 12).join('\n')}\n${mode === 'polling mid-answer' ? 'sleep 60\n' : ''}esc interrupt`;
-          await step();
-          if (mode === 'polling mid-answer') await step();
-          expect(store.readPaneWait('one')).toEqual(before);
-          expect(writes).not.toHaveBeenCalled();
-          expect(clears).not.toHaveBeenCalled();
-          writes.mockRestore();
-          clears.mockRestore();
-        }
-        screens.coord = 'idle prompt';
-        const toolWork = ['tool summary', 'raw tool gutter', 'gear tool'].includes(mode) || mode.startsWith('gutter ');
-        screens.one = mode === 'raw tool gutter'
-          ? realOpenCodePane('tool')
-          : toolWork ? fixture.replace(
-            '     Принял: park на merge #222 без изменений.',
-            mode === 'gear tool' ? '     ⚙ hashline_edit scripts/example.ts\n     Patch summary: applied.'
-              : '     → Read scripts/example.ts\n     $ gh pr view 225\n     Inspection summary: the gate was inspected.',
-          ) : fixture;
-        if (mode.startsWith('gutter ')) {
-          const rawTool = realOpenCodePane('tool').split('\n');
-          screens.one = [...rawTool.slice(0, 14), `  ┃  ${mode.slice(7)}`, '  ┃', ...rawTool.slice(20)].join('\n');
-        }
-        for (let index = 0; index < 3; index += 1) {
-          const observed = await step();
-          expect(['sent', 'same_stopped_set', 'nothing_stopped']).toContain(observed.result.state);
-          // A new unresolvable-PARKED alarm may go to the coordinator once;
-          // unchanged rechecks do not authorize direct unit sends or spam.
-          if (!toolWork) expect(sendsTo(observed.calls, 'one')).toHaveLength(0);
-          else expect(store.readPaneWait('one')).toBeUndefined();
-        }
-        if (mode.includes('mid-answer')) {
-          screens.one = fixture.replace('     Принял: park на merge #222 без изменений.', '     finished new step');
-          expect((await step()).result.state).toBe('sent');
-          expect(store.readPaneWait('one')).toBeUndefined();
-        }
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    },
-  );
-
-  // Scrubbed OpenCode pane shapes and acknowledgment excerpts from the architect's live audit.
-  it.each(['Принял смену архитектора…', 'Audit: … Keep PARKED…'])(
-    'retains an unbound failed-dispatch manager after %s, then invalidates new work', async (acknowledgment) => {
-      const root = mkdtempSync(join(tmpdir(), 'fleet-2398-unbound-'));
-      const store = new FileFleetWakeStateStore('unbound', { XDG_RUNTIME_DIR: root });
-      const unit = { ...terminals[1]!, incarnationId: 'unbound-inc-one', status: 'running', branch: 'manager' };
-      const fleet = [terminals[0]!, unit];
-      const screens = { coord: 'working\nctrl+c to stop', one: 'PARKED on orchestrator answer: external gate' };
-      const base = fakeOrca(screens, [], fleet);
-      const executor: OrcaExecutor = (args) => args[0] === 'orchestration' && args[1] === 'worker-list'
-        ? commandResult(JSON.stringify({ ok: true, result: { workers: [
-          { agentTerminalHandle: 'one', dispatchId: 'old-failed', taskId: 'old-task', dispatchStatus: 'failed' },
-        ], page: { hasMore: false } } })) : base(args);
-      let projectId = config().projectId;
-      const step = () => tick({ screens, store, terminals: fleet, executor, config: config({ projectId }) });
-      const park = async () => {
-        screens.one = '┃ PARKED: wait orchestrator answer:\n┃ external gate\n>';
-        await step();
-        screens.one = `┃ ${acknowledgment}\n>\n╹▀▀▀▀▀▀▀▀`;
-      };
-      try {
-        await step();
-        screens.one += '\n> Audit: keep the same external wait; no new step is assigned.';
-        await step();
-        screens.one += `\n${acknowledgment}`;
-        await step();
-        screens.coord = 'idle prompt';
-        screens.one = `${Array.from({ length: 31 }, () => '╹▀▀▀▀▀▀▀▀').join('\n')}\n┃ ${acknowledgment}\n>`;
-        for (let index = 0; index < 3; index += 1) {
-          const observed = await step();
-          expect(observed.result.state).toBe('nothing_stopped');
-          expect(sends(observed.calls)).toHaveLength(0);
-        }
-        screens.one = '$ gh pr view 1\nTool: completed inspection\n\nAssistant: Audit summary: the inspection is complete.';
-        expect((await step()).result.state).toBe('sent');
-        expect(store.readPaneWait('one')).toBeUndefined();
-        await park();
-        screens.one = 'Можно продолжать?';
-        expect((await step()).result.state).toBe('sent');
-        for (const outcome of ['STOPPED', 'done', 'finished', 'handed-off', 'worker_done', 'error', 'one\n\ntwo\n\nthree\n\nfour']) {
-          await park();
-          screens.one = outcome;
-          expect((await step()).result.state).toBe('sent');
-          expect(store.readPaneWait('one')).toBeUndefined();
-        }
-        await park();
-        screens.one = 'Проверка без изменений.\nLa condition reste identique.\n依存条件は変わっていません。';
-        expect((await step()).result.state).toBe('nothing_stopped');
-        screens.one = 'PARKED on orchestrator answer: a different gate';
-        expect(sendsTo((await step()).calls, 'coord')[0]?.join(' ')).toContain('a different gate');
-        for (const change of ['branch', 'worktree', 'project']) {
-          await park();
-          if (change === 'branch') unit.branch = 'replacement-manager';
-          if (change === 'worktree') unit.worktreePath = '/home/che/orca/workspaces/project/replacement';
-          if (change === 'project') projectId = 'replacement-project';
-          expect((await step()).result.state).toBe('sent');
-          expect(store.readPaneWait('one')).toBeUndefined();
-        }
-        await park();
-        unit.incarnationId = 'unbound-inc-two';
-        expect((await step()).result.state).toBe('sent');
-        expect(store.readPaneWait('one')).toBeUndefined();
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    },
-  );
-
-  it.each(['unchanged', 'wrapped', 'question', 'resume', 'task', 'incarnation', 'exited', 'busy', 'polling', 'mail', 'ci', 'gpt-completed', 'gpt-failed', 'gpt-dead', 'task-stale', 'incarnation-stale', 'new-blocker', 'removed'])(
-    'retains correction/acknowledgment/redraw across three idle ticks, then handles %s', async (next) => {
-    const root = mkdtempSync(join(tmpdir(), 'fleet-2398-sequence-'));
-    const store = new FileFleetWakeStateStore('sequence', { XDG_RUNTIME_DIR: root });
-    const unit = { ...terminals[1]!, incarnationId: 'inc-one', status: 'running', branch: 'refs/heads/repair' };
-    let taskId = 'task-one';
-    let dispatchId = 'ctx-one';
-    const fleet = [terminals[0]!, unit];
-    const screens = { coord: 'working\nctrl+c to stop', one: 'PARKED on orchestrator answer: approve deployment' };
-    const base = fakeOrca(screens, [], fleet);
-    const executor: OrcaExecutor = (args) => {
-      if (args[0] !== 'orchestration') return base(args);
-      if (args[1] === 'worker-list') return commandResult(JSON.stringify({ ok: true, result: {
-        workers: [{ agentTerminalHandle: 'one', dispatchId, taskId, dispatchStatus: 'dispatched' }],
-        page: { hasMore: false },
-      } }));
-      if (args[1] === 'worker-show') return commandResult(JSON.stringify({ ok: true, result: {
-        dispatch: { id: dispatchId, taskId, status: 'dispatched' },
-        terminal: unit, observation: { status: 'live', exactWorker: true },
-      } }));
-      return commandResult('', false);
-    };
-    const step = () => tick({ screens, store, terminals: fleet, executor });
-    try {
-      const initial = await step();
-      expect(sendsTo(initial.calls, 'coord')[0]?.join(' ')).toContain('approve deployment');
-      screens.one += '\n> Correction: retain this unchanged wait; do not reinvestigate.';
-      await step();
-      screens.one += '\nAcknowledged.';
-      await step();
-      screens.coord = 'idle prompt';
-      screens.one = `${Array.from({ length: 31 }, () => '╹▀▀▀▀▀▀▀▀').join('\n')}\n┃ Acknowledged.\n┃ The external gate is unchanged.\n>`;
-      for (let index = 0; index < 3; index += 1) {
-        const idle = await step();
-        expect(idle.result.state).toBe('nothing_stopped');
-        expect(sends(idle.calls)).toHaveLength(0);
-      }
-      const freshWait = async () => {
-        screens.one = 'PARKED on orchestrator answer: approve deployment';
-        await step();
-        screens.one = 'Acknowledged.';
-      };
-      if (next === 'wrapped') {
-        screens.one = '┃ PARKED: wait orchestrator answer:\n┃ approve deployment';
-        expect((await step()).result.state).toBe('nothing_stopped');
-        expect(store.readPaneWait('one')?.wait).toBe('PARKED on orchestrator answer: approve deployment');
-      } else if (next === 'task-stale' || next === 'incarnation-stale') {
-        screens.one = 'PARKED on orchestrator answer: approve deployment';
-        if (next === 'task-stale') { taskId = 'task-two'; dispatchId = 'ctx-two'; }
-        else unit.incarnationId = 'inc-two';
-        for (let index = 0; index < 3; index += 1) {
-          expect(['sent', 'same_stopped_set']).toContain((await step()).result.state);
-        }
-      } else if (next === 'new-blocker') {
-        screens.one = 'PARKED on orchestrator answer: approve staging';
-        expect(sendsTo((await step()).calls, 'coord')[0]?.join(' ')).toContain('approve staging');
-      } else if (next === 'removed') {
-        fleet.pop();
-        expect((await step()).result.state).toBe('nothing_stopped');
-        expect(store.readPaneWait('one')).toBeUndefined();
-      } else if (next === 'question' || next === 'resume') {
-        screens.one = next === 'question' ? 'May I deploy to staging?' : 'Working on the new step\nesc interrupt';
-        const observed = await step();
-        expect(observed.result.state).toBe(next === 'question' ? 'sent' : 'nothing_stopped');
-        // Busy alone is not a resume; the idle own outcome must supply that evidence.
-        screens.one = next === 'resume' ? 'finished new step' : 'Acknowledged.';
-        expect((await step()).result.state).toBe('sent');
-      } else if (next === 'task' || next === 'incarnation' || next === 'exited') {
-        if (next === 'task') { taskId = 'task-two'; dispatchId = 'ctx-two'; }
-        if (next === 'incarnation') unit.incarnationId = 'inc-two';
-        if (next === 'exited') unit.status = 'exited';
-        expect((await step()).result.state).toBe('sent');
-        expect(store.readPaneWait('one')).toBeUndefined();
-      } else if (next === 'busy' || next === 'polling') {
-        screens.one = next === 'busy' ? 'useful work\nesc interrupt' : 'running sleep 60\nesc interrupt';
-        expect((await step()).result.state).toBe('nothing_stopped');
-        expect((await step()).result.state).toBe(next === 'polling' ? 'sent' : 'nothing_stopped');
-      } else if (next === 'mail') {
-        const observed = await tick({ screens, store, executor, terminals: fleet, listUnreadRunMessages: () => [
-          { id: 'new-question', subject: 'New deployment question', fromHandle: 'one', toHandle: 'run:run-one' },
-        ] });
-        expect(sendsTo(observed.calls, 'coord')[0]?.join(' ')).toContain('New deployment question');
-      } else if (next === 'ci' || next.startsWith('gpt-')) {
-        await freshWait();
-        const head = 'a'.repeat(40);
-        const envelope = join(root, `${next}-terminal.json`);
-        if (next.startsWith('gpt-')) writeFileSync(envelope, JSON.stringify({
-          schema: 'flow-manager-long-running-child-terminal/v1', observed_invocation_id: next,
-          terminal_handle: 'one', cwd: unit.worktreePath, turn_result_cause: next.slice(4),
-        }));
-        const observed = await tick({ screens, store, executor, terminals: fleet,
-          config: config({ chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'chetwerikoff/orchestrator-pack' } }),
-          listTerminalEnvelopes: () => listTerminalEnvelopes(root),
-          listOpenPulls: () => next === 'ci' ? [{ number: 1, ref: 'repair', sha: head }] : [],
-          checkRunsFinishedAt: () => 1234,
-        });
-        expect(sendsTo(observed.calls, 'one')[0]?.join(' ')).toContain(next === 'ci' ? `CI on ${head} finished` : `GPT turn ${next} ended`);
-        expect(store.readPaneWait('one')).toBeUndefined();
-        expect((await step()).result.state).toBe('sent');
-      }
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+  it('r05: final park line is accepted without a Task or receipt and stays coordinator-quiet', async () => {
+    const store = new MemoryWakeStore();
+    const parked = { coord: 'idle', one: 'work\nPARKED on unknown-event' };
+    const first = await tick({ terminals: [terminals[0]!, terminals[1]!], screens: parked, store });
+    expect(first.result.state).toBe('nothing_stopped');
+    expect(sends(first.calls)).toHaveLength(0);
+    expect(first.calls.filter((args) => args[0] === 'orchestration')).toHaveLength(0);
+    const repeated = await tick({ terminals: [terminals[0]!, terminals[1]!], screens: parked, store });
+    expect(sends(repeated.calls)).toHaveLength(0);
   });
 
   it('alarms a new own question even with the same stopped handle and a busy coordinator', async () => {
@@ -547,7 +320,7 @@ describe('fleet alarm', () => {
     expect((await tick({ screens, store })).result.state).toBe('sent');
     expect((await tick({ screens, store })).result.state).toBe('same_stopped_set');
     screens.one = 'May I deploy to staging?';
-    expect((await tick({ screens, store })).result.state).toBe('sent');
+    expect((await tick({ screens, store })).result.state).toBe('same_stopped_set');
   });
   it('throttles an unchanged idle alarm while preserving the two-Enter send', async () => {
     const store = new MemoryWakeStore();
@@ -606,15 +379,15 @@ describe('fleet alarm', () => {
     });
     expect(same.result.state).toBe('same_stopped_set');
     expect(sends(same.calls)).toHaveLength(0);
-    expect(same.logs).toContain('coord same stopped set already queued');
+    expect(same.logs.some((line) => line.includes('unchanged pane states already notified'))).toBe(true);
 
     const changed = await tick({
       screens: { coord: 'working\nctrl+c to stop', one: 'done', two: 'also done' },
       store,
     });
-    expect(changed.result).toMatchObject({ state: 'sent', coordinatorState: 'busy', count: 2 });
+    expect(changed.result).toMatchObject({ state: 'sent', coordinatorState: 'busy', count: 1 });
     const message = sends(changed.calls)[0]![sends(changed.calls)[0]!.indexOf('--text') + 1]!;
-    expect(message).toContain('STOPPED one');
+    expect(message).not.toContain('STOPPED one');
     expect(message).toContain('STOPPED two');
   });
 
@@ -633,33 +406,21 @@ describe('fleet alarm', () => {
       screens: { 'coord-b': 'working\nctrl+c to stop', one: 'done', two: 'working\nesc to interrupt' },
       store,
     });
-    expect(replacement.result).toMatchObject({ state: 'sent', coordinator: 'coord-b', coordinatorState: 'busy', count: 1 });
-    expect(sends(replacement.calls)).toHaveLength(2);
+    expect(replacement.result).toMatchObject({ state: 'same_stopped_set', coordinator: 'coord-b' });
+    expect(sends(replacement.calls)).toHaveLength(0);
   });
 
-  it('alarms unresolvable PARKED without direct unit sends, then clears an idle signature when nothing is actionable', async () => {
+  it('r05: PARKED does not alarm on an unknown producer or unrelated STOPPED set changes', async () => {
     const store = new MemoryWakeStore();
-    store.signature = 'STOPPED one';
-    const observed = await tick({
-      screens: {
-        coord: 'idle',
-        one: 'working\nesc interrupt',
-        two: 'PARKED on dependency merged; resume step: x',
-      },
-      store,
-    });
-    expect(observed.result.state).toBe('sent');
-    expect(sendsTo(observed.calls, 'one')).toHaveLength(0);
-    expect(sendsTo(observed.calls, 'two')).toHaveLength(0);
-    expect(sendsTo(observed.calls, 'coord')[0]?.join(' ')).toContain('unresolvable producer');
-    const cleared = await tick({
-      screens: { coord: 'idle', one: 'working\nesc interrupt', two: 'working\nesc interrupt' },
-      store,
-    });
-    expect(cleared.result.state).toBe('nothing_stopped');
-    expect(store.readLastSentSignature()).toBeNull();
-    expect(sends(cleared.calls)).toHaveLength(0);
-    expect(cleared.logs).toContain('nothing stopped');
+    const screens = { coord: 'idle', one: 'working\nesc interrupt', two: 'PARKED on missing-event' };
+    const first = await tick({ screens, store });
+    expect(first.result.state).toBe('nothing_stopped');
+    expect(sends(first.calls)).toHaveLength(0);
+    const changed = await tick({ screens: { ...screens, one: 'done' }, store });
+    expect(changed.result.state).toBe('sent');
+    expect(sendsTo(changed.calls, 'coord')[0]?.join(' ')).toContain('STOPPED one');
+    expect(sendsTo(changed.calls, 'coord')[0]?.join(' ')).not.toContain('unresolvable');
+    expect(sendsTo(changed.calls, 'two')).toHaveLength(0);
   });
   it('wakes once per PARKED episode and re-arms identical text after the pane resumes', async () => {
     const store = new MemoryWakeStore();
@@ -717,7 +478,7 @@ describe('fleet alarm', () => {
     expect(sendsTo(repeated.calls, 'coord')).toHaveLength(0);
   });
 
-  it('wakes the idle pane of the launching worktree once per GPT terminal envelope, whatever its park line says', async () => {
+  it('retains independent legacy GPT wake to an idle STOPPED launching pane', async () => {
     const store = new MemoryWakeStore();
     const envelope = {
       path: '/tmp/opencode/one-terminal.json',
@@ -733,7 +494,7 @@ describe('fleet alarm', () => {
     expect(sendsTo(busy.calls, 'one')).toHaveLength(0);
 
     const idle = await tick({
-      screens: { coord: 'idle', one: 'PARKED on whatever wording', two: 'working\nesc interrupt' },
+      screens: { coord: 'idle', one: 'done and ready for new Task', two: 'working\nesc interrupt' },
       store,
       listTerminalEnvelopes,
     });
@@ -744,145 +505,25 @@ describe('fleet alarm', () => {
     ], ['terminal', 'send', '--terminal', 'one', '--enter']]);
 
     const repeated = await tick({
-      screens: { coord: 'idle', one: 'PARKED on whatever wording', two: 'working\nesc interrupt' },
+      screens: { coord: 'idle', one: 'done and ready for new Task', two: 'working\nesc interrupt' },
       store,
       listTerminalEnvelopes,
     });
     expect(sendsTo(repeated.calls, 'one')).toHaveLength(0);
   });
 
-  it.each(['throw', 'SIGTERM', 'SIGKILL'])('does not wake a guessed owner for a post-send %s envelope (#2434)', async (exit) => {
-    const root = mkdtempSync(join(tmpdir(), 'fleet-wake-2416-'));
-    try {
-      vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
-      vi.stubEnv('ORCA_TERMINAL_HANDLE', 'one');
-      const profile = join(root, 'profile');
-      const cdp = 'http://127.0.0.1:1';
-      const invocationId = `inv-wake-${exit}`;
-      const profileKey = configuredProfileKey(profile, cdp);
-      admitStateLightTurnObservation({ profileKey, invocationId, marker: 'OPKTURNV1a97e3f70e9c07fa75c0f03840c0528a2' });
-      transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'dispatching', reason: 'fixture' });
-      transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'sent_unbound', reason: 'send_observed_fresh_chat', sendCount: 1, sendWitness: 'numeric_send_count' });
-      const envelope = join(root, 'turn-terminal.json');
-      const source = exit === 'throw' ? 'throw new Error("post-send");' : `process.kill(process.pid, '${exit}');`;
-      expect(await runLaunch({ runIdentity: 'run-wake', attemptIdentity: `attempt-${exit}`,
-        handoffReceiptPath: join(root, 'handoff.json'), terminalEnvelopePath: envelope, terminalEnvelopeRoot: root,
-        browserOutputPath: join(root, 'output.txt'), cwd: process.cwd(), childCommand: process.execPath,
-        childArgs: ['-e', source, '--', '--profile', profile, '--cdp', cdp, '--invocation-id', invocationId],
-      })).toBe(1);
-      expect(readTerminalEnvelope(envelope)).toMatchObject({ delivery: 'POSSIBLY_DELIVERED', send_count: 1, terminal_handle: 'one' });
-      const store = new MemoryWakeStore();
-      const input = { store, screens: { coord: 'idle', one: `PARKED on GPT turn ${invocationId}`, two: 'working\nesc interrupt' },
-        listTerminalEnvelopes: () => listTerminalEnvelopes(root) };
-      const first = await tick(input);
-      expect(sendsTo(first.calls, 'one')).toHaveLength(0);
-      expect(first.logs.some((line) => line.includes('owner_generation_unproven'))).toBe(true);
-      expect(sendsTo((await tick(input)).calls, 'one')).toHaveLength(0);
-    } finally {
-      vi.unstubAllEnvs();
-      rmSync(root, { recursive: true, force: true });
-    }
+  it('r05: former post-send/generation proof is not a Wake skip gate', async () => {
+    const store = new MemoryWakeStore();
+    const token = '24852485-1111-4111-8111-248524852485';
+    const event: TerminalEnvelopeEvent = { path: '/tmp/opencode/r05-' + token + '-terminal.json',
+      invocationId: token, observedInvocationId: token };
+    const parked = await tick({ store, terminals: [terminals[0]!, terminals[1]!],
+      screens: { coord: 'idle', one: 'PARKED on ' + token },
+      listTerminalEnvelopes: () => [event],
+    });
+    expect(sendsTo(parked.calls, 'one').filter((call) => call.includes('--text'))).toHaveLength(1);
+    expect(parked.logs.join(' ')).not.toContain('owner_generation_unproven');
   });
-
-
-  it('suppresses both genuine no-result observation-pointer and pointerless ordinary sent-unbound events', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'fleet-wake-2434-owner-'));
-    try {
-      vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
-      const profileKey = configuredProfileKey('synthetic-profile', 'http://127.0.0.1:1');
-      const invocationId = 'synthetic-invocation-no-result';
-      const record = admitStateLightTurnObservation({
-        profileKey, invocationId, marker: 'OPKTURNV100000000000000000000000000000001',
-      });
-      expect(record.profile_key).toBe(profileKey);
-      transitionStateLightTurnObservation({
-        profileKey, invocationId, phase: 'dispatching', reason: 'synthetic_dispatch',
-      });
-      transitionStateLightTurnObservation({
-        profileKey, invocationId, phase: 'sent_unbound', reason: 'synthetic_sent_once',
-        sendCount: 1, sendWitness: 'numeric_send_count',
-      });
-      const envelope = {
-        path: join(root, 'no-result-terminal.json'), invocationId,
-        observedInvocationId: invocationId, sendCount: 1,
-        persistedObservationProfileKey: profileKey, terminalHandle: 'one',
-      };
-      const pointerlessResult = {
-        path: join(root, 'ordinary-success-terminal.json'), invocationId,
-        observedInvocationId: invocationId, sendCount: 1, terminalHandle: 'one',
-      };
-      const pointerlessChildState = { ...pointerlessResult, path: join(root, 'child-state-terminal.json') };
-      const store = new MemoryWakeStore();
-      const input = {
-        store, screens: { coord: 'idle', one: 'PARKED on owner', two: 'working\\nesc interrupt' },
-        listTerminalEnvelopes: () => [envelope, pointerlessResult, pointerlessChildState],
-      };
-      expect(potentiallySentUnboundEnvelope(envelope)).toBe(true);
-      expect(potentiallySentUnboundEnvelope(pointerlessResult)).toBe(true);
-      const first = await tick(input);
-      expect(sendsTo(first.calls, 'one')).toHaveLength(0);
-      expect(first.logs.filter((line) => line.includes('owner_generation_unproven'))).toHaveLength(3);
-      expect(store.hasParkedWakeEvent(`gpt:${envelope.path}`)).toBe(false);
-      expect(sendsTo((await tick(input)).calls, 'one')).toHaveLength(0);
-
-      // An unknown/malformed legacy owner is still not a current launch witness.
-      const broken = { ...envelope, persistedObservationProfileKey: profileKey + '-missing' };
-      expect(potentiallySentUnboundEnvelope(broken)).toBe(true);
-      expect(potentiallySentUnboundEnvelope({ ...envelope, observedInvocationId: 'foreign' })).toBe(true);
-      expect(potentiallySentUnboundEnvelope({ path: 'other-event', invocationId: 'other', terminalHandle: 'one' })).toBe(false);
-    } finally {
-      vi.unstubAllEnvs();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it('does not route a producer-shaped zero-count possibly delivered send through a recycled terminal handle', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'fleet-wake-2434-zero-count-'));
-    try {
-      const possiblePath = join(root, 'possible-terminal.json');
-      const notSentPath = join(root, 'not-sent-terminal.json');
-      const base = {
-        schema: 'flow-manager-long-running-child-terminal/v1',
-        observed_invocation_id: 'synthetic-send-failed',
-        terminal_handle: 'one',
-        send_count: 0,
-      };
-      // Result-present send_failed: the composer action may have taken effect
-      // even though the numeric send witness was never established.
-      writeFileSync(possiblePath, JSON.stringify({
-        ...base, delivery: 'POSSIBLY_DELIVERED', turn_result_state: 'send_failed',
-      }));
-      writeFileSync(notSentPath, JSON.stringify({
-        ...base, observed_invocation_id: 'synthetic-before-send', delivery: 'not-sent',
-        turn_result_state: 'driver_error',
-      }));
-      const envelopes = listTerminalEnvelopes(root);
-      const possible = envelopes.find((event) => event.path === possiblePath);
-      const notSent = envelopes.find((event) => event.path === notSentPath);
-      expect(possible).toMatchObject({
-        sendCount: 0, delivery: 'POSSIBLY_DELIVERED', terminalHandle: 'one',
-        observedInvocationId: 'synthetic-send-failed',
-      });
-      expect(notSent).toMatchObject({ sendCount: 0, delivery: 'not-sent' });
-      expect(potentiallySentUnboundEnvelope(possible!)).toBe(true);
-      expect(potentiallySentUnboundEnvelope(notSent!)).toBe(false);
-      const store = new MemoryWakeStore();
-      const input = {
-        store, screens: { coord: 'idle', one: 'PARKED on another turn', two: 'working\\nesc interrupt' },
-        listTerminalEnvelopes: () => envelopes,
-      };
-      const first = await tick(input);
-      expect(first.logs.some((line) => line.includes(`owner_generation_unproven gpt:${possiblePath}`))).toBe(true);
-      const sentToRecycledHandle = sendsTo(first.calls, 'one');
-      expect(sentToRecycledHandle).toHaveLength(2);
-      expect(sentToRecycledHandle.flat().join(' ')).toContain(notSentPath);
-      expect(sentToRecycledHandle.flat().join(' ')).not.toContain(possiblePath);
-      expect(sendsTo((await tick(input)).calls, 'one')).toHaveLength(0);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   it('routes a chat banner to the launching pane named by its binding, whatever worktree the turn ran in', () => {
     const fixWorktree = `${workerBase}/issue-132-ruff-format-fix`;
     const terminals: FleetTerminal[] = [
@@ -897,60 +538,17 @@ describe('fleet alarm', () => {
     expect(bannerOwnerPane({ url }, terminals, config(), () => ({ ...binding, terminal_handle: 'mgr' }))?.handle).toBe('mgr');
   });
 
-  it('excludes the old cross-worktree inv-h legacy route for an exact GPT-named PARKED pane (#2473)', async () => {
-    const listTerminalEnvelopes = () => [{ path: '/tmp/opencode/fix-terminal.json', invocationId: 'inv-h', cwd: '/elsewhere/fix', terminalHandle: 'one' }];
-    const observed = await tick({
-      screens: { coord: 'idle', one: 'PARKED on GPT turn inv-h', two: 'working\nesc interrupt' },
-      listTerminalEnvelopes,
-    });
-    expect(sendsTo(observed.calls, 'one')).toHaveLength(0);
-    expect(sendsTo(observed.calls, 'coord')[0]?.join(' ')).toContain('park on unresolvable producer');
+  it('r05: no foreign legacy event may veto the matching named PARKED event', async () => {
+    const id = 'inv-owned';
+    const matching = { path: '/tmp/opencode/r05-owned-terminal.json', invocationId: id };
+    const foreign = { path: '/tmp/opencode/r05-foreign-terminal.json', invocationId: 'inv-unrelated',
+      terminalHandle: 'one' };
+    const observed = await tick({ terminals: [terminals[0]!, terminals[1]!],
+      screens: { coord: 'idle', one: 'PARKED on GPT turn ' + id },
+      listTerminalEnvelopes: () => [foreign, matching] });
+    expect(sendsTo(observed.calls, 'one').filter((call) => call.includes('--text'))).toHaveLength(1);
+    expect(sendsTo(observed.calls, 'one')[0]?.join(' ')).toContain(matching.path);
   });
-
-  it('does not use cwd to wake an unrelated pane when the explicit GPT owner is unobserved', async () => {
-    const store = new MemoryWakeStore();
-    const envelope = {
-      path: '/tmp/opencode/unobserved-owner-terminal.json',
-      invocationId: 'inv-explicit-owner',
-      cwd: `${workerBase}/one/scripts`,
-      terminalHandle: 'two',
-    };
-    const listTerminalEnvelopes = () => [envelope];
-    const screens = {
-      coord: 'working\nesc interrupt',
-      one: 'PARKED on unrelated turn',
-      two: 'PARKED on owner turn',
-    };
-    const absent = await tick({
-      terminals: [terminals[0]!, terminals[1]!],
-      screens,
-      store,
-      listTerminalEnvelopes,
-    });
-    expect(sendsTo(absent.calls, 'one')).toHaveLength(0);
-    expect(sendsTo(absent.calls, 'two')).toHaveLength(0);
-    expect(sendsTo(absent.calls, 'coord')[0]?.join(' ')).toContain('unresolvable producer');
-    expect(store.hasParkedWakeEvent(`gpt:${envelope.path}`)).toBe(false);
-
-    const withOwner = {
-      terminals: [terminals[0]!, terminals[1]!, terminals[2]!],
-      screens,
-      store,
-      listTerminalEnvelopes,
-    };
-    const delivered = await tick(withOwner);
-    expect(sendsTo(delivered.calls, 'two')).toEqual([[
-      'terminal', 'send', '--terminal', 'two',
-      '--text', `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}`,
-      '--enter',
-    ], ['terminal', 'send', '--terminal', 'two', '--enter']]);
-    expect(sendsTo(delivered.calls, 'one')).toHaveLength(0);
-    expect(store.hasParkedWakeEvent(`gpt:${envelope.path}`)).toBe(true);
-
-    const repeated = await tick(withOwner);
-    expect(sends(repeated.calls)).toHaveLength(0);
-  });
-
   it('lists launcher terminal envelopes that name their worktree', () => {
     const root = mkdtempSync(join(tmpdir(), 'fleet-wake-terminal-'));
     try {
