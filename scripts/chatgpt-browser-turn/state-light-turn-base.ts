@@ -1985,7 +1985,7 @@ async function readComposerReadiness(page: any, deadline: number): Promise<boole
   }
 }
 
-type StateLightSendDeliveryWitness = 'owned_user_node' | 'composer_cleared' | 'unproven';
+type StateLightSendDeliveryWitness = 'owned_user_node' | 'composer_cleared' | 'owned_stop' | 'unproven';
 
 async function readComposerTextForSendDelivery(
   composer: any,
@@ -2063,9 +2063,10 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
   readonly invocationDeadlineMs: number;
   readonly deliveryProofWaitMs?: number;
   readonly preSendAlertsAlreadyMarked?: boolean;
+  readonly allowOwnedStopWitness?: boolean;
   readonly onDispatch?: () => void;
   readonly onActionError?: (diagnostic: string) => void;
-}): Promise<{ sendCount: 0 | 1; witness: StateLightSendDeliveryWitness; actionError?: string }> {
+}): Promise<{ sendCount: 0 | 1; witness: StateLightSendDeliveryWitness; actionError?: string; preDispatchTimeoutProven?: boolean }> {
   if (!input.preSendAlertsAlreadyMarked) {
     await markPreSendAlerts(input.page, Math.min(MAX_LOCAL_READ_WAIT_MS, input.sendWaitMs));
   }
@@ -2084,19 +2085,25 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
     input.onActionError?.(actionError);
   }
 
-  const witness = await observeStateLightSendDelivery(
-    input.page,
-    input.composer,
-    input.marker,
-    input.baselineUserNodeCount,
-    input.invocationDeadlineMs,
-    input.deliveryProofWaitMs,
-    input.browser,
-  );
+  // A newly appearing Stop on this previously idle, owner-checked page is
+  // delivery/ongoing generation even when the transcript is still catching up.
+  const observedOwnedStop = input.allowOwnedStopWitness
+    && await readFreshStopVisible(input.page, Math.min(input.invocationDeadlineMs, Date.now() + MAX_LOCAL_READ_WAIT_MS)) === true;
+  const witness = observedOwnedStop
+    ? 'owned_stop' as const
+    : await observeStateLightSendDelivery(
+      input.page,
+      input.composer,
+      input.marker,
+      input.baselineUserNodeCount,
+      input.invocationDeadlineMs,
+      input.deliveryProofWaitMs,
+      input.browser,
+    );
   return {
     sendCount: witness === 'unproven' ? 0 : 1,
     witness,
-    ...(actionError ? { actionError } : {}),
+    ...(actionError ? { actionError, preDispatchTimeoutProven: affirmativePreActionabilityTimeout(actionError) } : {}),
   };
 }
 
