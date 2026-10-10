@@ -338,7 +338,10 @@ export function verifyCdpProfile({ cdp = 'http://localhost:9222', profile }) {
  * Caller-bounded owner inspection for tracked browser turns.
  * @returns {Promise<{ ok: true } | { ok: false, reason: string, message: string, timedOut?: boolean }>}
  */
-export async function verifyCdpProfileBounded({ cdp = 'http://localhost:9222', profile, timeoutMs }) {
+export async function inspectCdpProfileBounded(
+  { cdp = 'http://localhost:9222', profile, timeoutMs },
+  observation = {},
+) {
   if (!profile) {
     return { ok: false, reason: 'uninspectable', message: 'profile path required' };
   }
@@ -352,7 +355,9 @@ export async function verifyCdpProfileBounded({ cdp = 'http://localhost:9222', p
     if (pidBudget <= 0) {
       return { ok: false, reason: 'uninspectable', message: 'owner_probe_timeout', timedOut: true };
     }
-    const pid = await findCdpListenerPidBounded(cdp, deadlineMs);
+    const pid = observation.findListenerPid
+      ? await observation.findListenerPid(cdp, deadlineMs)
+      : await findCdpListenerPidBounded(cdp, deadlineMs);
     if (!pid) {
       if (remainingMs(deadlineMs) <= 0) {
         return { ok: false, reason: 'uninspectable', message: 'owner_probe_timeout', timedOut: true };
@@ -367,7 +372,9 @@ export async function verifyCdpProfileBounded({ cdp = 'http://localhost:9222', p
     if (cmdBudget <= 0) {
       return { ok: false, reason: 'uninspectable', message: 'owner_probe_timeout', timedOut: true };
     }
-    const cmdline = await getCmdlineBounded(pid, deadlineMs);
+    const cmdline = observation.readCommandLine
+      ? await observation.readCommandLine(pid, deadlineMs)
+      : await getCmdlineBounded(pid, deadlineMs);
     if (!cmdline) {
       return {
         ok: false,
@@ -394,7 +401,6 @@ export async function verifyCdpProfileBounded({ cdp = 'http://localhost:9222', p
           ' — close the foreign Chrome or fix DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR',
       };
     }
-    recordCdpOwner(cdp, profile);
     return { ok: true };
   } catch (error) {
     if (error?.code === 'TIMEOUT' || error?.message === 'owner_probe_timeout') {
@@ -402,6 +408,16 @@ export async function verifyCdpProfileBounded({ cdp = 'http://localhost:9222', p
     }
     throw error;
   }
+}
+
+/**
+ * The ordinary bounded verifier deliberately persists successful CDP ownership.
+ * The separately named inspectCdpProfileBounded is the only non-writing branch.
+ */
+export async function verifyCdpProfileBounded(input, testObservation) {
+  const result = await inspectCdpProfileBounded(input, testObservation);
+  if (result.ok) recordCdpOwner(input.cdp ?? 'http://localhost:9222', input.profile);
+  return result;
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];

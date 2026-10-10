@@ -1,0 +1,27 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2461,
+  "declared_paths": [
+    ".claude/skills/discuss-with-gpt/verify-cdp-owner.mjs",
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/discuss-with-gpt/verify-cdp-owner.mjs",
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+  ],
+  "source_revision": "cd570d614810c44ccf70c6061a9029310382ea70"
+}
