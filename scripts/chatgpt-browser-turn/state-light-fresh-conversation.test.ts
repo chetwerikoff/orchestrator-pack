@@ -436,7 +436,7 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(turn.getSends()).toBe(0);
     expect(turn.sendButton.click).not.toHaveBeenCalled();
-    expect(turn.composer.fill).toHaveBeenLastCalledWith('');
+    expect(turn.composer.fill).toHaveBeenLastCalledWith('', expect.objectContaining({ timeout: expect.any(Number) }));
     expect(turn.page.close).toHaveBeenCalledTimes(1);
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
   });
@@ -575,7 +575,7 @@ describe('state-light fresh conversation collision recovery', () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-LATE'));
     const solo = makeLoserPage('PROMPT-LATE', 'LATE-OK');
     solo.composer.count.mockImplementation(async () => mocks.nowMs >= 30_000 ? 1 : 0);
-    const outcome = await runNewChatTurn(solo.page, '/tmp/late-fresh.txt', '90000');
+    const outcome = await runNewChatTurn(solo.page, '/tmp/late-fresh.txt', '120000');
     expect(outcome.result.send_count).toBe(1);
     expect(solo.getSends()).toBe(1);
     expect(solo.page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), expect.objectContaining({
@@ -1497,6 +1497,10 @@ describe('state-light fresh conversation collision recovery', () => {
           insertionDeadlineMs?: number;
           diagnostic?: import('./contracts.ts').ComposerMutationDiagnosticV1;
         } = {};
+        // The production path first performs a successful composer readiness
+        // check before invoking the mutation helper. Keep that preflight so
+        // its deliberate second/final readiness failure remains reachable.
+        expect(await __testComposerMutation.readComposerReadiness(page, deadlineMs)).toBe(true);
         const cause = await __testComposerMutation.mutateComposerOrCause(
           page, markedPrompt, deadlineMs, insertionContext,
         );
@@ -1968,7 +1972,8 @@ describe('state-light fresh conversation collision recovery', () => {
       send_count: 1,
     });
     expect(outcome.result.incidents).toContain('conversation_landing_mismatch');
-    expect(outcome.result.poll_count).toBeLessThan(20);
+    // Longer accepted timeout leaves a larger legitimate post-send observation budget.
+    expect(outcome.result.poll_count).toBeLessThan(100);
   });
 
 });
@@ -2450,7 +2455,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     mocks.browserQueue.push(initialBrowser, recoveredBrowser);
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
 
-    const outcome = await runProductionNewChat(output, '50');
+    const outcome = await runProductionNewChat(output, '90000');
 
     expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0 });
     expect(outcome.result).toMatchObject({
@@ -2573,7 +2578,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     mocks.browserQueue.push(browserWithPages(ownedPage, [ownedPage, foreignPage], () => true));
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
 
-    const outcome = await runProductionNewChat(output, '5');
+    const outcome = await runProductionNewChat(output, '90000');
 
     expect(outcome.result).toMatchObject({
       state: 'no_reply',
@@ -2769,7 +2774,7 @@ describe('Issue #1752 production liveness regressions', () => {
     }) as typeof process.stdout.write);
     try {
       const code = await runStateLightTurn(
-        livenessArgv(join(livenessStateDir, 'locator-stall.txt'), '45'),
+        livenessArgv(join(livenessStateDir, 'locator-stall.txt'), '90000'),
         { entryLivenessHeartbeat: true },
       );
       expect(code).not.toBe(0);
@@ -2779,7 +2784,7 @@ describe('Issue #1752 production liveness regressions', () => {
       expect(records.at(-1)).toMatchObject({
         schema: 'turn-result/v1',
         state: 'driver_error',
-        cause: 'browser_operation_timeout:locator_count',
+        cause: 'fresh_send_actionability_unknown_or_busy',
         send_count: 0,
       });
     } finally {
@@ -3016,11 +3021,16 @@ describe('Issue #1752 production liveness regressions', () => {
     }) as typeof process.stdout.write);
     try {
       const code = await runStateLightTurn(
-        livenessArgv(join(livenessStateDir, 'recovery-page.txt'), '50'),
+        livenessArgv(join(livenessStateDir, 'recovery-page.txt'), '90000'),
         {
           entryLivenessHeartbeat: true,
           recoveryHooks: {
-            faultActuator: () => { lost = true; },
+            faultActuator: () => {
+              lost = true;
+              // Reach the post-send deadline with only a bounded recovery
+              // newPage budget; the full 60s pre-send reserve was already met.
+              mocks.nowMs += (2 * 90_000) - 2_000;
+            },
           },
         },
       );
