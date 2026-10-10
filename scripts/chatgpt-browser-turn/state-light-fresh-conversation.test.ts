@@ -693,25 +693,57 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(solo.getSends()).toBe(0);
   });
 
-  it('returns rate_limit from prepare without additional navigation rounds', async () => {
-    vi.mocked(uiAdapter.classifyProductWall).mockImplementation((surface) => {
-      const text = typeof surface === 'string' ? surface : surface.text;
-      if (/temporarily limited/i.test(text)) return { state: 'rate_limit', cause: 'rate_limit_detected' };
-      return {};
+  it('continues a fresh send when a usage-remaining banner leaves the composer usable', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    const classifier = vi.mocked(uiAdapter.classifyProductWall);
+    const previousImplementation = classifier.getMockImplementation();
+    classifier.mockImplementation(actual.classifyProductWall);
+    try {
+      mocks.productStatusText.mockResolvedValue({
+        text: 'You have 20% usage remaining',
+        composer: true,
+        parts: [{ selector: '[role="alert"]', text: 'You have 20% usage remaining' }],
+      });
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-REMAINING'));
+      const solo = makeLoserPage('PROMPT-REMAINING', 'REMAINING-OK');
+      const outcome = await runNewChatTurn(solo.page, '/tmp/remaining-warning.txt');
+
+      expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+      expect(solo.getSends()).toBe(1);
+      expect(readStateLightAdvisoryWall('collision-profile')).toBeNull();
+    } finally {
+      classifier.mockImplementation(previousImplementation ?? (() => ({})));
+    }
+  });
+
+  it('reports a pre-send rate-limit status as advisory while still sending once', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.productStatusText.mockResolvedValue({
+      text: 'temporarily limited access',
+      composer: false,
+      parts: [{ selector: '[role="alert"]', text: 'temporarily limited access' }],
     });
-    mocks.productStatusText.mockResolvedValue({ text: 'temporarily limited access', composer: false });
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-SOLO'));
     const solo = makeLoserPage('PROMPT-SOLO', 'SOLO-OK');
     const outcome = await runNewChatTurn(solo.page, '/tmp/rate-limit-prepare.txt');
 
-    expect(outcome.code).toBe(12);
+    expect(outcome.code).toBe(0);
     expect(outcome.result).toMatchObject({
-      state: 'rate_limit',
-      cause: 'rate_limit_detected',
-      send_count: 0,
+      state: 'ok',
+      send_count: 1,
+      product_wall_diagnostic: {
+        wall_kind: 'rate_limit',
+        matched_text: 'temporarily limited access',
+        matched_selector: '[role="alert"]',
+      },
     });
-    expect(outcome.result.navigation_count).toBeLessThanOrEqual(3);
-    expect(readStateLightAdvisoryWall('collision-profile')).toMatchObject({ state: 'rate_limit' });
+    expect(solo.getSends()).toBe(1);
+    expect(readStateLightAdvisoryWall('collision-profile')).toMatchObject({
+      state: 'rate_limit',
+      matched_text: 'temporarily limited access',
+      matched_selector: '[role="alert"]',
+    });
   });
 
   it('continues observing after fresh-conversation URL wait expiry without send_failed', async () => {
@@ -1391,7 +1423,9 @@ describe('state-light fresh conversation collision recovery', () => {
       expireOnNextClockRead?: boolean;
     };
     const scenarios: BranchScenario[] = [
-      { branch: 'readiness_before_click', ready: [true, false] },
+      // The composer remains present but unready through the new bounded
+      // click/fill attempt; a recovered composer is tested separately.
+      { branch: 'readiness_before_click', ready: [true, false, false] },
       { branch: 'budget_before_click', ready: [true, true], expireAfterEvaluate: 2 },
       { branch: 'after_click', ready: [true, true], expireAfterClick: true },
       { branch: 'budget_before_fill', ready: [true, true], expireAfterClick: true, expireOnNextClockRead: true },
@@ -1433,7 +1467,8 @@ describe('state-light fresh conversation collision recovery', () => {
         );
         expect(composer.evaluate).toHaveBeenCalled();
         expect(evaluateCount).toBe(scenario.ready.length);
-        expect(composer.click).toHaveBeenCalledTimes(scenario.branch === 'readiness_before_click' || scenario.branch === 'budget_before_click' ? 0 : 1);
+        expect(composer.click).toHaveBeenCalledTimes(scenario.branch === 'budget_before_click' ? 0 : 1);
+        expect(composer.fill).toHaveBeenCalledTimes(scenario.branch === 'readiness_before_click' ? 1 : 0);
         expect(result).toMatchObject({
           state: 'driver_error',
           cause: 'composer_mutation_budget_exhausted',

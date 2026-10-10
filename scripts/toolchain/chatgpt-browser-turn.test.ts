@@ -891,7 +891,7 @@ describe('issue 964 UI ownership and profile walls — S7/S8/S9', () => {
     })).rejects.toThrow('ui_contract_mismatch:duplicate_tabs');
   });
 
-  it('S8 recognizes a product-owned quota alert before send', async () => {
+  it('S8 sends despite a product-owned quota alert and preserves advisory evidence', async () => {
     const fixture = fakeTurnPage({ alertText: "You've reached the current usage limit" });
     const result = await sendTurn(fixture.page, 'payload', {
       cdp,
@@ -900,8 +900,28 @@ describe('issue 964 UI ownership and profile walls — S7/S8/S9', () => {
       newChat: false,
       timeoutMs: 100,
     });
-    expect(result.state).toBe('quota');
-    expect(fixture.getSendClicks()).toBe(0);
+    expect(result.state).toBe('stream_timeout');
+    expect(fixture.getSendClicks()).toBe(1);
+    expect(result.product_wall_diagnostic).toMatchObject({ wall_kind: 'quota' });
+  });
+
+  it('S8 sends despite a generic product-owned retry toast while preserving its source', async () => {
+    const text = 'Something went wrong. Please try again later.';
+    const fixture = fakeTurnPage({ alertText: text });
+    const result = await sendTurn(fixture.page, 'payload', {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: 'https://chatgpt.com/c/example',
+      newChat: false,
+      timeoutMs: 100,
+    });
+    expect(fixture.getSendClicks()).toBe(1);
+    expect(result.state).toBe('stream_timeout');
+    expect(result.product_wall_diagnostic).toEqual({
+      wall_kind: 'none',
+      matched_text: text,
+      matched_selector: '[role="alert"]',
+    });
   });
 
   it('S8 does not treat authored conversation wall phrases as product state while composer is healthy', async () => {
@@ -918,7 +938,7 @@ describe('issue 964 UI ownership and profile walls — S7/S8/S9', () => {
     expect(fixture.getSendClicks()).toBe(0);
   });
 
-  it('S8 preserves possible-delivery evidence when a product wall appears mid-turn', async () => {
+  it('S8 continues post-send observation despite a quota banner', async () => {
     const own = 'user-owned-12345678';
     const fixture = fakeTurnPage({ dispatchCandidateIds: [own], alertAfterSend: 'usage limit' });
     const result = await sendTurn(fixture.page, 'payload', {
@@ -928,22 +948,124 @@ describe('issue 964 UI ownership and profile walls — S7/S8/S9', () => {
       newChat: false,
       timeoutMs: 100,
     });
-    expect(result.state).toBe('recovery_required');
-    expect(result.cause).toBe('profile_wall:quota');
+    expect(result.state).toBe('stream_timeout');
+    expect(result.possibleDelivery).toBe(true);
     expect(result.userMessageId).toBe(own);
+    expect(result.product_wall_diagnostic).toMatchObject({ wall_kind: 'quota' });
   });
 
-  it('S9 returns ui_contract_mismatch with zero send when composer is unavailable without a product wall', async () => {
-    const fixture = fakeTurnPage({ composer: false, bodyText: 'ordinary page' });
+  it('S8 still sends when the product-status reader itself throws', async () => {
+    const fixture = fakeTurnPage();
+    const originalLocator = fixture.page.locator.bind(fixture.page);
+    fixture.page.locator = (selector: string) => selector === '[role="alert"]'
+      ? { count: async () => { throw new Error('synthetic_status_reader_failure'); } }
+      : originalLocator(selector);
+    const result = await sendTurn(fixture.page, 'payload', {
+      cdp, profile: join(root, 'profile'),
+      chatUrl: 'https://chatgpt.com/c/example', newChat: false, timeoutMs: 100,
+    });
+    expect(fixture.getSendClicks()).toBe(1);
+    expect(result.state).not.toBe('quota');
+    expect(result.product_wall_diagnostic).toEqual({ wall_kind: 'none', matched_text: 'none', matched_selector: 'none' });
+  });
+
+  it('S9 quota text with missing composer attempts ordinary mutation then reports not-sent', async () => {
+    const evidence = "You've reached the current usage limit";
+    const fixture = fakeTurnPage({ composer: false, alertText: evidence });
+    const originalLocator = fixture.page.locator.bind(fixture.page);
+    let fillAttempts = 0;
+    fixture.page.locator = (selector: string) => selector === COMPOSER_SELECTOR
+      ? {
+        ...originalLocator(selector),
+        fill: async () => { fillAttempts++; throw new Error('synthetic_absent_composer'); },
+      }
+      : originalLocator(selector);
     const result = await sendTurn(fixture.page, 'payload', {
       cdp,
       profile: join(root, 'profile'),
       chatUrl: 'https://chatgpt.com/c/example',
       newChat: false,
-      timeoutMs: 1,
+      timeoutMs: 100,
     });
-    expect(result.state).toBe('ui_contract_mismatch');
+    expect(fillAttempts).toBe(1);
+    expect(result.state).toBe('send_failed');
+    expect(result.cause).toBe('composer_unavailable');
+    expect(result.possibleDelivery).toBe(false);
     expect(fixture.getSendClicks()).toBe(0);
+    expect(result.product_wall_diagnostic).toEqual({
+      wall_kind: 'quota',
+      matched_text: evidence,
+      matched_selector: '[role="alert"]',
+    });
+  });
+
+  it('S9 reserves production pre-send budget for baseline and absent-composer mutation', async () => {
+    const evidence = "You've reached your usage limit";
+    const fixture = fakeTurnPage({ composer: false, alertText: evidence });
+    const originalLocator = fixture.page.locator.bind(fixture.page);
+    let clickAttempts = 0;
+    let fillAttempts = 0;
+    fixture.page.locator = (selector: string) => selector === COMPOSER_SELECTOR
+      ? {
+        ...originalLocator(selector),
+        click: async (options: { timeout: number }) => {
+          expect(options.timeout).toBeGreaterThan(0);
+          clickAttempts++;
+        },
+        fill: async (_text: string, options: { timeout: number }) => {
+          expect(options.timeout).toBeGreaterThan(0);
+          fillAttempts++;
+          throw new Error('synthetic_absent_composer');
+        },
+      }
+      : originalLocator(selector);
+    const segmentBudget = createPreSendSegmentBudget(1_500);
+    const result = await sendTurn(fixture.page, 'payload', {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: 'https://chatgpt.com/c/example',
+      newChat: false,
+      timeoutMs: 30_000,
+    }, undefined, undefined, segmentBudget);
+
+    expect(clickAttempts).toBe(1);
+    expect(fillAttempts).toBe(1);
+    expect(fixture.getSendClicks()).toBe(0);
+    expect(result).toMatchObject({
+      state: 'send_failed',
+      cause: 'composer_unavailable',
+      possibleDelivery: false,
+      product_wall_diagnostic: {
+        wall_kind: 'quota',
+        matched_text: evidence,
+        matched_selector: '[role="alert"]',
+      },
+    });
+  });
+
+  it('S9 no composer and no status text attempts ordinary mutation then reports not-sent', async () => {
+    const fixture = fakeTurnPage({ composer: false, bodyText: 'ordinary page' });
+    const originalLocator = fixture.page.locator.bind(fixture.page);
+    let fillAttempts = 0;
+    fixture.page.locator = (selector: string) => selector === COMPOSER_SELECTOR
+      ? {
+        ...originalLocator(selector),
+        fill: async () => { fillAttempts++; throw new Error('synthetic_absent_composer'); },
+      }
+      : originalLocator(selector);
+    const result = await sendTurn(fixture.page, 'payload', {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: 'https://chatgpt.com/c/example',
+      newChat: false,
+      timeoutMs: 100,
+    });
+    expect(fillAttempts).toBe(1);
+    expect(result.state).toBe('send_failed');
+    expect(result.cause).toBe('composer_unavailable');
+    expect(result.possibleDelivery).toBe(false);
+    expect(fixture.getSendClicks()).toBe(0);
+    expect(result.product_wall_diagnostic).toEqual({ wall_kind: 'none', matched_text: 'none', matched_selector: 'none' });
   });
 });
 
@@ -2274,6 +2396,7 @@ describe('issue 1025 Half A proven non-delivery', () => {
       state: 'send_failed',
       cause: 'dispatch_request_not_issued',
       possibleDelivery: false,
+      product_wall_diagnostic: { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' },
     });
   });
 
@@ -2308,6 +2431,7 @@ describe('issue 1025 Half A proven non-delivery', () => {
       state: 'send_failed',
       cause: 'dispatch_request_not_issued',
       possibleDelivery: false,
+      product_wall_diagnostic: { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' },
     });
   });
 
@@ -2947,6 +3071,7 @@ async function runTurnWithMocks1060(
     sendResult?: Record<string, unknown>;
     browserProvenance?: string;
     onBeforeSend?: () => void | Promise<void>;
+    beforeDriverOnBeforeSend?: () => void | Promise<void>;
     deleteIncidentFails?: boolean;
   } = {},
 ): Promise<{ exitCode: number; stdout: string }> {
@@ -2974,6 +3099,7 @@ async function runTurnWithMocks1060(
       openTurnPage: vi.fn(async () => ({ page: stubPage, owned: true, provisionalId: randomUUID() })),
       runtimeWitnessSurfaceAvailable: vi.fn(async () => witnessQueue.shift() ?? 'available'),
       sendTurn: vi.fn(async (_page, _text, _config, _provisionalId, onBeforeSend) => {
+        if (options.beforeDriverOnBeforeSend) await options.beforeDriverOnBeforeSend();
         if (onBeforeSend) await onBeforeSend();
         if (options.onBeforeSend) await options.onBeforeSend();
         return options.sendResult ?? {
@@ -3138,6 +3264,112 @@ function turnArgvFor1060(outputPath: string, flags: string[] = []): string[] {
     ...flags,
   ];
 }
+
+describe('Issue #2489 legacy runCli product-wall envelope', () => {
+  const diagnostic = {
+    wall_kind: 'quota' as const,
+    matched_text: "You've reached your usage limit",
+    matched_selector: '[role="alert"]',
+  };
+  const conversationId = 'https://chatgpt.com/c/fixture-conv';
+  const cases = [
+    {
+      label: 'completed',
+      state: 'ok' as TurnState,
+      sendResult: {
+        state: 'ok',
+        cause: 'completed',
+        possibleDelivery: true,
+        conversationId,
+        userMessageId: 'user-fixture-12345678',
+        assistantMessageId: 'asst-fixture-12345678',
+        reply: 'reply text',
+      },
+    },
+    {
+      label: 'proven not-sent',
+      state: 'send_failed' as TurnState,
+      sendResult: {
+        state: 'send_failed',
+        cause: 'composer_unavailable',
+        possibleDelivery: false,
+      },
+    },
+    {
+      label: 'post-send uncertain',
+      state: 'recovery_required' as TurnState,
+      sendResult: {
+        state: 'recovery_required',
+        cause: 'message_stream_error',
+        possibleDelivery: true,
+        conversationId,
+        userMessageId: 'user-fixture-12345678',
+      },
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    it(`preserves matched selector/text in terminal turn-result/v1 for ${testCase.label}`, async () => {
+      const output = join(root, `legacy-wall-diagnostic-${testCase.label.replaceAll(' ', '-')}.txt`);
+      const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output), {
+        sendResult: {
+          ...testCase.sendResult,
+          product_wall_diagnostic: diagnostic,
+        },
+      });
+      const terminals = stdout.trim().split(/\r?\n/)
+        .map((line) => JSON.parse(line))
+        .filter((row) => row.schema === 'turn-result/v1');
+
+      expect(exitCode).toBe(turnExitCode(testCase.state));
+      expect(terminals).toHaveLength(1);
+      expect(terminals[0]).toMatchObject({
+        schema: 'turn-result/v1',
+        state: testCase.state,
+        product_wall_diagnostic: diagnostic,
+      });
+    });
+  }
+});
+
+describe('Issue #2489 legacy persisted profile_wall admission', () => {
+  for (const cause of ['quota', 'rate_limit', 'challenge', 'login']) {
+    it('does not block a turn from a persisted ' + cause + ' page-text wall', async () => {
+      const prior = writeIncident(profileKey, {
+        kind: 'profile_wall',
+        phase: 'pre_send',
+        cause,
+        generation: 1,
+      });
+      let dispatchReached = 0;
+      const output = join(root, 'existing-' + cause + '-profile-wall.txt');
+      const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output), {
+        onBeforeSend: () => { dispatchReached += 1; },
+      });
+      const terminal = stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line))
+        .find((row) => row.schema === 'turn-result/v1');
+      expect(dispatchReached).toBe(1);
+      expect(exitCode).toBe(0);
+      expect(terminal).toMatchObject({ state: 'ok', cause: 'completed' });
+      expect(listReadableIncidents(profileKey).some(({ identity }) => identity === prior.identity)).toBe(true);
+    });
+  }
+
+  it('does not veto an advisory profile_wall arriving immediately before dispatch', async () => {
+    let attempted = 0;
+    const output = join(root, 'raced-profile-wall.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output), {
+      beforeDriverOnBeforeSend: () => {
+        writeIncident(profileKey, { kind: 'profile_wall', phase: 'pre_send', cause: 'quota', generation: 1 });
+      },
+      onBeforeSend: () => { attempted += 1; },
+    });
+    expect(attempted).toBe(1);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('"state":"ok"');
+    expect(stdout).not.toContain('profile_wall_active');
+  });
+});
 
 describe('issue 1060 remove profile-wide admission', () => {
   it('AC1/AC11a: independent conversations race while capability is absent and changing', async () => {
@@ -3835,6 +4067,36 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     expect(evidence!.timeoutMs).toBeLessThanOrEqual(evidence!.remainingMs);
   });
 
+  it('Issue #2489 reaches bounded click/fill when the composer is genuinely absent', async () => {
+    const absent = makeComposerPage({ composerPresent: false });
+    const result = await __testComposerMutation.mutateComposerOrCause(absent.page, 'payload', 10_000);
+    expect(result).toBe('composer_unavailable');
+    expect(absent.composer.click).toHaveBeenCalledTimes(1);
+    expect(absent.composer.fill).toHaveBeenCalledTimes(1);
+
+    const rejected = makeComposerPage({ composerPresent: false, clickReject: true });
+    const failed = await __testComposerMutation.mutateComposerOrCause(rejected.page, 'payload', 10_000);
+    expect(failed).toBe('composer_unavailable');
+    expect(rejected.composer.click).toHaveBeenCalledTimes(1);
+    expect(rejected.composer.fill).not.toHaveBeenCalled();
+  });
+
+  it('Issue #2489 attempts click/fill on present-but-unready composers within budget', async () => {
+    for (const option of [{ visible: false }, { enabled: false }, { contentEditable: false }]) {
+      const fixture = makeComposerPage(option);
+      const failure = await __testComposerMutation.mutateComposerOrCause(fixture.page, 'payload', 10_000);
+      expect(failure).toBe('composer_mutation_budget_exhausted');
+      expect(fixture.composer.click).toHaveBeenCalledTimes(1);
+      expect(fixture.composer.fill).toHaveBeenCalledTimes(1);
+      expect(fixture.composer.click.mock.calls[0]?.[0]?.timeout).toBeGreaterThan(0);
+    }
+
+    const recovered = makeComposerPage({ readinessSequence: [false, true] });
+    expect(await __testComposerMutation.mutateComposerOrCause(recovered.page, 'payload', 10_000)).toBeNull();
+    expect(recovered.composer.click).toHaveBeenCalledTimes(1);
+    expect(recovered.composer.fill).toHaveBeenCalledTimes(1);
+  });
+
   it('bounds the first post-readiness probe by the insertion phase', async () => {
     const fixture = makeComposerPage({ readinessDelayMs: COMPOSER_INSERTION_WAIT_MS });
     const failure = await __testComposerMutation.mutateComposerOrCause(fixture.page, 'payload', 10_000);
@@ -3942,8 +4204,12 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     ]);
     const result = JSON.parse(writes.join(''));
 
-    expect(exitCode).toBe(10);
-    expect(result.cause).toBe('composer_unavailable');
+    // The time budget expired during CDP/nav, not because an absent composer
+    // was positively observed. Preserve the strict no-post-deadline action.
+    expect(exitCode).toBe(13);
+    expect(result.state).toBe('driver_error');
+    expect(result.cause).toBe('composer_mutation_budget_exhausted');
+    expect(result.send_count).toBe(0);
     expect(connectAt).toBeGreaterThanOrEqual(1_000);
     expect(connectAt).toBeLessThan(2_000);
     expect(navigateAt).toBeGreaterThanOrEqual(7_000);

@@ -1,0 +1,36 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2489,
+  "declared_paths": [
+    "docs/declarations/2489.pr-scope.json",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/chatgpt-browser-turn/profile-probe.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
+    "scripts/chatgpt-browser-turn/state-light-session.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-session.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter-base.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.test.ts",
+    "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/2489.pr-scope.json",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
+  ],
+  "source_revision": "eb1a96ca96f50a1507c84ace70ab9cb4c3c2830e"
+}

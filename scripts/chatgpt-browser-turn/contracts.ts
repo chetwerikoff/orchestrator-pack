@@ -103,6 +103,7 @@ export interface TurnResultV1 {
   scope: FailureScope;
   cause: string;
   composer_mutation_diagnostic?: ComposerMutationDiagnosticV1;
+  product_wall_diagnostic?: { readonly wall_kind: 'quota' | 'rate_limit' | 'challenge' | 'login' | 'none'; readonly matched_text: string; readonly matched_selector: string };
   /** Dispatch was attempted; zero observed sends does not prove non-delivery. */
   send_attempted?: boolean;
   invocation_id: string;
