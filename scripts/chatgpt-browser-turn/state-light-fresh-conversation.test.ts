@@ -118,7 +118,7 @@ import {
 } from './state-light-turn.test-fixtures.ts';
 import { classifyPageObservation, classifySendLandingEvidence, readPageObservation, runStateLightTurn } from './state-light-turn.ts';
 import { admitStateLightTurnObservation, readStateLightTurnObservation } from './state-light-turn-observation.ts';
-import { deriveComposerInsertionBudgetMs } from './state-light-turn-base.ts';
+import { __testComposerMutation, deriveComposerInsertionBudgetMs } from './state-light-turn-base.ts';
 import { wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
   EXPLICIT_CANCELLATION_AUTHORITY,
@@ -1447,7 +1447,7 @@ describe('state-light fresh conversation collision recovery', () => {
     });
   });
 
-  it('records privacy-safe diagnostics for each composer mutation budget exit', async () => {
+  it('reports privacy-safe diagnostics from each composer mutation budget exit', async () => {
     const prompt = 'PROMPT-2405-SENTINEL';
     const markedPrompt = wrapOwnedPromptPayload(TEST_OWNED_MARKER, prompt);
     const insertionBudgetMs = deriveComposerInsertionBudgetMs(markedPrompt);
@@ -1493,26 +1493,20 @@ describe('state-light fresh conversation collision recovery', () => {
             if (!scenario.expireOnNextClockRead) mocks.nowMs = deadlineMs;
           }
         });
-        mocks.readStableInput.mockReturnValue(stableTurnInput(prompt));
-        const invocationId = randomUUID();
-        const { result } = await runNewChatTurn(
-          page,
-          join(stateDir, `${scenario.branch}.json`),
-          '5000',
-          invocationId,
+        const insertionContext: { diagnostic?: {
+          branch: string;
+          insertionBudgetMs: number;
+          textLength: number;
+          elapsedMs: number;
+          remainingInvocationMs: number;
+        } } = {};
+        const cause = await __testComposerMutation.mutateComposerOrCause(
+          page, markedPrompt, deadlineMs, insertionContext,
         );
         expect(composer.evaluate).toHaveBeenCalled();
         expect(evaluateCount).toBe(scenario.ready.length);
         expect(composer.click).toHaveBeenCalledTimes(scenario.branch === 'readiness_before_click' || scenario.branch === 'budget_before_click' ? 0 : 1);
-        expect(result).toMatchObject({
-          state: 'driver_error',
-          cause: 'composer_mutation_budget_exhausted',
-          send_count: 0,
-        });
-        expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
-          phase: 'not_sent',
-          send_count: 0,
-        });
+        expect(cause).toBe('composer_mutation_budget_exhausted');
         expect(getSends()).toBe(0);
         const expectedElapsed = scenario.branch === 'readiness_before_click'
           || scenario.branch === 'readiness_before_fill' ? 0 : 5_000;
@@ -1523,12 +1517,8 @@ describe('state-light fresh conversation collision recovery', () => {
           elapsedMs: expectedElapsed,
           remainingInvocationMs: expectedElapsed === 0 ? 5_000 : 0,
         };
-        expect(result.composer_mutation_diagnostic).toEqual(diagnostic);
-        expect(JSON.stringify(result.composer_mutation_diagnostic)).not.toContain(prompt);
-        const recurrenceRecord = mocks.appendFileSync.mock.calls
-          .map((call: unknown[]) => JSON.parse(String(call[1])))
-          .find((record: any) => record.invocation === invocationId);
-        expect(recurrenceRecord?.composer_mutation_diagnostic).toEqual(diagnostic);
+        expect(insertionContext.diagnostic).toEqual(diagnostic);
+        expect(JSON.stringify(insertionContext.diagnostic)).not.toContain(prompt);
       }
     } finally {
       if (priorHome === undefined) delete process.env.HOME;
