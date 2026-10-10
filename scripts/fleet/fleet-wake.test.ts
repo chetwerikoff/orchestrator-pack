@@ -2703,7 +2703,11 @@ describe('Issue #2485 indexed GPT named PARKED owner, source and veto isolation'
       // Reused PID yields the same observation as any other present PID.
       f.pid('exists'); f.time(1_800_000);
       const reused = await f.step({ store });
-      expect(sendsTo(reused.calls, 'coord').some((call) => call.join(' ').includes('pid-identity-unverified'))).toBe(true);
+      // Same PID-exists observation stays expired; unchanged coordinator
+      // signature is throttled rather than sent again inside its 30-min slot.
+      expect(reused.result.state).toBe('same_stopped_set');
+      expect(unitWake(reused.calls)).toHaveLength(0);
+      expect(sendsTo(reused.calls, 'coord')).toHaveLength(0);
       const invalid = new MemoryWakeStore();
       f.time(0);
       await f.step({ store: invalid });
