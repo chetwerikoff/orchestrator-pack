@@ -1521,10 +1521,22 @@ export async function runWait(options: {
       attemptIdentity: options.attemptIdentity,
       ...(options.terminalEnvelopeRoot ? { terminalEnvelopeRoot: options.terminalEnvelopeRoot } : {}),
     });
+    // An older terminal preserves the caller's relative handoff spelling. The
+    // wait caller may now have a different cwd, so resolving that spelling here
+    // would resolve against the wrong directory. The locator owns the absolute
+    // original receipt; match the relative filename plus the receipt's original
+    // committed launch identity instead of guessing the launching cwd.
+    const terminalHandoffMatches = !envelope || (
+      (isAbsolute(envelope.handoff_receipt_path)
+        ? resolve(envelope.handoff_receipt_path) === handoffReceiptPath
+        : basename(normalize(envelope.handoff_receipt_path)) === basename(handoffReceiptPath))
+      && envelope.launcher_started_at === handoff?.launcher_started_at
+      && envelope.handoff_committed_at === handoff?.handoff_committed_at
+    );
     if (reread.locator.handoff_receipt_path !== handoffReceiptPath
       || reread.locator.terminal_envelope_path !== terminalEnvelopePath
       || !handoff || JSON.stringify(reread.receipt) !== JSON.stringify(handoff)
-      || (envelope && envelope.handoff_receipt_path !== handoffReceiptPath)) {
+      || !terminalHandoffMatches) {
       throw new Error('wait_locator_identity_changed');
     }
   }
