@@ -58,6 +58,7 @@ export interface FleetWakeConfig {
   readonly intervalSeconds: number;
   readonly chatCdpUrl?: string;
   readonly chatScope?: ChatBannerScope;
+  readonly selectedRepository?: string;
 }
 
 export interface FleetWakeStateStore extends FleetPollingStore {
@@ -871,8 +872,10 @@ interface ProducerResolution {
 export function parseNamedParkedProducer(wait: string): NamedProducer | undefined {
   const source = wait.endsWith(' (self-wake armed)')
     ? wait.slice(0, -' (self-wake armed)'.length) : wait;
-  let match = new RegExp('^PARKED on GPT turn (' + UUID + ')$', 'u').exec(source);
-  if (match) return { kind: 'gpt', label: 'GPT-turn-' + match[1], id: match[1] };
+  let match = new RegExp('^PARKED on GPT turn (' + UUID + '|inv-[a-z0-9]+(?:-[a-z0-9]+)*)$', 'u').exec(source);
+  if (match && (!match[1]!.startsWith('inv-') || match[1]!.length <= 96)) {
+    return { kind: 'gpt', label: 'GPT-turn-' + match[1], id: match[1] };
+  }
   match = /^PARKED on pack-review PR #([1-9]\d*) head ([0-9a-f]{40})$/u.exec(source);
   if (match) return { kind: 'pack-review', label: 'pack-review-PR-' + match[1], number: Number(match[1]), sha: match[2] };
   match = /^PARKED on PR #([1-9]\d*) review #([1-9]\d*) head ([0-9a-f]{40})$/u.exec(source);
@@ -954,6 +957,14 @@ function exactParkedTask(pane: FleetPaneObservation, projectId: string): readonl
   } catch { return undefined; }
 }
 
+// Prefer the trusted selected project card for repository-bound producers.
+// Conflicting optional ChatGPT scope cannot authorize a GitHub lookup.
+function namedRepository(config: FleetWakeConfig): string | undefined {
+  if (config.selectedRepository && config.chatScope?.repository
+    && config.selectedRepository !== config.chatScope.repository) return undefined;
+  return config.selectedRepository ?? config.chatScope?.repository;
+}
+
 function resolveNamedProducer(
   producer: NamedProducer,
   pane: FleetPaneObservation,
@@ -976,7 +987,7 @@ function resolveNamedProducer(
       || !samePath(event.cwd, pane.worktreePath) || potentiallySentUnboundEnvelope(event)) return unknown;
     return ended('terminal-envelope', event.path, 'gpt:' + event.path);
   }
-  const repository = options.config.chatScope?.repository;
+  const repository = namedRepository(options.config);
   if (producer.kind === 'terminal') {
     if (!producer.handle || !producer.incarnation) return unknown;
     if (producer.mergeAgent) {
@@ -1213,6 +1224,9 @@ async function wakePanesOnEvents(
         ? envelopeOwner(envelope.cwd, observations)
         : undefined;
     if (!pane || !idlePane(pane) || store.hasParkedWakeEvent(key)) continue;
+    // Only the named producer may deliver GPT envelope wakes to an exactly
+    // parsed own GPT-PARKED pane, even if the legacy handle/cwd would match.
+    if (pane.state === 'PARKED' && pane.wait && parseNamedParkedProducer(pane.wait)?.kind === 'gpt') continue;
     wakes.push({ pane, key, message: `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}` });
   }
   const parkedEpisodes = observations.flatMap((pane) => {
@@ -1243,7 +1257,7 @@ async function wakePanesOnEvents(
     if (store.hasParkedWakeEvent(key)) continue;
     wakes.push({ pane: coordinator, key, message: `Wake: FLEET unit ${event.fromHandle} sent Run message: ${event.subject}` });
   }
-  const repository = options.config.chatScope?.repository;
+  const repository = namedRepository(options.config);
   if (repository && observations.some(idlePane)) {
     const finishedAt = options.checkRunsFinishedAt ?? checkRunsFinishedAt;
     const ownerForPull = options.supervisedPullOwner ?? ((candidate, panes) => supervisedOwnerForPull(candidate, panes, executor));
@@ -1624,6 +1638,7 @@ export function fleetWakeConfigFromEnv(
     intervalSeconds,
     chatCdpUrl: env.PACK_GPT_BROWSER_CDP?.trim() || DEFAULT_CHAT_CDP_URL,
     chatScope: { projectUrl: target.browserGpt.projectUrl, repository: target.repository },
+    selectedRepository: target.repository,
   };
 }
 

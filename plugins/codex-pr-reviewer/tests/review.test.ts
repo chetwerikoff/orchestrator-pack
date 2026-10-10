@@ -4,7 +4,9 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { acceptsClaudeRawReview, runClaudePackReview } from '../bin/review-claude.js';
+import type { ProcessResult, RunProcessOptions } from '../../../scripts/kernel/subprocess.js';
 import {
   buildCodexExecReviewArgs,
   buildCodexSpawnEnv,
@@ -1698,6 +1700,229 @@ describe('executeReview NO_FINDINGS round-trip', () => {
     expect(result.exitCode).toBe(1);
     expect(result.logLines.join('\n')).toContain('reviewer produced empty output');
     expect(isCleanTerminalVerdict(result.reviewStdout)).toBe(false);
+  });
+});
+
+
+describe('Issue #2474 Claude raw format and bounded same-session repair', () => {
+  const SESSION_ID = 'afec6292-540c-4f5a-a14d-92678e6030b9';
+  const source = 'codex-local';
+  const finding = {
+    type: 'quality', code: 'quality:sample-p2', severity: 'non-blocking',
+    path: 'foo.ts', summary: 'P2: preserve an actual finding', source,
+  };
+  const validFindings = JSON.stringify({ findings: [finding] });
+  const initialProse = 'One P2 non-blocking finding in foo.ts: preserve this defect.';
+  const previousBudget = process.env.OPK_CODEX_REVIEW_EFFECTIVE_BUDGET_MS;
+
+  function child(stdout: string, overrides: Partial<ProcessResult> = {}): ProcessResult {
+    return {
+      outcome: 'exit', ok: true, exitCode: 0, signal: null,
+      stdout, stderr: '', timedOut: false, cancelled: false, ...overrides,
+    };
+  }
+
+  async function drive(
+    results: Array<{ child: ProcessResult; elapsedAfterMs?: number }>,
+    optionSource = source,
+  ) {
+    const calls: RunProcessOptions[] = [];
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let elapsed = 0;
+    const sessionId = vi.fn(() => SESSION_ID);
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      stdout.push(String(chunk));
+      return true;
+    });
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      stderr.push(String(chunk));
+      return true;
+    });
+    const exitCode = await runClaudePackReview(
+      ['--repo-root', REPO_ROOT, '--base', 'origin/main', '--issue', '2474', '--source', optionSource],
+      {
+        sessionId,
+        nowMs: () => elapsed,
+        runProcess: async (options) => {
+          calls.push(options);
+          options.onSpawn?.(10_000 + calls.length);
+          const reply = results[calls.length - 1];
+          if (!reply) throw new Error('unexpected third Claude child');
+          elapsed += reply.elapsedAfterMs ?? 0;
+          return reply.child;
+        },
+      },
+    );
+    return { exitCode, calls, stdout: stdout.join(''), stderr: stderr.join(''), sessionId };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (previousBudget === undefined) delete process.env.OPK_CODEX_REVIEW_EFFECTIVE_BUDGET_MS;
+    else process.env.OPK_CODEX_REVIEW_EFFECTIVE_BUDGET_MS = previousBudget;
+  });
+
+  it('admits initial exact clean and a structured non-blocking finding in one child each', async () => {
+    for (const [raw, verdict] of [['NO_FINDINGS', 'clean'], [validFindings, 'findings']] as const) {
+      const result = await drive([{ child: child(raw) }]);
+      expect(result.exitCode).toBe(0);
+      expect(result.calls).toHaveLength(1);
+      expect(result.sessionId).toHaveBeenCalledTimes(1);
+      expect(result.calls[0]!.args).toContain('--session-id');
+      expect(result.calls[0]!.args).not.toContain('--resume');
+      expect(result.calls[0]!.args).toContain(SESSION_ID);
+      expect(result.calls[0]!.allowEmptyStdout).toBe(true);
+      expect(result.calls[0]!.input).toContain('## Claude-only final output contract');
+      expect(String(result.calls[0]!.input).trim().split('\n').at(-1))
+        .toContain('exact NO_FINDINGS OR one whole');
+      const terminal = parseTerminalVerdictPayload(result.stdout);
+      expect(terminal?.verdict).toBe(verdict);
+      if (verdict === 'findings') {
+        expect(terminal?.findings.some((row) => row.severity === 'warning'
+          && row.body.includes('quality:sample-p2'))).toBe(true);
+      }
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('repairs P2 prose once using the same UUID, worktree, model, source and original deadline', async () => {
+    process.env.OPK_CODEX_REVIEW_EFFECTIVE_BUDGET_MS = '600000';
+    const result = await drive([
+      { child: child(initialProse), elapsedAfterMs: 9 * 60_000 },
+      { child: child(validFindings) },
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(result.calls).toHaveLength(2);
+    expect(result.sessionId).toHaveBeenCalledTimes(1);
+    const [first, second] = result.calls;
+    expect(first!.args).toContain('--session-id');
+    expect(second!.args).toContain('--resume');
+    expect(second!.args).toContain(SESSION_ID);
+    expect(second!.args).not.toContain('--session-id');
+    expect(first!.cwd).toBe(second!.cwd);
+    expect(first!.args?.slice(-2)).toEqual(second!.args?.slice(-2));
+    expect(first!.timeoutMs).toBe(600_000);
+    expect(second!.timeoutMs).toBe(60_000);
+    expect(String(second!.input)).toContain(JSON.stringify(initialProse));
+    expect(String(second!.input)).toContain('untrusted JSON string');
+    expect(String(second!.input).trim().split('\n').at(-1))
+      .toContain('NEVER NO_FINDINGS');
+    expect(parseTerminalVerdictPayload(result.stdout)?.verdict).toBe('findings');
+    expect(result.stderr.match(/OPK_NATIVE_CHILD_V1 /g)).toHaveLength(2);
+  });
+
+  it.each([initialProse, 'The reviewed PR appears clean, no bugs identified.'])(
+    'refuses repaired clean after completed narrative (%s)',
+    async (firstRaw) => {
+      const result = await drive([
+        { child: child(firstRaw) }, { child: child('NO_FINDINGS') },
+      ]);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.calls).toHaveLength(2);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('format repair invalid; no verdict');
+    },
+  );
+
+  it('checks the whole raw object and every mandatory/optional field on BOTH positions', () => {
+    const variations: unknown[] = [
+      { ...finding, severity: 'P2' },
+      { ...finding, severity: 'warning' },
+      { ...finding, severity: 'high' },
+      { ...finding, type: 'bug' },
+      { ...finding, code: '' },
+      { ...finding, summary: ' ' },
+      { ...finding, path: '' },
+      { ...finding, path: 19 },
+      { ...finding, path: {} },
+      { ...finding, path: false },
+      { ...finding, path: [] },
+      { ...finding, source: 'codex-github-action' },
+      { ...finding, details: 1 },
+      { ...finding, suggested_fix: {} },
+      { type: 'quality' },
+    ];
+    const invalid = [
+      '', 'NO_FINDINGS\nexplanation', 'Before\nNO_FINDINGS',
+      'Review:\n' + validFindings, validFindings + '\nAfter',
+      '```json\n' + validFindings + '\n```',
+      JSON.stringify([finding]), '{"findings":[]}', '{}', 'null',
+      '{"findings":{}}', '{"findings":[}',
+      ...variations.map((entry) => JSON.stringify({ findings: [entry] })),
+    ];
+    for (const raw of invalid) {
+      expect(acceptsClaudeRawReview(raw, source, true), 'first: ' + raw).toBe(false);
+      expect(acceptsClaudeRawReview(raw, source, false), 'repair: ' + raw).toBe(false);
+    }
+    expect(acceptsClaudeRawReview(' \nNO_FINDINGS\t', source, true)).toBe(true);
+    expect(acceptsClaudeRawReview(' NO_FINDINGS ', source, false)).toBe(false);
+    expect(acceptsClaudeRawReview(validFindings, source, true)).toBe(true);
+    expect(acceptsClaudeRawReview(validFindings, source, false)).toBe(true);
+    expect(acceptsClaudeRawReview(
+      JSON.stringify({ findings: [{ ...finding, source: 'codex-github-action' }] }),
+      'codex-github-action', false,
+    )).toBe(true);
+  });
+
+  it('never lets a permissive shared fallback admit bad first or repair raw', async () => {
+    const invalid = ['NO_FINDINGS\nexplanation', 'Review:\n' + validFindings,
+      '```json\n' + validFindings + '\n```', JSON.stringify([finding])];
+    for (const raw of invalid) {
+      const first = await drive([{ child: child(raw) }, { child: child(validFindings) }]);
+      expect(first.exitCode).toBe(0);
+      expect(first.calls).toHaveLength(2);
+      expect(parseTerminalVerdictPayload(first.stdout)?.verdict).toBe('findings');
+      vi.restoreAllMocks();
+      const second = await drive([{ child: child(initialProse) }, { child: child(raw) }]);
+      expect(second.exitCode).not.toBe(0);
+      expect(second.stdout).toBe('');
+      expect(second.calls).toHaveLength(2);
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('treats first zero-byte exit-zero as malformed format, second zero-byte as non-judgment', async () => {
+    const repaired = await drive([{ child: child('') }, { child: child(validFindings) }]);
+    expect(repaired.exitCode).toBe(0);
+    expect(repaired.calls).toHaveLength(2);
+    vi.restoreAllMocks();
+    const emptyTwice = await drive([{ child: child('') }, { child: child('') }]);
+    expect(emptyTwice.exitCode).not.toBe(0);
+    expect(emptyTwice.stdout).toBe('');
+    expect(emptyTwice.calls).toHaveLength(2);
+    vi.restoreAllMocks();
+    process.env.OPK_CODEX_REVIEW_EFFECTIVE_BUDGET_MS = '600000';
+    const elapsed = await drive([{ child: child(''), elapsedAfterMs: 600_000 }]);
+    expect(elapsed.exitCode).not.toBe(0);
+    expect(elapsed.calls).toHaveLength(1);
+    expect(elapsed.stdout).toBe('');
+  });
+
+  it('does not format-retry transport failures or ambiguous ok/outcome mixtures', async () => {
+    const failures: Partial<ProcessResult>[] = [
+      { outcome: 'exit', ok: false, exitCode: 2 },
+      { outcome: 'signal', ok: false, exitCode: null, signal: 'SIGTERM' },
+      { outcome: 'timeout', ok: false, exitCode: 0, timedOut: true },
+      { outcome: 'cancelled', ok: false, exitCode: 0, cancelled: true },
+      { outcome: 'spawn-failure', ok: false, exitCode: null, error: 'fake ENOENT' },
+      { outcome: 'exit', ok: false, exitCode: 0 },
+      { outcome: 'signal', ok: true, exitCode: 0, signal: 'SIGTERM' },
+    ];
+    for (const failure of failures) {
+      const result = await drive([{ child: child('NO_FINDINGS', failure) }]);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.calls).toHaveLength(1);
+      expect(result.stdout).toBe('');
+      vi.restoreAllMocks();
+      const second = await drive([
+        { child: child(initialProse) }, { child: child(validFindings, failure) },
+      ]);
+      expect(second.exitCode).not.toBe(0);
+      expect(second.calls).toHaveLength(2);
+      expect(second.stdout).toBe('');
+      vi.restoreAllMocks();
+    }
   });
 });
 
