@@ -99,6 +99,7 @@ import {
   BrowserOperationTimeoutError,
   createTurnOperationBudget,
   type BrowserConfig,
+  type ProductWallDiagnostic,
   type TurnOperationBudget,
 } from './ui-adapter.ts';
 import {
@@ -1857,13 +1858,14 @@ export async function classifySendLandingEvidence(
 
 function recordProductWallAdvisory(
   profileKey: string,
-  wallState: TurnState,
-  cause: string,
+  diagnostic: ProductWallDiagnostic,
   invocationId: string,
 ): void {
-  if (wallState === 'rate_limit' || wallState === 'quota' || wallState === 'challenge' || wallState === 'login') {
-    recordStateLightAdvisoryWall(profileKey, wallState, cause, invocationId);
-  }
+  if (diagnostic.wall_kind === 'none') return;
+  recordStateLightAdvisoryWall(
+    profileKey, diagnostic.wall_kind, `${diagnostic.wall_kind}_detected`,
+    invocationId, undefined, undefined, diagnostic,
+  );
 }
 
 async function readPostSendObservation(
@@ -1871,6 +1873,7 @@ async function readPostSendObservation(
   expectedMarker: string,
   baselineCount: number,
   deadlineMs: number,
+  observeProductWall?: (diagnostic: ReturnType<typeof classifyProductWall>) => void,
 ): Promise<{
   readonly messages: PageMessage[];
   readonly wall: ReturnType<typeof classifyProductWall>;
@@ -1897,6 +1900,7 @@ async function readPostSendObservation(
     const wallProbeMs = Math.min(POST_SEND_PRODUCT_WALL_PROBE_MS, deadlineMs - Date.now());
     if (wallProbeMs > 0) {
       wall = classifyProductWall(await productStatusText(page, wallProbeMs));
+      observeProductWall?.(wall);
     }
   } catch (error) {
     if (isPostSendTargetCrash(error)) throw error;
@@ -2104,6 +2108,7 @@ async function waitForComposer(
   page: any,
   invocationDeadlineMs: number,
   useWholePreSendDeadline = false,
+  observeProductWall?: (diagnostic: ReturnType<typeof classifyProductWall>) => void,
 ): Promise<{ state: 'ready' } | { state: TurnState; cause: string }> {
   // Preserve the legacy two-argument helper contract used by in-process tests.
   // Committed pre-send navigations explicitly opt into the whole invocation deadline.
@@ -2113,11 +2118,16 @@ async function waitForComposer(
   while (true) {
     let remainingMs = readinessDeadline - Date.now();
     if (remainingMs <= 0) break;
-    const wall = classifyProductWall(
-      await productStatusText(page, Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs)),
-    );
+    try {
+      const wall = classifyProductWall(
+        await productStatusText(page, Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs)),
+      );
+      observeProductWall?.(wall);
+      if (wall.state === 'recovery_required') return { state: 'recovery_required', cause: wall.cause };
+    } catch {
+      // Status-probe failures cannot veto the composer; the probe is advisory.
+    }
     if (Date.now() >= readinessDeadline) break;
-    if (wall.state) return { state: wall.state, cause: wall.cause ?? `${wall.state}_detected` };
     if (await readComposerReadiness(page, readinessDeadline)) return { state: 'ready' };
     remainingMs = readinessDeadline - Date.now();
     if (remainingMs <= 0) break;
@@ -2132,17 +2142,7 @@ function isPlaywrightTimeoutError(error: unknown): boolean {
 }
 
 async function hasBlockingPageOverlay(page: any, deadlineMs: number): Promise<boolean> {
-  const overlay = page.locator(BLOCKING_PAGE_OVERLAY_SELECTOR);
-  if (await locatorCount(overlay, deadlineMs) === 0) return false;
-  const remainingMs = deadlineMs - Date.now();
-  if (remainingMs <= 0) return false;
-  const wall = classifyProductWall(
-    await productStatusText(
-      page,
-      Math.min(MAX_LOCAL_READ_WAIT_MS, POST_SEND_PRODUCT_WALL_PROBE_MS, remainingMs),
-    ),
-  );
-  return !wall.state;
+  return (await locatorCount(page.locator(BLOCKING_PAGE_OVERLAY_SELECTOR), deadlineMs)) > 0;
 }
 
 function remainingComposerMutationMs(
@@ -2514,6 +2514,20 @@ async function runTurn(
   entryLivenessHeartbeat = false,
   heartbeatSchedulerReady?: (scheduler: TurnScopedHeartbeatScheduler) => void,
 ): Promise<TurnRunOutcome> {
+  let diagnostic: ProductWallDiagnostic = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
+  const outcome = await runTurnCore(args, recoveryHooks, entryLivenessHeartbeat, heartbeatSchedulerReady, (value) => {
+    if (value.wall_kind !== 'none') diagnostic = value;
+  });
+  return { ...outcome, result: { ...outcome.result, product_wall_diagnostic: diagnostic } };
+}
+
+async function runTurnCore(
+  args: ParsedTurnArgs,
+  recoveryHooks: StateLightRecoveryHooks,
+  entryLivenessHeartbeat: boolean,
+  heartbeatSchedulerReady: ((scheduler: TurnScopedHeartbeatScheduler) => void) | undefined,
+  onProductWallDiagnostic: (diagnostic: ProductWallDiagnostic) => void,
+): Promise<TurnRunOutcome> {
   rejectUnknownOptions(args, [
     'profile',
     'cdp',
@@ -2570,6 +2584,12 @@ async function runTurn(
       navigation.snapshot(),
     );
     if (!ok) journalWriteFailed = true;
+  };
+
+  const observeProductWall = (wall: ReturnType<typeof classifyProductWall>): void => {
+    if (!('wall_kind' in wall) || wall.wall_kind === 'none') return;
+    onProductWallDiagnostic(wall);
+    try { recordProductWallAdvisory(profileKey, wall, invocationId); } catch { /* advisory I/O is fail-open */ }
   };
 
   try {
@@ -2915,25 +2935,6 @@ async function runTurn(
           prepared: Awaited<ReturnType<typeof prepareStateLightFreshConversation>>,
         ): TurnRunOutcome | null => {
           if (prepared.state === 'ready') return null;
-          if (prepared.state === 'wall') {
-            recordProductWallAdvisory(profileKey, prepared.wallState, prepared.cause, invocationId);
-            incident('invocation_blocker', prepared.cause, 'return_local_error');
-            return {
-              page,
-              browser,
-              result: compactResult(
-                prepared.wallState,
-                'invocation',
-                prepared.cause,
-                invocationId,
-                profileKey,
-                sendCount,
-                pollCount, navigation, incidents,
-                {},
-                journalWriteFailed,
-              ),
-            };
-          }
           incident('invocation_blocker', prepared.cause, 'return_local_error');
           return {
             page,
@@ -2956,7 +2957,6 @@ async function runTurn(
           composerState: { state: 'ready' } | { state: TurnState; cause: string },
         ): TurnRunOutcome | null => {
           if (composerState.state === 'ready') return null;
-          recordProductWallAdvisory(profileKey, composerState.state, composerState.cause, invocationId);
           incident('invocation_blocker', composerState.cause, 'return_local_error');
           return {
             page,
@@ -2982,11 +2982,13 @@ async function runTurn(
           invocationId,
           navigation,
           invocationDeadlineMs,
+          Date.now,
+          observeProductWall,
         );
         const initialPrepareFailure = returnFreshPrepareFailure(initialPrepare);
         if (initialPrepareFailure) return initialPrepareFailure;
 
-        let composerState = await waitForComposer(page, invocationDeadlineMs, true);
+        let composerState = await waitForComposer(page, invocationDeadlineMs, true, observeProductWall);
         const initialComposerFailure = returnComposerBlocker(composerState);
         if (initialComposerFailure) return initialComposerFailure;
 
@@ -3045,10 +3047,12 @@ async function runTurn(
               invocationId,
               navigation,
               invocationDeadlineMs,
+              Date.now,
+              observeProductWall,
             );
             const preparedFailure = returnFreshPrepareFailure(prepared);
             if (preparedFailure) return preparedFailure;
-            composerState = await waitForComposer(page, invocationDeadlineMs, true);
+            composerState = await waitForComposer(page, invocationDeadlineMs, true, observeProductWall);
             const composerFailure = returnComposerBlocker(composerState);
             if (composerFailure) return composerFailure;
             sendAuthorized = true;
@@ -3333,9 +3337,8 @@ async function runTurn(
         );
       }
 
-      const composerState = await waitForComposer(page, invocationDeadlineMs, true);
+      const composerState = await waitForComposer(page, invocationDeadlineMs, true, observeProductWall);
       if (composerState.state !== 'ready') {
-        recordProductWallAdvisory(profileKey, composerState.state, composerState.cause, invocationId);
         incident('invocation_blocker', composerState.cause, 'return_local_error');
         return {
           page,
@@ -3707,6 +3710,7 @@ async function runTurn(
           marker,
           baselineCount,
           hardExhaustionDeadline,
+          observeProductWall,
         );
       } catch (error) {
         if (isPostSendTargetCrash(error)) {
@@ -3818,12 +3822,11 @@ async function runTurn(
           incident,
         );
       }
-      if (wall.state && (recoveryBannerTrusted || !(
+      if (wall.state === 'recovery_required' && (recoveryBannerTrusted || !(
         wall.state === 'recovery_required'
         && (wall.cause === 'stream_recovery_polling_timed_out' || wall.cause === 'message_stream_error')
       ))) {
         const cause = wall.cause ?? `${wall.state}_detected`;
-        recordProductWallAdvisory(profileKey, wall.state, cause, invocationId);
         incident('invocation_blocker', cause, 'return_local_error');
         return {
           page,
@@ -4543,7 +4546,7 @@ async function runTurn(
           // that passed exact full-content stability is admissible.
           const captureReply = decision.reply;
           const managerReply = captureReply;
-          const finalObservation = await readPostSendObservation(page, marker, baselineCount, hardExhaustionDeadline);
+          const finalObservation = await readPostSendObservation(page, marker, baselineCount, hardExhaustionDeadline, observeProductWall);
           const finalKeyedCandidate = ownedCarrierKey
             ? keyedHarvestCandidate(finalObservation.snapshot, baselineSnapshot, ownedCarrierKey)
             : undefined;
