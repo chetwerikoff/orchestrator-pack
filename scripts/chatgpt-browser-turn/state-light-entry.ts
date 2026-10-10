@@ -67,8 +67,9 @@ export async function runPackReviewPreflight(
   try {
     const { projectId, timeoutMs } = parsePackReviewPreflightArgs(argv);
     const remaining = (): number => Math.max(0, Math.floor(timeoutMs - (now() - began)));
-    // The selected Orca/pack project must already be bound; CLI input cannot supply missing authority.
-    if (!env.OPK_PROJECT_ID?.trim() || env.OPK_PROJECT_ID.trim() !== projectId) {
+    // An explicit project selects the card unless a nonempty ambient selector conflicts.
+    const ambientProjectId = env.OPK_PROJECT_ID?.trim();
+    if (ambientProjectId && ambientProjectId !== projectId) {
       return report('incomplete', 'project_selector_mismatch');
     }
     const selectedEnv: NodeJS.ProcessEnv = { ...env, OPK_PROJECT_ID: projectId };
