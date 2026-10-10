@@ -410,6 +410,73 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(newChatSendSlotEnabled()).toBe(false);
   });
 
+  it('clears a foreign stale composer draft before typing only this invocation marker (#2487)', async () => {
+    const prompt = 'PROMPT-FRESH-DRAFT';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'DRAFT-CLEAR-OK');
+    await turn.composer.fill('SYNTHETIC-FOREIGN-DRAFT');
+    turn.composer.fill.mockClear();
+    const result = await runNewChatTurn(turn.page, '/tmp/fresh-draft-2487.txt');
+    expect(result.result).toMatchObject({ state: 'ok', send_count: 1, stale_composer_cleared: true });
+    expect(turn.getSends()).toBe(1);
+    expect(turn.composer.fill.mock.calls.map((args: unknown[]) => args[0])).toEqual([
+      '', expect.stringContaining(prompt),
+    ]);
+  });
+
+  it('closes a proven owned, never-clicked draft only after 60s of disabled Send (#2487)', async () => {
+    const prompt = 'PROMPT-FRESH-NEVER-ENABLED';
+    const invocationId = randomUUID();
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'DO-NOT-SEND');
+    turn.sendButton.isEnabled.mockResolvedValue(false);
+    const outcome = await runNewChatTurn(turn.page, '/tmp/never-enabled-2487.txt', '90000', invocationId);
+    expect(outcome.result).toMatchObject({
+      state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
+    });
+    expect(turn.getSends()).toBe(0);
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.composer.fill).toHaveBeenLastCalledWith('');
+    expect(turn.page.close).toHaveBeenCalledTimes(1);
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
+  });
+
+  it('allows one and only one additional click after positive pre-actionability TimeoutError (#2487)', async () => {
+    const prompt = 'PROMPT-RETRY-PROVEN';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'RETRY-OK');
+    const clickEffect = turn.sendButton.click.getMockImplementation()!;
+    const firstClick = [
+      'locator.click: Timeout 5000ms exceeded',
+      'Call log:',
+      '  - waiting for element to be visible, enabled and stable',
+      '  - element is not enabled',
+    ].join('\n');
+    turn.sendButton.click.mockImplementationOnce(async () => {
+      throw Object.assign(new Error(firstClick), { name: 'TimeoutError' });
+    }).mockImplementationOnce(clickEffect);
+    const outcome = await runNewChatTurn(turn.page, '/tmp/retry-proven-2487.txt');
+    expect(outcome.result.send_count).toBe(1);
+    expect(turn.getSends()).toBe(1);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
+  });
+
+  it('never retries or clears an ambiguous first click (#2487)', async () => {
+    const prompt = 'PROMPT-RETRY-UNPROVEN';
+    const invocationId = randomUUID();
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'DO-NOT-SEND');
+    turn.sendButton.click.mockRejectedValue(Object.assign(new Error('locator.click: Timeout 5000ms exceeded'), {
+      name: 'TimeoutError',
+    }));
+    const outcome = await runNewChatTurn(turn.page, '/tmp/retry-unproven-2487.txt', '90000', invocationId);
+    expect(outcome.result).toMatchObject({ state: 'send_failed', send_count: 0, send_attempted: true });
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.composer.fill).not.toHaveBeenLastCalledWith('');
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
+  });
+
   it('terminates contended recovery without a second send when the prompt already landed', async () => {
     const profileKey = 'collision-profile';
     expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'winner-invocation')).toBe('claimed');
