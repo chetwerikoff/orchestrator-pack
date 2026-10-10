@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 import './toolchain/native-entrypoint-preflight.ts';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { settleCliMain } from './chatgpt-browser-turn/cli-main.ts';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
 import { runProcess } from './kernel/subprocess.ts';
 import {
-  HANDOFF_SCHEMA,
+  invocationReceiptLocatorPath,
   isWakeableTerminalEnvelopePath,
   parseFlagArgv,
   readHandoffReceipt,
+  readInvocationReceiptLocator,
+  type HandoffReceipt,
   unwakeableTerminalEnvelopeHint,
 } from './flow-manager-long-running-child.ts';
 import {
@@ -34,6 +36,8 @@ const CLI = {
     { flag: '--cdp', value: 'url', required: true },
     { flag: '--input', value: 'path', required: true },
     { flag: '--cwd', value: 'path' },
+    { flag: '--owner-task-id', value: 'id' },
+    { flag: '--owner-dispatch-id', value: 'id' },
     { flag: '--project-url', value: 'url' },
     { flag: '--timeout-ms', value: 'ms' },
     { flag: '--poll-ms', value: 'ms' },
@@ -55,28 +59,42 @@ function refuse(reason: string): number {
   return 2;
 }
 
-function staleReceipt(path: string, runIdentity: string, attemptIdentity: string): boolean {
-  if (!existsSync(path) || statSync(path).size === 0) return false;
+/** Any historical or uncertain path is occupied, even with identical run/attempt IDs. */
+function pathIsOccupied(path: string): boolean {
   try {
-    const body = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
-    return body.schema === HANDOFF_SCHEMA
-      && (body.run_identity !== runIdentity || body.attempt_identity !== attemptIdentity);
-  } catch {
-    return false;
+    lstatSync(path); // unlike existsSync, also identifies dangling symlinks
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
   }
 }
 
-async function waitForReceipt(path: string, runIdentity: string, attemptIdentity: string): Promise<boolean> {
+async function waitForReceipt(
+  path: string,
+  runIdentity: string,
+  attemptIdentity: string,
+  invocationId: string,
+): Promise<HandoffReceipt | null> {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    if (readHandoffReceipt(path, { runIdentity, attemptIdentity })) return true;
+    const receipt = readHandoffReceipt(path, { runIdentity, attemptIdentity });
+    if (receipt?.invocation_id === invocationId) return receipt;
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
   }
-  return false;
+  return null;
 }
 
-export async function spawnDetachedLauncher(launcherArgs: readonly string[]): Promise<number> {
+export interface LauncherSpawnObservation {
+  /** OS PID of this newly spawned launcher, never a shell exit status. */
+  readonly launcherPid: number;
+  /** Present only in synchronous mode; a pre-spawn refusal exits 2. */
+  readonly exitCode?: number;
+}
+
+export async function spawnDetachedLauncher(launcherArgs: readonly string[]): Promise<LauncherSpawnObservation> {
   if (process.env.OPK_FM_LONG_CHILD_DISABLE_DETACH === '1') {
+    let launcherPid: number | undefined;
     const result = await runProcess({
       command: process.execPath,
       args: ['--experimental-strip-types', launcherPath, ...launcherArgs],
@@ -84,9 +102,13 @@ export async function spawnDetachedLauncher(launcherArgs: readonly string[]): Pr
       inheritParentEnv: true,
       allowEmptyStdout: true,
       timeoutMs: 120_000,
+      onSpawn: (pid) => { launcherPid = pid; },
     });
     if (!result.ok && result.outcome !== 'exit') throw new Error('launcher_failed:' + result.outcome);
-    return result.exitCode ?? 1;
+    if (!launcherPid || !Number.isSafeInteger(launcherPid) || launcherPid <= 1) {
+      throw new Error('launcher_spawn_pid_unavailable');
+    }
+    return { launcherPid, exitCode: result.exitCode ?? 1 };
   }
   const result = await runProcess({
     command: '/bin/sh',
@@ -105,8 +127,8 @@ export async function spawnDetachedLauncher(launcherArgs: readonly string[]): Pr
   });
   if (!result.ok) throw new Error('detach_failed:' + (result.stderr || result.error));
   const pid = Number(result.stdout.trim());
-  if (!Number.isInteger(pid) || pid <= 1) throw new Error('detach_pid_invalid');
-  return pid;
+  if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error('detach_pid_invalid');
+  return { launcherPid: pid };
 }
 
 export interface BrowserAdapterDependencies {
@@ -134,11 +156,22 @@ export async function runBrowserAdapter(
   const runIdentity = requiredOption(options, 'run-identity');
   const attemptIdentity = requiredOption(options, 'attempt-identity');
   const handoffReceipt = requiredOption(options, 'handoff-receipt');
-  if (staleReceipt(handoffReceipt, runIdentity, attemptIdentity)) return refuse('stale_handoff_receipt');
-
   const invocationId = requiredOption(options, 'invocation-id');
+  try {
+    if (pathIsOccupied(handoffReceipt) || pathIsOccupied(invocationReceiptLocatorPath(invocationId))) {
+      return refuse('occupied_handoff_or_invocation_use_fresh_id');
+    }
+  } catch (error) {
+    return refuse('launch_occupancy_uncertain: ' + (error instanceof Error ? error.message : String(error)));
+  }
   const terminalEnvelope = requiredOption(options, 'terminal-envelope');
-  if (!isWakeableTerminalEnvelopePath(terminalEnvelope)) {
+  // Mirror the launcher's existing two-part fixture gate; never relax production wake-path checks.
+  const fixtureRoot = process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT;
+  const trustedFixtureRoot = process.env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
+    && typeof fixtureRoot === 'string' && isAbsolute(fixtureRoot)
+    ? resolve(fixtureRoot)
+    : undefined;
+  if (!isWakeableTerminalEnvelopePath(terminalEnvelope, trustedFixtureRoot)) {
     return refuse('terminal_envelope_name_not_wakeable: ' + unwakeableTerminalEnvelopeHint(terminalEnvelope).hint);
   }
   const browserOutput = requiredOption(options, 'output');
@@ -146,6 +179,8 @@ export async function runBrowserAdapter(
   const cdp = requiredOption(options, 'cdp');
   const input = requiredOption(options, 'input');
   const cwd = typeof options.get('cwd') === 'string' ? options.get('cwd') as string : repoRoot;
+  const ownerTaskId = options.has('owner-task-id') ? requiredOption(options, 'owner-task-id') : undefined;
+  const ownerDispatchId = options.has('owner-dispatch-id') ? requiredOption(options, 'owner-dispatch-id') : undefined;
 
   const browserArgs = [
     'turn',
@@ -166,6 +201,11 @@ export async function runBrowserAdapter(
     'launch',
     '--run-identity', runIdentity,
     '--attempt-identity', attemptIdentity,
+    '--invocation-id', invocationId,
+    '--profile', profile,
+    '--cdp', cdp,
+    ...(ownerTaskId ? ['--owner-task-id', ownerTaskId] : []),
+    ...(ownerDispatchId ? ['--owner-dispatch-id', ownerDispatchId] : []),
     '--handoff-receipt', handoffReceipt,
     '--terminal-envelope', terminalEnvelope,
     '--browser-output', browserOutput,
@@ -180,18 +220,52 @@ export async function runBrowserAdapter(
     ...browserArgs,
   ];
 
-  const pid = await (deps.spawnLauncher ?? spawnDetachedLauncher)(launcherArgs);
-  if (!(await waitForReceipt(handoffReceipt, runIdentity, attemptIdentity))) {
-    return refuse('handoff_receipt_missing');
+  // Require the newly started OS process as a witness, not merely a matching old receipt.
+  // Synchronous launcher refusal is an exit status (2), never handoff acceptance.
+  let spawn: LauncherSpawnObservation;
+  try {
+    spawn = await (deps.spawnLauncher ?? spawnDetachedLauncher)(launcherArgs);
+  } catch (error) {
+    return refuse('launcher_start_failed: ' + (error instanceof Error ? error.message : String(error)));
+  }
+  if (spawn.exitCode === 2) return refuse('launcher_pre_spawn_refused_use_fresh_id');
+  if (!Number.isSafeInteger(spawn.launcherPid) || spawn.launcherPid <= 1) {
+    return refuse('launcher_process_identity_unavailable');
+  }
+  const receipt = await waitForReceipt(handoffReceipt, runIdentity, attemptIdentity, invocationId);
+  if (!receipt || receipt.launcher_pid !== spawn.launcherPid) {
+    return refuse('handoff_missing_or_new_launcher_pid_mismatch');
+  }
+  let receiptLocator: string;
+  try {
+    const bound = readInvocationReceiptLocator({ invocationId, runIdentity, attemptIdentity });
+    receiptLocator = bound.path;
+    if (bound.locator.handoff_receipt_path !== resolve(handoffReceipt)
+      || bound.locator.terminal_envelope_path !== resolve(terminalEnvelope)
+      || JSON.stringify(bound.receipt) !== JSON.stringify(receipt)
+      || bound.receipt.launcher_pid !== spawn.launcherPid
+      || bound.receipt.child_cwd !== realpathSync(cwd)
+      || bound.receipt.owner_task_id !== ownerTaskId
+      || bound.receipt.owner_dispatch_id !== ownerDispatchId) {
+      throw new Error('identity_or_provenance_mismatch');
+    }
+  } catch (error) {
+    return refuse('receipt_locator_readback_failed: ' + (error instanceof Error ? error.message : String(error)));
   }
   process.stdout.write(JSON.stringify({
     schema: 'flow-manager-browser-gpt-long-run-accepted/v1',
     run_identity: runIdentity,
     attempt_identity: attemptIdentity,
-    launcher_pid: pid,
+    invocation_id: invocationId,
+    launcher_pid: receipt.launcher_pid,
     handoff_receipt: handoffReceipt,
+    receipt_locator: receiptLocator,
     terminal_envelope: terminalEnvelope,
     browser_output: browserOutput,
+    child_cwd: receipt.child_cwd,
+    ...(receipt.owner_task_id ? { owner_task_id: receipt.owner_task_id } : {}),
+    ...(receipt.owner_dispatch_id ? { owner_dispatch_id: receipt.owner_dispatch_id } : {}),
+    ...(receipt.launching_terminal_handle ? { launching_terminal_handle: receipt.launching_terminal_handle } : {}),
     completion_mode: 'browser-turn-result-v1',
   }) + '\n');
   return 0;
