@@ -1613,6 +1613,16 @@ export function classifyProductWall(surface: ProductStatusSurface): ProductWallD
       };
     }
   }
+  // A generic retry toast is product-owned diagnostic evidence, not a usage
+  // wall. Retain its original node and selector without terminal classification.
+  const genericRetry = matchingProductStatusPart(surface, /please try again later/i);
+  if (genericRetry) {
+    return {
+      wall_kind: 'none',
+      matched_text: genericRetry.text.slice(0, PRODUCT_WALL_TEXT_CAP),
+      matched_selector: genericRetry.selector ?? 'none',
+    };
+  }
   return { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
 }
 
@@ -1963,7 +1973,7 @@ export async function sendTurn(
 ): Promise<TurnBrowserResult> {
   let diagnostic: ProductWallDiagnostic = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
   const result = await sendTurnWithDiagnostics(page, text, config, provisionalId, onBeforeSend, segmentBudget, freshIdentity, (value) => {
-    if (value.wall_kind !== 'none') diagnostic = value;
+    if (value.matched_text !== 'none') diagnostic = value;
   });
   return { ...result, product_wall_diagnostic: diagnostic };
 }

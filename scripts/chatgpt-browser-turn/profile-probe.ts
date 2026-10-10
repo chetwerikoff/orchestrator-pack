@@ -23,7 +23,7 @@ async function probePage(page: any): Promise<ProfileReadyProbe | null> {
   if (wall.state === 'recovery_required') {
     return surface.composer ? { ready: true, state: 'ready', cause: 'composer_ready_no_wall' } : null;
   }
-  const diagnostic = 'wall_kind' in wall && wall.wall_kind !== 'none' ? { product_wall_diagnostic: wall } : {};
+  const diagnostic = 'wall_kind' in wall && wall.matched_text !== 'none' ? { product_wall_diagnostic: wall } : {};
   // Profile verification cannot turn absence of a composer into a refusal
   // to attempt the owned send; the send path supplies the delivery outcome.
   return { ready: true, state: 'ready', cause: surface.composer ? 'composer_ready_no_wall' : 'composer_unavailable_advisory', ...diagnostic };

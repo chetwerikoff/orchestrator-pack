@@ -272,7 +272,13 @@ describe('issue 1120 rate-limit product wall detection', () => {
     expect(classifyProductWall({ text: "You've reached the current usage limit", composer: true }))
       .toEqual({ wall_kind: 'quota', matched_text: "You've reached the current usage limit", matched_selector: 'none' });
     expect(classifyProductWall({ text: 'please try again later', composer: true }))
-      .toEqual({ wall_kind: 'none', matched_text: 'none', matched_selector: 'none' });
+      .toEqual({ wall_kind: 'none', matched_text: 'please try again later', matched_selector: 'none' });
+    const text = 'Something went wrong. Please try again later.';
+    expect(classifyProductWall({
+      text,
+      composer: true,
+      parts: [{ selector: '[role="alert"]', text }],
+    })).toEqual({ wall_kind: 'none', matched_text: text, matched_selector: '[role="alert"]' });
   });
 });
 

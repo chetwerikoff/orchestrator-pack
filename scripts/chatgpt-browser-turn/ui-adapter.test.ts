@@ -141,9 +141,11 @@ describe('Issue #2489 product-status advisory classification', () => {
     for (const composer of [true, false]) {
       it(record.label + ' with composer=' + composer + ' never becomes a terminal state', () => {
         const classified = classifyProductWall({ text: record.text, composer });
-        expect(classified).toEqual(record.expected === 'none'
-          ? none
-          : { wall_kind: record.expected, matched_text: record.text, matched_selector: 'none' });
+        expect(classified).toEqual(record.label === 'generic error toast'
+          ? { wall_kind: 'none', matched_text: record.text, matched_selector: 'none' }
+          : record.expected === 'none'
+            ? none
+            : { wall_kind: record.expected, matched_text: record.text, matched_selector: 'none' });
         expect(classified).not.toHaveProperty('state');
       });
     }
@@ -169,6 +171,25 @@ describe('Issue #2489 product-status advisory classification', () => {
       });
     });
   }
+
+  it('retains the exact generic retry alert node without a terminal state', async () => {
+    const text = 'Something went wrong. Please try again later.';
+    const selector = '[role="alert"]';
+    const page = {
+      locator: (requested: string) => ({
+        count: async () => requested === COMPOSER_SELECTOR ? 1 : Number(requested === selector),
+        nth: () => ({ innerText: async () => text }),
+      }),
+    };
+    const surface = await productStatusText(page);
+    expect(surface).toEqual({ text, composer: true, parts: [{ selector, text }] });
+    const diagnostic = classifyProductWall(surface);
+    expect(diagnostic).toEqual({ wall_kind: 'none', matched_text: text, matched_selector: selector });
+    expect(diagnostic).not.toHaveProperty('state');
+    expect(diagnostic).not.toHaveProperty('cause');
+    expect(classifyProductWall({ ...surface, text: text + 'X'.repeat(600), parts: [{ selector, text: text + 'X'.repeat(600) }] }).matched_text)
+      .toBe((text + 'X'.repeat(600)).slice(0, 500));
+  });
 
   it('bounds the exact matched node to 500 characters while preserving its source', async () => {
     const text = `Too many requests XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX`;

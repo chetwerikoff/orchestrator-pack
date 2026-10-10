@@ -203,15 +203,17 @@ function rememberSessionProductWall(
   wall: ReturnType<typeof classifyProductWall>,
   deps: StateLightSessionDependencies,
 ): void {
-  if (!('wall_kind' in wall) || wall.wall_kind === 'none') return;
+  if (!('wall_kind' in wall) || wall.matched_text === 'none') return;
   state.productWallDiagnostic = wall;
-  try {
-    recordStateLightAdvisoryWall(
-      deps.profileKey(state.config.browser.profile, state.config.browser.cdp),
-      wall.wall_kind, `${wall.wall_kind}_detected`,
-      state.invocationId, undefined, undefined, wall,
-    );
-  } catch { /* advisory I/O is non-blocking */ }
+  if (wall.wall_kind !== 'none') {
+    try {
+      recordStateLightAdvisoryWall(
+        deps.profileKey(state.config.browser.profile, state.config.browser.cdp),
+        wall.wall_kind, `${wall.wall_kind}_detected`,
+        state.invocationId, undefined, undefined, wall,
+      );
+    } catch { /* advisory I/O is non-blocking */ }
+  }
 }
 
 export interface SessionWritable {

@@ -2541,7 +2541,7 @@ async function runTurn(
 ): Promise<TurnRunOutcome> {
   let diagnostic: ProductWallDiagnostic = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
   const outcome = await runTurnCore(args, recoveryHooks, entryLivenessHeartbeat, heartbeatSchedulerReady, (value) => {
-    if (value.wall_kind !== 'none') diagnostic = value;
+    if (value.matched_text !== 'none') diagnostic = value;
   });
   return { ...outcome, result: { ...outcome.result, product_wall_diagnostic: diagnostic } };
 }
@@ -2612,9 +2612,11 @@ async function runTurnCore(
   };
 
   const observeProductWall = (wall: ReturnType<typeof classifyProductWall>): void => {
-    if (!('wall_kind' in wall) || wall.wall_kind === 'none') return;
+    if (!('wall_kind' in wall) || wall.matched_text === 'none') return;
     onProductWallDiagnostic(wall);
-    try { recordProductWallAdvisory(profileKey, wall, invocationId); } catch { /* advisory I/O is fail-open */ }
+    if (wall.wall_kind !== 'none') {
+      try { recordProductWallAdvisory(profileKey, wall, invocationId); } catch { /* advisory I/O is fail-open */ }
+    }
   };
 
   try {

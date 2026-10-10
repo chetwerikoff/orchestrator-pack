@@ -905,6 +905,25 @@ describe('issue 964 UI ownership and profile walls — S7/S8/S9', () => {
     expect(result.product_wall_diagnostic).toMatchObject({ wall_kind: 'quota' });
   });
 
+  it('S8 sends despite a generic product-owned retry toast while preserving its source', async () => {
+    const text = 'Something went wrong. Please try again later.';
+    const fixture = fakeTurnPage({ alertText: text });
+    const result = await sendTurn(fixture.page, 'payload', {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: 'https://chatgpt.com/c/example',
+      newChat: false,
+      timeoutMs: 100,
+    });
+    expect(fixture.getSendClicks()).toBe(1);
+    expect(result.state).toBe('stream_timeout');
+    expect(result.product_wall_diagnostic).toEqual({
+      wall_kind: 'none',
+      matched_text: text,
+      matched_selector: '[role="alert"]',
+    });
+  });
+
   it('S8 does not treat authored conversation wall phrases as product state while composer is healthy', async () => {
     const fixture = fakeTurnPage({ bodyText: 'verify you are human; just a moment; usage limit; please try again later' });
     await expect(sendTurn(fixture.page, 'payload', {
@@ -3052,6 +3071,7 @@ async function runTurnWithMocks1060(
     sendResult?: Record<string, unknown>;
     browserProvenance?: string;
     onBeforeSend?: () => void | Promise<void>;
+    beforeDriverOnBeforeSend?: () => void | Promise<void>;
     deleteIncidentFails?: boolean;
   } = {},
 ): Promise<{ exitCode: number; stdout: string }> {
@@ -3079,6 +3099,7 @@ async function runTurnWithMocks1060(
       openTurnPage: vi.fn(async () => ({ page: stubPage, owned: true, provisionalId: randomUUID() })),
       runtimeWitnessSurfaceAvailable: vi.fn(async () => witnessQueue.shift() ?? 'available'),
       sendTurn: vi.fn(async (_page, _text, _config, _provisionalId, onBeforeSend) => {
+        if (options.beforeDriverOnBeforeSend) await options.beforeDriverOnBeforeSend();
         if (onBeforeSend) await onBeforeSend();
         if (options.onBeforeSend) await options.onBeforeSend();
         return options.sendResult ?? {
@@ -3309,6 +3330,45 @@ describe('Issue #2489 legacy runCli product-wall envelope', () => {
       });
     });
   }
+});
+
+describe('Issue #2489 legacy persisted profile_wall admission', () => {
+  for (const cause of ['quota', 'rate_limit', 'challenge', 'login']) {
+    it('does not block a turn from a persisted ' + cause + ' page-text wall', async () => {
+      const prior = writeIncident(profileKey, {
+        kind: 'profile_wall',
+        phase: 'pre_send',
+        cause,
+        generation: 1,
+      });
+      let dispatchReached = 0;
+      const output = join(root, 'existing-' + cause + '-profile-wall.txt');
+      const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output), {
+        onBeforeSend: () => { dispatchReached += 1; },
+      });
+      const terminal = stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line))
+        .find((row) => row.schema === 'turn-result/v1');
+      expect(dispatchReached).toBe(1);
+      expect(exitCode).toBe(0);
+      expect(terminal).toMatchObject({ state: 'ok', cause: 'completed' });
+      expect(listReadableIncidents(profileKey).some(({ identity }) => identity === prior.identity)).toBe(true);
+    });
+  }
+
+  it('does not veto an advisory profile_wall arriving immediately before dispatch', async () => {
+    let attempted = 0;
+    const output = join(root, 'raced-profile-wall.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output), {
+      beforeDriverOnBeforeSend: () => {
+        writeIncident(profileKey, { kind: 'profile_wall', phase: 'pre_send', cause: 'quota', generation: 1 });
+      },
+      onBeforeSend: () => { attempted += 1; },
+    });
+    expect(attempted).toBe(1);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('"state":"ok"');
+    expect(stdout).not.toContain('profile_wall_active');
+  });
 });
 
 describe('issue 1060 remove profile-wide admission', () => {

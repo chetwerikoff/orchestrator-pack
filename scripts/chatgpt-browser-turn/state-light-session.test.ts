@@ -302,6 +302,28 @@ describe('state-light explicit session mode', () => {
     });
   });
 
+  it('keeps an ordinary generic retry toast as nonterminal session evidence', async () => {
+    const harness = makeHarness(['one']);
+    const evidence = {
+      wall_kind: 'none' as const,
+      matched_text: 'Something went wrong. Please try again later.',
+      matched_selector: '[role="alert"]',
+    };
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      waitForComposer: async (_page, _deadline, _useWhole, observe) => {
+        observe?.(evidence);
+        return { state: 'ready' };
+      },
+    };
+    const exit = await runStateLightSession(harness.argv, dependencies);
+    expect(exit).toBe(0);
+    expect(harness.metrics.sends).toBe(1);
+    expect(aggregate(harness.stream)).toMatchObject({
+      state: 'ok', total_send_count: 1, product_wall_diagnostic: evidence,
+    });
+  });
+
   it('uses one owned tab and one initial navigation for three ordered payloads', async () => {
     const harness = makeHarness();
     const exit = await runStateLightSession(harness.argv, harness.dependencies);
