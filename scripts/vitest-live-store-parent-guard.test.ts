@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -12,7 +11,7 @@ import {
   isExternalWakeSupervisorSnapshotOnlyChange,
   startParentLiveStoreGuard,
 } from './lib/vitest-live-store-parent-guard.mjs';
-import { runProcess } from './kernel/subprocess.ts';
+import { runProcess, runProcessSync } from './kernel/subprocess.ts';
 
 const temporaryRoots: string[] = [];
 const temporaryFiles: string[] = [];
@@ -166,8 +165,10 @@ function assertPreSetupVitestEntry(
 
 function makeOfflineProjectCard(configHome: string, primaryRoot: string, repository: string): string {
   mkdirSync(primaryRoot, { recursive: true });
-  execFileSync('git', ['init', '--quiet', primaryRoot], { stdio: 'pipe' });
-  execFileSync('git', ['-C', primaryRoot, 'remote', 'add', 'origin', 'https://github.com/' + repository + '.git'], { stdio: 'pipe' });
+  const init = runProcessSync({ command: 'git', args: ['init', '--quiet', primaryRoot] });
+  expect(init.exitCode, init.stderr).toBe(0);
+  const origin = runProcessSync({ command: 'git', args: ['-C', primaryRoot, 'remote', 'add', 'origin', 'https://github.com/' + repository + '.git'] });
+  expect(origin.exitCode, origin.stderr).toBe(0);
   const cardPath = join(configHome, 'orchestrator-pack', 'projects', 'fixture-project.json');
   mkdirSync(join(configHome, 'orchestrator-pack', 'projects'), { recursive: true });
   writeFileSync(cardPath, JSON.stringify({
