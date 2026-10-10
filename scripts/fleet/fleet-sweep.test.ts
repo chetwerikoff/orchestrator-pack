@@ -542,7 +542,7 @@ describe('Issue #2441 observational-only fleet diagnostics', () => {
     expect(late[0]?.reason).toBe('agent_unverified');
   }));
 
-  it('mirrors retained PARKED acknowledgment and final-line PARKED despite stale binding without writing task state', () => withStore((store) => {
+  it('retains PARKED acknowledgment only for the same binding; a replacement still accepts a fresh PARKED line', () => withStore((store) => {
     const terminal = designated();
     const perform = (current: FleetTerminal, screen: string, now: number) => {
       const observations = runFleetSweep({ projectId: 'project', primary, terminals: [current], store,
@@ -556,7 +556,10 @@ describe('Issue #2441 observational-only fleet diagnostics', () => {
     expect(parked).toEqual({ state: 'PARKED', diagnostic: 'PARKED' });
     const acknowledged = perform(terminal, 'Acknowledged', 300_000);
     expect(acknowledged).toEqual({ state: 'PARKED', diagnostic: 'PARKED' });
-    const changed = perform({ ...terminal, incarnationId: 'inc-new' }, 'PARKED on PR #1 merged', 600_000);
+    const replacement = perform({ ...terminal, incarnationId: 'inc-new' }, 'Acknowledged', 600_000);
+    expect(replacement).toEqual({ state: 'STOPPED', diagnostic: 'STOPPED' });
+    expect(store.readPaneWait('agent')).toBeUndefined();
+    const changed = perform({ ...terminal, incarnationId: 'inc-new' }, 'PARKED on PR #1 merged', 600_001);
     expect(changed).toEqual({ state: 'PARKED', diagnostic: 'PARKED' });
   }));
 

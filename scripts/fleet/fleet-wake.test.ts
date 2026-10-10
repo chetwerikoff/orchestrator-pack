@@ -414,8 +414,27 @@ describe('fleet alarm', () => {
       screens: { 'coord-b': 'working\nctrl+c to stop', one: 'done', two: 'working\nesc to interrupt' },
       store,
     });
-    expect(replacement.result).toMatchObject({ state: 'same_stopped_set', coordinator: 'coord-b' });
-    expect(sends(replacement.calls)).toHaveLength(0);
+    expect(replacement.result).toMatchObject({ state: 'sent', coordinator: 'coord-b', count: 1 });
+    expect(sendsTo(replacement.calls, 'coord-b')).toHaveLength(2);
+    const stable = await tick({
+      terminals: [{ handle: 'coord-b', title: 'Cursor coordinator', worktreePath: primary }, ...workers],
+      screens: { 'coord-b': 'working\nctrl+c to stop', one: 'done', two: 'working\nesc to interrupt' },
+      store,
+    });
+    expect(stable.result.state).toBe('same_stopped_set');
+    expect(sends(stable.calls)).toHaveLength(0);
+  });
+
+  it('re-alarms a STOPPED pane on same-handle new-coordinator incarnation', async () => {
+    const store = new MemoryWakeStore();
+    const coordinator = { ...terminals[0]!, incarnationId: 'coord-inc-a' };
+    const shared = { store, screens: { coord: 'idle', one: 'done' } };
+    expect((await tick({ ...shared, terminals: [coordinator, terminals[1]!] })).result.state).toBe('sent');
+    const newer = { ...coordinator, incarnationId: 'coord-inc-b' };
+    const replaced = await tick({ ...shared, terminals: [newer, terminals[1]!] });
+    expect(replaced.result).toMatchObject({ state: 'sent', count: 1 });
+    expect(sendsTo(replaced.calls, 'coord')).toHaveLength(2);
+    expect(sendsTo((await tick({ ...shared, terminals: [newer, terminals[1]!] })).calls, 'coord')).toHaveLength(0);
   });
 
   it('r05: PARKED does not alarm on an unknown producer or unrelated STOPPED set changes', async () => {
@@ -593,9 +612,8 @@ describe('fleet alarm', () => {
       { number: 8, ref: 'issue-2317-split', sha: headB, issue: 2317 },
     ];
     const screens = { coord: 'idle', one: 'done', mgr: 'done for now' };
-    const supervisedPullOwner = (pull: OpenPullHead): FleetPaneObservation | undefined => pull.issue === 2317
-      ? { handle: 'mgr', title: 'OpenCode manager', state: 'PARKED', lines: ['PARKED'], worktreePath: `${workerBase}/leopoker-mgr-2317`, branch: 'refs/heads/chetwerikoff/mgr-2317' }
-      : undefined;
+    const supervisedPullOwner = (pull: OpenPullHead, panes: readonly FleetPaneObservation[]): FleetPaneObservation | undefined =>
+      pull.issue === 2317 ? panes.find((pane) => pane.handle === 'mgr') : undefined;
 
     const first = await tick({ screens, store, config: wakeConfig, terminals: owned, listOpenPulls, supervisedPullOwner,
       checkRunsFinishedAt: (_repository, sha) => sha === headA ? now - 60_000 : undefined });
@@ -1377,7 +1395,8 @@ describe('Issue #2441 read-only diagnostic tick non-interference', () => {
     const output = await tick({ store, terminals: [coordinator, worker], screens: {
       coord: 'idle', one: 'done',
     } });
-    expect(output.logs.some((line) => line.includes('reason=diagnostic_unreadable'))).toBe(true);
+    expect(output.logs.some((line) => line.includes('reason=agent_unverified'))).toBe(true);
+    expect(output.logs.some((line) => line.includes('reason=diagnostic_unreadable'))).toBe(false);
     expect(output.result.state).toBe('sent');
     expect(sendsTo(output.calls, 'coord')).toHaveLength(2);
     // The diagnostic failure itself never routes or calls terminal send; old dispatch still owns it.
@@ -1521,6 +1540,88 @@ describe('Issue #2485 r05: plain event wake, no proof gates and pane-local alarm
         screens: { coord: 'idle', one: parked }, listTerminalEnvelopes: () => [event] });
       expect(sendsTo(third.calls, 'coord')).toHaveLength(0);
       expect(sendsTo(third.calls, 'one')).toHaveLength(0);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('preserves a bare-shell alarm when advisory history persistence fails', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-r05-history-'));
+    try {
+      const store = new FileFleetWakeStateStore('r05-history', { XDG_RUNTIME_DIR: root });
+      const agent: FleetTerminal = { ...terminals[1]!, title: 'OpenCode manager',
+        agentIdentity: 'opencode', incarnationId: 'inc-1',
+        branch: 'refs/heads/work', status: 'running' };
+      const shell: FleetTerminal = { ...agent, title: 'bash', agentIdentity: undefined };
+      await tick({ store, terminals: [terminals[0]!, agent],
+        screens: { coord: 'idle', one: 'work\nesc interrupt' } });
+      vi.spyOn(store, 'writeDiagnosticHistory').mockImplementation(() => {
+        throw new Error('synthetic diagnostic write refusal');
+      });
+      const found = await tick({ store, terminals: [terminals[0]!, shell],
+        screens: { coord: 'idle', one: parked }, listTerminalEnvelopes: () => [event] });
+      expect(paneText(found.calls, 'coord')[0]).toContain('suspected_bare_shell one');
+      expect(sendsTo(found.calls, 'one')).toHaveLength(0);
+      expect(sendsTo((await tick({ store, terminals: [terminals[0]!, shell],
+        screens: { coord: 'idle', one: parked }, listTerminalEnvelopes: () => [event] })).calls, 'coord')).toHaveLength(0);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('plain-matches PR-number substrings of completed CI and pack-review events', async () => {
+    const head = 'a'.repeat(40);
+    const params = {
+      config: config({ selectedRepository: 'example/repo' }),
+      terminals: [terminals[0]!, terminals[1]!],
+      screens: { coord: 'idle', one: 'PARKED on PR #42' },
+      listOpenPulls: () => [{ number: 42, ref: 'issue-42', sha: head }],
+    };
+    const ci = await tick({ ...params, checkRunsFinishedAt: () => 17,
+      readPackReviewStage: () => undefined });
+    expect(paneText(ci.calls, 'one')).toHaveLength(1);
+    expect(paneText(ci.calls, 'one')[0]).toContain('checks-completed');
+    const pack = await tick({ ...params, checkRunsFinishedAt: () => undefined,
+      readPackReviewStage: () => ({ state: 'success', description: 'done' }) });
+    expect(paneText(pack.calls, 'one')).toHaveLength(1);
+    expect(paneText(pack.calls, 'one')[0]).toContain('stage-success');
+  });
+
+  it('delivers one matching named CI completion, never unrelated PR-owner CI, to PARKED', async () => {
+    const sha = 'b'.repeat(40);
+    const owner = { ...terminals[1]!, branch: 'refs/heads/ci-owner' };
+    const params = {
+      config: config({ selectedRepository: 'example/repo' }),
+      terminals: [terminals[0]!, owner],
+      listOpenPulls: () => [{ number: 42, ref: 'ci-owner', sha }],
+      checkRunsFinishedAt: () => 17,
+      readPackReviewStage: () => undefined,
+    };
+    const store = new MemoryWakeStore();
+    const matched = await tick({ ...params, store, screens: { coord: 'idle', one: 'PARKED on CI on ' + sha } });
+    expect(paneText(matched.calls, 'one')).toHaveLength(1);
+    expect(sendsTo(matched.calls, 'one')).toHaveLength(2);
+    expect(sendsTo((await tick({ ...params, store,
+      screens: { coord: 'idle', one: 'PARKED on CI on ' + sha } })).calls, 'one')).toHaveLength(0);
+    const unrelated = await tick({ ...params,
+      screens: { coord: 'idle', one: 'PARKED on GPT turn unrelated-event' } });
+    expect(sendsTo(unrelated.calls, 'one')).toHaveLength(0);
+    const stopped = await tick({ ...params, screens: { coord: 'idle', one: 'done' } });
+    expect(paneText(stopped.calls, 'one')).toHaveLength(1);
+    expect(paneText(stopped.calls, 'one')[0]).toContain('CI on ' + sha);
+  });
+
+  it('does not carry an old PARKED wait or wake it across same-handle incarnation change', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-r05-inc-'));
+    try {
+      const store = new FileFleetWakeStateStore('r05-inc', { XDG_RUNTIME_DIR: root });
+      const prior: FleetTerminal = { ...terminals[1]!, incarnationId: 'inc-old' };
+      const next: FleetTerminal = { ...prior, incarnationId: 'inc-new' };
+      const earlier = await tick({ store, terminals: [terminals[0]!, prior],
+        screens: { coord: 'idle', one: 'PARKED on old-token' } });
+      expect(sendsTo(earlier.calls, 'one')).toHaveLength(0);
+      const changed = await tick({ store, terminals: [terminals[0]!, next],
+        screens: { coord: 'idle', one: 'Acknowledged' },
+        listTerminalEnvelopes: () => [{ path: '/tmp/opencode/old-token.json', invocationId: 'old-token' }] });
+      expect(changed.result).toMatchObject({ state: 'sent', count: 1 });
+      expect(sendsTo(changed.calls, 'one')).toHaveLength(0);
+      expect(store.readPaneWait('one')).toBeUndefined();
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -1813,6 +1914,18 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
     expect(sendsTo((await step()).calls, 'coord')).toHaveLength(0);
   });
 
+  it('re-alarms STOPPED after PERMISSION without replaying the permission warning', async () => {
+    const store = new MemoryWakeStore();
+    const step = (screen: string) => tick({ store, terminals: fleet,
+      screens: { coord: 'idle', one: screen }, now: () => 0 });
+    expect(msg((await step('done')).calls)).toContain('STOPPED one');
+    const permission = await step(modal);
+    expect(msg(permission.calls)).toContain('visible OpenCode permission UI');
+    expect(msg(permission.calls)).not.toContain('STOPPED one');
+    expect(msg((await step('done')).calls)).toContain('STOPPED one');
+    expect(sendsTo((await step('done')).calls, 'coord')).toHaveLength(0);
+  });
+
   it('keeps the STOPPED reminder at 30m after a permission-only send at 20m', async () => {
     const store = new MemoryWakeStore();
     const screens = { coord: 'busy\nctrl+c to stop', one: 'working\nesc interrupt',
@@ -1829,7 +1942,10 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
     expect(permission.result.state).toBe('sent');
     expect(msg(permission.calls)).toContain('visible OpenCode permission UI');
     expect(msg(permission.calls)).not.toContain('pane(s) need a step');
-    expect(store.signature).toBe(ordinarySignature);
+    const latest = JSON.parse(store.signature ?? '{}') as { panes: Record<string, { state: string; sent: boolean }> };
+    const prior = JSON.parse(ordinarySignature ?? '{}') as { panes: Record<string, { state: string; sent: boolean }> };
+    expect(latest.panes.two).toEqual(prior.panes.two);
+    expect(latest.panes.one?.state).toContain('PERMISSION');
     expect(store.sentAt).toBe(0);
     const reminder = await step(30 * 60_000);
     expect(reminder.result.state).toBe('sent');

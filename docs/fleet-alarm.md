@@ -20,7 +20,11 @@ index is maintained in the fleet notifier.
 Each successful named Wake records one simple `(pane,event)` sent marker.
 A repeat tick does not resend the same event to the same pane; a different
 pane parked on the same event can be woken independently. A changed event
-can generate another Wake. The normal 30-minute parked Reminder remains
+can generate another Wake. Any substring of a completed CI or pack-review
+event name (for example, `PR #42`) may match X; X need not spell the event
+type. The legacy PR-owner CI route is limited to STOPPED panes, so an
+unrelated PARKED pane is never woken and a matching one cannot receive the
+same CI completion through both routes. The normal 30-minute parked Reminder remains
 available for unresolved dependencies; a PARKED pane does **not** raise
 an immediate coordinator alarm for missing or unresolvable producer evidence.
 
@@ -29,8 +33,14 @@ the entire stopped-pane set. A pane becoming STOPPED or POLLING raises one
 alarm for that change; an unchanged pane is not re-alarmed merely because
 another pane changes between busy, PARKED and STOPPED. PARKED is silent
 until its existing 30-minute Reminder. Bare-shell suspicion produces one
-coordinator alarm per pane/state change. ChatGPT banner and Run-mail
-notifications use their existing separate routing and marks.
+coordinator alarm per pane/state change. On coordinator replacement (handle
+or observed incarnation), unchanged actionable pane alarms must reach the new
+recipient. PERMISSION is recorded as an intervening per-pane state so a
+STOPPED -> PERMISSION -> STOPPED transition produces a new STOPPED alarm;
+its separate warning marks and ordinary reminder cadence remain unchanged.
+A failed advisory history write cannot erase an observed bare-shell alarm.
+ChatGPT banner and Run-mail notifications retain their separate routing
+and marks.
 
 The notifier itself makes no GitHub, Task/Dispatch, scheduler or supervisor
 mutation and grants no authority to automatically continue, merge, retry or

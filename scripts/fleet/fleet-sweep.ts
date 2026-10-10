@@ -716,7 +716,9 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
         ?? JSON.stringify([options.projectId ?? '', terminal.handle, terminal.incarnationId, terminal.worktreePath, terminal.branch])
       : undefined;
     const previous = store.readPaneWait?.(terminal.handle);
-    const retained = outcome.acknowledgment ? previous?.wait : undefined;
+    // Acknowledgment-only retention belongs to the previous Task/incarnation.
+    // A literal final PARKED line still needs no Task or generation proof.
+    const retained = outcome.acknowledgment && previous?.binding === binding ? previous.wait : undefined;
     const baseState = classifyFleetPane(screen, terminal.handle, store, busyRe);
     // Only this new branch consults native OpenCode/liveness metadata; the
     // existing classifier and all other agents retain their original inputs.
@@ -872,12 +874,16 @@ export function collectFleetDiagnostics(options: FleetDiagnosticOptions): FleetD
       && prior.firstUnchangedObservedAt <= now);
     const firstUnchangedObservedAt = unchanged ? prior!.firstUnchangedObservedAt : now;
     if (key && Number.isFinite(now)) {
-      store.writeDiagnosticHistory?.(terminal.handle, {
-        key, designatedAgent: designated || previouslyDesignated,
-        ...(designated ? { agentIdentity: terminal.agentIdentity }
-          : previouslyDesignated && prior?.agentIdentity ? { agentIdentity: prior.agentIdentity } : {}),
-        tailHash, firstUnchangedObservedAt, ...(progress !== undefined ? { lastOutputAt: progress } : {}),
-      });
+      try {
+        store.writeDiagnosticHistory?.(terminal.handle, {
+          key, designatedAgent: designated || previouslyDesignated,
+          ...(designated ? { agentIdentity: terminal.agentIdentity }
+            : previouslyDesignated && prior?.agentIdentity ? { agentIdentity: prior.agentIdentity } : {}),
+          tailHash, firstUnchangedObservedAt, ...(progress !== undefined ? { lastOutputAt: progress } : {}),
+        });
+      } catch {
+        // Advisory persistence failure cannot erase an already detected bare shell.
+      }
     }
     const suspectedHung = key && unchanged && now - firstUnchangedObservedAt >= HUNG_AFTER_MS
       && state === 'busy' && !formerAgentShell;

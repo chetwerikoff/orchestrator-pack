@@ -625,10 +625,6 @@ export function checkRunsFinishedAt(repository: string, sha: string): number | u
   return times.length > 0 ? Math.max(...times) : undefined;
 }
 
-function idlePane(pane: FleetPaneObservation): boolean {
-  return pane.state === 'STOPPED' || pane.state === 'PARKED';
-}
-
 function onlyPane(panes: readonly FleetPaneObservation[]): FleetPaneObservation | undefined {
   if (panes.length === 1) return panes[0];
   const agents = panes.filter((pane) => pane.agentIdentity);
@@ -924,7 +920,7 @@ function resolveParkEvent(
   if (!producer) {
     // Plain substring match over existing completed pack-review/CI event IDs,
     // independent of any launch- or pane-ownership witness.
-    if (!repo || !/(?:pack-review|\bCI\b)/iu.test(parked)) return undefined;
+    if (!repo) return undefined;
     for (const pull of (options.listOpenPulls ?? listOpenPullHeads)(repo)) {
       const ci = (options.checkRunsFinishedAt ?? checkRunsFinishedAt)(repo, pull.sha);
       if (ci !== undefined && Number.isFinite(ci)
@@ -1136,7 +1132,7 @@ async function wakePanesOnEvents(
     wakes.push({ pane: coordinator, key, message: `Wake: FLEET unit ${event.fromHandle} sent Run message: ${event.subject}` });
   }
   const repository = namedRepository(options.config);
-  if (repository && observations.some(idlePane)) {
+  if (repository && observations.some((pane) => pane.state === 'STOPPED')) {
     const finishedAt = options.checkRunsFinishedAt ?? checkRunsFinishedAt;
     const ownerForPull = options.supervisedPullOwner ?? ((candidate, panes) => supervisedOwnerForPull(candidate, panes, executor));
     const readHead = options.readWorktreeHead ?? readWorktreeHead;
@@ -1160,7 +1156,9 @@ async function wakePanesOnEvents(
         }
         continue;
       }
-      if (!idlePane(pane) || bareShellHandles.has(pane.handle) || store.hasParkedWakeEvent(key)) continue;
+      // A PARKED pane is eligible only through its own X/event-name match above.
+      // This also coalesces a matching CI completion across the two routes.
+      if (pane.state !== 'STOPPED' || bareShellHandles.has(pane.handle) || store.hasParkedWakeEvent(key)) continue;
       wakes.push({ pane, key, message: `Wake: CI on ${pull.sha} finished for PR #${pull.number}` });
     }
   }
@@ -1431,7 +1429,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
 
     // Persist one notification state per pane; one pane changing cannot re-alarm another.
     type PaneState = { state: string; sent: boolean };
-    type History = { panes: Record<string, PaneState>; routed: string };
+    type History = { panes: Record<string, PaneState>; routed: string; coordinator?: string };
     let previous: History = { panes: {}, routed: '' };
     const pendingPermission = observedPermissionWarnings(observations, config.projectId, store);
     try {
@@ -1442,21 +1440,24 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
         if (row.panes && typeof row.panes === 'object' && typeof row.routed === 'string') previous = row;
       }
     } catch { /* An old whole-set digest is not a per-pane notification. */ }
+    const coordinatorKey = JSON.stringify([
+      coordinator.handle, coordinator.incarnationId ?? '', coordinator.worktreePath,
+    ]);
+    const sameCoordinator = previous.coordinator === coordinatorKey;
     const paneStates: Record<string, PaneState> = Object.create(null) as Record<string, PaneState>;
     const paneStateKey = (pane: FleetPaneObservation): string =>
       JSON.stringify([pane.state, pane.incarnationId ?? '']);
     for (const pane of observations) {
-      if (pane.state === 'PERMISSION') {
-        if (previous.panes[pane.handle]) paneStates[pane.handle] = previous.panes[pane.handle]!;
-        continue;
-      }
+      // PERMISSION emits no ordinary alert, but its interval must be remembered:
+      // STOPPED -> PERMISSION -> STOPPED is a new ordinary state transition.
       const state = paneStateKey(pane);
-      paneStates[pane.handle] = { state, sent: previous.panes[pane.handle]?.state === state
+      paneStates[pane.handle] = { state, sent: sameCoordinator
+        && previous.panes[pane.handle]?.state === state
         && previous.panes[pane.handle]?.sent === true };
     }
     for (const handle of bareShellHandles) {
       paneStates[handle] = { state: 'suspected_bare_shell',
-        sent: previous.panes[handle]?.state === 'suspected_bare_shell'
+        sent: sameCoordinator && previous.panes[handle]?.state === 'suspected_bare_shell'
           && previous.panes[handle]?.sent === true };
     }
     const now = (options.now ?? Date.now)();
@@ -1468,9 +1469,17 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
         && (!paneStates[pane.handle]?.sent || reminderDue));
     const bareAlerts = [...bareShellHandles].filter((handle) => !paneStates[handle]?.sent);
     const routedSignature = chatBannerSignature(routed);
-    const pendingRouted = routedSignature !== previous.routed ? routed : [];
+    const pendingRouted = !sameCoordinator || routedSignature !== previous.routed ? routed : [];
     const ordinaryDue = stopped.length > 0 || bareAlerts.length > 0 || pendingRouted.length > 0;
-    const nowSignature = JSON.stringify({ panes: paneStates, routed: routedSignature });
+    const nowSignature = JSON.stringify({ panes: paneStates, routed: routedSignature, coordinator: coordinatorKey });
+    if (observations.some((pane) => pane.state === 'PERMISSION'
+      && previous.panes[pane.handle]?.state !== paneStates[pane.handle]?.state)) {
+      // Persist the intervening state even if the separate permission alert
+      // fails. Keep unsent routed messages and coordinator transfer unacknowledged.
+      store.writeLastSentSignature(JSON.stringify({
+        panes: paneStates, routed: previous.routed, coordinator: previous.coordinator,
+      }));
+    }
     const signature = JSON.stringify({
       panes: stopped.map((pane) => [pane.handle, pane.state]),
       bareShells: bareAlerts, routed: routedSignature,
@@ -1564,7 +1573,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     }
     for (const pane of stopped) paneStates[pane.handle]!.sent = true;
     for (const handle of bareAlerts) paneStates[handle]!.sent = true;
-    store.writeLastSentSignature(JSON.stringify({ panes: paneStates, routed: routedSignature }));
+    store.writeLastSentSignature(nowSignature);
     if (ordinaryDue) store.writeLastSentAt?.(now);
     log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} pane changes, ${bareAlerts.length} bare shells, ${pendingRouted.length} chat banner(s), ${deliverLocal.length} local warning(s), ${deliverPermission.length} permission warning(s)`);
     return {
