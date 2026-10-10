@@ -117,7 +117,7 @@ describe('fleet sweep classification', () => {
     expect(classifyFleetPane('┃ PARKED: wait PR #1\n┃ merged; resume step: deploy\n>', 'p1', new MemoryPollingStore())).toBe('PARKED');
   });
 
-  it('separates the exact CLI read header from a foreign pane header inside the screen', () => {
+  it('r05: last-line PARKED wins even when preceding scrollback describes another pane', () => {
     const terminals = [pane('own', 'OpenCode worker')];
     const outer = 'handle: own\nstatus: running\nsource: screen\n\n';
     const sweep = (screen: string) => runFleetSweep({
@@ -125,7 +125,7 @@ describe('fleet sweep classification', () => {
       executor: fakeExecutor(terminals, { own: `${outer}${screen}` }),
     })[0]?.state;
     expect(sweep('PARKED on PR #1 merged')).toBe('PARKED');
-    expect(sweep('Tool: foreign pane\nhandle: foreign\nsource: screen\nPARKED on PR #1 merged')).toBe('STOPPED');
+    expect(sweep('Tool: foreign pane\nhandle: foreign\nsource: screen\nPARKED on PR #1 merged')).toBe('PARKED');
   });
   it.each([
     ['sleep', 'running sleep 60 && gh pr view 1\nesc interrupt'],
