@@ -63,10 +63,21 @@ The initial human-facing prompt stays deliberately small. Use the equivalent of:
 
 At the end of each finished response report:
 EXECUTION_STATUS: complete | continue
+ISSUE: <exact Issue URL>
 PR: <url | none>
 HEAD: <sha | none>
 REMAINING: <what remains | none>
 ```
+
+Replace `<ISSUE_URL>` with the **exact live Issue URL**. Where a bound PR
+already exists, include its live URL and current GitHub-observed 40-hex head
+as a baseline; otherwise name a proven published Issue-owned remote branch
+and its observed head, or state `PR: none`, `HEAD: none` and no observed
+remote work. Never infer an identity from a task title. Use GitHub-visible
+Issue/PR/published branch/commit URLs or paste necessary authorized
+non-secret text: a machine-local path or unpushed branch alone is unreadable
+by a standalone Browser GPT. Do not invent a downloadable patch, checkout
+access, or a new transport.
 
 Submit that initial Issue/execution request exactly once under the shared
 Browser-GPT turn authority.
@@ -120,14 +131,85 @@ A new user turn is legal only after the previous owned turn has been settled or
 recovered under the shared authority and there is a concrete reason to continue.
 The workflow is completion-driven, not iteration-count-driven.
 
-The compact status footer is an executor hint:
+### Exact context in every manager-authored execution prompt
+
+Before **every** ordinary implementation/fixer continuation, product-error
+same-conversation continuation, or authorized fresh-chat fallback, re-read
+the exact live Issue and reconcile GitHub. Name that **exact live Issue URL**
+plus one of these observed, task-bound baselines:
+
+- **PR exists:** actual Issue-bound PR URL and its live GitHub-observed
+  **40-hex head**, as a *baseline* that may legitimately advance.
+- **No PR, one proven Issue-owned published branch:** `PR: none`,
+  the published branch URL and its exact observed head. A suggestive branch
+  name alone is insufficient evidence of ownership.
+- **No observed Issue-owned remote work:** `PR: none`, `HEAD: none`,
+  and an explicit statement of that observed absence, without a guessed head.
+
+A concrete implementation/fixer gap and the canonical finished-response
+footer request accompany, not replace, the context above. Use published
+GitHub URLs or safe pasted source text; a local path/unpushed branch alone
+is not accessible in another execution conversation. No new send gate.
+
+**Synthetic existing-PR prompt** (replace every identity with the live one):
+
+```text
+Continue Issue https://github.com/example-org/example-repo/issues/17 in the existing implementation conversation.
+Issue-bound PR baseline: https://github.com/example-org/example-repo/pull/21
+GitHub-observed HEAD baseline: 0123456789abcdef0123456789abcdef01234567
+Finish the concrete outstanding acceptance gap; do not start a different task or PR.
+At the end of every finished reply include the canonical five-field footer.
+```
+
+**Synthetic no-PR branch** context carries that same Issue URL, `PR: none`,
+a proven published branch URL and its head. **Synthetic no-work** context
+carries that Issue URL, `PR: none`, `HEAD: none` and
+`No observed Issue-bound remote work`. Neither fabricates a branch/SHA.
+
+Fleet-wake's bare `Доделай и сообщи статус` remains a **notification
+only**; it is not a complete manager-authored prompt or permission to send.
+After GitHub-first reconciliation, authoritative turn settlement, and
+existing send/no-resend gates **permit** a new turn, the manager expands
+that hint into the full Issue/PR/head-or-none context above. Do not edit
+the fleet code or create another send/attribution authority.
+
+The five-field footer below is the canonical **advisory executor
+self-report**. Request it in each manager-authored turn and require it in
+**every finished executor response**, whether `complete` or `continue`.
+It does not authenticate a turn, establish send/delivery ownership, vet the
+rest of the reply, or certify Definition of Done.
 
 ```text
 EXECUTION_STATUS: complete | continue
+ISSUE: <exact Issue URL>
 PR: <url | none>
 HEAD: <sha | none>
 REMAINING: <what remains | none>
 ```
+
+**Attribution precedes footer evaluation:** the existing
+`docs/browser-gpt-turn-runbook.md` `turn-result/v1` and exact
+invocation/conversation evidence authoritatively determine delivery,
+attribution and settlement. Potential delivery retains no-resend
+regardless of footer text. Only **then** compare `ISSUE`/`PR`/`HEAD`
+model claims with the live Issue, bound PR or no-PR state, and current
+GitHub-observed head or proved published branch. A missing, foreign,
+ambiguous or stale claim disqualifies **only the reply's self-reported
+task-progress/completion claim**: it never un-settles transport, creates
+resend authority, cancels independently verified same-Issue GitHub
+progress, or replaces the existing candidate/DoD checks. A legitimate
+head advance verified on GitHub is still progress. Even correct-looking
+footer fields do not prove turn ownership or that all other prose
+belongs to the same task.
+
+**Synthetic negative case:** an exactly attributable, landed response
+for Issue 17 reports Issue 999, unrelated PR 999 or an earlier PR 21 head
+in its footer; GitHub independently confirms newer Issue-bound PR 21
+progress. Keep the owned turn settled, do not resend, reject that
+*reported status claim*, and preserve verified progress for normal DoD.
+Conversely, a correct-looking Issue 17/PR 21/head footer with unrelated
+foreign-task substantive text does not make that text trustworthy.
+Neither case creates a second classifier or gate.
 
 Missing or malformed status does not prove success or failure.
 `EXECUTION_STATUS: complete` never bypasses independent current-state
@@ -374,12 +456,15 @@ before required same-manager smoke completes.
 Otherwise save the exact selected baseline and send exactly one ordinary tracked
 continuation user turn in the **same exact owned ChatGPT conversation**:
 
-- **Existing PR:** concrete known gap, or `Доделай и сообщи статус` with the Issue URL, PR
-  URL, and exact baseline head as needed to continue that same implementation;
-- **No PR, one unambiguous Issue-owned branch:** concrete known gap, or
-  `Доделай и сообщи статус` tied to the Issue, same branch, and exact baseline head;
-- **No observed Issue-bound work:** `Доделай и сообщи статус` (or a concrete known gap)
-  in the same conversation; do not synthesize a branch/head.
+- **Existing PR:** exact live Issue URL, verified Issue-bound PR URL and
+  GitHub-observed 40-hex head baseline; name the gap or ask to complete
+  that same implementation, and require the advisory footer.
+- **No PR, one proven Issue-owned published branch:** exact live Issue URL,
+  `PR: none`, verified published branch URL/head; name the gap or request
+  continuation with the same footer.
+- **No observed Issue-bound work:** exact Issue URL, `PR: none`,
+  `HEAD: none`, explicit no-work observation and the same footer;
+  do not synthesize a branch/head.
 
 This is a new tracked user turn after the exact product-error turn is settled,
 not a retry of that turn. Never press the product `Retry` control. Reuse the
@@ -431,12 +516,16 @@ enter review convergence when its preconditions hold.
 Only after all fallback gates pass, or at streak 4 of **Repeated product-error
 streak** below, may the manager open exactly one fresh execution conversation:
 
-- **Existing PR:** Issue URL + same PR URL + exact unchanged baseline head;
-  instruct GPT to continue that implementation.
-- **No PR, one Issue-owned branch:** Issue URL + same branch + exact unchanged
-  head; instruct GPT to continue that implementation.
-- **No observed Issue-bound work:** Issue URL + existing ordinary initial prompt
-  `выполни задачу`; create no synthetic repository identity.
+- **Existing PR:** exact live Issue URL + same bound PR URL + unchanged
+  GitHub-observed 40-hex head baseline; continue that implementation.
+- **No PR, proven Issue-owned published branch:** exact live Issue URL,
+  `PR: none`, verified branch URL and unchanged observed head.
+- **No observed Issue-bound work:** exact live Issue URL, `PR: none`,
+  `HEAD: none`, explicit observed absence; request `выполни задачу`
+  for the same Issue with no synthetic branch/head.
+
+Each authorized fresh-chat prompt also requests the canonical five-field
+finished-response footer, using only reachable GitHub/safe textual inputs.
 
 Do not create a replacement branch or PR merely because the conversation
 changed. Under existing tab-lifecycle authority, close only the exact old owned
@@ -500,7 +589,9 @@ submitted GPT turn
        -> invalidated baseline/candidate-complete: no stale fresh send; re-evaluate/review
   -> finished GPT reply
        -> continue / remaining work in same conversation
-            -> send `Доделай и сообщи статус` or a concrete gap in that same conversation
+            -> re-read live Issue/GitHub, then send concrete gap or completion
+                request naming exact Issue URL, observed PR/head or no-work
+                baseline, and the canonical footer in that same conversation
             -> shared one-turn mechanics and 30-minute execution checkpoint
             -> repeat
        -> claims complete
