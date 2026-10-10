@@ -577,7 +577,7 @@ describe('fleet alarm', () => {
       { number: 7, ref: 'fix/a', sha: headA },
       { number: 8, ref: 'issue-2317-split', sha: headB, issue: 2317 },
     ];
-    const screens = { coord: 'idle', one: 'PARKED on any text', mgr: 'done for now' };
+    const screens = { coord: 'idle', one: 'done', mgr: 'done for now' };
     const supervisedPullOwner = (pull: OpenPullHead): FleetPaneObservation | undefined => pull.issue === 2317
       ? { handle: 'mgr', title: 'OpenCode manager', state: 'PARKED', lines: ['PARKED'], worktreePath: `${workerBase}/leopoker-mgr-2317`, branch: 'refs/heads/chetwerikoff/mgr-2317' }
       : undefined;
@@ -608,7 +608,7 @@ describe('fleet alarm', () => {
       branch: 'refs/heads/agent/issue-145-bulk-import-passes', agentIdentity: 'opencode',
     };
     const pull = { number: 150, ref: 'agent/issue-145-bulk-import-passes', sha: 'c'.repeat(40), issue: 145 };
-    const baseExecutor = fakeOrca({ coord: 'idle', mgr: 'PARKED on CI', foreign: 'working\\nesc interrupt' }, [], [terminals[0]!, manager, foreign]);
+    const baseExecutor = fakeOrca({ coord: 'idle', mgr: 'done', foreign: 'working\\nesc interrupt' }, [], [terminals[0]!, manager, foreign]);
     const executor: OrcaExecutor = (args) => {
       if (args[0] !== 'orchestration') return baseExecutor(args);
       if (args[1] === 'run-list') return commandResult(JSON.stringify({ ok: true, result: { runs: [{ id: 'run-145', objective: 'Execute Issue #145' }] } }));
@@ -623,7 +623,7 @@ describe('fleet alarm', () => {
     };
     const observed = await tick({
       terminals: [terminals[0]!, manager, foreign], executor,
-      screens: { coord: 'idle', mgr: 'PARKED on CI', foreign: 'working\\nesc interrupt' },
+      screens: { coord: 'idle', mgr: 'done', foreign: 'working\\nesc interrupt' },
       config: config({ chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'chetwerikoff/LeoPoker' } }),
       listOpenPulls: () => [pull],
       checkRunsFinishedAt: () => Date.parse('2026-10-03T18:00:00Z'),
@@ -642,7 +642,7 @@ describe('fleet alarm', () => {
     };
     const observed = await tick({
       terminals: [terminals[0]!, manager],
-      screens: { coord: 'idle', mgr: 'PARKED on CI' },
+      screens: { coord: 'idle', mgr: 'done' },
       config: config({ chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'chetwerikoff/LeoPoker' } }),
       listOpenPulls: () => [{ number: 153, ref: 'leopoker-mgr-148', sha: head, issue: 148 }],
       checkRunsFinishedAt: () => Date.parse('2026-10-04T13:21:06Z'),
@@ -658,7 +658,7 @@ describe('fleet alarm', () => {
     const input = {
       store,
       terminals: [terminals[0]!, terminals[1]!],
-      screens: { coord: 'idle', one: 'PARKED on CI' },
+      screens: { coord: 'idle', one: 'done' },
       config: config({ chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'chetwerikoff/LeoPoker' } }),
       listOpenPulls: () => [{ number: 160, ref: 'nobody-here', sha: head, issue: 159 }],
       supervisedPullOwner: () => undefined,
@@ -677,7 +677,7 @@ describe('fleet alarm', () => {
   it('does not wake a pane when CI check-runs remain pending regardless of later review status', async () => {
     const observed = await tick({
       terminals: [terminals[0]!, terminals[1]!],
-      screens: { coord: 'idle', one: 'PARKED on CI' },
+      screens: { coord: 'idle', one: 'done' },
       config: config({ chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'chetwerikoff/LeoPoker' } }),
       listOpenPulls: () => [{ number: 150, ref: 'agent/issue-145-bulk-import-passes', sha: 'd'.repeat(40), issue: 145 }],
       checkRunsFinishedAt: () => undefined,
@@ -1002,7 +1002,7 @@ describe('Issue #2471 local-chatgpt coordinator-only and one-attempt routing', (
     expect(withoutCoordinator.parkedWakeEvents.size).toBe(0);
   });
 
-  it('isolates local attempts from changed STOPPED state, ordinary 30-minute cadence and fresh local IDs', async () => {
+  it('isolates local attempts from per-pane STOPPED state and fresh local IDs', async () => {
     const store = new MemoryWakeStore();
     const screens = { coord: 'idle', one: 'A decision is needed', two: 'working\nesc interrupt' };
     const step = (at: number, rows: ProjectChat[], paneScreens = screens) =>
@@ -1026,7 +1026,7 @@ describe('Issue #2471 local-chatgpt coordinator-only and one-attempt routing', (
     const cadence = await step(1_860_002, [row(local)], {
       coord: 'idle', one: 'A decision is needed', two: 'Another decision needed',
     });
-    expect(cadence.result.state).toBe('sent');
+    expect(cadence.result.state).toBe('same_stopped_set');
     expect(textTo(cadence.calls, 'coord')).not.toContain(local);
     const newChat = await step(1_860_010, [row(local.replace(uuid1, uuid2))], {
       coord: 'idle', one: 'A decision is needed', two: 'Another decision needed',
@@ -1040,7 +1040,7 @@ describe('Issue #2471 local-chatgpt coordinator-only and one-attempt routing', (
   });
 
 
-  it('preserves ordinary STOPPED alerts and cadence when a local mark write fails', async () => {
+  it('preserves ordinary STOPPED per-pane transitions when a local mark write fails', async () => {
     const store = new MemoryWakeStore();
     const originalMark = store.markParkedWakeEvent.bind(store);
     const markSpy = vi.spyOn(store, 'markParkedWakeEvent').mockImplementation((key, status) => {
@@ -1099,7 +1099,7 @@ describe('Issue #2471 local-chatgpt coordinator-only and one-attempt routing', (
     const store = new MemoryWakeStore();
     const envelope: TerminalEnvelopeEvent = {
       path: '/tmp/opencode/child-start-failed-terminal.json', invocationId: 'inv-child-start-failed',
-      terminalHandle: 'missing', cwd: '/foreign/worktree', delivery: 'not-sent',
+      terminalHandle: 'missing', cwd: '/foreign/worktree',
       // A child_start_failed envelope need not carry observedInvocationId.
     };
     const first = await tick({ config: settings, store, screens: idle,
