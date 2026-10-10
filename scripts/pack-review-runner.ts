@@ -2844,7 +2844,10 @@ function provenFirstAttemptZeroSendCensus(
       || proof.invocation_id !== slot.invocationId
       || !['invocation', 'profile'].includes(String(proof.scope))
       || proof.send_count !== 0 || terminalHasPossibleDelivery(proof)
+      || (proof.send_attempted !== undefined && proof.send_attempted !== false)
+      || proof.cause === 'send_delivery_unproven'
       || proof.review_harvest_class !== undefined || proof.review_evidence !== undefined
+      || proof.source_comment_authority !== undefined || proof.source_comment_receipt !== undefined
       || proof.state === 'ok' || proof.state === 'no_reply'
       || (proof.delivery !== undefined && !['not_sent', 'NOT_SENT'].includes(String(proof.delivery)))
       || (proof.source_comment_reconciliation !== undefined
@@ -2859,6 +2862,9 @@ function provenFirstAttemptZeroSendCensus(
       if (!['prepared', 'not_sent'].includes(String(observation.phase))
         || observation.transition_reason === 'send_delivery_unproven'
         || (observation.send_count !== undefined && observation.send_count !== 0)
+        || (observation.send_attempted !== undefined && observation.send_attempted !== false)
+        || (observation.delivery !== undefined
+          && !['not_sent', 'NOT_SENT'].includes(String(observation.delivery)))
         || (observation.invocation_id !== undefined
           && observation.invocation_id !== slot.invocationId)) return false;
     }
