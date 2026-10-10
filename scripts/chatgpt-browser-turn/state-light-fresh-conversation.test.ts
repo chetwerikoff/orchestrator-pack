@@ -537,7 +537,7 @@ describe('state-light fresh conversation collision recovery', () => {
       turn.page, join(stateDir, 'foreign-before-send.txt'), '90000', invocationId,
     );
     expect(outcome.result).toMatchObject({
-      state: 'ui_contract_mismatch', cause: 'fresh_owned_payload_changed_before_click', send_count: 0,
+      state: 'ui_contract_mismatch', cause: 'ui_contract_mismatch:fresh_owned_payload_changed_before_click', send_count: 0,
     });
     expect(turn.getSends()).toBe(0);
     expect(turn.sendButton.click).not.toHaveBeenCalled();
