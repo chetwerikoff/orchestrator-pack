@@ -4253,6 +4253,7 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
   const repoSlug = 'chetwerikoff/orchestrator-pack';
   const prNumber = 2469;
   const failure = 'gpt_source_non_complete:after_grace_zero_usable:0/3';
+  const issueBody = ['```complexity-tier', 'tier: T2', '```'].join('\n');
 
   function seedOrphan(
     slotMode: 'planned' | 'first-attempt' | 'prelaunch' = 'first-attempt',
@@ -4273,9 +4274,7 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
     const round = plannedStoredGptRound();
     round.tier = 'T2';
     round.issueNumber = prNumber;
-    round.boundIssueSnapshotDigest = computeBoundIssueSnapshotHash(
-      ['```complexity-tier', 'tier: T2', '```'].join('\n'),
-    );
+    round.boundIssueSnapshotDigest = computeBoundIssueSnapshotHash(issueBody);
     if (slotMode === 'first-attempt') {
       round.sourceSlots[0] = {
         ...round.sourceSlots[0]!,
@@ -4487,7 +4486,7 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
       tier: 'T2', claimMode: 'preacquired',
       fixturePrState: 'OPEN', fixtureRepoSlug: repoSlug,
       fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
-      fixtureIssueBody: '```complexity-tier\\ntier: T2\\n```',
+      fixtureIssueBody: issueBody,
       fixtureIssueNumber: prNumber,
       fixtureGptAttemptObserver: async () => ({
         state: 'observation_unavailable' as const, replacementEligible: false,
@@ -4518,7 +4517,7 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
       tier: 'T2', claimMode: 'preacquired',
       fixturePrState: 'OPEN', fixtureRepoSlug: repoSlug,
       fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
-      fixtureIssueBody: '```complexity-tier\\ntier: T2\\n```',
+      fixtureIssueBody: issueBody,
       fixtureIssueNumber: prNumber,
       fixtureGptAttemptObserver: async () => ({
         state: 'replacement_eligible' as const, replacementEligible: true,
