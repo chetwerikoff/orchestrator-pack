@@ -3,6 +3,8 @@
   "issue_number": 2485,
   "declared_paths": [
     "docs/fleet-alarm.md",
+    "scripts/fleet/fleet-sweep.test.ts",
+    "scripts/fleet/fleet-sweep.ts",
     "scripts/fleet/fleet-wake.test.ts",
     "scripts/fleet/fleet-wake.ts"
   ],
@@ -14,8 +16,10 @@
   ],
   "allowed_roots": [
     "docs/fleet-alarm.md",
+    "scripts/fleet/fleet-sweep.test.ts",
+    "scripts/fleet/fleet-sweep.ts",
     "scripts/fleet/fleet-wake.test.ts",
     "scripts/fleet/fleet-wake.ts"
   ],
-  "source_revision": "03f8c764b1f475d4161af7a5dead32346e55ce2b"
+  "source_revision": "4e332a939a8e8edfaafaa13f13058f0f05c67ce4"
 }
