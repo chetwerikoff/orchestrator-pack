@@ -4254,7 +4254,11 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
   const prNumber = 2469;
   const failure = 'gpt_source_non_complete:after_grace_zero_usable:0/3';
 
-  function seedOrphan(slotMode: 'planned' | 'first-attempt' | 'prelaunch' = 'first-attempt') {
+  function seedOrphan(
+    slotMode: 'planned' | 'first-attempt' | 'prelaunch' = 'first-attempt',
+    firstSlotOverride?: (slot: PackReviewGptRoundRecord['sourceSlots'][number]) =>
+      PackReviewGptRoundRecord['sourceSlots'][number],
+  ) {
     const storeRoot = tempRoot('opk-2469-orphan-');
     harnessEnv(storeRoot, path.join(storeRoot, 'review.json'));
     process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
@@ -4289,6 +4293,7 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
         terminalResult: { kind: 'stale_pre_launch_interruption', noResend: true },
       };
     }
+    if (firstSlotOverride) round.sourceSlots[0] = firstSlotOverride(round.sourceSlots[0]!);
     const created = createPackReviewRun({
       ...options, prNumber, headSha: HEAD_A,
       canonicalRepository: repoSlug,
@@ -4382,18 +4387,12 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
     })],
     ['started-without-terminal', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
       slotId: slot.slotId, ordinal: slot.ordinal, lifecycle: 'invocation_started' as const,
-      attemptOrdinal: 1, invocationId: slot.invocationId,
+      attemptOrdinal: 1, invocationId: 'inv-2469-first-attempt',
     })],
-  ])('does not classify unsafe 0/3 witness: %s', async (_name, mutate) => {
-    const f = seedOrphan();
-    const stored = getPackReviewRun(f.runId, f.options)!;
-    const round = stored.reviewRound!;
-    updatePackReviewRun(f.runId, {
-      reviewRound: {
-        ...round,
-        sourceSlots: round.sourceSlots.map((slot, index) => index === 0 ? mutate(slot) : slot),
-      },
-    }, f.options);
+  ])('does not classify unsafe 0/3 witness: %s', async (name, mutate) => {
+    // Build persisted negative evidence directly. The incumbent store rightly
+    // rejects overwriting terminal attempt results after they are recorded.
+    const f = seedOrphan(name === 'started-without-terminal' ? 'planned' : 'first-attempt', mutate);
     f.expire();
     const result = await reconcileStalePackReviewRuns(f.input);
     expect(result.results).toEqual(expect.arrayContaining([
