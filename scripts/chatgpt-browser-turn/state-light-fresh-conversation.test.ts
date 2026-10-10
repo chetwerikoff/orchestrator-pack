@@ -516,6 +516,28 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(mocks.nowMs).toBeGreaterThanOrEqual(30_000);
   });
 
+  it('dispatches an existing-chat composer mounted 20 seconds after commit without DCL', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-LATE-EXISTING'));
+    const owned = makeLoserPage('PROMPT-LATE-EXISTING', 'LATE-EXISTING-OK');
+    owned.composer.count.mockImplementation(async () => mocks.nowMs >= 30_000 ? 1 : 0);
+    enqueueBrowserForTurn(mocks, owned.page);
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', '/tmp/late-existing.txt',
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '60000',
+      '--poll-ms', '1',
+    ]);
+    expect(owned.page.goto).toHaveBeenCalledWith(SHARED_CONV, expect.objectContaining({
+      waitUntil: 'commit',
+      timeout: expect.any(Number),
+    }));
+    expect(outcome.result.send_count).toBe(1);
+    expect(owned.getSends()).toBe(1);
+    expect(mocks.nowMs).toBeGreaterThanOrEqual(30_000);
+  });
+
   it('rejects a late foreign-project redirect after composer mutation, before fresh dispatch', async () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-REDIRECT'));
     const solo = makeLoserPage('PROMPT-REDIRECT', 'SHOULD-NOT-SEND');
