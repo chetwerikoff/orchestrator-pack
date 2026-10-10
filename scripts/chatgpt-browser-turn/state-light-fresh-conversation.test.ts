@@ -1493,13 +1493,10 @@ describe('state-light fresh conversation collision recovery', () => {
             if (!scenario.expireOnNextClockRead) mocks.nowMs = deadlineMs;
           }
         });
-        const insertionContext: { diagnostic?: {
-          branch: string;
-          insertionBudgetMs: number;
-          textLength: number;
-          elapsedMs: number;
-          remainingInvocationMs: number;
-        } } = {};
+        const insertionContext: {
+          insertionDeadlineMs?: number;
+          diagnostic?: import('./contracts.ts').ComposerMutationDiagnosticV1;
+        } = {};
         const cause = await __testComposerMutation.mutateComposerOrCause(
           page, markedPrompt, deadlineMs, insertionContext,
         );
