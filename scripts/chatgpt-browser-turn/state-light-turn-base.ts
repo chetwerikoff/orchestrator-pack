@@ -50,6 +50,7 @@ import {
   StateLightNavigationCounter,
   STATE_LIGHT_FRESH_RECOVERY_ATTEMPTS,
   STATE_LIGHT_MAX_TIMEOUT_MS,
+  StateLightSendSlotTimeoutError,
   STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
   tryClaimStateLightFreshConversation,
   navigateToProjectConversationIfNeeded,
@@ -382,6 +383,14 @@ export interface TurnRunOutcome {
   readonly ownedConversationUrl?: string;
   readonly profileKey?: string;
   readonly ownershipForfeited?: boolean;
+  /** Private, process-local cleanup value; never emitted as turn-result. */
+  readonly ownedTypedPayload?: string;
+}
+
+interface FreshComposerCleanupContext {
+  page?: any;
+  markedPayload?: string;
+  staleComposerCleared: boolean;
 }
 
 export interface StateLightPublicationResult {
@@ -2643,6 +2652,7 @@ async function runTurn(
   recoveryHooks: StateLightRecoveryHooks = {},
   entryLivenessHeartbeat = false,
   heartbeatSchedulerReady?: (scheduler: TurnScopedHeartbeatScheduler) => void,
+  freshCleanup?: FreshComposerCleanupContext,
 ): Promise<TurnRunOutcome> {
   rejectUnknownOptions(args, [
     'profile',
@@ -2669,6 +2679,7 @@ async function runTurn(
   let sendAttempted = false;
   let deliveryProofPendingRecovery = false;
   let ownershipForfeited = false;
+  let sendSlotOwnerDeadlineMs = Infinity;
   let cancellationReceiptEmitted = false;
   let heartbeatScheduler: TurnScopedHeartbeatScheduler | undefined;
   let heartbeatPhase: BrowserTurnLivenessPhase = 'admitted_pre_send';
@@ -2861,6 +2872,28 @@ async function runTurn(
     };
 
     const markedPayload = wrapOwnedPromptPayload(marker, snapshot.text);
+    const assertFreshOwner = (): void => {
+      if (Date.now() >= sendSlotOwnerDeadlineMs) {
+        throw new Error('state_light_new_chat_owner_pre_dispatch_deadline_exhausted');
+      }
+      if (verifyStateLightSendSlotOwnerFence(profileKey, invocationId) !== 'valid') {
+        ownershipForfeited = true;
+        throw new Error('state_light_new_chat_send_slot_owner_lost');
+      }
+      let observedUrl = '';
+      try { observedUrl = String(page.url()); } catch { /* fail closed */ }
+      if (!isBlankProjectSurfaceUrl(observedUrl, config.projectUrl ?? '')) {
+        ownershipForfeited = true;
+        throw new Error('ui_contract_mismatch:fresh_conversation_surface_unavailable');
+      }
+    };
+    const requireFreshSendReserve = (additionalPreSendMs: number): void => {
+      assertFreshOwner();
+      const availableUntil = Math.min(invocationDeadlineMs, sendSlotOwnerDeadlineMs);
+      if (Date.now() + additionalPreSendMs + FRESH_SEND_RESERVE_MS > availableUntil) {
+        throw new Error('state_light_new_chat_send_budget_unavailable');
+      }
+    };
 
     // A URL is only a candidate. A complete conversation-local census and
     // exactly one owned user carrier/marker token are required before *any*
@@ -3039,8 +3072,9 @@ async function runTurn(
     };
 
     if (config.newChat) {
-      await acquireStateLightNewChatSendSlot(profileKey, invocationId, config.timeoutMs);
+      sendSlotOwnerDeadlineMs = await acquireStateLightNewChatSendSlot(profileKey, invocationId, config.timeoutMs);
       try {
+        assertFreshOwner();
         const returnFreshPrepareFailure = (
           prepared: Awaited<ReturnType<typeof prepareStateLightFreshConversation>>,
         ): TurnRunOutcome | null => {
@@ -3113,10 +3147,12 @@ async function runTurn(
           navigation,
           invocationDeadlineMs,
         );
+        assertFreshOwner();
         const initialPrepareFailure = returnFreshPrepareFailure(initialPrepare);
         if (initialPrepareFailure) return initialPrepareFailure;
 
         let composerState = await waitForComposer(page, invocationDeadlineMs, true);
+        assertFreshOwner();
         const initialComposerFailure = returnComposerBlocker(composerState);
         if (initialComposerFailure) return initialComposerFailure;
 
@@ -3176,9 +3212,11 @@ async function runTurn(
               navigation,
               invocationDeadlineMs,
             );
+            assertFreshOwner();
             const preparedFailure = returnFreshPrepareFailure(prepared);
             if (preparedFailure) return preparedFailure;
             composerState = await waitForComposer(page, invocationDeadlineMs, true);
+            assertFreshOwner();
             const composerFailure = returnComposerBlocker(composerState);
             if (composerFailure) return composerFailure;
             sendAuthorized = true;
@@ -3205,6 +3243,7 @@ async function runTurn(
               continue;
             }
             const baselineFailure = await captureBaseline();
+            assertFreshOwner();
             if (baselineFailure) return baselineFailure;
             const sendFailure = await sendOwnedPrompt();
             if (sendFailure) return sendFailure;
@@ -4962,6 +5001,7 @@ async function runTurn(
           ? 'ui_contract_mismatch'
           : 'driver_error';
     const retirementCleanupRequired = message === 'observation_mutation_retirement_cleanup_required';
+    const holderTimeout = error instanceof StateLightSendSlotTimeoutError ? error : undefined;
     const lostAfterSend = afterSend && browserOrPageDefinitelyLost(page, browser);
     const cause = retirementCleanupRequired
       ? message
@@ -4991,6 +5031,7 @@ async function runTurn(
       ...(page ? { page } : {}),
       ...(browser ? { browser } : {}),
       ...(lostAfterSend ? { cleanupAction: 'skip' as const } : {}),
+      ...(ownershipForfeited ? { cleanupAction: 'preserve' as const } : {}),
       result: {
         ...compactResult(
           state,
@@ -5000,7 +5041,14 @@ async function runTurn(
           profileKey,
           sendCount,
           pollCount, navigation, incidents,
-          { ...(sendAttempted ? { send_attempted: true } : {}), ...(page && pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+          {
+            ...(sendAttempted ? { send_attempted: true } : {}),
+            ...(page && pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
+            ...(holderTimeout ? {
+              send_slot_holder_invocation_id: holderTimeout.send_slot_holder_invocation_id,
+              send_slot_holder_phase: holderTimeout.send_slot_holder_phase,
+            } : {}),
+          },
           journalWriteFailed,
         ),
         ...(retirementCleanupRequired ? { retirement_cleanup_required: true } : {}),
@@ -5169,6 +5217,7 @@ export async function runStateLightTurn(
   }
 
   let heartbeatScheduler: TurnScopedHeartbeatScheduler | undefined;
+  const freshCleanup: FreshComposerCleanupContext = { staleComposerCleared: false };
   const outcome = dependencies.runTurn
     ? await dependencies.runTurn(args)
     : await runTurn(
@@ -5176,9 +5225,19 @@ export async function runStateLightTurn(
         dependencies.recoveryHooks,
         dependencies.entryLivenessHeartbeat === true,
         (scheduler) => { heartbeatScheduler = scheduler; },
+        freshCleanup,
       );
   try {
-    const result = await finalizeTurn(outcome);
+    const augmented: TurnRunOutcome = {
+      ...outcome,
+      result: {
+        ...outcome.result,
+        ...(freshCleanup.staleComposerCleared ? { stale_composer_cleared: true as const } : {}),
+      },
+      ...(freshCleanup.page && outcome.page === freshCleanup.page && freshCleanup.markedPayload
+        ? { ownedTypedPayload: freshCleanup.markedPayload } : {}),
+    };
+    const result = await finalizeTurn(augmented);
     // Keep liveness continuous through every pre-emission cleanup await, then
     // stop the scheduler at the terminal publication boundary so no heartbeat
     // can follow turn-result/v1 or keep the subprocess alive.
