@@ -950,6 +950,27 @@ describe('issue 964 UI ownership and profile walls — S7/S8/S9', () => {
     expect(result.product_wall_diagnostic).toEqual({ wall_kind: 'none', matched_text: 'none', matched_selector: 'none' });
   });
 
+  it('S9 missing composer with an explicit quota alert remains nonquota, not-sent', async () => {
+    const evidence = "You've reached the current usage limit";
+    const fixture = fakeTurnPage({ composer: false, alertText: evidence });
+    const result = await sendTurn(fixture.page, 'payload', {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: 'https://chatgpt.com/c/example',
+      newChat: false,
+      timeoutMs: 100,
+    });
+    expect(result.state).toBe('ui_contract_mismatch');
+    expect(result.cause).toBe('composer_unavailable');
+    expect(result.possibleDelivery).toBe(false);
+    expect(fixture.getSendClicks()).toBe(0);
+    expect(result.product_wall_diagnostic).toEqual({
+      wall_kind: 'quota',
+      matched_text: evidence,
+      matched_selector: '[role="alert"]',
+    });
+  });
+
   it('S9 returns ui_contract_mismatch with zero send when composer is unavailable without a product wall', async () => {
     const fixture = fakeTurnPage({ composer: false, bodyText: 'ordinary page' });
     const result = await sendTurn(fixture.page, 'payload', {
