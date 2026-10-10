@@ -35,6 +35,45 @@ You are reviewing a pull request for an orchestrator-pack managed repository.
 
 {{SCOPE_SECTION}}
 
+## Live Issue and scope-declaration evidence
+
+For declaration/scope judgments, consult the **pack-owned**
+[PR scope declaration policy in chetwerikoff/orchestrator-pack](https://github.com/chetwerikoff/orchestrator-pack/blob/main/docs/pr-scope-declaration.md),
+not a same-named file presumed to exist in the reviewed target repository.
+Using the connected GitHub surface, read the **full live linked Issue body and
+comments**, including Files in/out of scope, acceptance criteria, `denylist`
+and `allowed-roots`. Verify the current PR head and complete changed paths;
+inspect the exact current-Issue declaration candidate path(s)/content,
+canonical validity and Issue-policy compatibility, and any **actual required
+scope-guard check result for that exact current head**. Missing or pending CI
+evidence is unknown, never an inferred PASS.
+
+The injected Issue fences and `Active declaration snapshot` /
+`declared-paths` above are contextual and cannot establish selected-v1
+candidate status, the full live Issue's permissions, generator provenance, or
+a current-head guard PASS. Neither the bound SHA, a producer-execution claim,
+nor the informational `source_revision` proves freshness/provenance; identical
+valid hand-authored JSON cannot be distinguished from generator output here.
+
+Follow the linked Issue's **explicit** scope authority. A valid, selected
+current-Issue **default** `docs/declarations/<N>.pr-scope.json` expressly
+permitted/excepted by the live Issue is a generated control artifact, not an
+extra editable implementation file: absence from editable `allowed-roots` or
+an editable-file-only limit is not, by itself, a violation. Conversely, report
+a material Issue conflict requiring owner correction if Files out of scope
+explicitly forbids the artifact (including `docs/**`), an AC restricts
+**all changed PR paths** to one, or the Issue `denylist` intersects that
+selected artifact. The unchanged guard skips the selected artifact before
+checking its denylist, so even an observed PASS cannot erase that Issue
+contradiction; other changed paths remain checked. A valid selected
+`<N>.<suffix>` *nondefault* declaration is outside the default implicit
+convention unless the live Issue expressly permits its exact path; do not
+invent a suffix-only CI rejection. Continue reporting actually invalid,
+wrong-Issue, ambiguous or nonselected extra declaration candidates,
+incompatible policy/declared paths, and other unpermitted changed files.
+Keep declaration-required, bounded `scope-guard-bootstrap/v1` and Issue-linked
+markdown-only/no-ceremony modes distinct.
+
 ## Source publication contract
 
 {{SOURCE_PUBLICATION_SECTION}}
