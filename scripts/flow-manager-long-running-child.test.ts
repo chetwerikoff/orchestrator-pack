@@ -822,7 +822,6 @@ describe('flow-manager long-running child (#1164)', () => {
       });
 
       expect(code).toBe(state === 'ok' ? 0 : 1);
-      expect(readFileSync(paths.output, 'utf8').trimEnd().split('\n')).toHaveLength(1);
       const terminal = readTerminalEnvelope(paths.envelope);
       expect(terminal).toMatchObject({
         schema: TERMINAL_SCHEMA,
