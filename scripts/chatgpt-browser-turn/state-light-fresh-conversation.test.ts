@@ -3571,11 +3571,14 @@ describe('Issue #1752 production liveness regressions', () => {
   it('keeps healthy heartbeats flowing while a stalled profile verification is terminated by its invocation budget', async () => {
     const prompt = 'PROMPT-LIVENESS-PROFILE-STALL';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const profileEntered = Promise.withResolvers<void>();
+    const pendingVerification = new Promise<any>(() => {});
     let observedBudgetMs = 0;
     mocks.verifyProfile.mockImplementationOnce((...args: any[]) => {
       const operationBudget = args[1] as { clampOperationWaitMs?: () => number } | undefined;
       observedBudgetMs = operationBudget?.clampOperationWaitMs?.() ?? 0;
-      return new Promise<any>(() => {});
+      profileEntered.resolve();
+      return pendingVerification;
     });
 
     const writes: string[] = [];
@@ -3584,10 +3587,40 @@ describe('Issue #1752 production liveness regressions', () => {
       return true;
     }) as typeof process.stdout.write);
     try {
-      const code = await runStateLightTurn(
+      // The containing beforeEach mocks Date.now; let this test's timer clock own it.
+      vi.spyOn(Date, 'now').mockRestore();
+      const startedAt = mocks.nowMs;
+      vi.useFakeTimers({
+        now: startedAt,
+        toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+      });
+      const turn = runStateLightTurn(
         livenessArgv(join(livenessStateDir, 'profile-stall.txt'), '45'),
         { entryLivenessHeartbeat: true },
       );
+      let turnSettled = false;
+      void turn.then(
+        () => { turnSettled = true; },
+        () => { turnSettled = true; },
+      );
+      await profileEntered.promise;
+      expect(mocks.verifyProfile).toHaveBeenCalledTimes(1);
+      expect(mocks.verifyProfile.mock.results[0]?.value).toBe(pendingVerification);
+
+      await vi.advanceTimersByTimeAsync(15);
+      mocks.nowMs = Date.now();
+      expect(mocks.nowMs - startedAt).toBe(15);
+      const preExpiryRecords = parseRecords(writes);
+      const preExpiryHeartbeats = preExpiryRecords.filter((record) => record.schema === 'observation-heartbeat/v1');
+      expect(preExpiryHeartbeats.length).toBeGreaterThan(2);
+      expect(preExpiryHeartbeats.some((record) => record.phase === 'admitted_pre_send')).toBe(true);
+      expect(preExpiryRecords.some((record) => record.schema === 'turn-result/v1')).toBe(false);
+      expect(turnSettled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(30);
+      mocks.nowMs = Date.now();
+      expect(mocks.nowMs - startedAt).toBe(45);
+      const code = await turn;
       expect(code).not.toBe(0);
       expect(observedBudgetMs).toBeGreaterThan(0);
       expect(observedBudgetMs).toBeLessThanOrEqual(45);
@@ -3602,7 +3635,9 @@ describe('Issue #1752 production liveness regressions', () => {
         send_count: 0,
       });
     } finally {
+      vi.useRealTimers();
       stdout.mockRestore();
+      vi.restoreAllMocks();
     }
   });
 
