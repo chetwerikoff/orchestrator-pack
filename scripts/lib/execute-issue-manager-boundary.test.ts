@@ -149,6 +149,56 @@ describe('execute-Issue manager boundary', () => {
     expect(JSON.stringify(unsafe.result)).toContain('unsafe-evidence-2081');
   });
 
+  it('Issue #2495: bound vanished inspect selects only the existing GitHub-first read', () => {
+    // The actual error envelope does not echo target, profile, invocation or identity_bound.
+    const missing = {
+      schema: 'browser-gpt-page-probe/v1', operation: 'inspect',
+      status: 'not_found', reason: 'target_not_found',
+      diagnostic_only: true, workflow_authority: 'none',
+    };
+    const bound = { ...context, profile: 'owned-profile', invocationId: 'owned-invocation' };
+    for (const identity of [
+      { ...bound, targetId: 'owned-target', conversationUrl: undefined },
+      { ...bound, targetId: undefined, conversationUrl: 'https://chatgpt.com/c/owned-2081' },
+    ]) {
+      const evaluated = classifyExecuteIssueManagerRecord(missing, identity);
+      expect(evaluated.exitCode).toBe(3);
+      const action = expectReadOnly(evaluated);
+      expect(action.kind).toBe('execute-github-first-read-only');
+      expect(action.argv).toEqual([
+        'scripts/gh', 'issue', 'view', '2081', '--json', 'state,title,body,closedAt',
+      ]);
+    }
+    const negatives: Array<[Record<string, unknown>, ExecuteIssueManagerBoundaryContext]> = [
+      [missing, context],
+      [missing, { ...bound, profile: undefined }],
+      [missing, { ...bound, profile: ' ' }],
+      [missing, { ...bound, invocationId: undefined }],
+      [missing, { ...bound, invocationId: ' ' }],
+      [missing, { ...bound, targetId: undefined, conversationUrl: undefined }],
+      [missing, { ...bound, targetId: ' ', conversationUrl: ' ' }],
+      [{ ...missing, operation: 'export' }, bound],
+      [{ ...missing, operation: 'list' }, bound],
+      [{ ...missing, reason: 'other_missing_reason' }, bound],
+      [{ ...missing, identity_bound: false }, bound],
+      [{ ...missing, profile: 'foreign-profile' }, bound],
+      [{ ...missing, invocation_id: 'foreign-invocation' }, bound],
+      [{ ...missing, target_id: 'foreign-target' }, { ...bound, targetId: 'owned-target' }],
+      [{ ...missing, conversation_url: 'https://chatgpt.com/c/foreign' }, bound],
+      // A producer-only target locator cannot replace missing trusted manager identity.
+      [{ ...missing, target_id: 'producer-target' }, context],
+    ];
+    for (const [envelope, identity] of negatives) {
+      expect(actionOf(classifyExecuteIssueManagerRecord(envelope, identity))?.kind)
+        .not.toBe('execute-github-first-read-only');
+    }
+    for (const status of ['stale_node', 'surface_unknown', 'unavailable', 'ambiguous'] as const) {
+      expect(actionOf(classifyExecuteIssueManagerRecord(
+        { ...missing, status }, bound,
+      ))?.kind).not.toBe('execute-github-first-read-only');
+    }
+  });
+
   it('projects review runner success, read-only pass-through, and external failure', () => {
     expect(classifyExecuteIssueManagerRecord({ ok: true, prNumber: 2083 }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 0 });
     const action = managerNextAction({ kind: 'execute-review-runner-read-only', binding: { ...context, stage: 'execute:review' }, argv: ['scripts/gh', 'pr', 'view', '2083', '--json', 'state'] });
