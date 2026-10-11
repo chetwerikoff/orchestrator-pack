@@ -1,11 +1,10 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import { runProcess } from '../kernel/subprocess.ts';
+import { runProcess, runProcessSync } from '../kernel/subprocess.ts';
 
 const fixture = join(import.meta.dirname, 'tab-lifecycle-subprocess-fixture.ts');
 
@@ -94,20 +93,30 @@ const executableFixture = [
 ].join('\n');
 
 function spawnStateLightEntryFixture(mode: string, state: string) {
+  const root = mkdtempSync(join(tmpdir(), 'opk-2494-subprocess-'));
   const began = Date.now();
-  const child = spawnSync(process.execPath, [
-    '--experimental-strip-types', '--input-type=module', '--eval', executableFixture, mode, state,
-  ], {
-    cwd: resolve(import.meta.dirname, '../..'),
-    encoding: 'utf8',
-    timeout: 8_000, // Fail and clean up a hung child; a test-side kill never proves exit.
-    env: { ...process.env, ORCA_TERMINAL_HANDLE: '', NODE_OPTIONS: '' },
-    maxBuffer: 1024 * 1024,
-  });
-  expect(child.error, child.stderr).toBeUndefined();
-  expect(child.signal, child.stderr).toBeNull();
-  expect(Date.now() - began).toBeLessThan(60_000);
-  return child;
+  try {
+    const child = runProcessSync({
+      command: process.execPath,
+      args: ['--experimental-strip-types', '--input-type=module', '--eval', executableFixture, mode, state],
+      cwd: resolve(import.meta.dirname, '../..'),
+      encoding: 'utf8',
+      timeoutMs: 8_000, // Timeout kills a failed fixture; it cannot count as successful exit.
+      env: {
+        ...process.env,
+        CHATGPT_BROWSER_TURN_STATE_DIR: root,
+        ORCA_TERMINAL_HANDLE: '',
+        NODE_OPTIONS: '',
+      },
+      inheritParentEnv: false,
+    });
+    expect(child.outcome, child.stderr).toBe('exit');
+    expect(child.signal, child.stderr).toBeNull();
+    expect(Date.now() - began).toBeLessThan(60_000);
+    return child;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 describe('Issue #2494 executable state-light turn terminal/exit', () => {
@@ -121,7 +130,7 @@ describe('Issue #2494 executable state-light turn terminal/exit', () => {
   ] as const)('flushes exactly one %s %s terminal before actual exit %i with a retained handle',
     (mode, state, code) => {
       const child = spawnStateLightEntryFixture(mode, state);
-      expect(child.status, child.stderr).toBe(code);
+      expect(child.exitCode, child.stderr).toBe(code);
       expect(child.stdout.endsWith('\n')).toBe(true);
       const records = child.stdout.trimEnd().split('\n');
       expect(records).toHaveLength(1);
@@ -135,7 +144,7 @@ describe('Issue #2494 executable state-light turn terminal/exit', () => {
     ['invalid-direct', 'direct'],
   ])('preserves argument-invalid 22 on the %s route', (mode) => {
     const child = spawnStateLightEntryFixture(mode, 'ok');
-    expect(child.status, child.stderr).toBe(22);
+    expect(child.exitCode, child.stderr).toBe(22);
     const lines = child.stdout.trimEnd().split('\n');
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0]!)).toMatchObject({
@@ -145,14 +154,14 @@ describe('Issue #2494 executable state-light turn terminal/exit', () => {
 
   it.each(['imported-entry', 'imported-turn'])('%s returns without forcing process exit', (mode) => {
     const child = spawnStateLightEntryFixture(mode, 'no_reply');
-    expect(child.status, child.stderr).toBe(0);
+    expect(child.exitCode, child.stderr).toBe(0);
     expect(child.stdout).toContain(mode + '-survived\n');
   });
 
   it.each(['preflight', 'cancel', 'session', 'unrelated'])(
     'does not force process exit for the %s non-turn route', (route) => {
       const child = spawnStateLightEntryFixture('nonturn', route);
-      expect(child.status, child.stderr).toBe(0);
+      expect(child.exitCode, child.stderr).toBe(0);
       expect(child.stdout).toContain('nonturn-survived\n');
     },
   );
