@@ -14,6 +14,7 @@ import {
   authorizeTargetGhInvocation,
 } from './lib/gh-target-authorization.ts';
 import { projectCardPath, resolveTargetContext } from './lib/target-context.ts';
+import { isClassifiedGhReadCommand } from './lib/gh-inventory-static-guard.mjs';
 
 const roots: string[] = [];
 const savedEnv = new Map<string, string | undefined>();
@@ -372,4 +373,109 @@ describe('Issue #2188 target portability sinks', () => {
     expect(codeOf(() => parsePackWorkerReportArgs(['ready_for_review'], fixture.env))).toBe('missing-selection');
   });
 
+});
+
+describe('Issue #2507 selected-target edit-history GraphQL refusal', () => {
+  const target = { repository: 'example/alpha', defaultBranch: 'trunk' };
+  const inventory = JSON.parse(readFileSync(join(import.meta.dirname, 'lib/graphql-quota-github-read-inventory.json'), 'utf8')) as {
+    rows: Array<{ id: string; query?: string }>;
+  };
+  const query = inventory.rows.find((row) => row.id === 'issue-body-edit-evidence')?.query;
+  if (!query) throw new Error('registered Issue-body edit evidence query is missing');
+  const registered = [
+    'api', 'graphql', '-f', 'query=' + query, '-f', 'owner=example',
+    '-f', 'name=alpha', '-F', 'number=228',
+  ];
+
+  function refusal(args: string[], env: NodeJS.ProcessEnv = { OPK_PROJECT_ID: 'alpha' }): TargetGhAuthorizationError {
+    try {
+      authorizeTargetGhInvocation({ context: target, argv: args, env });
+    } catch (error) {
+      expect(error).toBeInstanceOf(TargetGhAuthorizationError);
+      return error as TargetGhAuthorizationError;
+    }
+    throw new Error('all target-mode GraphQL must remain refused');
+  }
+
+  it('offers the current-body-only classified command without fabricating same-head history evidence', () => {
+    const error = refusal(registered);
+    expect(error.code).toBe('target-gh-graphql-unsupported');
+    for (const fragment of [
+      'gh issue view 228 --json body', 'example/alpha', 'userContentEdits',
+      'lastEditedAt', 'editedAt/diff', 'post-terminal before/after',
+      'same-head', 'strict-descendant', 'scoped reconciliation', 'process-only/fake commit',
+    ]) expect(error.message).toContain(fragment);
+    expect(isClassifiedGhReadCommand('gh issue view 228 --json body')).toBe(true);
+  });
+
+  it('leaves arbitrary, malformed, duplicated, unsafe and foreign-bound GraphQL generic with no guessed Issue', () => {
+    const cases = [
+      ['api', 'graphql', '-f', 'query={viewer{login}}'],
+      registered.slice(0, -2),
+      [...registered.slice(0, -1), 'number=0'],
+      [...registered.slice(0, -1), 'number=1e2'],
+      [...registered.slice(0, -1), 'number=9007199254740992'],
+      [...registered.slice(0, -1), 'number=228', '-F', 'number=229'],
+      [...registered.slice(0, -1), 'number=228', '-f', 'owner=example'],
+      registered.map((arg) => arg === 'owner=example' ? 'owner=other' : arg),
+      registered.map((arg) => arg === 'name=alpha' ? 'name=beta' : arg),
+      registered.map((arg) => arg === 'query=' + query ? 'query={viewer{login}}' : arg),
+      [...registered, '--repo', 'example/beta'],
+      [...registered, '--hostname', 'ghe.example.test'],
+    ];
+    for (const args of cases) {
+      const error = refusal(args);
+      expect(error.code).toBe('target-gh-graphql-unsupported');
+      expect(error.message).not.toContain('gh issue view 228');
+      expect(error.message).toContain('arbitrary gh api graphql');
+    }
+    const inherited = refusal(registered, { GH_REPO: 'example/beta' });
+    expect(inherited.message).not.toContain('gh issue view 228');
+    const otherHost = refusal(registered, { GH_HOST: 'ghe.example.test' });
+    expect(otherHost.code).toBe('target-gh-host-mismatch');
+    expect(otherHost.message).not.toContain('gh issue view 228');
+  });
+
+  it('exercises the tracked scripts/gh target-mode subprocess, with zero unauthorized native calls', () => {
+    if (process.platform === 'win32') return;
+    const fixture = twoTargetFixture();
+    const bin = join(fixture.root, 'fake-native');
+    const audit = join(fixture.root, 'native-audit.log');
+    mkdirSync(bin, { recursive: true });
+    const fakeGh = join(bin, 'gh');
+    writeFileSync(fakeGh, '#!/usr/bin/env bash\nprintf "unexpected native call\\n" >>"$OPK_NATIVE_GH_AUDIT"\nexit 81\n', 'utf8');
+    chmodSync(fakeGh, 0o755);
+    const env = isolatedChildEnv({
+      ...fixture.env,
+      PATH: bin + ':' + dirname(process.execPath) + ':/usr/bin:/bin',
+      OPK_PROJECT_ID: 'alpha',
+      GH_REPO: 'example/alpha',
+      GH_HOST: 'github.com',
+      GH_REAL_BINARY: fakeGh,
+      GH_WRAPPER_ACTIVE: '',
+      OPK_NATIVE_GH_AUDIT: audit,
+    });
+    for (const args of [
+      registered,
+      ['api', 'graphql', '-f', 'query={viewer{login}}'],
+      registered.map((arg) => arg === 'name=alpha' ? 'name=beta' : arg),
+      [...registered.slice(0, -1), 'number=9007199254740992'],
+    ]) {
+      const result = runProcessSync({
+        command: join(process.cwd(), 'scripts', 'gh'),
+        args,
+        cwd: join(fixture.root, 'alpha'),
+        env,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.stderr).toContain('target-gh-graphql-unsupported');
+      if (args === registered) {
+        expect(result.stderr).toContain('gh issue view 228 --json body');
+        expect(result.stderr).toContain('userContentEdits');
+      } else {
+        expect(result.stderr).not.toContain('gh issue view 228');
+      }
+    }
+    expect(existsSync(audit)).toBe(false);
+  });
 });

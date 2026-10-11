@@ -44,6 +44,7 @@ import { runProcessSync } from './kernel/subprocess.ts';
 import { fileURLToPath } from 'node:url';
 import {
   extractAmbientGhExecutableSelections,
+  isClassifiedGhReadCommand,
   scanFileForViolations,
 } from './lib/gh-inventory-static-guard.mjs';
 import {
@@ -286,11 +287,15 @@ set -euo pipefail
 for arg in "$@"; do
   case "$arg" in
     *"/actions/runs/36730183562/jobs?"*)
-      printf '%s\\n' '{"total_count":2,"jobs":[{"id":17001,"name":"failed-build","conclusion":"failure"},{"id":17002,"name":"passed-build","conclusion":"success"}]}'
+      printf '%s\\n' '{"total_count":3,"jobs":[{"id":17001,"name":"failed-build","conclusion":"failure"},{"id":17002,"name":"passed-build","conclusion":"success"},{"id":17003,"name":"failed-tests","conclusion":"failure"}]}'
       exit 0
       ;;
     *"/actions/jobs/17001/logs")
       printf '%s\\n' 'build step failed' 'stack trace'
+      exit 0
+      ;;
+    *"/actions/jobs/17003/logs")
+      printf '%s\\n' 'tests failed' 'second job crash'
       exit 0
       ;;
   esac
@@ -309,13 +314,18 @@ exit 3
       expect(result).toContain('failed-build (job 17001)');
       expect(result).toContain('build step failed');
       expect(result).toContain('stack trace');
+      expect(result).toContain('failed-tests (job 17003)');
+      expect(result).toContain('second job crash');
       expect(result).not.toContain('passed-build');
+      expect(result).not.toContain('\\n'); // Raw line breaks, not escaped UI JSON.
 
       const direct = classifyArgv(jobArgv);
       expect(direct.route).not.toBeNull();
-      expect(executeRestRoute(direct.route!.id, {
+      const singleJobText = executeRestRoute(direct.route!.id, {
         realGh: fakeGh, parsed: direct.parsed, route: direct.route!, cwd: root,
-      })).toContain('build step failed');
+      });
+      expect(singleJobText).toBe('build step failed\nstack trace\n');
+      expect(singleJobText).not.toContain('second job crash');
     } finally {
       if (previousRepo === undefined) delete process.env.GH_REPO;
       else process.env.GH_REPO = previousRepo;
@@ -2531,5 +2541,95 @@ describe('Issue #2428 registered body-edit evidence identity/content read', () =
     });
     await expect(resolveFinalCapIssueBodyRevision(f.input, f.read as typeof runProcess)).rejects.toThrow('graphql_degraded_fail_fast');
     expect(f.read).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Issue #2507 exact checks arguments and actionable non-equivalent read refusals', () => {
+  const fullFields = 'name,state,bucket,link,startedAt,completedAt,workflow,description';
+  const checkArgs = (id: string) => ['pr', 'checks', id, '--json', fullFields];
+
+  it('allows exact decimal safe PR IDs and listed JSON subsets, never coercion or extra positionals', () => {
+    expect(classifyArgv(checkArgs('42')).route?.id).toBe('pr-checks');
+    expect(classifyArgv(['pr', 'checks', '42', '--json', 'name,state']).route?.id).toBe('pr-checks');
+    for (const args of [
+      ['pr', 'checks', '--json', fullFields],
+      ...['1e2', '1.5', '0', '-1', '9007199254740992', 'bad'].map(checkArgs),
+      [...checkArgs('42'), 'extra'],
+      ['pr', 'checks', '42'],
+      [...checkArgs('42'), '--required'],
+      [...checkArgs('42'), '--watch'],
+      [...checkArgs('42'), '--json', 'name,unsupported'],
+    ]) {
+      const { parsed, route } = classifyArgv(args);
+      expect(route, args.join(' ')).toBeNull();
+      expect(isUnsupportedHighLevelRead(parsed)).toBe(true);
+    }
+  });
+
+  it('classifies exactly the executable inventory-approved reads and a known-job-only direct log', () => {
+    for (const command of [
+      'gh pr checks 42 --json ' + fullFields,
+      'gh run view 36730183562 --log-failed',
+      'gh issue view 228 --json body',
+      'gh api repos/example/target/actions/jobs/17001/logs',
+    ]) expect(isClassifiedGhReadCommand(command), command).toBe(true);
+    for (const command of [
+      'gh api repos/example/target/issues/228',
+      'gh api repos/example/target/actions/runs/36730183562/jobs',
+      'gh api repos/example/target/commits/' + 'a'.repeat(40) + '/check-runs',
+      'gh api repos/example/target/commits/' + 'a'.repeat(40) + '/status',
+      'gh api repos/example/target/actions/jobs/not-known/logs',
+      'gh api repos/example/target/actions/jobs/17001/logs --method DELETE',
+      'gh api repos/example/target/actions/jobs/9007199254740992/logs',
+    ]) expect(isClassifiedGhReadCommand(command), command).toBe(false);
+  });
+
+  it('refuses malformed and semantically unsupported forms through the actual tracked scripts/gh without native fallthrough', () => {
+    if (process.platform === 'win32') return;
+    const root = tempRoot('opk-2507-gh-refusals-');
+    const fakeNative = join(root, 'gh');
+    symlinkSync(process.execPath, fakeNative);
+    const nativeAudit = join(root, 'native-fallthrough');
+    const fallbackSource = 'require("node:fs").writeFileSync(' + JSON.stringify(nativeAudit)
+      + ', "unexpected native call"); process.exitCode=92;\n';
+    for (const nativeCommand of ['pr', 'run', 'api']) {
+      writeFileSync(join(root, nativeCommand), fallbackSource, 'utf8');
+    }
+    const env = {
+      ...process.env,
+      PATH: controlledPath(root),
+      GH_REAL_BINARY: fakeNative,
+      OPK_PROJECT_ID: '',
+      GH_REPO: 'example/target',
+      GH_HOST: 'github.com',
+      GH_WRAPPER_ACTIVE: '',
+      GH_WRAPPER_AUDIT: '',
+      GH_WRAPPER_AUDIT_FILE: '',
+    };
+    const rejected: Array<{ args: string[]; fragments: string[] }> = [
+      { args: ['pr', 'checks', '42'], fragments: ['--json', 'gh pr checks 42 --json ' + fullFields] },
+      { args: [...checkArgs('42'), '--required'], fragments: ['--required', 'NON-EQUIVALENT', 'required-only filtering'] },
+      { args: [...checkArgs('42'), '--watch'], fragments: ['--watch', 'NON-EQUIVALENT', 'polling'] },
+      { args: ['pr', 'checks', '42', 'extra', '--json', fullFields], fragments: ['exactly one', 'PR ID'] },
+      ...['1e2', '1.5', '0', '-1', '9007199254740992'].map((id) => ({
+        args: checkArgs(id), fragments: ['PR ID', 'No runnable PR-checks command'],
+      })),
+      { args: ['pr', 'checks', '--json', fullFields], fragments: ['PR ID', 'No runnable PR-checks command'] },
+      { args: ['run', 'view', '36730183562', '--log-failed', '--watch'], fragments: ['--watch', 'NON-EQUIVALENT', 'gh run view 36730183562 --log-failed'] },
+      { args: ['run', 'view', '--log-failed'], fragments: ['RUN_ID', 'Do not invent'] },
+      { args: ['run', 'view', 'not-a-run', '--log-failed'], fragments: ['RUN_ID', 'Do not invent'] },
+    ];
+    for (const item of rejected) {
+      const outcome = spawnSync(join(repoRoot, 'scripts', 'gh'), item.args, {
+        cwd: root, env, encoding: 'utf8',
+      });
+      expect(outcome.status, item.args.join(' ')).not.toBe(0);
+      expect(outcome.stdout).toBe('');
+      expect(outcome.stderr).toContain('gh-wrapper: REST route failed');
+      for (const fragment of item.fragments) {
+        expect(outcome.stderr, item.args.join(' ')).toContain(fragment);
+      }
+    }
+    expect(existsSync(nativeAudit)).toBe(false);
   });
 });

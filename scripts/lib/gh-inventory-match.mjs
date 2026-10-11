@@ -280,8 +280,13 @@ export function matchInventoryRoute(parsed, options = {}) {
     if (!hasOnlyAllowedFlags(parsed, [])) {
       return null;
     }
-    const num = Number(parsed.positionals[0]);
-    if (!Number.isFinite(num) || num <= 0) {
+    // Do not coerce scientific notation, fractions, unsafe IDs or extra positionals.
+    const rawPrNumber = parsed.positionals[0];
+    if (parsed.positionals.length !== 1 || !/^\d+$/u.test(rawPrNumber ?? '')) {
+      return null;
+    }
+    const num = Number(rawPrNumber);
+    if (!Number.isSafeInteger(num) || num <= 0) {
       return null;
     }
     if (!hasOnlySupportedFields(parsed.jsonFields, PR_CHECKS_REST_FIELDS)) {
