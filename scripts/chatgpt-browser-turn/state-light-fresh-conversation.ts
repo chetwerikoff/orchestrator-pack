@@ -12,7 +12,6 @@ import {
 import { join } from 'node:path';
 import {
   classifyProductWall,
-  NEW_CHAT_CONTROL_SELECTORS,
   normalizeConversationUrl,
   productStatusText,
   projectConversationUrlMatchesProject,
@@ -792,23 +791,6 @@ export async function openBlankProjectChatSurface(
       deadlineMs,
       now,
     );
-  }
-  for (const selector of NEW_CHAT_CONTROL_SELECTORS) {
-    requireFreshPreparationTime(deadlineMs, now);
-    const control = page.locator(selector).first();
-    try {
-      if (Number(await boundedFreshPreparation(() => control.count(), deadlineMs, now)) <= 0) continue;
-      const clickMs = Math.min(500, requireFreshPreparationTime(deadlineMs, now));
-      await boundedFreshPreparation(() => control.click({ timeout: clickMs }), deadlineMs, now);
-      navigation?.recordNewChatActivation();
-      break;
-    } catch (error) {
-      if ((error instanceof Error && error.message === FRESH_PREPARATION_DEADLINE_EXHAUSTED)
-        || freshPreparationRemainingMs(deadlineMs, now) <= 0) {
-        throw new Error(FRESH_PREPARATION_DEADLINE_EXHAUSTED);
-      }
-      // Keep the existing opportunistic selector fallback while the deadline is open.
-    }
   }
 }
 

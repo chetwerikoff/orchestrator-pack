@@ -136,7 +136,6 @@ import {
   ASSISTANT_TURN_ANCESTOR_XPATH,
   COMPOSER_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR,
-  matchesNewChatControlSelector,
   matchesStopButtonSelector,
   MESSAGE_NODE_SELECTOR,
   RENDERED_STOP_BUTTON_SELECTOR,
@@ -260,9 +259,6 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void) {
         return collectionLocator(sent
           ? [{ role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` }]
           : []);
-      }
-      if (matchesNewChatControlSelector(selector)) {
-        return scalarLocator({ count: vi.fn(async () => 0) });
       }
       if (selector === MESSAGE_NODE_SELECTOR) {
         if (!sent) return collectionLocator([]);
@@ -1230,7 +1226,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(mocks.productStatusText).not.toHaveBeenCalled();
   });
 
-  it('bounds an unresolved new-chat control count and starts no click or retry', async () => {
+  it('ignores an unresolved new-chat control count and starts no click or retry', async () => {
     const navigation = new StateLightNavigationCounter();
     let url = SHARED_CONV;
     const goto = vi.fn(async (target: string) => { url = target; });
@@ -1244,10 +1240,10 @@ describe('state-light fresh conversation collision recovery', () => {
       'collision-profile', 'unresolved-locator', navigation,
       mocks.nowMs + 30, () => mocks.nowMs,
     );
-    expect(prepared).toMatchObject({ state: 'ui_contract_mismatch', cause: 'fresh_conversation_surface_unavailable' });
-    expect(count).toHaveBeenCalledTimes(1);
+    expect(prepared).toEqual({ state: 'ready' });
+    expect(count).not.toHaveBeenCalled();
     expect(click).not.toHaveBeenCalled();
-    expect(locator).toHaveBeenCalledTimes(1);
+    expect(locator).not.toHaveBeenCalled();
     expect(goto).toHaveBeenCalledTimes(1);
     expect(navigation.snapshotNewChatClick()).toBe(0);
     expect(mocks.productStatusText).not.toHaveBeenCalled();
@@ -1353,9 +1349,6 @@ describe('state-light fresh conversation collision recovery', () => {
       locator: vi.fn((selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
-        if (matchesNewChatControlSelector(selector)) {
-          return scalarLocator({ count: vi.fn(async () => 0) });
-        }
         if (selector === MESSAGE_NODE_SELECTOR) {
           if (!sent) return collectionLocator([]);
           const frame = snapshotFrames[Math.min(observationIndex, snapshotFrames.length - 1)]!;
@@ -1456,7 +1449,6 @@ describe('state-light fresh conversation collision recovery', () => {
             ? [{ role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` }]
             : []);
         }
-        if (matchesNewChatControlSelector(selector)) return scalarLocator({ count: vi.fn(async () => 0) });
         if (selector === MESSAGE_NODE_SELECTOR) {
           if (!state.sent) return collectionLocator([]);
           state.reads += 1;
@@ -1878,7 +1870,6 @@ describe('state-light fresh conversation collision recovery', () => {
             ? [{ role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` }]
             : sent && surface === 'foreign' ? foreignMessages.filter((message) => message.role === 'user') : []);
         }
-        if (matchesNewChatControlSelector(selector)) return scalarLocator({ count: vi.fn(async () => 0) });
         if (selector === MESSAGE_NODE_SELECTOR) {
           if (!sent) return collectionLocator([]);
           if (surface === 'foreign') {
@@ -2183,6 +2174,30 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(navigation.snapshotGoto()).toBe(1);
   });
 
+  it('prepares a project conversation without clicking the global New chat control that opens the root', async () => {
+    const navigation = new StateLightNavigationCounter();
+    let url = ISSUE_CONVERSATION_URL;
+    const click = vi.fn(async () => { url = 'https://chatgpt.com/'; });
+    const page = {
+      goto: vi.fn(async (target: string) => { url = target; }),
+      url: vi.fn(() => url),
+      locator: vi.fn((selector: string) => selector === '[data-testid="create-new-chat-button"]'
+        ? scalarLocator({ count: vi.fn(async () => 1), click })
+        : scalarLocator({ count: vi.fn(async () => 0) })),
+    };
+
+    const prepared = await prepareStateLightFreshConversation(page, {
+      cdp: 'http://127.0.0.1:9222', profile: '/tmp/profile',
+      newChat: true, projectUrl: ISSUE_PROJECT_URL, timeoutMs: 5_000,
+    }, 'global-new-chat-root', 'prepare-invocation', navigation);
+
+    expect(prepared).toEqual({ state: 'ready' });
+    expect(url).toBe(projectConversationPrefix(ISSUE_PROJECT_URL));
+    expect(page.goto).toHaveBeenCalledTimes(1);
+    expect(click).not.toHaveBeenCalled();
+    expect(navigation.snapshotGoto()).toBe(1);
+  });
+
   it('prepareStateLightFreshConversation skips a second goto when already on a blank project surface', async () => {
     const navigation = new StateLightNavigationCounter();
     const page = {
@@ -2309,9 +2324,6 @@ describe('state-light fresh conversation collision recovery', () => {
       locator: vi.fn((selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
-        if (matchesNewChatControlSelector(selector)) {
-          return scalarLocator({ count: vi.fn(async () => 0) });
-        }
         if (selector === MESSAGE_NODE_SELECTOR) {
           if (!sent) return collectionLocator([]);
           const frame = snapshotFrames[Math.min(observationIndex, snapshotFrames.length - 1)]!;
@@ -2417,9 +2429,6 @@ describe('state-light fresh conversation collision recovery', () => {
       locator: vi.fn((selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
-        if (matchesNewChatControlSelector(selector)) {
-          return scalarLocator({ count: vi.fn(async () => 0) });
-        }
         if (selector === MESSAGE_NODE_SELECTOR) {
           if (!sent) return collectionLocator([]);
           return collectionLocator(staleAssistant.messages, staleAssistant.generating);
@@ -2481,9 +2490,6 @@ describe('state-light fresh conversation collision recovery', () => {
       locator: vi.fn((selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
-        if (matchesNewChatControlSelector(selector)) {
-          return scalarLocator({ count: vi.fn(async () => 0) });
-        }
         if (selector === MESSAGE_NODE_SELECTOR) {
           if (!sent) return collectionLocator([]);
           return collectionLocator(staleAssistant.messages, staleAssistant.generating);
@@ -2593,9 +2599,6 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
       locator: vi.fn((selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
-        if (matchesNewChatControlSelector(selector)) {
-          return scalarLocator({ count: vi.fn(async () => 0) });
-        }
         if (selector === MESSAGE_NODE_SELECTOR) {
           if (!sent) return collectionLocator([]);
           const frame = snapshotFrames[Math.min(observationIndex, snapshotFrames.length - 1)]!;
@@ -2898,7 +2901,6 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
       locator: vi.fn((selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
-        if (matchesNewChatControlSelector(selector)) return scalarLocator({ count: vi.fn(async () => 0) });
         if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator([]);
         if (selector === ASSISTANT_MESSAGE_SELECTOR) return collectionLocator([]);
         if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
@@ -3052,7 +3054,6 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
       locator: vi.fn((selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
-        if (matchesNewChatControlSelector(selector)) return scalarLocator({ count: vi.fn(async () => 0) });
         if (selector === MESSAGE_NODE_SELECTOR) return sent
           ? collectionLocator(waitingMessages(), true)
           : collectionLocator([]);
@@ -3811,7 +3812,6 @@ describe('Issue #1752 production liveness regressions', () => {
       locator: vi.fn((selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
-        if (matchesNewChatControlSelector(selector)) return scalarLocator({ count: vi.fn(async () => 0) });
         if (selector === MESSAGE_NODE_SELECTOR) {
           return sent ? collectionLocator(workingMessages(), true) : collectionLocator([]);
         }
@@ -4023,7 +4023,6 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
       locator: vi.fn((selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
-        if (matchesNewChatControlSelector(selector)) return scalarLocator({ count: vi.fn(async () => 0) });
         if (selector.includes('regenerate-thread-error') || selector.includes('data-testid*="error"')) {
           return scalarLocator({
             count: vi.fn(async () => (sent && currentPhase() === 'banner' ? 1 : 0)),
