@@ -3155,7 +3155,10 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
       expect(lostAt).toBeUndefined();
       expect(terminal.result).toMatchObject({ state: 'driver_error', cause: 'post_send_target_crashed' });
     }
-    expect(turn.page.close).not.toHaveBeenCalled();
+    // A definitively closed Page is skipped; a still-reachable owned Page
+    // gets exactly one bounded terminal close even after a read error.
+    expect(turn.page.close).toHaveBeenCalledTimes(closeDuringRead ? 0 : 1);
+    expect(terminal.result.cleanup).toBe(closeDuringRead ? 'skipped' : 'confirmed');
     expect(foreignClose).not.toHaveBeenCalled();
   });
 
@@ -4037,8 +4040,8 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     });
     expect(fake.getSends()).toBe(1);
     expect(fake.retryClicks).not.toHaveBeenCalled();
-    expect(fake.close).not.toHaveBeenCalled();
-    expect(outcome.result.cleanup).not.toBe('confirmed');
+    expect(fake.close).toHaveBeenCalledTimes(1);
+    expect(outcome.result.cleanup).toBe('confirmed');
   });
 
   it('continues in an already-open tab of the conversation instead of reloading it', async () => {
@@ -4059,6 +4062,7 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     ]);
     expect(harness.context.newPage).not.toHaveBeenCalled();
     expect(fake.page.goto).not.toHaveBeenCalled();
+    expect(fake.close).not.toHaveBeenCalled();
     expect(outcome.result).toMatchObject({ goto_count: 0, send_count: 1 });
   });
 
@@ -4078,7 +4082,8 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     });
     expect(fake.getSends()).toBe(1);
     expect(fake.retryClicks).not.toHaveBeenCalled();
-    expect(fake.close).not.toHaveBeenCalled();
+    expect(fake.close).toHaveBeenCalledTimes(1);
+    expect(outcome.result.cleanup).toBe('confirmed');
   });
 
   it('does not end a turn on a recovery banner before its generation was ever observed', async () => {
