@@ -471,16 +471,14 @@ describe('observable post-send exits (#2416)', () => {
 });
 
 describe('flow-manager long-running child (#1164)', () => {
-  it('projects only bounded holder and stale-clear diagnostics through the persisted terminal (#2487)', async () => {
+  it('projects only bounded holder diagnostics through the persisted terminal (#2487)', async () => {
     for (const [label, extras, expected] of [
       ['stable', {
         send_slot_holder_invocation_id: 'holder-2487',
         send_slot_holder_phase: 'prepared',
-        stale_composer_cleared: true,
       }, {
         send_slot_holder_invocation_id: 'holder-2487',
         send_slot_holder_phase: 'prepared',
-        stale_composer_cleared: true,
       }],
       ['uncorrelatable', {
         send_slot_holder_invocation_id: 'invalid holder: private path',

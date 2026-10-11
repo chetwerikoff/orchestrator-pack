@@ -14,6 +14,7 @@ import {
   fleetAlarmMessage,
   fleetWakeConfigFromEnv,
   managerBannerMessage,
+  parseNamedParkedProducer,
   runFleetAlarmTick,
   runFleetDiagnosticTick,
   type FleetAlarmTickOptions,
@@ -1478,6 +1479,50 @@ describe('Issue #2485 r05: plain event wake, no proof gates and pane-local alarm
     envelopes: readonly TerminalEnvelopeEvent[] = [event]) =>
     tick({ screens, store, terminals: [terminals[0]!, terminals[1]!, terminals[2]!],
       listTerminalEnvelopes: () => envelopes });
+
+  it.each([
+    ['2dfc83d0-0000-4000-8000-000000000101', '.'],
+    ['batch1011-c2-author-r02', ''],
+    ['batch1011-c2-author-r02', '.'],
+    ['batch1011-c2-author-r02', ' (self-wake armed)'],
+    ['2dfc83d0-0000-4000-8000-000000000101', '. (self-wake armed)'],
+    ['batch1011-c2-author-r02', ' (self-wake armed).'],
+    ['batch1011-c2-author-r02', '...  '],
+    [id, ''],
+    ['inv-owned', ''],
+  ])('Issue #2498: parses and wakes GPT turn %s%s by envelope path substring', async (token, suffix) => {
+    const wait = 'PARKED on GPT turn ' + token + suffix;
+    expect(parseNamedParkedProducer(wait)).toEqual({ kind: 'gpt', label: 'GPT-turn-' + token, id: token });
+    const matching = { path: '/tmp/opencode/issue-2498-' + token + '-terminal.json', invocationId: 'unrelated' };
+    const first = await simple({ coord: 'idle', one: wait, two: 'working\nesc interrupt' },
+      new MemoryWakeStore(), [matching]);
+    expect(paneText(first.calls, 'one')).toHaveLength(1);
+    expect(paneText(first.calls, 'one')[0]).toContain(matching.path);
+    const foreign = await simple({ coord: 'idle', one: wait, two: 'working\nesc interrupt' },
+      new MemoryWakeStore(), [{ path: '/tmp/opencode/foreign-terminal.json', invocationId: 'unrelated' }]);
+    expect(paneText(foreign.calls, 'one')).toHaveLength(0);
+  });
+
+  it('Issue #2498: leaves empty GPT ids unresolved and other named forms unchanged', () => {
+    expect(parseNamedParkedProducer('PARKED on GPT turn ...  ')).toBeUndefined();
+    const sha = 'a'.repeat(40);
+    for (const wait of [
+      `PARKED on pack-review PR #42 head ${sha}`,
+      `PARKED on PR #42 review #7 head ${sha}`,
+      `PARKED on CI PR #42 head ${sha}`,
+      `PARKED on CI on ${sha}`,
+      'PARKED on merge-42',
+      'PARKED on PR #42 merged',
+      'PARKED on #42 merged into main',
+      'PARKED on terminal one incarnation inc-1',
+      'PARKED on merge agent terminal one incarnation inc-1 PR #42',
+    ]) {
+      expect(parseNamedParkedProducer(wait)).toBeDefined();
+      if (!wait.startsWith('PARKED on terminal ')) {
+        expect(parseNamedParkedProducer(wait + '.')).toBeUndefined();
+      }
+    }
+  });
 
   it('AC1/2: matches a terminal envelope filename or ID with no Task, receipt, index or process identity', async () => {
     const first = await simple({ coord: 'idle', one: parked, two: 'working\nesc interrupt' });
