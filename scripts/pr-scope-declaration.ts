@@ -111,6 +111,7 @@ function canonicalizeEntry(
   raw: unknown,
   field: string,
   index: number,
+  allowFileStar = false,
 ): { ok: true; entry: CanonicalEntry } | { ok: false; error: string } {
   if (typeof raw !== 'string') {
     return { ok: false, error: `${field}[${index}] must be a string` };
@@ -144,7 +145,19 @@ function canonicalizeEntry(
     };
   }
 
-  if (value.includes('*') || value.includes('?')) {
+  // File-suffix stars are declaration-only; policy arrays and concrete paths stay literal.
+  const terminalFileStar =
+    allowFileStar &&
+    !prefix &&
+    value.endsWith('*') &&
+    value.indexOf('*') === value.length - 1 &&
+    /(?:^|\/)[^/*]+\*$/.test(value);
+  if (
+    (value.includes('*') && !terminalFileStar) ||
+    value.includes('?') ||
+    /[\[\]{}]/.test(value) ||
+    /(?:^|[^\\])[@+?!*]\(/.test(value)
+  ) {
     return {
       ok: false,
       error: `${field}[${index}] "${raw}" uses an unsupported glob; use a literal path or terminal /** directory prefix`,
@@ -193,7 +206,7 @@ function canonicalizeEntries(
   const errors: string[] = [];
   const seen = new Set<string>();
   values.forEach((value, index) => {
-    const result = canonicalizeEntry(value, field, index);
+    const result = canonicalizeEntry(value, field, index, field === 'declared_paths');
     if (!result.ok) {
       errors.push(result.error);
       return;
@@ -268,7 +281,7 @@ export function pathMatchesEntries(
   const canonical = normalizeRepositoryPath(path);
   if (!canonical.ok) return false;
   return entries.some((raw) => {
-    const result = canonicalizeEntry(raw, 'entry', 0);
+    const result = canonicalizeEntry(raw, 'declared_paths', 0, true);
     return result.ok && pathEntryMatches(canonical.path, result.entry);
   });
 }
@@ -283,7 +296,7 @@ export function entriesWithinRoots(
   }
 
   for (const raw of entries) {
-    const entry = canonicalizeEntry(raw, 'declared_paths', 0);
+    const entry = canonicalizeEntry(raw, 'declared_paths', 0, true);
     if (!entry.ok) {
       return { ok: false, path: raw, root: entry.error };
     }

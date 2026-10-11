@@ -6,6 +6,8 @@ import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import {
   PR_SCOPE_DECLARATION_SCHEMA,
   REPOSITORY_ALLOWED_ROOTS,
+  normalizeRepositoryPath,
+  pathMatchesEntries,
   producePrScopeDeclaration,
   selectDeclarationArtifact,
   selectLiveIssueScope,
@@ -222,6 +224,150 @@ describe('AO-free PR scope declaration contract', () => {
         allowed_roots: ['scripts/foo*.test.ts'],
       }),
     ).toMatchObject({ ok: false, kind: 'invalid-normalization' });
+  });
+
+
+  it('accepts one terminal file star only for declared paths, never policy or changed paths', () => {
+    const valid = {
+      ...declaration(),
+      declared_paths: ['scripts/.env.*'],
+      allowed_roots: ['scripts/'],
+    };
+    expect(validatePrScopeDeclaration(valid, 42)).toMatchObject({ ok: true });
+
+    expect(pathMatchesEntries('.env.fixture', ['.env.*'])).toBe(true);
+    expect(pathMatchesEntries('.env', ['.env.*'])).toBe(false);
+    expect(pathMatchesEntries('.env.fixture/child', ['.env.*'])).toBe(false);
+    expect(pathMatchesEntries('scripts/.env.fixture', ['scripts/.env.*'])).toBe(true);
+    expect(pathMatchesEntries('scripts/.env.fixture/child', ['scripts/.env.*'])).toBe(false);
+    // Syntax recognition is not permission to widen the pack's repository root ceiling.
+    expect(
+      validatePrScopeDeclaration({ ...declaration(), declared_paths: ['.env.*'] }, 42),
+    ).toMatchObject({ ok: false, kind: 'policy-violation' });
+
+    for (const pattern of [
+      '*',
+      'scripts/*',
+      'scripts/*.ts',
+      'scripts/foo*bar',
+      'scripts/foo**',
+      'scripts/**/file.*',
+      'scripts/file?.ts',
+      'scripts/[ab].ts',
+      'scripts/{one,two}.ts',
+      'scripts/@(one|two).ts',
+      'scripts/!(private).ts',
+    ]) {
+      expect(
+        validatePrScopeDeclaration({ ...valid, declared_paths: [pattern] }, 42),
+      ).toMatchObject({ ok: false, kind: 'invalid-normalization' });
+    }
+    for (const policyField of ['allowed_roots', 'denylist'] as const) {
+      expect(
+        validatePrScopeDeclaration({
+          ...valid,
+          [policyField]:
+            policyField === 'denylist'
+              ? [...(valid.denylist as string[]), 'scripts/.env.*']
+              : ['scripts/.env.*'],
+        }, 42),
+      ).toMatchObject({ ok: false, kind: 'invalid-normalization' });
+    }
+    for (const changedPath of [
+      'scripts/.env.*',
+      'scripts/file?.ts',
+      'scripts/[ab].ts',
+      'scripts/{one,two}.ts',
+      'scripts/@(one|two).ts',
+    ]) {
+      expect(normalizeRepositoryPath(changedPath)).toMatchObject({ ok: false });
+    }
+    const denylist = [
+      ...(valid.denylist as string[]),
+      'scripts/.env.private',
+    ].sort((left, right) => left.localeCompare(right));
+    expect(
+      validatePrScopeDeclaration({ ...valid, denylist }, 42),
+    ).toMatchObject({ ok: false, kind: 'policy-violation' });
+  });
+
+  it('generates bounded file patterns and guards the selected default declaration', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-file-star-'));
+    roots.push(root);
+    const fixtureIssue = [
+      '```denylist',
+      'vendor/**',
+      'packages/core/**',
+      'secrets/**',
+      'credentials/**',
+      '```',
+      '```allowed-roots',
+      'scripts/**',
+      '```',
+    ].join('\n');
+    const issueBodyFile = join(root, 'issue-body.md');
+    writeFileSync(issueBodyFile, fixtureIssue);
+    const output = producePrScopeDeclaration([
+      '--issue', '42',
+      '--declared-paths', 'scripts/.env.*',
+      '--issue-body-file', issueBodyFile,
+      '--repo-root', root,
+    ]);
+    expect(output.declared_paths).toEqual(['scripts/.env.*']);
+    expect(output.allowed_roots).toEqual(['scripts/']);
+    const selectedPath = 'docs/declarations/42.pr-scope.json';
+    const artifact = JSON.parse(readFileSync(join(root, selectedPath), 'utf8')) as unknown;
+    expect(validatePrScopeDeclaration(artifact, 42)).toMatchObject({ ok: true });
+    expect(artifact).toEqual(output);
+
+    const paths = [selectedPath, 'scripts/.env.fixture'];
+    const base = {
+      repoRoot: root,
+      prBody: 'Closes #42',
+      issueBody: fixtureIssue,
+      prPaths: paths,
+      degradedMode: false,
+      forkPr: false,
+    };
+    expect(checkPrScope(base)).toMatchObject({
+      ok: true,
+      mode: 'implementation',
+      scopeSource: 'declaration',
+      declarationPath: selectedPath,
+      checkedPaths: paths,
+      skippedControlArtifacts: [selectedPath],
+    });
+
+    for (const [badPath, reason] of [
+      ['scripts/other.env', 'scope_violation'],
+      ['scripts/.env.*', 'invalid_path'],
+      ['vendor/secret.ts', 'scope_violation'],
+      ['packages/core/index.ts', 'scope_violation'],
+      ['docs/declarations/42.extra.txt', 'scope_violation'],
+    ]) {
+      expect(
+        checkPrScope({ ...base, prPaths: [selectedPath, badPath] }),
+      ).toMatchObject({ ok: false, reason });
+    }
+
+    const alternatePath = join(root, 'docs/declarations/42.alternate.json');
+    writeFileSync(alternatePath, JSON.stringify(output));
+    expect(checkPrScope(base)).toMatchObject({
+      ok: false,
+      reason: 'declaration-selection-failed',
+    });
+    rmSync(alternatePath);
+
+    writeFileSync(
+      issueBodyFile,
+      fixtureIssue.replace('credentials/**', 'credentials/**\nscripts/.env.private'),
+    );
+    expect(() => producePrScopeDeclaration([
+      '--issue', '42',
+      '--declared-paths', 'scripts/.env.*',
+      '--issue-body-file', issueBodyFile,
+      '--repo-root', root,
+    ])).toThrow(/denylisted by repository policy/);
   });
 
   it('admits the exact .gitignore root without widening the root-file family', () => {
