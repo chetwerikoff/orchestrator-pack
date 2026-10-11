@@ -127,6 +127,7 @@ export function stableTurnInput(prompt: string) {
 }
 
 export function browserFor(page: any) {
+  page.bringToFront ??= vi.fn(async () => undefined);
   const context = { newPage: vi.fn(async () => page) };
   return {
     browser: {
@@ -154,6 +155,7 @@ export function createBrowserSessionModuleMock(mocks: {
 
 export function createCoordinationModuleMock() {
   return {
+    acquireDomainLock: vi.fn(() => ({ release: vi.fn() })),
     destinationIdentity: vi.fn((path: string) => ({
       identity: `identity:${path}`,
       finalPath: path,

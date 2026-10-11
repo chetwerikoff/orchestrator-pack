@@ -22,7 +22,7 @@ import {
   RESOURCE_CLEANUP_BOUND_MS,
   type ResourceCleanupOutcome,
 } from './browser-session.ts';
-import { destinationIdentity } from './coordination.ts';
+import { acquireDomainLock, destinationIdentity, type DomainLock } from './coordination.ts';
 import {
   turnExitCode,
   type ComposerMutationDiagnosticV1,
@@ -395,6 +395,8 @@ interface FreshComposerCleanupContext {
   markedPayload?: string;
   projectUrl?: string;
   staleComposerCleared: boolean;
+  sendLock?: DomainLock;
+  sendAttempted?: boolean;
 }
 
 export interface StateLightPublicationResult {
@@ -1851,7 +1853,7 @@ export async function classifySendLandingEvidence(
   const pageUrl = pageConversationUrl(page);
   if (pageUrl && conversationUuidFromUrl(pageUrl)) return 'landed';
   const messages = await readPageMessages(page, deadlineMs);
-  if (messages.some((message) => message.role === 'user' && normalizeVisibleText(message.text) === normalizedPrompt)) {
+  if (messages.some((message) => message.role === 'user' && renderedPayloadMatches(normalizeVisibleText(message.text), normalizedPrompt))) {
     return 'landed';
   }
   let remainingMs = deadlineMs - Date.now();
@@ -1863,7 +1865,7 @@ export async function classifySendLandingEvidence(
     const composerText = collapseUnicodeWhitespace(
       await locatorText(composer, Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs)),
     );
-    if (composerText === collapseUnicodeWhitespace(promptText)) return 'not_landed';
+    if (renderedPayloadMatches(composerText, promptText)) return 'not_landed';
   }
   return 'ambiguous';
 }
@@ -2159,6 +2161,7 @@ async function prepareFreshComposerDraft(
   assertOwnerAndPage?: () => void,
 ): Promise<'empty' | 'cleared' | 'unavailable'> {
   assertOwnerAndPage?.();
+  await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), Math.max(1, Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now())), 'fresh_composer_front_timeout');
   const composer = page.locator(COMPOSER_SELECTOR);
   const original = await readComposerTextForSendDelivery(composer, deadlineMs);
   assertOwnerAndPage?.();
@@ -2168,6 +2171,7 @@ async function prepareFreshComposerDraft(
     const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
     if (waitMs <= 0) return 'unavailable';
     assertOwnerAndPage?.();
+    await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), waitMs, 'fresh_composer_front_timeout');
     await composer.fill('', { timeout: waitMs });
     assertOwnerAndPage?.();
   } catch {
@@ -2251,7 +2255,7 @@ async function freshRetryDomGuards(input: {
   try {
     if (await readFreshStopVisible(input.page, input.deadlineMs) !== false) return false;
     const typed = await readComposerTextForSendDelivery(input.composer, input.deadlineMs);
-    if (typed !== collapseUnicodeWhitespace(input.markerPayload)) return false;
+    if (!renderedPayloadMatches(typed, input.markerPayload)) return false;
     const observed = await readPageObservation(
       input.page, undefined, undefined, true, input.deadlineMs,
     );
@@ -2318,6 +2322,7 @@ async function mutateComposerOrCause(
   insertionContext?: {
     insertionDeadlineMs?: number;
     diagnostic?: ComposerMutationDiagnosticV1;
+    fresh?: boolean;
   },
 ): Promise<PreSendComposerFailureCause | null> {
   const composer = page.locator(COMPOSER_SELECTOR);
@@ -2338,6 +2343,9 @@ async function mutateComposerOrCause(
     }
     return 'composer_mutation_budget_exhausted';
   };
+  if (insertionContext?.fresh) {
+    await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), Math.max(1, remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs)), 'fresh_composer_front_timeout');
+  }
   if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
     // A late readiness read must not open another browser operation after
     // the insertion/invocation budget has expired.
@@ -2356,6 +2364,9 @@ async function mutateComposerOrCause(
       let actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (actionBudgetMs <= 0) return exhausted('budget_before_click');
       await composer.click({ timeout: actionBudgetMs });
+      actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+      if (actionBudgetMs <= 0) return exhausted('budget_before_fill');
+      if (insertionContext?.fresh) await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), actionBudgetMs, 'fresh_composer_front_timeout');
       actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (actionBudgetMs <= 0) return exhausted('budget_before_fill');
       await composer.fill(text, { timeout: actionBudgetMs });
@@ -2378,6 +2389,9 @@ async function mutateComposerOrCause(
     if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
       return exhausted('readiness_before_fill');
     }
+    actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+    if (actionBudgetMs <= 0) return exhausted('budget_before_fill2');
+    if (insertionContext?.fresh) await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), actionBudgetMs, 'fresh_composer_front_timeout');
     actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
     if (actionBudgetMs <= 0) return exhausted('budget_before_fill2');
     await composer.fill(text, { timeout: actionBudgetMs });
@@ -2691,6 +2705,30 @@ function browserOrPageDefinitelyLost(page: any, browser: any): boolean {
   return false;
 }
 
+function renderedPayloadMatches(actual: string | undefined, expected: string): boolean {
+  return actual !== undefined && actual.replace(/\s+/gu, '') === expected.replace(/\s+/gu, '');
+}
+
+async function acquireFreshSendLock(profileKey: string, deadlineMs: number): Promise<DomainLock> {
+  while (Date.now() < deadlineMs) {
+    const lock = acquireDomainLock(profileKey, 'fresh-send-composer', 0);
+    if (lock) return lock;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(1, deadlineMs - Date.now()))));
+  }
+  throw new Error('fresh_send_lock_deadline_exhausted');
+}
+
+async function clearFreshComposerDraft(page: any): Promise<void> {
+  try {
+    await boundedBrowserRead((async () => {
+      await page.bringToFront?.();
+      await page.locator(COMPOSER_SELECTOR).fill('', { timeout: MAX_LOCAL_READ_WAIT_MS });
+    })(), MAX_LOCAL_READ_WAIT_MS, 'fresh_composer_clear_timeout');
+  } catch { /* Best-effort cleanup must not hide the pre-send failure. */ }
+}
+
+export const __testFreshSend = { acquireFreshSendLock, renderedPayloadMatches, clearFreshComposerDraft };
+
 async function runTurn(
   args: ParsedTurnArgs,
   recoveryHooks: StateLightRecoveryHooks = {},
@@ -2699,10 +2737,27 @@ async function runTurn(
   freshCleanup?: FreshComposerCleanupContext,
 ): Promise<TurnRunOutcome> {
   let diagnostic: ProductWallDiagnostic = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
-  const outcome = await runTurnCore(args, recoveryHooks, entryLivenessHeartbeat, heartbeatSchedulerReady, (value) => {
-    if (value.matched_text !== 'none') diagnostic = value;
-  }, freshCleanup);
-  return { ...outcome, result: { ...outcome.result, product_wall_diagnostic: diagnostic } };
+  freshCleanup ??= { staleComposerCleared: false };
+  try {
+    const outcome = await runTurnCore(args, recoveryHooks, entryLivenessHeartbeat, heartbeatSchedulerReady, (value) => {
+      if (value.matched_text !== 'none') diagnostic = value;
+    }, freshCleanup);
+    return { ...outcome, result: { ...outcome.result, product_wall_diagnostic: diagnostic } };
+  } finally {
+    if (freshCleanup.sendLock) {
+      try {
+        if (freshCleanup.page && !freshCleanup.sendAttempted
+          && isBlankProjectSurfaceUrl(String(freshCleanup.page.url()), freshCleanup.projectUrl ?? '')) {
+          await clearFreshComposerDraft(freshCleanup.page);
+        }
+      } catch {
+        // A lost page must not hide the original pre-send result.
+      } finally {
+        freshCleanup.sendLock.release();
+        freshCleanup.sendLock = undefined;
+      }
+    }
+  }
 }
 
 async function runTurnCore(
@@ -2861,6 +2916,9 @@ async function runTurnCore(
       };
     }
 
+    if (config.newChat && freshCleanup) {
+      freshCleanup.sendLock = await acquireFreshSendLock(profileKey, invocationDeadlineMs);
+    }
     const chromium = loadChromium();
     const connectWaitMs = invocationBudget.clampOperationWaitMs();
     if (connectWaitMs <= 0) throw new BrowserOperationTimeoutError('connect_over_cdp');
@@ -3061,7 +3119,7 @@ async function runTurnCore(
         freshCleanup.page = page;
         freshCleanup.markedPayload = markedPayload;
       }
-      const insertionContext: { insertionDeadlineMs?: number; diagnostic?: ComposerMutationDiagnosticV1 } = {};
+      const insertionContext: { insertionDeadlineMs?: number; diagnostic?: ComposerMutationDiagnosticV1; fresh?: boolean } = { fresh: true };
       const mutationFailure = await mutateComposerOrCause(page, markedPayload, invocationDeadlineMs, insertionContext);
       assertFreshOwner();
       if (mutationFailure) return returnComposerMutationFailure(mutationFailure, insertionContext.diagnostic);
@@ -3070,7 +3128,8 @@ async function runTurnCore(
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       const composer = page.locator(COMPOSER_SELECTOR);
-      if (await readComposerTextForSendDelivery(composer, invocationDeadlineMs) !== collapseUnicodeWhitespace(markedPayload)) {
+      await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), Math.max(1, Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now())), 'fresh_composer_front_timeout');
+      if (!renderedPayloadMatches(await readComposerTextForSendDelivery(composer, invocationDeadlineMs), markedPayload)) {
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
@@ -3120,12 +3179,14 @@ async function runTurnCore(
           profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
         });
         sendAttempted = true;
+        if (freshCleanup) freshCleanup.sendAttempted = true;
       };
       // The composer can change during Send readiness polling. Do not send a
       // different draft as though it were the invocation's marked payload.
-      if (await readComposerTextForSendDelivery(
+      await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), Math.max(1, Math.min(MAX_LOCAL_READ_WAIT_MS, readinessDeadlineMs - Date.now())), 'fresh_composer_front_timeout');
+      if (!renderedPayloadMatches(await readComposerTextForSendDelivery(
         composer, Math.min(invocationDeadlineMs, readinessDeadlineMs),
-      ) !== collapseUnicodeWhitespace(markedPayload)) throw new Error('ui_contract_mismatch:fresh_owned_payload_changed_before_click');
+      ), markedPayload)) throw new Error('ui_contract_mismatch:fresh_owned_payload_changed_before_click');
       assertFreshOwner();
       const sendAction = async () => await dispatchStateLightSendAndObserveDelivery({
         page, browser, composer, sendButton, hasSendButton: true, marker,
@@ -3165,6 +3226,8 @@ async function runTurnCore(
         };
       }
       sendCount += delivery.sendCount;
+      freshCleanup?.sendLock?.release();
+      if (freshCleanup) freshCleanup.sendLock = undefined;
       if (delivery.witness === 'owned_stop') ownedStopDeliveryObserved = true;
       afterSend = true;
       setHeartbeatPhase('post_send_observation');
@@ -5381,14 +5444,12 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
         const composer = outcome.page.locator(COMPOSER_SELECTOR);
         if (await safeComposerBoundary()) {
           const text = await readComposerTextForSendDelivery(composer, Date.now() + MAX_LOCAL_READ_WAIT_MS);
-          // The empty composer is already clean if insertion never happened.
-          // A nonempty draft must still match this turn's normalized marked payload.
-          if (text !== undefined && (text === '' || (outcome.ownedTypedPayload !== undefined
-            && text === collapseUnicodeWhitespace(outcome.ownedTypedPayload)))
+          // Draft clearing happened while holding the fresh-send lock.
+          // After release, never modify a draft belonging to the next sender.
+          if (text === ''
             && await safeComposerBoundary()
             && await readComposerTextForSendDelivery(composer, Date.now() + MAX_LOCAL_READ_WAIT_MS) === text
             && stillOwnedBlankSurface()) {
-            if (text.trim() !== '') await composer.fill('', { timeout: MAX_LOCAL_READ_WAIT_MS });
             cleared = await safeComposerBoundary()
               && (await readComposerTextForSendDelivery(composer, Date.now() + MAX_LOCAL_READ_WAIT_MS))?.trim() === ''
               && await safeComposerBoundary();

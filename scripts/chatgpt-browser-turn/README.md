@@ -52,7 +52,7 @@ invalid in identity-bound mode.
 Every canonical turn creates a dedicated owned tab. This removes the old shared-
 tab cleanup ambiguity.
 
-- a positively not-sent terminal may clear only the exact invocation-marked composer payload and then close its provably created tab; a zero count or uncertain click never suffices;
+- a fresh pre-send failure best-effort clears the draft on its still-owned blank project page while holding the composer lock, even when the page is preserved; an uncertain click never authorizes draft clearing;
 - a post-send turn closes that exact tab only after the final-path publisher returns
   `committed_ok`;
 - every post-send/no-publication result preserves the reachable retained tab and
@@ -73,9 +73,14 @@ liveness.
 
 ## Fresh-conversation prepare bounds and advisory walls
 
-Fresh `--new-chat` turns serialize the whole prepare+send critical section behind a
-mandatory profile send slot. Disabling that slot requires explicit opt-in plus a
-recorded reason env var; the legacy disable flag alone is not sufficient.
+Fresh `--new-chat` turns take an unconditional profile-wide composer file lock
+before opening their tab, reusing `acquireDomainLock`. Waiters yield until release
+or their invocation deadline; a dead process's lock is reclaimed immediately.
+The lock is released after observed dispatch or after bounded pre-send draft
+cleanup on every exit path. Existing-chat continuations do not take it. The
+legacy send-slot owner fence remains unchanged and cannot disable this lock.
+Fresh composer reads and fills front the tab; rendered payload comparisons
+ignore whitespace added by the editor, including around backticked URLs.
 
 Prepare attempts are capped (`STATE_LIGHT_FRESH_PREPARE_ATTEMPTS`, currently 3) with
 exponential backoff between attempts instead of hot-looping `page.goto`. A product
@@ -140,8 +145,9 @@ the first action never physically dispatched and the exact marked composer,
 user-node baseline, absent Stop and current page/slot identity all still agree.
 Missing log proof or any ambiguity forbids retry and pre-send cleanup; a newly
 attributable Stop after click is delivery and continues normal observation.
-An unclicked never-enabled button can end not-sent; clear only identical owned
-payload and close only its proven dedicated tab, retaining any changed/foreign tab.
+An unclicked never-enabled button can end not-sent; clear its draft before
+releasing the composer lock, then close only its proven dedicated blank tab.
+After lock release, the finalizer reads the composer but never fills it again.
 Operator recovery must never blindly resend after possible delivery.
 
 These records are transport-local only. They do not authorize workflow

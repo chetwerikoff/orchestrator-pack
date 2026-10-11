@@ -1,4 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import { runProcessSync } from '../kernel/subprocess.ts';
+import { __testFreshSend, __testSendDelivery, __testComposerMutation } from './state-light-turn-base.ts';
 import {
   classifyProductWall,
   createFreshIdentityRetention,
@@ -284,4 +289,98 @@ describe('fresh project conversation identity', () => {
     expect(projectConversationUrlMatchesProject(project + '/c/' + conversationUuid + '/other-route', projectUrl)).toBe(false);
   });
 
+});
+
+
+describe('Issue #2497 fresh-send composer serialization', () => {
+  it.each(['normal send', 'pre-send failure'])('queues a second send until release after %s', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'fresh-send-2497-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    try {
+      const first = await __testFreshSend.acquireFreshSendLock('profile-2497', Date.now() + 2_000);
+      let secondAcquired = false;
+      const secondPending = __testFreshSend.acquireFreshSendLock('profile-2497', Date.now() + 2_000)
+        .then((lock) => { secondAcquired = true; return lock; });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(secondAcquired).toBe(false);
+      first.release();
+      const second = await secondPending;
+      expect(secondAcquired).toBe(true);
+      second.release();
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('takes over a lock left by a dead process without waiting for its age', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'fresh-send-dead-2497-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    try {
+      const child = runProcessSync({ command: process.execPath, args: ['--experimental-strip-types', '--input-type=module', '-e',
+        `import { acquireDomainLock } from ${JSON.stringify(new URL('./coordination.ts', import.meta.url).href)}; acquireDomainLock('profile-dead-2497', 'fresh-send-composer', 0);`,
+      ], env: process.env, encoding: 'utf8', timeoutMs: 5_000 });
+      expect(child.exitCode, child.stderr).toBe(0);
+      const lock = await __testFreshSend.acquireFreshSendLock('profile-dead-2497', Date.now() + 2_000);
+      lock.release();
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('bounds contention by the invocation deadline', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'fresh-send-deadline-2497-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    try {
+      const first = await __testFreshSend.acquireFreshSendLock('profile-deadline-2497', Date.now() + 1_000);
+      try {
+        await expect(__testFreshSend.acquireFreshSendLock('profile-deadline-2497', Date.now() + 50))
+          .rejects.toThrow('fresh_send_lock_deadline_exhausted');
+      } finally { first.release(); }
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores editor whitespace around a backticked https URL but rejects changed content', () => {
+    const payload = 'Reply OK for `https://example.com/2497`';
+    expect(__testFreshSend.renderedPayloadMatches('Reply OK for ` https://example.com/2497 `', payload)).toBe(true);
+    expect(__testFreshSend.renderedPayloadMatches('Reply OK for ` https://example.com/2498 `', payload)).toBe(false);
+    expect(__testFreshSend.renderedPayloadMatches(undefined, payload)).toBe(false);
+  });
+
+  it('fronts before reading and filling the fresh composer, then clears a failed draft', async () => {
+    const actions: string[] = [];
+    let text = 'leftover OPKTURN draft';
+    const composer = {
+      count: async () => 1,
+      isVisible: async () => true,
+      isEnabled: async () => true,
+      isEditable: async () => true,
+      click: async () => {},
+      innerText: async () => { actions.push('read'); return text; },
+      fill: async (value: string) => { actions.push('fill'); text = value; },
+    };
+    const page = {
+      bringToFront: async () => { actions.push('front'); },
+      locator: () => composer,
+    };
+    expect(await __testSendDelivery.prepareFreshComposerDraft(page, Date.now() + 2_000)).toBe('cleared');
+    expect(actions.indexOf('front')).toBeLessThan(actions.indexOf('read'));
+    expect(actions[actions.indexOf('fill') - 1]).toBe('front');
+    actions.length = 0;
+    expect(await __testComposerMutation.mutateComposerOrCause(page, 'new draft', Date.now() + 2_000, { fresh: true })).toBeNull();
+    expect(actions[actions.indexOf('fill') - 1]).toBe('front');
+    await __testFreshSend.clearFreshComposerDraft(page);
+    expect(text).toBe('');
+  });
+
+  it('ignores draft-clear failures', async () => {
+    await expect(__testFreshSend.clearFreshComposerDraft({
+      bringToFront: async () => {},
+      locator: () => ({ fill: async () => { throw new Error('closed'); } }),
+    })).resolves.toBeUndefined();
+  });
 });

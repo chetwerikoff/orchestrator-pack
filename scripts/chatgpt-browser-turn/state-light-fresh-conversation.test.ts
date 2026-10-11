@@ -469,7 +469,30 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.getSends()).toBe(1);
   });
 
-  it('blocks before clearing or typing if existing fresh composer content cannot be read (#2487)', async () => {
+  it('sends a backticked https URL when editor autolinking adds whitespace (#2497)', async () => {
+    const prompt = 'Reply OK for `https://example.com/2497`';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'OK');
+    const read = turn.composer.innerText.getMockImplementation()!;
+    turn.composer.innerText.mockImplementation(async () => (await read()).replace('`https://', '` https://'));
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'autolink-2497.txt'));
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(turn.getSends()).toBe(1);
+  });
+
+  it.each(['90000', '61000'])('releases the fresh-send file lock after a normal send or pre-send failure (%s)', async (timeout) => {
+    const { acquireDomainLock } = await import('./coordination.ts');
+    const acquire = vi.mocked(acquireDomainLock);
+    acquire.mockClear();
+    const turn = makeLoserPage('PROMPT', 'OK');
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, `slot-release-${timeout}.txt`), timeout);
+    expect(outcome.result.send_count).toBe(timeout === '90000' ? 1 : 0);
+    expect(acquire).toHaveBeenCalledWith('collision-profile', 'fresh-send-composer', 0);
+    expect(acquire.mock.results[0]!.value.release).toHaveBeenCalledTimes(1);
+    if (timeout === '61000') expect(turn.composer.fill).toHaveBeenLastCalledWith('', { timeout: 5_000 });
+  });
+
+  it('blocks typing on unreadable fresh content and clears the unsent draft on exit (#2497)', async () => {
     const prompt = 'PROMPT-UNREADABLE-STALE-DRAFT';
     const invocationId = randomUUID();
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
@@ -482,7 +505,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch', cause: 'fresh_composer_draft_unreadable', send_count: 0,
     });
-    expect(turn.composer.fill).not.toHaveBeenCalled();
+    expect(turn.composer.fill).toHaveBeenLastCalledWith('', { timeout: 5_000 });
     expect(turn.sendButton.click).not.toHaveBeenCalled();
     expect(turn.page.close).not.toHaveBeenCalled();
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
@@ -503,7 +526,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch', cause: 'fresh_composer_draft_unreadable', send_count: 0,
     });
-    expect(turn.composer.fill.mock.calls.map((args: unknown[]) => args[0])).toEqual(['']);
+    expect(turn.composer.fill.mock.calls.map((args: unknown[]) => args[0])).toEqual(['', '']);
     expect(turn.sendButton.click).not.toHaveBeenCalled();
     expect(turn.page.close).not.toHaveBeenCalled();
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
@@ -577,8 +600,8 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(turn.getSends()).toBe(0);
     expect(turn.sendButton.click).not.toHaveBeenCalled();
-    expect(turn.page.close).not.toHaveBeenCalled();
-    expect(turn.composer.fill).toHaveBeenLastCalledWith('SYNTHETIC-FOREIGN-COMPOSER-EDIT');
+    expect(turn.page.close).toHaveBeenCalledTimes(1);
+    expect(turn.composer.fill).toHaveBeenLastCalledWith('', { timeout: 5_000 });
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
   });
 
@@ -628,7 +651,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({
       state: 'driver_error', cause: 'state_light_new_chat_send_budget_unavailable', send_count: 0,
     });
-    expect(turn.composer.fill).not.toHaveBeenCalled();
+    expect(turn.composer.fill).toHaveBeenLastCalledWith('', { timeout: 5_000 });
     expect(turn.sendButton.click).not.toHaveBeenCalled();
     expect(turn.page.close).toHaveBeenCalledTimes(1);
     expect(outcome.result.incidents).not.toContain('owned_composer_cleanup_unavailable');
@@ -654,7 +677,7 @@ describe('state-light fresh conversation collision recovery', () => {
       state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
     });
     expect(repurposed).toBe(true);
-    expect(turn.composer.fill).not.toHaveBeenLastCalledWith('', expect.anything());
+    expect(turn.composer.fill).toHaveBeenLastCalledWith('', { timeout: 5_000 });
     expect(turn.page.close).not.toHaveBeenCalled();
     expect(outcome.result.incidents).toContain('owned_composer_cleanup_unavailable');
   });
