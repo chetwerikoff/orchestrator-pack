@@ -1088,7 +1088,6 @@ export async function recordPackReviewStaleRequiredStatus(
           `Run: ${current.id}`,
           `Head: ${current.targetSha}`,
           'Next: GitHub-first recovery for this exact run through the Pack-review recovery recipe in docs/orchestration-runbook.md.',
-          'This notification does not authorize a resend, replacement, or new review round.',
         ].join('\n'),
         idempotencyKey: workerKey,
         reviewRunId: current.id,
