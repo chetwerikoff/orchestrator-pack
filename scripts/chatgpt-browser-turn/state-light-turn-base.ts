@@ -5462,7 +5462,8 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   let pageAction: PageCleanupAction = cleanupAuthorityProven && !pageLost && outcome.ownershipForfeited !== true
     ? 'close'
     : 'skip';
-  if (pageAction === 'close' && outcome.result.send_count === 0 && outcome.ownedFreshProjectUrl) {
+  if (pageAction === 'close' && outcome.result.send_count === 0
+    && outcome.result.send_attempted !== true && outcome.ownedFreshProjectUrl) {
     // The slot was already owner-released. For this proven-created tab, check
     // its current blank project identity and no foreign Stop at each destructive
     // boundary, never only its original creation handle or old composer read.
