@@ -52,7 +52,7 @@ invalid in identity-bound mode.
 Every canonical turn creates a dedicated owned tab. This removes the old shared-
 tab cleanup ambiguity.
 
-- a fresh pre-send failure best-effort clears the draft on its still-owned blank project page while holding the composer lock, even when the page is preserved; an uncertain click never authorizes draft clearing;
+- a fresh pre-send failure best-effort clears the draft on its still-owned blank project page, even when the page is preserved; an uncertain click never authorizes draft clearing;
 - a post-send turn closes that exact tab only after the final-path publisher returns
   `committed_ok`;
 - every post-send/no-publication result preserves the reachable retained tab and
@@ -73,18 +73,17 @@ liveness.
 
 ## Fresh-conversation prepare bounds and advisory walls
 
-Fresh `--new-chat` turns take one profile-wide composer file lock before opening
-their tab, reusing `acquireDomainLock`. Dead-process locks are reclaimed immediately;
-One 61-second limit bounds the slot: a lock older than that limit is reclaimed
-even if its owner is still alive; a waiter proceeds without the slot when the
-same limit is reached, or stops at an earlier invocation deadline. This limit
-applies only to the fresh-send composer lock, not other domain locks.
-The lock is released after observed dispatch or after bounded pre-send draft
-cleanup on every exit path. Existing-chat continuations do not take it. The
-legacy send-slot protocol is no longer a canonical fresh-send gate.
+Fresh `--new-chat` turns reserve one profile-wide slot before opening their tab,
+reusing `acquireDomainLock`. The reservation expires after 15 seconds; a waiter
+tries four 15-second windows (60 seconds total), then proceeds without the slot,
+or stops at an earlier invocation deadline. Dead-process reservations are
+reclaimed immediately. This timing applies only to the fresh-send composer slot,
+not other domain locks. The reservation delays the start only: send and cleanup
+do not release it or depend on continued ownership. Existing-chat continuations
+do not take it. The legacy send-slot protocol is no longer a canonical fresh-send gate.
 Fresh composer reads, fills and cleanup never foreground the page or raise the
-browser window. The serialized slot suffices without focus emulation unless
-a live failure demonstrates otherwise. Rendered payload comparisons ignore
+browser window. No focus emulation is used unless a live failure demonstrates
+otherwise. Rendered payload comparisons ignore
 whitespace added by the editor, including around backticked URLs.
 
 Prepare attempts are capped (`STATE_LIGHT_FRESH_PREPARE_ATTEMPTS`, currently 3) with
@@ -108,9 +107,8 @@ claims retain their finite ownership contract:
   Passive/legacy v1 claims without `expires_at` use `claimed_at + 3,900,000 ms`.
   The 300,000 ms grace is advisory, not proof that all work finished first.
 
-Before dispatch, a sender still holding a composer lock checks that it has not
-been taken over. After fresh-claim acquisition and before continuation or late
-publication, the helper re-reads the canonical fresh claim with its expected
+After fresh-claim acquisition and before continuation or late publication,
+the helper re-reads the canonical fresh claim with its expected
 identity and unexpired status. Claim loss preserves the owned page and returns
 without resend or page-close authority. The finalizer still performs bounded
 connected-client release. Expired/corrupt claims use the existing bounded recovery.
@@ -121,27 +119,27 @@ read and skips on mismatch or expected expiry, so a successor present before tha
 read survives. Replacement after final revalidation but before protected entry,
 or after final release read but before unlink, remains documented residual risk.
 
-A resumed old composer-lock owner cannot release its successor's lock or clear
-the successor's shared draft. The original invocation deadline still bounds
-pre-send work, including callers that proceeded without the slot at the wait cap.
+The composer reservation does not fence an in-progress send. The original
+invocation deadline still bounds pre-send work, including callers that
+proceeded without the slot at the wait cap.
 
 On a dedicated new-chat project tab, `composer.fill(payload)` directly replaces
 the draft. There is no draft pre-check, separate stale clear, or unreadable-draft
 failure result. A pre-send failure still performs bounded best-effort draft clear
-before releasing the slot or preserving the page.
+before preserving or closing its owned page.
 The full **60 s Send-readiness reserve** sits inside the original invocation
 timeout, separately from navigation/cleanup/insertion; insufficient remaining
-time ends safely before typing. Two 30 s readiness **maxima**, not sleeps, click
-immediately on an enabled visible Send button (no Enter fallback or third window).
+time ends safely before typing. Four 15 s readiness **maxima**, not sleeps, click
+immediately on an enabled visible Send button (no Enter fallback).
 A first Playwright click timeout is possible delivery by default. A second and
 final click is allowed only when the actual Playwright actionability log proves
 the first action never physically dispatched and the exact marked composer,
-user-node baseline, absent Stop and current page/slot identity all still agree.
+user-node baseline, absent Stop and current page identity all still agree.
 Missing log proof or any ambiguity forbids retry and pre-send cleanup; a newly
 attributable Stop after click is delivery and continues normal observation.
-An unclicked never-enabled button can end not-sent; clear its draft before
-releasing the composer lock, then close only its proven dedicated blank tab.
-After lock release, the finalizer reads the composer but never fills it again.
+An unclicked never-enabled button can end not-sent; clear its draft, then close
+only its proven dedicated blank tab. After a send attempt, the finalizer reads
+the composer but never fills it again.
 Operator recovery must never blindly resend after possible delivery.
 
 These records are transport-local only. They do not authorize workflow
