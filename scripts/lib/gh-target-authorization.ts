@@ -195,7 +195,7 @@ function registeredEditEvidenceRefusal(
   }
   return 'registered issue-body-edit-evidence GraphQL is unsupported in target mode. '
     + 'Closest inventory-authorized CURRENT-BODY-ONLY read for selected repository '
-    + selected + ': gh issue view ' + number + ' --json body. '
+    + selected + ': `gh issue view ' + number + ' --json body`. '
     + 'The present REST body does not contain userContentEdits, lastEditedAt, historical '
     + 'editedAt/diff, or the post-terminal before/after proof required for #2428 '
     + 'same-head final-cap settlement; it never authorizes same-head settlement. '

@@ -293,7 +293,7 @@ export function matchInventoryRoute(parsed, options = {}) {
       return null;
     }
     const includeAppId = parsed.jsonFields.includes('appId');
-    if (parsed.jq) {
+    if (parsed.jq !== null) {
       return null;
     }
     return { id: 'pr-checks', prNumber: num, includeAppId };

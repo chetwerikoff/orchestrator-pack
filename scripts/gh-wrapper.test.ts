@@ -326,6 +326,33 @@ exit 3
       });
       expect(singleJobText).toBe('build step failed\nstack trace\n');
       expect(singleJobText).not.toContain('second job crash');
+
+      const env = {
+        ...process.env,
+        PATH: controlledPath(root),
+        GH_REAL_BINARY: fakeGh,
+        GH_REPO: 'o/r',
+        GH_HOST: 'github.com',
+        GH_WRAPPER_ACTIVE: '',
+        GH_WRAPPER_AUDIT: '',
+        GH_WRAPPER_AUDIT_FILE: '',
+      };
+      const refusal = runProcessSync({
+        command: join(repoRoot, 'scripts', 'gh'),
+        args: ['run', 'view', '36730183562', '--log-failed', '--watch'],
+        cwd: root,
+        env,
+      });
+      const suggested = refusal.stderr.match(/Closest inventory-authorized whole-failed-run read: `([^`]+)`/)?.[1];
+      expect(suggested).toBe('gh run view 36730183562 --log-failed');
+      expect(isClassifiedGhReadCommand(suggested!)).toBe(true);
+      const suggestedCommand = classifyArgv(suggested!.split(' ').slice(1));
+      expect(suggestedCommand.route?.id).toBe('run-view-log-failed');
+      const executable = executeRestRoute(suggestedCommand.route!.id, {
+        realGh: fakeGh, parsed: suggestedCommand.parsed, route: suggestedCommand.route!, cwd: root,
+      });
+      expect(executable).toContain('build step failed');
+      expect(executable).toContain('second job crash');
     } finally {
       if (previousRepo === undefined) delete process.env.GH_REPO;
       else process.env.GH_REPO = previousRepo;
@@ -2563,6 +2590,85 @@ describe('Issue #2507 exact checks arguments and actionable non-equivalent read 
       const { parsed, route } = classifyArgv(args);
       expect(route, args.join(' ')).toBeNull();
       expect(isUnsupportedHighLevelRead(parsed)).toBe(true);
+    }
+  });
+
+  it('rejects incomplete PR check-run pages and executes the literal suggested checks command', () => {
+    if (process.platform === 'win32') return;
+    const root = tempRoot('opk-2507-pr-checks-completeness-');
+    const fakeGh = join(root, 'fake-gh');
+    writeExecutable(fakeGh, `#!/usr/bin/env bash
+set -euo pipefail
+for arg in "$@"; do
+  case "$arg" in
+    *"/pulls/42")
+      printf '%s\\n' '{"head":{"sha":"abc123"}}'
+      exit 0
+      ;;
+    *"/check-runs?per_page=100&page=1")
+      if [[ "$OPK_INCOMPLETE_CHECKS" == "1" ]]; then
+        printf '%s\\n' '{"total_count":2,"check_runs":[{"id":1,"name":"only-check","status":"completed","conclusion":"success","started_at":"2026-10-11T00:00:00Z"}]}'
+      else
+        printf '%s\\n' '{"total_count":0,"check_runs":[]}'
+      fi
+      exit 0
+      ;;
+    *"/commits/abc123/status")
+      printf '%s\\n' '{"state":"success","statuses":[{"context":"ci","state":"success","description":"passed","target_url":"https://github.com/example/target/actions/runs/1","created_at":"2026-10-11T00:00:00Z"}]}'
+      exit 0
+      ;;
+  esac
+done
+printf '%s\\n' "unexpected API args: $*" >&2
+exit 3
+`);
+    const env = {
+      ...process.env,
+      PATH: controlledPath(root),
+      GH_REAL_BINARY: fakeGh,
+      OPK_PROJECT_ID: '',
+      GH_REPO: 'example/target',
+      GH_HOST: 'github.com',
+      GH_WRAPPER_ACTIVE: '',
+      GH_WRAPPER_AUDIT: '',
+      GH_WRAPPER_AUDIT_FILE: '',
+      OPK_INCOMPLETE_CHECKS: '1',
+    };
+    const previousRepo = process.env.GH_REPO;
+    const previousHost = process.env.GH_HOST;
+    const previousIncompleteChecks = process.env.OPK_INCOMPLETE_CHECKS;
+    try {
+      process.env.GH_REPO = 'example/target';
+      process.env.GH_HOST = 'github.com';
+      process.env.OPK_INCOMPLETE_CHECKS = '1';
+      const refusal = runProcessSync({
+        command: join(repoRoot, 'scripts', 'gh'),
+        args: ['pr', 'checks', '42'],
+        cwd: root,
+        env,
+      });
+      const suggested = refusal.stderr.match(/Closest inventory-authorized snapshot: `([^`]+)`/)?.[1];
+      expect(suggested).toBe('gh pr checks 42 --json ' + fullFields);
+      expect(isClassifiedGhReadCommand(suggested!)).toBe(true);
+      const args = suggested!.split(' ').slice(1);
+      const suggestedCommand = classifyArgv(args);
+      expect(suggestedCommand.route?.id).toBe('pr-checks');
+      expect(() => executeRestRoute(suggestedCommand.route!.id, {
+        realGh: fakeGh, parsed: suggestedCommand.parsed, route: suggestedCommand.route!, cwd: root,
+      })).toThrow('check-runs pagination incomplete');
+      process.env.OPK_INCOMPLETE_CHECKS = '0';
+      const complete = executeRestRoute(suggestedCommand.route!.id, {
+        realGh: fakeGh, parsed: suggestedCommand.parsed, route: suggestedCommand.route!, cwd: root,
+      });
+      expect(complete).toEqual([expect.objectContaining({ name: 'ci', state: 'SUCCESS' })]);
+    } finally {
+      if (previousRepo === undefined) delete process.env.GH_REPO;
+      else process.env.GH_REPO = previousRepo;
+      if (previousHost === undefined) delete process.env.GH_HOST;
+      else process.env.GH_HOST = previousHost;
+      if (previousIncompleteChecks === undefined) delete process.env.OPK_INCOMPLETE_CHECKS;
+      else process.env.OPK_INCOMPLETE_CHECKS = previousIncompleteChecks;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

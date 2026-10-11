@@ -263,8 +263,8 @@ function highLevelReadRefusal(parsed) {
     const unsupported = flags.length ? ' Unsupported option(s): ' + flags.join(', ') + '.' : '';
     const advice = prId === null
       ? ' No runnable PR-checks command can be formed until the real PR ID is known.'
-      : ' Closest inventory-authorized snapshot: gh pr checks ' + prId
-        + safeRepositoryAdvice(parsed) + ' --json ' + FULL_PR_CHECKS_JSON_FIELDS + '.';
+      : ' Closest inventory-authorized snapshot: `gh pr checks ' + prId
+        + safeRepositoryAdvice(parsed) + ' --json ' + FULL_PR_CHECKS_JSON_FIELDS + '`';
     return 'uncovered pr checks read form.' + missing + json + unsupported
       + semanticWarning + advice;
   }
@@ -283,8 +283,8 @@ function highLevelReadRefusal(parsed) {
     const extra = unsupported.length ? ' Unsupported option(s): ' + unsupported.join(', ') + '.' : '';
     const advice = runId === null
       ? ' A known PR may have a checks link pointing to an actual Actions run ID; inspect the link field of the inventoried PR checks snapshot when that PR ID is known. Do not invent a run or job ID. A single known-job log is only partial run evidence.'
-      : ' Closest inventory-authorized whole-failed-run read: gh run view ' + runId
-        + safeRepositoryAdvice(parsed) + ' --log-failed. A single known-job log would be partial evidence.';
+      : ' Closest inventory-authorized whole-failed-run read: `gh run view ' + runId
+        + safeRepositoryAdvice(parsed) + ' --log-failed`. A single known-job log would be partial evidence.';
     return 'uncovered run view read form.' + missing + incomplete + extra
       + semanticWarning + advice;
   }

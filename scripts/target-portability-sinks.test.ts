@@ -401,11 +401,14 @@ describe('Issue #2507 selected-target edit-history GraphQL refusal', () => {
     const error = refusal(registered);
     expect(error.code).toBe('target-gh-graphql-unsupported');
     for (const fragment of [
+      'Closest inventory-authorized CURRENT-BODY-ONLY read for selected repository example/alpha: `gh issue view 228 --json body`.',
       'gh issue view 228 --json body', 'example/alpha', 'userContentEdits',
       'lastEditedAt', 'editedAt/diff', 'post-terminal before/after',
       'same-head', 'strict-descendant', 'scoped reconciliation', 'process-only/fake commit',
     ]) expect(error.message).toContain(fragment);
-    expect(isClassifiedGhReadCommand('gh issue view 228 --json body')).toBe(true);
+    const suggested = error.message.match(/CURRENT-BODY-ONLY read for selected repository example\/alpha: `([^`]+)`/)?.[1];
+    expect(suggested).toBe('gh issue view 228 --json body');
+    expect(isClassifiedGhReadCommand(suggested!)).toBe(true);
   });
 
   it('leaves arbitrary, malformed, duplicated, unsafe and foreign-bound GraphQL generic with no guessed Issue', () => {
