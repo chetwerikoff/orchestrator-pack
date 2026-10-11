@@ -3788,7 +3788,46 @@ async function runTurnCore(
         );
       }
 
-      const composerState = await waitForComposer(page, composerReadinessDeadline(), true, observeProductWall);
+      // A long existing chat gets an initial hydration window before one
+      // optional same-URL reopen. Navigation and renewed readiness retain a
+      // positive share of the original absolute invocation deadline.
+      const postReopenReserveMs = COMPOSER_READINESS_WAIT_MS
+        + deriveComposerInsertionBudgetMs(markedPayload) + MAX_LOCAL_READ_WAIT_MS;
+      const mayReopenComposer = invocationDeadlineMs - Date.now()
+        > EXISTING_GENERATION_RESUME_WINDOW_MS + postReopenReserveMs + 3 * MAX_LOCAL_READ_WAIT_MS;
+      const initialComposerDeadline = mayReopenComposer
+        ? Math.min(composerReadinessDeadline(), Date.now() + EXISTING_GENERATION_RESUME_WINDOW_MS)
+        : composerReadinessDeadline();
+      let composerState = await waitForComposer(page, initialComposerDeadline, true, observeProductWall);
+      if (composerState.cause === 'composer_unavailable' && mayReopenComposer
+        && !browserOrPageDefinitelyLost(page, browser)
+        && readOwnedConversationIdentity(page, chatUrlTarget).matched
+        && Date.now() + postReopenReserveMs + MAX_LOCAL_READ_WAIT_MS < invocationDeadlineMs) {
+        const stop = await readFreshStopVisible(page, invocationDeadlineMs);
+        const observation = await readPageObservation(page, undefined, undefined, true, invocationDeadlineMs);
+        if (stop === false && !observation.transcriptIncomplete
+          && observation.snapshot?.complete === true
+          && observation.pageTurnEvidence?.generationInProgress !== true
+          && !browserOrPageDefinitelyLost(page, browser)
+          && readOwnedConversationIdentity(page, chatUrlTarget).matched
+          && Date.now() + postReopenReserveMs < invocationDeadlineMs) {
+          try {
+            // navigateOwnedTurnPage already uses goto(waitUntil:'commit') and
+            // verifies the same conversation identity; the subdeadline keeps
+            // room for the renewed composer read and insertion.
+            await navigateOwnedTurnPage(
+              page, config, navigation, invocationDeadlineMs - postReopenReserveMs,
+            );
+          } catch {
+            return returnComposerMutationFailure('composer_unavailable');
+          }
+          if (browserOrPageDefinitelyLost(page, browser)
+            || !readOwnedConversationIdentity(page, chatUrlTarget).matched) {
+            return returnComposerMutationFailure('composer_unavailable');
+          }
+          composerState = await waitForComposer(page, composerReadinessDeadline(), true, observeProductWall);
+        }
+      }
       if (composerState.state !== 'ready' && composerState.cause !== 'composer_unavailable') {
         incident('invocation_blocker', composerState.cause, 'return_local_error');
         return {
@@ -3807,6 +3846,7 @@ async function runTurnCore(
           ),
         };
       }
+      if (composerState.state !== 'ready') return returnComposerMutationFailure('composer_unavailable');
 
       const baselineFailure = await captureBaseline();
       if (baselineFailure) return baselineFailure;
