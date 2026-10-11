@@ -2306,3 +2306,146 @@ describe('Issue #2479 frozen reviewer and accepted-verdict provenance', () => {
       .toMatchObject({ resolvedReviewer: 'gpt', executedReviewer: 'gpt' });
   });
 });
+
+describe('Issue #2496 r03 native reviewer no-regression controls', () => {
+  function fixture(prNumber: number, reviewer: 'codex' | 'claude' = 'codex') {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2496-native-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const writes: string[] = [];
+    const input = {
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+      prNumber, headSha: HEAD, claimMode: 'preacquired' as const,
+      fixtureCurrentPrHeadSha: HEAD, fixturePostReviewHeadSha: HEAD,
+      fixturePrState: 'OPEN' as const,
+      fixturePrBody: `Closes #${prNumber}`, fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: prNumber,
+      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      reviewerOverride: reviewer,
+      fixtureReviewStdout: cleanPayload(),
+      fixtureGithubReviewId: 249601,
+      fixtureRequiredStatusWriter: async (request: { state: string }) => { writes.push(request.state); },
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    };
+    return { input, writes, storeRoot };
+  }
+
+  it.each(['codex', 'claude'] as const)(
+    'native %s fresh publication never invokes GPT-only status observation or forced repost',
+    async (reviewer) => {
+      const f = fixture(24962, reviewer);
+      const statusReader = vi.fn(async () => { throw new Error('native status reader must not be used'); });
+      const result = await startPackReview({
+        ...f.input, fixtureRequiredStatusReader: statusReader,
+      });
+      expect(result).toMatchObject({
+        ok: true, created: true, reason: 'completed', status: 'up_to_date',
+        httpStatus: 201, resolvedReviewer: reviewer,
+      });
+      expect(result).not.toHaveProperty('publicationVerified');
+      expect(result).not.toHaveProperty('publicationReason');
+      expect(statusReader).not.toHaveBeenCalled();
+      expect(f.writes).toEqual(['pending', 'success']);
+      expect(readPackReviewAuthority(f.input.prNumber, { storeRoot: f.storeRoot })?.publication)
+        .toMatchObject({ status: 'succeeded', headSha: HEAD });
+    },
+  );
+
+  it('native notification-only failure preserves incumbent successful publication', async () => {
+    const f = fixture(24961);
+    const result = await startPackReview({
+      ...f.input, fixtureWorkerNotifier: async () => { throw new Error('native notifier down'); },
+      fixtureRequiredStatusReader: async () => { throw new Error('native must not read status'); },
+    });
+    expect(result).toMatchObject({ ok: true, reason: 'completed', httpStatus: 201 });
+    expect(result).not.toHaveProperty('publicationVerified');
+    expect(f.writes).toEqual(['pending', 'success']);
+  });
+
+  it('native failed required-status POST retains existing no-retry delivery behavior', async () => {
+    const f = fixture(24963);
+    let failed = false;
+    const reader = vi.fn(async () => { throw new Error('native status reader must not be used'); });
+    const result = await startPackReview({
+      ...f.input, fixtureRequiredStatusReader: reader,
+      fixtureRequiredStatusWriter: async (request) => {
+        f.writes.push(request.state);
+        if (request.state === 'success' && !failed) {
+          failed = true;
+          throw new Error('native status authorization denied');
+        }
+      },
+    });
+    expect(result).toMatchObject({
+      ok: true, created: true, reason: 'completed_with_delivery_failures', httpStatus: 201,
+    });
+    expect(result).not.toHaveProperty('publicationVerified');
+    expect(f.writes).toEqual(['pending', 'success']);
+    expect(reader).not.toHaveBeenCalled();
+    expect(getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot: f.storeRoot })
+      ?.deliveryOutcomes.requiredStatus?.state).toBe('failed');
+  });
+
+  it('native accepted status is not changed by later observed external status drift', async () => {
+    const f = fixture(24964);
+    let externalStatus: string | undefined;
+    const reader = vi.fn(async () => externalStatus);
+    const result = await startPackReview({
+      ...f.input, fixtureRequiredStatusReader: reader,
+      fixtureRequiredStatusWriter: async (request) => {
+        f.writes.push(request.state);
+        externalStatus = request.state === 'success' ? 'error' : request.state;
+      },
+    });
+    expect(result).toMatchObject({ ok: true, reason: 'completed', httpStatus: 201 });
+    expect(result).not.toHaveProperty('publicationVerified');
+    expect(reader).not.toHaveBeenCalled();
+    expect(f.writes).toEqual(['pending', 'success']);
+    expect(externalStatus).toBe('error');
+  });
+
+  it.each(['codex', 'claude'] as const)(
+    'native %s journaled resume does not read or republish status beyond the incumbent channels',
+    async (reviewer) => {
+      const f = fixture(24966, reviewer);
+      const seed = createPackReviewRun({
+        projectId: 'orchestrator-pack', storeRoot: f.storeRoot,
+        prNumber: f.input.prNumber, headSha: HEAD,
+        trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+        canonicalRepository: 'chetwerikoff/orchestrator-pack',
+        resolvedReviewer: reviewer,
+      }).run;
+      const now = '2026-10-11T00:00:00.000Z';
+      updatePackReviewRun(seed.id, {
+        status: 'reviewing', latestRunStatus: 'reviewing',
+        reviewVerdict: 'clean', findingCount: 0, findings: [],
+        journalOutcome: {
+          state: 'persisted', reason: 'verdict_persisted',
+          recordedAtUtc: now, idempotencyKey: `verdict:${seed.id}:${HEAD}`, attempts: 1,
+        },
+        githubReviewId: 249602, githubReviewUrl: 'fixture://review/249602',
+        githubReviewEvent: 'COMMENT',
+        deliveryOutcomes: {
+          githubComment: {
+            state: 'succeeded', reason: 'comment_posted',
+            recordedAtUtc: now, idempotencyKey: `github-comment:${seed.id}:${HEAD}`,
+          },
+        },
+      }, { projectId: 'orchestrator-pack', storeRoot: f.storeRoot });
+      const reader = vi.fn(async () => { throw new Error('native resume must not read status'); });
+      const resumed = await startPackReview({ ...f.input, fixtureRequiredStatusReader: reader });
+      expect(resumed).toMatchObject({
+        ok: true, created: false, reused: true, recovered: true,
+        reason: 'resumed_journaled_delivery', deliveryReason: 'completed',
+        httpStatus: 200,
+      });
+      expect(resumed).not.toHaveProperty('publicationVerified');
+      expect(reader).not.toHaveBeenCalled();
+      expect(f.writes).toEqual(['success']);
+      expect(readPackReviewAuthority(f.input.prNumber, { storeRoot: f.storeRoot })?.publication)
+        .toMatchObject({ status: 'succeeded', headSha: HEAD });
+    },
+  );
+});
