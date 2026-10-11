@@ -1869,7 +1869,6 @@ export async function openGateBCharacterizationPage(browser: any, chatUrl = 'htt
     try { return page.url().includes('chatgpt.com'); } catch { return false; }
   });
   if (existing) {
-    await existing.bringToFront().catch(() => {});
     return { page: existing, owned: false };
   }
   const page = await ctx.newPage();

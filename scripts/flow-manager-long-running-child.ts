@@ -244,7 +244,6 @@ export interface TerminalEnvelope {
   readonly observed_invocation_id?: string;
   readonly send_slot_holder_invocation_id?: string;
   readonly send_slot_holder_phase?: string;
-  readonly stale_composer_cleared?: true;
   readonly observed_turn_result_identity?: string;
   readonly recovery_available: boolean;
   readonly conversation_locator?: string;
@@ -514,7 +513,6 @@ function parseTurnResult(line: string): ParsedTurnResult | null {
     };
 
     if (body.send_attempted === true) result.send_attempted = true;
-    if (body.stale_composer_cleared === true) result.stale_composer_cleared = true;
     if (body.cause === 'state_light_new_chat_send_slot_timeout') {
       const validHolder = typeof body.send_slot_holder_invocation_id === 'string'
         && /^[A-Za-z0-9-]{1,128}$/u.test(body.send_slot_holder_invocation_id)
@@ -988,7 +986,6 @@ async function finalizeCandidatePath(
       send_slot_holder_invocation_id: candidate.send_slot_holder_invocation_id ?? 'unknown',
       send_slot_holder_phase: candidate.send_slot_holder_phase ?? 'unknown',
     } : {}),
-    ...(candidate.stale_composer_cleared === true ? { stale_composer_cleared: true as const } : {}),
   };
   const incidentEnvelope = (incident: string): TerminalEnvelope => ({
     schema: TERMINAL_SCHEMA,
