@@ -1,6 +1,8 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { runProcess } from '../kernel/subprocess.ts';
@@ -57,4 +59,101 @@ describe('Issue #1238 helper-termination publication barriers', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+
+// #2494: use the entry's actual executable-only exit function with a base
+// runStateLightTurn-injected synthetic outcome. This is not a JSON printer.
+const entryUrl = pathToFileURL(join(import.meta.dirname, 'state-light-entry.ts')).href;
+const turnUrl = pathToFileURL(join(import.meta.dirname, 'state-light-turn.ts')).href;
+const executableFixture = [
+  'import { runStateLightExecutable, runStateLightEntry } from ' + JSON.stringify(entryUrl) + ';',
+  'import { runStateLightTurn } from ' + JSON.stringify(turnUrl) + ';',
+  'const [mode, state] = process.argv.slice(1);',
+  "const result = { schema: 'turn-result/v1', state, scope: state === 'ok' ? 'none' : 'invocation',",
+  "  cause: state === 'ok' ? 'completed_page_only' : 'synthetic_failure',",
+  "  invocation_id: 'fixture-2494', configured_profile_key: 'fixture-profile',",
+  "  send_count: 1, poll_count: 0, goto_count: 0, new_chat_click_count: 0, navigation_count: 0, incidents: [] };",
+  'const injected = (argv, options = {}) => runStateLightTurn(argv, { ...options, runTurn: async () => ({ result }) });',
+  "const args = mode.startsWith('direct') ? ['--profile', 'synthetic'] : ['turn', '--profile', 'synthetic'];",
+  'const held = setInterval(() => {}, 60_000);',
+  "if (mode === 'imported-entry') {",
+  '  await runStateLightEntry(args, { runTurn: injected });',
+  "  clearInterval(held); console.log('imported-entry-survived');",
+  "} else if (mode === 'imported-turn') {",
+  '  await injected(args.slice(1));',
+  "  clearInterval(held); console.log('imported-turn-survived');",
+  "} else if (mode === 'nonturn') {",
+  "  try { await runStateLightExecutable([state, '--invalid-2494']); } catch {}",
+  "  clearInterval(held); console.log('nonturn-survived');",
+  '} else {',
+  "  await runStateLightExecutable(mode.startsWith('invalid')",
+  "    ? (mode === 'invalid-direct' ? ['--profile'] : ['turn', '--profile']) : args,",
+  '    { runTurn: injected });',
+  '}',
+].join('\n');
+
+function spawnStateLightEntryFixture(mode: string, state: string) {
+  const began = Date.now();
+  const child = spawnSync(process.execPath, [
+    '--experimental-strip-types', '--input-type=module', '--eval', executableFixture, mode, state,
+  ], {
+    cwd: resolve(import.meta.dirname, '../..'),
+    encoding: 'utf8',
+    timeout: 8_000, // Fail and clean up a hung child; a test-side kill never proves exit.
+    env: { ...process.env, ORCA_TERMINAL_HANDLE: '', NODE_OPTIONS: '' },
+    maxBuffer: 1024 * 1024,
+  });
+  expect(child.error, child.stderr).toBeUndefined();
+  expect(child.signal, child.stderr).toBeNull();
+  expect(Date.now() - began).toBeLessThan(60_000);
+  return child;
+}
+
+describe('Issue #2494 executable state-light turn terminal/exit', () => {
+  it.each([
+    ['turn', 'ok', 0],
+    ['turn', 'no_reply', 11],
+    ['turn', 'driver_error', 13],
+    ['direct', 'ok', 0],
+    ['direct', 'no_reply', 11],
+    ['direct', 'driver_error', 13],
+  ] as const)('flushes exactly one %s %s terminal before actual exit %i with a retained handle',
+    (mode, state, code) => {
+      const child = spawnStateLightEntryFixture(mode, state);
+      expect(child.status, child.stderr).toBe(code);
+      expect(child.stdout.endsWith('\n')).toBe(true);
+      const records = child.stdout.trimEnd().split('\n');
+      expect(records).toHaveLength(1);
+      expect(JSON.parse(records[0]!)).toMatchObject({
+        schema: 'turn-result/v1', state, send_count: 1, cleanup: 'skipped',
+      });
+    });
+
+  it.each([
+    ['invalid-turn', 'turn'],
+    ['invalid-direct', 'direct'],
+  ])('preserves argument-invalid 22 on the %s route', (mode) => {
+    const child = spawnStateLightEntryFixture(mode, 'ok');
+    expect(child.status, child.stderr).toBe(22);
+    const lines = child.stdout.trimEnd().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      schema: 'turn-result/v1', state: 'driver_error', cause: 'argument_invalid',
+    });
+  });
+
+  it.each(['imported-entry', 'imported-turn'])('%s returns without forcing process exit', (mode) => {
+    const child = spawnStateLightEntryFixture(mode, 'no_reply');
+    expect(child.status, child.stderr).toBe(0);
+    expect(child.stdout).toContain(mode + '-survived\n');
+  });
+
+  it.each(['preflight', 'cancel', 'session', 'unrelated'])(
+    'does not force process exit for the %s non-turn route', (route) => {
+      const child = spawnStateLightEntryFixture('nonturn', route);
+      expect(child.status, child.stderr).toBe(0);
+      expect(child.stdout).toContain('nonturn-survived\n');
+    },
+  );
 });
