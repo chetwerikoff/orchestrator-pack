@@ -585,7 +585,10 @@ describe('production attempted-send result and durable envelope', () => {
       expect(result.send_count).toBe(witnessed ? 1 : 0);
       expect(observation.phase).toBe(preDispatch ? 'not_sent' : witnessed ? 'sent_unharvested' : 'dispatching');
       if (!preDispatch) {
-        expect(page.close).not.toHaveBeenCalled();
+        // This fixture is a newly-created owned tab, unlike the reused-page
+        // negative controls above. Possible delivery still closes that tab.
+        expect(page.close).toHaveBeenCalledTimes(1);
+        expect(result.cleanup).toBe('confirmed');
         if (!witnessed) {
           expect(result.send_attempted).toBe(true);
           expect(observation.send_count).toBeUndefined();

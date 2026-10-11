@@ -73,7 +73,9 @@ const executableFixture = [
   "  cause: state === 'ok' ? 'completed_page_only' : 'synthetic_failure',",
   "  invocation_id: 'fixture-2494', configured_profile_key: 'fixture-profile',",
   "  send_count: 1, poll_count: 0, goto_count: 0, new_chat_click_count: 0, navigation_count: 0, incidents: [] };",
-  'const injected = (argv, options = {}) => runStateLightTurn(argv, { ...options, runTurn: async () => ({ result }) });',
+  "const page = mode === 'hung-close-turn' || mode === 'reject-close-turn' ? { isClosed: () => false,",
+  "  close: mode === 'hung-close-turn' ? () => new Promise(() => {}) : async () => { throw new Error('synthetic_close_rejected'); } } : undefined;",
+  "const injected = (argv, options = {}) => runStateLightTurn(argv, { ...options, runTurn: async () => ({ result, ...(page ? { page, cleanupAction: 'preserve' } : {}) }) });",
   "const args = mode.startsWith('direct') ? ['--profile', 'synthetic'] : ['turn', '--profile', 'synthetic'];",
   'const held = setInterval(() => {}, 60_000);',
   "if (mode === 'imported-entry') {",
@@ -138,6 +140,22 @@ describe('Issue #2494 executable state-light turn terminal/exit', () => {
         schema: 'turn-result/v1', state, send_count: 1, cleanup: 'skipped',
       });
     });
+
+  it.each([
+    ['hung-close-turn', 'ok', 0],
+    ['hung-close-turn', 'no_reply', 11],
+    ['reject-close-turn', 'driver_error', 13],
+  ] as const)('bounds an owned %s page-close failure for %s and still exits truthfully', (mode, state, code) => {
+    const child = spawnStateLightEntryFixture(mode, state);
+    expect(child.exitCode, child.stderr).toBe(code);
+    expect(child.stdout.endsWith('\n')).toBe(true);
+    const records = child.stdout.trimEnd().split('\n');
+    expect(records).toHaveLength(1);
+    expect(JSON.parse(records[0]!)).toMatchObject({
+      schema: 'turn-result/v1', state, send_count: 1, cleanup: 'unconfirmed',
+      incidents: expect.arrayContaining(['owned_tab_cleanup_failed']),
+    });
+  }, 15_000);
 
   it.each([
     ['invalid-turn', 'turn'],
