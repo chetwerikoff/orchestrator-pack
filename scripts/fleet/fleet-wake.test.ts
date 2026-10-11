@@ -951,6 +951,13 @@ describe('Issue #2463 parked-producer compatibility with r05', () => {
 });
 
 describe('Issue #2510 URL-bound-only saved chat alarms', () => {
+  // The production FileFleetWakeStateStore persists a direct-send signature.
+  // Limit the matching memory behavior to these dedup regression fixtures.
+  class BoundBannerStore extends MemoryWakeStore {
+    private bannerSignature: string | null = null;
+    readBannerSignature(): string | null { return this.bannerSignature; }
+    writeBannerSignature(signature: string): void { this.bannerSignature = signature; }
+  }
   const projectUrl = 'https://chatgpt.com/g/g-p/project/test';
   const saved = `${projectUrl}/c/6ac03300-098c-83ec-a6d5-f9d0cec30a5f`;
   const scope = { projectUrl, repository: 'test/project' };
@@ -992,7 +999,7 @@ describe('Issue #2510 URL-bound-only saved chat alarms', () => {
   it('sends an exact URL worktree-only binding to one current agent without coordinator fallback', async () =>
     isolatedBindings(async (home) => {
       writeChatBinding(saved, workers[1]!.worktreePath, { HOME: home });
-      const store = new MemoryWakeStore();
+      const store = new BoundBannerStore();
       const first = await tick({ config: settings, store, terminals: workers, screens: quiet,
         readChats: async () => [chat()] });
       expect(sendsTo(first.calls, 'one')).toHaveLength(2);
@@ -1009,7 +1016,7 @@ describe('Issue #2510 URL-bound-only saved chat alarms', () => {
   it('waits for the original two-tick saved-stall admission before bound-pane delivery', async () =>
     isolatedBindings(async (home) => {
       writeChatBinding(saved, workers[1]!.worktreePath, { HOME: home });
-      const store = new MemoryWakeStore();
+      const store = new BoundBannerStore();
       const next = () => tick({ config: settings, store, terminals: workers, screens: quiet,
         readChats: async () => [chat(saved, 'stalled')] });
       expect(sendsTo((await next()).calls, 'one')).toHaveLength(0);
@@ -1055,7 +1062,7 @@ describe('Issue #2510 URL-bound-only saved chat alarms', () => {
           }
           return fakeOrca(quiet, [], workers)(args);
         };
-        const store = new MemoryWakeStore();
+        const store = new BoundBannerStore();
         const result = await tick({ config: settings, terminals: workers, screens: quiet, executor, store,
           readChats: async () => [chat()], listOpenPulls: () => [] });
         expect(sendsTo(result.calls, 'one')).toHaveLength(failure.includes('first') ? 1 : 2);
