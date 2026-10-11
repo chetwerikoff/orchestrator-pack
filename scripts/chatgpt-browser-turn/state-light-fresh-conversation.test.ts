@@ -3121,9 +3121,15 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     const output = join(integrationStateDir, 'lost-2494.txt');
     let lost = false;
     let lostAt: number | undefined;
-    const turn = makeLoserPage(prompt, 'NEVER PUBLISHED', () => {
-      lost = true;
-      lostAt = mocks.nowMs;
+    const turn = makeLoserPage(prompt, 'NEVER PUBLISHED');
+    // The Send is already positively witnessed on the exact page before the
+    // post-send observation loses the tab; do not fabricate a send count.
+    mocks.productStatusText.mockImplementation(async () => {
+      if (turn.getSends() > 0) {
+        lost = true;
+        lostAt ??= mocks.nowMs;
+      }
+      return { text: '', composer: true };
     });
     turn.page.isClosed.mockImplementation(() => lost);
     turn.page.waitForTimeout.mockImplementation(async (ms: number) => {
