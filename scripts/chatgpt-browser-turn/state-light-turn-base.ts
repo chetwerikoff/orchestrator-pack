@@ -2282,7 +2282,7 @@ async function existingRetryDomGuards(input: {
     || baseline.carriers.some((carrier) =>
       !carrier.fingerprint || normalizeVisibleText(carrier.text).length === 0)) return false;
   const samePage = (): boolean => !browserOrPageDefinitelyLost(input.page, input.browser)
-    && pageConversationUrl(input.page) === input.targetChatUrl
+    && normalizeConversationUrl(String(input.page.url())) === input.targetChatUrl
     && readOwnedConversationIdentity(input.page, input.targetChatUrl).matched
     && Date.now() < input.deadlineMs;
   if (!samePage()) return false;
@@ -3790,9 +3790,6 @@ async function runTurnCore(
         );
       }
 
-      if (Date.now() >= invocationDeadlineMs) {
-        return returnComposerMutationFailure('composer_mutation_budget_exhausted');
-      }
       // A long existing chat gets an initial hydration window before one
       // optional same-URL reopen. Navigation and renewed readiness retain a
       // positive share of the original absolute invocation deadline.
@@ -3851,10 +3848,13 @@ async function runTurnCore(
           ),
         };
       }
-      if (Date.now() >= invocationDeadlineMs) {
+      if (composerState.state !== 'ready' && Date.now() >= invocationDeadlineMs) {
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
-      if (composerState.state !== 'ready') return returnComposerMutationFailure('composer_unavailable');
+      // Preserve the incumbent mutation path: it owns late readiness and the
+      // historical composer-unavailable/budget-exhausted result distinction.
+      // A failed one-time reopen does not grant a second navigation.
+
 
       const baselineFailure = await captureBaseline();
       if (baselineFailure) return baselineFailure;
