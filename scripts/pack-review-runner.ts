@@ -4840,7 +4840,7 @@ export async function reconcileStalePackReviewRuns(
     const authorizeStaleWrite = async () => {
       if (resolvePackReviewRunOrder(await readBoundRecords(), run).kind !== 'none') return false;
       if (zeroJudgmentStaleStatus) return verifyNoJudgmentStatusTarget();
-      if (failedPartialStaleStatus) return verifyPartialStatusTarget();
+      if (failedPartialStaleStatus) return !needsStaleStatus || verifyPartialStatusTarget();
       return true;
     };
     const repairSupersededStaleWrite = async () => {

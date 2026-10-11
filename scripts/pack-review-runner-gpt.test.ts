@@ -5244,7 +5244,10 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
     expect(f.reviewBodies).toEqual([]);
     expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
       .toEqual([]);
-    await reconcileStalePackReviewRuns({ ...input, immediate: false });
+    const repeated = await reconcileStalePackReviewRuns({ ...input, immediate: false });
+    expect(repeated.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ runId: f.runId, reason: 'status_already_reconciled' }),
+    ]));
     expect(writes).toEqual(['error', 'error']);
   });
 
