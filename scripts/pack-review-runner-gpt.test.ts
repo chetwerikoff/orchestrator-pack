@@ -4939,3 +4939,284 @@ describe('Issue #2496 native PR-only command settlement compatibility', () => {
     },
   );
 });
+
+
+describe('Issue #2523 persisted zero-send and credentialed source recovery', () => {
+  const projectId = 'orchestrator-pack';
+  const repoSlug = 'chetwerikoff/orchestrator-pack';
+  const prNumber = 2523;
+  const issueBody = [String.fromCharCode(96).repeat(3) + 'complexity-tier',
+    'tier: T2', String.fromCharCode(96).repeat(3)].join('\n');
+
+  function seed(commentsToPublish: number, sourceReplies: Record<number, string> = {}) {
+    const storeRoot = tempRoot('opk-2523-source-recovery-');
+    harnessEnv(storeRoot, path.join(storeRoot, 'review.json'));
+    process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-10T08:00:00.000Z'));
+    const options = { projectId, storeRoot };
+    const authority = initializePackReviewAuthority({
+      prNumber, headSha: HEAD_A, tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options: { storeRoot },
+    });
+    const invocationIds = Array.from({ length: 3 }, (_, index) =>
+      '25232523-2523-4252-8252-' + String(index + 1).padStart(12, '0'));
+    const reviewRound: PackReviewGptRoundRecord = {
+      schema: 'pack-review-gpt-round/v1', reviewer: 'gpt', tier: 'T2',
+      roundOrdinal: 1, cardinality: 3, issueNumber: 2523,
+      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(issueBody),
+      sourceSlots: invocationIds.map((invocationId, index) => ({
+        slotId: 'source-' + String(index + 1).padStart(2, '0'),
+        ordinal: index + 1, lifecycle: 'terminal' as const,
+        invocationId, attemptOrdinal: 1,
+        admissionStartedAtUtc: '2026-10-10T08:00:00.000Z',
+        terminalClass: 'driver_error:connect_over_cdp_failed',
+        terminalResult: storedTerminalTurnResult(invocationId, {
+          state: 'driver_error', cause: 'connect_over_cdp_failed',
+          send_count: 0, send_attempted: false,
+        }),
+      })),
+    };
+    const run = createPackReviewRun({
+      ...options, prNumber, headSha: HEAD_A, canonicalRepository: repoSlug,
+      trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: authority.cycle!.cycleId, logicalRoundOrdinal: 1,
+      logicalRoundCap: 1, automaticBudgetDisposition: 'consume',
+      resolvedReviewer: 'gpt', reviewRound,
+    }).run;
+    updatePackReviewRun(run.id, {
+      status: 'reviewing', latestRunStatus: 'reviewing',
+      runnerPid: 2147483647,
+    }, options);
+    const comments: PackGptSourceGithubComment[] = invocationIds
+      .slice(0, commentsToPublish).map((invocationId, index) => {
+        const id = 2523001 + index;
+        const identity: PackGptSourceIdentity = {
+          repository: repoSlug, prNumber, headSha: HEAD_A, runId: run.id,
+          slotId: 'source-' + String(index + 1).padStart(2, '0'),
+          invocationId,
+        };
+        return {
+          id,
+          body: formatPackGptSourceCommentEnvelope(identity, sourceReplies[index] ?? 'NO_FINDINGS'),
+          actorLogin: 'browser-gpt-bot',
+          createdAt: '2026-10-10T08:01:00.000Z',
+          updatedAt: '2026-10-10T08:01:00.000Z',
+          url: 'https://github.com/chetwerikoff/orchestrator-pack/pull/2523#issuecomment-' + id,
+          issueUrl: 'https://api.github.com/repos/chetwerikoff/orchestrator-pack/issues/2523',
+        };
+      });
+    const sourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async () => comments,
+      getComment: async (id) => {
+        const comment = comments.find((item) => item.id === id);
+        if (!comment) throw new Error('synthetic comment unavailable');
+        return comment;
+      },
+    };
+    const reviews: GithubReviewSummary[] = [];
+    const reviewBodies: string[] = [];
+    const finalReviewTransport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'pack-review-bot',
+      listReviews: async () => [...reviews],
+      postReview: async ({ body, commitId }) => {
+        const id = 2523100 + reviews.length;
+        reviewBodies.push(body);
+        const review: GithubReviewSummary = {
+          id, body, commitId, state: 'COMMENTED', userLogin: 'pack-review-bot',
+          submittedAt: '2026-10-10T08:06:00.000Z',
+          url: 'https://github.com/chetwerikoff/orchestrator-pack/pull/2523#pullrequestreview-' + id,
+        };
+        reviews.push(review);
+        return { id, url: review.url };
+      },
+      dismissReview: async () => {},
+    };
+    const statusStates: string[] = [];
+    const input: Parameters<typeof reconcileStalePackReviewRuns>[0] = {
+      ...options, sourceRepoRoot: repoRoot, repoSlug, prNumber, immediate: true,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureGithubReviewTransport: finalReviewTransport,
+      fixtureRequiredStatusWriter: async (request) => { statusStates.push(request.state); },
+      fixtureIssueBody: issueBody, fixtureIssueNumber: 2523,
+      fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
+      fixtureBoundIssueSnapshotBytes: issueBody,
+    };
+    return {
+      runId: run.id, storeRoot, options, input, sourceTransport,
+      reviewBodies, statusStates,
+      expireGrace: () => vi.setSystemTime(new Date('2026-10-10T08:05:00.000Z')),
+    };
+  }
+
+  it('settles 3/3 later credentialed comments after three persisted first-attempt zero-sends', async () => {
+    const f = seed(3);
+    const before = getPackReviewRun(f.runId, f.options)!;
+    expect(before.reviewRound?.sourceSlots.every((slot) =>
+      (slot.terminalResult as { send_count?: number })?.send_count === 0)).toBe(true);
+    expect(before.reviewVerdict).toBeUndefined();
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, recovered: true, statusReconciled: true,
+        reason: 'gpt_source_comments_recovered_and_delivered',
+        settledSourceCount: 3,
+      }),
+    ]));
+    const settled = getPackReviewRun(f.runId, f.options)!;
+    expect(settled).toMatchObject({
+      status: 'up_to_date', reviewVerdict: 'clean', findingCount: 0,
+      journalOutcome: { state: 'persisted' },
+      deliveryOutcomes: { requiredStatus: { state: 'succeeded' } },
+    });
+    expect(settled.reviewRound?.sourceSlots.every((slot) => slot.terminalClass === 'complete_clean')).toBe(true);
+    expect(f.reviewBodies).toHaveLength(1);
+    expect(f.statusStates).toEqual(['success']);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([1]);
+    await reconcileStalePackReviewRuns(f.input);
+    expect(f.reviewBodies).toHaveLength(1);
+    expect(f.statusStates).toEqual(['success']);
+  });
+
+  it('waits for 2/3 before grace then settles the existing degraded quorum after grace', async () => {
+    const f = seed(2);
+    const before = await reconcileStalePackReviewRuns(f.input);
+    expect(before.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, statusReconciled: false,
+        reason: 'gpt_sources_waiting_for_grace:2/3',
+      }),
+    ]));
+    expect(f.statusStates).toEqual([]);
+    f.expireGrace();
+    const after = await reconcileStalePackReviewRuns(f.input);
+    expect(after.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, statusReconciled: true, recovered: true,
+        degraded: true, settledSourceCount: 2,
+      }),
+    ]));
+    expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+      status: 'up_to_date', reviewVerdict: 'clean',
+      reviewRound: { settledSourceCount: 2 },
+    });
+    expect(f.reviewBodies).toHaveLength(1);
+    expect(f.statusStates).toEqual(['success']);
+  });
+
+  it('retains explicit disabled partial-settlement behavior', async () => {
+    const f = seed(2);
+    f.expireGrace();
+    const result = await reconcileStalePackReviewRuns({
+      ...f.input, settlePartialAfterGrace: false,
+    });
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, terminalized: false, statusReconciled: false,
+        reason: 'gpt_partial_requires_explicit_immediate_reconcile',
+      }),
+    ]));
+    expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
+    expect(f.statusStates).toEqual([]);
+  });
+
+  it.each(['write-failed', 'written', 'head-advanced'] as const)(
+    'reports truthful below-quorum terminal required-status delivery: %s', async (mode) => {
+      const f = seed(1);
+      f.expireGrace();
+      let currentHead = HEAD_A;
+      const statuses: string[] = [];
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input,
+        fixtureReadCurrentPrHead: async () => currentHead,
+        fixtureRequiredStatusWriter: async (request) => {
+          statuses.push(request.state);
+          if (mode === 'write-failed') throw new Error('synthetic status writer failed');
+          if (mode === 'head-advanced') currentHead = HEAD_B;
+        },
+      });
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true,
+          statusReconciled: mode === 'written',
+          reason: 'gpt_sources_incomplete_after_grace:1/3',
+          ...(mode === 'written' ? {} : {
+            nextAction: expect.stringContaining('reconcile --source-repo-root'),
+          }),
+        }),
+      ]));
+      expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+        status: 'failed', reviewRound: { cardinality: 3 },
+        deliveryOutcomes: {
+          requiredStatus: { state: mode === 'write-failed' ? 'failed' : 'succeeded' },
+        },
+      });
+      expect(statuses).toEqual(['error']);
+      expect(f.reviewBodies).toEqual([]);
+      expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+        .toEqual([]);
+    },
+  );
+
+  it('retains actual head-drift reason instead of an unproven 0/3 census', async () => {
+    const f = seed(3);
+    f.expireGrace();
+    const result = await reconcileStalePackReviewRuns({
+      ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+    });
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, terminalized: false, statusReconciled: false,
+        reason: 'gpt_source_head_changed', nextAction: 'run review for the current PR head',
+      }),
+    ]));
+    expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
+    expect(f.statusStates).toEqual([]);
+    expect(f.reviewBodies).toEqual([]);
+  });
+
+  it('keeps incomplete actor/census evidence distinct from a missing-comment census', async () => {
+    const f = seed(0);
+    f.expireGrace();
+    const result = await reconcileStalePackReviewRuns({
+      ...f.input,
+      fixtureGptSourceCommentTransport: {
+        ...f.sourceTransport,
+        resolveActorLogin: async () => { throw new Error('synthetic GitHub actor outage'); },
+      },
+    });
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, terminalized: false, statusReconciled: false,
+        reason: expect.stringContaining('source_comment_actor_resolution_failed'),
+        nextAction: expect.stringContaining('GitHub'),
+      }),
+    ]));
+    expect(getPackReviewRun(f.runId, f.options)?.status).toBe('reviewing');
+    expect(f.reviewBodies).toEqual([]);
+    expect(f.statusStates).toEqual([]);
+  });
+
+  it('preserves blocking findings through the credentialed aggregate and status path', async () => {
+    const blockingReply = JSON.stringify({ findings: [{
+      type: 'quality', code: 'quality:synthetic-blocker',
+      severity: 'blocking', path: 'scripts/pack-review-runner.ts',
+      summary: 'synthetic blocker', source: 'gpt-browser',
+    }] });
+    const f = seed(3, { 0: blockingReply });
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ runId: f.runId, recovered: true, statusReconciled: true }),
+    ]));
+    expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+      status: 'changes_requested', reviewVerdict: 'findings', findingCount: 1,
+    });
+    expect(f.reviewBodies).toHaveLength(1);
+    expect(f.statusStates).not.toContain('success');
+  });
+});
