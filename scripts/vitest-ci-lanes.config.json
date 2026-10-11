@@ -67,6 +67,7 @@
     "scripts/gate-runner/goldens.test.ts": "light",
     "scripts/gate-runner/registry.test.ts": "light",
     "scripts/gate-runner/runner.test.ts": "light",
+    "scripts/gen-merge-spec.test.ts": "light",
     "scripts/gh-wrapper.test.ts": "heavy",
     "scripts/invoke-gated-worker-nudge.test.ts": "light",
     "scripts/invoke-worker-recovery.test.ts": "light",
