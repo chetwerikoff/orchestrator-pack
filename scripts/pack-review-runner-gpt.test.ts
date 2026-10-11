@@ -5053,6 +5053,42 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
     };
   }
 
+  function installNewerCleanRun(f: ReturnType<typeof seed>): string {
+    const older = getPackReviewRun(f.runId, f.options)!;
+    const replacement = createPackReviewRun({
+      ...f.options, prNumber, headSha: HEAD_A, canonicalRepository: repoSlug,
+      trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: older.reviewCycleId, logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      automaticBudgetDisposition: 'consume', resolvedReviewer: 'gpt',
+      allowSameRoundReplacement: true,
+    });
+    expect(replacement.created).toBe(true);
+    expect(replacement.run.id).not.toBe(f.runId);
+    const recordedAtUtc = new Date().toISOString();
+    setPackReviewRunTerminal(replacement.run.id, 'up_to_date', {
+      reviewVerdict: 'clean', findingCount: 0, findings: [],
+      journalOutcome: {
+        state: 'persisted', reason: 'newer_credentialed_verdict',
+        recordedAtUtc, idempotencyKey: 'verdict:' + replacement.run.id + ':' + HEAD_A,
+        attempts: 1,
+      },
+    }, f.options);
+    const authority = readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })!;
+    commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: authority.transitionSeq,
+      terminal: {
+        schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal',
+        runId: replacement.run.id, targetSha: HEAD_A,
+        reviewVerdict: 'clean', findingCount: 0,
+        findingsDigest: 'fixture-2523-newer-clean',
+        automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 1,
+      },
+      status: 'clean', findingCount: 0, options: { storeRoot: f.storeRoot },
+    });
+    return replacement.run.id;
+  }
+
   it('settles 3/3 later credentialed comments after three persisted first-attempt zero-sends', async () => {
     const f = seed(3);
     const before = getPackReviewRun(f.runId, f.options)!;
@@ -5164,6 +5200,118 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
         .toEqual([]);
     },
   );
+
+  it('repairs a failed post-grace 1/3 status on the recommended non-immediate second reconcile', async () => {
+    const f = seed(1);
+    f.expireGrace();
+    const writes: string[] = [];
+    let failStatus = true;
+    const input = {
+      ...f.input,
+      fixtureRequiredStatusWriter: async (request: { state: string }) => {
+        writes.push(request.state);
+        if (failStatus) throw new Error('synthetic one-time status outage');
+      },
+    };
+    const first = await reconcileStalePackReviewRuns(input);
+    expect(first.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, statusReconciled: false,
+        reason: 'gpt_sources_incomplete_after_grace:1/3',
+        nextAction: expect.stringContaining('reconcile --source-repo-root'),
+      }),
+    ]));
+    const afterFirst = getPackReviewRun(f.runId, f.options)!;
+    expect(afterFirst).toMatchObject({
+      status: 'failed', failureReason: 'gpt_sources_incomplete_after_grace:1/3',
+      deliveryOutcomes: { requiredStatus: { state: 'failed' } },
+    });
+    failStatus = false;
+    const second = await reconcileStalePackReviewRuns({ ...input, immediate: false });
+    expect(second.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, statusReconciled: true,
+        reason: 'status_unfinished_execution',
+      }),
+    ]));
+    const repaired = getPackReviewRun(f.runId, f.options)!;
+    expect(repaired).toMatchObject({
+      status: 'failed', failureReason: 'gpt_sources_incomplete_after_grace:1/3',
+      deliveryOutcomes: { requiredStatus: { state: 'succeeded' } },
+    });
+    expect(repaired.reviewRound).toEqual(afterFirst.reviewRound);
+    expect(writes).toEqual(['error', 'error']);
+    expect(f.reviewBodies).toEqual([]);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([]);
+    await reconcileStalePackReviewRuns({ ...input, immediate: false });
+    expect(writes).toEqual(['error', 'error']);
+  });
+
+  it('does not publish an older 1/3 error if a newer same-key clean run wins before the write', async () => {
+    const f = seed(1);
+    f.expireGrace();
+    let newerId: string | undefined;
+    const originalList = f.sourceTransport.listComments;
+    const result = await reconcileStalePackReviewRuns({
+      ...f.input,
+      fixtureGptSourceCommentTransport: {
+        ...f.sourceTransport,
+        listComments: async () => {
+          if (!newerId) newerId = installNewerCleanRun(f);
+          return originalList();
+        },
+      },
+    });
+    expect(newerId).toBeDefined();
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, terminalized: false,
+        statusReconciled: true, reason: 'newer_run_authoritative',
+      }),
+    ]));
+    expect(f.statusStates).toEqual(['success']);
+    expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
+    expect(getPackReviewRun(newerId!, f.options)).toMatchObject({
+      status: 'up_to_date', reviewVerdict: 'clean',
+      deliveryOutcomes: { requiredStatus: { state: 'succeeded' } },
+    });
+  });
+
+  it('restores the newer same-key clean status when its success is overwritten during the older error write', async () => {
+    const f = seed(1);
+    f.expireGrace();
+    const externalWrites: string[] = [];
+    let newerId: string | undefined;
+    const result = await reconcileStalePackReviewRuns({
+      ...f.input,
+      fixtureRequiredStatusWriter: async (request) => {
+        if (request.state === 'error' && !newerId) {
+          newerId = installNewerCleanRun(f);
+          // The newer run publishes success before this old awaited error
+          // completes; recording the writes in actual external completion order.
+          externalWrites.push('success');
+          await Promise.resolve();
+        }
+        externalWrites.push(request.state);
+      },
+    });
+    expect(newerId).toBeDefined();
+    expect(externalWrites).toEqual(['success', 'error', 'success']);
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, terminalized: true,
+        statusReconciled: true, reason: 'newer_run_authoritative',
+      }),
+    ]));
+    expect(getPackReviewRun(newerId!, f.options)).toMatchObject({
+      status: 'up_to_date', reviewVerdict: 'clean',
+      deliveryOutcomes: { requiredStatus: { state: 'succeeded' } },
+    });
+    expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.terminal?.runId)
+      .toBe(newerId);
+  });
 
   it('retains actual head-drift reason instead of an unproven 0/3 census', async () => {
     const f = seed(3);
