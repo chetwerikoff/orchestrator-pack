@@ -146,8 +146,29 @@ export async function runStateLightEntry(
   return runCli(argv);
 }
 
+/**
+ * Only the executable turn route may exit after its terminal JSON has drained.
+ * Library callers keep the ordinary returned-code contract and their handles.
+ */
+export async function runStateLightExecutable(
+  argv: readonly string[],
+  deps: StateLightEntryDependencies = {},
+): Promise<number> {
+  const exitCode = await runStateLightEntry(argv, deps);
+  if (argv[0] === 'turn' || argv[0]?.startsWith('--')) {
+    // The base turn already finalized, disposed heartbeat and written one
+    // newline-terminated turn-result/v1. Queue an ordered zero-byte write so
+    // preceding stdout bytes drain before the retained-handle-proof exit.
+    await new Promise<void>((resolve, reject) => {
+      process.stdout.write('', (error) => error ? reject(error) : resolve());
+    });
+    process.exit(exitCode);
+  }
+  return exitCode;
+}
+
 async function main(): Promise<void> {
-  process.exitCode = await runStateLightEntry(process.argv.slice(2));
+  process.exitCode = await runStateLightExecutable(process.argv.slice(2));
 }
 
 const entryPath = fileURLToPath(import.meta.url);
