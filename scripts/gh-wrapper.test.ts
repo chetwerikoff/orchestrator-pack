@@ -2620,10 +2620,13 @@ describe('Issue #2507 exact checks arguments and actionable non-equivalent read 
       { args: ['run', 'view', 'not-a-run', '--log-failed'], fragments: ['RUN_ID', 'Do not invent'] },
     ];
     for (const item of rejected) {
-      const outcome = spawnSync(join(repoRoot, 'scripts', 'gh'), item.args, {
-        cwd: root, env, encoding: 'utf8',
+      const outcome = runProcessSync({
+        command: join(repoRoot, 'scripts', 'gh'),
+        args: item.args,
+        cwd: root,
+        env,
       });
-      expect(outcome.status, item.args.join(' ')).not.toBe(0);
+      expect(outcome.exitCode, item.args.join(' ')).not.toBe(0);
       expect(outcome.stdout).toBe('');
       expect(outcome.stderr).toContain('gh-wrapper: REST route failed');
       for (const fragment of item.fragments) {
