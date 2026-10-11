@@ -5358,7 +5358,7 @@ async function runTurnCore(
       ...(page ? { page } : {}),
       ...(browser ? { browser } : {}),
       ...(lostAfterSend ? { cleanupAction: 'skip' as const } : {}),
-      ...(ownershipForfeited ? { cleanupAction: 'preserve' as const } : {}),
+      ...(ownershipForfeited ? { ownershipForfeited: true, cleanupAction: 'preserve' as const } : {}),
       result: {
         ...compactResult(
           state,
@@ -5456,15 +5456,12 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     && typeof outcome.page === 'object'
     && !cleanupAuthorityUnprovenPages.has(outcome.page),
   );
-  const requestedPageAction = outcome.cleanupAction ?? decidePageCleanupAction({
-    sendCount: outcome.result.send_count,
-    publicationState: outcome.publicationState,
-    pagePresent: cleanupAuthorityProven,
-    pageLost,
-  });
-  let pageAction = (outcome.result.send_count >= 1 || outcome.result.send_attempted === true) && outcome.result.state !== 'ok'
-    ? 'preserve'
-    : requestedPageAction;
+  // Only the invocation-owned, reachable Page can be closed. A cleanupAction
+  // of preserve (including an ambiguous Send) is not negative ownership proof;
+  // forfeiture and pre-existing/recovered pages independently prohibit close.
+  let pageAction: PageCleanupAction = cleanupAuthorityProven && !pageLost && outcome.ownershipForfeited !== true
+    ? 'close'
+    : 'skip';
   if (pageAction === 'close' && outcome.result.send_count === 0 && outcome.ownedFreshProjectUrl) {
     // The slot was already owner-released. For this proven-created tab, check
     // its current blank project identity and no foreign Stop at each destructive

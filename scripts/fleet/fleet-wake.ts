@@ -434,6 +434,27 @@ export function bannerOwnerPane(
   return singleOwner(matches);
 }
 
+// Unlike the historical supersession grouping, a saved chat alarm needs an
+// exact existing URL/worktree binding and one current agent pane. Issue/PR
+// hints, unbound URLs and shell panes are never destinations for this alarm.
+function boundChatBannerPane(
+  banner: ChatErrorBanner,
+  terminals: readonly FleetTerminal[],
+  config: FleetWakeConfig,
+  readBinding: typeof readChatBinding = readChatBinding,
+): FleetTerminal | undefined {
+  if (isLocalPlaceholderUrl(banner.url) || !config.chatScope
+    || !banner.url.startsWith(projectConversationPrefix(config.chatScope.projectUrl))) return undefined;
+  const binding = readBinding(banner.url);
+  if (!binding || binding.conversation_url !== banner.url || !binding.worktree) return undefined;
+  const owners = terminals.filter((terminal) => terminal.agentIdentity?.trim()
+    && isWorkerPane(terminal, config)
+    && (!terminal.status || /^(?:running|active|open|connected)$/iu.test(terminal.status))
+    && samePath(terminal.worktreePath, binding.worktree)
+    && (!binding.terminal_handle || terminal.handle === binding.terminal_handle));
+  return owners.length === 1 ? owners[0] : undefined;
+}
+
 /**
  * A task that moved to a fresh chat leaves its earlier chats behind; only the
  * newest chat per owner pane (else per Issue, else per PR) stays current.
@@ -1387,7 +1408,8 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       log(`${closed ? 'closed' : 'close failed for'} superseded chat ${chat.url}`);
     }
     activeChats = chats.filter((chat) => !superseded.has(chat));
-    const observed = activeChats.filter((chat) => !chat.generating).flatMap((chat) => chat.banners);
+    const observed = activeChats.filter((chat) => !chat.generating)
+      .flatMap((chat) => chat.banners.filter((banner) => banner.url === chat.url));
     // The two-tick stall evidence is URL-identity-based, not a mutable CDP target.
     const bannerIdentity = (banner: ChatErrorBanner) => localChatIdentity(banner.url, config)?.key ?? banner.url;
     const stalledNow = observed.filter((banner) => banner.kind === 'stalled')
@@ -1412,9 +1434,9 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
         // Invalid/foreign local placeholders remain read-only diagnostic evidence.
         continue;
       }
-      const owner = bannerOwnerPane(banner, terminals, config);
+      const owner = boundChatBannerPane(banner, terminals, config);
       if (owner) direct.push([owner, banner]);
-      else routed.push(banner);
+      // Missing/ambiguous bindings are silent, never coordinator-routed.
     }
     const directSignature = direct
       .map(([owner, banner]) => `${owner.handle} ${banner.url} ${banner.text}`)
@@ -1422,10 +1444,14 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       .join('\n');
     if (store.readBannerSignature?.() !== directSignature) {
       for (const [owner, banner] of direct) {
-        const delivered = sendCoordinator(executor, owner.handle, managerBannerMessage(banner))
-          && (await sleepMs(4_000), submitCoordinator(executor, owner.handle));
-        log(`${delivered ? 'sent' : 'send failed'} chat banner to ${owner.handle}: ${banner.url}`);
-        if (!delivered) routed.push(banner);
+        let delivered = false;
+        try {
+          delivered = sendCoordinator(executor, owner.handle, managerBannerMessage(banner))
+            && (await sleepMs(4_000), submitCoordinator(executor, owner.handle));
+        } catch {
+          // A thrown terminal send also means uncertain delivery, not reroute.
+        }
+        log(`${delivered ? 'sent' : 'send failed/uncertain'} chat banner to ${owner.handle}: ${banner.url}`);
       }
       store.writeBannerSignature?.(directSignature);
     }
