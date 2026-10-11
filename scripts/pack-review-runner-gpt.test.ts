@@ -3858,7 +3858,7 @@ describe('Issue #2451 zero-judgment budget and wrapper projection', () => {
       const startReview = vi.fn(async () => ({
         ok: true, created: false, reused: true, reason,
         prNumber: 2451, headSha: HEAD_A,
-        publicationHeadSha: HEAD_A, statusPublished: true,
+        publicationHeadSha: HEAD_A, statusPublished: true, publicationVerified: true,
       }));
       const execution = await runPackGptReviewCommand({ prNumber: 2451 }, {
         env: {}, stderr: { write: () => undefined },
@@ -4629,4 +4629,68 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
       expect(getPackReviewRun(f.runId, f.options)?.failureReason).toBe(failure);
     },
   );
+});
+
+describe('Issue #2496 r03 public GPT command settlement', () => {
+  it('partial-202-not-settled', async () => {
+    const result = await runPackGptReviewCommand({ prNumber: 2496 }, {
+      env: {}, stderr: { write: () => undefined },
+      startReview: async () => ({
+        ok: true, created: true, reason: 'gpt_sources_partial_pending_reconcile:2/3',
+        prNumber: 2496, headSha: HEAD_A, runId: 'prr-partial',
+        status: 'reviewing', httpStatus: 202,
+      }),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.result).toMatchObject({
+      ok: false, created: true, runnerReason: 'gpt_sources_partial_pending_reconcile:2/3',
+      status: 'reviewing', runId: 'prr-partial',
+      outcome: 'review_not_settled', nextAction: expect.stringContaining('observe'),
+    });
+  });
+
+  it('journal-failed-not-complete', async () => {
+    const result = await runPackGptReviewCommand({ prNumber: 2496 }, {
+      env: {}, stderr: { write: () => undefined },
+      startReview: async () => ({
+        ok: true, created: true, reason: 'journal_write_failed',
+        prNumber: 2496, headSha: HEAD_A, runId: 'prr-journal',
+        status: 'up_to_date', httpStatus: 201,
+      }),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.result).toMatchObject({
+      ok: false, outcome: 'review_not_settled', runId: 'prr-journal',
+      runnerReason: 'journal_write_failed', nextAction: expect.stringContaining('journal'),
+    });
+  });
+
+  it('prose-harvest-failed-actionable', async () => {
+    const result = await runPackGptReviewCommand({ prNumber: 2496 }, {
+      env: {}, stderr: { write: () => undefined },
+      startReview: async () => ({
+        ok: false, created: true, reason: 'harvest_failed', status: 'failed',
+        prNumber: 2496, headSha: HEAD_A, runId: 'prr-prose',
+      }),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.result).toMatchObject({
+      ok: false, runnerReason: 'harvest_failed', status: 'failed',
+      nextAction: expect.stringContaining('same-run slots'),
+    });
+  });
+
+  it('accepts a verified delivered round but not an unobserved status', async () => {
+    for (const verified of [false, true]) {
+      const result = await runPackGptReviewCommand({ prNumber: 2496 }, {
+        env: {}, stderr: { write: () => undefined },
+        startReview: async () => ({
+          ok: true, created: true, reason: 'completed', status: 'commented',
+          prNumber: 2496, headSha: HEAD_A, runId: 'prr-verified',
+          publicationHeadSha: HEAD_A, publicationVerified: verified,
+        }),
+      });
+      expect(result.exitCode).toBe(verified ? 0 : 1);
+    }
+  });
 });

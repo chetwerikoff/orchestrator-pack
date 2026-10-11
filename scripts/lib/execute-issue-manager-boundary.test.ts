@@ -150,7 +150,7 @@ describe('execute-Issue manager boundary', () => {
   });
 
   it('projects review runner success, read-only pass-through, and external failure', () => {
-    expect(classifyExecuteIssueManagerRecord({ ok: true, prNumber: 2083 }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 0 });
+    expect(classifyExecuteIssueManagerRecord({ ok: true, created: true, publicationVerified: true, headSha: context.headSha, prNumber: 2083 }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 0 });
     const action = managerNextAction({ kind: 'execute-review-runner-read-only', binding: { ...context, stage: 'execute:review' }, argv: ['scripts/gh', 'pr', 'view', '2083', '--json', 'state'] });
     expect(classifyExecuteIssueManagerRecord({ ok: false, nextAction: action }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 3, result: { nextAction: action } });
     const send = classifyExecuteIssueManagerRecord({ ok: false, nextAction: { schema: 'manager-next-action/v1', kind: 'execute-send-replacement', binding: { ...context, stage: 'execute:review' }, argv: ['node', 'scripts/chatgpt-browser-turn.ts', '--new-chat'] } }, { ...context, phase: 'review' });
@@ -480,4 +480,66 @@ describe('execute-Issue manager boundary', () => {
       result: { cause: 'execute_owned_turn_reobserve' },
     });
   });
+  it('legacy-missing-next-action-bound-pr-read-only', () => {
+    const evaluated = classifyExecuteIssueManagerRecord(
+      { ok: false, reason: 'harvest_failed', runId: 'fixture-run' },
+      { ...context, phase: 'review' },
+    );
+    expect(evaluated.exitCode).toBe(3);
+    const action = expectReadOnly(evaluated);
+    expect(action.kind).toBe('execute-review-runner-read-only');
+    expect(action.argv).toContain('2083');
+  });
+
+  it('contradictory-pr-rejected', () => {
+    for (const ok of [false, true]) {
+      const evaluated = classifyExecuteIssueManagerRecord(
+        { ok, created: true, publicationVerified: true, prNumber: 2099, headSha: context.headSha },
+        { ...context, phase: 'review' },
+      );
+      expect(evaluated).toMatchObject({ exitCode: 5, result: { cause: 'producer_contract_defect', nextAction: null } });
+    }
+  });
+
+  it('missing-trusted-pr-rejected', () => {
+    for (const prNumber of [undefined, 2099]) {
+      const evaluated = classifyExecuteIssueManagerRecord(
+        { ok: false, prNumber, reason: 'review failed' },
+        { ...context, phase: 'review', prNumber: undefined },
+      );
+      expect(evaluated).toMatchObject({ exitCode: 5, result: { cause: 'producer_contract_defect', nextAction: null } });
+    }
+  });
+
+  it('positive-but-unfinished-never-completed', () => {
+    for (const row of [
+      { ok: true, created: true, status: 'reviewing', httpStatus: 202 },
+      { ok: true, created: true, reason: 'journal_write_failed' },
+      { ok: true, created: true, reason: 'completed_with_delivery_failures' },
+      { ok: true, created: true, publicationVerified: false, reason: 'status_unverified' },
+      { ok: true, created: false, reused: true, reason: 'terminal_run_exists' },
+    ]) {
+      const evaluated = classifyExecuteIssueManagerRecord({ prNumber: 2083, ...row }, { ...context, phase: 'review' });
+      expect(evaluated.exitCode).toBe(3);
+      expectReadOnly(evaluated);
+    }
+    // A legitimately delivered intermediate pending status completes only the runner action.
+    expect(classifyExecuteIssueManagerRecord({
+      ok: true, created: true, publicationVerified: true,
+      prNumber: 2083, headSha: context.headSha, requiredStatusState: 'pending',
+    }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 0 });
+  });
+
+  it('external-outage-vs-local-exception', () => {
+    expect(classifyExecuteIssueManagerRecord({
+      ok: false, outcome: 'review_target_unavailable', reason: 'GitHub HTTP 503', prNumber: 2083,
+    }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 4, result: { cause: 'external:github_unavailable' } });
+    const local = classifyExecuteIssueManagerRecord({
+      ok: false, outcome: 'review_target_unavailable',
+      reason: 'invalid GitHub configuration argument', prNumber: 2083,
+    }, { ...context, phase: 'review' });
+    expect(local.exitCode).toBe(3);
+    expectReadOnly(local);
+  });
+
 });

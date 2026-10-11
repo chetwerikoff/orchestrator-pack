@@ -206,8 +206,11 @@ function runnerReadOnlyAction(
   context: ExecuteIssueManagerBoundaryContext,
   producerRecord: JsonRecord,
  ): ManagerNextAction | null {
-  const raw = context.prNumber ?? Number(producerRecord.prNumber);
-  if (!Number.isSafeInteger(raw) || Number(raw) < 1) return null;
+  // The manager's bound PR is the only read target. A producer-supplied PR
+  // may be missing in older results but must never override or contradict it.
+  const raw = context.prNumber;
+  if (!Number.isSafeInteger(raw) || raw! < 1
+    || (producerRecord.prNumber !== undefined && producerRecord.prNumber !== raw)) return null;
   return managerNextAction({
     kind: 'execute-review-runner-read-only',
     binding: actionBinding(context),
@@ -694,37 +697,72 @@ function classifyWorkerSmoke(
 
   return defect(context, producer, 'worker-smoke structured nonPassCause is unrecognized: ' + nonPassCause);
 }
+function reviewRunnerExternalCause(reason: string): ManagerExternalPauseCause | null {
+  // A local error mentioning "GitHub" is not evidence of a GitHub outage.
+  if (/\b(?:invalid|argument|configuration|unknown flag|must be|typeerror|syntaxerror)\b/iu.test(reason)) return null;
+  if (/\b(?:github|gh api)\b/iu.test(reason)
+    && /\b(?:unavailable|timeout|timed out|connection refused|forbidden|rate limit|http\s*[45]\d\d|[45]\d\d)\b/iu.test(reason)) {
+    return externalCauseFromText(reason);
+  }
+  if (/\b(?:chrome|cdp|browser)\b/iu.test(reason)
+    && /\b(?:unavailable|not running|connection refused|timed out)\b/iu.test(reason)) {
+    return externalCauseFromText(reason);
+  }
+  return null;
+}
+
 function classifyReviewRunner(
   value: JsonRecord,
   context: ExecuteIssueManagerBoundaryContext,
  ): ManagerBoundaryEvaluation {
   const producer = 'pack-gpt-review';
-  if (value.ok === true) return completed(context, producer, 'execute_review_runner_completed');
-
-  const outcome = text(value.outcome);
-  const reason = text(value.reason) || text(value.runnerReason);
-  if (outcome === 'review_target_unavailable') {
-    const cause = externalCauseFromText(reason) ?? 'external:github_unavailable';
-    return pause(context, producer, cause, value, 'restore the review target/external dependency, then resume the same execute-Issue Dispatch');
+  // A producer result cannot supply a missing trusted PR, nor retarget the manager.
+  if (!Number.isSafeInteger(context.prNumber) || context.prNumber! < 1) {
+    return defect(context, producer, 'review runner requires a trusted context PR');
+  }
+  if (value.prNumber !== undefined && value.prNumber !== context.prNumber) {
+    return defect(context, producer, 'review runner producer PR contradicts the trusted manager PR');
+  }
+  const reason = text(value.runnerReason) || text(value.reason);
+  const stageReuse = value.created === false && value.reused === true
+    && value.statusPublished === true
+    && (value.reason === 'review_stage_complete' || value.reason === 'terminal_run_exists')
+    && text(value.publicationHeadSha) !== ''
+    && text(value.publicationHeadSha) === text(value.headSha);
+  const deliveredRound = value.publicationVerified === true
+    && (value.created === true || (value.reused === true && value.reason === 'resumed_journaled_delivery'));
+  const headMatches = !text(context.headSha) || (text(value.headSha) && text(context.headSha) === text(value.headSha));
+  if (value.ok === true && headMatches && (stageReuse || deliveredRound)
+    && value.status !== 'reviewing' && value.reason !== 'journal_write_failed'
+    && value.reason !== 'completed_with_delivery_failures') {
+    // This completes the command action, not any remaining tier-required round.
+    return completed(context, producer, 'execute_review_runner_completed');
   }
 
-  const candidate = structuredNextAction(value.nextAction);
-  if (candidate && isExecuteIssueReadOnlyArgv(candidate.argv)) {
-    return recoverable(context, producer, 'execute_review_runner_read_only', candidate);
-  }
-
-  if (value.nextAction !== undefined && value.nextAction !== null) {
-    const nextAction = runnerReadOnlyAction(context, value);
-    return nextAction
-      ? recoverable(context, producer, 'execute_review_runner_reconcile', nextAction)
-      : defect(context, producer, 'runner nextAction is not read-only and no exact PR target is available for reconciliation');
-  }
-
-  const external = externalCauseFromText(reason);
+  const external = reviewRunnerExternalCause(reason);
   if (external) {
     return pause(context, producer, external, value, 'restore the observed external review dependency, then resume the same execute-Issue Dispatch');
   }
-  return defect(context, producer, 'non-success review runner result has no legal read-only action or external evidence');
+
+  const candidate = structuredNextAction(value.nextAction);
+  const binding = actionBinding(context);
+  if (candidate && isExecuteIssueReadOnlyArgv(candidate.argv)
+    && candidate.binding.repository === binding.repository
+    && candidate.binding.issueNumber === binding.issueNumber
+    && candidate.binding.sourceRevision === binding.sourceRevision
+    && candidate.binding.stage === binding.stage
+    && !(candidate.argv[0] === 'scripts/gh' && candidate.argv[1] === 'pr'
+      && candidate.argv[2] === 'view' && candidate.argv[3] !== String(context.prNumber))) {
+    return recoverable(context, producer, 'execute_review_runner_read_only', candidate);
+  }
+
+  // Positive dispatch/HTTP 202 and failed or uncertain delivery are observations,
+  // not completed verdicts. Reuse the incumbent exact-PR read-only action even
+  // when the producer omitted nextAction or supplied prose/non-read-only advice.
+  const nextAction = runnerReadOnlyAction(context, value);
+  return nextAction
+    ? recoverable(context, producer, 'execute_review_runner_reconcile', nextAction)
+    : defect(context, producer, 'review runner has no exact trusted PR for read-only reconciliation');
 }
 
 export function classifyExecuteIssueManagerRecord(

@@ -2306,3 +2306,121 @@ describe('Issue #2479 frozen reviewer and accepted-verdict provenance', () => {
       .toMatchObject({ resolvedReviewer: 'gpt', executedReviewer: 'gpt' });
   });
 });
+
+describe('Issue #2496 r03 exact-head review delivery', () => {
+  function fixture(prNumber: number) {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2496-delivery-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const head = HEAD;
+    let observed: string | undefined;
+    const writes: Array<{ state: string; description: string }> = [];
+    const input = {
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+      prNumber, headSha: head, claimMode: 'preacquired' as const,
+      fixtureCurrentPrHeadSha: head, fixturePostReviewHeadSha: head,
+      fixturePrState: 'OPEN' as const,
+      fixturePrBody: `Closes #${prNumber}`, fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: prNumber,
+      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureReviewStdout: cleanPayload(),
+      fixtureGithubReviewId: 249601,
+      fixtureReviewerLayerOverrides: { Process: 'codex' as const, User: 'codex' as const },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusReader: async () => observed,
+      fixtureRequiredStatusWriter: async (request: { state: string; description: string }) => {
+        writes.push(request);
+        observed = request.state;
+      },
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    };
+    return { input, writes, setObserved: (value: string | undefined) => { observed = value; } };
+  }
+
+  it('notification-only-nonblocking', async () => {
+    const f = fixture(24961);
+    const result = await startPackReview({
+      ...f.input, fixtureWorkerNotifier: async () => { throw new Error('offline notifier down'); },
+    });
+    expect(result).toMatchObject({
+      ok: true, created: true, reason: 'completed', publicationVerified: true,
+      publicationHeadSha: HEAD, requiredStatusState: 'success',
+    });
+    expect(f.writes.some((row) => row.state === 'success')).toBe(true);
+  });
+
+  it('status-ack-unobserved-not-settled', async () => {
+    const f = fixture(24962);
+    const result = await startPackReview({
+      ...f.input,
+      fixtureRequiredStatusReader: async () => undefined,
+    });
+    expect(result).toMatchObject({
+      ok: false, created: true, reason: 'status_not_published:current_head_status_unconfirmed',
+      publicationVerified: false, nextAction: expect.any(String),
+    });
+    // An acknowledged POST is not a verified latest GitHub status.
+    expect(f.writes.filter((row) => row.state === 'success')).toHaveLength(2);
+  });
+
+  it('status-failed-comment-success-reposts', async () => {
+    const f = fixture(24963);
+    let failed = false;
+    const result = await startPackReview({
+      ...f.input,
+      fixtureRequiredStatusWriter: async (request) => {
+        f.writes.push(request);
+        if (request.state === 'success' && !failed) {
+          failed = true;
+          throw new Error('offline first terminal status POST rejected');
+        }
+        f.setObserved(request.state);
+      },
+    });
+    expect(result).toMatchObject({
+      ok: true, publicationVerified: true, requiredStatusState: 'success',
+    });
+    expect(failed).toBe(true);
+    expect(f.writes.filter((row) => row.state === 'success')).toHaveLength(2);
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot: f.input.storeRoot });
+    expect(run?.deliveryOutcomes.requiredStatus?.state).toBe('succeeded');
+  });
+
+  it('status-post-late-ack-restores-or-unresolved', async () => {
+    const f = fixture(24964);
+    let latest = '';
+    const result = await startPackReview({
+      ...f.input,
+      fixtureRequiredStatusReader: async () => latest,
+      fixtureRequiredStatusWriter: async (request) => {
+        f.writes.push(request);
+        // Simulate a delayed older error status reaching GitHub after our ACK.
+        latest = request.state === 'success' && f.writes.filter((row) => row.state === 'success').length === 1
+          ? 'error' : request.state;
+      },
+    });
+    expect(result).toMatchObject({
+      ok: true, publicationVerified: true, requiredStatusState: 'success',
+    });
+    expect(f.writes.filter((row) => row.state === 'success')).toHaveLength(2);
+  });
+
+  it('head-stage-complete-versus-unresolved-or-diverged', async () => {
+    const f = fixture(24965);
+    let live = HEAD;
+    const result = await startPackReview({
+      ...f.input,
+      fixtureReadCurrentPrHead: async () => live,
+      fixtureRequiredStatusWriter: async (request) => {
+        f.writes.push(request);
+        if (request.state === 'success') live = 'b'.repeat(40);
+      },
+    });
+    expect(result).toMatchObject({
+      ok: false, publicationVerified: false,
+      reason: expect.stringContaining('status_not_published'),
+    });
+  });
+});

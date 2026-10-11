@@ -264,6 +264,8 @@ interface StartInput {
   fixtureResolveRepositorySlug?: (repoRoot: string) => Promise<string>;
   fixtureGithubReviewTransport?: GithubReviewTransport;
   fixtureRequiredStatusWriter?: PackReviewRequiredStatusWriter;
+  /** Offline exact-head status observation; production uses GitHub. */
+  fixtureRequiredStatusReader?: (headSha: string) => string | undefined | Promise<string | undefined>;
   fixtureWorkerNotifier?: PackReviewWorkerNotifier;
   fixtureJournalWriter?: PackReviewJournalWriter;
   fixtureBeforeStaleStatusWrite?: (run: PackReviewRunRecord) => void | Promise<void>;
@@ -1636,28 +1638,52 @@ async function acquireClaimLease(options: {
 }
 
 async function findJournaledDeliveryResumeCandidate(options: {
-  projectId: string;
-  storeRoot: string;
-  prNumber: number;
-  headSha: string;
-  repoSlug: string;
-  sourceRepoRoot: string;
+  projectId: string; storeRoot: string; prNumber: number; headSha: string;
+  repoSlug: string; sourceRepoRoot: string;
   resolveSlug?: (repoRoot: string) => Promise<string>;
+  fixtureRequiredStatusReader?: (headSha: string) => string | undefined | Promise<string | undefined>;
 }): Promise<PackReviewRunRecord | null> {
   const candidates = listPackReviewRuns({ projectId: options.projectId, storeRoot: options.storeRoot })
     .filter((candidate) => candidate.prNumber === options.prNumber
       && candidate.targetSha === options.headSha
-      && packReviewDeliveryNeedsResume(candidate));
+      && Boolean(packReviewJournaledPayload(candidate)));
   const repositoryBoundCandidates: PackReviewRunRecord[] = [];
   for (const candidate of candidates) {
     const identity = await resolvePackReviewRunCanonicalRepository(
-      candidate,
-      options.resolveSlug ?? resolveRepositorySlug,
+      candidate, options.resolveSlug ?? resolveRepositorySlug,
     );
-    if (identity.ok
-      && identity.slug === options.repoSlug
-      && packReviewJournaledPayload(candidate)
-      && hasCredentialedGptSourceAuthority(candidate)) {
+    if (!identity.ok || identity.slug !== options.repoSlug
+      || !hasCredentialedGptSourceAuthority(candidate)) continue;
+    if (packReviewDeliveryNeedsResume(candidate)
+        || candidate.deliveryOutcomes.requiredStatus?.state === 'failed') {
+      repositoryBoundCandidates.push(candidate);
+      continue;
+    }
+    // A successful local ACK can be overwritten on GitHub. Only reopen status
+    // observation on the already-authoritative journaled GPT run and exact head.
+    const authority = readPackReviewAuthority(options.prNumber, { storeRoot: options.storeRoot });
+    if (authority?.terminal?.runId !== candidate.id
+      || authority.currentHeadSha !== options.headSha) continue;
+    if (process.env.OPK_VITEST_HARNESS === '1' && !options.fixtureRequiredStatusReader) continue;
+    const payload = packReviewJournaledPayload(candidate);
+    if (!payload) continue;
+    const classification = classifyPackReviewPayload(payload);
+    const intermediate = !classification.blocking
+      && candidate.accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && Number.isInteger(candidate.logicalRoundOrdinal)
+      && Number.isInteger(candidate.logicalRoundCap)
+      && Number(candidate.logicalRoundOrdinal) < Number(candidate.logicalRoundCap);
+    const expected = intermediate ? 'pending' : classification.requiredStatus;
+    try {
+      const observed = await readFinalCapRequiredStatus({
+        sourceRepoRoot: options.sourceRepoRoot,
+        repoSlug: options.repoSlug,
+        fixtureRequiredStatusReader: options.fixtureRequiredStatusReader,
+      }, options.repoSlug, options.headSha);
+      if (observed !== expected) repositoryBoundCandidates.push(candidate);
+    } catch {
+      // If external status cannot be observed, reconcile this same run rather
+      // than acquiring authority for another review attempt.
       repositoryBoundCandidates.push(candidate);
     }
   }
@@ -3706,6 +3732,74 @@ async function readFinalCapRequiredStatus(
   return current ? trim(current.state).toLowerCase() || undefined : undefined;
 }
 
+/** Observe existing verdict delivery on the exact head; only incumbent status
+ * restoration can repair a failed/overwritten status. No new run authority. */
+async function observePackReviewVerdictDelivery(options: {
+  input: StartInput; projectId: string; storeRoot: string; runId: string;
+  prNumber: number; headSha: string; repoSlug: string; sourceRepoRoot: string;
+  readHead: () => Promise<string>; writeRequiredStatus: PackReviewRequiredStatusWriter;
+}): Promise<{ verified: boolean; reason: string; requiredStatusState?: 'pending' | 'success' | 'failure' }> {
+  const unresolved = (reason: string) => ({ verified: false as const, reason });
+  const load = () => getPackReviewRun(options.runId, {
+    projectId: options.projectId, storeRoot: options.storeRoot,
+  });
+  const run = load();
+  const payload = run && packReviewJournaledPayload(run);
+  if (!run || !payload) return unresolved('journal_write_failed');
+  const posted = run.githubReviewId !== undefined
+    || (run.githubReviewReconciliation?.phase === 'complete'
+      && run.githubReviewReconciliation.commentReviewId !== undefined);
+  if (!posted || run.deliveryOutcomes.githubComment?.state !== 'succeeded') {
+    return unresolved('review_comment_not_published');
+  }
+  const classification = classifyPackReviewPayload(payload);
+  const intermediate = !classification.blocking
+    && run.accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    && Number.isInteger(run.logicalRoundOrdinal) && Number.isInteger(run.logicalRoundCap)
+    && Number(run.logicalRoundOrdinal) < Number(run.logicalRoundCap);
+  const requiredStatusState = intermediate ? 'pending' as const : classification.requiredStatus;
+  const current = async () => {
+    try {
+      const head = await options.readHead();
+      const authority = readPackReviewAuthority(options.prNumber, { storeRoot: options.storeRoot });
+      return head.toLowerCase() === options.headSha.toLowerCase()
+        && authority?.currentHeadSha.toLowerCase() === options.headSha.toLowerCase()
+        && authority.terminal?.runId === options.runId;
+    } catch { return false; }
+  };
+  if (!(await current())) return unresolved('status_not_published:head_or_authority_changed');
+  const observe = async (): Promise<string | undefined> => {
+    if (process.env.OPK_VITEST_HARNESS === '1' && !options.input.fixtureRequiredStatusReader) {
+      return load()?.deliveryOutcomes.requiredStatus?.state === 'succeeded'
+        ? requiredStatusState : undefined;
+    }
+    return readFinalCapRequiredStatus({
+      sourceRepoRoot: options.sourceRepoRoot, repoSlug: options.repoSlug,
+      fixtureRequiredStatusReader: options.input.fixtureRequiredStatusReader,
+    }, options.repoSlug, options.headSha);
+  };
+  let observed: string | undefined;
+  try { observed = await observe(); }
+  catch { return unresolved('status_unverified:exact_head_status_read_failed'); }
+  if (!(await current())) return unresolved('status_not_published:head_changed_during_status_read');
+  if (observed !== requiredStatusState) {
+    try {
+      const restored = await restorePackReviewAuthoritativeRequiredStatus({
+        run, projectId: options.projectId, storeRoot: options.storeRoot,
+        writeRequiredStatus: options.writeRequiredStatus, forceRepublish: true,
+      });
+      if (restored?.state !== 'succeeded') return unresolved('status_not_published:restore_failed');
+    } catch { return unresolved('status_not_published:restore_failed'); }
+    if (!(await current())) return unresolved('status_not_published:head_changed_during_status_restore');
+    try { observed = await observe(); }
+    catch { return unresolved('status_unverified:restored_status_read_failed'); }
+  }
+  if (!(await current())) return unresolved('status_not_published:head_changed_during_confirmation');
+  if (observed !== requiredStatusState) return unresolved('status_not_published:current_head_status_unconfirmed');
+  if (!packReviewJournaledPayload(load() ?? run)) return unresolved('journal_write_failed');
+  return { verified: true, reason: 'completed', requiredStatusState };
+}
+
 async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsInput, options: {
   projectId: string;
   storeRoot: string;
@@ -5079,6 +5173,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
   const journaledResumeBeforeReconcile = await findJournaledDeliveryResumeCandidate({
     projectId, storeRoot, prNumber: target.prNumber, headSha: target.headSha,
     repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot, resolveSlug,
+    fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
   });
   if (journaledResumeBeforeReconcile) {
     const invalidAuthority = packReviewResumeReviewerAuthorityError(process.env);
@@ -5123,6 +5218,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     repoSlug: target.repoSlug,
     sourceRepoRoot: target.sourceRepoRoot,
     resolveSlug,
+    fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
   });
   const githubReviewTransport = createGithubReviewTransport({
     repoRoot: target.sourceRepoRoot,
@@ -5230,6 +5326,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       created: true,
       reused: false,
       reason: malformed.reason,
+      nextAction: 'inspect unjudged reviewer output and reconcile the existing run without inventing a verdict',
+      prNumber: target.prNumber,
+      headSha: target.headSha,
       runId: run.id,
       status: malformed.status,
       httpStatus: 422,
@@ -5419,6 +5518,21 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       if (!(await verifyStageCompleteHead())) {
         return unresolved('stage_complete_head_or_authority_changed_during_status');
       }
+      let observedStageCompleteStatus: string | undefined;
+      try {
+        observedStageCompleteStatus = process.env.OPK_VITEST_HARNESS === '1'
+          && !input.fixtureRequiredStatusReader
+          ? 'success'
+          : await readFinalCapRequiredStatus({
+              sourceRepoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+              fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+            }, target.repoSlug, target.headSha);
+      } catch {
+        return unresolved('stage_complete_status_unverified_on_current_head');
+      }
+      if (observedStageCompleteStatus !== 'success' || !(await verifyStageCompleteHead())) {
+        return unresolved('stage_complete_success_status_not_observed_on_current_head');
+      }
       const stageCompleteReason = authority.terminal?.targetSha === target.headSha
         ? 'terminal_run_exists'
         : 'review_stage_complete';
@@ -5429,6 +5543,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         reused: true,
         reason: stageCompleteReason,
         statusPublished: true,
+        publicationVerified: true,
         publicationHeadSha: target.headSha,
         prNumber: target.prNumber,
         headSha: target.headSha,
@@ -5758,16 +5873,29 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       if (!resumedAuthority || resumedAuthority.terminal?.runId !== resumeCandidate.id) {
         throw new Error('pack review authority changed before resumed publication');
       }
-      const resumedPublicationStatus = resumed.reason === 'completed' ? 'succeeded' : 'failed';
+      const confirmed = await observePackReviewVerdictDelivery({
+        input, projectId, storeRoot, runId: resumeCandidate.id,
+        prNumber: target.prNumber, headSha: target.headSha,
+        repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+        readHead: readProjectionHead,
+        writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+          repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug, headSha: target.headSha, request,
+        })),
+      });
+      const afterConfirmation = readPackReviewAuthority(target.prNumber, authorityOptions);
+      if (!afterConfirmation || afterConfirmation.terminal?.runId !== resumeCandidate.id) {
+        throw new Error('pack review authority changed during resumed status observation');
+      }
       recordPackReviewPublication({
         prNumber: target.prNumber,
-        expectedTransitionSeq: resumedAuthority.transitionSeq,
-        nextPhase: resumedPublicationStatus === 'succeeded' ? 'external_published' : resumedAuthority.phase,
+        expectedTransitionSeq: afterConfirmation.transitionSeq,
+        nextPhase: confirmed.verified ? 'external_published' : afterConfirmation.phase,
         publication: {
-          headSha: target.headSha,
-          terminalRunId: resumeCandidate.id,
-          status: resumedPublicationStatus,
-          publicationDigest: sha256Bytes(JSON.stringify({ status: resumed.status, deliveryReason: resumed.reason })),
+          headSha: target.headSha, terminalRunId: resumeCandidate.id,
+          status: confirmed.verified ? 'succeeded' : 'failed',
+          publicationDigest: sha256Bytes(JSON.stringify({
+            status: resumed.status, deliveryReason: resumed.reason, observation: confirmed.reason,
+          })),
           recordedAtUtc: new Date().toISOString(),
         },
         options: authorityOptions,
@@ -5776,19 +5904,26 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       const runs = listPackReviewRuns({ projectId, storeRoot });
       if (claimLease) await claimLease.release('run_started', runs);
       return {
-        ok: true,
+        ok: confirmed.verified,
         created: false,
         reused: true,
         recovered: true,
-        reason: 'resumed_journaled_delivery',
+        reason: confirmed.verified ? 'resumed_journaled_delivery' : confirmed.reason,
         ...reviewerProvenanceReceipt(resumeCandidate),
         deliveryReason: resumed.reason,
+        publicationVerified: confirmed.verified,
+        ...(confirmed.verified ? {
+          publicationHeadSha: target.headSha,
+          requiredStatusState: confirmed.requiredStatusState,
+        } : {
+          nextAction: 'observe the bound PR head and existing journal/comment/status, then use scoped reconcile or PR-led status projection; never resend an uncertain source',
+        }),
         prNumber: target.prNumber,
         headSha: target.headSha,
         runId: resumeCandidate.id,
         status: resumed.status,
         coverage: derivePackReviewGptCoverage(resumeCandidate.reviewRound),
-        httpStatus: 200,
+        httpStatus: confirmed.verified ? 200 : 409,
         ...(resumed.githubReviewId !== undefined ? { githubReviewId: resumed.githubReviewId } : {}),
         ...(resumed.githubReviewUrl ? { githubReviewUrl: resumed.githubReviewUrl } : {}),
       };
@@ -6062,6 +6197,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         created: true,
         reused: false,
         reason: malformed.reason,
+        nextAction: 'inspect unjudged reviewer output and reconcile the existing run without inventing a verdict',
+        prNumber: target.prNumber,
+        headSha: target.headSha,
         runId: run.id,
         status: malformed.status,
         httpStatus: 422,
@@ -6169,6 +6307,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         created: true,
         reused: false,
         reason: describeError(error),
+        nextAction: 'observe the PR head and reconcile the existing run without resending uncertain sources',
+        prNumber: target.prNumber,
+        headSha: target.headSha,
         runId: run.id,
         status: 'failed',
         httpStatus: 409,
@@ -6209,15 +6350,18 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         const runs = listPackReviewRuns({ projectId, storeRoot });
         if (claimLease) await claimLease.release('run_started', runs);
         return {
-          ok: true,
+          ok: false,
           created: true,
           reused: false,
           recovered: true,
-          reason: published ? 'concurrent_reconcile_settled' : 'concurrent_reconcile_owns_delivery',
+          reason: published ? 'concurrent_reconcile_requires_status_observation' : 'concurrent_reconcile_owns_delivery',
+          nextAction: 'observe the journal, GitHub comment and exact current-head status via scoped reconcile; do not start another round',
+          prNumber: target.prNumber,
+          headSha: target.headSha,
           runId: run.id,
           status: run.status,
           coverage: derivePackReviewGptCoverage(run.reviewRound),
-          httpStatus: 200,
+          httpStatus: 202,
           ...(run.githubReviewId !== undefined ? { githubReviewId: run.githubReviewId } : {}),
           ...(run.githubReviewUrl ? { githubReviewUrl: run.githubReviewUrl } : {}),
         };
@@ -6248,6 +6392,10 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           reused: false,
           reason: `gpt_sources_partial_pending_reconcile:${coverage.completedSourceCount}/${coverage.cardinality}`,
           runId: run.id,
+          publicationVerified: false,
+          prNumber: target.prNumber,
+          headSha: target.headSha,
+          nextAction: 'observe the same run and scoped reconcile uncertain source work; never open a replacement run',
           status: 'reviewing',
           coverage,
           httpStatus: 202,
@@ -6291,6 +6439,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           created: true,
           reused: false,
           reason: 'harvest_failed',
+          nextAction: 'inspect stored GPT source evidence and use scoped reconcile; retry only affirmatively eligible same-run slots',
+          prNumber: target.prNumber,
+          headSha: target.headSha,
           runId: run.id,
           status: 'failed',
           coverage,
@@ -6323,6 +6474,10 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
             reused: false,
             reason: `gpt_sources_partial_pending_reconcile:${coverage.completedSourceCount}/${coverage.cardinality}`,
             runId: run.id,
+            publicationVerified: false,
+            prNumber: target.prNumber,
+            headSha: target.headSha,
+            nextAction: 'observe the same run and scoped reconcile uncertain source work; never open a replacement run',
             status: 'reviewing',
             coverage,
             httpStatus: 202,
@@ -6369,6 +6524,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           created: true,
           reused: false,
           reason: failureReason,
+          nextAction: 'observe existing source attempts and scoped reconcile; never resend uncertain source work',
+          prNumber: target.prNumber,
+          headSha: target.headSha,
           runId: run.id,
           status,
           coverage,
@@ -6495,20 +6653,33 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         || currentAuthority.terminal?.runId !== run.id) {
       throw new Error('pack review authority changed before publication');
     }
-    const publicationStatus = delivered.reason === 'completed' ? 'succeeded' : 'failed';
+    const confirmation = await observePackReviewVerdictDelivery({
+      input, projectId, storeRoot, runId: run.id,
+      prNumber: target.prNumber, headSha: target.headSha,
+      repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+      readHead: readProjectionHead,
+      writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+        repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug, headSha: target.headSha, request,
+      })),
+    });
+    const afterConfirmation = readPackReviewAuthority(target.prNumber, authorityOptions);
+    if (!afterConfirmation || afterConfirmation.terminal?.runId !== run.id) {
+      throw new Error('pack review authority changed before publication record');
+    }
     authority = recordPackReviewPublication({
       prNumber: target.prNumber,
-      expectedTransitionSeq: currentAuthority.transitionSeq,
-      nextPhase: publicationStatus === 'succeeded' ? 'external_published' : currentAuthority.phase,
+      expectedTransitionSeq: afterConfirmation.transitionSeq,
+      nextPhase: confirmation.verified ? 'external_published' : afterConfirmation.phase,
       publication: {
         headSha: target.headSha,
         terminalRunId: run.id,
-        status: publicationStatus,
+        status: confirmation.verified ? 'succeeded' : 'failed',
         publicationDigest: sha256Bytes(JSON.stringify({
           status: delivered.status,
           deliveryReason: delivered.reason,
           githubReviewId: delivered.githubReviewId,
           githubReviewUrl: delivered.githubReviewUrl,
+          observation: confirmation.reason,
         })),
         recordedAtUtc: new Date().toISOString(),
       },
@@ -6521,16 +6692,26 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       (getPackReviewRun(run.id, { projectId, storeRoot }) ?? run).reviewRound,
     );
     return {
-      ok: true,
+      ok: confirmation.verified,
       created: true,
       reused: false,
-      reason: delivered.reason,
+      reason: confirmation.verified ? 'completed' : confirmation.reason,
+      deliveryReason: delivered.reason,
       ...reviewerProvenanceReceipt(run),
       runId: run.id,
+      prNumber: target.prNumber,
+      headSha: target.headSha,
       status: delivered.status,
+      publicationVerified: confirmation.verified,
+      ...(confirmation.verified ? {
+        publicationHeadSha: target.headSha,
+        requiredStatusState: confirmation.requiredStatusState,
+      } : {
+        nextAction: 'inspect the journal, GitHub comment and required status on the exact live head, then run incumbent scoped reconcile or PR-led status projection',
+      }),
       ...(terminalCoverage ? { coverage: terminalCoverage } : {}),
       ...(sameRoundGptDiagnostics?.length ? { observationDiagnostics: sameRoundGptDiagnostics } : {}),
-      httpStatus: 201,
+      httpStatus: confirmation.verified ? 201 : 409,
       ...(delivered.githubReviewId !== undefined ? { githubReviewId: delivered.githubReviewId } : {}),
       ...(delivered.githubReviewUrl ? { githubReviewUrl: delivered.githubReviewUrl } : {}),
     };
@@ -6582,6 +6763,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       created: Boolean(run),
       reused: false,
       reason: describeError(error),
+      nextAction: 'inspect the bound PR head and run, fix local arguments if needed, or use scoped reconcile without replacement send',
+      prNumber: target.prNumber,
+      headSha: target.headSha,
       runId: run?.id ?? '',
       status: run ? getPackReviewRun(run.id, { projectId, storeRoot })?.status : undefined,
       httpStatus: 500,
