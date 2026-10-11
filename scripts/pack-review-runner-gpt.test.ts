@@ -4722,3 +4722,147 @@ describe('Issue #2496 r03 public GPT command settlement', () => {
     });
   });
 });
+
+describe('Issue #2496 r03 genuine GPT source delivery and status observation', () => {
+  function fixture(prNumber: number) {
+    const storeRoot = tempRoot('opk-2496-gpt-observed-status-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const statuses: string[] = [];
+    let observed: string | undefined;
+    const input = {
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: repoRoot,
+      prNumber, headSha: HEAD_A, reviewerOverride: 'gpt' as const,
+      fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
+      fixturePrState: 'OPEN' as const,
+      fixturePrBody: `Closes #${prNumber}`, fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: prNumber,
+      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      claimMode: 'preacquired' as const,
+      fixtureGithubReviewId: 249601,
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-2496-gpt-source-01') }],
+        'source-02': [{ stdout: successfulCleanReviewPayload('inv-2496-gpt-source-02') }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-2496-gpt-source-03') }],
+      },
+      fixtureRequiredStatusReader: async (headSha: string) => {
+        expect(headSha).toBe(HEAD_A);
+        return observed;
+      },
+      fixtureRequiredStatusWriter: async (request: { state: string }) => {
+        statuses.push(request.state);
+        observed = request.state;
+      },
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    };
+    return {
+      input, statuses, storeRoot,
+      setObserved: (value: string | undefined) => { observed = value; },
+      getObserved: () => observed,
+    };
+  }
+
+  it('gpt-verified-delivery-and-notification-only-nonblocking', async () => {
+    const f = fixture(249601);
+    const reader = vi.fn(f.input.fixtureRequiredStatusReader);
+    const result = await startPackReview({
+      ...f.input,
+      fixtureRequiredStatusReader: reader,
+      fixtureWorkerNotifier: async () => { throw new Error('offline GPT worker notification failure'); },
+    });
+    expect(result).toMatchObject({
+      ok: true, created: true, reason: 'completed',
+      publicationVerified: true, publicationHeadSha: HEAD_A, requiredStatusState: 'success',
+    });
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot: f.storeRoot });
+    expect(run?.reviewRound?.reviewer).toBe('gpt');
+    expect(run?.reviewRound?.sourceSlots).toHaveLength(3);
+    expect(run?.deliveryOutcomes.workerNotification?.state).toBe('failed');
+    expect(f.statuses).toEqual(['pending', 'success']);
+    expect(reader).toHaveBeenCalledWith(HEAD_A);
+  });
+
+  it('status-post-late-ack-restores-or-unresolved for genuine GPT', async () => {
+    const f = fixture(249602);
+    const result = await startPackReview({
+      ...f.input,
+      fixtureRequiredStatusWriter: async (request) => {
+        f.statuses.push(request.state);
+        const attempts = f.statuses.filter((state) => state === 'success').length;
+        // The first ACK is followed by a visible older error status.
+        f.setObserved(request.state === 'success' && attempts === 1 ? 'error' : request.state);
+      },
+    });
+    expect(result).toMatchObject({
+      ok: true, created: true, publicationVerified: true,
+      publicationHeadSha: HEAD_A, requiredStatusState: 'success',
+    });
+    expect(f.statuses.filter((state) => state === 'success')).toHaveLength(2);
+    expect(f.getObserved()).toBe('success');
+  });
+
+  it('status-ack-unobserved-not-settled for genuine GPT', async () => {
+    const f = fixture(249603);
+    const result = await startPackReview({
+      ...f.input,
+      fixtureRequiredStatusReader: async () => undefined,
+    });
+    expect(result).toMatchObject({
+      ok: true, created: true, reason: 'completed',
+      publicationVerified: false,
+      publicationReason: 'status_not_published:current_head_status_unconfirmed',
+      nextAction: expect.any(String),
+    });
+    expect(result).not.toHaveProperty('publicationHeadSha');
+    expect(f.statuses.filter((state) => state === 'success')).toHaveLength(2);
+  });
+
+  it('status-failed-comment-success-reposts via the same GPT journaled PR-led resume', async () => {
+    const f = fixture(249604);
+    let denyFirstTerminalPost = true;
+    const writer = async (request: { state: string }) => {
+      f.statuses.push(request.state);
+      if (request.state === 'success' && denyFirstTerminalPost) {
+        denyFirstTerminalPost = false;
+        throw new Error('offline required-status POST failed');
+      }
+      f.setObserved(request.state);
+    };
+    const first = await startPackReview({ ...f.input, fixtureRequiredStatusWriter: writer });
+    expect(first).toMatchObject({
+      ok: true, created: true, publicationVerified: false,
+      publicationReason: 'status_not_published:failed_required_status_channel',
+    });
+    expect(f.statuses.filter((state) => state === 'success')).toHaveLength(1);
+    const recovered = await startPackReview({ ...f.input, fixtureRequiredStatusWriter: writer });
+    expect(recovered).toMatchObject({
+      ok: true, created: false, reused: true, recovered: true,
+      runId: first.runId, reason: 'resumed_journaled_delivery',
+      publicationVerified: true, publicationHeadSha: HEAD_A, requiredStatusState: 'success',
+    });
+    expect(f.statuses.filter((state) => state === 'success')).toHaveLength(2);
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot: f.storeRoot })).toHaveLength(1);
+  });
+
+  it('genuine GPT head drift does not inherit an earlier acknowledged status', async () => {
+    const f = fixture(249605);
+    let liveHead = HEAD_A;
+    const result = await startPackReview({
+      ...f.input,
+      fixtureReadCurrentPrHead: async () => liveHead,
+      fixtureRequiredStatusWriter: async (request) => {
+        f.statuses.push(request.state);
+        f.setObserved(request.state);
+        if (request.state === 'success') liveHead = HEAD_B;
+      },
+    });
+    expect(result).toMatchObject({
+      ok: true, created: true, publicationVerified: false,
+      publicationReason: expect.stringContaining('status_not_published'),
+    });
+    expect(result).not.toHaveProperty('publicationHeadSha');
+  });
+});

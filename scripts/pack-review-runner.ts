@@ -5887,29 +5887,44 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       if (!resumedAuthority || resumedAuthority.terminal?.runId !== resumeCandidate.id) {
         throw new Error('pack review authority changed before resumed publication');
       }
-      const confirmed = await observePackReviewVerdictDelivery({
-        input, projectId, storeRoot, runId: resumeCandidate.id,
-        prNumber: target.prNumber, headSha: target.headSha,
-        repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
-        readHead: readProjectionHead,
-        writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
-          repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug, headSha: target.headSha, request,
-        })),
-        resumeFailedStatus: true,
-      });
-      const afterConfirmation = readPackReviewAuthority(target.prNumber, authorityOptions);
+      // Issue #2496 observes/reprojects only GPT review delivery. Native
+      // Claude/Codex resumes keep their incumbent delivered.reason semantics,
+      // with no extra status read or forced publication.
+      const gptResume = resumeCandidate.reviewRound?.reviewer === 'gpt'
+        || resumeCandidate.resolvedReviewer === 'gpt';
+      const confirmed = gptResume
+        ? await observePackReviewVerdictDelivery({
+            input, projectId, storeRoot, runId: resumeCandidate.id,
+            prNumber: target.prNumber, headSha: target.headSha,
+            repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+            readHead: readProjectionHead,
+            writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+              repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug, headSha: target.headSha, request,
+            })),
+            resumeFailedStatus: true,
+          })
+        : null;
+      const afterConfirmation = confirmed
+        ? readPackReviewAuthority(target.prNumber, authorityOptions)
+        : resumedAuthority;
       if (!afterConfirmation || afterConfirmation.terminal?.runId !== resumeCandidate.id) {
-        throw new Error('pack review authority changed during resumed status observation');
+        throw new Error('pack review authority changed during resumed publication');
       }
+      const publicationStatus = confirmed
+        ? (confirmed.verified ? 'succeeded' : 'failed')
+        : (resumed.reason === 'completed' ? 'succeeded' : 'failed');
       recordPackReviewPublication({
         prNumber: target.prNumber,
         expectedTransitionSeq: afterConfirmation.transitionSeq,
-        nextPhase: confirmed.verified ? 'external_published' : afterConfirmation.phase,
+        nextPhase: publicationStatus === 'succeeded' ? 'external_published' : afterConfirmation.phase,
         publication: {
-          headSha: target.headSha, terminalRunId: resumeCandidate.id,
-          status: confirmed.verified ? 'succeeded' : 'failed',
+          headSha: target.headSha,
+          terminalRunId: resumeCandidate.id,
+          status: publicationStatus,
           publicationDigest: sha256Bytes(JSON.stringify({
-            status: resumed.status, deliveryReason: resumed.reason, observation: confirmed.reason,
+            status: resumed.status,
+            deliveryReason: resumed.reason,
+            ...(confirmed ? { observation: confirmed.reason } : {}),
           })),
           recordedAtUtc: new Date().toISOString(),
         },
@@ -5919,9 +5934,6 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       const runs = listPackReviewRuns({ projectId, storeRoot });
       if (claimLease) await claimLease.release('run_started', runs);
       return {
-        // Accepted/recovered command != verified current-head publication.
-        // Preserve the historical runner acknowledgement for old callers,
-        // while the public command/manager require publicationVerified.
         ok: true,
         created: false,
         reused: true,
@@ -5929,20 +5941,21 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         reason: 'resumed_journaled_delivery',
         ...reviewerProvenanceReceipt(resumeCandidate),
         deliveryReason: resumed.reason,
-        publicationVerified: confirmed.verified,
-        ...(confirmed.verified ? {} : { publicationReason: confirmed.reason }),
-        ...(confirmed.verified ? {
-          publicationHeadSha: target.headSha,
-          requiredStatusState: confirmed.requiredStatusState,
-        } : {
-          nextAction: 'observe the bound PR head and existing journal/comment/status, then use scoped reconcile or PR-led status projection; never resend an uncertain source',
-        }),
+        ...(confirmed ? {
+          publicationVerified: confirmed.verified,
+          ...(confirmed.verified
+            ? { publicationHeadSha: target.headSha, requiredStatusState: confirmed.requiredStatusState }
+            : {
+                publicationReason: confirmed.reason,
+                nextAction: 'observe the bound PR head and existing journal/comment/status, then use scoped reconcile or PR-led status projection; never resend an uncertain source',
+              }),
+        } : {}),
         prNumber: target.prNumber,
         headSha: target.headSha,
         runId: resumeCandidate.id,
         status: resumed.status,
         coverage: derivePackReviewGptCoverage(resumeCandidate.reviewRound),
-        httpStatus: confirmed.verified ? 200 : 409,
+        httpStatus: confirmed ? (confirmed.verified ? 200 : 409) : 200,
         ...(resumed.githubReviewId !== undefined ? { githubReviewId: resumed.githubReviewId } : {}),
         ...(resumed.githubReviewUrl ? { githubReviewUrl: resumed.githubReviewUrl } : {}),
       };
@@ -6675,33 +6688,42 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         || currentAuthority.terminal?.runId !== run.id) {
       throw new Error('pack review authority changed before publication');
     }
-    const confirmation = await observePackReviewVerdictDelivery({
-      input, projectId, storeRoot, runId: run.id,
-      prNumber: target.prNumber, headSha: target.headSha,
-      repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
-      readHead: readProjectionHead,
-      writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
-        repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug, headSha: target.headSha, request,
-      })),
-    });
-    const afterConfirmation = readPackReviewAuthority(target.prNumber, authorityOptions);
+    // The exact-head status observation and authorized reprojection introduced
+    // by #2496 are GPT-only. Native reviewer publication is unchanged.
+    const confirmation = reviewer === 'gpt'
+      ? await observePackReviewVerdictDelivery({
+          input, projectId, storeRoot, runId: run.id,
+          prNumber: target.prNumber, headSha: target.headSha,
+          repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+          readHead: readProjectionHead,
+          writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+            repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug, headSha: target.headSha, request,
+          })),
+        })
+      : null;
+    const afterConfirmation = confirmation
+      ? readPackReviewAuthority(target.prNumber, authorityOptions)
+      : currentAuthority;
     if (!afterConfirmation || afterConfirmation.terminal?.runId !== run.id) {
       throw new Error('pack review authority changed before publication record');
     }
+    const publicationStatus = confirmation
+      ? (confirmation.verified ? 'succeeded' : 'failed')
+      : (delivered.reason === 'completed' ? 'succeeded' : 'failed');
     authority = recordPackReviewPublication({
       prNumber: target.prNumber,
       expectedTransitionSeq: afterConfirmation.transitionSeq,
-      nextPhase: confirmation.verified ? 'external_published' : afterConfirmation.phase,
+      nextPhase: publicationStatus === 'succeeded' ? 'external_published' : afterConfirmation.phase,
       publication: {
         headSha: target.headSha,
         terminalRunId: run.id,
-        status: confirmation.verified ? 'succeeded' : 'failed',
+        status: publicationStatus,
         publicationDigest: sha256Bytes(JSON.stringify({
           status: delivered.status,
           deliveryReason: delivered.reason,
           githubReviewId: delivered.githubReviewId,
           githubReviewUrl: delivered.githubReviewUrl,
-          observation: confirmation.reason,
+          ...(confirmation ? { observation: confirmation.reason } : {}),
         })),
         recordedAtUtc: new Date().toISOString(),
       },
@@ -6714,29 +6736,27 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       (getPackReviewRun(run.id, { projectId, storeRoot }) ?? run).reviewRound,
     );
     return {
-      // Preserve the existing accepted-run shape without promoting it to
-      // published review. Exact-head delivery truth is separate and explicit.
       ok: true,
       created: true,
       reused: false,
       reason: delivered.reason,
-      deliveryReason: delivered.reason,
-      publicationVerified: confirmation.verified,
-      ...(confirmation.verified ? {} : { publicationReason: confirmation.reason }),
+      ...(confirmation ? {
+        deliveryReason: delivered.reason,
+        publicationVerified: confirmation.verified,
+        ...(confirmation.verified
+          ? { publicationHeadSha: target.headSha, requiredStatusState: confirmation.requiredStatusState }
+          : {
+              publicationReason: confirmation.reason,
+              nextAction: 'inspect the journal, GitHub comment and required status on the exact live head, then run incumbent scoped reconcile or PR-led status projection',
+            }),
+      } : {}),
       ...reviewerProvenanceReceipt(run),
       runId: run.id,
-      prNumber: target.prNumber,
-      headSha: target.headSha,
+      ...(confirmation ? { prNumber: target.prNumber, headSha: target.headSha } : {}),
       status: delivered.status,
-      ...(confirmation.verified ? {
-        publicationHeadSha: target.headSha,
-        requiredStatusState: confirmation.requiredStatusState,
-      } : {
-        nextAction: 'inspect the journal, GitHub comment and required status on the exact live head, then run incumbent scoped reconcile or PR-led status projection',
-      }),
       ...(terminalCoverage ? { coverage: terminalCoverage } : {}),
       ...(sameRoundGptDiagnostics?.length ? { observationDiagnostics: sameRoundGptDiagnostics } : {}),
-      httpStatus: confirmation.verified ? 201 : 409,
+      httpStatus: confirmation ? (confirmation.verified ? 201 : 409) : 201,
       ...(delivered.githubReviewId !== undefined ? { githubReviewId: delivered.githubReviewId } : {}),
       ...(delivered.githubReviewUrl ? { githubReviewUrl: delivered.githubReviewUrl } : {}),
     };
