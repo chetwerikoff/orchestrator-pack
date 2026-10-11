@@ -465,6 +465,31 @@ function executionRecoveryInspect(value: JsonRecord): ExecutionRecoveryInspectEv
   return projectExecutionRecoveryInspect(value);
 }
 
+// An error-shaped target_not_found probe cannot prove ownership by itself.
+// Use the retained manager inspect binding; supplied conflicting echoes fail closed.
+function trustedMissingInspectTarget(
+  value: JsonRecord,
+  context: ExecuteIssueManagerBoundaryContext,
+): boolean {
+  if (value.operation !== 'inspect' || text(value.reason) !== 'target_not_found'
+    || !text(context.profile) || !text(context.invocationId)
+    || (!text(context.targetId) && !text(context.conversationUrl))
+    || value.identity_bound === false) return false;
+  for (const [field, expected] of [
+    ['profile', context.profile],
+    ['invocation_id', context.invocationId],
+    ['invocationId', context.invocationId],
+    ['target_id', context.targetId],
+    ['targetId', context.targetId],
+    ['conversation_url', context.conversationUrl],
+    ['conversationUrl', context.conversationUrl],
+  ] as const) {
+    if (value[field] !== undefined
+      && (!text(expected) || text(value[field]) !== text(expected))) return false;
+  }
+  return true;
+}
+
 function classifyProbe(
   value: JsonRecord,
   context: ExecuteIssueManagerBoundaryContext,
@@ -499,6 +524,10 @@ function classifyProbe(
       return completed(context, producer, 'execute_probe_observation_completed');
     }
     case 'not_found':
+      if (trustedMissingInspectTarget(value, context)) {
+        return recoverable(context, producer, 'execute_github_first_reconciliation', githubFirstAction(context));
+      }
+      return recoverObservation(context, producer, value, 'execute_probe_reobserve');
     case 'stale_node':
     case 'surface_unknown':
     case 'export_failed':
