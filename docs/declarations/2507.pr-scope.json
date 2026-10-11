@@ -1,0 +1,31 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2507,
+  "declared_paths": [
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-target-authorization.ts",
+    "scripts/lib/gh-wrapper.mjs",
+    "scripts/lib/graphql-quota-github-read-inventory.json",
+    "scripts/target-portability-sinks.test.ts"
+  ],
+  "denylist": [
+    ".cursor/skills/create-issue-draft/",
+    "credentials/",
+    "docs/pr-scope-declaration.md",
+    "packages/core/",
+    "prompts/gpt_pack_review_prompt.md",
+    "scripts/pr-scope-declaration.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-target-authorization.ts",
+    "scripts/lib/gh-wrapper.mjs",
+    "scripts/lib/graphql-quota-github-read-inventory.json",
+    "scripts/target-portability-sinks.test.ts"
+  ],
+  "source_revision": "e138cb743c7efb257d737bf5d98fe18aa4ef5d14"
+}
