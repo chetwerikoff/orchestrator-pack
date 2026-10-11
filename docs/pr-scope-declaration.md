@@ -1,7 +1,7 @@
 # AO-free PR scope declarations
 
 The AO-free declaration producer produces the only schema accepted by
-`scripts/pr-scope-check.ps1`. It reads the linked Issue's `denylist` and
+`scripts/pr-scope-check.ts`. It reads the linked Issue's `denylist` and
 `allowed-roots` fences, writes one artifact under `docs/declarations/`, and
 does not use AO state or session metadata.
 
@@ -12,24 +12,33 @@ npm run check:node-major --silent && node --experimental-strip-types scripts/pr-
 The resulting `docs/declarations/<issue>.pr-scope.json` is canonical JSON:
 repository-relative paths use `/`, `.` segments are collapsed, `..` cannot
 escape the repository, arrays are sorted, and duplicates are rejected.
-Directory prefixes are explicit terminal `/**` entries. The artifact may add
-denials or narrow roots, but cannot weaken the repository policy.
+Directory prefixes are explicit terminal `/**` entries. Only `declared_paths` may also
+contain one `*` at the end of the final filename segment, after a nonempty
+literal prefix (for example `scripts/fixture.*` or `.env.*`). The matching
+filename must stay in that segment; bare `*`, `*.ts`, infix or multiple stars,
+`?`, bracket/brace/extglob and multi-segment globs are unsupported. Artifact
+`allowed_roots` and `denylist` keep their literal-or-terminal-directory-prefix
+grammar; concrete changed paths cannot contain wildcard syntax. The artifact
+may add denials or narrow roots, but cannot weaken the repository policy.
+Root-level `.env.*` is not inside the pack's allowed-root ceiling, and matching
+a pathname never authorizes committing secret-bearing content.
 
 ## Issue-author convention for declaration-required PRs
 
 This document belongs to the **pack repository** (`chetwerikoff/orchestrator-pack`); a
-reviewed target repository need not contain a local copy. For an ordinary Issue-linked
-PR that requires a declaration, the Issue author explicitly lists the default
-`docs/declarations/<N>.pr-scope.json` for that Issue number in **Files in scope** as
-a *generated-only control artifact* and excepts that exact file in **Files out of
-scope**, including under any broad `docs/**` exclusion. Keep it separate from
-editable implementation files: only those editable paths belong in
-`allowed-roots`, and the Issue `denylist` must not match the artifact. An
-implementation one-file limit means **one editable implementation file plus the
-generated control artifact**, not one changed PR path in total. An existing
-explicit artifact prohibition, intersecting Issue denylist, or literal total-diff
-path limit requires an Issue-owner amendment; this convention does not silently
-override a live Issue.
+reviewed target repository need not contain a local copy. For an ordinary Issue-linked PR requiring a declaration, the **unique valid
+selected default** `docs/declarations/<N>.pr-scope.json` is in scope by
+default as a generated-only control artifact. It needs **no** Files-in-scope
+enumeration, Files-out-of-scope exception, or additional `allowed-roots` entry.
+Files in scope and `allowed-roots` enumerate editable implementation files
+only. Interpret generic Files-out-of-scope catch-alls such as "all other files"
+or "all paths not listed" **after** implicitly including this default artifact;
+those catch-alls do not specifically prohibit it. A one-editable-file limit
+means one editable file plus the generated artifact, not one changed PR path in
+total. A **specific** live-Issue prohibition of the selected exact path,
+`docs/declarations/**` or `docs/**`, an intersecting Issue `denylist`, or
+an AC literally capping **all changed PR paths** requires Issue-owner
+correction; the default convention does not override it.
 
 The **default** `<N>.pr-scope.json` path is the authoring convention, not a new
 selector constraint. The existing `selectDeclarationArtifact` also accepts a
@@ -44,13 +53,13 @@ freshness witness.
 
 The unchanged `scripts/pr-scope-check.ts::checkDeclarationPaths` skips the
 single selected declaration **before** changed-path denylist and root checks;
-all other changed paths remain checked. That skip cannot cure a contradictory
-live-Issue Files out of scope rule, total-path acceptance criterion, or
-`denylist` matching the selected artifact: reviewers report the conflict even
-when the current-head scope guard says PASS, and the Issue owner corrects it.
-A properly permitted selected default control artifact is not a scope
-violation solely for omission from editable `allowed-roots` or an editable-file
-count. Scope review uses the full live Issue and its acceptance criteria, the
+all other changed paths remain checked. That skip cannot cure a **specific** live-Issue prohibition of the selected
+artifact, a literal total-PR-path cap, or a matching `denylist`: reviewers
+report the conflict even when the current-head scope guard says PASS, and the
+Issue owner corrects it. A generic unlisted-files catch-all is not a specific
+prohibition. A properly selected default artifact is not a scope violation
+because it is absent from Files in scope, editable `allowed_roots`, or an
+editable-file count. Scope review uses the full live Issue and its acceptance criteria, the
 actual current PR/head and diff, exact declaration candidate path/content, and
 observed current-head scope-guard evidence if available. An injected legacy
 snapshot, a generator claim, or `source_revision` proves neither v1 selection

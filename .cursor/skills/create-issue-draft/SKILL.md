@@ -141,15 +141,18 @@ The Issue body uses this order:
 For ordinary Issue-linked declaration-required PRs, apply the **pack-owned**
 [PR scope declaration authoring convention](https://github.com/chetwerikoff/orchestrator-pack/blob/main/docs/pr-scope-declaration.md)
 (`chetwerikoff/orchestrator-pack`, not the reviewed target repository).
-In **Files in scope**, identify the Issue's default generated-only
-`docs/declarations/<N>.pr-scope.json`, except that exact file in **Files out of
-scope** even under a `docs/**` ban, keep the Issue `denylist` nonconflicting,
-and reserve `allowed-roots` for editable implementation paths. A one-file AC
-must count one *editable implementation file* plus the generated control path,
-not one total changed PR path. If the existing live Issue prohibits the
-artifact or its total-PR-path AC conflicts, require Issue-owner amendment
-before treating the declaration as authorized; never silently reinterpret
-the prohibition.
+The unique valid selected default `docs/declarations/<N>.pr-scope.json`
+is **implicitly in scope** as a generated-only control artifact: do not list it
+in Files in scope, demand a Files-out-of-scope exception, or add an editable
+`allowed-roots` entry for it. List only editable implementation paths in those
+fields. Generic catch-alls like "all other files" or "every path not listed"
+exclude unlisted editable paths **after** including this default artifact;
+they are not a specific prohibition. A one-editable-file AC allows that one
+file plus the generated declaration. A specific live-Issue prohibition of the
+exact selected path, `docs/declarations/**` or `docs/**`, an intersecting
+Issue denylist, or an AC literally limiting **all changed PR paths** still
+requires Issue-owner correction; never override it or infer permission for a
+nondefault selected suffix.
 
 ### Smoke plan by change kind
 

@@ -55,24 +55,26 @@ a current-head guard PASS. Neither the bound SHA, a producer-execution claim,
 nor the informational `source_revision` proves freshness/provenance; identical
 valid hand-authored JSON cannot be distinguished from generator output here.
 
-Follow the linked Issue's **explicit** scope authority. A valid, selected
-current-Issue **default** `docs/declarations/<N>.pr-scope.json` expressly
-permitted/excepted by the live Issue is a generated control artifact, not an
-extra editable implementation file: absence from editable `allowed-roots` or
-an editable-file-only limit is not, by itself, a violation. Conversely, report
-a material Issue conflict requiring owner correction if Files out of scope
-explicitly forbids the artifact (including `docs/**`), an AC restricts
-**all changed PR paths** to one, or the Issue `denylist` intersects that
-selected artifact. The unchanged guard skips the selected artifact before
-checking its denylist, so even an observed PASS cannot erase that Issue
-contradiction; other changed paths remain checked. A valid selected
-`<N>.<suffix>` *nondefault* declaration is outside the default implicit
-convention unless the live Issue expressly permits its exact path; do not
-invent a suffix-only CI rejection. Continue reporting actually invalid,
-wrong-Issue, ambiguous or nonselected extra declaration candidates,
-incompatible policy/declared paths, and other unpermitted changed files.
-Keep declaration-required, bounded `scope-guard-bootstrap/v1` and Issue-linked
-markdown-only/no-ceremony modes distinct.
+Follow the linked Issue's **explicit** scope authority. A unique valid selected
+current-Issue **default** `docs/declarations/<N>.pr-scope.json` is implicitly
+in scope as a generated-only control artifact, **without** Files-in-scope
+enumeration, Files-out-of-scope exception, or an editable `allowed-roots`
+entry. Generic catch-alls such as "all other files" or "all paths not listed"
+are applied **after** the implicit default inclusion; they do not specifically
+prohibit it. A one-*editable*-file limit permits that file plus the generated
+control artifact. Conversely, report a material Issue conflict requiring owner
+correction for a **specific** exact selected-path prohibition, a
+`docs/declarations/**` or `docs/**` exclusion, an intersecting Issue
+`denylist`, or an AC literally restricting **all changed PR paths**. The
+unchanged guard skips only the selected artifact before checking denylist/root
+of other changed paths, so even an observed PASS cannot erase that specific
+Issue contradiction. A valid selected `<N>.<suffix>` *nondefault* candidate
+needs explicit live-Issue authorization; do not invent a suffix-only CI
+rejection. Continue reporting invalid, wrong-Issue, ambiguous or nonselected
+extra declaration candidates, incompatible policy/declared paths, and other
+unpermitted changed files. Keep declaration-required, bounded
+`scope-guard-bootstrap/v1` and Issue-linked markdown-only/no-ceremony modes
+distinct. Path matching never authorizes committing secret-bearing content.
 
 ## Source publication contract
 
