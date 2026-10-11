@@ -5478,7 +5478,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
       && await readFreshStopVisible(outcome.page, Date.now() + MAX_LOCAL_READ_WAIT_MS) === false
       && stillOwnedBlankSurface();
     let cleared = false;
-    if (observedNotSent && !pageLost && outcome.result.send_attempted !== true) {
+    if (observedNotSent && !pageLost) {
       try {
         const composer = outcome.page.locator(COMPOSER_SELECTOR);
         if (await safeComposerBoundary()) {
