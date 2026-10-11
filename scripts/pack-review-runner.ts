@@ -2997,6 +2997,7 @@ async function recoverStaleGptSourceComments(options: {
   let round = initialRound;
   let hydratedSourceCount = 0;
   const unresolved: string[] = [];
+  const uncertainSourceObservations: string[] = [];
   const missingFirstAttemptIdentities: string[] = [];
   if (!resumeFrozenRound) {
     const transport = options.input.fixtureGptSourceCommentTransport
@@ -3027,10 +3028,15 @@ async function recoverStaleGptSourceComments(options: {
       try {
         resolution = await resolvePackGptSourceComment({ identity, transport });
       } catch (error) {
-        unresolved.push(`${currentSlot.slotId}:${describeError(error)}`);
+        const detail = `${currentSlot.slotId}:${describeError(error)}`;
+        unresolved.push(detail);
+        uncertainSourceObservations.push(detail);
         continue;
       }
       if (resolution.kind !== 'credentialed') {
+        if (resolution.kind !== 'missing') {
+          uncertainSourceObservations.push(`${currentSlot.slotId}:${resolution.reason}`);
+        }
         if (resolution.kind === 'missing') {
           missingFirstAttemptIdentities.push(`${currentSlot.slotId}:${invocationId}`);
         }
@@ -3088,6 +3094,19 @@ async function recoverStaleGptSourceComments(options: {
       ? (graceExpired && settlePartialAfterGrace ? 2 : round.cardinality)
       : round.cardinality);
   if (usableSourceCount < requiredSourceCount) {
+    // A failed actor lookup, incomplete comment page, or conflicting identity
+    // is not proof that the corresponding GitHub comment is absent.
+    if (uncertainSourceObservations.length > 0) {
+      return {
+        recovered: false,
+        reason: `gpt_source_census_unresolved:${uncertainSourceObservations.join(', ')}`,
+        hydratedSourceCount,
+        usableSourceCount,
+        graceExpired,
+        missingFirstAttemptIdentities,
+        nextAction: `restore GitHub source-comment resolution for ${uncertainSourceObservations.join(', ')}, then rerun scoped reconcile`,
+      };
+    }
     const reason = round.cardinality >= 3 && !graceExpired
       ? `gpt_sources_waiting_for_grace:${usableSourceCount}/${round.cardinality}`
       : `gpt_sources_incomplete_after_grace:${usableSourceCount}/${round.cardinality}`;
@@ -4421,6 +4440,26 @@ export async function reconcileStalePackReviewRuns(
 
       const recoveredSnapshot = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
       const recoveryCoverage = derivePackReviewGptCoverage(recoveredSnapshot.reviewRound);
+      // These failures occur before a complete source census or exact-head
+      // authority exists. Never reinterpret them as a proven empty 0/3.
+      if (recovery.reason === 'gpt_source_head_changed'
+          || recovery.reason === 'gpt_source_head_changed_after_census'
+          || recovery.reason.startsWith('gpt_source_unavailable:')
+          || recovery.reason.startsWith('gpt_source_unavailable_after_census:')
+          || recovery.reason.startsWith('gpt_source_census_unresolved:')) {
+        results.push({
+          runId: run.id,
+          terminalized: false,
+          statusReconciled: false,
+          hydratedSourceCount: recovery.hydratedSourceCount,
+          usableSourceCount: recovery.usableSourceCount,
+          graceExpired: recovery.graceExpired,
+          reason: recovery.reason,
+          coverage: recoveryCoverage,
+          nextAction: recovery.nextAction ?? scopedReconcileAction(run.prNumber),
+        });
+        continue;
+      }
       if (input.settlePartialAfterGrace === false
           && recoveryCoverage?.kind === 'partial'
           && recoveredSnapshot.reviewRound?.settledSourceCount === undefined) {
@@ -4441,7 +4480,7 @@ export async function reconcileStalePackReviewRuns(
           && recoveryCoverage?.kind === 'partial'
           && recovery.graceExpired
           && recovery.reason.startsWith('gpt_sources_incomplete_after_grace:')) {
-        await recordPackReviewUnfinishedTerminalStatus({
+        const terminal = await recordPackReviewUnfinishedTerminalStatus({
           run: getPackReviewRun(run.id, { projectId, storeRoot }) ?? run,
           status: 'failed',
           failureReason: recovery.reason,
@@ -4450,17 +4489,39 @@ export async function reconcileStalePackReviewRuns(
           writeRequiredStatus: statusWriter,
         });
         const failed = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
+        let statusReconciled = false;
+        let observedHead: string | undefined;
+        if (terminal.deliveryOutcome.state === 'succeeded') {
+          try {
+            observedHead = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
+            const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
+            statusReconciled = observedHead === run.targetSha.toLowerCase()
+              && authority?.currentHeadSha.toLowerCase() === observedHead
+              && authority.cycle?.cycleId === run.reviewCycleId
+              && authority.terminal?.runId !== run.id
+              && failed.status === 'failed'
+              && failed.failureReason === recovery.reason
+              && failed.deliveryOutcomes.requiredStatus?.state === 'succeeded';
+          } catch {
+            // An unavailable post-write head/authority check cannot certify publication.
+          }
+        }
         results.push({
           runId: run.id,
           terminalized: true,
-          statusReconciled: true,
+          statusReconciled,
           hydratedSourceCount: recovery.hydratedSourceCount,
           usableSourceCount: recovery.usableSourceCount,
           graceExpired: recovery.graceExpired,
           reason: recovery.reason,
           status: failed.status,
           coverage: derivePackReviewGptCoverage(failed.reviewRound),
-          nextAction: recovery.nextAction ?? 'reconcile or retry the missing source work',
+          deliveryReason: terminal.deliveryOutcome.reason,
+          nextAction: statusReconciled
+            ? (recovery.nextAction ?? 'observe unresolved source slots before any eligible retry')
+            : observedHead !== undefined && observedHead !== run.targetSha.toLowerCase()
+              ? 'run review for the current PR head'
+              : scopedReconcileAction(run.prNumber),
         });
         continue;
       }
