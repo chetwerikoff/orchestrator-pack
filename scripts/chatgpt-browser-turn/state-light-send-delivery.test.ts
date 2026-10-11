@@ -21,7 +21,7 @@ vi.mock('./ui-adapter.ts', async (original) => buildUiAdapterTestMock(
 
 import { buildUiAdapterTestMock, collectionLocator, createBrowserSessionModuleMock, createCoordinationModuleMock, enqueueBrowserForTurn, runStateLightTurnWithStdoutCapture, scalarLocator, stableTurnInput } from './state-light-turn.test-fixtures.ts';
 import { COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR, MESSAGE_NODE_SELECTOR, MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE } from './product-page-selectors.ts';
-import { __testSendDelivery, runStateLightTurn } from './state-light-turn-base.ts';
+import { __testSendDelivery, readPageObservation, runStateLightTurn } from './state-light-turn-base.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { configuredProfileKey } from './storage-common.ts';
 import { readTerminalEnvelope, runLaunch } from '../flow-manager-long-running-child.ts';
@@ -296,6 +296,240 @@ describe('production attempted-send result and durable envelope', () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
     mocks.browserQueue.length = 0;
+  });
+
+  it.each([
+    ['positive-disabled', 2],
+    ['generic-timeout', 1],
+    ['possibly-clicked', 1],
+    ['enter', 0],
+    ['empty-baseline', 1],
+    ['empty-after-click', 1],
+    ['vanished-user', 1],
+    ['reordered', 1],
+    ['role-changed', 1],
+    ['text-changed', 1],
+    ['key-changed', 1],
+    ['unreadable', 1],
+    ['foreign-user', 1],
+    ['active-generation', 1],
+    ['unknown-generation', 1],
+    ['stop-visible', 1],
+    ['wrong-url', 1],
+    ['changed-composer', 1],
+    ['expired', 1],
+  ] as const)('Issue #2495: %s allows exactly %i Send-button clicks', async (scenario, expectedClicks) => {
+    const invocationId = randomUUID();
+    const profile = join(root, 'profile');
+    const cdp = 'http://127.0.0.1:9222';
+    const chatUrl = 'https://chatgpt.com/c/synthetic-2495';
+    let now = 50_000;
+    let currentUrl = chatUrl;
+    let composerText = '';
+    let stop = false;
+    let generation: boolean | 'unknown' = false;
+    const messages: Array<{ role: string; text: string; key: string; complete?: boolean }> =
+      scenario === 'empty-baseline' ? [] : [
+        { role: 'user', text: 'historical user', key: 'user-key-2495' },
+        { role: 'assistant', text: 'historical reply', key: 'assistant-key-2495' },
+      ];
+    const timeoutLog = 'locator.click: Timeout 5000ms exceeded\nCall log:\n - waiting for element to be visible, enabled and stable\n - element is not enabled';
+    const firstAction = vi.fn(async () => {
+      if (firstAction.mock.calls.length === 1) {
+        switch (scenario) {
+          case 'empty-after-click': messages.splice(0); break;
+          case 'vanished-user': messages.splice(0, 1); break;
+          case 'reordered': messages.reverse(); break;
+          case 'role-changed': messages[0]!.role = 'assistant'; break;
+          case 'text-changed': messages[0]!.text = 'changed'; break;
+          case 'key-changed': messages[0]!.key = 'different-key-2495'; break;
+          case 'unreadable': messages[0]!.complete = false; break;
+          case 'foreign-user': messages.push({ role: 'user', text: 'foreign turn', key: 'foreign-key-2495' }); break;
+          case 'active-generation': generation = true; break;
+          case 'unknown-generation': generation = 'unknown'; break;
+          case 'stop-visible': stop = true; break;
+          case 'wrong-url': currentUrl = 'https://chatgpt.com/c/foreign'; break;
+          case 'changed-composer': composerText = 'foreign draft'; break;
+          case 'expired': now += 180_000; break;
+        }
+      }
+      if (scenario === 'possibly-clicked') throw Object.assign(
+        new Error(timeoutLog + '\n - performing click action'), { name: 'TimeoutError' },
+      );
+      if (scenario === 'generic-timeout') throw Object.assign(
+        new Error('locator.click: Timeout 5000ms exceeded'), { name: 'TimeoutError' },
+      );
+      if (scenario !== 'enter') throw Object.assign(new Error(timeoutLog), { name: 'TimeoutError' });
+    });
+    const composer = scalarLocator({
+      count: async () => 1,
+      fill: async (value: string) => { composerText = value; },
+      innerText: async () => composerText,
+      press: firstAction,
+    });
+    const click = vi.fn(async () => { await firstAction(); });
+    const messageNodes = {
+      ...collectionLocator(messages as any[]),
+      evaluateAll: vi.fn(async () => ({
+        rows: messages.map((message, domIndex) => ({
+          role: message.role, text: message.text, key: message.key, domIndex,
+          complete: message.complete !== false, completionReady: false,
+          continuationVisible: false,
+        })),
+        pageTurnEvidence: { generationInProgress: generation, observedAssistantNodes: 1, continueGeneratingVisible: false },
+      })),
+    };
+    const page = {
+      __fakeBrowserGptPage: true,
+      url: () => currentUrl,
+      isClosed: () => false,
+      goto: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      waitForTimeout: vi.fn(async (ms: number) => { now += ms; }),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({
+          count: async () => scenario === 'enter' ? 0 : 1, click,
+        });
+        if (selector === MESSAGE_NODE_SELECTOR) return messageNodes;
+        if (selector.includes('stop-button') || selector.includes('Stop')) {
+          return scalarLocator({ count: async () => stop ? 1 : 0, isVisible: async () => stop });
+        }
+        return scalarLocator();
+      }),
+    };
+    // Select an already-owned existing-chat tab; creation/navigation is not recovery.
+    const browserFixture = enqueueBrowserForTurn(mocks, page);
+    Object.assign(browserFixture.context, { pages: () => [page] });
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        '--profile', profile, '--cdp', cdp, '--input', join(root, 'synthetic-input'),
+        '--output', join(root, invocationId + '.txt'), '--chat-url', chatUrl,
+        '--invocation-id', invocationId, '--timeout-ms', '180000',
+      ]);
+      expect(click).toHaveBeenCalledTimes(expectedClicks);
+      expect(firstAction).toHaveBeenCalledTimes(scenario === 'enter' ? 1 : expectedClicks);
+      expect(result.send_count).toBe(0);
+      expect(result.send_attempted).toBe(true);
+      expect(page.close).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.each([
+    ['ready', 0, 1],
+    ['late-hydration', 0, 1],
+    ['reopen-ready', 1, 1],
+    ['still-absent', 1, 0],
+    ['redirected', 1, 0],
+    ['busy', 0, 0],
+    ['near-expiry', 0, 0],
+    ['empty-history', 0, 0],
+    ['unknown-generation', 0, 0],
+    ['active-generation', 0, 0],
+    ['assistant-only-history', 0, 0],
+    ['blank-user-history', 0, 0],
+  ] as const)('Issue #2495 composer: %s navigates %i times and sends %i times', async (
+    scenario, expectedNavigations, expectedSends,
+  ) => {
+    const invocationId = randomUUID();
+    const profile = join(root, 'profile');
+    const cdp = 'http://127.0.0.1:9222';
+    const chatUrl = 'https://chatgpt.com/c/synthetic-2495';
+    let now = 50_000;
+    const startedAt = now;
+    let currentUrl = chatUrl;
+    let composerText = '';
+    let navigations = 0;
+    const ready = () => scenario === 'ready'
+      || (scenario === 'late-hydration' && now - startedAt >= 20_000)
+      || (scenario === 'reopen-ready' && navigations === 1);
+    const composer = scalarLocator({
+      count: async () => ready() ? 1 : 0,
+      fill: async (value: string) => { composerText = value; },
+      innerText: async () => composerText,
+    });
+    const send = vi.fn(async () => {
+      throw Object.assign(new Error('locator.click: Timeout 5000ms exceeded after dispatch'), { name: 'TimeoutError' });
+    });
+    const nodes = {
+      ...collectionLocator([{ role: 'user', text: 'historical user' }]),
+      evaluateAll: vi.fn(async () => {
+        const empty = scenario === 'empty-history';
+        const assistantOnly = scenario === 'assistant-only-history';
+        return {
+          rows: empty ? [] : [{
+            role: assistantOnly ? 'assistant' : 'user',
+            text: scenario === 'blank-user-history' ? '' : 'historical user',
+            key: 'historical-user-key-2495', domIndex: 0,
+            complete: true, completionReady: false, continuationVisible: false,
+          }],
+          ...(empty ? {} : { pageTurnEvidence: {
+            generationInProgress: scenario === 'unknown-generation'
+              ? 'unknown' : scenario === 'active-generation',
+            observedAssistantNodes: assistantOnly ? 1 : 0,
+            continueGeneratingVisible: false,
+          } }),
+        };
+      }),
+    };
+    const goto = vi.fn(async (url: string) => {
+      navigations++;
+      currentUrl = scenario === 'redirected' ? 'https://chatgpt.com/c/foreign' : url;
+    });
+    const page = {
+      __fakeBrowserGptPage: true,
+      url: () => currentUrl,
+      isClosed: () => false,
+      goto,
+      close: vi.fn(async () => undefined),
+      waitForTimeout: vi.fn(async (ms: number) => { now += ms; }),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => 1, click: send });
+        if (selector === MESSAGE_NODE_SELECTOR) return nodes;
+        if (selector.includes('stop-button') || selector.includes('Stop')) {
+          return scalarLocator({
+            count: async () => scenario === 'busy' && now - startedAt >= 30_000 ? 1 : 0,
+            isVisible: async () => true,
+          });
+        }
+        return scalarLocator();
+      }),
+    };
+    // Select an already-owned existing-chat tab; creation/navigation is not recovery.
+    const browserFixture = enqueueBrowserForTurn(mocks, page);
+    Object.assign(browserFixture.context, { pages: () => [page] });
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      if (scenario === 'empty-history' || scenario === 'unknown-generation') {
+        const census = await readPageObservation(page, undefined, undefined, true, now + 5_000);
+        expect(census.snapshot?.complete).toBe(true);
+        if (scenario === 'empty-history') {
+          expect(census.snapshot?.carriers).toHaveLength(0);
+          expect(census.pageTurnEvidence).toBeUndefined();
+        } else {
+          expect(census.pageTurnEvidence?.generationInProgress).toBe('unknown');
+        }
+      }
+      const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        '--profile', profile, '--cdp', cdp, '--input', join(root, 'synthetic-input'),
+        '--output', join(root, invocationId + '.txt'), '--chat-url', chatUrl,
+        '--invocation-id', invocationId, '--timeout-ms', scenario === 'near-expiry' ? '10000' : '180000',
+      ]);
+      expect(goto).toHaveBeenCalledTimes(expectedNavigations);
+      if (expectedNavigations === 1) expect(goto).toHaveBeenCalledWith(
+        chatUrl, expect.objectContaining({ waitUntil: 'commit' }),
+      );
+      expect(send).toHaveBeenCalledTimes(expectedSends);
+      expect(result.send_count).toBe(0);
+      expect(result.send_attempted === true).toBe(expectedSends > 0);
+      expect(page.close).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it.each((['click', 'enter'] as const).flatMap((transport) =>
