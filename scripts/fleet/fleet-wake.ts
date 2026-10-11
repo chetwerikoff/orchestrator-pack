@@ -814,17 +814,18 @@ interface ProducerResolution {
   readonly eventId: string;
 }
 
-// Only a complete, single, exact own response is a supported dependency.
-// The one known suffix adds no condition; "resume when ..." and similar
-// semantic tails must not be discarded to make a producer appear resolved.
+// GPT invocation names are free-form; punctuation belongs to the park sentence.
+// Other named producer forms retain their exact response syntax.
 export function parseNamedParkedProducer(wait: string): NamedProducer | undefined {
+  const gptPrefix = 'PARKED on GPT turn ';
+  if (wait.startsWith(gptPrefix)) {
+    const id = wait.slice(gptPrefix.length)
+      .replace(/\s+\(self-wake armed\)[\p{P}\s]*$/u, '').replace(/[\p{P}\s]+$/u, '');
+    return id ? { kind: 'gpt', label: 'GPT-turn-' + id, id } : undefined;
+  }
   const source = wait.endsWith(' (self-wake armed)')
     ? wait.slice(0, -' (self-wake armed)'.length) : wait;
-  let match = new RegExp('^PARKED on GPT turn (' + UUID + '|inv-[a-z0-9]+(?:-[a-z0-9]+)*)$', 'u').exec(source);
-  if (match && (!match[1]!.startsWith('inv-') || match[1]!.length <= 96)) {
-    return { kind: 'gpt', label: 'GPT-turn-' + match[1], id: match[1] };
-  }
-  match = /^PARKED on pack-review PR #([1-9]\d*) head ([0-9a-f]{40})$/u.exec(source);
+  let match = /^PARKED on pack-review PR #([1-9]\d*) head ([0-9a-f]{40})$/u.exec(source);
   if (match) return { kind: 'pack-review', label: 'pack-review-PR-' + match[1], number: Number(match[1]), sha: match[2] };
   match = /^PARKED on PR #([1-9]\d*) review #([1-9]\d*) head ([0-9a-f]{40})$/u.exec(source);
   if (match) return { kind: 'review', label: 'review-' + match[2] + '-PR-' + match[1], number: Number(match[1]), reviewId: Number(match[2]), sha: match[3] };
@@ -908,7 +909,10 @@ function resolveParkEvent(
 ): ProducerResolution | undefined {
   const parked = /^PARKED on\s+(.+)$/iu.exec(wait)?.[1]?.trim();
   if (!parked) return undefined;
-  const key = parked.replace(/^GPT turn\s+/iu, '').replace(/\s+\(self-wake armed\)$/u, '').trim();
+  const producer = parseNamedParkedProducer(wait);
+  const key = producer?.kind === 'gpt' ? producer.id
+    : parked.replace(/^GPT turn\s+/iu, '').replace(/\s+\(self-wake armed\)$/u, '').trim();
+  if (!key) return undefined;
   const envelope = envelopes.find((event) => [basename(event.path), event.path, event.invocationId, event.observedInvocationId]
     .some((value) => value?.includes(key)));
   if (envelope) return {
@@ -916,7 +920,6 @@ function resolveParkEvent(
     eventId: 'terminal:' + envelope.path,
   };
   const repo = namedRepository(options.config);
-  const producer = parseNamedParkedProducer(wait);
   if (!producer) {
     // Plain substring match over existing completed pack-review/CI event IDs,
     // independent of any launch- or pane-ownership witness.
