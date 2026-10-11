@@ -2600,6 +2600,9 @@ function returnOwnedConversationIdentityMismatch(
   return {
     page,
     browser,
+    // A mismatched identity is observed foreign UI, not authority to close the held Page.
+    ownershipForfeited: true,
+    cleanupAction: 'preserve',
     result: compactResult(
       'ui_contract_mismatch',
       'invocation',
@@ -5358,7 +5361,7 @@ async function runTurnCore(
       ...(page ? { page } : {}),
       ...(browser ? { browser } : {}),
       ...(lostAfterSend ? { cleanupAction: 'skip' as const } : {}),
-      ...(ownershipForfeited ? { cleanupAction: 'preserve' as const } : {}),
+      ...(ownershipForfeited ? { ownershipForfeited: true, cleanupAction: 'preserve' as const } : {}),
       result: {
         ...compactResult(
           state,
@@ -5456,16 +5459,14 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     && typeof outcome.page === 'object'
     && !cleanupAuthorityUnprovenPages.has(outcome.page),
   );
-  const requestedPageAction = outcome.cleanupAction ?? decidePageCleanupAction({
-    sendCount: outcome.result.send_count,
-    publicationState: outcome.publicationState,
-    pagePresent: cleanupAuthorityProven,
-    pageLost,
-  });
-  let pageAction = (outcome.result.send_count >= 1 || outcome.result.send_attempted === true) && outcome.result.state !== 'ok'
-    ? 'preserve'
-    : requestedPageAction;
-  if (pageAction === 'close' && outcome.result.send_count === 0 && outcome.ownedFreshProjectUrl) {
+  // Only the invocation-owned, reachable Page can be closed. A cleanupAction
+  // of preserve (including an ambiguous Send) is not negative ownership proof;
+  // forfeiture and pre-existing/recovered pages independently prohibit close.
+  let pageAction: PageCleanupAction = cleanupAuthorityProven && !pageLost && outcome.ownershipForfeited !== true
+    ? 'close'
+    : 'skip';
+  if (pageAction === 'close' && outcome.result.send_count === 0
+    && outcome.result.send_attempted !== true && outcome.ownedFreshProjectUrl) {
     // The slot was already owner-released. For this proven-created tab, check
     // its current blank project identity and no foreign Stop at each destructive
     // boundary, never only its original creation handle or old composer read.
@@ -5480,7 +5481,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
       && await readFreshStopVisible(outcome.page, Date.now() + MAX_LOCAL_READ_WAIT_MS) === false
       && stillOwnedBlankSurface();
     let cleared = false;
-    if (observedNotSent && !pageLost && outcome.result.send_attempted !== true) {
+    if (observedNotSent && !pageLost) {
       try {
         const composer = outcome.page.locator(COMPOSER_SELECTOR);
         if (await safeComposerBoundary()) {
@@ -5499,6 +5500,12 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
       } catch {
         // Preserve the tab if owner, Stop, content or clearing is uncertain.
       }
+    }
+    if (!cleared) {
+      // An unsent draft is expendable on this invocation-owned failed tab.
+      // Unconfirmed composer clearing must not veto close when the existing
+      // blank-project URL and absence of Stop can still be proven.
+      try { cleared = await safeComposerBoundary(); } catch { /* Fail closed on uncertain Stop or URL. */ }
     }
     if (!cleared) {
       pageAction = 'preserve';
