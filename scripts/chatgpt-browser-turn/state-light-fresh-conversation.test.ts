@@ -2,7 +2,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { runProcessSync } from '../kernel/subprocess.ts';
 
 const mocks = vi.hoisted(() => ({
   browserQueue: [] as any[],
@@ -3259,6 +3261,44 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
       // confirmed loss, bounded recovery and 15s cleanup. With 30s recovery,
       // the old budget costs 15s + 30s + 15s and overruns the child bound.
       expect(mocks.nowMs - lostAt!).toBeLessThan(60_000);
+      // Include the actual process termination and flushed terminal in the same
+      // loss-clock oracle; the subprocess consumes the outcome produced by the
+      // real mocked browser loop rather than an independently invented status.
+      const entryUrl = pathToFileURL(join(import.meta.dirname, 'state-light-entry.ts')).href;
+      const turnUrl = pathToFileURL(join(import.meta.dirname, 'state-light-turn.ts')).href;
+      const childScript = [
+        'import { runStateLightExecutable } from ' + JSON.stringify(entryUrl) + ';',
+        'import { runStateLightTurn } from ' + JSON.stringify(turnUrl) + ';',
+        'const result = ' + JSON.stringify(result.result) + ';',
+        'setInterval(() => {}, 60_000);',
+        "await runStateLightExecutable(['turn', '--profile', 'synthetic'], {",
+        '  runTurn: (args, opts) => runStateLightTurn(args, { ...opts, runTurn: async () => ({ result }) }),',
+        '});',
+      ].join('\n');
+      const childStarted = process.hrtime.bigint();
+      const child = runProcessSync({
+        command: process.execPath,
+        args: ['--experimental-strip-types', '--input-type=module', '--eval', childScript],
+        cwd: join(import.meta.dirname, '../..'),
+        timeoutMs: 8_000,
+        env: {
+          ...process.env,
+          CHATGPT_BROWSER_TURN_STATE_DIR: join(integrationStateDir, 'child-state'),
+          ORCA_TERMINAL_HANDLE: '',
+          NODE_OPTIONS: '',
+        },
+        inheritParentEnv: false,
+      });
+      const childMs = Number((process.hrtime.bigint() - childStarted) / 1_000_000n);
+      expect(child.outcome, child.stderr).toBe('exit'); // test-side kill never passes
+      expect(child.exitCode, child.stderr).toBe(result.code);
+      expect(child.stdout.endsWith('\n')).toBe(true);
+      const lines = child.stdout.trimEnd().split('\n');
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0]!)).toMatchObject({
+        schema: 'turn-result/v1', state: result.result.state, send_count: 1,
+      });
+      expect(mocks.nowMs - lostAt! + childMs).toBeLessThan(60_000);
       expect(turn.getSends()).toBe(1);
       expect(turn.page.close).not.toHaveBeenCalled();
       expect(foreignClose).not.toHaveBeenCalled();
