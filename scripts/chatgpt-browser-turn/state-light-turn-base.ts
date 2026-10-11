@@ -2242,6 +2242,59 @@ async function freshRetryDomGuards(input: {
   }
 }
 
+// A disabled-before-click action log is necessary but not sufficient to retry
+// an existing-chat Send: the retained visible history must still be comparable.
+// This is an ephemeral DOM continuity check, never backend non-delivery proof.
+async function existingRetryDomGuards(input: {
+  page: any;
+  browser: any;
+  composer: any;
+  targetChatUrl: string;
+  markedPayload: string;
+  marker: string;
+  baselineSnapshot?: AtomicTranscriptSnapshot;
+  deadlineMs: number;
+}): Promise<boolean> {
+  const baseline = input.baselineSnapshot;
+  if (!baseline?.complete || baseline.carriers.length === 0
+    || !baseline.carriers.some((carrier) =>
+      carrier.role === 'user' && normalizeVisibleText(carrier.text).length > 0)
+    || baseline.carriers.some((carrier) =>
+      !carrier.fingerprint || normalizeVisibleText(carrier.text).length === 0)) return false;
+  const samePage = (): boolean => !browserOrPageDefinitelyLost(input.page, input.browser)
+    && normalizeConversationUrl(String(input.page.url())) === input.targetChatUrl
+    && readOwnedConversationIdentity(input.page, input.targetChatUrl).matched
+    && Date.now() < input.deadlineMs;
+  if (!samePage()) return false;
+  try {
+    if (await readComposerTextForSendDelivery(input.composer, input.deadlineMs)
+      !== collapseUnicodeWhitespace(input.markedPayload)) return false;
+    if (await readFreshStopVisible(input.page, input.deadlineMs) !== false) return false;
+    const observed = await readPageObservation(
+      input.page, undefined, undefined, true, input.deadlineMs,
+    );
+    if (observed.transcriptIncomplete || observed.snapshot?.complete !== true
+      || observed.pageTurnEvidence?.generationInProgress !== false
+      || observed.pageTurnEvidence?.continueGeneratingVisible === true) return false;
+    const current = observed.snapshot.carriers;
+    if (current.length < baseline.carriers.length || current.some((carrier) =>
+      !carrier.fingerprint || normalizeVisibleText(carrier.text).length === 0
+      || carrier.text.includes(input.marker))) return false;
+    for (let i = 0; i < baseline.carriers.length; i++) {
+      const before = baseline.carriers[i]!;
+      const after = current[i]!;
+      if (before.role !== after.role || before.fingerprint !== after.fingerprint
+        || before.key !== after.key) return false;
+    }
+    if (current.slice(baseline.carriers.length).some((carrier) => carrier.role === 'user')) return false;
+    // The final Stop/liveness/URL check follows the transcript read so a late
+    // generation or redirect cannot turn a stale census into a second click.
+    return await readFreshStopVisible(input.page, input.deadlineMs) === false && samePage();
+  } catch {
+    return false;
+  }
+}
+
 async function waitForComposer(
   page: any,
   invocationDeadlineMs: number,
@@ -3257,25 +3310,38 @@ async function runTurnCore(
           };
         }
       }
-      const delivery = await dispatchStateLightSendAndObserveDelivery({
-        page,
-        browser,
-        composer,
-        sendButton,
-        hasSendButton,
-        marker,
-        baselineUserNodeCount,
-        sendWaitMs,
-        invocationDeadlineMs,
-        preSendAlertsAlreadyMarked: true,
-        onDispatch: () => {
-          transitionStateLightTurnObservation({
-            profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
-          });
-          sendAttempted = true;
-        },
-        onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_resend'),
-      });
+      const dispatchExisting = async (clickWaitMs: number) =>
+        await dispatchStateLightSendAndObserveDelivery({
+          page,
+          browser,
+          composer,
+          sendButton,
+          hasSendButton,
+          marker,
+          baselineUserNodeCount,
+          sendWaitMs: clickWaitMs,
+          invocationDeadlineMs,
+          preSendAlertsAlreadyMarked: true,
+          onDispatch: () => {
+            transitionStateLightTurnObservation({
+              profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
+            });
+            sendAttempted = true;
+          },
+          onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_resend'),
+        });
+      let delivery = await dispatchExisting(sendWaitMs);
+      if (hasSendButton && delivery.sendCount === 0 && delivery.witness === 'unproven'
+        && delivery.preDispatchTimeoutProven === true
+        && await existingRetryDomGuards({
+          page, browser, composer, targetChatUrl: normalizeConversationUrl(config.chatUrl ?? ''),
+          markedPayload, marker, baselineSnapshot, deadlineMs: invocationDeadlineMs,
+        })) {
+        // Only the first click's actual positive non-dispatch action result grants
+        // this one optional repeat; an uncertain first action or Enter never does.
+        const repeatWaitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now());
+        if (repeatWaitMs > 0) delivery = await dispatchExisting(repeatWaitMs);
+      }
       if (delivery.sendCount === 0) {
         if (browserOrPageDefinitelyLost(page, browser)) {
           deliveryProofPendingRecovery = true;
@@ -3741,7 +3807,51 @@ async function runTurnCore(
         );
       }
 
-      const composerState = await waitForComposer(page, composerReadinessDeadline(), true, observeProductWall);
+      // A long existing chat gets an initial hydration window before one
+      // optional same-URL reopen. Navigation and renewed readiness retain a
+      // positive share of the original absolute invocation deadline.
+      const postReopenReserveMs = COMPOSER_READINESS_WAIT_MS
+        + deriveComposerInsertionBudgetMs(markedPayload) + MAX_LOCAL_READ_WAIT_MS;
+      const mayReopenComposer = invocationDeadlineMs - Date.now()
+        > EXISTING_GENERATION_RESUME_WINDOW_MS + postReopenReserveMs + 3 * MAX_LOCAL_READ_WAIT_MS;
+      const initialComposerDeadline = mayReopenComposer
+        ? Math.min(composerReadinessDeadline(), Date.now() + EXISTING_GENERATION_RESUME_WINDOW_MS)
+        : composerReadinessDeadline();
+      let composerState = await waitForComposer(page, initialComposerDeadline, true, observeProductWall);
+      if (composerState.state !== 'ready' && composerState.cause === 'composer_unavailable' && mayReopenComposer
+        && !browserOrPageDefinitelyLost(page, browser)
+        && readOwnedConversationIdentity(page, chatUrlTarget).matched
+        && Date.now() + postReopenReserveMs + MAX_LOCAL_READ_WAIT_MS < invocationDeadlineMs) {
+        const stop = await readFreshStopVisible(page, invocationDeadlineMs);
+        const observation = await readPageObservation(page, undefined, undefined, true, invocationDeadlineMs);
+        if (stop === false && !observation.transcriptIncomplete
+          && observation.snapshot?.complete === true
+          // A complete snapshot covers only currently rendered rows. Require
+          // affirmative idle plus readable historical user context; absence of
+          // pageTurnEvidence or an unknown generation must not trigger reload.
+          && observation.pageTurnEvidence?.generationInProgress === false
+          && observation.snapshot?.carriers.some((carrier) =>
+            carrier.role === 'user' && normalizeVisibleText(carrier.text).length > 0) === true
+          && !browserOrPageDefinitelyLost(page, browser)
+          && readOwnedConversationIdentity(page, chatUrlTarget).matched
+          && Date.now() + postReopenReserveMs < invocationDeadlineMs) {
+          try {
+            // navigateOwnedTurnPage already uses goto(waitUntil:'commit') and
+            // verifies the same conversation identity; the subdeadline keeps
+            // room for the renewed composer read and insertion.
+            await navigateOwnedTurnPage(
+              page, config, navigation, invocationDeadlineMs - postReopenReserveMs,
+            );
+          } catch {
+            return returnComposerMutationFailure('composer_unavailable');
+          }
+          if (browserOrPageDefinitelyLost(page, browser)
+            || !readOwnedConversationIdentity(page, chatUrlTarget).matched) {
+            return returnComposerMutationFailure('composer_unavailable');
+          }
+          composerState = await waitForComposer(page, composerReadinessDeadline(), true, observeProductWall);
+        }
+      }
       if (composerState.state !== 'ready' && composerState.cause !== 'composer_unavailable') {
         incident('invocation_blocker', composerState.cause, 'return_local_error');
         return {
@@ -3760,6 +3870,13 @@ async function runTurnCore(
           ),
         };
       }
+      if (composerState.state !== 'ready' && Date.now() >= invocationDeadlineMs) {
+        return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      }
+      // Preserve the incumbent mutation path: it owns late readiness and the
+      // historical composer-unavailable/budget-exhausted result distinction.
+      // A failed one-time reopen does not grant a second navigation.
+
 
       const baselineFailure = await captureBaseline();
       if (baselineFailure) return baselineFailure;
