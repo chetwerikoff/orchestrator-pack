@@ -631,11 +631,23 @@ function changedPathsForMerge(repoRoot: string, mergeSha: string): string[] {
 }
 
 function runLiveChecks(repoRoot: string, checks: readonly string[][]): LiveCheckResult {
+  // Only Issue-declared checks lose these inherited caller/terminal selectors.
+  const childEnv = { ...process.env };
+  delete childEnv.OPK_PROJECT_ID;
+  delete childEnv.GH_REPO;
+  delete childEnv.ORCA_TERMINAL_HANDLE;
   for (const argv of checks) {
     const [command, ...args] = argv;
     if (!command) return { ok: false, reason: 'live_check_command_empty' };
-    const result = runCommand(command, args, repoRoot, 120_000);
-    if (!result.ok) return { ok: false, reason: 'command_failed:' + path.basename(command) + ':' + String(result.status ?? 'unknown') };
+    const result = runProcessSync({
+      command,
+      args,
+      cwd: repoRoot,
+      env: childEnv,
+      inheritParentEnv: false,
+      timeoutMs: 120_000,
+    });
+    if (!result.ok) return { ok: false, reason: 'command_failed:' + path.basename(command) + ':' + String(result.exitCode ?? 'unknown') };
   }
   return { ok: true };
 }
