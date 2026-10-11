@@ -303,6 +303,8 @@ done
 printf '%s\\n' "unexpected API args: $*" >&2
 exit 3
 `);
+      const preload = join(root, 'fake-gh-preload.cjs');
+      writeNativeGhMock(preload);
       process.env.GH_REPO = 'o/r';
       process.env.GH_HOST = 'github.com';
       const classified = classifyArgv(runArgv);
@@ -330,7 +332,21 @@ exit 3
       const env = {
         ...process.env,
         PATH: controlledPath(root),
-        GH_REAL_BINARY: fakeGh,
+        GH_REAL_BINARY: process.execPath,
+        NODE_OPTIONS: `--require=${preload}`,
+        OPK_NATIVE_GH_AUDIT: join(root, 'native-gh-audit.jsonl'),
+        OPK_FAKE_GH_RESPONSES: JSON.stringify([
+          {
+            includes: '/actions/runs/36730183562/jobs?',
+            stdout: JSON.stringify({ total_count: 3, jobs: [
+              { id: 17001, name: 'failed-build', conclusion: 'failure' },
+              { id: 17002, name: 'passed-build', conclusion: 'success' },
+              { id: 17003, name: 'failed-tests', conclusion: 'failure' },
+            ] }),
+          },
+          { includes: '/actions/jobs/17001/logs', stdout: 'build step failed\nstack trace\n' },
+          { includes: '/actions/jobs/17003/logs', stdout: 'tests failed\nsecond job crash\n' },
+        ]),
         GH_REPO: 'o/r',
         GH_HOST: 'github.com',
         GH_WRAPPER_ACTIVE: '',
@@ -346,13 +362,15 @@ exit 3
       const suggested = refusal.stderr.match(/Closest inventory-authorized whole-failed-run read: `([^`]+)`/)?.[1];
       expect(suggested).toBe('gh run view 36730183562 --log-failed');
       expect(isClassifiedGhReadCommand(suggested!)).toBe(true);
-      const suggestedCommand = classifyArgv(suggested!.split(' ').slice(1));
-      expect(suggestedCommand.route?.id).toBe('run-view-log-failed');
-      const executable = executeRestRoute(suggestedCommand.route!.id, {
-        realGh: fakeGh, parsed: suggestedCommand.parsed, route: suggestedCommand.route!, cwd: root,
+      const executable = runProcessSync({
+        command: join(repoRoot, 'scripts', 'gh'),
+        args: suggested!.split(' ').slice(1),
+        cwd: root,
+        env,
       });
-      expect(executable).toContain('build step failed');
-      expect(executable).toContain('second job crash');
+      expect(executable.exitCode).toBe(0);
+      expect(executable.stdout).toContain('build step failed');
+      expect(executable.stdout).toContain('second job crash');
     } finally {
       if (previousRepo === undefined) delete process.env.GH_REPO;
       else process.env.GH_REPO = previousRepo;
@@ -641,6 +659,27 @@ exec "$real_gh" "$@"
 function writeExecutable(path: string, content: string) {
   writeFileSync(path, content, { mode: 0o755 });
   chmodSync(path, 0o755);
+}
+function writeNativeGhMock(path: string): void {
+  writeFileSync(path, [
+    "const fs = require('node:fs');",
+    "const cp = require('node:child_process');",
+    'const originalSpawnSync = cp.spawnSync;',
+    'cp.spawnSync = function(command, args, options) {',
+    '  const env = options?.env || process.env;',
+    "  if (command === env.GH_REAL_BINARY && Array.isArray(args) && args.includes('api')) {",
+    "    const endpoint = args.find((arg) => arg.startsWith('repos/')) || '';",
+    "    const rules = JSON.parse(env.OPK_FAKE_GH_RESPONSES || '[]');",
+    '    const rule = rules.find((item) => endpoint.includes(item.includes));',
+    "    const stdout = rule?.byEnv ? (rule.byEnv[env[rule.envKey]] || '') : (rule?.stdout || '');",
+    "    const stderr = rule ? '' : ('unexpected fake gh endpoint: ' + endpoint);",
+    '    if (env.OPK_NATIVE_GH_AUDIT) fs.appendFileSync(env.OPK_NATIVE_GH_AUDIT, JSON.stringify({ args, endpoint }) + \'\\n\');',
+    '    return { pid: 1, output: [null, stdout, stderr], stdout, stderr, status: rule ? (rule.status || 0) : 3, signal: null };',
+    '  }',
+    '  return originalSpawnSync.apply(this, arguments);',
+    '};',
+    "require('node:module').syncBuiltinESMExports();",
+  ].join('\n'), 'utf8');
 }
 
 describe('gh wrapper audit telemetry', () => {
@@ -2596,36 +2635,27 @@ describe('Issue #2507 exact checks arguments and actionable non-equivalent read 
   it('rejects incomplete PR check-run pages and executes the literal suggested checks command', () => {
     if (process.platform === 'win32') return;
     const root = tempRoot('opk-2507-pr-checks-completeness-');
-    const fakeGh = join(root, 'fake-gh');
-    writeExecutable(fakeGh, `#!/usr/bin/env bash
-set -euo pipefail
-for arg in "$@"; do
-  case "$arg" in
-    *"/pulls/42")
-      printf '%s\\n' '{"head":{"sha":"abc123"}}'
-      exit 0
-      ;;
-    *"/check-runs?per_page=100&page=1")
-      if [[ "$OPK_INCOMPLETE_CHECKS" == "1" ]]; then
-        printf '%s\\n' '{"total_count":2,"check_runs":[{"id":1,"name":"only-check","status":"completed","conclusion":"success","started_at":"2026-10-11T00:00:00Z"}]}'
-      else
-        printf '%s\\n' '{"total_count":0,"check_runs":[]}'
-      fi
-      exit 0
-      ;;
-    *"/commits/abc123/status")
-      printf '%s\\n' '{"state":"success","statuses":[{"context":"ci","state":"success","description":"passed","target_url":"https://github.com/example/target/actions/runs/1","created_at":"2026-10-11T00:00:00Z"}]}'
-      exit 0
-      ;;
-  esac
-done
-printf '%s\\n' "unexpected API args: $*" >&2
-exit 3
-`);
+    const preload = join(root, 'fake-gh-preload.cjs');
+    writeNativeGhMock(preload);
+    const audit = join(root, 'native-gh-audit.jsonl');
     const env = {
       ...process.env,
       PATH: controlledPath(root),
-      GH_REAL_BINARY: fakeGh,
+      GH_REAL_BINARY: process.execPath,
+      NODE_OPTIONS: `--require=${preload}`,
+      OPK_NATIVE_GH_AUDIT: audit,
+      OPK_FAKE_GH_RESPONSES: JSON.stringify([
+        { includes: '/pulls/42', stdout: JSON.stringify({ head: { sha: 'abc123' } }) },
+        {
+          includes: '/check-runs?per_page=100&page=1',
+          envKey: 'OPK_INCOMPLETE_CHECKS',
+          byEnv: {
+            '1': JSON.stringify({ total_count: 2, check_runs: [{ id: 1, name: 'only-check', status: 'completed', conclusion: 'success', started_at: '2026-10-11T00:00:00Z' }] }),
+            '0': JSON.stringify({ total_count: 0, check_runs: [] }),
+          },
+        },
+        { includes: '/commits/abc123/status', stdout: JSON.stringify({ state: 'success', statuses: [{ context: 'ci', state: 'success', description: 'passed', target_url: 'https://github.com/example/target/actions/runs/1', created_at: '2026-10-11T00:00:00Z' }] }) },
+      ]),
       OPK_PROJECT_ID: '',
       GH_REPO: 'example/target',
       GH_HOST: 'github.com',
@@ -2651,16 +2681,23 @@ exit 3
       expect(suggested).toBe('gh pr checks 42 --json ' + fullFields);
       expect(isClassifiedGhReadCommand(suggested!)).toBe(true);
       const args = suggested!.split(' ').slice(1);
-      const suggestedCommand = classifyArgv(args);
-      expect(suggestedCommand.route?.id).toBe('pr-checks');
-      expect(() => executeRestRoute(suggestedCommand.route!.id, {
-        realGh: fakeGh, parsed: suggestedCommand.parsed, route: suggestedCommand.route!, cwd: root,
-      })).toThrow('check-runs pagination incomplete');
-      process.env.OPK_INCOMPLETE_CHECKS = '0';
-      const complete = executeRestRoute(suggestedCommand.route!.id, {
-        realGh: fakeGh, parsed: suggestedCommand.parsed, route: suggestedCommand.route!, cwd: root,
+      const incomplete = runProcessSync({
+        command: join(repoRoot, 'scripts', 'gh'),
+        args,
+        cwd: root,
+        env: { ...env, OPK_INCOMPLETE_CHECKS: '1' },
       });
-      expect(complete).toEqual([expect.objectContaining({ name: 'ci', state: 'SUCCESS' })]);
+      expect(incomplete.exitCode).not.toBe(0);
+      expect(incomplete.stdout).toBe('');
+      expect(incomplete.stderr).toContain('check-runs pagination incomplete');
+      const complete = runProcessSync({
+        command: join(repoRoot, 'scripts', 'gh'),
+        args,
+        cwd: root,
+        env: { ...env, OPK_INCOMPLETE_CHECKS: '0' },
+      });
+      expect(complete.exitCode).toBe(0);
+      expect(complete.stdout).toContain('"name":"ci"');
     } finally {
       if (previousRepo === undefined) delete process.env.GH_REPO;
       else process.env.GH_REPO = previousRepo;

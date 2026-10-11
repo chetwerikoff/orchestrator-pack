@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -41,6 +41,27 @@ function isolatedChildEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     'OPK_SIDE_PROCESS_LIVENESS_ACTIVE',
   ]) delete env[key];
   return env;
+}
+function writeNativeGhMock(path: string): void {
+  writeFileSync(path, [
+    "const fs = require('node:fs');",
+    "const cp = require('node:child_process');",
+    'const originalSpawnSync = cp.spawnSync;',
+    'cp.spawnSync = function(command, args, options) {',
+    '  const env = options?.env || process.env;',
+    "  if (command === env.GH_REAL_BINARY && Array.isArray(args) && args.includes('api')) {",
+    "    const endpoint = args.find((arg) => arg.startsWith('repos/')) || '';",
+    "    const rules = JSON.parse(env.OPK_FAKE_GH_RESPONSES || '[]');",
+    '    const rule = rules.find((item) => endpoint.includes(item.includes));',
+    "    const stdout = rule?.byEnv ? (rule.byEnv[env[rule.envKey]] || '') : (rule?.stdout || '');",
+    "    const stderr = rule ? '' : ('unexpected fake gh endpoint: ' + endpoint);",
+    '    if (env.OPK_NATIVE_GH_AUDIT) fs.appendFileSync(env.OPK_NATIVE_GH_AUDIT, JSON.stringify({ args, endpoint }) + \'\\n\');',
+    '    return { pid: 1, output: [null, stdout, stderr], stdout, stderr, status: rule ? (rule.status || 0) : 3, signal: null };',
+    '  }',
+    '  return originalSpawnSync.apply(this, arguments);',
+    '};',
+    "require('node:module').syncBuiltinESMExports();",
+  ].join('\n'), 'utf8');
 }
 
 function git(root: string, ...args: string[]): void {
@@ -442,22 +463,25 @@ describe('Issue #2507 selected-target edit-history GraphQL refusal', () => {
   it('exercises the tracked scripts/gh target-mode subprocess, with zero unauthorized native calls', () => {
     if (process.platform === 'win32') return;
     const fixture = twoTargetFixture();
-    const bin = join(fixture.root, 'fake-native');
     const audit = join(fixture.root, 'native-audit.log');
-    mkdirSync(bin, { recursive: true });
-    const fakeGh = join(bin, 'gh');
-    writeFileSync(fakeGh, '#!/usr/bin/env bash\nprintf "unexpected native call\\n" >>"$OPK_NATIVE_GH_AUDIT"\nexit 81\n', 'utf8');
-    chmodSync(fakeGh, 0o755);
+    const preload = join(fixture.root, 'fake-gh-preload.cjs');
+    writeNativeGhMock(preload);
     const env = isolatedChildEnv({
       ...fixture.env,
-      PATH: bin + ':' + dirname(process.execPath) + ':/usr/bin:/bin',
+      PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
       OPK_PROJECT_ID: 'alpha',
       GH_REPO: 'example/alpha',
       GH_HOST: 'github.com',
-      GH_REAL_BINARY: fakeGh,
+      GH_REAL_BINARY: process.execPath,
+      NODE_OPTIONS: `--require=${preload}`,
+      OPK_FAKE_GH_RESPONSES: JSON.stringify([{
+        includes: 'repos/example/alpha/issues/228',
+        stdout: JSON.stringify({ body: 'fixture current body' }),
+      }]),
       GH_WRAPPER_ACTIVE: '',
       OPK_NATIVE_GH_AUDIT: audit,
     });
+    let suggested: string | undefined;
     for (const args of [
       registered,
       ['api', 'graphql', '-f', 'query={viewer{login}}'],
@@ -475,10 +499,24 @@ describe('Issue #2507 selected-target edit-history GraphQL refusal', () => {
       if (args === registered) {
         expect(result.stderr).toContain('gh issue view 228 --json body');
         expect(result.stderr).toContain('userContentEdits');
+        suggested = result.stderr.match(/CURRENT-BODY-ONLY read for selected repository .*: `([^`]+)`/)?.[1];
+        expect(suggested).toBe('gh issue view 228 --json body');
+        expect(isClassifiedGhReadCommand(suggested!)).toBe(true);
       } else {
         expect(result.stderr).not.toContain('gh issue view 228');
       }
     }
     expect(existsSync(audit)).toBe(false);
+    const executed = runProcessSync({
+      command: join(process.cwd(), 'scripts', 'gh'),
+      args: suggested!.split(' ').slice(1),
+      cwd: join(fixture.root, 'alpha'),
+      env,
+    });
+    expect(executed.exitCode, executed.stderr || executed.error).toBe(0);
+    expect(JSON.parse(executed.stdout)).toEqual({ body: 'fixture current body' });
+    const nativeCalls = readFileSync(audit, 'utf8');
+    expect(nativeCalls).toContain('repos/example/alpha/issues/228');
+    expect(nativeCalls).not.toMatch(/graphql/i);
   });
 });
