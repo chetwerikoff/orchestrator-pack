@@ -118,6 +118,31 @@ export function parsePackGptReviewArgs(argv: readonly string[]): PackGptReviewOp
   };
 }
 
+function reviewNextStep(result: Record<string, unknown>, prNumber: number): string {
+  const supplied = trim(result.nextAction);
+  if (supplied) return supplied;
+  const reason = trim(result.publicationReason) || trim(result.runnerReason) || trim(result.reason);
+  if (reason === 'required_ci_not_green_for_current_head') {
+    return `inspect the exact current PR #${prNumber} required CI, then retry the PR-led review only after green checks`;
+  }
+  if (trim(result.status) === 'reviewing' || Number(result.httpStatus) === 202) {
+    return `observe the existing review run on PR #${prNumber}; use scoped reconcile for uncertain sources, never send another possible_delivery attempt`;
+  }
+  if (reason.includes('journal_write_failed')) {
+    return `inspect the persisted run journal for PR #${prNumber} and use its incumbent journal/resume recovery; do not treat the verdict as published`;
+  }
+  if (reason.includes('review_comment_not_published')) {
+    return `observe the existing PR #${prNumber} reviewer COMMENT and use incumbent comment reconciliation/resume; do not blindly duplicate a possibly accepted post`;
+  }
+  if (reason.includes('status_not_published') || reason.includes('status_unverified')) {
+    return `read the current PR #${prNumber} head and required status, then use the incumbent PR-led projection or scoped reconcile when authorized`;
+  }
+  if (reason.includes('harvest') || reason.includes('parse_error') || reason.includes('no_judgment')) {
+    return `inspect the existing GPT source evidence for PR #${prNumber} and run scoped reconcile; retry only affirmatively eligible same-run slots`;
+  }
+  return `inspect PR #${prNumber} and its current review run; apply the incumbent scoped reconcile or correct the reported input before retrying`;
+}
+
 export async function runPackGptReviewCommand(
   options: PackGptReviewOptions,
   dependencies: PackGptReviewDependencies = {},
@@ -148,36 +173,51 @@ export async function runPackGptReviewCommand(
       },
     });
 
-    if (result.created !== true) {
-      // Non-created success is legitimate only for the runner's fresh,
-      // same-invocation status projection with post-await current-head proof.
-      // A generic terminal-run reuse has not established that status.
-      if (result.ok === true && result.reused === true && result.statusPublished === true
-          && result.publicationHeadSha === result.headSha
-          && (result.reason === 'review_stage_complete' || result.reason === 'terminal_run_exists')) {
-        return { exitCode: 0, result };
-      }
-      return {
-        exitCode: 1,
-        result: {
-          ...result,
-          ok: false,
-          created: false,
-          reused: Boolean(result.reused),
-          outcome: 'review_not_started',
-          reason: 'review_not_started',
-          runnerReason: trim(result.reason) || 'unknown_runner_reason',
-          prNumber: Number(result.prNumber) > 0 ? Number(result.prNumber) : options.prNumber,
-          ...(trim(result.headSha) ? { headSha: trim(result.headSha) } : {}),
-          ...(trim(result.runId) ? { runId: trim(result.runId) } : {}),
-          ...(trim(result.status) ? { status: trim(result.status) } : {}),
-        },
-      };
+    // 'ok' can mean accepted/in progress, journal failure, or only part of
+    // the three required delivery channels. It does not mean a settled review.
+    const currentHeadPublication = result.publicationVerified === true
+      && trim(result.publicationHeadSha) === trim(result.headSha)
+      && Boolean(trim(result.headSha));
+    const deliveredRound = result.created === true
+      && currentHeadPublication
+      && result.reason !== 'completed_with_delivery_failures'
+      && result.reason !== 'journal_write_failed';
+    const recoveredRound = result.created === false && result.reused === true
+      && result.reason === 'resumed_journaled_delivery' && currentHeadPublication;
+    const stageCompleteReuse = result.created === false && result.reused === true
+      && result.statusPublished === true && currentHeadPublication
+      && (result.reason === 'review_stage_complete' || result.reason === 'terminal_run_exists');
+    // The route name does not select GPT. Native reviewer delivery retains its
+    // incumbent acknowledgement contract; only GPT uses exact-head observation.
+    const nativeDeliveredRound = (result.resolvedReviewer === 'claude' || result.resolvedReviewer === 'codex')
+      && result.created === true && result.reused === false
+      && result.reason === 'completed' && result.httpStatus === 201
+      && result.publicationVerified === undefined
+      && (result.status === 'up_to_date' || result.status === 'commented' || result.status === 'changes_requested');
+    if (result.ok === true && (deliveredRound || recoveredRound || stageCompleteReuse || nativeDeliveredRound)) {
+      return { exitCode: 0, result };
     }
 
+    const prNumber = Number.isSafeInteger(result.prNumber) && Number(result.prNumber) > 0
+      ? Number(result.prNumber) : options.prNumber;
+    const runnerReason = trim(result.reason) || 'unknown_runner_reason';
+    const publicationReason = trim(result.publicationReason);
     return {
-      exitCode: result.ok === true ? 0 : 1,
-      result,
+      exitCode: 1,
+      result: {
+        ...result,
+        ok: false,
+        created: result.created === true,
+        reused: Boolean(result.reused),
+        outcome: result.created === true ? 'review_not_settled' : 'review_not_started',
+        reason: result.created === true ? (publicationReason || runnerReason) : 'review_not_started',
+        runnerReason,
+        prNumber,
+        ...(trim(result.headSha) ? { headSha: trim(result.headSha) } : {}),
+        ...(trim(result.runId) ? { runId: trim(result.runId) } : {}),
+        ...(trim(result.status) ? { status: trim(result.status) } : {}),
+        nextAction: reviewNextStep(result, prNumber),
+      },
     };
   } catch (error) {
     return {
@@ -188,7 +228,9 @@ export async function runPackGptReviewCommand(
         reused: false,
         outcome: 'review_target_unavailable',
         reason: describeError(error),
+        runnerReason: describeError(error),
         prNumber: options.prNumber,
+        nextAction: `verify the arguments and selected PR #${options.prNumber}; if the remote target is unavailable, restore GitHub and inspect that PR before retrying`,
       },
     };
   }
