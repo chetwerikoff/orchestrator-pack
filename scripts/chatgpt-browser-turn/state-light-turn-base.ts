@@ -396,7 +396,6 @@ interface FreshComposerCleanupContext {
   page?: any;
   markedPayload?: string;
   projectUrl?: string;
-  sendLock?: DomainLock;
   sendAttempted?: boolean;
 }
 
@@ -2132,8 +2131,8 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
   };
 }
 
-const FRESH_SEND_WINDOW_MS = 30_000;
-const FRESH_SEND_RESERVE_MS = 2 * FRESH_SEND_WINDOW_MS;
+const FRESH_SEND_WINDOW_MS = 15_000;
+const FRESH_SEND_RESERVE_MS = 4 * FRESH_SEND_WINDOW_MS;
 const FRESH_SEND_PREPARE_RESERVE_MS = 3 * MAX_LOCAL_READ_WAIT_MS;
 
 /** A Stop already present before our click is foreign/busy, not this turn's delivery. */
@@ -2162,9 +2161,9 @@ async function waitForFreshSendButton(
   assertOwnerAndPage: () => void,
   startedAt = Date.now(),
 ): Promise<'enabled' | 'never_enabled' | 'busy'> {
-  // Both windows have their full 30s; polls do not sleep to a window boundary
+  // All four windows have their full 15s; polls do not sleep to a window boundary
   // when a button becomes enabled.
-  for (let windowIndex = 1; windowIndex <= 2; windowIndex++) {
+  for (let windowIndex = 1; windowIndex <= 4; windowIndex++) {
     const windowEnd = startedAt + windowIndex * FRESH_SEND_WINDOW_MS;
     while (Date.now() < windowEnd) {
       assertOwnerAndPage();
@@ -2727,23 +2726,19 @@ function renderedPayloadMatches(actual: string | undefined, expected: string): b
   return actual !== undefined && actual.replace(/\s+/gu, '') === expected.replace(/\s+/gu, '');
 }
 
-const FRESH_SEND_SLOT_LIMIT_MS = 61_000;
+const FRESH_SEND_SLOT_LIMIT_MS = 15_000;
 
 async function acquireFreshSendLock(profileKey: string, deadlineMs: number): Promise<DomainLock | undefined> {
-  const waitDeadlineMs = Math.min(deadlineMs, Date.now() + FRESH_SEND_SLOT_LIMIT_MS);
-  while (Date.now() < waitDeadlineMs) {
-    const lock = acquireDomainLock(profileKey, 'fresh-send-composer', 0, { maxHoldMs: FRESH_SEND_SLOT_LIMIT_MS });
-    if (lock) return lock;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(1, waitDeadlineMs - Date.now()))));
+  for (let window = 0; window < 4; window++) {
+    const waitDeadlineMs = Math.min(deadlineMs, Date.now() + FRESH_SEND_SLOT_LIMIT_MS);
+    while (Date.now() < waitDeadlineMs) {
+      const lock = acquireDomainLock(profileKey, 'fresh-send-composer', 0, { maxHoldMs: FRESH_SEND_SLOT_LIMIT_MS });
+      if (lock) return lock;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(1, waitDeadlineMs - Date.now()))));
+    }
+    if (Date.now() >= deadlineMs) throw new Error('fresh_send_lock_deadline_exhausted');
   }
-  if (Date.now() >= deadlineMs) throw new Error('fresh_send_lock_deadline_exhausted');
   return undefined;
-}
-
-function releaseFreshSendLock(lock?: DomainLock): void {
-  try { lock?.release(); } catch (error) {
-    if (!(error instanceof Error) || error.message !== 'lock_ownership_lost') throw error;
-  }
 }
 
 async function clearFreshComposerDraft(page: any): Promise<void> {
@@ -2753,7 +2748,7 @@ async function clearFreshComposerDraft(page: any): Promise<void> {
   } catch { /* Best-effort cleanup must not hide the pre-send failure. */ }
 }
 
-export const __testFreshSend = { acquireFreshSendLock, releaseFreshSendLock, renderedPayloadMatches, clearFreshComposerDraft };
+export const __testFreshSend = { acquireFreshSendLock, renderedPayloadMatches, clearFreshComposerDraft };
 
 async function runTurn(
   args: ParsedTurnArgs,
@@ -2772,15 +2767,11 @@ async function runTurn(
   } finally {
     try {
       if (freshCleanup.page && !freshCleanup.sendAttempted
-        && freshCleanup.sendLock?.isOwned?.() !== false
         && isBlankProjectSurfaceUrl(String(freshCleanup.page.url()), freshCleanup.projectUrl ?? '')) {
         await clearFreshComposerDraft(freshCleanup.page);
       }
     } catch {
       // A lost page must not hide the original pre-send result.
-    } finally {
-      releaseFreshSendLock(freshCleanup.sendLock);
-      freshCleanup.sendLock = undefined;
     }
   }
 }
@@ -2819,7 +2810,6 @@ async function runTurnCore(
   let ownedStopDeliveryObserved = false;
   let deliveryProofPendingRecovery = false;
   let ownershipForfeited = false;
-  let sendSlotOwnerDeadlineMs = Infinity;
   let cancellationReceiptEmitted = false;
   let heartbeatScheduler: TurnScopedHeartbeatScheduler | undefined;
   let heartbeatPhase: BrowserTurnLivenessPhase = 'admitted_pre_send';
@@ -2942,7 +2932,7 @@ async function runTurnCore(
     }
 
     if (config.newChat && freshCleanup) {
-      freshCleanup.sendLock = await acquireFreshSendLock(profileKey, invocationDeadlineMs);
+      await acquireFreshSendLock(profileKey, invocationDeadlineMs);
     }
     const chromium = loadChromium();
     const connectWaitMs = invocationBudget.clampOperationWaitMs();
@@ -3028,12 +3018,8 @@ async function runTurnCore(
 
     const markedPayload = wrapOwnedPromptPayload(marker, snapshot.text);
     const assertFreshOwner = (): void => {
-      if (Date.now() >= sendSlotOwnerDeadlineMs) {
+      if (Date.now() >= invocationDeadlineMs) {
         throw new Error('state_light_new_chat_owner_pre_dispatch_deadline_exhausted');
-      }
-      if (freshCleanup?.sendLock?.isOwned?.() === false) {
-        ownershipForfeited = true;
-        throw new Error('state_light_new_chat_send_slot_owner_lost');
       }
       let observedUrl = '';
       try { observedUrl = String(page.url()); } catch { /* fail closed */ }
@@ -3044,16 +3030,14 @@ async function runTurnCore(
     };
     const requireFreshSendReserve = (additionalPreSendMs: number): void => {
       assertFreshOwner();
-      const availableUntil = Math.min(invocationDeadlineMs, sendSlotOwnerDeadlineMs);
-      if (Date.now() + additionalPreSendMs + FRESH_SEND_RESERVE_MS > availableUntil) {
+      if (Date.now() + additionalPreSendMs + FRESH_SEND_RESERVE_MS > invocationDeadlineMs) {
         throw new Error('state_light_new_chat_send_budget_unavailable');
       }
     };
     // Reserve bounded composer insertion time after the readiness wait.
     const composerReadinessDeadline = (): number => Math.max(
       Date.now(),
-      Math.min(invocationDeadlineMs, sendSlotOwnerDeadlineMs)
-        - deriveComposerInsertionBudgetMs(markedPayload),
+      invocationDeadlineMs - deriveComposerInsertionBudgetMs(markedPayload),
     );
 
     // A URL is only a candidate. A complete conversation-local census and
@@ -3237,8 +3221,6 @@ async function runTurnCore(
         };
       }
       sendCount += delivery.sendCount;
-      releaseFreshSendLock(freshCleanup?.sendLock);
-      if (freshCleanup) freshCleanup.sendLock = undefined;
       if (delivery.witness === 'owned_stop') ownedStopDeliveryObserved = true;
       afterSend = true;
       setHeartbeatPhase('post_send_observation');
@@ -3397,7 +3379,6 @@ async function runTurnCore(
     };
 
     if (config.newChat) {
-      sendSlotOwnerDeadlineMs = invocationDeadlineMs;
       {
         assertFreshOwner();
         const returnFreshPrepareFailure = (
@@ -3532,25 +3513,6 @@ async function runTurnCore(
           }
 
           if (sendAuthorized) {
-            if (freshCleanup?.sendLock?.isOwned?.() === false) {
-              sendAuthorized = false;
-              if (sendCount >= 1) {
-                ownershipForfeited = true;
-                return returnOwnerFenceLostAfterSend(
-                  page,
-                  browser,
-                  invocationId,
-                  profileKey,
-                  sendCount,
-                  pollCount,
-                  navigation,
-                  incidents,
-                  journalWriteFailed,
-                  incident,
-                );
-              }
-              continue;
-            }
             const baselineFailure = await captureBaseline();
             assertFreshOwner();
             if (baselineFailure) return baselineFailure;
@@ -3655,24 +3617,6 @@ async function runTurnCore(
             incident('send_observation_deferred', 'fresh_conversation_marker_unproven', 'continue_observing_after_send');
             claimed = true;
             break;
-          }
-          if (freshCleanup?.sendLock?.isOwned?.() === false) {
-            if (sendCount >= 1) {
-              ownershipForfeited = true;
-              return returnOwnerFenceLostAfterSend(
-                page,
-                browser,
-                invocationId,
-                profileKey,
-                sendCount,
-                pollCount,
-                navigation,
-                incidents,
-                journalWriteFailed,
-                incident,
-              );
-            }
-            continue;
           }
           const claim = tryClaimStateLightFreshConversation(
             profileKey,

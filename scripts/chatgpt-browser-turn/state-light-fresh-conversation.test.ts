@@ -454,29 +454,49 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.getSends()).toBe(1);
   });
 
-  it.each(['90000', '61000'])('releases the fresh-send file lock after a normal send or pre-send failure (%s)', async (timeout) => {
+  it.each(['90000', '61000'])('leaves the reservation to expire after a normal send or pre-send failure (%s)', async (timeout) => {
     const { acquireDomainLock } = await import('./coordination.ts');
     const acquire = vi.mocked(acquireDomainLock);
     acquire.mockClear();
     const turn = makeLoserPage('PROMPT', 'OK');
     const outcome = await runNewChatTurn(turn.page, join(stateDir, `slot-release-${timeout}.txt`), timeout);
     expect(outcome.result.send_count).toBe(timeout === '90000' ? 1 : 0);
-    expect(acquire).toHaveBeenCalledWith('collision-profile', 'fresh-send-composer', 0, { maxHoldMs: 61_000 });
-    expect(acquire.mock.results[0]!.value.release).toHaveBeenCalledTimes(1);
+    expect(acquire).toHaveBeenCalledWith('collision-profile', 'fresh-send-composer', 0, { maxHoldMs: 15_000 });
+    expect(acquire.mock.results[0]!.value.release).not.toHaveBeenCalled();
     if (timeout === '61000') expect(turn.composer.fill).toHaveBeenLastCalledWith('', { timeout: 5_000 });
     expect(turn.page.bringToFront).not.toHaveBeenCalled();
   });
 
-  it('sends after the 61-second slot wait cap without a second admission gate (#2497 c3)', async () => {
+  it('sends after four reservation wait windows without a second admission gate (#2505)', async () => {
     const { acquireDomainLock } = await import('./coordination.ts');
-    vi.mocked(acquireDomainLock).mockImplementationOnce(() => {
-      mocks.nowMs += 61_000;
-      return null;
-    });
+    for (let window = 0; window < 4; window++) {
+      vi.mocked(acquireDomainLock).mockImplementationOnce(() => {
+        mocks.nowMs += 15_000;
+        return null;
+      });
+    }
     const turn = makeLoserPage('PROMPT', 'OK');
     const outcome = await runNewChatTurn(turn.page, join(stateDir, 'fail-open-send-2497.txt'), '400000');
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(turn.getSends()).toBe(1);
+  });
+
+  it('sends when the button enables after 40 seconds even after reservation expiry (#2505)', async () => {
+    const prompt = 'PROMPT-2505-DELAYED-SEND';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'OK');
+    const startedAt = mocks.nowMs;
+    const { acquireDomainLock } = await import('./coordination.ts');
+    vi.mocked(acquireDomainLock).mockReturnValueOnce({
+      isOwned: () => mocks.nowMs < startedAt + 15_000,
+      release: vi.fn(),
+    } as any);
+    turn.sendButton.isEnabled.mockImplementation(async () => mocks.nowMs >= startedAt + 40_000);
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'delayed-send-2505.txt'), '90000');
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(mocks.nowMs).toBeGreaterThanOrEqual(startedAt + 40_000);
+    expect(turn.getSends()).toBe(1);
+    expect(turn.page.bringToFront).not.toHaveBeenCalled();
   });
 
   it('closes a proven owned, never-clicked draft only after 60s of disabled Send (#2487)', async () => {
@@ -739,7 +759,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
   });
 
-  it('forbids retry when original slot owner identity is replaced (#2487)', async () => {
+  it('allows the proven non-dispatch retry after the reservation is replaced (#2505)', async () => {
     clearSendSlotDisableEnv();
     const invocationId = randomUUID();
     const prompt = 'PROMPT-2487-OWNER-IDENTITY';
@@ -759,13 +779,9 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(
       turn.page, join(stateDir, invocationId + '-owner-identity.txt'), '90000', invocationId,
     );
-    expect(outcome.result).toMatchObject({
-      send_count: 0, send_attempted: true, cause: 'state_light_new_chat_send_slot_owner_lost',
-    });
-    expectPossibleEffect(outcome.result);
-    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
-    expect(turn.page.close).not.toHaveBeenCalled();
-    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
+    expect(turn.getSends()).toBe(1);
   });
 
   it('never makes a third attempt after even an affirmative second pre-actionability timeout (#2487)', async () => {
