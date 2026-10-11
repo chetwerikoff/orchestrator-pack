@@ -591,6 +591,60 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
   });
 
+  it('closes an owned pre-Send failure when composer clear and readback fail', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-FAILED-COMPOSER-CLEAR';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'NOT-SENT');
+    turn.sendButton.isEnabled.mockResolvedValue(false);
+    const originalFill = turn.composer.fill.getMockImplementation()!;
+    const originalInnerText = turn.composer.innerText.getMockImplementation()!;
+    const originalTextContent = turn.composer.textContent.getMockImplementation()!;
+    let failedClear = false;
+    let failedReadback = 0;
+    turn.composer.fill.mockImplementation(async (value: string, options?: unknown) => {
+      if (value === '') {
+        failedClear = true;
+        throw new Error('synthetic composer clearing failure');
+      }
+      return originalFill(value, options);
+    });
+    turn.composer.innerText.mockImplementation(async () => {
+      if (failedClear) {
+        failedReadback++;
+        throw new Error('synthetic composer readback failure');
+      }
+      return originalInnerText();
+    });
+    turn.composer.textContent.mockImplementation(async () => {
+      if (failedClear) {
+        failedReadback++;
+        throw new Error('synthetic composer readback failure');
+      }
+      return originalTextContent();
+    });
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, 'failed-composer-clear-2510.txt'), '90000', invocationId,
+    );
+    expect(failedClear).toBe(true);
+    expect(failedReadback).toBeGreaterThan(0);
+    expect(outcome.result).toMatchObject({
+      state: 'send_failed', cause: 'fresh_send_button_never_enabled',
+      send_count: 0, cleanup: 'confirmed',
+    });
+    expect(outcome.result.send_attempted).not.toBe(true);
+    expect(turn.getSends()).toBe(0);
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.page.close).toHaveBeenCalledTimes(1);
+    expect(deriveDelivery({
+      ...outcome.result,
+      resolved_send_count: outcome.result.send_count,
+    }, false)).toBe('not-sent');
+    expect(outcome.code).not.toBe(0);
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
+  });
+
   it('preserves a formerly owned tab that navigates during terminal composer cleanup (#2487)', async () => {
     const prompt = 'PROMPT-CLEANUP-PAGE-REPLACED';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
@@ -758,6 +812,43 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.page.close).not.toHaveBeenCalled();
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
+  });
+
+  it('does not close a created Page redirected to a foreign conversation after Send', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'PROMPT-FOREIGN-POST-SEND-REDIRECT';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'REPLY-NOT-OWNED-AT-SETTLEMENT');
+    const originalUrl = turn.page.url.getMockImplementation()!;
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    let redirected = false;
+    turn.page.url.mockImplementation(() => redirected ? OTHER_PROJECT_CONVERSATION_URL : originalUrl());
+    turn.page.locator.mockImplementation((selector: string) => {
+      const locator = originalLocator(selector);
+      if (selector === MESSAGE_NODE_SELECTOR && turn.getSends() === 1
+        && turn.getObservationReads() >= 4) redirected = true;
+      return locator;
+    });
+
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, 'foreign-after-send-2510.txt'), '90000', invocationId,
+    );
+    expect(redirected).toBe(true);
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'owned_conversation_identity_mismatch',
+      send_count: 1,
+      cleanup: 'skipped',
+    });
+    expect(turn.getSends()).toBe(1);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(deriveDelivery({
+      ...outcome.result,
+      resolved_send_count: outcome.result.send_count,
+    }, false)).toBe('POSSIBLY_DELIVERED');
+    expect(outcome.code).not.toBe(0);
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).not.toBe('not_sent');
   });
 
   it('allows the proven non-dispatch retry after the reservation is replaced (#2505)', async () => {

@@ -2600,6 +2600,9 @@ function returnOwnedConversationIdentityMismatch(
   return {
     page,
     browser,
+    // A mismatched identity is observed foreign UI, not authority to close the held Page.
+    ownershipForfeited: true,
+    cleanupAction: 'preserve',
     result: compactResult(
       'ui_contract_mismatch',
       'invocation',
@@ -5497,6 +5500,12 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
       } catch {
         // Preserve the tab if owner, Stop, content or clearing is uncertain.
       }
+    }
+    if (!cleared) {
+      // An unsent draft is expendable on this invocation-owned failed tab.
+      // Unconfirmed composer clearing must not veto close when the existing
+      // blank-project URL and absence of Stop can still be proven.
+      try { cleared = await safeComposerBoundary(); } catch { /* Fail closed on uncertain Stop or URL. */ }
     }
     if (!cleared) {
       pageAction = 'preserve';
