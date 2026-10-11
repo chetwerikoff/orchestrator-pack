@@ -3323,7 +3323,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
           const stopAfterFirstObservation = boundary === 'secondary'
             && selector === RENDERED_STOP_BUTTON_SELECTOR && turn.getObservationReads() >= 2;
           const finalConfirmation = boundary === 'final'
-            && selector === MESSAGE_NODE_SELECTOR && turn.getObservationReads() >= 4;
+            && selector === MESSAGE_NODE_SELECTOR && turn.getObservationReads() >= 6;
           if (!injected && turn.getSends() > 0 && (stopAfterFirstObservation || finalConfirmation)) {
             return scalarLocator({
               count: vi.fn(async () => {
