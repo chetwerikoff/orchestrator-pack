@@ -226,6 +226,71 @@ function failRest(message) {
   process.exit(1);
 }
 
+const FULL_PR_CHECKS_JSON_FIELDS = 'name,state,bucket,link,startedAt,completedAt,workflow,description';
+
+function positiveSafeDecimalId(value) {
+  if (typeof value !== 'string' || !/^\d+$/u.test(value)) return null;
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+function safeRepositoryAdvice(parsed) {
+  const repo = String(parsed.repo ?? '');
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repo) ? ' --repo ' + repo : '';
+}
+
+function highLevelReadRefusal(parsed) {
+  const [root, sub] = parsed.subcommand;
+  const flags = Object.keys(parsed.flags);
+  const required = flags.includes('--required');
+  const watch = flags.includes('--watch') || flags.includes('-w');
+  const semanticWarning = (required || watch)
+    ? ' An unfiltered one-shot read is NON-EQUIVALENT: it cannot reproduce '
+      + (required ? '--required required-only filtering' : '')
+      + (required && watch ? ' or ' : '')
+      + (watch ? '--watch polling' : '') + '.'
+    : '';
+
+  if (root === 'pr' && sub === 'checks') {
+    const prId = parsed.positionals.length === 1
+      ? positiveSafeDecimalId(parsed.positionals[0]) : null;
+    const missing = prId === null
+      ? ' Supply exactly one positive, decimal-only, safe-integer PR ID (no extra positionals).'
+      : '';
+    const json = !parsed.jsonFields?.length
+      ? ' The REST checks route requires --json with supported check fields.'
+      : ' Only inventoried --json fields and no unsupported flags/jq are accepted.';
+    const unsupported = flags.length ? ' Unsupported option(s): ' + flags.join(', ') + '.' : '';
+    const advice = prId === null
+      ? ' No runnable PR-checks command can be formed until the real PR ID is known.'
+      : ' Closest inventory-authorized snapshot: `gh pr checks ' + prId
+        + safeRepositoryAdvice(parsed) + ' --json ' + FULL_PR_CHECKS_JSON_FIELDS + '`';
+    return 'uncovered pr checks read form.' + missing + json + unsupported
+      + semanticWarning + advice;
+  }
+
+  if (root === 'run' && parsed.positionals[0] === 'view') {
+    const runId = parsed.positionals.length === 2
+      ? positiveSafeDecimalId(parsed.positionals[1]) : null;
+    const missing = runId === null
+      ? ' A real positive, decimal-only, safe-integer RUN_ID is required; no extra positionals.'
+      : '';
+    const logFlag = parsed.flags['--log-failed'];
+    const incomplete = (logFlag !== true && logFlag !== 'true')
+      ? ' The complete failed-run read requires --log-failed.'
+      : '';
+    const unsupported = flags.filter((flag) => flag !== '--log-failed');
+    const extra = unsupported.length ? ' Unsupported option(s): ' + unsupported.join(', ') + '.' : '';
+    const advice = runId === null
+      ? ' A known PR may have a checks link pointing to an actual Actions run ID; inspect the link field of the inventoried PR checks snapshot when that PR ID is known. Do not invent a run or job ID. A single known-job log is only partial run evidence.'
+      : ' Closest inventory-authorized whole-failed-run read: `gh run view ' + runId
+        + safeRepositoryAdvice(parsed) + ' --log-failed`. A single known-job log would be partial evidence.';
+    return 'uncovered run view read form.' + missing + incomplete + extra
+      + semanticWarning + advice;
+  }
+  return 'uncovered high-level read form';
+}
+
 function formatAuditValue(value) {
   return String(value).replace(/\s+/g, '_');
 }
@@ -350,7 +415,7 @@ function main() {
   );
   if (!route) {
     if (isUnsupportedHighLevelRead(parsed)) {
-      failRest('uncovered high-level read form');
+      failRest(highLevelReadRefusal(parsed));
       return;
     }
     passthrough(argv).catch((err) => {
@@ -369,6 +434,13 @@ function main() {
   }
   try {
     const result = executeRestRoute(route.id, { realGh, parsed, route, cwd: process.cwd() });
+    if (route.id === 'pr-checks' && (!Array.isArray(result) || result.length === 0)) {
+      throw new Error('PR checks returned no check rows; no complete successful checks result can be asserted');
+    }
+    if ((route.id === 'actions-job-log' || route.id === 'run-view-log-failed')
+      && (typeof result !== 'string' || !result.trim())) {
+      throw new Error('Actions log read returned no text; do not treat an empty log as complete evidence');
+    }
     const outputResult = route.id === 'pr-checks' && parsed.jsonFields
       ? result.map((check) => pickJsonFields(check, parsed.jsonFields))
       : result;
