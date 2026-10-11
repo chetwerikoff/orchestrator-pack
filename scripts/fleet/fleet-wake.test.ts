@@ -28,6 +28,7 @@ import type { ChatErrorBanner, ProjectChat } from './chat-error-banners.ts';
 import { FileFleetStateStore, formatFleetSweep, runFleetSweep, visibleOpenCodePermission, type FleetPaneObservation, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
 import { runLaunch, readTerminalEnvelope } from '../flow-manager-long-running-child.ts';
 import { configuredProfileKey } from '../chatgpt-browser-turn/storage-common.ts';
+import { writeChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
 import { admitStateLightTurnObservation, transitionStateLightTurnObservation } from '../chatgpt-browser-turn/state-light-turn-observation.ts';
 
 class MemoryWakeStore implements FleetWakeStateStore {
@@ -949,6 +950,136 @@ describe('Issue #2463 parked-producer compatibility with r05', () => {
   });
 });
 
+describe('Issue #2510 URL-bound-only saved chat alarms', () => {
+  const projectUrl = 'https://chatgpt.com/g/g-p/project/test';
+  const saved = `${projectUrl}/c/6ac03300-098c-83ec-a6d5-f9d0cec30a5f`;
+  const scope = { projectUrl, repository: 'test/project' };
+  const settings = config({ chatCdpUrl: 'http://127.0.0.1:9222', chatScope: scope });
+  const workers: FleetTerminal[] = [
+    terminals[0]!,
+    { ...terminals[1]!, agentIdentity: 'opencode', status: 'running', incarnationId: 'one-current' },
+    { ...terminals[2]!, agentIdentity: 'claude', status: 'running', incarnationId: 'two-current' },
+  ];
+  const quiet = { coord: 'idle', one: 'working\nesc interrupt', two: 'working\nesc interrupt' };
+  function chat(url = saved, kind: ChatErrorBanner['kind'] = 'error_banner'): ProjectChat {
+    return {
+      targetId: 'saved-fixture', url, issue: 2510, pull: 4000, generating: false,
+      banners: [{ url, issue: 2510, pull: 4000, kind,
+        text: kind === 'stalled' ? 'GPT stopped without a final reply' : 'Synthetic red banner',
+        retry: kind === 'error_banner' }],
+    };
+  }
+  async function isolatedBindings<T>(work: (home: string) => Promise<T>): Promise<T> {
+    const home = mkdtempSync(join(tmpdir(), 'opk-2510-binding-'));
+    const originalHome = process.env.HOME;
+    process.env.HOME = home;
+    try { return await work(home); }
+    finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+  const sentText = (calls: readonly string[][], handle: string): string =>
+    sendsTo(calls, handle).find((call) => call.includes('--text'))?.at(-2) ?? '';
+  function patchBinding(home: string, changes: Record<string, unknown>): void {
+    const id = saved.split('/c/').at(-1)!;
+    const path = join(home, '.local', 'state', 'orchestrator-fleet', 'chat-bindings', id + '.json');
+    const record = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    writeFileSync(path, JSON.stringify({ ...record, ...changes }));
+  }
+
+  it('sends an exact URL worktree-only binding to one current agent without coordinator fallback', async () =>
+    isolatedBindings(async (home) => {
+      writeChatBinding(saved, workers[1]!.worktreePath, { HOME: home });
+      const store = new MemoryWakeStore();
+      const first = await tick({ config: settings, store, terminals: workers, screens: quiet,
+        readChats: async () => [chat()] });
+      expect(sendsTo(first.calls, 'one')).toHaveLength(2);
+      expect(sendsTo(first.calls, 'coord')).toHaveLength(0);
+      expect(sendsTo(first.calls, 'two')).toHaveLength(0);
+      expect(sentText(first.calls, 'one')).toContain(saved);
+      expect(store.readLastSentSignature()).not.toContain(saved);
+      const repeat = await tick({ config: settings, store, terminals: workers, screens: quiet,
+        readChats: async () => [chat()] });
+      expect(sendsTo(repeat.calls, 'one')).toHaveLength(0);
+      expect(sendsTo(repeat.calls, 'coord')).toHaveLength(0);
+    }));
+
+  it('waits for the original two-tick saved-stall admission before bound-pane delivery', async () =>
+    isolatedBindings(async (home) => {
+      writeChatBinding(saved, workers[1]!.worktreePath, { HOME: home });
+      const store = new MemoryWakeStore();
+      const next = () => tick({ config: settings, store, terminals: workers, screens: quiet,
+        readChats: async () => [chat(saved, 'stalled')] });
+      expect(sendsTo((await next()).calls, 'one')).toHaveLength(0);
+      expect(sendsTo((await next()).calls, 'one')).toHaveLength(2);
+      expect(sendsTo((await next()).calls, 'one')).toHaveLength(0);
+    }));
+
+  it.each(['no-binding', 'wrong-url', 'no-agent', 'exited', 'stale', 'ambiguous', 'shell', 'wrong-handle', 'architect'] as const)(
+    'never falls back to DOM Issue/PR, another pane or coordinator for %s', async (scenario) =>
+      isolatedBindings(async (home) => {
+        if (scenario !== 'no-binding') writeChatBinding(saved, workers[1]!.worktreePath, { HOME: home });
+        if (scenario === 'wrong-url') patchBinding(home, { conversation_url: projectUrl + '/c/foreign' });
+        if (scenario === 'wrong-handle') patchBinding(home, { terminal_handle: 'two' });
+        const selected = workers.map((pane) => pane.handle !== 'one' ? pane
+          : scenario === 'no-agent' ? { ...pane, agentIdentity: undefined }
+            : scenario === 'exited' ? { ...pane, status: 'exited' }
+              : scenario === 'stale' ? { ...pane, status: 'stale' }
+                : scenario === 'shell' ? { ...pane, title: 'zsh', agentIdentity: undefined }
+                  : pane);
+        if (scenario === 'ambiguous') selected.push({ ...workers[1]!, handle: 'duplicate-one' });
+        const run = await tick({ config: scenario === 'architect' ? { ...settings, architectHandle: 'one' } : settings,
+          terminals: selected, screens: { ...quiet, 'duplicate-one': 'working\nesc interrupt' },
+          readChats: async () => [chat()], listOpenPulls: () => [] });
+        expect(sendsTo(run.calls, 'one').filter((call) => call.includes('--text')
+          && sentText(run.calls, 'one').includes(saved))).toHaveLength(0);
+        expect(sendsTo(run.calls, 'duplicate-one')).toHaveLength(0);
+        expect(sentText(run.calls, 'coord')).not.toContain(saved);
+        expect(run.calls.filter((call) => call[0] === 'terminal' && call[1] === 'send'
+          && call.includes(saved))).toHaveLength(0);
+      }));
+
+  it.each(['first', 'second', 'thrown-first', 'thrown-second'] as const)(
+    'never routes uncertain %s bound-pane send through coordinator', async (failure) =>
+      isolatedBindings(async (home) => {
+        writeChatBinding(saved, workers[1]!.worktreePath, { HOME: home });
+        const executor: OrcaExecutor = (args) => {
+          if (args[0] === 'terminal' && args[1] === 'send' && args.includes('one')) {
+            const first = args.includes('--text');
+            if (first === failure.includes('first')) {
+              if (failure.startsWith('thrown')) throw new Error('synthetic_send_uncertain');
+              return commandResult('', false);
+            }
+          }
+          return fakeOrca(quiet, [], workers)(args);
+        };
+        const store = new MemoryWakeStore();
+        const result = await tick({ config: settings, terminals: workers, screens: quiet, executor, store,
+          readChats: async () => [chat()], listOpenPulls: () => [] });
+        expect(sendsTo(result.calls, 'one')).toHaveLength(failure.includes('first') ? 1 : 2);
+        expect(sendsTo(result.calls, 'coord')).toHaveLength(0);
+        expect(result.logs.join(' ')).toContain('send failed/uncertain chat banner');
+        const next = await tick({ config: settings, terminals: workers, screens: quiet, store,
+          readChats: async () => [chat()], listOpenPulls: () => [] });
+        expect(sendsTo(next.calls, 'one')).toHaveLength(0);
+        expect(sendsTo(next.calls, 'coord')).toHaveLength(0);
+      }));
+
+  it('leaves unrelated STOPPED/local warnings available while omitting an unbound saved URL', async () =>
+    isolatedBindings(async () => {
+      const local = projectUrl + '/c/local-chatgpt:123e4567-e89b-12d3-a456-426614174042';
+      const result = await tick({ config: settings, terminals: workers, screens: {
+        coord: 'idle', one: 'Needs response', two: 'working\nesc interrupt',
+      }, readChats: async () => [chat(), chat(local)], listOpenPulls: () => [] });
+      expect(sentText(result.calls, 'coord')).toContain('STOPPED one');
+      expect(sentText(result.calls, 'coord')).toContain('Owner, workflow role and latest-turn invocation are unproven');
+      expect(sentText(result.calls, 'coord')).not.toContain(saved);
+      expect(sendsTo(result.calls, 'one')).toHaveLength(0);
+    }));
+});
+
 describe('Issue #2471 local-chatgpt coordinator-only and one-attempt routing', () => {
   const projectUrl = 'https://chatgpt.com/g/g-p/project/test';
   const localScope = { projectUrl, repository: 'test/project' };
@@ -1230,10 +1361,10 @@ describe('Issue #2471 local-chatgpt coordinator-only and one-attempt routing', (
       const canonical = await tick({ config: settings, store: reloaded,
         terminals: [terminals[0]!, owner, terminals[2]!], screens: idle,
         readChats: async () => [row(saved)] });
-      expect(sendsTo(canonical.calls, 'one')).toHaveLength(2);
-      expect(textTo(canonical.calls, 'one')).toContain('Only for confirmed execution');
-      expect(textTo(canonical.calls, 'one')).toContain('Only for confirmed PR review');
-      expect(textTo(canonical.calls, 'one')).not.toContain('This is a review chat');
+      // Superseded-saved closure is unchanged; an unbound saved URL no longer
+      // grants Issue/PR fallback delivery to a worker or coordinator.
+      expect(sendsTo(canonical.calls, 'one')).toHaveLength(0);
+      expect(textTo(canonical.calls, 'coord')).not.toContain(saved);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
