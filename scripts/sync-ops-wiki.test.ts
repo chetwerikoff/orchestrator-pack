@@ -9,8 +9,12 @@ import {
   buildEscalationQueries,
   checkRepositoryMode,
   collectHeadings,
+  DEFAULT_CONVERGENCE_TIMEOUT_MS,
   DEFAULT_MCP_READ_SNIPPET_LENGTH,
+  DEFAULT_MCP_REINDEX_TIMEOUT_MS,
+  DEFAULT_MCP_REQUEST_TIMEOUT_MS,
   createMcpWikiOpsClient,
+  createProductionWikiOpsClient,
   defaultGitRunner,
   episodeRelativePath,
   evaluateEpisodeRead,
@@ -353,6 +357,56 @@ describe('ops-wiki extraction and repository check', () => {
 });
 
 describe('ops-wiki apply protocol', () => {
+  it.each([
+    { caseName: '120-second default', timeoutOverride: undefined, expectedSuccess: true },
+    { caseName: 'explicit 30-second override', timeoutOverride: 30_000, expectedSuccess: false },
+  ])('uses $caseName for an index visible only after 35 virtual seconds', async ({ timeoutOverride, expectedSuccess }) => {
+    expect(DEFAULT_CONVERGENCE_TIMEOUT_MS).toBe(120_000);
+    const { repoRoot } = initRepo(fixtureFiles());
+    writeManifestAndGolden(repoRoot);
+    const corpusRoot = tempDir('ops-wiki-delayed-');
+    const base = corpusClient(corpusRoot);
+    let virtualNow = 0;
+    let firstStatusRead = true;
+    const client: WikiOpsClient = {
+      ...base,
+      async read(path, options) {
+        if (path === OPS_WIKI_STATUS_NOTE && firstStatusRead) {
+          firstStatusRead = false;
+          virtualNow = 35_000;
+          return { ok: false, reason: 'absent' };
+        }
+        return base.read(path, options);
+      },
+    };
+    const parentOverride = process.env.PACK_OPS_WIKI_CONVERGENCE_TIMEOUT_MS;
+    delete process.env.PACK_OPS_WIKI_CONVERGENCE_TIMEOUT_MS;
+    try {
+      const result = await applyOpsWiki({
+        repoRoot,
+        commitRef: 'HEAD',
+        corpusRoot,
+        client,
+        git: recordingGit(repoRoot, corpusRoot).git,
+        convergenceTimeoutMs: timeoutOverride,
+        pollIntervalMs: 0,
+        now: () => virtualNow,
+      });
+      expect(virtualNow).toBe(35_000);
+      if (expectedSuccess) {
+        expect(result).toMatchObject({ ok: true, status: 'applied', searchable: true });
+        expect(parseStatusNote(readFileSync(join(corpusRoot, OPS_WIKI_STATUS_NOTE), 'utf8')).applyInProgress).toBeUndefined();
+      } else {
+        expect(result).toMatchObject({ ok: false, status: 'degraded', searchable: false, mutationBegan: false });
+        expect(existsSync(join(corpusRoot, OPS_WIKI_STATUS_NOTE))).toBe(false);
+        expect(existsSync(join(corpusRoot, episodeRelativePath('worker-lifecycle')))).toBe(false);
+      }
+    } finally {
+      if (parentOverride === undefined) delete process.env.PACK_OPS_WIKI_CONVERGENCE_TIMEOUT_MS;
+      else process.env.PACK_OPS_WIKI_CONVERGENCE_TIMEOUT_MS = parentOverride;
+    }
+  });
+
   it('publishes and confirms apply_in_progress before episode mutation', async () => {
     const { repoRoot } = initRepo(fixtureFiles());
     writeManifestAndGolden(repoRoot);
@@ -702,7 +756,7 @@ describe('ops-wiki production MCP seam', () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
-  it('allows a slow reindex to use the convergence timeout', async () => {
+  it('allows a slow reindex under its independent 30-second RPC cap', async () => {
     const client = createMcpWikiOpsClient('http://wiki-ops.test/mcp', async (_url, init) => {
       const body = JSON.parse(String(init?.body)) as { method: string; id: number };
       if (body.method !== 'initialize') await new Promise((resolve) => setTimeout(resolve, 25));
@@ -715,4 +769,45 @@ describe('ops-wiki production MCP seam', () => {
     }, 5);
     await expect(client.reindex?.({ force: true })).resolves.toBeUndefined();
   });
+  it('keeps 5-second request and 30-second reindex caps independent of convergence overrides', async () => {
+    expect(DEFAULT_MCP_REQUEST_TIMEOUT_MS).toBe(5_000);
+    expect(DEFAULT_MCP_REINDEX_TIMEOUT_MS).toBe(30_000);
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const request = JSON.parse(String(init?.body)) as { id: number; method: string };
+      const result = request.method === 'initialize'
+        ? { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'synthetic', version: '1' } }
+        : {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ results: [{ path: OPS_WIKI_STATUS_NOTE, found: true, content: renderStatusNote({ checkedThrough: 'c'.repeat(40) }) }] }),
+          }],
+        };
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    try {
+      const normal = createProductionWikiOpsClient({ PACK_OPS_WIKI_MCP_URL: 'http://wiki-ops.test/mcp' });
+      expect(normal).toBeDefined();
+      await normal!.read(OPS_WIKI_STATUS_NOTE, { related: false });
+      await normal!.search({ query: 'fixture' });
+      await normal!.reindex?.({ force: true });
+      expect(timeoutSpy.mock.calls.map(([ms]) => ms)).toEqual([5_000, 5_000, 5_000, 30_000]);
+
+      timeoutSpy.mockClear();
+      const shorter = createProductionWikiOpsClient({
+        PACK_OPS_WIKI_MCP_URL: 'http://wiki-ops.test/mcp',
+        PACK_OPS_WIKI_CONVERGENCE_TIMEOUT_MS: '250',
+      });
+      expect(shorter).toBeDefined();
+      await shorter!.read(OPS_WIKI_STATUS_NOTE, { related: false });
+      await shorter!.reindex?.({ force: false });
+      expect(timeoutSpy.mock.calls.map(([ms]) => ms)).toEqual([250, 250, 30_000]);
+    } finally {
+      fetchSpy.mockRestore();
+      timeoutSpy.mockRestore();
+    }
+  });
+
 });

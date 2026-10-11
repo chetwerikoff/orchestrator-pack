@@ -1,0 +1,28 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2518,
+  "declared_paths": [
+    "scripts/merge-adoption-effect.test.ts",
+    "scripts/merge-adoption-effect.ts",
+    "scripts/sync-ops-wiki.test.ts",
+    "scripts/sync-ops-wiki.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/gh",
+    "scripts/lib/gh-rest-routes.mjs",
+    "scripts/pr-scope-declaration.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/merge-adoption-effect.test.ts",
+    "scripts/merge-adoption-effect.ts",
+    "scripts/sync-ops-wiki.test.ts",
+    "scripts/sync-ops-wiki.ts"
+  ],
+  "source_revision": "074b43c632e783f51b04705941941a9a0e905746"
+}

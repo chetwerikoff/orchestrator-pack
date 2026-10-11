@@ -391,6 +391,79 @@ describe('Issue #2145 merge adoption effect verification', () => {
     }
   });
 
+  it.each(['seeded', 'clean'] as const)('keeps real adopted-primary live-check children selector-free with a %s parent', async (parentCase) => {
+    const root = mappingFixture();
+    const original = {
+      OPK_PROJECT_ID: process.env.OPK_PROJECT_ID,
+      GH_REPO: process.env.GH_REPO,
+      ORCA_TERMINAL_HANDLE: process.env.ORCA_TERMINAL_HANDLE,
+      OPK_LIVE_CHECK_TEST_MARKER: process.env.OPK_LIVE_CHECK_TEST_MARKER,
+    };
+    try {
+      const mergeSha = fixtureMerge(root, 'scripts/unrelated.ts');
+      if (parentCase === 'seeded') {
+        process.env.OPK_PROJECT_ID = 'synthetic-other-project';
+        process.env.GH_REPO = 'fixture/example.test';
+        process.env.ORCA_TERMINAL_HANDLE = 'synthetic-terminal';
+      } else {
+        delete process.env.OPK_PROJECT_ID;
+        delete process.env.GH_REPO;
+        delete process.env.ORCA_TERMINAL_HANDLE;
+      }
+      process.env.OPK_LIVE_CHECK_TEST_MARKER = 'retained';
+      const parentSnapshot = {
+        OPK_PROJECT_ID: process.env.OPK_PROJECT_ID,
+        GH_REPO: process.env.GH_REPO,
+        ORCA_TERMINAL_HANDLE: process.env.ORCA_TERMINAL_HANDLE,
+        OPK_LIVE_CHECK_TEST_MARKER: process.env.OPK_LIVE_CHECK_TEST_MARKER,
+      };
+      const checks = [path.join(root, 'check-1.json'), path.join(root, 'check-2.json')];
+      const script = [
+        "const fs = require('node:fs')",
+        "const keys = ['OPK_PROJECT_ID', 'GH_REPO', 'ORCA_TERMINAL_HANDLE']",
+        "const observed = { cwd: process.cwd(), selectors: keys.map((key) => Object.hasOwn(process.env, key) ? process.env[key] : null), marker: process.env.OPK_LIVE_CHECK_TEST_MARKER }",
+        "fs.writeFileSync(process.argv[1], JSON.stringify(observed))",
+        "process.exit(observed.selectors.every((value) => value === null) && observed.marker === 'retained' ? 0 : 17)",
+      ].join('; ');
+      const commandArgs = [
+        'verify', '--repo-root', root, '--merge-sha', mergeSha,
+        '--adopted-at', new Date(Date.now() - 1_000).toISOString(),
+      ];
+      const passed = await runCli([
+        ...commandArgs,
+        '--live-check-json', JSON.stringify(checks.map((file) => [process.execPath, '-e', script, file])),
+      ]);
+      expect(passed).toMatchObject({ effect: 'effect_verified', operationalOutcome: 'operationally_complete', liveCheck: { ok: true } });
+      for (const file of checks) {
+        expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({
+          cwd: root,
+          selectors: [null, null, null],
+          marker: 'retained',
+        });
+      }
+
+      const failed = await runCli([
+        ...commandArgs,
+        '--live-check-json', JSON.stringify([process.execPath, '-e', 'process.exit(17)']),
+      ]);
+      expect(failed.liveCheck).toMatchObject({ ok: false, reason: expect.stringContaining('command_failed:') });
+      expect(failed.effect).toContain('effect_unverified');
+      expect(failed.operationalOutcome).toBe('operationally_incomplete');
+      expect({
+        OPK_PROJECT_ID: process.env.OPK_PROJECT_ID,
+        GH_REPO: process.env.GH_REPO,
+        ORCA_TERMINAL_HANDLE: process.env.ORCA_TERMINAL_HANDLE,
+        OPK_LIVE_CHECK_TEST_MARKER: process.env.OPK_LIVE_CHECK_TEST_MARKER,
+      }).toEqual(parentSnapshot);
+    } finally {
+      for (const [key, value] of Object.entries(original)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed when the Issue live check fails even if no long-lived consumer is stale', async () => {
     const report = await verifyAdoptionEffect({
       adoptionStartedAtMs: Date.now() - 1_000,

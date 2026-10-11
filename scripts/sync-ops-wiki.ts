@@ -20,11 +20,11 @@ export const OPS_WIKI_MANIFEST_RELATIVE = 'scripts/data/ops-wiki-manifest.json';
 export const OPS_WIKI_GOLDEN_RELATIVE = 'scripts/fixtures/ops-wiki-golden-queries.json';
 export const OPS_WIKI_STATUS_NOTE = 'Ops Wiki Status.md';
 export const OPS_WIKI_EPISODE_DIR = 'episodes';
-export const DEFAULT_CONVERGENCE_TIMEOUT_MS = 30_000;
+export const DEFAULT_CONVERGENCE_TIMEOUT_MS = 120_000;
 export const DEFAULT_POLL_INTERVAL_MS = 200;
 export const DEFAULT_MCP_REQUEST_TIMEOUT_MS = 5_000;
 export const DEFAULT_MCP_READ_SNIPPET_LENGTH = 12_288;
-export const DEFAULT_MCP_REINDEX_TIMEOUT_MS = DEFAULT_CONVERGENCE_TIMEOUT_MS;
+export const DEFAULT_MCP_REINDEX_TIMEOUT_MS = 30_000;
 const GOLDEN_SEARCH_LIMIT = 20;
 
 export type GitRunner = (cwd: string, args: readonly string[]) => { ok: boolean; stdout: string; stderr: string };
