@@ -131,6 +131,8 @@ export type { StopOwnedGenerationOutcome };
 const DEFAULT_TIMEOUT_MS = 1_800_000;
 /** Local CDP DOM reads after dispatch; not send/navigation pacing. */
 export const POST_SEND_OBSERVATION_POLL_MS = 15_000;
+// Leave room for bounded terminal page/CDP cleanup and stdout publication.
+const CONFIRMED_OWNED_PAGE_LOSS_RECOVERY_MS = 30_000;
 const DEFAULT_POLL_MS = POST_SEND_OBSERVATION_POLL_MS;
 const INITIAL_POLL_MS = 500;
 // Consecutive finished-answer reads without a rendered owned user message
@@ -3807,7 +3809,7 @@ async function runTurnCore(
     const startedAt = Date.now();
     const softDeadline = startedAt + config.timeoutMs;
     // `2 × timeout-ms` is a post-send decision threshold, not a hard observation ceiling.
-    const hardExhaustionDeadline = startedAt + (config.timeoutMs * 2);
+    let hardExhaustionDeadline = startedAt + (config.timeoutMs * 2);
     const dispatchDeadline = startedAt + Math.min(DISPATCH_OBSERVATION_MS, config.timeoutMs);
     const freshConversationLandingDeadline = startedAt + Math.min(
       FRESH_CONVERSATION_LANDING_MS,
@@ -3883,12 +3885,21 @@ async function runTurnCore(
     };
 
     const recoverCurrentObservation = async (): Promise<TurnRunOutcome | null> => {
+      // Only positive owned-page/browser loss shortens the *existing* observation
+      // deadline. No diagnostic string can authorize this recovery or a resend.
+      // Reuse that deadline across further loss epochs instead of restarting it.
+      if (recoveryState.lossEpoch === 0) {
+        hardExhaustionDeadline = Math.min(
+          hardExhaustionDeadline,
+          Date.now() + CONFIRMED_OWNED_PAGE_LOSS_RECOVERY_MS,
+        );
+      }
       const recovered = await runPostSendRecovery({
         browser,
         currentPage: page,
         marker,
         hardDeadlineMs: hardExhaustionDeadline,
-        pollMs: config.pollMs,
+        pollMs: Math.min(config.pollMs, 1_000),
         state: recoveryState,
         observer: recoveryHooks.observer,
         adapter: {
@@ -3955,7 +3966,7 @@ async function runTurnCore(
             navigation.recordGoto();
             await successor.goto(immutableConversationUrl, {
               waitUntil: 'domcontentloaded',
-              timeout: STATE_LIGHT_NAVIGATION_TIMEOUT_MS,
+              timeout: Math.min(STATE_LIGHT_NAVIGATION_TIMEOUT_MS, Math.max(1, hardExhaustionDeadline - Date.now())),
             });
             return successor;
           },
@@ -4100,6 +4111,11 @@ async function runTurnCore(
           observeProductWall,
         );
       } catch (error) {
+        if (browserOrPageDefinitelyLost(page, browser)) {
+          const terminal = await recoverCurrentObservation();
+          if (terminal) return terminal;
+          continue;
+        }
         if (isPostSendTargetCrash(error)) {
           incident('post_send_target_loss', 'post_send_target_crashed', 'retain_owned_page_no_resend');
           return {
@@ -4120,11 +4136,6 @@ async function runTurnCore(
               journalWriteFailed,
             ),
           };
-        }
-        if (browserOrPageDefinitelyLost(page, browser)) {
-          const terminal = await recoverCurrentObservation();
-          if (terminal) return terminal;
-          continue;
         }
         const symptom = error instanceof Error ? error.message : String(error);
         incident('post_send_observation_error', symptom, 'continue_polling_owned_page');
@@ -5205,9 +5216,11 @@ async function runTurnCore(
           ? INITIAL_POLL_MS
           : POST_SEND_OBSERVATION_POLL_MS;
       const beforeSoftDeadline = Date.now() < softDeadline;
-      await sleep(page, beforeSoftDeadline
-        ? Math.min(delay, Math.max(1, softDeadline - Date.now()))
-        : delay);
+      await sleep(page, recoveryState.lossEpoch > 0
+        ? Math.min(delay, Math.max(1, hardExhaustionDeadline - Date.now()))
+        : beforeSoftDeadline
+          ? Math.min(delay, Math.max(1, softDeadline - Date.now()))
+          : delay);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
