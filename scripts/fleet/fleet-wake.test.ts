@@ -963,8 +963,8 @@ describe('Issue #2510 URL-bound-only saved chat alarms', () => {
   const quiet = { coord: 'idle', one: 'working\nesc interrupt', two: 'working\nesc interrupt' };
   function chat(url = saved, kind: ChatErrorBanner['kind'] = 'error_banner'): ProjectChat {
     return {
-      targetId: 'saved-fixture', url, issue: 2510, pull: 4000, generating: false,
-      banners: [{ url, issue: 2510, pull: 4000, kind,
+      targetId: 'saved-fixture', url, issue: 2510, generating: false,
+      banners: [{ url, issue: 2510, kind,
         text: kind === 'stalled' ? 'GPT stopped without a final reply' : 'Synthetic red banner',
         retry: kind === 'error_banner' }],
     };
