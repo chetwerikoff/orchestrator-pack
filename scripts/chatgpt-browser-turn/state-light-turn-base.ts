@@ -3821,7 +3821,12 @@ async function runTurnCore(
         const observation = await readPageObservation(page, undefined, undefined, true, invocationDeadlineMs);
         if (stop === false && !observation.transcriptIncomplete
           && observation.snapshot?.complete === true
-          && observation.pageTurnEvidence?.generationInProgress !== true
+          // A complete snapshot covers only currently rendered rows. Require
+          // affirmative idle plus readable historical user context; absence of
+          // pageTurnEvidence or an unknown generation must not trigger reload.
+          && observation.pageTurnEvidence?.generationInProgress === false
+          && observation.snapshot?.carriers.some((carrier) =>
+            carrier.role === 'user' && normalizeVisibleText(carrier.text).length > 0) === true
           && !browserOrPageDefinitelyLost(page, browser)
           && readOwnedConversationIdentity(page, chatUrlTarget).matched
           && Date.now() + postReopenReserveMs < invocationDeadlineMs) {

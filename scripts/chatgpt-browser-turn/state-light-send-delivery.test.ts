@@ -21,7 +21,7 @@ vi.mock('./ui-adapter.ts', async (original) => buildUiAdapterTestMock(
 
 import { buildUiAdapterTestMock, collectionLocator, createBrowserSessionModuleMock, createCoordinationModuleMock, enqueueBrowserForTurn, runStateLightTurnWithStdoutCapture, scalarLocator, stableTurnInput } from './state-light-turn.test-fixtures.ts';
 import { COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR, MESSAGE_NODE_SELECTOR, MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE } from './product-page-selectors.ts';
-import { __testSendDelivery, runStateLightTurn } from './state-light-turn-base.ts';
+import { __testSendDelivery, readPageObservation, runStateLightTurn } from './state-light-turn-base.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { configuredProfileKey } from './storage-common.ts';
 import { readTerminalEnvelope, runLaunch } from '../flow-manager-long-running-child.ts';
@@ -426,6 +426,11 @@ describe('production attempted-send result and durable envelope', () => {
     ['redirected', 1, 0],
     ['busy', 0, 0],
     ['near-expiry', 0, 0],
+    ['empty-history', 0, 0],
+    ['unknown-generation', 0, 0],
+    ['active-generation', 0, 0],
+    ['assistant-only-history', 0, 0],
+    ['blank-user-history', 0, 0],
   ] as const)('Issue #2495 composer: %s navigates %i times and sends %i times', async (
     scenario, expectedNavigations, expectedSends,
   ) => {
@@ -451,13 +456,24 @@ describe('production attempted-send result and durable envelope', () => {
     });
     const nodes = {
       ...collectionLocator([{ role: 'user', text: 'historical user' }]),
-      evaluateAll: vi.fn(async () => ({
-        rows: [{
-          role: 'user', text: 'historical user', key: 'historical-user-key-2495',
-          domIndex: 0, complete: true, completionReady: false, continuationVisible: false,
-        }],
-        pageTurnEvidence: { generationInProgress: false, observedAssistantNodes: 0, continueGeneratingVisible: false },
-      })),
+      evaluateAll: vi.fn(async () => {
+        const empty = scenario === 'empty-history';
+        const assistantOnly = scenario === 'assistant-only-history';
+        return {
+          rows: empty ? [] : [{
+            role: assistantOnly ? 'assistant' : 'user',
+            text: scenario === 'blank-user-history' ? '' : 'historical user',
+            key: 'historical-user-key-2495', domIndex: 0,
+            complete: true, completionReady: false, continuationVisible: false,
+          }],
+          ...(empty ? {} : { pageTurnEvidence: {
+            generationInProgress: scenario === 'unknown-generation'
+              ? 'unknown' : scenario === 'active-generation',
+            observedAssistantNodes: assistantOnly ? 1 : 0,
+            continueGeneratingVisible: false,
+          } }),
+        };
+      }),
     };
     const goto = vi.fn(async (url: string) => {
       navigations++;
@@ -488,6 +504,16 @@ describe('production attempted-send result and durable envelope', () => {
     Object.assign(browserFixture.context, { pages: () => [page] });
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
     try {
+      if (scenario === 'empty-history' || scenario === 'unknown-generation') {
+        const census = await readPageObservation(page, undefined, undefined, true, now + 5_000);
+        expect(census.snapshot?.complete).toBe(true);
+        if (scenario === 'empty-history') {
+          expect(census.snapshot?.carriers).toHaveLength(0);
+          expect(census.pageTurnEvidence).toBeUndefined();
+        } else {
+          expect(census.pageTurnEvidence?.generationInProgress).toBe('unknown');
+        }
+      }
       const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
         '--profile', profile, '--cdp', cdp, '--input', join(root, 'synthetic-input'),
         '--output', join(root, invocationId + '.txt'), '--chat-url', chatUrl,
