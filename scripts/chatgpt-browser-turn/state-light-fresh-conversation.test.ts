@@ -487,9 +487,21 @@ describe('state-light fresh conversation collision recovery', () => {
     const turn = makeLoserPage('PROMPT', 'OK');
     const outcome = await runNewChatTurn(turn.page, join(stateDir, `slot-release-${timeout}.txt`), timeout);
     expect(outcome.result.send_count).toBe(timeout === '90000' ? 1 : 0);
-    expect(acquire).toHaveBeenCalledWith('collision-profile', 'fresh-send-composer', 0);
+    expect(acquire).toHaveBeenCalledWith('collision-profile', 'fresh-send-composer', 0, { maxHoldMs: 90_000 });
     expect(acquire.mock.results[0]!.value.release).toHaveBeenCalledTimes(1);
     if (timeout === '61000') expect(turn.composer.fill).toHaveBeenLastCalledWith('', { timeout: 5_000 });
+  });
+
+  it('sends after the 120-second slot wait cap without a second admission gate (#2497 c3)', async () => {
+    const { acquireDomainLock } = await import('./coordination.ts');
+    vi.mocked(acquireDomainLock).mockImplementationOnce(() => {
+      mocks.nowMs += 120_000;
+      return null;
+    });
+    const turn = makeLoserPage('PROMPT', 'OK');
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'fail-open-send-2497.txt'), '400000');
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(turn.getSends()).toBe(1);
   });
 
   it('blocks typing on unreadable fresh content and clears the unsent draft on exit (#2497)', async () => {
@@ -832,16 +844,14 @@ describe('state-light fresh conversation collision recovery', () => {
     const prompt = 'PROMPT-2487-OWNER-IDENTITY';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'UNREACHED');
-    const { writeFileSync } = await import('node:fs');
+    const { acquireDomainLock } = await import('./coordination.ts');
+    let replaced = false;
+    vi.mocked(acquireDomainLock).mockReturnValueOnce({
+      isOwned: () => !replaced,
+      release: vi.fn(() => { if (replaced) throw new Error('lock_ownership_lost'); }),
+    } as any);
     turn.sendButton.click.mockImplementationOnce(async () => {
-      const now = mocks.nowMs;
-      writeFileSync(join(stateDir, 'collision-profile', 'locks', 'state-light-new-chat-send.slot'),
-        JSON.stringify({
-          schema: 'state-light-new-chat-send-slot/v1', version: 1,
-          invocation_id: 'foreign-owner-2487', pid: process.pid,
-          acquired_at: new Date(now).toISOString(),
-          expires_at: new Date(now + STATE_LIGHT_SEND_SLOT_TTL_MS).toISOString(),
-        }) + '\n');
+      replaced = true;
       throw timeoutError();
     });
 
@@ -2642,7 +2652,7 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
     releaseStateLightNewChatSendSlot(profileKey, 'successor-2487');
   });
 
-  it('stops a slow but progressing original owner after its own deadline without dispatch (#2487)', async () => {
+  it('stops a slow original owner at the invocation deadline without dispatch (#2497)', async () => {
     clearSendSlotDisableEnv();
     const prompt = 'PROMPT-OWNER-LATE';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
@@ -2651,7 +2661,7 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
     turn.composer.evaluate.mockImplementation(async () => {
       if (!expired) {
         expired = true;
-        mocks.nowMs += STATE_LIGHT_OWNER_PRE_DISPATCH_MS + 1;
+        mocks.nowMs += 400_001;
       }
       return { visible: true, enabled: true, contentEditable: true };
     });
@@ -2661,9 +2671,7 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
       cause: 'state_light_new_chat_owner_pre_dispatch_deadline_exhausted',
     });
     expect(turn.getSends()).toBe(0);
-    // The original owner, not the waiter, returns through its slot finalizer.
-    await acquireStateLightNewChatSendSlot('collision-profile', 'later-admitted-2487', 100);
-    releaseStateLightNewChatSendSlot('collision-profile', 'later-admitted-2487');
+    // The original owner returns through its fresh-send lock finalizer.
   });
 
   it('recovers expired and corrupt ownership artifacts through bounded exclusive create', async () => {

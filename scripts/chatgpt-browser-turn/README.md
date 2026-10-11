@@ -73,12 +73,15 @@ liveness.
 
 ## Fresh-conversation prepare bounds and advisory walls
 
-Fresh `--new-chat` turns take an unconditional profile-wide composer file lock
-before opening their tab, reusing `acquireDomainLock`. Waiters yield until release
-or their invocation deadline; a dead process's lock is reclaimed immediately.
+Fresh `--new-chat` turns take one profile-wide composer file lock before opening
+their tab, reusing `acquireDomainLock`. Dead-process locks are reclaimed immediately;
+a lock held more than 90 seconds is reclaimed even if its owner is still alive.
+Waiters yield until release, their invocation deadline, or 120 seconds: at that
+wait cap they proceed without the slot. These caps apply only to the fresh-send
+composer lock, not other domain locks.
 The lock is released after observed dispatch or after bounded pre-send draft
 cleanup on every exit path. Existing-chat continuations do not take it. The
-legacy send-slot owner fence remains unchanged and cannot disable this lock.
+legacy send-slot protocol is no longer a canonical fresh-send gate.
 Fresh composer reads and fills front the tab; rendered payload comparisons
 ignore whitespace added by the editor, including around backticked URLs.
 
@@ -89,8 +92,8 @@ navigation rounds for that invocation.
 
 ### Ownership TTL, owner fences, and fail-open recovery (#1145)
 
-Fresh `--new-chat` turns still serialize behind the profile send slot and
-per-conversation fresh claims, but both artifacts are now **finite and fail-open**:
+The profile composer lock bounds fresh-send contention; per-conversation fresh
+claims retain their finite ownership contract:
 
 - `--timeout-ms` through **1,800,000 ms** remains accepted; larger values fail
   before browser connection, artifact acquisition, or dispatch with
@@ -98,22 +101,17 @@ per-conversation fresh claims, but both artifacts are now **finite and fail-open
 - The existing **`2 × timeout-ms` post-send value is a decision threshold**, not a
   hard observation/hold ceiling. An awaited DOM observation pass may return after
   that threshold; it does not manufacture resend authority.
-- Send-slot authority expires no later than `acquired_at + 2,100,000 ms`.
 - Fresh claims created by new code expire at
   `claimed_at + 2 × accepted timeout-ms + 300,000 ms` (maximum **3,900,000 ms**).
   Passive/legacy v1 claims without `expires_at` use `claimed_at + 3,900,000 ms`.
   The 300,000 ms grace is advisory, not proof that all work finished first.
 
-Immediately before final message dispatch and fresh-claim create/replace, the
-helper re-reads the canonical send slot and requires the complete expected v1
-identity plus unexpired status. After every awaited fresh-chat observation pass
-and immediately before continuation or late-result publication, it re-reads the
-canonical fresh claim the same way. Fence loss suppresses the protected effect:
-before-dispatch loss keeps `send_count: 0`; after-dispatch loss preserves the
-owned page and returns without resend or page-close authority. The finalizer still
-performs the bounded connected-client release. Expiry wins over PID uncertainty; expired/corrupt records recover
-through bounded retry, stale cleanup, exclusive create, and post-create
-revalidation.
+Before dispatch, a sender still holding a composer lock checks that it has not
+been taken over. After fresh-claim acquisition and before continuation or late
+publication, the helper re-reads the canonical fresh claim with its expected
+identity and unexpired status. Claim loss preserves the owned page and returns
+without resend or page-close authority. The finalizer still performs bounded
+connected-client release. Expired/corrupt claims use the existing bounded recovery.
 
 Emitted records remain rollback-readable v1 with only optional additive
 `expires_at`. Release compares complete expected v1 identity on a final canonical
@@ -121,15 +119,9 @@ read and skips on mismatch or expected expiry, so a successor present before tha
 read survives. Replacement after final revalidation but before protected entry,
 or after final release read but before unlink, remains documented residual risk.
 
-A new-chat send-slot owner uses an additional **cooperative** 300,000 ms
-pre-dispatch cutoff from its own slot acquisition. After asynchronous preparation
-and immediately before entering dispatch it checks that cutoff and the original
-v1 owner fence; a suspended owner cannot promise physical slot release at 300 s.
-Waiters still use their existing maximum 120 s wait and the original 2,100,000 ms
-slot TTL; they do **not** revoke live owners from a `prepared/none/0` snapshot.
-A slot timeout keeps its canonical cause and not-sent waiter identity, and projects
-a stable correlated holder invocation and observation phase to terminal/v1,
-or explicit `unknown` when correlation is not possible.
+A resumed old composer-lock owner cannot release its successor's lock or clear
+the successor's shared draft. The original invocation deadline still bounds
+pre-send work, including callers that proceeded without the slot at the wait cap.
 
 On a dedicated new-chat project tab, the pre-send composer is read before typing;
 a stale nonempty draft is cleared and re-read before the owned marker is inserted.

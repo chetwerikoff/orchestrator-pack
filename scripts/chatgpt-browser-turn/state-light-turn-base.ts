@@ -38,7 +38,6 @@ import {
   wrapOwnedPromptPayload,
 } from './owned-prompt-marker.ts';
 import {
-  acquireStateLightNewChatSendSlot,
   conversationUuidFromUrl,
   ownedConversationIdentityMatches,
   prepareStateLightFreshConversation,
@@ -46,7 +45,6 @@ import {
   projectConversationPrefix,
   recordStateLightAdvisoryWall,
   releaseStateLightFreshConversationClaim,
-  releaseStateLightNewChatSendSlot,
   StateLightNavigationCounter,
   STATE_LIGHT_FRESH_RECOVERY_ATTEMPTS,
   STATE_LIGHT_MAX_TIMEOUT_MS,
@@ -56,7 +54,6 @@ import {
   navigateToProjectConversationIfNeeded,
   readProjectConversationUrl,
   verifyStateLightFreshClaimOwnerFence,
-  verifyStateLightSendSlotOwnerFence,
   waitForConversationUrlAfterSend,
 } from './state-light-fresh-conversation.ts';
 import { configuredProfileKey } from './storage-common.ts';
@@ -2709,13 +2706,21 @@ function renderedPayloadMatches(actual: string | undefined, expected: string): b
   return actual !== undefined && actual.replace(/\s+/gu, '') === expected.replace(/\s+/gu, '');
 }
 
-async function acquireFreshSendLock(profileKey: string, deadlineMs: number): Promise<DomainLock> {
-  while (Date.now() < deadlineMs) {
-    const lock = acquireDomainLock(profileKey, 'fresh-send-composer', 0);
+async function acquireFreshSendLock(profileKey: string, deadlineMs: number): Promise<DomainLock | undefined> {
+  const waitDeadlineMs = Math.min(deadlineMs, Date.now() + 120_000);
+  while (Date.now() < waitDeadlineMs) {
+    const lock = acquireDomainLock(profileKey, 'fresh-send-composer', 0, { maxHoldMs: 90_000 });
     if (lock) return lock;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(1, deadlineMs - Date.now()))));
+    await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(1, waitDeadlineMs - Date.now()))));
   }
-  throw new Error('fresh_send_lock_deadline_exhausted');
+  if (Date.now() >= deadlineMs) throw new Error('fresh_send_lock_deadline_exhausted');
+  return undefined;
+}
+
+function releaseFreshSendLock(lock?: DomainLock): void {
+  try { lock?.release(); } catch (error) {
+    if (!(error instanceof Error) || error.message !== 'lock_ownership_lost') throw error;
+  }
 }
 
 async function clearFreshComposerDraft(page: any): Promise<void> {
@@ -2727,7 +2732,7 @@ async function clearFreshComposerDraft(page: any): Promise<void> {
   } catch { /* Best-effort cleanup must not hide the pre-send failure. */ }
 }
 
-export const __testFreshSend = { acquireFreshSendLock, renderedPayloadMatches, clearFreshComposerDraft };
+export const __testFreshSend = { acquireFreshSendLock, releaseFreshSendLock, renderedPayloadMatches, clearFreshComposerDraft };
 
 async function runTurn(
   args: ParsedTurnArgs,
@@ -2744,18 +2749,17 @@ async function runTurn(
     }, freshCleanup);
     return { ...outcome, result: { ...outcome.result, product_wall_diagnostic: diagnostic } };
   } finally {
-    if (freshCleanup.sendLock) {
-      try {
-        if (freshCleanup.page && !freshCleanup.sendAttempted
-          && isBlankProjectSurfaceUrl(String(freshCleanup.page.url()), freshCleanup.projectUrl ?? '')) {
-          await clearFreshComposerDraft(freshCleanup.page);
-        }
-      } catch {
-        // A lost page must not hide the original pre-send result.
-      } finally {
-        freshCleanup.sendLock.release();
-        freshCleanup.sendLock = undefined;
+    try {
+      if (freshCleanup.page && !freshCleanup.sendAttempted
+        && freshCleanup.sendLock?.isOwned?.() !== false
+        && isBlankProjectSurfaceUrl(String(freshCleanup.page.url()), freshCleanup.projectUrl ?? '')) {
+        await clearFreshComposerDraft(freshCleanup.page);
       }
+    } catch {
+      // A lost page must not hide the original pre-send result.
+    } finally {
+      releaseFreshSendLock(freshCleanup.sendLock);
+      freshCleanup.sendLock = undefined;
     }
   }
 }
@@ -3006,7 +3010,7 @@ async function runTurnCore(
       if (Date.now() >= sendSlotOwnerDeadlineMs) {
         throw new Error('state_light_new_chat_owner_pre_dispatch_deadline_exhausted');
       }
-      if (verifyStateLightSendSlotOwnerFence(profileKey, invocationId) !== 'valid') {
+      if (freshCleanup?.sendLock?.isOwned?.() === false) {
         ownershipForfeited = true;
         throw new Error('state_light_new_chat_send_slot_owner_lost');
       }
@@ -3226,7 +3230,7 @@ async function runTurnCore(
         };
       }
       sendCount += delivery.sendCount;
-      freshCleanup?.sendLock?.release();
+      releaseFreshSendLock(freshCleanup?.sendLock);
       if (freshCleanup) freshCleanup.sendLock = undefined;
       if (delivery.witness === 'owned_stop') ownedStopDeliveryObserved = true;
       afterSend = true;
@@ -3373,8 +3377,8 @@ async function runTurnCore(
     };
 
     if (config.newChat) {
-      sendSlotOwnerDeadlineMs = await acquireStateLightNewChatSendSlot(profileKey, invocationId, config.timeoutMs);
-      try {
+      sendSlotOwnerDeadlineMs = invocationDeadlineMs;
+      {
         assertFreshOwner();
         const returnFreshPrepareFailure = (
           prepared: Awaited<ReturnType<typeof prepareStateLightFreshConversation>>,
@@ -3508,7 +3512,7 @@ async function runTurnCore(
           }
 
           if (sendAuthorized) {
-            if (verifyStateLightSendSlotOwnerFence(profileKey, invocationId) !== 'valid') {
+            if (freshCleanup?.sendLock?.isOwned?.() === false) {
               sendAuthorized = false;
               if (sendCount >= 1) {
                 ownershipForfeited = true;
@@ -3632,7 +3636,7 @@ async function runTurnCore(
             claimed = true;
             break;
           }
-          if (verifyStateLightSendSlotOwnerFence(profileKey, invocationId) !== 'valid') {
+          if (freshCleanup?.sendLock?.isOwned?.() === false) {
             if (sendCount >= 1) {
               ownershipForfeited = true;
               return returnOwnerFenceLostAfterSend(
@@ -3761,10 +3765,6 @@ async function runTurnCore(
               journalWriteFailed,
             ),
           };
-        }
-      } finally {
-        if (!ownershipForfeited) {
-          releaseStateLightNewChatSendSlot(profileKey, invocationId);
         }
       }
     } else {

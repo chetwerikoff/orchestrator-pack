@@ -31,6 +31,7 @@ export interface DomainLock {
   readonly nonce: string;
   readonly phase: 'pre_send' | 'possible_delivery';
   updatePhase(phase: 'pre_send' | 'possible_delivery'): void;
+  isOwned(): boolean;
   release(): void;
 }
 
@@ -158,9 +159,11 @@ function stalePreSend(record: LockRecordV1, staleMs: number): boolean {
     && ownerProvablyDead(record);
 }
 
-function tryReclaim(profileKey: string, key: string, directory: string, staleMs: number): number | null {
+function tryReclaim(profileKey: string, key: string, directory: string, staleMs: number, maxHoldMs?: number): number | null {
+  const reclaimable = (record: LockRecordV1): boolean => stalePreSend(record, staleMs)
+    || (maxHoldMs !== undefined && Date.now() - Date.parse(record.created_at) > maxHoldMs);
   const first = readLock(directory, profileKey, key);
-  if (!first || !stalePreSend(first, staleMs)) return null;
+  if (!first || !reclaimable(first)) return null;
 
   const guard = `${directory}.reclaim`;
   try {
@@ -173,7 +176,7 @@ function tryReclaim(profileKey: string, key: string, directory: string, staleMs:
     if (!current
       || current.nonce !== first.nonce
       || current.generation !== first.generation
-      || !stalePreSend(current, staleMs)) {
+      || !reclaimable(current)) {
       return null;
     }
     rmSync(directory, { recursive: true, force: false });
@@ -204,6 +207,7 @@ function schedulingAdmissionKey(profileKey: string): string {
 
 export interface AcquireDomainLockOptions {
   readonly admissionRetryDeadlineMs?: number;
+  readonly maxHoldMs?: number;
 }
 
 function resolveAdmissionRetryDeadlineMs(
@@ -280,7 +284,7 @@ export function acquireDomainLock(
     const directory = lockDirectory(profileKey, key);
     let record = createLockRecord(profileKey, key, 1);
     if (!createLockDirectory(directory, record)) {
-      const nextGeneration = tryReclaim(profileKey, key, directory, staleMs);
+      const nextGeneration = tryReclaim(profileKey, key, directory, staleMs, options?.maxHoldMs);
       if (nextGeneration === null) return null;
       record = createLockRecord(profileKey, key, nextGeneration);
       if (!createLockDirectory(directory, record)) return null;
@@ -303,6 +307,9 @@ export function acquireDomainLock(
       generation: record.generation,
       nonce: record.nonce,
       phase: record.phase,
+      isOwned() {
+        try { assertOwned(); return true; } catch { return false; }
+      },
       updatePhase(phase) {
         const current = assertOwned();
         record = { ...current, phase, updated_at: new Date().toISOString() };

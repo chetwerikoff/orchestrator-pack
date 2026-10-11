@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { __testFreshSend, __testSendDelivery, __testComposerMutation } from './state-light-turn-base.ts';
+import * as coordination from './coordination.ts';
 import {
   classifyProductWall,
   createFreshIdentityRetention,
@@ -303,10 +304,10 @@ describe('Issue #2497 fresh-send composer serialization', () => {
         .then((lock) => { secondAcquired = true; return lock; });
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect(secondAcquired).toBe(false);
-      first.release();
+      first!.release();
       const second = await secondPending;
       expect(secondAcquired).toBe(true);
-      second.release();
+      second!.release();
     } finally {
       vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
@@ -322,10 +323,52 @@ describe('Issue #2497 fresh-send composer serialization', () => {
       ], env: process.env, encoding: 'utf8', timeoutMs: 5_000 });
       expect(child.exitCode, child.stderr).toBe(0);
       const lock = await __testFreshSend.acquireFreshSendLock('profile-dead-2497', Date.now() + 2_000);
-      lock.release();
+      lock!.release();
     } finally {
       vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('takes over a live stuck owner after 90 seconds without releasing its successor (#2497 c2)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'fresh-send-hung-2497-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    vi.useFakeTimers();
+    try {
+      const first = await __testFreshSend.acquireFreshSendLock('profile-hung-2497', Date.now() + 300_000);
+      expect(first).toBeDefined();
+      expect(() => process.kill(process.pid, 0)).not.toThrow();
+      vi.setSystemTime(Date.now() + 90_001);
+      expect(coordination.acquireDomainLock('profile-hung-2497', 'fresh-send-composer', 0)).toBeNull();
+      const second = coordination.acquireDomainLock('profile-hung-2497', 'fresh-send-composer', 0, { maxHoldMs: 90_000 });
+      expect(second).not.toBeNull();
+      expect(second!.nonce).not.toBe(first!.nonce);
+      expect(first!.isOwned()).toBe(false);
+      __testFreshSend.releaseFreshSendLock(first);
+      expect(second!.isOwned()).toBe(true);
+      second!.release();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('proceeds without the slot after 120 seconds of failed acquisitions (#2497 c3)', async () => {
+    const acquire = vi.spyOn(coordination, 'acquireDomainLock').mockReturnValue(null);
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const waiter = __testFreshSend.acquireFreshSendLock('profile-wait-2497', Date.now() + 300_000)
+        .then((lock) => { settled = true; return lock; });
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      expect(await waiter).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      acquire.mockRestore();
     }
   });
 
@@ -337,7 +380,7 @@ describe('Issue #2497 fresh-send composer serialization', () => {
       try {
         await expect(__testFreshSend.acquireFreshSendLock('profile-deadline-2497', Date.now() + 50))
           .rejects.toThrow('fresh_send_lock_deadline_exhausted');
-      } finally { first.release(); }
+      } finally { first!.release(); }
     } finally {
       vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
