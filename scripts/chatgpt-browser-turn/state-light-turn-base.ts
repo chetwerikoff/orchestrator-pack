@@ -3317,7 +3317,8 @@ async function runTurnCore(
         })) {
         // Only the first click's actual positive non-dispatch action result grants
         // this one optional repeat; an uncertain first action or Enter never does.
-        delivery = await dispatchExisting(Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now()));
+        const repeatWaitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now());
+        if (repeatWaitMs > 0) delivery = await dispatchExisting(repeatWaitMs);
       }
       if (delivery.sendCount === 0) {
         if (browserOrPageDefinitelyLost(page, browser)) {
@@ -3799,7 +3800,7 @@ async function runTurnCore(
         ? Math.min(composerReadinessDeadline(), Date.now() + EXISTING_GENERATION_RESUME_WINDOW_MS)
         : composerReadinessDeadline();
       let composerState = await waitForComposer(page, initialComposerDeadline, true, observeProductWall);
-      if (composerState.cause === 'composer_unavailable' && mayReopenComposer
+      if (composerState.state !== 'ready' && composerState.cause === 'composer_unavailable' && mayReopenComposer
         && !browserOrPageDefinitelyLost(page, browser)
         && readOwnedConversationIdentity(page, chatUrlTarget).matched
         && Date.now() + postReopenReserveMs + MAX_LOCAL_READ_WAIT_MS < invocationDeadlineMs) {
