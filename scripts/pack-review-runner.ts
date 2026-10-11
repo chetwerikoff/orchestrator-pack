@@ -5489,8 +5489,17 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       }
     }
 
+    // An existing, credentialed, same-head GPT verdict with unfinished
+    // delivery must resume its own journal/comment/status channels before
+    // the generic stage-complete success projection can acknowledge the head.
+    // This does not reopen the review stage or grant another source invocation.
+    const incumbentGptDeliveryResume = resumeCandidate?.reviewRound?.reviewer === 'gpt'
+      && authority.terminal?.runId === resumeCandidate.id
+      && authority.currentHeadSha.toLowerCase() === target.headSha.toLowerCase()
+      && resumeCandidate.targetSha.toLowerCase() === target.headSha.toLowerCase();
     if (authority.cycle?.reviewStageComplete === true
-        && authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) {
+        && authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+        && !incumbentGptDeliveryResume) {
       const cycleId = authority.cycle.cycleId;
       const verifyStageCompleteHead = async () => {
         const head = await readProjectionHead();

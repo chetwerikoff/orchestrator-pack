@@ -187,7 +187,14 @@ export async function runPackGptReviewCommand(
     const stageCompleteReuse = result.created === false && result.reused === true
       && result.statusPublished === true && currentHeadPublication
       && (result.reason === 'review_stage_complete' || result.reason === 'terminal_run_exists');
-    if (result.ok === true && (deliveredRound || recoveredRound || stageCompleteReuse)) {
+    // The route name does not select GPT. Native reviewer delivery retains its
+    // incumbent acknowledgement contract; only GPT uses exact-head observation.
+    const nativeDeliveredRound = (result.resolvedReviewer === 'claude' || result.resolvedReviewer === 'codex')
+      && result.created === true && result.reused === false
+      && result.reason === 'completed' && result.httpStatus === 201
+      && result.publicationVerified === undefined
+      && (result.status === 'up_to_date' || result.status === 'commented' || result.status === 'changes_requested');
+    if (result.ok === true && (deliveredRound || recoveredRound || stageCompleteReuse || nativeDeliveredRound)) {
       return { exitCode: 0, result };
     }
 

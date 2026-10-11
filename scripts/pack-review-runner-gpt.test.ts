@@ -1309,7 +1309,12 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
       resolvedReviewerSource: 'legacy-env',
       executedReviewer: 'claude',
       reviewerInvokedForThisRun: true,
+      reason: 'completed',
+      httpStatus: 201,
     });
+    // Native result retains the pre-#2496 acknowledged-delivery shape;
+    // the GPT-only publication proof is not retroactively imposed on Claude.
+    expect(execution.result).not.toHaveProperty('publicationVerified');
     expect(process.env.PACK_REVIEWER).toBe('codex');
     expect(process.env[PACK_REVIEW_BOUND_REVIEWER_ENV]).toBeUndefined();
   });
@@ -4837,14 +4842,29 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
       publicationReason: 'status_not_published:failed_required_status_channel',
     });
     expect(f.statuses.filter((state) => state === 'success')).toHaveLength(1);
-    const recovered = await startPackReview({ ...f.input, fixtureRequiredStatusWriter: writer });
+    const priorRun = getPackReviewRun(String(first.runId), { projectId: 'orchestrator-pack', storeRoot: f.storeRoot });
+    const priorAttempts = priorRun?.reviewRound?.sourceSlots.map((slot) => ({
+      slotId: slot.slotId, invocationId: slot.invocationId, attemptOrdinal: slot.attemptOrdinal,
+    }));
+    expect(priorAttempts).toHaveLength(3);
+    const noNewSourceInvocations = vi.fn(() => { throw new Error('journaled status resume must never resend GPT sources'); });
+    const recovered = await startPackReview({
+      ...f.input,
+      fixtureRequiredStatusWriter: writer,
+      fixtureAfterGptInvocationBound: noNewSourceInvocations,
+    });
     expect(recovered).toMatchObject({
       ok: true, created: false, reused: true, recovered: true,
       runId: first.runId, reason: 'resumed_journaled_delivery',
       publicationVerified: true, publicationHeadSha: HEAD_A, requiredStatusState: 'success',
     });
     expect(f.statuses.filter((state) => state === 'success')).toHaveLength(2);
-    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot: f.storeRoot })).toHaveLength(1);
+    const runs = listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot: f.storeRoot });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.reviewRound?.sourceSlots.map((slot) => ({
+      slotId: slot.slotId, invocationId: slot.invocationId, attemptOrdinal: slot.attemptOrdinal,
+    }))).toEqual(priorAttempts);
+    expect(noNewSourceInvocations).not.toHaveBeenCalled();
   });
 
   it('genuine GPT head drift does not inherit an earlier acknowledged status', async () => {
@@ -4865,4 +4885,57 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
     });
     expect(result).not.toHaveProperty('publicationHeadSha');
   });
+});
+
+describe('Issue #2496 native PR-only command settlement compatibility', () => {
+  it.each(['claude', 'codex'] as const)(
+    'keeps a delivered %s result successful without GPT-only publication proof',
+    async (reviewer) => {
+      const execution = await runPackGptReviewCommand({ prNumber: 1111 }, {
+        env: {}, stderr: { write: () => undefined },
+        startReview: async () => ({
+          ok: true, created: true, reused: false, resolvedReviewer: reviewer,
+          reason: 'completed', status: 'up_to_date', httpStatus: 201,
+          prNumber: 1111, headSha: HEAD_A, runId: `prr-native-${reviewer}`,
+        }),
+      });
+      expect(execution).toMatchObject({
+        exitCode: 0, result: {
+          ok: true, created: true, resolvedReviewer: reviewer,
+          reason: 'completed', status: 'up_to_date',
+        },
+      });
+      expect(execution.result).not.toHaveProperty('publicationVerified');
+    },
+  );
+
+  it.each([
+    ['unselected', undefined, 'completed', 'up_to_date', 201, undefined],
+    ['GPT without status observation', 'gpt', 'completed', 'up_to_date', 201, undefined],
+    ['native failed delivery', 'claude', 'completed_with_delivery_failures', 'up_to_date', 201, undefined],
+    ['native unfinished review', 'codex', 'completed', 'reviewing', 201, undefined],
+    ['native accepted-but-pending', 'codex', 'completed', 'up_to_date', 202, undefined],
+    ['native explicit unverified publication', 'claude', 'completed', 'up_to_date', 201, false],
+  ] as const)(
+    'does not turn %s into a settled terminal result',
+    async (_label, reviewer, reason, status, httpStatus, publicationVerified) => {
+      const execution = await runPackGptReviewCommand({ prNumber: 1111 }, {
+        env: {}, stderr: { write: () => undefined },
+        startReview: async () => ({
+          ok: true, created: true, reused: false,
+          ...(reviewer ? { resolvedReviewer: reviewer } : {}),
+          ...(publicationVerified === undefined ? {} : { publicationVerified }),
+          reason, status, httpStatus,
+          prNumber: 1111, headSha: HEAD_A, runId: 'prr-negative-native-shape',
+        }),
+      });
+      expect(execution).toMatchObject({
+        exitCode: 1, result: {
+          ok: false, created: true, outcome: 'review_not_settled',
+          runnerReason: reason,
+          nextAction: expect.any(String),
+        },
+      });
+    },
+  );
 });
