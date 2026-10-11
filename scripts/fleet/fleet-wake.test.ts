@@ -817,13 +817,25 @@ describe('fleet alarm', () => {
     );
 
     const currentCoordinator: FleetTerminal = { handle: 'term_coord_new', title: 'Cursor coordinator', worktreePath: primary };
-    const currentTerminals = [currentCoordinator];
+    const currentTerminals = [currentCoordinator, terminals[1]!];
     const currentTerminalJson = {
       handle: 'term_coord_new',
       title: 'Cursor coordinator',
       worktreePath: primary,
       incarnationId: 'generation-coord-new',
     };
+    const firstRow = {
+      id: 'msg-1', run_id: 'run-1', to_handle: 'run:run-1', read: 0,
+      subject: 'Need approval', from_handle: 'gone-sender', created_at: '2026-10-06T10:00:00Z',
+    };
+    const eligibleRows = [firstRow, { ...firstRow, id: 'msg-2', subject: 'Another request' }];
+    let inboxMessages = [
+      ...eligibleRows,
+      { ...firstRow, id: 'read-1', read: 1, subject: 'Already read but not necessarily delivered' },
+      { ...firstRow, id: 'read-true', read: true, subject: 'Already read (boolean)' },
+      { ...firstRow, id: 'foreign', to_handle: 'run:another', subject: 'Other recipient' },
+      { ...firstRow, id: 'malformed', subject: '' },
+    ];
     const executor: OrcaExecutor = (args) => {
       if (args[0] === 'terminal' && args[1] === 'list' && args.includes('--include-visual-layouts')) {
         return commandResult(JSON.stringify({
@@ -843,25 +855,29 @@ describe('fleet alarm', () => {
       if (args[0] === 'orchestration' && args[1] === 'inbox' && args.includes('--full')) {
         return commandResult(JSON.stringify({
           ok: true,
-          result: { messages: [{
-            id: 'msg-1', run_id: 'run-1', to_handle: 'run:run-1', read: 0,
-            subject: 'Need approval', from_handle: 'gone-sender', created_at: '2026-10-06T10:00:00Z',
-          }] },
+          result: { messages: inboxMessages },
         }));
       }
       if (args[0] === 'orchestration' && args[1] === 'check' && args.includes('run-1')) {
         return commandResult(JSON.stringify({ ok: false, error: { code: 'consumer_fenced' } }), false);
       }
-      return fakeOrca({ 'term_coord_new': 'idle' }, [], currentTerminals)(args);
+      return fakeOrca({ 'term_coord_new': 'idle', one: 'done\n>' }, [], currentTerminals)(args);
     };
 
     try {
+      const store = new MemoryWakeStore();
+      store.markParkedWakeEvent('mail:gone-sender:msg-2');
+      const settings = config({ projectId: 'leopoker', orchestratorHandle: 'term_coord_new' });
       const observed = await tick({
-        executor,
+        executor, store,
         terminals: currentTerminals,
-        config: config({ projectId: 'leopoker', orchestratorHandle: 'term_coord_new' }),
-        screens: { 'term_coord_new': 'idle' },
+        config: settings,
+        screens: { 'term_coord_new': 'idle', one: 'done\n>' },
       });
+      const alarmText = (calls: readonly string[][]) => sendsTo(calls, 'term_coord_new')
+        .filter((call) => call.includes('--text'))
+        .map((call) => call[call.indexOf('--text') + 1]!)
+        .find((text) => text.startsWith('Fleet alarm (idle):'));
       expect(observed.calls).toContainEqual(['orchestration', 'inbox', '--full', '--limit', '5000', '--json']);
       expect(observed.calls).toContainEqual(['orchestration', 'run-show', '--id', 'run-1', '--json']);
       expect(observed.calls.some((call) => call[0] === 'orchestration' && call[1] === 'check')).toBe(false);
@@ -869,6 +885,38 @@ describe('fleet alarm', () => {
       expect(sendsTo(observed.calls, 'term_coord_new')[0]?.join(' ')).toContain('gone-sender');
       expect(observed.calls.some((call) => call[0] === 'git' || call[0] === 'gh')).toBe(false);
       expect(sendsTo(observed.calls, 'gone-sender')).toHaveLength(0);
+      expect(observed.result).toMatchObject({ state: 'sent', coordinatorState: 'idle', count: 1 });
+      expect(observed.calls.filter((call) => call[0] === 'orchestration' && call[1] === 'inbox')).toHaveLength(1);
+      expect(sendsTo(observed.calls, 'term_coord_new')
+        .filter((call) => call.includes('--text') && call[call.indexOf('--text') + 1]?.startsWith('Wake:'))).toHaveLength(1);
+      expect(alarmText(observed.calls)).toContain('2 eligible unread Run messages');
+      expect(alarmText(observed.calls)).not.toContain('Already read');
+
+      inboxMessages = inboxMessages.map((row) => ({ ...row, read: 1 }));
+      const zero = await tick({ executor, terminals: currentTerminals, config: settings,
+        screens: { 'term_coord_new': 'idle', one: 'done\n>' } });
+      expect(zero.result.state).toBe('sent');
+      expect(alarmText(zero.calls)).toContain('Fleet alarm (idle):');
+      expect(alarmText(zero.calls)).not.toMatch(/eligible unread Run messages?/u);
+      expect(sendsTo(zero.calls, 'term_coord_new')).toEqual([
+        expect.arrayContaining(['--text', '--enter']),
+        ['terminal', 'send', '--terminal', 'term_coord_new', '--enter'],
+      ]);
+
+      inboxMessages = [firstRow];
+      const singular = await tick({ executor, terminals: currentTerminals, config: settings,
+        screens: { 'term_coord_new': 'idle', one: 'done\n>' } });
+      expect(alarmText(singular.calls)).toContain('1 eligible unread Run message');
+      expect(alarmText(singular.calls)).not.toContain('1 eligible unread Run messages');
+
+      inboxMessages = eligibleRows;
+      const quietStore = new MemoryWakeStore();
+      quietStore.markParkedWakeEvent('mail:gone-sender:msg-1');
+      quietStore.markParkedWakeEvent('mail:gone-sender:msg-2');
+      const quiet = await tick({ executor, store: quietStore, terminals: currentTerminals, config: settings,
+        screens: { 'term_coord_new': 'idle', one: 'working\nesc interrupt' } });
+      expect(quiet.result.state).toBe('nothing_stopped');
+      expect(sendsTo(quiet.calls, 'term_coord_new')).toHaveLength(0);
     } finally {
       if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
       else process.env.XDG_STATE_HOME = previousStateHome;
