@@ -341,6 +341,9 @@ export function routePrChecks(realGh, repo, prNumber, cwd, includeAppId = false)
     }
     page += 1;
   }
+  if (totalCount !== null && checkRuns.length < totalCount) {
+    throw new Error(`${REST_ERROR_MARKER}: check-runs pagination incomplete (${checkRuns.length} < ${totalCount})`);
+  }
 
   if (totalCount !== null && totalCount > 1000) {
     throw new Error(`${REST_ERROR_MARKER}: check-runs count exceeds documented suite limit`);

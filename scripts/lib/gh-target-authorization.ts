@@ -1,6 +1,7 @@
 #!/usr/bin/env -S node --experimental-strip-types
 import '../toolchain/native-entrypoint-preflight.ts';
 
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetContext, type TargetContext } from './target-context.ts';
@@ -142,6 +143,67 @@ function repositoryCandidates(argv: readonly string[], env: Readonly<NodeJS.Proc
   return candidates;
 }
 
+function registeredEditEvidenceQuery(): string | null {
+  try {
+    const inventory = JSON.parse(
+      readFileSync(new URL('./graphql-quota-github-read-inventory.json', import.meta.url), 'utf8'),
+    ) as { rows?: Array<{ id?: string; query?: string }> };
+    const matching = inventory.rows?.filter((row) => row.id === 'issue-body-edit-evidence') ?? [];
+    return matching.length === 1 && typeof matching[0]?.query === 'string'
+      ? matching[0].query : null;
+  } catch {
+    return null;
+  }
+}
+
+function registeredEditEvidenceRefusal(
+  argv: readonly string[],
+  selected: string,
+  env: Readonly<NodeJS.ProcessEnv>,
+): string | null {
+  // The registered query's four unique variables have one precise CLI form.
+  // Do not infer an Issue number from arbitrary query text or duplicate flags.
+  if (argv.length !== 10 || argv[0] !== 'api' || argv[1] !== 'graphql') return null;
+  const values = new Map<string, string>();
+  for (let index = 2; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const raw = String(argv[index + 1] ?? '');
+    const equals = raw.indexOf('=');
+    if (equals <= 0) return null;
+    const key = raw.slice(0, equals);
+    const value = raw.slice(equals + 1);
+    if (!['query', 'owner', 'name', 'number'].includes(key) || values.has(key)) return null;
+    if ((key === 'number' ? '-F' : '-f') !== flag) return null;
+    values.set(key, value);
+  }
+  const query = registeredEditEvidenceQuery();
+  if (!query || values.get('query') !== query) return null;
+  const rawNumber = values.get('number') ?? '';
+  if (!/^\d+$/u.test(rawNumber)) return null;
+  const number = Number(rawNumber);
+  if (!Number.isSafeInteger(number) || number <= 0) return null;
+  const owner = values.get('owner') ?? '';
+  const name = values.get('name') ?? '';
+  if (!REPOSITORY_RE.test(owner + '/' + name)) return null;
+  try {
+    if (normalizeRepository(owner + '/' + name) !== selected) return null;
+    if (repositoryCandidates(argv, env).some((candidate) => normalizeRepository(candidate.value) !== selected)) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  return 'registered issue-body-edit-evidence GraphQL is unsupported in target mode. '
+    + 'Closest inventory-authorized CURRENT-BODY-ONLY read for selected repository '
+    + selected + ': `gh issue view ' + number + ' --json body`. '
+    + 'The present REST body does not contain userContentEdits, lastEditedAt, historical '
+    + 'editedAt/diff, or the post-terminal before/after proof required for #2428 '
+    + 'same-head final-cap settlement; it never authorizes same-head settlement. '
+    + 'If edit history is unavailable, a genuine substantive code-bearing strict-descendant '
+    + 'change followed by existing scoped reconciliation is a distinct legal route, '
+    + 'not equivalent history proof or permission for a process-only/fake commit.';
+}
+
 export function authorizeTargetGhInvocation(input: {
   context: Pick<TargetContext, 'repository' | 'defaultBranch'>;
   argv: readonly string[];
@@ -161,7 +223,8 @@ export function authorizeTargetGhInvocation(input: {
   if (input.argv[0] === 'api' && input.argv.some((value, index) => index > 0 && value === 'graphql')) {
     throw new TargetGhAuthorizationError(
       'target-gh-graphql-unsupported',
-      'arbitrary gh api graphql is unsupported in target mode',
+      registeredEditEvidenceRefusal(input.argv, selected, env)
+        ?? 'arbitrary gh api graphql is unsupported in target mode; supply the exact registered selected-target request and a real Issue ID for current-body-only guidance',
     );
   }
 
