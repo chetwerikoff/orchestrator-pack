@@ -2158,7 +2158,6 @@ async function prepareFreshComposerDraft(
   assertOwnerAndPage?: () => void,
 ): Promise<'empty' | 'cleared' | 'unavailable'> {
   assertOwnerAndPage?.();
-  await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), Math.max(1, Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now())), 'fresh_composer_front_timeout');
   const composer = page.locator(COMPOSER_SELECTOR);
   const original = await readComposerTextForSendDelivery(composer, deadlineMs);
   assertOwnerAndPage?.();
@@ -2168,7 +2167,6 @@ async function prepareFreshComposerDraft(
     const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
     if (waitMs <= 0) return 'unavailable';
     assertOwnerAndPage?.();
-    await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), waitMs, 'fresh_composer_front_timeout');
     await composer.fill('', { timeout: waitMs });
     assertOwnerAndPage?.();
   } catch {
@@ -2319,7 +2317,6 @@ async function mutateComposerOrCause(
   insertionContext?: {
     insertionDeadlineMs?: number;
     diagnostic?: ComposerMutationDiagnosticV1;
-    fresh?: boolean;
   },
 ): Promise<PreSendComposerFailureCause | null> {
   const composer = page.locator(COMPOSER_SELECTOR);
@@ -2340,9 +2337,6 @@ async function mutateComposerOrCause(
     }
     return 'composer_mutation_budget_exhausted';
   };
-  if (insertionContext?.fresh) {
-    await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), Math.max(1, remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs)), 'fresh_composer_front_timeout');
-  }
   if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
     // A late readiness read must not open another browser operation after
     // the insertion/invocation budget has expired.
@@ -2361,9 +2355,6 @@ async function mutateComposerOrCause(
       let actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (actionBudgetMs <= 0) return exhausted('budget_before_click');
       await composer.click({ timeout: actionBudgetMs });
-      actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-      if (actionBudgetMs <= 0) return exhausted('budget_before_fill');
-      if (insertionContext?.fresh) await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), actionBudgetMs, 'fresh_composer_front_timeout');
       actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (actionBudgetMs <= 0) return exhausted('budget_before_fill');
       await composer.fill(text, { timeout: actionBudgetMs });
@@ -2386,9 +2377,6 @@ async function mutateComposerOrCause(
     if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
       return exhausted('readiness_before_fill');
     }
-    actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-    if (actionBudgetMs <= 0) return exhausted('budget_before_fill2');
-    if (insertionContext?.fresh) await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), actionBudgetMs, 'fresh_composer_front_timeout');
     actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
     if (actionBudgetMs <= 0) return exhausted('budget_before_fill2');
     await composer.fill(text, { timeout: actionBudgetMs });
@@ -2467,7 +2455,6 @@ async function findOpenConversationPage(
     ) {
       return { contextUsable };
     }
-    await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), MAX_LOCAL_READ_WAIT_MS, 'bring_to_front_timeout');
   } catch {
     return { contextUsable };
   }
@@ -2727,10 +2714,8 @@ function releaseFreshSendLock(lock?: DomainLock): void {
 
 async function clearFreshComposerDraft(page: any): Promise<void> {
   try {
-    await boundedBrowserRead((async () => {
-      await page.bringToFront?.();
-      await page.locator(COMPOSER_SELECTOR).fill('', { timeout: MAX_LOCAL_READ_WAIT_MS });
-    })(), MAX_LOCAL_READ_WAIT_MS, 'fresh_composer_clear_timeout');
+    await boundedBrowserRead(page.locator(COMPOSER_SELECTOR).fill('', { timeout: MAX_LOCAL_READ_WAIT_MS }),
+      MAX_LOCAL_READ_WAIT_MS, 'fresh_composer_clear_timeout');
   } catch { /* Best-effort cleanup must not hide the pre-send failure. */ }
 }
 
@@ -3125,7 +3110,7 @@ async function runTurnCore(
         freshCleanup.page = page;
         freshCleanup.markedPayload = markedPayload;
       }
-      const insertionContext: { insertionDeadlineMs?: number; diagnostic?: ComposerMutationDiagnosticV1; fresh?: boolean } = { fresh: true };
+      const insertionContext: { insertionDeadlineMs?: number; diagnostic?: ComposerMutationDiagnosticV1 } = {};
       const mutationFailure = await mutateComposerOrCause(page, markedPayload, invocationDeadlineMs, insertionContext);
       assertFreshOwner();
       if (mutationFailure) return returnComposerMutationFailure(mutationFailure, insertionContext.diagnostic);
@@ -3134,7 +3119,6 @@ async function runTurnCore(
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       const composer = page.locator(COMPOSER_SELECTOR);
-      await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), Math.max(1, Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now())), 'fresh_composer_front_timeout');
       if (!renderedPayloadMatches(await readComposerTextForSendDelivery(composer, invocationDeadlineMs), markedPayload)) {
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
@@ -3189,7 +3173,6 @@ async function runTurnCore(
       };
       // The composer can change during Send readiness polling. Do not send a
       // different draft as though it were the invocation's marked payload.
-      await boundedBrowserRead(Promise.resolve(page.bringToFront?.()), Math.max(1, Math.min(MAX_LOCAL_READ_WAIT_MS, readinessDeadlineMs - Date.now())), 'fresh_composer_front_timeout');
       if (!renderedPayloadMatches(await readComposerTextForSendDelivery(
         composer, Math.min(invocationDeadlineMs, readinessDeadlineMs),
       ), markedPayload)) throw new Error('ui_contract_mismatch:fresh_owned_payload_changed_before_click');

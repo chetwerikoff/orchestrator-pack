@@ -394,7 +394,7 @@ describe('Issue #2497 fresh-send composer serialization', () => {
     expect(__testFreshSend.renderedPayloadMatches(undefined, payload)).toBe(false);
   });
 
-  it('fronts before reading and filling the fresh composer, then clears a failed draft', async () => {
+  it('reads, fills and clears a failed fresh draft without foregrounding the page (#2497 d)', async () => {
     const actions: string[] = [];
     let text = 'leftover OPKTURN draft';
     const composer = {
@@ -411,13 +411,14 @@ describe('Issue #2497 fresh-send composer serialization', () => {
       locator: () => composer,
     };
     expect(await __testSendDelivery.prepareFreshComposerDraft(page, Date.now() + 2_000)).toBe('cleared');
-    expect(actions.indexOf('front')).toBeLessThan(actions.indexOf('read'));
-    expect(actions[actions.indexOf('fill') - 1]).toBe('front');
-    actions.length = 0;
-    expect(await __testComposerMutation.mutateComposerOrCause(page, 'new draft', Date.now() + 2_000, { fresh: true })).toBeNull();
-    expect(actions[actions.indexOf('fill') - 1]).toBe('front');
+    expect(actions).toContain('read');
+    expect(actions).toContain('fill');
+    expect(actions).not.toContain('front');
+    expect(await __testComposerMutation.mutateComposerOrCause(page, 'new draft', Date.now() + 2_000)).toBeNull();
+    expect(text).toBe('new draft');
     await __testFreshSend.clearFreshComposerDraft(page);
     expect(text).toBe('');
+    expect(actions).not.toContain('front');
   });
 
   it('ignores draft-clear failures', async () => {

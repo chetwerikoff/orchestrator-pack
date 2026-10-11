@@ -490,6 +490,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(acquire).toHaveBeenCalledWith('collision-profile', 'fresh-send-composer', 0, { maxHoldMs: 61_000 });
     expect(acquire.mock.results[0]!.value.release).toHaveBeenCalledTimes(1);
     if (timeout === '61000') expect(turn.composer.fill).toHaveBeenLastCalledWith('', { timeout: 5_000 });
+    expect(turn.page.bringToFront).not.toHaveBeenCalled();
   });
 
   it('sends after the 61-second slot wait cap without a second admission gate (#2497 c3)', async () => {

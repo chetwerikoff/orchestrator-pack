@@ -82,8 +82,10 @@ applies only to the fresh-send composer lock, not other domain locks.
 The lock is released after observed dispatch or after bounded pre-send draft
 cleanup on every exit path. Existing-chat continuations do not take it. The
 legacy send-slot protocol is no longer a canonical fresh-send gate.
-Fresh composer reads and fills front the tab; rendered payload comparisons
-ignore whitespace added by the editor, including around backticked URLs.
+Fresh composer reads, fills and cleanup never foreground the page or raise the
+browser window. The serialized slot suffices without focus emulation unless
+a live failure demonstrates otherwise. Rendered payload comparisons ignore
+whitespace added by the editor, including around backticked URLs.
 
 Prepare attempts are capped (`STATE_LIGHT_FRESH_PREPARE_ATTEMPTS`, currently 3) with
 exponential backoff between attempts instead of hot-looping `page.goto`. A product
