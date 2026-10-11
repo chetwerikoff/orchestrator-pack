@@ -391,7 +391,6 @@ interface FreshComposerCleanupContext {
   page?: any;
   markedPayload?: string;
   projectUrl?: string;
-  staleComposerCleared: boolean;
   sendLock?: DomainLock;
   sendAttempted?: boolean;
 }
@@ -2152,29 +2151,6 @@ async function readFreshStopVisible(page: any, deadlineMs: number): Promise<bool
   }
 }
 
-async function prepareFreshComposerDraft(
-  page: any,
-  deadlineMs: number,
-  assertOwnerAndPage?: () => void,
-): Promise<'empty' | 'cleared' | 'unavailable'> {
-  assertOwnerAndPage?.();
-  const composer = page.locator(COMPOSER_SELECTOR);
-  const original = await readComposerTextForSendDelivery(composer, deadlineMs);
-  assertOwnerAndPage?.();
-  if (original === undefined) return 'unavailable';
-  if (original.trim().length === 0) return 'empty';
-  try {
-    const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
-    if (waitMs <= 0) return 'unavailable';
-    assertOwnerAndPage?.();
-    await composer.fill('', { timeout: waitMs });
-    assertOwnerAndPage?.();
-  } catch {
-    return 'unavailable';
-  }
-  return (await readComposerTextForSendDelivery(composer, deadlineMs))?.trim() === '' ? 'cleared' : 'unavailable';
-}
-
 async function waitForFreshSendButton(
   page: any,
   sendButton: any,
@@ -2729,7 +2705,7 @@ async function runTurn(
   freshCleanup?: FreshComposerCleanupContext,
 ): Promise<TurnRunOutcome> {
   let diagnostic: ProductWallDiagnostic = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
-  freshCleanup ??= { staleComposerCleared: false };
+  freshCleanup ??= {};
   try {
     const outcome = await runTurnCore(args, recoveryHooks, entryLivenessHeartbeat, heartbeatSchedulerReady, (value) => {
       if (value.matched_text !== 'none') diagnostic = value;
@@ -3092,19 +3068,7 @@ async function runTurnCore(
           ),
         };
       }
-      const draft = await prepareFreshComposerDraft(page, Math.min(invocationDeadlineMs, Date.now() + MAX_LOCAL_READ_WAIT_MS * 2), assertFreshOwner);
       assertFreshOwner();
-      if (draft === 'unavailable') {
-        incident('invocation_blocker', 'fresh_composer_draft_unreadable', 'preserve_page');
-        return {
-          page, browser, cleanupAction: 'preserve',
-          result: compactResult(
-            'ui_contract_mismatch', 'invocation', 'fresh_composer_draft_unreadable',
-            invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed,
-          ),
-        };
-      }
-      if (draft === 'cleared' && freshCleanup) freshCleanup.staleComposerCleared = true;
       requireFreshSendReserve(deriveComposerInsertionBudgetMs(markedPayload) + FRESH_SEND_PREPARE_RESERVE_MS);
       if (freshCleanup) {
         freshCleanup.page = page;
@@ -5505,7 +5469,6 @@ export const __testSendDelivery = {
   dispatchStateLightSendAndObserveDelivery,
   affirmativePreActionabilityTimeout,
   waitForFreshSendButton,
-  prepareFreshComposerDraft,
 };
 
 export type StateLightTurnDependencies = {
@@ -5541,7 +5504,7 @@ export async function runStateLightTurn(
   }
 
   let heartbeatScheduler: TurnScopedHeartbeatScheduler | undefined;
-  const freshCleanup: FreshComposerCleanupContext = { staleComposerCleared: false };
+  const freshCleanup: FreshComposerCleanupContext = {};
   const outcome = dependencies.runTurn
     ? await dependencies.runTurn(args)
     : await runTurn(
@@ -5554,10 +5517,6 @@ export async function runStateLightTurn(
   try {
     const augmented: TurnRunOutcome = {
       ...outcome,
-      result: {
-        ...outcome.result,
-        ...(freshCleanup.staleComposerCleared ? { stale_composer_cleared: true as const } : {}),
-      },
       ...(freshCleanup.page && outcome.page === freshCleanup.page && freshCleanup.markedPayload
         ? { ownedTypedPayload: freshCleanup.markedPayload } : {}),
       ...(freshCleanup.page && outcome.page === freshCleanup.page && freshCleanup.projectUrl

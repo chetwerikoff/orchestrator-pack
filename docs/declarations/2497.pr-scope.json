@@ -3,6 +3,7 @@
   "issue_number": 2497,
   "declared_paths": [
     "docs/declarations/2497.pr-scope.json",
+    "scripts/chatgpt-browser-turn/contracts.ts",
     "scripts/chatgpt-browser-turn/coordination.ts",
     "scripts/chatgpt-browser-turn/README.md",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",

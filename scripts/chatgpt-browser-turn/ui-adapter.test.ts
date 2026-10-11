@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { runProcessSync } from '../kernel/subprocess.ts';
-import { __testFreshSend, __testSendDelivery, __testComposerMutation } from './state-light-turn-base.ts';
+import { __testFreshSend, __testComposerMutation } from './state-light-turn-base.ts';
 import * as coordination from './coordination.ts';
 import {
   classifyProductWall,
@@ -394,7 +394,7 @@ describe('Issue #2497 fresh-send composer serialization', () => {
     expect(__testFreshSend.renderedPayloadMatches(undefined, payload)).toBe(false);
   });
 
-  it('reads, fills and clears a failed fresh draft without foregrounding the page (#2497 d)', async () => {
+  it('replaces a stale draft and clears a failed payload without foregrounding (#2497 d)', async () => {
     const actions: string[] = [];
     let text = 'leftover OPKTURN draft';
     const composer = {
@@ -410,12 +410,9 @@ describe('Issue #2497 fresh-send composer serialization', () => {
       bringToFront: async () => { actions.push('front'); },
       locator: () => composer,
     };
-    expect(await __testSendDelivery.prepareFreshComposerDraft(page, Date.now() + 2_000)).toBe('cleared');
-    expect(actions).toContain('read');
-    expect(actions).toContain('fill');
-    expect(actions).not.toContain('front');
     expect(await __testComposerMutation.mutateComposerOrCause(page, 'new draft', Date.now() + 2_000)).toBeNull();
     expect(text).toBe('new draft');
+    expect(actions).toContain('fill');
     await __testFreshSend.clearFreshComposerDraft(page);
     expect(text).toBe('');
     expect(actions).not.toContain('front');

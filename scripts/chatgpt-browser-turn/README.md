@@ -125,10 +125,10 @@ A resumed old composer-lock owner cannot release its successor's lock or clear
 the successor's shared draft. The original invocation deadline still bounds
 pre-send work, including callers that proceeded without the slot at the wait cap.
 
-On a dedicated new-chat project tab, the pre-send composer is read before typing;
-a stale nonempty draft is cleared and re-read before the owned marker is inserted.
-Only positive evidence records `stale_composer_cleared: true` in terminal/v1.
-Prompt bytes, stale draft bytes and sibling tabs never enter that diagnostic.
+On a dedicated new-chat project tab, `composer.fill(payload)` directly replaces
+the draft. There is no draft pre-check, separate stale clear, or unreadable-draft
+failure result. A pre-send failure still performs bounded best-effort draft clear
+before releasing the slot or preserving the page.
 The full **60 s Send-readiness reserve** sits inside the original invocation
 timeout, separately from navigation/cleanup/insertion; insufficient remaining
 time ends safely before typing. Two 30 s readiness **maxima**, not sleeps, click
