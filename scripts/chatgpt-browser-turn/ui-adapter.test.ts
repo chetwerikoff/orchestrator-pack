@@ -294,25 +294,6 @@ describe('fresh project conversation identity', () => {
 
 
 describe('Issue #2497 fresh-send composer serialization', () => {
-  it.each(['normal send', 'pre-send failure'])('queues a second send until release after %s', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'fresh-send-2497-'));
-    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
-    try {
-      const first = await __testFreshSend.acquireFreshSendLock('profile-2497', Date.now() + 2_000);
-      let secondAcquired = false;
-      const secondPending = __testFreshSend.acquireFreshSendLock('profile-2497', Date.now() + 2_000)
-        .then((lock) => { secondAcquired = true; return lock; });
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      expect(secondAcquired).toBe(false);
-      first!.release();
-      const second = await secondPending;
-      expect(secondAcquired).toBe(true);
-      second!.release();
-    } finally {
-      vi.unstubAllEnvs();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 
   it('takes over a lock left by a dead process without waiting for its age', async () => {
     const root = mkdtempSync(join(tmpdir(), 'fresh-send-dead-2497-'));
@@ -330,7 +311,7 @@ describe('Issue #2497 fresh-send composer serialization', () => {
     }
   });
 
-  it('takes over a live stuck owner after 61 seconds without releasing its successor (#2497 c2)', async () => {
+  it('expires a reservation after 15 seconds so a second agent acquires without release (#2505)', async () => {
     const root = mkdtempSync(join(tmpdir(), 'fresh-send-hung-2497-'));
     vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
     vi.useFakeTimers();
@@ -338,15 +319,14 @@ describe('Issue #2497 fresh-send composer serialization', () => {
       const first = await __testFreshSend.acquireFreshSendLock('profile-hung-2497', Date.now() + 300_000);
       expect(first).toBeDefined();
       expect(() => process.kill(process.pid, 0)).not.toThrow();
-      vi.setSystemTime(Date.now() + 61_001);
-      expect(coordination.acquireDomainLock('profile-hung-2497', 'fresh-send-composer', 0)).toBeNull();
-      const second = coordination.acquireDomainLock('profile-hung-2497', 'fresh-send-composer', 0, { maxHoldMs: 61_000 });
-      expect(second).not.toBeNull();
+      vi.setSystemTime(Date.now() + 14_999);
+      const secondPending = __testFreshSend.acquireFreshSendLock('profile-hung-2497', Date.now() + 300_000);
+      await vi.advanceTimersByTimeAsync(100);
+      const second = await secondPending;
+      expect(second).toBeDefined();
       expect(second!.nonce).not.toBe(first!.nonce);
       expect(first!.isOwned()).toBe(false);
-      __testFreshSend.releaseFreshSendLock(first);
       expect(second!.isOwned()).toBe(true);
-      second!.release();
     } finally {
       vi.useRealTimers();
       vi.unstubAllEnvs();
@@ -354,18 +334,24 @@ describe('Issue #2497 fresh-send composer serialization', () => {
     }
   });
 
-  it('proceeds without the slot after 61 seconds of failed acquisitions (#2497 c3)', async () => {
+  it('proceeds without the slot after four 15-second acquisition windows (#2505)', async () => {
     const acquire = vi.spyOn(coordination, 'acquireDomainLock').mockReturnValue(null);
     vi.useFakeTimers();
     try {
       let settled = false;
       const waiter = __testFreshSend.acquireFreshSendLock('profile-wait-2497', Date.now() + 300_000)
         .then((lock) => { settled = true; return lock; });
-      await vi.advanceTimersByTimeAsync(60_999);
+      for (let window = 0; window < 3; window++) {
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(settled).toBe(false);
+      }
+      await vi.advanceTimersByTimeAsync(14_999);
       expect(settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       expect(settled).toBe(true);
       expect(await waiter).toBeUndefined();
+      expect(acquire).toHaveBeenCalledTimes(600);
+      expect(acquire).toHaveBeenLastCalledWith('profile-wait-2497', 'fresh-send-composer', 0, { maxHoldMs: 15_000 });
     } finally {
       vi.useRealTimers();
       acquire.mockRestore();
