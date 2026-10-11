@@ -643,10 +643,10 @@ describe('state-light fresh conversation collision recovery', () => {
       name: 'TimeoutError',
     }));
     const outcome = await runNewChatTurn(turn.page, '/tmp/retry-unproven-2487.txt', '90000', invocationId);
-    expect(outcome.result).toMatchObject({ state: 'send_failed', send_count: 0, send_attempted: true });
+    expect(outcome.result).toMatchObject({ state: 'send_failed', send_count: 0, send_attempted: true, cleanup: 'confirmed' });
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.composer.fill).not.toHaveBeenLastCalledWith('');
-    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(turn.page.close).toHaveBeenCalledTimes(1);
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
   });
 
@@ -693,7 +693,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.getSends()).toBe(0);
     expect(turn.composer.fill).not.toHaveBeenLastCalledWith('', expect.anything());
-    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(turn.page.close).toHaveBeenCalledTimes(1);
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
   });
 
@@ -732,7 +732,7 @@ describe('state-light fresh conversation collision recovery', () => {
       expectPossibleEffect(outcome.result);
       expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
       expect(turn.getSends()).toBe(0);
-      expect(turn.page.close).not.toHaveBeenCalled();
+      expect(turn.page.close).toHaveBeenCalledTimes(1);
       expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
     },
   );
@@ -751,7 +751,8 @@ describe('state-light fresh conversation collision recovery', () => {
       turn.page, join(stateDir, invocationId + '-page-identity.txt'), '90000', invocationId,
     );
     expect(outcome.result).toMatchObject({
-      send_count: 0, send_attempted: true, cause: 'fresh_conversation_surface_unavailable',
+      state: 'ui_contract_mismatch', send_count: 0, send_attempted: true,
+      cause: 'fresh_conversation_surface_unavailable', cleanup: 'skipped',
     });
     expectPossibleEffect(outcome.result);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
@@ -799,7 +800,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expectPossibleEffect(outcome.result);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
     expect(turn.getSends()).toBe(0);
-    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(turn.page.close).toHaveBeenCalledTimes(1);
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
   });
 
@@ -828,7 +829,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expectPossibleEffect(outcome.result);
     expect(outcome.result.cause).not.toBe('fresh_conversation_landing_mismatch');
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
-    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(turn.page.close).toHaveBeenCalledTimes(1);
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase)
       .toMatch(/sent_unbound|sent_unharvested/);
   });
@@ -858,7 +859,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result.poll_count).toBeGreaterThan(0);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
     expect(turn.getSends()).toBe(0);
-    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(turn.page.close).toHaveBeenCalledTimes(1);
     expect(turn.composer.fill).not.toHaveBeenLastCalledWith('', expect.anything());
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase)
       .toMatch(/sent_unbound|sent_unharvested/);
@@ -3026,7 +3027,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
       state: 'no_reply',
       cause: 'observation_exhausted_no_resend',
       send_count: 1,
-      cleanup: 'skipped',
+      cleanup: 'confirmed',
     });
     expect(outcome.result.incidents).toContain('observation_exhausted');
     expect(ownedStop, JSON.stringify(outcome)).not.toHaveBeenCalled();
@@ -3037,7 +3038,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     ]);
     expect(sends).toBe(1);
     expect(foreignStop).not.toHaveBeenCalled();
-    expect(ownedClose).not.toHaveBeenCalled();
+    expect(ownedClose).toHaveBeenCalledTimes(1);
     expect(foreignClose).not.toHaveBeenCalled();
   });
 
@@ -3328,7 +3329,8 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
           });
           expect(existsSync(output)).toBe(false);
         }
-        expect(turn.page.close).not.toHaveBeenCalled();
+        if (closed) expect(turn.page.close).not.toHaveBeenCalled();
+        else expect(turn.page.close).toHaveBeenCalledTimes(1);
         expect(foreignClose).not.toHaveBeenCalled();
         expect(foreignStop).not.toHaveBeenCalled();
       }
