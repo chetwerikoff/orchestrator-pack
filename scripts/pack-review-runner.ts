@@ -1655,10 +1655,14 @@ async function findJournaledDeliveryResumeCandidate(options: {
     if (!identity.ok || identity.slug !== options.repoSlug
       || !hasCredentialedGptSourceAuthority(candidate)) continue;
     if (packReviewDeliveryNeedsResume(candidate)
-        || candidate.deliveryOutcomes.requiredStatus?.state === 'failed') {
+        || (candidate.reviewRound?.reviewer === 'gpt'
+          && candidate.deliveryOutcomes.requiredStatus?.state === 'failed')) {
       repositoryBoundCandidates.push(candidate);
       continue;
     }
+    // Only GPT scoped-reprojection is part of this Issue. Existing native
+    // reviewer status/no-retry behavior remains unchanged.
+    if (candidate.reviewRound?.reviewer !== 'gpt') continue;
     // A successful local ACK can be overwritten on GitHub. Only reopen status
     // observation on the already-authoritative journaled GPT run and exact head.
     const authority = readPackReviewAuthority(options.prNumber, { storeRoot: options.storeRoot });
@@ -3738,6 +3742,8 @@ async function observePackReviewVerdictDelivery(options: {
   input: StartInput; projectId: string; storeRoot: string; runId: string;
   prNumber: number; headSha: string; repoSlug: string; sourceRepoRoot: string;
   readHead: () => Promise<string>; writeRequiredStatus: PackReviewRequiredStatusWriter;
+  /** An incumbent journaled resume, not a just-failed first delivery, owns retry. */
+  resumeFailedStatus?: boolean;
 }): Promise<{ verified: boolean; reason: string; requiredStatusState?: 'pending' | 'success' | 'failure' }> {
   const unresolved = (reason: string) => ({ verified: false as const, reason });
   const load = () => getPackReviewRun(options.runId, {
@@ -3783,6 +3789,14 @@ async function observePackReviewVerdictDelivery(options: {
   catch { return unresolved('status_unverified:exact_head_status_read_failed'); }
   if (!(await current())) return unresolved('status_not_published:head_changed_during_status_read');
   if (observed !== requiredStatusState) {
+    // A failed first POST is reported, not silently retried in the same start.
+    // The next authorized PR-led journaled resume can restore it and observe
+    // a fresh exact-head POST. An ACK followed by an observed overwritten
+    // status may already be repaired on this first pass.
+    if (run.deliveryOutcomes.requiredStatus?.state === 'failed'
+        && options.resumeFailedStatus !== true) {
+      return unresolved('status_not_published:failed_required_status_channel');
+    }
     try {
       const restored = await restorePackReviewAuthoritativeRequiredStatus({
         run, projectId: options.projectId, storeRoot: options.storeRoot,
@@ -5881,6 +5895,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
           repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug, headSha: target.headSha, request,
         })),
+        resumeFailedStatus: true,
       });
       const afterConfirmation = readPackReviewAuthority(target.prNumber, authorityOptions);
       if (!afterConfirmation || afterConfirmation.terminal?.runId !== resumeCandidate.id) {
@@ -5904,14 +5919,18 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       const runs = listPackReviewRuns({ projectId, storeRoot });
       if (claimLease) await claimLease.release('run_started', runs);
       return {
-        ok: confirmed.verified,
+        // Accepted/recovered command != verified current-head publication.
+        // Preserve the historical runner acknowledgement for old callers,
+        // while the public command/manager require publicationVerified.
+        ok: true,
         created: false,
         reused: true,
         recovered: true,
-        reason: confirmed.verified ? 'resumed_journaled_delivery' : confirmed.reason,
+        reason: 'resumed_journaled_delivery',
         ...reviewerProvenanceReceipt(resumeCandidate),
         deliveryReason: resumed.reason,
         publicationVerified: confirmed.verified,
+        ...(confirmed.verified ? {} : { publicationReason: confirmed.reason }),
         ...(confirmed.verified ? {
           publicationHeadSha: target.headSha,
           requiredStatusState: confirmed.requiredStatusState,
@@ -6350,11 +6369,14 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         const runs = listPackReviewRuns({ projectId, storeRoot });
         if (claimLease) await claimLease.release('run_started', runs);
         return {
-          ok: false,
+          // A competing reconciler owns the same run, not a new verdict.
+          // Preserve accepted/recovered while refusing publication authority.
+          ok: true,
           created: true,
           reused: false,
           recovered: true,
-          reason: published ? 'concurrent_reconcile_requires_status_observation' : 'concurrent_reconcile_owns_delivery',
+          reason: published ? 'concurrent_reconcile_settled' : 'concurrent_reconcile_owns_delivery',
+          publicationVerified: false,
           nextAction: 'observe the journal, GitHub comment and exact current-head status via scoped reconcile; do not start another round',
           prNumber: target.prNumber,
           headSha: target.headSha,
@@ -6692,17 +6714,20 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       (getPackReviewRun(run.id, { projectId, storeRoot }) ?? run).reviewRound,
     );
     return {
-      ok: confirmation.verified,
+      // Preserve the existing accepted-run shape without promoting it to
+      // published review. Exact-head delivery truth is separate and explicit.
+      ok: true,
       created: true,
       reused: false,
-      reason: confirmation.verified ? 'completed' : confirmation.reason,
+      reason: delivered.reason,
       deliveryReason: delivered.reason,
+      publicationVerified: confirmation.verified,
+      ...(confirmation.verified ? {} : { publicationReason: confirmation.reason }),
       ...reviewerProvenanceReceipt(run),
       runId: run.id,
       prNumber: target.prNumber,
       headSha: target.headSha,
       status: delivered.status,
-      publicationVerified: confirmation.verified,
       ...(confirmation.verified ? {
         publicationHeadSha: target.headSha,
         requiredStatusState: confirmation.requiredStatusState,

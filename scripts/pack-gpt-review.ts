@@ -121,7 +121,7 @@ export function parsePackGptReviewArgs(argv: readonly string[]): PackGptReviewOp
 function reviewNextStep(result: Record<string, unknown>, prNumber: number): string {
   const supplied = trim(result.nextAction);
   if (supplied) return supplied;
-  const reason = trim(result.runnerReason) || trim(result.reason);
+  const reason = trim(result.publicationReason) || trim(result.runnerReason) || trim(result.reason);
   if (reason === 'required_ci_not_green_for_current_head') {
     return `inspect the exact current PR #${prNumber} required CI, then retry the PR-led review only after green checks`;
   }
@@ -130,6 +130,9 @@ function reviewNextStep(result: Record<string, unknown>, prNumber: number): stri
   }
   if (reason.includes('journal_write_failed')) {
     return `inspect the persisted run journal for PR #${prNumber} and use its incumbent journal/resume recovery; do not treat the verdict as published`;
+  }
+  if (reason.includes('review_comment_not_published')) {
+    return `observe the existing PR #${prNumber} reviewer COMMENT and use incumbent comment reconciliation/resume; do not blindly duplicate a possibly accepted post`;
   }
   if (reason.includes('status_not_published') || reason.includes('status_unverified')) {
     return `read the current PR #${prNumber} head and required status, then use the incumbent PR-led projection or scoped reconcile when authorized`;
@@ -191,6 +194,7 @@ export async function runPackGptReviewCommand(
     const prNumber = Number.isSafeInteger(result.prNumber) && Number(result.prNumber) > 0
       ? Number(result.prNumber) : options.prNumber;
     const runnerReason = trim(result.reason) || 'unknown_runner_reason';
+    const publicationReason = trim(result.publicationReason);
     return {
       exitCode: 1,
       result: {
@@ -199,7 +203,7 @@ export async function runPackGptReviewCommand(
         created: result.created === true,
         reused: Boolean(result.reused),
         outcome: result.created === true ? 'review_not_settled' : 'review_not_started',
-        reason: result.created === true ? runnerReason : 'review_not_started',
+        reason: result.created === true ? (publicationReason || runnerReason) : 'review_not_started',
         runnerReason,
         prNumber,
         ...(trim(result.headSha) ? { headSha: trim(result.headSha) } : {}),

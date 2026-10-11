@@ -2358,14 +2358,15 @@ describe('Issue #2496 r03 exact-head review delivery', () => {
       fixtureRequiredStatusReader: async () => undefined,
     });
     expect(result).toMatchObject({
-      ok: false, created: true, reason: 'status_not_published:current_head_status_unconfirmed',
+      ok: true, created: true, reason: 'completed',
+      publicationReason: 'status_not_published:current_head_status_unconfirmed',
       publicationVerified: false, nextAction: expect.any(String),
     });
     // An acknowledged POST is not a verified latest GitHub status.
     expect(f.writes.filter((row) => row.state === 'success')).toHaveLength(2);
   });
 
-  it('status-failed-comment-success-reposts', async () => {
+  it('status-failed-comment-success-distinct', async () => {
     const f = fixture(24963);
     let failed = false;
     const result = await startPackReview({
@@ -2380,12 +2381,17 @@ describe('Issue #2496 r03 exact-head review delivery', () => {
       },
     });
     expect(result).toMatchObject({
-      ok: true, publicationVerified: true, requiredStatusState: 'success',
+      // A runner action can be accepted while external publication is unproven.
+      ok: true, reason: 'completed_with_delivery_failures', publicationVerified: false,
+      publicationReason: 'status_not_published:failed_required_status_channel',
+      nextAction: expect.any(String),
     });
     expect(failed).toBe(true);
-    expect(f.writes.filter((row) => row.state === 'success')).toHaveLength(2);
+    // A failed first status POST is not blindly retried in the same invocation.
+    // Only the incumbent later authorized PR-led resume owns that retry.
+    expect(f.writes.filter((row) => row.state === 'success')).toHaveLength(1);
     const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot: f.input.storeRoot });
-    expect(run?.deliveryOutcomes.requiredStatus?.state).toBe('succeeded');
+    expect(run?.deliveryOutcomes.requiredStatus?.state).toBe('failed');
   });
 
   it('status-post-late-ack-restores-or-unresolved', async () => {
@@ -2419,8 +2425,8 @@ describe('Issue #2496 r03 exact-head review delivery', () => {
       },
     });
     expect(result).toMatchObject({
-      ok: false, publicationVerified: false,
-      reason: expect.stringContaining('status_not_published'),
+      ok: true, publicationVerified: false,
+      publicationReason: expect.stringContaining('status_not_published'),
     });
   });
 });

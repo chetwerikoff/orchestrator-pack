@@ -1183,8 +1183,11 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
         ok: true,
         created: true,
         reused: false,
+        reason: 'completed',
         prNumber: 1111,
         headSha: HEAD_A,
+        publicationHeadSha: HEAD_A,
+        publicationVerified: true,
         runId: `prr-session-${starts.length}`,
         status: 'up_to_date',
       };
@@ -1210,6 +1213,9 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
 
     expect(bound.exitCode).toBe(0);
     expect(unbound.exitCode).toBe(0);
+    expect(bound.result).toMatchObject({
+      publicationVerified: true, publicationHeadSha: HEAD_A, reason: 'completed',
+    });
     expect(starts[0]).toMatchObject({
       prNumber: 1111,
       sessionId: 'leopoker-mgr-145',
@@ -4692,5 +4698,27 @@ describe('Issue #2496 r03 public GPT command settlement', () => {
       });
       expect(result.exitCode).toBe(verified ? 0 : 1);
     }
+  });
+
+  it('retains a distinct publication failure even when the runner accepted delivery work', async () => {
+    const result = await runPackGptReviewCommand({ prNumber: 2496 }, {
+      env: {}, stderr: { write: () => undefined },
+      startReview: async () => ({
+        ok: true, created: true, reason: 'completed_with_delivery_failures',
+        publicationVerified: false,
+        publicationReason: 'review_comment_not_published',
+        prNumber: 2496, headSha: HEAD_A, runId: 'prr-comment-uncertain',
+        status: 'up_to_date',
+      }),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.result).toMatchObject({
+      ok: false, created: true, outcome: 'review_not_settled',
+      reason: 'review_comment_not_published',
+      runnerReason: 'completed_with_delivery_failures',
+      runId: 'prr-comment-uncertain',
+      headSha: HEAD_A,
+      nextAction: expect.stringContaining('do not blindly duplicate'),
+    });
   });
 });
