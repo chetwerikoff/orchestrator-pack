@@ -115,6 +115,7 @@ import {
   packReviewDeliveryNeedsResume,
   packReviewJournaledPayload,
   packReviewRequiredStatusNeedsStaleReconciliation,
+  packReviewRequiredStatusStaleReconciliationComplete,
   packReviewRequiredStatusProjectionKey,
   publishPackReviewRequiredStatus,
   recordMalformedPackReviewStatus,
@@ -4607,6 +4608,41 @@ export async function reconcileStalePackReviewRuns(
         && recoveredSnapshot.failureReason?.startsWith('gpt_source_non_complete:') === true
         && recoveryCoverage?.kind === 'empty'
         && noJudgmentBudgetOutcome(recoveredSnapshot, storeRoot) !== null;
+      // The required error status was already repaired on this terminal run.
+      // Continue source observation above, but do not misreport the persisted
+      // exact-head publication or write it again while coverage stays 1/3.
+      if (needsGptSourceRecovery
+          && !failedPartialStatusNeedsRepair
+          && recoveredSnapshot.failureReason?.startsWith('gpt_sources_incomplete_after_grace:') === true
+          && recoveryCoverage?.kind === 'partial'
+          && packReviewRequiredStatusStaleReconciliationComplete(recoveredSnapshot)) {
+        let verified = false;
+        try {
+          const currentHead = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
+          const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
+          verified = currentHead === run.targetSha.toLowerCase()
+            && authority?.currentHeadSha.toLowerCase() === currentHead
+            && authority.cycle?.cycleId === run.reviewCycleId
+            && !authority.terminal
+            && resolvePackReviewRunOrder(await readBoundRecords(), run).kind === 'none';
+        } catch {
+          // No current-head evidence means no certified required-status result.
+        }
+        if (verified) {
+          results.push({
+            runId: run.id,
+            terminalized: false,
+            statusReconciled: true,
+            hydratedSourceCount: recovery.hydratedSourceCount,
+            usableSourceCount: recovery.usableSourceCount,
+            graceExpired: recovery.graceExpired,
+            reason: 'status_already_reconciled',
+            coverage: recoveryCoverage,
+            nextAction: recovery.nextAction ?? 'observe unresolved source slots before any eligible retry',
+          });
+          continue;
+        }
+      }
       if (needsGptSourceRecovery && !stillZeroJudgment && !failedPartialStatusNeedsRepair) {
         results.push({
           runId: run.id,
