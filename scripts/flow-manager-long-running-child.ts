@@ -803,57 +803,91 @@ async function provenOwnedTab(
   }
 }
 
-async function persistedTerminalEvidence(
+interface FinalObservationProjection {
+  readonly record: StateLightTurnObservationRecord;
+  readonly cdp: string;
+  readonly delivery: DeliveryState;
+  readonly replyDiagnostics?: Record<string, unknown>;
+}
+
+// One state-light observation and one final-primary integrity check for both terminal paths.
+// A parsed result must correlate with both launch-selected identities before using its primary.
+function finalObservationProjection(
   config: LaunchConfig,
   heartbeatDiagnostics?: Record<string, unknown>,
-): Promise<Partial<TerminalEnvelope> | null> {
-  const invocation = childOption(config, '--invocation-id');
+  candidate?: Pick<ParsedTurnResult, 'invocation_id' | 'configured_profile_key'>,
+): FinalObservationProjection | null {
+  const invocationId = childOption(config, '--invocation-id');
   const profile = childOption(config, '--profile');
   const cdp = childOption(config, '--cdp');
-  if (!invocation || !profile || !cdp) return null;
+  if (!invocationId || !profile || !cdp) return null;
+  const profileKey = configuredProfileKey(profile, cdp);
   let record: StateLightTurnObservationRecord;
   try {
-    record = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocation);
+    record = readStateLightTurnObservation(profileKey, invocationId);
   } catch {
     return null;
   }
-  const locator = (record.send_count ?? 0) >= 1 ? await provenOwnedTab(config, record, cdp) : undefined;
+  if (candidate && (
+    candidate.invocation_id !== invocationId
+    || candidate.invocation_id !== record.invocation_id
+    || candidate.configured_profile_key !== profileKey
+    || candidate.configured_profile_key !== record.profile_key
+  )) return null;
+
   const harvestedPrimary = record.phase === 'harvested' && Boolean(record.primary);
   const preDispatch = (record.phase === 'prepared' || record.phase === 'not_sent')
     && record.transition_reason !== 'send_delivery_unproven'
     && (record.send_count === undefined || record.send_count === 0);
 
-  let projectedHeartbeat = heartbeatDiagnostics;
-  if (record.phase === 'harvested' && heartbeatDiagnostics) {
-    // A final harvest supersedes reply advisories from an earlier accepted heartbeat.
-    // Preserve its liveness fields, but never publish stale length/hash as the final reply.
-    const liveness = { ...heartbeatDiagnostics };
-    delete liveness.last_reply_length;
-    delete liveness.last_reply_sha256_head;
-    projectedHeartbeat = liveness;
+  let replyDiagnostics = heartbeatDiagnostics;
+  if (record.phase === 'harvested' && (heartbeatDiagnostics || candidate)) {
+    // Keep accepted liveness; remove stale reply advisories before checking final bytes.
+    // The successful result can receive verified reply length without a heartbeat.
+    const retained: Record<string, unknown> = { ...(heartbeatDiagnostics ?? {}) };
+    delete retained.last_reply_length;
+    delete retained.last_reply_sha256_head;
+    let verified = false;
     if (record.primary) {
       try {
         const bytes = readFileSync(record.primary.target);
         const sha256 = createHash('sha256').update(bytes).digest('hex');
         if (bytes.byteLength === record.primary.byte_length && sha256 === record.primary.sha256) {
-          const reply = bytes.toString('utf8');
-          projectedHeartbeat = {
-            ...liveness,
-            last_reply_length: reply.length,
-            ...(typeof heartbeatDiagnostics.last_reply_sha256_head === 'string'
-              ? { last_reply_sha256_head: reply.length ? sha256.slice(0, 16) : '' } : {}),
-          };
+          const replyLength = bytes.toString('utf8').length;
+          retained.last_reply_length = replyLength;
+          if (typeof heartbeatDiagnostics?.last_reply_sha256_head === 'string') {
+            retained.last_reply_sha256_head = replyLength ? sha256.slice(0, 16) : '';
+          }
+          verified = true;
         }
       } catch {
-        // The persisted harvest still proves delivery, not current target readability.
+        // Committed harvest proves delivery, not continued readability of its target.
       }
     }
+    replyDiagnostics = (heartbeatDiagnostics || verified) ? retained : undefined;
   }
+
+  return {
+    record, cdp,
+    delivery: harvestedPrimary ? 'landed' : preDispatch ? 'not-sent' : 'POSSIBLY_DELIVERED',
+    ...(replyDiagnostics ? { replyDiagnostics } : {}),
+  };
+}
+
+async function persistedTerminalEvidence(
+  config: LaunchConfig,
+  heartbeatDiagnostics?: Record<string, unknown>,
+): Promise<Partial<TerminalEnvelope> | null> {
+  const observed = finalObservationProjection(config, heartbeatDiagnostics);
+  if (!observed) return null;
+  const { record } = observed;
+  // Optional owned-tab CDP recovery stays exclusive to no-result incidents.
+  const locator = (record.send_count ?? 0) >= 1 ? await provenOwnedTab(config, record, observed.cdp) : undefined;
 
   return {
     observed_invocation_id: record.invocation_id,
     ...(record.send_count !== undefined ? { send_count: record.send_count } : {}),
-    delivery: harvestedPrimary ? 'landed' : preDispatch ? 'not-sent' : 'POSSIBLY_DELIVERED',
+    delivery: observed.delivery,
     recovery_available: Boolean(locator),
     ...(locator ? { conversation_locator: locator } : {}),
     diagnostics: {
@@ -861,7 +895,7 @@ async function persistedTerminalEvidence(
         phase: record.phase, ...(record.send_count !== undefined ? { send_count: record.send_count } : {}),
         profile_key: record.profile_key,
       },
-      ...(projectedHeartbeat ? { last_heartbeat: projectedHeartbeat } : {}),
+      ...(heartbeatDiagnostics && observed.replyDiagnostics ? { last_heartbeat: observed.replyDiagnostics } : {}),
     },
   };
 }
@@ -1058,6 +1092,14 @@ async function finalizeCandidatePath(
     return 1;
   }
   if (candidate.state === 'ok') {
+    const observed = finalObservationProjection(config, heartbeatDiagnostics, candidate);
+    const resultDelivery = deriveDelivery(candidate, false);
+    const observedDelivery = observed?.delivery;
+    // A weaker pre-dispatch observation cannot demote a result's possible send or landing.
+    const delivery = resultDelivery === 'landed' || observedDelivery === 'landed' ? 'landed'
+      : resultDelivery === 'POSSIBLY_DELIVERED' || observedDelivery === 'POSSIBLY_DELIVERED'
+        ? 'POSSIBLY_DELIVERED' : resultDelivery;
+    const diagnostics = observed ? observed.replyDiagnostics : heartbeatDiagnostics;
     await publishEnvelope(config, {
       schema: TERMINAL_SCHEMA,
       run_identity: config.runIdentity,
@@ -1068,7 +1110,7 @@ async function finalizeCandidatePath(
       handoff_committed_at: receipt.handoff_committed_at,
       terminal_at: nowIso(),
       lifecycle_outcome: 'success',
-      delivery: deriveDelivery(candidate, false),
+      delivery,
       child_exit_code: resolvedExitCode,
       child_exit_diagnostic: childExitDiagnostic,
       turn_result_state: candidate.state,
@@ -1080,7 +1122,7 @@ async function finalizeCandidatePath(
         ? { observed_turn_result_identity: candidate.observed_turn_result_identity }
         : {}),
       ...conversationLocatorFields(config, candidate),
-      ...(heartbeatDiagnostics ? { diagnostics: heartbeatDiagnostics } : {}),
+      ...(diagnostics ? { diagnostics } : {}),
     });
     await abortManagedProcess(controller, runPromise);
     return 0;
