@@ -416,6 +416,92 @@ describe('production attempted-send result and durable envelope', () => {
     }
   });
 
+  it.each([
+    ['ready', 0, 1],
+    ['late-hydration', 0, 1],
+    ['reopen-ready', 1, 1],
+    ['still-absent', 1, 0],
+    ['redirected', 1, 0],
+    ['busy', 0, 0],
+    ['near-expiry', 0, 0],
+  ] as const)('Issue #2495 composer: %s navigates %i times and sends %i times', async (
+    scenario, expectedNavigations, expectedSends,
+  ) => {
+    const invocationId = randomUUID();
+    const profile = join(root, 'profile');
+    const cdp = 'http://127.0.0.1:9222';
+    const chatUrl = 'https://chatgpt.com/c/synthetic-2495';
+    let now = 50_000;
+    const startedAt = now;
+    let currentUrl = chatUrl;
+    let composerText = '';
+    let navigations = 0;
+    const ready = () => scenario === 'ready'
+      || (scenario === 'late-hydration' && now - startedAt >= 20_000)
+      || (scenario === 'reopen-ready' && navigations === 1);
+    const composer = scalarLocator({
+      count: async () => ready() ? 1 : 0,
+      fill: async (value: string) => { composerText = value; },
+      innerText: async () => composerText,
+    });
+    const send = vi.fn(async () => {
+      throw Object.assign(new Error('locator.click: Timeout 5000ms exceeded after dispatch'), { name: 'TimeoutError' });
+    });
+    const nodes = {
+      ...collectionLocator([{ role: 'user', text: 'historical user' }]),
+      evaluateAll: vi.fn(async () => ({
+        rows: [{
+          role: 'user', text: 'historical user', key: 'historical-user-key-2495',
+          domIndex: 0, complete: true, completionReady: false, continuationVisible: false,
+        }],
+        pageTurnEvidence: { generationInProgress: false, observedAssistantNodes: 0, continueGeneratingVisible: false },
+      })),
+    };
+    const goto = vi.fn(async (url: string) => {
+      navigations++;
+      currentUrl = scenario === 'redirected' ? 'https://chatgpt.com/c/foreign' : url;
+    });
+    const page = {
+      __fakeBrowserGptPage: true,
+      url: () => currentUrl,
+      isClosed: () => false,
+      goto,
+      close: vi.fn(async () => undefined),
+      waitForTimeout: vi.fn(async (ms: number) => { now += ms; }),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => 1, click: send });
+        if (selector === MESSAGE_NODE_SELECTOR) return nodes;
+        if (selector.includes('stop-button') || selector.includes('Stop')) {
+          return scalarLocator({
+            count: async () => scenario === 'busy' && now - startedAt >= 30_000 ? 1 : 0,
+            isVisible: async () => true,
+          });
+        }
+        return scalarLocator();
+      }),
+    };
+    enqueueBrowserForTurn(mocks, page);
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        '--profile', profile, '--cdp', cdp, '--input', join(root, 'synthetic-input'),
+        '--output', join(root, invocationId + '.txt'), '--chat-url', chatUrl,
+        '--invocation-id', invocationId, '--timeout-ms', scenario === 'near-expiry' ? '10000' : '180000',
+      ]);
+      expect(goto).toHaveBeenCalledTimes(expectedNavigations);
+      if (expectedNavigations === 1) expect(goto).toHaveBeenCalledWith(
+        chatUrl, expect.objectContaining({ waitUntil: 'commit' }),
+      );
+      expect(send).toHaveBeenCalledTimes(expectedSends);
+      expect(result.send_count).toBe(0);
+      expect(result.send_attempted === true).toBe(expectedSends > 0);
+      expect(page.close).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it.each((['click', 'enter'] as const).flatMap((transport) =>
     (['witness_then_throw', 'throw_no_witness', 'return_no_witness', 'pre_dispatch'] as const)
       .map((scenario) => ({ transport, scenario })),
