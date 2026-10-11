@@ -75,10 +75,10 @@ liveness.
 
 Fresh `--new-chat` turns take one profile-wide composer file lock before opening
 their tab, reusing `acquireDomainLock`. Dead-process locks are reclaimed immediately;
-a lock held more than 90 seconds is reclaimed even if its owner is still alive.
-Waiters yield until release, their invocation deadline, or 120 seconds: at that
-wait cap they proceed without the slot. These caps apply only to the fresh-send
-composer lock, not other domain locks.
+One 61-second limit bounds the slot: a lock older than that limit is reclaimed
+even if its owner is still alive; a waiter proceeds without the slot when the
+same limit is reached, or stops at an earlier invocation deadline. This limit
+applies only to the fresh-send composer lock, not other domain locks.
 The lock is released after observed dispatch or after bounded pre-send draft
 cleanup on every exit path. Existing-chat continuations do not take it. The
 legacy send-slot protocol is no longer a canonical fresh-send gate.

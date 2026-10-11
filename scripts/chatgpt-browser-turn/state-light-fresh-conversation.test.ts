@@ -487,15 +487,15 @@ describe('state-light fresh conversation collision recovery', () => {
     const turn = makeLoserPage('PROMPT', 'OK');
     const outcome = await runNewChatTurn(turn.page, join(stateDir, `slot-release-${timeout}.txt`), timeout);
     expect(outcome.result.send_count).toBe(timeout === '90000' ? 1 : 0);
-    expect(acquire).toHaveBeenCalledWith('collision-profile', 'fresh-send-composer', 0, { maxHoldMs: 90_000 });
+    expect(acquire).toHaveBeenCalledWith('collision-profile', 'fresh-send-composer', 0, { maxHoldMs: 61_000 });
     expect(acquire.mock.results[0]!.value.release).toHaveBeenCalledTimes(1);
     if (timeout === '61000') expect(turn.composer.fill).toHaveBeenLastCalledWith('', { timeout: 5_000 });
   });
 
-  it('sends after the 120-second slot wait cap without a second admission gate (#2497 c3)', async () => {
+  it('sends after the 61-second slot wait cap without a second admission gate (#2497 c3)', async () => {
     const { acquireDomainLock } = await import('./coordination.ts');
     vi.mocked(acquireDomainLock).mockImplementationOnce(() => {
-      mocks.nowMs += 120_000;
+      mocks.nowMs += 61_000;
       return null;
     });
     const turn = makeLoserPage('PROMPT', 'OK');

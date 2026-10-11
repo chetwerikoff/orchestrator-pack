@@ -2706,10 +2706,12 @@ function renderedPayloadMatches(actual: string | undefined, expected: string): b
   return actual !== undefined && actual.replace(/\s+/gu, '') === expected.replace(/\s+/gu, '');
 }
 
+const FRESH_SEND_SLOT_LIMIT_MS = 61_000;
+
 async function acquireFreshSendLock(profileKey: string, deadlineMs: number): Promise<DomainLock | undefined> {
-  const waitDeadlineMs = Math.min(deadlineMs, Date.now() + 120_000);
+  const waitDeadlineMs = Math.min(deadlineMs, Date.now() + FRESH_SEND_SLOT_LIMIT_MS);
   while (Date.now() < waitDeadlineMs) {
-    const lock = acquireDomainLock(profileKey, 'fresh-send-composer', 0, { maxHoldMs: 90_000 });
+    const lock = acquireDomainLock(profileKey, 'fresh-send-composer', 0, { maxHoldMs: FRESH_SEND_SLOT_LIMIT_MS });
     if (lock) return lock;
     await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(1, waitDeadlineMs - Date.now()))));
   }
