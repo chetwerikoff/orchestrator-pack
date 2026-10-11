@@ -115,6 +115,7 @@ import {
   packReviewDeliveryNeedsResume,
   packReviewJournaledPayload,
   packReviewRequiredStatusNeedsStaleReconciliation,
+  packReviewRequiredStatusStaleReconciliationComplete,
   packReviewRequiredStatusProjectionKey,
   publishPackReviewRequiredStatus,
   recordMalformedPackReviewStatus,
@@ -2997,6 +2998,7 @@ async function recoverStaleGptSourceComments(options: {
   let round = initialRound;
   let hydratedSourceCount = 0;
   const unresolved: string[] = [];
+  const uncertainSourceObservations: string[] = [];
   const missingFirstAttemptIdentities: string[] = [];
   if (!resumeFrozenRound) {
     const transport = options.input.fixtureGptSourceCommentTransport
@@ -3027,10 +3029,15 @@ async function recoverStaleGptSourceComments(options: {
       try {
         resolution = await resolvePackGptSourceComment({ identity, transport });
       } catch (error) {
-        unresolved.push(`${currentSlot.slotId}:${describeError(error)}`);
+        const detail = `${currentSlot.slotId}:${describeError(error)}`;
+        unresolved.push(detail);
+        uncertainSourceObservations.push(detail);
         continue;
       }
       if (resolution.kind !== 'credentialed') {
+        if (resolution.kind !== 'missing') {
+          uncertainSourceObservations.push(`${currentSlot.slotId}:${resolution.reason}`);
+        }
         if (resolution.kind === 'missing') {
           missingFirstAttemptIdentities.push(`${currentSlot.slotId}:${invocationId}`);
         }
@@ -3088,6 +3095,19 @@ async function recoverStaleGptSourceComments(options: {
       ? (graceExpired && settlePartialAfterGrace ? 2 : round.cardinality)
       : round.cardinality);
   if (usableSourceCount < requiredSourceCount) {
+    // A failed actor lookup, incomplete comment page, or conflicting identity
+    // is not proof that the corresponding GitHub comment is absent.
+    if (uncertainSourceObservations.length > 0) {
+      return {
+        recovered: false,
+        reason: `gpt_source_census_unresolved:${uncertainSourceObservations.join(', ')}`,
+        hydratedSourceCount,
+        usableSourceCount,
+        graceExpired,
+        missingFirstAttemptIdentities,
+        nextAction: `restore GitHub source-comment resolution for ${uncertainSourceObservations.join(', ')}, then rerun scoped reconcile`,
+      };
+    }
     const reason = round.cardinality >= 3 && !graceExpired
       ? `gpt_sources_waiting_for_grace:${usableSourceCount}/${round.cardinality}`
       : `gpt_sources_incomplete_after_grace:${usableSourceCount}/${round.cardinality}`;
@@ -4421,7 +4441,33 @@ export async function reconcileStalePackReviewRuns(
 
       const recoveredSnapshot = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
       const recoveryCoverage = derivePackReviewGptCoverage(recoveredSnapshot.reviewRound);
+      // These failures occur before a complete source census or exact-head
+      // authority exists. Never reinterpret them as a proven empty 0/3.
+      if (recovery.reason === 'gpt_source_head_changed'
+          || recovery.reason === 'gpt_source_head_changed_after_census'
+          || recovery.reason.startsWith('gpt_source_unavailable:')
+          || recovery.reason.startsWith('gpt_source_unavailable_after_census:')
+          || recovery.reason.startsWith('gpt_source_census_unresolved:')) {
+        results.push({
+          runId: run.id,
+          terminalized: false,
+          statusReconciled: false,
+          hydratedSourceCount: recovery.hydratedSourceCount,
+          usableSourceCount: recovery.usableSourceCount,
+          graceExpired: recovery.graceExpired,
+          reason: recovery.reason,
+          coverage: recoveryCoverage,
+          nextAction: recovery.nextAction ?? scopedReconcileAction(run.prNumber),
+        });
+        continue;
+      }
+      const failedPartialStatusNeedsRepair = needsGptSourceRecovery
+        && recoveredSnapshot.status === 'failed'
+        && recoveredSnapshot.failureReason?.startsWith('gpt_sources_incomplete_after_grace:') === true
+        && recoveryCoverage?.kind === 'partial'
+        && packReviewRequiredStatusNeedsStaleReconciliation(recoveredSnapshot);
       if (input.settlePartialAfterGrace === false
+          && !failedPartialStatusNeedsRepair
           && recoveryCoverage?.kind === 'partial'
           && recoveredSnapshot.reviewRound?.settledSourceCount === undefined) {
         results.push({
@@ -4441,26 +4487,115 @@ export async function reconcileStalePackReviewRuns(
           && recoveryCoverage?.kind === 'partial'
           && recovery.graceExpired
           && recovery.reason.startsWith('gpt_sources_incomplete_after_grace:')) {
-        await recordPackReviewUnfinishedTerminalStatus({
+        // The first run-order read preceded GitHub source observation. A newer
+        // run may have become authoritative while that observation was pending.
+        const beforeOrder = resolvePackReviewRunOrder(await readBoundRecords(), run);
+        if (beforeOrder.kind !== 'none') {
+          if (beforeOrder.kind === 'newer') {
+            const restoration = await restoreAndSettleNewerAuthority(run, statusWriter);
+            results.push({
+              runId: run.id,
+              terminalized: false,
+              statusReconciled: restoration.reason === 'newer_run_authoritative'
+                && restoration.outcome?.state === 'succeeded',
+              reason: restoration.reason,
+              nextAction: restoration.reason === 'newer_run_authoritative'
+                ? 'observe the newer authoritative review'
+                : scopedReconcileAction(run.prNumber),
+            });
+          } else {
+            results.push({
+              runId: run.id,
+              terminalized: false,
+              statusReconciled: false,
+              reason: beforeOrder.reason,
+              nextAction: scopedReconcileAction(run.prNumber),
+            });
+          }
+          continue;
+        }
+        const terminal = await recordPackReviewUnfinishedTerminalStatus({
           run: getPackReviewRun(run.id, { projectId, storeRoot }) ?? run,
           status: 'failed',
           failureReason: recovery.reason,
           projectId,
           storeRoot,
-          writeRequiredStatus: statusWriter,
+          // The unfinished-status helper owns persistence/publication. Gate
+          // only this caller's shared status write on incumbent live authority.
+          writeRequiredStatus: async (request) => {
+            const head = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
+            const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
+            const order = resolvePackReviewRunOrder(await readBoundRecords(), run);
+            if (head !== run.targetSha.toLowerCase()
+                || authority?.currentHeadSha.toLowerCase() !== head
+                || authority.cycle?.cycleId !== run.reviewCycleId
+                || authority.terminal
+                || order.kind !== 'none') {
+              throw new Error('gpt_partial_status_authority_changed');
+            }
+            await statusWriter(request);
+          },
         });
         const failed = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
+        let observedHead: string | undefined;
+        let matchingAuthority = false;
+        if (terminal.deliveryOutcome.state === 'succeeded') {
+          try {
+            observedHead = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
+            const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
+            matchingAuthority = observedHead === run.targetSha.toLowerCase()
+              && authority?.currentHeadSha.toLowerCase() === observedHead
+              && authority.cycle?.cycleId === run.reviewCycleId
+              && !authority.terminal;
+          } catch {
+            // An unavailable post-write head/authority check cannot certify publication.
+          }
+        }
+        const afterOrder = resolvePackReviewRunOrder(await readBoundRecords(), run);
+        if (afterOrder.kind === 'newer') {
+          // The older error may have landed after the newer success. Force the
+          // existing projector to restore the latest authority after the write.
+          const restoration = await restoreLatestAuthority(run, statusWriter, true);
+          results.push({
+            runId: run.id,
+            terminalized: true,
+            statusReconciled: restoration.reason === 'newer_run_authoritative'
+              && restoration.outcome?.state === 'succeeded',
+            hydratedSourceCount: recovery.hydratedSourceCount,
+            usableSourceCount: recovery.usableSourceCount,
+            graceExpired: recovery.graceExpired,
+            reason: restoration.reason,
+            status: failed.status,
+            coverage: derivePackReviewGptCoverage(failed.reviewRound),
+            deliveryReason: terminal.deliveryOutcome.reason,
+            nextAction: restoration.reason === 'newer_run_authoritative'
+              ? 'observe the newer authoritative review'
+              : scopedReconcileAction(run.prNumber),
+          });
+          continue;
+        }
+        const statusReconciled = afterOrder.kind === 'none'
+          && terminal.deliveryOutcome.state === 'succeeded'
+          && matchingAuthority
+          && failed.status === 'failed'
+          && failed.failureReason === recovery.reason
+          && failed.deliveryOutcomes.requiredStatus?.state === 'succeeded';
         results.push({
           runId: run.id,
           terminalized: true,
-          statusReconciled: true,
+          statusReconciled,
           hydratedSourceCount: recovery.hydratedSourceCount,
           usableSourceCount: recovery.usableSourceCount,
           graceExpired: recovery.graceExpired,
-          reason: recovery.reason,
+          reason: afterOrder.kind === 'ambiguous' ? afterOrder.reason : recovery.reason,
           status: failed.status,
           coverage: derivePackReviewGptCoverage(failed.reviewRound),
-          nextAction: recovery.nextAction ?? 'reconcile or retry the missing source work',
+          deliveryReason: terminal.deliveryOutcome.reason,
+          nextAction: statusReconciled
+            ? (recovery.nextAction ?? 'observe unresolved source slots before any eligible retry')
+            : observedHead !== undefined && observedHead !== run.targetSha.toLowerCase()
+              ? 'run review for the current PR head'
+              : scopedReconcileAction(run.prNumber),
         });
         continue;
       }
@@ -4473,7 +4608,42 @@ export async function reconcileStalePackReviewRuns(
         && recoveredSnapshot.failureReason?.startsWith('gpt_source_non_complete:') === true
         && recoveryCoverage?.kind === 'empty'
         && noJudgmentBudgetOutcome(recoveredSnapshot, storeRoot) !== null;
-      if (needsGptSourceRecovery && !stillZeroJudgment) {
+      // The required error status was already repaired on this terminal run.
+      // Continue source observation above, but do not misreport the persisted
+      // exact-head publication or write it again while coverage stays 1/3.
+      if (needsGptSourceRecovery
+          && !failedPartialStatusNeedsRepair
+          && recoveredSnapshot.failureReason?.startsWith('gpt_sources_incomplete_after_grace:') === true
+          && recoveryCoverage?.kind === 'partial'
+          && packReviewRequiredStatusStaleReconciliationComplete(recoveredSnapshot)) {
+        let verified = false;
+        try {
+          const currentHead = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
+          const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
+          verified = currentHead === run.targetSha.toLowerCase()
+            && authority?.currentHeadSha.toLowerCase() === currentHead
+            && authority.cycle?.cycleId === run.reviewCycleId
+            && !authority.terminal
+            && resolvePackReviewRunOrder(await readBoundRecords(), run).kind === 'none';
+        } catch {
+          // No current-head evidence means no certified required-status result.
+        }
+        if (verified) {
+          results.push({
+            runId: run.id,
+            terminalized: false,
+            statusReconciled: true,
+            hydratedSourceCount: recovery.hydratedSourceCount,
+            usableSourceCount: recovery.usableSourceCount,
+            graceExpired: recovery.graceExpired,
+            reason: 'status_already_reconciled',
+            coverage: recoveryCoverage,
+            nextAction: recovery.nextAction ?? 'observe unresolved source slots before any eligible retry',
+          });
+          continue;
+        }
+      }
+      if (needsGptSourceRecovery && !stillZeroJudgment && !failedPartialStatusNeedsRepair) {
         results.push({
           runId: run.id,
           terminalized: false,
@@ -4486,7 +4656,7 @@ export async function reconcileStalePackReviewRuns(
         });
         continue;
       }
-      if (stillZeroJudgment) run = await bindRepositoryIdentity(recoveredSnapshot);
+      if (stillZeroJudgment || failedPartialStatusNeedsRepair) run = await bindRepositoryIdentity(recoveredSnapshot);
       if (activeGptRecovery && !activeStale) {
         results.push({
           runId: run.id,
@@ -4679,6 +4849,7 @@ export async function reconcileStalePackReviewRuns(
     }
 
     const zeroJudgmentStaleStatus = run.failureReason?.startsWith('gpt_source_non_complete:') === true;
+    const failedPartialStaleStatus = run.failureReason?.startsWith('gpt_sources_incomplete_after_grace:') === true;
     const verifyNoJudgmentStatusTarget = async () => {
       const current = getPackReviewRun(run.id, { projectId, storeRoot });
       if (!current || !noJudgmentBudgetOutcome(current, storeRoot)) return false;
@@ -4690,12 +4861,26 @@ export async function reconcileStalePackReviewRuns(
           && afterHeadRead.failureReason === run.failureReason
           && noJudgmentBudgetOutcome(afterHeadRead, storeRoot));
     };
+    const verifyPartialStatusTarget = async () => {
+      const current = getPackReviewRun(run.id, { projectId, storeRoot });
+      if (!current || current.status !== 'failed'
+          || current.failureReason !== run.failureReason
+          || !packReviewRequiredStatusNeedsStaleReconciliation(current)) return false;
+      const head = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
+      const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
+      return head === run.targetSha.toLowerCase()
+        && authority?.currentHeadSha.toLowerCase() === head
+        && authority.cycle?.cycleId === run.reviewCycleId
+        && !authority.terminal;
+    };
     const authorizeStaleWrite = async () => {
       if (resolvePackReviewRunOrder(await readBoundRecords(), run).kind !== 'none') return false;
-      return !zeroJudgmentStaleStatus || await verifyNoJudgmentStatusTarget();
+      if (zeroJudgmentStaleStatus) return verifyNoJudgmentStatusTarget();
+      if (failedPartialStaleStatus) return !needsStaleStatus || verifyPartialStatusTarget();
+      return true;
     };
     const repairSupersededStaleWrite = async () => {
-      if (zeroJudgmentStaleStatus) {
+      if (zeroJudgmentStaleStatus || failedPartialStaleStatus) {
         const current = getPackReviewRun(run.id, { projectId, storeRoot });
         const head = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
         const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
@@ -4778,6 +4963,9 @@ export async function reconcileStalePackReviewRuns(
       statusReconciled: needsStaleStatus && outcome.state === 'succeeded',
       reason: needsStaleStatus ? outcome.reason : 'status_already_reconciled',
       ...(zeroJudgmentStaleStatus && terminalized ? { nextAction: scopedReconcileAction(run.prNumber) } : {}),
+      ...(failedPartialStaleStatus && needsStaleStatus && outcome.state !== 'succeeded' ? {
+        nextAction: scopedReconcileAction(run.prNumber),
+      } : {}),
       ...(zeroJudgmentStaleStatus && needsStaleStatus && outcome.state !== 'succeeded' ? {
         statusPublication: outcome.reason === 'same_run_verdict_status_restored'
           ? 'authoritative_verdict_restored'
