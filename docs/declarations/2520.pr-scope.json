@@ -1,0 +1,28 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2520,
+  "declared_paths": [
+    "docs/declarations/2520.pr-scope.json",
+    "scripts/chatgpt-browser-turn/product-page-selectors.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter-base.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "scripts/pr-scope-declaration.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/2520.pr-scope.json",
+    "scripts/chatgpt-browser-turn/product-page-selectors.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter-base.ts"
+  ],
+  "source_revision": "f138865f3bbf8c9583dc6805f18a243ab3803f6e"
+}

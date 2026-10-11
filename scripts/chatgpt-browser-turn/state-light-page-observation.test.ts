@@ -959,7 +959,6 @@ describe('Issue #2457 unproven terminal locator', () => {
               return last?.role === 'assistant' && last.finalActionInTurnContainer
                 ? fixture.messageLocator(last) : fixture.scalarLocator();
             }
-            if (selectors.matchesNewChatControlSelector(selector)) return fixture.scalarLocator();
             return fixture.scalarLocator();
           }),
         };

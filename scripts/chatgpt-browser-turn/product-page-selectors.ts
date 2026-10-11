@@ -88,13 +88,6 @@ export const PRODUCT_STATUS_PROBE_SELECTORS = [
 export const PRE_SEND_ALERT_ATTR = 'data-opk-pre-send-alert';
 export const PRE_SEND_ALERT_SELECTOR = '[role="alert"]';
 
-export const NEW_CHAT_CONTROL_SELECTORS = [
-  '[data-testid="create-new-chat-button"]',
-  'a:has-text("New chat")',
-  'button:has-text("New chat")',
-  '[aria-label="New chat"]',
-] as const;
-
 export const UI_COLLAPSE_AFFIX_RE = /(?:\s*(?:show more|read more|see more|view more|continue reading)\s*)+$/iu;
 const UI_COLLAPSE_ELLIPSIS_SUFFIX_RE = /[.…]+\s*$/u;
 
@@ -109,12 +102,6 @@ export function stripUiCollapseAffixes(value: string): string {
     result = next;
   }
   return result;
-}
-
-export function matchesNewChatControlSelector(selector: string): boolean {
-  return NEW_CHAT_CONTROL_SELECTORS.some((candidate) => candidate === selector)
-    || selector.includes('create-new-chat-button')
-    || selector.includes('New chat');
 }
 
 export function matchesAssistantTurnActionSelector(selector: string): boolean {
