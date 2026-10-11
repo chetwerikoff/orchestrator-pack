@@ -2535,7 +2535,9 @@ describe('Issue #2524: final persisted no-result terminal projection', () => {
     reply?: string;
     targetChange?: TargetChange;
     heartbeat?: boolean;
-    childResult?: TurnResultV1;
+    childResult?: TurnResultV1 | ((identity: { invocationId: string; profileKey: string }) => TurnResultV1);
+    conversationLocator?: string;
+    cancellationDependencies?: LaunchConfig['cancellationDependencies'];
   }) {
     const root = tempDir('opk-2524-terminal-');
     vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
@@ -2615,9 +2617,12 @@ describe('Issue #2524: final persisted no-result terminal projection', () => {
       last_reply_length: 0,
       last_reply_sha256_head: 'deadbeef00000000',
     };
-    const output = input.childResult
-      ? JSON.stringify(input.childResult) + '\n'
-      : input.heartbeat ? JSON.stringify(staleHeartbeat) + '\n' : '';
+    const childResult = typeof input.childResult === 'function'
+      ? input.childResult({ invocationId, profileKey }) : input.childResult;
+    const output = [
+      ...(input.heartbeat ? [JSON.stringify(staleHeartbeat)] : []),
+      ...(childResult ? [JSON.stringify(childResult)] : []),
+    ].map((line) => line + '\n').join('');
     const fixture = nodeFixture(output
       ? 'process.stdout.write(' + JSON.stringify(output) + ', () => process.exit(0));'
       : 'process.exit(1);');
@@ -2627,6 +2632,8 @@ describe('Issue #2524: final persisted no-result terminal projection', () => {
       terminalEnvelopeRoot: root, browserOutputPath: paths.output, cwd: repoRoot,
       childCommand: fixture.command,
       childArgs: [...fixture.args, '--', '--profile', profile, '--cdp', cdp, '--invocation-id', invocationId],
+      ...(input.conversationLocator ? { conversationLocator: input.conversationLocator } : {}),
+      ...(input.cancellationDependencies ? { cancellationDependencies: input.cancellationDependencies } : {}),
     });
     const envelope = readTerminalEnvelope(paths.envelope);
     expect(envelope).not.toBeNull();
@@ -2787,4 +2794,211 @@ describe('Issue #2524: final persisted no-result terminal projection', () => {
       expect(authoritativePreSend(slot)).toBe(false);
     }
   });
+  describe('Issue #2529: correlated success delivery and verified flat advisories', () => {
+    const matchingOk = (overrides: Partial<TurnResultV1> = {}) =>
+      ({ invocationId, profileKey }: { invocationId: string; profileKey: string }): TurnResultV1 =>
+        makeTurnResult({
+          invocation_id: invocationId,
+          configured_profile_key: profileKey,
+          witness: undefined,
+          observation_uncertainty_diagnostics: {
+            cause: 'ok', send_count: 1, owned_prompt_seen: false,
+          },
+          ...overrides,
+        });
+
+    it.each([
+      ['with accepted heartbeat', true],
+      ['without heartbeat', false],
+    ] as const)('lands a matched harvested ok result %s', async (_label, heartbeat) => {
+      const reply = 'synthetic reply!!';
+      const { envelope, exitCode } = await savedTerminal({
+        phase: 'harvested', sendCount: 1, reply, heartbeat,
+        childResult: matchingOk(),
+      });
+      expect(exitCode).toBe(0);
+      expect(envelope).toMatchObject({
+        schema: TERMINAL_SCHEMA,
+        lifecycle_outcome: 'success', turn_result_state: 'ok',
+        delivery: 'landed', send_count: 1,
+        observed_invocation_id: 'inv-2524-synthetic',
+        recovery_available: true,
+        conversation_locator: 'conv-uuid',
+        diagnostics: { last_reply_length: 17 },
+      });
+      expect(envelope).not.toHaveProperty('incident');
+      expect(envelope.diagnostics).not.toHaveProperty('last_heartbeat');
+      expect(envelope.diagnostics).not.toHaveProperty('persisted_observation');
+      if (heartbeat) {
+        expect(envelope.diagnostics).toMatchObject({
+          phase: 'post_send_observation', poll_count: 1, observation_state: 'busy',
+          last_reply_sha256_head: createHash('sha256').update(reply, 'utf8').digest('hex').slice(0, 16),
+        });
+      } else {
+        expect(envelope.diagnostics).toEqual({ last_reply_length: 17 });
+      }
+      expect(JSON.stringify(envelope)).not.toContain(reply);
+    });
+
+    it('keeps success reply length in JavaScript string units for a verified Unicode primary', async () => {
+      const { envelope } = await savedTerminal({
+        phase: 'harvested', sendCount: 1, reply: '😀',
+        childResult: matchingOk(),
+      });
+      expect(envelope).toMatchObject({
+        lifecycle_outcome: 'success', delivery: 'landed',
+        diagnostics: { last_reply_length: 2 },
+      });
+      expect(envelope.diagnostics).not.toHaveProperty('last_heartbeat');
+    });
+
+    it.each(['invocation', 'profile'] as const)(
+      'does not borrow harvested primary for a mismatched parsed %s', async (mismatch) => {
+        const result = ({ invocationId, profileKey }: { invocationId: string; profileKey: string }) =>
+          matchingOk({
+            ...(mismatch === 'invocation' ? { invocation_id: invocationId + '-foreign' } : {}),
+            ...(mismatch === 'profile' ? { configured_profile_key: profileKey + '-foreign' } : {}),
+          })({ invocationId, profileKey });
+        const { envelope } = await savedTerminal({
+          phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!',
+          heartbeat: true, childResult: result,
+        });
+        expect(envelope).toMatchObject({
+          lifecycle_outcome: 'success', turn_result_state: 'ok',
+          delivery: 'POSSIBLY_DELIVERED', send_count: 1,
+          conversation_locator: 'conv-uuid', recovery_available: true,
+          diagnostics: {
+            poll_count: 1, last_reply_length: 0,
+            last_reply_sha256_head: 'deadbeef00000000',
+          },
+        });
+        expect(envelope).not.toHaveProperty('incident');
+        expect(envelope.diagnostics).not.toHaveProperty('persisted_observation');
+      },
+    );
+
+    it.each(['mutated', 'truncated', 'unreadable', 'symlink'] as const)(
+      'drops stale success reply advisories for a %s committed target', async (targetChange) => {
+        const { envelope } = await savedTerminal({
+          phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!',
+          targetChange, heartbeat: true, childResult: matchingOk(),
+        });
+        expect(envelope).toMatchObject({
+          lifecycle_outcome: 'success', turn_result_state: 'ok',
+          delivery: 'landed', send_count: 1,
+          diagnostics: { poll_count: 1, observation_state: 'busy' },
+        });
+        expect(envelope.diagnostics).not.toHaveProperty('last_reply_length');
+        expect(envelope.diagnostics).not.toHaveProperty('last_reply_sha256_head');
+      },
+    );
+
+    it('does not invent reply or liveness fields when a matching primary is unreadable and no heartbeat exists', async () => {
+      const { envelope } = await savedTerminal({
+        phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!',
+        targetChange: 'unreadable', childResult: matchingOk(),
+      });
+      expect(envelope).toMatchObject({
+        lifecycle_outcome: 'success', delivery: 'landed', send_count: 1,
+      });
+      expect(envelope).not.toHaveProperty('diagnostics');
+    });
+
+    it.each(['prepared', 'not_sent'] as const)(
+      'never demotes a parsed attempted send to not-sent on %s/zero', async (phase) => {
+        const { envelope } = await savedTerminal({
+          phase, sendCount: 0, childResult: matchingOk({ send_attempted: true }),
+        });
+        expect(envelope).toMatchObject({
+          lifecycle_outcome: 'success', delivery: 'POSSIBLY_DELIVERED', send_count: 1,
+          observed_invocation_id: 'inv-2524-synthetic',
+        });
+      },
+    );
+
+    it('preserves possible delivery for attempted result count zero with observed prepared zero', async () => {
+      const { envelope } = await savedTerminal({
+        phase: 'prepared', sendCount: 0,
+        childResult: matchingOk({
+          send_attempted: true,
+          observation_uncertainty_diagnostics: {
+            cause: 'ok', send_count: 0, owned_prompt_seen: false,
+          },
+        }),
+      });
+      expect(envelope).toMatchObject({
+        lifecycle_outcome: 'success', delivery: 'POSSIBLY_DELIVERED', send_count: 0,
+      });
+    });
+
+    it('uses correlated primary to land, but never overwrites a contradictory parsed send count', async () => {
+      const { envelope } = await savedTerminal({
+        phase: 'harvested', sendCount: 0, reply: 'synthetic reply!!',
+        childResult: matchingOk(),
+      });
+      expect(envelope).toMatchObject({
+        lifecycle_outcome: 'success', delivery: 'landed', send_count: 1,
+        diagnostics: { last_reply_length: 17 },
+      });
+    });
+
+    it('retains independently proven reply_to landing against a weaker prepared observation', async () => {
+      const { envelope } = await savedTerminal({
+        phase: 'prepared', sendCount: 0,
+        childResult: ({ invocationId, profileKey }) => makeTurnResult({
+          invocation_id: invocationId, configured_profile_key: profileKey,
+        }),
+      });
+      expect(envelope).toMatchObject({
+        lifecycle_outcome: 'success', delivery: 'landed', send_count: 1,
+        conversation_locator: 'conv-uuid',
+      });
+    });
+
+    it.each([
+      'dispatching', 'sent_unbound', 'sent_unharvested', 'harvested', 'not_sent',
+    ] as const)('conservatively preserves ambiguous %s despite observed zero', async (phase) => {
+      const { envelope } = await savedTerminal({
+        phase, sendCount: 0,
+        ...(phase === 'not_sent' ? { reason: 'send_delivery_unproven' } : {}),
+        childResult: matchingOk({
+          observation_uncertainty_diagnostics: {
+            cause: 'ok', send_count: 0, owned_prompt_seen: false,
+          },
+        }),
+      });
+      expect(envelope).toMatchObject({
+        lifecycle_outcome: 'success', delivery: 'POSSIBLY_DELIVERED', send_count: 0,
+      });
+    });
+
+    it('keeps the parsed result baseline when the persisted observation is missing', async () => {
+      const { envelope } = await savedTerminal({
+        childResult: matchingOk(),
+      });
+      expect(envelope).toMatchObject({
+        lifecycle_outcome: 'success', delivery: 'POSSIBLY_DELIVERED', send_count: 1,
+        conversation_locator: 'conv-uuid', recovery_available: true,
+      });
+      expect(envelope).not.toHaveProperty('diagnostics');
+    });
+
+    it('keeps candidate/config locator and never connects to CDP for a matched successful harvest', async () => {
+      const connect = vi.fn(async () => { throw new Error('synthetic_cdp_unavailable'); });
+      const locator = 'https://chatgpt.com/c/synthetic-fixture';
+      const { envelope, exitCode } = await savedTerminal({
+        phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!',
+        childResult: matchingOk(), conversationLocator: locator,
+        cancellationDependencies: { connect },
+      });
+      expect(exitCode).toBe(0);
+      expect(envelope).toMatchObject({
+        lifecycle_outcome: 'success', delivery: 'landed', send_count: 1,
+        conversation_locator: locator, recovery_available: true,
+        diagnostics: { last_reply_length: 17 },
+      });
+      expect(connect).not.toHaveBeenCalled();
+    });
+  });
+
 });
