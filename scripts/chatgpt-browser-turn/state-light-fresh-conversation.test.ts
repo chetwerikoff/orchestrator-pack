@@ -120,7 +120,7 @@ import {
 import { classifyPageObservation, classifySendLandingEvidence, readPageObservation, runStateLightTurn } from './state-light-turn.ts';
 import { admitStateLightTurnObservation, readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { deriveDelivery } from '../flow-manager-long-running-child.ts';
-import { __testComposerMutation, __testSendDelivery, deriveComposerInsertionBudgetMs } from './state-light-turn-base.ts';
+import { __testBrowserOrPageDefinitelyLost, __testComposerMutation, __testSendDelivery, deriveComposerInsertionBudgetMs, probePageLiveness } from './state-light-turn-base.ts';
 import { wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
   EXPLICIT_CANCELLATION_AUTHORITY,
@@ -3092,6 +3092,130 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     expect(ownedClose).not.toHaveBeenCalled();
     expect(foreignClose).not.toHaveBeenCalled();
   });
+
+  it('publishes a committed owned reply before closing only its original tab (#2494 AC1)', async () => {
+    const prompt = 'COMMITTED-2494';
+    const reply = 'COMMITTED FINAL';
+    const output = join(integrationStateDir, 'committed-2494.txt');
+    const turn = makeLoserPage(prompt, reply);
+    let closed = false;
+    let publicationAtClose: string | undefined;
+    turn.page.isClosed.mockImplementation(() => closed);
+    turn.page.close.mockImplementation(async () => {
+      publicationAtClose = existsSync(output) ? readFileSync(output, 'utf8') : undefined;
+      closed = true;
+    });
+    const browser = browserWithPages(turn.page, [turn.page], () => true);
+    mocks.browserQueue.push(browser);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const terminal = await runProductionNewChat(output, '90000');
+    expect(terminal.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(terminal.code).toBe(0);
+    expect(publicationAtClose).toBe(reply);
+    expect(turn.getSends()).toBe(1);
+    expect(turn.page.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('terminalizes a definitely lost owned tab without a reply inside the child-only bound (#2494 AC2)', async () => {
+    const prompt = 'LOST-NO-REPLY-2494';
+    const output = join(integrationStateDir, 'lost-2494.txt');
+    let lost = false;
+    let lostAt: number | undefined;
+    const turn = makeLoserPage(prompt, 'NEVER PUBLISHED', () => {
+      lost = true;
+      lostAt = mocks.nowMs;
+    });
+    turn.page.isClosed.mockImplementation(() => lost);
+    turn.page.waitForTimeout.mockImplementation(async (ms: number) => {
+      mocks.nowMs += Math.max(ms, 5_000);
+    });
+    const foreignClose = vi.fn(async () => undefined);
+    const foreignStop = vi.fn(async () => undefined);
+    const foreignPage = {
+      url: vi.fn(() => LOSER_CONV),
+      isClosed: vi.fn(() => false),
+      close: foreignClose,
+      locator: vi.fn(() => scalarLocator({ click: foreignStop })),
+    };
+    const browser = browserWithPages(turn.page, [foreignPage], () => true);
+    const context = browser.contexts()[0]!;
+    context.newPage.mockResolvedValueOnce(turn.page).mockRejectedValueOnce(new Error('successor unavailable'));
+    mocks.browserQueue.push(browser);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const terminal = await runProductionNewChat(output, '90000');
+    expect(lostAt).toBeDefined();
+    expect(mocks.nowMs - lostAt!).toBeLessThan(60_000);
+    expect(terminal.result.state).not.toBe('ok');
+    expect(terminal.result.send_count).toBe(1);
+    expect(terminal.code).not.toBe(0);
+    expect(existsSync(output)).toBe(false);
+    expect(turn.getSends()).toBe(1);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(foreignClose).not.toHaveBeenCalled();
+    expect(foreignStop).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('handles Target crashed during a pending owned post-send read, closed=%s (#2494 AC3)', async (closeDuringRead) => {
+    const prompt = 'IN-FLIGHT-2494';
+    const output = join(integrationStateDir, 'in-flight-' + String(closeDuringRead) + '.txt');
+    let lost = false;
+    let lostAt: number | undefined;
+    const turn = makeLoserPage(prompt, 'NEVER PUBLISHED');
+    turn.page.isClosed.mockImplementation(() => lost);
+    turn.page.waitForTimeout.mockImplementation(async (ms: number) => {
+      mocks.nowMs += Math.max(ms, 5_000);
+    });
+    // This rejection is emitted by readPostSendObservation's product-status
+    // read, after the same page has been sent. The paired error bytes are equal.
+    mocks.productStatusText.mockImplementation(async () => {
+      if (turn.getSends() === 0) return { text: '', composer: true };
+      await Promise.resolve();
+      if (closeDuringRead) {
+        lost = true;
+        lostAt = mocks.nowMs;
+      }
+      throw new Error('Target crashed');
+    });
+    const foreignClose = vi.fn(async () => undefined);
+    const foreignPage = {
+      url: vi.fn(() => LOSER_CONV),
+      isClosed: vi.fn(() => false),
+      close: foreignClose,
+      locator: vi.fn(() => scalarLocator()),
+    };
+    const browser = browserWithPages(turn.page, [foreignPage], () => true);
+    const context = browser.contexts()[0]!;
+    context.newPage.mockResolvedValueOnce(turn.page).mockRejectedValueOnce(new Error('successor unavailable'));
+    mocks.browserQueue.push(browser);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const terminal = await runProductionNewChat(output, '90000');
+    expect(turn.getSends()).toBe(1);
+    expect(terminal.result.send_count).toBe(1);
+    expect(terminal.result.state).not.toBe('ok');
+    if (closeDuringRead) {
+      expect(lostAt).toBeDefined();
+      expect(mocks.nowMs - lostAt!).toBeLessThan(60_000);
+      expect(terminal.result.cause).not.toBe('post_send_target_crashed');
+    } else {
+      expect(lostAt).toBeUndefined();
+      expect(terminal.result).toMatchObject({ state: 'driver_error', cause: 'post_send_target_crashed' });
+    }
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(foreignClose).not.toHaveBeenCalled();
+  });
+
+  it.each(['surface_unknown', 'message_nodes_missing', 'target_not_found'])(
+    'does not treat %s on an open connected page as definite owned-tab loss (#2494 AC3)', async (diagnostic) => {
+      const page = {
+        isClosed: vi.fn(() => false),
+        locator: vi.fn(() => scalarLocator({ count: vi.fn(async () => { throw new Error(diagnostic); }) })),
+      };
+      const browser = { isConnected: vi.fn(() => true) };
+      expect(__testBrowserOrPageDefinitelyLost(page, browser)).toBe(false);
+      expect(await probePageLiveness(page, browser)).toBe('unknown');
+    },
+  );
+
 });
 
 describe('Issue #1430 mutation-generation crash and restart coverage', () => {
