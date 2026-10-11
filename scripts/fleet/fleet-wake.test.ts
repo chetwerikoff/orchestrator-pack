@@ -836,6 +836,7 @@ describe('fleet alarm', () => {
       { ...firstRow, id: 'foreign', to_handle: 'run:another', subject: 'Other recipient' },
       { ...firstRow, id: 'malformed', subject: '' },
     ];
+    let unitScreen = 'done\n>';
     const executor: OrcaExecutor = (args) => {
       if (args[0] === 'terminal' && args[1] === 'list' && args.includes('--include-visual-layouts')) {
         return commandResult(JSON.stringify({
@@ -861,7 +862,7 @@ describe('fleet alarm', () => {
       if (args[0] === 'orchestration' && args[1] === 'check' && args.includes('run-1')) {
         return commandResult(JSON.stringify({ ok: false, error: { code: 'consumer_fenced' } }), false);
       }
-      return fakeOrca({ 'term_coord_new': 'idle', one: 'done\n>' }, [], currentTerminals)(args);
+      return fakeOrca({ 'term_coord_new': 'idle', one: unitScreen }, [], currentTerminals)(args);
     };
 
     try {
@@ -913,6 +914,7 @@ describe('fleet alarm', () => {
       const quietStore = new MemoryWakeStore();
       quietStore.markParkedWakeEvent('mail:gone-sender:msg-1');
       quietStore.markParkedWakeEvent('mail:gone-sender:msg-2');
+      unitScreen = 'working\nesc interrupt';
       const quiet = await tick({ executor, store: quietStore, terminals: currentTerminals, config: settings,
         screens: { 'term_coord_new': 'idle', one: 'working\nesc interrupt' } });
       expect(quiet.result.state).toBe('nothing_stopped');
