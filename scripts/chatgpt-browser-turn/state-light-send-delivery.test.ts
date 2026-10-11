@@ -400,7 +400,7 @@ describe('production attempted-send result and durable envelope', () => {
     };
     // Select an already-owned existing-chat tab; creation/navigation is not recovery.
     const browserFixture = enqueueBrowserForTurn(mocks, page);
-    (browserFixture.context as { pages?: () => any[] }).pages = () => [page];
+    Object.assign(browserFixture.context, { pages: () => [page] });
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
     try {
       const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
@@ -485,7 +485,7 @@ describe('production attempted-send result and durable envelope', () => {
     };
     // Select an already-owned existing-chat tab; creation/navigation is not recovery.
     const browserFixture = enqueueBrowserForTurn(mocks, page);
-    (browserFixture.context as { pages?: () => any[] }).pages = () => [page];
+    Object.assign(browserFixture.context, { pages: () => [page] });
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
     try {
       const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
