@@ -10,7 +10,7 @@
   ],
   "denylist": ["credentials/", "packages/core/", "secrets/", "vendor/"],
   "allowed_roots": [
-    "docs/declarations/",
+    "docs/declarations/2505.pr-scope.json",
     "scripts/chatgpt-browser-turn/README.md",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
