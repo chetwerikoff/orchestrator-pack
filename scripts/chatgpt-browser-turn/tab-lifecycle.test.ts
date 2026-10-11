@@ -46,36 +46,36 @@ type CleanupCase = {
 const cleanupCases: readonly CleanupCase[] = [
   { id: 'K1', sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false, expected: 'close' },
   { id: 'K2', sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: true, expected: 'skip' },
-  { id: 'K3', sendCount: 1, publicationState: 'conflict', pagePresent: true, pageLost: false, expected: 'preserve' },
+  { id: 'K3', sendCount: 1, publicationState: 'conflict', pagePresent: true, pageLost: false, expected: 'close' },
   { id: 'K4', sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false, expected: 'close' },
-  { id: 'K5', sendCount: 1, pagePresent: true, pageLost: false, expected: 'preserve' },
-  { id: 'K6', sendCount: 1, publicationState: 'error', pagePresent: true, pageLost: false, expected: 'preserve' },
+  { id: 'K5', sendCount: 1, pagePresent: true, pageLost: false, expected: 'close' },
+  { id: 'K6', sendCount: 1, publicationState: 'error', pagePresent: true, pageLost: false, expected: 'close' },
   { id: 'K7', sendCount: 0, pagePresent: true, pageLost: false, expected: 'close' },
-  { id: 'K8', sendCount: 1, pagePresent: true, pageLost: false, expected: 'preserve' },
+  { id: 'K8', sendCount: 1, pagePresent: true, pageLost: false, expected: 'close' },
   { id: 'K9', sendCount: 0, pagePresent: false, pageLost: true, expected: 'skip' },
   { id: 'K10', sendCount: 1, pagePresent: false, pageLost: true, expected: 'skip' },
-  { id: 'K11', sendCount: 1, pagePresent: true, pageLost: false, expected: 'preserve' },
+  { id: 'K11', sendCount: 1, pagePresent: true, pageLost: false, expected: 'close' },
   { id: 'K12', sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false, expected: 'close' },
-  { id: 'K13', sendCount: 1, pagePresent: true, pageLost: false, expected: 'preserve' },
-  { id: 'K14', sendCount: 1, pagePresent: true, pageLost: false, expected: 'preserve' },
+  { id: 'K13', sendCount: 1, pagePresent: true, pageLost: false, expected: 'close' },
+  { id: 'K14', sendCount: 1, pagePresent: true, pageLost: false, expected: 'close' },
   { id: 'K15', sendCount: 1, pagePresent: false, pageLost: true, expected: 'skip' },
-  { id: 'K16', sendCount: 1, publicationState: 'error', pagePresent: true, pageLost: false, expected: 'preserve' },
+  { id: 'K16', sendCount: 1, publicationState: 'error', pagePresent: true, pageLost: false, expected: 'close' },
   { id: 'K17', sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false, expected: 'close' },
   { id: 'K18', sendCount: 0, pagePresent: true, pageLost: false, expected: 'close' },
   { id: 'K19', sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false, expected: 'close' },
-  { id: 'K20', sendCount: 1, pagePresent: true, pageLost: false, expected: 'preserve' },
+  { id: 'K20', sendCount: 1, pagePresent: true, pageLost: false, expected: 'close' },
 ];
 
 const ledgerCases = [
   { id: 'L1', transition: 'reserved page identity enters the final partition', sendCount: 1, publicationState: 'committed_ok' as const, pagePresent: true, pageLost: false, expectedCleanup: 'confirmed' as const, expectedPageCloseCalls: 1 },
-  { id: 'L2', transition: 'unsupported takeover retains the owned page', sendCount: 1, pagePresent: true, pageLost: false, expectedCleanup: 'skipped' as const, expectedPageCloseCalls: 0 },
+  { id: 'L2', transition: 'failed owned turn still closes page', sendCount: 1, pagePresent: true, pageLost: false, expectedCleanup: 'confirmed' as const, expectedPageCloseCalls: 1 },
   { id: 'L3', transition: 'zero-send terminal closes the reserved page', sendCount: 0, pagePresent: true, pageLost: false, expectedCleanup: 'confirmed' as const, expectedPageCloseCalls: 1 },
   { id: 'L4', transition: 'publication is the close boundary', sendCount: 1, publicationState: 'committed_ok' as const, pagePresent: true, pageLost: false, expectedCleanup: 'confirmed' as const, expectedPageCloseCalls: 1 },
   { id: 'L5', transition: 'publication survives cleanup failure', sendCount: 1, publicationState: 'committed_ok' as const, pagePresent: true, pageLost: false, closeError: true, expectedCleanup: 'unconfirmed' as const, expectedPageCloseCalls: 1 },
-  { id: 'L6', transition: 'post-send non-publication preserves the page', sendCount: 1, publicationState: 'conflict' as const, pagePresent: true, pageLost: false, expectedCleanup: 'skipped' as const, expectedPageCloseCalls: 0 },
+  { id: 'L6', transition: 'post-send non-publication closes owned page', sendCount: 1, publicationState: 'conflict' as const, pagePresent: true, pageLost: false, expectedCleanup: 'confirmed' as const, expectedPageCloseCalls: 1 },
   { id: 'L7', transition: 'production graph enumerates page and browser sinks', sendCount: 1, publicationState: 'committed_ok' as const, pagePresent: true, pageLost: false, expectedCleanup: 'confirmed' as const, expectedPageCloseCalls: 1 },
-  { id: 'L8', transition: 'helper termination leaves publication observable', sendCount: 1, pagePresent: true, pageLost: false, expectedCleanup: 'skipped' as const, expectedPageCloseCalls: 0 },
-  { id: 'L9', transition: 'probe remains read-only while the page is retained', sendCount: 1, pagePresent: true, pageLost: false, expectedCleanup: 'skipped' as const, expectedPageCloseCalls: 0 },
+  { id: 'L8', transition: 'terminal helper outcome keeps publication truthful', sendCount: 1, pagePresent: true, pageLost: false, expectedCleanup: 'confirmed' as const, expectedPageCloseCalls: 1 },
+  { id: 'L9', transition: 'probe remains read-only before terminal close', sendCount: 1, pagePresent: true, pageLost: false, expectedCleanup: 'confirmed' as const, expectedPageCloseCalls: 1 },
   { id: 'L10', transition: 'browser release remains observable after page action', sendCount: 0, pagePresent: true, pageLost: false, expectedCleanup: 'confirmed' as const, expectedPageCloseCalls: 1 },
 ] as const;
 
@@ -334,8 +334,8 @@ describe('Issue #1238 publication boundary', () => {
         pagePresent: true,
         pageLost: false,
       });
-      expect(observed.result.cleanup).toBe('skipped');
-      expect(observed.pageCloseCalls).toBe(0);
+      expect(observed.result.cleanup).toBe('confirmed');
+      expect(observed.pageCloseCalls).toBe(1);
       expect(observed.browserCloseCalls).toBe(1);
       expect(observed.foreignTargetOpen).toBe(true);
       expect(readFileSync(output, 'utf8')).toBe('foreign winner');
@@ -694,13 +694,13 @@ describe('Issue #1377 explicit abandonment authority', () => {
       expect(result).toMatchObject({
         state,
         cause: `post_send_${state}`,
-        cleanup: 'skipped',
+        cleanup: 'confirmed',
       });
       expect(result.incidents).toContain('owned_generation_stop_not_attempted_authority_absent');
     }
 
     expect(stopClick).toHaveBeenCalledTimes(0);
-    expect(close).toHaveBeenCalledTimes(0);
+    expect(close).toHaveBeenCalledTimes(TURN_STATES.length - 1);
   });
 
   it('does not Stop or close an unproven reachable page through runStateLightTurn', async () => {
@@ -718,7 +718,7 @@ describe('Issue #1377 explicit abandonment authority', () => {
     const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     try {
       await runStateLightTurn(['--profile', 'fixture'], {
-        runTurn: async () => ({ page, browser, result: nonOkResult() }),
+        runTurn: async () => ({ page, browser, ownershipForfeited: true, cleanupAction: 'preserve', result: nonOkResult() }),
       });
     } finally {
       write.mockRestore();
@@ -749,8 +749,8 @@ describe('Issue #1377 explicit abandonment authority', () => {
       result: nonOkResult(),
     });
     expect(stopClick).toHaveBeenCalledTimes(0);
-    expect(close).toHaveBeenCalledTimes(0);
-    expect(result.cleanup).toBe('skipped');
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(result.cleanup).toBe('confirmed');
     expect(result.incidents).toContain('owned_generation_stop_not_attempted_authority_absent');
   });
 
@@ -772,6 +772,8 @@ describe('Issue #1377 explicit abandonment authority', () => {
       result: nonOkResult(),
     });
     expect(stopClick).toHaveBeenCalledTimes(0);
+    expect(page.close).not.toHaveBeenCalled();
+    expect(result.cleanup).toBe('skipped');
     expect(result.incidents).toContain('owned_generation_stop_not_attempted_authority_absent');
   });
 });
@@ -941,9 +943,22 @@ describe('Issue #1377 production runStateLightTurn recovery integration', () => 
     }
   }
 
+  // Model recovered/reused pages through the real cleanup-unproven selector.
+  async function markAlreadyOpenPageUnowned(page: ReturnType<typeof trackedPage>['page']) {
+    const browser = { contexts: () => [{ newPage: () => undefined, pages: () => [page] }] };
+    const selected = await __testConversationPageSelection.selectConversationPage(
+      browser, { connectOverCDP: vi.fn() },
+      { cdp: 'http://127.0.0.1:9222', profile: 'fixture', chatUrl: ownedUrl,
+        newChat: false, timeoutMs: 5_000 },
+      { clampOperationWaitMs: () => 5_000 } as any,
+    );
+    expect(selected.page).toBe(page);
+  }
+
   it('recovers an exact owned page after page loss without resend, foreign Stop, or close', async () => {
     const lost = { url: () => ownedUrl, isClosed: () => true };
     const recovered = trackedPage(ownedUrl);
+    await markAlreadyOpenPageUnowned(recovered.page);
     const foreign = trackedPage(foreignUrl, true);
     const browser = { isConnected: () => true, close: vi.fn(async () => undefined) };
     let sends = 0;
@@ -1015,6 +1030,7 @@ describe('Issue #1377 production runStateLightTurn recovery integration', () => 
   it('reconnects after browser loss and binds only the exact owned conversation without resend', async () => {
     const lost = { url: () => ownedUrl, isClosed: () => true };
     const recovered = trackedPage(ownedUrl);
+    await markAlreadyOpenPageUnowned(recovered.page);
     const foreign = trackedPage(foreignUrl, true);
     const deadBrowser = { isConnected: () => false, close: vi.fn(async () => undefined) };
     const liveBrowser = { isConnected: () => true, close: vi.fn(async () => undefined) };
@@ -1154,12 +1170,12 @@ describe('Issue #1377 production runStateLightTurn recovery integration', () => 
       state: 'no_reply',
       cause: 'observation_exhausted_no_resend',
       send_count: 1,
-      cleanup: 'skipped',
+      cleanup: 'confirmed',
     });
     expect(outcome.result.incidents).toContain('owned_generation_stop_not_attempted_authority_absent');
     expect(sends).toBe(1);
     expect(owned.stopClick).not.toHaveBeenCalled();
-    expect(owned.close).not.toHaveBeenCalled();
+    expect(owned.close).toHaveBeenCalledTimes(1);
     expect(foreign.stopClick).not.toHaveBeenCalled();
     expect(foreign.close).not.toHaveBeenCalled();
   });
@@ -1170,7 +1186,7 @@ describe('Issue #1377 production runStateLightTurn recovery integration', () => 
     const page = {
       url: () => ownedUrl,
       isClosed: () => false,
-      close: vi.fn(async () => undefined),
+      close: vi.fn(async () => { order.push('page-close'); }),
       locator: () => ({
         count: vi.fn(async () => 1),
         first: () => ({
@@ -1200,8 +1216,8 @@ describe('Issue #1377 production runStateLightTurn recovery integration', () => 
       }),
     }));
     expect(outcome.code).not.toBe(0);
-    expect(order).toEqual(['capture', 'disconnect']);
-    expect(outcome.result).toMatchObject({ cleanup: 'skipped', send_count: 1 });
+    expect(order).toEqual(['page-close', 'capture', 'disconnect']);
+    expect(outcome.result).toMatchObject({ cleanup: 'confirmed', send_count: 1 });
   });
 });
 
