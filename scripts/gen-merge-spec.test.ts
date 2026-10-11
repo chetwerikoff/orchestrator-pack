@@ -1,5 +1,5 @@
 // @vitest-ci-lane light
-import { spawnSync } from 'node:child_process';
+import { runProcessSync } from './kernel/subprocess.mjs';
 import { chmodSync, copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { renderMergeSpec } from './gen-merge-spec.mjs';
 
 const generator = fileURLToPath(new URL('./gen-merge-spec.mjs', import.meta.url));
+const kernel = fileURLToPath(new URL('./kernel/subprocess.mjs', import.meta.url));
 const roots: string[] = [];
 const caseA = {
   repo: 'test-org/alpha-A_REPO', pr: 301, issue: 401, head: 'a'.repeat(40),
@@ -52,7 +53,9 @@ function syntheticCli(item: typeof caseA | typeof caseB, stub?: { body?: string;
   const gh = join(root, 'scripts', 'gh');
   const capture = join(root, 'argv.json');
   mkdirSync(dirname(script), { recursive: true });
+  mkdirSync(join(root, 'scripts', 'kernel'), { recursive: true });
   copyFileSync(generator, script);
+  copyFileSync(kernel, join(root, 'scripts', 'kernel', 'subprocess.mjs'));
   writeFileSync(gh, `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
 writeFileSync(process.env.OPK_GH_ARGV_CAPTURE, JSON.stringify(process.argv.slice(2)));
@@ -63,17 +66,16 @@ if (process.env.OPK_GH_EXIT !== '0') {
 process.stdout.write(process.env.OPK_GH_BODY);
 `, 'utf8');
   chmodSync(gh, 0o755);
-  const result = spawnSync(process.execPath, [script, ...commandArgs(item)], {
-    encoding: 'utf8',
-    cwd: root,
+  const result = runProcessSync({
+    command: process.execPath, args: [script, ...commandArgs(item)], cwd: root,
+    inheritParentEnv: true,
     env: {
-      ...process.env,
       OPK_GH_ARGV_CAPTURE: capture,
       OPK_GH_EXIT: stub?.exit ?? '0',
       OPK_GH_BODY: stub?.body ?? JSON.stringify({ number: item.pr, headRefOid: item.head }),
     },
   });
-  return { ...result, argv: JSON.parse(readFileSync(capture, 'utf8')) as string[] };
+  return { ...result, status: result.exitCode, argv: JSON.parse(readFileSync(capture, 'utf8')) as string[] };
 }
 
 afterEach(() => {

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
+import { runProcessSync } from './kernel/subprocess.mjs';
 import { fileURLToPath } from 'node:url';
 
 const SINGLE_FLAGS = new Map([
@@ -65,14 +65,14 @@ function parseArgs(argv) {
 function readLivePrHead({ repo, pr }) {
   // This is the tracked pack GitHub transport, not a second API or a caller head.
   const gh = fileURLToPath(new URL('./gh', import.meta.url));
-  const result = spawnSync(gh, ['pr', 'view', String(pr), '--repo', repo, '--json', 'number,headRefOid'], {
-    encoding: 'utf8',
-    maxBuffer: 1024 * 1024,
-    windowsHide: true,
+  const result = runProcessSync({
+    command: gh,
+    args: ['pr', 'view', String(pr), '--repo', repo, '--json', 'number,headRefOid'],
+    inheritParentEnv: true,
   });
-  if (result.error || result.status !== 0) {
-    const reason = result.error?.message ?? result.stderr?.trim() ?? `exit ${String(result.status)}`;
-    throw new Error(`Cannot read PR #${pr} head for ${repo}: ${reason || `exit ${String(result.status)}`}. Check the repository/PR and tracked scripts/gh access, then retry.`);
+  if (!result.ok) {
+    const reason = result.error || result.stderr.trim() || `${result.outcome}, exit ${String(result.exitCode)}`;
+    throw new Error(`Cannot read PR #${pr} head for ${repo}: ${reason}. Check the repository/PR and tracked scripts/gh access, then retry.`);
   }
   let data;
   try {

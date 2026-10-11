@@ -8,14 +8,14 @@
     "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
-    "credentials/**",
-    "packages/core/**",
-    "scripts/chatgpt-browser-turn/**",
+    "credentials/",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn/",
     "scripts/gh",
     "scripts/lib/gh-wrapper.mjs",
     "scripts/pr-scope-declaration.ts",
-    "secrets/**",
-    "vendor/**"
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
     ".cursor/skills/merge-with-local-adoption/SKILL.md",
