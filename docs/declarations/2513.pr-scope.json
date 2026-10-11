@@ -1,0 +1,22 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2513,
+  "declared_paths": [
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/declarations/2513.pr-scope.json",
+    "scripts/lib/pack-review-delivery.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/declarations/",
+    "scripts/lib/pack-review-delivery.ts"
+  ],
+  "source_revision": "dcf54ad14a373ce96f3b85b8264be8eb80295b78"
+}
