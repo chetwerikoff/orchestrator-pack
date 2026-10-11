@@ -792,6 +792,51 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(envelope?.child_exit_code).toBe(0);
   });
 
+  it.each([
+    ['ok', 0, 'success', undefined],
+    ['no_reply', 11, 'incident', 'child_turn_state:no_reply'],
+    ['driver_error', 13, 'incident', 'child_turn_state:driver_error'],
+  ] as const)(
+    'projects one accepted %s child result to the unchanged launcher terminal envelope (#2494)',
+    async (state, exitCode, outcome, expectedIncident) => {
+      const root = tempDir('opk-2494-envelope-');
+      const paths = launchPaths(root, 'terminal-' + state);
+      const turnResult = makeTurnResult({
+        state,
+        cause: state === 'ok' ? 'completed_page_only' : 'synthetic_owned_page_lost',
+        scope: state === 'ok' ? 'none' : 'invocation',
+      });
+      const fixture = nodeFixture(
+        'process.stdout.write(JSON.stringify(' + JSON.stringify(turnResult)
+        + ') + "\\n", () => process.exit(' + String(exitCode) + '));',
+      );
+      const code = await runFixtureLaunch(root, {
+        runIdentity: 'run-2494-' + state,
+        attemptIdentity: 'attempt-2494-' + state,
+        handoffReceiptPath: paths.receipt,
+        terminalEnvelopePath: paths.envelope,
+        browserOutputPath: paths.output,
+        cwd: repoRoot,
+        childCommand: fixture.command,
+        childArgs: fixture.args,
+      });
+
+      expect(code).toBe(state === 'ok' ? 0 : 1);
+      expect(readFileSync(paths.output, 'utf8').trimEnd().split('\n')).toHaveLength(1);
+      const terminal = readTerminalEnvelope(paths.envelope);
+      expect(terminal).toMatchObject({
+        schema: TERMINAL_SCHEMA,
+        lifecycle_outcome: outcome,
+        turn_result_state: state,
+        child_exit_code: exitCode,
+      });
+      expect(terminal?.incident).toBe(expectedIncident);
+      // The child result and the real launcher terminal are separate owners.
+      // Do not claim a page-loss-relative launcher deadline from this fixture.
+      expect(existsSync(paths.envelope)).toBe(true);
+    },
+  );
+
   it('treats exit zero without turn-result as missing after stdout EOF', async () => {
     const root = tempDir();
     const paths = launchPaths(root, 'missing');
