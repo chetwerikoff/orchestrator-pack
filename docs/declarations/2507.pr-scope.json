@@ -4,6 +4,7 @@
   "declared_paths": [
     "scripts/gh-wrapper.test.ts",
     "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-rest-routes.mjs",
     "scripts/lib/gh-target-authorization.ts",
     "scripts/lib/gh-wrapper.mjs",
     "scripts/lib/graphql-quota-github-read-inventory.json",
@@ -22,10 +23,11 @@
   "allowed_roots": [
     "scripts/gh-wrapper.test.ts",
     "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-rest-routes.mjs",
     "scripts/lib/gh-target-authorization.ts",
     "scripts/lib/gh-wrapper.mjs",
     "scripts/lib/graphql-quota-github-read-inventory.json",
     "scripts/target-portability-sinks.test.ts"
   ],
-  "source_revision": "e138cb743c7efb257d737bf5d98fe18aa4ef5d14"
+  "source_revision": "8c89bd1cb23b38eec56ec01d923acbb5ae65398e"
 }
