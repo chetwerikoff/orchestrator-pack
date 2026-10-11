@@ -43,25 +43,23 @@ function isolatedChildEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return env;
 }
 function writeNativeGhMock(path: string): void {
-  writeFileSync(path, [
+  const source = [
     "const fs = require('node:fs');",
     "const cp = require('node:child_process');",
-    'const originalSpawnSync = cp.spawnSync;',
+    'const original = cp.spawnSync;',
     'cp.spawnSync = function(command, args, options) {',
     '  const env = options?.env || process.env;',
-    "  if (command === env.GH_REAL_BINARY && Array.isArray(args) && args.includes('api')) {",
-    "    const endpoint = args.find((arg) => arg.startsWith('repos/')) || '';",
-    "    const rules = JSON.parse(env.OPK_FAKE_GH_RESPONSES || '[]');",
-    '    const rule = rules.find((item) => endpoint.includes(item.includes));',
-    "    const stdout = rule?.byEnv ? (rule.byEnv[env[rule.envKey]] || '') : (rule?.stdout || '');",
-    "    const stderr = rule ? '' : ('unexpected fake gh endpoint: ' + endpoint);",
-    '    if (env.OPK_NATIVE_GH_AUDIT) fs.appendFileSync(env.OPK_NATIVE_GH_AUDIT, JSON.stringify({ args, endpoint }) + \'\\n\');',
-    '    return { pid: 1, output: [null, stdout, stderr], stdout, stderr, status: rule ? (rule.status || 0) : 3, signal: null };',
+    "  const endpoint = args?.find((arg) => arg.startsWith('repos/')) || '';",
+    "  if (command === env.GH_REAL_BINARY && args?.includes('api')) {",
+    '    if (env.OPK_NATIVE_GH_AUDIT) fs.appendFileSync(env.OPK_NATIVE_GH_AUDIT, JSON.stringify({ args, endpoint }));',
+    "    const stdout = endpoint.endsWith('/issues/228') ? JSON.stringify({ body: 'fixture current body' }) : '';",
+    "    return { pid: 1, output: [null, stdout, ''], stdout, stderr: '', status: stdout ? 0 : 3, signal: null };",
     '  }',
-    '  return originalSpawnSync.apply(this, arguments);',
+    '  return original.apply(this, arguments);',
     '};',
     "require('node:module').syncBuiltinESMExports();",
-  ].join('\n'), 'utf8');
+  ].join('\n');
+  writeFileSync(path, source, 'utf8');
 }
 
 function git(root: string, ...args: string[]): void {
@@ -474,10 +472,6 @@ describe('Issue #2507 selected-target edit-history GraphQL refusal', () => {
       GH_HOST: 'github.com',
       GH_REAL_BINARY: process.execPath,
       NODE_OPTIONS: `--require=${preload}`,
-      OPK_FAKE_GH_RESPONSES: JSON.stringify([{
-        includes: 'repos/example/alpha/issues/228',
-        stdout: JSON.stringify({ body: 'fixture current body' }),
-      }]),
       GH_WRAPPER_ACTIVE: '',
       OPK_NATIVE_GH_AUDIT: audit,
     });
