@@ -1,0 +1,31 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2510,
+  "declared_paths": [
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.subprocess.test.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/pr-scope-declaration.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.subprocess.test.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts"
+  ],
+  "source_revision": "58dbed314faf16c74a2bf0dcbad2beb15aa85920"
+}
