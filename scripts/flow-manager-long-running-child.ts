@@ -803,57 +803,93 @@ async function provenOwnedTab(
   }
 }
 
-async function persistedTerminalEvidence(
+interface FinalObservationProjection {
+  readonly record: StateLightTurnObservationRecord;
+  readonly cdp: string;
+  readonly delivery: DeliveryState;
+  readonly heartbeat?: Record<string, unknown>;
+  readonly verifiedReplyLength?: number;
+}
+
+/** One launch-selected, read-only observation and at most one final-primary integrity read. */
+function finalObservationProjection(
   config: LaunchConfig,
   heartbeatDiagnostics?: Record<string, unknown>,
-): Promise<Partial<TerminalEnvelope> | null> {
+  candidate?: ParsedTurnResult,
+): FinalObservationProjection | null {
   const invocation = childOption(config, '--invocation-id');
   const profile = childOption(config, '--profile');
   const cdp = childOption(config, '--cdp');
   if (!invocation || !profile || !cdp) return null;
   let record: StateLightTurnObservationRecord;
   try {
-    record = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocation);
+    const profileKey = configuredProfileKey(profile, cdp);
+    record = readStateLightTurnObservation(profileKey, invocation);
+    // The launcher lookup alone is not authority to borrow a different parsed turn's primary.
+    if (candidate && (candidate.invocation_id !== invocation
+      || candidate.invocation_id !== record.invocation_id
+      || candidate.configured_profile_key !== profileKey
+      || candidate.configured_profile_key !== record.profile_key)) return null;
   } catch {
     return null;
   }
-  const locator = (record.send_count ?? 0) >= 1 ? await provenOwnedTab(config, record, cdp) : undefined;
+
   const harvestedPrimary = record.phase === 'harvested' && Boolean(record.primary);
   const preDispatch = (record.phase === 'prepared' || record.phase === 'not_sent')
     && record.transition_reason !== 'send_delivery_unproven'
     && (record.send_count === undefined || record.send_count === 0);
 
+  let verifiedReplyLength: number | undefined;
+  let verifiedReplySha256Head: string | undefined;
+  if (harvestedPrimary && (candidate || heartbeatDiagnostics)) {
+    try {
+      const bytes = readFileSync(record.primary!.target);
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      if (bytes.byteLength === record.primary!.byte_length && sha256 === record.primary!.sha256) {
+        verifiedReplyLength = bytes.toString('utf8').length;
+        verifiedReplySha256Head = verifiedReplyLength ? sha256.slice(0, 16) : '';
+      }
+    } catch {
+      // The committed harvest proves landing even when its target is no longer readable.
+    }
+  }
+
   let projectedHeartbeat = heartbeatDiagnostics;
   if (record.phase === 'harvested' && heartbeatDiagnostics) {
-    // A final harvest supersedes reply advisories from an earlier accepted heartbeat.
-    // Preserve its liveness fields, but never publish stale length/hash as the final reply.
-    const liveness = { ...heartbeatDiagnostics };
-    delete liveness.last_reply_length;
-    delete liveness.last_reply_sha256_head;
-    projectedHeartbeat = liveness;
-    if (record.primary) {
-      try {
-        const bytes = readFileSync(record.primary.target);
-        const sha256 = createHash('sha256').update(bytes).digest('hex');
-        if (bytes.byteLength === record.primary.byte_length && sha256 === record.primary.sha256) {
-          const reply = bytes.toString('utf8');
-          projectedHeartbeat = {
-            ...liveness,
-            last_reply_length: reply.length,
-            ...(typeof heartbeatDiagnostics.last_reply_sha256_head === 'string'
-              ? { last_reply_sha256_head: reply.length ? sha256.slice(0, 16) : '' } : {}),
-          };
-        }
-      } catch {
-        // The persisted harvest still proves delivery, not current target readability.
+    // Keep accepted liveness but remove advisories that no longer describe final bytes.
+    projectedHeartbeat = { ...heartbeatDiagnostics };
+    delete projectedHeartbeat.last_reply_length;
+    delete projectedHeartbeat.last_reply_sha256_head;
+    if (verifiedReplyLength !== undefined) {
+      projectedHeartbeat.last_reply_length = verifiedReplyLength;
+      if (typeof heartbeatDiagnostics.last_reply_sha256_head === 'string') {
+        projectedHeartbeat.last_reply_sha256_head = verifiedReplySha256Head;
       }
     }
   }
 
   return {
+    record,
+    cdp,
+    delivery: harvestedPrimary ? 'landed' : preDispatch ? 'not-sent' : 'POSSIBLY_DELIVERED',
+    ...(projectedHeartbeat ? { heartbeat: projectedHeartbeat } : {}),
+    ...(verifiedReplyLength !== undefined ? { verifiedReplyLength } : {}),
+  };
+}
+
+async function persistedTerminalEvidence(
+  config: LaunchConfig,
+  heartbeatDiagnostics?: Record<string, unknown>,
+): Promise<Partial<TerminalEnvelope> | null> {
+  const projection = finalObservationProjection(config, heartbeatDiagnostics);
+  if (!projection) return null;
+  const { record, cdp } = projection;
+  // Owned-tab probing is incident-only; parsed successful results retain their own locator.
+  const locator = (record.send_count ?? 0) >= 1 ? await provenOwnedTab(config, record, cdp) : undefined;
+  return {
     observed_invocation_id: record.invocation_id,
     ...(record.send_count !== undefined ? { send_count: record.send_count } : {}),
-    delivery: harvestedPrimary ? 'landed' : preDispatch ? 'not-sent' : 'POSSIBLY_DELIVERED',
+    delivery: projection.delivery,
     recovery_available: Boolean(locator),
     ...(locator ? { conversation_locator: locator } : {}),
     diagnostics: {
@@ -861,7 +897,7 @@ async function persistedTerminalEvidence(
         phase: record.phase, ...(record.send_count !== undefined ? { send_count: record.send_count } : {}),
         profile_key: record.profile_key,
       },
-      ...(projectedHeartbeat ? { last_heartbeat: projectedHeartbeat } : {}),
+      ...(projection.heartbeat ? { last_heartbeat: projection.heartbeat } : {}),
     },
   };
 }
@@ -1058,6 +1094,19 @@ async function finalizeCandidatePath(
     return 1;
   }
   if (candidate.state === 'ok') {
+    const observation = finalObservationProjection(config, heartbeatDiagnostics, candidate);
+    const resultDelivery = deriveDelivery(candidate, false);
+    const delivery = observation?.delivery === 'landed'
+      ? 'landed'
+      : observation?.delivery === 'POSSIBLY_DELIVERED' && resultDelivery === 'not-sent'
+        ? 'POSSIBLY_DELIVERED' : resultDelivery;
+    const successDiagnostics = observation
+      ? {
+          ...(observation.heartbeat ?? {}),
+          ...(observation.verifiedReplyLength !== undefined
+            ? { last_reply_length: observation.verifiedReplyLength } : {}),
+        }
+      : heartbeatDiagnostics;
     await publishEnvelope(config, {
       schema: TERMINAL_SCHEMA,
       run_identity: config.runIdentity,
@@ -1068,7 +1117,7 @@ async function finalizeCandidatePath(
       handoff_committed_at: receipt.handoff_committed_at,
       terminal_at: nowIso(),
       lifecycle_outcome: 'success',
-      delivery: deriveDelivery(candidate, false),
+      delivery,
       child_exit_code: resolvedExitCode,
       child_exit_diagnostic: childExitDiagnostic,
       turn_result_state: candidate.state,
@@ -1080,7 +1129,7 @@ async function finalizeCandidatePath(
         ? { observed_turn_result_identity: candidate.observed_turn_result_identity }
         : {}),
       ...conversationLocatorFields(config, candidate),
-      ...(heartbeatDiagnostics ? { diagnostics: heartbeatDiagnostics } : {}),
+      ...(successDiagnostics && Object.keys(successDiagnostics).length ? { diagnostics: successDiagnostics } : {}),
     });
     await abortManagedProcess(controller, runPromise);
     return 0;
