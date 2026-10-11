@@ -131,8 +131,11 @@ export type { StopOwnedGenerationOutcome };
 const DEFAULT_TIMEOUT_MS = 1_800_000;
 /** Local CDP DOM reads after dispatch; not send/navigation pacing. */
 export const POST_SEND_OBSERVATION_POLL_MS = 15_000;
-// Leave room for bounded terminal page/CDP cleanup and stdout publication.
-const CONFIRMED_OWNED_PAGE_LOSS_RECOVERY_MS = 30_000;
+// After the tab closes, a 15s ordinary poll and up to a 5s read can precede
+// detection. Reserve the existing 15s CDP release and 7s terminal/overshoot
+// headroom inside AC2's 60s child-only bound: 15 + 5 + 18 + 15 + 7 = 60.
+// Do not shorten healthy/open-page observation or manufacture a loss timestamp.
+const CONFIRMED_OWNED_PAGE_LOSS_RECOVERY_MS = 18_000;
 const DEFAULT_POLL_MS = POST_SEND_OBSERVATION_POLL_MS;
 const INITIAL_POLL_MS = 500;
 // Consecutive finished-answer reads without a rendered owned user message
@@ -4195,6 +4198,11 @@ async function runTurnCore(
         try {
           ownedGenerationSeen = await locatorCount(page.locator(RENDERED_STOP_BUTTON_SELECTOR), hardExhaustionDeadline) > 0;
         } catch (error) {
+          if (browserOrPageDefinitelyLost(page, browser)) {
+            const terminal = await recoverCurrentObservation();
+            if (terminal) return terminal;
+            continue;
+          }
           if (isPostSendTargetCrash(error)) throw error;
         }
       }
@@ -4943,7 +4951,17 @@ async function runTurnCore(
           // that passed exact full-content stability is admissible.
           const captureReply = decision.reply;
           const managerReply = captureReply;
-          const finalObservation = await readPostSendObservation(page, marker, baselineCount, hardExhaustionDeadline, observeProductWall);
+          let finalObservation: Awaited<ReturnType<typeof readPostSendObservation>>;
+          try {
+            finalObservation = await readPostSendObservation(page, marker, baselineCount, hardExhaustionDeadline, observeProductWall);
+          } catch (error) {
+            if (browserOrPageDefinitelyLost(page, browser)) {
+              const terminal = await recoverCurrentObservation();
+              if (terminal) return terminal;
+              continue;
+            }
+            throw error;
+          }
           const finalKeyedCandidate = ownedCarrierKey
             ? keyedHarvestCandidate(finalObservation.snapshot, baselineSnapshot, ownedCarrierKey)
             : undefined;
