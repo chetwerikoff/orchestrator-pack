@@ -2282,6 +2282,7 @@ async function existingRetryDomGuards(input: {
     || baseline.carriers.some((carrier) =>
       !carrier.fingerprint || normalizeVisibleText(carrier.text).length === 0)) return false;
   const samePage = (): boolean => !browserOrPageDefinitelyLost(input.page, input.browser)
+    && pageConversationUrl(input.page) === input.targetChatUrl
     && readOwnedConversationIdentity(input.page, input.targetChatUrl).matched
     && Date.now() < input.deadlineMs;
   if (!samePage()) return false;
@@ -3789,6 +3790,9 @@ async function runTurnCore(
         );
       }
 
+      if (Date.now() >= invocationDeadlineMs) {
+        return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      }
       // A long existing chat gets an initial hydration window before one
       // optional same-URL reopen. Navigation and renewed readiness retain a
       // positive share of the original absolute invocation deadline.
@@ -3846,6 +3850,9 @@ async function runTurnCore(
             journalWriteFailed,
           ),
         };
+      }
+      if (Date.now() >= invocationDeadlineMs) {
+        return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       if (composerState.state !== 'ready') return returnComposerMutationFailure('composer_unavailable');
 
