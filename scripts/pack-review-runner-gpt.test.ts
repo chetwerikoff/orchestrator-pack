@@ -5145,9 +5145,11 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
           runId: f.runId, terminalized: true,
           statusReconciled: mode === 'written',
           reason: 'gpt_sources_incomplete_after_grace:1/3',
-          ...(mode === 'written' ? {} : {
+          ...(mode === 'write-failed' ? {
             nextAction: expect.stringContaining('reconcile --source-repo-root'),
-          }),
+          } : mode === 'head-advanced' ? {
+            nextAction: 'run review for the current PR head',
+          } : {}),
         }),
       ]));
       expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
