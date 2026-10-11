@@ -803,7 +803,10 @@ async function provenOwnedTab(
   }
 }
 
-async function persistedTerminalEvidence(config: LaunchConfig): Promise<Partial<TerminalEnvelope> | null> {
+async function persistedTerminalEvidence(
+  config: LaunchConfig,
+  heartbeatDiagnostics?: Record<string, unknown>,
+): Promise<Partial<TerminalEnvelope> | null> {
   const invocation = childOption(config, '--invocation-id');
   const profile = childOption(config, '--profile');
   const cdp = childOption(config, '--cdp');
@@ -815,16 +818,51 @@ async function persistedTerminalEvidence(config: LaunchConfig): Promise<Partial<
     return null;
   }
   const locator = (record.send_count ?? 0) >= 1 ? await provenOwnedTab(config, record, cdp) : undefined;
+  const harvestedPrimary = record.phase === 'harvested' && Boolean(record.primary);
+  const preDispatch = (record.phase === 'prepared' || record.phase === 'not_sent')
+    && record.transition_reason !== 'send_delivery_unproven'
+    && (record.send_count === undefined || record.send_count === 0);
+
+  let projectedHeartbeat = heartbeatDiagnostics;
+  if (record.phase === 'harvested' && heartbeatDiagnostics) {
+    // A final harvest supersedes reply advisories from an earlier accepted heartbeat.
+    // Preserve its liveness fields, but never publish stale length/hash as the final reply.
+    const liveness = { ...heartbeatDiagnostics };
+    delete liveness.last_reply_length;
+    delete liveness.last_reply_sha256_head;
+    projectedHeartbeat = liveness;
+    if (record.primary) {
+      try {
+        const bytes = readFileSync(record.primary.target);
+        const sha256 = createHash('sha256').update(bytes).digest('hex');
+        if (bytes.byteLength === record.primary.byte_length && sha256 === record.primary.sha256) {
+          const reply = bytes.toString('utf8');
+          projectedHeartbeat = {
+            ...liveness,
+            last_reply_length: reply.length,
+            ...(typeof heartbeatDiagnostics.last_reply_sha256_head === 'string'
+              ? { last_reply_sha256_head: reply.length ? sha256.slice(0, 16) : '' } : {}),
+          };
+        }
+      } catch {
+        // The persisted harvest still proves delivery, not current target readability.
+      }
+    }
+  }
+
   return {
     observed_invocation_id: record.invocation_id,
     ...(record.send_count !== undefined ? { send_count: record.send_count } : {}),
-    delivery: (record.send_count ?? 0) >= 1 || record.phase === 'dispatching' ? 'POSSIBLY_DELIVERED' : 'not-sent',
+    delivery: harvestedPrimary ? 'landed' : preDispatch ? 'not-sent' : 'POSSIBLY_DELIVERED',
     recovery_available: Boolean(locator),
     ...(locator ? { conversation_locator: locator } : {}),
-    diagnostics: { persisted_observation: {
-      phase: record.phase, ...(record.send_count !== undefined ? { send_count: record.send_count } : {}),
-      profile_key: record.profile_key,
-    } },
+    diagnostics: {
+      persisted_observation: {
+        phase: record.phase, ...(record.send_count !== undefined ? { send_count: record.send_count } : {}),
+        profile_key: record.profile_key,
+      },
+      ...(projectedHeartbeat ? { last_heartbeat: projectedHeartbeat } : {}),
+    },
   };
 }
 
@@ -836,16 +874,18 @@ async function terminalNoResultEvidence(
   heartbeatDiagnostics: Record<string, unknown> | undefined,
 ): Promise<Partial<TerminalEnvelope> & Pick<TerminalEnvelope, 'delivery' | 'recovery_available'>> {
   const receiptEvidence = receiptEvidenceForTerminalIncident(config, capture, incident);
-  const persisted = await persistedTerminalEvidence(config);
-  if (persisted) return {
-    delivery: deliveryWithoutTurnResult(spawnFailed), recovery_available: false, ...persisted,
-    ...(receiptEvidence ? { turn_result_state: receiptEvidence.state, turn_result_cause: receiptEvidence.cause } : {}),
-    diagnostics: boundedDiagnostics({
-      ...persisted.diagnostics,
-      ...(receiptEvidence ? cancellationDiagnostics(receiptEvidence, heartbeatDiagnostics)
-        : heartbeatDiagnostics ? { last_heartbeat: heartbeatDiagnostics } : {}),
-    }),
-  };
+  const persisted = await persistedTerminalEvidence(config, heartbeatDiagnostics);
+  if (persisted) {
+    const projectedHeartbeat = (persisted.diagnostics as { last_heartbeat?: Record<string, unknown> })?.last_heartbeat;
+    return {
+      delivery: deliveryWithoutTurnResult(spawnFailed), recovery_available: false, ...persisted,
+      ...(receiptEvidence ? { turn_result_state: receiptEvidence.state, turn_result_cause: receiptEvidence.cause } : {}),
+      diagnostics: boundedDiagnostics({
+        ...persisted.diagnostics,
+        ...(receiptEvidence ? cancellationDiagnostics(receiptEvidence, projectedHeartbeat) : {}),
+      }),
+    };
+  }
   const invocationId = childOption(config, '--invocation-id');
   if (!receiptEvidence) {
     const postSendObserved = heartbeatDiagnostics?.phase === 'post_send_observation';
