@@ -5480,6 +5480,19 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
   if (!reviewer && !syntheticNoReviewer) {
     throw new Error(reviewerResolution.errorMessage ?? 'pack review reviewer selector did not resolve');
   }
+  // Reconciliation can hydrate the original comment and refresh updatedAt/
+  // heartbeat while preserving the same dead owner. Capture its actual stale
+  // grace + dead-PID evidence before that benign store mutation.
+  const deadOwnersBeforeReconcile = new Map(
+    listPackReviewRunRecordsRaw({ projectId, storeRoot })
+      .filter((candidate) => isPackReviewRunStale(candidate)
+        || (isPackReviewUnfinishedTerminalRun(candidate)
+          && isPackReviewRunStale({ ...candidate, status: 'reviewing' })))
+      .map((candidate) => [candidate.id, {
+        runnerPid: candidate.runnerPid,
+        heartbeatAtUtc: candidate.heartbeatAtUtc,
+      }]),
+  );
   await reconcileStalePackReviewRuns({
     repoSlug: target.repoSlug,
     sourceRepoRoot: target.sourceRepoRoot,
@@ -6017,9 +6030,17 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       && candidate.reviewRound?.issueNumber === authoritative.issueNumber
       && candidate.reviewRound?.boundIssueSnapshotDigest === authoritative.snapshotDigest
     );
-    const incumbentOwnerDead = (candidate: PackReviewRunRecord) => isPackReviewRunStale(candidate)
-      || (isPackReviewUnfinishedTerminalRun(candidate)
-        && isPackReviewRunStale({ ...candidate, status: 'reviewing' }));
+    const incumbentOwnerDead = (candidate: PackReviewRunRecord) => {
+      const original = deadOwnersBeforeReconcile.get(candidate.id);
+      return isPackReviewRunStale(candidate)
+        || (isPackReviewUnfinishedTerminalRun(candidate)
+          && isPackReviewRunStale({ ...candidate, status: 'reviewing' }))
+        || Boolean(original
+          && original.runnerPid === candidate.runnerPid
+          && isPackReviewRunStale({
+            ...candidate, status: 'reviewing', heartbeatAtUtc: original.heartbeatAtUtc,
+          }));
+    };
     const rejectIncumbent = async (candidate: PackReviewRunRecord, reason: string, nextAction: string) => {
       await releaseEarlyClaim(reason);
       return {
@@ -6075,8 +6096,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
             && slot.lifecycle === 'terminal'
             && (authoritativePreSend(slot) || (
               Boolean(slot.terminalClass)
-              && slot.terminalResult?.send_count === 0
-              && !terminalHasPossibleDelivery(slot.terminalResult)
+              && (slot.terminalResult as Record<string, unknown> | undefined)?.send_count === 0
+              && !terminalHasPossibleDelivery(slot.terminalResult as Record<string, unknown>)
             ))
           )));
         const eligibleSlotIds = [...new Set([...replacementSlotIds, ...initialLaunchSlotIds])];
