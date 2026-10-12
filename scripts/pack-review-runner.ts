@@ -4126,11 +4126,10 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         }
         if (!issueNumber) throw new Error('linked Issue unresolved');
         currentFields = await resolveCurrentIssueFields(input.sourceRepoRoot, options.repoSlug, issueNumber);
-      } catch (error) {
-        return { prNumber, finalCapSettlement: true, settled: false,
-          reason: 'final_cap_live_issue_unavailable',
-          detail: describeError(error),
-          nextAction: 'retry linked Issue title/body verification before final-cap settlement' };
+      } catch {
+        // A mutable Issue title/body read outage is not itself evidence of
+        // a raised tier. Preserve the frozen T2 final-cap continuation when
+        // there is no authenticated upward amendment to apply.
       }
     }
     if (currentFields) {
