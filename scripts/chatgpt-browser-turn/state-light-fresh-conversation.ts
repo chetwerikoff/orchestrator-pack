@@ -840,10 +840,14 @@ export async function prepareStateLightFreshConversation(
     const needsSurface = !currentUrl || !isBlankProjectSurfaceUrl(currentUrl, config.projectUrl);
     if (needsSurface) {
       await openBlankProjectChatSurface(page, config.projectUrl, navigation, deadlineMs, now);
-      const afterNavigationWall = await probeProductWall(page, deadlineMs, now);
-      onProductWall?.(afterNavigationWall);
-      if (afterNavigationWall.wall_kind === 'account_load_error') {
-        return { state: 'recovery_required', cause: 'account_load_error' };
+      // A successful last-moment commit must not start a new status read
+      // beyond the preparation deadline (existing zero-extra-probe contract).
+      if (deadlineMs === undefined || deadlineMs - now() >= 100) {
+        const afterNavigationWall = await probeProductWall(page, deadlineMs, now);
+        onProductWall?.(afterNavigationWall);
+        if (afterNavigationWall.wall_kind === 'account_load_error') {
+          return { state: 'recovery_required', cause: 'account_load_error' };
+        }
       }
       try {
         currentUrl = normalizeConversationUrl(page.url());
