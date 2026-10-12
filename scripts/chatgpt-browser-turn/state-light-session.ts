@@ -1034,7 +1034,8 @@ async function observeAndPublish(
         previousReply = '';
       }
       if (decision.state === 'ready' && decision.reply) {
-        if (decision.reply.length > bestReply.length) bestReply = decision.reply;
+        // The complete, stable current observation is authoritative, not its historical maximum.
+        bestReply = decision.reply;
         if (deps.replyStable(decision.reply, previousReply)) stableReads += 1;
         else {
           previousReply = decision.reply;
@@ -1046,7 +1047,7 @@ async function observeAndPublish(
           }
           const finalIdentityFailure = conversationIdentityContinuity(state);
           if (finalIdentityFailure) return { terminal: finalIdentityFailure, markerCount };
-          const reply = bestReply.length >= decision.reply.length ? bestReply : decision.reply;
+          const reply = decision.reply;
           const publication = deps.publishReply(payload.item.outputPath, state.invocationId, reply);
           if (publication.state !== 'committed_ok') {
             return {
