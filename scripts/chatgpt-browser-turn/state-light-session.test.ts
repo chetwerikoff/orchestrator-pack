@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { InputSnapshot } from './input.ts';
 import { STATE_LIGHT_NAVIGATION_TIMEOUT_MS } from './state-light-fresh-conversation.ts';
+import { classifyPageObservation } from './state-light-turn-base.ts';
 import {
   COMPOSER_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR,
@@ -133,6 +134,7 @@ function makeHarness(
           count: async () => options.atomicRows!().length,
           evaluateAll: async (callback: (elements: any[], args: any) => unknown, args: any) => {
             const elements = options.atomicRows!().map((row) => ({
+              getBoundingClientRect: () => ({ height: 20 }),
               getAttribute: (attribute: string) => {
                 if (attribute === 'data-chatgpt-selection-message-id' && row.key?.startsWith('data-chatgpt-selection-message-id:')) return row.key.slice('data-chatgpt-selection-message-id:'.length);
                 if (attribute === 'data-message-id' && row.key?.startsWith('data-message-id:')) return row.key.slice('data-message-id:'.length);
@@ -1061,5 +1063,141 @@ describe('SessionStdoutWriter', () => {
     const writer = new SessionStdoutWriter(stream, 100, () => 100);
     await expect(writer.write({ record: 1 })).resolves.toBe(false);
     expect(destroyed).toBe(true);
+  });
+});
+
+
+// Existing session execution harness, using full atomic transcripts in a long reused chat.
+type HarvestRow2536 = { role: 'user' | 'assistant'; text: string; key: string };
+function harvestHistory2536(): HarvestRow2536[] {
+  return Array.from({ length: 8 }, (_, i): HarvestRow2536[] => [
+    { role: 'user', text: `historical user ${i}`, key: `data-message-id:historical-user-${i}-2536` },
+    { role: 'assistant', text: `historical assistant ${i}`, key: `data-message-id:historical-assistant-${i}-2536` },
+  ]).flat();
+}
+function harvestObservation2536(rows: readonly HarvestRow2536[], finished: boolean) {
+  return {
+    messages: rows.map(({ role, text }) => ({ role, text })),
+    ownedWindowCompletionReady: finished,
+    transcriptIncomplete: false,
+    snapshot: {
+      complete: true,
+      carriers: rows.map(({ role, text, key }, domIndex) => ({
+        role, text, key, domIndex, completionReady: finished && role === 'assistant',
+        fingerprint: createHash('sha256').update(`${role}\u0000${text.replace(/\r\n?/g, '\n').replace(/[\t ]+/g, ' ').trim()}`).digest('hex'),
+      })),
+    },
+  };
+}
+
+describe('Issue #2536: current session harvest in a long reused chat', () => {
+  it('publishes only P3 SHORT after owned marker A-to-B with one finished reply and one Send', async () => {
+    const history = harvestHistory2536();
+    const harness = makeHarness(['one'], { timeoutMs: 200 });
+    const published: string[] = [];
+    let observations = 0;
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      classifyObservation: classifyPageObservation,
+      readObservation: async () => {
+        if (harness.metrics.sends === 0) return harvestObservation2536(history, false);
+        observations++;
+        const ownedText = harness.messages.find((row) => row.role === 'user')!.text;
+        const key = observations === 1
+          ? 'data-message-id:current-user-a-2536'
+          : 'data-message-id:current-user-b-2536';
+        const reply = observations === 1 ? 'LONG reply has older surplus text' : 'SHORT';
+        return harvestObservation2536([
+          ...history,
+          { role: 'user', text: ownedText, key },
+          { role: 'assistant', text: reply, key: 'data-message-id:current-assistant-x-2536' },
+        ], true);
+      },
+      publishReply: (_path, _invocation, reply) => {
+        published.push(reply);
+        return { state: 'committed_ok', output: { byte_length: Buffer.byteLength(reply), sha256: `hash-${reply}` } };
+      },
+    };
+    expect(await runStateLightSession(harness.argv, dependencies)).toBe(0);
+    expect(observations).toBeGreaterThanOrEqual(3);
+    expect(harness.metrics.sends).toBe(1);
+    expect(published).toEqual(['SHORT']);
+    expect(aggregate(harness.stream)).toMatchObject({ state: 'ok', total_send_count: 1 });
+    expect(records(harness.stream).find((row) => row.phase === 'terminal')).toMatchObject({
+      delivery_state: 'delivered', send_count: 1, state: 'ok',
+    });
+  });
+
+  it('never publishes one of concurrently finished X/Y in the marked current window', async () => {
+    const history = harvestHistory2536();
+    const harness = makeHarness(['one'], { timeoutMs: 60 });
+    const published: string[] = [];
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      classifyObservation: classifyPageObservation,
+      readObservation: async () => harness.metrics.sends === 0
+        ? harvestObservation2536(history, false)
+        : harvestObservation2536([
+          ...history,
+          { role: 'user', text: harness.messages[0]!.text, key: 'data-message-id:current-user-a-2536' },
+          { role: 'assistant', text: 'finished X', key: 'data-message-id:current-assistant-x-2536' },
+          { role: 'assistant', text: 'finished Y', key: 'data-message-id:current-assistant-y-2536' },
+        ], true),
+      publishReply: (_path, _invocation, reply) => {
+        published.push(reply);
+        return { state: 'committed_ok', output: { byte_length: Buffer.byteLength(reply), sha256: `hash-${reply}` } };
+      },
+    };
+    await runStateLightSession(harness.argv, dependencies);
+    expect(harness.metrics.sends).toBe(1);
+    expect(published).toEqual([]);
+    expect(aggregate(harness.stream)).toMatchObject({
+      state: 'observation_uncertain', total_send_count: 1,
+    });
+  });
+
+  it.each([false, true])('preserves strict markerless U bridge (competing X/Y: %s)', async (competing) => {
+    const history = harvestHistory2536();
+    const ownKey = 'data-message-id:current-owned-u-2536';
+    const assistantX: HarvestRow2536 = { role: 'assistant', text: 'finished X', key: 'data-message-id:current-assistant-x-2536' };
+    const assistantY: HarvestRow2536 = { role: 'assistant', text: 'finished Y', key: 'data-message-id:current-assistant-y-2536' };
+    let hideMarker = false;
+    let currentRows: HarvestRow2536[] = history;
+    const published: string[] = [];
+    const stream = new CaptureStream(() => false, (value) => {
+      if (value.schema === 'session-payload/v1' && value.phase === 'delivery-bound') hideMarker = true;
+    });
+    const harness = makeHarness(['one'], {
+      stream, timeoutMs: 90, atomicRows: () => currentRows,
+    });
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      classifyObservation: classifyPageObservation,
+      readObservation: async () => {
+        if (harness.metrics.sends === 0) {
+          currentRows = history;
+          return harvestObservation2536(currentRows, false);
+        }
+        currentRows = [
+          ...history,
+          { role: 'user', text: hideMarker ? 'owned user re-render without marker' : harness.messages[0]!.text, key: ownKey },
+          assistantX,
+          ...(competing ? [assistantY] : []),
+        ];
+        // Do not finish in the first marker-visible observation; exercise the
+        // keyed bridge after delivery-bound and repeated markerless snapshots.
+        return harvestObservation2536(currentRows, hideMarker);
+      },
+      publishReply: (_path, _invocation, reply) => {
+        published.push(reply);
+        return { state: 'committed_ok', output: { byte_length: Buffer.byteLength(reply), sha256: `hash-${reply}` } };
+      },
+    };
+    await runStateLightSession(harness.argv, dependencies);
+    expect(harness.metrics.sends).toBe(1);
+    expect(published).toEqual(competing ? [] : ['finished X']);
+    expect(aggregate(stream)).toMatchObject({
+      state: competing ? 'observation_uncertain' : 'ok', total_send_count: 1,
+    });
   });
 });

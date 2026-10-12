@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,7 +21,7 @@ vi.mock('./ui-adapter.ts', async (original) => buildUiAdapterTestMock(
 
 import { buildUiAdapterTestMock, collectionLocator, createBrowserSessionModuleMock, createCoordinationModuleMock, enqueueBrowserForTurn, runStateLightTurnWithStdoutCapture, scalarLocator, stableTurnInput } from './state-light-turn.test-fixtures.ts';
 import { COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR, MESSAGE_NODE_SELECTOR, MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE } from './product-page-selectors.ts';
-import { __testSendDelivery, readPageObservation, runStateLightTurn } from './state-light-turn-base.ts';
+import { __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { configuredProfileKey } from './storage-common.ts';
 import { readTerminalEnvelope, runLaunch } from '../flow-manager-long-running-child.ts';
@@ -619,5 +619,72 @@ describe('production attempted-send result and durable envelope', () => {
           launchProfileKey: configuredProfileKey(profile, cdp), launchCdpUrl: cdp, terminalResult,
         }, observation)).toBe(preDispatch);
       }
+  });
+});
+
+
+describe('Issue #2536: unique current reply and strict keyed cardinality', () => {
+  type Row = { role: 'user' | 'assistant'; text: string; key: string };
+  const history: Row[] = Array.from({ length: 8 }, (_, i): Row[] => [
+    { role: 'user', text: `history user ${i}`, key: `data-message-id:history-user-${i}-2536` },
+    { role: 'assistant', text: `history reply ${i}`, key: `data-message-id:history-assistant-${i}-2536` },
+  ]).flat();
+  const ownKey = 'data-message-id:owned-user-u-2536';
+  const assistantX = { role: 'assistant' as const, text: 'finished reply X', key: 'data-message-id:assistant-x-2536' };
+  const assistantY = { role: 'assistant' as const, text: 'finished reply Y', key: 'data-message-id:assistant-y-2536' };
+  const snapshot = (rows: Row[]): AtomicTranscriptSnapshot => ({
+    complete: true,
+    carriers: rows.map(({ role, text, key }, domIndex) => ({
+      role, text, key, domIndex, completionReady: role === 'assistant',
+      fingerprint: createHash('sha256').update(`${role}\u0000${text}`).digest('hex'),
+    })),
+  });
+
+  it('keeps a single exact-marker finished reply deliverable after user carrier A-to-B churn', () => {
+    const original = [...history, { role: 'user' as const, text: MARKED_PROMPT, key: 'data-message-id:owner-a-2536' }, assistantX];
+    const rekeyed = [...history, { role: 'user' as const, text: MARKED_PROMPT, key: 'data-message-id:owner-b-2536' }, assistantX];
+    expect(classifyPageObservation(original, history.length, MARKER, false))
+      .toEqual({ state: 'ready', reply: assistantX.text });
+    expect(classifyPageObservation(rekeyed, history.length, MARKER, false))
+      .toEqual({ state: 'ready', reply: assistantX.text });
+    expect(classifyPageObservation([...history, { role: 'user', text: MARKED_PROMPT, key: ownKey }, { ...assistantX, text: 'SHORT' }], history.length, MARKER, false))
+      .toEqual({ state: 'ready', reply: 'SHORT' });
+  });
+
+  it('does not select the last of two concurrently finished visible assistants', () => {
+    const rows = [...history, { role: 'user' as const, text: MARKED_PROMPT, key: ownKey }, assistantX, assistantY];
+    expect(classifyPageObservation(rows, history.length, MARKER, false).state).not.toBe('ready');
+    expect(classifyPageObservation(rows, history.length, MARKER, true).state).not.toBe('ready');
+    expect(classifyPageObservation([...rows, { role: 'user', text: 'foreign turn', key: 'data-message-id:foreign-2536' }], history.length, MARKER, false).state).not.toBe('ready');
+  });
+
+  it('refuses complete-markerless keyed X/Y even when the last carrier would revalidate', async () => {
+    const baseline = snapshot(history);
+    const markerless: Row[] = [...history, { role: 'user', text: 'same owned carrier without rendered marker', key: ownKey }, assistantX, assistantY];
+    const complete = snapshot(markerless);
+    expect(keyedHarvestCandidate(complete, baseline, ownKey).state).not.toBe('ready');
+
+    const page = { locator: () => ({
+      evaluateAll: async (callback: (elements: any[], args: any) => unknown, args: any) => callback(markerless.map((row) => ({
+        getBoundingClientRect: () => ({ height: 20 }),
+        getAttribute: (attr: string) => attr === 'data-message-id' ? row.key.slice('data-message-id:'.length) : null,
+        querySelectorAll: () => [],
+        querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+          ? { getAttribute: () => row.role === 'user' ? 'user-message' : 'assistant-message' }
+          : null,
+        closest: () => ({ querySelector: (selector: string) => selector === args.inProgressSelector ? null : {} }),
+        innerText: row.text,
+      })), args),
+    }) };
+    expect(await revalidateKeyedHarvest(page, baseline, ownKey, {
+      reply: assistantY.text, assistantKey: assistantY.key, snapshotSignature: atomicSnapshotSignature(complete),
+    })).toEqual({ state: 'continuity-unproven' });
+
+    const single = keyedHarvestCandidate(snapshot(markerless.slice(0, -1)), baseline, ownKey);
+    expect(single).toEqual({ state: 'ready', reply: assistantX.text, assistantKey: assistantX.key });
+    expect(keyedHarvestCandidate({ complete: false, carriers: complete.carriers }, baseline, ownKey).state)
+      .toBe('continuity-unproven');
+    expect(keyedHarvestCandidate(complete, { complete: false, carriers: baseline.carriers }, ownKey).state)
+      .toBe('continuity-unproven');
   });
 });
