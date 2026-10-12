@@ -1300,7 +1300,16 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
   if (!liveIssue && !started && priorCycle?.reviewStageComplete !== true) {
     throw new Error('linked Issue title/body missing at fresh admission');
   }
-  const observedTier = liveIssue ? parseAuthoritativeTier(liveIssue.body, liveIssue.title) : undefined;
+  let observedTier: PackReviewTier | undefined;
+  if (liveIssue) {
+    try {
+      observedTier = parseAuthoritativeTier(liveIssue.body, liveIssue.title);
+    } catch (error) {
+      if (!started && priorCycle?.reviewStageComplete !== true) throw error;
+      // An invalid mutable update cannot replace or corrupt a valid frozen
+      // Issue snapshot for an already started/settled run.
+    }
+  }
   const rank = { T1: 1, T2: 2, T3: 3 } as const;
   let tier: PackReviewTier = observedTier ?? priorCycle?.frozenTier ?? snapshotTier;
   if (priorCycle && (started || priorCycle.reviewStageComplete === true || priorCycle.state === 'closed')) {
@@ -3501,10 +3510,8 @@ async function commitRecoveredGptAuthority(options: {
   if (authority.currentHeadSha !== options.run.targetSha) {
     throw new Error('recovered pack review authority head does not match the recovered run');
   }
-  if (authority.cycle?.frozenTier !== round.tier) {
-    throw new Error('recovered pack review tier does not match frozen authority');
-  }
-
+  // Historical GPT source tier/cap are frozen, even if the *cycle*
+  // was subsequently raised on the same run and ordinal.
   const target = {
     prNumber: options.run.prNumber,
     headSha: options.run.targetSha,
@@ -3531,9 +3538,23 @@ async function commitRecoveredGptAuthority(options: {
     target,
     options.projectId,
   );
-  if (authoritative.tier !== round.tier
-      || authoritative.snapshotDigest !== round.boundIssueSnapshotDigest) {
+  if (authoritative.snapshotDigest !== round.boundIssueSnapshotDigest) {
     throw new Error('recovered GPT round no longer matches its authoritative Issue snapshot');
+  }
+  authority = reconcilePackReviewTier({
+    prNumber: options.run.prNumber, tier: authoritative.tier,
+    options: authorityOptions, startedRunExists: true,
+  });
+  const rank = { T1: 1, T2: 2, T3: 3 } as const;
+  const historicalTierCompatible = authority.cycle?.frozenTier === round.tier
+    || (authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && options.run.accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && round.accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && options.run.logicalRoundOrdinal === round.roundOrdinal
+      && Number(options.run.logicalRoundCap) <= authority.cycle.frozenCap
+      && rank[authority.cycle.frozenTier] > rank[round.tier]);
+  if (!historicalTierCompatible) {
+    throw new Error('recovered GPT tier does not match frozen round or legal upward cycle');
   }
 
   const existingTerminal = authority.terminal;
@@ -4080,6 +4101,55 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   if (!prNumber) return null;
   let authority = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot });
   if (!authority?.cycle) return null;
+  // A former T2 final-cap checkpoint must not close the review while a
+  // verifiable linked-Issue amendment makes it a pre-cap T3 checkpoint.
+  if (authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && authority.cycle.frozenTier !== 'T3'
+      && authority.cycle.reviewStageComplete !== true
+      && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
+      && authority.terminal?.runId) {
+    const terminalRun = getPackReviewRun(authority.terminal.runId, {
+      projectId: options.projectId, storeRoot: options.storeRoot,
+    });
+    let issueNumber = input.fixtureIssueNumber ?? terminalRun?.reviewRound?.issueNumber;
+    let currentFields: { title: string; body: string } | undefined;
+    if (input.fixtureIssueBody !== undefined && input.fixtureIssueTitle !== undefined) {
+      currentFields = { title: input.fixtureIssueTitle, body: input.fixtureIssueBody };
+    } else if (process.env.OPK_VITEST_HARNESS !== '1') {
+      try {
+        if (!issueNumber) {
+          const livePr = await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, prNumber);
+          issueNumber = extractClosingIssueNumber(livePr.body) ?? undefined;
+        }
+        if (!issueNumber) throw new Error('linked Issue unresolved');
+        currentFields = await resolveCurrentIssueFields(input.sourceRepoRoot, options.repoSlug, issueNumber);
+      } catch (error) {
+        return { prNumber, finalCapSettlement: true, settled: false,
+          reason: 'final_cap_live_issue_unavailable',
+          detail: describeError(error),
+          nextAction: 'retry linked Issue title/body verification before final-cap settlement' };
+      }
+    }
+    if (currentFields) {
+      let effective: PackReviewTier;
+      try { effective = parseAuthoritativeTier(currentFields.body, currentFields.title); }
+      catch (error) {
+        return { prNumber, finalCapSettlement: true, settled: false,
+          reason: 'final_cap_live_issue_invalid', detail: describeError(error),
+          nextAction: 'correct the linked Issue tier fields before final-cap settlement' };
+      }
+      authority = reconcilePackReviewTier({
+        prNumber, tier: effective, startedRunExists: true,
+        options: { storeRoot: options.storeRoot },
+      });
+      if (authority.cycle?.state === 'open_findings') {
+        return { prNumber, headSha: authority.currentHeadSha,
+          finalCapSettlement: true, settled: false,
+          reason: 'prior_round_findings_unresolved_after_promotion',
+          nextAction: 'prove the strict-descendant fix before starting required round 2' };
+      }
+    }
+  }
   const logicalAccounting = authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
   const logicalFinalFindings = logicalAccounting
     && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
