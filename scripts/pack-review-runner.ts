@@ -6050,6 +6050,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       await releaseEarlyClaim(reason);
       return {
         ok: false, created: false, reused: true, reason,
+        replacementEligible: false,
         nextAction,
         reviewer,
         prNumber: target.prNumber, headSha: target.headSha,
