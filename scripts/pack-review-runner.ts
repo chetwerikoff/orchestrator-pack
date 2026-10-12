@@ -5491,7 +5491,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       .map((candidate) => [candidate.id, {
         runnerPid: candidate.runnerPid,
         heartbeatAtUtc: candidate.heartbeatAtUtc,
-      }]),
+      }] as const),
   );
   await reconcileStalePackReviewRuns({
     repoSlug: target.repoSlug,
@@ -6054,7 +6054,19 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       };
     };
     if (logicalAccounting && reviewer === 'gpt' && authority.cycle) {
-      const storedCandidates = incumbentCandidates(listPackReviewRunRecordsRaw({ projectId, storeRoot }));
+      const allRecords = listPackReviewRunRecordsRaw({ projectId, storeRoot });
+      const storedCandidates = incumbentCandidates(allRecords);
+      const otherSameHead = allRecords.find((candidate) => (
+        candidate.prNumber === target.prNumber
+        && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
+        && candidate.reviewRound?.reviewer === 'gpt'
+        && !hasPersistedPackReviewVerdict(candidate)
+        && !storedCandidates.some((matching) => matching.id === candidate.id)
+      ));
+      if (otherSameHead) {
+        return rejectIncumbent(otherSameHead, 'gpt_incumbent_identity_mismatch',
+          'reconcile the existing same-head GPT run cycle/round before starting or rebinding work');
+      }
       if (storedCandidates.length > 0) {
         const priorSameRound = storedCandidates[0]!;
         if (storedCandidates.length !== 1 || resolvePackReviewRunOrder(
