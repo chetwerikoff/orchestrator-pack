@@ -6840,7 +6840,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           const current = records.find((candidate) => candidate.id === run!.id);
           return Boolean(current && current.runnerPid === process.pid
             && !hasPersistedPackReviewVerdict(current)
-            && current.reviewRound?.settledSourceCount === undefined
+            && current.reviewRound
+            && current.reviewRound.settledSourceCount === undefined
             && current.reviewRound.sourceSlots.some((slot) => (
               slot.slotId === pendingSource.slotId
               && slot.lifecycle === 'invocation_started'
