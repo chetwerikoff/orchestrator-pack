@@ -5728,6 +5728,10 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     prNumber: target.prNumber,
     recoverActiveGptSources: true,
     fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
+    fixtureIssueBody: input.fixtureIssueBody,
+    fixtureIssueTitle: input.fixtureIssueTitle,
+    fixtureIssueNumber: input.fixtureIssueNumber,
+    fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
     fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
     ...(recoverableGptFixture ? {
       fixtureGithubReviewId: input.fixtureGithubReviewId,
