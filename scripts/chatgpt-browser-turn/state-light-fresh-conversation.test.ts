@@ -3008,7 +3008,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(fresh.sendButton.click).toHaveBeenCalledTimes(1);
     expect(fault.reload).toHaveBeenCalledTimes(1);
     expect(result.result).not.toHaveProperty('conversation_id');
-    expect(deriveDelivery(result.result as any)).toBe('POSSIBLY_DELIVERED');
+    expect(deriveDelivery(result.result as any, false)).toBe('POSSIBLY_DELIVERED');
   });
 
   it('reloads a previously exact-selected existing chat on an error-route but never closes it', async () => {
