@@ -6194,6 +6194,23 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         ? getPackReviewRun(authority.terminal.runId, { projectId, storeRoot })
         : null;
       if (terminalRun) {
+        // A pre-start reconciler can finish the original credentialed GPT run.
+        // Reusing that at-cap terminal does not authorize a new reviewer, but
+        // the manager still needs exact-current-head publication confirmation.
+        // Blocking findings remain blocking; verification is not approval.
+        const confirmation = terminalRun.reviewRound?.reviewer === 'gpt'
+          ? await observePackReviewVerdictDelivery({
+              input, projectId, storeRoot, runId: terminalRun.id,
+              prNumber: target.prNumber, headSha: target.headSha,
+              repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+              readHead: readProjectionHead,
+              writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+                repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+                headSha: target.headSha, request,
+              })),
+              resumeFailedStatus: true,
+            })
+          : null;
         await releaseEarlyClaim('terminal_run_exists');
         return {
           ok: true,
@@ -6205,7 +6222,17 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           runId: terminalRun.id,
           status: terminalRun.status,
           cycleId: authority.cycle.cycleId,
-          httpStatus: 200,
+          ...(confirmation ? {
+            statusPublished: confirmation.verified,
+            publicationVerified: confirmation.verified,
+            ...(confirmation.verified
+              ? { publicationHeadSha: target.headSha, requiredStatusState: confirmation.requiredStatusState }
+              : {
+                  publicationReason: confirmation.reason,
+                  nextAction: 'reconcile the incumbent GitHub review and exact-head status without another reviewer invocation',
+                }),
+          } : {}),
+          httpStatus: confirmation && !confirmation.verified ? 409 : 200,
         };
       }
     }
