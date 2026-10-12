@@ -2624,6 +2624,24 @@ async function runGptSourceBatch(options: {
         && !priorHistory.some((entry) => entry.invocationId === priorAttempt.invocationId)
         ? [...priorHistory, priorAttempt]
         : priorHistory;
+      if (options.sameRoundEligibleSlotIds && priorSlot?.invocationId && sourceTransport) {
+        // A real original-invocation GitHub source comment may have appeared
+        // after the observer classified the chat. Uncertain census is a veto.
+        const originalIdentity = gptSourceIdentity({
+          repoSlug: options.target.repoSlug, prNumber: options.target.prNumber,
+          headSha: options.target.headSha, runId: options.run.id,
+          slotId, invocationId: priorSlot.invocationId,
+        });
+        let originalResolution: PackGptSourceCommentResolution;
+        try {
+          originalResolution = await resolvePackGptSourceComment({
+            identity: originalIdentity, transport: sourceTransport,
+          });
+        } catch {
+          return false;
+        }
+        if (originalResolution.kind !== 'missing') return false;
+      }
       const patch: Partial<PackReviewSourceSlotRecord> = {
         lifecycle: 'invocation_started',
         admissionStartedAtUtc: new Date(admissionStartedAt).toISOString(),
@@ -6000,7 +6018,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       && candidate.reviewRound?.boundIssueSnapshotDigest === authoritative.snapshotDigest
     );
     const incumbentOwnerDead = (candidate: PackReviewRunRecord) => isPackReviewRunStale(candidate)
-      || (candidate.stale === true && isPackReviewUnfinishedTerminalRun(candidate)
+      || (isPackReviewUnfinishedTerminalRun(candidate)
         && isPackReviewRunStale({ ...candidate, status: 'reviewing' }));
     const rejectIncumbent = async (candidate: PackReviewRunRecord, reason: string, nextAction: string) => {
       await releaseEarlyClaim(reason);
@@ -6053,16 +6071,25 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         const replacementSlotIds = (observation?.replacementEligibleSlotIds
           ?? (observation?.replacementEligible && observation.slotId ? [observation.slotId] : []))
           .filter((slotId) => priorSameRound.reviewRound?.sourceSlots.some((slot) => (
-            slot.slotId === slotId && authoritativePreSend(slot)
+            slot.slotId === slotId
+            && slot.lifecycle === 'terminal'
+            && (authoritativePreSend(slot) || (
+              Boolean(slot.terminalClass)
+              && slot.terminalResult?.send_count === 0
+              && !terminalHasPossibleDelivery(slot.terminalResult)
+            ))
           )));
         const eligibleSlotIds = [...new Set([...replacementSlotIds, ...initialLaunchSlotIds])];
         if (eligibleSlotIds.length === 0) {
           const unresolved = priorSameRound.reviewRound!.sourceSlots.find((slot) => (
             slot.lifecycle === 'invocation_started' && slot.invocationId
           ));
-          return rejectIncumbent(priorSameRound, unresolved
-            ? 'gpt_original_invocation_recovery_required'
-            : observation?.state ?? 'gpt_observation_unavailable',
+          return rejectIncumbent(priorSameRound,
+            observation?.state === 'reply_recovery_required'
+              ? 'reply_recovery_required'
+              : unresolved
+                ? 'gpt_original_invocation_recovery_required'
+                : observation?.state ?? 'gpt_observation_unavailable',
           unresolved
             ? 'recover the original chat and credentialed GitHub source for '
               + unresolved.slotId + ' invocation ' + unresolved.invocationId + '; do not resend'
@@ -6311,24 +6338,26 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       if (freshHead !== target.headSha.toLowerCase()
           || !ownsClaim
           || freshAuthority?.currentHeadSha.toLowerCase() !== target.headSha.toLowerCase()
-          || freshAuthority.cycle?.cycleId !== sameRoundGptRun.reviewCycleId
+          || !freshAuthority?.cycle
+          || freshAuthority.cycle.cycleId !== sameRoundGptRun.reviewCycleId
           || freshAuthority.cycle.consumedRoundOrdinals.includes(roundOrdinal)
           || freshAuthority.terminal) {
         return rejectIncumbent(sameRoundGptRun, 'gpt_incumbent_authority_changed',
           'observe the exact PR head, current claim and review authority; do not requeue a changed run');
       }
-      const selectedRound = stableJson(sameRoundGptRun.reviewRound);
-      run = updatePackReviewRunIf(sameRoundGptRun.id, (records) => {
-        const incumbent = records.find((candidate) => candidate.id === sameRoundGptRun.id);
+      const selectedRun = sameRoundGptRun;
+      const selectedRound = stableJson(selectedRun.reviewRound);
+      run = updatePackReviewRunIf(selectedRun.id, (records) => {
+        const incumbent = records.find((candidate) => candidate.id === selectedRun.id);
         return Boolean(incumbent
           && incumbentCandidates(records).length === 1
           && incumbentIdentityMatches(incumbent)
           && incumbentOwnerDead(incumbent)
-          && incumbent.status === sameRoundGptRun.status
-          && incumbent.runnerPid === sameRoundGptRun.runnerPid
-          && incumbent.heartbeatAtUtc === sameRoundGptRun.heartbeatAtUtc
-          && incumbent.updatedAt === sameRoundGptRun.updatedAt
-          && incumbent.sameKeyOrder === sameRoundGptRun.sameKeyOrder
+          && incumbent.status === selectedRun.status
+          && incumbent.runnerPid === selectedRun.runnerPid
+          && incumbent.heartbeatAtUtc === selectedRun.heartbeatAtUtc
+          && incumbent.updatedAt === selectedRun.updatedAt
+          && incumbent.sameKeyOrder === selectedRun.sameKeyOrder
           && stableJson(incumbent.reviewRound) === selectedRound
           && resolvePackReviewRunOrder(records, incumbent).kind === 'none');
       }, {
