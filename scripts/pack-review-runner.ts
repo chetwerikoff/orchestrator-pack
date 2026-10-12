@@ -415,6 +415,7 @@ interface ClaimLease {
   acquired: boolean;
   reason: string;
   directory: string;
+  owns: () => boolean;
   release: (action: 'run_started' | 'failure', reviewRuns: PackReviewRunRecord[], detail?: string) => Promise<void>;
 }
 
@@ -1643,6 +1644,7 @@ async function acquireClaimLease(options: {
       acquired: false,
       reason: trim(claim.reason) || 'claimed',
       directory: '',
+      owns: () => false,
       release: async () => undefined,
     };
   }
@@ -1650,6 +1652,7 @@ async function acquireClaimLease(options: {
     acquired: true,
     reason: 'acquired',
     directory: '',
+    owns: () => testReviewStartClaimOwnership(claim),
     release: async (action, reviewRuns, detail = '') => {
       const completion = action === 'run_started'
         ? completeAfterRunInvoke(claim as ClaimResult, reviewRuns)
@@ -2521,9 +2524,12 @@ async function runGptSourceBatch(options: {
     .filter((slot) => slot.invocationId && slot.admissionStartedAtUtc)
     .sort((a, b) => Date.parse(b.admissionStartedAtUtc!) - Date.parse(a.admissionStartedAtUtc!))[0];
   const terminalInvocations = new Set<string>();
+  const admittedHere = new Set<string>();
   let admissionTail = Promise.resolve();
   let credentialedSourceCount = 0;
-  const admit = async (slotId: string, invocationId: string): Promise<number> => {
+  const admit = async (
+    slotId: string, invocationId: string, bind: (startedAt: number) => Promise<boolean>,
+  ): Promise<boolean> => {
     let release!: () => void;
     const predecessor = admissionTail;
     admissionTail = new Promise<void>((resolveRelease) => { release = resolveRelease; });
@@ -2545,19 +2551,24 @@ async function runGptSourceBatch(options: {
               && observation.send_count === 1;
           } catch { /* Missing evidence keeps admission closed; it never authorizes a resend. */ }
         }
+        // Previously admitted, now-orphaned sources have no local producer that
+        // could make missing send evidence appear. Do not poll them forever.
+        if (!sendSettled && !admittedHere.has(previous.invocationId!)) return false;
         const remaining = Date.parse(previous.admissionStartedAtUtc!) + admissionInterval - Date.now();
         if (sendSettled && remaining <= 0) break;
         await new Promise<void>((resolveWait) => setTimeout(resolveWait,
           remaining > 0 ? Math.min(remaining, 1_000) : 1_000));
       }
       const startedAt = Date.now();
+      if (!(await bind(startedAt))) return false;
+      admittedHere.add(invocationId);
       previousAdmission = {
         slotId, invocationId, lifecycle: 'invocation_started',
         ordinal: options.round.sourceSlots.find((slot) => slot.slotId === slotId)!.ordinal,
         admissionStartedAtUtc: new Date(startedAt).toISOString(),
         ...(resolveLaunchBinding() ?? {}),
       };
-      return startedAt;
+      return true;
     } finally {
       release();
     }
@@ -2602,7 +2613,7 @@ async function runGptSourceBatch(options: {
     }
     let attemptOrdinal = (currentSlot.attemptOrdinal ?? 0) + 1;
     let invocationId = randomUUID();
-    const markInvocationStarted = async (admissionStartedAt: number): Promise<void> => {
+    const markInvocationStarted = async (admissionStartedAt: number): Promise<boolean> => {
       const launchBinding = resolveLaunchBinding();
       const priorSlot = round.sourceSlots.find((slot) => slot.slotId === slotId);
       const priorHistory: PackReviewSourceSlotAttemptHistory[] = priorSlot?.attemptHistory ?? [];
@@ -2613,7 +2624,7 @@ async function runGptSourceBatch(options: {
         && !priorHistory.some((entry) => entry.invocationId === priorAttempt.invocationId)
         ? [...priorHistory, priorAttempt]
         : priorHistory;
-      round = updateGptRoundSlot(options.run.id, round, slotId, {
+      const patch: Partial<PackReviewSourceSlotRecord> = {
         lifecycle: 'invocation_started',
         admissionStartedAtUtc: new Date(admissionStartedAt).toISOString(),
         attemptOrdinal,
@@ -2623,12 +2634,45 @@ async function runGptSourceBatch(options: {
         terminalResult: undefined,
         payload: undefined,
         ...(launchBinding ?? {}),
-      }, { projectId: options.projectId, storeRoot: options.storeRoot });
+      };
+      if (options.sameRoundEligibleSlotIds) {
+        // An original invocation may have acquired its GitHub comment while we
+        // waited for pacing. Never overwrite it from an earlier slot snapshot.
+        const updated = updatePackReviewRunIf(options.run.id, (records) => {
+          const incumbent = records.find((record) => record.id === options.run.id);
+          const liveRound = incumbent?.reviewRound;
+          const liveSlot = liveRound?.sourceSlots.find((slot) => slot.slotId === slotId);
+          return Boolean(incumbent && liveRound && liveSlot
+            && incumbent.runnerPid === process.pid
+            && PACK_REVIEW_ACTIVE_STATUSES.has(incumbent.status)
+            && !hasPersistedPackReviewVerdict(incumbent)
+            && liveRound.settledSourceCount === undefined
+            && stableJson(liveSlot) === stableJson(priorSlot)
+            && resolvePackReviewRunOrder(records, incumbent).kind === 'none');
+        }, (existing) => ({
+          reviewRound: {
+            ...existing.reviewRound!,
+            sourceSlots: existing.reviewRound!.sourceSlots.map((slot) => (
+              slot.slotId === slotId ? { ...slot, ...patch } : slot
+            )),
+          },
+        }), { projectId: options.projectId, storeRoot: options.storeRoot });
+        if (!updated?.reviewRound) return false;
+        round = updated.reviewRound;
+      } else {
+        round = updateGptRoundSlot(options.run.id, round, slotId, patch, {
+          projectId: options.projectId, storeRoot: options.storeRoot,
+        });
+      }
       if (options.input.fixtureAfterGptInvocationBound) {
         await options.input.fixtureAfterGptInvocationBound({ slotId, attemptOrdinal, invocationId, round });
       }
+      return true;
     };
-    await markInvocationStarted(await admit(slotId, invocationId));
+    if (!(await admit(slotId, invocationId, markInvocationStarted))) {
+      const retained = getPackReviewRun(options.run.id, { projectId: options.projectId, storeRoot: options.storeRoot });
+      return { slot: retained?.reviewRound?.sourceSlots.find((slot) => slot.slotId === slotId) ?? currentSlot, payload: undefined };
+    }
     let invocation: { result: ProcessResult; resolvedReviewer: PackReviewer | null };
     while (true) {
       try {
@@ -2685,7 +2729,10 @@ async function runGptSourceBatch(options: {
         && isRetryablePackReviewZeroSendCollision(invocation.result, invocationId))) break;
       attemptOrdinal = 2;
       invocationId = randomUUID();
-      await markInvocationStarted(await admit(slotId, invocationId));
+      if (!(await admit(slotId, invocationId, markInvocationStarted))) {
+        const retained = getPackReviewRun(options.run.id, { projectId: options.projectId, storeRoot: options.storeRoot });
+        return { slot: retained?.reviewRound?.sourceSlots.find((slot) => slot.slotId === slotId) ?? currentSlot, payload: undefined };
+      }
     }
 
     const browserTerminal = parseLastGptTerminalTurnResult(invocation.result.stdout);
@@ -5923,57 +5970,103 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     let sameRoundGptRun: PackReviewRunRecord | null = null;
     let sameRoundGptEligibleSlotIds: ReadonlySet<string> | undefined;
     let sameRoundGptDiagnostics: PackReviewGptTargetDiagnostic[] | undefined;
+    const ownsStartClaim = () => claimMode === 'preacquired'
+      ? preacquiredClaimOwned()
+      : claimLease?.owns() === true;
+    const incumbentCandidates = (records: readonly PackReviewRunRecord[]) => records.filter((candidate) => (
+      candidate.prNumber === target.prNumber
+      && candidate.reviewCycleId === authority.cycle?.cycleId
+      && candidate.logicalRoundOrdinal === roundOrdinal
+      && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
+      && candidate.reviewRound?.reviewer === 'gpt'
+      && !hasPersistedPackReviewVerdict(candidate)
+    ));
+    const incumbentIdentityMatches = (candidate: PackReviewRunRecord) => (
+      candidate.projectId === projectId
+      && trim(candidate.canonicalRepository).toLowerCase() === target.repoSlug.toLowerCase()
+      && resolve(candidate.sourceRepoRoot) === resolve(target.sourceRepoRoot)
+      && resolve(candidate.trustedPackRoot) === resolve(trusted.trustedPackRoot)
+      && candidate.headSha.toLowerCase() === target.headSha.toLowerCase()
+      && candidate.resolvedReviewer === 'gpt'
+      && candidate.accountingVersion === accountingVersion
+      && candidate.reviewCycleId === authority.cycle?.cycleId
+      && candidate.logicalRoundOrdinal === roundOrdinal
+      && candidate.logicalRoundCap === authority.cycle?.frozenCap
+      && candidate.reviewRound?.roundOrdinal === roundOrdinal
+      && candidate.reviewRound?.accountingVersion === accountingVersion
+      && candidate.reviewRound?.tier === authoritative.tier
+      && candidate.reviewRound?.cardinality === cardinality
+      && candidate.reviewRound?.issueNumber === authoritative.issueNumber
+      && candidate.reviewRound?.boundIssueSnapshotDigest === authoritative.snapshotDigest
+    );
+    const incumbentOwnerDead = (candidate: PackReviewRunRecord) => isPackReviewRunStale(candidate)
+      || (candidate.stale === true && isPackReviewUnfinishedTerminalRun(candidate)
+        && isPackReviewRunStale({ ...candidate, status: 'reviewing' }));
+    const rejectIncumbent = async (candidate: PackReviewRunRecord, reason: string, nextAction: string) => {
+      await releaseEarlyClaim(reason);
+      return {
+        ok: false, created: false, reused: true, reason,
+        nextAction,
+        reviewer,
+        prNumber: target.prNumber, headSha: target.headSha,
+        runId: candidate.id, status: candidate.status,
+        coverage: derivePackReviewGptCoverage(candidate.reviewRound),
+        httpStatus: 409,
+      };
+    };
     if (logicalAccounting && reviewer === 'gpt' && authority.cycle) {
-      const priorSameRound = listPackReviewRunRecordsRaw({ projectId, storeRoot })
-        .filter((candidate) => candidate.prNumber === target.prNumber
-          && candidate.reviewCycleId === authority.cycle!.cycleId
-          && candidate.logicalRoundOrdinal === roundOrdinal
-          && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
-          && candidate.reviewRound?.reviewer === 'gpt'
-          && !hasPersistedPackReviewVerdict(candidate))
-        .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
-      if (priorSameRound) {
+      const storedCandidates = incumbentCandidates(listPackReviewRunRecordsRaw({ projectId, storeRoot }));
+      if (storedCandidates.length > 0) {
+        const priorSameRound = storedCandidates[0]!;
+        if (storedCandidates.length !== 1 || resolvePackReviewRunOrder(
+          listPackReviewRunRecordsRaw({ projectId, storeRoot }), priorSameRound,
+        ).kind !== 'none') {
+          return rejectIncumbent(priorSameRound, 'gpt_incumbent_ambiguous_run',
+            'inspect competing same-round records; do not reassign any incumbent owner');
+        }
+        if (!incumbentIdentityMatches(priorSameRound)) {
+          return rejectIncumbent(priorSameRound, 'gpt_incumbent_identity_mismatch',
+            'reconcile the exact repository, frozen Issue snapshot and round before any incumbent continuation');
+        }
+        if (!incumbentOwnerDead(priorSameRound)) {
+          return rejectIncumbent(priorSameRound, 'gpt_incumbent_owner_not_dead',
+            'observe the original runner PID and stale grace; do not take over a live or fresh incumbent');
+        }
+        if (!ownsStartClaim()) {
+          return rejectIncumbent(priorSameRound, 'gpt_incumbent_claim_not_owned',
+            'acquire or retain the exact current PR/head start claim before resuming');
+        }
         const observeAttempt = input.fixtureGptAttemptObserver ?? observeGptPackReviewAttempt;
         const observation = await observeAttempt(priorSameRound);
         sameRoundGptDiagnostics = observation?.diagnostics;
-        const initialLaunchSlotIds = observation?.initialLaunchSlotIds ?? [];
-        if (!observation || (!observation.replacementEligible && initialLaunchSlotIds.length === 0)) {
-          await releaseEarlyClaim('gpt_replacement_not_eligible');
-          return {
-            ok: false,
-            created: false,
-            reused: true,
-            reason: observation?.state ?? 'gpt_observation_unavailable',
-            reviewer,
-            replacementEligible: false,
-            prNumber: target.prNumber,
-            headSha: target.headSha,
-            runId: priorSameRound.id,
-            ...(sameRoundGptDiagnostics?.length ? { observationDiagnostics: sameRoundGptDiagnostics } : {}),
-            httpStatus: 202,
-          };
-        }
-        const replacementSlotIds = observation.replacementEligibleSlotIds
-          ?? (observation.replacementEligible && observation.slotId ? [observation.slotId] : []);
-        const eligibleSlotIds = [...new Set([
-          ...replacementSlotIds,
-          ...initialLaunchSlotIds,
-        ])];
+        const originalLaunchIds = observation?.initialLaunchSlotIds ?? [];
+        const initialLaunchSlotIds = originalLaunchIds.filter((slotId) => (
+          priorSameRound.reviewRound?.sourceSlots.some((slot) => (
+            slot.slotId === slotId
+            && (slot.lifecycle === 'planned'
+              || (slot.lifecycle === 'terminal' && slot.terminalClass === 'pre_launch_interrupted'))
+          ))
+        ));
+        // The browser observer's generating-timeout/empty-reply hint is not
+        // evidence of zero delivery. Only an existing terminal pre-send class
+        // can legally rotate the original invocation in this dead-partial path.
+        const replacementSlotIds = (observation?.replacementEligibleSlotIds
+          ?? (observation?.replacementEligible && observation.slotId ? [observation.slotId] : []))
+          .filter((slotId) => priorSameRound.reviewRound?.sourceSlots.some((slot) => (
+            slot.slotId === slotId && authoritativePreSend(slot)
+          )));
+        const eligibleSlotIds = [...new Set([...replacementSlotIds, ...initialLaunchSlotIds])];
         if (eligibleSlotIds.length === 0) {
-          await releaseEarlyClaim('gpt_replacement_not_eligible');
-          return {
-            ok: false,
-            created: false,
-            reused: true,
-            reason: 'gpt_observation_unavailable',
-            reviewer,
-            replacementEligible: false,
-            prNumber: target.prNumber,
-            headSha: target.headSha,
-            runId: priorSameRound.id,
-            ...(sameRoundGptDiagnostics?.length ? { observationDiagnostics: sameRoundGptDiagnostics } : {}),
-            httpStatus: 202,
-          };
+          const unresolved = priorSameRound.reviewRound!.sourceSlots.find((slot) => (
+            slot.lifecycle === 'invocation_started' && slot.invocationId
+          ));
+          return rejectIncumbent(priorSameRound, unresolved
+            ? 'gpt_original_invocation_recovery_required'
+            : observation?.state ?? 'gpt_observation_unavailable',
+          unresolved
+            ? 'recover the original chat and credentialed GitHub source for '
+              + unresolved.slotId + ' invocation ' + unresolved.invocationId + '; do not resend'
+            : 'observe the original run and recover its source evidence before any eligible retry');
         }
         allowSameRoundReplacement = true;
         sameRoundGptRun = priorSameRound;
@@ -6212,14 +6305,42 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     }
     let created: ReturnType<typeof createPackReviewRun>;
     if (sameRoundGptRun) {
-      if (claimMode === 'preacquired' && !preacquiredClaimOwned()) {
-        return unownedPreacquiredResult(sameRoundGptRun);
+      const freshHead = await readProjectionHead();
+      const freshAuthority = readPackReviewAuthority(target.prNumber, authorityOptions);
+      const ownsClaim = ownsStartClaim();
+      if (freshHead !== target.headSha.toLowerCase()
+          || !ownsClaim
+          || freshAuthority?.currentHeadSha.toLowerCase() !== target.headSha.toLowerCase()
+          || freshAuthority.cycle?.cycleId !== sameRoundGptRun.reviewCycleId
+          || freshAuthority.cycle.consumedRoundOrdinals.includes(roundOrdinal)
+          || freshAuthority.terminal) {
+        return rejectIncumbent(sameRoundGptRun, 'gpt_incumbent_authority_changed',
+          'observe the exact PR head, current claim and review authority; do not requeue a changed run');
       }
-      run = updatePackReviewRun(sameRoundGptRun.id, {
+      const selectedRound = stableJson(sameRoundGptRun.reviewRound);
+      run = updatePackReviewRunIf(sameRoundGptRun.id, (records) => {
+        const incumbent = records.find((candidate) => candidate.id === sameRoundGptRun.id);
+        return Boolean(incumbent
+          && incumbentCandidates(records).length === 1
+          && incumbentIdentityMatches(incumbent)
+          && incumbentOwnerDead(incumbent)
+          && incumbent.status === sameRoundGptRun.status
+          && incumbent.runnerPid === sameRoundGptRun.runnerPid
+          && incumbent.heartbeatAtUtc === sameRoundGptRun.heartbeatAtUtc
+          && incumbent.updatedAt === sameRoundGptRun.updatedAt
+          && incumbent.sameKeyOrder === sameRoundGptRun.sameKeyOrder
+          && stableJson(incumbent.reviewRound) === selectedRound
+          && resolvePackReviewRunOrder(records, incumbent).kind === 'none');
+      }, {
         status: 'queued',
         latestRunStatus: 'queued',
         runnerPid: process.pid,
       }, { projectId, storeRoot });
+      if (!run) {
+        return rejectIncumbent(sameRoundGptRun, 'gpt_incumbent_concurrent_update',
+          'inspect current source comments, live owner and conditional run state before retrying observation');
+      }
+      gptRound = run.reviewRound;
       created = {
         created: true,
         reused: false,
@@ -6617,7 +6738,6 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       }
       run = persistedRun;
       const diagnostics = gptRoundDiagnostics(run.reviewRound);
-      payload = validatePersistedGptReviewPayload(run.id, payload, { projectId, storeRoot });
       if (hasPersistedPackReviewVerdict(run)) {
         const concurrentAuthority = readPackReviewAuthority(target.prNumber, authorityOptions);
         const published = concurrentAuthority?.currentHeadSha === target.headSha
@@ -6647,6 +6767,44 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           ...(run.githubReviewUrl ? { githubReviewUrl: run.githubReviewUrl } : {}),
         };
       }
+      // An unfrozen, still-started original invocation is an incomplete source
+      // census, not a malformed aggregate. Keep its exact ID and action visible.
+      const pendingSource = run.reviewRound?.settledSourceCount === undefined
+        ? run.reviewRound?.sourceSlots.find((slot) => slot.lifecycle === 'invocation_started'
+          && Boolean(slot.invocationId))
+        : undefined;
+      if (pendingSource) {
+        const pending = updatePackReviewRunIf(run.id, (records) => {
+          const current = records.find((candidate) => candidate.id === run!.id);
+          return Boolean(current && current.runnerPid === process.pid
+            && !hasPersistedPackReviewVerdict(current)
+            && current.reviewRound?.settledSourceCount === undefined
+            && current.reviewRound.sourceSlots.some((slot) => (
+              slot.slotId === pendingSource.slotId
+              && slot.lifecycle === 'invocation_started'
+              && slot.invocationId === pendingSource.invocationId
+            )));
+        }, {
+          status: 'reviewing', latestRunStatus: 'reviewing',
+          failureReason: undefined, completedAtUtc: undefined,
+        }, { projectId, storeRoot });
+        const latest = pending ?? getPackReviewRun(run.id, { projectId, storeRoot });
+        const runs = listPackReviewRuns({ projectId, storeRoot });
+        if (claimLease) await claimLease.release('run_started', runs);
+        return {
+          ok: false, created: true, reused: false,
+          reason: pending ? 'gpt_original_invocation_recovery_required' : 'gpt_source_state_changed_during_partial',
+          nextAction: 'recover original ' + pendingSource.slotId + ' invocation '
+            + pendingSource.invocationId
+            + ' through its existing chat/transport and exact credentialed GitHub comment; do not resend',
+          publicationVerified: false,
+          prNumber: target.prNumber, headSha: target.headSha,
+          runId: run.id, status: latest?.status ?? 'reviewing',
+          coverage: derivePackReviewGptCoverage(latest?.reviewRound),
+          httpStatus: 202,
+        };
+      }
+      payload = validatePersistedGptReviewPayload(run.id, payload, { projectId, storeRoot });
       const writeRequiredStatus = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
         repoRoot: target.sourceRepoRoot,
         repoSlug: target.repoSlug,
