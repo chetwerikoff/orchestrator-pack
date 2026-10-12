@@ -619,7 +619,7 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
       stderr: { write: (value) => boundaryErrors.push(String(value)) },
       currentArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
     });
-    expect(boundaryExit).toBe(0);
+    expect(boundaryExit, JSON.stringify({ recoveredRunner: second, boundaryErrors, boundaryOutput })).toBe(0);
     expect(boundaryErrors).toEqual([]);
     expect(boundaryOutput).toHaveLength(1);
     expect(JSON.parse(boundaryOutput[0]!)).toMatchObject({
