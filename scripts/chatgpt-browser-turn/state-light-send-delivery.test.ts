@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -686,5 +686,113 @@ describe('Issue #2536: unique current reply and strict keyed cardinality', () =>
       .toBe('continuity-unproven');
     expect(keyedHarvestCandidate(complete, { complete: false, carriers: baseline.carriers }, ownKey).state)
       .toBe('continuity-unproven');
+  });
+});
+
+
+describe('Issue #2536 ordinary end-to-end: one owned Send in a long reused conversation', () => {
+  it.each([false, true])('delivers current A-to-B reply without X/Y ambiguity (competing: %s)', async (competing) => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2536-ordinary-'));
+    const invocation = randomUUID();
+    const target = 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111';
+    const profile = join(root, 'profile');
+    const output = join(root, 'reply.txt');
+    let now = 20_000;
+    let composerText = '';
+    let deliveredText = '';
+    let sends = 0;
+    let postSendReads = 0;
+    const rows = Array.from({ length: 8 }, (_, i): Array<{ role: 'user' | 'assistant'; text: string; key: string }> => [
+      { role: 'user', text: `older user ${i}`, key: `data-message-id:older-user-${i}-2536` },
+      { role: 'assistant', text: `older assistant ${i}`, key: `data-message-id:older-assistant-${i}-2536` },
+    ]).flat();
+    type Row = typeof rows[number];
+    let currentRows: Row[] = rows;
+    const composer = scalarLocator({
+      count: async () => 1,
+      fill: async (text: string) => { composerText = text; },
+      innerText: async () => composerText,
+    });
+    const send = vi.fn(async () => {
+      sends += 1;
+      deliveredText = composerText;
+      composerText = '';
+    });
+    const sendButton = scalarLocator({ count: async () => 1, click: send });
+    const messageNodes = {
+      count: async () => currentRows.length,
+      nth: (index: number) => collectionLocator(currentRows).nth(index),
+      evaluateAll: async () => {
+        if (sends) postSendReads++;
+        const reply = postSendReads <= 1 ? 'LONG with superseded text' : 'SHORT';
+        const userKey = postSendReads <= 1
+          ? 'data-message-id:current-user-a-2536' : 'data-message-id:current-user-b-2536';
+        currentRows = sends
+          ? [
+            ...rows,
+            { role: 'user', text: deliveredText, key: userKey },
+            { role: 'assistant', text: reply, key: 'data-message-id:current-assistant-x-2536' },
+            ...(competing ? [{ role: 'assistant' as const, text: 'OTHER', key: 'data-message-id:current-assistant-y-2536' }] : []),
+          ]
+          : rows;
+        return {
+          rows: currentRows.map((row, domIndex) => ({
+            ...row, domIndex, complete: true, completionReady: true, continuationVisible: false,
+          })),
+          pageTurnEvidence: {
+            generationInProgress: false,
+            observedAssistantNodes: currentRows.filter((row) => row.role === 'assistant').length,
+            continueGeneratingVisible: false,
+          },
+        };
+      },
+    };
+    const page = {
+      __fakeBrowserGptPage: true,
+      url: () => target,
+      isClosed: () => false,
+      goto: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      waitForTimeout: async (ms: number) => { now += ms; },
+      getByRole: () => scalarLocator(),
+      getByText: () => scalarLocator(),
+      locator: (selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (selector === MESSAGE_NODE_SELECTOR) return messageNodes;
+        return scalarLocator();
+      },
+    };
+    const browserFixture = enqueueBrowserForTurn(mocks, page);
+    Object.assign(browserFixture.context, { pages: () => [page] });
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    try {
+      const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        '--profile', profile, '--cdp', 'http://127.0.0.1:9222',
+        '--input', join(root, 'synthetic-prompt.txt'),
+        '--output', output, '--chat-url', target,
+        '--invocation-id', invocation, '--timeout-ms', '180000',
+      ]);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(sends).toBe(1);
+      expect(result.send_count, JSON.stringify(result)).toBe(1);
+      expect(postSendReads).toBeGreaterThanOrEqual(3);
+      if (competing) {
+        expect(result.state).not.toBe('ok');
+        expect(existsSync(output)).toBe(false);
+        expect(page.close).not.toHaveBeenCalled();
+      } else {
+        expect(result.state, JSON.stringify(result)).toBe('ok');
+        expect(readFileSync(output, 'utf8')).toBe('SHORT');
+        expect(result.output).toMatchObject({ byte_length: 5 });
+      }
+    } finally {
+      clock.mockRestore();
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+      mocks.browserQueue.length = 0;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
