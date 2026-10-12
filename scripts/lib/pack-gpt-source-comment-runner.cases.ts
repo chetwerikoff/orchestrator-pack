@@ -154,7 +154,7 @@ function baseStart(storeRoot: string, transport: PackGptSourceCommentTransport) 
     prNumber: 1436,
     headSha: HEAD,
     tier: 'T1' as const,
-    fixtureIssueBody: ISSUE_BODY,
+    fixtureIssueTitle: "[T1] Source comment fixture", fixtureIssueBody: ISSUE_BODY,
     fixtureIssueNumber: 1435,
     fixtureCurrentPrHeadSha: HEAD,
     fixturePostReviewHeadSha: HEAD,
@@ -509,7 +509,7 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
         workerWrites.push(request);
         return { state: 'delivered' as const, reason: 'fixture' };
       },
-      fixtureIssueBody: ISSUE_BODY,
+      fixtureIssueTitle: "[T1] Source recovery fixture", fixtureIssueBody: ISSUE_BODY,
       fixtureIssueNumber: 1435,
       fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
       fixtureBoundIssueSnapshotBytes: ISSUE_BODY,
