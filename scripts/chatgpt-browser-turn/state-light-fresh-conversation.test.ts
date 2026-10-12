@@ -1542,6 +1542,26 @@ describe('state-light fresh conversation collision recovery', () => {
     return { page, state };
   }
 
+  it('bounds the early local-ID landing wait even when the Send witness arrives near the absolute deadline', async () => {
+    const prompt = 'SYNTHETIC-NEAR-DEADLINE-LOCAL-ID';
+    const invocationId = randomUUID();
+    const output = join(stateDir, 'late-local-id-unbound.txt');
+    const turn = makeLoserPage(prompt, 'NO-CANONICAL-REPLY', () => { mocks.nowMs += 72_000; });
+    turn.page.url.mockImplementation(() => turn.getSends() > 0 ? LOCAL_ID_CONVERSATION_URL : PROJECT_URL);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const start = mocks.nowMs;
+
+    const outcome = await runNewChatTurn(turn.page, output, '90000', invocationId);
+
+    expect(outcome.result).toMatchObject({
+      state: 'observation_uncertain', cause: 'fresh_conversation_owner_unproven', send_count: 1,
+    });
+    expect(mocks.nowMs - start).toBeLessThan(90_000);
+    expect(turn.getSends()).toBe(1);
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(existsSync(output)).toBe(false);
+  });
+
   // The Send fetch can fail while the server executes. Model the owned local
   // page without an assistant answer and without dispatching Retry, then census
   // only already-open canonical server pages using the incumbent recovery path.
