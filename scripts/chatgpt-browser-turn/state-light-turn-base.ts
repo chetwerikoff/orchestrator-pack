@@ -4143,10 +4143,34 @@ async function runTurnCore(
       return null;
     };
 
-    // `timeout-ms` is a soft post-send observation threshold. Once a prompt has
-    // landed and this invocation still owns a reachable page, #1120 requires us
-    // to keep that page rather than manufacture lost-chat/resend eligibility.
+    // `timeout-ms` is a soft post-send observation threshold for an owned
+    // conversation. A fresh Send that never obtains an exact-project owned
+    // conversation must instead end at its pre-Send absolute invocation budget:
+    // the later 2 x timeout decision threshold is not a hard exit.
     while (true) {
+      if (config.newChat && !ownedConversationUrl
+        && (sendCount >= 1 || deliveryProofPendingRecovery)
+        && Date.now() >= invocationDeadlineMs) {
+        incident('post_send_observation_error', 'fresh_conversation_owner_unproven', 'retain_page_no_resend');
+        return {
+          page,
+          browser,
+          cleanupAction: 'preserve',
+          result: compactResult(
+            'observation_uncertain',
+            'invocation',
+            'fresh_conversation_owner_unproven',
+            invocationId,
+            profileKey,
+            sendCount,
+            pollCount,
+            navigation,
+            incidents,
+            { ...(deliveryProofPendingRecovery ? { send_attempted: true } : {}) },
+            journalWriteFailed,
+          ),
+        };
+      }
       if ((sendCount >= 1 || deliveryProofPendingRecovery) && browserOrPageDefinitelyLost(page, browser)) {
         const terminal = await recoverCurrentObservation();
         if (terminal) return terminal;
@@ -4186,7 +4210,9 @@ async function runTurnCore(
           page,
           marker,
           baselineCount,
-          hardExhaustionDeadline,
+          config.newChat && !ownedConversationUrl
+            ? Math.min(hardExhaustionDeadline, invocationDeadlineMs)
+            : hardExhaustionDeadline,
           observeProductWall,
         );
       } catch (error) {
@@ -5310,11 +5336,13 @@ async function runTurnCore(
           ? INITIAL_POLL_MS
           : POST_SEND_OBSERVATION_POLL_MS;
       const beforeSoftDeadline = Date.now() < softDeadline;
-      await sleep(page, recoveryState.lossEpoch > 0
-        ? Math.min(delay, Math.max(1, hardExhaustionDeadline - Date.now()))
-        : beforeSoftDeadline
-          ? Math.min(delay, Math.max(1, softDeadline - Date.now()))
-          : delay);
+      await sleep(page, config.newChat && !ownedConversationUrl
+        ? Math.min(delay, Math.max(1, invocationDeadlineMs - Date.now()))
+        : recoveryState.lossEpoch > 0
+          ? Math.min(delay, Math.max(1, hardExhaustionDeadline - Date.now()))
+          : beforeSoftDeadline
+            ? Math.min(delay, Math.max(1, softDeadline - Date.now()))
+            : delay);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -5576,6 +5604,44 @@ export type StateLightTurnDependencies = {
   readonly entryLivenessHeartbeat?: boolean;
 };
 
+// The launcher promotes every turn-result conversation_id into a recoverable
+// locator. For fresh chats, the page URL is only a candidate: admission needs
+// this invocation's durable exact-project conversation binding and live claim.
+// Apply this to every fresh return path, including thrown errors, without
+// changing existing-chat result semantics or the launcher schema.
+function admitFreshResultConversationId(
+  args: ParsedTurnArgs,
+  outcome: TurnRunOutcome,
+): TurnRunOutcome {
+  if (!hasFlag(args, 'new-chat')) return outcome;
+  let ownedUrl: string | undefined;
+  try {
+    const profileKey = outcome.result.configured_profile_key;
+    const invocationId = outcome.result.invocation_id;
+    const projectUrl = stringOption(args, 'project-url') ?? '';
+    const record = readStateLightTurnObservation(profileKey, invocationId);
+    const candidate = record.conversation_url;
+    const timeoutMs = stringOption(args, 'timeout-ms')
+      ? Number(stringOption(args, 'timeout-ms'))
+      : DEFAULT_TIMEOUT_MS;
+    if (!outcome.ownershipForfeited
+      && outcome.result.send_count === 1
+      && record.send_count === 1
+      && (record.phase === 'sent_unharvested' || record.phase === 'harvested')
+      && candidate
+      && projectConversationUrlMatchesProject(candidate, projectUrl)
+      && verifyStateLightFreshClaimOwnerFence(profileKey, candidate, invocationId, timeoutMs) === 'valid') {
+      ownedUrl = candidate;
+    }
+  } catch {
+    // Missing, unreadable, expired or mismatched authority is never a locator.
+  }
+  return {
+    ...outcome,
+    result: { ...outcome.result, conversation_id: ownedUrl },
+  };
+}
+
 export async function runStateLightTurn(
   argv: readonly string[],
   dependencies: StateLightTurnDependencies = {},
@@ -5621,7 +5687,7 @@ export async function runStateLightTurn(
       ...(freshCleanup.page && outcome.page === freshCleanup.page && freshCleanup.projectUrl
         ? { ownedFreshProjectUrl: freshCleanup.projectUrl } : {}),
     };
-    const result = await finalizeTurn(augmented);
+    const result = await finalizeTurn(admitFreshResultConversationId(args, augmented));
     // Keep liveness continuous through every pre-emission cleanup await, then
     // stop the scheduler at the terminal publication boundary so no heartbeat
     // can follow turn-result/v1 or keep the subprocess alive.
