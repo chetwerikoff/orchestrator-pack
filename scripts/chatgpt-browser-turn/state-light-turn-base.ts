@@ -17,6 +17,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import {
   abandonLatePageHandle,
   boundedResourceCleanup,
+  CDP_BROWSER_RELEASE_BOUND_MS,
   createCdpPageTarget,
   releaseCdpBrowser,
   RESOURCE_CLEANUP_BOUND_MS,
@@ -4143,14 +4144,18 @@ async function runTurnCore(
       return null;
     };
 
+    // Reserve the incumbent bounded Page/CDP cleanup and result emission from
+    // the *same pre-Send absolute deadline*, rather than starting another timer.
+    const freshUnboundReturnByMs = invocationDeadlineMs
+      - RESOURCE_CLEANUP_BOUND_MS - CDP_BROWSER_RELEASE_BOUND_MS - 2_000;
     // `timeout-ms` is a soft post-send observation threshold for an owned
-    // conversation. A fresh Send that never obtains an exact-project owned
-    // conversation must instead end at its pre-Send absolute invocation budget:
-    // the later 2 x timeout decision threshold is not a hard exit.
+    // conversation. A fresh Send still without a proven exact-project owner
+    // must instead return within its pre-Send invocation budget, including
+    // bounded cleanup; the 2 x timeout threshold is not a hard exit.
     while (true) {
       if (config.newChat && !ownedConversationUrl
         && (sendCount >= 1 || deliveryProofPendingRecovery)
-        && Date.now() >= invocationDeadlineMs) {
+        && Date.now() >= freshUnboundReturnByMs) {
         incident('post_send_observation_error', 'fresh_conversation_owner_unproven', 'retain_page_no_resend');
         return {
           page,
@@ -4211,7 +4216,7 @@ async function runTurnCore(
           marker,
           baselineCount,
           config.newChat && !ownedConversationUrl
-            ? Math.min(hardExhaustionDeadline, invocationDeadlineMs)
+            ? Math.min(hardExhaustionDeadline, freshUnboundReturnByMs)
             : hardExhaustionDeadline,
           observeProductWall,
         );
@@ -5337,7 +5342,7 @@ async function runTurnCore(
           : POST_SEND_OBSERVATION_POLL_MS;
       const beforeSoftDeadline = Date.now() < softDeadline;
       await sleep(page, config.newChat && !ownedConversationUrl
-        ? Math.min(delay, Math.max(1, invocationDeadlineMs - Date.now()))
+        ? Math.min(delay, Math.max(1, freshUnboundReturnByMs - Date.now()))
         : recoveryState.lossEpoch > 0
           ? Math.min(delay, Math.max(1, hardExhaustionDeadline - Date.now()))
           : beforeSoftDeadline
