@@ -1392,7 +1392,17 @@ describe('state-light fresh conversation collision recovery', () => {
     streamRecoveryAlert: string | false = false,
     replySequence: readonly string[] = [reply],
     continueGeneratingSequence: readonly boolean[] = [],
-    observationOverrides: { incompleteReads?: readonly number[]; nonFinalReads?: readonly number[]; nonFinalFromRead?: number; includeOwnedUser?: boolean; keyedOwnedMessages?: boolean; markerlessOwnedUserFromRead?: number; assistantCarrierKeysByRead?: readonly string[]; neverMarkerProof?: boolean } = {},
+    observationOverrides: {
+      incompleteReads?: readonly number[];
+      nonFinalReads?: readonly number[];
+      nonFinalFromRead?: number;
+      includeOwnedUser?: boolean;
+      keyedOwnedMessages?: boolean;
+      markerlessOwnedUserFromRead?: number;
+      userMarkerlessFromRead?: number;
+      assistantCarrierKeysByRead?: readonly string[];
+      neverMarkerProof?: boolean;
+    } = {},
   ) {
     const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0, composerText: '' };
     const withCarrierKeys = (messages: StateLightTestMessage[]) => observationOverrides.keyedOwnedMessages
@@ -1447,6 +1457,8 @@ describe('state-light fresh conversation collision recovery', () => {
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
         if (selector === USER_MESSAGE_SELECTOR) {
           return collectionLocator(state.sent && !observationOverrides.neverMarkerProof
+            && (observationOverrides.userMarkerlessFromRead === undefined
+              || state.reads < observationOverrides.userMarkerlessFromRead)
             ? [{ role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` }]
             : []);
         }
@@ -2025,6 +2037,39 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readFileSync(output, 'utf8')).toBe(reply);
   });
 
+  it('retains the ordinary markerless finished-reply reopen after account-error recovery', async () => {
+    const prompt = 'PROMPT-MARKERLESS-RECOVERY';
+    const reply = 'MARKERLESS-RECOVERY-FINAL';
+    const output = join(stateDir, 'markerless-recovery-final.txt');
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt, reply, true, false, false, [reply], [],
+      { includeOwnedUser: true, markerlessOwnedUserFromRead: 3, userMarkerlessFromRead: 3 },
+    );
+    const fault = installAccountLoadError(page);
+    let statusReads = 0;
+    mocks.productStatusText.mockImplementation(async (): Promise<any> => {
+      statusReads++;
+      if (statusReads === 2) {
+        fault.showError();
+        const heading = "We couldn't load your account";
+        return {
+          text: heading, composer: false,
+          parts: [{ selector: uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR, text: heading }],
+        };
+      }
+      return { text: '', composer: true };
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await withActualProductWallClassifier(() => runNewChatTurn(page, output, '90000'));
+
+    expect(outcome.result).toMatchObject({ state: 'ok', cause: 'completed_page_only', send_count: 1 });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+    expect(fault.reload).toHaveBeenCalledTimes(1);
+    expect(page.goto.mock.calls.some((call: readonly unknown[]) => call[0] === SHARED_CONV)).toBe(true);
+    expect(state.reloads).toBeGreaterThan(0);
+  });
+
   it('does not transfer a stable reply proof across assistant carrier-key changes', async () => {
     const prompt = 'PROMPT-ASSISTANT-KEY-DRIFT';
     const reply = 'SAME-KEYED-REPLY-TEXT';
@@ -2521,7 +2566,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const sites = [
       ['state-light-session.ts', 0],
       ['state-light-fresh-conversation.ts', 1],
-      ['state-light-turn-base.ts', 2],
+      ['state-light-turn-base.ts', 3],
     ] as const;
     for (const [file, expectedPostSendDcl] of sites) {
       const source = readFileSync(
@@ -2897,6 +2942,330 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result.incidents).toContain('conversation_landing_mismatch');
     // Longer accepted timeout leaves a larger legitimate post-send observation budget.
     expect(outcome.result.poll_count).toBeLessThan(100);
+  });
+
+  function installAccountLoadError(page: any, opts: {
+    persistent?: boolean; errorUrl?: string; afterReloadUrl?: string; throwReload?: boolean;
+  } = {}) {
+    const originalLocator = page.locator.bind(page);
+    const originalUrl = page.url.bind(page);
+    let showing = false;
+    let redirectedUrl: string | undefined;
+    page.url = vi.fn(() => showing
+      ? (opts.errorUrl ?? 'https://chatgpt.com/account-error')
+      : (redirectedUrl ?? originalUrl()));
+    page.locator = vi.fn((selector: string) => {
+      if (!showing) return originalLocator(selector);
+      if (selector === uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR) return scalarLocator({
+        count: vi.fn(async () => 1),
+        innerText: vi.fn(async () => "We couldn't load your account"),
+      });
+      if ([COMPOSER_SELECTOR, MESSAGE_NODE_SELECTOR, USER_MESSAGE_SELECTOR].includes(selector)) {
+        return scalarLocator({ count: vi.fn(async () => 0) });
+      }
+      return originalLocator(selector);
+    });
+    const reload = vi.fn(async () => {
+      if (opts.throwReload) throw new Error('synthetic account reload rejected');
+      if (!opts.persistent) {
+        showing = false;
+        redirectedUrl = opts.afterReloadUrl;
+      }
+    });
+    page.reload = reload;
+    return {
+      showError: () => { showing = true; },
+      reload,
+      visible: () => showing,
+    };
+  }
+
+  async function withActualProductWallClassifier<T>(operation: () => Promise<T>): Promise<T> {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    const classifier = vi.mocked(uiAdapter.classifyProductWall);
+    const previousImplementation = classifier.getMockImplementation();
+    classifier.mockImplementation(actual.classifyProductWall);
+    try {
+      return await operation();
+    } finally {
+      classifier.mockImplementation(previousImplementation ?? (() => ({
+        wall_kind: 'none', matched_text: 'none', matched_selector: 'none',
+      })));
+    }
+  }
+
+  it('reloads a created fresh account-error route once before owner assertion and dispatch', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+    const fresh = makeLoserPage('PROMPT', 'RECOVERED-OK');
+    const fault = installAccountLoadError(fresh.page);
+    fault.showError();
+    const result = await runNewChatTurn(fresh.page, join(stateDir, 'account-open-ok.txt'));
+    expect(result.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(fresh.getSends()).toBe(1);
+    expect(fault.reload).toHaveBeenCalledTimes(1);
+    expect(fault.reload).toHaveBeenCalledWith({
+      waitUntil: 'domcontentloaded', timeout: expect.any(Number),
+    });
+    expect(fresh.page.goto).toHaveBeenCalledTimes(1);
+    expect(readFileSync(join(stateDir, 'account-open-ok.txt'), 'utf8')).toBe('RECOVERED-OK');
+  });
+
+  it.each(['persistent', 'failed'] as const)('fails closed on a %s first account-error reload', async (kind) => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+    const fresh = makeLoserPage('PROMPT', 'NEVER-SENT');
+    const fault = installAccountLoadError(fresh.page, {
+      persistent: kind === 'persistent', throwReload: kind === 'failed',
+    });
+    fault.showError();
+    const result = await runNewChatTurn(fresh.page, join(stateDir, 'account-' + kind + '.txt'));
+    expect(result.result).toMatchObject({
+      state: 'recovery_required', scope: 'invocation', cause: 'account_load_error', send_count: 0,
+    });
+    expect(fresh.getSends()).toBe(0);
+    expect(fault.reload).toHaveBeenCalledTimes(1);
+    expect(result.result).not.toHaveProperty('conversation_id');
+  });
+
+  it('does not spend a second account reload or Send on a second error after initial recovery', async () => {
+    let triggerAfterSend = () => {};
+    const fresh = makeLoserPage('PROMPT', 'MUST-NOT-PUBLISH', () => triggerAfterSend());
+    const fault = installAccountLoadError(fresh.page);
+    triggerAfterSend = fault.showError;
+    fault.showError();
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+    const result = await runNewChatTurn(fresh.page, join(stateDir, 'account-two-phase.txt'));
+    expect(result.result).toMatchObject({
+      state: 'recovery_required', scope: 'invocation', cause: 'account_load_error',
+      send_count: 1, send_attempted: true,
+    });
+    expect(fault.reload).toHaveBeenCalledTimes(1);
+    expect(fresh.getSends()).toBe(1);
+    expect(fresh.page.goto).toHaveBeenCalledTimes(1);
+    expect(result.result).not.toHaveProperty('conversation_id');
+  });
+
+
+  it('recovers an account error that appears during fresh composer readiness', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+    const fresh = makeLoserPage('PROMPT', 'LATE-COMPOSER-OK');
+    const fault = installAccountLoadError(fresh.page);
+    let statusReads = 0;
+    mocks.productStatusText.mockImplementation(async (): Promise<any> => {
+      statusReads++;
+      if (statusReads === 1) {
+        fault.showError();
+        const heading = "We couldn't load your account";
+        return {
+          text: heading, composer: false,
+          parts: [{ selector: uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR, text: heading }],
+        };
+      }
+      return { text: '', composer: true };
+    });
+
+    const result = await withActualProductWallClassifier(() =>
+      runNewChatTurn(fresh.page, join(stateDir, 'account-late-composer-fresh.txt')));
+
+    expect(result.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(fault.reload).toHaveBeenCalledTimes(1);
+    expect(fresh.getSends()).toBe(1);
+  });
+
+  it('recovers an account error during selected existing-chat composer readiness', async () => {
+    const existing = makeLoserPage('PROMPT', 'LATE-EXISTING-COMPOSER-OK');
+    const originalUrl = existing.page.url;
+    existing.page.url = vi.fn(() => originalUrl() === PROJECT_URL ? SHARED_CONV : originalUrl());
+    const fault = installAccountLoadError(existing.page);
+    const harness = enqueueBrowserForTurn(mocks, existing.page);
+    Object.assign(harness.context, { pages: vi.fn(() => [existing.page]) });
+    mocks.productStatusText.mockImplementationOnce(async (): Promise<any> => {
+      fault.showError();
+      const heading = "We couldn't load your account";
+      return {
+        text: heading, composer: false,
+        parts: [{ selector: uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR, text: heading }],
+      };
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+
+    const result = await withActualProductWallClassifier(() =>
+      runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        ...STATE_LIGHT_TURN_BASE_ARGV, '--invocation-id', randomUUID(),
+        '--output', join(stateDir, 'account-late-composer-existing.txt'), '--chat-url', SHARED_CONV,
+        '--timeout-ms', '90000', '--poll-ms', '1',
+      ]));
+
+    expect(result.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(fault.reload).toHaveBeenCalledTimes(1);
+    expect(existing.getSends()).toBe(1);
+    expect(existing.page.close).not.toHaveBeenCalled();
+  });
+
+  it('preserves possibly-delivered state after a recovered zero-witness fresh dispatch stays unbound', async () => {
+    const fresh = makeLoserPage('PROMPT', 'NEVER-PUBLISHED');
+    const fault = installAccountLoadError(fresh.page);
+    fresh.sendButton.click.mockImplementation(async () => {
+      fault.showError();
+      throw new Error('synthetic Send action failed after callback');
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+
+    const result = await runNewChatTurn(fresh.page, join(stateDir, 'account-zero-recovered.txt'));
+
+    expect(result.result).toMatchObject({
+      state: 'observation_uncertain', cause: 'fresh_conversation_owner_unproven',
+      send_count: 0, send_attempted: true,
+    });
+    expect(fault.reload).toHaveBeenCalledTimes(1);
+    expect(fresh.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(deriveDelivery({ ...result.result, resolved_send_count: result.result.send_count } as any, false))
+      .toBe('POSSIBLY_DELIVERED');
+  });
+
+  it('rejects a foreign conversation reached only after a counted fresh-turn error reload', async () => {
+    const fresh = makeLoserPage('PROMPT', 'NEVER-PUBLISHED');
+    const fault = installAccountLoadError(fresh.page, { afterReloadUrl: OTHER_PROJECT_CONVERSATION_URL });
+    let statusReads = 0;
+    mocks.productStatusText.mockImplementation(async (): Promise<any> => {
+      statusReads++;
+      if (statusReads === 2) {
+        fault.showError();
+        const heading = "We couldn't load your account";
+        return {
+          text: heading, composer: false,
+          parts: [{ selector: uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR, text: heading }],
+        };
+      }
+      return { text: '', composer: true };
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+
+    const result = await runNewChatTurn(fresh.page, join(stateDir, 'account-post-reload-foreign.txt'));
+
+    expect(result.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'account_error_page_ownership_unproven', send_count: 1,
+    });
+    expect(fault.reload).toHaveBeenCalledTimes(1);
+    expect(fresh.getSends()).toBe(1);
+    expect(fresh.page.goto).toHaveBeenCalledTimes(1);
+    expect(fresh.page.url()).toBe(OTHER_PROJECT_CONVERSATION_URL);
+    expect(fresh.page.close).not.toHaveBeenCalled();
+  });
+  it('reloads a counted fresh Send at URL landing without another Send', async () => {
+    let triggerAfterSend = () => {};
+    const fresh = makeLoserPage('PROMPT', 'LANDING-OK', () => triggerAfterSend());
+    const fault = installAccountLoadError(fresh.page);
+    triggerAfterSend = fault.showError;
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+    const result = await runNewChatTurn(fresh.page, join(stateDir, 'account-landing.txt'));
+    expect(result.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(fault.reload).toHaveBeenCalledTimes(1);
+    expect(fresh.getSends()).toBe(1);
+    expect(readFileSync(join(stateDir, 'account-landing.txt'), 'utf8')).toBe('LANDING-OK');
+  });
+
+  it('detects an attempted fresh Send with zero numeric witness and never retries', async () => {
+    const fresh = makeLoserPage('PROMPT', 'NEVER-SENT');
+    const fault = installAccountLoadError(fresh.page, { persistent: true });
+    fresh.sendButton.click.mockImplementation(async () => {
+      fault.showError();
+      throw new Error('synthetic Send action failed after callback');
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+    const result = await runNewChatTurn(fresh.page, join(stateDir, 'account-zero-fresh.txt'));
+    expect(result.result).toMatchObject({
+      state: 'recovery_required', scope: 'invocation', cause: 'account_load_error',
+      send_count: 0, send_attempted: true,
+    });
+    expect(fresh.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(fault.reload).toHaveBeenCalledTimes(1);
+    expect(result.result).not.toHaveProperty('conversation_id');
+    expect(deriveDelivery({ ...result.result, resolved_send_count: result.result.send_count } as any, false)).toBe('POSSIBLY_DELIVERED');
+  });
+
+  it('reloads a previously exact-selected existing chat on an error-route but never closes it', async () => {
+    const existing = makeLoserPage('PROMPT', 'NEVER-SENT');
+    const baseUrl = existing.page.url;
+    existing.page.url = vi.fn(() => baseUrl() === PROJECT_URL ? SHARED_CONV : baseUrl());
+    const fault = installAccountLoadError(existing.page, { persistent: true });
+    existing.sendButton.click.mockImplementation(async () => {
+      fault.showError();
+      throw new Error('synthetic existing Send action failed');
+    });
+    const harness = enqueueBrowserForTurn(mocks, existing.page);
+    Object.assign(harness.context, { pages: vi.fn(() => [existing.page]) });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+    const result = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV, '--invocation-id', randomUUID(),
+      '--output', join(stateDir, 'account-existing-zero.txt'), '--chat-url', SHARED_CONV,
+      '--timeout-ms', '90000', '--poll-ms', '1',
+    ]);
+    expect(result.result).toMatchObject({
+      state: 'recovery_required', scope: 'invocation', cause: 'account_load_error',
+      send_count: 0, send_attempted: true,
+    });
+    expect(fault.reload).toHaveBeenCalledTimes(1);
+    expect(existing.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(existing.page.close).not.toHaveBeenCalled();
+    expect(harness.context.newPage).not.toHaveBeenCalled();
+  });
+
+  it('does not reload a selected existing chat after its account-error URL becomes foreign', async () => {
+    const existing = makeLoserPage('PROMPT', 'NEVER-SENT');
+    const baseUrl = existing.page.url;
+    existing.page.url = vi.fn(() => baseUrl() === PROJECT_URL ? SHARED_CONV : baseUrl());
+    const fault = installAccountLoadError(existing.page, { errorUrl: OTHER_PROJECT_CONVERSATION_URL });
+    const harness = enqueueBrowserForTurn(mocks, existing.page);
+    Object.assign(harness.context, { pages: vi.fn(() => [existing.page]) });
+    mocks.productStatusText.mockImplementationOnce(async (): Promise<any> => {
+      fault.showError();
+      const heading = "We couldn't load your account";
+      return {
+        text: heading, composer: false,
+        parts: [{ selector: uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR, text: heading }],
+      };
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+
+    const result = await withActualProductWallClassifier(() =>
+      runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        ...STATE_LIGHT_TURN_BASE_ARGV, '--invocation-id', randomUUID(),
+        '--output', join(stateDir, 'account-existing-foreign.txt'), '--chat-url', SHARED_CONV,
+        '--timeout-ms', '90000', '--poll-ms', '1',
+      ]));
+
+    expect(result.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'account_error_page_ownership_unproven', send_count: 0,
+    });
+    expect(fault.reload).not.toHaveBeenCalled();
+    expect(existing.getSends()).toBe(0);
+    expect(existing.page.close).not.toHaveBeenCalled();
+    expect(harness.context.newPage).not.toHaveBeenCalled();
+  });
+
+  it('never reloads a positively foreign account-error destination', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+    const fresh = makeLoserPage('PROMPT', 'NEVER-SENT');
+    const fault = installAccountLoadError(fresh.page, { errorUrl: OTHER_PROJECT_CONVERSATION_URL });
+    fault.showError();
+    const result = await runNewChatTurn(fresh.page, join(stateDir, 'account-foreign.txt'));
+    expect(result.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'account_error_page_ownership_unproven',
+      send_count: 0,
+    });
+    expect(fault.reload).not.toHaveBeenCalled();
+    expect(fresh.getSends()).toBe(0);
+    expect(fresh.page.close).not.toHaveBeenCalled();
+  });
+
+  it('keeps account diagnostics transient without persisting or remapping login', () => {
+    const key = 'account-advisory-transient';
+    recordStateLightAdvisoryWall(key, 'account_load_error', 'account_load_error', 'invocation');
+    expect(readStateLightAdvisoryWall(key)).toBeNull();
+    for (const kind of ['quota', 'rate_limit', 'challenge', 'login'] as const) {
+      recordStateLightAdvisoryWall(key, kind, kind + '_detected', 'invocation');
+      expect(readStateLightAdvisoryWall(key)).toMatchObject({ state: kind });
+    }
   });
 
 });

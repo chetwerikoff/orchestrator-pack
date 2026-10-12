@@ -1552,12 +1552,53 @@ export interface ProductStatusSurface {
   readonly parts?: readonly { readonly selector: string; readonly text: string }[];
 }
 
+/** A full-screen product heading is not an assistant quotation or a status toast. */
+export const ACCOUNT_LOAD_ERROR_HEADING_SELECTOR = 'h1, h2, [role="heading"][aria-level="1"], [role="heading"][aria-level="2"]';
+const ACCOUNT_LOAD_ERROR_HEADING_RE = /^we\s+couldn['’]t\s+load\s+your\s+account[.!]?\s*$/iu;
+
+/** Read only the held Page. Presence of a composer or chat transcript vetoes
+ * this full-page classification, even if an assistant quotes the heading.
+ * Every Playwright read is bounded; this probe never changes the Page.
+ */
+export async function probeAccountLoadError(
+  page: any,
+  waitSource?: OperationWaitSource,
+): Promise<ProductWallDiagnostic | null> {
+  const limitMs = Math.min(600, requireOperationWait(waitSource, 'product_status'));
+  if (limitMs <= 0) return null;
+  const deadline = Date.now() + limitMs;
+  const remaining = () => Math.max(1, Math.min(200, deadline - Date.now()));
+  try {
+    if (await boundedLocatorCount(page.locator(COMPOSER_SELECTOR), remaining()) > 0) return null;
+    if (await boundedLocatorCount(page.locator(MESSAGE_NODE_SELECTOR), remaining()) > 0) return null;
+    const headings = page.locator(ACCOUNT_LOAD_ERROR_HEADING_SELECTOR);
+    const count = Math.min(4, await boundedLocatorCount(headings, remaining()));
+    for (let i = 0; i < count && Date.now() < deadline; i++) {
+      const text = await boundedPlaywrightOperation(
+        remaining(), () => headings.nth(i).innerText({ timeout: remaining() }),
+      );
+      if (ACCOUNT_LOAD_ERROR_HEADING_RE.test(String(text))) {
+        return {
+          wall_kind: 'account_load_error',
+          matched_text: String(text).slice(0, 500),
+          matched_selector: ACCOUNT_LOAD_ERROR_HEADING_SELECTOR,
+        };
+      }
+    }
+  } catch {
+    // A failed/late heading read is never authority to reload or to call it login.
+  }
+  return null;
+}
+
 export async function productStatusText(page: any, waitSource?: OperationWaitSource): Promise<ProductStatusSurface> {
   const composer = (await boundedLocatorCount(
     page.locator(COMPOSER_SELECTOR),
     requireOperationWait(waitSource, 'product_status'),
   )) > 0;
   const parts: { selector: string; text: string }[] = [];
+  const accountHeading = !composer ? await probeAccountLoadError(page, waitSource) : null;
+  if (accountHeading) parts.push({ selector: accountHeading.matched_selector, text: accountHeading.matched_text });
   for (const selector of PRODUCT_STATUS_PROBE_SELECTORS) {
     const locator = page.locator(selector);
     const countWait = requireOperationWait(waitSource, 'product_status');
@@ -1576,7 +1617,7 @@ const PRODUCT_RATE_LIMIT_WALL_RE = /too many requests|(?:making |sending )?reque
 const PRODUCT_QUOTA_WALL_RE = /you(?:'|’)ve reached[^\n]{0,120}\blimit\b|\busage limit\b|\bmessage limit\b|\breached the current usage\b|\breached your usage limit\b/i;
 const PRODUCT_WALL_TEXT_CAP = 500;
 
-export type ProductWallKind = 'quota' | 'rate_limit' | 'challenge' | 'login';
+export type ProductWallKind = 'quota' | 'rate_limit' | 'challenge' | 'login' | 'account_load_error';
 export interface ProductWallDiagnostic {
   /** Advisory evidence only; a page-text match cannot become a terminal state. */
   readonly wall_kind: ProductWallKind | 'none';
@@ -1596,6 +1637,16 @@ function matchingProductStatusPart(
 }
 
 export function classifyProductWall(surface: ProductStatusSurface): ProductWallDiagnostic {
+  // Only the positively probed product heading has this selector. Never infer
+  // an account failure from generic sign-in copy or assistant-rendered text.
+  const heading = surface.parts?.find((part) =>
+    part.selector === ACCOUNT_LOAD_ERROR_HEADING_SELECTOR
+    && ACCOUNT_LOAD_ERROR_HEADING_RE.test(part.text));
+  if (heading) return {
+    wall_kind: 'account_load_error',
+    matched_text: heading.text.slice(0, PRODUCT_WALL_TEXT_CAP),
+    matched_selector: heading.selector,
+  };
   const patterns: readonly [ProductWallKind, RegExp][] = [
     ['challenge', /verify you are human|checking your browser|just a moment|unusual activity/i],
     ['quota', PRODUCT_QUOTA_WALL_RE],
