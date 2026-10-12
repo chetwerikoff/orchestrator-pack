@@ -5392,7 +5392,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
   });
 });
 
- 
+
 describe('Issue #2532 dead partial GPT incumbent through public start', () => {
   const projectId = 'orchestrator-pack';
   const repository = 'chetwerikoff/orchestrator-pack';
