@@ -2886,6 +2886,10 @@ async function runTurnCore(
     admitStateLightTurnObservation({ profileKey, invocationId, marker });
     const invocationStartedAt = Date.now();
     const invocationDeadlineMs = invocationStartedAt + config.timeoutMs;
+    // One absolute fresh-Send budget, shared by early URL landing, post-send
+    // observation, bounded Page/CDP cleanup and terminal emission.
+    const freshUnboundReturnByMs = invocationDeadlineMs
+      - RESOURCE_CLEANUP_BOUND_MS - 15_000 - 2_000;
     const invocationBudget = createTurnOperationBudget(config.timeoutMs, invocationStartedAt);
     if (entryLivenessHeartbeat) {
       const livenessTiming = resolveBrowserTurnLivenessTiming();
@@ -3527,7 +3531,15 @@ async function runTurnCore(
             sendAuthorized = false;
           }
 
-          const urlDeadline = Date.now() + Math.min(30_000, config.timeoutMs);
+          if (sendCount >= 1 && Date.now() >= freshUnboundReturnByMs) {
+            incident('send_observation_deferred', 'fresh_conversation_url_wait_budget_exhausted', 'continue_observing_after_send');
+            claimed = true;
+            break;
+          }
+          const urlDeadline = Math.min(
+            Date.now() + Math.min(30_000, config.timeoutMs),
+            freshUnboundReturnByMs,
+          );
           let conversationUrl: string | undefined;
           try {
             conversationUrl = await waitForConversationUrlAfterSend(
@@ -3548,6 +3560,11 @@ async function runTurnCore(
             break;
           }
           if (!conversationUrl) {
+            if (sendCount >= 1 && Date.now() >= freshUnboundReturnByMs) {
+              incident('send_observation_deferred', 'fresh_conversation_url_wait_budget_exhausted', 'continue_observing_after_send');
+              claimed = true;
+              break;
+            }
             if (sendCount >= 1) {
               const landingEvidence = await classifySendLandingEvidence(
                 page,
@@ -3619,7 +3636,7 @@ async function runTurnCore(
 
           // The early URL alone cannot bind an invocation. The incumbent
           // post-send observer can bind later once the marker becomes visible.
-          if (!(await freshProjectMarkerProven(page, conversationUrl, invocationDeadlineMs))) {
+          if (!(await freshProjectMarkerProven(page, conversationUrl, freshUnboundReturnByMs))) {
             incident('send_observation_deferred', 'fresh_conversation_marker_unproven', 'continue_observing_after_send');
             claimed = true;
             break;
@@ -3897,11 +3914,6 @@ async function runTurnCore(
       FRESH_CONVERSATION_LANDING_MS,
       config.timeoutMs,
     );
-    // Reserve existing bounded Page/CDP cleanup and terminal emission from the
-    // same absolute pre-Send deadline; this is not a second observation timer.
-    const freshUnboundReturnByMs = invocationDeadlineMs
-      // CDP release's tracked 15s bound (browser-session.ts) plus 2s emission.
-      - RESOURCE_CLEANUP_BOUND_MS - 15_000 - 2_000;
     let lastReadyReply = '';
     let lastReadyObservedText = '';
     let bestReadyReply = '';
