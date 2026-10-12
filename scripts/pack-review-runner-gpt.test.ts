@@ -104,6 +104,17 @@ function selectProjectCard(storeRoot: string): void {
   process.env.OPK_PROJECT_ID = 'orchestrator-pack';
 }
 
+function ownedFixtureReviewStartClaim(storeRoot: string, prNumber: number, headSha: string) {
+  const claim = acquireReviewStartClaim({
+    projectId: 'orchestrator-pack', prNumber, headSha,
+    surface: 'fixture-owned-continuation', startReason: 'fixture-restart',
+    reviewRuns: listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot }),
+  });
+  expect(claim.acquired, JSON.stringify(claim)).toBe(true);
+  expect(testReviewStartClaimOwnership(claim)).toBe(true);
+  return claim;
+}
+
 function cleanTerminalPayload(): string {
   return JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] });
 }
@@ -2096,6 +2107,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
 
     const relaunched: string[] = [];
     const second = await startPackReview(pluralStart(storeRoot, capture, {
+      preacquiredClaim: ownedFixtureReviewStartClaim(storeRoot, 1276, HEAD_A),
       fixtureGptAttemptObserver: async () => ({
         state: 'replacement_eligible' as const,
         replacementEligible: true,
@@ -2150,6 +2162,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     });
 
     const sameHead = await startPackReview(pluralStart(storeRoot, capture, {
+      preacquiredClaim: ownedFixtureReviewStartClaim(storeRoot, 1276, HEAD_A),
       fixtureGptAttemptObserver: recoveryObserver,
     }));
     expect(sameHead).toMatchObject({
@@ -2160,6 +2173,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     });
 
     const newHead = await startPackReview(pluralStart(storeRoot, capture, {
+      preacquiredClaim: ownedFixtureReviewStartClaim(storeRoot, 1276, HEAD_B),
       headSha: HEAD_B,
       fixtureCurrentPrHeadSha: HEAD_B,
       fixturePostReviewHeadSha: HEAD_B,
@@ -2206,6 +2220,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
 
     const relaunched: string[] = [];
     const second = await startPackReview(pluralStart(storeRoot, capture, {
+      preacquiredClaim: ownedFixtureReviewStartClaim(storeRoot, 1276, HEAD_A),
       fixtureGptAttemptObserver: async () => ({
         state: 'replacement_eligible' as const,
         replacementEligible: true,
@@ -4505,6 +4520,7 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
       ...f.options,
       sourceRepoRoot: repoRoot, prNumber, headSha: HEAD_A,
       tier: 'T2', claimMode: 'preacquired',
+      preacquiredClaim: ownedFixtureReviewStartClaim(f.options.storeRoot, prNumber, HEAD_A),
       fixturePrState: 'OPEN', fixtureRepoSlug: repoSlug,
       fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
       fixtureIssueBody: issueBody,
@@ -4536,6 +4552,7 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
       ...f.options,
       sourceRepoRoot: repoRoot, prNumber, headSha: HEAD_A,
       tier: 'T2', claimMode: 'preacquired',
+      preacquiredClaim: ownedFixtureReviewStartClaim(f.options.storeRoot, prNumber, HEAD_A),
       fixturePrState: 'OPEN', fixtureRepoSlug: repoSlug,
       fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
       fixtureIssueBody: issueBody,
