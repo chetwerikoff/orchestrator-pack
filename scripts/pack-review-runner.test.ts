@@ -1259,7 +1259,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
     });
 
-    expect(result).toMatchObject({ ok: true, created: true, reused: false });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, created: true, reused: false });
     expect(result.runId).not.toBe(prior.run.id);
   });
 });
