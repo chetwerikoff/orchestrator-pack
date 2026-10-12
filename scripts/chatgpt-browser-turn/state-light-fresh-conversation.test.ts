@@ -1541,6 +1541,52 @@ describe('state-light fresh conversation collision recovery', () => {
     return { page, state };
   }
 
+  // #2533: source-level negative controls. The historical live DOM predicate
+  // remains unknown; these do not claim to reproduce the production incident.
+  it('bounds a sent-but-unowned same-project URL before the normal launcher ceiling without granting recovery', async () => {
+    const prompt = 'SYNTHETIC-UNBOUND-CANDIDATE';
+    const output = join(stateDir, 'unowned-candidate-must-not-publish.txt');
+    const invocationId = randomUUID();
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt, 'VISIBLE-BUT-UNATTRIBUTABLE', false, false, false,
+      ['VISIBLE-BUT-UNATTRIBUTABLE'], [], { neverMarkerProof: true },
+    );
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const launcherStartMs = mocks.nowMs;
+    const outcome = await runNewChatTurn(page, output, '1800000', invocationId);
+    expect(outcome.result).toMatchObject({
+      state: 'observation_uncertain',
+      cause: 'fresh_conversation_owner_unproven',
+      send_count: 1,
+    });
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(mocks.nowMs - launcherStartMs).toBeLessThan(3_600_000);
+    expect(state.sent).toBe(true);
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'sent_unbound', conversation_url: null, send_count: 1,
+    });
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it.each([
+    ['foreign project', OTHER_PROJECT_CONVERSATION_URL],
+    ['project root', PROJECT_URL],
+  ])('does not promote a sent, unowned %s page URL into a launcher locator', async (_kind, observedUrl) => {
+    const prompt = 'SYNTHETIC-NO-MARKER';
+    const output = join(stateDir, 'unowned-foreign-or-root.txt');
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt, 'SYNTHETIC-UNATTRIBUTABLE-REPLY', false, false, false,
+      ['SYNTHETIC-UNATTRIBUTABLE-REPLY'], [], { neverMarkerProof: true },
+    );
+    page.url.mockImplementation(() => state.sent ? observedUrl : PROJECT_URL);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+    expect(outcome.result.send_count).toBe(1);
+    expect(outcome.result.state).not.toBe('ok');
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(existsSync(output)).toBe(false);
+  });
+
   it('never publishes a newly discovered fresh assistant-only reply without a proven marker', async () => {
     const prompt = 'PROMPT-FRESH-UNRENDERED';
     const reply = 'FRESH-UNRENDERED-OK';
