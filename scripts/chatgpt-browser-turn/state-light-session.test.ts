@@ -94,6 +94,7 @@ function makeHarness(
   let markerIndex = 0;
   const page = {
     __fakeBrowserGptPage: true,
+    isClosed: () => false,
     url: () => options.pageUrl?.() ?? 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111',
     goto: async (_target: string, options?: { timeout?: number; waitUntil?: string }) => {
       metrics.gotos += 1;
