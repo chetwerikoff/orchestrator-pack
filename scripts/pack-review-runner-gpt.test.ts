@@ -5585,9 +5585,12 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     const before = getPackReviewRun(f.runId, f.options)!;
     const initialCycle = readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })!.cycle!;
     const oldRound = structuredClone(before.reviewRound!);
-    // This is a real frozen T2 body snapshot; only the mutable title/body are amended.
+    // Freeze the T2 body under the standard snapshot-store transport. The
+    // independent mutable title/body below must never rewrite this artifact.
+    process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR = path.join(f.options.storeRoot, 'bound-snapshots');
     captureBoundIssueSnapshot({
       projectId, prNumber, prHeadSha: HEAD_A, issueNumber: prNumber, issueBody,
+      storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
     });
     f.input.fixtureIssueTitle = '[T3] Real amended linked Issue';
     f.input.fixtureIssueBody = ['```complexity-tier', 'tier: T3', '```'].join('\n');
