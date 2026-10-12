@@ -2548,7 +2548,7 @@ describe('Issue #2537 promoted T2-at-cap second-round required CI gate', () => {
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
     };
     const first = await startPackReview({
-      ...base, surface: 'pr2-scheduler', headSha: reviewed,
+      ...base, headSha: reviewed,
       fixtureCurrentPrHeadSha: reviewed, fixturePostReviewHeadSha: reviewed,
       fixtureIssueTitle: '[T2] Original linked Issue',
       fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
