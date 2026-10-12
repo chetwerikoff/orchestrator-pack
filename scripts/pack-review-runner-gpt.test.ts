@@ -21,6 +21,7 @@ import {
   isRetryablePackReviewZeroSendCollision,
   parseArgs,
   reconcileStalePackReviewRuns,
+  observeGptPackReviewAttempt,
   resolveCurrentPrHead,
   resolvePackReviewReconcileRepository,
   startPackReview,
@@ -43,16 +44,18 @@ import {
   updatePackReviewRun,
   type PackReviewGptRoundRecord,
 } from './lib/pack-review-run-store.js';
-import { acquireReviewStartClaim } from './lib/review-start-claim-store.js';
+import { acquireReviewStartClaim, testReviewStartClaimOwnership } from './lib/review-start-claim-store.js';
+import type { StateLightTurnObservationRecord } from './chatgpt-browser-turn/state-light-turn-observation.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
 import { computeBoundIssueSnapshotHash } from './lib/reverify-bound-issue-snapshot.js';
 import {
   formatPackGptSourceCommentEnvelope,
   type PackGptSourceIdentity,
 } from './lib/pack-gpt-source-comment-contract.js';
-import type {
-  PackGptSourceCommentTransport,
-  PackGptSourceGithubComment,
+import {
+  resolvePackGptSourceComment,
+  type PackGptSourceCommentTransport,
+  type PackGptSourceGithubComment,
 } from './lib/pack-gpt-source-comment.js';
 import type {
   GithubReviewSummary,
@@ -101,6 +104,17 @@ function selectProjectCard(storeRoot: string): void {
   process.env.HOME = storeRoot;
   process.env.XDG_CONFIG_HOME = configHome;
   process.env.OPK_PROJECT_ID = 'orchestrator-pack';
+}
+
+function ownedFixtureReviewStartClaim(storeRoot: string, prNumber: number, headSha: string) {
+  const claim = acquireReviewStartClaim({
+    projectId: 'orchestrator-pack', prNumber, headSha,
+    surface: 'fixture-owned-continuation', startReason: 'fixture-restart',
+    reviewRuns: listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot }),
+  });
+  expect(claim.acquired, JSON.stringify(claim)).toBe(true);
+  expect(testReviewStartClaimOwnership(claim)).toBe(true);
+  return claim;
 }
 
 function cleanTerminalPayload(): string {
@@ -2063,6 +2077,13 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(() => readFileSync(capture, 'utf8')).toThrow();
   });
 
+  function markFixtureRunnerDead(storeRoot: string, runId: string) {
+    process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
+    updatePackReviewRun(runId, { runnerPid: 2147483647 }, {
+      projectId: 'orchestrator-pack', storeRoot, now: new Date(Date.now() - 5 * 60_000),
+    });
+  }
+
   it('continues the same durable GPT round and relaunches only unresolved source slots', async () => {
     const storeRoot = tempRoot('opk-gpt-same-round-continuation-');
     const capture = path.join(storeRoot, 'github-review.json');
@@ -2093,8 +2114,10 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       .map((slot) => ({ slotId: slot.slotId, invocationId: slot.invocationId, payload: slot.payload }));
     const replacedBefore = before!.reviewRound!.sourceSlots.find((slot) => slot.slotId === 'source-02')!;
 
+    markFixtureRunnerDead(storeRoot, firstRunId);
     const relaunched: string[] = [];
     const second = await startPackReview(pluralStart(storeRoot, capture, {
+      preacquiredClaim: ownedFixtureReviewStartClaim(storeRoot, 1276, HEAD_A),
       fixtureGptAttemptObserver: async () => ({
         state: 'replacement_eligible' as const,
         replacementEligible: true,
@@ -2143,12 +2166,14 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     }));
     expect(first).toMatchObject({ ok: true, status: 'reviewing' });
     const firstRunId = String(first.runId);
+    markFixtureRunnerDead(storeRoot, firstRunId);
     const recoveryObserver = async () => ({
       state: 'reply_recovery_required' as const,
       replacementEligible: false,
     });
 
     const sameHead = await startPackReview(pluralStart(storeRoot, capture, {
+      preacquiredClaim: ownedFixtureReviewStartClaim(storeRoot, 1276, HEAD_A),
       fixtureGptAttemptObserver: recoveryObserver,
     }));
     expect(sameHead).toMatchObject({
@@ -2159,6 +2184,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     });
 
     const newHead = await startPackReview(pluralStart(storeRoot, capture, {
+      preacquiredClaim: ownedFixtureReviewStartClaim(storeRoot, 1276, HEAD_B),
       headSha: HEAD_B,
       fixtureCurrentPrHeadSha: HEAD_B,
       fixturePostReviewHeadSha: HEAD_B,
@@ -2203,8 +2229,12 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const before = getPackReviewRun(firstRunId, { projectId: 'orchestrator-pack', storeRoot });
     const protectedSibling = before!.reviewRound!.sourceSlots.find((slot) => slot.slotId === 'source-02')!;
 
+    // The prior runner has actually stopped. A live first-run owner would
+    // correctly refuse replacement before the per-slot gate is considered.
+    markFixtureRunnerDead(storeRoot, firstRunId);
     const relaunched: string[] = [];
     const second = await startPackReview(pluralStart(storeRoot, capture, {
+      preacquiredClaim: ownedFixtureReviewStartClaim(storeRoot, 1276, HEAD_A),
       fixtureGptAttemptObserver: async () => ({
         state: 'replacement_eligible' as const,
         replacementEligible: true,
@@ -2217,7 +2247,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       },
     }));
 
-    expect(second.ok).toBe(true);
+    expect(second.ok, JSON.stringify(second)).toBe(true);
     expect(second.runId).toBe(firstRunId);
     expect(relaunched).toEqual(['source-01']);
     const after = getPackReviewRun(firstRunId, { projectId: 'orchestrator-pack', storeRoot });
@@ -4293,6 +4323,7 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
     });
     const round = plannedStoredGptRound();
     round.tier = 'T2';
+    round.accountingVersion = PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
     round.issueNumber = prNumber;
     round.boundIssueSnapshotDigest = computeBoundIssueSnapshotHash(issueBody);
     if (slotMode === 'first-attempt') {
@@ -4504,6 +4535,7 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
       ...f.options,
       sourceRepoRoot: repoRoot, prNumber, headSha: HEAD_A,
       tier: 'T2', claimMode: 'preacquired',
+      preacquiredClaim: ownedFixtureReviewStartClaim(f.options.storeRoot, prNumber, HEAD_A),
       fixturePrState: 'OPEN', fixtureRepoSlug: repoSlug,
       fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
       fixtureIssueBody: issueBody,
@@ -4535,6 +4567,7 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
       ...f.options,
       sourceRepoRoot: repoRoot, prNumber, headSha: HEAD_A,
       tier: 'T2', claimMode: 'preacquired',
+      preacquiredClaim: ownedFixtureReviewStartClaim(f.options.storeRoot, prNumber, HEAD_A),
       fixturePrState: 'OPEN', fixtureRepoSlug: repoSlug,
       fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
       fixtureIssueBody: issueBody,
@@ -5371,5 +5404,409 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
     });
     expect(f.reviewBodies).toHaveLength(1);
     expect(f.statusStates).not.toContain('success');
+  });
+});
+
+
+describe('Issue #2532 dead partial GPT incumbent through public start', () => {
+  const projectId = 'orchestrator-pack';
+  const repository = 'chetwerikoff/orchestrator-pack';
+  const prNumber = 2532;
+  const issueBody = ['```complexity-tier', 'tier: T2', '```'].join('\n');
+  const originalSource01 = '25320001-0000-4000-8000-000000000001';
+  const originalSource02 = '25320002-0000-4000-8000-000000000002';
+  const oldPid = 2147483647;
+  const staleAt = '2026-10-12T00:00:00.000Z';
+  const restartAt = '2026-10-12T00:20:00.000Z';
+
+  async function seedDeadIncumbent(config: {
+    source02Comment?: boolean;
+    canonicalRepository?: string;
+    sourceRepoRoot?: string;
+    snapshotDigest?: string;
+  } = {}) {
+    const storeRoot = tempRoot('opk-2532-dead-partial-');
+    const capture = path.join(storeRoot, 'review.json');
+    harnessEnv(storeRoot, capture);
+    selectProjectCard(storeRoot);
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(new Date(staleAt));
+
+    const options = { projectId, storeRoot };
+    const authority = initializePackReviewAuthority({
+      prNumber, headSha: HEAD_A, tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options: { storeRoot },
+    });
+    const round = plannedStoredGptRound();
+    round.tier = 'T2';
+    round.accountingVersion = PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
+    round.issueNumber = prNumber;
+    round.boundIssueSnapshotDigest = config.snapshotDigest ?? computeBoundIssueSnapshotHash(issueBody);
+    const created = createPackReviewRun({
+      ...options, prNumber, headSha: HEAD_A, canonicalRepository: config.canonicalRepository ?? repository,
+      trustedPackRoot: repoRoot, sourceRepoRoot: config.sourceRepoRoot ?? repoRoot,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      automaticBudgetDisposition: 'consume',
+      resolvedReviewer: 'gpt', reviewRound: round,
+    });
+    expect(created.created).toBe(true);
+    const runId = created.run.id;
+
+    const makeComment = (slotId: string, invocationId: string, id: number): PackGptSourceGithubComment => {
+      const identity: PackGptSourceIdentity = {
+        repository, prNumber, headSha: HEAD_A, runId, slotId, invocationId,
+      };
+      return {
+        id, body: formatPackGptSourceCommentEnvelope(identity, 'NO_FINDINGS'),
+        actorLogin: 'browser-gpt-bot',
+        createdAt: '2026-10-12T00:01:00.000Z',
+        updatedAt: '2026-10-12T00:01:00.000Z',
+        url: `https://github.com/${repository}/pull/${prNumber}#issuecomment-${id}`,
+        issueUrl: `https://api.github.com/repos/${repository}/issues/${prNumber}`,
+      };
+    };
+    const comments: PackGptSourceGithubComment[] = [
+      makeComment('source-01', originalSource01, 2532001),
+      ...(config.source02Comment === false ? [] : [makeComment('source-02', originalSource02, 2532002)]),
+    ];
+    const addSource02Comment = () => {
+      if (!comments.some((comment) => comment.id === 2532002)) {
+        comments.push(makeComment('source-02', originalSource02, 2532002));
+      }
+    };
+    const sourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async () => [...comments],
+      getComment: async (id) => {
+        const comment = comments.find((candidate) => candidate.id === id);
+        if (!comment) throw new Error('missing exact synthetic source comment');
+        return comment;
+      },
+    };
+    const firstSource = await resolvePackGptSourceComment({
+      identity: { repository, prNumber, headSha: HEAD_A, runId, slotId: 'source-01', invocationId: originalSource01 },
+      transport: sourceTransport,
+    });
+    if (firstSource.kind !== 'credentialed') throw new Error('source-01 synthetic comment is not credentialed');
+    const firstSlot = {
+      ...round.sourceSlots[0]!,
+      lifecycle: 'terminal' as const,
+      invocationId: originalSource01,
+      attemptOrdinal: 1,
+      admissionStartedAtUtc: staleAt,
+      terminalClass: 'complete_clean',
+      terminalResult: {
+        schema: 'turn-result/v1',
+        state: 'ok', scope: 'none', cause: 'github_source_comment_credentialed',
+        invocation_id: originalSource01, send_count: 1,
+        source_comment_authority: 'credentialed_github',
+        source_comment_receipt: firstSource.receipt,
+      },
+      payload: firstSource.payload,
+    };
+    round.sourceSlots[0] = firstSlot;
+    round.sourceSlots[1] = {
+      ...round.sourceSlots[1]!,
+      lifecycle: 'invocation_started',
+      invocationId: originalSource02,
+      attemptOrdinal: 1,
+      admissionStartedAtUtc: '2026-10-12T00:00:30.000Z',
+      launchProfileKey: 'profile-' + 'a'.repeat(32),
+      launchCdpUrl: 'http://127.0.0.1:9222',
+    };
+    updatePackReviewRun(runId, {
+      reviewRound: round, status: 'preparing', latestRunStatus: 'preparing',
+      runnerPid: oldPid,
+    }, options);
+    const firstSnapshot = getPackReviewRun(runId, options)!.reviewRound!.sourceSlots[0]!;
+    expect(firstSnapshot.terminalClass).toBe('complete_clean');
+    expect(getPackReviewRun(runId, options)!.reviewRound!.sourceSlots.map((slot) => slot.lifecycle))
+      .toEqual(['terminal', 'invocation_started', 'planned']);
+    vi.setSystemTime(new Date(restartAt));
+
+    const statusStates: string[] = [];
+    const attempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+    const launches: Array<{ slotId: string; invocationId: string; timeMs: number }> = [];
+    const input: Parameters<typeof startPackReview>[0] = {
+      ...options, sourceRepoRoot: repoRoot, prNumber, headSha: HEAD_A,
+      tier: 'T2', fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
+      fixturePrState: 'OPEN', fixtureRepoSlug: repository,
+      fixtureIssueNumber: prNumber, fixtureIssueBody: issueBody,
+      fixtureGptSourceCommentTransport: sourceTransport,
+      // Supplying an observation reader keeps the real 30s admission interval.
+      // Unreadable state-light must not become invented predecessor send proof.
+      fixtureGptAdmissionReadObservation: () => { throw new Error('synthetic state-light unavailable'); },
+      fixtureReviewBySourceSlot: attempts,
+      fixtureAfterGptInvocationBound: ({ slotId, invocationId }) => {
+        launches.push({ slotId, invocationId, timeMs: Date.now() });
+        attempts[slotId] = [{ stdout: successfulCleanReviewPayload(invocationId), exitCode: 0 }];
+      },
+      fixtureBeforeGptSourceCommentCensus: ({ slotId, invocationId }) => {
+        if (slotId === 'source-03') comments.push(makeComment(slotId, invocationId, 2532003));
+      },
+      fixtureRequiredStatusWriter: async ({ state }) => { statusStates.push(state); },
+    };
+    return { runId, options, input, launches, originalFirst: firstSnapshot, statusStates,
+      sourceTransport, addSource02Comment };
+  }
+
+  it('hydrates the original credentialed source-02 and admits only source-03 after real predecessor pacing', async () => {
+    const f = await seedDeadIncumbent();
+    const result = await startPackReview({ ...f.input, claimMode: 'acquire' });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      ok: true, runId: f.runId, status: 'up_to_date',
+      coverage: { kind: 'complete', completedSourceCount: 3, cardinality: 3 },
+    });
+    expect(f.launches.map((launch) => launch.slotId)).toEqual(['source-03']);
+    expect(f.launches[0]!.timeMs - Date.parse('2026-10-12T00:00:30.000Z')).toBeGreaterThanOrEqual(30_000);
+    const stored = getPackReviewRun(f.runId, f.options)!;
+    expect(stored.reviewRound!.sourceSlots[0]).toEqual(f.originalFirst);
+    expect(stored.reviewRound!.sourceSlots[1]).toMatchObject({
+      lifecycle: 'terminal', terminalClass: 'complete_clean',
+      invocationId: originalSource02, attemptOrdinal: 1,
+      terminalResult: { source_comment_authority: 'credentialed_github' },
+    });
+    expect(stored.reviewRound!.sourceSlots[1]!.attemptHistory).toBeUndefined();
+    expect(stored.reviewRound!.sourceSlots[2]).toMatchObject({
+      lifecycle: 'terminal', terminalClass: 'complete_clean', attemptOrdinal: 1,
+    });
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([1]);
+  });
+
+  it('continues the same dead GPT round with a genuinely held preacquired claim', async () => {
+    const f = await seedDeadIncumbent();
+    const claim = acquireReviewStartClaim({
+      projectId, prNumber, headSha: HEAD_A,
+      surface: 'fixture-preacquired-owner', startReason: 'fixture-restart',
+      reviewRuns: listPackReviewRuns(f.options),
+    });
+    expect(claim.acquired, JSON.stringify(claim)).toBe(true);
+    expect(testReviewStartClaimOwnership(claim)).toBe(true);
+    const result = await startPackReview({ ...f.input, claimMode: 'preacquired', preacquiredClaim: claim });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      ok: true, runId: f.runId, status: 'up_to_date',
+      coverage: { kind: 'complete', completedSourceCount: 3, cardinality: 3 },
+    });
+    expect(f.launches.map((launch) => launch.slotId)).toEqual(['source-03']);
+    expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[1]).toMatchObject({
+      invocationId: originalSource02, attemptOrdinal: 1, terminalClass: 'complete_clean',
+    });
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    expect(f.statusStates).not.toContain('error');
+  });
+
+  it('rejects an unowned preacquired continuation before PID rebind or a new source-03 send', async () => {
+    const f = await seedDeadIncumbent();
+    // No matching claim has ever been acquired. The flag alone is not a holder.
+    const result = await startPackReview({ ...f.input, claimMode: 'preacquired' });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      ok: false, created: false, runId: f.runId, reason: 'gpt_preacquired_claim_not_owned',
+    });
+    const stored = getPackReviewRun(f.runId, f.options)!;
+    expect(stored.runnerPid).toBe(oldPid);
+    expect(stored.reviewRound!.sourceSlots[0]).toEqual(f.originalFirst);
+    expect(stored.reviewRound!.sourceSlots[1]).toMatchObject({
+      invocationId: originalSource02, attemptOrdinal: 1, terminalClass: 'complete_clean',
+    });
+    expect(stored.reviewRound!.sourceSlots[2]!.lifecycle).toBe('planned');
+    expect(f.launches).toEqual([]);
+    expect(f.statusStates).not.toContain('success');
+    expect(stored.reviewVerdict).toBeUndefined();
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([]);
+  });
+
+
+  it.each(['alive', 'fresh'] as const)(
+    'does not rebind a %s original runner despite a valid new start claim', async (mode) => {
+      const f = await seedDeadIncumbent();
+      updatePackReviewRun(f.runId, { runnerPid: mode === 'alive' ? process.pid : oldPid }, {
+        ...f.options, now: new Date(mode === 'alive' ? staleAt : restartAt),
+      });
+      const before = getPackReviewRun(f.runId, f.options)!;
+      const result = await startPackReview({ ...f.input, claimMode: 'acquire' });
+      expect(result.reason).toBe('gpt_incumbent_owner_not_dead');
+      expect(result.ok).toBe(false);
+      expect(getPackReviewRun(f.runId, f.options)?.runnerPid).toBe(before.runnerPid);
+      expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[2]?.lifecycle).toBe('planned');
+      expect(f.launches).toEqual([]);
+      expect(f.statusStates).not.toContain('success');
+    },
+  );
+
+  it.each(['repository', 'source-root', 'snapshot'] as const)(
+    'rejects a %s-mismatched same-head incumbent before observer or PID takeover', async (mode) => {
+      const f = await seedDeadIncumbent({
+        ...(mode === 'repository' ? { canonicalRepository: 'synthetic/foreign' } : {}),
+        ...(mode === 'source-root' ? { sourceRepoRoot: path.join(repoRoot, 'synthetic-other-root') } : {}),
+        ...(mode === 'snapshot' ? { snapshotDigest: 'f'.repeat(64) } : {}),
+      });
+      const result = await startPackReview({ ...f.input, claimMode: 'acquire' });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe('gpt_incumbent_identity_mismatch');
+      expect(getPackReviewRun(f.runId, f.options)?.runnerPid).toBe(oldPid);
+      expect(f.launches).toEqual([]);
+    },
+  );
+
+  it('rejects ambiguous competing same-round records instead of choosing the latest timestamp', async () => {
+    const f = await seedDeadIncumbent();
+    const incumbent = getPackReviewRun(f.runId, f.options)!;
+    const duplicateId = 'prr-synthetic-second-owner';
+    const duplicate = {
+      ...incumbent, id: duplicateId, runId: duplicateId,
+      sameKeyOrder: (incumbent.sameKeyOrder ?? 1) + 1,
+    };
+    writeFileSync(path.join(f.options.storeRoot, 'runs', duplicateId + '.json'), JSON.stringify(duplicate));
+    const result = await startPackReview({ ...f.input, claimMode: 'acquire' });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('gpt_incumbent_ambiguous_run');
+    expect(getPackReviewRun(f.runId, f.options)?.runnerPid).toBe(oldPid);
+    expect(f.launches).toEqual([]);
+  });
+
+  it('loses conditional rebind to a concurrently credentialed original source comment', async () => {
+    const f = await seedDeadIncumbent({ source02Comment: false });
+    const result = await startPackReview({
+      ...f.input, claimMode: 'acquire',
+      fixtureGptAttemptObserver: async () => {
+        f.addSource02Comment();
+        await reconcileStalePackReviewRuns({
+          ...f.options, prNumber, sourceRepoRoot: repoRoot, repoSlug: repository,
+          fixtureCurrentPrHeadSha: HEAD_A,
+          fixtureGptSourceCommentTransport: f.sourceTransport,
+          fixtureRequiredStatusWriter: async () => {},
+          recoverActiveGptSources: true, settlePartialAfterGrace: false,
+        });
+        return {
+          state: 'continuation_eligible' as const,
+          replacementEligible: false,
+          initialLaunchSlotIds: ['source-03'],
+        };
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('gpt_incumbent_concurrent_update');
+    expect(f.launches).toEqual([]);
+    expect(getPackReviewRun(f.runId, f.options)?.runnerPid).toBe(oldPid);
+    expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[1]).toMatchObject({
+      invocationId: originalSource02, terminalClass: 'complete_clean',
+    });
+  });
+
+  function source02Observation(phase: 'sent_unharvested' | 'sent_unbound'): StateLightTurnObservationRecord {
+    return {
+      schema: 'state-light-turn-observation/v1', version: 1,
+      invocation_id: originalSource02, profile_key: 'profile-' + 'a'.repeat(32),
+      marker: 'OPKTURNV1fixture-owned-2532', phase, send_count: 1,
+      send_witness: 'numeric_send_count', conversation_url: null,
+      transitioned_at: staleAt, transition_reason: 'synthetic-send',
+    };
+  }
+
+  it.each(['generating', 'empty-reply', 'sent_unbound'] as const)(
+    'keeps old invocation after real observer %s replacement hint', async (mode) => {
+      const f = await seedDeadIncumbent({ source02Comment: false });
+      const observations: Array<{ replacementEligible: boolean; state: string }> = [];
+      const result = await startPackReview({
+        ...f.input, claimMode: 'acquire',
+        fixtureGptAttemptObserver: async (run) => {
+          const observation = await observeGptPackReviewAttempt(run, Date.now(), {
+            readObservation: () => source02Observation(mode === 'sent_unbound' ? 'sent_unbound' : 'sent_unharvested'),
+            resolveSourceComment: (identity) => resolvePackGptSourceComment({
+              identity, transport: f.sourceTransport,
+            }),
+            listTargets: async () => [{
+              id: 'synthetic-source-02-tab', type: 'page',
+              url: 'https://chatgpt.com/c/00000000-0000-4000-8000-000000000002',
+              title: 'Synthetic GPT source',
+            }],
+            evaluate: async () => ({
+              status: 'ok', nodes_truncated: false,
+              generation_in_progress: mode === 'generating',
+              nodes: [{
+                role: 'user', document_ordinal: 0,
+                innerText: { head: 'OPKTURNV1fixture-owned-2532' },
+              }],
+            }),
+          });
+          if (observation) observations.push(observation);
+          return observation;
+        },
+      });
+      expect(observations).toEqual([expect.objectContaining({
+        replacementEligible: true, state: 'replacement_eligible',
+      })]);
+      expect(result.ok).toBe(false);
+      expect(f.launches).toEqual([]);
+      expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[1]).toMatchObject({
+        lifecycle: 'invocation_started', invocationId: originalSource02, attemptOrdinal: 1,
+      });
+      expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[1]?.attemptHistory).toBeUndefined();
+      expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[2]?.lifecycle).toBe('planned');
+    },
+  );
+
+  it('returns promptly when source-02 predecessor send observation stays unreadable', async () => {
+    const f = await seedDeadIncumbent({ source02Comment: false });
+    const result = await startPackReview({ ...f.input, claimMode: 'acquire' });
+    expect(result).toMatchObject({
+      ok: false, runId: f.runId, reason: 'gpt_original_invocation_recovery_required',
+      coverage: { kind: 'partial', completedSourceCount: 1, cardinality: 3 },
+    });
+    expect(String(result.nextAction)).toContain('source-02');
+    expect(String(result.nextAction)).toContain(originalSource02);
+    expect(f.launches).toEqual([]);
+    expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[2]?.lifecycle).toBe('planned');
+    expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
+    expect(f.statusStates).not.toContain('error');
+    expect(f.statusStates).not.toContain('success');
+  });
+
+  it('returns a true pending 2/3 when the started predecessor has exactly one matching send', async () => {
+    const f = await seedDeadIncumbent({ source02Comment: false });
+    const result = await startPackReview({
+      ...f.input, claimMode: 'acquire',
+      fixtureGptAdmissionReadObservation: () => source02Observation('sent_unharvested'),
+    });
+    expect(result).toMatchObject({
+      ok: false, runId: f.runId, reason: 'gpt_original_invocation_recovery_required',
+      coverage: { kind: 'partial', completedSourceCount: 2, cardinality: 3 },
+    });
+    expect(f.launches.map((launch) => launch.slotId)).toEqual(['source-03']);
+    expect(String(result.nextAction)).toContain(originalSource02);
+    const stored = getPackReviewRun(f.runId, f.options)!;
+    expect(stored.reviewRound?.sourceSlots[1]).toMatchObject({
+      lifecycle: 'invocation_started', invocationId: originalSource02, attemptOrdinal: 1,
+    });
+    expect(stored.reviewRound?.settledSourceCount).toBeUndefined();
+    expect(stored.reviewVerdict).toBeUndefined();
+    expect(f.statusStates).not.toContain('error');
+    expect(f.statusStates).not.toContain('success');
+  });
+
+  it('rejects a real preacquired claim bound to a different PR head', async () => {
+    const f = await seedDeadIncumbent();
+    const foreign = acquireReviewStartClaim({
+      projectId, prNumber, headSha: HEAD_B,
+      surface: 'fixture-foreign-preacquired', startReason: 'fixture-restart', reviewRuns: [],
+    });
+    expect(foreign.acquired, JSON.stringify(foreign)).toBe(true);
+    const result = await startPackReview({ ...f.input, claimMode: 'preacquired', preacquiredClaim: foreign });
+    expect(result).toMatchObject({
+      ok: false, created: false, runId: f.runId, reason: 'gpt_preacquired_claim_not_owned',
+    });
+    expect(getPackReviewRun(f.runId, f.options)?.runnerPid).toBe(oldPid);
+    expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[2]?.lifecycle).toBe('planned');
+    expect(f.launches).toEqual([]);
+    expect(f.statusStates).not.toContain('success');
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
   });
 });
