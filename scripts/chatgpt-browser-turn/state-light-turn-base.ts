@@ -103,6 +103,9 @@ import {
 import {
   recoveryMarkerCardinality,
   runPostSendRecovery,
+  takeRecoveryCensus,
+  type PostSendRecoveryAdapter,
+  type PostSendRecoveryResult,
   type PostSendRecoveryFailure,
   type PostSendRecoveryState,
   type RecoveryObserverEvent,
@@ -3968,11 +3971,87 @@ async function runTurnCore(
       };
     };
 
-    const recoverCurrentObservation = async (): Promise<TurnRunOutcome | null> => {
+    // Reuse the existing read-only owned-conversation census for both page loss
+    // and local-ID Send fetch loss. No navigation or Retry is authorized by a census.
+    const recoveryAdapter: PostSendRecoveryAdapter = {
+      enumeratePages: async (activeBrowser) => {
+        const contexts = (activeBrowser as any).contexts();
+        if (!Array.isArray(contexts) || contexts.length !== 1) {
+          throw new Error('recovery_context_count_unproven');
+        }
+        const pages = contexts[0].pages();
+        if (!Array.isArray(pages)) throw new Error('recovery_page_enumeration_failed');
+        const targetUrl = recoveryState.immutableConversationUrl;
+        if (!targetUrl) return pages;
+        return pages.filter((candidate: any) => {
+          try {
+            return normalizeConversationUrl(String(candidate.url())) === targetUrl;
+          } catch {
+            return false;
+          }
+        });
+      },
+      pageUrl: (candidate) => String((candidate as any).url()),
+      normalizeConversationUrl,
+      isSupportedConversationUrl: isSupportedChatGptConversationUrl,
+      readAuthoritativeMessages: async (candidatePage) => {
+        const remainingMs = hardExhaustionDeadline - Date.now();
+        if (remainingMs <= 0) return { messages: [], incomplete: true };
+        try {
+          return await boundedBrowserRead(
+            readRecoveryAuthoritativeUserMessages(candidatePage),
+            Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs),
+            'recovery_authoritative_read_timeout',
+          );
+        } catch {
+          return { messages: [], incomplete: true };
+        }
+      },
+      browserDefinitelyDisconnected: (candidateBrowser) => {
+        try {
+          return typeof (candidateBrowser as any)?.isConnected === 'function'
+            && (candidateBrowser as any).isConnected() === false;
+        } catch {
+          return false;
+        }
+      },
+      pageDefinitelyLost: (candidatePage) => {
+        try {
+          return typeof (candidatePage as any)?.isClosed === 'function'
+            && (candidatePage as any).isClosed() === true;
+        } catch {
+          return false;
+        }
+      },
+      reconnect: async () => {
+        const remainingMs = Math.max(1, hardExhaustionDeadline - Date.now());
+        return await chromium.connectOverCDP(config.cdp, {
+          timeout: Math.min(30_000, remainingMs),
+        });
+      },
+      createSuccessor: async (activeBrowser, immutableConversationUrl) => {
+        const recoveryBudget = createTurnOperationBudget(
+          Math.max(0, hardExhaustionDeadline - Date.now()),
+        );
+        const successor = await createDedicatedTurnPage(activeBrowser, recoveryBudget);
+        navigation.recordGoto();
+        await successor.goto(immutableConversationUrl, {
+          waitUntil: 'domcontentloaded',
+          timeout: Math.min(STATE_LIGHT_NAVIGATION_TIMEOUT_MS, Math.max(1, hardExhaustionDeadline - Date.now())),
+        });
+        return successor;
+      },
+      sleep: recoveryHooks.sleep ?? (async (milliseconds) => {
+        await sleep(page, milliseconds);
+      }),
+      now: () => Date.now(),
+    };
+
+    const recoverCurrentObservation = async (localFetchFailure = false): Promise<TurnRunOutcome | null> => {
       // Only positive owned-page/browser loss shortens the *existing* observation
       // deadline. No diagnostic string can authorize this recovery or a resend.
       // Reuse that deadline across further loss epochs instead of restarting it.
-      if (recoveryState.lossEpoch === 0) {
+      if (!localFetchFailure && recoveryState.lossEpoch === 0) {
         hardExhaustionDeadline = Math.min(
           hardExhaustionDeadline,
           Date.now() + CONFIRMED_OWNED_PAGE_LOSS_RECOVERY_MS,
@@ -3981,7 +4060,40 @@ async function runTurnCore(
       if (config.newChat && !ownedConversationUrl) {
         hardExhaustionDeadline = Math.min(hardExhaustionDeadline, freshUnboundReturnByMs);
       }
-      const recovered = await runPostSendRecovery({
+      let recovered: PostSendRecoveryResult;
+      if (localFetchFailure) {
+        // This invocation's local-chatgpt: tab lost the initial Send fetch.
+        // Server execution is unknown; use only existing browser census evidence.
+        const census = await takeRecoveryCensus(browser, marker, recoveryAdapter);
+        const matches = census.pages.filter((candidate) => candidate.eligible);
+        const unbound = (cause: string): TurnRunOutcome => {
+          incident('post_send_observation_error', cause, 'retain_page_no_resend');
+          cleanupAuthorityUnprovenPages.add(page);
+          return {
+            page, browser, cleanupAction: 'preserve',
+            result: compactResult(
+              'observation_uncertain', 'invocation', cause,
+              invocationId, profileKey, sendCount, pollCount, navigation, incidents,
+              { send_attempted: true }, journalWriteFailed,
+            ),
+          };
+        };
+        if (census.monotonicAmbiguity || matches.length > 1) {
+          return unbound('owned_prompt_marker_ambiguous');
+        }
+        if (!census.complete) return unbound('owned_conversation_recovery_census_failed');
+        if (matches.length === 0) return unbound('fresh_send_fetch_failed');
+        const match = matches[0]!;
+        if (!config.projectUrl || !projectConversationUrlMatchesProject(match.normalizedUrl, config.projectUrl)) {
+          return unbound('recovered_fresh_owner_marker_or_project_unproven');
+        }
+        recovered = {
+          kind: 'recovered', browser, page: match.page,
+          conversationUrl: match.normalizedUrl, cleanupOwned: false,
+          lossEpoch: recoveryState.lossEpoch,
+        };
+      } else {
+        recovered = await runPostSendRecovery({
         browser,
         currentPage: page,
         marker,
@@ -3989,80 +4101,9 @@ async function runTurnCore(
         pollMs: Math.min(config.pollMs, 1_000),
         state: recoveryState,
         observer: recoveryHooks.observer,
-        adapter: {
-          enumeratePages: async (activeBrowser) => {
-            const contexts = (activeBrowser as any).contexts();
-            if (!Array.isArray(contexts) || contexts.length !== 1) {
-              throw new Error('recovery_context_count_unproven');
-            }
-            const pages = contexts[0].pages();
-            if (!Array.isArray(pages)) throw new Error('recovery_page_enumeration_failed');
-            const targetUrl = recoveryState.immutableConversationUrl;
-            if (!targetUrl) return pages;
-            return pages.filter((candidate: any) => {
-              try {
-                return normalizeConversationUrl(String(candidate.url())) === targetUrl;
-              } catch {
-                return false;
-              }
-            });
-          },
-          pageUrl: (candidate) => String((candidate as any).url()),
-          normalizeConversationUrl,
-          isSupportedConversationUrl: isSupportedChatGptConversationUrl,
-          readAuthoritativeMessages: async (candidatePage) => {
-            const remainingMs = hardExhaustionDeadline - Date.now();
-            if (remainingMs <= 0) return { messages: [], incomplete: true };
-            try {
-              return await boundedBrowserRead(
-                readRecoveryAuthoritativeUserMessages(candidatePage),
-                Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs),
-                'recovery_authoritative_read_timeout',
-              );
-            } catch {
-              return { messages: [], incomplete: true };
-            }
-          },
-          browserDefinitelyDisconnected: (candidateBrowser) => {
-            try {
-              return typeof (candidateBrowser as any)?.isConnected === 'function'
-                && (candidateBrowser as any).isConnected() === false;
-            } catch {
-              return false;
-            }
-          },
-          pageDefinitelyLost: (candidatePage) => {
-            try {
-              return typeof (candidatePage as any)?.isClosed === 'function'
-                && (candidatePage as any).isClosed() === true;
-            } catch {
-              return false;
-            }
-          },
-          reconnect: async () => {
-            const remainingMs = Math.max(1, hardExhaustionDeadline - Date.now());
-            return await chromium.connectOverCDP(config.cdp, {
-              timeout: Math.min(30_000, remainingMs),
-            });
-          },
-          createSuccessor: async (activeBrowser, immutableConversationUrl) => {
-            const recoveryBudget = createTurnOperationBudget(
-              Math.max(0, hardExhaustionDeadline - Date.now()),
-            );
-            const successor = await createDedicatedTurnPage(activeBrowser, recoveryBudget);
-            navigation.recordGoto();
-            await successor.goto(immutableConversationUrl, {
-              waitUntil: 'domcontentloaded',
-              timeout: Math.min(STATE_LIGHT_NAVIGATION_TIMEOUT_MS, Math.max(1, hardExhaustionDeadline - Date.now())),
-            });
-            return successor;
-          },
-          sleep: recoveryHooks.sleep ?? (async (milliseconds) => {
-            await sleep(page, milliseconds);
-          }),
-          now: () => Date.now(),
-        },
+        adapter: recoveryAdapter,
       });
+      }
 
       browser = recovered.browser;
       if (recovered.kind === 'failure') return recoveryFailureOutcome(recovered);
@@ -4151,6 +4192,25 @@ async function runTurnCore(
       return null;
     };
 
+    const ownedLocalFetchFailureVisible = async (): Promise<boolean> => {
+      if (!config.newChat || ownedConversationUrl || sendCount !== 1
+        || browserOrPageDefinitelyLost(page, browser)) return false;
+      try {
+        const localUrl = new URL(String(page.url()));
+        const segments = localUrl.pathname.split('/');
+        if (localUrl.origin !== new URL(config.projectUrl ?? '').origin
+          || segments.at(-2) !== 'c'
+          || !/^local-chatgpt(?::|%3a)[a-z0-9-]+$/i.test(segments.at(-1) ?? '')) return false;
+        const deadlineMs = Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS);
+        if (deadlineMs <= Date.now()) return false;
+        // These are read-only signals from the owned tab. Retry must never be clicked.
+        return await locatorCount(page.getByText('Failed to fetch', { exact: true }), deadlineMs) > 0
+          && await locatorCount(page.getByRole('button', { name: 'Retry', exact: true }), deadlineMs) > 0;
+      } catch {
+        return false;
+      }
+    };
+
     // `timeout-ms` is a soft post-send observation threshold for an owned
     // conversation. A fresh Send still without a proven exact-project owner
     // must instead return within its pre-Send invocation budget, including
@@ -4181,6 +4241,11 @@ async function runTurnCore(
       }
       if ((sendCount >= 1 || deliveryProofPendingRecovery) && browserOrPageDefinitelyLost(page, browser)) {
         const terminal = await recoverCurrentObservation();
+        if (terminal) return terminal;
+        continue;
+      }
+      if (await ownedLocalFetchFailureVisible()) {
+        const terminal = await recoverCurrentObservation(true);
         if (terminal) return terminal;
         continue;
       }
