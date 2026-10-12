@@ -47,7 +47,7 @@ import {
 import { acquireReviewStartClaim, testReviewStartClaimOwnership } from './lib/review-start-claim-store.js';
 import type { StateLightTurnObservationRecord } from './chatgpt-browser-turn/state-light-turn-observation.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
-import { computeBoundIssueSnapshotHash } from './lib/reverify-bound-issue-snapshot.js';
+import { captureBoundIssueSnapshot, computeBoundIssueSnapshotHash } from './lib/reverify-bound-issue-snapshot.js';
 import {
   formatPackGptSourceCommentEnvelope,
   type PackGptSourceIdentity,
@@ -5578,6 +5578,49 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     });
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
     expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([1]);
+  });
+
+  it('preserves original T2 GPT source identity after live T3 promotion and confirms pending on the exact head', async () => {
+    const f = await seedDeadIncumbent();
+    const before = getPackReviewRun(f.runId, f.options)!;
+    const initialCycle = readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })!.cycle!;
+    const oldRound = structuredClone(before.reviewRound!);
+    // This is a real frozen T2 body snapshot; only the mutable title/body are amended.
+    captureBoundIssueSnapshot({
+      projectId, prNumber, prHeadSha: HEAD_A, issueNumber: prNumber, issueBody,
+    });
+    f.input.fixtureIssueTitle = '[T3] Real amended linked Issue';
+    f.input.fixtureIssueBody = ['```complexity-tier', 'tier: T3', '```'].join('\n');
+    f.input.fixtureRequiredStatusReader = async (headSha) => {
+      expect(headSha).toBe(HEAD_A);
+      return f.statusStates.at(-1);
+    };
+    const resumed = await startPackReview({ ...f.input, claimMode: 'acquire' });
+    expect(resumed, JSON.stringify(resumed)).toMatchObject({
+      ok: true, runId: f.runId, status: 'up_to_date',
+      publicationVerified: true, requiredStatusState: 'pending',
+    });
+    const after = getPackReviewRun(f.runId, f.options)!;
+    const authority = readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })!;
+    expect(authority.cycle).toMatchObject({
+      cycleId: initialCycle.cycleId, frozenTier: 'T3', frozenCap: 2,
+      consumedRoundOrdinals: [1], state: 'open',
+    });
+    expect(authority.cycle?.reviewStageComplete).not.toBe(true);
+    expect(after.logicalRoundCap).toBe(1);
+    expect(after.logicalRoundOrdinal).toBe(1);
+    expect(after.reviewRound).toMatchObject({
+      tier: 'T2', roundOrdinal: 1,
+      boundIssueSnapshotDigest: oldRound.boundIssueSnapshotDigest,
+    });
+    expect(after.reviewRound?.sourceSlots[0]?.invocationId)
+      .toBe(oldRound.sourceSlots[0]?.invocationId);
+    expect(after.reviewRound?.sourceSlots[1]?.invocationId)
+      .toBe(oldRound.sourceSlots[1]?.invocationId);
+    expect(f.launches.map((launch) => launch.slotId)).toEqual(['source-03']);
+    expect(f.statusStates.at(-1)).toBe('pending');
+    expect(f.statusStates).not.toContain('success');
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
   });
 
   it('continues the same dead GPT round with a genuinely held preacquired claim', async () => {
