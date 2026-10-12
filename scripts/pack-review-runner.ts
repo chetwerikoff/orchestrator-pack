@@ -279,6 +279,8 @@ interface StartInput {
   fixtureCarryoverSourceCleanRunId?: string;
   fixtureFocusedResolutionBundleDigest?: string;
   fixtureIssueBody?: string;
+  /** Independent synthetic linked Issue title, never inferred from body or caller tier. */
+  fixtureIssueTitle?: string;
   fixtureIssueNumber?: number;
   fixtureChangedPaths?: string[];
   fixtureBoundIssueSnapshotBytes?: string;
@@ -328,6 +330,8 @@ export interface ReconcileStalePackReviewRunsInput {
   fixtureRequiredStatusReader?: (headSha: string) => string | undefined | Promise<string | undefined>;
   fixtureWorkerNotifier?: PackReviewWorkerNotifier;
   fixtureIssueBody?: string;
+  /** Independent synthetic linked Issue title, never inferred from body or caller tier. */
+  fixtureIssueTitle?: string;
   fixtureIssueNumber?: number;
   fixtureChangedPaths?: string[];
   fixtureBoundIssueSnapshotBytes?: string;
@@ -887,33 +891,28 @@ export async function manualPackReviewRequiredCiGreen(input: {
     && targetAfterGate.baseRef === targetContext.defaultBranch;
 }
 
-async function resolveCurrentIssueBody(
-  repoRoot: string,
-  repoSlug: string,
-  issueNumber: number,
+async function resolveCurrentIssueFields(
+  repoRoot: string, repoSlug: string, issueNumber: number,
   runner: typeof runProcess = runProcess,
-): Promise<string> {
+): Promise<{title: string; body: string}> {
   const result = await runner({
     command: resolveTrackedGhWrapper(),
     args: ['api', `repos/${repoSlug}/issues/${issueNumber}`],
-    cwd: repoRoot,
-    inheritParentEnv: true,
-    allowEmptyStdout: false,
-    timeoutMs: 30_000,
+    cwd: repoRoot, inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 30_000,
   });
-  const output = await requireProcess(result, `gh issue view ${issueNumber} --json body`);
+  const output = await requireProcess(result, `gh issue view ${issueNumber} --json title,body`);
   let parsed: unknown;
-  try {
-    parsed = JSON.parse(output);
-  } catch {
-    throw new Error(`Issue #${issueNumber} returned invalid JSON`);
-  }
+  try { parsed = JSON.parse(output); }
+  catch { throw new Error(`Issue #${issueNumber} returned invalid JSON`); }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error(`Issue #${issueNumber} returned invalid JSON`);
   }
-  const body = (parsed as Record<string, unknown>).body;
+  const { title, body } = parsed as Record<string, unknown>;
+  if (typeof title !== 'string' || !title.trim()) {
+    throw new Error(`Issue #${issueNumber} returned missing or invalid title`);
+  }
   if (typeof body !== 'string') throw new Error(`Issue #${issueNumber} returned invalid body`);
-  return body;
+  return { title, body };
 }
 
 export async function resolvePackReviewSelectedRepository(input: {
@@ -1078,22 +1077,41 @@ async function resolveTarget(
   };
 }
 
-export function parseAuthoritativeTier(body: string): PackReviewTier {
+/** Only leading linked-Issue title markers and fenced body tiers grant authority. */
+export function parseAuthoritativeTier(body: string, title?: string): PackReviewTier {
   const parsed = parseComplexityTierFromIssueBody(body);
-  if (parsed.kind === 'missing') {
-    if (/```complexity-tier\b/i.test(body)) {
-      throw new Error('authoritative Issue tier is invalid');
+  const fenceSeen = /\`\`\`complexity-tier\b/i.test(body);
+  const fence = body.match(/\`\`\`complexity-tier[^\n]*\n([\s\S]*?)\`\`\`/i);
+  if ((fenceSeen && !fence) || parsed.kind === 'invalid') {
+    throw new Error('authoritative Issue tier is invalid');
+  }
+  let bodyTier: PackReviewTier | undefined;
+  if (parsed.kind === 'tier') bodyTier = parsed.tier as PackReviewTier;
+  if (parsed.kind === 'no-tier' && fence) {
+    // The shared parser treats skip-line as a no-tier signal; pack review must
+    // still honor an explicit valid tier written in the same fenced block.
+    const rows = (fence[1] ?? '').split(/\r?\n/).map((row) => row.trim())
+      .filter((row) => /^tier\s*:/i.test(row));
+    if (rows.length > 1) throw new Error('authoritative Issue tier is ambiguous');
+    if (rows.length === 1) {
+      const value = rows[0]!.replace(/^tier\s*:\s*/i, '').toUpperCase();
+      if (!['T1', 'T2', 'T3'].includes(value)) throw new Error('authoritative Issue tier is invalid');
+      bodyTier = value as PackReviewTier;
     }
-    return resolveTierAndCap({ issueBody: body }).tier as PackReviewTier;
   }
-  if (parsed.kind === 'no-tier') {
-    return resolveTierAndCap({ issueBody: body }).tier as PackReviewTier;
+  let titleTier: PackReviewTier | undefined;
+  if (title !== undefined) {
+    if (typeof title !== 'string' || !title.trim()) throw new Error('authoritative Issue title is missing');
+    const leading = title.trim().replace(/^\d+\s*[—–-]\s*/, '');
+    const valid = leading.match(/^\[(T[123])\](?=\s|$)/i);
+    if (valid) titleTier = valid[1]!.toUpperCase() as PackReviewTier;
+    else if (/^\[\s*T[^\]]*\]/i.test(leading) || /^\[\s*T\d/i.test(leading)) {
+      throw new Error('authoritative Issue title tier marker is malformed');
+    }
   }
-  const tier = String(parsed.kind === 'tier' ? parsed.tier : '').toUpperCase();
-  if (parsed.kind !== 'tier' || !['T1', 'T2', 'T3'].includes(tier)) {
-    throw new Error(`authoritative Issue tier is ${parsed.kind === 'invalid' ? 'invalid' : 'missing'}`);
-  }
-  return tier as PackReviewTier;
+  const rank = { T1: 1, T2: 2, T3: 3 } as const;
+  if (titleTier && (!bodyTier || rank[titleTier] >= rank[bodyTier])) return titleTier;
+  return bodyTier ?? 'T2';
 }
 
 async function resolveAuthoritativeReviewContext(input: StartInput, target: {
@@ -1107,6 +1125,31 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
   const issueNumber = target.issueNumber ?? 0;
   let body: string | undefined;
   let snapshotDigest = '';
+  const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
+  const prior = readPackReviewAuthority(target.prNumber, { storeRoot });
+  const priorCycle = prior?.cycle;
+  const historicalRuns = listPackReviewRunRecordsRaw({ projectId, storeRoot }).filter((run) =>
+    run.prNumber === target.prNumber && run.reviewCycleId === priorCycle?.cycleId
+    && run.canonicalRepository?.toLowerCase() === target.repoSlug.toLowerCase());
+  const started = historicalRuns.length > 0
+    || Boolean(priorCycle?.consumedRoundOrdinals?.length || priorCycle?.consumedHeadShas.length);
+  let liveIssue: { title: string; body: string } | undefined;
+  if (issueNumber > 0) {
+    if (harness && input.fixtureIssueBody !== undefined) {
+      if (input.fixtureIssueTitle === undefined && !started) {
+        throw new Error('linked-Issue fixture requires independent fixtureIssueTitle');
+      }
+      if (input.fixtureIssueTitle !== undefined) {
+        liveIssue = { title: input.fixtureIssueTitle, body: input.fixtureIssueBody };
+      }
+    } else if (!harness) {
+      try {
+        liveIssue = await resolveCurrentIssueFields(target.sourceRepoRoot, target.repoSlug, issueNumber);
+      } catch (error) {
+        if (!started && priorCycle?.reviewStageComplete !== true) throw error;
+      }
+    }
+  }
 
   const configuredSnapshotPath = trim(process.env.OPK_BOUND_ISSUE_SNAPSHOT_PATH);
   const configuredSnapshotStore = trim(process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR);
@@ -1131,10 +1174,12 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
     }
     if (resolvedSnapshot.status === 'missing') {
       if (!(harness && input.fixtureIssueBody === undefined)) {
-        const observedBody = input.fixtureIssueBody
-          ?? await resolveCurrentIssueBody(target.sourceRepoRoot, target.repoSlug, issueNumber);
+        const observedBody = input.fixtureIssueBody ?? liveIssue?.body;
+        if (observedBody === undefined) {
+          throw new Error('authoritative linked Issue body unavailable for snapshot capture');
+        }
         try {
-          parseAuthoritativeTier(observedBody);
+          parseAuthoritativeTier(observedBody, liveIssue?.title);
         } catch {
           throw new Error(
             `authoritative Issue #${issueNumber} tier is invalid; correct its complexity-tier block to tier: T1|T2|T3 and retry review start`,
@@ -1208,9 +1253,21 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
   }
 
   if (issueNumber <= 0) throw new Error('authoritative bound Issue number unavailable');
-  const tier = parseAuthoritativeTier(body);
+  const snapshotTier = parseAuthoritativeTier(body);
+  if (!liveIssue && !started && priorCycle?.reviewStageComplete !== true) {
+    throw new Error('linked Issue title/body missing at fresh admission');
+  }
+  const observedTier = liveIssue ? parseAuthoritativeTier(liveIssue.body, liveIssue.title) : undefined;
+  const rank = { T1: 1, T2: 2, T3: 3 } as const;
+  let tier: PackReviewTier = observedTier ?? priorCycle?.frozenTier ?? snapshotTier;
+  if (priorCycle && (started || priorCycle.reviewStageComplete === true || priorCycle.state === 'closed')) {
+    if (priorCycle.reviewStageComplete === true || priorCycle.state === 'closed'
+        || rank[tier] <= rank[priorCycle.frozenTier]) tier = priorCycle.frozenTier;
+  }
   if (input.tier && input.tier !== tier) {
-    throw new Error(`caller tier ${input.tier} conflicts with authoritative Issue tier ${tier}`);
+    const exactOldRun = historicalRuns.some((run) => run.targetSha === target.headSha
+      && run.reviewRound?.tier === input.tier && !hasPersistedPackReviewVerdict(run));
+    if (!exactOldRun) throw new Error(`caller tier ${input.tier} conflicts with authoritative Issue tier ${tier}`);
   }
   let frozenScope: ResolvedScopeContext;
   try {
@@ -3418,6 +3475,8 @@ async function commitRecoveredGptAuthority(options: {
     baseRef: options.input.baseRef ?? DEFAULT_BASE_REF,
     fixtureCurrentPrHeadSha: options.input.fixtureCurrentPrHeadSha,
     fixtureIssueBody: options.input.fixtureIssueBody,
+    fixtureIssueTitle: options.input.fixtureIssueTitle,
+    storeRoot: options.storeRoot,
     fixtureIssueNumber: round.issueNumber,
     fixtureChangedPaths: options.input.fixtureChangedPaths,
     fixtureBoundIssueSnapshotBytes: options.input.fixtureBoundIssueSnapshotBytes,
@@ -4175,6 +4234,8 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     baseRef: input.baseRef ?? DEFAULT_BASE_REF,
     fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
     fixtureIssueBody: input.fixtureIssueBody,
+    fixtureIssueTitle: input.fixtureIssueTitle,
+    storeRoot: options.storeRoot,
     fixtureIssueNumber: issueNumber,
     fixtureChangedPaths: input.fixtureChangedPaths,
     fixtureBoundIssueSnapshotBytes: input.fixtureBoundIssueSnapshotBytes,
@@ -5759,6 +5820,10 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         prNumber: target.prNumber,
         tier: authoritative.tier,
         options: authorityOptions,
+        startedRunExists: listPackReviewRunRecordsRaw({ projectId, storeRoot }).some((candidate) =>
+          candidate.prNumber === target.prNumber
+          && candidate.reviewCycleId === authority.cycle?.cycleId
+          && candidate.canonicalRepository?.toLowerCase() === target.repoSlug.toLowerCase()),
       });
     } catch (error) {
       await releaseEarlyClaim(describeError(error));
