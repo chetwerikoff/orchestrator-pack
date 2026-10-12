@@ -6,7 +6,9 @@ import { runProcessSync } from '../kernel/subprocess.ts';
 import { __testFreshSend, __testComposerMutation } from './state-light-turn-base.ts';
 import * as coordination from './coordination.ts';
 import {
+  ACCOUNT_LOAD_ERROR_HEADING_SELECTOR,
   classifyProductWall,
+  probeAccountLoadError,
   createFreshIdentityRetention,
   enterExecutionRecoveryProductWallScope,
   observeFreshConversationUrl,
@@ -132,6 +134,47 @@ describe('owned-turn product recovery confirmation', () => {
   });
 });
 
+
+describe('Issue #2538 full-page account load error', () => {
+  it.each([
+    "We couldn't load your account",
+    'We couldn’t   load your account',
+    "We couldn't\\nload your account.",
+  ])('recognizes the exact owned product heading %j before sign-in copy', async (heading) => {
+    const page = {
+      locator: (selector: string) => ({
+        count: async () => selector === ACCOUNT_LOAD_ERROR_HEADING_SELECTOR ? 1
+          : selector === '[role="alert"]' ? 1 : 0,
+        nth: () => ({ innerText: async () => selector === '[role="alert"]'
+          ? 'Try reloading, or sign out and sign in again' : heading }),
+      }),
+    };
+    const direct = await probeAccountLoadError(page, 1000);
+    expect(direct).toMatchObject({ wall_kind: 'account_load_error', matched_selector: ACCOUNT_LOAD_ERROR_HEADING_SELECTOR });
+    const surface = await productStatusText(page, 1000);
+    expect(classifyProductWall(surface)).toMatchObject({
+      wall_kind: 'account_load_error',
+      matched_text: heading,
+    });
+  });
+
+  it('never turns an assistant quotation or ordinary sign-in wall into an account error', async () => {
+    const quote = "We couldn't load your account";
+    expect(classifyProductWall({ composer: true, text: quote, parts: [
+      { selector: '[data-message-author-role="assistant"]', text: quote },
+    ] })).toMatchObject({ wall_kind: 'none' });
+    expect(classifyProductWall({ composer: false, text: 'Sign in to continue',
+      parts: [{ selector: '[role="alert"]', text: 'Sign in to continue' }],
+    })).toMatchObject({ wall_kind: 'login' });
+    const quotedPage = {
+      locator: (selector: string) => ({
+        count: async () => Number(selector === COMPOSER_SELECTOR || selector === ACCOUNT_LOAD_ERROR_HEADING_SELECTOR),
+        nth: () => ({ innerText: async () => quote }),
+      }),
+    };
+    expect(await probeAccountLoadError(quotedPage, 1000)).toBeNull();
+  });
+});
 
 describe('Issue #2489 product-status advisory classification', () => {
   const none = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
