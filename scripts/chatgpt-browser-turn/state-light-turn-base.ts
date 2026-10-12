@@ -79,6 +79,7 @@ import {
   resolveMessageRoleStyle,
   MESSAGE_NODE_SELECTOR,
   normalizeConversationUrl,
+  probeAccountLoadError,
   productStatusText,
   projectConversationUrlMatchesProject,
   CONTINUE_GENERATING_BUTTON_NAME,
@@ -2307,6 +2308,7 @@ async function waitForComposer(
   invocationDeadlineMs: number,
   useWholePreSendDeadline = false,
   observeProductWall?: (diagnostic: ReturnType<typeof classifyProductWall>) => void,
+  detectAccountLoadError = false,
 ): Promise<{ state: 'ready' } | { state: TurnState; cause: string }> {
   // Preserve the legacy two-argument helper contract used by in-process tests.
   // Committed pre-send navigations explicitly opt into the whole invocation deadline.
@@ -2321,6 +2323,9 @@ async function waitForComposer(
         await productStatusText(page, Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs)),
       );
       observeProductWall?.(wall);
+      if (detectAccountLoadError && 'wall_kind' in wall && wall.wall_kind === 'account_load_error') {
+        return { state: 'ui_contract_mismatch', cause: 'account_load_error' };
+      }
       if (wall.state === 'recovery_required') return { state: 'recovery_required', cause: wall.cause };
     } catch {
       // Status-probe failures cannot veto the composer; the probe is advisory.
@@ -2974,6 +2979,144 @@ async function runTurnCore(
     let baselineUserNodeCount = 0;
     let baselineSnapshot: AtomicTranscriptSnapshot | undefined;
     let ownedConversationUrl: string | undefined;
+    // One invocation-local recovery cap, independent of terminal close authority.
+    const originalHeldPage = page;
+    const createdFreshPage = config.newChat && !selection.page
+      && !cleanupAuthorityUnprovenPages.has(page);
+    const originalExactChat = !config.newChat && config.chatUrl
+      && readOwnedConversationIdentity(page, normalizeConversationUrl(config.chatUrl)).matched
+      ? normalizeConversationUrl(config.chatUrl) : undefined;
+    let accountReloadAttempted = false;
+    let zeroWitnessAccountRecovery = false;
+
+    const accountErrorTerminal = (): TurnRunOutcome => {
+      incident('invocation_blocker', 'account_load_error', 'retain_page_no_resend');
+      return {
+        page, browser, cleanupAction: 'preserve',
+        result: compactResult(
+          'recovery_required', 'invocation', 'account_load_error',
+          invocationId, profileKey, sendCount, pollCount, navigation, incidents,
+          { ...(sendAttempted ? { send_attempted: true } : {}) }, journalWriteFailed,
+        ),
+      };
+    };
+    const accountErrorOwnershipMismatch = (): TurnRunOutcome => {
+      incident('invocation_blocker', 'account_error_page_ownership_unproven', 'preserve_unproven_page');
+      return {
+        page, browser,
+        ...(ownershipForfeited ? { ownershipForfeited: true } : {}),
+        cleanupAction: 'preserve',
+        result: compactResult(
+          'ui_contract_mismatch', 'invocation', 'account_error_page_ownership_unproven',
+          invocationId, profileKey, sendCount, pollCount, navigation, incidents,
+          { ...(sendAttempted ? { send_attempted: true } : {}) }, journalWriteFailed,
+        ),
+      };
+    };
+    const checkAccountLoadError = async (): Promise<TurnRunOutcome | 'recovered' | null> => {
+      if (browserOrPageDefinitelyLost(page, browser)) return null;
+      let error: ProductWallDiagnostic | null = null;
+      try { error = await probeAccountLoadError(page, 600); } catch { /* no positive heading evidence */ }
+      if (!error) return null;
+      observeProductWall(error);
+      // URL changes are not owner evidence. A verified selected existing chat
+      // retains reload (never close) authority only on the same held Page.
+      if (page !== originalHeldPage || ownershipForfeited
+        || (config.newChat ? !createdFreshPage : !originalExactChat)) {
+        return accountErrorOwnershipMismatch();
+      }
+      let observedUrl = '';
+      try { observedUrl = String(page.url()); } catch { /* no URL authority */ }
+      if (config.newChat && config.projectUrl
+        && conversationUuidFromUrl(observedUrl)
+        && !projectConversationUrlMatchesProject(observedUrl, config.projectUrl)) {
+        ownershipForfeited = true;
+        return accountErrorOwnershipMismatch();
+      }
+      if (originalExactChat && conversationUuidFromUrl(observedUrl)
+        && !ownedConversationIdentityMatches(observedUrl, originalExactChat)) {
+        return accountErrorOwnershipMismatch();
+      }
+      if (config.newChat && ownedConversationUrl
+        && !freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs)) {
+        ownershipForfeited = true;
+        return accountErrorOwnershipMismatch();
+      }
+      if (accountReloadAttempted) return accountErrorTerminal();
+      // Reserve Page/CDP cleanup and terminal projection before liveness expiry.
+      const returnByMs = config.newChat && (sendAttempted || sendCount > 0)
+        && !ownedConversationUrl ? freshUnboundReturnByMs
+        : invocationDeadlineMs - RESOURCE_CLEANUP_BOUND_MS - 2_000;
+      const availableMs = returnByMs - Date.now();
+      if (availableMs <= 1_000) return accountErrorTerminal();
+      accountReloadAttempted = true; // Failure consumes the only allowance.
+      try {
+        await boundedBrowserRead(
+          page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(25_000, availableMs - 500) }),
+          Math.min(25_000, availableMs - 500),
+          'account_load_error_reload_timeout',
+        );
+      } catch {
+        return accountErrorTerminal();
+      }
+      if (browserOrPageDefinitelyLost(page, browser)) return accountErrorTerminal();
+      try {
+        if (await probeAccountLoadError(page, 600)) return accountErrorTerminal();
+      } catch { /* ordinary binding checks still apply */ }
+      if (originalExactChat && !readOwnedConversationIdentity(page, originalExactChat).matched) {
+        return accountErrorOwnershipMismatch();
+      }
+      if (config.newChat && sendAttempted) {
+        let currentUrl = '';
+        try { currentUrl = String(page.url()); } catch { /* fail closed below */ }
+        const currentConversationId = conversationUuidFromUrl(currentUrl);
+        if (currentConversationId
+          && (!projectConversationUrlMatchesProject(currentUrl, config.projectUrl ?? '')
+            || (ownedConversationUrl
+              && !ownedConversationIdentityMatches(currentUrl, ownedConversationUrl)))) {
+          ownershipForfeited = true;
+          return accountErrorOwnershipMismatch();
+        }
+        if (ownedConversationUrl
+          && !freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs)) {
+          ownershipForfeited = true;
+          return accountErrorOwnershipMismatch();
+        }
+      }
+      if (config.newChat && !sendAttempted) {
+        // A pre-dispatch reload grants no authority to send on an already
+        // populated/foreign conversation; the composer is checked downstream.
+        let currentUrl = '';
+        try { currentUrl = String(page.url()); } catch { /* fail closed */ }
+        if (!isBlankProjectSurfaceUrl(currentUrl, config.projectUrl ?? '')) {
+          ownershipForfeited = true;
+          return accountErrorOwnershipMismatch();
+        }
+        try {
+          const census = await boundedBrowserRead(
+            readRecoveryAuthoritativeUserMessages(page), MAX_LOCAL_READ_WAIT_MS,
+            'account_error_pre_send_marker_check_timeout',
+          );
+          if (census.incomplete
+            || recoveryMarkerCardinality(census.messages, marker).exactMarkerTokenCount !== 0) {
+            return accountErrorOwnershipMismatch();
+          }
+        } catch { return accountErrorOwnershipMismatch(); }
+      }
+      return 'recovered';
+    };
+
+    const waitForComposerWithAccountRecovery = async (deadlineMs: number): Promise<
+      TurnRunOutcome | { state: 'ready' } | { state: TurnState; cause: string }
+    > => {
+      let readiness = await waitForComposer(page, deadlineMs, true, observeProductWall, true);
+      while (readiness.state === 'ui_contract_mismatch' && readiness.cause === 'account_load_error') {
+        const recovery = await checkAccountLoadError();
+        if (recovery && recovery !== 'recovered') return recovery;
+        readiness = await waitForComposer(page, deadlineMs, true, observeProductWall, true);
+      }
+      return readiness;
+    };
 
     const returnComposerMutationFailure = (
       cause: PreSendComposerFailureCause,
@@ -3224,6 +3367,15 @@ async function runTurnCore(
           deliveryProofPendingRecovery = true;
           return null;
         }
+        if (sendAttempted) {
+          const recovery = await checkAccountLoadError();
+          if (recovery && recovery !== 'recovered') return recovery;
+          if (recovery === 'recovered') {
+            zeroWitnessAccountRecovery = true;
+            afterSend = true;
+            return null;
+          }
+        }
         incident('send_observation_error', 'send_delivery_unproven', 'retain_owned_page_no_resend');
         return {
           cleanupAction: 'preserve', page, browser,
@@ -3345,6 +3497,15 @@ async function runTurnCore(
           if (!config.newChat) ownedConversationUrl = pageConversationUrl(page) ?? ownedConversationUrl;
           return null;
         }
+        if (sendAttempted) {
+          const recovery = await checkAccountLoadError();
+          if (recovery && recovery !== 'recovered') return recovery;
+          if (recovery === 'recovered') {
+            zeroWitnessAccountRecovery = true;
+            afterSend = true;
+            return null;
+          }
+        }
         incident('send_observation_error', 'send_delivery_unproven', 'retain_owned_page_no_resend');
         return {
           cleanupAction: 'preserve',
@@ -3395,6 +3556,8 @@ async function runTurnCore(
 
     if (config.newChat) {
       {
+        const entryAccountError = await checkAccountLoadError();
+        if (entryAccountError && entryAccountError !== 'recovered') return entryAccountError;
         assertFreshOwner();
         const returnFreshPrepareFailure = (
           prepared: Awaited<ReturnType<typeof prepareStateLightFreshConversation>>,
@@ -3440,7 +3603,7 @@ async function runTurnCore(
           };
         };
 
-        const initialPrepare = await prepareStateLightFreshConversation(
+        let initialPrepare = await prepareStateLightFreshConversation(
           page,
           config,
           profileKey,
@@ -3450,11 +3613,24 @@ async function runTurnCore(
           Date.now,
           observeProductWall,
         );
+        if (initialPrepare.state === 'recovery_required') {
+          const recovery = await checkAccountLoadError();
+          if (recovery && recovery !== 'recovered') return recovery;
+          if (recovery === 'recovered') initialPrepare = await prepareStateLightFreshConversation(
+            page, config, profileKey, invocationId, navigation, invocationDeadlineMs,
+            Date.now, observeProductWall,
+          );
+          if (initialPrepare.state === 'recovery_required') return accountErrorTerminal();
+        }
+        const duringPrepareError = await checkAccountLoadError();
+        if (duringPrepareError && duringPrepareError !== 'recovered') return duringPrepareError;
         assertFreshOwner();
         const initialPrepareFailure = returnFreshPrepareFailure(initialPrepare);
         if (initialPrepareFailure) return initialPrepareFailure;
 
-        let composerState = await waitForComposer(page, composerReadinessDeadline(), true, observeProductWall);
+        const initialComposer = await waitForComposerWithAccountRecovery(composerReadinessDeadline());
+        if ('result' in initialComposer) return initialComposer;
+        let composerState = initialComposer;
         assertFreshOwner();
         const initialComposerFailure = returnComposerBlocker(composerState);
         if (initialComposerFailure) return initialComposerFailure;
@@ -3507,6 +3683,8 @@ async function runTurnCore(
               };
             }
             incident('fresh_conversation_collision', 'shared_fresh_conversation_surface', 'recover_on_isolated_surface');
+            const beforeReprepare = await checkAccountLoadError();
+            if (beforeReprepare && beforeReprepare !== 'recovered') return beforeReprepare;
             const prepared = await prepareStateLightFreshConversation(
               page,
               config,
@@ -3517,10 +3695,17 @@ async function runTurnCore(
               Date.now,
               observeProductWall,
             );
+            if (prepared.state === 'recovery_required') {
+              const accountFailure = await checkAccountLoadError();
+              if (accountFailure && accountFailure !== 'recovered') return accountFailure;
+              return accountErrorTerminal();
+            }
             assertFreshOwner();
             const preparedFailure = returnFreshPrepareFailure(prepared);
             if (preparedFailure) return preparedFailure;
-            composerState = await waitForComposer(page, composerReadinessDeadline(), true, observeProductWall);
+            const recoveredComposer = await waitForComposerWithAccountRecovery(composerReadinessDeadline());
+            if ('result' in recoveredComposer) return recoveredComposer;
+            composerState = recoveredComposer;
             assertFreshOwner();
             const composerFailure = returnComposerBlocker(composerState);
             if (composerFailure) return composerFailure;
@@ -3534,6 +3719,10 @@ async function runTurnCore(
             const sendFailure = await sendOwnedPrompt();
             if (sendFailure) return sendFailure;
             sendAuthorized = false;
+            if (zeroWitnessAccountRecovery) {
+              claimed = true;
+              break; // send_attempted=true: never re-enter the fresh Send loop.
+            }
           }
 
           if (sendCount >= 1 && Date.now() >= freshUnboundReturnByMs) {
@@ -3546,6 +3735,8 @@ async function runTurnCore(
             freshUnboundReturnByMs,
           );
           let conversationUrl: string | undefined;
+          const beforeUrlWait = await checkAccountLoadError();
+          if (beforeUrlWait && beforeUrlWait !== 'recovered') return beforeUrlWait;
           try {
             conversationUrl = await waitForConversationUrlAfterSend(
               page,
@@ -3563,6 +3754,12 @@ async function runTurnCore(
             );
             claimed = true;
             break;
+          }
+          const afterUrlWait = await checkAccountLoadError();
+          if (afterUrlWait && afterUrlWait !== 'recovered') return afterUrlWait;
+          if (!conversationUrl && afterUrlWait === 'recovered') {
+            claimed = true;
+            break; // observe the original possibly delivered Send; do not retry.
           }
           if (!conversationUrl) {
             if (sendCount >= 1 && Date.now() >= freshUnboundReturnByMs) {
@@ -3761,6 +3958,8 @@ async function runTurnCore(
       }
     } else {
       const chatUrlTarget = normalizeConversationUrl(config.chatUrl ?? '');
+      const beforeExistingIdentity = await checkAccountLoadError();
+      if (beforeExistingIdentity && beforeExistingIdentity !== 'recovered') return beforeExistingIdentity;
       const preSendIdentity = readOwnedConversationIdentity(page, chatUrlTarget);
       if (!preSendIdentity.matched) {
         return returnOwnedConversationIdentityMismatch(
@@ -3789,7 +3988,9 @@ async function runTurnCore(
       const initialComposerDeadline = mayReopenComposer
         ? Math.min(composerReadinessDeadline(), Date.now() + EXISTING_GENERATION_RESUME_WINDOW_MS)
         : composerReadinessDeadline();
-      let composerState = await waitForComposer(page, initialComposerDeadline, true, observeProductWall);
+      const initialComposer = await waitForComposerWithAccountRecovery(initialComposerDeadline);
+      if ('result' in initialComposer) return initialComposer;
+      let composerState = initialComposer;
       if (composerState.state !== 'ready' && composerState.cause === 'composer_unavailable' && mayReopenComposer
         && !browserOrPageDefinitelyLost(page, browser)
         && readOwnedConversationIdentity(page, chatUrlTarget).matched
@@ -3821,7 +4022,9 @@ async function runTurnCore(
             || !readOwnedConversationIdentity(page, chatUrlTarget).matched) {
             return returnComposerMutationFailure('composer_unavailable');
           }
-          composerState = await waitForComposer(page, composerReadinessDeadline(), true, observeProductWall);
+          const reopenedComposer = await waitForComposerWithAccountRecovery(composerReadinessDeadline());
+          if ('result' in reopenedComposer) return reopenedComposer;
+          composerState = reopenedComposer;
         }
       }
       if (composerState.state !== 'ready' && composerState.cause !== 'composer_unavailable') {
@@ -3882,6 +4085,8 @@ async function runTurnCore(
     const targetChatUrl = config.newChat
       ? undefined
       : normalizeConversationUrl(config.chatUrl ?? '');
+    const beforePostDispatch = await checkAccountLoadError();
+    if (beforePostDispatch && beforePostDispatch !== 'recovered') return beforePostDispatch;
     if (targetChatUrl && !browserOrPageDefinitelyLost(page, browser)) {
       const landingIdentity = readOwnedConversationIdentity(page, targetChatUrl);
       if (!landingIdentity.matched) {
@@ -4249,7 +4454,7 @@ async function runTurnCore(
     // bounded cleanup; the 2 x timeout threshold is not a hard exit.
     while (true) {
       if (config.newChat && !ownedConversationUrl
-        && (sendCount >= 1 || deliveryProofPendingRecovery)
+        && (sendCount >= 1 || deliveryProofPendingRecovery || zeroWitnessAccountRecovery)
         && Date.now() >= freshUnboundReturnByMs) {
         incident('post_send_observation_error', 'fresh_conversation_owner_unproven', 'retain_page_no_resend');
         return {
@@ -4266,7 +4471,7 @@ async function runTurnCore(
             pollCount,
             navigation,
             incidents,
-            { ...(deliveryProofPendingRecovery ? { send_attempted: true } : {}) },
+            { ...(sendAttempted ? { send_attempted: true } : {}) },
             journalWriteFailed,
           ),
         };
@@ -4276,6 +4481,9 @@ async function runTurnCore(
         if (terminal) return terminal;
         continue;
       }
+      const liveAccountError = await checkAccountLoadError();
+      if (liveAccountError && liveAccountError !== 'recovered') return liveAccountError;
+      if (liveAccountError === 'recovered') continue;
       if (await ownedLocalFetchFailureVisible()) {
         const terminal = await recoverCurrentObservation(true);
         if (terminal) return terminal;
@@ -4503,6 +4711,17 @@ async function runTurnCore(
       }
 
       const markerCardinality = recoveryMarkerCardinality(messages, marker);
+      if (zeroWitnessAccountRecovery && sendCount === 0
+        && markerCardinality.matchingUserCarrierCount === 1
+        && markerCardinality.exactMarkerTokenCount === 1
+        && (config.newChat
+          ? Boolean(readProjectConversationUrl(page, config.projectUrl ?? ''))
+          : Boolean(targetChatUrl && readOwnedConversationIdentity(page, targetChatUrl).matched))) {
+        // Positive rendered unique owned marker, not the absent numeric click
+        // witness, proves delivery. A missing marker never authorizes Send.
+        sendCount = 1;
+        zeroWitnessAccountRecovery = false;
+      }
       if (
         ownedWindowCompletionReady
         && markerCardinality.matchingUserCarrierCount === 1
@@ -5156,6 +5375,9 @@ async function runTurnCore(
           }
           // Never publish a historical longest candidate: only the current full reply
           // that passed exact full-content stability is admissible.
+          const beforeFinalRead = await checkAccountLoadError();
+          if (beforeFinalRead && beforeFinalRead !== 'recovered') return beforeFinalRead;
+          if (beforeFinalRead === 'recovered') continue;
           const captureReply = decision.reply;
           const managerReply = captureReply;
           let finalObservation: Awaited<ReturnType<typeof readPostSendObservation>>;
@@ -5358,7 +5580,7 @@ async function runTurnCore(
 
       if (Date.now() >= dispatchDeadline) {
         if (!hasOwnedUserMessage(messages, marker)) {
-          if (sendCount >= 1) {
+          if (sendCount >= 1 || zeroWitnessAccountRecovery) {
             if (!sendObservationDeferredLogged) {
               incident(
                 'send_observation_deferred',

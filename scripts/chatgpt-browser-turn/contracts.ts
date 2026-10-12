@@ -106,7 +106,7 @@ export interface TurnResultV1 {
   /** Diagnostics for only the canonical new-chat send-slot timeout. */
   send_slot_holder_invocation_id?: string;
   send_slot_holder_phase?: string;
-  product_wall_diagnostic?: { readonly wall_kind: 'quota' | 'rate_limit' | 'challenge' | 'login' | 'none'; readonly matched_text: string; readonly matched_selector: string };
+  product_wall_diagnostic?: { readonly wall_kind: 'quota' | 'rate_limit' | 'challenge' | 'login' | 'account_load_error' | 'none'; readonly matched_text: string; readonly matched_selector: string };
   /** Dispatch was attempted; zero observed sends does not prove non-delivery. */
   send_attempted?: boolean;
   invocation_id: string;

@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import {
   classifyProductWall,
   normalizeConversationUrl,
+  probeAccountLoadError,
   productStatusText,
   projectConversationUrlMatchesProject,
   type BrowserConfig,
@@ -81,7 +82,8 @@ export type StateLightFreshConversationClaimResult = 'claimed' | 'owned' | 'cont
 
 export type StateLightFreshPrepareResult =
   | { state: 'ready' }
-  | { state: 'ui_contract_mismatch'; cause: string };
+  | { state: 'ui_contract_mismatch'; cause: string }
+  | { state: 'recovery_required'; cause: 'account_load_error' };
 
 export class StateLightNavigationCounter {
   readonly gotoCount = { value: 0 };
@@ -526,14 +528,14 @@ export function readStateLightAdvisoryWall(
 
 export function recordStateLightAdvisoryWall(
   profileKey: string,
-  wallState: TurnState,
+  wallState: TurnState | 'account_load_error',
   cause: string,
   invocationId?: string,
   ttlMs = STATE_LIGHT_ADVISORY_WALL_TTL_MS,
   nowMs = Date.now(),
   diagnostic?: ProductWallDiagnostic,
 ): void {
-  if (!ADVISORY_WALL_STATES.has(wallState)) return;
+  if (wallState === 'account_load_error' || !ADVISORY_WALL_STATES.has(wallState)) return;
   const dir = profileDirs(profileKey).root;
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const record: StateLightAdvisoryWallRecord = {
@@ -758,6 +760,8 @@ async function probeProductWall(
   const none: ProductWallDiagnostic = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
   try {
     const timeoutMs = Math.min(PRODUCT_WALL_PROBE_MS, 250, requireFreshPreparationTime(deadlineMs, now));
+    const accountError = timeoutMs >= 100 ? await probeAccountLoadError(page, timeoutMs) : null;
+    if (accountError) return accountError;
     const wall = classifyProductWall(await boundedFreshPreparation(
       () => productStatusText(page, timeoutMs), deadlineMs, now,
     ));
@@ -824,10 +828,27 @@ export async function prepareStateLightFreshConversation(
     } catch {
       currentUrl = '';
     }
+    // Before a URL-replacing navigation, retain a full-page account error
+    // for the invocation's shared same-Page recovery decision.
+    if (requireFreshPreparationTime(deadlineMs, now) > 600) {
+      const error = await probeAccountLoadError(page, Math.min(600, requireFreshPreparationTime(deadlineMs, now)));
+      if (error) {
+        onProductWall?.(error);
+        return { state: 'recovery_required', cause: 'account_load_error' };
+      }
+    }
     const needsSurface = !currentUrl || !isBlankProjectSurfaceUrl(currentUrl, config.projectUrl);
     if (needsSurface) {
       await openBlankProjectChatSurface(page, config.projectUrl, navigation, deadlineMs, now);
-      onProductWall?.(await probeProductWall(page, deadlineMs, now));
+      // A successful last-moment commit must not start a new status read
+      // beyond the preparation deadline (existing zero-extra-probe contract).
+      if (deadlineMs === undefined || deadlineMs - now() >= 100) {
+        const afterNavigationWall = await probeProductWall(page, deadlineMs, now);
+        onProductWall?.(afterNavigationWall);
+        if (afterNavigationWall.wall_kind === 'account_load_error') {
+          return { state: 'recovery_required', cause: 'account_load_error' };
+        }
+      }
       try {
         currentUrl = normalizeConversationUrl(page.url());
       } catch {
