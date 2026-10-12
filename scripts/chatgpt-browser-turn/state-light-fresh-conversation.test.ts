@@ -1392,7 +1392,17 @@ describe('state-light fresh conversation collision recovery', () => {
     streamRecoveryAlert: string | false = false,
     replySequence: readonly string[] = [reply],
     continueGeneratingSequence: readonly boolean[] = [],
-    observationOverrides: { incompleteReads?: readonly number[]; nonFinalReads?: readonly number[]; nonFinalFromRead?: number; includeOwnedUser?: boolean; keyedOwnedMessages?: boolean; markerlessOwnedUserFromRead?: number; assistantCarrierKeysByRead?: readonly string[]; neverMarkerProof?: boolean } = {},
+    observationOverrides: {
+      incompleteReads?: readonly number[];
+      nonFinalReads?: readonly number[];
+      nonFinalFromRead?: number;
+      includeOwnedUser?: boolean;
+      keyedOwnedMessages?: boolean;
+      markerlessOwnedUserFromRead?: number;
+      userMarkerlessFromRead?: number;
+      assistantCarrierKeysByRead?: readonly string[];
+      neverMarkerProof?: boolean;
+    } = {},
   ) {
     const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0, composerText: '' };
     const withCarrierKeys = (messages: StateLightTestMessage[]) => observationOverrides.keyedOwnedMessages
@@ -1447,6 +1457,8 @@ describe('state-light fresh conversation collision recovery', () => {
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
         if (selector === USER_MESSAGE_SELECTOR) {
           return collectionLocator(state.sent && !observationOverrides.neverMarkerProof
+            && (observationOverrides.userMarkerlessFromRead === undefined
+              || state.reads < observationOverrides.userMarkerlessFromRead)
             ? [{ role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` }]
             : []);
         }
@@ -2023,6 +2035,39 @@ describe('state-light fresh conversation collision recovery', () => {
 
     expect(outcome.result).toMatchObject({ state: 'ok', cause: 'completed_page_only', send_count: 1 });
     expect(readFileSync(output, 'utf8')).toBe(reply);
+  });
+
+  it('retains the ordinary markerless finished-reply reopen after account-error recovery', async () => {
+    const prompt = 'PROMPT-MARKERLESS-RECOVERY';
+    const reply = 'MARKERLESS-RECOVERY-FINAL';
+    const output = join(stateDir, 'markerless-recovery-final.txt');
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt, reply, true, false, false, [reply], [],
+      { includeOwnedUser: true, markerlessOwnedUserFromRead: 3, userMarkerlessFromRead: 3 },
+    );
+    const fault = installAccountLoadError(page);
+    let statusReads = 0;
+    mocks.productStatusText.mockImplementation(async (): Promise<any> => {
+      statusReads++;
+      if (statusReads === 2) {
+        fault.showError();
+        const heading = "We couldn't load your account";
+        return {
+          text: heading, composer: false,
+          parts: [{ selector: uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR, text: heading }],
+        };
+      }
+      return { text: '', composer: true };
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await withActualProductWallClassifier(() => runNewChatTurn(page, output, '90000'));
+
+    expect(outcome.result).toMatchObject({ state: 'ok', cause: 'completed_page_only', send_count: 1 });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+    expect(fault.reload).toHaveBeenCalledTimes(1);
+    expect(page.goto.mock.calls.some((call: readonly unknown[]) => call[0] === SHARED_CONV)).toBe(true);
+    expect(state.reloads).toBeGreaterThan(0);
   });
 
   it('does not transfer a stable reply proof across assistant carrier-key changes', async () => {
@@ -2900,12 +2945,15 @@ describe('state-light fresh conversation collision recovery', () => {
   });
 
   function installAccountLoadError(page: any, opts: {
-    persistent?: boolean; errorUrl?: string; throwReload?: boolean;
+    persistent?: boolean; errorUrl?: string; afterReloadUrl?: string; throwReload?: boolean;
   } = {}) {
     const originalLocator = page.locator.bind(page);
     const originalUrl = page.url.bind(page);
     let showing = false;
-    page.url = vi.fn(() => showing ? (opts.errorUrl ?? 'https://chatgpt.com/account-error') : originalUrl());
+    let redirectedUrl: string | undefined;
+    page.url = vi.fn(() => showing
+      ? (opts.errorUrl ?? 'https://chatgpt.com/account-error')
+      : (redirectedUrl ?? originalUrl()));
     page.locator = vi.fn((selector: string) => {
       if (!showing) return originalLocator(selector);
       if (selector === uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR) return scalarLocator({
@@ -2919,7 +2967,10 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     const reload = vi.fn(async () => {
       if (opts.throwReload) throw new Error('synthetic account reload rejected');
-      if (!opts.persistent) showing = false;
+      if (!opts.persistent) {
+        showing = false;
+        redirectedUrl = opts.afterReloadUrl;
+      }
     });
     page.reload = reload;
     return {
@@ -2927,6 +2978,20 @@ describe('state-light fresh conversation collision recovery', () => {
       reload,
       visible: () => showing,
     };
+  }
+
+  async function withActualProductWallClassifier<T>(operation: () => Promise<T>): Promise<T> {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    const classifier = vi.mocked(uiAdapter.classifyProductWall);
+    const previousImplementation = classifier.getMockImplementation();
+    classifier.mockImplementation(actual.classifyProductWall);
+    try {
+      return await operation();
+    } finally {
+      classifier.mockImplementation(previousImplementation ?? (() => ({
+        wall_kind: 'none', matched_text: 'none', matched_selector: 'none',
+      })));
+    }
   }
 
   it('reloads a created fresh account-error route once before owner assertion and dispatch', async () => {
@@ -2979,6 +3044,113 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(result.result).not.toHaveProperty('conversation_id');
   });
 
+
+  it('recovers an account error that appears during fresh composer readiness', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+    const fresh = makeLoserPage('PROMPT', 'LATE-COMPOSER-OK');
+    const fault = installAccountLoadError(fresh.page);
+    let statusReads = 0;
+    mocks.productStatusText.mockImplementation(async (): Promise<any> => {
+      statusReads++;
+      if (statusReads === 1) {
+        fault.showError();
+        const heading = "We couldn't load your account";
+        return {
+          text: heading, composer: false,
+          parts: [{ selector: uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR, text: heading }],
+        };
+      }
+      return { text: '', composer: true };
+    });
+
+    const result = await withActualProductWallClassifier(() =>
+      runNewChatTurn(fresh.page, join(stateDir, 'account-late-composer-fresh.txt')));
+
+    expect(result.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(fault.reload).toHaveBeenCalledTimes(1);
+    expect(fresh.getSends()).toBe(1);
+  });
+
+  it('recovers an account error during selected existing-chat composer readiness', async () => {
+    const existing = makeLoserPage('PROMPT', 'LATE-EXISTING-COMPOSER-OK');
+    const originalUrl = existing.page.url;
+    existing.page.url = vi.fn(() => originalUrl() === PROJECT_URL ? SHARED_CONV : originalUrl());
+    const fault = installAccountLoadError(existing.page);
+    const harness = enqueueBrowserForTurn(mocks, existing.page);
+    Object.assign(harness.context, { pages: vi.fn(() => [existing.page]) });
+    mocks.productStatusText.mockImplementationOnce(async (): Promise<any> => {
+      fault.showError();
+      const heading = "We couldn't load your account";
+      return {
+        text: heading, composer: false,
+        parts: [{ selector: uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR, text: heading }],
+      };
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+
+    const result = await withActualProductWallClassifier(() =>
+      runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        ...STATE_LIGHT_TURN_BASE_ARGV, '--invocation-id', randomUUID(),
+        '--output', join(stateDir, 'account-late-composer-existing.txt'), '--chat-url', SHARED_CONV,
+        '--timeout-ms', '90000', '--poll-ms', '1',
+      ]));
+
+    expect(result.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(fault.reload).toHaveBeenCalledTimes(1);
+    expect(existing.getSends()).toBe(1);
+    expect(existing.page.close).not.toHaveBeenCalled();
+  });
+
+  it('preserves possibly-delivered state after a recovered zero-witness fresh dispatch stays unbound', async () => {
+    const fresh = makeLoserPage('PROMPT', 'NEVER-PUBLISHED');
+    const fault = installAccountLoadError(fresh.page);
+    fresh.sendButton.click.mockImplementation(async () => {
+      fault.showError();
+      throw new Error('synthetic Send action failed after callback');
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+
+    const result = await runNewChatTurn(fresh.page, join(stateDir, 'account-zero-recovered.txt'));
+
+    expect(result.result).toMatchObject({
+      state: 'observation_uncertain', cause: 'fresh_conversation_owner_unproven',
+      send_count: 0, send_attempted: true,
+    });
+    expect(fault.reload).toHaveBeenCalledTimes(1);
+    expect(fresh.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(deriveDelivery({ ...result.result, resolved_send_count: result.result.send_count } as any, false))
+      .toBe('POSSIBLY_DELIVERED');
+  });
+
+  it('rejects a foreign conversation reached only after a counted fresh-turn error reload', async () => {
+    const fresh = makeLoserPage('PROMPT', 'NEVER-PUBLISHED');
+    const fault = installAccountLoadError(fresh.page, { afterReloadUrl: OTHER_PROJECT_CONVERSATION_URL });
+    let statusReads = 0;
+    mocks.productStatusText.mockImplementation(async (): Promise<any> => {
+      statusReads++;
+      if (statusReads === 2) {
+        fault.showError();
+        const heading = "We couldn't load your account";
+        return {
+          text: heading, composer: false,
+          parts: [{ selector: uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR, text: heading }],
+        };
+      }
+      return { text: '', composer: true };
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+
+    const result = await runNewChatTurn(fresh.page, join(stateDir, 'account-post-reload-foreign.txt'));
+
+    expect(result.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'account_error_page_ownership_unproven', send_count: 1,
+    });
+    expect(fault.reload).toHaveBeenCalledTimes(1);
+    expect(fresh.getSends()).toBe(1);
+    expect(fresh.page.goto).toHaveBeenCalledTimes(1);
+    expect(fresh.page.url()).toBe(OTHER_PROJECT_CONVERSATION_URL);
+    expect(fresh.page.close).not.toHaveBeenCalled();
+  });
   it('reloads a counted fresh Send at URL landing without another Send', async () => {
     let triggerAfterSend = () => {};
     const fresh = makeLoserPage('PROMPT', 'LANDING-OK', () => triggerAfterSend());
@@ -3034,6 +3206,39 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(fault.reload).toHaveBeenCalledTimes(1);
     expect(existing.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(existing.page.close).not.toHaveBeenCalled();
+    expect(harness.context.newPage).not.toHaveBeenCalled();
+  });
+
+  it('does not reload a selected existing chat after its account-error URL becomes foreign', async () => {
+    const existing = makeLoserPage('PROMPT', 'NEVER-SENT');
+    const baseUrl = existing.page.url;
+    existing.page.url = vi.fn(() => baseUrl() === PROJECT_URL ? SHARED_CONV : baseUrl());
+    const fault = installAccountLoadError(existing.page, { errorUrl: OTHER_PROJECT_CONVERSATION_URL });
+    const harness = enqueueBrowserForTurn(mocks, existing.page);
+    Object.assign(harness.context, { pages: vi.fn(() => [existing.page]) });
+    mocks.productStatusText.mockImplementationOnce(async (): Promise<any> => {
+      fault.showError();
+      const heading = "We couldn't load your account";
+      return {
+        text: heading, composer: false,
+        parts: [{ selector: uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR, text: heading }],
+      };
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+
+    const result = await withActualProductWallClassifier(() =>
+      runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        ...STATE_LIGHT_TURN_BASE_ARGV, '--invocation-id', randomUUID(),
+        '--output', join(stateDir, 'account-existing-foreign.txt'), '--chat-url', SHARED_CONV,
+        '--timeout-ms', '90000', '--poll-ms', '1',
+      ]));
+
+    expect(result.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'account_error_page_ownership_unproven', send_count: 0,
+    });
+    expect(fault.reload).not.toHaveBeenCalled();
+    expect(existing.getSends()).toBe(0);
     expect(existing.page.close).not.toHaveBeenCalled();
     expect(harness.context.newPage).not.toHaveBeenCalled();
   });

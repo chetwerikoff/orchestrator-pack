@@ -2303,6 +2303,7 @@ async function waitForComposer(
   invocationDeadlineMs: number,
   useWholePreSendDeadline = false,
   observeProductWall?: (diagnostic: ReturnType<typeof classifyProductWall>) => void,
+  detectAccountLoadError = false,
 ): Promise<{ state: 'ready' } | { state: TurnState; cause: string }> {
   // Preserve the legacy two-argument helper contract used by in-process tests.
   // Committed pre-send navigations explicitly opt into the whole invocation deadline.
@@ -2317,6 +2318,9 @@ async function waitForComposer(
         await productStatusText(page, Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs)),
       );
       observeProductWall?.(wall);
+      if (detectAccountLoadError && 'wall_kind' in wall && wall.wall_kind === 'account_load_error') {
+        return { state: 'ui_contract_mismatch', cause: 'account_load_error' };
+      }
       if (wall.state === 'recovery_required') return { state: 'recovery_required', cause: wall.cause };
     } catch {
       // Status-probe failures cannot veto the composer; the probe is advisory.
@@ -2994,7 +2998,9 @@ async function runTurnCore(
     const accountErrorOwnershipMismatch = (): TurnRunOutcome => {
       incident('invocation_blocker', 'account_error_page_ownership_unproven', 'preserve_unproven_page');
       return {
-        page, browser, cleanupAction: 'preserve',
+        page, browser,
+        ...(ownershipForfeited ? { ownershipForfeited: true } : {}),
+        cleanupAction: 'preserve',
         result: compactResult(
           'ui_contract_mismatch', 'invocation', 'account_error_page_ownership_unproven',
           invocationId, profileKey, sendCount, pollCount, navigation, incidents,
@@ -3055,6 +3061,23 @@ async function runTurnCore(
       if (originalExactChat && !readOwnedConversationIdentity(page, originalExactChat).matched) {
         return accountErrorOwnershipMismatch();
       }
+      if (config.newChat && sendAttempted) {
+        let currentUrl = '';
+        try { currentUrl = String(page.url()); } catch { /* fail closed below */ }
+        const currentConversationId = conversationUuidFromUrl(currentUrl);
+        if (currentConversationId
+          && (!projectConversationUrlMatchesProject(currentUrl, config.projectUrl ?? '')
+            || (ownedConversationUrl
+              && !ownedConversationIdentityMatches(currentUrl, ownedConversationUrl)))) {
+          ownershipForfeited = true;
+          return accountErrorOwnershipMismatch();
+        }
+        if (ownedConversationUrl
+          && !freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs)) {
+          ownershipForfeited = true;
+          return accountErrorOwnershipMismatch();
+        }
+      }
       if (config.newChat && !sendAttempted) {
         // A pre-dispatch reload grants no authority to send on an already
         // populated/foreign conversation; the composer is checked downstream.
@@ -3076,6 +3099,18 @@ async function runTurnCore(
         } catch { return accountErrorOwnershipMismatch(); }
       }
       return 'recovered';
+    };
+
+    const waitForComposerWithAccountRecovery = async (deadlineMs: number): Promise<
+      TurnRunOutcome | { state: 'ready' } | { state: TurnState; cause: string }
+    > => {
+      let readiness = await waitForComposer(page, deadlineMs, true, observeProductWall, true);
+      while (readiness.state === 'ui_contract_mismatch' && readiness.cause === 'account_load_error') {
+        const recovery = await checkAccountLoadError();
+        if (recovery && recovery !== 'recovered') return recovery;
+        readiness = await waitForComposer(page, deadlineMs, true, observeProductWall, true);
+      }
+      return readiness;
     };
 
     const returnComposerMutationFailure = (
@@ -3588,7 +3623,9 @@ async function runTurnCore(
         const initialPrepareFailure = returnFreshPrepareFailure(initialPrepare);
         if (initialPrepareFailure) return initialPrepareFailure;
 
-        let composerState = await waitForComposer(page, composerReadinessDeadline(), true, observeProductWall);
+        const initialComposer = await waitForComposerWithAccountRecovery(composerReadinessDeadline());
+        if ('result' in initialComposer) return initialComposer;
+        let composerState = initialComposer;
         assertFreshOwner();
         const initialComposerFailure = returnComposerBlocker(composerState);
         if (initialComposerFailure) return initialComposerFailure;
@@ -3661,7 +3698,9 @@ async function runTurnCore(
             assertFreshOwner();
             const preparedFailure = returnFreshPrepareFailure(prepared);
             if (preparedFailure) return preparedFailure;
-            composerState = await waitForComposer(page, composerReadinessDeadline(), true, observeProductWall);
+            const recoveredComposer = await waitForComposerWithAccountRecovery(composerReadinessDeadline());
+            if ('result' in recoveredComposer) return recoveredComposer;
+            composerState = recoveredComposer;
             assertFreshOwner();
             const composerFailure = returnComposerBlocker(composerState);
             if (composerFailure) return composerFailure;
@@ -3944,7 +3983,9 @@ async function runTurnCore(
       const initialComposerDeadline = mayReopenComposer
         ? Math.min(composerReadinessDeadline(), Date.now() + EXISTING_GENERATION_RESUME_WINDOW_MS)
         : composerReadinessDeadline();
-      let composerState = await waitForComposer(page, initialComposerDeadline, true, observeProductWall);
+      const initialComposer = await waitForComposerWithAccountRecovery(initialComposerDeadline);
+      if ('result' in initialComposer) return initialComposer;
+      let composerState = initialComposer;
       if (composerState.state !== 'ready' && composerState.cause === 'composer_unavailable' && mayReopenComposer
         && !browserOrPageDefinitelyLost(page, browser)
         && readOwnedConversationIdentity(page, chatUrlTarget).matched
@@ -3976,7 +4017,9 @@ async function runTurnCore(
             || !readOwnedConversationIdentity(page, chatUrlTarget).matched) {
             return returnComposerMutationFailure('composer_unavailable');
           }
-          composerState = await waitForComposer(page, composerReadinessDeadline(), true, observeProductWall);
+          const reopenedComposer = await waitForComposerWithAccountRecovery(composerReadinessDeadline());
+          if ('result' in reopenedComposer) return reopenedComposer;
+          composerState = reopenedComposer;
         }
       }
       if (composerState.state !== 'ready' && composerState.cause !== 'composer_unavailable') {
@@ -4423,7 +4466,7 @@ async function runTurnCore(
             pollCount,
             navigation,
             incidents,
-            { ...(deliveryProofPendingRecovery ? { send_attempted: true } : {}) },
+            { ...(sendAttempted ? { send_attempted: true } : {}) },
             journalWriteFailed,
           ),
         };
@@ -5532,7 +5575,7 @@ async function runTurnCore(
 
       if (Date.now() >= dispatchDeadline) {
         if (!hasOwnedUserMessage(messages, marker)) {
-          if (sendCount >= 1) {
+          if (sendCount >= 1 || zeroWitnessAccountRecovery) {
             if (!sendObservationDeferredLogged) {
               incident(
                 'send_observation_deferred',
