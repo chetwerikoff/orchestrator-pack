@@ -1593,8 +1593,8 @@ describe('state-light fresh conversation collision recovery', () => {
     const turn = makeLoserPage(prompt, 'DUPLICATE-UNATTRIBUTABLE-REPLY');
     const originalLocator = turn.page.locator.getMockImplementation()!;
     const duplicateOwnedUsers: StateLightTestMessage[] = [
-      { role: 'user', text: `${TEST_OWNED_MARKER}\\n\\n${prompt}` },
-      { role: 'user', text: `${TEST_OWNED_MARKER}\\n\\n${prompt}` },
+      { role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` },
+      { role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` },
     ];
     turn.page.locator.mockImplementation((selector: string) => {
       if (selector === USER_MESSAGE_SELECTOR && turn.getSends() > 0) {
