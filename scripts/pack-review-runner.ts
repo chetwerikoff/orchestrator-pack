@@ -6329,6 +6329,22 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       && candidate.reviewRound?.reviewer === 'gpt'
       && !hasPersistedPackReviewVerdict(candidate)
     ));
+    const incumbentFrozenTierMatches = (candidate: PackReviewRunRecord): boolean => {
+      const cycle = authority.cycle;
+      const historicalRound = candidate.reviewRound;
+      if (!cycle || !historicalRound) return false;
+      if (candidate.logicalRoundCap === cycle.frozenCap
+          && historicalRound.tier === authoritative.tier) return true;
+      // A live upward amendment changes the unfinished cycle, not the original
+      // zero-consumed run's tier/cap, owner, ordinal or Issue snapshot.
+      return cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+        && cycle.frozenTier === 'T3'
+        && cycle.frozenCap === 2
+        && cycle.consumedRoundOrdinals?.length === 0
+        && candidate.logicalRoundOrdinal === 1
+        && (historicalRound.tier === 'T1' || historicalRound.tier === 'T2')
+        && candidate.logicalRoundCap === 1;
+    };
     const incumbentIdentityMatches = (candidate: PackReviewRunRecord) => (
       candidate.projectId === projectId
       && trim(candidate.canonicalRepository).toLowerCase() === target.repoSlug.toLowerCase()
@@ -6339,10 +6355,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       && candidate.accountingVersion === accountingVersion
       && candidate.reviewCycleId === authority.cycle?.cycleId
       && candidate.logicalRoundOrdinal === roundOrdinal
-      && candidate.logicalRoundCap === authority.cycle?.frozenCap
+      && incumbentFrozenTierMatches(candidate)
       && candidate.reviewRound?.roundOrdinal === roundOrdinal
       && candidate.reviewRound?.accountingVersion === accountingVersion
-      && candidate.reviewRound?.tier === authoritative.tier
       && candidate.reviewRound?.cardinality === cardinality
       && candidate.reviewRound?.issueNumber === authoritative.issueNumber
       && candidate.reviewRound?.boundIssueSnapshotDigest === authoritative.snapshotDigest
