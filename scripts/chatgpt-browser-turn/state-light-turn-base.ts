@@ -3895,6 +3895,10 @@ async function runTurnCore(
       FRESH_CONVERSATION_LANDING_MS,
       config.timeoutMs,
     );
+    // Reserve existing bounded Page/CDP cleanup and terminal emission from the
+    // same absolute pre-Send deadline; this is not a second observation timer.
+    const freshUnboundReturnByMs = invocationDeadlineMs
+      - RESOURCE_CLEANUP_BOUND_MS - CDP_BROWSER_RELEASE_BOUND_MS - 2_000;
     let lastReadyReply = '';
     let lastReadyObservedText = '';
     let bestReadyReply = '';
@@ -3973,6 +3977,9 @@ async function runTurnCore(
           hardExhaustionDeadline,
           Date.now() + CONFIRMED_OWNED_PAGE_LOSS_RECOVERY_MS,
         );
+      }
+      if (config.newChat && !ownedConversationUrl) {
+        hardExhaustionDeadline = Math.min(hardExhaustionDeadline, freshUnboundReturnByMs);
       }
       const recovered = await runPostSendRecovery({
         browser,
@@ -4144,10 +4151,6 @@ async function runTurnCore(
       return null;
     };
 
-    // Reserve the incumbent bounded Page/CDP cleanup and result emission from
-    // the *same pre-Send absolute deadline*, rather than starting another timer.
-    const freshUnboundReturnByMs = invocationDeadlineMs
-      - RESOURCE_CLEANUP_BOUND_MS - CDP_BROWSER_RELEASE_BOUND_MS - 2_000;
     // `timeout-ms` is a soft post-send observation threshold for an owned
     // conversation. A fresh Send still without a proven exact-project owner
     // must instead return within its pre-Send invocation budget, including
