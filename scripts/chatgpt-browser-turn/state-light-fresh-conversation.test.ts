@@ -1542,6 +1542,109 @@ describe('state-light fresh conversation collision recovery', () => {
     return { page, state };
   }
 
+  // The Send fetch can fail while the server executes. Model the owned local
+  // page without an assistant answer and without dispatching Retry, then census
+  // only already-open canonical server pages using the incumbent recovery path.
+  function freshLocalFetchLossFixture(prompt: string, reply?: string) {
+    const local = makeLoserPage(prompt, 'NO-LOCAL-ASSISTANT-REPLY');
+    const retryClicks = vi.fn(async () => undefined);
+    local.page.url.mockImplementation(() => local.getSends() ? LOCAL_ID_CONVERSATION_URL : PROJECT_URL);
+    local.page.getByText.mockImplementation((value: string) => value === 'Failed to fetch'
+      ? scalarLocator({ count: vi.fn(async () => local.getSends() ? 1 : 0) })
+      : scalarLocator());
+    local.page.getByRole.mockImplementation((role: string, options?: { name?: string }) =>
+      role === 'button' && options?.name === 'Retry'
+        ? scalarLocator({ count: vi.fn(async () => local.getSends() ? 1 : 0), click: retryClicks })
+        : scalarLocator());
+    const localLocator = local.page.locator.getMockImplementation()!;
+    local.page.locator.mockImplementation((selector: string) => {
+      if (local.getSends() && (
+        selector === MESSAGE_NODE_SELECTOR || selector === USER_MESSAGE_SELECTOR
+        || selector === ASSISTANT_MESSAGE_SELECTOR
+      )) return collectionLocator([]);
+      return localLocator(selector);
+    });
+
+    let serverPage: any;
+    if (reply) {
+      serverPage = makeLoserPage(prompt, reply).page;
+      serverPage.url.mockReturnValue(SHARED_CONV);
+      const completeMessages = readyTurnObservationFrames(prompt, reply).at(-1)!;
+      const serverLocator = serverPage.locator.getMockImplementation()!;
+      serverPage.locator.mockImplementation((selector: string) => {
+        if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(completeMessages, false);
+        if (selector === USER_MESSAGE_SELECTOR) {
+          return collectionLocator(completeMessages.filter((message) => message.role === 'user'), false);
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          return collectionLocator(completeMessages.filter((message) => message.role === 'assistant'), false);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          return messageLocator(completeMessages.at(-1)!, false);
+        }
+        return serverLocator(selector);
+      });
+    }
+    const harness = enqueueBrowserForTurn(mocks, local.page);
+    Object.assign(harness.context, { pages: vi.fn(() => [local.page, ...(serverPage ? [serverPage] : [])]) });
+    return {
+      local, serverPage, retryClicks,
+      run: async (output: string, invocationId: string) => runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        ...STATE_LIGHT_TURN_BASE_ARGV,
+        '--invocation-id', invocationId, '--output', output,
+        '--new-chat', '--project-url', PROJECT_URL, '--timeout-ms', '90000', '--poll-ms', '1',
+      ]),
+    };
+  }
+
+  it('binds and harvests after local-ID Failed to fetch when census finds exactly one owned server marker', async () => {
+    const prompt = 'SYNTHETIC-LOCAL-FETCH-LOSS-WITH-SERVER-REPLY';
+    const reply = 'SERVER-COMPLETED-WHILE-LOCAL-FETCH-FAILED';
+    const output = join(stateDir, 'fetch-loss-server-reply.txt');
+    const invocationId = randomUUID();
+    const fixture = freshLocalFetchLossFixture(prompt, reply);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const start = mocks.nowMs;
+
+    const outcome = await fixture.run(output, invocationId);
+
+    expect(outcome).toMatchObject({ code: 0, result: {
+      state: 'ok', send_count: 1, conversation_id: SHARED_CONV,
+    } });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'harvested', conversation_url: SHARED_CONV, send_count: 1,
+    });
+    expect(mocks.nowMs - start).toBeLessThan(90_000);
+    expect(fixture.local.getSends()).toBe(1);
+    expect(fixture.retryClicks).not.toHaveBeenCalled();
+    expect(fixture.local.page.close).not.toHaveBeenCalled();
+    expect(fixture.serverPage.close).not.toHaveBeenCalled();
+  });
+
+  it('returns fresh_send_fetch_failed without locator or resend on local-ID Failed to fetch and zero census match', async () => {
+    const prompt = 'SYNTHETIC-LOCAL-FETCH-LOSS-NO-SERVER-TAB';
+    const output = join(stateDir, 'fetch-loss-no-server-output.txt');
+    const invocationId = randomUUID();
+    const fixture = freshLocalFetchLossFixture(prompt);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const start = mocks.nowMs;
+
+    const outcome = await fixture.run(output, invocationId);
+
+    expect(outcome.result).toMatchObject({
+      state: 'observation_uncertain', cause: 'fresh_send_fetch_failed',
+      send_count: 1, send_attempted: true,
+    });
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(outcome.result).not.toHaveProperty('output');
+    expect(existsSync(output)).toBe(false);
+    expect(mocks.nowMs - start).toBeLessThan(90_000);
+    expect(fixture.local.getSends()).toBe(1);
+    expect(fixture.retryClicks).not.toHaveBeenCalled();
+    expect(fixture.local.page.close).not.toHaveBeenCalled();
+  });
+
   it('keeps a local-chatgpt fresh URL unbound even when its owned reply looks complete', async () => {
     const prompt = 'SYNTHETIC-LOCAL-ID-STILL-PENDING';
     const reply = 'COMPLETE-BUT-LOCAL-ID-ONLY';
