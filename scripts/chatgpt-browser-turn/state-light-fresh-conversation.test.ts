@@ -1608,7 +1608,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const harness = enqueueBrowserForTurn(mocks, local.page);
     Object.assign(harness.context, { pages: vi.fn(() => [local.page, ...(serverPage ? [serverPage] : [])]) });
     return {
-      local, serverPage, retryClicks,
+      local, serverPage, context: harness.context, retryClicks,
       run: async (output: string, invocationId: string) => runStateLightTurnWithStdoutCapture(runStateLightTurn, [
         ...STATE_LIGHT_TURN_BASE_ARGV,
         '--invocation-id', invocationId, '--output', output,
@@ -1640,6 +1640,116 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(fixture.retryClicks).not.toHaveBeenCalled();
     expect(fixture.local.page.close).not.toHaveBeenCalled();
     expect(fixture.serverPage.close).not.toHaveBeenCalled();
+  });
+
+  it('keeps the full bound-reply observation window after a fresh fetch-loss recovery claim', async () => {
+    const prompt = 'SYNTHETIC-RECOVERED-REPLY-OUTLIVES-UNBOUND-CUTOFF';
+    const reply = 'RECOVERED-ANSWER-COMPLETED-AFTER-UNBOUND-CUTOFF';
+    const output = join(stateDir, 'fetch-loss-late-owned-reply.txt');
+    const invocationId = randomUUID();
+    const fixture = freshLocalFetchLossFixture(prompt, reply);
+    // timeout=90s, and the existing cleanup/terminal reserve makes the
+    // pre-Send unbound cutoff ~68s. This owned reply completes later (~80s).
+    const start = mocks.nowMs;
+    const replyReadyAt = start + 80_000;
+    const originalLocator = fixture.serverPage.locator.getMockImplementation()!;
+    const working = readyTurnObservationFrames(prompt, reply)[0]!;
+    let workingReads = 0;
+    let completeReads = 0;
+    fixture.serverPage.locator.mockImplementation((selector: string) => {
+      if (mocks.nowMs < replyReadyAt) {
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          workingReads++;
+          return collectionLocator(working, true);
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          return collectionLocator(working.filter((message) => message.role === 'assistant'), true);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+      } else if (selector === MESSAGE_NODE_SELECTOR) {
+        completeReads++;
+      }
+      return originalLocator(selector);
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await fixture.run(output, invocationId);
+
+    expect(workingReads).toBeGreaterThan(0);
+    expect(completeReads).toBeGreaterThan(0);
+    expect(mocks.nowMs - start).toBeGreaterThanOrEqual(80_000);
+    expect(mocks.nowMs - start).toBeLessThan(180_000);
+    expect(outcome).toMatchObject({ code: 0, result: {
+      state: 'ok', send_count: 1, conversation_id: SHARED_CONV,
+    } });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'harvested', conversation_url: SHARED_CONV, send_count: 1,
+    });
+    expect(fixture.local.getSends()).toBe(1);
+    expect(fixture.retryClicks).not.toHaveBeenCalled();
+  });
+
+  it('skips an unreadable positively foreign project tab in a fresh fetch-loss census', async () => {
+    const prompt = 'SYNTHETIC-RECOVERY-WITH-FOREIGN-TAB';
+    const reply = 'COMPLETE-OWNED-DESPITE-FOREIGN-READ-FAILURE';
+    const output = join(stateDir, 'fetch-loss-foreign-census.txt');
+    const invocationId = randomUUID();
+    const fixture = freshLocalFetchLossFixture(prompt, reply);
+    const foreignPage = makeLoserPage('UNRELATED-PROMPT', 'UNRELATED-REPLY').page;
+    foreignPage.url.mockReturnValue(OTHER_PROJECT_CONVERSATION_URL);
+    const unreadableForeignRead = vi.fn(async () => { throw new Error('foreign_transcript_unreadable'); });
+    const originalForeignLocator = foreignPage.locator.getMockImplementation()!;
+    foreignPage.locator.mockImplementation((selector: string) => selector === USER_MESSAGE_SELECTOR
+      ? scalarLocator({ count: unreadableForeignRead })
+      : originalForeignLocator(selector));
+    fixture.context.pages.mockReturnValue([fixture.local.page, foreignPage, fixture.serverPage]);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await fixture.run(output, invocationId);
+
+    expect(outcome).toMatchObject({ code: 0, result: {
+      state: 'ok', send_count: 1, conversation_id: SHARED_CONV,
+    } });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+    expect(unreadableForeignRead).not.toHaveBeenCalled();
+    expect(fixture.local.getSends()).toBe(1);
+    expect(fixture.retryClicks).not.toHaveBeenCalled();
+    expect(foreignPage.close).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { kind: 'same-project', url: LOSER_CONV },
+    { kind: 'unknown URL', url: null },
+  ])('keeps an unreadable $kind census page fail-closed beside an owned candidate', async ({ kind, url }) => {
+    const prompt = 'SYNTHETIC-RECOVERY-FAIL-CLOSED-' + kind;
+    const output = join(stateDir, 'fetch-loss-census-uncertain-' + kind + '.txt');
+    const invocationId = randomUUID();
+    const fixture = freshLocalFetchLossFixture(prompt, 'SHOULD-NOT-HARVEST');
+    const unreadablePage = makeLoserPage('UNRELATED-PROMPT', 'UNRELATED-REPLY').page;
+    if (url === null) {
+      unreadablePage.url.mockImplementation(() => { throw new Error('url_unreadable'); });
+    } else {
+      unreadablePage.url.mockReturnValue(url);
+    }
+    unreadablePage.locator.mockImplementation((selector: string) => selector === USER_MESSAGE_SELECTOR
+      ? scalarLocator({ count: vi.fn(async () => { throw new Error('transcript_unreadable'); }) })
+      : scalarLocator());
+    fixture.context.pages.mockReturnValue([fixture.local.page, fixture.serverPage, unreadablePage]);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await fixture.run(output, invocationId);
+
+    expect(outcome.result).toMatchObject({
+      state: 'observation_uncertain', cause: 'owned_conversation_recovery_census_failed',
+      send_count: 1,
+    });
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(existsSync(output)).toBe(false);
+    expect(fixture.local.getSends()).toBe(1);
+    expect(fixture.retryClicks).not.toHaveBeenCalled();
   });
 
   it('returns fresh_send_fetch_failed without locator or resend on local-ID Failed to fetch and zero census match', async () => {
