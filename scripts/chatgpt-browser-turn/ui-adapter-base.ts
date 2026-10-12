@@ -1554,7 +1554,7 @@ export interface ProductStatusSurface {
 
 /** A full-screen product heading is not an assistant quotation or a status toast. */
 export const ACCOUNT_LOAD_ERROR_HEADING_SELECTOR = 'h1, h2, [role="heading"][aria-level="1"], [role="heading"][aria-level="2"]';
-const ACCOUNT_LOAD_ERROR_HEADING_RE = /^we\\s+couldn['’]t\\s+load\\s+your\\s+account[.!]?\\s*$/iu;
+const ACCOUNT_LOAD_ERROR_HEADING_RE = /^we\s+couldn['’]t\s+load\s+your\s+account[.!]?\s*$/iu;
 
 /** Read only the held Page. Presence of a composer or chat transcript vetoes
  * this full-page classification, even if an assistant quotes the heading.
