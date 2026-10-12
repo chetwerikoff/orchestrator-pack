@@ -58,7 +58,7 @@ function startFixture(storeRoot: string, overrides: Record<string, unknown> = {}
     fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
     fixturePostReviewHeadSha: HEAD_A,
     fixturePostReviewPrBody: 'Closes #1529',
-    fixtureIssueBody: issueBody(),
+    fixtureIssueTitle: "Independent Issue 1529", fixtureIssueBody: issueBody(),
     fixtureReviewStdout: cleanPayload(),
     fixtureGithubReviewId: 1529,
     fixtureRequiredStatusWriter: async () => {},
@@ -189,7 +189,7 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
 
     const result = await startFixture(storeRoot, {
       sessionId: 'stale-worker-session',
-      fixtureIssueBody: body,
+      fixtureIssueTitle: "Independent Issue 1529", fixtureIssueBody: body,
     });
 
     expect(result).toMatchObject({ ok: true, created: true, reused: false });
@@ -322,8 +322,8 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
     setupHarness(storeRoot);
 
     const results = await Promise.all([
-      startFixture(storeRoot, { fixtureIssueBody: issueBody('T2', 'body-A') }),
-      startFixture(storeRoot, { fixtureIssueBody: issueBody('T2', 'body-B') }),
+      startFixture(storeRoot, { fixtureIssueTitle: "Independent Issue 1529", fixtureIssueBody: issueBody('T2', 'body-A') }),
+      startFixture(storeRoot, { fixtureIssueTitle: "Independent Issue 1529", fixtureIssueBody: issueBody('T2', 'body-B') }),
     ]);
     expect(results.filter((result) => result.created === true)).toHaveLength(1);
 
@@ -385,7 +385,7 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
     });
 
     const first = await startFixture(storeRoot, {
-      fixtureIssueBody: issueBody('T1'),
+      fixtureIssueTitle: "Independent Issue 1529", fixtureIssueBody: issueBody('T1'),
       fixtureReviewStdout: finding,
       fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
       fixtureBoundIssueSnapshotBytes: issueBody('T1'),
@@ -439,7 +439,7 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
     });
 
     const first = await startFixture(storeRoot, {
-      fixtureIssueBody: issueBody('T1'),
+      fixtureIssueTitle: "Independent Issue 1529", fixtureIssueBody: issueBody('T1'),
       fixtureReviewStdout: finding,
       fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
       fixtureBoundIssueSnapshotBytes: issueBody('T1'),
@@ -450,7 +450,7 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
       headSha: HEAD_B,
       fixtureCurrentPrHeadSha: HEAD_B,
       fixturePostReviewHeadSha: HEAD_B,
-      fixtureIssueBody: issueBody('T1'),
+      fixtureIssueTitle: "Independent Issue 1529", fixtureIssueBody: issueBody('T1'),
     });
     expect(second).toMatchObject({ ok: false, created: false, reason: 'at_cap_continuation_required' });
     expect(readFileSync(invocationLog, 'utf8').trim().split(/\r?\n/).filter(Boolean)).toHaveLength(1);
