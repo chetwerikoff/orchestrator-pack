@@ -2606,3 +2606,71 @@ describe('Issue #2537 promoted T2-at-cap second-round required CI gate', () => {
     });
   });
 });
+
+
+describe('Issue #2537 historical first-round status readback', () => {
+  it('repairs old same-head cap-one success to pending without starting another reviewer', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2537-old-success-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const prNumber = 25373;
+    const statuses: string[] = [];
+    let currentStatus: string | undefined;
+    const common = {
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+      prNumber, headSha: HEAD, claimMode: 'preacquired' as const,
+      fixtureCurrentPrHeadSha: HEAD, fixturePostReviewHeadSha: HEAD,
+      fixturePrState: 'OPEN' as const,
+      fixturePrBody: `Closes #${prNumber}`, fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack', fixtureIssueNumber: prNumber,
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusReader: async () => currentStatus,
+      fixtureRequiredStatusWriter: async (request: { state: string }) => {
+        currentStatus = request.state; statuses.push(request.state);
+      },
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    };
+    const first = await startPackReview({
+      ...common,
+      fixtureIssueTitle: '[T2] Original Issue title',
+      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureReviewStdout: JSON.stringify({
+        verdict: 'findings', findingCount: 1,
+        findings: [{ severity: 'warning', title: 'non-blocking note' }],
+      }),
+      fixtureGithubReviewId: 2537301,
+    });
+    expect(first).toMatchObject({ ok: true, created: true });
+    expect(currentStatus).toBe('success');
+    const original = readPackReviewAuthority(prNumber, { storeRoot })!;
+    expect(original.cycle).toMatchObject({ frozenTier: 'T2', frozenCap: 1,
+      state: 'at_cap_open_findings', consumedRoundOrdinals: [1] });
+    const runId = original.terminal!.runId;
+    const old = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot })!;
+    expect(old.logicalRoundCap).toBe(1);
+    expect(old.logicalRoundOrdinal).toBe(1);
+    const reentered = await startPackReview({
+      ...common,
+      fixtureIssueTitle: '[T3] Amended linked Issue',
+      fixtureIssueBody: '```complexity-tier\ntier: T3\n```',
+      fixtureReviewStdout: cleanPayload(), fixtureGithubReviewId: 2537302,
+    });
+    expect(reentered).toMatchObject({
+      ok: false, created: false, reason: 'prior_round_findings_unresolved',
+    });
+    const current = readPackReviewAuthority(prNumber, { storeRoot })!;
+    expect(current.cycle).toMatchObject({
+      cycleId: original.cycle!.cycleId, frozenTier: 'T3', frozenCap: 2,
+      state: 'open_findings', consumedRoundOrdinals: [1],
+    });
+    expect(currentStatus).toBe('pending');
+    expect(statuses).toContain('success');
+    expect(statuses.at(-1)).toBe('pending');
+    const historical = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot })!;
+    expect(historical.logicalRoundCap).toBe(1);
+    expect(historical.logicalRoundOrdinal).toBe(1);
+    expect(historical.reviewRound?.tier).toBeUndefined();
+  });
+});
