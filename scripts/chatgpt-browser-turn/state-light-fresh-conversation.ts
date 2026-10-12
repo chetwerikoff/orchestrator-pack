@@ -760,7 +760,7 @@ async function probeProductWall(
   const none: ProductWallDiagnostic = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
   try {
     const timeoutMs = Math.min(PRODUCT_WALL_PROBE_MS, 250, requireFreshPreparationTime(deadlineMs, now));
-    const accountError = await probeAccountLoadError(page, timeoutMs);
+    const accountError = timeoutMs >= 100 ? await probeAccountLoadError(page, timeoutMs) : null;
     if (accountError) return accountError;
     const wall = classifyProductWall(await boundedFreshPreparation(
       () => productStatusText(page, timeoutMs), deadlineMs, now,
