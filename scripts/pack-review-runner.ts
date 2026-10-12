@@ -1104,7 +1104,7 @@ export function parseAuthoritativeTier(body: string, title?: string): PackReview
     const leading = title.trim().replace(/^\d+\s*[—–-]\s*/, '');
     const valid = leading.match(/^\[(T[123])\](?=\s|$)/i);
     if (valid) titleTier = valid[1]!.toUpperCase() as PackReviewTier;
-    else if (/^\[\s*T[^\]]*\]/i.test(leading) || /^\[\s*T\d/i.test(leading)) {
+    else if (/^\[\s*T(?=[^a-zA-Z]|$)/i.test(leading)) {
       throw new Error('authoritative Issue title tier marker is malformed');
     }
   }
