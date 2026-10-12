@@ -17,7 +17,6 @@ import { basename, dirname, join, resolve } from 'node:path';
 import {
   abandonLatePageHandle,
   boundedResourceCleanup,
-  CDP_BROWSER_RELEASE_BOUND_MS,
   createCdpPageTarget,
   releaseCdpBrowser,
   RESOURCE_CLEANUP_BOUND_MS,
@@ -3898,7 +3897,8 @@ async function runTurnCore(
     // Reserve existing bounded Page/CDP cleanup and terminal emission from the
     // same absolute pre-Send deadline; this is not a second observation timer.
     const freshUnboundReturnByMs = invocationDeadlineMs
-      - RESOURCE_CLEANUP_BOUND_MS - CDP_BROWSER_RELEASE_BOUND_MS - 2_000;
+      // CDP release's tracked 15s bound (browser-session.ts) plus 2s emission.
+      - RESOURCE_CLEANUP_BOUND_MS - 15_000 - 2_000;
     let lastReadyReply = '';
     let lastReadyObservedText = '';
     let bestReadyReply = '';
