@@ -1587,6 +1587,40 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(existsSync(output)).toBe(false);
   });
 
+  it('refuses a duplicate fresh owned-marker census rather than claiming its candidate URL', async () => {
+    const prompt = 'SYNTHETIC-DUPLICATE-OWNED-MARKER';
+    const output = join(stateDir, 'duplicate-owned-marker-unbound.txt');
+    const turn = makeLoserPage(prompt, 'DUPLICATE-UNATTRIBUTABLE-REPLY');
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    const duplicateOwnedUsers: StateLightTestMessage[] = [
+      { role: 'user', text: `${TEST_OWNED_MARKER}\\n\\n${prompt}` },
+      { role: 'user', text: `${TEST_OWNED_MARKER}\\n\\n${prompt}` },
+    ];
+    turn.page.locator.mockImplementation((selector: string) => {
+      if (selector === USER_MESSAGE_SELECTOR && turn.getSends() > 0) {
+        return collectionLocator(duplicateOwnedUsers);
+      }
+      if (selector === MESSAGE_NODE_SELECTOR && turn.getSends() > 0) {
+        return collectionLocator([
+          ...duplicateOwnedUsers,
+          { role: 'assistant', text: 'DUPLICATE-UNATTRIBUTABLE-REPLY', finalActionInTurnContainer: true },
+        ]);
+      }
+      return originalLocator(selector);
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const invocationId = randomUUID();
+    const outcome = await runNewChatTurn(turn.page, output, '90000', invocationId);
+    expect(outcome.result.send_count).toBe(1);
+    expect(outcome.result.state).not.toBe('ok');
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(turn.getSends()).toBe(1);
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'sent_unbound', conversation_url: null,
+    });
+    expect(existsSync(output)).toBe(false);
+  });
+
   it('never publishes a newly discovered fresh assistant-only reply without a proven marker', async () => {
     const prompt = 'PROMPT-FRESH-UNRENDERED';
     const reply = 'FRESH-UNRENDERED-OK';
