@@ -2470,6 +2470,7 @@ describe('Issue #2537 linked Issue title and body tier authority', () => {
       .toBe('T2');
     expect(parseAuthoritativeTier('No tier here', '2537 — [T2] Normal Issue')).toBe('T2');
     expect(parseAuthoritativeTier('No tier here', '[T3] A real Issue')).toBe('T3');
+    expect(parseAuthoritativeTier('No tier here', '[Task] Normal labeled Issue')).toBe('T2');
     expect(parseAuthoritativeTier('No tier here')).toBe('T2');
     expect(parseAuthoritativeTier('<!-- ARCH tier T3 -->', 'Markerless linked Issue')).toBe('T2');
     expect(parseAuthoritativeTier('no authority', 'Title with incidental [T3]')).toBe('T2');
