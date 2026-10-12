@@ -600,7 +600,9 @@ export function keyedHarvestCandidate(
   if (assistants.length === 0) {
     return laterUserOffset >= 0 ? { state: 'foreign-user' } : { state: 'waiting' };
   }
-  const assistant = assistants.at(-1)!;
+  // Keyed recovery proves one owned assistant, never merely the last candidate.
+  if (assistants.length !== 1) return { state: 'continuity-unproven' };
+  const assistant = assistants[0]!;
   const reply = normalizeVisibleText(assistant.text);
   if (!assistant.key || !reply) return { state: 'continuity-unproven' };
   return { state: 'ready', reply, assistantKey: assistant.key };
@@ -1294,6 +1296,9 @@ export function classifyPageObservation(
     expectedMarker,
   );
   const assistants = replyWindow.filter((message) => message.role === 'assistant');
+  if (assistants.length > 1) {
+    return { state: 'uncertain', cause: 'owned_reply_boundary_unproven' };
+  }
 
   if (uncertainCause) {
     if (inProgress || assistants.length === 0) {

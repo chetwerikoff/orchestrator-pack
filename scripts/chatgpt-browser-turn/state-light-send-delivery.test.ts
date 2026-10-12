@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
-import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,7 +21,7 @@ vi.mock('./ui-adapter.ts', async (original) => buildUiAdapterTestMock(
 
 import { buildUiAdapterTestMock, collectionLocator, createBrowserSessionModuleMock, createCoordinationModuleMock, enqueueBrowserForTurn, runStateLightTurnWithStdoutCapture, scalarLocator, stableTurnInput } from './state-light-turn.test-fixtures.ts';
 import { COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR, MESSAGE_NODE_SELECTOR, MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE } from './product-page-selectors.ts';
-import { __testSendDelivery, readPageObservation, runStateLightTurn } from './state-light-turn-base.ts';
+import { __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { configuredProfileKey } from './storage-common.ts';
 import { readTerminalEnvelope, runLaunch } from '../flow-manager-long-running-child.ts';
@@ -619,5 +619,180 @@ describe('production attempted-send result and durable envelope', () => {
           launchProfileKey: configuredProfileKey(profile, cdp), launchCdpUrl: cdp, terminalResult,
         }, observation)).toBe(preDispatch);
       }
+  });
+});
+
+
+describe('Issue #2536: unique current reply and strict keyed cardinality', () => {
+  type Row = { role: 'user' | 'assistant'; text: string; key: string };
+  const history: Row[] = Array.from({ length: 8 }, (_, i): Row[] => [
+    { role: 'user', text: `history user ${i}`, key: `data-message-id:history-user-${i}-2536` },
+    { role: 'assistant', text: `history reply ${i}`, key: `data-message-id:history-assistant-${i}-2536` },
+  ]).flat();
+  const ownKey = 'data-message-id:owned-user-u-2536';
+  const assistantX = { role: 'assistant' as const, text: 'finished reply X', key: 'data-message-id:assistant-x-2536' };
+  const assistantY = { role: 'assistant' as const, text: 'finished reply Y', key: 'data-message-id:assistant-y-2536' };
+  const snapshot = (rows: Row[]): AtomicTranscriptSnapshot => ({
+    complete: true,
+    carriers: rows.map(({ role, text, key }, domIndex) => ({
+      role, text, key, domIndex, completionReady: role === 'assistant',
+      fingerprint: createHash('sha256').update(`${role}\u0000${text}`).digest('hex'),
+    })),
+  });
+
+  it('keeps a single exact-marker finished reply deliverable after user carrier A-to-B churn', () => {
+    const original = [...history, { role: 'user' as const, text: MARKED_PROMPT, key: 'data-message-id:owner-a-2536' }, assistantX];
+    const rekeyed = [...history, { role: 'user' as const, text: MARKED_PROMPT, key: 'data-message-id:owner-b-2536' }, assistantX];
+    expect(classifyPageObservation(original, history.length, MARKER, false))
+      .toEqual({ state: 'ready', reply: assistantX.text });
+    expect(classifyPageObservation(rekeyed, history.length, MARKER, false))
+      .toEqual({ state: 'ready', reply: assistantX.text });
+    expect(classifyPageObservation([...history, { role: 'user', text: MARKED_PROMPT, key: ownKey }, { ...assistantX, text: 'SHORT' }], history.length, MARKER, false))
+      .toEqual({ state: 'ready', reply: 'SHORT' });
+  });
+
+  it('does not select the last of two concurrently finished visible assistants', () => {
+    const rows = [...history, { role: 'user' as const, text: MARKED_PROMPT, key: ownKey }, assistantX, assistantY];
+    expect(classifyPageObservation(rows, history.length, MARKER, false).state).not.toBe('ready');
+    expect(classifyPageObservation(rows, history.length, MARKER, true).state).not.toBe('ready');
+    expect(classifyPageObservation([...rows, { role: 'user', text: 'foreign turn', key: 'data-message-id:foreign-2536' }], history.length, MARKER, false).state).not.toBe('ready');
+  });
+
+  it('refuses complete-markerless keyed X/Y even when the last carrier would revalidate', async () => {
+    const baseline = snapshot(history);
+    const markerless: Row[] = [...history, { role: 'user', text: 'same owned carrier without rendered marker', key: ownKey }, assistantX, assistantY];
+    const complete = snapshot(markerless);
+    expect(keyedHarvestCandidate(complete, baseline, ownKey).state).not.toBe('ready');
+
+    const page = { locator: () => ({
+      evaluateAll: async (callback: (elements: any[], args: any) => unknown, args: any) => callback(markerless.map((row) => ({
+        getBoundingClientRect: () => ({ height: 20 }),
+        getAttribute: (attr: string) => attr === 'data-message-id' ? row.key.slice('data-message-id:'.length) : null,
+        querySelectorAll: () => [],
+        querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+          ? { getAttribute: () => row.role === 'user' ? 'user-message' : 'assistant-message' }
+          : null,
+        closest: () => ({ querySelector: (selector: string) => selector === args.inProgressSelector ? null : {} }),
+        innerText: row.text,
+      })), args),
+    }) };
+    expect(await revalidateKeyedHarvest(page, baseline, ownKey, {
+      reply: assistantY.text, assistantKey: assistantY.key, snapshotSignature: atomicSnapshotSignature(complete),
+    })).toEqual({ state: 'continuity-unproven' });
+
+    const single = keyedHarvestCandidate(snapshot(markerless.slice(0, -1)), baseline, ownKey);
+    expect(single).toEqual({ state: 'ready', reply: assistantX.text, assistantKey: assistantX.key });
+    expect(keyedHarvestCandidate({ complete: false, carriers: complete.carriers }, baseline, ownKey).state)
+      .toBe('continuity-unproven');
+    expect(keyedHarvestCandidate(complete, { complete: false, carriers: baseline.carriers }, ownKey).state)
+      .toBe('continuity-unproven');
+  });
+});
+
+
+describe('Issue #2536 ordinary end-to-end: one owned Send in a long reused conversation', () => {
+  it.each([false, true])('delivers current A-to-B reply without X/Y ambiguity (competing: %s)', async (competing) => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2536-ordinary-'));
+    const invocation = randomUUID();
+    const target = 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111';
+    const profile = join(root, 'profile');
+    const output = join(root, 'reply.txt');
+    let now = 20_000;
+    let composerText = '';
+    let deliveredText = '';
+    let sends = 0;
+    let postSendReads = 0;
+    const rows = Array.from({ length: 8 }, (_, i): Array<{ role: 'user' | 'assistant'; text: string; key: string }> => [
+      { role: 'user', text: `older user ${i}`, key: `data-message-id:older-user-${i}-2536` },
+      { role: 'assistant', text: `older assistant ${i}`, key: `data-message-id:older-assistant-${i}-2536` },
+    ]).flat();
+    type Row = typeof rows[number];
+    let currentRows: Row[] = rows;
+    const composer = scalarLocator({
+      count: async () => 1,
+      fill: async (text: string) => { composerText = text; },
+      innerText: async () => composerText,
+    });
+    const send = vi.fn(async () => {
+      sends += 1;
+      deliveredText = composerText;
+      composerText = '';
+    });
+    const sendButton = scalarLocator({ count: async () => 1, click: send });
+    const messageNodes = {
+      count: async () => currentRows.length,
+      nth: (index: number) => collectionLocator(currentRows).nth(index),
+      evaluateAll: async () => {
+        if (sends) postSendReads++;
+        const reply = postSendReads <= 1 ? 'LONG with superseded text' : 'SHORT';
+        const userKey = postSendReads <= 1
+          ? 'data-message-id:current-user-a-2536' : 'data-message-id:current-user-b-2536';
+        currentRows = sends
+          ? [
+            ...rows,
+            { role: 'user', text: deliveredText, key: userKey },
+            { role: 'assistant', text: reply, key: 'data-message-id:current-assistant-x-2536' },
+            ...(competing ? [{ role: 'assistant' as const, text: 'OTHER', key: 'data-message-id:current-assistant-y-2536' }] : []),
+          ]
+          : rows;
+        return {
+          rows: currentRows.map((row, domIndex) => ({
+            ...row, domIndex, complete: true, completionReady: true, continuationVisible: false,
+          })),
+          pageTurnEvidence: {
+            generationInProgress: false,
+            observedAssistantNodes: currentRows.filter((row) => row.role === 'assistant').length,
+            continueGeneratingVisible: false,
+          },
+        };
+      },
+    };
+    const page = {
+      __fakeBrowserGptPage: true,
+      url: () => target,
+      isClosed: () => false,
+      goto: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      waitForTimeout: async (ms: number) => { now += ms; },
+      getByRole: () => scalarLocator(),
+      getByText: () => scalarLocator(),
+      locator: (selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (selector === MESSAGE_NODE_SELECTOR) return messageNodes;
+        return scalarLocator();
+      },
+    };
+    const browserFixture = enqueueBrowserForTurn(mocks, page);
+    Object.assign(browserFixture.context, { pages: () => [page] });
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    try {
+      const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        '--profile', profile, '--cdp', 'http://127.0.0.1:9222',
+        '--input', join(root, 'synthetic-prompt.txt'),
+        '--output', output, '--chat-url', target,
+        '--invocation-id', invocation, '--timeout-ms', '180000',
+      ]);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(sends).toBe(1);
+      expect(result.send_count, JSON.stringify(result)).toBe(1);
+      expect(postSendReads).toBeGreaterThanOrEqual(3);
+      if (competing) {
+        expect(result.state).not.toBe('ok');
+        expect(existsSync(output)).toBe(false);
+        expect(page.close).not.toHaveBeenCalled();
+      } else {
+        expect(result.state, JSON.stringify(result)).toBe('ok');
+        expect(readFileSync(output, 'utf8')).toBe('SHORT');
+        expect(result.output).toMatchObject({ byte_length: 5 });
+      }
+    } finally {
+      clock.mockRestore();
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+      mocks.browserQueue.length = 0;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
