@@ -3981,9 +3981,13 @@ async function readFinalCapRequiredStatus(
 async function ensurePromotedRoundPublicPending(input: {
   run: PackReviewRunRecord; projectId: string; storeRoot: string;
   repoSlug: string; sourceRepoRoot: string;
+  fixtureCurrentPrHeadSha?: string;
   fixtureRequiredStatusReader?: StartInput['fixtureRequiredStatusReader'];
   fixtureRequiredStatusWriter?: PackReviewRequiredStatusWriter;
 }): Promise<void> {
+  const currentLiveHead = async () => input.fixtureCurrentPrHeadSha
+    ? trim(input.fixtureCurrentPrHeadSha).toLowerCase()
+    : resolveCurrentPrHead(input.sourceRepoRoot, input.repoSlug, input.run.prNumber);
   const authority = readPackReviewAuthority(input.run.prNumber, { storeRoot: input.storeRoot });
   if (!authority?.cycle
       || input.run.logicalRoundCap === undefined
@@ -3991,13 +3995,17 @@ async function ensurePromotedRoundPublicPending(input: {
       || !outstandingPackReviewCycle(input.run, input.storeRoot)) return;
   const payload = packReviewJournaledPayload(input.run);
   if (!payload || classifyPackReviewPayload(payload).blocking) return;
+  if (await currentLiveHead() !== input.run.targetSha.toLowerCase()) {
+    throw new Error('promoted required-status repair requires the current PR head');
+  }
   const observe = () => readFinalCapRequiredStatus({
     sourceRepoRoot: input.sourceRepoRoot, repoSlug: input.repoSlug,
     fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
   }, input.repoSlug, input.run.targetSha);
   if (await observe() === 'pending') return;
-  if (!outstandingPackReviewCycle(input.run, input.storeRoot)) {
-    throw new Error('promoted cycle authority changed before pending restoration');
+  if (!outstandingPackReviewCycle(input.run, input.storeRoot)
+      || await currentLiveHead() !== input.run.targetSha.toLowerCase()) {
+    throw new Error('promoted cycle authority or head changed before pending restoration');
   }
   const baseWriter = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
     repoRoot: input.sourceRepoRoot, repoSlug: input.repoSlug,
@@ -4009,6 +4017,7 @@ async function ensurePromotedRoundPublicPending(input: {
     forceRepublish: true,
   });
   if (restored?.state !== 'succeeded' || !outstandingPackReviewCycle(input.run, input.storeRoot)
+      || await currentLiveHead() !== input.run.targetSha.toLowerCase()
       || await observe() !== 'pending') {
     throw new Error('promoted current-head pending status not confirmed');
   }
@@ -5290,6 +5299,34 @@ export async function reconcileStalePackReviewRuns(
     });
   }
 
+  // A scoped reconcile is also a status-repair entrypoint when a previously
+  // delivered cap-one run is now an outstanding cap-two cycle. No new reviewer.
+  if (input.prNumber) {
+    const authority = readPackReviewAuthority(input.prNumber, { storeRoot });
+    const historic = authority?.terminal?.runId
+      ? getPackReviewRun(authority.terminal.runId, { projectId, storeRoot })
+      : null;
+    if (historic && authority.currentHeadSha === historic.targetSha
+        && authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+        && Number(historic.logicalRoundCap) < authority.cycle.frozenCap
+        && outstandingPackReviewCycle(historic, storeRoot)) {
+      try {
+        await ensurePromotedRoundPublicPending({
+          run: historic, projectId, storeRoot, repoSlug,
+          sourceRepoRoot: input.sourceRepoRoot,
+          fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
+          fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+          fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
+        });
+        results.push({ runId: historic.id, reason: 'promoted_current_head_pending_verified' });
+      } catch (error) {
+        results.push({ runId: historic.id, reason: 'promoted_current_head_pending_unverified',
+          detail: describeError(error),
+          nextAction: scopedReconcileAction(input.prNumber) });
+      }
+    }
+  }
+
   if (input.immediate && input.prNumber) {
     const settlement = await reconcileFinalCapSettlement(input, { projectId, storeRoot, repoSlug });
     if (settlement) results.push(settlement);
@@ -6013,6 +6050,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         await ensurePromotedRoundPublicPending({
           run: priorTerminalRun, projectId, storeRoot,
           repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+          fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
           fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
           fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
         });
