@@ -174,6 +174,7 @@ import {
 const PROJECT_URL = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test/project';
 const PROJECT_CONVERSATION_ROOT = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test';
 const SHARED_CONV = `${PROJECT_CONVERSATION_ROOT}/c/11111111-1111-4111-8111-111111111111`;
+const LOCAL_ID_CONVERSATION_URL = `${PROJECT_CONVERSATION_ROOT}/c/local-chatgpt%3A11111111-1111-4111-8111-111111111111`;
 const SHARED_CANONICAL_CONV = SHARED_CONV.replace('-test/c/', '/c/');
 const LOSER_CONV = `${PROJECT_CONVERSATION_ROOT}/c/22222222-2222-4222-8222-222222222222`;
 const ISSUE_PROJECT_URL = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project';
@@ -1540,6 +1541,73 @@ describe('state-light fresh conversation collision recovery', () => {
     };
     return { page, state };
   }
+
+  it('keeps a local-chatgpt fresh URL unbound even when its owned reply looks complete', async () => {
+    const prompt = 'SYNTHETIC-LOCAL-ID-STILL-PENDING';
+    const reply = 'COMPLETE-BUT-LOCAL-ID-ONLY';
+    const output = join(stateDir, 'local-id-unbound.txt');
+    const invocationId = randomUUID();
+    const turn = makeLoserPage(prompt, reply);
+    turn.page.url.mockImplementation(() => turn.getSends() > 0 ? LOCAL_ID_CONVERSATION_URL : PROJECT_URL);
+    expect(conversationUuidFromUrl(LOCAL_ID_CONVERSATION_URL)).toBeUndefined();
+    expect(isSupportedChatGptConversationUrl(LOCAL_ID_CONVERSATION_URL)).toBe(false);
+    expect(readProjectConversationUrl(turn.page, PROJECT_URL)).toBeUndefined();
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const launcherStartMs = mocks.nowMs;
+
+    const outcome = await runNewChatTurn(turn.page, output, '1800000', invocationId);
+
+    expect(outcome.result).toMatchObject({
+      state: 'observation_uncertain',
+      cause: 'fresh_conversation_owner_unproven',
+      send_count: 1,
+    });
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(mocks.nowMs - launcherStartMs).toBeLessThan(3_600_000);
+    expect(turn.getSends()).toBe(1);
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'sent_unbound',
+      conversation_url: null,
+      send_count: 1,
+    });
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it('binds and harvests once after a local-chatgpt fresh URL becomes a canonical owned project URL', async () => {
+    const prompt = 'SYNTHETIC-LOCAL-TO-CANONICAL';
+    const reply = 'COMPLETE-OWNED-AFTER-CANONICAL';
+    const output = join(stateDir, 'local-to-canonical-reply.txt');
+    const invocationId = randomUUID();
+    const turn = makeLoserPage(prompt, reply);
+    let localObserved = false;
+    let canonicalObserved = false;
+    turn.page.url.mockImplementation(() => {
+      if (turn.getSends() === 0) return PROJECT_URL;
+      if (turn.getObservationReads() < 4) {
+        localObserved = true;
+        return LOCAL_ID_CONVERSATION_URL;
+      }
+      canonicalObserved = true;
+      return SHARED_CONV;
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await runNewChatTurn(turn.page, output, '90000', invocationId);
+
+    expect(localObserved).toBe(true);
+    expect(canonicalObserved).toBe(true);
+    expect(outcome).toMatchObject({
+      code: 0,
+      result: { state: 'ok', send_count: 1, conversation_id: SHARED_CONV },
+    });
+    expect(turn.getSends()).toBe(1);
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'harvested',
+      conversation_url: SHARED_CONV,
+      send_count: 1,
+    });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+  });
 
   // #2533: source-level negative controls. The historical live DOM predicate
   // remains unknown; these do not claim to reproduce the production incident.
