@@ -2229,6 +2229,9 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const before = getPackReviewRun(firstRunId, { projectId: 'orchestrator-pack', storeRoot });
     const protectedSibling = before!.reviewRound!.sourceSlots.find((slot) => slot.slotId === 'source-02')!;
 
+    // The prior runner has actually stopped. A live first-run owner would
+    // correctly refuse replacement before the per-slot gate is considered.
+    markFixtureRunnerDead(storeRoot, firstRunId);
     const relaunched: string[] = [];
     const second = await startPackReview(pluralStart(storeRoot, capture, {
       preacquiredClaim: ownedFixtureReviewStartClaim(storeRoot, 1276, HEAD_A),
