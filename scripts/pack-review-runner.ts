@@ -163,7 +163,6 @@ import {
 import { extractClosingIssueNumber } from './pr-scope-contract.ts';
 import {
   parseComplexityTierFromIssueBody,
-  resolveTierAndCap,
 } from '../docs/review-cycle-cap.mjs';
 import {
   requiredStatusChecksEndpoint,
@@ -1112,6 +1111,50 @@ export function parseAuthoritativeTier(body: string, title?: string): PackReview
   const rank = { T1: 1, T2: 2, T3: 3 } as const;
   if (titleTier && (!bodyTier || rank[titleTier] >= rank[bodyTier])) return titleTier;
   return bodyTier ?? 'T2';
+}
+
+/** Public status follows current cycle authority, not an immutable historical run cap. */
+function outstandingPackReviewCycle(run: PackReviewRunRecord, storeRoot: string): boolean {
+  const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
+  const cycle = authority?.cycle;
+  return Boolean(cycle && authority?.currentHeadSha === run.targetSha
+    && run.reviewCycleId === cycle.cycleId
+    && cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    && cycle.reviewStageComplete !== true
+    && (cycle.consumedRoundOrdinals?.length ?? 0) < cycle.frozenCap);
+}
+
+function currentCycleRequiredStatusWriter(
+  run: PackReviewRunRecord, storeRoot: string, writer: PackReviewRequiredStatusWriter,
+): PackReviewRequiredStatusWriter {
+  return async (request) => {
+    if (request.context === PACK_REVIEW_REQUIRED_STATUS_CONTEXT
+        && request.state === 'success'
+        && outstandingPackReviewCycle(run, storeRoot)) {
+      await writer({ ...request, state: 'pending',
+        description: 'Pack review has an outstanding required logical round.',
+        idempotencyKey: `${request.idempotencyKey}:current-cycle-pending` });
+    } else {
+      await writer(request);
+    }
+  };
+}
+
+async function reconcileTierBeforeTerminal(input: {
+  start: StartInput;
+  target: {prNumber: number; headSha: string; issueNumber?: number; repoSlug: string; sourceRepoRoot: string};
+  projectId: string; storeRoot: string; cycleId: string | undefined;
+}): Promise<PackReviewAuthorityDocument> {
+  const selected = await resolveAuthoritativeReviewContext(input.start, input.target, input.projectId);
+  const latest = readPackReviewAuthority(input.target.prNumber, { storeRoot: input.storeRoot });
+  if (!latest || latest.currentHeadSha !== input.target.headSha
+      || latest.cycle?.cycleId !== input.cycleId) {
+    throw new Error('pack review authority changed before terminal tier reconciliation');
+  }
+  return reconcilePackReviewTier({
+    prNumber: input.target.prNumber, tier: selected.tier,
+    startedRunExists: true, options: { storeRoot: input.storeRoot },
+  });
 }
 
 async function resolveAuthoritativeReviewContext(input: StartInput, target: {
@@ -3418,7 +3461,9 @@ async function resumeRecoveredGptDelivery(options: {
       });
       return { id: posted.id, url: posted.url, event: 'COMMENT' };
     },
-    writeRequiredStatus: options.writeRequiredStatus,
+    writeRequiredStatus: currentCycleRequiredStatusWriter(
+      options.run, options.storeRoot, options.writeRequiredStatus,
+    ),
     notifyWorker: options.input.fixtureWorkerNotifier ?? ((request) => sendPackReviewWorkerNotification({
       trustedPackRoot: options.run.trustedPackRoot,
       sessionId: options.run.linkedSessionId,
@@ -3932,9 +3977,10 @@ async function observePackReviewVerdictDelivery(options: {
   }
   const classification = classifyPackReviewPayload(payload);
   const intermediate = !classification.blocking
-    && run.accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
-    && Number.isInteger(run.logicalRoundOrdinal) && Number.isInteger(run.logicalRoundCap)
-    && Number(run.logicalRoundOrdinal) < Number(run.logicalRoundCap);
+    && (outstandingPackReviewCycle(run, options.storeRoot)
+      || (run.accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+        && Number.isInteger(run.logicalRoundOrdinal) && Number.isInteger(run.logicalRoundCap)
+        && Number(run.logicalRoundOrdinal) < Number(run.logicalRoundCap)));
   const requiredStatusState = intermediate ? 'pending' as const : classification.requiredStatus;
   const current = async () => {
     try {
@@ -3972,7 +4018,9 @@ async function observePackReviewVerdictDelivery(options: {
     try {
       const restored = await restorePackReviewAuthoritativeRequiredStatus({
         run, projectId: options.projectId, storeRoot: options.storeRoot,
-        writeRequiredStatus: options.writeRequiredStatus, forceRepublish: true,
+        writeRequiredStatus: currentCycleRequiredStatusWriter(
+          run, options.storeRoot, options.writeRequiredStatus,
+        ), forceRepublish: true,
       });
       if (restored?.state !== 'succeeded') return unresolved('status_not_published:restore_failed');
     } catch { return unresolved('status_not_published:restore_failed'); }
@@ -4345,13 +4393,14 @@ export async function reconcileStalePackReviewRuns(
       }
       const selectedId = currentOrder.run.id;
       const selectedProjection = packReviewRequiredStatusProjectionKey(currentOrder.run);
+      const remaining = outstandingPackReviewCycle(currentOrder.run, storeRoot);
       restored = await restorePackReviewAuthoritativeRequiredStatus({
         run: currentOrder.run,
         projectId,
         storeRoot,
-        writeRequiredStatus,
+        writeRequiredStatus: currentCycleRequiredStatusWriter(currentOrder.run, storeRoot, writeRequiredStatus),
         pauseAfterPendingWrite: input.fixturePauseAfterPendingRestoreWrite,
-        forceRepublish,
+        forceRepublish: forceRepublish || remaining,
       });
       if (input.fixturePauseAfterRestoreRead) {
         await input.fixturePauseAfterRestoreRead(currentOrder.run);
@@ -5047,7 +5096,8 @@ export async function reconcileStalePackReviewRuns(
           // ordering helper. It still supersedes this zero-judgment error.
           const restored = await restorePackReviewAuthoritativeRequiredStatus({
             run: current, projectId, storeRoot,
-            writeRequiredStatus: statusWriter, forceRepublish: true,
+            writeRequiredStatus: currentCycleRequiredStatusWriter(current, storeRoot, statusWriter),
+            forceRepublish: true,
           });
           const after = getPackReviewRun(run.id, { projectId, storeRoot });
           const afterHead = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
@@ -5071,7 +5121,8 @@ export async function reconcileStalePackReviewRuns(
           const projection = packReviewRequiredStatusProjectionKey(current);
           const restored = await restorePackReviewAuthoritativeRequiredStatus({
             run: current, projectId, storeRoot,
-            writeRequiredStatus: statusWriter, forceRepublish: true,
+            writeRequiredStatus: currentCycleRequiredStatusWriter(current, storeRoot, statusWriter),
+            forceRepublish: true,
           });
           const after = getPackReviewRun(run.id, { projectId, storeRoot });
           const afterHead = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
@@ -6018,6 +6069,28 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       };
     }
 
+    // An earlier at-cap shortcut skipped CI; newly available ordinal 2
+    // cannot consume its slot without green required checks for this head/base.
+    if (productionRequiredCiStart && existingStateCannotStartReviewer
+        && (process.env.OPK_VITEST_HARNESS !== '1' || harnessRequiredCiOptIn)
+        && logicalAccounting && authority.cycle?.state === 'open'
+        && authority.cycle.reviewStageComplete !== true
+        && consumedLogicalRoundCount > 0
+        && consumedLogicalRoundCount < authority.cycle.frozenCap) {
+      const green = await manualPackReviewRequiredCiGreen({
+        startInput: input, targetContext: selectedTarget,
+        target: { prNumber: target.prNumber, headSha: target.headSha,
+          repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+          prBaseRef: target.prBaseRef },
+      });
+      if (!green) {
+        await releaseEarlyClaim('required_ci_not_green_for_current_head');
+        return { ok: false, created: false, reused: false,
+          reason: 'required_ci_not_green_for_current_head',
+          prNumber: target.prNumber, headSha: target.headSha, httpStatus: 409 };
+      }
+    }
+
     if (logicalAccounting
         && authority.cycle?.state === 'open'
         && consumedLogicalRoundCount > 0
@@ -6278,6 +6351,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           target.prNumber,
           authorityOptions,
         );
+        authority = await reconcileTierBeforeTerminal({
+          start: input, target, projectId, storeRoot, cycleId: authority.cycle?.cycleId,
+        });
         authority = commitPackReviewTerminal({
           prNumber: target.prNumber,
           expectedTransitionSeq: authority.transitionSeq,
@@ -6336,12 +6412,13 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           });
           return { id: posted.id, url: posted.url, event: 'COMMENT' };
         },
-        writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
-          repoRoot: target.sourceRepoRoot,
-          repoSlug: target.repoSlug,
-          headSha: target.headSha,
-          request,
-        })),
+        writeRequiredStatus: currentCycleRequiredStatusWriter(
+          resumeCandidate, storeRoot,
+          input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+            repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+            headSha: target.headSha, request,
+          })),
+        ),
         notifyWorker: input.fixtureWorkerNotifier ?? ((request) => sendPackReviewWorkerNotification({
           trustedPackRoot: trusted.trustedPackRoot,
           sessionId: target.sessionId || resumeCandidate.linkedSessionId,
@@ -7140,6 +7217,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           }
         : {}, { projectId, storeRoot });
 
+    authority = await reconcileTierBeforeTerminal({
+      start: input, target, projectId, storeRoot, cycleId: authority.cycle?.cycleId,
+    });
     authority = commitPackReviewTerminal({
       prNumber: target.prNumber,
       expectedTransitionSeq: authority.transitionSeq,
@@ -7206,12 +7286,13 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         });
         return { id: posted.id, url: posted.url, event: 'COMMENT' };
       },
-      writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
-        repoRoot: target.sourceRepoRoot,
-        repoSlug: target.repoSlug,
-        headSha: target.headSha,
-        request,
-      })),
+      writeRequiredStatus: currentCycleRequiredStatusWriter(
+        deliveryRun, storeRoot,
+        input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+          repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+          headSha: target.headSha, request,
+        })),
+      ),
       notifyWorker: input.fixtureWorkerNotifier ?? ((request) => sendPackReviewWorkerNotification({
         trustedPackRoot: trusted.trustedPackRoot,
         sessionId: target.sessionId,
