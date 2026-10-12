@@ -21,6 +21,7 @@ import {
   isRetryablePackReviewZeroSendCollision,
   parseArgs,
   reconcileStalePackReviewRuns,
+  observeGptPackReviewAttempt,
   resolveCurrentPrHead,
   resolvePackReviewReconcileRepository,
   startPackReview,
@@ -44,6 +45,7 @@ import {
   type PackReviewGptRoundRecord,
 } from './lib/pack-review-run-store.js';
 import { acquireReviewStartClaim, testReviewStartClaimOwnership } from './lib/review-start-claim-store.js';
+import type { StateLightTurnObservationRecord } from './chatgpt-browser-turn/state-light-turn-observation.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
 import { computeBoundIssueSnapshotHash } from './lib/reverify-bound-issue-snapshot.js';
 import {
@@ -2075,6 +2077,13 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(() => readFileSync(capture, 'utf8')).toThrow();
   });
 
+  function markFixtureRunnerDead(storeRoot: string, runId: string) {
+    process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
+    updatePackReviewRun(runId, { runnerPid: 2147483647 }, {
+      projectId: 'orchestrator-pack', storeRoot, now: new Date(Date.now() - 5 * 60_000),
+    });
+  }
+
   it('continues the same durable GPT round and relaunches only unresolved source slots', async () => {
     const storeRoot = tempRoot('opk-gpt-same-round-continuation-');
     const capture = path.join(storeRoot, 'github-review.json');
@@ -2105,6 +2114,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       .map((slot) => ({ slotId: slot.slotId, invocationId: slot.invocationId, payload: slot.payload }));
     const replacedBefore = before!.reviewRound!.sourceSlots.find((slot) => slot.slotId === 'source-02')!;
 
+    markFixtureRunnerDead(storeRoot, firstRunId);
     const relaunched: string[] = [];
     const second = await startPackReview(pluralStart(storeRoot, capture, {
       preacquiredClaim: ownedFixtureReviewStartClaim(storeRoot, 1276, HEAD_A),
@@ -2156,6 +2166,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     }));
     expect(first).toMatchObject({ ok: true, status: 'reviewing' });
     const firstRunId = String(first.runId);
+    markFixtureRunnerDead(storeRoot, firstRunId);
     const recoveryObserver = async () => ({
       state: 'reply_recovery_required' as const,
       replacementEligible: false,
@@ -5404,7 +5415,12 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
   const staleAt = '2026-10-12T00:00:00.000Z';
   const restartAt = '2026-10-12T00:20:00.000Z';
 
-  async function seedDeadIncumbent() {
+  async function seedDeadIncumbent(config: {
+    source02Comment?: boolean;
+    canonicalRepository?: string;
+    sourceRepoRoot?: string;
+    snapshotDigest?: string;
+  } = {}) {
     const storeRoot = tempRoot('opk-2532-dead-partial-');
     const capture = path.join(storeRoot, 'review.json');
     harnessEnv(storeRoot, capture);
@@ -5425,10 +5441,10 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     round.tier = 'T2';
     round.accountingVersion = PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
     round.issueNumber = prNumber;
-    round.boundIssueSnapshotDigest = computeBoundIssueSnapshotHash(issueBody);
+    round.boundIssueSnapshotDigest = config.snapshotDigest ?? computeBoundIssueSnapshotHash(issueBody);
     const created = createPackReviewRun({
-      ...options, prNumber, headSha: HEAD_A, canonicalRepository: repository,
-      trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+      ...options, prNumber, headSha: HEAD_A, canonicalRepository: config.canonicalRepository ?? repository,
+      trustedPackRoot: repoRoot, sourceRepoRoot: config.sourceRepoRoot ?? repoRoot,
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
       reviewCycleId: authority.cycle!.cycleId,
       logicalRoundOrdinal: 1, logicalRoundCap: 1,
@@ -5453,8 +5469,13 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     };
     const comments: PackGptSourceGithubComment[] = [
       makeComment('source-01', originalSource01, 2532001),
-      makeComment('source-02', originalSource02, 2532002),
+      ...(config.source02Comment === false ? [] : [makeComment('source-02', originalSource02, 2532002)]),
     ];
+    const addSource02Comment = () => {
+      if (!comments.some((comment) => comment.id === 2532002)) {
+        comments.push(makeComment('source-02', originalSource02, 2532002));
+      }
+    };
     const sourceTransport: PackGptSourceCommentTransport = {
       resolveActorLogin: async () => 'browser-gpt-bot',
       listComments: async () => [...comments],
@@ -5527,7 +5548,8 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       },
       fixtureRequiredStatusWriter: async ({ state }) => { statusStates.push(state); },
     };
-    return { runId, options, input, launches, originalFirst: firstSnapshot, statusStates };
+    return { runId, options, input, launches, originalFirst: firstSnapshot, statusStates,
+      sourceTransport, addSource02Comment };
   }
 
   it('hydrates the original credentialed source-02 and admits only source-03 after real predecessor pacing', async () => {
