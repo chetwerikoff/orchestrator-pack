@@ -3953,6 +3953,43 @@ async function readFinalCapRequiredStatus(
   return current ? trim(current.state).toLowerCase() || undefined : undefined;
 }
 
+/** Repair an old cap-one success using exact-head evidence, never a new run. */
+async function ensurePromotedRoundPublicPending(input: {
+  run: PackReviewRunRecord; projectId: string; storeRoot: string;
+  repoSlug: string; sourceRepoRoot: string;
+  fixtureRequiredStatusReader?: StartInput['fixtureRequiredStatusReader'];
+  fixtureRequiredStatusWriter?: PackReviewRequiredStatusWriter;
+}): Promise<void> {
+  const authority = readPackReviewAuthority(input.run.prNumber, { storeRoot: input.storeRoot });
+  if (!authority?.cycle
+      || input.run.logicalRoundCap === undefined
+      || input.run.logicalRoundCap >= authority.cycle.frozenCap
+      || !outstandingPackReviewCycle(input.run, input.storeRoot)) return;
+  const payload = packReviewJournaledPayload(input.run);
+  if (!payload || classifyPackReviewPayload(payload).blocking) return;
+  const observe = () => readFinalCapRequiredStatus({
+    sourceRepoRoot: input.sourceRepoRoot, repoSlug: input.repoSlug,
+    fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+  }, input.repoSlug, input.run.targetSha);
+  if (await observe() === 'pending') return;
+  if (!outstandingPackReviewCycle(input.run, input.storeRoot)) {
+    throw new Error('promoted cycle authority changed before pending restoration');
+  }
+  const baseWriter = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+    repoRoot: input.sourceRepoRoot, repoSlug: input.repoSlug,
+    headSha: input.run.targetSha, request,
+  }));
+  const restored = await restorePackReviewAuthoritativeRequiredStatus({
+    run: input.run, projectId: input.projectId, storeRoot: input.storeRoot,
+    writeRequiredStatus: currentCycleRequiredStatusWriter(input.run, input.storeRoot, baseWriter),
+    forceRepublish: true,
+  });
+  if (restored?.state !== 'succeeded' || !outstandingPackReviewCycle(input.run, input.storeRoot)
+      || await observe() !== 'pending') {
+    throw new Error('promoted current-head pending status not confirmed');
+  }
+}
+
 /** Observe existing verdict delivery on the exact head; only incumbent status
  * restoration can repair a failed/overwritten status. No new run authority. */
 async function observePackReviewVerdictDelivery(options: {
@@ -5887,6 +5924,28 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         headSha: target.headSha,
         httpStatus: 409,
       };
+    }
+    // A historical T2 run's immutable cap-one delivery may already have
+    // published success. Reconcile that exact same-head public status before
+    // starting any newly eligible reviewer or returning an old-cap receipt.
+    const priorTerminalRun = authority.currentHeadSha === target.headSha && authority.terminal?.runId
+      ? getPackReviewRun(authority.terminal.runId, { projectId, storeRoot })
+      : null;
+    if (priorTerminalRun) {
+      try {
+        await ensurePromotedRoundPublicPending({
+          run: priorTerminalRun, projectId, storeRoot,
+          repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+          fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+          fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
+        });
+      } catch (error) {
+        await releaseEarlyClaim('status_not_published');
+        return { ok: false, created: false, reused: true,
+          reason: 'status_not_published', detail: describeError(error),
+          nextAction: 'repair the incumbent exact-head required status using scoped reconcile; do not create another review',
+          prNumber: target.prNumber, headSha: target.headSha, httpStatus: 409 };
+      }
     }
     const priorAuthority = authority.currentHeadSha === target.headSha ? undefined : authority;
     if (authority.currentHeadSha !== target.headSha) {
