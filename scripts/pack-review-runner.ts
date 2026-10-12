@@ -6373,7 +6373,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           || freshAuthority?.currentHeadSha.toLowerCase() !== target.headSha.toLowerCase()
           || !freshAuthority?.cycle
           || freshAuthority.cycle.cycleId !== sameRoundGptRun.reviewCycleId
-          || freshAuthority.cycle.consumedRoundOrdinals.includes(roundOrdinal)
+          || freshAuthority.cycle.consumedRoundOrdinals?.includes(roundOrdinal) === true
           || freshAuthority.terminal) {
         return rejectIncumbent(sameRoundGptRun, 'gpt_incumbent_authority_changed',
           'observe the exact PR head, current claim and review authority; do not requeue a changed run');
