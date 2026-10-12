@@ -812,7 +812,7 @@ describe('Issue #2474 Claude same-ordinal child rollover and original budget', (
       fixturePrState: 'OPEN' as const,
       fixturePrBody: 'Closes #2474', fixturePostReviewPrBody: 'Closes #2474',
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack', fixtureIssueNumber: 2474,
-      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureIssueTitle: "[T2] Accepted reviewer fixture", fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
       fixtureReviewStdout: cleanPayload(), fixtureGithubReviewId: 247401,
       fixtureReviewerLayerOverrides: { Process: 'claude', User: 'claude' },
       fixtureEmulateWin32Selector: true,
@@ -851,7 +851,7 @@ describe('Issue #1826 native initial pre-spawn binding', () => {
       fixturePostReviewPrBody: 'Closes #' + prNumber,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
+      fixtureIssueTitle: "[T3] Multi-round review fixture", fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
       fixtureReviewStdout: cleanPayload(),
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
       fixtureEmulateWin32Selector: true,
@@ -921,7 +921,7 @@ describe('Issue #1826 native fallback pre-spawn binding', () => {
       fixturePostReviewPrBody: 'Closes #' + prNumber,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
+      fixtureIssueTitle: "[T3] Carryover round fixture", fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
       fixtureCarryoverReplay: mergeCompositeReplay(head),
       fixtureCarryoverSourceCleanRunId: 'fixture-source-clean',
       fixtureFocusedResolutionBundleDigest: 'wrong-bundle',
@@ -1008,7 +1008,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
       fixturePostReviewPrBody: 'Closes #1826',
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: 1826,
-      fixtureIssueBody: issueBody,
+      fixtureIssueTitle: "[T3] Same-head two rounds fixture", fixtureIssueBody: issueBody,
       fixtureReviewStdout: cleanPayload(),
       fixtureGithubReviewId: 182601,
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
@@ -1033,7 +1033,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
       fixturePostReviewPrBody: 'Closes #1826',
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: 1826,
-      fixtureIssueBody: issueBody,
+      fixtureIssueTitle: "[T3] Second round fixture", fixtureIssueBody: issueBody,
       fixtureReviewStdout: cleanPayload(),
       fixtureGithubReviewId: 182602,
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
@@ -1082,7 +1082,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
       fixturePostReviewPrBody: `Closes #${prNumber}`,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: issueBody,
+      fixtureIssueTitle: "[T3] Findings descendant fixture", fixtureIssueBody: issueBody,
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
       fixtureEmulateWin32Selector: true,
       fixtureRequiredStatusWriter: async () => {},
@@ -1177,7 +1177,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
       fixturePostReviewPrBody: `Closes #${prNumber}`,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
+      fixtureIssueTitle: "[T3] Native incumbent fixture", fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
       fixtureReviewStdout: cleanPayload(),
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
       fixtureEmulateWin32Selector: true,
@@ -1251,7 +1251,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
       fixturePostReviewPrBody: `Closes #${prNumber}`,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
+      fixtureIssueTitle: "[T3] Reviewer retry fixture", fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
       fixtureReviewStdout: cleanPayload(),
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
       fixtureEmulateWin32Selector: true,
@@ -1299,7 +1299,7 @@ describe('Issue #2412 first bound snapshot tier admission', () => {
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
     };
     const malformedBody = '```complexity-tier\nT2\n```';
-    const rejected = await startPackReview({ ...common, fixtureIssueBody: malformedBody });
+    const rejected = await startPackReview({ ...common, fixtureIssueTitle: "[T2] Rejected malformed block", fixtureIssueBody: malformedBody });
     expect(rejected).toMatchObject({ ok: false, created: false });
     expect(existsSync(paths.snapshotPath)).toBe(false);
     expect(existsSync(paths.metadataPath)).toBe(false);
@@ -1308,14 +1308,14 @@ describe('Issue #2412 first bound snapshot tier admission', () => {
     expect(rejected.reason).toContain('tier: T1|T2|T3');
 
     const correctedBody = '```complexity-tier\ntier: T2\n```';
-    const admitted = await startPackReview({ ...common, fixtureIssueBody: correctedBody });
+    const admitted = await startPackReview({ ...common, fixtureIssueTitle: "[T2] Corrected block", fixtureIssueBody: correctedBody });
     expect(admitted).toMatchObject({ ok: true, created: true });
     const snapshot = resolveBoundIssueSnapshot(binding);
     expect(snapshot.status).toBe('found');
     expect(readFileSync(paths.snapshotPath, 'utf8')).toBe(correctedBody);
     const metadataBytes = readFileSync(paths.metadataPath, 'utf8');
 
-    const reused = await startPackReview({ ...common, fixtureIssueBody: malformedBody });
+    const reused = await startPackReview({ ...common, fixtureIssueTitle: "[T2] Historical frozen block", fixtureIssueBody: malformedBody });
     expect(reused).toMatchObject({ ok: true, created: false, reused: true });
     expect(readFileSync(paths.snapshotPath, 'utf8')).toBe(correctedBody);
     expect(readFileSync(paths.metadataPath, 'utf8')).toBe(metadataBytes);
@@ -1360,7 +1360,7 @@ describe('Issue #1647 authoritative tier resolution', () => {
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixturePostReviewHeadSha: HEAD,
       fixturePostReviewPrBody: 'Closes #1647',
-      fixtureIssueBody: '# Firefighter repair\n\nNo complexity tier is required.',
+      fixtureIssueTitle: "Firefighter repair", fixtureIssueBody: '# Firefighter repair\n\nNo complexity tier is required.',
       fixtureReviewStdout: cleanPayload(),
       fixtureGithubReviewId: 1647,
       fixtureRequiredStatusWriter: async () => {},
@@ -2087,7 +2087,7 @@ describe('Issue #2479 frozen reviewer and accepted-verdict provenance', () => {
       fixturePostReviewPrBody: `Closes #${prNumber}`,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureIssueTitle: "[T2] Delivery retry fixture", fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
       fixtureReviewStdout: cleanPayload(),
       fixtureRequiredStatusWriter: async () => {},
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
@@ -2322,7 +2322,7 @@ describe('Issue #2496 r03 native reviewer no-regression controls', () => {
       fixturePrBody: `Closes #${prNumber}`, fixturePostReviewPrBody: `Closes #${prNumber}`,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureIssueTitle: "[T2] Verdict state fixture", fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
       reviewerOverride: reviewer,
       fixtureReviewStdout: cleanPayload(),
       fixtureGithubReviewId: 249601,
