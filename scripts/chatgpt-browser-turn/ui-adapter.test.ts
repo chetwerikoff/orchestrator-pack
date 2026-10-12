@@ -139,7 +139,7 @@ describe('Issue #2538 full-page account load error', () => {
   it.each([
     "We couldn't load your account",
     'We couldn’t   load your account',
-    "We couldn't\\nload your account.",
+    "We couldn't\nload your account.",
   ])('recognizes the exact owned product heading %j before sign-in copy', async (heading) => {
     const page = {
       locator: (selector: string) => ({
