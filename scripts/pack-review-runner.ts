@@ -1172,8 +1172,10 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
   const prior = readPackReviewAuthority(target.prNumber, { storeRoot });
   const priorCycle = prior?.cycle;
   const historicalRuns = listPackReviewRunRecordsRaw({ projectId, storeRoot }).filter((run) =>
-    run.prNumber === target.prNumber && run.reviewCycleId === priorCycle?.cycleId
-    && run.canonicalRepository?.toLowerCase() === target.repoSlug.toLowerCase());
+    Boolean(priorCycle) && run.prNumber === target.prNumber
+    && (run.reviewCycleId === priorCycle?.cycleId
+      || (!run.reviewCycleId && run.targetSha === target.headSha
+        && run.canonicalRepository?.toLowerCase() === target.repoSlug.toLowerCase())));
   const started = historicalRuns.length > 0
     || Boolean(priorCycle?.consumedRoundOrdinals?.length || priorCycle?.consumedHeadShas.length);
   let liveIssue: { title: string; body: string } | undefined;
@@ -1318,7 +1320,8 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
   }
   if (input.tier && input.tier !== tier) {
     const exactOldRun = historicalRuns.some((run) => run.targetSha === target.headSha
-      && run.reviewRound?.tier === input.tier && !hasPersistedPackReviewVerdict(run));
+      && run.reviewRound?.tier === input.tier
+      && (PACK_REVIEW_ACTIVE_STATUSES.has(run.status) || packReviewDeliveryNeedsResume(run)));
     if (!exactOldRun) throw new Error(`caller tier ${input.tier} conflicts with authoritative Issue tier ${tier}`);
   }
   let frozenScope: ResolvedScopeContext;
@@ -5980,8 +5983,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         options: authorityOptions,
         startedRunExists: listPackReviewRunRecordsRaw({ projectId, storeRoot }).some((candidate) =>
           candidate.prNumber === target.prNumber
-          && candidate.reviewCycleId === authority.cycle?.cycleId
-          && candidate.canonicalRepository?.toLowerCase() === target.repoSlug.toLowerCase()),
+          && (candidate.reviewCycleId === authority.cycle?.cycleId
+            || (!candidate.reviewCycleId && candidate.targetSha === target.headSha
+              && candidate.canonicalRepository?.toLowerCase() === target.repoSlug.toLowerCase()))),
       });
     } catch (error) {
       await releaseEarlyClaim(describeError(error));
