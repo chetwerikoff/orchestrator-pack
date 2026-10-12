@@ -174,6 +174,7 @@ import {
 const PROJECT_URL = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test/project';
 const PROJECT_CONVERSATION_ROOT = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test';
 const SHARED_CONV = `${PROJECT_CONVERSATION_ROOT}/c/11111111-1111-4111-8111-111111111111`;
+const LOCAL_ID_CONVERSATION_URL = `${PROJECT_CONVERSATION_ROOT}/c/local-chatgpt%3A11111111-1111-4111-8111-111111111111`;
 const SHARED_CANONICAL_CONV = SHARED_CONV.replace('-test/c/', '/c/');
 const LOSER_CONV = `${PROJECT_CONVERSATION_ROOT}/c/22222222-2222-4222-8222-222222222222`;
 const ISSUE_PROJECT_URL = 'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project';
@@ -1540,6 +1541,386 @@ describe('state-light fresh conversation collision recovery', () => {
     };
     return { page, state };
   }
+
+  it('bounds the early local-ID landing wait even when the Send witness arrives near the absolute deadline', async () => {
+    const prompt = 'SYNTHETIC-NEAR-DEADLINE-LOCAL-ID';
+    const invocationId = randomUUID();
+    const output = join(stateDir, 'late-local-id-unbound.txt');
+    const turn = makeLoserPage(prompt, 'NO-CANONICAL-REPLY', () => { mocks.nowMs += 72_000; });
+    turn.page.url.mockImplementation(() => turn.getSends() > 0 ? LOCAL_ID_CONVERSATION_URL : PROJECT_URL);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const start = mocks.nowMs;
+
+    const outcome = await runNewChatTurn(turn.page, output, '90000', invocationId);
+
+    expect(outcome.result).toMatchObject({
+      state: 'observation_uncertain', cause: 'fresh_conversation_owner_unproven', send_count: 1,
+    });
+    expect(mocks.nowMs - start).toBeLessThan(90_000);
+    expect(turn.getSends()).toBe(1);
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(existsSync(output)).toBe(false);
+  });
+
+  // The Send fetch can fail while the server executes. Model the owned local
+  // page without an assistant answer and without dispatching Retry, then census
+  // only already-open canonical server pages using the incumbent recovery path.
+  function freshLocalFetchLossFixture(prompt: string, reply?: string) {
+    const local = makeLoserPage(prompt, 'NO-LOCAL-ASSISTANT-REPLY');
+    const retryClicks = vi.fn(async () => undefined);
+    local.page.url.mockImplementation(() => local.getSends() ? LOCAL_ID_CONVERSATION_URL : PROJECT_URL);
+    local.page.getByText.mockImplementation((value: string) => value === 'Failed to fetch'
+      ? scalarLocator({ count: vi.fn(async () => local.getSends() ? 1 : 0) })
+      : scalarLocator());
+    local.page.getByRole.mockImplementation((role: string, options?: { name?: string }) =>
+      role === 'button' && options?.name === 'Retry'
+        ? scalarLocator({ count: vi.fn(async () => local.getSends() ? 1 : 0), click: retryClicks })
+        : scalarLocator());
+    const localLocator = local.page.locator.getMockImplementation()!;
+    local.page.locator.mockImplementation((selector: string) => {
+      if (local.getSends() && (
+        selector === MESSAGE_NODE_SELECTOR || selector === USER_MESSAGE_SELECTOR
+        || selector === ASSISTANT_MESSAGE_SELECTOR
+      )) return collectionLocator([]);
+      return localLocator(selector);
+    });
+
+    let serverPage: any;
+    if (reply) {
+      serverPage = makeLoserPage(prompt, reply).page;
+      serverPage.url.mockReturnValue(SHARED_CONV);
+      const completeMessages = readyTurnObservationFrames(prompt, reply).at(-1)!;
+      const serverLocator = serverPage.locator.getMockImplementation()!;
+      serverPage.locator.mockImplementation((selector: string) => {
+        if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(completeMessages, false);
+        if (selector === USER_MESSAGE_SELECTOR) {
+          return collectionLocator(completeMessages.filter((message) => message.role === 'user'), false);
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          return collectionLocator(completeMessages.filter((message) => message.role === 'assistant'), false);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          return messageLocator(completeMessages.at(-1)!, false);
+        }
+        return serverLocator(selector);
+      });
+    }
+    const harness = enqueueBrowserForTurn(mocks, local.page);
+    Object.assign(harness.context, { pages: vi.fn(() => [local.page, ...(serverPage ? [serverPage] : [])]) });
+    return {
+      local, serverPage, context: harness.context, retryClicks,
+      run: async (output: string, invocationId: string) => runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        ...STATE_LIGHT_TURN_BASE_ARGV,
+        '--invocation-id', invocationId, '--output', output,
+        '--new-chat', '--project-url', PROJECT_URL, '--timeout-ms', '90000', '--poll-ms', '1',
+      ]),
+    };
+  }
+
+  it('binds and harvests after local-ID Failed to fetch when census finds exactly one owned server marker', async () => {
+    const prompt = 'SYNTHETIC-LOCAL-FETCH-LOSS-WITH-SERVER-REPLY';
+    const reply = 'SERVER-COMPLETED-WHILE-LOCAL-FETCH-FAILED';
+    const output = join(stateDir, 'fetch-loss-server-reply.txt');
+    const invocationId = randomUUID();
+    const fixture = freshLocalFetchLossFixture(prompt, reply);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const start = mocks.nowMs;
+
+    const outcome = await fixture.run(output, invocationId);
+
+    expect(outcome).toMatchObject({ code: 0, result: {
+      state: 'ok', send_count: 1, conversation_id: SHARED_CONV,
+    } });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'harvested', conversation_url: SHARED_CONV, send_count: 1,
+    });
+    expect(mocks.nowMs - start).toBeLessThan(90_000);
+    expect(fixture.local.getSends()).toBe(1);
+    expect(fixture.retryClicks).not.toHaveBeenCalled();
+    expect(fixture.local.page.close).not.toHaveBeenCalled();
+    expect(fixture.serverPage.close).not.toHaveBeenCalled();
+  });
+
+  it('keeps the full bound-reply observation window after a fresh fetch-loss recovery claim', async () => {
+    const prompt = 'SYNTHETIC-RECOVERED-REPLY-OUTLIVES-UNBOUND-CUTOFF';
+    const reply = 'RECOVERED-ANSWER-COMPLETED-AFTER-UNBOUND-CUTOFF';
+    const output = join(stateDir, 'fetch-loss-late-owned-reply.txt');
+    const invocationId = randomUUID();
+    const fixture = freshLocalFetchLossFixture(prompt, reply);
+    // timeout=90s, and the existing cleanup/terminal reserve makes the
+    // pre-Send unbound cutoff ~68s. This owned reply completes later (~80s).
+    const start = mocks.nowMs;
+    const replyReadyAt = start + 80_000;
+    const originalLocator = fixture.serverPage.locator.getMockImplementation()!;
+    const working = readyTurnObservationFrames(prompt, reply)[0]!;
+    let workingReads = 0;
+    let completeReads = 0;
+    fixture.serverPage.locator.mockImplementation((selector: string) => {
+      if (mocks.nowMs < replyReadyAt) {
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          workingReads++;
+          return collectionLocator(working, true);
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          return collectionLocator(working.filter((message) => message.role === 'assistant'), true);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+      } else if (selector === MESSAGE_NODE_SELECTOR) {
+        completeReads++;
+      }
+      return originalLocator(selector);
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await fixture.run(output, invocationId);
+
+    expect(workingReads).toBeGreaterThan(0);
+    expect(completeReads).toBeGreaterThan(0);
+    expect(mocks.nowMs - start).toBeGreaterThanOrEqual(80_000);
+    expect(mocks.nowMs - start).toBeLessThan(180_000);
+    expect(outcome).toMatchObject({ code: 0, result: {
+      state: 'ok', send_count: 1, conversation_id: SHARED_CONV,
+    } });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'harvested', conversation_url: SHARED_CONV, send_count: 1,
+    });
+    expect(fixture.local.getSends()).toBe(1);
+    expect(fixture.retryClicks).not.toHaveBeenCalled();
+  });
+
+  it('skips an unreadable positively foreign project tab in a fresh fetch-loss census', async () => {
+    const prompt = 'SYNTHETIC-RECOVERY-WITH-FOREIGN-TAB';
+    const reply = 'COMPLETE-OWNED-DESPITE-FOREIGN-READ-FAILURE';
+    const output = join(stateDir, 'fetch-loss-foreign-census.txt');
+    const invocationId = randomUUID();
+    const fixture = freshLocalFetchLossFixture(prompt, reply);
+    const foreignPage = makeLoserPage('UNRELATED-PROMPT', 'UNRELATED-REPLY').page;
+    foreignPage.url.mockReturnValue(OTHER_PROJECT_CONVERSATION_URL);
+    const unreadableForeignRead = vi.fn(async () => { throw new Error('foreign_transcript_unreadable'); });
+    const originalForeignLocator = foreignPage.locator.getMockImplementation()!;
+    foreignPage.locator.mockImplementation((selector: string) => selector === USER_MESSAGE_SELECTOR
+      ? scalarLocator({ count: unreadableForeignRead })
+      : originalForeignLocator(selector));
+    fixture.context.pages.mockReturnValue([fixture.local.page, foreignPage, fixture.serverPage]);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await fixture.run(output, invocationId);
+
+    expect(outcome).toMatchObject({ code: 0, result: {
+      state: 'ok', send_count: 1, conversation_id: SHARED_CONV,
+    } });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+    expect(unreadableForeignRead).not.toHaveBeenCalled();
+    expect(fixture.local.getSends()).toBe(1);
+    expect(fixture.retryClicks).not.toHaveBeenCalled();
+    expect(foreignPage.close).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { kind: 'same-project', url: LOSER_CONV },
+    { kind: 'unknown URL', url: null },
+  ])('keeps an unreadable $kind census page fail-closed beside an owned candidate', async ({ kind, url }) => {
+    const prompt = 'SYNTHETIC-RECOVERY-FAIL-CLOSED-' + kind;
+    const output = join(stateDir, 'fetch-loss-census-uncertain-' + kind + '.txt');
+    const invocationId = randomUUID();
+    const fixture = freshLocalFetchLossFixture(prompt, 'SHOULD-NOT-HARVEST');
+    const unreadablePage = makeLoserPage('UNRELATED-PROMPT', 'UNRELATED-REPLY').page;
+    if (url === null) {
+      unreadablePage.url.mockImplementation(() => { throw new Error('url_unreadable'); });
+    } else {
+      unreadablePage.url.mockReturnValue(url);
+    }
+    unreadablePage.locator.mockImplementation((selector: string) => selector === USER_MESSAGE_SELECTOR
+      ? scalarLocator({ count: vi.fn(async () => { throw new Error('transcript_unreadable'); }) })
+      : scalarLocator());
+    fixture.context.pages.mockReturnValue([fixture.local.page, fixture.serverPage, unreadablePage]);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await fixture.run(output, invocationId);
+
+    expect(outcome.result).toMatchObject({
+      state: 'observation_uncertain', cause: 'owned_conversation_recovery_census_failed',
+      send_count: 1,
+    });
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(existsSync(output)).toBe(false);
+    expect(fixture.local.getSends()).toBe(1);
+    expect(fixture.retryClicks).not.toHaveBeenCalled();
+  });
+
+  it('returns fresh_send_fetch_failed without locator or resend on local-ID Failed to fetch and zero census match', async () => {
+    const prompt = 'SYNTHETIC-LOCAL-FETCH-LOSS-NO-SERVER-TAB';
+    const output = join(stateDir, 'fetch-loss-no-server-output.txt');
+    const invocationId = randomUUID();
+    const fixture = freshLocalFetchLossFixture(prompt);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const start = mocks.nowMs;
+
+    const outcome = await fixture.run(output, invocationId);
+
+    expect(outcome.result).toMatchObject({
+      state: 'observation_uncertain', cause: 'fresh_send_fetch_failed',
+      send_count: 1, send_attempted: true,
+    });
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(outcome.result).not.toHaveProperty('output');
+    expect(existsSync(output)).toBe(false);
+    expect(mocks.nowMs - start).toBeLessThan(90_000);
+    expect(fixture.local.getSends()).toBe(1);
+    expect(fixture.retryClicks).not.toHaveBeenCalled();
+    expect(fixture.local.page.close).not.toHaveBeenCalled();
+  });
+
+  it('keeps a local-chatgpt fresh URL unbound even when its owned reply looks complete', async () => {
+    const prompt = 'SYNTHETIC-LOCAL-ID-STILL-PENDING';
+    const reply = 'COMPLETE-BUT-LOCAL-ID-ONLY';
+    const output = join(stateDir, 'local-id-unbound.txt');
+    const invocationId = randomUUID();
+    const turn = makeLoserPage(prompt, reply);
+    turn.page.url.mockImplementation(() => turn.getSends() > 0 ? LOCAL_ID_CONVERSATION_URL : PROJECT_URL);
+    expect(conversationUuidFromUrl(LOCAL_ID_CONVERSATION_URL)).toBeUndefined();
+    expect(isSupportedChatGptConversationUrl(LOCAL_ID_CONVERSATION_URL)).toBe(false);
+    expect(readProjectConversationUrl(turn.page, PROJECT_URL)).toBeUndefined();
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const launcherStartMs = mocks.nowMs;
+
+    const outcome = await runNewChatTurn(turn.page, output, '1800000', invocationId);
+
+    expect(outcome.result).toMatchObject({
+      state: 'observation_uncertain',
+      cause: 'fresh_conversation_owner_unproven',
+      send_count: 1,
+    });
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(mocks.nowMs - launcherStartMs).toBeLessThan(3_600_000);
+    expect(turn.getSends()).toBe(1);
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'sent_unbound',
+      conversation_url: null,
+      send_count: 1,
+    });
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it('binds and harvests once after a local-chatgpt fresh URL becomes a canonical owned project URL', async () => {
+    const prompt = 'SYNTHETIC-LOCAL-TO-CANONICAL';
+    const reply = 'COMPLETE-OWNED-AFTER-CANONICAL';
+    const output = join(stateDir, 'local-to-canonical-reply.txt');
+    const invocationId = randomUUID();
+    const turn = makeLoserPage(prompt, reply);
+    let localObserved = false;
+    let canonicalObserved = false;
+    turn.page.url.mockImplementation(() => {
+      if (turn.getSends() === 0) return PROJECT_URL;
+      if (turn.getObservationReads() < 4) {
+        localObserved = true;
+        return LOCAL_ID_CONVERSATION_URL;
+      }
+      canonicalObserved = true;
+      return SHARED_CONV;
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await runNewChatTurn(turn.page, output, '90000', invocationId);
+
+    expect(localObserved).toBe(true);
+    expect(canonicalObserved).toBe(true);
+    expect(outcome).toMatchObject({
+      code: 0,
+      result: { state: 'ok', send_count: 1, conversation_id: SHARED_CONV },
+    });
+    expect(turn.getSends()).toBe(1);
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'harvested',
+      conversation_url: SHARED_CONV,
+      send_count: 1,
+    });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+  });
+
+  // #2533: source-level negative controls. The historical live DOM predicate
+  // remains unknown; these do not claim to reproduce the production incident.
+  it('bounds a sent-but-unowned same-project URL before the normal launcher ceiling without granting recovery', async () => {
+    const prompt = 'SYNTHETIC-UNBOUND-CANDIDATE';
+    const output = join(stateDir, 'unowned-candidate-must-not-publish.txt');
+    const invocationId = randomUUID();
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt, 'VISIBLE-BUT-UNATTRIBUTABLE', false, false, false,
+      ['VISIBLE-BUT-UNATTRIBUTABLE'], [], { neverMarkerProof: true },
+    );
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const launcherStartMs = mocks.nowMs;
+    const outcome = await runNewChatTurn(page, output, '1800000', invocationId);
+    expect(outcome.result).toMatchObject({
+      state: 'observation_uncertain',
+      cause: 'fresh_conversation_owner_unproven',
+      send_count: 1,
+    });
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(mocks.nowMs - launcherStartMs).toBeLessThan(3_600_000);
+    expect(state.sent).toBe(true);
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'sent_unbound', conversation_url: null, send_count: 1,
+    });
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it.each([
+    ['foreign project', OTHER_PROJECT_CONVERSATION_URL],
+    ['project root', PROJECT_URL],
+  ])('does not promote a sent, unowned %s page URL into a launcher locator', async (_kind, observedUrl) => {
+    const prompt = 'SYNTHETIC-NO-MARKER';
+    const output = join(stateDir, 'unowned-foreign-or-root.txt');
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt, 'SYNTHETIC-UNATTRIBUTABLE-REPLY', false, false, false,
+      ['SYNTHETIC-UNATTRIBUTABLE-REPLY'], [], { neverMarkerProof: true },
+    );
+    page.url.mockImplementation(() => state.sent ? observedUrl : PROJECT_URL);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+    expect(outcome.result.send_count).toBe(1);
+    expect(outcome.result.state).not.toBe('ok');
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it('refuses a duplicate fresh owned-marker census rather than claiming its candidate URL', async () => {
+    const prompt = 'SYNTHETIC-DUPLICATE-OWNED-MARKER';
+    const output = join(stateDir, 'duplicate-owned-marker-unbound.txt');
+    const turn = makeLoserPage(prompt, 'DUPLICATE-UNATTRIBUTABLE-REPLY');
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    const duplicateOwnedUsers: StateLightTestMessage[] = [
+      { role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` },
+      { role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` },
+    ];
+    turn.page.locator.mockImplementation((selector: string) => {
+      if (selector === USER_MESSAGE_SELECTOR && turn.getSends() > 0) {
+        return collectionLocator(duplicateOwnedUsers);
+      }
+      if (selector === MESSAGE_NODE_SELECTOR && turn.getSends() > 0) {
+        return collectionLocator([
+          ...duplicateOwnedUsers,
+          { role: 'assistant', text: 'DUPLICATE-UNATTRIBUTABLE-REPLY', finalActionInTurnContainer: true },
+        ]);
+      }
+      return originalLocator(selector);
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const invocationId = randomUUID();
+    const outcome = await runNewChatTurn(turn.page, output, '90000', invocationId);
+    expect(outcome.result.send_count).toBe(1);
+    expect(outcome.result.state).not.toBe('ok');
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(turn.getSends()).toBe(1);
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'sent_unbound', conversation_url: null,
+    });
+    expect(existsSync(output)).toBe(false);
+  });
 
   it('never publishes a newly discovered fresh assistant-only reply without a proven marker', async () => {
     const prompt = 'PROMPT-FRESH-UNRENDERED';
