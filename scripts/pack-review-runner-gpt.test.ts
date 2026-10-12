@@ -2244,7 +2244,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       },
     }));
 
-    expect(second.ok).toBe(true);
+    expect(second.ok, JSON.stringify(second)).toBe(true);
     expect(second.runId).toBe(firstRunId);
     expect(relaunched).toEqual(['source-01']);
     const after = getPackReviewRun(firstRunId, { projectId: 'orchestrator-pack', storeRoot });
@@ -4320,6 +4320,7 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
     });
     const round = plannedStoredGptRound();
     round.tier = 'T2';
+    round.accountingVersion = PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
     round.issueNumber = prNumber;
     round.boundIssueSnapshotDigest = computeBoundIssueSnapshotHash(issueBody);
     if (slotMode === 'first-attempt') {
