@@ -4161,6 +4161,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       }
     }
   }
+  if (!authority.cycle) return null;
   const logicalAccounting = authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
   const logicalFinalFindings = logicalAccounting
     && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
@@ -5306,8 +5307,8 @@ export async function reconcileStalePackReviewRuns(
     const historic = authority?.terminal?.runId
       ? getPackReviewRun(authority.terminal.runId, { projectId, storeRoot })
       : null;
-    if (historic && authority.currentHeadSha === historic.targetSha
-        && authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    if (historic && authority?.cycle && authority.currentHeadSha === historic.targetSha
+        && authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
         && Number(historic.logicalRoundCap) < authority.cycle.frozenCap
         && outstandingPackReviewCycle(historic, storeRoot)) {
       try {
