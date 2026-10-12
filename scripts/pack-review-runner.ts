@@ -1143,9 +1143,14 @@ function currentCycleRequiredStatusWriter(
 async function reconcileTierBeforeTerminal(input: {
   start: StartInput;
   target: {prNumber: number; headSha: string; issueNumber?: number; repoSlug: string; sourceRepoRoot: string};
-  projectId: string; storeRoot: string; cycleId: string | undefined;
+  projectId: string; storeRoot: string; cycleId: string | undefined; runId: string;
 }): Promise<PackReviewAuthorityDocument> {
-  const selected = await resolveAuthoritativeReviewContext(input.start, input.target, input.projectId);
+  // This is already an admitted run. Read only its exact stored identity:
+  // native same-round replacement may legitimately overlap a former active
+  // process until the new terminal is persisted.
+  const selected = await resolveAuthoritativeReviewContext(
+    input.start, input.target, input.projectId, input.runId,
+  );
   const latest = readPackReviewAuthority(input.target.prNumber, { storeRoot: input.storeRoot });
   if (!latest || latest.currentHeadSha !== input.target.headSha
       || latest.cycle?.cycleId !== input.cycleId) {
@@ -1163,7 +1168,7 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
   issueNumber?: number;
   repoSlug: string;
   sourceRepoRoot: string;
-}, projectId: string): Promise<AuthoritativeReviewContext> {
+}, projectId: string, exactStartedRunId?: string): Promise<AuthoritativeReviewContext> {
   const harness = process.env.OPK_VITEST_HARNESS === '1';
   const issueNumber = target.issueNumber ?? 0;
   let body: string | undefined;
@@ -1171,11 +1176,25 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
   const prior = readPackReviewAuthority(target.prNumber, { storeRoot });
   const priorCycle = prior?.cycle;
-  const historicalRuns = listPackReviewRunRecordsRaw({ projectId, storeRoot }).filter((run) =>
-    Boolean(priorCycle) && run.prNumber === target.prNumber
-    && (run.reviewCycleId === priorCycle?.cycleId
-      || (!run.reviewCycleId && run.targetSha === target.headSha
-        && run.canonicalRepository?.toLowerCase() === target.repoSlug.toLowerCase())));
+  const exactStartedRun = exactStartedRunId
+    ? getPackReviewRun(exactStartedRunId, { projectId, storeRoot })
+    : null;
+  if (exactStartedRunId && (!priorCycle || !exactStartedRun
+      || exactStartedRun.prNumber !== target.prNumber
+      || exactStartedRun.targetSha !== target.headSha
+      || exactStartedRun.projectId !== projectId
+      || exactStartedRun.canonicalRepository?.toLowerCase() !== target.repoSlug.toLowerCase()
+      || resolve(exactStartedRun.sourceRepoRoot) !== resolve(target.sourceRepoRoot)
+      || exactStartedRun.reviewCycleId !== priorCycle.cycleId)) {
+    throw new Error('exact started review run is not bound to the current PR/head/cycle');
+  }
+  const historicalRuns = exactStartedRun
+    ? [exactStartedRun]
+    : listPackReviewRunRecordsRaw({ projectId, storeRoot }).filter((run) =>
+      Boolean(priorCycle) && run.prNumber === target.prNumber
+      && (run.reviewCycleId === priorCycle?.cycleId
+        || (!run.reviewCycleId && run.targetSha === target.headSha
+          && run.canonicalRepository?.toLowerCase() === target.repoSlug.toLowerCase())));
   const started = historicalRuns.length > 0
     || Boolean(priorCycle?.consumedRoundOrdinals?.length || priorCycle?.consumedHeadShas.length);
   let liveIssue: { title: string; body: string } | undefined;
@@ -6569,7 +6588,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           authorityOptions,
         );
         authority = await reconcileTierBeforeTerminal({
-          start: input, target, projectId, storeRoot, cycleId: authority.cycle?.cycleId,
+          start: input, target, projectId, storeRoot,
+          cycleId: authority.cycle?.cycleId, runId: resumeCandidate.id,
         });
         authority = commitPackReviewTerminal({
           prNumber: target.prNumber,
@@ -7435,7 +7455,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         : {}, { projectId, storeRoot });
 
     authority = await reconcileTierBeforeTerminal({
-      start: input, target, projectId, storeRoot, cycleId: authority.cycle?.cycleId,
+      start: input, target, projectId, storeRoot,
+      cycleId: authority.cycle?.cycleId, runId: run.id,
     });
     authority = commitPackReviewTerminal({
       prNumber: target.prNumber,
