@@ -3986,6 +3986,17 @@ async function runTurnCore(
     const recoverCurrentObservation = async (localFetchFailure = false): Promise<TurnRunOutcome | null> => {
       // Reuse the existing read-only recovery adapter and preserve the lifecycle
       // graph's recoverCurrentObservation owner for its page/context census.
+      // Positive page/browser loss retains its independent recovery cap.
+      // The fresh unbound-only cutoff bounds recovery, not an owned reply.
+      if (!localFetchFailure && recoveryState.lossEpoch === 0) {
+        hardExhaustionDeadline = Math.min(
+          hardExhaustionDeadline,
+          Date.now() + CONFIRMED_OWNED_PAGE_LOSS_RECOVERY_MS,
+        );
+      }
+      const recoveryDeadlineMs = config.newChat && !ownedConversationUrl
+        ? Math.min(hardExhaustionDeadline, freshUnboundReturnByMs)
+        : hardExhaustionDeadline;
       const recoveryAdapter: PostSendRecoveryAdapter = {
       enumeratePages: async (activeBrowser) => {
         const contexts = (activeBrowser as any).contexts();
@@ -3995,7 +4006,24 @@ async function runTurnCore(
         const pages = contexts[0].pages();
         if (!Array.isArray(pages)) throw new Error('recovery_page_enumeration_failed');
         const targetUrl = recoveryState.immutableConversationUrl;
-        if (!targetUrl) return pages;
+        if (!targetUrl) {
+          if (!(localFetchFailure && config.newChat && config.projectUrl)) return pages;
+          // Only exclude a foreign project before transcript reads when its
+          // canonical project identity is positively established. Unknown or
+          // unreadable URLs remain in the census and fail closed.
+          return pages.filter((candidate: any) => {
+            try {
+              const url = String(candidate.url());
+              const parsed = new URL(url);
+              const projectSegment = /^\/g\/(g-p-[^/]+)\/c\/[^/]+$/i.exec(parsed.pathname)?.[1];
+              return !(projectSegment
+                && projectConversationUrlMatchesProject(url, parsed.origin + '/g/' + projectSegment)
+                && !projectConversationUrlMatchesProject(url, config.projectUrl!));
+            } catch {
+              return true;
+            }
+          });
+        }
         return pages.filter((candidate: any) => {
           try {
             return normalizeConversationUrl(String(candidate.url())) === targetUrl;
@@ -4008,7 +4036,7 @@ async function runTurnCore(
       normalizeConversationUrl,
       isSupportedConversationUrl: isSupportedChatGptConversationUrl,
       readAuthoritativeMessages: async (candidatePage) => {
-        const remainingMs = hardExhaustionDeadline - Date.now();
+        const remainingMs = recoveryDeadlineMs - Date.now();
         if (remainingMs <= 0) return { messages: [], incomplete: true };
         try {
           return await boundedBrowserRead(
@@ -4037,20 +4065,20 @@ async function runTurnCore(
         }
       },
       reconnect: async () => {
-        const remainingMs = Math.max(1, hardExhaustionDeadline - Date.now());
+        const remainingMs = Math.max(1, recoveryDeadlineMs - Date.now());
         return await chromium.connectOverCDP(config.cdp, {
           timeout: Math.min(30_000, remainingMs),
         });
       },
       createSuccessor: async (activeBrowser, immutableConversationUrl) => {
         const recoveryBudget = createTurnOperationBudget(
-          Math.max(0, hardExhaustionDeadline - Date.now()),
+          Math.max(0, recoveryDeadlineMs - Date.now()),
         );
         const successor = await createDedicatedTurnPage(activeBrowser, recoveryBudget);
         navigation.recordGoto();
         await successor.goto(immutableConversationUrl, {
           waitUntil: 'domcontentloaded',
-          timeout: Math.min(STATE_LIGHT_NAVIGATION_TIMEOUT_MS, Math.max(1, hardExhaustionDeadline - Date.now())),
+          timeout: Math.min(STATE_LIGHT_NAVIGATION_TIMEOUT_MS, Math.max(1, recoveryDeadlineMs - Date.now())),
         });
         return successor;
       },
@@ -4059,18 +4087,6 @@ async function runTurnCore(
       }),
       now: () => Date.now(),
       };
-      // Only positive owned-page/browser loss shortens the *existing* observation
-      // deadline. No diagnostic string can authorize this recovery or a resend.
-      // Reuse that deadline across further loss epochs instead of restarting it.
-      if (!localFetchFailure && recoveryState.lossEpoch === 0) {
-        hardExhaustionDeadline = Math.min(
-          hardExhaustionDeadline,
-          Date.now() + CONFIRMED_OWNED_PAGE_LOSS_RECOVERY_MS,
-        );
-      }
-      if (config.newChat && !ownedConversationUrl) {
-        hardExhaustionDeadline = Math.min(hardExhaustionDeadline, freshUnboundReturnByMs);
-      }
       let recovered: PostSendRecoveryResult;
       if (localFetchFailure) {
         // This invocation's local-chatgpt: tab lost the initial Send fetch.
@@ -4108,7 +4124,7 @@ async function runTurnCore(
         browser,
         currentPage: page,
         marker,
-        hardDeadlineMs: hardExhaustionDeadline,
+        hardDeadlineMs: recoveryDeadlineMs,
         pollMs: Math.min(config.pollMs, 1_000),
         state: recoveryState,
         observer: recoveryHooks.observer,
@@ -4124,7 +4140,7 @@ async function runTurnCore(
         deliveryProofPendingRecovery = false;
       }
       if (config.newChat && !ownedConversationUrl) {
-        if (!(await freshProjectMarkerProven(recovered.page, recovered.conversationUrl, hardExhaustionDeadline))) {
+        if (!(await freshProjectMarkerProven(recovered.page, recovered.conversationUrl, recoveryDeadlineMs))) {
           incident('post_send_observation_error', 'recovered_fresh_owner_marker_or_project_unproven', 'retain_page_no_resend');
           return {
             page: recovered.page,
