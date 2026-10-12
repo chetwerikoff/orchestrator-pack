@@ -3971,9 +3971,10 @@ async function runTurnCore(
       };
     };
 
-    // Reuse the existing read-only owned-conversation census for both page loss
-    // and local-ID Send fetch loss. No navigation or Retry is authorized by a census.
-    const recoveryAdapter: PostSendRecoveryAdapter = {
+    const recoverCurrentObservation = async (localFetchFailure = false): Promise<TurnRunOutcome | null> => {
+      // Reuse the existing read-only recovery adapter and preserve the lifecycle
+      // graph's recoverCurrentObservation owner for its page/context census.
+      const recoveryAdapter: PostSendRecoveryAdapter = {
       enumeratePages: async (activeBrowser) => {
         const contexts = (activeBrowser as any).contexts();
         if (!Array.isArray(contexts) || contexts.length !== 1) {
@@ -4045,9 +4046,7 @@ async function runTurnCore(
         await sleep(page, milliseconds);
       }),
       now: () => Date.now(),
-    };
-
-    const recoverCurrentObservation = async (localFetchFailure = false): Promise<TurnRunOutcome | null> => {
+      };
       // Only positive owned-page/browser loss shortens the *existing* observation
       // deadline. No diagnostic string can authorize this recovery or a resend.
       // Reuse that deadline across further loss epochs instead of restarting it.
