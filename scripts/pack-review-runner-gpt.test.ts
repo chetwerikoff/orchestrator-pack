@@ -43,7 +43,7 @@ import {
   updatePackReviewRun,
   type PackReviewGptRoundRecord,
 } from './lib/pack-review-run-store.js';
-import { acquireReviewStartClaim } from './lib/review-start-claim-store.js';
+import { acquireReviewStartClaim, testReviewStartClaimOwnership } from './lib/review-start-claim-store.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
 import { computeBoundIssueSnapshotHash } from './lib/reverify-bound-issue-snapshot.js';
 import {
@@ -5488,6 +5488,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       .toEqual(['terminal', 'invocation_started', 'planned']);
     vi.setSystemTime(new Date(restartAt));
 
+    const statusStates: string[] = [];
     const attempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
     const launches: Array<{ slotId: string; invocationId: string; timeMs: number }> = [];
     const input: Parameters<typeof startPackReview>[0] = {
@@ -5507,9 +5508,9 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       fixtureBeforeGptSourceCommentCensus: ({ slotId, invocationId }) => {
         if (slotId === 'source-03') comments.push(makeComment(slotId, invocationId, 2532003));
       },
-      fixtureRequiredStatusWriter: async () => {},
+      fixtureRequiredStatusWriter: async ({ state }) => { statusStates.push(state); },
     };
-    return { runId, options, input, launches, originalFirst: firstSnapshot };
+    return { runId, options, input, launches, originalFirst: firstSnapshot, statusStates };
   }
 
   it('hydrates the original credentialed source-02 and admits only source-03 after real predecessor pacing', async () => {
@@ -5536,11 +5537,35 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([1]);
   });
 
+  it('continues the same dead GPT round with a genuinely held preacquired claim', async () => {
+    const f = await seedDeadIncumbent();
+    const claim = acquireReviewStartClaim({
+      projectId, prNumber, headSha: HEAD_A,
+      surface: 'fixture-preacquired-owner', startReason: 'fixture-restart',
+      reviewRuns: listPackReviewRuns(f.options),
+    });
+    expect(claim.acquired, JSON.stringify(claim)).toBe(true);
+    expect(testReviewStartClaimOwnership(claim)).toBe(true);
+    const result = await startPackReview({ ...f.input, claimMode: 'preacquired', preacquiredClaim: claim });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      ok: true, runId: f.runId, status: 'up_to_date',
+      coverage: { kind: 'complete', completedSourceCount: 3, cardinality: 3 },
+    });
+    expect(f.launches.map((launch) => launch.slotId)).toEqual(['source-03']);
+    expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[1]).toMatchObject({
+      invocationId: originalSource02, attemptOrdinal: 1, terminalClass: 'complete_clean',
+    });
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    expect(f.statusStates).not.toContain('error');
+  });
+
   it('rejects an unowned preacquired continuation before PID rebind or a new source-03 send', async () => {
     const f = await seedDeadIncumbent();
     // No matching claim has ever been acquired. The flag alone is not a holder.
     const result = await startPackReview({ ...f.input, claimMode: 'preacquired' });
-    expect(result, JSON.stringify(result)).toMatchObject({ ok: false, created: false, runId: f.runId });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      ok: false, created: false, runId: f.runId, reason: 'gpt_preacquired_claim_not_owned',
+    });
     const stored = getPackReviewRun(f.runId, f.options)!;
     expect(stored.runnerPid).toBe(oldPid);
     expect(stored.reviewRound!.sourceSlots[0]).toEqual(f.originalFirst);
@@ -5549,8 +5574,27 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     });
     expect(stored.reviewRound!.sourceSlots[2]!.lifecycle).toBe('planned');
     expect(f.launches).toEqual([]);
+    expect(f.statusStates).not.toContain('success');
     expect(stored.reviewVerdict).toBeUndefined();
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
     expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([]);
+  });
+
+  it('rejects a real preacquired claim bound to a different PR head', async () => {
+    const f = await seedDeadIncumbent();
+    const foreign = acquireReviewStartClaim({
+      projectId, prNumber, headSha: HEAD_B,
+      surface: 'fixture-foreign-preacquired', startReason: 'fixture-restart', reviewRuns: [],
+    });
+    expect(foreign.acquired, JSON.stringify(foreign)).toBe(true);
+    const result = await startPackReview({ ...f.input, claimMode: 'preacquired', preacquiredClaim: foreign });
+    expect(result).toMatchObject({
+      ok: false, created: false, runId: f.runId, reason: 'gpt_preacquired_claim_not_owned',
+    });
+    expect(getPackReviewRun(f.runId, f.options)?.runnerPid).toBe(oldPid);
+    expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[2]?.lifecycle).toBe('planned');
+    expect(f.launches).toEqual([]);
+    expect(f.statusStates).not.toContain('success');
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
   });
 });

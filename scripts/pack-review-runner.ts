@@ -8,7 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -68,8 +68,12 @@ import {
 } from './pack-review-state.ts';
 import {
   acquireReviewStartClaim,
+  claimKey,
+  claimPath,
   completeAfterRunInvoke,
   releaseAfterRunFailure,
+  resolveReviewStartClaimNamespace,
+  testReviewStartClaimOwnership,
   type ClaimResult,
 } from './lib/review-start-claim-store.ts';
 import {
@@ -198,6 +202,7 @@ interface StartInput {
   timeoutSeconds?: unknown;
   tier?: 'T1' | 'T2' | 'T3';
   claimMode?: 'acquire' | 'preacquired';
+  preacquiredClaim?: ClaimResult;
   onRunStarted?: (event: {
     prNumber: number;
     headSha: string;
@@ -1573,6 +1578,24 @@ function writeRunLogs(storeRoot: string, runId: string, stdout: string, stderr: 
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `${runId}.stdout.log`), stdout, 'utf8');
   writeFileSync(join(dir, `${runId}.stderr.log`), stderr, 'utf8');
+}
+
+function ownsBoundPreacquiredClaim(
+  claim: ClaimResult | undefined,
+  binding: { projectId: string; prNumber: number; headSha: string },
+): boolean {
+  const held = claim?.claim;
+  const namespace = resolveReviewStartClaimNamespace({ projectId: binding.projectId });
+  const key = claimKey(binding.prNumber, binding.headSha);
+  if (!claim?.acquired || !held || held.state !== 'active'
+      || held.projectNamespace !== binding.projectId
+      || held.prNumber !== binding.prNumber
+      || held.headSha !== binding.headSha
+      || held.key !== key || claim.key !== key
+      || held.holder.pid !== process.pid || held.holder.host !== hostname()
+      || claim.namespace !== namespace
+      || claim.path !== claimPath(namespace, binding.prNumber, binding.headSha)) return false;
+  try { return testReviewStartClaimOwnership(claim); } catch { return false; }
 }
 
 async function acquireClaimLease(options: {
@@ -5412,6 +5435,29 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     beforeStaleStatusWrite: input.fixtureBeforeStaleStatusWrite,
   });
   const claimMode = input.claimMode ?? 'acquire';
+  const preacquiredClaimOwned = () => ownsBoundPreacquiredClaim(input.preacquiredClaim, {
+    projectId, prNumber: target.prNumber, headSha: target.headSha,
+  });
+  const unownedPreacquiredResult = (candidate: PackReviewRunRecord) => ({
+    ok: false, created: false, reused: true,
+    reason: 'gpt_preacquired_claim_not_owned',
+    nextAction: 'acquire the exact PR/head review-start claim before continuing this run; do not open a replacement round',
+    prNumber: target.prNumber, headSha: target.headSha,
+    runId: candidate.id, status: candidate.status,
+    coverage: derivePackReviewGptCoverage(candidate.reviewRound), httpStatus: 409,
+  });
+  if (claimMode === 'preacquired') {
+    const unfinished = listPackReviewRunRecordsRaw({ projectId, storeRoot }).find((candidate) => (
+      candidate.prNumber === target.prNumber
+      && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
+      && candidate.canonicalRepository?.toLowerCase() === target.repoSlug.toLowerCase()
+      && resolve(candidate.sourceRepoRoot) === resolve(target.sourceRepoRoot)
+      && candidate.reviewRound?.reviewer === 'gpt'
+      && candidate.reviewRound.settledSourceCount === undefined
+      && !hasPersistedPackReviewVerdict(candidate)
+    ));
+    if (unfinished && !preacquiredClaimOwned()) return unownedPreacquiredResult(unfinished);
+  }
   const resumeCandidate = await findJournaledDeliveryResumeCandidate({
     projectId,
     storeRoot,
@@ -6166,6 +6212,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     }
     let created: ReturnType<typeof createPackReviewRun>;
     if (sameRoundGptRun) {
+      if (claimMode === 'preacquired' && !preacquiredClaimOwned()) {
+        return unownedPreacquiredResult(sameRoundGptRun);
+      }
       run = updatePackReviewRun(sameRoundGptRun.id, {
         status: 'queued',
         latestRunStatus: 'queued',
