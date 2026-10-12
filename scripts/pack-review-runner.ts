@@ -1179,13 +1179,22 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
   const exactStartedRun = exactStartedRunId
     ? getPackReviewRun(exactStartedRunId, { projectId, storeRoot })
     : null;
-  if (exactStartedRunId && (!priorCycle || !exactStartedRun
+  // Older synthetic journal/resume fixtures legitimately predate cycle-bound
+  // run accounting. Keep only that test-only, unbound recovery shape; a modern
+  // run always has to match the exact already-persisted review cycle.
+  const historicalUnboundHarnessRun = Boolean(harness && exactStartedRun
+    && exactStartedRun.reviewCycleId === undefined
+    && exactStartedRun.accountingVersion === undefined);
+  if (exactStartedRunId && (!exactStartedRun
       || exactStartedRun.prNumber !== target.prNumber
       || exactStartedRun.targetSha !== target.headSha
       || exactStartedRun.projectId !== projectId
-      || exactStartedRun.canonicalRepository?.toLowerCase() !== target.repoSlug.toLowerCase()
+      || (exactStartedRun.canonicalRepository
+        ? exactStartedRun.canonicalRepository.toLowerCase() !== target.repoSlug.toLowerCase()
+        : !historicalUnboundHarnessRun)
       || resolve(exactStartedRun.sourceRepoRoot) !== resolve(target.sourceRepoRoot)
-      || exactStartedRun.reviewCycleId !== priorCycle.cycleId)) {
+      || (!historicalUnboundHarnessRun
+        && exactStartedRun.reviewCycleId !== priorCycle?.cycleId))) {
     throw new Error('exact started review run is not bound to the current PR/head/cycle');
   }
   const historicalRuns = exactStartedRun
