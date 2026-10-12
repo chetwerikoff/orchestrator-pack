@@ -2449,3 +2449,78 @@ describe('Issue #2496 r03 native reviewer no-regression controls', () => {
     },
   );
 });
+
+
+describe('Issue #2537 linked Issue title and body tier authority', () => {
+  const fenced = (tier: string) => `\`\`\`complexity-tier\ntier: ${tier}\n\`\`\``;
+
+  it('takes the higher valid linked-Issue tier in both disagreement directions', () => {
+    expect(parseAuthoritativeTier(fenced('T2'), '[T3] Actual linked Issue')).toBe('T3');
+    expect(parseAuthoritativeTier(fenced('T3'), '[T2] Actual linked Issue')).toBe('T3');
+    expect(parseAuthoritativeTier(fenced('T1'), '2537 — [T2] Actual Issue')).toBe('T2');
+    expect(parseAuthoritativeTier(fenced('T2'), '2537 – [T3] Actual Issue')).toBe('T3');
+    expect(parseAuthoritativeTier(fenced('T1'), '[T1] Actual Issue')).toBe('T1');
+  });
+
+  it('honors valid missing tiers without inventing a title or interpreting prose', () => {
+    expect(parseAuthoritativeTier('No fenced tier.', '[T1] Bare title')).toBe('T1');
+    expect(parseAuthoritativeTier(fenced('T1'), 'Markerless linked Issue')).toBe('T1');
+    expect(parseAuthoritativeTier('Ordinary body', 'Markerless linked Issue')).toBe('T2');
+    expect(parseAuthoritativeTier('Ordinary body [T3] tier T3', 'A title with later [T3]'))
+      .toBe('T2');
+    expect(parseAuthoritativeTier('No tier here', '2537 — [T2] Normal Issue')).toBe('T2');
+    expect(parseAuthoritativeTier('No tier here', '[T3] A real Issue')).toBe('T3');
+    expect(parseAuthoritativeTier('No tier here')).toBe('T2');
+    expect(parseAuthoritativeTier('<!-- ARCH tier T3 -->', 'Markerless linked Issue')).toBe('T2');
+    expect(parseAuthoritativeTier('no authority', 'Title with incidental [T3]')).toBe('T2');
+    expect(parseAuthoritativeTier('no authority', '[T1] Simple')).toBe('T1');
+  });
+
+  it('does not allow skip-line to erase an explicitly higher fenced tier', () => {
+    const body = ['```complexity-tier', 'tier: T3', 'skip-line: true', '```'].join('\n');
+    expect(parseAuthoritativeTier(body, '[T1] Real Issue')).toBe('T3');
+  });
+
+  it('rejects malformed leading title markers and malformed fenced tiers', () => {
+    expect(() => parseAuthoritativeTier(fenced('T2'), '[T4] Unsupported'))
+      .toThrow('title tier marker is malformed');
+    expect(() => parseAuthoritativeTier(fenced('T1'), '[T3 Not Closed'))
+      .toThrow('title tier marker is malformed');
+    expect(() => parseAuthoritativeTier(fenced('T4'), '[T3] Looks valid'))
+      .toThrow('authoritative Issue tier is invalid');
+    expect(() => parseAuthoritativeTier('```complexity-tier\ntier: T2', '[T3] Valid title'))
+      .toThrow('authoritative Issue tier is invalid');
+  });
+
+  it('uses independently authored higher title to freeze cap 2 and publishes pending after clean ordinal one', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2537-title-cap-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const statuses: string[] = [];
+    const prNumber = 25371;
+    const result = await startPackReview({
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+      prNumber, headSha: HEAD,
+      fixtureCurrentPrHeadSha: HEAD, fixturePostReviewHeadSha: HEAD,
+      fixturePrState: 'OPEN', fixturePrBody: 'Closes #25371',
+      fixturePostReviewPrBody: 'Closes #25371',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: 25371,
+      fixtureIssueTitle: '25371 — [T3] independently authored title',
+      fixtureIssueBody: fenced('T2'),
+      fixtureReviewStdout: cleanPayload(),
+      fixtureGithubReviewId: 2537101,
+      fixtureRequiredStatusWriter: async (request) => { statuses.push(request.state); },
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    });
+    expect(result).toMatchObject({ ok: true, created: true });
+    const authority = readPackReviewAuthority(prNumber, { storeRoot });
+    expect(authority?.cycle).toMatchObject({
+      frozenTier: 'T3', frozenCap: 2, state: 'open',
+      consumedRoundOrdinals: [1],
+    });
+    expect(authority?.cycle?.reviewStageComplete).not.toBe(true);
+    expect(statuses.at(-1)).toBe('pending');
+  });
+});
