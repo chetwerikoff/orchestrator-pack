@@ -2675,3 +2675,51 @@ describe('Issue #2537 historical first-round status readback', () => {
     expect(historical.reviewRound?.tier).toBeUndefined();
   });
 });
+
+
+describe('Issue #2537 in-flight first-round escalation', () => {
+  it('raises persisted T2 cap one before clean terminal while preserving the native run and publishing pending', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2537-inflight-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const prNumber = 25374;
+    const statuses: string[] = [];
+    let armedRunId = '';
+    const input = {
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+      prNumber, headSha: HEAD, claimMode: 'preacquired' as const,
+      fixtureCurrentPrHeadSha: HEAD, fixturePostReviewHeadSha: HEAD,
+      fixturePrState: 'OPEN' as const,
+      fixturePrBody: `Closes #${prNumber}`,
+      fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack', fixtureIssueNumber: prNumber,
+      fixtureIssueTitle: '[T2] Original linked Issue',
+      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureReviewStdout: cleanPayload(), fixtureGithubReviewId: 2537401,
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusWriter: async (request: {state: string}) => { statuses.push(request.state); },
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+      fixtureAfterNativeInitialArmed: async (run: PackReviewRunRecord) => {
+        armedRunId = run.id;
+        expect(run.logicalRoundOrdinal).toBe(1);
+        expect(run.logicalRoundCap).toBe(1);
+        input.fixtureIssueTitle = '[T3] Real Issue amended during round one';
+        input.fixtureIssueBody = '```complexity-tier\ntier: T3\n```';
+      },
+    };
+    const first = await startPackReview(input);
+    expect(first).toMatchObject({ ok: true, created: true, runId: armedRunId });
+    const authority = readPackReviewAuthority(prNumber, { storeRoot });
+    expect(authority?.cycle).toMatchObject({
+      frozenTier: 'T3', frozenCap: 2, state: 'open',
+      consumedRoundOrdinals: [1],
+    });
+    expect(authority?.cycle?.reviewStageComplete).not.toBe(true);
+    expect(statuses.at(-1)).toBe('pending');
+    expect(getPackReviewRun(armedRunId, { projectId: 'orchestrator-pack', storeRoot }))
+      .toMatchObject({ logicalRoundOrdinal: 1, logicalRoundCap: 1,
+        accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION });
+  });
+});
