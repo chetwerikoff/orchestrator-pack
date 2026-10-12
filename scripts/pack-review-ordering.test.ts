@@ -65,7 +65,7 @@ describe('Issue #2250 retire smoke ordering without removing pack-review cycle a
       fixturePrState: 'OPEN',
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: 1436,
-      fixtureIssueBody: issueBody,
+      fixtureIssueTitle: "Independent Issue 1436", fixtureIssueBody: issueBody,
       fixtureReviewStdout: JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }),
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
       fixtureEmulateWin32Selector: true,
@@ -103,7 +103,7 @@ describe('Issue #2250 retire smoke ordering without removing pack-review cycle a
       fixturePrState: 'OPEN',
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: 1436,
-      fixtureIssueBody: issueBody,
+      fixtureIssueTitle: "Independent Issue 1436", fixtureIssueBody: issueBody,
       fixtureReviewStdout: JSON.stringify({
         verdict: 'findings',
         findingCount: 1,
