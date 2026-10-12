@@ -2682,14 +2682,16 @@ async function runGptSourceBatch(options: {
           projectId: options.projectId, storeRoot: options.storeRoot,
         });
       }
-      if (options.input.fixtureAfterGptInvocationBound) {
-        await options.input.fixtureAfterGptInvocationBound({ slotId, attemptOrdinal, invocationId, round });
-      }
       return true;
     };
     if (!(await admit(slotId, invocationId, markInvocationStarted))) {
       const retained = getPackReviewRun(options.run.id, { projectId: options.projectId, storeRoot: options.storeRoot });
       return { slot: retained?.reviewRound?.sourceSlots.find((slot) => slot.slotId === slotId) ?? currentSlot, payload: undefined };
+    }
+    // The persisted admission is serialized; the invocation's potentially long
+    // browser work must run outside that gate to preserve parallel generation.
+    if (options.input.fixtureAfterGptInvocationBound) {
+      await options.input.fixtureAfterGptInvocationBound({ slotId, attemptOrdinal, invocationId, round });
     }
     let invocation: { result: ProcessResult; resolvedReviewer: PackReviewer | null };
     while (true) {
@@ -2750,6 +2752,9 @@ async function runGptSourceBatch(options: {
       if (!(await admit(slotId, invocationId, markInvocationStarted))) {
         const retained = getPackReviewRun(options.run.id, { projectId: options.projectId, storeRoot: options.storeRoot });
         return { slot: retained?.reviewRound?.sourceSlots.find((slot) => slot.slotId === slotId) ?? currentSlot, payload: undefined };
+      }
+      if (options.input.fixtureAfterGptInvocationBound) {
+        await options.input.fixtureAfterGptInvocationBound({ slotId, attemptOrdinal, invocationId, round });
       }
     }
 
