@@ -2524,3 +2524,85 @@ describe('Issue #2537 linked Issue title and body tier authority', () => {
     expect(statuses.at(-1)).toBe('pending');
   });
 });
+
+
+describe('Issue #2537 promoted T2-at-cap second-round required CI gate', () => {
+  it('denies round two until the existing required-CI resolver certifies the exact descendant head/base', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2537-ci-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const prNumber = 25372;
+    const reviewed = '1'.repeat(40);
+    const descendant = '2'.repeat(40);
+    const base = {
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+      prNumber, claimMode: 'preacquired' as const,
+      fixturePrState: 'OPEN' as const, fixturePrBody: `Closes #${prNumber}`,
+      fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: prNumber,
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    };
+    const first = await startPackReview({
+      ...base, surface: 'pr2-scheduler', headSha: reviewed,
+      fixtureCurrentPrHeadSha: reviewed, fixturePostReviewHeadSha: reviewed,
+      fixtureIssueTitle: '[T2] Original linked Issue',
+      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureReviewStdout: JSON.stringify({ verdict: 'findings', findingCount: 1,
+        findings: [{ severity: 'blocking', title: 'fix before round two' }] }),
+      fixtureGithubReviewId: 2537201,
+    });
+    expect(first).toMatchObject({ ok: true, created: true });
+    const historicCycle = readPackReviewAuthority(prNumber, { storeRoot })!.cycle!;
+    expect(historicCycle).toMatchObject({
+      frozenTier: 'T2', frozenCap: 1, state: 'at_cap_open_findings',
+      consumedRoundOrdinals: [1],
+    });
+    const issueAmendment = {
+      ...base, surface: 'pr2-scheduler', headSha: descendant,
+      fixtureCurrentPrHeadSha: descendant, fixturePostReviewHeadSha: descendant,
+      fixtureReviewCompareStatus: 'ahead',
+      fixtureIssueTitle: '[T3] Promoted linked Issue',
+      fixtureIssueBody: '```complexity-tier\ntier: T3\n```',
+      fixtureReviewStdout: cleanPayload(), fixtureGithubReviewId: 2537202,
+      fixtureRequiredCiPolicy: { contexts: ['CI'] },
+      fixtureRequiredCiChecks: [] as Array<{name: string; state: string}>,
+    };
+    const absent = await startPackReview(issueAmendment);
+    expect(absent).toMatchObject({
+      ok: false, created: false, reason: 'required_ci_not_green_for_current_head',
+    });
+    const amended = readPackReviewAuthority(prNumber, { storeRoot })!.cycle!;
+    expect(amended).toMatchObject({
+      cycleId: historicCycle.cycleId, frozenTier: 'T3', frozenCap: 2,
+      state: 'open', consumedRoundOrdinals: [1],
+    });
+    const checks = [{ name: 'CI', state: 'SUCCESS' }];
+    for (const negative of [
+      { fixtureRequiredCiChecks: [{ name: 'CI', state: 'PENDING' }] },
+      { fixtureRequiredCiChecks: [{ name: 'CI', state: 'FAILURE' }] },
+      { fixtureRequiredCiChecks: checks, fixtureRequiredCiPostProjectionHead: reviewed },
+      { fixtureRequiredCiChecks: checks, fixtureRequiredCiPostProjectionBase: 'other-base' },
+      { fixtureRequiredCiChecks: checks, fixtureRequiredCiHeadAfterGate: reviewed },
+    ]) {
+      const result = await startPackReview({ ...issueAmendment, ...negative });
+      expect(result).toMatchObject({
+        ok: false, created: false, reason: 'required_ci_not_green_for_current_head',
+      });
+      expect(readPackReviewAuthority(prNumber, { storeRoot })!.cycle!.consumedRoundOrdinals)
+        .toEqual([1]);
+    }
+    const admitted = await startPackReview({
+      ...issueAmendment, fixtureRequiredCiChecks: checks,
+    });
+    expect(admitted).toMatchObject({ ok: true, created: true });
+    expect(readPackReviewAuthority(prNumber, { storeRoot })!.cycle).toMatchObject({
+      cycleId: historicCycle.cycleId, frozenTier: 'T3', frozenCap: 2,
+      consumedRoundOrdinals: [1, 2], reviewStageComplete: true,
+    });
+  });
+});
