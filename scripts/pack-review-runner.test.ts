@@ -1521,11 +1521,28 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
         accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
         roundOrdinal: 1, cardinality: 3, issueNumber,
         boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(originalBody),
-        sourceSlots: [1, 2, 3].map((ordinal) => ({
-          slotId: `source-${String(ordinal).padStart(2, '0')}`, ordinal,
-          lifecycle: 'terminal' as const,
-          terminalClass: ordinal === 1 ? 'complete_findings' : 'complete_clean',
-        })),
+        sourceSlots: [1, 2, 3].map((ordinal) => {
+          const slotId = `source-${String(ordinal).padStart(2, '0')}`;
+          const invocationId = `fixture-2565-${ordinal}`;
+          return {
+            slotId, ordinal, invocationId, lifecycle: 'terminal' as const,
+            terminalClass: ordinal === 1 ? 'complete_findings' : 'complete_clean',
+            attemptOrdinal: 1,
+            payload: ordinal === 1
+              ? { verdict: 'findings', findingCount: 1, findings }
+              : { verdict: 'clean', findingCount: 0, findings: [] },
+            terminalResult: {
+              schema: 'turn-result/v1', state: 'ok', scope: 'none', send_count: 1,
+              cause: 'github_source_comment_credentialed', invocation_id: invocationId,
+              source_comment_authority: 'credentialed_github',
+              source_comment_receipt: { repository, prNumber, headSha: reviewed, runId: run.id,
+                slotId, invocationId, commentId: 8000000000 + ordinal,
+                commentUrl: `https://github.com/${repository}/pull/${prNumber}#issuecomment-${8000000000 + ordinal}`,
+                actorLogin: 'chetwerikoff', createdAt: '2026-10-14T01:00:00Z',
+                updatedAt: '2026-10-14T01:00:00Z', bodySha256: 'a'.repeat(64) },
+            },
+          };
+        }),
         settledSourceCount: 3,
       } }, options);
     }
@@ -1540,7 +1557,8 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     let status = 'pending';
     const statusWrites: string[] = [];
     const request = (body: string) => ({
-      ...options, repoSlug: repository, sourceRepoRoot: process.cwd(), prNumber,
+      ...options, repoSlug: repository, fixtureRepoSlug: repository,
+      sourceRepoRoot: process.cwd(), prNumber,
       immediate: true, fixtureCurrentPrHeadSha: current,
       fixturePrState: 'OPEN', fixturePrBody: `Closes #${issueNumber}`,
       fixtureIssueNumber: issueNumber, fixtureIssueTitle: '[T2] Final findings Issue',
@@ -1932,7 +1950,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       summary: 'DEFER: _quality_summary_v2 sets per-month and aggregate complete_response_windows to eligible-parent count minus ambiguous_response_parents. Trigger: 120 already-admitted parents, one legal complete direct SB-call/BB-raise or SB-first-aggression prefix. It reports 119 complete windows and zero incomplete_eligible_windows even though all 120 #180 direct windows passed response_window_outcome; ambiguity is the unobserved later continuation, not a missing/invalid direct window. This makes operator source-completeness diagnostics misleading, but the count-qualified ambiguous cell already refuses before frequencies or EV, so it need not block merge. Cheap correction: retain structural complete-window count N and report the ambiguous-parent count separately, as /1 does for structurally valid unsupported prefixes; no new state or gate.', source: 'gpt-browser' },
   ] };
 
-  function fixture(settings: { scopeType?: string; scopePath?: string; allowedRoot?: string; denylist?: string[]; summary?: string; details?: string; dispositionSignature?: string } = {}) {
+  function fixture(settings: { scopeType?: string; scopePath?: string; allowedRoot?: string; denylist?: string[]; summary?: string; details?: string; dispositionSignature?: string; frozenBodyOverride?: string } = {}) {
     const scopePath = settings.scopePath ?? witnessSource.findings[0]!.path;
     const allowedRoot = settings.allowedRoot ?? scopePath;
     const liveBody = `<!-- source-revision: r12 -->\n\`\`\`allowed-roots\n${allowedRoot}\n\`\`\`\n\`\`\`denylist\n${(settings.denylist ?? ['vendor/**', 'packages/core/**']).join('\n')}\n\`\`\`\n`;
@@ -1941,7 +1959,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     const storeRoot = join(root, 'store');
     setupHarness(storeRoot);
     const options = { projectId: 'orchestrator-pack', storeRoot };
-    const frozenBody = '<!-- source-revision: r12 -->\n```allowed-roots\nsrc/**\n```\n';
+    const frozenBody = settings.frozenBodyOverride ?? '<!-- source-revision: r12 -->\n```allowed-roots\nsrc/**\n```\n';
     captureBoundIssueSnapshot({ ...options, prNumber, prHeadSha: reviewedHead, issueNumber, issueBody: frozenBody });
     let authority = initializePackReviewAuthority({
       prNumber, headSha: reviewedHead, tier: 'T3', capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options,
@@ -2022,6 +2040,19 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       fixtureRequiredStatusReader: async (_headSha: string) => statuses.at(-1)?.state,
     };
     return { input, options, authority, run, transports, read, statuses };
+  }
+
+  // Strict-descendant status recovery cases now carry a preflight snapshot of
+  // the *same* live Issue body. The original fixture above remains amended
+  // for the separate same-head Issue-only authority tests.
+  function unchangedDescendantFixture() {
+    const f = fixture({ frozenBodyOverride: revisedBody });
+    Object.assign(f.input, {
+      fixturePrBody: `Closes #${issueNumber}`, fixtureIssueNumber: issueNumber,
+      fixturePrState: 'OPEN', fixtureIssueTitle: '[T3] Frozen Issue 228',
+      fixtureIssueBody: revisedBody,
+    });
+    return f;
   }
 
   it('settles the observed final R2 same-head Issue-only scope correction and publishes status', async () => {
@@ -2184,7 +2215,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   });
 
   it('keeps changed-head settlement on the observed strict-descendant route', async () => {
-    const f = fixture();
+    const f = unchangedDescendantFixture();
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'ahead';
     const result = await reconcileStalePackReviewRuns(f.input);
@@ -2195,7 +2226,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   });
 
   it('observes but refuses an unrelated changed head without taking the same-head shortcut', async () => {
-    const f = fixture();
+    const f = unchangedDescendantFixture();
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'diverged';
     const result = await reconcileStalePackReviewRuns(f.input);
@@ -2225,7 +2256,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   });
 
   it('Issue #2451: strict descendant retries failed publication without a second settlement', async () => {
-    const f = fixture();
+    const f = unchangedDescendantFixture();
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'ahead';
     f.input.fixtureRequiredStatusWriter = async () => { throw new Error('offline descendant status failure'); };
@@ -2249,7 +2280,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
 
 
   it('Issue #2451: a closed descendant with a missing GitHub status retries, then confirms without duplicate publication', async () => {
-    const f = fixture();
+    const f = unchangedDescendantFixture();
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'ahead';
     const statusesByHead = new Map<string, string>();
@@ -2289,7 +2320,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   });
 
   it('Issue #2451: a settled strict descendant projects a later live head without reopening the review cap', async () => {
-    const f = fixture();
+    const f = unchangedDescendantFixture();
     let liveHead = HEAD;
     const statusByHead = new Map<string, string>();
     f.input.fixtureCurrentPrHeadSha = HEAD;
@@ -2309,6 +2340,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(f.statuses).toHaveLength(1);
 
     liveHead = 'd'.repeat(40);
+    f.input.fixtureCurrentPrHeadSha = liveHead;
     const second = await reconcileStalePackReviewRuns(f.input);
     expect(second.results).toContainEqual(expect.objectContaining({
       settled: true, statusPublished: true, publicationHeadSha: liveHead,
@@ -2332,7 +2364,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   });
 
   it('Issue #2451: an acknowledged write without a GitHub success status stays unsettled and is retryable', async () => {
-    const f = fixture();
+    const f = unchangedDescendantFixture();
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'ahead';
     let githubStatus: string | undefined;
@@ -2362,7 +2394,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   });
 
   it('Issue #2451: changing the selected run verdict authority during awaited publication cannot claim success', async () => {
-    const f = fixture();
+    const f = unchangedDescendantFixture();
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'ahead';
     let githubStatus: string | undefined;
@@ -2384,7 +2416,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   });
 
   it('retries status publication without a new logical round or duplicate settlement transition', async () => {
-    const f = fixture();
+    const f = unchangedDescendantFixture();
     f.input.fixtureRequiredStatusWriter = async () => { throw new Error('offline status transport failed'); };
     const first = await reconcileStalePackReviewRuns(f.input);
     expect(first.results).toContainEqual(expect.objectContaining({
