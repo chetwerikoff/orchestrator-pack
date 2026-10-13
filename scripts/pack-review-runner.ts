@@ -1455,6 +1455,7 @@ function freezeGptRoundSourceCount(
   runId: string,
   requiredSourceCount: number,
   options: { projectId: string; storeRoot: string },
+  observedRound?: PackReviewGptRoundRecord,
 ): PackReviewGptRoundRecord | null {
   const updated = updatePackReviewRunIf(
     runId,
@@ -1464,7 +1465,8 @@ function freezeGptRoundSourceCount(
       return Boolean(round
         && round.reviewer === 'gpt'
         && round.settledSourceCount === undefined
-        && gptUsableSourceCount(round) >= requiredSourceCount);
+        && gptUsableSourceCount(round) >= requiredSourceCount
+        && (!observedRound || stableJson(round) === stableJson(observedRound)));
     },
     (existing) => {
       const round = existing.reviewRound;
@@ -3236,6 +3238,7 @@ async function recoverStaleGptSourceComments(options: {
   let round = initialRound;
   let hydratedSourceCount = 0;
   const unresolved: string[] = [];
+  const uncredentialableCompletedSources: string[] = [];
   const uncertainSourceObservations: string[] = [];
   const missingFirstAttemptIdentities: string[] = [];
   if (!resumeFrozenRound) {
@@ -3250,7 +3253,7 @@ async function recoverStaleGptSourceComments(options: {
       const invocationId = trim(currentSlot.invocationId);
       const complete = currentSlot.terminalClass === 'complete_clean'
         || currentSlot.terminalClass === 'complete_findings';
-      if (complete || (currentSlot.lifecycle === 'terminal' && !invocationId)) continue;
+      if (currentSlot.lifecycle === 'terminal' && !invocationId && !complete) continue;
       if ((currentSlot.lifecycle !== 'invocation_started' && currentSlot.lifecycle !== 'terminal') || !invocationId) {
         unresolved.push(`${currentSlot.slotId}:not_started`);
         continue;
@@ -3273,6 +3276,7 @@ async function recoverStaleGptSourceComments(options: {
         continue;
       }
       if (resolution.kind !== 'credentialed') {
+        if (complete) uncredentialableCompletedSources.push(`${currentSlot.slotId}:${resolution.reason}`);
         if (resolution.kind !== 'missing') {
           uncertainSourceObservations.push(`${currentSlot.slotId}:${resolution.reason}`);
         }
@@ -3283,6 +3287,16 @@ async function recoverStaleGptSourceComments(options: {
         continue;
       }
       const payload = resolution.payload as unknown as ReviewPayload;
+      if (complete) {
+        // The persisted complete slot is immutable. A current, exact original
+        // GitHub comment must still agree with its stored receipt and verdict.
+        const terminal = currentSlot.terminalResult as Record<string, unknown> | undefined;
+        if (stableJson(terminal?.source_comment_receipt) !== stableJson(resolution.receipt)
+          || stableJson(currentSlot.payload) !== stableJson(payload)) {
+          uncredentialableCompletedSources.push(`${currentSlot.slotId}:stored_publication_mismatch`);
+        }
+        continue;
+      }
       round = updateGptRoundSlot(options.run.id, round, currentSlot.slotId, {
         lifecycle: 'terminal',
         terminalClass: payload.verdict === 'clean' && payload.findingCount === 0
@@ -3327,6 +3341,26 @@ async function recoverStaleGptSourceComments(options: {
   round = persisted.reviewRound ?? round;
   let usableSourceCount = gptUsableSourceCount(round);
   const graceExpired = gptRoundGraceExpired(persisted);
+  if (uncredentialableCompletedSources.length > 0) {
+    return {
+      recovered: false,
+      reason: `gpt_complete_source_uncredentialable:${uncredentialableCompletedSources.join(', ')}`,
+      hydratedSourceCount,
+      usableSourceCount,
+      graceExpired,
+      nextAction: 'restore the exact original GPT source-comment evidence, then rerun scoped reconcile; do not downgrade a complete slot',
+    };
+  }
+  if (uncertainSourceObservations.length > 0) {
+    return {
+      recovered: false,
+      reason: `gpt_source_census_unresolved:${uncertainSourceObservations.join(', ')}`,
+      hydratedSourceCount,
+      usableSourceCount,
+      graceExpired,
+      nextAction: 'restore exact GitHub source-comment resolution, then rerun scoped reconcile',
+    };
+  }
   const settlePartialAfterGrace = options.input.settlePartialAfterGrace ?? true;
   const requiredSourceCount = round.settledSourceCount
     ?? (round.cardinality >= 3
@@ -3375,6 +3409,7 @@ async function recoverStaleGptSourceComments(options: {
       options.run.id,
       requiredSourceCount,
       { projectId: options.projectId, storeRoot: options.storeRoot },
+      round,
     );
     if (!frozen) {
       return {
@@ -4841,7 +4876,8 @@ export async function reconcileStalePackReviewRuns(
           || recovery.reason === 'gpt_source_head_changed_after_census'
           || recovery.reason.startsWith('gpt_source_unavailable:')
           || recovery.reason.startsWith('gpt_source_unavailable_after_census:')
-          || recovery.reason.startsWith('gpt_source_census_unresolved:')) {
+          || recovery.reason.startsWith('gpt_source_census_unresolved:')
+          || recovery.reason.startsWith('gpt_complete_source_uncredentialable:')) {
         results.push({
           runId: run.id,
           terminalized: false,
