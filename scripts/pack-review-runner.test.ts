@@ -2,7 +2,6 @@
 // @vitest-pre-topology-seconds 120
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -28,7 +27,7 @@ import {
   type PackReviewRunRecord,
 } from './lib/pack-review-run-store.ts';
 import type { CarryoverReplayResult } from './pack-review-carryover.ts';
-import { runProcess } from './kernel/subprocess.ts';
+import { runProcess, runProcessSync } from './kernel/subprocess.ts';
 import { getPackReviewerPreferencePath, writePackReviewerPreference } from './lib/pack-reviewer-preference.ts';
 import {
   boundIssueSnapshotArtifactPaths,
@@ -1639,9 +1638,13 @@ describe('Issue #2565 selected-target reset and immutable H1/B0 to H2/B1 review'
     setupHarness(join(root, 'pack-harness'));
     const primaryRoot = join(root, 'actual-target');
     mkdirSync(primaryRoot, { recursive: true });
-    execFileSync('git', ['init', '-q', primaryRoot]);
-    execFileSync('git', ['-C', primaryRoot, 'remote', 'add', 'origin',
-      'https://github.com/chetwerikoff/AppliedIn.git']);
+    expect(runProcessSync({
+      command: 'git', args: ['init', '-q', primaryRoot], cwd: root, inheritParentEnv: false,
+    }).ok).toBe(true);
+    expect(runProcessSync({
+      command: 'git', args: ['-C', primaryRoot, 'remote', 'add', 'origin',
+        'https://github.com/chetwerikoff/AppliedIn.git'], cwd: root, inheritParentEnv: false,
+    }).ok).toBe(true);
     const projectId = 'appliedin-2565';
     const repository = 'chetwerikoff/appliedin';
     const projectCard = join(process.env.XDG_CONFIG_HOME!, 'orchestrator-pack', 'projects',
@@ -1716,7 +1719,7 @@ describe('Issue #2565 selected-target reset and immutable H1/B0 to H2/B1 review'
       '--actor', 'owner', '--reason', 'body amended',
       '--nonce', 'operator-2565',
     ]);
-    applyCliTargetProject(cli, process.env);
+    applyCliTargetProject(cli as { targetProjectId?: string; projectId?: string }, process.env);
     expect(cli).toMatchObject({ projectId, prNumber, actor: 'owner', nonce: 'operator-2565' });
     expect(() => applyCliTargetProject({
       targetProjectId: projectId, projectId: 'wrong-store',
