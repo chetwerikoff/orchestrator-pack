@@ -980,6 +980,25 @@ describe('AO-free PR scope declaration contract', () => {
         violations: { declarationErrors: expect.arrayContaining([canonical.error]) },
       });
     }
+
+    // Repository defaults must not shift the diagnostic index from the Issue fence.
+    const shortBody = [
+      '```denylist', 'vendor/**', 'packages/core/**', 'secrets/*.pem', '```',
+      '```allowed-roots', 'scripts/**', '```',
+    ].join('\n');
+    const indexed = canonicalizeEntry('secrets/*.pem', 'denylist', 2);
+    if (indexed.ok) throw new Error('expected invalid denylist suffix');
+    writeFileSync(bodyPath, shortBody);
+    expect(() => producePrScopeDeclaration([
+      '--issue', '42', '--declared-paths', 'scripts/public.ts',
+      '--issue-body-file', bodyPath, '--repo-root', root,
+    ])).toThrow(indexed.error);
+    expect(selectLiveIssueScope(shortBody, parseIssueBody(shortBody))).toMatchObject({
+      ok: false, message: expect.stringContaining(indexed.error),
+    });
+    expect(checkPrScope({ ...input, issueBody: shortBody })).toMatchObject({
+      ok: false, message: expect.stringContaining(indexed.error),
+    });
   });
 
   it('keeps a missing declaration fail-closed when the Issue permits declaration artifacts', () => {

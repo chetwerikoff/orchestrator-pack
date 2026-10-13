@@ -974,6 +974,12 @@ export function producePrScopeDeclaration(argv: string[]): PrScopeDeclaration {
     [...declaredPaths, ...declaredPrefixes],
     'declared_paths',
   );
+  // Preserve original Issue indices before merging in repository-wide denials.
+  const issueDenyErrors = issueConstraints.denylist.flatMap((value, index) => {
+    const checked = canonicalizeEntry(value, 'denylist', index);
+    return checked.ok ? [] : [checked.error];
+  });
+  if (issueDenyErrors.length > 0) throw new Error(issueDenyErrors.join('; '));
   const denyEntries = canonicalizeEntries(
     [...new Set([...REPOSITORY_DENYLIST, ...issueConstraints.denylist])],
     'denylist',
