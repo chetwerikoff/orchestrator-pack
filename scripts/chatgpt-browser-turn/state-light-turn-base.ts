@@ -6031,9 +6031,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
         && !browserOrPageDefinitelyLost(dead, outcome.browser)
         && String(dead.url()) === outcome.ownedDeadLocalUrl
         && /^\/g\/g-p-[^/]+\/c\/local-chatgpt(?::|%3a)[a-z0-9-]+$/iu.test(new URL(String(dead.url())).pathname)) {
-        const deadCleanup = await boundedResourceCleanup(
-          () => dead.close(), RESOURCE_CLEANUP_BOUND_MS,
-        );
+        const deadCleanup = await abandonLatePageHandle(dead, RESOURCE_CLEANUP_BOUND_MS);
         cleanup = deadCleanup;
         if (deadCleanup !== 'confirmed') {
           incidents.push('owned_tab_cleanup_failed');
