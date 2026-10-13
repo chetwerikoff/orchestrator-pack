@@ -778,6 +778,7 @@ export async function openBlankProjectChatSurface(
   navigation?: StateLightNavigationCounter,
   deadlineMs?: number,
   now: () => number = Date.now,
+  maxSurfaceOpens?: number,
 ): Promise<void> {
   requireFreshPreparationTime(deadlineMs, now);
   const projectPrefix = projectConversationPrefix(projectUrl);
@@ -788,6 +789,9 @@ export async function openBlankProjectChatSurface(
     currentUrl = '';
   }
   if (!isBlankProjectSurfaceUrl(currentUrl, projectUrl)) {
+    if (navigation && maxSurfaceOpens !== undefined && navigation.snapshotGoto() >= maxSurfaceOpens) {
+      throw new Error('fresh_conversation_surface_unavailable');
+    }
     const navigationMs = Math.min(STATE_LIGHT_NAVIGATION_TIMEOUT_MS, requireFreshPreparationTime(deadlineMs, now));
     navigation?.recordGoto();
     await boundedFreshPreparation(
@@ -807,10 +811,12 @@ export async function prepareStateLightFreshConversation(
   deadlineMs?: number,
   now: () => number = Date.now,
   onProductWall?: (diagnostic: ProductWallDiagnostic) => void,
+  maxSurfaceOpens?: number,
 ): Promise<StateLightFreshPrepareResult> {
   if (!config.newChat || !config.projectUrl) {
     return { state: 'ui_contract_mismatch', cause: 'project_url_required' };
   }
+  let observedNavigationFailure: string | undefined;
   try {
     for (let attempt = 0; attempt < STATE_LIGHT_FRESH_PREPARE_ATTEMPTS; attempt++) {
       requireFreshPreparationTime(deadlineMs, now);
@@ -839,7 +845,20 @@ export async function prepareStateLightFreshConversation(
     }
     const needsSurface = !currentUrl || !isBlankProjectSurfaceUrl(currentUrl, config.projectUrl);
     if (needsSurface) {
-      await openBlankProjectChatSurface(page, config.projectUrl, navigation, deadlineMs, now);
+      try {
+        await openBlankProjectChatSurface(page, config.projectUrl, navigation, deadlineMs, now, maxSurfaceOpens);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        observedNavigationFailure = /ERR_NETWORK_CHANGED/iu.test(message)
+          ? 'network_changed'
+          : /locator_count/iu.test(message)
+            ? 'browser_operation_timeout:locator_count'
+            : 'fresh_conversation_surface_unavailable';
+        if (navigation && maxSurfaceOpens !== undefined && navigation.snapshotGoto() >= maxSurfaceOpens) {
+          return { state: 'ui_contract_mismatch', cause: observedNavigationFailure };
+        }
+        continue;
+      }
       // A successful last-moment commit must not start a new status read
       // beyond the preparation deadline (existing zero-extra-probe contract).
       if (deadlineMs === undefined || deadlineMs - now() >= 100) {
@@ -885,7 +904,7 @@ export async function prepareStateLightFreshConversation(
   } catch (error) {
     if (!(error instanceof Error && error.message === FRESH_PREPARATION_DEADLINE_EXHAUSTED)) throw error;
   }
-  return { state: 'ui_contract_mismatch', cause: 'fresh_conversation_surface_unavailable' };
+  return { state: 'ui_contract_mismatch', cause: observedNavigationFailure ?? 'fresh_conversation_surface_unavailable' };
 }
 
 export async function waitForConversationUrlAfterSend(

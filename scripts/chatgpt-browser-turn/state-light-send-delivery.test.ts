@@ -24,7 +24,7 @@ import { COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR, MESSAGE_NODE_SELECTOR, MESSAGE
 import { __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { configuredProfileKey } from './storage-common.ts';
-import { readTerminalEnvelope, runLaunch } from '../flow-manager-long-running-child.ts';
+import { deriveDelivery, readTerminalEnvelope, runLaunch } from '../flow-manager-long-running-child.ts';
 import { authoritativePreSend } from '../pack-review-no-review-reconcile.ts';
 
 const MARKER = `OPKTURNV1${'ab'.repeat(16)}`;
@@ -95,6 +95,22 @@ async function dispatch(harness: ReturnType<typeof createHarness>) {
     deliveryProofWaitMs: 10,
   });
 }
+
+describe('Issue #2541 attempted Send stays possibly delivered under local-ID fetch loss', () => {
+  it.each(['fresh_send_fetch_failed', 'owned_conversation_recovery_census_failed', 'owned_prompt_marker_ambiguous'])(
+    'never projects a witnessed Send as not-sent after %s', (cause) => {
+      const result = {
+        state: 'observation_uncertain',
+        cause,
+        resolved_send_count: 1,
+        send_attempted: true,
+        conversation_id: undefined,
+        witness: undefined,
+      } as unknown as NonNullable<Parameters<typeof deriveDelivery>[0]>;
+      expect(deriveDelivery(result, false)).toBe('POSSIBLY_DELIVERED');
+    },
+  );
+});
 
 describe('state-light send delivery accounting', () => {
   it.each<Transport>(['click', 'enter'])(
@@ -322,7 +338,7 @@ describe('production attempted-send result and durable envelope', () => {
     const invocationId = randomUUID();
     const profile = join(root, 'profile');
     const cdp = 'http://127.0.0.1:9222';
-    const chatUrl = 'https://chatgpt.com/c/synthetic-2495';
+    const chatUrl = 'https://chatgpt.com/c/24952495-2495-4495-8495-249524952495';
     let now = 50_000;
     let currentUrl = chatUrl;
     let composerText = '';
@@ -437,7 +453,7 @@ describe('production attempted-send result and durable envelope', () => {
     const invocationId = randomUUID();
     const profile = join(root, 'profile');
     const cdp = 'http://127.0.0.1:9222';
-    const chatUrl = 'https://chatgpt.com/c/synthetic-2495';
+    const chatUrl = 'https://chatgpt.com/c/24952495-2495-4495-8495-249524952495';
     let now = 50_000;
     const startedAt = now;
     let currentUrl = chatUrl;
@@ -539,7 +555,7 @@ describe('production attempted-send result and durable envelope', () => {
       const invocationId = randomUUID();
       const profile = join(root, 'profile');
       const cdp = 'http://127.0.0.1:9222';
-      const chatUrl = 'https://chatgpt.com/c/synthetic-owned-turn';
+      const chatUrl = 'https://chatgpt.com/c/25412541-2541-4541-8541-254125412541';
       let now = 10_000;
       let text = '';
       let attempts = 0;

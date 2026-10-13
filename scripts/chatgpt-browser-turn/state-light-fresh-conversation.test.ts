@@ -451,45 +451,102 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.getSends()).toBe(1);
   });
 
-  it.each(['90000', '61000'])('leaves the reservation to expire after a normal send or pre-send failure (%s)', async (timeout) => {
+  it.each(['90000', '61000'])('does not reserve the whole profile while preparing (%s ms)', async (timeout) => {
     const { acquireDomainLock } = await import('./coordination.ts');
     const acquire = vi.mocked(acquireDomainLock);
     acquire.mockClear();
     const turn = makeLoserPage('PROMPT', 'OK');
-    const outcome = await runNewChatTurn(turn.page, join(stateDir, `slot-release-${timeout}.txt`), timeout);
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, `no-profile-lock-${timeout}.txt`), timeout);
     expect(outcome.result.send_count).toBe(timeout === '90000' ? 1 : 0);
-    expect(acquire).toHaveBeenCalledWith('collision-profile', 'fresh-send-composer', 0, { maxHoldMs: 15_000 });
-    expect(acquire.mock.results[0]!.value.release).not.toHaveBeenCalled();
+    expect(acquire).not.toHaveBeenCalledWith(
+      'collision-profile', 'fresh-send-composer', 0, { maxHoldMs: 15_000 },
+    );
     if (timeout === '61000') expect(turn.composer.fill).toHaveBeenLastCalledWith('', { timeout: 5_000 });
     expect(turn.page.bringToFront).not.toHaveBeenCalled();
   });
 
-  it('sends after four reservation wait windows without a second admission gate (#2505)', async () => {
-    const { acquireDomainLock } = await import('./coordination.ts');
-    for (let window = 0; window < 4; window++) {
-      vi.mocked(acquireDomainLock).mockImplementationOnce(() => {
-        mocks.nowMs += 15_000;
-        return null;
+  it('allows two distinct owned Pages in the same profile to reach Send concurrently', async () => {
+    const first = makeLoserPage('PROMPT', 'FIRST-REPLY');
+    const second = makeLoserPage('PROMPT', 'SECOND-REPLY');
+    second.page.url.mockImplementation(() => second.getSends() > 0 ? LOSER_CONV : PROJECT_URL);
+
+    let entered = 0;
+    let releasedTogether = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const timer = setTimeout(release, 1_000);
+    for (const turn of [first, second]) {
+      const original = turn.sendButton.click.getMockImplementation()!;
+      turn.sendButton.click.mockImplementation(async () => {
+        entered++;
+        if (entered === 2) {
+          releasedTogether = true;
+          clearTimeout(timer);
+          release();
+        }
+        await gate;
+        await original();
       });
+      enqueueBrowserForTurn(mocks, turn.page);
     }
-    const turn = makeLoserPage('PROMPT', 'OK');
-    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'fail-open-send-2497.txt'), '400000');
-    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
-    expect(turn.getSends()).toBe(1);
+
+    const captured: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      captured.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const args = (id: string) => [
+        ...STATE_LIGHT_TURN_BASE_ARGV,
+        '--invocation-id', id,
+        '--output', join(stateDir, id + '.txt'),
+        '--new-chat', '--project-url', PROJECT_URL, '--timeout-ms', '90000', '--poll-ms', '1',
+      ];
+      const codes = await Promise.all([
+        runStateLightTurn(args(randomUUID())),
+        runStateLightTurn(args(randomUUID())),
+      ]);
+      expect(releasedTogether).toBe(true);
+      expect(entered).toBe(2);
+      expect(codes).toEqual([0, 0]);
+      expect(first.getSends()).toBe(1);
+      expect(second.getSends()).toBe(1);
+      const terminals = captured.map((line) => {
+        try { return JSON.parse(line) as { schema?: string; send_count?: number }; }
+        catch { return {}; }
+      }).filter((value) => value.schema === 'turn-result/v1');
+      expect(terminals).toHaveLength(2);
+      expect(terminals.every((value) => value.send_count === 1)).toBe(true);
+    } finally {
+      clearTimeout(timer);
+      release();
+      stdout.mockRestore();
+    }
   });
 
-  it('sends when the button enables after 40 seconds even after reservation expiry (#2505)', async () => {
-    const prompt = 'PROMPT-2505-DELAYED-SEND';
+  it('does not wait for a profile-wide composer lock even under simulated contention', async () => {
+    const { acquireDomainLock } = await import('./coordination.ts');
+    const acquire = vi.mocked(acquireDomainLock);
+    acquire.mockClear();
+    acquire.mockReturnValue(null);
+    try {
+      const turn = makeLoserPage('PROMPT', 'OK');
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, 'independent-page-no-profile-lock.txt'));
+      expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+      expect(turn.getSends()).toBe(1);
+      expect(acquire).not.toHaveBeenCalled();
+    } finally {
+      acquire.mockReset();
+    }
+  });
+
+  it('sends when the button becomes available after 40 seconds without a profile reservation', async () => {
+    const prompt = 'PROMPT-2541-DELAYED-SEND';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'OK');
     const startedAt = mocks.nowMs;
-    const { acquireDomainLock } = await import('./coordination.ts');
-    vi.mocked(acquireDomainLock).mockReturnValueOnce({
-      isOwned: () => mocks.nowMs < startedAt + 15_000,
-      release: vi.fn(),
-    } as any);
     turn.sendButton.isEnabled.mockImplementation(async () => mocks.nowMs >= startedAt + 40_000);
-    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'delayed-send-2505.txt'), '90000');
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'delayed-send-2541.txt'), '90000');
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(mocks.nowMs).toBeGreaterThanOrEqual(startedAt + 40_000);
     expect(turn.getSends()).toBe(1);
@@ -1250,13 +1307,38 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(mocks.productStatusText).not.toHaveBeenCalled();
   });
 
+  it('recovers from one observed pre-Send network navigation error on the same owned Page', async () => {
+    const prompt = 'PROMPT-2541-ONE-NETWORK-OPEN-RETRY';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const solo = makeLoserPage(prompt, 'RECOVERED-SEND');
+    solo.page.goto.mockRejectedValueOnce(new Error('page.goto: net::ERR_NETWORK_CHANGED'));
+    const outcome = await runNewChatTurn(solo.page, join(stateDir, 'one-network-reopen.txt'));
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(solo.page.goto).toHaveBeenCalledTimes(2);
+    expect(solo.getSends()).toBe(1);
+  });
+
+  it('classifies two observed network-changed navigation errors without attempting Send', async () => {
+    const solo = makeLoserPage('PROMPT', 'SHOULD-NOT-SEND');
+    solo.page.goto.mockRejectedValueOnce(new Error('page.goto: net::ERR_NETWORK_CHANGED'));
+    solo.page.goto.mockRejectedValueOnce(new Error('page.goto: net::ERR_NETWORK_CHANGED'));
+    const outcome = await runNewChatTurn(solo.page, join(stateDir, 'twice-network-changed.txt'));
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'network_changed', send_count: 0,
+    });
+    expect(solo.page.goto).toHaveBeenCalledTimes(2);
+    expect(solo.getSends()).toBe(0);
+  });
+
   it('keeps a failed no-commit navigation at zero send', async () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-NOCOMMIT'));
     const solo = makeLoserPage('PROMPT-NOCOMMIT', 'SHOULD-NOT-SEND');
     solo.page.goto.mockRejectedValueOnce(new Error('page.goto: Timeout while waiting for commit'));
+    solo.page.goto.mockRejectedValueOnce(new Error('page.goto: Timeout while waiting for commit'));
     const outcome = await runNewChatTurn(solo.page, '/tmp/no-commit.txt');
     expect(outcome.result.send_count).toBe(0);
     expect(outcome.result.state).not.toBe('ok');
+    expect(solo.page.goto).toHaveBeenCalledTimes(2);
     expect(solo.getSends()).toBe(0);
   });
 
@@ -1554,6 +1636,67 @@ describe('state-light fresh conversation collision recovery', () => {
     return { page, state };
   }
 
+  it.each([
+    ['locator timeout', 'count', 'browser_operation_timeout:locator_count', 'browser_operation_timeout:locator_count'],
+    ['network change', 'evaluate', 'page.evaluate: net::ERR_NETWORK_CHANGED', 'network_changed'],
+  ])('reports observed pre-Send %s without dispatching a fresh prompt (#2541 AC4)', async (_kind, source, failure, cause) => {
+    const prompt = 'OBSERVED-PRE-SEND-FAILURE';
+    const solo = makeLoserPage(prompt, 'SHOULD-NOT-SEND');
+    if (source === 'count') solo.composer.count.mockRejectedValue(new Error(failure));
+    else solo.composer.evaluate.mockRejectedValue(new Error(failure));
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(
+      solo.page, join(stateDir, 'composer-probe-' + randomUUID() + '.txt'), '61000',
+    );
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause, send_count: 0,
+    });
+    expect(solo.getSends()).toBe(0);
+    expect(solo.sendButton.click).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['root', 'https://chatgpt.com/c/not-a-uuid'],
+    ['project', `${PROJECT_CONVERSATION_ROOT}/c/not-a-uuid`],
+    ['legacy', 'https://chat.openai.com/c/11111111-1111-4111-8111-not-a-uuid'],
+  ])('refuses a malformed existing-chat UUID on the %s route before navigation or Send (#2541 AC5)', async (_kind, chatUrl) => {
+    const output = join(stateDir, 'malformed-' + randomUUID() + '.txt');
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(), '--output', output,
+      '--chat-url', chatUrl, '--timeout-ms', '5000',
+    ]);
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'chat_not_found', send_count: 0,
+    });
+    expect(mocks.verifyProfile).not.toHaveBeenCalled();
+    expect(mocks.browserQueue).toHaveLength(0);
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it.each([
+    ['root', 'https://chatgpt.com/c/11111111-1111-4111-8111-111111111111'],
+    ['project', SHARED_CONV],
+    ['legacy', 'https://chat.openai.com/c/11111111-1111-4111-8111-111111111111'],
+  ])('keeps a canonical %s UUID unconfirmed without inventing chat_not_found (#2541 AC5)', async (_kind, chatUrl) => {
+    const prompt = 'CANONICAL-UNCONFIRMED-ID';
+    const page = makeLoserPage(prompt, 'NOT-SENT');
+    page.page.url.mockReturnValue(chatUrl);
+    page.composer.count.mockResolvedValue(0);
+    enqueueBrowserForTurn(mocks, page.page);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', join(stateDir, 'canonical-' + randomUUID() + '.txt'),
+      '--chat-url', chatUrl, '--timeout-ms', '5000',
+    ]);
+    expect(mocks.verifyProfile).toHaveBeenCalled();
+    expect(outcome.result.cause).not.toBe('chat_not_found');
+    expect(outcome.result.send_count).toBe(0);
+    expect(page.getSends()).toBe(0);
+  });
+
   it('bounds the early local-ID landing wait even when the Send witness arrives near the absolute deadline', async () => {
     const prompt = 'SYNTHETIC-NEAR-DEADLINE-LOCAL-ID';
     const invocationId = randomUUID();
@@ -1650,8 +1793,71 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(mocks.nowMs - start).toBeLessThan(90_000);
     expect(fixture.local.getSends()).toBe(1);
     expect(fixture.retryClicks).not.toHaveBeenCalled();
+    // One positive same-project claim permits closing only the original
+    // provably invocation-created dead local-ID Page.
+    expect(fixture.local.page.close).toHaveBeenCalledTimes(1);
+    expect(fixture.serverPage.close).not.toHaveBeenCalled();
+  });
+
+  it('closes only the proven-created root /c/local-chatgpt Page after unique positive recovery (#2541 AC7)', async () => {
+    const prompt = 'ROOT-LOCAL-ID-POSITIVE';
+    const reply = 'ROOT-SERVER-REPLY';
+    const fixture = freshLocalFetchLossFixture(prompt, reply);
+    const rootLocalUrl = LOCAL_ID_CONVERSATION_URL.replace(PROJECT_CONVERSATION_ROOT, 'https://chatgpt.com');
+    fixture.local.page.url.mockImplementation(() => fixture.local.getSends() ? rootLocalUrl : PROJECT_URL);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await fixture.run(join(stateDir, 'root-local-positive.txt'), randomUUID());
+
+    expect(outcome).toMatchObject({ code: 0, result: { state: 'ok', send_count: 1, conversation_id: SHARED_CONV } });
+    expect(fixture.local.getSends()).toBe(1);
+    expect(fixture.local.page.close).toHaveBeenCalledTimes(1);
+    expect(fixture.serverPage.close).not.toHaveBeenCalled();
+    expect(fixture.retryClicks).not.toHaveBeenCalled();
+  });
+
+  it('retains a foreign-project local-ID Page after the positive user-marker claim (#2541 AC9)', async () => {
+    const prompt = 'FOREIGN-REDIRECT-AFTER-FETCH-LOSS';
+    const fixture = freshLocalFetchLossFixture(prompt, 'OWNED-REPLY');
+    const originalServerLocator = fixture.serverPage.locator.getMockImplementation()!;
+    const foreignLocalUrl = LOCAL_ID_CONVERSATION_URL.replace(
+      PROJECT_CONVERSATION_ROOT,
+      'https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-foreign',
+    );
+    let redirected = false;
+    fixture.serverPage.locator.mockImplementation((selector: string) => {
+      if (selector === USER_MESSAGE_SELECTOR && !redirected) {
+        redirected = true;
+        fixture.local.page.url.mockReturnValue(foreignLocalUrl);
+      }
+      return originalServerLocator(selector);
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await fixture.run(join(stateDir, 'foreign-local-retained.txt'), randomUUID());
+
+    expect(redirected).toBe(true);
+    expect(outcome).toMatchObject({ code: 0, result: { state: 'ok', send_count: 1, conversation_id: SHARED_CONV } });
+    expect(fixture.local.getSends()).toBe(1);
     expect(fixture.local.page.close).not.toHaveBeenCalled();
     expect(fixture.serverPage.close).not.toHaveBeenCalled();
+    expect(fixture.retryClicks).not.toHaveBeenCalled();
+  });
+
+  it('retains the original local-ID Page when its Failed to fetch evidence disappears before close (#2541 AC9)', async () => {
+    const prompt = 'FETCH-ERROR-VANISHED-BEFORE-CLOSE';
+    const fixture = freshLocalFetchLossFixture(prompt, 'OWNED-REPLY');
+    const originalGetByText = fixture.local.page.getByText.getMockImplementation()!;
+    let fetchFailureReads = 0;
+    fixture.local.page.getByText.mockImplementation((value: string, options: unknown) => value === 'Failed to fetch'
+      ? scalarLocator({ count: vi.fn(async () => (++fetchFailureReads === 1 ? 1 : 0)) })
+      : originalGetByText(value, options));
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await fixture.run(join(stateDir, 'fetch-error-vanished.txt'), randomUUID());
+
+    expect(outcome).toMatchObject({ code: 0, result: { state: 'ok', send_count: 1, conversation_id: SHARED_CONV } });
+    expect(fetchFailureReads).toBeGreaterThanOrEqual(2);
+    expect(fixture.local.page.close).not.toHaveBeenCalled();
+    expect(fixture.serverPage.close).not.toHaveBeenCalled();
+    expect(fixture.retryClicks).not.toHaveBeenCalled();
   });
 
   it('keeps the full bound-reply observation window after a fresh fetch-loss recovery claim', async () => {
