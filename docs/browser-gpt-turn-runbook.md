@@ -132,6 +132,17 @@ known, current transport result/uncertainty, and output/envelope paths. Continue
 the same invocation when recovery remains legal. Workflow completion is decided
 by the calling workflow.
 
+The explicit `cancel` command in `scripts/chatgpt-browser-turn/state-light-entry.ts`
+uses `state-light-cancellation.ts`, which can return
+`cancellation_owned_tab_and_generation_unproven` as non-success without
+confirming Stop. A URL, prompt marker, receipt, PID, closed local process or
+disappearing Stop control does not prove the original tab/active generation or
+revoke an already-issued GitHub connector write. Launcher handoff is not author
+completion. Author/disposition decisions and reconciliation of *landed* Issue
+writes belong to the
+[create-Issue owner](../.cursor/skills/create-issue-draft/SKILL.md#possibly-sent-authordisposition-turns-at-owner-controlled-handoff),
+not this transport runbook.
+
 ## Maintenance matrix
 
 Shared implementation owners:
