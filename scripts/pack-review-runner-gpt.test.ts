@@ -5170,6 +5170,27 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       .toEqual([1]);
   });
 
+  it('fleet stale-only settlement does not claim verified status when exact-head read-back rejects the write', async () => {
+    const f = seed(3);
+    f.expireGrace();
+    const result = await reconcileStalePackReviewRuns({
+      ...f.input, staleOnly: true,
+      fixtureRequiredStatusReader: async () => 'pending',
+    });
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, recovered: true, statusReconciled: false,
+        reason: expect.stringContaining('gpt_source_comments_recovered_delivery_unverified:'),
+      }),
+    ]));
+    expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+      reviewVerdict: 'clean', reviewRound: { settledSourceCount: 3 },
+    });
+    expect(f.statusStates.length).toBeGreaterThanOrEqual(1);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([1]);
+  });
+
   it('does not freeze a locally complete source whose original GitHub comment disappeared', async () => {
     const f = seed(3);
     const identity: PackGptSourceIdentity = {
