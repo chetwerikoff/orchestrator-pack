@@ -812,3 +812,237 @@ describe('Issue #2536 ordinary end-to-end: one owned Send in a long reused conve
     }
   });
 });
+
+
+describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'existing-composer-2560-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    mocks.verifyProfile.mockResolvedValue({ state: 'verified' });
+  });
+  afterEach(() => {
+    mocks.browserQueue.length = 0;
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  type Scenario =
+    | 'restored' | 'delayed-stop' | 'ready' | 'late-hydration'
+    | 'composer-still-absent' | 'redirect' | 'network' | 'navigation-throw'
+    | 'lost-page' | 'expired-goto' | 'post-empty' | 'post-userless'
+    | 'post-incomplete' | 'post-unreadable' | 'post-unknown'
+    | 'post-active' | 'post-stop' | 'initial-active'
+    | 'initial-unknown' | 'initial-empty' | 'initial-incomplete'
+    | 'initial-stop' | 'initial-wrong-url' | 'short-budget';
+
+  async function fullTurn(scenario: Scenario) {
+    const chatUrl = 'https://chatgpt.com/c/25602560-2560-4560-8560-256025602560';
+    const invocationId = randomUUID();
+    const profile = join(root, 'profile');
+    const cdp = 'http://127.0.0.1:9222';
+    let now = 100_000;
+    const startedAt = now;
+    let lastGotoAt: number | undefined;
+    let sentAt: number | undefined;
+    let sentText = '';
+    let composerText = '';
+    let url = scenario === 'initial-wrong-url'
+      ? 'https://chatgpt.com/c/foreign' : chatUrl;
+    let closed = false;
+    let stop = scenario === 'initial-stop';
+    let reopened = false;
+    let resumedStopObserved = false;
+    let afterReopenReads = 0;
+    const usableComposer = () => scenario === 'ready'
+      || (scenario === 'late-hydration' && now - startedAt >= 20_000)
+      || (reopened && scenario !== 'composer-still-absent');
+    const fill = vi.fn(async (value: string) => { composerText = value; });
+    const composer = scalarLocator({
+      count: vi.fn(async () => usableComposer() ? 1 : 0),
+      fill,
+      innerText: vi.fn(async () => composerText),
+    });
+    const send = vi.fn(async () => {
+      sentAt = now;
+      sentText = composerText;
+      composerText = ''; // Synthetic owned composer-cleared delivery witness.
+    });
+    const goto = vi.fn(async (target: string, options: { waitUntil: string }) => {
+      expect(options.waitUntil).toBe('commit');
+      reopened = true;
+      lastGotoAt = now;
+      if (scenario === 'redirect') url = 'https://chatgpt.com/c/foreign';
+      else if (scenario === 'network') throw new Error('net::ERR_NETWORK_CHANGED');
+      else if (scenario === 'navigation-throw') throw new Error('unexpected navigation failure');
+      else if (scenario === 'lost-page') closed = true;
+      else if (scenario === 'expired-goto') now += 40_000;
+      else url = target;
+    });
+    const rows = () => {
+      const isInitial = !reopened;
+      const empty = (isInitial && scenario === 'initial-empty')
+        || (!isInitial && scenario === 'post-empty');
+      const userless = !isInitial && scenario === 'post-userless';
+      const incomplete = (isInitial && scenario === 'initial-incomplete')
+        || (!isInitial && (scenario === 'post-incomplete' || scenario === 'post-unreadable'));
+      return empty ? [] : [{
+        role: userless ? 'assistant' : 'user',
+        text: 'historical user',
+        key: 'data-message-id:history-user-2560',
+        domIndex: 0,
+        complete: !incomplete,
+        completionReady: false,
+        continuationVisible: false,
+      }];
+    };
+    const nodes = {
+      ...collectionLocator([{ role: 'user', text: 'historical user' }]),
+      evaluateAll: vi.fn(async () => {
+        if (reopened) afterReopenReads++;
+        const generationInProgress: boolean | 'unknown' =
+          (!reopened && scenario === 'initial-unknown')
+          || (reopened && scenario === 'post-unknown')
+            ? 'unknown'
+            : (!reopened && scenario === 'initial-active')
+              || (reopened && scenario === 'post-active')
+              || stop;
+        const currentRows = rows();
+        return {
+          rows: currentRows,
+          ...(currentRows.length > 0 ? {
+            pageTurnEvidence: {
+              generationInProgress,
+              observedAssistantNodes: currentRows[0]!.role === 'assistant' ? 1 : 0,
+              continueGeneratingVisible: false,
+            },
+          } : {}),
+        };
+      }),
+    };
+    const stopLocator = scalarLocator({
+      count: vi.fn(async () => {
+        if (reopened && scenario === 'delayed-stop' && stop) resumedStopObserved = true;
+        return stop ? 1 : 0;
+      }),
+      isVisible: vi.fn(async () => stop),
+    });
+    const page = {
+      __fakeBrowserGptPage: true,
+      url: () => url,
+      isClosed: () => closed,
+      goto,
+      close: vi.fn(async () => undefined),
+      waitForTimeout: vi.fn(async (ms: number) => {
+        now += ms;
+        if (scenario === 'delayed-stop' && lastGotoAt !== undefined
+          && now - lastGotoAt >= 12_000) stop = true;
+        if (scenario === 'post-stop' && reopened) stop = true;
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => 1, click: send });
+        if (selector === MESSAGE_NODE_SELECTOR) return nodes;
+        if (selector.includes('stop-button') || selector.includes('Stop')) return stopLocator;
+        return scalarLocator();
+      }),
+    };
+    const browserFixture = enqueueBrowserForTurn(mocks, page);
+    Object.assign(browserFixture.context, { pages: () => [page] });
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        '--profile', profile, '--cdp', cdp,
+        '--input', join(root, 'synthetic-prompt.txt'),
+        '--output', join(root, invocationId + '.txt'),
+        '--chat-url', chatUrl, '--invocation-id', invocationId,
+        '--timeout-ms', scenario === 'short-budget' ? '10000' : '60000',
+      ]);
+      return {
+        result, send, fill, goto, startedAt, lastGotoAt, sentAt, sentText,
+        finalUrl: url, afterReopenReads, resumedStopObserved,
+        observer: readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId),
+      };
+    } finally {
+      clock.mockRestore();
+    }
+  }
+
+  it('reopens exactly once then physically dispatches one owned prompt only after the real 30s watch', async () => {
+    const run = await fullTurn('restored');
+    expect(run.goto).toHaveBeenCalledTimes(1);
+    expect(run.goto).toHaveBeenCalledWith(
+      'https://chatgpt.com/c/25602560-2560-4560-8560-256025602560',
+      expect.objectContaining({ waitUntil: 'commit' }),
+    );
+    expect(run.afterReopenReads).toBeGreaterThanOrEqual(2);
+    expect(run.sentAt).toBeDefined();
+    expect(run.lastGotoAt).toBeDefined();
+    expect(run.sentAt! - run.lastGotoAt!).toBeGreaterThanOrEqual(30_000);
+    expect(run.sentAt! - run.startedAt).toBeLessThan(60_000);
+    expect(run.sentText).toMatch(/^OPKTURNV1[0-9a-f]{32}\n\nPROMPT$/u);
+    expect(run.send).toHaveBeenCalledTimes(1);
+    expect(run.fill).toHaveBeenCalledTimes(1);
+    expect(run.result.send_count).toBe(1);
+    expect(run.observer.phase).toBe('sent_unharvested');
+    expect(run.finalUrl).toBe('https://chatgpt.com/c/25602560-2560-4560-8560-256025602560');
+  });
+
+  it('does not bypass the resume watch when Stop appears after an initially idle post-goto snapshot', async () => {
+    const run = await fullTurn('delayed-stop');
+    expect(run.goto).toHaveBeenCalledTimes(1);
+    expect(run.afterReopenReads).toBeGreaterThan(0);
+    expect(run.resumedStopObserved).toBe(true);
+    expect(run.result).toMatchObject({
+      state: 'conversation_busy', cause: 'another_turn_active', send_count: 0,
+    });
+    expect(run.result.send_attempted).not.toBe(true);
+    expect(run.fill).not.toHaveBeenCalled();
+    expect(run.send).not.toHaveBeenCalled();
+    expect(run.lastGotoAt! - run.startedAt).toBeLessThan(30_000);
+  });
+
+  it.each([
+    ['composer-still-absent', 'send_failed', 'composer_unavailable'],
+    ['redirect', 'ui_contract_mismatch', 'owned_conversation_identity_mismatch'],
+    ['network', 'ui_contract_mismatch', 'network_changed'],
+    ['navigation-throw', 'driver_error', 'unexpected navigation failure'],
+    ['lost-page', 'driver_error', 'Target closed'],
+    ['expired-goto', 'driver_error', 'composer_mutation_budget_exhausted'],
+    ['post-empty', 'ui_contract_mismatch', 'owned_conversation_render_mismatch'],
+    ['post-userless', 'ui_contract_mismatch', 'owned_conversation_render_mismatch'],
+    ['post-incomplete', 'ui_contract_mismatch', 'baseline_transcript_incomplete'],
+    ['post-unreadable', 'ui_contract_mismatch', 'baseline_transcript_incomplete'],
+    ['post-unknown', 'ui_contract_mismatch', 'owned_conversation_render_mismatch'],
+    ['post-active', 'conversation_busy', 'another_turn_active'],
+    ['post-stop', 'conversation_busy', 'another_turn_active'],
+  ] as const)('%s keeps distinct existing failure authority after a single reopen', async (scenario, state, cause) => {
+    const run = await fullTurn(scenario);
+    expect(run.goto).toHaveBeenCalledTimes(1);
+    expect(run.result).toMatchObject({ state, cause, send_count: 0 });
+    expect(run.result.send_attempted).not.toBe(true);
+    expect(run.fill).not.toHaveBeenCalled();
+    expect(run.send).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['ready', 0],
+    ['late-hydration', 0],
+    ['initial-active', 0],
+    ['initial-unknown', 0],
+    ['initial-empty', 0],
+    ['initial-incomplete', 0],
+    ['initial-stop', 0],
+    ['initial-wrong-url', 0],
+    ['short-budget', 0],
+  ] as const)('%s cannot cause an unnecessary or unauthorized reopen', async (scenario, gotoCount) => {
+    const run = await fullTurn(scenario);
+    expect(run.goto).toHaveBeenCalledTimes(gotoCount);
+    if (scenario !== 'ready' && scenario !== 'late-hydration') {
+      expect(run.fill).not.toHaveBeenCalled();
+      expect(run.send).not.toHaveBeenCalled();
+      expect(run.result.send_count).toBe(0);
+    }
+  });
+});
