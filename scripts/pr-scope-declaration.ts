@@ -672,8 +672,23 @@ export function selectLiveIssueScope(
     };
   }
 
-  const parsedAllowedRoots = canonicalizeEntries(allowed_roots, 'allowed_roots');
-  const parsedDenylist = canonicalizeEntries(issueConstraints.denylist, 'denylist');
+  const checkedRoots = canonicalizeEntries(allowed_roots, 'allowed_roots');
+  const checkedDenylist = canonicalizeEntries(issueConstraints.denylist, 'denylist');
+  if (!checkedRoots.ok || !checkedDenylist.ok) {
+    const errors = [
+      ...(checkedRoots.ok ? [] : checkedRoots.errors),
+      ...(checkedDenylist.ok ? [] : checkedDenylist.errors),
+    ];
+    return {
+      ok: false,
+      message: `live-Issue scope selection failed: ${errors.join('; ')}; FAIL/no-selection/fresh-declaration`,
+    };
+  }
+
+  // Preserve the live-scope interface: fence order and terminal /** spellings
+  // remain unchanged after the stricter field-specific grammar check.
+  const parsedAllowedRoots = parsePolicyEntries(allowed_roots, 'allowed-roots');
+  const parsedDenylist = parsePolicyEntries(issueConstraints.denylist, 'denylist');
   if (!parsedAllowedRoots.ok || !parsedDenylist.ok) {
     const errors = [
       ...(parsedAllowedRoots.ok ? [] : parsedAllowedRoots.errors),
@@ -684,9 +699,7 @@ export function selectLiveIssueScope(
       message: `live-Issue scope selection failed: ${errors.join('; ')}; FAIL/no-selection/fresh-declaration`,
     };
   }
-
-  const selectedRoots = canonicalTexts(parsedAllowedRoots.entries);
-  if (!policySubset(selectedRoots, REPOSITORY_ALLOWED_ROOTS)) {
+  if (!policySubset(parsedAllowedRoots.entries, REPOSITORY_ALLOWED_ROOTS)) {
     return {
       ok: false,
       message:
@@ -696,8 +709,8 @@ export function selectLiveIssueScope(
 
   return {
     ok: true,
-    allowed_roots: selectedRoots,
-    denylist: canonicalTexts(parsedDenylist.entries),
+    allowed_roots: parsedAllowedRoots.entries,
+    denylist: parsedDenylist.entries,
   };
 }
 

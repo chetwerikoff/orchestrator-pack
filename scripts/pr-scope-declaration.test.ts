@@ -778,9 +778,9 @@ describe('AO-free PR scope declaration contract', () => {
       supportedLiveIssueBody, parseIssueBody(supportedLiveIssueBody),
     )).toEqual({
       ok: true,
-      allowed_roots: ['plugins/scope-guard/tests/', 'scripts/'],
+      allowed_roots: ['plugins/scope-guard/tests/**', 'scripts/**'],
       denylist: [
-        'docs/declarations/',
+        'docs/declarations/**',
         'plugins/scope-guard/tests/secret*',
         'scripts/foo-secret.test.ts',
       ],
