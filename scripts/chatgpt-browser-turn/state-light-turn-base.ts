@@ -1335,6 +1335,19 @@ export function classifyPageObservation(
   return { state: 'waiting' };
 }
 
+function definitelyMalformedChatTarget(raw: string): boolean {
+  try {
+    const parsed = new URL(raw);
+    if ((parsed.origin !== 'https://chatgpt.com' && parsed.origin !== 'https://chat.openai.com')
+      || parsed.username || parsed.password) return true;
+    // A plausible identifier can be absent or temporarily unhydrated; that is
+    // not evidence that the conversation does not exist.
+    return !/^\\/(?:c\\/[^/]+|g\\/g-p-[^/]+\\/c\\/[^/]+)\\/?$/iu.test(parsed.pathname);
+  } catch {
+    return true;
+  }
+}
+
 function browserConfig(args: ParsedTurnArgs): BrowserConfig & { pollMs: number } {
   const cdp = requireOption(args, 'cdp');
   const profile = requireOption(args, 'profile');
@@ -1974,12 +1987,23 @@ async function maybeContinueGeneration(page: any, deadlineMs: number, assistantD
   }
 }
 
-async function readComposerReadiness(page: any, deadline: number): Promise<boolean> {
+async function readComposerReadiness(
+  page: any,
+  deadline: number,
+  observe?: (state: 'absent' | 'disabled' | 'hidden' | 'not_editable' | 'ready' | 'unknown') => void,
+): Promise<boolean> {
   try {
     const composer = page.locator(COMPOSER_SELECTOR);
     let remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
-    if (await locatorCount(composer, deadline) <= 0 || Date.now() >= deadline) return false;
+    if (await locatorCount(composer, deadline) <= 0) {
+      observe?.('absent');
+      return false;
+    }
+    if (Date.now() >= deadline) {
+      observe?.('unknown');
+      return false;
+    }
 
     remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
@@ -2008,8 +2032,15 @@ async function readComposerReadiness(page: any, deadline: number): Promise<boole
 
     // Legacy page fixtures expose presence only. Real DOM-backed locators return
     // the object above; test fixtures with deterministic controls do the same.
-    if (!readiness || typeof readiness !== 'object') return Date.now() < deadline;
+    if (!readiness || typeof readiness !== 'object') {
+      observe?.('unknown');
+      return Date.now() < deadline;
+    }
     const observed = readiness as { visible?: unknown; enabled?: unknown; contentEditable?: unknown };
+    observe?.(!observed.visible ? 'hidden'
+      : !observed.enabled ? 'disabled'
+        : !observed.contentEditable ? 'not_editable'
+          : 'ready');
     return Boolean(
       observed.visible
       && observed.enabled
@@ -2018,6 +2049,7 @@ async function readComposerReadiness(page: any, deadline: number): Promise<boole
     );
   } catch (error) {
     if (isPostSendTargetCrash(error)) throw error;
+    observe?.('unknown');
     return false;
   }
 }
@@ -2319,6 +2351,7 @@ async function waitForComposer(
   useWholePreSendDeadline = false,
   observeProductWall?: (diagnostic: ReturnType<typeof classifyProductWall>) => void,
   detectAccountLoadError = false,
+  observeComposer?: (state: 'absent' | 'disabled' | 'hidden' | 'not_editable' | 'ready' | 'unknown') => void,
 ): Promise<{ state: 'ready' } | { state: TurnState; cause: string }> {
   // Preserve the legacy two-argument helper contract used by in-process tests.
   // Committed pre-send navigations explicitly opt into the whole invocation deadline.
@@ -2341,7 +2374,7 @@ async function waitForComposer(
       // Status-probe failures cannot veto the composer; the probe is advisory.
     }
     if (Date.now() >= readinessDeadline) break;
-    if (await readComposerReadiness(page, readinessDeadline)) return { state: 'ready' };
+    if (await readComposerReadiness(page, readinessDeadline, observeComposer)) return { state: 'ready' };
     remainingMs = readinessDeadline - Date.now();
     if (remainingMs <= 0) break;
     await sleep(page, Math.min(INITIAL_POLL_MS, remainingMs));
@@ -2854,8 +2887,25 @@ async function runTurnCore(
     if (!ok) journalWriteFailed = true;
   };
 
+  let preSendComposerState = 'not_probed';
+  let observedProductErrorText = '';
+  const preSendPageRoute = (): string => {
+    try {
+      const url = new URL(String(page.url()));
+      // No private chat/project IDs, query, fragment or authentication in logs.
+      const path = url.pathname.includes('/c/') ? '/g/<project>/c/<conversation>'
+        : url.pathname.includes('/g/') ? '/g/<project>' : '/';
+      return url.origin + path;
+    } catch { return 'unavailable'; }
+  };
+  const preSendDiagnostic = (cause: string): void => {
+    incident('pre_send_surface_diagnostic',
+      `${cause};composer=${preSendComposerState};url=${preSendPageRoute()};product_error=${observedProductErrorText.slice(0, 160)}`,
+      'return_local_error');
+  };
   const observeProductWall = (wall: ReturnType<typeof classifyProductWall>): void => {
     if (!('wall_kind' in wall) || wall.matched_text === 'none') return;
+    observedProductErrorText = wall.matched_text.replace(/\\s+/gu, ' ').slice(0, 160);
     onProductWallDiagnostic(wall);
     if (wall.wall_kind !== 'none') {
       try { recordProductWallAdvisory(profileKey, wall, invocationId); } catch { /* advisory I/O is fail-open */ }
@@ -2884,6 +2934,17 @@ async function runTurnCore(
       };
     }
     profileKey = configuredProfileKey(baseConfig.profile, baseConfig.cdp);
+    if (!baseConfig.newChat && baseConfig.chatUrl
+      && definitelyMalformedChatTarget(baseConfig.chatUrl)) {
+      incident('invocation_blocker', 'chat_not_found', 'return_local_error');
+      return {
+        result: compactResult(
+          'ui_contract_mismatch', 'invocation', 'chat_not_found',
+          invocationId, profileKey, 0, pollCount, navigation, incidents, {},
+          journalWriteFailed,
+        ),
+      };
+    }
     const snapshot = readStableInput(requireOption(args, 'input'));
     const destination = destinationIdentity(requireOption(args, 'output'));
     const config = baseConfig;
@@ -3116,11 +3177,17 @@ async function runTurnCore(
     const waitForComposerWithAccountRecovery = async (deadlineMs: number): Promise<
       TurnRunOutcome | { state: 'ready' } | { state: TurnState; cause: string }
     > => {
-      let readiness = await waitForComposer(page, deadlineMs, true, observeProductWall, true);
+      let readiness = await waitForComposer(
+        page, deadlineMs, true, observeProductWall, true,
+        (state) => { preSendComposerState = state; },
+      );
       while (readiness.state === 'ui_contract_mismatch' && readiness.cause === 'account_load_error') {
         const recovery = await checkAccountLoadError();
         if (recovery && recovery !== 'recovered') return recovery;
-        readiness = await waitForComposer(page, deadlineMs, true, observeProductWall, true);
+        readiness = await waitForComposer(
+          page, deadlineMs, true, observeProductWall, true,
+          (state) => { preSendComposerState = state; },
+        );
       }
       return readiness;
     };
@@ -3130,6 +3197,7 @@ async function runTurnCore(
       diagnostic?: ComposerMutationDiagnosticV1,
     ): TurnRunOutcome => {
       incident('invocation_blocker', cause, 'return_local_error', diagnostic);
+      preSendDiagnostic(cause);
       return {
         page,
         browser,
@@ -4102,14 +4170,14 @@ async function runTurnCore(
         if (settledBaselineFailure) return settledBaselineFailure;
       }
       if (existingGeneration === 'busy') {
-        incident('invocation_blocker', 'existing_generation_active', 'return_local_error');
+        incident('invocation_blocker', 'another_turn_active', 'return_local_error');
         return {
           page,
           browser,
           result: compactResult(
             'conversation_busy',
             'conversation',
-            'existing_generation_active',
+            'another_turn_active',
             invocationId,
             profileKey,
             sendCount,
@@ -5732,13 +5800,14 @@ async function runTurnCore(
       ? 'input_invalid'
       : isOutput
         ? 'output_conflict'
-        : isUi
+        : isUi || (!afterSend && /ERR_NETWORK_CHANGED/iu.test(message))
           ? 'ui_contract_mismatch'
           : 'driver_error';
     const retirementCleanupRequired = message === 'observation_mutation_retirement_cleanup_required';
     const holderTimeout = error instanceof StateLightSendSlotTimeoutError ? error : undefined;
     const lostAfterSend = afterSend && browserOrPageDefinitelyLost(page, browser);
-    const cause = retirementCleanupRequired
+    const observedNetworkChange = !afterSend && /ERR_NETWORK_CHANGED/iu.test(message);
+    const cause = observedNetworkChange ? 'network_changed' : retirementCleanupRequired
       ? message
       : afterSend
         ? lostAfterSend
@@ -5748,6 +5817,7 @@ async function runTurnCore(
           ? 'fresh_conversation_surface_unavailable'
           : message;
     if (!isInput && !isOutput) {
+      if (!afterSend) preSendDiagnostic(cause);
       incident(
         retirementCleanupRequired
           ? 'observation_mutation_retirement_cleanup_required'
@@ -5945,7 +6015,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   // A recovered Page is marked cleanup-unproven and is never this close target.
   if (outcome.ownedDeadLocalPage && outcome.ownedDeadLocalUrl
     && outcome.ownedDeadLocalConversationUrl && outcome.result.send_count === 1
-    && outcome.result.send_attempted === true && !outcome.ownershipForfeited
+    && !outcome.ownershipForfeited
     && outcome.result.conversation_id === outcome.ownedDeadLocalConversationUrl
     && outcome.page !== outcome.ownedDeadLocalPage
     && outcome.result.configured_profile_key
@@ -5964,6 +6034,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
         const deadCleanup = await boundedResourceCleanup(
           () => dead.close(), RESOURCE_CLEANUP_BOUND_MS,
         );
+        cleanup = deadCleanup;
         if (deadCleanup !== 'confirmed') {
           incidents.push('owned_tab_cleanup_failed');
           if (!appendIncident({
