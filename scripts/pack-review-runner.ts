@@ -8160,6 +8160,9 @@ export async function resetPackReview(input: Record<string, unknown>): Promise<R
   if (trim(input.projectId) && trim(input.projectId) !== selected.projectId) {
     throw new Error('reset selected project/store mismatch');
   }
+  if (trim(input.sourceRepoRoot) || trim(input.repoRoot) || trim(input.repoSlug)) {
+    throw new Error('reset requires the selected project-card primaryRoot/repository; no checkout or repository override');
+  }
   const target = await resolveTarget(input as StartInput, trusted.trustedPackRoot, undefined, selected);
   if (target.repoSlug.toLowerCase() !== selected.repository.toLowerCase()) {
     throw new Error('reset selected repository mismatch');
@@ -8177,6 +8180,12 @@ export async function resetPackReview(input: Record<string, unknown>): Promise<R
   const nonce = trim(input.nonce);
   if (!actor || !reason || !nonce) throw new Error('reset requires --actor, --reason, and --nonce');
   if (!target.issueNumber) throw new Error('reset requires the actual PR-closing Issue');
+  const requestedCycleId = trim(input.priorCycleId) || authority.cycle.cycleId;
+  const suppliedHash = trim(input.priorAtCapHash);
+  if (requestedCycleId !== authority.cycle.cycleId
+      || (suppliedHash && suppliedHash !== authority.cycle.atCapHash)) {
+    throw new Error('reset prior cycle/hash mismatch');
+  }
   const fields = process.env.OPK_VITEST_HARNESS === '1'
     && (input as StartInput).fixtureIssueBody !== undefined
     && (input as StartInput).fixtureIssueTitle !== undefined
@@ -8257,10 +8266,6 @@ export async function resetPackReview(input: Record<string, unknown>): Promise<R
     throw new Error('reset requires an eligible at-cap findings record');
   }
 
-  const suppliedHash = trim(input.priorAtCapHash);
-  if (suppliedHash && suppliedHash !== authority.cycle.atCapHash) {
-    throw new Error('reset supplied prior at-cap hash mismatch');
-  }
   const reset = acknowledgePackReviewReset({
     prNumber: target.prNumber,
     expectedTransitionSeq: authority.transitionSeq,
@@ -8268,7 +8273,7 @@ export async function resetPackReview(input: Record<string, unknown>): Promise<R
     tier: authoritativeTier,
     completedFindingsBodyAmended,
     provenance: {
-      priorCycleId: trim(input.priorCycleId) || authority.cycle.cycleId,
+      priorCycleId: requestedCycleId,
       ...(authority.cycle.atCapHash ? { priorAtCapHash: authority.cycle.atCapHash } : {}),
       actor, reason, timestampUtc: trim(input.timestampUtc) || new Date().toISOString(), nonce,
     },
