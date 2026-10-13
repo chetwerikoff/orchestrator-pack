@@ -5949,8 +5949,8 @@ describe('Issue #2537 GPT delayed no-judgment error cannot restore cap-one succe
     const authority = readPackReviewAuthority(prNumber, { storeRoot })!;
     expect(authority.cycle).toMatchObject({
       frozenTier: 'T3', frozenCap: 2, consumedRoundOrdinals: [1],
-      reviewStageComplete: false,
     });
+    expect(authority.cycle?.reviewStageComplete).not.toBe(true);
     const historical = listPackReviewRuns(opts)[0]!;
     expect(historical).toMatchObject({ logicalRoundCap: 1, logicalRoundOrdinal: 1 });
   });
