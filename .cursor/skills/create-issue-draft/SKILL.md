@@ -158,9 +158,12 @@ be established, keep applicability unverified instead of inferring guard absence
 
 ### Smoke plan by change kind
 
-An Issue limited to documentation, policy, prompt, or skill text must declare its
-`smoke-test-plan` as `not-applicable: true` and include a one-line reason. Smoke
-scenarios are only for executable behavior.
+Executable `smoke-test-plan` scenarios use `- action: <text> | expected: <text>`
+or `- name: <title>` with indented `action: <text>` and `expected: <text>`
+lines; documentation-, policy-, prompt-, or skill-text-only Issues instead must
+use `not-applicable: true` with a one-line `reason: <text>`.
+Put `entrypoint`, `environment`, and other scenario context in the scenario's
+`action` text, never as standalone lines inside the `smoke-test-plan` fence.
 
 When an Issue's goal includes proving that no stale terms, removed commands, or
 old paths remain, write that check as a numbered acceptance criterion containing
