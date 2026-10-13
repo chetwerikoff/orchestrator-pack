@@ -4326,7 +4326,8 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
 
   // A non-descendant has never been eligible for final-cap success. Keep that
   // existing refusal ahead of body-validation errors and status publication.
-  if (logicalFinalFindings && authority.terminal
+  if (logicalFinalFindings && authority.cycle.frozenTier !== 'T1'
+      && authority.terminal
       && authority.currentHeadSha !== authority.terminal.targetSha) {
     const strict = await resolvePackReviewStrictDescendant({
       repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
@@ -4344,7 +4345,8 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   // At the findings cap, review completion and required success use the old
   // preflight body snapshot, not a revision tag or an amended current Issue.
   let verifiedFinalIssue: { issueNumber: number; digest: string } | undefined;
-  if (logicalAccounting && authority.currentHeadSha !== authority.terminal.targetSha) {
+  if (logicalAccounting && authority.cycle.frozenTier !== 'T1'
+      && authority.currentHeadSha !== authority.terminal.targetSha) {
     try {
       const cycle = authority.cycle;
       const terminal = authority.terminal;
@@ -6454,6 +6456,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     // Reuse the same final-cap evidence and publication decision as scoped
     // reconciliation. Do not let start settle first or swallow its refusal.
     const finalFindings = authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && authority.cycle.frozenTier !== 'T1'
       && authority.terminal?.reviewVerdict === 'findings'
       && (['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
         || (authority.cycle.state === 'closed' && authority.cycle.reviewStageComplete === true
@@ -8191,9 +8194,10 @@ export async function resetPackReview(input: Record<string, unknown>): Promise<R
   if (target.repoSlug.toLowerCase() !== selected.repository.toLowerCase()) {
     throw new Error('reset selected repository mismatch');
   }
-  const storeRoot = resolvePackReviewRunStoreRoot({
-    projectId: selected.projectId, storeRoot: trim(input.storeRoot) || undefined,
-  });
+  const storeRoot = resolvePackReviewRunStoreRoot({ projectId: selected.projectId });
+  if (trim(input.storeRoot) && resolve(trim(input.storeRoot)) !== storeRoot) {
+    throw new Error('reset selected project/store mismatch');
+  }
   const authority = readPackReviewAuthority(target.prNumber, { storeRoot });
   if (!authority?.cycle) throw new Error('reset requires an authoritative review cycle');
   if (authority.currentHeadSha !== target.headSha) {
@@ -8220,6 +8224,7 @@ export async function resetPackReview(input: Record<string, unknown>): Promise<R
   const authoritativeTier = tierRank[liveTier] > tierRank[authority.cycle.frozenTier]
     ? liveTier : authority.cycle.frozenTier;
   const completed = authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    && authority.cycle.frozenTier !== 'T1'
     && authority.cycle.state === 'closed'
     && authority.cycle.reviewStageComplete === true
     && authority.cycle.consumedRoundOrdinals?.length === authority.cycle.frozenCap
