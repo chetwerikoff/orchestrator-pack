@@ -848,10 +848,9 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     let sentAt: number | undefined;
     let sentText = '';
     let composerText = '';
-    let url = scenario === 'initial-wrong-url'
-      ? 'https://chatgpt.com/c/foreign' : chatUrl;
+    let url = chatUrl;
     let closed = false;
-    let stop = scenario === 'initial-stop';
+    let stop = false;
     let reopened = false;
     let resumedStopObserved = false;
     let afterReopenReads = 0;
@@ -861,6 +860,9 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     const fill = vi.fn(async (value: string) => { composerText = value; });
     const composer = scalarLocator({
       count: vi.fn(async () => usableComposer() ? 1 : 0),
+      click: vi.fn(async () => {
+        if (!usableComposer()) throw new Error('no composer in the rendered page');
+      }),
       fill,
       innerText: vi.fn(async () => composerText),
     });
@@ -936,6 +938,10 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
       close: vi.fn(async () => undefined),
       waitForTimeout: vi.fn(async (ms: number) => {
         now += ms;
+        if (!reopened && scenario === 'initial-stop' && now - startedAt >= 10_000) stop = true;
+        if (!reopened && scenario === 'initial-wrong-url' && now - startedAt >= 10_000) {
+          url = 'https://chatgpt.com/c/foreign';
+        }
         if (scenario === 'delayed-stop' && lastGotoAt !== undefined
           && now - lastGotoAt >= 12_000) stop = true;
         if (scenario === 'post-stop' && reopened) stop = true;
@@ -977,7 +983,10 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
       expect.objectContaining({ waitUntil: 'commit' }),
     );
     expect(run.afterReopenReads).toBeGreaterThanOrEqual(2);
-    expect(run.sentAt).toBeDefined();
+    expect(run.sentAt, JSON.stringify({
+      result: run.result, fillCount: run.fill.mock.calls.length,
+      sentAt: run.sentAt, lastGotoAt: run.lastGotoAt,
+    })).toBeDefined();
     expect(run.lastGotoAt).toBeDefined();
     expect(run.sentAt! - run.lastGotoAt!).toBeGreaterThanOrEqual(30_000);
     expect(run.sentAt! - run.startedAt).toBeLessThan(60_000);
