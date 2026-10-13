@@ -925,106 +925,324 @@ function gitOutput(repoRoot: string, args: string[]): string | null {
   return result.ok ? result.stdout.trim() : null;
 }
 
+type WorkflowState = true | false | null;
+type WorkflowField = { key: string; value: string; indent: number; index: number };
+
+function workflowIndent(line: string): number {
+  return /^\s*/u.exec(line)?.[0].length ?? 0;
+}
+
 function workflowLines(source: string): string[] {
-  return source
-    .replace(/^\uFEFF/, '')
-    .split(/\r?\n/)
-    .map((line) => line.replace(/\s+#.*$/, ''));
-}
-
-function rootSection(lines: string[], key: string): string[] | null {
-  const start = lines.findIndex((line) => new RegExp(`^(?:${key}|['\"]${key}['\"]):`).test(line));
-  if (start < 0) return null;
-  const result = [lines[start]!];
-  for (let index = start + 1; index < lines.length; index += 1) {
-    const line = lines[index]!;
-    if (line.trim() && !/^\s/.test(line)) break;
-    result.push(line);
-  }
-  return result;
-}
-
-function hasNormalPullRequestTrigger(lines: string[]): boolean {
-  const section = rootSection(lines, 'on');
-  if (!section) return false;
-  const first = section[0]!.replace(/^(?:on|['\"]on['\"]):\s*/, '').trim();
-  if (first) return /(?:^|[\[,{\s])pull_request(?:$|[\],}\s])/.test(first);
-  const eventIndex = section.findIndex((line) => /^\s{2}pull_request\s*:/.test(line));
-  if (eventIndex < 0) return false;
-  const eventLines: string[] = [];
-  for (let index = eventIndex + 1; index < section.length; index += 1) {
-    const line = section[index]!;
-    if (line.trim() && /^\s{2}\S/.test(line)) break;
-    eventLines.push(line);
-  }
-  const typesIndex = eventLines.findIndex((line) => /^\s{4}types\s*:/.test(line));
-  if (typesIndex < 0) return true;
-  const typeLine = eventLines[typesIndex]!.replace(/^\s{4}types\s*:\s*/, '');
-  let types = typeLine.match(/^\[([^\]]*)\]/)?.[1];
-  if (types === undefined) {
-    const typeValues: string[] = [];
-    for (let index = typesIndex + 1; index < eventLines.length; index += 1) {
-      const line = eventLines[index]!;
-      if (line.trim() && /^\s{4}\S/.test(line)) break;
-      const value = /^\s+-\s*['\"]?([A-Za-z_-]+)['\"]?\s*$/.exec(line)?.[1];
-      if (value) typeValues.push(value);
+  return source.replace(/^\uFEFF/u, '').split(/\r?\n/u).map((line) => {
+    let quote: "'" | '"' | null = null;
+    for (let index = 0; index < line.length; index += 1) {
+      const char = line[index]!;
+      if (quote === '"' && char === '\\') { index += 1; continue; }
+      if (quote === "'" && char === "'" && line[index + 1] === "'") { index += 1; continue; }
+      if (quote === char) { quote = null; continue; }
+      if (!quote && (char === "'" || char === '"')) { quote = char; continue; }
+      if (!quote && char === '#' && (index === 0 || /\s/u.test(line[index - 1]!))) {
+        return line.slice(0, index).trimEnd();
+      }
     }
-    types = typeValues.join(',');
-  }
-  if (!types) return false;
-  const values = new Set(types.split(',').map((value) => value.trim().replace(/^['\"]|['\"]$/g, '')));
-  return values.has('opened') && values.has('synchronize');
+    return line;
+  });
 }
 
-function activeScopeGuardJob(lines: string[]): boolean {
-  const jobs = rootSection(lines, 'jobs');
-  if (!jobs) return false;
-  const start = jobs.findIndex((line) => /^\s{2}pr-scope-guard\s*:/.test(line));
-  if (start < 0) return false;
-  const block: string[] = [];
-  for (let index = start + 1; index < jobs.length; index += 1) {
-    const line = jobs[index]!;
-    if (line.trim() && /^\s{2}\S/.test(line)) break;
-    block.push(line);
+function workflowField(line: string, index: number): WorkflowField | null {
+  const indent = workflowIndent(line);
+  const match = /^(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+))\s*:\s*(.*)$/u.exec(line.slice(indent));
+  if (!match) return null;
+  return { key: match[1] ?? match[2] ?? match[3]!, value: match[4]!, indent, index };
+}
+
+function workflowBlockEnd(lines: readonly string[], start: number, parentIndent: number): number {
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (lines[index]!.trim() && workflowIndent(lines[index]!) <= parentIndent) return index;
   }
-  if (block.some((line) => /^\s{4}if\s*:\s*(?:\$\{\{\s*)?false\b/i.test(line))) return false;
-  for (let index = 0; index < block.length; index += 1) {
-    const runMatch = /^\s{6,}(?:-\s*)?run\s*:\s*(.*)$/.exec(block[index]!);
-    if (!runMatch) continue;
-    const runIndent = block[index]!.match(/^\s*/)?.[0].length ?? 0;
-    const runLines = [runMatch[1]!];
-    for (let next = index + 1; next < block.length; next += 1) {
-      const line = block[next]!;
-      if (line.trim() && (line.match(/^\s*/)?.[0].length ?? 0) <= runIndent) break;
-      runLines.push(line);
+  return lines.length;
+}
+
+function workflowChildren(
+  lines: readonly string[],
+  start: number,
+  end: number,
+  parentIndent: number,
+): WorkflowField[] {
+  const candidates: WorkflowField[] = [];
+  for (let index = start + 1; index < end; index += 1) {
+    if (!lines[index]!.trim() || workflowIndent(lines[index]!) <= parentIndent) continue;
+    const field = workflowField(lines[index]!, index);
+    if (field) candidates.push(field);
+  }
+  const level = Math.min(...candidates.map((field) => field.indent));
+  return candidates.filter((field) => field.indent === level);
+}
+
+function workflowFlowItems(source: string): string[] | null {
+  const text = source.trim();
+  if (!((text[0] === '[' && text.at(-1) === ']') ||
+        (text[0] === '{' && text.at(-1) === '}'))) return null;
+  const items: string[] = [];
+  let quote: "'" | '"' | null = null;
+  let depth = 0;
+  let start = 1;
+  for (let index = 1; index < text.length - 1; index += 1) {
+    const char = text[index]!;
+    if (quote === '"' && char === '\\') { index += 1; continue; }
+    if (quote === "'" && char === "'" && text[index + 1] === "'") { index += 1; continue; }
+    if (quote === char) { quote = null; continue; }
+    if (!quote && (char === "'" || char === '"')) { quote = char; continue; }
+    if (quote) continue;
+    if (char === '[' || char === '{') depth += 1;
+    else if (char === ']' || char === '}') depth -= 1;
+    else if (char === ',' && depth === 0) {
+      items.push(text.slice(start, index).trim());
+      start = index + 1;
+    }
+    if (depth < 0) return null;
+  }
+  if (quote || depth !== 0) return null;
+  const last = text.slice(start, -1).trim();
+  if (last) items.push(last);
+  return items;
+}
+
+function workflowScalar(value: string): string {
+  const text = value.trim();
+  if (text.startsWith("'") && text.endsWith("'")) return text.slice(1, -1).replaceAll("''", "'");
+  if (text.startsWith('"') && text.endsWith('"')) {
+    try { return JSON.parse(text) as string; } catch { return text; }
+  }
+  return text;
+}
+
+function workflowFlowMap(source: string): Map<string, string> | null {
+  if (!source.trim().startsWith('{')) return null;
+  const items = workflowFlowItems(source);
+  if (!items) return null;
+  const map = new Map<string, string>();
+  for (const item of items) {
+    const pair = workflowField(item, 0);
+    if (!pair || map.has(pair.key)) return null;
+    map.set(pair.key, pair.value);
+  }
+  return map;
+}
+
+function workflowSequence(
+  value: string,
+  lines: readonly string[],
+  field: WorkflowField | undefined,
+  end: number,
+): string[] | null {
+  const text = value.trim();
+  if (text.startsWith('[')) return workflowFlowItems(text)?.map(workflowScalar) ?? null;
+  if (text || !field) return null;
+  const values: string[] = [];
+  let listIndent: number | null = null;
+  for (let index = field.index + 1; index < end; index += 1) {
+    const line = lines[index]!;
+    if (!line.trim()) continue;
+    const indent = workflowIndent(line);
+    if (indent <= field.indent) break;
+    const match = /^\s*-\s*(.+?)\s*$/u.exec(line);
+    if (!match || (listIndent !== null && indent !== listIndent)) return null;
+    listIndent = indent;
+    values.push(workflowScalar(match[1]!));
+  }
+  return values.length ? values : null;
+}
+
+function normalPrTrigger(lines: readonly string[]): WorkflowState {
+  const on = lines.map(workflowField).find((field) => field?.indent === 0 && field.key === 'on');
+  if (!on) return lines.some((line) => /\bpull_request\b/u.test(line)) ? null : false;
+  const onEnd = workflowBlockEnd(lines, on.index, on.indent);
+  let prValue: string | undefined;
+  let prField: WorkflowField | undefined;
+  const onText = on.value.trim();
+
+  if (onText.startsWith('{')) {
+    const events = workflowFlowMap(onText);
+    if (!events) return null;
+    prValue = events.get('pull_request');
+    if (prValue === undefined) return false;
+  } else if (onText.startsWith('[')) {
+    const events = workflowFlowItems(onText);
+    if (!events) return null;
+    return events.map(workflowScalar).includes('pull_request');
+  } else if (onText) {
+    return workflowScalar(onText) === 'pull_request';
+  } else {
+    prField = workflowChildren(lines, on.index, onEnd, on.indent)
+      .find((field) => field.key === 'pull_request');
+    if (!prField) return false;
+    prValue = prField.value;
+  }
+
+  let types: string | undefined;
+  let typesField: WorkflowField | undefined;
+  let typesEnd = onEnd;
+  if (prValue?.trim().startsWith('{')) {
+    const map = workflowFlowMap(prValue);
+    if (!map) return null;
+    types = map.get('types');
+    if (types === undefined) return true;
+  } else if (prValue?.trim()) {
+    return null;
+  } else if (prField) {
+    typesEnd = workflowBlockEnd(lines, prField.index, prField.indent);
+    typesField = workflowChildren(lines, prField.index, typesEnd, prField.indent)
+      .find((field) => field.key === 'types');
+    if (!typesField) return true;
+    types = typesField.value;
+  } else {
+    return true;
+  }
+
+  const events = workflowSequence(types ?? '', lines, typesField, typesEnd);
+  if (!events) return null;
+  const opened = events.includes('opened');
+  const synchronize = events.includes('synchronize');
+  if (opened && synchronize) return true;
+  // A partial normal-PR trigger may still enforce scope on some PR updates.
+  return opened || synchronize ? null : false;
+}
+
+function workflowIf(raw: string): WorkflowState {
+  let value = raw.trim();
+  if (value.startsWith('\${{') && value.endsWith('}}')) value = value.slice(3, -2).trim();
+  while (value.startsWith('(') && value.endsWith(')')) value = value.slice(1, -1).trim();
+  const or = value.split(/\s+\|\|\s+/u);
+  if (or.length > 1) {
+    const states = or.map(workflowIf);
+    return states.includes(true) ? true : states.every((state) => state === false) ? false : null;
+  }
+  const and = value.split(/\s+&&\s+/u);
+  if (and.length > 1) {
+    const states = and.map(workflowIf);
+    return states.includes(false) ? false : states.every((state) => state === true) ? true : null;
+  }
+  if (/^false$/iu.test(value)) return false;
+  if (/^true$/iu.test(value)) return true;
+  const event = /^github\.event_name\s*(==|!=)\s*(['"])([^'"]+)\2$/iu.exec(value);
+  if (event) {
+    const matches = event[3] === 'pull_request';
+    return event[1] === '==' ? matches : !matches;
+  }
+  if (/^!\s*/u.test(value)) {
+    const nested = workflowIf(value.replace(/^!\s*/u, ''));
+    return nested === null ? null : !nested;
+  }
+  return null;
+}
+
+function guardJobState(lines: readonly string[], jobs: WorkflowField, jobsEnd: number): WorkflowState {
+  const job = workflowChildren(lines, jobs.index, jobsEnd, jobs.indent)
+    .find((field) => field.key === 'pr-scope-guard');
+  if (!job) return false;
+  const jobEnd = workflowBlockEnd(lines, job.index, job.indent);
+  const properties = workflowChildren(lines, job.index, jobEnd, job.indent);
+  const condition = properties.find((field) => field.key === 'if');
+  const jobCondition = condition ? workflowIf(condition.value) : true;
+  if (jobCondition === false) return false;
+  const steps = properties.find((field) => field.key === 'steps');
+  if (!steps) return null;
+  const stepsEnd = workflowBlockEnd(lines, steps.index, steps.indent);
+  const stepStarts = [];
+  for (let index = steps.index + 1; index < stepsEnd; index += 1) {
+    if (/^\s*-\s+\S/u.test(lines[index]!)) stepStarts.push(index);
+  }
+  if (stepStarts.length === 0) return null;
+  const stepLevel = Math.min(...stepStarts.map((index) => workflowIndent(lines[index]!)));
+  const starts = stepStarts.filter((index) => workflowIndent(lines[index]!) === stepLevel);
+  let ambiguous = jobCondition === null;
+  for (let number = 0; number < starts.length; number += 1) {
+    const start = starts[number]!;
+    const end = starts[number + 1] ?? stepsEnd;
+    const first = workflowField(lines[start]!.trimStart().replace(/^-\s*/u, ''), start);
+    const inline = first ? [{ ...first, indent: stepLevel + 2 }] : [];
+    const properties = [...inline, ...workflowChildren(lines, start, end, stepLevel)];
+    const run = properties.find((field) => field.key === 'run');
+    if (!run) {
+      if (/scripts\/pr-scope-(?:runner|check)\.ts/u.test(lines.slice(start, end).join('\n'))) ambiguous = true;
+      continue;
+    }
+    const runLines = [run.value];
+    for (let index = run.index + 1; index < end; index += 1) {
+      if (lines[index]!.trim() && workflowIndent(lines[index]!) <= run.indent) break;
+      runLines.push(lines[index]!);
     }
     const command = runLines.join('\n');
-    if (/\bnode\b/.test(command) && /scripts\/pr-scope-(?:runner|check)\.ts/.test(command)) return true;
+    if (!/\bnode\b/u.test(command) || !/scripts\/pr-scope-(?:runner|check)\.ts\b/u.test(command)) continue;
+    const stepIf = properties.find((field) => field.key === 'if');
+    const active = stepIf ? workflowIf(stepIf.value) : true;
+    if (active === false) continue;
+    if (active === null) { ambiguous = true; continue; }
+    if (jobCondition === true) return true;
   }
-  return false;
+  return ambiguous ? null : false;
 }
 
-export function resolvePrScopeGuardApplicability(repoRoot: string): {
+function workflowGuardState(source: string): WorkflowState {
+  const lines = workflowLines(source);
+  const trigger = normalPrTrigger(lines);
+  if (trigger === false) return false;
+  if (!lines.some((line) => /\bpr-scope-guard\b/u.test(line))) return false;
+  const jobs = lines.map(workflowField).find((field) => field?.indent === 0 && field.key === 'jobs');
+  if (!jobs) return null;
+  const job = guardJobState(lines, jobs, workflowBlockEnd(lines, jobs.index, jobs.indent));
+  if (job === false) return false;
+  return trigger === null || job === null ? null : true;
+}
+
+export function resolvePrScopeGuardApplicability(
+  repoRoot: string,
+  options: { baseRef?: string } = {},
+): {
   status: PrScopeGuardApplicability;
   repository: string | null;
 } {
   const origin = gitOutput(repoRoot, ['config', '--get', 'remote.origin.url']);
   const repository = origin ? parseRemoteSlug(origin) : null;
-  const ref = gitOutput(repoRoot, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
-  if (!repository || !ref || !/^refs\/remotes\/origin\/.+/.test(ref)) {
+  if (!repository) return { status: 'unverified', repository };
+
+  let branch = options.baseRef?.trim() ?? '';
+  if (branch.startsWith('refs/remotes/origin/')) branch = branch.slice('refs/remotes/origin/'.length);
+  else if (branch.startsWith('refs/heads/')) branch = branch.slice('refs/heads/'.length);
+  else if (branch.startsWith('origin/')) branch = branch.slice('origin/'.length);
+  if (!branch) {
+    const advertisedHead = gitOutput(repoRoot, ['ls-remote', '--symref', 'origin', 'HEAD']);
+    branch = advertisedHead?.match(/^ref:\s+refs\/heads\/([^\t\r\n]+)\tHEAD$/mu)?.[1] ?? '';
+  }
+  if (!branch || gitOutput(repoRoot, ['check-ref-format', '--branch', branch]) !== branch) {
     return { status: 'unverified', repository };
   }
-  const paths = gitOutput(repoRoot, ['ls-tree', '-r', '--name-only', ref, '--', '.github/workflows']);
-  if (paths === null) return { status: 'unverified', repository };
-  for (const path of paths.split('\n').filter((entry) => /\.ya?ml$/i.test(entry))) {
-    const source = gitOutput(repoRoot, ['show', `${ref}:${path}`]);
-    if (source === null) return { status: 'unverified', repository };
-    const lines = workflowLines(source);
-    if (hasNormalPullRequestTrigger(lines) && activeScopeGuardJob(lines)) {
-      return { status: 'guarded', repository };
-    }
+  const advertised = gitOutput(repoRoot, ['ls-remote', '--heads', 'origin', 'refs/heads/' + branch]);
+  const expected = advertised?.match(/^([0-9a-f]{40})\trefs\/heads\/[^\t\r\n]+$/mu)?.[1];
+  if (!expected) return { status: 'unverified', repository };
+  const fetched = runProcessSync({
+    command: 'git',
+    args: ['fetch', '--no-tags', '--quiet', 'origin', 'refs/heads/' + branch],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+    timeoutMs: 30_000,
+  });
+  if (!fetched.ok || gitOutput(repoRoot, ['rev-parse', 'FETCH_HEAD^{commit}']) !== expected) {
+    return { status: 'unverified', repository };
   }
-  return { status: 'guard-free', repository };
+
+  const paths = gitOutput(repoRoot, ['ls-tree', '-r', '--name-only', 'FETCH_HEAD', '--', '.github/workflows']);
+  if (paths === null) return { status: 'unverified', repository };
+  let unresolved = false;
+  for (const path of paths.split('\n').filter((entry) => /\.ya?ml$/iu.test(entry))) {
+    const source = gitOutput(repoRoot, ['show', 'FETCH_HEAD:' + path]);
+    if (source === null) return { status: 'unverified', repository };
+    const state = workflowGuardState(source);
+    if (state === true) return { status: 'guarded', repository };
+    if (state === null) unresolved = true;
+  }
+  return { status: unresolved ? 'unverified' : 'guard-free', repository };
 }
 
 export function producePrScopeDeclaration(argv: string[]): PrScopeDeclaration | null {
