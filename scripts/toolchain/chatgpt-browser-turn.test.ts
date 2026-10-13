@@ -296,7 +296,8 @@ describe('Issue #1998 Target crash classification', () => {
         '--chat-url', 'https://chatgpt.com/c/19981998-1998-4998-8998-199819981998',
         '--timeout-ms', '10000',
       ]);
-      const result = JSON.parse(writes.join('')) as { state: string; cause: string; send_count: number; incidents: string[] };
+      // A witnessed Send can emit a cancellation receipt before the terminal result.
+      const result = JSON.parse(writes.join('').trim().split(/\r?\n/u).at(-1)!) as { state: string; cause: string; send_count: number; incidents: string[] };
       expect(result).toMatchObject({
         state: 'driver_error',
         cause: 'post_send_target_crashed',
