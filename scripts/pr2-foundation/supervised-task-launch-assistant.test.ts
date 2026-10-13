@@ -107,6 +107,70 @@ describe('production manager Run observation command seam', () => {
   });
 });
 
+describe('Issue #2547 strict production GitHub origin preflight', () => {
+  it.each([
+    ['mixed-case SSH', 'git@GITHUB.COM:Chetwerikoff/AppliedIN.git', 'CHETWERIKOFF/AppliedIn', true],
+    ['mixed-case HTTPS', 'https://GitHub.com/CHETWERIKOFF/appliedIN.git', 'chetwerikoff/AppliedIn', true],
+    ['extra SSH segment', 'git@github.com:other/chetwerikoff/AppliedIn.git', 'chetwerikoff/AppliedIn', false],
+    ['extra HTTPS segment', 'https://github.com/other/chetwerikoff/AppliedIn.git', 'chetwerikoff/AppliedIn', false],
+    ['empty segment', 'git@github.com:chetwerikoff//AppliedIn.git', 'chetwerikoff/AppliedIn', false],
+    ['non-GitHub origin', 'git@example.com:chetwerikoff/AppliedIn.git', 'chetwerikoff/AppliedIn', false],
+    ['wrong origin', 'git@github.com:other/AppliedIn.git', 'chetwerikoff/AppliedIn', false],
+    ['invalid card', 'git@github.com:chetwerikoff/AppliedIn.git', 'other/chetwerikoff/AppliedIn', false],
+  ] as const)('direct callback: %s', async (_name, remote, repository, matched) => {
+    const config = mkdtempSync(join(tmpdir(), 'production-origin-'));
+    const cards = join(config, 'orchestrator-pack', 'projects');
+    mkdirSync(cards, { recursive: true });
+    writeFileSync(join(cards, 'orchestrator-pack.json'), JSON.stringify({
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/AppliedIn',
+      primaryRoot: process.cwd(), defaultBranch: 'main', orcaWorkspacePattern: '.*',
+      orchestratorTitlePattern: '.*', browserGpt: { projectUrl: 'https://example.test/project' },
+    }));
+    const commands: Array<{ argv: string[]; cwd: string | undefined }> = [];
+    const mock = vi.spyOn(subprocess, 'runProcess').mockImplementation(async (options) => {
+      commands.push({ argv: [options.command, ...(options.args ?? [])], cwd: options.cwd });
+      return {
+        outcome: 'exit', ok: true, exitCode: 0, signal: null,
+        stdout: remote + '\n', stderr: '', timedOut: false, cancelled: false,
+      };
+    });
+    try {
+      const production = await createProductionLaunchDependencies({
+        ...launchInput(), projectId: 'orchestrator-pack', repository: 'chetwerikoff/AppliedIn',
+        env: { ...profileEnv(), XDG_CONFIG_HOME: config },
+      });
+      const direct = await production.repositoryPreflight(repository);
+      expect(direct.status).toBe(matched ? 'ok' : 'continue');
+      if (!matched) expect(direct).toMatchObject({ cause: 'repository_preflight_mismatch' });
+      expect(commands).toEqual([{ argv: ['git', 'remote', 'get-url', 'origin'], cwd: process.cwd() }]);
+      if (matched) {
+        commands.length = 0;
+        const ordinary = await runSupervisedTaskLaunchAssistant({
+          ...launchInput(), repository: 'CHETWERIKOFF/AppliedIn',
+        }, { ...deps(), repositoryPreflight: production.repositoryPreflight });
+        expect(ordinary.outcome).toBe('ready');
+        expect(ordinary.resources.repository).toBe('chetwerikoff/appliedin');
+        expect(commands).toEqual([{ argv: ['git', 'remote', 'get-url', 'origin'], cwd: process.cwd() }]);
+      }
+    } finally {
+      mock.mockRestore();
+      rmSync(config, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['git@GITHUB.COM:CHETWERIKOFF/AppliedIn.git', 'github.com/chetwerikoff/appliedin'],
+    ['https://github.com/CHETWERIKOFF/AppliedIn.git', 'github.com/chetwerikoff/appliedin'],
+    ['git@github.com:other/chetwerikoff/AppliedIn.git', ''],
+    ['https://github.com/other/chetwerikoff/AppliedIn.git', ''],
+    ['git@github.com:chetwerikoff//AppliedIn.git', ''],
+    ['https://github.com//chetwerikoff/AppliedIn.git', ''],
+    ['git@elsewhere.example:chetwerikoff/AppliedIn.git', ''],
+  ] as const)('normalizes only an exact GitHub owner/repo path: %s', (origin, expected) => {
+    expect(repoCanonicalKey(origin)).toBe(expected);
+  });
+});
+
 const MANAGER_PREAMBLE_FIXTURE = `# Manager launch preamble
 
 Manager work may hand a correction to the firefighter role when required.
@@ -292,6 +356,70 @@ function okEnvelope(result: Record<string, unknown>): string {
 
 function repoListEnvelope(repos: readonly Record<string, unknown>[]): string {
   return okEnvelope({ repos });
+}
+
+const REGISTERED_ORCA_ROOT = '/tmp/orca-registered-checkout';
+
+function registeredOrcaRepo(id = 'orca-repo-1', path = REGISTERED_ORCA_ROOT): Record<string, unknown> {
+  return {
+    id, path, kind: 'git', executionHostId: 'local',
+    gitRemoteIdentity: { canonicalKey: 'github.com/upstream/unrelated' },
+  };
+}
+
+function freshRepoFixture(input: {
+  repos?: readonly Record<string, unknown>[];
+  listOutput?: string;
+  originByPath?: Readonly<Record<string, string>>;
+  rootByPath?: Readonly<Record<string, string>>;
+  failRoot?: boolean;
+  failOrigin?: boolean;
+  setupState?: 'not_configured' | 'running' | 'absent';
+  waitExitCode?: number;
+} = {}) {
+  const calls: Array<{ argv: string[]; cwd: string | undefined }> = [];
+  const execute = async (
+    args: readonly string[], _timeoutMs?: number, _env?: Readonly<NodeJS.ProcessEnv>, cwd?: string,
+  ) => {
+    const argv = [...args];
+    calls.push({ argv, cwd });
+    const command = argv.join(' ');
+    if (command === 'orca repo list --json') {
+      return { ok: true, stdout: input.listOutput ?? repoListEnvelope(input.repos ?? [registeredOrcaRepo()]), stderr: '' };
+    }
+    if (command === 'git rev-parse --show-toplevel') {
+      return {
+        ok: !input.failRoot, stdout: (input.rootByPath?.[cwd ?? ''] ?? cwd ?? '') + '\n', stderr: '',
+      };
+    }
+    if (command === 'git remote get-url origin') {
+      return {
+        ok: !input.failOrigin,
+        stdout: (input.originByPath?.[cwd ?? ''] ?? 'git@github.com:chetwerikoff/orchestrator-pack.git') + '\n',
+        stderr: '',
+      };
+    }
+    if (args[0] === 'orca' && args[1] === 'worktree' && args[2] === 'create') {
+      const receipt = input.setupState === 'absent' ? {} : {
+        setupReceipt: input.setupState === 'running'
+          ? { requested: 'run', hookFound: true, state: 'running', terminalHandle: 'setup-term' }
+          : { requested: 'run', hookFound: false, state: 'not_configured' },
+      };
+      return {
+        ok: true, stdout: okEnvelope({ worktree: { id: 'repo::wt', path: '/tmp/wt' }, ...receipt }), stderr: '',
+      };
+    }
+    if (args[0] === 'orca' && args[1] === 'terminal' && args[2] === 'wait') {
+      return {
+        ok: true,
+        stdout: okEnvelope({ wait: {
+          handle: 'setup-term', satisfied: true, status: 'exited', exitCode: input.waitExitCode ?? 0,
+        } }), stderr: '',
+      };
+    }
+    return { ok: false, stdout: '', stderr: 'unexpected command: ' + command };
+  };
+  return { execute, calls };
 }
 
 function managerReuseFixture(input: {
@@ -1908,72 +2036,155 @@ The words Firefighter universal appear here only as prose.`;
     }
   });
 
-  it('resolves the GitHub slug to the exact Orca repository selector before create', async () => {
-    const calls: string[][] = [];
-    const result = await prepareWorktreeWithOrca({
-      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
-    }, async (args) => {
-      calls.push([...args]);
-      if (args[1] === 'repo') return {
-        ok: true,
-        stdout: repoListEnvelope([{
-          id: 'orca-repo-1',
-          repoIcon: { label: 'chetwerikoff/orchestrator-pack' },
-          gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' },
-        }]),
-      };
-      return { ok: true, stdout: okEnvelope({
-        worktree: { id: 'orca-repo-1::wt', path: '/tmp/wt' },
-        setupReceipt: { requested: 'run', hookFound: false, state: 'not_configured' },
-      }) };
-    });
-    expect(result).toMatchObject({ status: 'ok', value: { id: 'orca-repo-1::wt' } });
-    expect(calls[0]).toEqual(['orca', 'repo', 'list', '--json']);
-    expect(calls[1]).toEqual([
-      'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
-      '--issue', '1479', '--setup', 'run', '--json',
-    ]);
-  });
-
-  it('does not authorize a requested slug from mutable repoIcon.label when canonical identity disagrees', async () => {
-    const calls: string[][] = [];
-    const result = await prepareWorktreeWithOrca({
-      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
-    }, async (args) => {
-      calls.push([...args]);
-      return { ok: true, stdout: repoListEnvelope([{
-        id: 'wrong-repo', repoIcon: { label: 'chetwerikoff/orchestrator-pack' },
-        gitRemoteIdentity: { canonicalKey: 'github.com/other/repo' },
-      }]) };
-    });
-    expect(result).toMatchObject({ status: 'continue', cause: 'worktree_repository_resolution_absent' });
-    expect(calls).toEqual([['orca', 'repo', 'list', '--json']]);
+  it('uses the registered local fork origin, not upstream Orca identity, for both fresh effect boundaries', async () => {
+    const repo = {
+      ...registeredOrcaRepo('6f030d40'),
+      gitRemoteIdentity: { canonicalKey: 'github.com/sayantan94/AppliedIn' },
+      repoIcon: { label: 'untrusted/upstream-label' },
+    };
+    for (const providerTopLevel of [false, true]) {
+      const fixture = freshRepoFixture({
+        repos: [repo],
+        originByPath: { [REGISTERED_ORCA_ROOT]: 'git@GITHUB.COM:CHETWERIKOFF/AppliedIn.git' },
+      });
+      const result = await prepareWorktreeWithOrca({
+        repository: 'Chetwerikoff/aPPLIEDin', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
+        providerTopLevel,
+      }, fixture.execute);
+      if (providerTopLevel) {
+        expect(result).toMatchObject({
+          status: 'ok', value: {
+            selector: 'new-top-level', repositorySelector: 'id:6f030d40', setupWitness: 'provider_top_level',
+          },
+        });
+      } else {
+        expect(result).toMatchObject({ status: 'ok', value: { id: 'repo::wt' } });
+      }
+      expect(fixture.calls.slice(0, 3)).toEqual([
+        { argv: ['orca', 'repo', 'list', '--json'], cwd: undefined },
+        { argv: ['git', 'rev-parse', '--show-toplevel'], cwd: REGISTERED_ORCA_ROOT },
+        { argv: ['git', 'remote', 'get-url', 'origin'], cwd: REGISTERED_ORCA_ROOT },
+      ]);
+      expect(fixture.calls.filter((call) => call.argv[2] === 'create').map((call) => call.argv)).toEqual(
+        providerTopLevel ? [] : [[
+          'orca', 'worktree', 'create', '--repo', 'id:6f030d40', '--name', 'wt',
+          '--issue', '1479', '--setup', 'run', '--json',
+        ]],
+      );
+    }
   });
 
   it.each([
-    ['absent', repoListEnvelope([{ id: 'other', repoIcon: { label: 'other/repo' } }]), 'worktree_repository_resolution_absent'],
-    ['ambiguous', repoListEnvelope([
-      { id: 'orca-repo-1', repoIcon: { label: 'stale/label' },
-        gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' } },
-      { id: 'orca-repo-2', gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' } },
-    ]), 'worktree_repository_resolution_ambiguous'],
-    ['malformed', '{not-json', 'worktree_repository_resolution_malformed'],
-  ] as const)('continues before fresh worktree effects when Orca repository resolution is %s', async (_label, stdout, cause) => {
-    const calls: string[][] = [];
+    'git@github.com:other/chetwerikoff/AppliedIn.git',
+    'https://github.com/other/chetwerikoff/AppliedIn.git',
+    'git@github.com:chetwerikoff//AppliedIn.git',
+    'https://github.com/chetwerikoff/AppliedIn/extra.git',
+  ])('rejects a suffix-match origin in both fresh effect variants: %s', async (origin) => {
+    for (const providerTopLevel of [false, true]) {
+      const fixture = freshRepoFixture({
+        repos: [registeredOrcaRepo()],
+        originByPath: { [REGISTERED_ORCA_ROOT]: origin },
+      });
+      const result = await prepareWorktreeWithOrca({
+        repository: 'chetwerikoff/AppliedIn', taskId: 'task-1', worktreeName: 'wt', providerTopLevel,
+      }, fixture.execute);
+      expect(result).toMatchObject({ status: 'continue', cause: 'worktree_repository_resolution_absent' });
+      expect(fixture.calls).toEqual([
+        { argv: ['orca', 'repo', 'list', '--json'], cwd: undefined },
+        { argv: ['git', 'rev-parse', '--show-toplevel'], cwd: REGISTERED_ORCA_ROOT },
+        { argv: ['git', 'remote', 'get-url', 'origin'], cwd: REGISTERED_ORCA_ROOT },
+      ]);
+    }
+  });
+
+  it.each([
+    ['folder under another Git root', { kind: 'folder' }, {}],
+    ['ssh-owned colliding local checkout', { executionHostId: 'ssh:remote' }, {}],
+    ['runtime-owned colliding local checkout', { executionHostId: 'runtime:other' }, {}],
+    ['unknown host', { executionHostId: 'unknown' }, {}],
+    ['malformed host', { executionHostId: 42 }, {}],
+    ['host connection collision', { executionHostId: 'local', connectionId: 'remote-connection' }, {}],
+    ['connection without host', { executionHostId: null, connectionId: 'remote-connection' }, {}],
+    ['malformed connection', { connectionId: 42 }, {}],
+    ['missing registered path', { path: undefined }, {}],
+    ['relative registered path', { path: 'nested/folder' }, {}],
+    ['blank registered path', { path: '' }, {}],
+    ['missing repository id', { id: undefined }, {}],
+    ['unusable repository id', { id: 'unusable id' }, {}],
+    ['nested Git directory', {}, { rootByPath: { [REGISTERED_ORCA_ROOT]: '/tmp/parent-root' } }],
+    ['failed root probe', {}, { failRoot: true }],
+    ['failed origin probe', {}, { failOrigin: true }],
+    ['non-GitHub origin', {}, { originByPath: { [REGISTERED_ORCA_ROOT]: 'git@example.com:chetwerikoff/AppliedIn.git' } }],
+    ['wrong origin despite matching labels', {
+      repoIcon: { label: 'chetwerikoff/AppliedIn' },
+      gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/AppliedIn' },
+    }, { originByPath: { [REGISTERED_ORCA_ROOT]: 'git@github.com:unrelated/repo.git' } }],
+  ] as const)('refuses an ineligible local identity: %s', async (_name, differences, options) => {
+    for (const providerTopLevel of [false, true]) {
+      const fixture = freshRepoFixture({ repos: [{ ...registeredOrcaRepo(), ...differences }], ...options });
+      const result = await prepareWorktreeWithOrca({
+        repository: 'chetwerikoff/AppliedIn', taskId: 'task-1', worktreeName: 'wt', providerTopLevel,
+      }, fixture.execute);
+      expect(result.status).toBe('continue');
+      expect(fixture.calls.some((call) => call.argv[0] === 'orca' && call.argv[1] === 'worktree')).toBe(false);
+      for (const call of fixture.calls.filter((entry) => entry.argv[0] === 'git')) {
+        expect(call.cwd).toBe(REGISTERED_ORCA_ROOT);
+      }
+    }
+  });
+
+  it('accepts an absent legacy kind/host only after the registered Git-root probes', async () => {
+    const fixture = freshRepoFixture({
+      repos: [{ id: 'legacy-repo', path: REGISTERED_ORCA_ROOT }],
+    });
     const result = await prepareWorktreeWithOrca({
-      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
-    }, async (args) => {
-      calls.push([...args]);
-      return { ok: true, stdout };
-    });
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt',
+      providerTopLevel: true,
+    }, fixture.execute);
     expect(result).toMatchObject({
-      status: 'continue', cause,
-      nextAction: {
-        kind: 'reconcile_worktree_setup',
-        note: 'reconcile the exact registered Orca repository for the validated GitHub owner/repo before creating a fresh worktree',
-      },
+      status: 'ok', value: { selector: 'new-top-level', repositorySelector: 'id:legacy-repo' },
     });
-    expect(calls).toEqual([['orca', 'repo', 'list', '--json']]);
+    expect(fixture.calls.slice(1).map((call) => call.cwd)).toEqual([
+      REGISTERED_ORCA_ROOT, REGISTERED_ORCA_ROOT,
+    ]);
+  });
+
+  it('refuses two eligible matching registered origins rather than choosing the first', async () => {
+    for (const providerTopLevel of [false, true]) {
+      const fixture = freshRepoFixture({ repos: [
+        registeredOrcaRepo('orca-1', '/tmp/orca-repo-a'),
+        registeredOrcaRepo('orca-2', '/tmp/orca-repo-b'),
+      ] });
+      const result = await prepareWorktreeWithOrca({
+        repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt',
+        providerTopLevel,
+      }, fixture.execute);
+      expect(result).toMatchObject({ status: 'continue', cause: 'worktree_repository_resolution_ambiguous' });
+      expect(fixture.calls.map((call) => call.cwd)).toEqual([
+        undefined, '/tmp/orca-repo-a', '/tmp/orca-repo-a', '/tmp/orca-repo-b', '/tmp/orca-repo-b',
+      ]);
+      expect(fixture.calls.some((call) => call.argv[2] === 'create')).toBe(false);
+    }
+  });
+
+  it.each([
+    ['missing matching origin', repoListEnvelope([registeredOrcaRepo('other')]), 'worktree_repository_resolution_absent'],
+    ['malformed envelope', '{not-json', 'worktree_repository_resolution_malformed'],
+    ['malformed row', okEnvelope({ repos: [null] }), 'worktree_repository_resolution_malformed'],
+  ] as const)('keeps safe Orca list refusal: %s', async (_name, listed, expectedCause) => {
+    const fixture = freshRepoFixture({
+      listOutput: listed,
+      originByPath: { [REGISTERED_ORCA_ROOT]: 'git@github.com:wrong/repo.git' },
+    });
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt',
+      providerTopLevel: true,
+    }, fixture.execute);
+    expect(result).toMatchObject({
+      status: 'continue', cause: expectedCause,
+      nextAction: { kind: 'reconcile_worktree_setup' },
+    });
+    expect(fixture.calls.every((call) => call.argv[2] !== 'create')).toBe(true);
   });
 
   it('rejects a manager refresh worktree whose origin uses a non-GitHub host', async () => {
@@ -1989,84 +2200,49 @@ The words Firefighter universal appear here only as prose.`;
   });
 
   it('accepts fresh Orca worktree creation when setup is explicitly not configured', async () => {
-    const calls: readonly string[][] = [];
-    const mutableCalls = calls as string[][];
+    const fixture = freshRepoFixture();
     const result = await prepareWorktreeWithOrca({
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
-    }, async (args) => {
-      mutableCalls.push([...args]);
-      if (args[1] === 'repo') return { ok: true, stdout: repoListEnvelope([{
-        id: 'orca-repo-1', repoIcon: { label: 'stale/label' },
-        gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' },
-      }]) };
-      return { ok: true, stdout: okEnvelope({
-        worktree: { id: 'repo::wt', path: '/tmp/wt' },
-        setupReceipt: { requested: 'run', hookFound: false, state: 'not_configured' },
-      }) };
-    });
+    }, fixture.execute);
     expect(result).toMatchObject({ status: 'ok', value: { id: 'repo::wt', setupWitness: 'same_invocation_complete' } });
-    expect(mutableCalls).toHaveLength(2);
+    expect(fixture.calls.map((call) => call.argv[0])).toEqual(['orca', 'git', 'git', 'orca']);
   });
 
   it('accepts a fresh worktree with no setup receipt', async () => {
-    const calls: string[][] = [];
+    const fixture = freshRepoFixture({ setupState: 'absent' });
     const result = await prepareWorktreeWithOrca({
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
-    }, async (args) => {
-      calls.push([...args]);
-      if (args[1] === 'repo') return { ok: true, stdout: repoListEnvelope([{
-        id: 'orca-repo-1', gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' },
-      }]) };
-      return { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::wt', path: '/tmp/wt' } }) };
-    });
+    }, fixture.execute);
     expect(result).toMatchObject({
       status: 'ok', value: { id: 'repo::wt', setupWitness: 'same_invocation_complete' },
       evidence: { setupState: 'not_configured' },
     });
-    expect(calls[1]).toEqual([
+    expect(fixture.calls[3]?.argv).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
       '--issue', '1479', '--setup', 'run', '--json',
     ]);
   });
 
   it('waits for the exact fresh setup terminal to exit successfully', async () => {
-    const calls: string[][] = [];
+    const fixture = freshRepoFixture({ setupState: 'running' });
     const result = await prepareWorktreeWithOrca({
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', baseBranch: 'main',
-    }, async (args) => {
-      calls.push([...args]);
-      if (args[1] === 'repo') return { ok: true, stdout: repoListEnvelope([{
-        id: 'orca-repo-1', repoIcon: { label: 'stale/label' },
-        gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' },
-      }]) };
-      if (args[1] === 'worktree') return { ok: true, stdout: okEnvelope({
-        worktree: { id: 'repo::wt', path: '/tmp/wt' },
-        setupReceipt: { requested: 'run', hookFound: true, state: 'running', terminalHandle: 'setup-term' },
-      }) };
-      return { ok: true, stdout: okEnvelope({ wait: {
-        handle: 'setup-term', condition: 'exit', satisfied: true, status: 'exited', exitCode: 0,
-      } }) };
-    });
+    }, fixture.execute);
     expect(result).toMatchObject({ status: 'ok', value: { setupWitness: 'same_invocation_complete' } });
-    expect(calls[1]).toEqual([
+    expect(fixture.calls[3]?.argv).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
       '--base-branch', 'main', '--no-parent', '--setup', 'run', '--json',
     ]);
-    expect(calls[2]).toEqual(['orca', 'terminal', 'wait', '--terminal', 'setup-term', '--for', 'exit', '--timeout-ms', '120000', '--json']);
+    expect(fixture.calls[4]?.argv).toEqual([
+      'orca', 'terminal', 'wait', '--terminal', 'setup-term', '--for', 'exit', '--timeout-ms', '120000', '--json',
+    ]);
   });
 
   it('fails closed when fresh setup exits non-zero', async () => {
+    const fixture = freshRepoFixture({ setupState: 'running', waitExitCode: 1 });
     const result = await prepareWorktreeWithOrca({
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt',
-    }, async (args) => args[1] === 'repo'
-      ? { ok: true, stdout: repoListEnvelope([{
-        id: 'orca-repo-1', repoIcon: { label: 'stale/label' },
-        gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' },
-      }]) }
-      : args[1] === 'worktree'
-        ? { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::wt', path: '/tmp/wt' },
-          setupReceipt: { requested: 'run', hookFound: true, state: 'running', terminalHandle: 'setup-term' } }) }
-        : { ok: true, stdout: okEnvelope({ wait: { handle: 'setup-term', satisfied: true, status: 'exited', exitCode: 1 } }) });
+    }, fixture.execute);
     expect(result).toMatchObject({ status: 'continue', cause: 'worktree_setup_wait_not_successful', evidence: { exitCode: 1 } });
   });
 
@@ -2367,12 +2543,17 @@ The words Firefighter universal appear here only as prose.`;
       calls.push([...args]);
       if (args[0] === 'orca' && args[1] === 'repo') {
         return { ok: true, stdout: repoListEnvelope([{
-          id: 'orca-repo-1',
-          gitRemoteIdentity: { canonicalKey: 'github.com/chetwerikoff/orchestrator-pack' },
+          ...registeredOrcaRepo('orca-repo-1', '/tmp/primary'),
         }]), stderr: '' };
       }
       if (args[0] === 'orca' && args[1] === 'worktree') {
         return { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::manager-2024', path } }), stderr: '' };
+      }
+      if (cwd === '/tmp/primary' && args.join(' ') === 'git rev-parse --show-toplevel') {
+        return { ok: true, stdout: '/tmp/primary\n', stderr: '' };
+      }
+      if (cwd === '/tmp/primary' && args.join(' ') === 'git remote get-url origin') {
+        return { ok: true, stdout: 'git@github.com:chetwerikoff/orchestrator-pack.git\n', stderr: '' };
       }
       if (cwd !== path) return { ok: false, stdout: '', stderr: 'wrong cwd' };
       const command = args.join(' ');
@@ -2403,7 +2584,7 @@ The words Firefighter universal appear here only as prose.`;
       value: { id: 'repo::manager-2024', setupWitness: 'same_invocation_complete' },
       evidence: { branch: 'manager-2024' },
     });
-    expect(calls[1]).toEqual([
+    expect(calls[3]).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'manager-2024',
       '--base-branch', 'origin/main', '--issue', '2024', '--setup', 'run', '--json',
     ]);
