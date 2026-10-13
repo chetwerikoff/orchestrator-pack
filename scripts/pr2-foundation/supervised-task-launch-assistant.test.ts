@@ -127,6 +127,11 @@ describe('Issue #2547 strict production GitHub origin preflight', () => {
       orchestratorTitlePattern: '.*', browserGpt: { projectUrl: 'https://example.test/project' },
     }));
     const commands: Array<{ argv: string[]; cwd: string | undefined }> = [];
+    const mockSync = vi.spyOn(subprocess, 'runProcessSync').mockImplementation(() => ({
+      outcome: 'exit', ok: true, exitCode: 0, signal: null,
+      stdout: 'https://github.com/chetwerikoff/AppliedIn.git\n', stderr: '',
+      timedOut: false, cancelled: false,
+    }));
     const mock = vi.spyOn(subprocess, 'runProcess').mockImplementation(async (options) => {
       commands.push({ argv: [options.command, ...(options.args ?? [])], cwd: options.cwd });
       return {
@@ -154,6 +159,7 @@ describe('Issue #2547 strict production GitHub origin preflight', () => {
       }
     } finally {
       mock.mockRestore();
+      mockSync.mockRestore();
       rmSync(config, { recursive: true, force: true });
     }
   });
