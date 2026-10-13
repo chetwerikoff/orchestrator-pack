@@ -987,7 +987,7 @@ async function resolveTarget(
   const fixtureCurrentHead = trim(input.fixtureCurrentPrHeadSha).toLowerCase();
   const harness = process.env.OPK_VITEST_HARNESS === '1';
   const fixtureIssueNumber = harness ? positiveInteger(input.fixtureIssueNumber, 'fixtureIssueNumber') : undefined;
-  const harnessExplicit = harness && !selectedTarget && Boolean(input.prNumber && (input.headSha || fixtureCurrentHead));
+  const harnessExplicit = harness && Boolean(input.prNumber && (input.headSha || fixtureCurrentHead));
   let binding: BindingRecord | undefined;
   if (sessionId) {
     try {
@@ -1008,10 +1008,10 @@ async function resolveTarget(
     throw new Error(`source repository root is not a git checkout: ${sourceRepoRoot}`);
   }
   const requestedHead = trim(input.headSha).toLowerCase();
-  const repoSlug = harnessExplicit
-    ? trim(input.fixtureRepoSlug) || 'fixture/orchestrator-pack'
-    : selectedTarget
-      ? await resolvePackReviewSelectedRepository({ sourceRepoRoot, selectedTarget })
+  const repoSlug = selectedTarget
+    ? await resolvePackReviewSelectedRepository({ sourceRepoRoot, selectedTarget })
+    : harnessExplicit
+      ? trim(input.fixtureRepoSlug) || 'fixture/orchestrator-pack'
       : await resolveRepositorySlug(sourceRepoRoot);
   if (harnessExplicit && trim(input.fixturePrState || 'OPEN').toUpperCase() !== 'OPEN') {
     throw new Error(`PR #${prNumber} is not open`);
@@ -1020,7 +1020,7 @@ async function resolveTarget(
     ? {
         headSha: fixtureCurrentHead || requestedHead,
         body: input.fixturePrBody ?? '',
-        baseRef: 'main',
+        baseRef: selectedTarget?.defaultBranch ?? 'main',
       }
     : await resolveCurrentPrTarget(sourceRepoRoot, repoSlug, prNumber);
   const liveHead = liveTarget.headSha;
