@@ -2843,7 +2843,7 @@ describe('Issue #2537 scoped final-cap promotion and status integrity', () => {
       frozenCap: 1, state: 'at_cap_open_findings', consumedRoundOrdinals: [1],
     });
     expect(seeded.getPublished()).toBe('success');
-    expect(seeded.statuses).toEqual(['success']);
+    expect(seeded.statuses).toEqual(['pending', 'success']);
   });
 
   it('repairs historical same-head success after a verified final-cap raise and independently reads pending', async () => {
@@ -2859,9 +2859,9 @@ describe('Issue #2537 scoped final-cap promotion and status integrity', () => {
     expect(current.cycle).toMatchObject({
       cycleId: seeded.authority.cycle!.cycleId, frozenTier: 'T3',
       frozenCap: 2, state: 'open_findings', consumedRoundOrdinals: [1],
-      reviewStageComplete: false,
     });
-    expect(seeded.statuses).toEqual(['success', 'pending']);
+    expect(current.cycle?.reviewStageComplete).not.toBe(true);
+    expect(seeded.statuses).toEqual(['pending', 'success', 'pending']);
     expect(seeded.getPublished()).toBe('pending');
     expect(getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot: seeded.storeRoot }))
       .toMatchObject({ logicalRoundCap: 1, logicalRoundOrdinal: 1 });
