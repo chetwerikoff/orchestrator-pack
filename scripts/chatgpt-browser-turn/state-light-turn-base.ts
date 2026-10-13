@@ -1342,7 +1342,7 @@ function definitelyMalformedChatTarget(raw: string): boolean {
       || parsed.username || parsed.password) return true;
     // A plausible identifier can be absent or temporarily unhydrated; that is
     // not evidence that the conversation does not exist.
-    return !/^\\/(?:c\\/[^/]+|g\\/g-p-[^/]+\\/c\\/[^/]+)\\/?$/iu.test(parsed.pathname);
+    return !/^\/(?:c\/[^/]+|g\/g-p-[^/]+\/c\/[^/]+)\/?$/iu.test(parsed.pathname);
   } catch {
     return true;
   }
@@ -2905,7 +2905,7 @@ async function runTurnCore(
   };
   const observeProductWall = (wall: ReturnType<typeof classifyProductWall>): void => {
     if (!('wall_kind' in wall) || wall.matched_text === 'none') return;
-    observedProductErrorText = wall.matched_text.replace(/\\s+/gu, ' ').slice(0, 160);
+    observedProductErrorText = wall.matched_text.replace(/\s+/gu, ' ').slice(0, 160);
     onProductWallDiagnostic(wall);
     if (wall.wall_kind !== 'none') {
       try { recordProductWallAdvisory(profileKey, wall, invocationId); } catch { /* advisory I/O is fail-open */ }
