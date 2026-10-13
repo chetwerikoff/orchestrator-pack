@@ -9,6 +9,7 @@ import './toolchain/native-entrypoint-preflight.ts';
  */
 
 import { runProcessSync } from './kernel/subprocess.ts';
+import { parseRemoteSlug } from './lib/git-origin-slug.mjs';
 import {
   existsSync,
   mkdirSync,
@@ -901,7 +902,122 @@ function parseListArg(argv: string[], index: number): string[] {
   return value.split(',').filter((entry) => entry.length > 0);
 }
 
-export function producePrScopeDeclaration(argv: string[]): PrScopeDeclaration {
+export type PrScopeGuardApplicability = 'guarded' | 'guard-free' | 'unverified';
+
+function gitOutput(repoRoot: string, args: string[]): string | null {
+  const result = runProcessSync({
+    command: 'git',
+    args,
+    cwd: repoRoot,
+    inheritParentEnv: true,
+    timeoutMs: 10_000,
+  });
+  return result.ok ? result.stdout.trim() : null;
+}
+
+function workflowLines(source: string): string[] {
+  return source
+    .replace(/^\uFEFF/, '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+#.*$/, ''));
+}
+
+function rootSection(lines: string[], key: string): string[] | null {
+  const start = lines.findIndex((line) => new RegExp(`^(?:${key}|['\"]${key}['\"]):`).test(line));
+  if (start < 0) return null;
+  const result = [lines[start]!];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (line.trim() && !/^\s/.test(line)) break;
+    result.push(line);
+  }
+  return result;
+}
+
+function hasNormalPullRequestTrigger(lines: string[]): boolean {
+  const section = rootSection(lines, 'on');
+  if (!section) return false;
+  const first = section[0]!.replace(/^(?:on|['\"]on['\"]):\s*/, '').trim();
+  if (first) return /(?:^|[\[,{\s])pull_request(?:$|[\],}\s])/.test(first);
+  const eventIndex = section.findIndex((line) => /^\s{2}pull_request\s*:/.test(line));
+  if (eventIndex < 0) return false;
+  const eventLines: string[] = [];
+  for (let index = eventIndex + 1; index < section.length; index += 1) {
+    const line = section[index]!;
+    if (line.trim() && /^\s{2}\S/.test(line)) break;
+    eventLines.push(line);
+  }
+  const typesIndex = eventLines.findIndex((line) => /^\s{4}types\s*:/.test(line));
+  if (typesIndex < 0) return true;
+  const typeLine = eventLines[typesIndex]!.replace(/^\s{4}types\s*:\s*/, '');
+  let types = typeLine.match(/^\[([^\]]*)\]/)?.[1];
+  if (types === undefined) {
+    const typeValues: string[] = [];
+    for (let index = typesIndex + 1; index < eventLines.length; index += 1) {
+      const line = eventLines[index]!;
+      if (line.trim() && /^\s{4}\S/.test(line)) break;
+      const value = /^\s+-\s*['\"]?([A-Za-z_-]+)['\"]?\s*$/.exec(line)?.[1];
+      if (value) typeValues.push(value);
+    }
+    types = typeValues.join(',');
+  }
+  if (!types) return false;
+  const values = new Set(types.split(',').map((value) => value.trim().replace(/^['\"]|['\"]$/g, '')));
+  return values.has('opened') && values.has('synchronize');
+}
+
+function activeScopeGuardJob(lines: string[]): boolean {
+  const jobs = rootSection(lines, 'jobs');
+  if (!jobs) return false;
+  const start = jobs.findIndex((line) => /^\s{2}pr-scope-guard\s*:/.test(line));
+  if (start < 0) return false;
+  const block: string[] = [];
+  for (let index = start + 1; index < jobs.length; index += 1) {
+    const line = jobs[index]!;
+    if (line.trim() && /^\s{2}\S/.test(line)) break;
+    block.push(line);
+  }
+  if (block.some((line) => /^\s{4}if\s*:\s*(?:\$\{\{\s*)?false\b/i.test(line))) return false;
+  for (let index = 0; index < block.length; index += 1) {
+    const runMatch = /^\s{6,}(?:-\s*)?run\s*:\s*(.*)$/.exec(block[index]!);
+    if (!runMatch) continue;
+    const runIndent = block[index]!.match(/^\s*/)?.[0].length ?? 0;
+    const runLines = [runMatch[1]!];
+    for (let next = index + 1; next < block.length; next += 1) {
+      const line = block[next]!;
+      if (line.trim() && (line.match(/^\s*/)?.[0].length ?? 0) <= runIndent) break;
+      runLines.push(line);
+    }
+    const command = runLines.join('\n');
+    if (/\bnode\b/.test(command) && /scripts\/pr-scope-(?:runner|check)\.ts/.test(command)) return true;
+  }
+  return false;
+}
+
+export function resolvePrScopeGuardApplicability(repoRoot: string): {
+  status: PrScopeGuardApplicability;
+  repository: string | null;
+} {
+  const origin = gitOutput(repoRoot, ['config', '--get', 'remote.origin.url']);
+  const repository = origin ? parseRemoteSlug(origin) : null;
+  const ref = gitOutput(repoRoot, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
+  if (!repository || !ref || !/^refs\/remotes\/origin\/.+/.test(ref)) {
+    return { status: 'unverified', repository };
+  }
+  const paths = gitOutput(repoRoot, ['ls-tree', '-r', '--name-only', ref, '--', '.github/workflows']);
+  if (paths === null) return { status: 'unverified', repository };
+  for (const path of paths.split('\n').filter((entry) => /\.ya?ml$/i.test(entry))) {
+    const source = gitOutput(repoRoot, ['show', `${ref}:${path}`]);
+    if (source === null) return { status: 'unverified', repository };
+    const lines = workflowLines(source);
+    if (hasNormalPullRequestTrigger(lines) && activeScopeGuardJob(lines)) {
+      return { status: 'guarded', repository };
+    }
+  }
+  return { status: 'guard-free', repository };
+}
+
+export function producePrScopeDeclaration(argv: string[]): PrScopeDeclaration | null {
   let issueNumber: number | undefined;
   let declaredPaths: string[] = [];
   let declaredPrefixes: string[] = [];
@@ -949,6 +1065,15 @@ export function producePrScopeDeclaration(argv: string[]): PrScopeDeclaration {
   }
   if (declaredPaths.length === 0 && declaredPrefixes.length === 0) {
     throw new Error('at least one declared path or prefix is required');
+  }
+
+  const applicability = resolvePrScopeGuardApplicability(repoRoot);
+  if (applicability.status === 'unverified' || !applicability.repository) {
+    throw new Error('PR scope guard applicability is unverified for the selected repository');
+  }
+  if (applicability.status === 'guard-free') {
+    process.stdout.write(`no PR scope guard in ${applicability.repository}; the Issue fences are the scope\n`);
+    return null;
   }
   if (amend) {
     process.stderr.write(

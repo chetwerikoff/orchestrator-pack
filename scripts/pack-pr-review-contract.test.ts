@@ -49,4 +49,26 @@ describe('pack PR review canonical contract (Issue #1031)', () => {
     expect(gptPrompt).toContain('Do **not** create GitHub reviews');
     expect(gptPrompt).toContain('Do **not** rely on a pasted diff');
   });
+
+  it('makes managed runner-shaped frozen scope non-authoritative for guard mode', () => {
+    const prompt = buildGptReviewPrompt({
+      prUrl: 'https://github.com/example/repo/pull/22',
+      headSha: 'b'.repeat(40),
+      scope: {
+        hasScope: true,
+        issueNumber: 22,
+        issueConstraints: { denylist: ['vendor/**'], allowed_roots: ['tests/**'] },
+        declaredPaths: [],
+        declaredGlobs: [],
+        unverifiedIssueConstraints: false,
+      },
+    });
+    expect(prompt).toContain('full live linked Issue body');
+    expect(prompt).toContain("PR target's authoritative base");
+    expect(prompt).toContain('active `pr-scope-guard` job');
+    expect(prompt).toContain('Confirmed guard-free');
+    expect(prompt).toContain('Check every actually changed path');
+    expect(prompt).toContain('missing or pending CI is');
+    expect(prompt).toContain('Guard applicability is unverified');
+  });
 });

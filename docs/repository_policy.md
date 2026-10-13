@@ -41,10 +41,13 @@ entry. It must contain a mandatory `denylist` and may contain `allowed-roots`.
 Implementation PRs link exactly one Issue with `Closes #N`, `Fixes #N`, or
 `Resolves #N` near the top of the PR body.
 
-The committed declaration at
-`docs/declarations/<issue-number>.pr-scope.json` is generated evidence. Do not
-hand-edit it, copy a stale declaration, or broaden it to make an unrelated diff
-pass.
+The generated declaration at `docs/declarations/<issue-number>.pr-scope.json` is
+scope authority only when the selected target's authoritative PR-base/default
+workflow configuration enables the pack PR scope guard. This is a configuration
+decision, separate from whether the guard ran or passed on a particular PR head.
+For a confirmed guard-free target, the complete live Issue is the scope authority;
+historical declarations have no authority. Inaccessible or unresolved configuration
+remains unverified. Never hand-edit, copy stale, or broaden a generated declaration.
 
 Task authoring uses the published GitHub Issue directly. There is no tracked draft
 or queue-index publishing path in the current repository.
@@ -156,8 +159,8 @@ check into a claim that the code passed.
 
 - Link every branch and PR to its source Issue; PR bodies must include `Closes #N`,
   `Fixes #N`, or `Resolves #N` in the first few lines.
-- Do not touch files outside the active declaration or Issue scope.
-- Every task needs explicit paths or a validated denylist.
+- In configured guard-enabled targets, constrain changes by the complete Issue and
+  its applicable declaration; in confirmed guard-free targets, use the complete live Issue and actual changed paths. Unresolved configuration remains unverified.
 - Treat broad declarations such as `src/**` or `**/*` as suspicious; narrow them.
 - Normalize repository-relative paths before comparing them with scope.
 - Before every commit, inspect the complete status and diff.

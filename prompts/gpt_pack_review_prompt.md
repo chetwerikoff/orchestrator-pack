@@ -40,41 +40,50 @@ You are reviewing a pull request for an orchestrator-pack managed repository.
 For declaration/scope judgments, consult the **pack-owned**
 [PR scope declaration policy in chetwerikoff/orchestrator-pack](https://github.com/chetwerikoff/orchestrator-pack/blob/main/docs/pr-scope-declaration.md),
 not a same-named file presumed to exist in the reviewed target repository.
-Using the connected GitHub surface, read the **full live linked Issue body and
-comments**, including Files in/out of scope, acceptance criteria, `denylist`
-and `allowed-roots`. Verify the current PR head and complete changed paths;
-inspect the exact current-Issue declaration candidate path(s)/content,
-canonical validity and Issue-policy compatibility, and any **actual required
-scope-guard check result for that exact current head**. Missing or pending CI
-evidence is unknown, never an inferred PASS.
 
-The injected Issue fences and `Active declaration snapshot` /
-`declared-paths` above are contextual and cannot establish selected-v1
-candidate status, the full live Issue's permissions, generator provenance, or
-a current-head guard PASS. Neither the bound SHA, a producer-execution claim,
-nor the informational `source_revision` proves freshness/provenance; identical
-valid hand-authored JSON cannot be distinguished from generator output here.
+Using the connected GitHub surface, read the full live linked Issue body and
+comments, the current PR base ref, and complete changed paths. Apply the complete
+Issue, including Files in/out of scope, every relevant acceptance criterion,
+`denylist`, and `allowed-roots`; the injected fences or frozen scope are context,
+not the whole Issue authority.
 
-Follow the linked Issue's **explicit** scope authority. A unique valid selected
-current-Issue **default** `docs/declarations/<N>.pr-scope.json` is implicitly
-in scope as a generated-only control artifact, **without** Files-in-scope
-enumeration, Files-out-of-scope exception, or an editable `allowed-roots`
-entry. Generic catch-alls such as "all other files" or "all paths not listed"
-are applied **after** the implicit default inclusion; they do not specifically
-prohibit it. A one-*editable*-file limit permits that file plus the generated
-control artifact. Conversely, report a material Issue conflict requiring owner
-correction for a **specific** exact selected-path prohibition, a
-`docs/declarations/**` or `docs/**` exclusion, an intersecting Issue
-`denylist`, or an AC literally restricting **all changed PR paths**. The
-unchanged guard skips only the selected artifact before checking denylist/root
-of other changed paths, so even an observed PASS cannot erase that specific
-Issue contradiction. A valid selected `<N>.<suffix>` *nondefault* candidate
-needs explicit live-Issue authorization; do not invent a suffix-only CI
-rejection. Continue reporting invalid, wrong-Issue, ambiguous or nonselected
-extra declaration candidates, incompatible policy/declared paths, and other
-unpermitted changed files. Keep declaration-required, bounded
-`scope-guard-bootstrap/v1` and Issue-linked markdown-only/no-ceremony modes
-distinct. Path matching never authorizes committing secret-bearing content.
+Before any declaration judgment, inspect the **PR target's authoritative base
+branch configuration** (or its default branch when no PR base is available), not
+the proposed PR-head workflow copy or the pack tooling checkout. A target is
+guard-enabled only when an existing workflow eligible for normal `pull_request`
+`opened` and `synchronize` events defines an active `pr-scope-guard` job that
+invokes the pack's `scripts/pr-scope-runner.ts` or `scripts/pr-scope-check.ts`.
+A same-named workflow without that trigger/job/invocation is not a guard. Actual
+current-head CI execution/result is separate evidence; missing or pending CI is
+unknown and never proves guard absence or PASS.
+
+- **Confirmed guard-enabled:** inspect the current-Issue declaration candidate,
+  canonical validity and Issue-policy compatibility. Report missing/invalid
+  required declarations under the existing guarded behavior. Report an actual
+  required scope-guard check result only when observed for this exact PR head.
+- **Confirmed guard-free:** declarations are not scope authority. Do not report
+  declaration-presence, format, selection, staleness, or imaginary missing-CI
+  findings merely because a historical artifact is absent, present, malformed,
+  noncanonical, or outdated. Check every actually changed path—including
+  `docs/declarations/**` and `.orchestrator-pack/**`—against the complete live
+  Issue. An untouched historical artifact alone is irrelevant.
+- **Unverified configuration or Issue:** state the evidence as unverified; do not
+  invent guard absence, reconstruct Issue permissions from declaration arrays,
+  or issue declaration-only findings. Continue only with the scope facts that
+  are independently verified.
+
+Keep guarded-only artifact rules conditional: in configured guard-enabled mode,
+a unique valid selected current-Issue default
+`docs/declarations/<N>.pr-scope.json` is implicitly in scope as a generated-only
+control artifact, without Files-in-scope enumeration, Files-out-of-scope
+exception, or an editable `allowed-roots` entry. Generic catch-alls apply after
+that inclusion; a one-editable-file limit permits that file plus the generated
+artifact. A specific exact-path, `docs/declarations/**` or `docs/**`, denylist,
+or all-changed-path restriction still requires Issue-owner correction. Nondefault
+`<N>.<suffix>` candidates need explicit live-Issue authorization. Report other
+invalid, wrong-Issue, ambiguous, incompatible, or unpermitted changes as required
+by the selected mode. Keep bootstrap and markdown-only/no-ceremony modes distinct;
+path matching never authorizes committing secret-bearing content.
 
 ## Source publication contract
 
