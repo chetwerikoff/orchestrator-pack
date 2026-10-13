@@ -5,7 +5,14 @@ import { runProcessSync } from '../kernel/subprocess.ts';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveTargetContext } from '../lib/target-context.ts';
+import { resolveTargetContext, type TargetContext } from '../lib/target-context.ts';
+import {
+  isPackReviewRunStale,
+  listPackReviewRunRecordsRaw,
+  resolvePackReviewRunStoreRoot,
+  type PackReviewRunRecord,
+} from '../lib/pack-review-run-store.ts';
+import { reconcileStalePackReviewRuns } from '../pack-review-runner.ts';
 import {
   ORCHESTRATION_RUN_PANE_KEY_PATH,
   createAdapterSubmitDeps,
@@ -284,6 +291,10 @@ export interface FleetAlarmTickOptions {
   readonly readNamedPull?: (repository: string, number: number) => NativePull | undefined;
   readonly readNamedReview?: (repository: string, number: number, reviewId: number) => NativeReview | undefined;
   readonly readPackReviewStage?: (repository: string, sha: string) => PackReviewStageFact | undefined;
+  /** Offline fixtures; production revalidates the selected registered card. */
+  readonly resolveSelectedReviewProject?: () => Pick<TargetContext, 'projectId' | 'repository' | 'primaryRoot'>;
+  readonly readPackReviewRuns?: () => readonly PackReviewRunRecord[];
+  readonly reconcilePackReview?: typeof reconcileStalePackReviewRuns;
   readonly now?: () => number;
 }
 
@@ -1328,12 +1339,66 @@ function observedPermissionWarnings(
   return warnings;
 }
 
+async function reconcileSelectedProjectStaleReviews(
+  options: FleetAlarmTickOptions, log: (line: string) => void,
+): Promise<void> {
+  const { config } = options;
+  // Read-only banner fallback is never a repository mutation identity.
+  if (!config.selectedRepository) return;
+  let target: Pick<TargetContext, 'projectId' | 'repository' | 'primaryRoot'>;
+  try {
+    target = options.resolveSelectedReviewProject?.()
+      ?? resolveTargetContext({ projectId: config.projectId });
+  } catch {
+    return; // Missing, stale or contradictory project registration has no write authority.
+  }
+  if (target.projectId !== config.projectId
+    || target.repository.toLowerCase() !== config.selectedRepository.toLowerCase()
+    || resolve(target.primaryRoot) !== resolve(config.primary)) return;
+  const storeRoot = resolvePackReviewRunStoreRoot({ projectId: target.projectId });
+  const records = options.readPackReviewRuns?.()
+    ?? listPackReviewRunRecordsRaw({ projectId: target.projectId, storeRoot });
+  const eligible = records.filter((record) =>
+    record.projectId === target.projectId
+    && record.canonicalRepository?.toLowerCase() === target.repository.toLowerCase()
+    && resolve(record.sourceRepoRoot) === resolve(target.primaryRoot)
+    && record.reviewRound?.reviewer === 'gpt'
+    && isPackReviewRunStale(record));
+  for (const run of eligible) {
+    // Reconcile will independently re-check stale PID + heartbeat grace,
+    // current head, selected run and competing run-order authority.
+    const result = await (options.reconcilePackReview ?? reconcileStalePackReviewRuns)({
+      projectId: target.projectId,
+      sourceRepoRoot: target.primaryRoot,
+      repoSlug: target.repository,
+      storeRoot,
+      prNumber: run.prNumber,
+      runId: run.id,
+      staleOnly: true,
+      settlePartialAfterGrace: true,
+    });
+    for (const item of result.results) {
+      if (item.runId === run.id) {
+        log(`pack-review stale reconcile PR #${run.prNumber}: ${String(item.reason)}`);
+      }
+    }
+  }
+}
+
 export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise<FleetAlarmTickResult> {
   const { config } = options;
   const executor = options.executor ?? defaultOrcaExecutor;
   const store = options.store ?? new FileFleetWakeStateStore(config.projectId);
   const sleepMs = options.sleepMs ?? defaultSleep;
   const log = options.log ?? ((line: string) => process.stdout.write(`${line}\n`));
+
+  // This already-scheduled tick owns a stale-only backstop independently of
+  // coordinator pane discovery; a dead runner cannot execute its own finally.
+  try {
+    await reconcileSelectedProjectStaleReviews(options, log);
+  } catch (error) {
+    log(`pack-review stale reconcile unresolved: ${error instanceof Error ? error.message : String(error)}`);
+  }
 
   let terminals: FleetTerminal[];
   try {
