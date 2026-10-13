@@ -4324,6 +4324,23 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     };
   }
 
+  // A non-descendant has never been eligible for final-cap success. Keep that
+  // existing refusal ahead of body-validation errors and status publication.
+  if (logicalFinalFindings && authority.terminal
+      && authority.currentHeadSha !== authority.terminal.targetSha) {
+    const strict = await resolvePackReviewStrictDescendant({
+      repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+      reviewedHeadSha: authority.terminal.targetSha,
+      currentHeadSha: authority.currentHeadSha,
+      fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
+    });
+    if (!strict) {
+      return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
+        settled: false, reason: 'final_cap_strict_descendant_required',
+        nextAction: 'advance the same PR from the final findings head with a verified strict descendant, then reconcile' };
+    }
+  }
+
   // At the findings cap, review completion and required success use the old
   // preflight body snapshot, not a revision tag or an amended current Issue.
   let verifiedFinalIssue: { issueNumber: number; digest: string } | undefined;
@@ -4404,7 +4421,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
           settled: false, reason: 'final_cap_issue_body_amended',
           reviewedIssueNumber: issueNumber,
-          nextAction: `start one new review round on the current head; an Issue amendment resets the cap: node --experimental-strip-types scripts/pack-review-runner.ts reset --project ${options.projectId} --pr-number ${prNumber} --actor <actor> --reason <reason> --nonce <nonce>; then ${command}. If this PR head has an old immutable bound snapshot, advance this same PR to a fresh head with a genuine change and run ${command} on that new head; do not overwrite the historical snapshot.`,
+          nextAction: `start one new review round on the current head; an Issue amendment resets the cap: node --experimental-strip-types scripts/pack-review-runner.ts reset --project ${options.projectId} --pr-number ${prNumber} --actor <actor> --reason <reason> --nonce <nonce>; then ${command}. If the existing bound snapshot on this PR head differs from the amended live Issue body, no review can start on this head: advance this same PR to a fresh head with a genuine change, then run ${command} on the new current head; do not overwrite the historical snapshot.`,
         };
       }
       verifiedFinalIssue = { issueNumber, digest };
@@ -6441,7 +6458,14 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       && (['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
         || (authority.cycle.state === 'closed' && authority.cycle.reviewStageComplete === true
           && authority.terminal.targetSha !== target.headSha));
-    if (finalFindings) {
+    const finalStrictDescendant = finalFindings
+      && authority.terminal!.targetSha !== target.headSha
+      && await resolvePackReviewStrictDescendant({
+        repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+        reviewedHeadSha: authority.terminal!.targetSha, currentHeadSha: target.headSha,
+        fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
+      });
+    if (finalStrictDescendant) {
       const result = await reconcileFinalCapSettlement({
         projectId, storeRoot, prNumber: target.prNumber,
         repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
@@ -8312,7 +8336,7 @@ function usage(): string {
     '  node --experimental-strip-types scripts/pack-review-runner.ts reconcile --source-repo-root <path> --repo-slug owner/name [--pr-number <n>] [--immediate]',
     '',
     'Audited cap reset:',
-    '  node --experimental-strip-types scripts/pack-review-runner.ts reset --project <id> --pr-number <n> --actor <actor> --reason <reason> --nonce <nonce>',
+    '  node --experimental-strip-types scripts/pack-review-runner.ts reset --project <id> --pr-number <n> --actor <actor> --reason <text> --nonce <value>',
     '',
     'The runner/store/reviewer scripts resolve from the trusted pack checkout, never from the reviewed PR worktree.',
   ].join('\n');
