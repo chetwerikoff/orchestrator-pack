@@ -1,0 +1,37 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2552,
+  "declared_paths": [
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "AGENTS.md",
+    "docs/pr-scope-declaration.md",
+    "docs/repository_policy.md",
+    "plugins/codex-pr-reviewer/lib/scope_context.ts",
+    "plugins/codex-pr-reviewer/tests/review.test.ts",
+    "prompts/codex_review_prompt.md",
+    "prompts/gpt_pack_review_prompt.md",
+    "scripts/pack-pr-review-contract.test.ts",
+    "scripts/pr-scope-declaration.test.ts",
+    "scripts/pr-scope-declaration.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "AGENTS.md",
+    "docs/pr-scope-declaration.md",
+    "docs/repository_policy.md",
+    "plugins/codex-pr-reviewer/lib/scope_context.ts",
+    "plugins/codex-pr-reviewer/tests/review.test.ts",
+    "prompts/codex_review_prompt.md",
+    "prompts/gpt_pack_review_prompt.md",
+    "scripts/pack-pr-review-contract.test.ts",
+    "scripts/pr-scope-declaration.test.ts",
+    "scripts/pr-scope-declaration.ts"
+  ],
+  "source_revision": "38b2b2e6c0c89572b69c0d7fc45accd764e68ad5"
+}
