@@ -5477,6 +5477,50 @@ export async function reconcileStalePackReviewRuns(
     }
   }
 
+  if (input.staleOnly) {
+    // An accepted error-status POST without a canonical verdict is not proof
+    // that the exact current-head required status actually survived delivery.
+    // Verdict-bearing rows were already checked by verifyStaleDelivery.
+    for (const item of results) {
+      if (item.statusReconciled !== true || typeof item.runId !== 'string') continue;
+      const current = getPackReviewRun(item.runId, { projectId, storeRoot });
+      if (!current || hasPersistedPackReviewVerdict(current)) continue;
+      let verified = false;
+      try {
+        const headBefore = await readCheckedReviewPrHead(
+          input, repoSlug, current.prNumber, current.targetSha,
+        );
+        const authorityBefore = readPackReviewAuthority(current.prNumber, { storeRoot });
+        if (current.status === 'failed'
+            && headBefore === current.targetSha.toLowerCase()
+            && authorityBefore?.currentHeadSha.toLowerCase() === headBefore
+            && authorityBefore.cycle?.cycleId === current.reviewCycleId
+            && !authorityBefore.terminal
+            && resolvePackReviewRunOrder(await readBoundRecords(), current).kind === 'none') {
+          const observed = await readFinalCapRequiredStatus(input, repoSlug, current.targetSha);
+          const headAfter = await readCheckedReviewPrHead(
+            input, repoSlug, current.prNumber, current.targetSha,
+          );
+          const authorityAfter = readPackReviewAuthority(current.prNumber, { storeRoot });
+          verified = observed === 'error'
+            && headAfter === headBefore
+            && authorityAfter?.currentHeadSha.toLowerCase() === headAfter
+            && authorityAfter.cycle?.cycleId === current.reviewCycleId
+            && !authorityAfter.terminal
+            && resolvePackReviewRunOrder(await readBoundRecords(), current).kind === 'none';
+        }
+      } catch {
+        // An unavailable, conflicting or overwritten current-head status is
+        // unresolved, never an externally verified no-verdict error.
+      }
+      if (!verified) {
+        item.statusReconciled = false;
+        item.reason = `status_unverified:${String(item.reason ?? 'no_verdict_required_status')}`;
+        item.nextAction = scopedReconcileAction(current.prNumber);
+      }
+    }
+  }
+
   return { ok: true, results };
 }
 
