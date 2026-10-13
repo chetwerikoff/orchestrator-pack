@@ -1483,6 +1483,7 @@ export function acknowledgePackReviewReset(input: {
         && cycle.reviewStageComplete !== true;
       const completedFindings = cycle && input.completedFindingsBodyAmended === true
         && cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+        && cycle.frozenTier !== 'T1'
         && cycle.state === 'closed' && cycle.reviewStageComplete === true
         && cycle.consumedRoundOrdinals?.length === cycle.frozenCap
         && cycle.consumedRoundOrdinals.at(-1) === cycle.frozenCap
