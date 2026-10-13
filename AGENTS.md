@@ -113,14 +113,17 @@ Key rules (detail in the owning sections):
   the live task, default branch, PR head, open review threads, and CI; write the shortest workable
   plan and execute through it. A blocker means re-check evidence and take the legitimate
   alternative route; never turn an unavailable check into a claim that the code passed.
-- [`Task and scope authority`](docs/repository_policy.md#task-and-scope-authority): the Issue
+- [`Task and scope authority`](docs/repository_policy.md#task-and-scope-authority): the live Issue
   carries a mandatory `denylist` and optional `allowed-roots`; an implementation PR links exactly
-  one Issue with `Closes #N` / `Fixes #N` / `Resolves #N` near the top; the generated
-  `docs/declarations/<issue-number>.pr-scope.json` is never hand-edited, copied from a stale
-  declaration, or broadened to make an unrelated diff pass.
-- [`Scope discipline`](docs/repository_policy.md#scope-discipline): touch nothing outside the
-  declaration or Issue scope; inspect the complete status and diff before every commit; on a scope
-  mismatch fix the artifact or the diff, never broaden scope to silence the check.
+  one Issue with `Closes #N` / `Fixes #N` / `Resolves #N` near the top. Produce and review the
+  generated `docs/declarations/<issue-number>.pr-scope.json` as scope authority only when the
+  selected target's authoritative PR-base/default workflow enables the pack PR scope guard; a
+  confirmed guard-free target uses the complete live Issue, and unresolved configuration stays
+  unverified. Generated declarations are never hand-edited, copied from stale state, or broadened.
+- [`Scope discipline`](docs/repository_policy.md#scope-discipline): constrain guard-free targets by
+  the complete live Issue and actual changed paths, and guard-enabled targets by both that Issue
+  and the applicable declaration; inspect the complete status and diff before every commit. On a
+  scope mismatch fix the artifact or diff, never broaden scope to silence the check.
 - [`Build the minimum`](docs/repository_policy.md#build-the-minimum): the smallest implementation
   that meets the acceptance criteria, no unrequested abstraction unless a public boundary,
   cross-platform contract, generated-drift prevention, risky-seam testability, or upgrade safety

@@ -1,9 +1,10 @@
 # AO-free PR scope declarations
 
 The AO-free declaration producer produces the only schema accepted by
-`scripts/pr-scope-check.ts`. It reads the linked Issue's `denylist` and
-`allowed-roots` fences, writes one artifact under `docs/declarations/`, and
-does not use AO state or session metadata.
+`scripts/pr-scope-check.ts`. It writes declarations only for a selected target
+whose authoritative PR-base/default workflow configuration enables the pack PR
+scope guard; actual per-head CI execution is separate. It reads Issue fences and
+writes under `docs/declarations/` only in configured guard-enabled mode.
 
 ```bash
 npm run check:node-major --silent && node --experimental-strip-types scripts/pr-scope-declaration.ts --issue 1210 --declared-paths scripts/pr-scope-check.ts,scripts/pr-scope-declaration.ts --declared-prefixes 'scripts/pr-scope-tests/**'
@@ -31,49 +32,50 @@ a pathname never authorizes committing secret-bearing content.
 ## Issue-author convention for declaration-required PRs
 
 This document belongs to the **pack repository** (`chetwerikoff/orchestrator-pack`); a
-reviewed target repository need not contain a local copy. For an ordinary Issue-linked PR requiring a declaration, the **unique valid
-selected default** `docs/declarations/<N>.pr-scope.json` is in scope by
-default as a generated-only control artifact. It needs **no** Files-in-scope
-enumeration, Files-out-of-scope exception, or additional `allowed-roots` entry.
-Files in scope and `allowed-roots` enumerate editable implementation files
-only. Interpret generic Files-out-of-scope catch-alls such as "all other files"
-or "all paths not listed" **after** implicitly including this default artifact;
-those catch-alls do not specifically prohibit it. A one-editable-file limit
-means one editable file plus the generated artifact, not one changed PR path in
-total. A **specific** live-Issue prohibition of the selected exact path,
-`docs/declarations/**` or `docs/**`, an intersecting Issue `denylist`, or
-an AC literally capping **all changed PR paths** requires Issue-owner
-correction; the default convention does not override it.
+reviewed target repository need not contain a local copy. Applicability comes from
+the selected target's authoritative existing PR base/default-branch workflow
+configuration: an enabled workflow eligible for normal `pull_request` opened and
+synchronize events must define an active `pr-scope-guard` job invoking the pack
+scope runner/check. A same-named inert workflow is not sufficient. Actual CI
+execution or pass/fail for a particular PR head is separate evidence and never
+determines producer applicability.
 
-The **default** `<N>.pr-scope.json` path is the authoring convention, not a new
-selector constraint. The existing `selectDeclarationArtifact` also accepts a
-unique valid current-Issue `<N>.<suffix>` candidate under `docs/declarations/`;
-the producer supports `--output` there. A nondefault selected path needs
-explicit authorization in the live Issue, but is not rejected by the guard
-merely for having another suffix. Authors/workers use the canonical
-`scripts/pr-scope-declaration.ts` generator and never hand-edit its output.
-Validation cannot distinguish byte-identical hand-written valid JSON from
-generator output; `source_revision` is informational, not a provenance or
-freshness witness.
+For a configured guard-enabled target, the unique valid selected default
+`docs/declarations/<N>.pr-scope.json` is in scope by default as a generated-only
+control artifact. It needs no Files-in-scope enumeration, Files-out-of-scope
+exception, or additional `allowed-roots` entry. Files in scope and `allowed-roots`
+enumerate editable implementation files only. Generic Files-out-of-scope catch-alls
+apply after implicitly including this default artifact; a one-editable-file limit
+means one editable file plus the generated artifact. A specific live-Issue
+prohibition of the selected exact path, `docs/declarations/**` or `docs/**`, an
+intersecting `denylist`, or an AC literally capping all changed PR paths requires
+Issue-owner correction; this convention does not override it.
 
-The unchanged `scripts/pr-scope-check.ts::checkDeclarationPaths` skips the
-single selected declaration **before** changed-path denylist and root checks;
-all other changed paths remain checked. That skip cannot cure a **specific** live-Issue prohibition of the selected
-artifact, a literal total-PR-path cap, or a matching `denylist`: reviewers
-report the conflict even when the current-head scope guard says PASS, and the
-Issue owner corrects it. A generic unlisted-files catch-all is not a specific
-prohibition. A properly selected default artifact is not a scope violation
-because it is absent from Files in scope, editable `allowed_roots`, or an
-editable-file count. Scope review uses the full live Issue and its acceptance criteria, the
-actual current PR/head and diff, exact declaration candidate path/content, and
-observed current-head scope-guard evidence if available. An injected legacy
-snapshot, a generator claim, or `source_revision` proves neither v1 selection
-nor a guard PASS. Missing/invalid selection fails closed in declaration-required
-mode; the existing narrowly bound `scope-guard-bootstrap/v1` declaration-free
-live-Issue mode and Issue-linked markdown-only/no-ceremony boundary remain
-unchanged.
+The default `<N>.pr-scope.json` path is the authoring convention, not a new selector
+constraint. The existing selector accepts one valid current-Issue `<N>.<suffix>`
+candidate under `docs/declarations/`; a nondefault path needs explicit live-Issue
+authorization. Authors/workers use the canonical producer and never hand-edit its
+output. `source_revision` is informational, not proof of provenance or freshness.
 
-The required check obtains the PR diff from the verified merge base and PR head:
+For a confirmed guard-free target, the producer prints exactly
+`no PR scope guard in <repo>; the Issue fences are the scope`, exits successfully,
+and returns before Issue retrieval/parsing or any declaration read/write. Neither
+reviewer reports declaration-only or imagined missing-guard-CI findings merely
+because a declaration is absent, present, malformed, noncanonical, or outdated.
+The complete live Issue and actual changed paths remain authoritative: changed
+historical declaration/control paths are checked like every other changed path; an
+untouched stale artifact alone is irrelevant. Unresolved configuration is
+unverified, never inferred as guard-free.
+
+In configured guard-enabled mode, `checkDeclarationPaths` skips only the selected
+declaration before denylist/root checks; all other changed paths remain checked.
+The skip cannot cure a specific Issue prohibition, literal total-PR-path cap, or
+matching `denylist`. Review uses the full live Issue, current PR/head and diff,
+candidate content, and observed current-head guard evidence if available. Missing
+or invalid required selection fails closed. Existing bootstrap and markdown-only/
+no-ceremony modes remain unchanged.
+
+For configured guard-enabled targets, the required check obtains the PR diff from the verified merge base and PR head:
 
 ```text
 git diff --name-status --find-renames <merge_base_sha> <head_sha>

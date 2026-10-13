@@ -49,4 +49,41 @@ describe('pack PR review canonical contract (Issue #1031)', () => {
     expect(gptPrompt).toContain('Do **not** create GitHub reviews');
     expect(gptPrompt).toContain('Do **not** rely on a pasted diff');
   });
+
+  it('makes managed runner-shaped frozen scope non-authoritative for guard mode', () => {
+    const frozenScope = {
+      hasScope: true,
+      issueNumber: 22,
+      issueConstraints: { denylist: ['vendor/**'], allowed_roots: ['tests/**'] },
+      declaredPaths: [],
+      declaredGlobs: [],
+      unverifiedIssueConstraints: false,
+    };
+    const unguardedPrompt = buildGptReviewPrompt({
+      prUrl: 'https://github.com/example/unguarded/pull/22',
+      headSha: 'b'.repeat(40),
+      scope: frozenScope,
+    });
+    const guardedPrompt = buildGptReviewPrompt({
+      prUrl: 'https://github.com/chetwerikoff/orchestrator-pack/pull/22',
+      headSha: 'b'.repeat(40),
+      scope: frozenScope,
+    });
+
+    for (const prompt of [unguardedPrompt, guardedPrompt]) {
+      expect(prompt).toContain('Target PR scope-guard applicability: unverified');
+      expect(prompt).toContain('full live linked Issue body');
+      expect(prompt).toContain("PR target's authoritative base");
+      expect(prompt).toContain('active `pr-scope-guard` job');
+      expect(prompt).toContain('Confirmed guard-free');
+      expect(prompt).toContain('Confirmed guard-enabled');
+      expect(prompt).toContain('Check every actually changed path');
+      expect(prompt).toContain('missing or pending CI is');
+      expect(prompt).toContain('Guard applicability is unverified');
+      expect(prompt).toContain('canonical validity and Issue-policy compatibility');
+    }
+    expect(unguardedPrompt).toContain('declarations are not scope authority');
+    expect(unguardedPrompt).toContain('An untouched historical artifact alone is irrelevant');
+    expect(guardedPrompt).toContain('Report missing/invalid');
+  });
 });

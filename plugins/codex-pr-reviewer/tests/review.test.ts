@@ -3,10 +3,11 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { acceptsClaudeRawReview, runClaudePackReview } from '../bin/review-claude.js';
 import type { ProcessResult, RunProcessOptions } from '../../../scripts/kernel/subprocess.js';
+import { runProcessSync } from '../../../scripts/kernel/subprocess.js';
 import {
   buildCodexExecReviewArgs,
   buildCodexSpawnEnv,
@@ -58,6 +59,49 @@ const FIXTURES_DIR = join(fileURLToPath(new URL('.', import.meta.url)), 'fixture
 
 function readFixture(name: string): string {
   return readFileSync(join(FIXTURES_DIR, name), 'utf8');
+}
+
+function initializeReviewTargetDefaultBranch(root: string, guarded: boolean): void {
+  const git = (args: string[]) => {
+    const result = runProcessSync({ command: 'git', args, cwd: root, inheritParentEnv: true });
+    if (!result.ok) throw new Error(result.stderr || result.error || `git ${args.join(' ')} failed`);
+  };
+  git(['init', '--quiet']);
+  git(['config', 'user.name', 'opk-test']);
+  git(['config', 'user.email', 'opk-test@example.invalid']);
+  const workflow = guarded
+    ? [
+        'on:',
+        '  pull_request:',
+        '    types: [opened, synchronize]',
+        'jobs:',
+        '  pr-scope-guard:',
+        '    steps:',
+        '      - name: Run guard',
+        '        run: node scripts/pr-scope-runner.ts',
+      ].join('\n')
+    : [
+        'on:',
+        '  push:',
+        '    branches: [main]',
+        'jobs:',
+        '  build:',
+        '    steps:',
+        '      - run: echo test',
+      ].join('\n');
+  mkdirSync(join(root, '.github', 'workflows'), { recursive: true });
+  writeFileSync(join(root, '.github', 'workflows', 'scope.yml'), workflow, 'utf8');
+  git(['add', '.github/workflows/scope.yml']);
+  git(['commit', '--quiet', '-m', 'workflow']);
+  const remoteUrl = 'https://github.com/fixture/' + (guarded ? 'guarded' : 'unguarded') + '.git';
+  git(['remote', 'add', 'origin', remoteUrl]);
+  const bareRemote = join(root, '.git', 'fixture-origin.git');
+  git(['init', '--bare', '--quiet', bareRemote]);
+  git(['--git-dir', bareRemote, 'symbolic-ref', 'HEAD', 'refs/heads/main']);
+  git(['config', 'url.' + pathToFileURL(bareRemote).href + '.insteadOf', remoteUrl]);
+  git(['push', '--quiet', 'origin', 'HEAD:refs/heads/main']);
+  git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+  git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
 }
 
 const PROSE_CLEAN_LAST_MESSAGE =
@@ -2025,12 +2069,104 @@ describe('buildReviewPrompt', () => {
     expect(prompt).toContain('Scope section omitted');
     expect(prompt).not.toContain('```denylist');
   });
+
+  it('injects the complete live Issue and guard-free rules into the Codex prompt', () => {
+    const issueBody = [
+      '## Files in scope',
+      '- `tests/a.py`',
+      '## Acceptance criteria',
+      'Only `tests/a.py` may change; no other path or a second changed path is permitted.',
+    ].join('\n');
+    const scope = {
+      issueNumber: 22,
+      hasScope: true,
+      issueConstraints: { denylist: ['vendor/**'], allowed_roots: ['tests/**'] },
+      declaredPaths: [] as string[],
+      declaredGlobs: [] as string[],
+      unverifiedIssueConstraints: false,
+      issueBody,
+      guardApplicability: 'guard-free' as const,
+    };
+    const prompt = buildReviewPrompt({
+      scope,
+      source: 'codex-local',
+      baseRef: 'origin/main',
+    });
+    const guardedPrompt = buildReviewPrompt({
+      scope: { ...scope, guardApplicability: 'guarded' as const, declaredPaths: ['tests/a.py'] },
+      source: 'codex-local',
+      baseRef: 'origin/main',
+    });
+    expect(prompt).toContain(issueBody);
+    expect(prompt).toContain('Files in/out of scope and path/count limits');
+    expect(prompt).toContain('In a **confirmed guard-free** target');
+    expect(prompt).toContain('docs/declarations/**');
+    expect(prompt).toContain('.orchestrator-pack/**');
+    expect(prompt).toContain('an untouched stale control artifact alone is irrelevant');
+    expect(prompt).toContain('complete live Issue like every other changed file');
+    expect(guardedPrompt).toContain('In a **confirmed guard-enabled** target');
+    expect(guardedPrompt).toContain('Control-artifact carve-out (guarded targets only)');
+    expect(guardedPrompt).toContain('Still report those paths when they intersect `denylist`');
+    expect(guardedPrompt).toContain('declared-paths');
+  });
 });
 
 describe('resolveScopeContext committed snapshots', () => {
+  it('uses a PR release base even if the remote default and tracking origin/HEAD disagree', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pr-base-'));
+    const git = (args: string[]) => {
+      const result = runProcessSync({ command: 'git', args, cwd: dir, inheritParentEnv: true });
+      if (!result.ok) throw new Error(result.stderr || result.error || 'git failed');
+    };
+    try {
+      initializeReviewTargetDefaultBranch(dir, true);
+      git(['push', '--quiet', 'origin', 'HEAD:refs/heads/release']);
+      writeFileSync(join(dir, '.github', 'workflows', 'scope.yml'), [
+        'on:', '  push:', 'jobs:', '  build:',
+        '    steps:', '      - run: echo not-guarded',
+      ].join('\n'), 'utf8');
+      git(['add', '.github/workflows/scope.yml']);
+      git(['commit', '--quiet', '-m', 'remove default guard']);
+      git(['push', '--quiet', 'origin', 'HEAD:refs/heads/main']);
+      git(['update-ref', 'refs/remotes/origin/release', 'HEAD~1']);
+      git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/release']);
+      expect(resolveScopeContext({ repoRoot: dir, issueNumber: 99 }).guardApplicability).toBe('guard-free');
+      expect(resolveScopeContext({
+        repoRoot: dir, issueNumber: 99, baseRef: 'origin/release',
+      }).guardApplicability).toBe('guarded');
+
+      const saved = {
+        actions: process.env.GITHUB_ACTIONS,
+        event: process.env.GITHUB_EVENT_NAME,
+        base: process.env.GITHUB_BASE_REF,
+      };
+      try {
+        process.env.GITHUB_ACTIONS = 'true';
+        process.env.GITHUB_EVENT_NAME = 'pull_request';
+        process.env.GITHUB_BASE_REF = 'release';
+        // The existing executeReview caller does not pass a new argument:
+        // its scope resolver still selects the actual Actions PR base.
+        const scope = resolveScopeContext({ repoRoot: dir, issueNumber: 99 });
+        expect(scope.guardApplicability).toBe('guarded');
+        expect(formatScopeSection({ ...scope, hasScope: true })).toContain('guarded');
+      } finally {
+        for (const [key, value] of [
+          ['GITHUB_ACTIONS', saved.actions], ['GITHUB_EVENT_NAME', saved.event],
+          ['GITHUB_BASE_REF', saved.base],
+        ] as const) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('prefers chain head over lexicographically later iteration ids', () => {
     const dir = mkdtempSync(join(tmpdir(), 'codex-scope-'));
     const snapshotDir = join(dir, 'docs', 'declarations');
+    initializeReviewTargetDefaultBranch(dir, true);
     mkdirSync(snapshotDir, { recursive: true });
 
     const baseline = 'abc123def4567890abc123def4567890abc12345';
@@ -2080,6 +2216,39 @@ describe('resolveScopeContext committed snapshots', () => {
         issueNumber: 99,
       });
       expect(scope.declaredPaths).toEqual(['CLAUDE.md']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores historical declarations for a confirmed guard-free target', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-guard-free-scope-'));
+    try {
+      initializeReviewTargetDefaultBranch(dir, false);
+      const declarations = join(dir, 'docs', 'declarations');
+      mkdirSync(declarations, { recursive: true });
+      writeFileSync(join(declarations, '99.pr-scope.json'), '{stale malformed bytes}', 'utf8');
+      const scope = resolveScopeContext({ repoRoot: dir, issueNumber: 99 });
+      expect(scope.guardApplicability).toBe('guard-free');
+      expect(scope.declaredPaths).toEqual([]);
+      expect(scope.declaredGlobs).toEqual([]);
+      expect(scope.hasScope).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not reconstruct authority from declarations when target configuration is unverified', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-unverified-scope-'));
+    try {
+      const declarations = join(dir, 'docs', 'declarations');
+      mkdirSync(declarations, { recursive: true });
+      writeFileSync(join(declarations, '99.pr-scope.json'), '{stale malformed bytes}', 'utf8');
+      const scope = resolveScopeContext({ repoRoot: dir, issueNumber: 99 });
+      expect(scope.guardApplicability).toBe('unverified');
+      expect(scope.declaredPaths).toEqual([]);
+      expect(scope.declaredGlobs).toEqual([]);
+      expect(formatScopeSection(scope)).toContain('guard applicability: unverified');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
