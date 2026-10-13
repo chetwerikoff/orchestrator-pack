@@ -1145,16 +1145,16 @@ export async function createManagerTaskWithOrca(
 }
 
 function githubRepositoryPath(path: string, remote: boolean): string {
-  const raw = remote ? path.trim().replace(/\.git$/iu, '') : path.trim();
+  const raw = remote ? path.trim().replace(/\.git$/i, '') : path.trim();
   const parts = raw.split('/');
-  if (parts.length !== 2 || parts.some((part) => !/^[a-z0-9._-]+$/iu.test(part))) return '';
+  if (parts.length !== 2 || parts.some((part) => !/^[a-z0-9._-]+$/i.test(part))) return '';
   return parts.join('/').toLowerCase();
 }
 
 export function repoCanonicalKey(remote: string): string {
   const raw = remote.trim();
-  const ssh = raw.match(/^git@([^:]+):(.+)$/iu);
-  const url = raw.match(/^https?:\/\/([^/]+)\/(.+)$/iu);
+  const ssh = raw.match(/^git@([^:]+):(.+)$/i);
+  const url = raw.match(/^https?:\/\/([^/]+)\/(.+)$/i);
   const host = (ssh?.[1] ?? url?.[1] ?? '').toLowerCase();
   if (host !== 'github.com') return '';
   const path = githubRepositoryPath(ssh?.[2] ?? url?.[2] ?? '', true);

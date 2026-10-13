@@ -113,6 +113,10 @@ describe('Issue #2547 strict production GitHub origin preflight', () => {
     ['mixed-case HTTPS', 'https://GitHub.com/CHETWERIKOFF/appliedIN.git', 'chetwerikoff/AppliedIn', true],
     ['extra SSH segment', 'git@github.com:other/chetwerikoff/AppliedIn.git', 'chetwerikoff/AppliedIn', false],
     ['extra HTTPS segment', 'https://github.com/other/chetwerikoff/AppliedIn.git', 'chetwerikoff/AppliedIn', false],
+    ['confusable HTTP scheme', 'httpſ://github.com/chetwerikoff/AppliedIn.git', 'chetwerikoff/AppliedIn', false],
+    ['confusable SSH repository', 'git@github.com:chetwerikoff/Kepo.git', 'chetwerikoff/Kepo', false],
+    ['confusable HTTPS repository', 'https://github.com/chetwerikoff/Kepo.git', 'chetwerikoff/Kepo', false],
+    ['confusable card repository', 'git@github.com:chetwerikoff/Kepo.git', 'chetwerikoff/Kepo', false],
     ['empty segment', 'git@github.com:chetwerikoff//AppliedIn.git', 'chetwerikoff/AppliedIn', false],
     ['non-GitHub origin', 'git@example.com:chetwerikoff/AppliedIn.git', 'chetwerikoff/AppliedIn', false],
     ['wrong origin', 'git@github.com:other/AppliedIn.git', 'chetwerikoff/AppliedIn', false],
@@ -171,6 +175,9 @@ describe('Issue #2547 strict production GitHub origin preflight', () => {
     ['https://github.com/other/chetwerikoff/AppliedIn.git', ''],
     ['git@github.com:chetwerikoff//AppliedIn.git', ''],
     ['https://github.com//chetwerikoff/AppliedIn.git', ''],
+    ['httpſ://github.com/chetwerikoff/AppliedIn.git', ''],
+    ['git@github.com:chetwerikoff/Kepo.git', ''],
+    ['https://github.com/chetwerikoff/Kepo.git', ''],
     ['git@elsewhere.example:chetwerikoff/AppliedIn.git', ''],
   ] as const)('normalizes only an exact GitHub owner/repo path: %s', (origin, expected) => {
     expect(repoCanonicalKey(origin)).toBe(expected);
@@ -2100,6 +2107,27 @@ The words Firefighter universal appear here only as prose.`;
         { argv: ['git', 'rev-parse', '--show-toplevel'], cwd: REGISTERED_ORCA_ROOT },
         { argv: ['git', 'remote', 'get-url', 'origin'], cwd: REGISTERED_ORCA_ROOT },
       ]);
+    }
+  });
+
+  it.each([
+    ['confusable HTTP scheme', 'httpſ://github.com/chetwerikoff/AppliedIn.git', 'chetwerikoff/AppliedIn', 'worktree_repository_resolution_absent'],
+    ['confusable SSH repository', 'git@github.com:chetwerikoff/Kepo.git', 'chetwerikoff/Kepo', 'worktree_repository_resolution_absent'],
+    ['confusable HTTPS repository', 'https://github.com/chetwerikoff/Kepo.git', 'chetwerikoff/Kepo', 'worktree_repository_resolution_absent'],
+    ['confusable card repository', 'git@github.com:chetwerikoff/Kepo.git', 'chetwerikoff/Kepo', 'worktree_repository_resolution_malformed'],
+  ] as const)('rejects Unicode case-folding at both fresh effect boundaries: %s', async (_name, origin, repository, cause) => {
+    for (const providerTopLevel of [false, true]) {
+      const fixture = freshRepoFixture({
+        repos: [registeredOrcaRepo()],
+        originByPath: { [REGISTERED_ORCA_ROOT]: origin },
+      });
+      const result = await prepareWorktreeWithOrca({
+        repository, taskId: 'task-1', worktreeName: 'wt', providerTopLevel,
+      }, fixture.execute);
+      expect(result).toMatchObject({ status: 'continue', cause });
+      expect(fixture.calls.some((call) =>
+        call.argv[0] === 'orca' && call.argv[1] === 'worktree' && call.argv[2] === 'create'
+      )).toBe(false);
     }
   });
 
