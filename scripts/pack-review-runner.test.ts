@@ -2,6 +2,7 @@
 // @vitest-pre-topology-seconds 120
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +22,7 @@ import {
 import {
   createPackReviewRun,
   getPackReviewRun,
+  resolvePackReviewRunStoreRoot,
   setPackReviewRunTerminal,
   updatePackReviewRun,
   type PackReviewRunRecord,
@@ -40,6 +42,7 @@ import {
   initializePackReviewAuthority,
   observePackReviewHead,
   readPackReviewAuthority,
+  settleLogicalPackReviewFindingsByStrictDescendant,
 } from './pack-review-state.ts';
 
 const roots: string[] = [];
@@ -1626,6 +1629,169 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     expect(result.results).toContainEqual(expect.objectContaining({
       settled: true, reason: 'final_cap_descendant_settled',
     }));
+  });
+});
+
+describe('Issue #2565 selected-target reset and immutable H1/B0 to H2/B1 review', () => {
+  it('reset target project card, status deassertion, stale H1 refusal and H2 ordinal one retention', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2565-selected-'));
+    roots.push(root);
+    setupHarness(join(root, 'pack-harness'));
+    const primaryRoot = join(root, 'actual-target');
+    mkdirSync(primaryRoot, { recursive: true });
+    execFileSync('git', ['init', '-q', primaryRoot]);
+    execFileSync('git', ['-C', primaryRoot, 'remote', 'add', 'origin',
+      'https://github.com/chetwerikoff/AppliedIn.git']);
+    const projectId = 'appliedin-2565';
+    const repository = 'chetwerikoff/appliedin';
+    const projectCard = join(process.env.XDG_CONFIG_HOME!, 'orchestrator-pack', 'projects',
+      `${projectId}.json`);
+    writeFileSync(projectCard, JSON.stringify({
+      projectId, repository, primaryRoot, defaultBranch: 'main',
+      orcaWorkspacePattern: '^test-only$', orchestratorTitlePattern: '^test-only$',
+      browserGpt: { projectUrl: 'https://example.invalid/test-only' },
+    }));
+    process.env.OPK_PROJECT_ID = projectId;
+    process.env.ORCHESTRATOR_PACK_STATE_ROOT = join(root, 'state');
+    const storeRoot = resolvePackReviewRunStoreRoot({ projectId });
+    const prNumber = 38;
+    const issueNumber = 39;
+    const H0 = '6'.repeat(40);
+    const H1 = '7'.repeat(40);
+    const H2 = '8'.repeat(40);
+    const B0 = '<!-- source-revision: r04 -->\n```complexity-tier\ntier: T2\n```\nOld body\n';
+    const B1 = '<!-- source-revision: r04 -->\n```complexity-tier\ntier: T2\n```\nFolded architect amendment\n';
+    const opts = { projectId, storeRoot };
+    for (const head of [H0, H1]) {
+      captureBoundIssueSnapshot({
+        projectId, prNumber, issueNumber, prHeadSha: head, issueBody: B0,
+      });
+    }
+    let authority = initializePackReviewAuthority({
+      prNumber, headSha: H0, tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: opts,
+    });
+    const run = createPackReviewRun({
+      ...opts, prNumber, headSha: H0,
+      trustedPackRoot: process.cwd(), sourceRepoRoot: primaryRoot,
+      canonicalRepository: repository, resolvedReviewer: 'codex',
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal: 1, logicalRoundCap: 1, automaticBudgetDisposition: 'consume',
+    }).run;
+    setPackReviewRunTerminal(run.id, 'changes_requested', {
+      reviewVerdict: 'findings', findingCount: 1,
+      findings: [{ severity: 'blocking', title: 'fixed by amended Issue' }],
+      automaticBudgetDisposition: 'consume',
+    }, opts);
+    authority = commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: authority.transitionSeq,
+      terminal: { schemaVersion: 1, terminalContractVersion: 2,
+        terminalSource: 'normal', runId: run.id, targetSha: H0,
+        logicalRoundOrdinal: 1, reviewVerdict: 'findings', findingCount: 1,
+        findingsDigest: 'immutable-final', automaticBudgetDisposition: 'consume' },
+      status: 'changes_requested', findingCount: 1, options: opts,
+    });
+    authority = observePackReviewHead({
+      prNumber, expectedTransitionSeq: authority.transitionSeq, headSha: H1, options: opts,
+    });
+    authority = settleLogicalPackReviewFindingsByStrictDescendant({
+      prNumber, expectedTransitionSeq: authority.transitionSeq,
+      reviewedHeadSha: H0, currentHeadSha: H1,
+      reviewedHeadIsAncestor: true, options: opts,
+    });
+    const priorCycleId = authority.cycle!.cycleId;
+    expect(authority.cycle).toMatchObject({
+      state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1],
+    });
+    expect(authority.cycle?.atCapHash).toBeUndefined();
+    let status = 'success';
+    const statusWrites: string[] = [];
+    const writeStatus = async (value: { state: string }) => {
+      status = value.state;
+      statusWrites.push(value.state);
+    };
+    const cli = parseArgs([
+      '--project', projectId, '--pr-number', String(prNumber),
+      '--actor', 'owner', '--reason', 'body amended',
+      '--nonce', 'operator-2565',
+    ]);
+    applyCliTargetProject(cli, process.env);
+    expect(cli).toMatchObject({ projectId, prNumber, actor: 'owner', nonce: 'operator-2565' });
+    expect(() => applyCliTargetProject({
+      targetProjectId: projectId, projectId: 'wrong-store',
+    }, process.env)).toThrow(/conflicts|mismatch/);
+    const request = {
+      ...cli, fixturePrState: 'OPEN', fixtureRepoSlug: 'forged/wrong',
+      fixtureCurrentPrHeadSha: H1, fixturePrBody: `Closes #${issueNumber}`,
+      fixtureIssueNumber: issueNumber, fixtureIssueTitle: '[T2] Amended real Issue',
+      fixtureIssueBody: B1, fixtureRequiredStatusWriter: writeStatus,
+      fixtureRequiredStatusReader: async () => status,
+    };
+    await expect(resetPackReview({
+      ...request, fixtureRequiredStatusReader: async () => 'success',
+    })).rejects.toThrow(/pending status/);
+    expect(readPackReviewAuthority(prNumber, opts)?.cycle?.cycleId).toBe(priorCycleId);
+    expect(statusWrites).toEqual(['pending']);
+    status = 'success';
+    const reset = await resetPackReview(request);
+    const resetCycleId = String(reset.cycleId);
+    expect(reset).toMatchObject({
+      ok: true, projectId, repository, headSha: H1,
+      requiredStatusState: 'pending', previousCycleId: priorCycleId,
+    });
+    expect(status).toBe('pending');
+    const audited = readPackReviewAuthority(prNumber, opts)!;
+    expect(audited.cycle).toMatchObject({
+      cycleId: resetCycleId, frozenTier: 'T2', frozenCap: 1,
+      state: 'open', consumedRoundOrdinals: [],
+      resetProvenance: { priorCycleId, actor: 'owner', reason: 'body amended',
+        nonce: 'operator-2565' },
+    });
+    expect(audited.cycle?.resetProvenance?.priorAtCapHash).toBeUndefined();
+
+    const commonStart = {
+      projectId, prNumber, storeRoot,
+      claimMode: 'preacquired' as const,
+      fixturePrState: 'OPEN', fixtureRepoSlug: 'forged/wrong',
+      fixturePrBody: `Closes #${issueNumber}`,
+      fixtureIssueNumber: issueNumber, fixtureIssueTitle: '[T2] Current real Issue',
+      fixtureIssueBody: B1, fixtureReviewStdout: cleanPayload(),
+      fixtureGithubReviewId: 38, fixtureRequiredStatusWriter: writeStatus,
+      fixtureRequiredStatusReader: async () => status,
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    };
+    const stale = await startPackReview({
+      ...commonStart, headSha: H1, fixtureCurrentPrHeadSha: H1,
+      fixturePostReviewHeadSha: H1, fixturePostReviewPrBody: `Closes #${issueNumber}`,
+    });
+    expect(stale).toMatchObject({
+      ok: false, created: false, reason: 'completed_reset_stale_exact_head_snapshot',
+      nextAction: expect.stringContaining('advance this same PR to a fresh head'),
+    });
+    expect(readPackReviewAuthority(prNumber, opts)?.cycle?.cycleId).toBe(resetCycleId);
+    expect(readPackReviewAuthority(prNumber, opts)?.cycle?.consumedRoundOrdinals).toEqual([]);
+    expect(status).toBe('pending');
+    expect(resolveBoundIssueSnapshot({
+      projectId, prNumber, issueNumber, prHeadSha: H1,
+    }).snapshotHash).toBe(computeBoundIssueSnapshotHash(B0));
+
+    const fresh = await startPackReview({
+      ...commonStart, headSha: H2, fixtureCurrentPrHeadSha: H2,
+      fixturePostReviewHeadSha: H2, fixturePostReviewPrBody: `Closes #${issueNumber}`,
+    });
+    expect(fresh).toMatchObject({ ok: true, created: true });
+    const following = readPackReviewAuthority(prNumber, opts);
+    expect(following?.cycle?.cycleId).toBe(resetCycleId);
+    expect(following?.cycle?.resetProvenance).toMatchObject({
+      priorCycleId, actor: 'owner', reason: 'body amended', nonce: 'operator-2565',
+    });
+    expect(resolveBoundIssueSnapshot({
+      projectId, prNumber, issueNumber, prHeadSha: H2,
+    })).toMatchObject({ status: 'found', snapshotHash: computeBoundIssueSnapshotHash(B1) });
+    expect(resolveBoundIssueSnapshot({
+      projectId, prNumber, issueNumber, prHeadSha: H1,
+    }).snapshotHash).toBe(computeBoundIssueSnapshotHash(B0));
   });
 });
 
