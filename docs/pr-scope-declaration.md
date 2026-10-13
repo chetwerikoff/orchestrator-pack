@@ -12,13 +12,18 @@ npm run check:node-major --silent && node --experimental-strip-types scripts/pr-
 The resulting `docs/declarations/<issue>.pr-scope.json` is canonical JSON:
 repository-relative paths use `/`, `.` segments are collapsed, `..` cannot
 escape the repository, arrays are sorted, and duplicates are rejected.
-Directory prefixes are explicit terminal `/**` entries. Only `declared_paths` may also
-contain one `*` at the end of the final filename segment, after a nonempty
-literal prefix (for example `scripts/fixture.*` or `.env.*`). The matching
-filename must stay in that segment; bare `*`, `*.ts`, infix or multiple stars,
-`?`, bracket/brace/extglob and multi-segment globs are unsupported. Artifact
-`allowed_roots` and `denylist` keep their literal-or-terminal-directory-prefix
-grammar; concrete changed paths cannot contain wildcard syntax. The artifact
+Directory prefixes are explicit terminal `/**` entries. Both `declared_paths`
+and `denylist` may also contain exactly one `*` as the final character of
+the final filename segment, after a nonempty literal prefix. For example,
+`scripts/fixture.*` is valid in `declared_paths`, while `.env*`, `.env.*`,
+and `secrets/key*` are valid in `denylist`. A denylist filename suffix
+pattern only adds prohibitions; it never grants an editable path.
+`allowed_roots` remains literal or terminal `/**` only: even `src/*.py`
+or `scripts/foo*.test.ts` must be rejected, along with nested globstars like
+`plugins/**/tests/*.test.ts`. Bare `*`, `*.ts`, infix or multiple
+stars, `secrets/*.pem` (nonterminal filename star), leading `**/`,
+`?`, bracket/brace/extglob, and stars in directory segments are unsupported
+in every field. Concrete changed paths cannot contain wildcard syntax. The artifact
 may add denials or narrow roots, but cannot weaken the repository policy.
 Root-level `.env.*` is not inside the pack's allowed-root ceiling, and matching
 a pathname never authorizes committing secret-bearing content.

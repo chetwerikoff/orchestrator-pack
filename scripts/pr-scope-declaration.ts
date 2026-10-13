@@ -107,11 +107,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function canonicalizeEntry(
+export function canonicalizeEntry(
   raw: unknown,
   field: string,
   index: number,
-  allowFileStar = false,
 ): { ok: true; entry: CanonicalEntry } | { ok: false; error: string } {
   if (typeof raw !== 'string') {
     return { ok: false, error: `${field}[${index}] must be a string` };
@@ -145,9 +144,9 @@ function canonicalizeEntry(
     };
   }
 
-  // File-suffix stars are declaration-only; policy arrays and concrete paths stay literal.
+  // Filename suffix stars can declare files or add denials, never widen allowed roots.
   const terminalFileStar =
-    allowFileStar &&
+    (field === 'declared_paths' || field === 'denylist') &&
     !prefix &&
     value.endsWith('*') &&
     value.indexOf('*') === value.length - 1 &&
@@ -206,7 +205,7 @@ function canonicalizeEntries(
   const errors: string[] = [];
   const seen = new Set<string>();
   values.forEach((value, index) => {
-    const result = canonicalizeEntry(value, field, index, field === 'declared_paths');
+    const result = canonicalizeEntry(value, field, index);
     if (!result.ok) {
       errors.push(result.error);
       return;
@@ -281,7 +280,7 @@ export function pathMatchesEntries(
   const canonical = normalizeRepositoryPath(path);
   if (!canonical.ok) return false;
   return entries.some((raw) => {
-    const result = canonicalizeEntry(raw, 'declared_paths', 0, true);
+    const result = canonicalizeEntry(raw, 'declared_paths', 0);
     return result.ok && pathEntryMatches(canonical.path, result.entry);
   });
 }
@@ -296,7 +295,7 @@ export function entriesWithinRoots(
   }
 
   for (const raw of entries) {
-    const entry = canonicalizeEntry(raw, 'declared_paths', 0, true);
+    const entry = canonicalizeEntry(raw, 'declared_paths', 0);
     if (!entry.ok) {
       return { ok: false, path: raw, root: entry.error };
     }
@@ -673,11 +672,23 @@ export function selectLiveIssueScope(
     };
   }
 
+  const checkedRoots = canonicalizeEntries(allowed_roots, 'allowed_roots');
+  const checkedDenylist = canonicalizeEntries(issueConstraints.denylist, 'denylist');
+  if (!checkedRoots.ok || !checkedDenylist.ok) {
+    const errors = [
+      ...(checkedRoots.ok ? [] : checkedRoots.errors),
+      ...(checkedDenylist.ok ? [] : checkedDenylist.errors),
+    ];
+    return {
+      ok: false,
+      message: `live-Issue scope selection failed: ${errors.join('; ')}; FAIL/no-selection/fresh-declaration`,
+    };
+  }
+
+  // Preserve the live-scope interface: fence order and terminal /** spellings
+  // remain unchanged after the stricter field-specific grammar check.
   const parsedAllowedRoots = parsePolicyEntries(allowed_roots, 'allowed-roots');
-  const parsedDenylist = parsePolicyEntries(
-    issueConstraints.denylist,
-    'denylist',
-  );
+  const parsedDenylist = parsePolicyEntries(issueConstraints.denylist, 'denylist');
   if (!parsedAllowedRoots.ok || !parsedDenylist.ok) {
     const errors = [
       ...(parsedAllowedRoots.ok ? [] : parsedAllowedRoots.errors),
@@ -688,7 +699,6 @@ export function selectLiveIssueScope(
       message: `live-Issue scope selection failed: ${errors.join('; ')}; FAIL/no-selection/fresh-declaration`,
     };
   }
-
   if (!policySubset(parsedAllowedRoots.entries, REPOSITORY_ALLOWED_ROOTS)) {
     return {
       ok: false,
@@ -964,6 +974,12 @@ export function producePrScopeDeclaration(argv: string[]): PrScopeDeclaration {
     [...declaredPaths, ...declaredPrefixes],
     'declared_paths',
   );
+  // Preserve original Issue indices before merging in repository-wide denials.
+  const issueDenyErrors = issueConstraints.denylist.flatMap((value, index) => {
+    const checked = canonicalizeEntry(value, 'denylist', index);
+    return checked.ok ? [] : [checked.error];
+  });
+  if (issueDenyErrors.length > 0) throw new Error(issueDenyErrors.join('; '));
   const denyEntries = canonicalizeEntries(
     [...new Set([...REPOSITORY_DENYLIST, ...issueConstraints.denylist])],
     'denylist',

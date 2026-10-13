@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import {
   PR_SCOPE_DECLARATION_SCHEMA,
+  canonicalizeEntry,
   REPOSITORY_ALLOWED_ROOTS,
   normalizeRepositoryPath,
   pathMatchesEntries,
@@ -55,6 +56,11 @@ const filePatternLiveIssueBody = [
   '```',
 ].join('\n');
 
+const supportedLiveIssueBody = filePatternLiveIssueBody
+  .replace('plugins/**/tests/secret*.test.ts', 'plugins/scope-guard/tests/secret*')
+  .replace('plugins/**/tests/*.test.ts', 'plugins/scope-guard/tests/**')
+  .replace('scripts/foo*.test.ts', 'scripts/**');
+
 const filePatternDeclarationIssueBody = [
   '```denylist',
   'vendor/**',
@@ -67,6 +73,10 @@ const filePatternDeclarationIssueBody = [
   'scripts/foo*.test.ts',
   '```',
 ].join('\n');
+
+const supportedDeclarationIssueBody = filePatternDeclarationIssueBody
+  .replace('plugins/**/tests/*.test.ts', 'plugins/scope-guard/tests/**')
+  .replace('scripts/foo*.test.ts', 'scripts/**');
 
 const firstPartySurfaceIssueBody = [
   '```denylist',
@@ -227,7 +237,7 @@ describe('AO-free PR scope declaration contract', () => {
   });
 
 
-  it('accepts one terminal file star only for declared paths, never policy or changed paths', () => {
+  it('accepts terminal file stars for declared paths and denylist but never allowed roots', () => {
     const valid = {
       ...declaration(),
       declared_paths: ['scripts/.env.*'],
@@ -262,14 +272,22 @@ describe('AO-free PR scope declaration contract', () => {
         validatePrScopeDeclaration({ ...valid, declared_paths: [pattern] }, 42),
       ).toMatchObject({ ok: false, kind: 'invalid-normalization' });
     }
-    for (const policyField of ['allowed_roots', 'denylist'] as const) {
+    expect(
+      validatePrScopeDeclaration({ ...valid, allowed_roots: ['scripts/.env.*'] }, 42),
+    ).toMatchObject({ ok: false, kind: 'invalid-normalization' });
+    for (const badDeny of [
+      'scripts/*.ts',
+      'scripts/foo*bar',
+      'scripts/foo**',
+      'scripts/**/file.*',
+      'scripts/*/secret/**',
+      '**/credentials/**',
+      'secrets/*.pem',
+    ]) {
       expect(
         validatePrScopeDeclaration({
           ...valid,
-          [policyField]:
-            policyField === 'denylist'
-              ? [...(valid.denylist as string[]), 'scripts/.env.*']
-              : ['scripts/.env.*'],
+          denylist: [...(valid.denylist as string[]), badDeny],
         }, 42),
       ).toMatchObject({ ok: false, kind: 'invalid-normalization' });
     }
@@ -368,6 +386,51 @@ describe('AO-free PR scope declaration contract', () => {
       '--issue-body-file', issueBodyFile,
       '--repo-root', root,
     ])).toThrow(/denylisted by repository policy/);
+  });
+
+  it('accepts denylist filename suffixes through producer, selector and real guard matching', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-deny-star-'));
+    roots.push(root);
+    const body = issueBody.replace(
+      'credentials/**\n',
+      'credentials/**\n.env*\n.env.*\nsecrets/key*\nscripts/private*\n',
+    );
+    const bodyPath = join(root, 'issue-body.md');
+    writeFileSync(bodyPath, body);
+    const produced = producePrScopeDeclaration([
+      '--issue', '42', '--declared-paths', 'scripts/public.ts',
+      '--issue-body-file', bodyPath, '--repo-root', root,
+    ]);
+    expect(produced.denylist).toEqual([...produced.denylist].sort((a, b) => a.localeCompare(b)));
+    for (const name of ['.env*', '.env.*', 'secrets/key*', 'scripts/private*']) {
+      expect(produced.denylist).toContain(name);
+    }
+    const artifactPath = 'docs/declarations/42.pr-scope.json';
+    expect(selectDeclarationArtifact(root, 42)).toMatchObject({ ok: true, path: artifactPath });
+    expect(validatePrScopeDeclaration(
+      JSON.parse(readFileSync(join(root, artifactPath), 'utf8')) as unknown, 42,
+    )).toMatchObject({ ok: true });
+    const live = selectLiveIssueScope(body, parseIssueBody(body));
+    expect(live).toMatchObject({ ok: true });
+    if (!live.ok) throw new Error(live.message);
+    expect(live.denylist).toContain('scripts/private*');
+
+    const base = {
+      repoRoot: root, prBody: 'Closes #42', issueBody: body,
+      prPaths: [artifactPath, 'scripts/public.ts'],
+      degradedMode: false, forkPr: false,
+    };
+    expect(checkPrScope(base)).toMatchObject({
+      ok: true, scopeSource: 'declaration', checkedPaths: base.prPaths,
+    });
+    for (const deniedPath of [
+      'scripts/private.key', 'vendor/safe.ts', 'packages/core/allowed.ts',
+    ]) {
+      const denied = checkPrScope({ ...base, prPaths: [artifactPath, deniedPath] });
+      expect(denied).toMatchObject({ ok: false, reason: 'scope_violation' });
+      if (denied.ok) throw new Error('expected denylist match');
+      expect(denied.violations?.denied).toEqual([deniedPath]);
+    }
   });
 
   it('admits the exact .gitignore root without widening the root-file family', () => {
@@ -704,39 +767,33 @@ describe('AO-free PR scope declaration contract', () => {
   });
 
   it('selects full-grammar live-Issue policy without rejecting deny overlap', () => {
-    expect(
-      selectLiveIssueScope(
-        filePatternLiveIssueBody,
-        parseIssueBody(filePatternLiveIssueBody),
-      ),
-    ).toEqual({
+    // Historically allowed nested/file-star Issue roots now fail closed.
+    expect(selectLiveIssueScope(
+      filePatternLiveIssueBody, parseIssueBody(filePatternLiveIssueBody),
+    )).toMatchObject({
+      ok: false, message: expect.stringContaining('allowed_roots[0]'),
+    });
+
+    expect(selectLiveIssueScope(
+      supportedLiveIssueBody, parseIssueBody(supportedLiveIssueBody),
+    )).toEqual({
       ok: true,
-      allowed_roots: [
-        'plugins/**/tests/*.test.ts',
-        'scripts/foo*.test.ts',
-      ],
+      allowed_roots: ['plugins/scope-guard/tests/**', 'scripts/**'],
       denylist: [
         'docs/declarations/**',
-        'plugins/**/tests/secret*.test.ts',
+        'plugins/scope-guard/tests/secret*',
         'scripts/foo-secret.test.ts',
       ],
     });
 
-    const outsideCeiling = filePatternLiveIssueBody.replace(
-      'scripts/foo*.test.ts',
-      'outside/**/tests/*.test.ts',
-    );
-    expect(
-      selectLiveIssueScope(outsideCeiling, parseIssueBody(outsideCeiling)),
-    ).toMatchObject({ ok: false });
+    const outsideCeiling = supportedLiveIssueBody.replace('scripts/**', 'outside/**');
+    expect(selectLiveIssueScope(outsideCeiling, parseIssueBody(outsideCeiling)))
+      .toMatchObject({ ok: false });
 
-    const malformed = filePatternLiveIssueBody.replace(
-      'scripts/foo*.test.ts',
-      'scripts/*/foo.test.ts',
-    );
-    expect(
-      selectLiveIssueScope(malformed, parseIssueBody(malformed)),
-    ).toMatchObject({ ok: false });
+    const malformed = supportedLiveIssueBody.replace('scripts/**', 'scripts/*/foo.test.ts');
+    expect(selectLiveIssueScope(malformed, parseIssueBody(malformed))).toMatchObject({
+      ok: false, message: expect.stringContaining('allowed_roots[1]'),
+    });
   });
 
   it('checks final-segment and nested file-pattern roots on the live-Issue route', () => {
@@ -749,34 +806,32 @@ describe('AO-free PR scope declaration contract', () => {
       degradedMode: false,
       forkPr: false,
     };
-    const allowedPaths = [
-      'plugins/scope-guard/tests/check.test.ts',
-      'plugins/one/two/tests/nested.test.ts',
-      'scripts/foo-public.test.ts',
-    ];
-
-    expect(checkPrScope({ ...base, prPaths: allowedPaths })).toMatchObject({
-      ok: true,
-      scopeSource: 'live-issue',
-      checkedPaths: allowedPaths,
+    expect(checkPrScope({ ...base, prPaths: ['scripts/foo-public.test.ts'] })).toMatchObject({
+      ok: false, reason: 'declaration-selection-failed',
+      message: expect.stringContaining('allowed_roots[0]'),
     });
 
+    // Exact file roots and terminal directory prefixes retain their original behavior.
+    const supported = { ...base, issueBody: supportedLiveIssueBody };
+    const allowedPaths = [
+      'plugins/scope-guard/tests/check.test.ts',
+      'plugins/scope-guard/tests/sub/nested.test.ts',
+      'scripts/foo-public.test.ts',
+    ];
+    expect(checkPrScope({ ...supported, prPaths: allowedPaths })).toMatchObject({
+      ok: true, scopeSource: 'live-issue', checkedPaths: allowedPaths,
+    });
     for (const deniedPath of [
-      'plugins/one/two/tests/secret-access.test.ts',
+      'plugins/scope-guard/tests/secret-access.test.ts',
       'scripts/foo-secret.test.ts',
     ]) {
-      const denied = checkPrScope({ ...base, prPaths: [deniedPath] });
-      expect(denied).toMatchObject({
-        ok: false,
-        reason: 'scope_violation',
-      });
+      const denied = checkPrScope({ ...supported, prPaths: [deniedPath] });
+      expect(denied).toMatchObject({ ok: false, reason: 'scope_violation' });
       if (denied.ok) throw new Error('expected denylist priority to fail');
       expect(denied.violations?.denied).toEqual([deniedPath]);
     }
-
     const outside = checkPrScope({
-      ...base,
-      prPaths: ['plugins/scope-guard/lib/check.test.ts'],
+      ...supported, prPaths: ['plugins/scope-guard/lib/check.test.ts'],
     });
     expect(outside).toMatchObject({ ok: false, reason: 'scope_violation' });
     if (outside.ok) throw new Error('expected outside path to fail');
@@ -797,19 +852,13 @@ describe('AO-free PR scope declaration contract', () => {
         'plugins/scope-guard/tests/check.test.ts',
         'scripts/foo-public.test.ts',
       ],
-      denylist: [
-        'credentials/',
-        'packages/core/',
-        'secrets/',
-        'vendor/',
-      ],
+      denylist: ['credentials/', 'packages/core/', 'secrets/', 'vendor/'],
       allowed_roots: [
         'plugins/scope-guard/tests/check.test.ts',
         'scripts/foo-public.test.ts',
       ],
     };
-    writeFileSync(artifactPath, `${JSON.stringify(allowedDeclaration)}\n`, 'utf8');
-
+    writeFileSync(artifactPath, JSON.stringify(allowedDeclaration) + '\n', 'utf8');
     const base = {
       repoRoot: root,
       prBody: 'Closes #42',
@@ -818,32 +867,29 @@ describe('AO-free PR scope declaration contract', () => {
       forkPr: false,
     };
     const declarationPath = 'docs/declarations/42.pr-scope.json';
-    expect(
-      checkPrScope({
-        ...base,
-        prPaths: [
-          declarationPath,
-          'plugins/scope-guard/tests/check.test.ts',
-          'scripts/foo-public.test.ts',
-        ],
-      }),
-    ).toMatchObject({
-      ok: true,
-      scopeSource: 'declaration',
+    const allowedPaths = [
       declarationPath,
+      'plugins/scope-guard/tests/check.test.ts',
+      'scripts/foo-public.test.ts',
+    ];
+    expect(checkPrScope({ ...base, prPaths: allowedPaths })).toMatchObject({
+      ok: false, reason: 'declaration-selection-failed',
+      message: expect.stringContaining('allowed_roots[0]'),
     });
 
+    const supported = { ...base, issueBody: supportedDeclarationIssueBody };
+    expect(checkPrScope({ ...supported, prPaths: allowedPaths })).toMatchObject({
+      ok: true, scopeSource: 'declaration', declarationPath,
+    });
     const denied = checkPrScope({
-      ...base,
-      prPaths: [declarationPath, 'vendor/secret.ts'],
+      ...supported, prPaths: [declarationPath, 'vendor/secret.ts'],
     });
     expect(denied).toMatchObject({ ok: false, reason: 'scope_violation' });
     if (denied.ok) throw new Error('expected declaration denylist to fail');
     expect(denied.violations?.denied).toEqual(['vendor/secret.ts']);
 
     const outside = checkPrScope({
-      ...base,
-      prPaths: [declarationPath, 'plugins/scope-guard/lib/check.test.ts'],
+      ...supported, prPaths: [declarationPath, 'plugins/scope-guard/lib/check.test.ts'],
     });
     expect(outside).toMatchObject({ ok: false, reason: 'scope_violation' });
     if (outside.ok) throw new Error('expected declaration outside path to fail');
@@ -856,22 +902,102 @@ describe('AO-free PR scope declaration contract', () => {
       declared_paths: ['plugins/scope-guard/lib/check.test.ts'],
       allowed_roots: ['plugins/scope-guard/lib/check.test.ts'],
     };
-    writeFileSync(
-      artifactPath,
-      `${JSON.stringify(outsideIssuePolicy)}\n`,
-      'utf8',
-    );
-    expect(
-      checkPrScope({
-        ...base,
-        prPaths: [
-          declarationPath,
-          'plugins/scope-guard/lib/check.test.ts',
-        ],
-      }),
-    ).toMatchObject({
-      ok: false,
-      reason: 'declaration-selection-failed',
+    writeFileSync(artifactPath, JSON.stringify(outsideIssuePolicy) + '\n', 'utf8');
+    expect(checkPrScope({
+      ...supported, prPaths: [declarationPath, 'plugins/scope-guard/lib/check.test.ts'],
+    })).toMatchObject({
+      ok: false, reason: 'declaration-selection-failed',
+    });
+  });
+
+  it('rejects malformed field-specific live Issue syntax before a valid declaration can mask it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-live-grammar-'));
+    roots.push(root);
+    mkdirSync(join(root, 'docs', 'declarations'), { recursive: true });
+    const artifactPath = 'docs/declarations/42.pr-scope.json';
+    const artifact = {
+      ...declaration(),
+      declared_paths: ['scripts/public.ts'],
+      allowed_roots: ['scripts/public.ts'],
+    };
+    writeFileSync(join(root, artifactPath), JSON.stringify(artifact) + '\n');
+    const bodyPath = join(root, 'issue-body.md');
+    const input = {
+      repoRoot: root, prBody: 'Closes #42', issueBody,
+      prPaths: [artifactPath, 'scripts/public.ts'],
+      degradedMode: false, forkPr: false,
+    };
+    expect(checkPrScope(input)).toMatchObject({ ok: true, scopeSource: 'declaration' });
+
+    const cases: Array<{ field: 'allowed_roots' | 'denylist'; pattern: string }> = [
+      { field: 'allowed_roots', pattern: 'src/*.py' },
+      { field: 'allowed_roots', pattern: 'scripts/*.ts' },
+      { field: 'allowed_roots', pattern: 'plugins/**/tests/*.test.ts' },
+      { field: 'allowed_roots', pattern: 'scripts/*/secret/**' },
+      { field: 'denylist', pattern: 'scripts/*/secret/**' },
+      { field: 'denylist', pattern: '**/credentials/**' },
+      { field: 'denylist', pattern: '**/secrets/**' },
+      { field: 'denylist', pattern: 'secrets/*.pem' },
+      { field: 'denylist', pattern: 'scripts/foo*bar' },
+      { field: 'denylist', pattern: 'scripts/foo**' },
+      { field: 'denylist', pattern: 'scripts/*' },
+      { field: 'denylist', pattern: 'scripts/*.ts' },
+    ];
+    for (const { field, pattern } of cases) {
+      const index = field === 'denylist' ? 4 : 1;
+      const canonical = canonicalizeEntry(pattern, field, index);
+      expect(canonical.ok).toBe(false);
+      if (canonical.ok) throw new Error('expected invalid grammar');
+
+      const malformedBody = field === 'denylist'
+        ? issueBody.replace('credentials/**\n', 'credentials/**\n' + pattern + '\n')
+        : issueBody.replace('scripts/**\n', 'scripts/**\n' + pattern + '\n');
+      const selected = selectLiveIssueScope(malformedBody, parseIssueBody(malformedBody));
+      expect(selected).toMatchObject({
+        ok: false, message: expect.stringContaining(canonical.error),
+      });
+      writeFileSync(bodyPath, malformedBody);
+      expect(() => producePrScopeDeclaration([
+        '--issue', '42', '--declared-paths', 'scripts/public.ts',
+        '--issue-body-file', bodyPath, '--repo-root', root,
+      ])).toThrow(canonical.error);
+
+      const validation = validatePrScopeDeclaration({
+        ...artifact,
+        [field]: field === 'denylist'
+          ? [...(artifact.denylist as string[]), pattern]
+          : ['scripts/public.ts', pattern],
+      }, 42);
+      expect(validation).toMatchObject({
+        ok: false, kind: 'invalid-normalization',
+        errors: expect.arrayContaining([canonical.error]),
+      });
+
+      const refused = checkPrScope({ ...input, issueBody: malformedBody });
+      expect(refused).toMatchObject({
+        ok: false, reason: 'declaration-selection-failed',
+        message: expect.stringContaining(canonical.error),
+        violations: { declarationErrors: expect.arrayContaining([canonical.error]) },
+      });
+    }
+
+    // Repository defaults must not shift the diagnostic index from the Issue fence.
+    const shortBody = [
+      '```denylist', 'vendor/**', 'packages/core/**', 'secrets/*.pem', '```',
+      '```allowed-roots', 'scripts/**', '```',
+    ].join('\n');
+    const indexed = canonicalizeEntry('secrets/*.pem', 'denylist', 2);
+    if (indexed.ok) throw new Error('expected invalid denylist suffix');
+    writeFileSync(bodyPath, shortBody);
+    expect(() => producePrScopeDeclaration([
+      '--issue', '42', '--declared-paths', 'scripts/public.ts',
+      '--issue-body-file', bodyPath, '--repo-root', root,
+    ])).toThrow(indexed.error);
+    expect(selectLiveIssueScope(shortBody, parseIssueBody(shortBody))).toMatchObject({
+      ok: false, message: expect.stringContaining(indexed.error),
+    });
+    expect(checkPrScope({ ...input, issueBody: shortBody })).toMatchObject({
+      ok: false, message: expect.stringContaining(indexed.error),
     });
   });
 

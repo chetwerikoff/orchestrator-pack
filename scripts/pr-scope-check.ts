@@ -18,6 +18,7 @@ import { pathMatchesAnyPattern } from '../plugins/task-declaration/lib/glob_matc
 import { partitionControlArtifacts } from '../plugins/scope-guard/lib/control_artifacts.ts';
 import {
   REPOSITORY_DENYLIST,
+  canonicalizeEntry,
   normalizeRepositoryPath,
   pathMatchesEntries,
   policySubset,
@@ -601,8 +602,46 @@ function checkImplementationPrScope(
   }
 
   let issueConstraints: ReturnType<typeof normalizeIssueConstraints>;
+  let parsedIssue: IssueConstraints;
   try {
-    issueConstraints = normalizeIssueConstraints(parseIssueBody(input.issueBody));
+    parsedIssue = parseIssueBody(input.issueBody);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      reason: 'issue_parse_error',
+      message: `issue_parse_error: failed to parse linked issue constraints: ${message}`,
+    };
+  }
+
+  // Check the live fence grammar before the permissive Issue normalizer and
+  // before any declaration-backed subset comparison can mask an invalid entry.
+  const entryErrors: string[] = [];
+  for (const [field, values] of [
+    ['denylist', parsedIssue.denylist],
+    ['allowed_roots', parsedIssue.allowed_roots ?? []],
+  ] as const) {
+    values.forEach((value, index) => {
+      const result = canonicalizeEntry(value, field, index);
+      if (!result.ok) entryErrors.push(result.error);
+    });
+  }
+  if (entryErrors.length > 0) {
+    return {
+      ok: false,
+      reason: 'declaration-selection-failed',
+      message: `invalid live Issue scope: ${entryErrors.join('; ')}`,
+      violations: {
+        outOfScope: [],
+        denied: [],
+        declarationErrors: entryErrors,
+        invalidPaths: [],
+      },
+    };
+  }
+
+  try {
+    issueConstraints = normalizeIssueConstraints(parsedIssue);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
