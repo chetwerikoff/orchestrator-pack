@@ -465,6 +465,65 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.page.bringToFront).not.toHaveBeenCalled();
   });
 
+  it('allows two distinct owned Pages in the same profile to reach Send concurrently', async () => {
+    const first = makeLoserPage('PROMPT', 'FIRST-REPLY');
+    const second = makeLoserPage('PROMPT', 'SECOND-REPLY');
+    second.page.url.mockImplementation(() => second.getSends() > 0 ? LOSER_CONV : PROJECT_URL);
+
+    let entered = 0;
+    let releasedTogether = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const timer = setTimeout(release, 1_000);
+    for (const turn of [first, second]) {
+      const original = turn.sendButton.click.getMockImplementation()!;
+      turn.sendButton.click.mockImplementation(async () => {
+        entered++;
+        if (entered === 2) {
+          releasedTogether = true;
+          clearTimeout(timer);
+          release();
+        }
+        await gate;
+        await original();
+      });
+      enqueueBrowserForTurn(mocks, turn.page);
+    }
+
+    const captured: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      captured.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const args = (id: string) => [
+        ...STATE_LIGHT_TURN_BASE_ARGV,
+        '--invocation-id', id,
+        '--output', join(stateDir, id + '.txt'),
+        '--new-chat', '--project-url', PROJECT_URL, '--timeout-ms', '90000', '--poll-ms', '1',
+      ];
+      const codes = await Promise.all([
+        runStateLightTurn(args(randomUUID())),
+        runStateLightTurn(args(randomUUID())),
+      ]);
+      expect(releasedTogether).toBe(true);
+      expect(entered).toBe(2);
+      expect(codes).toEqual([0, 0]);
+      expect(first.getSends()).toBe(1);
+      expect(second.getSends()).toBe(1);
+      const terminals = captured.map((line) => {
+        try { return JSON.parse(line) as { schema?: string; send_count?: number }; }
+        catch { return {}; }
+      }).filter((value) => value.schema === 'turn-result/v1');
+      expect(terminals).toHaveLength(2);
+      expect(terminals.every((value) => value.send_count === 1)).toBe(true);
+    } finally {
+      clearTimeout(timer);
+      release();
+      stdout.mockRestore();
+    }
+  });
+
   it('does not wait for a profile-wide composer lock even under simulated contention', async () => {
     const { acquireDomainLock } = await import('./coordination.ts');
     const acquire = vi.mocked(acquireDomainLock);
@@ -1257,6 +1316,18 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(solo.page.goto).toHaveBeenCalledTimes(2);
     expect(solo.getSends()).toBe(1);
+  });
+
+  it('classifies two observed network-changed navigation errors without attempting Send', async () => {
+    const solo = makeLoserPage('PROMPT', 'SHOULD-NOT-SEND');
+    solo.page.goto.mockRejectedValueOnce(new Error('page.goto: net::ERR_NETWORK_CHANGED'));
+    solo.page.goto.mockRejectedValueOnce(new Error('page.goto: net::ERR_NETWORK_CHANGED'));
+    const outcome = await runNewChatTurn(solo.page, join(stateDir, 'twice-network-changed.txt'));
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'network_changed', send_count: 0,
+    });
+    expect(solo.page.goto).toHaveBeenCalledTimes(2);
+    expect(solo.getSends()).toBe(0);
   });
 
   it('keeps a failed no-commit navigation at zero send', async () => {
