@@ -25,7 +25,13 @@ architect adapter for authorized tracked edits and the architect role contract.
 
 ## The direct-PR spine
 
-Before any repository/base/PR operation, resolve the selected project card with `node --experimental-strip-types scripts/lib/target-context.ts check`. Bind its exact `repository` as `TARGET_REPOSITORY` and exact `defaultBranch` as `TARGET_DEFAULT_BRANCH`. Missing selection or disagreement with an explicit repository/base is terminal; cwd/origin is validation, never target selection.
+Before any repository/base/PR operation, resolve the selected project card with `node --experimental-strip-types scripts/lib/target-context.ts check`.
+Bind the selected card's `repository` as `TARGET_REPOSITORY` and its exact
+`defaultBranch` as `TARGET_DEFAULT_BRANCH`. Compare GitHub owner/repo names
+case-insensitively: casing alone is never a mismatch, while a different owner or
+repository is. Missing selection, a genuinely different explicit repository, or
+an explicit base differing from the exact selected `defaultBranch` is terminal;
+cwd/origin is validation, never target selection.
 
 The order that matters. Sections after it cover the steps that need detail;
 CI and review are separate concerns and have their own sections.

@@ -96,13 +96,18 @@ only after resolving the same explicitly selected project card with
 `resolveTargetContext` and verifying the **persisted**
 `project-binding.json` on `~/.local/state/discuss-with-gpt/<projectId>/` using
 `assertProjectStateBinding` from the pack's `scripts/lib/project-state-binding.ts`.
-The expected identity is the selected card's exact `projectId` and `repository`;
-the pathname or an artifact's embedded text is not binding authority. Refuse
+The expected identity is the selected card's exact `projectId` and its GitHub
+`repository`, compared case-insensitively (`chetwerikoff/appliedin` equals
+`chetwerikoff/AppliedIn`; a different owner/repository still mismatches).
+The pathname or an artifact's embedded text is not binding authority. Refuse
 read-back on missing, malformed, unbound or mismatched namespace state: never
 select the latest pass from an unverified directory, including after a card
 retarget. Only then re-read the newest artifact in
 `~/.local/state/discuss-with-gpt/<projectId>/<draft-slug>/` and require its
-recorded `projectId`/`repository` to match the verified selected identity.
+recorded `projectId` to match exactly and `repository` to match the verified
+selected GitHub owner/repo case-insensitively. Keep the persisted project
+namespace binding and all `defaultBranch`/base, PR/head and path checks strict;
+case folding never selects another project card or accepts a different repository.
 The on-disk record outranks agent recollection and any earlier tool refusal.
 A preflight refusal on one invocation path is not a terminal state while a
 `completed_valid` artifact exists for that PASS_ID **under the verified binding**.
