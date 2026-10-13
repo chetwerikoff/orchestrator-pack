@@ -3,6 +3,8 @@ import {
   parseBehaviorKind,
 } from '../draft-discipline.mjs';
 import { checkContractEvidence } from '../contract-evidence-validator.mjs';
+import { canonicalizeEntry } from '../pr-scope-declaration.ts';
+import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
 
 export interface TierGateFloorOptions {
   repoRoot?: string;
@@ -42,11 +44,23 @@ export function checkWorkerSafetyFloor(draftText: string): { ok: boolean; errors
       errors.push('substantive floor: missing ' + fence + ' fence');
     }
   }
-  const deny = new RegExp('`{3}denylist\\s*\\n([\\s\\S]*?)`{3}', 'm').exec(draftText)?.[1] ?? '';
+  // Use the Issue parser's entries so repeated fences share one field index sequence.
+  const scope: ReturnType<typeof parseIssueBody> = hasFence(draftText, 'denylist')
+    ? parseIssueBody(draftText)
+    : { denylist: [] };
   for (const required of ['packages/core/**', 'vendor/**']) {
-    if (!deny.includes(required)) {
+    if (!scope.denylist.includes(required)) {
       errors.push('worker-safety floor: denylist must include ' + required);
     }
+  }
+  for (const [entries, field] of [
+    [scope.denylist, 'denylist'],
+    [scope.allowed_roots ?? [], 'allowed_roots'],
+  ] as const) {
+    entries.forEach((entry, index) => {
+      const result = canonicalizeEntry(entry, field, index);
+      if (!result.ok) errors.push(result.error);
+    });
   }
   return { ok: errors.length === 0, errors };
 }

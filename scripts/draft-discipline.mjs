@@ -179,6 +179,8 @@ function parseSmokeScenarioLine(line, nextLine = '') {
     return null;
   }
   const bullet = trimmed.replace(/^-\s*/, '');
+  // A named YAML header is a label, never a colon-form executable action.
+  if (/^name\s*:/i.test(bullet)) return null;
   const actionMatch = bullet.match(/^action:\s*(.*?)(?:\s*\|\s*expected:\s*(.*))?$/i);
   if (actionMatch) {
     const nestedExpectedMatch = nextLine.match(/^\s+expected:\s*(.*)$/i);
@@ -213,6 +215,95 @@ function parseSmokeScenarioLine(line, nextLine = '') {
     return { action: bullet, expected: bullet };
   }
   return null;
+}
+
+function rawSmokeTestPlanFence(markdown) {
+  // Preserve the physical fence lines, including leading blanks, for diagnostics.
+  return /```smoke-test-plan[^\S\r\n]*\r?\n([\s\S]*?)```/iu.exec(String(markdown ?? ''))?.[1] ?? null;
+}
+
+function parseRequiredSmokeScenarioLines(raw) {
+  const lines = raw.split(/\r?\n/u);
+  const scenarios = [];
+  const errors = [];
+  const lineError = (index, message) => {
+    errors.push('smoke-test-plan line ' + (index + 1) + ': ' + message);
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    if (!trimmed || /^scenarios:\s*$/iu.test(trimmed)) continue;
+
+    const header = line.match(/^(\s*)-\s+name:\s*(.*)$/iu);
+    if (header) {
+      const headerLine = index;
+      const headerIndent = header[1].length;
+      let action;
+      let expected;
+      let valid = true;
+      for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+        const child = lines[cursor];
+        if (!child.trim()) {
+          index = cursor;
+          continue;
+        }
+        if (/^\s*-\s+/u.test(child) || child.match(/^\s*/u)[0].length <= headerIndent) break;
+        const field = child.match(/^\s+(action|expected):\s*(.*)$/iu);
+        if (!field) {
+          lineError(cursor, 'unreadable named-scenario child');
+          valid = false;
+        } else {
+          const key = field[1].toLowerCase();
+          if (key === 'action') {
+            if (action !== undefined) {
+              lineError(cursor, 'duplicate named-scenario action');
+              valid = false;
+            }
+            action = field[2].trim();
+          } else {
+            if (expected !== undefined) {
+              lineError(cursor, 'duplicate named-scenario expected result');
+              valid = false;
+            }
+            expected = parseSmokeScenarioExpected(field[2]);
+          }
+        }
+        index = cursor;
+      }
+      if (!header[2].trim()) {
+        lineError(headerLine, 'named scenario is missing its name');
+        valid = false;
+      }
+      if (!action) {
+        lineError(headerLine, 'named scenario is missing action');
+        valid = false;
+      }
+      if (!expected) {
+        lineError(headerLine, 'named scenario is missing expected result');
+        valid = false;
+      }
+      if (valid) scenarios.push({ action, expected });
+      continue;
+    }
+
+    const scenario = parseSmokeScenarioLine(line, lines[index + 1]);
+    if (!scenario) {
+      lineError(index, 'unreadable scenario line');
+      continue;
+    }
+    if (!scenario.action.trim()) lineError(index, 'scenario is missing action');
+    if (!scenario.expected.trim()) lineError(index, 'scenario is missing expected result');
+    if (scenario.action.trim() && scenario.expected.trim()) scenarios.push(scenario);
+
+    // The incumbent action-led format consumes exactly its indented expected child.
+    if (/^\s*-\s*action:/iu.test(line) &&
+        !/\|\s*expected:/iu.test(line) &&
+        /^\s+expected:/iu.test(lines[index + 1] ?? '')) {
+      index += 1;
+    }
+  }
+  return { scenarios, errors };
 }
 
 function findSmokePlanRuntimeIdentifiers(scenario) {
@@ -257,11 +348,8 @@ function findSmokePlanUnsupportedMetadata(raw) {
 }
 
 export function parseSmokeTestPlan(markdown) {
-  const blocks = extractFencedBlocks(markdown);
-  const raw = blocks.get('smoke-test-plan')?.[0];
-  if (!raw) {
-    return null;
-  }
+  const raw = rawSmokeTestPlanFence(markdown);
+  if (!raw?.trim()) return null;
   const fields = parseKeyValueBlock(raw);
   const notApplicable = ['true', 'yes', '1'].includes(String(fields['not-applicable'] ?? fields.na ?? '').toLowerCase());
   if (notApplicable) {
@@ -271,19 +359,9 @@ export function parseSmokeTestPlan(markdown) {
       scenarios: [],
     };
   }
-
-  const scenarios = [];
-  const lines = raw.split(/\r?\n/u);
-  for (const [index, line] of lines.entries()) {
-    const scenario = parseSmokeScenarioLine(line, lines[index + 1]);
-    if (scenario?.action && scenario.expected) {
-      scenarios.push(scenario);
-    }
-  }
-
   return {
     requirement: 'required',
-    scenarios,
+    scenarios: parseRequiredSmokeScenarioLines(raw).scenarios,
   };
 }
 
@@ -330,6 +408,7 @@ export function checkSmokeTestPlan(markdown) {
   }
 
   const rawSmokePlan = blocks.get('smoke-test-plan')?.[0] ?? '';
+  const rawSmokePlanFenceRaw = rawSmokeTestPlanFence(markdown) ?? rawSmokePlan;
   for (const metadata of findSmokePlanUnsupportedMetadata(rawSmokePlan)) {
     errors.push(`smoke-test-plan scenario ${metadata.ordinal} contains unsupported metadata key: ${metadata.key}`);
   }
@@ -347,6 +426,7 @@ export function checkSmokeTestPlan(markdown) {
     return { ok: errors.length === 0, errors, warnings, plan };
   }
 
+  errors.push(...parseRequiredSmokeScenarioLines(rawSmokePlanFenceRaw).errors);
   if (plan.scenarios.length === 0) {
     errors.push('smoke-test-plan must list at least one scenario with action and expected result, or declare not-applicable with reason');
     return { ok: false, errors, warnings, plan };

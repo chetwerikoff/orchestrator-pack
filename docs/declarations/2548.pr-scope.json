@@ -1,0 +1,27 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2548,
+  "declared_paths": [
+    "docs/pr-scope-declaration.md",
+    "scripts/lib/tier-gate-floor.ts",
+    "scripts/pr-scope-check.ts",
+    "scripts/pr-scope-declaration.test.ts",
+    "scripts/pr-scope-declaration.ts",
+    "scripts/tier-gate-guard.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/pr-scope-declaration.md",
+    "scripts/lib/tier-gate-floor.ts",
+    "scripts/pr-scope-check.ts",
+    "scripts/pr-scope-declaration.test.ts",
+    "scripts/pr-scope-declaration.ts",
+    "scripts/tier-gate-guard.test.ts"
+  ],
+  "source_revision": "c367013646933e567d8846b26758125c809418c0"
+}
