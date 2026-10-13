@@ -1750,6 +1750,10 @@ describe('Issue #2565 selected-target reset and immutable H1/B0 to H2/B1 review'
       fixtureRequiredStatusReader: async () => status,
     };
     await expect(resetPackReview({
+      ...request, storeRoot: join(root, 'wrong-project-store'),
+    })).rejects.toThrow(/selected project\/store mismatch/);
+    expect(statusWrites).toEqual([]);
+    await expect(resetPackReview({
       ...request, fixtureRequiredStatusReader: async () => 'success',
     })).rejects.toThrow(/pending status/);
     expect(readPackReviewAuthority(prNumber, opts)?.cycle?.cycleId).toBe(priorCycleId);
