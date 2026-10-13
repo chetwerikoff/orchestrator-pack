@@ -42,6 +42,7 @@ import {
   ownedConversationIdentityMatches,
   prepareStateLightFreshConversation,
   isBlankProjectSurfaceUrl,
+  projectSurfaceUrlsEquivalent,
   projectConversationPrefix,
   recordStateLightAdvisoryWall,
   releaseStateLightFreshConversationClaim,
@@ -1342,7 +1343,8 @@ function definitelyMalformedChatTarget(raw: string): boolean {
       || parsed.username || parsed.password) return true;
     // A plausible identifier can be absent or temporarily unhydrated; that is
     // not evidence that the conversation does not exist.
-    return !/^\/(?:c\/[^/]+|g\/g-p-[^/]+\/c\/[^/]+)\/?$/iu.test(parsed.pathname);
+    return conversationUuidFromUrl(raw) === undefined
+      || !/^\/(?:c\/[^/]+|g\/g-p-[^/]+\/c\/[^/]+)\/?$/iu.test(parsed.pathname);
   } catch {
     return true;
   }
@@ -1557,6 +1559,7 @@ async function existingTurnHasNothingToResume(page: any, deadlineMs: number): Pr
 async function locatorCount(
   locator: any,
   deadlineMs = Date.now() + MAX_LOCAL_READ_WAIT_MS,
+  preserveNetworkChange = false,
 ): Promise<number> {
   const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
   if (waitMs <= 0) throw new BrowserOperationTimeoutError('locator_count');
@@ -1570,6 +1573,7 @@ async function locatorCount(
   } catch (error) {
     if (isPostSendTargetCrash(error)) throw error;
     if (error instanceof Error && error.message === timeoutCause) throw error;
+    if (preserveNetworkChange && error instanceof Error && /ERR_NETWORK_CHANGED/iu.test(error.message)) throw error;
     return 0;
   }
 }
@@ -1991,12 +1995,13 @@ async function readComposerReadiness(
   page: any,
   deadline: number,
   observe?: (state: 'absent' | 'disabled' | 'hidden' | 'not_editable' | 'ready' | 'unknown') => void,
+  observeFailure?: (cause: 'network_changed' | 'browser_operation_timeout:locator_count') => void,
 ): Promise<boolean> {
   try {
     const composer = page.locator(COMPOSER_SELECTOR);
     let remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
-    if (await locatorCount(composer, deadline) <= 0) {
+    if (await locatorCount(composer, deadline, true) <= 0) {
       observe?.('absent');
       return false;
     }
@@ -2049,6 +2054,11 @@ async function readComposerReadiness(
     );
   } catch (error) {
     if (isPostSendTargetCrash(error)) throw error;
+    const message = error instanceof Error ? error.message : '';
+    if (/ERR_NETWORK_CHANGED/iu.test(message)) observeFailure?.('network_changed');
+    else if (message === 'browser_operation_timeout:locator_count') {
+      observeFailure?.('browser_operation_timeout:locator_count');
+    }
     observe?.('unknown');
     return false;
   }
@@ -2358,6 +2368,7 @@ async function waitForComposer(
   const readinessDeadline = useWholePreSendDeadline
     ? invocationDeadlineMs
     : Math.min(Date.now() + COMPOSER_READINESS_WAIT_MS, invocationDeadlineMs);
+  let observedFailure: 'network_changed' | 'browser_operation_timeout:locator_count' | undefined;
   while (true) {
     let remainingMs = readinessDeadline - Date.now();
     if (remainingMs <= 0) break;
@@ -2374,12 +2385,16 @@ async function waitForComposer(
       // Status-probe failures cannot veto the composer; the probe is advisory.
     }
     if (Date.now() >= readinessDeadline) break;
-    if (await readComposerReadiness(page, readinessDeadline, observeComposer)) return { state: 'ready' };
+    if (await readComposerReadiness(page, readinessDeadline, observeComposer, (cause) => {
+      // Preserve only witnessed transport failures; a slow/disabled composer is
+      // not a network error. A later ready composer supersedes these probes.
+      if (cause === 'network_changed' || observedFailure !== 'network_changed') observedFailure = cause;
+    })) return { state: 'ready' };
     remainingMs = readinessDeadline - Date.now();
     if (remainingMs <= 0) break;
     await sleep(page, Math.min(INITIAL_POLL_MS, remainingMs));
   }
-  return { state: 'ui_contract_mismatch', cause: 'composer_unavailable' };
+  return { state: 'ui_contract_mismatch', cause: observedFailure ?? 'composer_unavailable' };
 }
 
 function isPlaywrightTimeoutError(error: unknown): boolean {
@@ -2779,6 +2794,37 @@ function browserOrPageDefinitelyLost(page: any, browser: any): boolean {
     // Probe failure is not proof of loss.
   }
   return false;
+}
+
+/**
+ * Positive, read-only fetch-loss evidence on the invocation-created Page.
+ * Both root and project local-ID routes are supported; a project route must
+ * match the configured project before either recovery or destructive cleanup.
+ */
+async function ownedLocalFetchFailureVisibleOnPage(
+  targetPage: any,
+  projectUrl: string,
+  deadlineMs: number,
+  expectedUrl?: string,
+): Promise<boolean> {
+  try {
+    if (deadlineMs <= Date.now()) return false;
+    const observedUrl = String(targetPage.url());
+    if (expectedUrl !== undefined && observedUrl !== expectedUrl) return false;
+    const local = new URL(observedUrl);
+    const project = new URL(projectUrl);
+    const localRoute = /^\/(?:g\/(g-p-[^/]+)\/)?c\/local-chatgpt(?::|%3a)[a-z0-9-]+$/iu.exec(local.pathname);
+    if (!localRoute || local.origin !== project.origin || local.username || local.password
+      || (localRoute[1] && !projectSurfaceUrlsEquivalent(
+        `${local.origin}/g/${localRoute[1]}`, projectUrl,
+      ))) return false;
+    // Read only this Page, within one absolute deadline. Never click Retry.
+    if (await locatorCount(targetPage.getByText('Failed to fetch', { exact: true }), deadlineMs) <= 0
+      || await locatorCount(targetPage.getByRole('button', { name: 'Retry', exact: true }), deadlineMs) <= 0) return false;
+    return Date.now() < deadlineMs && String(targetPage.url()) === observedUrl;
+  } catch {
+    return false;
+  }
 }
 
 function renderedPayloadMatches(actual: string | undefined, expected: string): boolean {
@@ -4550,22 +4596,12 @@ async function runTurnCore(
     };
 
     const ownedLocalFetchFailureVisible = async (): Promise<boolean> => {
-      if (!config.newChat || ownedConversationUrl || sendCount !== 1
+      if (!config.newChat || !config.projectUrl || ownedConversationUrl || sendCount !== 1
         || browserOrPageDefinitelyLost(page, browser)) return false;
-      try {
-        const localUrl = new URL(String(page.url()));
-        const segments = localUrl.pathname.split('/');
-        if (localUrl.origin !== new URL(config.projectUrl ?? '').origin
-          || segments.at(-2) !== 'c'
-          || !/^local-chatgpt(?::|%3a)[a-z0-9-]+$/i.test(segments.at(-1) ?? '')) return false;
-        const deadlineMs = Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS);
-        if (deadlineMs <= Date.now()) return false;
-        // These are read-only signals from the owned tab. Retry must never be clicked.
-        return await locatorCount(page.getByText('Failed to fetch', { exact: true }), deadlineMs) > 0
-          && await locatorCount(page.getByRole('button', { name: 'Retry', exact: true }), deadlineMs) > 0;
-      } catch {
-        return false;
-      }
+      return await ownedLocalFetchFailureVisibleOnPage(
+        page, config.projectUrl,
+        Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
+      );
     };
 
     // `timeout-ms` is a soft post-send observation threshold for an owned
@@ -6014,7 +6050,8 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   // Cleanup requires a positive owned claim/locator, never a zero-match census.
   // A recovered Page is marked cleanup-unproven and is never this close target.
   if (outcome.ownedDeadLocalPage && outcome.ownedDeadLocalUrl
-    && outcome.ownedDeadLocalConversationUrl && outcome.result.send_count === 1
+    && outcome.ownedDeadLocalConversationUrl && outcome.ownedFreshProjectUrl
+    && outcome.result.send_count === 1
     && !outcome.ownershipForfeited
     && outcome.result.conversation_id === outcome.ownedDeadLocalConversationUrl
     && outcome.page !== outcome.ownedDeadLocalPage
@@ -6029,8 +6066,10 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
       const dead = outcome.ownedDeadLocalPage;
       if (!cleanupAuthorityUnprovenPages.has(dead)
         && !browserOrPageDefinitelyLost(dead, outcome.browser)
-        && String(dead.url()) === outcome.ownedDeadLocalUrl
-        && /^\/g\/g-p-[^/]+\/c\/local-chatgpt(?::|%3a)[a-z0-9-]+$/iu.test(new URL(String(dead.url())).pathname)) {
+        && await ownedLocalFetchFailureVisibleOnPage(
+          dead, outcome.ownedFreshProjectUrl,
+          Date.now() + MAX_LOCAL_READ_WAIT_MS, outcome.ownedDeadLocalUrl,
+        )) {
         const deadCleanup = await abandonLatePageHandle(dead, RESOURCE_CLEANUP_BOUND_MS);
         cleanup = deadCleanup;
         if (deadCleanup !== 'confirmed') {
@@ -6176,7 +6215,9 @@ export async function runStateLightTurn(
       ...outcome,
       ...(freshCleanup.page && outcome.page === freshCleanup.page && freshCleanup.markedPayload
         ? { ownedTypedPayload: freshCleanup.markedPayload } : {}),
-      ...(freshCleanup.page && outcome.page === freshCleanup.page && freshCleanup.projectUrl
+      ...(freshCleanup.page
+        && (outcome.page === freshCleanup.page || freshCleanup.ownedDeadLocalPage)
+        && freshCleanup.projectUrl
         ? { ownedFreshProjectUrl: freshCleanup.projectUrl } : {}),
     };
     const result = await finalizeTurn(admitFreshResultConversationId(args, {
