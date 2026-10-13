@@ -5760,7 +5760,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       requiredStatusState: 'success', status: 'up_to_date',
       coverage: { kind: 'complete', completedSourceCount: 3, cardinality: 3 },
     });
-    expect(f.launches.map((launch) => launch.slotId).toEqual(['source-03']);
+    expect(f.launches.map((launch) => launch.slotId)).toEqual(['source-03']);
     expect(f.statusStates).toEqual(['pending', 'success']);
     const settled = getPackReviewRun(f.runId, f.options)!;
     expect(settled.reviewRound).toMatchObject({ settledSourceCount: 3 });
