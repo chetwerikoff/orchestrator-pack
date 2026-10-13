@@ -142,9 +142,23 @@ export function resolveIssueNumber(options: {
   return null;
 }
 
+function currentReviewBaseRef(repoRoot: string): string | null {
+  // GitHub Actions' pull-request base is the event's selected target, not origin/HEAD.
+  const actionsBase = process.env.GITHUB_ACTIONS === 'true'
+    ? process.env.GITHUB_BASE_REF?.trim()
+    : undefined;
+  if (actionsBase) return actionsBase;
+  // For a local review, the tracked GitHub connection resolves the checkout's PR.
+  const currentPr = readGhJsonBody(repoRoot, ['pr', 'view', '--json', 'baseRefName']);
+  return typeof currentPr?.baseRefName === 'string' && currentPr.baseRefName.trim()
+    ? currentPr.baseRefName.trim()
+    : null;
+}
+
 export function resolveScopeContext(options: {
   repoRoot: string;
   issueNumber: number | null;
+  baseRef?: string;
 }): ResolvedScopeContext {
   const empty: ResolvedScopeContext = {
     issueNumber: options.issueNumber,
@@ -174,7 +188,16 @@ export function resolveScopeContext(options: {
     unverifiedIssueConstraints = true;
   }
 
-  const guardApplicability = resolvePrScopeGuardApplicability(options.repoRoot).status;
+  const selectedBase = options.baseRef ?? currentReviewBaseRef(options.repoRoot);
+  const unobservedActionsPrBase = !selectedBase &&
+    process.env.GITHUB_ACTIONS === 'true' &&
+    (process.env.GITHUB_EVENT_NAME?.startsWith('pull_request') ?? false);
+  const guardApplicability: PrScopeGuardApplicability = unobservedActionsPrBase
+    ? 'unverified'
+    : resolvePrScopeGuardApplicability(
+        options.repoRoot,
+        selectedBase ? { baseRef: selectedBase } : {},
+      ).status;
 
   let declaredPaths: string[] = [];
   let declaredGlobs: string[] = [];
