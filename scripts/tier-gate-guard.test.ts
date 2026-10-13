@@ -139,6 +139,32 @@ describe('current substantive Issue floor', () => {
     }
   });
 
+  it('validates every repeated scope fence using parser-aligned entry indices', () => {
+    const mark = String.fromCharCode(96).repeat(3);
+    for (const { fence, field, pattern, index } of [
+      { fence: 'denylist', field: 'denylist', pattern: 'secrets/*.pem', index: 2 },
+      { fence: 'denylist', field: 'denylist', pattern: '**/credentials/**', index: 2 },
+      { fence: 'allowed-roots', field: 'allowed_roots', pattern: 'scripts/*.ts', index: 1 },
+    ] as const) {
+      const issue = valid + ['', mark + fence, '# ignored comment', '', pattern, mark, ''].join('\n');
+      const canonical = canonicalizeEntry(pattern, field, index);
+      expect(canonical.ok).toBe(false);
+      if (canonical.ok) throw new Error('expected invalid canonicalization');
+      expect(checkWorkerSafetyFloor(issue)).toMatchObject({
+        ok: false, errors: expect.arrayContaining([canonical.error]),
+      });
+      expect(checkTierGateGuard(issue)).toMatchObject({
+        ok: false, errors: expect.arrayContaining([canonical.error]),
+      });
+    }
+
+    // The required denies may also be split across multiple valid fences.
+    const splitDenylist = valid.replace(
+      'packages/core/**\nvendor/**\n', 'packages/core/**\n',
+    ) + ['', mark + 'denylist', '# ignored comment', 'vendor/**', mark, ''].join('\n');
+    expect(checkWorkerSafetyFloor(splitDenylist)).toEqual({ ok: true, errors: [] });
+  });
+
   it('rejects an invalid tier without adding review topology', () => {
     const result = checkTierGateGuard(valid.replace('tier: T2', 'tier: T4'));
     expect(result.ok).toBe(false);
