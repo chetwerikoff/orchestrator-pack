@@ -24,7 +24,7 @@ import { COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR, MESSAGE_NODE_SELECTOR, MESSAGE
 import { __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { configuredProfileKey } from './storage-common.ts';
-import { readTerminalEnvelope, runLaunch } from '../flow-manager-long-running-child.ts';
+import { deriveDelivery, readTerminalEnvelope, runLaunch } from '../flow-manager-long-running-child.ts';
 import { authoritativePreSend } from '../pack-review-no-review-reconcile.ts';
 
 const MARKER = `OPKTURNV1${'ab'.repeat(16)}`;
@@ -95,6 +95,22 @@ async function dispatch(harness: ReturnType<typeof createHarness>) {
     deliveryProofWaitMs: 10,
   });
 }
+
+describe('Issue #2541 attempted Send stays possibly delivered under local-ID fetch loss', () => {
+  it.each(['fresh_send_fetch_failed', 'owned_conversation_recovery_census_failed', 'owned_prompt_marker_ambiguous'])(
+    'never projects a witnessed Send as not-sent after %s', (cause) => {
+      const result = {
+        state: 'observation_uncertain',
+        cause,
+        resolved_send_count: 1,
+        send_attempted: true,
+        conversation_id: undefined,
+        witness: undefined,
+      } as unknown as NonNullable<Parameters<typeof deriveDelivery>[0]>;
+      expect(deriveDelivery(result, false)).toBe('POSSIBLY_DELIVERED');
+    },
+  );
+});
 
 describe('state-light send delivery accounting', () => {
   it.each<Transport>(['click', 'enter'])(
