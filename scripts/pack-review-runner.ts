@@ -4700,10 +4700,8 @@ export async function reconcileStalePackReviewRuns(
     recoveredRun: PackReviewRunRecord,
     statusWriter: PackReviewRequiredStatusWriter,
   ): Promise<{ verified: boolean; reason: string }> => {
-    if (!input.staleOnly) return { verified: true, reason: 'completed' };
-    // A stale fleet pass must not label POST acknowledgement as verified
-    // status. Observe the exact current-head status through the incumbent
-    // read-back path, including authority re-checks around external IO.
+    // Both explicit recovery and stale fleet reconciliation must verify the
+    // exact-head required status; a successful POST alone is not publication.
     try {
       return await observePackReviewVerdictDelivery({
         input, projectId, storeRoot, runId: recoveredRun.id,
@@ -7399,38 +7397,6 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         ? run.reviewRound?.sourceSlots.find((slot) => slot.lifecycle === 'invocation_started'
           && Boolean(slot.invocationId))
         : undefined;
-      if (pendingSource) {
-        const pending = updatePackReviewRunIf(run.id, (records) => {
-          const current = records.find((candidate) => candidate.id === run!.id);
-          return Boolean(current && current.runnerPid === process.pid
-            && !hasPersistedPackReviewVerdict(current)
-            && current.reviewRound
-            && current.reviewRound.settledSourceCount === undefined
-            && current.reviewRound.sourceSlots.some((slot) => (
-              slot.slotId === pendingSource.slotId
-              && slot.lifecycle === 'invocation_started'
-              && slot.invocationId === pendingSource.invocationId
-            )));
-        }, {
-          status: 'reviewing', latestRunStatus: 'reviewing',
-          failureReason: undefined, completedAtUtc: undefined,
-        }, { projectId, storeRoot });
-        const latest = pending ?? getPackReviewRun(run.id, { projectId, storeRoot });
-        const runs = listPackReviewRuns({ projectId, storeRoot });
-        if (claimLease) await claimLease.release('run_started', runs);
-        return {
-          ok: false, created: true, reused: false,
-          reason: pending ? 'gpt_original_invocation_recovery_required' : 'gpt_source_state_changed_during_partial',
-          nextAction: 'recover original ' + pendingSource.slotId + ' invocation '
-            + pendingSource.invocationId
-            + ' through its existing chat/transport and exact credentialed GitHub comment; do not resend',
-          publicationVerified: false,
-          prNumber: target.prNumber, headSha: target.headSha,
-          runId: run.id, status: latest?.status ?? 'reviewing',
-          coverage: derivePackReviewGptCoverage(latest?.reviewRound),
-          httpStatus: 202,
-        };
-      }
       // The original runner still owns this exact run. Use the same source
       // census, durable freeze, authority and delivery path as scoped recovery,
       // before returning to the public command. A locally complete slot alone
@@ -7443,7 +7409,10 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           reconciliation = await reconcileStalePackReviewRuns({
             repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
             projectId, storeRoot, prNumber: target.prNumber, runId: run.id,
-            recoverActiveGptSources: true, settlePartialAfterGrace: true,
+            recoverActiveGptSources: true,
+            // A still-running original invocation is not proof that its comment is absent.
+            // Do not degrade the quorum before credentialing that original source.
+            settlePartialAfterGrace: pendingSource === undefined,
             fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
             fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
             fixtureGithubReviewId: input.fixtureGithubReviewId,
@@ -7478,9 +7447,21 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           });
         }
         const verified = confirmation?.verified === true;
+        const unresolvedReason = String(reconciliationResult?.reason ?? '');
+        const stillPendingOriginal = !verdictExists && !reconcileError
+          && pendingSource
+          && recovered.reviewRound?.settledSourceCount === undefined
+          && recovered.reviewRound?.sourceSlots.some((slot) =>
+            slot.slotId === pendingSource.slotId
+            && slot.lifecycle === 'invocation_started'
+            && slot.invocationId === pendingSource.invocationId)
+          && (unresolvedReason === 'gpt_partial_requires_explicit_immediate_reconcile'
+            || unresolvedReason.startsWith('gpt_sources_'))
+          ? pendingSource : undefined;
         const reason = reconcileError ? `gpt_reconcile_failed:${reconcileError}`
           : verdictExists ? (verified ? 'completed' : confirmation?.reason ?? 'publication_unverified')
-            : String(reconciliationResult?.reason ?? 'gpt_source_census_not_settled');
+            : stillPendingOriginal ? 'gpt_original_invocation_recovery_required'
+              : String(reconciliationResult?.reason ?? 'gpt_source_census_not_settled');
         terminal = verdictExists;
         const runs = listPackReviewRuns({ projectId, storeRoot });
         if (claimLease) await claimLease.release('run_started', runs);
@@ -7491,8 +7472,12 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
             publicationHeadSha: target.headSha,
             requiredStatusState: confirmation!.requiredStatusState,
           } : {
-            nextAction: String(reconciliationResult?.nextAction
-              ?? 'repair the exact incumbent GitHub source/status evidence and rerun scoped reconcile; do not resend uncertain sources'),
+            nextAction: stillPendingOriginal
+              ? 'recover original ' + stillPendingOriginal.slotId + ' invocation '
+                + stillPendingOriginal.invocationId
+                + ' through its existing chat/transport and exact credentialed GitHub comment; do not resend'
+              : String(reconciliationResult?.nextAction
+                ?? 'repair the exact incumbent GitHub source/status evidence and rerun scoped reconcile; do not resend uncertain sources'),
           }),
           prNumber: target.prNumber, headSha: target.headSha, runId: run.id,
           status: recovered.status,
@@ -7503,6 +7488,38 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         };
       }
 
+      if (pendingSource) {
+        const pending = updatePackReviewRunIf(run.id, (records) => {
+          const current = records.find((candidate) => candidate.id === run!.id);
+          return Boolean(current && current.runnerPid === process.pid
+            && !hasPersistedPackReviewVerdict(current)
+            && current.reviewRound
+            && current.reviewRound.settledSourceCount === undefined
+            && current.reviewRound.sourceSlots.some((slot) => (
+              slot.slotId === pendingSource.slotId
+              && slot.lifecycle === 'invocation_started'
+              && slot.invocationId === pendingSource.invocationId
+            )));
+        }, {
+          status: 'reviewing', latestRunStatus: 'reviewing',
+          failureReason: undefined, completedAtUtc: undefined,
+        }, { projectId, storeRoot });
+        const latest = pending ?? getPackReviewRun(run.id, { projectId, storeRoot });
+        const runs = listPackReviewRuns({ projectId, storeRoot });
+        if (claimLease) await claimLease.release('run_started', runs);
+        return {
+          ok: false, created: true, reused: false,
+          reason: pending ? 'gpt_original_invocation_recovery_required' : 'gpt_source_state_changed_during_partial',
+          nextAction: 'recover original ' + pendingSource.slotId + ' invocation '
+            + pendingSource.invocationId
+            + ' through its existing chat/transport and exact credentialed GitHub comment; do not resend',
+          publicationVerified: false,
+          prNumber: target.prNumber, headSha: target.headSha,
+          runId: run.id, status: latest?.status ?? 'reviewing',
+          coverage: derivePackReviewGptCoverage(latest?.reviewRound),
+          httpStatus: 202,
+        };
+      }
       payload = validatePersistedGptReviewPayload(run.id, payload, { projectId, storeRoot });
       const writeRequiredStatus = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
         repoRoot: target.sourceRepoRoot,

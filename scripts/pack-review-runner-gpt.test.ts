@@ -5164,6 +5164,28 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       .toEqual([1]);
   });
 
+  it('explicit scoped reconcile rejects an acknowledged status without exact-head confirmation', async () => {
+    const f = seed(3);
+    const result = await reconcileStalePackReviewRuns({
+      ...f.input,
+      staleOnly: false,
+      fixtureRequiredStatusReader: async () => 'pending',
+    });
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, recovered: true, statusReconciled: false,
+        reason: expect.stringContaining('gpt_source_comments_recovered_delivery_unverified:'),
+      }),
+    ]));
+    expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+      reviewVerdict: 'clean', reviewRound: { settledSourceCount: 3 },
+    });
+    expect(f.reviewBodies).toHaveLength(1);
+    expect(f.statusStates.length).toBeGreaterThanOrEqual(1);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([1]);
+  });
+
   it('fleet stale-only 1/3 error without verdict cannot claim success when status read-back disagrees', async () => {
     const f = seed(1);
     f.expireGrace();
@@ -5718,6 +5740,38 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     });
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
     expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([1]);
+  });
+
+  it('settles a pending original source that posts while the last source runs', async () => {
+    const f = await seedDeadIncumbent({ source02Comment: false });
+    const originalLaunch = f.input.fixtureAfterGptInvocationBound;
+    const result = await startPackReview({
+      ...f.input,
+      claimMode: 'acquire',
+      fixtureGptAdmissionReadObservation: () => source02Observation('sent_unharvested'),
+      fixtureAfterGptInvocationBound: (launch) => {
+        originalLaunch?.(launch);
+        if (launch.slotId === 'source-03') f.addSource02Comment();
+      },
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      ok: true, created: true, publicationVerified: true,
+      publicationHeadSha: HEAD_A, reason: 'completed',
+      requiredStatusState: 'success', status: 'up_to_date',
+      coverage: { kind: 'complete', completedSourceCount: 3, cardinality: 3 },
+    });
+    expect(f.launches.map((launch) => launch.slotId).toEqual(['source-03']);
+    expect(f.statusStates).toEqual(['pending', 'success']);
+    const settled = getPackReviewRun(f.runId, f.options)!;
+    expect(settled.reviewRound).toMatchObject({ settledSourceCount: 3 });
+    expect(settled.reviewRound?.sourceSlots[1]).toMatchObject({
+      lifecycle: 'terminal', terminalClass: 'complete_clean',
+      invocationId: originalSource02, attemptOrdinal: 1,
+    });
+    expect(settled.reviewRound?.sourceSlots[1]?.attemptHistory).toBeUndefined();
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([1]);
   });
 
   it('normal runner exit reconciles the exact last comment missed by local harvesting', async () => {
