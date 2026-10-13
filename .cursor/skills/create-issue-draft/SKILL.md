@@ -138,21 +138,23 @@ The Issue body uses this order:
 13. **Verification** mapped to ACs;
 14. `contract-evidence` fence or accepted explicit none.
 
-For ordinary Issue-linked declaration-required PRs, apply the **pack-owned**
-[PR scope declaration authoring convention](https://github.com/chetwerikoff/orchestrator-pack/blob/main/docs/pr-scope-declaration.md)
-(`chetwerikoff/orchestrator-pack`, not the reviewed target repository).
-The unique valid selected default `docs/declarations/<N>.pr-scope.json`
-is **implicitly in scope** as a generated-only control artifact: do not list it
-in Files in scope, demand a Files-out-of-scope exception, or add an editable
-`allowed-roots` entry for it. List only editable implementation paths in those
-fields. Generic catch-alls like "all other files" or "every path not listed"
-exclude unlisted editable paths **after** including this default artifact;
-they are not a specific prohibition. A one-editable-file AC allows that one
-file plus the generated declaration. A specific live-Issue prohibition of the
-exact selected path, `docs/declarations/**` or `docs/**`, an intersecting
-Issue denylist, or an AC literally limiting **all changed PR paths** still
-requires Issue-owner correction; never override it or infer permission for a
-nondefault selected suffix.
+For an ordinary Issue-linked PR targeting a configured guard-enabled repository,
+apply the **pack-owned** [PR scope declaration authoring convention](https://github.com/chetwerikoff/orchestrator-pack/blob/main/docs/pr-scope-declaration.md)
+(`chetwerikoff/orchestrator-pack`, not the reviewed target repository). Determine
+applicability from the selected target's authoritative PR-base/default workflow
+configuration; actual per-head CI is separate. The unique valid selected default
+`docs/declarations/<N>.pr-scope.json` is implicitly in scope as a generated-only
+control artifact: do not list it in Files in scope, demand a Files-out-of-scope
+exception, or add an editable `allowed-roots` entry for it. List only editable
+implementation paths in those fields. Generic catch-alls exclude unlisted editable
+paths after including the default artifact; a one-editable-file AC permits that file
+plus its generated declaration. Specific live-Issue prohibitions, intersecting
+denylist entries, or limits on all changed PR paths still require Issue-owner
+correction; never infer permission for a nondefault selected suffix.
+
+For a confirmed guard-free target, use the complete live Issue as scope authority
+and do not require or generate a declaration. If authoritative configuration cannot
+be established, keep applicability unverified instead of inferring guard absence.
 
 ### Smoke plan by change kind
 

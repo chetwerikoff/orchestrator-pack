@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync as rawMkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { pathToFileURL } from 'node:url';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import {
   PR_SCOPE_DECLARATION_SCHEMA,
@@ -10,6 +11,7 @@ import {
   normalizeRepositoryPath,
   pathMatchesEntries,
   producePrScopeDeclaration,
+  resolvePrScopeGuardApplicability,
   selectDeclarationArtifact,
   selectLiveIssueScope,
   validatePrScopeDeclaration,
@@ -116,6 +118,67 @@ const bootstrapAllowedPaths = [
 ];
 const bootstrapHeadSha = '0123456789abcdef0123456789abcdef01234567';
 
+const activeScopeGuardWorkflow = [
+  'name: scope-guard',
+  'on:',
+  '  pull_request:',
+  '    types: [opened, synchronize]',
+  'jobs:',
+  '  pr-scope-guard:',
+  '    steps:',
+  '      - name: Run pack scope guard',
+  '        run: node --experimental-strip-types scripts/pr-scope-runner.ts',
+].join('\n');
+
+function fixtureGit(root: string, args: string[]): string {
+  const result = runProcessSync({ command: 'git', args, cwd: root, inheritParentEnv: true });
+  if (!result.ok) throw new Error(result.stderr || result.error || `git ${args.join(' ')} failed`);
+  return result.stdout.trim();
+}
+
+function initializeDefaultWorkflow(
+  root: string,
+  workflow: string = activeScopeGuardWorkflow,
+  repository = 'fixture/target',
+): void {
+  const gitDir = runProcessSync({ command: 'git', args: ['rev-parse', '--git-dir'], cwd: root, inheritParentEnv: true });
+  if (!gitDir.ok) {
+    fixtureGit(root, ['init', '--quiet']);
+    fixtureGit(root, ['config', 'user.name', 'opk-test']);
+    fixtureGit(root, ['config', 'user.email', 'opk-test@example.invalid']);
+  }
+  mkdirSync(join(root, '.github', 'workflows'), { recursive: true });
+  writeFileSync(join(root, '.github', 'workflows', 'scope-guard.yml'), workflow, 'utf8');
+  fixtureGit(root, ['add', '.github/workflows/scope-guard.yml']);
+  if (fixtureGit(root, ['status', '--porcelain'])) fixtureGit(root, ['commit', '--quiet', '-m', 'guard workflow']);
+  const remoteUrl = 'https://github.com/' + repository + '.git';
+  const remote = runProcessSync({ command: 'git', args: ['remote', 'get-url', 'origin'], cwd: root, inheritParentEnv: true });
+  if (!remote.ok) fixtureGit(root, ['remote', 'add', 'origin', remoteUrl]);
+  const bareRemote = join(root, '.git', 'fixture-origin.git');
+  if (!existsSync(bareRemote)) {
+    fixtureGit(root, ['init', '--bare', '--quiet', bareRemote]);
+    fixtureGit(root, ['--git-dir', bareRemote, 'symbolic-ref', 'HEAD', 'refs/heads/main']);
+  }
+  fixtureGit(root, ['config', 'url.' + pathToFileURL(bareRemote).href + '.insteadOf', remoteUrl]);
+  syncDefaultBranch(root);
+}
+
+function syncDefaultBranch(root: string): void {
+  fixtureGit(root, ['push', '--quiet', '--force', 'origin', 'HEAD:refs/heads/main']);
+  fixtureGit(root, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+  fixtureGit(root, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
+}
+
+// Concurrent main-line producer regressions use bare temp roots. Supply those
+// guarded-mode fixtures with real authoritative workflow/remote configuration.
+function mkdtempSync(prefix: string): string {
+  const root = rawMkdtempSync(prefix);
+  if (prefix.includes('opk-deny-star-') || prefix.includes('opk-live-grammar-')) {
+    initializeDefaultWorkflow(root);
+  }
+  return root;
+}
+
 type BootstrapIssueOptions = {
   markerRevision?: string;
   bootstrapRevision?: string;
@@ -202,6 +265,216 @@ describe('AO-free PR scope declaration contract', () => {
   afterEach(() => {
     for (const root of roots.splice(0)) {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('uses only the target origin default-branch workflow to identify the guard', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-guard-applicability-'));
+    roots.push(root);
+    initializeDefaultWorkflow(root);
+    writeFileSync(
+      join(root, '.github', 'workflows', 'scope-guard.yml'),
+      'name: scope-guard\non:\n  push:\n    branches: [main]\njobs:\n  build:\n    steps:\n      - run: echo inert\n',
+      'utf8',
+    );
+    expect(resolvePrScopeGuardApplicability(root)).toEqual({
+      status: 'guarded',
+      repository: 'fixture/target',
+    });
+  });
+
+
+  it('gets authoritative remote default without refs/remotes/origin/HEAD or a trusted local cache', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-guard-no-symbolic-'));
+    roots.push(root);
+    initializeDefaultWorkflow(root, [
+      'on:', '  push:', 'jobs:', '  build:', '    steps:', '      - run: echo not-a-guard',
+    ].join('\n'), 'fixture/no-symbolic');
+    fixtureGit(root, ['symbolic-ref', '--delete', 'refs/remotes/origin/HEAD']);
+    fixtureGit(root, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+    expect(resolvePrScopeGuardApplicability(root)).toEqual({
+      status: 'guard-free', repository: 'fixture/no-symbolic',
+    });
+  });
+
+  it('uses the observed remote PR base, not remote default or stale tracking refs', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-guard-base-'));
+    roots.push(root);
+    initializeDefaultWorkflow(root);
+    fixtureGit(root, ['push', '--quiet', 'origin', 'HEAD:refs/heads/release']);
+    writeFileSync(join(root, '.github', 'workflows', 'scope-guard.yml'), [
+      'on:', '  push:', 'jobs:', '  build:', '    steps:', '      - run: echo no-guard',
+    ].join('\n'), 'utf8');
+    fixtureGit(root, ['add', '.github/workflows/scope-guard.yml']);
+    fixtureGit(root, ['commit', '--quiet', '-m', 'remove guard on main']);
+    syncDefaultBranch(root);
+    // A stale symbolic tracking ref pointing at release must not override the live default.
+    fixtureGit(root, ['update-ref', 'refs/remotes/origin/release', 'HEAD~1']);
+    fixtureGit(root, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/release']);
+    expect(resolvePrScopeGuardApplicability(root)).toMatchObject({ status: 'guard-free' });
+    expect(resolvePrScopeGuardApplicability(root, { baseRef: 'origin/release' })).toEqual({
+      status: 'guarded', repository: 'fixture/target',
+    });
+    expect(resolvePrScopeGuardApplicability(root, { baseRef: 'refs/heads/absent' }))
+      .toMatchObject({ status: 'unverified' });
+  });
+
+  it('recognizes active inline and four-space YAML guard configurations', () => {
+    const workflows = [
+      [
+        'on: { pull_request: { types: [opened, synchronize] } }',
+        'jobs:', '    pr-scope-guard:', '        steps:',
+        '            - run: node scripts/pr-scope-runner.ts',
+      ].join('\n'),
+      [
+        'on:', '    pull_request:', '        types:', '            - opened', '            - synchronize',
+        'jobs:', '    pr-scope-guard:', '        steps:',
+        '            - name: Guard', '              run: node scripts/pr-scope-check.ts',
+      ].join('\n'),
+      [
+        'on: [push, pull_request]', 'jobs:', '  pr-scope-guard:',
+        "    if: github.event_name == 'pull_request'",
+        '    steps:', '      - run: node scripts/pr-scope-runner.ts',
+      ].join('\n'),
+    ];
+    for (const [index, yaml] of workflows.entries()) {
+      const root = mkdtempSync(join(tmpdir(), 'opk-guard-yaml-'));
+      roots.push(root);
+      initializeDefaultWorkflow(root, yaml, 'fixture/yaml-' + index);
+      expect(resolvePrScopeGuardApplicability(root)).toEqual({
+        status: 'guarded', repository: 'fixture/yaml-' + index,
+      });
+    }
+  });
+
+  it('rejects closed-only PR events, PR-inert jobs, and disabled guard steps', () => {
+    const workflows = [
+      [
+        'on: {pull_request: {types: [closed]}}', 'jobs:', '  pr-scope-guard:',
+        '    steps:', '      - run: node scripts/pr-scope-runner.ts',
+      ].join('\n'),
+      [
+        'on: pull_request', 'jobs:', '  pr-scope-guard:',
+        "    if: github.event_name == 'push'",
+        '    steps:', '      - run: node scripts/pr-scope-runner.ts',
+      ].join('\n'),
+      [
+        'on: pull_request', 'jobs:', '  pr-scope-guard:',
+        '    steps:', '      - if: false', '        run: node scripts/pr-scope-runner.ts',
+      ].join('\n'),
+      [
+        'on: pull_request', 'jobs:', '  pr-scope-guard:',
+        '    steps:', '      - run: echo safe',
+        '      - if: false', '        run: node scripts/pr-scope-runner.ts',
+      ].join('\n'),
+    ];
+    for (const [index, yaml] of workflows.entries()) {
+      const root = mkdtempSync(join(tmpdir(), 'opk-guard-inert-yaml-'));
+      roots.push(root);
+      initializeDefaultWorkflow(root, yaml, 'fixture/inert-yaml-' + index);
+      expect(resolvePrScopeGuardApplicability(root)).toEqual({
+        status: 'guard-free', repository: 'fixture/inert-yaml-' + index,
+      });
+    }
+  });
+
+  it('returns unverified instead of guessing on conditional or partial PR guard activity', () => {
+    const workflows = [
+      [
+        'on: pull_request', 'jobs:', '  pr-scope-guard:',
+        "    if: github.ref == 'refs/heads/main'",
+        '    steps:', '      - run: node scripts/pr-scope-runner.ts',
+      ].join('\n'),
+      [
+        'on: {pull_request: {types: [opened]}}', 'jobs:', '  pr-scope-guard:',
+        '    steps:', '      - run: node scripts/pr-scope-runner.ts',
+      ].join('\n'),
+    ];
+    for (const yaml of workflows) {
+      const root = mkdtempSync(join(tmpdir(), 'opk-guard-ambiguous-'));
+      roots.push(root);
+      initializeDefaultWorkflow(root, yaml, 'fixture/ambiguous');
+      expect(resolvePrScopeGuardApplicability(root)).toMatchObject({ status: 'unverified' });
+    }
+  });
+
+  it('does not require declarations for confirmed guard-free targets and leaves history untouched', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-guard-free-'));
+    roots.push(root);
+    initializeDefaultWorkflow(root, [
+      'name: scope-guard',
+      'on:',
+      '  push:',
+      '    branches: [main]',
+      'jobs:',
+      '  build:',
+      '    steps:',
+      '      - run: echo inert',
+    ].join('\n'), 'fixture/unguarded');
+    expect(resolvePrScopeGuardApplicability(root)).toEqual({
+      status: 'guard-free',
+      repository: 'fixture/unguarded',
+    });
+    const historicalDir = join(root, 'docs', 'declarations');
+    const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    try {
+      expect(producePrScopeDeclaration([
+        '--issue', '42',
+        '--declared-paths', 'scripts/allowed.ts',
+        '--issue-body-file', join(root, 'missing-issue-body.md'),
+        '--repo-root', root,
+      ])).toBeNull();
+      expect(existsSync(historicalDir)).toBe(false);
+      mkdirSync(historicalDir, { recursive: true });
+      const historicalPath = join(historicalDir, '42.pr-scope.json');
+      writeFileSync(historicalPath, '{malformed historical bytes}\n');
+      expect(producePrScopeDeclaration([
+        '--issue', '42',
+        '--declared-paths', 'scripts/allowed.ts',
+        '--issue-body-file', join(root, 'missing-issue-body.md'),
+        '--repo-root', root,
+      ])).toBeNull();
+      expect(readFileSync(historicalPath, 'utf8')).toBe('{malformed historical bytes}\n');
+      expect(stdout).toHaveBeenCalledTimes(2);
+      expect(stdout).toHaveBeenLastCalledWith(
+        'no PR scope guard in fixture/unguarded; the Issue fences are the scope\n',
+      );
+    } finally {
+      stdout.mockRestore();
+    }
+    expect(existsSync(join(historicalDir, '42.alternate.json'))).toBe(false);
+  });
+
+  it('fails closed when the selected repository default-branch config is unresolved', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-guard-unverified-'));
+    roots.push(root);
+    const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    try {
+      expect(() => producePrScopeDeclaration([
+        '--issue', '42',
+        '--declared-paths', 'scripts/allowed.ts',
+        '--issue-body-file', join(root, 'missing-issue-body.md'),
+        '--repo-root', root,
+      ])).toThrow(/applicability is unverified/);
+    } finally {
+      stdout.mockRestore();
+    }
+    expect(existsSync(join(root, 'docs', 'declarations'))).toBe(false);
+  });
+
+  it('does not count an unrelated PR workflow or placeholder guard job', () => {
+    const workflows = [
+      'name: scope-guard\non:\n  pull_request:\n    types: [opened, synchronize]\njobs:\n  build:\n    steps:\n      - run: echo test\n',
+      'name: scope-guard\non:\n  pull_request:\n    types: [opened, synchronize]\njobs:\n  pr-scope-guard:\n    steps:\n      - run: echo placeholder\n',
+    ];
+    for (const [index, workflow] of workflows.entries()) {
+      const root = mkdtempSync(join(tmpdir(), `opk-guard-inert-${index}-`));
+      roots.push(root);
+      initializeDefaultWorkflow(root, workflow, `fixture/inert-${index}`);
+      expect(resolvePrScopeGuardApplicability(root)).toEqual({
+        status: 'guard-free',
+        repository: `fixture/inert-${index}`,
+      });
     }
   });
 
@@ -312,6 +585,7 @@ describe('AO-free PR scope declaration contract', () => {
   it('generates bounded file patterns and guards the selected default declaration', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-file-star-'));
     roots.push(root);
+    initializeDefaultWorkflow(root);
     const fixtureIssue = [
       '```denylist',
       'vendor/**',
@@ -331,6 +605,7 @@ describe('AO-free PR scope declaration contract', () => {
       '--issue-body-file', issueBodyFile,
       '--repo-root', root,
     ]);
+    if (!output) throw new Error('guarded producer should return a declaration');
     expect(output.declared_paths).toEqual(['scripts/.env.*']);
     expect(output.allowed_roots).toEqual(['scripts/']);
     const selectedPath = 'docs/declarations/42.pr-scope.json';
@@ -567,6 +842,7 @@ describe('AO-free PR scope declaration contract', () => {
     git(['init', '--quiet']);
     git(['config', 'user.name', 'opk-test']);
     git(['config', 'user.email', 'opk-test@example.invalid']);
+    initializeDefaultWorkflow(root);
     mkdirSync(join(root, '.claude', 'skills'), { recursive: true });
     mkdirSync(join(root, '.cursor', 'skills'), { recursive: true });
     mkdirSync(join(root, 'plugins'), { recursive: true });
@@ -576,6 +852,7 @@ describe('AO-free PR scope declaration contract', () => {
     writeFileSync(join(root, 'plugins', 'fixture.ts'), 'export const fixture = true;\n');
     git(['add', '.claude', '.cursor', 'plugins']);
     git(['commit', '--quiet', '-m', 'base']);
+    syncDefaultBranch(root);
     const baseSha = git(['rev-parse', 'HEAD']);
 
     const issueBodyFile = join(root, 'issue-body.md');
@@ -1206,11 +1483,13 @@ describe('AO-free PR scope declaration contract', () => {
     git(['init', '--quiet']);
     git(['config', 'user.name', 'opk-test']);
     git(['config', 'user.email', 'opk-test@example.invalid']);
+    initializeDefaultWorkflow(root);
     mkdirSync(join(root, 'scripts'), { recursive: true });
     mkdirSync(join(root, 'docs', 'declarations'), { recursive: true });
     writeFileSync(join(root, 'scripts', 'allowed.ts'), 'export const allowed = "base";\n');
     git(['add', 'scripts/allowed.ts']);
     git(['commit', '--quiet', '-m', 'base']);
+    syncDefaultBranch(root);
     const baseSha = git(['rev-parse', 'HEAD']);
 
     writeFileSync(join(root, 'scripts', 'allowed.ts'), 'export const allowed = "head";\n');
