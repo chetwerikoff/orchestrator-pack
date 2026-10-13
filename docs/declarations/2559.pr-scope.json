@@ -1,0 +1,22 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2559,
+  "declared_paths": [
+    ".cursor/skills/direct-fix-checklist/SKILL.md",
+    ".cursor/skills/discuss-with-gpt/SKILL.md",
+    ".cursor/skills/merge-with-local-adoption/SKILL.md"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "scripts/lib/target-context.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/direct-fix-checklist/SKILL.md",
+    ".cursor/skills/discuss-with-gpt/SKILL.md",
+    ".cursor/skills/merge-with-local-adoption/SKILL.md"
+  ],
+  "source_revision": "47f7f63555b67886f452a250e0ab24df1f02360a"
+}
