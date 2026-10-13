@@ -541,8 +541,19 @@ The merge agent performs the sole branch update from `origin/main` immediately b
 
 #### Pack-review recovery recipe
 
-Recover interrupted or stale reviews only through the scoped runner; do not start a
-replacement same-head review merely because a browser or runner child stopped.
+The incumbent runner normally re-credentials posted GPT source comments, freezes
+the first legally observed source count, and verifies the review and required
+status before reporting completion. After a runner dies, an operating selected-
+project fleet-wake pass invokes the same scoped reconcile only once the existing
+dead-PID **and heartbeat-grace** stale predicate is satisfied. A healthy owner
+or a dead owner before grace is not taken over; when fleet-wake is not running,
+there is no automatic completion deadline. An uncredentialable locally complete
+source remains unresolved rather than becoming an invented 2/3 verdict.
+
+The command below is an **operator diagnostic/fallback**, not a routine manager
+step. Recover interrupted or stale reviews only through the scoped runner; do
+not start a replacement same-head review merely because a browser or runner
+child stopped.
 
 ```text
 node --experimental-strip-types scripts/pack-review-runner.ts reconcile \
@@ -678,6 +689,13 @@ earlier-head required checks are not green. Green CI alone is not exit: complete
 review and handoff obligations for the same current head.
 
 Pack review is a PR/task-cycle obligation with logical-round caps T1=1, T2=1, T3=2.
+Only an eligible canonical verdict committed by `commitPackReviewTerminal` consumes a
+`consumedRoundOrdinals` slot. A required `orchestrator-pack/pack-review=error`
+status from an unfinished genuine 0/3 or 1/3 source census has **no** verdict
+and does not consume the T2=1 cap; it permits incumbent evidence recovery,
+never a replacement round or an unobserved source resend. A legally frozen
+degraded 2/3 verdict does consume its logical round, even if the late third
+comment appears before the original review/status publication finishes.
 A T3 clean round 1 still requires round 2. Once required rounds and findings settle,
 the durable `reviewStageComplete` state prevents later commits, smoke fixes, or
 CI-only changes from reopening the required stage. A cap never converts findings
