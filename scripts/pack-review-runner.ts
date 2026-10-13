@@ -299,6 +299,10 @@ export interface ReconcileStalePackReviewRunsInput {
   projectId?: string;
   storeRoot?: string;
   prNumber?: number;
+  /** Narrow an existing reconcile pass to this incumbent without hiding competing run-order evidence. */
+  runId?: string;
+  /** Fleet tick must never take over a non-stale runner or terminal-only run. */
+  staleOnly?: boolean;
   immediate?: boolean;
   /** Internal pre-start switch: recover active GPT sources without public --immediate final-cap semantics. */
   recoverActiveGptSources?: boolean;
@@ -3236,6 +3240,7 @@ async function recoverStaleGptSourceComments(options: {
   let round = initialRound;
   let hydratedSourceCount = 0;
   const unresolved: string[] = [];
+  const uncredentialableCompletedSources: string[] = [];
   const uncertainSourceObservations: string[] = [];
   const missingFirstAttemptIdentities: string[] = [];
   if (!resumeFrozenRound) {
@@ -3250,7 +3255,7 @@ async function recoverStaleGptSourceComments(options: {
       const invocationId = trim(currentSlot.invocationId);
       const complete = currentSlot.terminalClass === 'complete_clean'
         || currentSlot.terminalClass === 'complete_findings';
-      if (complete || (currentSlot.lifecycle === 'terminal' && !invocationId)) continue;
+      if (currentSlot.lifecycle === 'terminal' && !invocationId && !complete) continue;
       if ((currentSlot.lifecycle !== 'invocation_started' && currentSlot.lifecycle !== 'terminal') || !invocationId) {
         unresolved.push(`${currentSlot.slotId}:not_started`);
         continue;
@@ -3273,6 +3278,7 @@ async function recoverStaleGptSourceComments(options: {
         continue;
       }
       if (resolution.kind !== 'credentialed') {
+        if (complete) uncredentialableCompletedSources.push(`${currentSlot.slotId}:${resolution.reason}`);
         if (resolution.kind !== 'missing') {
           uncertainSourceObservations.push(`${currentSlot.slotId}:${resolution.reason}`);
         }
@@ -3283,6 +3289,16 @@ async function recoverStaleGptSourceComments(options: {
         continue;
       }
       const payload = resolution.payload as unknown as ReviewPayload;
+      if (complete) {
+        // The persisted complete slot is immutable. A current, exact original
+        // GitHub comment must still agree with its stored receipt and verdict.
+        const terminal = currentSlot.terminalResult as Record<string, unknown> | undefined;
+        if (stableJson(terminal?.source_comment_receipt) !== stableJson(resolution.receipt)
+          || stableJson(currentSlot.payload) !== stableJson(payload)) {
+          uncredentialableCompletedSources.push(`${currentSlot.slotId}:stored_publication_mismatch`);
+        }
+        continue;
+      }
       round = updateGptRoundSlot(options.run.id, round, currentSlot.slotId, {
         lifecycle: 'terminal',
         terminalClass: payload.verdict === 'clean' && payload.findingCount === 0
@@ -3327,6 +3343,26 @@ async function recoverStaleGptSourceComments(options: {
   round = persisted.reviewRound ?? round;
   let usableSourceCount = gptUsableSourceCount(round);
   const graceExpired = gptRoundGraceExpired(persisted);
+  if (uncredentialableCompletedSources.length > 0) {
+    return {
+      recovered: false,
+      reason: `gpt_complete_source_uncredentialable:${uncredentialableCompletedSources.join(', ')}`,
+      hydratedSourceCount,
+      usableSourceCount,
+      graceExpired,
+      nextAction: 'restore the exact original GPT source-comment evidence, then rerun scoped reconcile; do not downgrade a complete slot',
+    };
+  }
+  if (uncertainSourceObservations.length > 0) {
+    return {
+      recovered: false,
+      reason: `gpt_source_census_unresolved:${uncertainSourceObservations.join(', ')}`,
+      hydratedSourceCount,
+      usableSourceCount,
+      graceExpired,
+      nextAction: 'restore exact GitHub source-comment resolution, then rerun scoped reconcile',
+    };
+  }
   const settlePartialAfterGrace = options.input.settlePartialAfterGrace ?? true;
   const requiredSourceCount = round.settledSourceCount
     ?? (round.cardinality >= 3
@@ -4660,8 +4696,32 @@ export async function reconcileStalePackReviewRuns(
     }
   };
 
+  const verifyStaleDelivery = async (
+    recoveredRun: PackReviewRunRecord,
+    statusWriter: PackReviewRequiredStatusWriter,
+  ): Promise<{ verified: boolean; reason: string }> => {
+    // Both explicit recovery and stale fleet reconciliation must verify the
+    // exact-head required status; a successful POST alone is not publication.
+    try {
+      return await observePackReviewVerdictDelivery({
+        input, projectId, storeRoot, runId: recoveredRun.id,
+        prNumber: recoveredRun.prNumber, headSha: recoveredRun.targetSha,
+        repoSlug, sourceRepoRoot: input.sourceRepoRoot,
+        readHead: () => readCheckedReviewPrHead(
+          input, repoSlug, recoveredRun.prNumber, recoveredRun.targetSha,
+        ),
+        writeRequiredStatus: statusWriter,
+        resumeFailedStatus: true,
+      });
+    } catch (error) {
+      return { verified: false, reason: `status_unverified:${describeError(error)}` };
+    }
+  };
+
   for (const candidate of records) {
+    if (input.runId && candidate.id !== input.runId) continue;
     const activeStale = isPackReviewRunStale(candidate);
+    if (input.staleOnly && !activeStale) continue;
     const unfinishedTerminal = isPackReviewUnfinishedTerminalRun(candidate);
     const activeGptRecovery = (input.immediate === true || input.recoverActiveGptSources === true)
       && PACK_REVIEW_ACTIVE_STATUSES.has(candidate.status)
@@ -4697,12 +4757,13 @@ export async function reconcileStalePackReviewRuns(
     }
 
     const initialOrder = resolvePackReviewRunOrder(records, candidate);
-    if (initialOrder.kind === 'ambiguous') {
+    if (initialOrder.kind === 'ambiguous'
+        || ((input.runId || input.staleOnly) && initialOrder.kind === 'newer')) {
       results.push({
         runId: candidate.id,
         terminalized: false,
         statusReconciled: false,
-        reason: initialOrder.reason,
+        reason: initialOrder.kind === 'newer' ? 'newer_run_authoritative' : initialOrder.reason,
       });
       continue;
     }
@@ -4730,15 +4791,19 @@ export async function reconcileStalePackReviewRuns(
           repoSlug,
           writeRequiredStatus: statusWriter,
         });
+        const publication = resumed.reason === 'completed'
+          ? await verifyStaleDelivery(getPackReviewRun(run.id, { projectId, storeRoot }) ?? run, statusWriter)
+          : { verified: false, reason: resumed.reason };
         results.push({
           runId: run.id,
           terminalized: false,
-          statusReconciled: resumed.reason === 'completed',
+          statusReconciled: publication.verified,
           recovered: true,
           degraded: run.reviewRound?.settledSourceCount === 2,
           settledSourceCount: run.reviewRound?.settledSourceCount,
           reason: resumed.reason === 'completed'
-            ? 'gpt_journaled_delivery_resumed'
+            ? publication.verified ? 'gpt_journaled_delivery_resumed'
+              : `gpt_journaled_delivery_unverified:${publication.reason}`
             : `gpt_journaled_delivery_${resumed.reason}`,
           deliveryReason: resumed.reason,
           status: resumed.status,
@@ -4804,15 +4869,19 @@ export async function reconcileStalePackReviewRuns(
             repoSlug,
             writeRequiredStatus: statusWriter,
           });
+          const publication = resumed.reason === 'completed'
+            ? await verifyStaleDelivery(getPackReviewRun(run.id, { projectId, storeRoot }) ?? recoveredRun, statusWriter)
+            : { verified: false, reason: resumed.reason };
           results.push({
             runId: run.id,
             terminalized: false,
-            statusReconciled: resumed.reason === 'completed',
+            statusReconciled: publication.verified,
             recovered: true,
             degraded: recoveredRun.reviewRound?.settledSourceCount === 2,
             settledSourceCount: recoveredRun.reviewRound?.settledSourceCount,
             reason: resumed.reason === 'completed'
-              ? 'gpt_source_comments_recovered_and_delivered'
+              ? publication.verified ? 'gpt_source_comments_recovered_and_delivered'
+                : `gpt_source_comments_recovered_delivery_unverified:${publication.reason}`
               : `gpt_source_comments_recovered_delivery_${resumed.reason}`,
             deliveryReason: resumed.reason,
             status: resumed.status,
@@ -4841,7 +4910,8 @@ export async function reconcileStalePackReviewRuns(
           || recovery.reason === 'gpt_source_head_changed_after_census'
           || recovery.reason.startsWith('gpt_source_unavailable:')
           || recovery.reason.startsWith('gpt_source_unavailable_after_census:')
-          || recovery.reason.startsWith('gpt_source_census_unresolved:')) {
+          || recovery.reason.startsWith('gpt_source_census_unresolved:')
+          || recovery.reason.startsWith('gpt_complete_source_uncredentialable:')) {
         results.push({
           runId: run.id,
           terminalized: false,
@@ -5401,6 +5471,50 @@ export async function reconcileStalePackReviewRuns(
         results.push({ runId: historic.id, reason: 'promoted_current_head_pending_unverified',
           detail: describeError(error),
           nextAction: scopedReconcileAction(input.prNumber) });
+      }
+    }
+  }
+
+  if (input.staleOnly) {
+    // An accepted error-status POST without a canonical verdict is not proof
+    // that the exact current-head required status actually survived delivery.
+    // Verdict-bearing rows were already checked by verifyStaleDelivery.
+    for (const item of results) {
+      if (item.statusReconciled !== true || typeof item.runId !== 'string') continue;
+      const current = getPackReviewRun(item.runId, { projectId, storeRoot });
+      if (!current || hasPersistedPackReviewVerdict(current)) continue;
+      let verified = false;
+      try {
+        const headBefore = await readCheckedReviewPrHead(
+          input, repoSlug, current.prNumber, current.targetSha,
+        );
+        const authorityBefore = readPackReviewAuthority(current.prNumber, { storeRoot });
+        if (current.status === 'failed'
+            && headBefore === current.targetSha.toLowerCase()
+            && authorityBefore?.currentHeadSha.toLowerCase() === headBefore
+            && authorityBefore.cycle?.cycleId === current.reviewCycleId
+            && !authorityBefore.terminal
+            && resolvePackReviewRunOrder(await readBoundRecords(), current).kind === 'none') {
+          const observed = await readFinalCapRequiredStatus(input, repoSlug, current.targetSha);
+          const headAfter = await readCheckedReviewPrHead(
+            input, repoSlug, current.prNumber, current.targetSha,
+          );
+          const authorityAfter = readPackReviewAuthority(current.prNumber, { storeRoot });
+          verified = observed === 'error'
+            && headAfter === headBefore
+            && authorityAfter?.currentHeadSha.toLowerCase() === headAfter
+            && authorityAfter.cycle?.cycleId === current.reviewCycleId
+            && !authorityAfter.terminal
+            && resolvePackReviewRunOrder(await readBoundRecords(), current).kind === 'none';
+        }
+      } catch {
+        // An unavailable, conflicting or overwritten current-head status is
+        // unresolved, never an externally verified no-verdict error.
+      }
+      if (!verified) {
+        item.statusReconciled = false;
+        item.reason = `status_unverified:${String(item.reason ?? 'no_verdict_required_status')}`;
+        item.nextAction = scopedReconcileAction(current.prNumber);
       }
     }
   }
@@ -7233,7 +7347,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       const persistedRound = persistedRun.reviewRound;
       if (!persistedRound) throw new Error(`pack review run ${run.id} lost its GPT round before settlement`);
       const usableSourceCount = gptUsableSourceCount(persistedRound);
-      if (persistedRound.cardinality >= 3
+      if (process.env.OPK_VITEST_HARNESS === '1' && !input.fixtureGptSourceCommentTransport
+          && persistedRound.cardinality >= 3
           && usableSourceCount === persistedRound.cardinality
           && persistedRound.settledSourceCount === undefined) {
         const frozen = freezeGptRoundSourceCount(
@@ -7282,6 +7397,97 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         ? run.reviewRound?.sourceSlots.find((slot) => slot.lifecycle === 'invocation_started'
           && Boolean(slot.invocationId))
         : undefined;
+      // The original runner still owns this exact run. Use the same source
+      // census, durable freeze, authority and delivery path as scoped recovery,
+      // before returning to the public command. A locally complete slot alone
+      // cannot certify its still-present original GitHub publication.
+      if ((process.env.OPK_VITEST_HARNESS !== '1' || input.fixtureGptSourceCommentTransport)
+          && !hasPersistedPackReviewVerdict(getPackReviewRun(run.id, { projectId, storeRoot }) ?? run)) {
+        let reconciliation: Awaited<ReturnType<typeof reconcileStalePackReviewRuns>> | undefined;
+        let reconcileError: string | undefined;
+        try {
+          reconciliation = await reconcileStalePackReviewRuns({
+            repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+            projectId, storeRoot, prNumber: target.prNumber, runId: run.id,
+            recoverActiveGptSources: true,
+            // A still-running original invocation is not proof that its comment is absent.
+            // Do not degrade the quorum before credentialing that original source.
+            settlePartialAfterGrace: pendingSource === undefined,
+            fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
+            fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
+            fixtureGithubReviewId: input.fixtureGithubReviewId,
+            fixtureGithubReviewTransport: input.fixtureGithubReviewTransport,
+            fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
+            fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+            fixtureWorkerNotifier: input.fixtureWorkerNotifier,
+            fixtureIssueBody: input.fixtureIssueBody, fixtureIssueTitle: input.fixtureIssueTitle,
+            fixtureIssueNumber: input.fixtureIssueNumber,
+            fixtureChangedPaths: input.fixtureChangedPaths,
+            fixtureBoundIssueSnapshotBytes: input.fixtureBoundIssueSnapshotBytes,
+            resolveRepositorySlug: resolveSlug,
+          });
+        } catch (error) {
+          reconcileError = describeError(error);
+        }
+        const recovered = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
+        const reconciliationResult = reconciliation?.results.find((item) => item.runId === run!.id);
+        const verdictExists = hasPersistedPackReviewVerdict(recovered);
+        let confirmation: Awaited<ReturnType<typeof observePackReviewVerdictDelivery>> | undefined;
+        if (verdictExists) {
+          confirmation = await observePackReviewVerdictDelivery({
+            input, projectId, storeRoot, runId: run.id,
+            prNumber: target.prNumber, headSha: target.headSha,
+            repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+            readHead: readProjectionHead,
+            writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) =>
+              publishPackReviewRequiredStatus({
+                repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+                headSha: target.headSha, request,
+              })),
+          });
+        }
+        const verified = confirmation?.verified === true;
+        const unresolvedReason = String(reconciliationResult?.reason ?? '');
+        const stillPendingOriginal = !verdictExists && !reconcileError
+          && pendingSource
+          && recovered.reviewRound?.settledSourceCount === undefined
+          && recovered.reviewRound?.sourceSlots.some((slot) =>
+            slot.slotId === pendingSource.slotId
+            && slot.lifecycle === 'invocation_started'
+            && slot.invocationId === pendingSource.invocationId)
+          && (unresolvedReason === 'gpt_partial_requires_explicit_immediate_reconcile'
+            || unresolvedReason.startsWith('gpt_sources_'))
+          ? pendingSource : undefined;
+        const reason = reconcileError ? `gpt_reconcile_failed:${reconcileError}`
+          : verdictExists ? (verified ? 'completed' : confirmation?.reason ?? 'publication_unverified')
+            : stillPendingOriginal ? 'gpt_original_invocation_recovery_required'
+              : String(reconciliationResult?.reason ?? 'gpt_source_census_not_settled');
+        terminal = verdictExists;
+        const runs = listPackReviewRuns({ projectId, storeRoot });
+        if (claimLease) await claimLease.release('run_started', runs);
+        return {
+          ok: verified, created: true, reused: false,
+          reason, publicationVerified: verified,
+          ...(verified ? {
+            publicationHeadSha: target.headSha,
+            requiredStatusState: confirmation!.requiredStatusState,
+          } : {
+            nextAction: stillPendingOriginal
+              ? 'recover original ' + stillPendingOriginal.slotId + ' invocation '
+                + stillPendingOriginal.invocationId
+                + ' through its existing chat/transport and exact credentialed GitHub comment; do not resend'
+              : String(reconciliationResult?.nextAction
+                ?? 'repair the exact incumbent GitHub source/status evidence and rerun scoped reconcile; do not resend uncertain sources'),
+          }),
+          prNumber: target.prNumber, headSha: target.headSha, runId: run.id,
+          status: recovered.status,
+          coverage: derivePackReviewGptCoverage(recovered.reviewRound),
+          ...(recovered.githubReviewId !== undefined ? { githubReviewId: recovered.githubReviewId } : {}),
+          ...(recovered.githubReviewUrl ? { githubReviewUrl: recovered.githubReviewUrl } : {}),
+          httpStatus: verified ? 201 : verdictExists ? 409 : 202,
+        };
+      }
+
       if (pendingSource) {
         const pending = updatePackReviewRunIf(run.id, (records) => {
           const current = records.find((candidate) => candidate.id === run!.id);
