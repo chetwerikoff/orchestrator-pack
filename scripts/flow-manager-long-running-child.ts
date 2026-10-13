@@ -1681,7 +1681,9 @@ export async function runWait(options: {
     && envelope.launcher_started_at === handoff?.launcher_started_at
     && envelope.handoff_committed_at === handoff?.handoff_committed_at
   );
-  if (indexed && !terminalHandoffMatches) throw new Error('wait_locator_identity_changed');
+  if (!terminalHandoffMatches) {
+    throw new Error(indexed ? 'wait_locator_identity_changed' : 'wait_receipt_identity_changed');
+  }
   if (taskBound && (!handoff || JSON.stringify(initialReceipt) !== JSON.stringify(handoff)
     || handoff.owner_task_id !== options.ownerTaskId
     || (options.ownerDispatchId !== undefined && handoff.owner_dispatch_id !== options.ownerDispatchId)

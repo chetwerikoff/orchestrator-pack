@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
@@ -754,7 +754,12 @@ describe('Issue #2544: unavailable observation and Task-owned receipt recovery',
 
   it('keeps target_not_found uncertain, changes observation surface, and never manufactures page death or Send', () => {
     const bound = { ...context, profile: 'owned-profile', invocationId: 'owned-invocation', targetId: 'owned-target' };
-    const missing = probe('not_found', { reason: 'target_not_found' });
+    const missing = probe('not_found', {
+      reason: 'target_not_found',
+      target_id: bound.targetId,
+      profile: bound.profile,
+      invocation_id: bound.invocationId,
+    });
     for (const headSha of ['a'.repeat(40), 'b'.repeat(40)]) {
       const result = classifyExecuteIssueManagerRecord(missing, { ...bound, headSha });
       expect(result.exitCode).toBe(3);
@@ -773,9 +778,18 @@ describe('Issue #2544: unavailable observation and Task-owned receipt recovery',
       expect(result.result).toMatchObject({ cause: 'external:content_authority_conflict', nextAction: null });
     }
     const contradictory = classifyExecuteIssueManagerRecord(probe('not_found', {
-      reason: 'target_not_found', profile: 'other-profile',
+      reason: 'target_not_found', target_id: bound.targetId,
+      profile: 'other-profile', invocation_id: bound.invocationId,
     }), bound);
     expect(contradictory.exitCode).toBe(4);
+    const wrongTarget = classifyExecuteIssueManagerRecord(probe('not_found', {
+      reason: 'target_not_found', target_id: 'foreign-target',
+      profile: bound.profile, invocation_id: bound.invocationId,
+    }), bound);
+    expect(wrongTarget.exitCode).toBe(4);
+    expect(wrongTarget.result).toMatchObject({
+      cause: 'external:content_authority_conflict', nextAction: null,
+    });
     const absentInspect = classifyExecuteIssueManagerRecord(probe('ok'), bound);
     expect(absentInspect.exitCode).toBe(3);
     expect(expectReadOnly(absentInspect).kind).toBe('execute-observe-owned-turn');
@@ -831,6 +845,48 @@ describe('Issue #2544: unavailable observation and Task-owned receipt recovery',
           .rejects.toThrow();
       }
       expect(stdout).not.toHaveBeenCalled();
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('rejects mismatched unbound explicit handoff/launch envelope without printing, but accepts relative legacy receipt name', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      for (const conflictingEnvelope of [
+        { handoff_receipt_path: join(tmpdir(), 'foreign-handoff.json') },
+        { launcher_started_at: '2026-10-13T01:00:00.000Z' },
+        { handoff_committed_at: '2026-10-13T01:00:01.000Z' },
+      ]) {
+        const f = fixture(null, null, 'legacy-explicit-unbound');
+        f.saveTerminal();
+        const original = JSON.parse(readFileSync(f.envelopePath, 'utf8')) as Record<string, unknown>;
+        writeFileSync(f.envelopePath, JSON.stringify({ ...original, ...conflictingEnvelope }), { mode: 0o600 });
+        await expect(runWait({
+          runIdentity, attemptIdentity,
+          terminalEnvelopePath: f.envelopePath,
+          handoffReceiptPath: f.receiptPath,
+          deadlineMs: 30,
+        })).rejects.toThrow(/wait_receipt_identity_changed/u);
+      }
+      expect(stdout).not.toHaveBeenCalled();
+
+      const relative = fixture(null, null, 'legacy-explicit-relative');
+      relative.saveTerminal();
+      const saved = JSON.parse(readFileSync(relative.envelopePath, 'utf8')) as Record<string, unknown>;
+      writeFileSync(relative.envelopePath, JSON.stringify({
+        ...saved, handoff_receipt_path: 'historical/launcher/cwd/handoff.json',
+      }), { mode: 0o600 });
+      await runWait({
+        runIdentity, attemptIdentity,
+        terminalEnvelopePath: relative.envelopePath,
+        handoffReceiptPath: relative.receiptPath,
+        deadlineMs: 30,
+      });
+      expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+        terminal: true,
+        envelope: { delivery: 'landed', handoff_receipt_path: 'historical/launcher/cwd/handoff.json' },
+      });
     } finally {
       stdout.mockRestore();
     }
