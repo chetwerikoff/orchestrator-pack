@@ -299,6 +299,10 @@ export interface ReconcileStalePackReviewRunsInput {
   projectId?: string;
   storeRoot?: string;
   prNumber?: number;
+  /** Narrow an existing reconcile pass to this incumbent without hiding competing run-order evidence. */
+  runId?: string;
+  /** Fleet tick must never take over a non-stale runner or terminal-only run. */
+  staleOnly?: boolean;
   immediate?: boolean;
   /** Internal pre-start switch: recover active GPT sources without public --immediate final-cap semantics. */
   recoverActiveGptSources?: boolean;
@@ -4696,7 +4700,9 @@ export async function reconcileStalePackReviewRuns(
   };
 
   for (const candidate of records) {
+    if (input.runId && candidate.id !== input.runId) continue;
     const activeStale = isPackReviewRunStale(candidate);
+    if (input.staleOnly && !activeStale) continue;
     const unfinishedTerminal = isPackReviewUnfinishedTerminalRun(candidate);
     const activeGptRecovery = (input.immediate === true || input.recoverActiveGptSources === true)
       && PACK_REVIEW_ACTIVE_STATUSES.has(candidate.status)
@@ -4732,12 +4738,12 @@ export async function reconcileStalePackReviewRuns(
     }
 
     const initialOrder = resolvePackReviewRunOrder(records, candidate);
-    if (initialOrder.kind === 'ambiguous') {
+    if (initialOrder.kind !== 'none') {
       results.push({
         runId: candidate.id,
         terminalized: false,
         statusReconciled: false,
-        reason: initialOrder.reason,
+        reason: initialOrder.kind === 'newer' ? 'newer_run_authoritative' : initialOrder.reason,
       });
       continue;
     }
@@ -7264,6 +7270,77 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       if (input.fixtureBeforeGptAggregateSettlement) {
         await input.fixtureBeforeGptAggregateSettlement({ runId: run.id, payload });
       }
+      // The original runner still owns this exact run. Use the same source
+      // census, durable freeze, authority and delivery path as scoped recovery,
+      // before returning to the public command. A locally complete slot alone
+      // cannot certify its still-present original GitHub publication.
+      if (process.env.OPK_VITEST_HARNESS !== '1' || input.fixtureGptSourceCommentTransport) {
+        let reconciliation: Awaited<ReturnType<typeof reconcileStalePackReviewRuns>> | undefined;
+        let reconcileError: string | undefined;
+        try {
+          reconciliation = await reconcileStalePackReviewRuns({
+            repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+            projectId, storeRoot, prNumber: target.prNumber, runId: run.id,
+            recoverActiveGptSources: true, settlePartialAfterGrace: true,
+            fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
+            fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
+            fixtureGithubReviewId: input.fixtureGithubReviewId,
+            fixtureGithubReviewTransport: input.fixtureGithubReviewTransport,
+            fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
+            fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+            fixtureWorkerNotifier: input.fixtureWorkerNotifier,
+            fixtureIssueBody: input.fixtureIssueBody, fixtureIssueTitle: input.fixtureIssueTitle,
+            fixtureIssueNumber: input.fixtureIssueNumber,
+            fixtureChangedPaths: input.fixtureChangedPaths,
+            fixtureBoundIssueSnapshotBytes: input.fixtureBoundIssueSnapshotBytes,
+            resolveRepositorySlug: resolveSlug,
+          });
+        } catch (error) {
+          reconcileError = describeError(error);
+        }
+        const recovered = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
+        const reconciliationResult = reconciliation?.results.find((item) => item.runId === run!.id);
+        const verdictExists = hasPersistedPackReviewVerdict(recovered);
+        let confirmation: Awaited<ReturnType<typeof observePackReviewVerdictDelivery>> | undefined;
+        if (verdictExists) {
+          confirmation = await observePackReviewVerdictDelivery({
+            input, projectId, storeRoot, runId: run.id,
+            prNumber: target.prNumber, headSha: target.headSha,
+            repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+            readHead: readProjectionHead,
+            writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) =>
+              publishPackReviewRequiredStatus({
+                repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+                headSha: target.headSha, request,
+              })),
+          });
+        }
+        const verified = confirmation?.verified === true;
+        const reason = reconcileError ? `gpt_reconcile_failed:${reconcileError}`
+          : verdictExists ? (verified ? 'completed' : confirmation?.reason ?? 'publication_unverified')
+            : String(reconciliationResult?.reason ?? 'gpt_source_census_not_settled');
+        terminal = verdictExists;
+        const runs = listPackReviewRuns({ projectId, storeRoot });
+        if (claimLease) await claimLease.release('run_started', runs);
+        return {
+          ok: verified, created: true, reused: false,
+          reason, publicationVerified: verified,
+          ...(verified ? {
+            publicationHeadSha: target.headSha,
+            requiredStatusState: confirmation!.requiredStatusState,
+          } : {
+            nextAction: String(reconciliationResult?.nextAction
+              ?? 'repair the exact incumbent GitHub source/status evidence and rerun scoped reconcile; do not resend uncertain sources'),
+          }),
+          prNumber: target.prNumber, headSha: target.headSha, runId: run.id,
+          status: recovered.status,
+          coverage: derivePackReviewGptCoverage(recovered.reviewRound),
+          ...(recovered.githubReviewId !== undefined ? { githubReviewId: recovered.githubReviewId } : {}),
+          ...(recovered.githubReviewUrl ? { githubReviewUrl: recovered.githubReviewUrl } : {}),
+          httpStatus: verified ? 201 : verdictExists ? 409 : 202,
+        };
+      }
+
       let persistedRun = getPackReviewRun(run.id, { projectId, storeRoot });
       if (!persistedRun) throw new Error(`pack review run ${run.id} disappeared before GPT settlement`);
       const persistedRound = persistedRun.reviewRound;
