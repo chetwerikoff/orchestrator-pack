@@ -5221,6 +5221,22 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       .toEqual([1]);
   });
 
+  it('fleet stale-only 1/3 error without verdict cannot claim success when status read-back disagrees', async () => {
+    const f = seed(1);
+    f.expireGrace();
+    const result = await reconcileStalePackReviewRuns({
+      ...f.input, staleOnly: true, settlePartialAfterGrace: true,
+      fixtureRequiredStatusReader: async () => 'pending',
+    });
+    const row = result.results.find((item) => item.runId === f.runId);
+    expect(row).toMatchObject({ runId: f.runId, statusReconciled: false });
+    expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
+    expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.settledSourceCount).toBeUndefined();
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([]);
+    expect(result.results.every((item) => item.statusReconciled !== true)).toBe(true);
+  });
+
   it('fleet stale-only settlement does not claim verified status when exact-head read-back rejects the write', async () => {
     const f = seed(3);
     f.expireGrace();
