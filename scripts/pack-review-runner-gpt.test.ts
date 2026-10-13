@@ -5713,6 +5713,72 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.settledSourceCount).toBe(3);
   });
 
+  it('normal-exit credentialed blocking source preserves findings and verifies failure status', async () => {
+    const f = await seedDeadIncumbent();
+    const thirdFinding = JSON.stringify({ findings: [{
+      type: 'quality', code: 'quality:fixture-blocking-third',
+      severity: 'blocking', path: 'scripts/pack-review-runner.ts',
+      summary: 'synthetic third-source blocker', source: 'gpt-browser',
+    }] });
+    const result = await startPackReview({
+      ...f.input, fixtureBeforeGptSourceCommentCensus: undefined,
+      fixtureAfterGptSourceSlotTerminal: ({ slotId, round }) => {
+        if (slotId !== 'source-03') return;
+        const source = round.sourceSlots.find((slot) => slot.slotId === slotId);
+        if (!source?.invocationId) throw new Error('missing bound third-source identity');
+        const original = f.makeComment(slotId, source.invocationId, 2532003);
+        const identity: PackGptSourceIdentity = {
+          repository, prNumber, headSha: HEAD_A, runId: f.runId,
+          slotId, invocationId: source.invocationId,
+        };
+        f.comments.push({
+          ...original,
+          body: formatPackGptSourceCommentEnvelope(identity, thirdFinding),
+        });
+      },
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      ok: true, publicationVerified: true,
+      publicationHeadSha: HEAD_A, status: 'changes_requested',
+      requiredStatusState: 'failure', reason: 'completed',
+    });
+    expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+      reviewVerdict: 'findings', findingCount: 1,
+      reviewRound: { settledSourceCount: 3 },
+    });
+    expect(f.statusStates).toEqual(['failure']);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([1]);
+  });
+
+  it('normal-exit writer failure leaves verified publication false on the same settled run', async () => {
+    const f = await seedDeadIncumbent();
+    let rejectedWrites = 0;
+    const result = await startPackReview({
+      ...f.input, fixtureBeforeGptSourceCommentCensus: undefined,
+      fixtureAfterGptSourceSlotTerminal: ({ slotId, round }) => {
+        if (slotId !== 'source-03') return;
+        const source = round.sourceSlots.find((slot) => slot.slotId === slotId);
+        if (!source?.invocationId) throw new Error('missing bound third-source identity');
+        f.comments.push(f.makeComment(slotId, source.invocationId, 2532003));
+      },
+      fixtureRequiredStatusWriter: async () => {
+        rejectedWrites += 1;
+        throw new Error('synthetic_required_status_refused');
+      },
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      ok: false, publicationVerified: false, status: 'up_to_date',
+      nextAction: expect.stringContaining('reconcile'),
+    });
+    expect(rejectedWrites).toBeGreaterThanOrEqual(1);
+    expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+      reviewVerdict: 'clean',
+      deliveryOutcomes: { requiredStatus: { state: 'failed' } },
+    });
+    expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.settledSourceCount).toBe(3);
+  });
+
   it('preserves original T2 GPT source identity after live T3 promotion and confirms pending on the exact head', async () => {
     const f = await seedDeadIncumbent();
     const before = getPackReviewRun(f.runId, f.options)!;
