@@ -3033,7 +3033,7 @@ async function runTurnCore(
       } catch (error) {
         // One total pre-Send reopen: an initial failed committed navigation
         // consumes the first opening; retry only on the same created Page.
-        if (navigation.snapshotGoto() !== 1
+        if (!config.newChat || navigation.snapshotGoto() !== 1
           || Date.now() + COMPOSER_READINESS_WAIT_MS + FRESH_SEND_RESERVE_MS >= invocationDeadlineMs
           || /ERR_NETWORK_CHANGED/u.test(error instanceof Error ? error.message : String(error)) === false
             && !(error instanceof Error && /timeout|net::ERR_|navigation|fetch/iu.test(error.message))) {
