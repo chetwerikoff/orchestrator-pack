@@ -1459,7 +1459,6 @@ function freezeGptRoundSourceCount(
   runId: string,
   requiredSourceCount: number,
   options: { projectId: string; storeRoot: string },
-  observedRound?: PackReviewGptRoundRecord,
 ): PackReviewGptRoundRecord | null {
   const updated = updatePackReviewRunIf(
     runId,
@@ -1469,8 +1468,7 @@ function freezeGptRoundSourceCount(
       return Boolean(round
         && round.reviewer === 'gpt'
         && round.settledSourceCount === undefined
-        && gptUsableSourceCount(round) >= requiredSourceCount
-        && (!observedRound || stableJson(round) === stableJson(observedRound)));
+        && gptUsableSourceCount(round) >= requiredSourceCount);
     },
     (existing) => {
       const round = existing.reviewRound;
@@ -3413,7 +3411,6 @@ async function recoverStaleGptSourceComments(options: {
       options.run.id,
       requiredSourceCount,
       { projectId: options.projectId, storeRoot: options.storeRoot },
-      round,
     );
     if (!frozen) {
       return {
@@ -4738,7 +4735,8 @@ export async function reconcileStalePackReviewRuns(
     }
 
     const initialOrder = resolvePackReviewRunOrder(records, candidate);
-    if (initialOrder.kind !== 'none') {
+    if (initialOrder.kind === 'ambiguous'
+        || ((input.runId || input.staleOnly) && initialOrder.kind === 'newer')) {
       results.push({
         runId: candidate.id,
         terminalized: false,
@@ -7274,7 +7272,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       // census, durable freeze, authority and delivery path as scoped recovery,
       // before returning to the public command. A locally complete slot alone
       // cannot certify its still-present original GitHub publication.
-      if (process.env.OPK_VITEST_HARNESS !== '1' || input.fixtureGptSourceCommentTransport) {
+      if ((process.env.OPK_VITEST_HARNESS !== '1' || input.fixtureGptSourceCommentTransport)
+          && !hasPersistedPackReviewVerdict(getPackReviewRun(run.id, { projectId, storeRoot }) ?? run)) {
         let reconciliation: Awaited<ReturnType<typeof reconcileStalePackReviewRuns>> | undefined;
         let reconcileError: string | undefined;
         try {
