@@ -1,10 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { runProcessSync } from '../kernel/subprocess.ts';
 import { __testFreshSend, __testComposerMutation } from './state-light-turn-base.ts';
-import * as coordination from './coordination.ts';
 import {
   ACCOUNT_LOAD_ERROR_HEADING_SELECTOR,
   classifyProductWall,
@@ -336,84 +331,9 @@ describe('fresh project conversation identity', () => {
 });
 
 
-describe('Issue #2497 fresh-send composer serialization', () => {
-
-  it('takes over a lock left by a dead process without waiting for its age', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'fresh-send-dead-2497-'));
-    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
-    try {
-      const child = runProcessSync({ command: process.execPath, args: ['--experimental-strip-types', '--input-type=module', '-e',
-        `import { acquireDomainLock } from ${JSON.stringify(new URL('./coordination.ts', import.meta.url).href)}; acquireDomainLock('profile-dead-2497', 'fresh-send-composer', 0);`,
-      ], env: process.env, encoding: 'utf8', timeoutMs: 5_000 });
-      expect(child.exitCode, child.stderr).toBe(0);
-      const lock = await __testFreshSend.acquireFreshSendLock('profile-dead-2497', Date.now() + 2_000);
-      lock!.release();
-    } finally {
-      vi.unstubAllEnvs();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it('expires a reservation after 15 seconds so a second agent acquires without release (#2505)', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'fresh-send-hung-2497-'));
-    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
-    vi.useFakeTimers();
-    try {
-      const first = await __testFreshSend.acquireFreshSendLock('profile-hung-2497', Date.now() + 300_000);
-      expect(first).toBeDefined();
-      expect(() => process.kill(process.pid, 0)).not.toThrow();
-      vi.setSystemTime(Date.now() + 14_999);
-      const secondPending = __testFreshSend.acquireFreshSendLock('profile-hung-2497', Date.now() + 300_000);
-      await vi.advanceTimersByTimeAsync(100);
-      const second = await secondPending;
-      expect(second).toBeDefined();
-      expect(second!.nonce).not.toBe(first!.nonce);
-      expect(first!.isOwned()).toBe(false);
-      expect(second!.isOwned()).toBe(true);
-    } finally {
-      vi.useRealTimers();
-      vi.unstubAllEnvs();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it('proceeds without the slot after four 15-second acquisition windows (#2505)', async () => {
-    const acquire = vi.spyOn(coordination, 'acquireDomainLock').mockReturnValue(null);
-    vi.useFakeTimers();
-    try {
-      let settled = false;
-      const waiter = __testFreshSend.acquireFreshSendLock('profile-wait-2497', Date.now() + 300_000)
-        .then((lock) => { settled = true; return lock; });
-      for (let window = 0; window < 3; window++) {
-        await vi.advanceTimersByTimeAsync(15_000);
-        expect(settled).toBe(false);
-      }
-      await vi.advanceTimersByTimeAsync(14_999);
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(settled).toBe(true);
-      expect(await waiter).toBeUndefined();
-      expect(acquire).toHaveBeenCalledTimes(600);
-      expect(acquire).toHaveBeenLastCalledWith('profile-wait-2497', 'fresh-send-composer', 0, { maxHoldMs: 15_000 });
-    } finally {
-      vi.useRealTimers();
-      acquire.mockRestore();
-    }
-  });
-
-  it('bounds contention by the invocation deadline', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'fresh-send-deadline-2497-'));
-    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
-    try {
-      const first = await __testFreshSend.acquireFreshSendLock('profile-deadline-2497', Date.now() + 1_000);
-      try {
-        await expect(__testFreshSend.acquireFreshSendLock('profile-deadline-2497', Date.now() + 50))
-          .rejects.toThrow('fresh_send_lock_deadline_exhausted');
-      } finally { first!.release(); }
-    } finally {
-      vi.unstubAllEnvs();
-      rmSync(root, { recursive: true, force: true });
-    }
+describe('Issue #2541 invocation-owned fresh composer without a profile lock', () => {
+  it('does not expose a profile-wide pre-Send lock', () => {
+    expect(__testFreshSend).not.toHaveProperty('acquireFreshSendLock');
   });
 
   it('ignores editor whitespace around a backticked https URL but rejects changed content', () => {

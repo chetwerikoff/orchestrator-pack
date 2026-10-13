@@ -227,7 +227,7 @@ describe('Issue #1998 Target crash classification', () => {
     const page: any = {
       __fakeBrowserGptPage: true,
       goto: vi.fn(async () => undefined),
-      url: vi.fn(() => 'https://chatgpt.com/c/target-crash-continuation'),
+      url: vi.fn(() => 'https://chatgpt.com/c/19981998-1998-4998-8998-199819981998'),
       isClosed: vi.fn(() => false),
       waitForTimeout: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
@@ -293,10 +293,11 @@ describe('Issue #1998 Target crash classification', () => {
         '--invocation-id', randomUUID(),
         '--input', input,
         '--output', output,
-        '--chat-url', 'https://chatgpt.com/c/target-crash-continuation',
+        '--chat-url', 'https://chatgpt.com/c/19981998-1998-4998-8998-199819981998',
         '--timeout-ms', '10000',
       ]);
-      const result = JSON.parse(writes.join('')) as { state: string; cause: string; send_count: number; incidents: string[] };
+      // A witnessed Send can emit a cancellation receipt before the terminal result.
+      const result = JSON.parse(writes.join('').trim().split(/\r?\n/u).at(-1)!) as { state: string; cause: string; send_count: number; incidents: string[] };
       expect(result).toMatchObject({
         state: 'driver_error',
         cause: 'post_send_target_crashed',
@@ -4146,7 +4147,7 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     let now = 1_000;
     let connectAt = -1;
     let navigateAt = -1;
-    const target = 'https://chatgpt.com/c/deadline-test';
+    const target = 'https://chatgpt.com/c/11881188-1188-4188-8188-118811881188';
     const input = join(root, 'deadline-input.txt');
     const output = join(root, 'deadline-output.txt');
     writeFileSync(input, 'payload');
