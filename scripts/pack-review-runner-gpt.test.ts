@@ -89,6 +89,67 @@ function harnessEnv(storeRoot: string, capture: string): void {
   );
 }
 
+/** Legacy harness-complete fixtures need genuine exact-comment witnesses before
+ * a new pre-freeze GitHub census. This only seeds synthetic test run-store data. */
+async function credentialFixtureCompleteSources(
+  storeRoot: string, runId: string, prNumber: number,
+): Promise<PackGptSourceCommentTransport> {
+  const options = { projectId: 'orchestrator-pack', storeRoot };
+  const run = getPackReviewRun(runId, options);
+  if (!run?.reviewRound) throw new Error('missing seeded GPT round');
+  const repository = 'chetwerikoff/orchestrator-pack';
+  const timestamp = new Date().toISOString();
+  const complete = run.reviewRound.sourceSlots.filter((slot) =>
+    slot.lifecycle === 'terminal' &&
+    (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings') &&
+    Boolean(slot.invocationId));
+  const comments: PackGptSourceGithubComment[] = complete.map((slot, index) => {
+    const id = prNumber * 1000 + index + 1;
+    const identity: PackGptSourceIdentity = {
+      repository, prNumber, headSha: run.targetSha, runId,
+      slotId: slot.slotId, invocationId: slot.invocationId!,
+    };
+    return {
+      id, body: formatPackGptSourceCommentEnvelope(identity, 'NO_FINDINGS'),
+      actorLogin: 'browser-gpt-bot',
+      createdAt: timestamp, updatedAt: timestamp,
+      url: `https://github.com/${repository}/pull/${prNumber}#issuecomment-${id}`,
+      issueUrl: `https://api.github.com/repos/${repository}/issues/${prNumber}`,
+    };
+  });
+  const transport: PackGptSourceCommentTransport = {
+    resolveActorLogin: async () => 'browser-gpt-bot',
+    listComments: async () => [...comments],
+    getComment: async (id) => {
+      const comment = comments.find((entry) => entry.id === id);
+      if (!comment) throw new Error('unavailable synthetic original source comment');
+      return comment;
+    },
+  };
+  const sourceSlots = await Promise.all(run.reviewRound.sourceSlots.map(async (slot) => {
+    if (!complete.some((item) => item.slotId === slot.slotId)) return slot;
+    const identity: PackGptSourceIdentity = {
+      repository, prNumber, headSha: run.targetSha, runId,
+      slotId: slot.slotId, invocationId: slot.invocationId!,
+    };
+    const witnessed = await resolvePackGptSourceComment({ identity, transport });
+    if (witnessed.kind !== 'credentialed') throw new Error('synthetic original comment is not credentialed');
+    return {
+      ...slot,
+      terminalResult: {
+        ...slot.terminalResult,
+        source_comment_authority: 'credentialed_github',
+        source_comment_receipt: witnessed.receipt,
+      },
+      payload: witnessed.payload,
+    };
+  }));
+  updatePackReviewRun(runId, {
+    reviewRound: { ...run.reviewRound, sourceSlots },
+  }, options);
+  return transport;
+}
+
 function selectProjectCard(storeRoot: string): void {
   const configHome = path.join(storeRoot, 'config');
   const projects = path.join(configHome, 'orchestrator-pack', 'projects');
@@ -2299,11 +2360,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(Math.min(...admissions) + 3 * 60_000));
 
-    const emptySourceTransport: PackGptSourceCommentTransport = {
-      resolveActorLogin: async () => 'browser-gpt-bot',
-      listComments: async () => [],
-      getComment: async () => { throw new Error('unexpected source comment reread'); },
-    };
+    const originalComments = await credentialFixtureCompleteSources(storeRoot, runId, 1276);
     const reconciliation = await reconcileStalePackReviewRuns({
       repoSlug: 'chetwerikoff/orchestrator-pack',
       sourceRepoRoot: repoRoot,
@@ -2312,7 +2369,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       prNumber: 1276,
       immediate: true,
       fixtureCurrentPrHeadSha: HEAD_A,
-      fixtureGptSourceCommentTransport: emptySourceTransport,
+      fixtureGptSourceCommentTransport: originalComments,
       fixtureRequiredStatusWriter: async (request) => {
         statuses.push({ state: request.state, description: request.description });
       },
@@ -2378,6 +2435,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(Math.min(...admissions) + 3 * 60_000));
 
+    const originalComments = await credentialFixtureCompleteSources(storeRoot, runId, 1276);
     const reconciliation = await reconcileStalePackReviewRuns({
       repoSlug: 'chetwerikoff/orchestrator-pack',
       sourceRepoRoot: repoRoot,
@@ -2386,11 +2444,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       prNumber: 1276,
       settlePartialAfterGrace: false,
       fixtureCurrentPrHeadSha: HEAD_A,
-      fixtureGptSourceCommentTransport: {
-        resolveActorLogin: async () => 'browser-gpt-bot',
-        listComments: async () => [],
-        getComment: async () => { throw new Error('unexpected source comment reread'); },
-      },
+      fixtureGptSourceCommentTransport: originalComments,
       fixtureRequiredStatusWriter: async () => {},
     });
 
@@ -3657,6 +3711,7 @@ describe('Issue #1741 failed GPT round source-comment settlement', () => {
       failureReason: 'stale_head_before_terminal',
     }, { projectId: 'orchestrator-pack', storeRoot });
     expect(packReviewDeliveryNeedsResume(failed)).toBe(true);
+    const originalComments = await credentialFixtureCompleteSources(storeRoot, created.id, 1741);
 
     const reviews: GithubReviewSummary[] = [];
     const result = await startPackReview({
@@ -3668,11 +3723,7 @@ describe('Issue #1741 failed GPT round source-comment settlement', () => {
       fixtureCurrentPrHeadSha: HEAD_A,
       fixturePrState: 'OPEN',
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
-      fixtureGptSourceCommentTransport: {
-        resolveActorLogin: async () => 'browser-gpt-bot',
-        listComments: async () => [],
-        getComment: async () => { throw new Error('complete source should not need comment hydration'); },
-      },
+      fixtureGptSourceCommentTransport: originalComments,
       fixtureGithubReviewTransport: {
         resolveActorLogin: async () => 'pack-review-bot',
         listReviews: async () => [...reviews],
@@ -5728,7 +5779,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       coverage: { kind: 'complete', completedSourceCount: 3, cardinality: 3 },
     });
     expect(f.launches.map((launch) => launch.slotId)).toEqual(['source-03']);
-    expect(f.statusStates).toEqual(['success']);
+    expect(f.statusStates).toEqual(['pending', 'success']);
     expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals)
       .toEqual([1]);
     expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.settledSourceCount).toBe(3);
@@ -5767,7 +5818,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       reviewVerdict: 'findings', findingCount: 1,
       reviewRound: { settledSourceCount: 3 },
     });
-    expect(f.statusStates).toEqual(['failure']);
+    expect(f.statusStates).toEqual(['pending', 'failure']);
     expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals)
       .toEqual([1]);
   });
