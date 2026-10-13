@@ -3,6 +3,7 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFile
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runProcessSync } from './kernel/subprocess.ts';
+import { checkSmokeTestPlan, parseSmokeTestPlan } from './draft-discipline.mjs';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import {
   buildSmokeGhChildEnv,
@@ -99,6 +100,137 @@ function planBody(scenarios: readonly { action: string; expected: string }[]): s
     '```',
   ].join('\n');
 }
+
+
+// Issue #2555: these are the exact action/expected values from Issue #2548 r03,
+// before its named YAML blocks were reformatted into pipe-form smoke scenarios.
+describe('Issue #2555 named YAML smoke plans', () => {
+  const expectedFrom2548 = [
+  {
+    "action": "On a disposable fixture with a complete Issue body, run the existing Issue floor, pack-owned declaration producer and existing scope checker using .env*, .env.*, secrets/key* and scripts/private* in the denylist and scripts/** as allowed roots.",
+    "expected": "Floor and declaration selection PASS; scripts/public.ts stays allowed and scripts/private.key is denied; no out-of-root permission is created."
+  },
+  {
+    "action": "On the same offline fixture, substitute src/*.py or scripts/*.ts in allowed-roots, then scripts/*/secret/**, **/credentials/** and secrets/*.pem in the appropriate scope fences; exercise the Issue floor, declaration producer/selector, and declaration-backed guard with a separately valid v1 artifact whose exact script root would otherwise pass policySubset.",
+    "expected": "Every relevant route FAILS for invalid live Issue grammar with the same field-indexed canonicalizer error even when subset matching would pass; valid literals and terminal /** prefixes retain their prior behavior."
+  }
+];
+  const plan = (lines: string[]) => [
+    '```behavior-kind',
+    'action-producing',
+    '```',
+    '',
+    '```smoke-test-plan',
+    ...lines,
+    '```',
+  ].join('\n');
+  const namedYaml = plan([
+    'scenarios:',
+    ...expectedFrom2548.flatMap((item, index) => [
+      '  - name: ' + (index === 0 ? 'scope floor and declaration denial' : 'invalid wildcard grammar rejection'),
+      '    action: ' + item.action,
+      '    expected: ' + item.expected,
+    ]),
+  ]);
+  const originalPipe = plan(expectedFrom2548.map(
+    (item) => '- action: ' + item.action + ' | expected: ' + item.expected,
+  ));
+
+  it('parses both original named YAML blocks as exactly the real two action/expected pairs', () => {
+    expect(parseSmokeTestPlan(namedYaml)).toEqual({
+      requirement: 'required',
+      scenarios: expectedFrom2548,
+    });
+    expect(checkSmokeTestPlan(namedYaml).ok).toBe(true);
+    expect(parseSmokeTestPlan(namedYaml)?.scenarios.some((item) => item.action === 'name')).toBe(false);
+  });
+
+  it('preserves Issue #2548 pipe-form identity, nested expected and historical bullet variants', () => {
+    expect(parseSmokeTestPlan(originalPipe)?.scenarios).toEqual(expectedFrom2548);
+    expect(checkSmokeTestPlan(originalPipe).ok).toBe(true);
+    const legacy = plan([
+      'scenarios:',
+      '  - action: execute nested step',
+      '    expected: nested step is observed',
+      '  - Verify status: stable',
+      '  - run quick check; successful',
+      '  - direct instruction',
+    ]);
+    expect(parseSmokeTestPlan(legacy)?.scenarios).toEqual([
+      { action: 'execute nested step', expected: 'nested step is observed' },
+      { action: 'Verify status', expected: 'stable' },
+      { action: 'run quick check', expected: 'successful' },
+      { action: 'direct instruction', expected: 'direct instruction' },
+    ]);
+    expect(checkSmokeTestPlan(legacy).ok).toBe(true);
+    const notApplicable = plan([
+      'not-applicable: true',
+      'reason: This Issue modifies documentation only.',
+    ]);
+    expect(parseSmokeTestPlan(notApplicable)).toMatchObject({
+      requirement: 'not-applicable',
+      reason: 'This Issue modifies documentation only.',
+      scenarios: [],
+    });
+    expect(checkSmokeTestPlan(notApplicable).ok).toBe(true);
+  });
+
+  it('never treats a named title as an action or accepts incomplete named children', () => {
+    for (const named of [
+      ['  - name: header without children'],
+      ['  - name: missing expected', '    action: do the thing'],
+      ['  - name: missing action', '    expected: done'],
+      ['  - name: empty action', '    action:', '    expected: done'],
+      ['  - name: misspelled child', '    action: do the thing', '    expectd: done'],
+      ['  - name: duplicate child', '    action: do the thing', '    action: other thing', '    expected: done'],
+    ]) {
+      const source = plan([
+        'scenarios:',
+        '  - action: valid scenario | expected: PASS',
+        ...named,
+      ]);
+      const parsed = parseSmokeTestPlan(source);
+      expect(parsed?.scenarios).toEqual([{ action: 'valid scenario', expected: 'PASS' }]);
+      const checked = checkSmokeTestPlan(source);
+      expect(checked.ok).toBe(false);
+      expect(checked.errors.some((error) => /smoke-test-plan line \d+/.test(error))).toBe(true);
+      expect(parsed?.scenarios.some((item) => item.action === 'name')).toBe(false);
+    }
+  });
+
+  it('rejects every unreadable required-plan line with its physical 1-based fence line', () => {
+    const stray = plan([
+      '',
+      '',
+      'scenarios:',
+      '  - action: valid scenario | expected: PASS',
+      'unreadable arbitrary text',
+      '  expected: orphan child',
+    ]);
+    const checked = checkSmokeTestPlan(stray);
+    expect(checked.ok).toBe(false);
+    expect(checked.errors).toEqual(expect.arrayContaining([
+      expect.stringContaining('smoke-test-plan line 5:'),
+      expect.stringContaining('smoke-test-plan line 6:'),
+    ]));
+    const orphan = checkSmokeTestPlan(plan([
+      'scenarios:',
+      '  expected: an orphan',
+      '  - action: valid scenario | expected: PASS',
+    ]));
+    expect(orphan.ok).toBe(false);
+    expect(orphan.errors).toEqual(expect.arrayContaining([
+      expect.stringContaining('smoke-test-plan line 2:'),
+    ]));
+    expect(checkSmokeTestPlan(plan([
+      '',
+      'scenarios:',
+      '',
+      '  - action: valid scenario | expected: PASS',
+      '',
+    ])).ok).toBe(true);
+  });
+});
 
 function scenario(
   action: string,
