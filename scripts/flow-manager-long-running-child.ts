@@ -1676,12 +1676,14 @@ export async function runWait(options: {
   // identity, not today's cwd, must still match the selected receipt.
   const terminalHandoffMatches = !envelope || (
     (isAbsolute(envelope.handoff_receipt_path)
-      ? resolve(envelope.handoff_receipt_path) === handoffReceiptPath
+      ? resolve(envelope.handoff_receipt_path) === resolve(handoffReceiptPath)
       : basename(normalize(envelope.handoff_receipt_path)) === basename(handoffReceiptPath))
     && envelope.launcher_started_at === handoff?.launcher_started_at
     && envelope.handoff_committed_at === handoff?.handoff_committed_at
   );
-  if (!terminalHandoffMatches) {
+  // The legacy explicit unbound wait is diagnostic even if its receipt is
+  // absent. Indexed and Task-bound waits still require exact launch identity.
+  if ((indexed || taskBound) && !terminalHandoffMatches) {
     throw new Error(indexed ? 'wait_locator_identity_changed' : 'wait_receipt_identity_changed');
   }
   if (taskBound && (!handoff || JSON.stringify(initialReceipt) !== JSON.stringify(handoff)

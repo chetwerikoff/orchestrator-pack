@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
 import type { ProbeStatus } from '../browser-gpt-page-probe.ts';
 import {
@@ -802,6 +802,85 @@ describe('Issue #2544: unavailable observation and Task-owned receipt recovery',
     }), bound)).kind).toBe('execute-observe-owned-turn');
   });
 
+  it('does not settle the incumbent from actual list, liveness, pending harvest or export observations', () => {
+    const retained = {
+      ...context, targetId: 'target-2081', profile: 'owned-profile', invocationId: 'owned-invocation',
+    };
+    const unbound = { ...context, targetId: undefined, conversationUrl: undefined };
+    // Real runProbe list returns a census, not a selected/attributable turn.
+    const census = {
+      schema: 'browser-gpt-page-probe/v1', operation: 'list', status: 'ok',
+      diagnostic_only: true, workflow_authority: 'none',
+      targets: [{ target_id: 'target-2081', normalized_url: 'https://chatgpt.com/c/owned-2081', title: 'ChatGPT' }],
+      targets_truncated: false, observed_compatible_targets: 1,
+    };
+    const unboundList = classifyExecuteIssueManagerRecord(census, unbound);
+    expect(unboundList).toMatchObject({
+      exitCode: 4, result: { cause: 'external:content_authority_conflict', nextAction: null },
+    });
+    expect(JSON.stringify(unboundList.result)).not.toContain('execute_probe_observation_completed');
+
+    const ownedList = classifyExecuteIssueManagerRecord(census, retained);
+    expect(ownedList.exitCode).toBe(3);
+    expect(expectReadOnly(ownedList)).toMatchObject({ kind: 'execute-observe-owned-turn' });
+    expect(expectReadOnly(ownedList).argv).toContain('inspect');
+
+    const liveness = {
+      schema: 'browser-gpt-page-probe/v1', operation: 'liveness', status: 'ok',
+      diagnostic_only: true, workflow_authority: 'none',
+      targets: [{ target_id: 'target-2081', liveness: 'responsive' }],
+      targets_truncated: false, observed_compatible_targets: 1,
+      unresponsive_target_ids: [], liveness_fan_out: 50,
+      liveness_target_timeout_ms: 2000, liveness_total_timeout_ms: 15000,
+      liveness_elapsed_ms: 88, liveness_total_deadline_exceeded: false,
+    };
+    const liveCensus = classifyExecuteIssueManagerRecord(liveness, retained);
+    expect(liveCensus.exitCode).toBe(3);
+    expect(expectReadOnly(liveCensus).kind).toBe('execute-observe-owned-turn');
+
+    for (const classifier of ['long_running', 'unknown'] as const) {
+      const pending = {
+        schema: 'browser-gpt-page-probe/v1', operation: 'harvest', status: 'ok',
+        diagnostic_only: false, workflow_authority: 'none', harvested: false,
+        classifier, observation_phase: 'sent_unharvested',
+        conversation_url: 'https://chatgpt.com/c/owned-2081', target_id: 'target-2081',
+      };
+      const observed = classifyExecuteIssueManagerRecord(pending, retained);
+      expect(observed.exitCode).toBe(3);
+      expect(expectReadOnly(observed).kind).toBe('execute-observe-owned-turn');
+      expect(JSON.stringify(observed.result)).not.toContain('execute_probe_observation_completed');
+    }
+    const exportedNode = classifyExecuteIssueManagerRecord({
+      schema: 'browser-gpt-page-probe/v1', operation: 'export', status: 'ok',
+      diagnostic_only: true, workflow_authority: 'none', target_id: 'target-2081',
+      node: { role: 'assistant', ordinal: 0 }, byte_length: 4, sha256: 'a'.repeat(64),
+    }, retained);
+    expect(exportedNode.exitCode).toBe(3);
+    expect(expectReadOnly(exportedNode).kind).toBe('execute-observe-owned-turn');
+  });
+
+  it('accepts only an owned and positively committed completed harvest, not a claimed/pending harvest', () => {
+    const retained = { ...context, profile: 'owned-profile', invocationId: 'owned-invocation' };
+    const harvested = {
+      schema: 'browser-gpt-page-probe/v1', operation: 'harvest', status: 'ok',
+      diagnostic_only: false, workflow_authority: 'none',
+      classifier: 'completed', harvested: true, observation_phase: 'harvested',
+      conversation_url: 'https://chatgpt.com/c/owned-2081', target_id: 'target-2081',
+      node: { role: 'assistant', ordinal: 0, document_ordinal: 1, message_id: 'answer-id' },
+      output: '/tmp/owned-reply.txt', byte_length: 5, sha256: 'a'.repeat(64), converged: false,
+    };
+    expect(classifyExecuteIssueManagerRecord(harvested, retained))
+      .toMatchObject({ exitCode: 0, result: { ok: true, nextAction: null } });
+    for (const [record, binding] of [
+      [{ ...harvested, observation_phase: 'sent_unharvested' }, retained],
+      [{ ...harvested, harvested: false }, retained],
+      [harvested, { ...context, profile: undefined, invocationId: undefined }],
+    ] as const) {
+      const result = classifyExecuteIssueManagerRecord(record, binding);
+      expect(result.exitCode).not.toBe(0);
+    }
+  });
+
   it('checks only the page helper truth-table, not runTurnCore ownership/deadline/two-read proof', () => {
     expect(classifyBrowserGptPageTurnStatus(false, 0)).toBe('dead');
     expect(classifyBrowserGptPageTurnStatus(true, 0)).toBe('long_running');
@@ -850,43 +929,85 @@ describe('Issue #2544: unavailable observation and Task-owned receipt recovery',
     }
   });
 
-  it('rejects mismatched unbound explicit handoff/launch envelope without printing, but accepts relative legacy receipt name', async () => {
+  it('preserves unbound explicit terminal diagnostics with no receipt or a relative caller path', async () => {
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     try {
+      const missing = fixture(null, null, 'legacy-missing-receipt');
+      missing.saveTerminal();
+      rmSync(missing.receiptPath);
+      await runWait({
+        runIdentity, attemptIdentity,
+        terminalEnvelopePath: missing.envelopePath, handoffReceiptPath: missing.receiptPath,
+        deadlineMs: 30,
+      });
+      expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+        terminal: true, handoff_receipt_observed: false,
+        envelope: { delivery: 'landed', lifecycle_outcome: 'success' },
+      });
+
+      const matching = fixture(null, null, 'legacy-relative-caller');
+      matching.saveTerminal(); // terminal names the absolute receipt
+      await runWait({
+        runIdentity, attemptIdentity,
+        terminalEnvelopePath: matching.envelopePath,
+        handoffReceiptPath: relative(process.cwd(), matching.receiptPath),
+        deadlineMs: 30,
+      });
+      expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+        terminal: true, handoff_receipt_observed: true,
+        envelope: { delivery: 'landed', handoff_receipt_path: matching.receiptPath },
+      });
+
+      // Historical envelopes may also retain a relative receipt path from
+      // the original launcher cwd, not the waiter's cwd.
+      const historical = fixture(null, null, 'legacy-relative-envelope');
+      historical.saveTerminal();
+      const saved = JSON.parse(readFileSync(historical.envelopePath, 'utf8')) as Record<string, unknown>;
+      writeFileSync(historical.envelopePath, JSON.stringify({
+        ...saved, handoff_receipt_path: 'historical/launcher/cwd/handoff.json',
+      }), { mode: 0o600 });
+      await runWait({
+        runIdentity, attemptIdentity,
+        terminalEnvelopePath: historical.envelopePath,
+        handoffReceiptPath: historical.receiptPath,
+        deadlineMs: 30,
+      });
+      expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).envelope)
+        .toMatchObject({ handoff_receipt_path: 'historical/launcher/cwd/handoff.json' });
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('retains Task-bound explicit launch checks while accepting equivalent relative receipt paths', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      const matching = fixture();
+      matching.saveTerminal();
+      await runWait({
+        ...explicit(matching), handoffReceiptPath: relative(process.cwd(), matching.receiptPath),
+        ownerTaskId: ownTask, ownerDispatchId: ownDispatch,
+      });
+      expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+        terminal: true, handoff_receipt_observed: true,
+        envelope: { delivery: 'landed' },
+      });
+      stdout.mockClear();
+
       for (const conflictingEnvelope of [
         { handoff_receipt_path: join(tmpdir(), 'foreign-handoff.json') },
         { launcher_started_at: '2026-10-13T01:00:00.000Z' },
         { handoff_committed_at: '2026-10-13T01:00:01.000Z' },
       ]) {
-        const f = fixture(null, null, 'legacy-explicit-unbound');
+        const f = fixture();
         f.saveTerminal();
         const original = JSON.parse(readFileSync(f.envelopePath, 'utf8')) as Record<string, unknown>;
         writeFileSync(f.envelopePath, JSON.stringify({ ...original, ...conflictingEnvelope }), { mode: 0o600 });
         await expect(runWait({
-          runIdentity, attemptIdentity,
-          terminalEnvelopePath: f.envelopePath,
-          handoffReceiptPath: f.receiptPath,
-          deadlineMs: 30,
+          ...explicit(f), ownerTaskId: ownTask, ownerDispatchId: ownDispatch,
         })).rejects.toThrow(/wait_receipt_identity_changed/u);
       }
       expect(stdout).not.toHaveBeenCalled();
-
-      const relative = fixture(null, null, 'legacy-explicit-relative');
-      relative.saveTerminal();
-      const saved = JSON.parse(readFileSync(relative.envelopePath, 'utf8')) as Record<string, unknown>;
-      writeFileSync(relative.envelopePath, JSON.stringify({
-        ...saved, handoff_receipt_path: 'historical/launcher/cwd/handoff.json',
-      }), { mode: 0o600 });
-      await runWait({
-        runIdentity, attemptIdentity,
-        terminalEnvelopePath: relative.envelopePath,
-        handoffReceiptPath: relative.receiptPath,
-        deadlineMs: 30,
-      });
-      expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
-        terminal: true,
-        envelope: { delivery: 'landed', handoff_receipt_path: 'historical/launcher/cwd/handoff.json' },
-      });
     } finally {
       stdout.mockRestore();
     }

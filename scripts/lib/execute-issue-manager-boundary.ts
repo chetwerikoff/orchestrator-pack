@@ -505,6 +505,33 @@ function classifyProbe(
   const reason = text(value.reason);
   switch (status) {
     case 'ok': {
+      // Only harvest commits an owned invocation's assistant reply. Its producer
+      // reads the record by profile/invocation; the envelope has no identity echo.
+      // Require the retained manager pair and the committed harvest result.
+      if (value.operation === 'harvest'
+        && text(context.profile) && text(context.invocationId)
+        && value.harvested === true
+        && value.classifier === 'completed'
+        && value.observation_phase === 'harvested'
+        && record(value.node)?.role === 'assistant'
+        && text(value.output)
+        && typeof value.byte_length === 'number'
+        && Number.isSafeInteger(value.byte_length) && value.byte_length >= 0
+        && /^[0-9a-f]{64}$/u.test(text(value.sha256))) {
+        return completed(context, producer, 'execute_probe_observation_completed');
+      }
+      if (value.operation !== 'inspect') {
+        // A list/liveness census, an export, or an unharvested/unknown reply
+        // cannot settle the incumbent. Do not recommend repeating the same
+        // unbound census when no exact owned inspect target can be retained.
+        const action = observeAction(context, value);
+        return action
+          ? recoverable(context, producer, 'execute_probe_reobserve', action)
+          : pause(
+            context, producer, 'external:content_authority_conflict', value,
+            'recover the retained exact owned target/profile/invocation via the existing supervisor path; do not send',
+          );
+      }
       const inspect = executionRecoveryInspect(value);
       if (inspect?.reason === 'ambiguous_marker') {
         return pause(
@@ -524,11 +551,8 @@ function classifyProbe(
       if (inspect) {
         return recoverObservation(context, producer, value, 'execute_owned_turn_reobserve');
       }
-      // Successful inspect transport without owned recovery evidence is not settlement.
-      if (value.operation === 'inspect') {
-        return recoverObservation(context, producer, value, 'execute_probe_observation_unavailable');
-      }
-      return completed(context, producer, 'execute_probe_observation_completed');
+      // A successful inspect transport without owned recovery evidence is not settlement.
+      return recoverObservation(context, producer, value, 'execute_probe_observation_unavailable');
     }
     case 'not_found':
       if (reason === 'target_not_found') {
