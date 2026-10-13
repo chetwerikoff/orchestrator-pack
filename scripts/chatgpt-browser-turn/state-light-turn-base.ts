@@ -6295,6 +6295,13 @@ export async function runStateLightTurn(
   try {
     const augmented: TurnRunOutcome = {
       ...outcome,
+      // A numeric Send witness after a same-chat one-goto recovery already
+      // proves a Send was attempted. Populate the existing optional v1 field
+      // without changing any dispatch/retry or post-Send decision authority.
+      ...(!hasFlag(args, 'new-chat') && outcome.result.goto_count === 1
+        && outcome.result.send_count === 1 ? {
+          result: { ...outcome.result, send_attempted: true },
+        } : {}),
       ...(freshCleanup.page && outcome.page === freshCleanup.page && freshCleanup.markedPayload
         ? { ownedTypedPayload: freshCleanup.markedPayload } : {}),
       ...(freshCleanup.page
