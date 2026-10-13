@@ -1392,14 +1392,9 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   const sleepMs = options.sleepMs ?? defaultSleep;
   const log = options.log ?? ((line: string) => process.stdout.write(`${line}\n`));
 
-  // This already-scheduled tick owns a stale-only backstop independently of
-  // coordinator pane discovery; a dead runner cannot execute its own finally.
-  try {
-    await reconcileSelectedProjectStaleReviews(options, log);
-  } catch (error) {
-    log(`pack-review stale reconcile unresolved: ${error instanceof Error ? error.message : String(error)}`);
-  }
-
+  // Keep legacy fleet effects first: stale recovery belongs to this same
+  // already-scheduled tick, but must not delay coordinator/banner delivery.
+  const operationalTick = async (): Promise<FleetAlarmTickResult> => {
   let terminals: FleetTerminal[];
   try {
     terminals = listFleetTerminals(executor);
@@ -1691,6 +1686,18 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       });
     } catch {
       log('DIAG state=unverified reason=diagnostic_unreadable evidence=read_only_projection_failure');
+    }
+  }
+  };
+  try {
+    return await operationalTick();
+  } finally {
+    // Covers missing/unreadable coordinator and every early return, without
+    // introducing a separate scheduler or an ahead-of-events network wait.
+    try {
+      await reconcileSelectedProjectStaleReviews(options, log);
+    } catch (error) {
+      log(`pack-review stale reconcile unresolved: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }
