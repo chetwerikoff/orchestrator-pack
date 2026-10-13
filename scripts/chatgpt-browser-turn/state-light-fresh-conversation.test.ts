@@ -1636,6 +1636,48 @@ describe('state-light fresh conversation collision recovery', () => {
     return { page, state };
   }
 
+  it.each([
+    ['root', 'https://chatgpt.com/c/not-a-uuid'],
+    ['project', `${PROJECT_CONVERSATION_ROOT}/c/not-a-uuid`],
+    ['legacy', 'https://chat.openai.com/c/11111111-1111-4111-8111-not-a-uuid'],
+  ])('refuses a malformed existing-chat UUID on the %s route before navigation or Send (#2541 AC5)', async (_kind, chatUrl) => {
+    const output = join(stateDir, 'malformed-' + randomUUID() + '.txt');
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(), '--output', output,
+      '--chat-url', chatUrl, '--timeout-ms', '5000',
+    ]);
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'chat_not_found', send_count: 0,
+    });
+    expect(mocks.verifyProfile).not.toHaveBeenCalled();
+    expect(mocks.browserQueue).toHaveLength(0);
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it.each([
+    ['root', 'https://chatgpt.com/c/11111111-1111-4111-8111-111111111111'],
+    ['project', SHARED_CONV],
+    ['legacy', 'https://chat.openai.com/c/11111111-1111-4111-8111-111111111111'],
+  ])('keeps a canonical %s UUID unconfirmed without inventing chat_not_found (#2541 AC5)', async (_kind, chatUrl) => {
+    const prompt = 'CANONICAL-UNCONFIRMED-ID';
+    const page = makeLoserPage(prompt, 'NOT-SENT');
+    page.page.url.mockReturnValue(chatUrl);
+    page.composer.count.mockResolvedValue(0);
+    enqueueBrowserForTurn(mocks, page.page);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', join(stateDir, 'canonical-' + randomUUID() + '.txt'),
+      '--chat-url', chatUrl, '--timeout-ms', '5000',
+    ]);
+    expect(mocks.verifyProfile).toHaveBeenCalled();
+    expect(outcome.result.cause).not.toBe('chat_not_found');
+    expect(outcome.result.send_count).toBe(0);
+    expect(page.getSends()).toBe(0);
+  });
+
   it('bounds the early local-ID landing wait even when the Send witness arrives near the absolute deadline', async () => {
     const prompt = 'SYNTHETIC-NEAR-DEADLINE-LOCAL-ID';
     const invocationId = randomUUID();
@@ -1736,6 +1778,67 @@ describe('state-light fresh conversation collision recovery', () => {
     // provably invocation-created dead local-ID Page.
     expect(fixture.local.page.close).toHaveBeenCalledTimes(1);
     expect(fixture.serverPage.close).not.toHaveBeenCalled();
+  });
+
+  it('closes only the proven-created root /c/local-chatgpt Page after unique positive recovery (#2541 AC7)', async () => {
+    const prompt = 'ROOT-LOCAL-ID-POSITIVE';
+    const reply = 'ROOT-SERVER-REPLY';
+    const fixture = freshLocalFetchLossFixture(prompt, reply);
+    const rootLocalUrl = LOCAL_ID_CONVERSATION_URL.replace(PROJECT_CONVERSATION_ROOT, 'https://chatgpt.com');
+    fixture.local.page.url.mockImplementation(() => fixture.local.getSends() ? rootLocalUrl : PROJECT_URL);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await fixture.run(join(stateDir, 'root-local-positive.txt'), randomUUID());
+
+    expect(outcome).toMatchObject({ code: 0, result: { state: 'ok', send_count: 1, conversation_id: SHARED_CONV } });
+    expect(fixture.local.getSends()).toBe(1);
+    expect(fixture.local.page.close).toHaveBeenCalledTimes(1);
+    expect(fixture.serverPage.close).not.toHaveBeenCalled();
+    expect(fixture.retryClicks).not.toHaveBeenCalled();
+  });
+
+  it('retains a foreign-project local-ID Page after the positive user-marker claim (#2541 AC9)', async () => {
+    const prompt = 'FOREIGN-REDIRECT-AFTER-FETCH-LOSS';
+    const fixture = freshLocalFetchLossFixture(prompt, 'OWNED-REPLY');
+    const originalServerLocator = fixture.serverPage.locator.getMockImplementation()!;
+    const foreignLocalUrl = LOCAL_ID_CONVERSATION_URL.replace(
+      PROJECT_CONVERSATION_ROOT,
+      'https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-foreign',
+    );
+    let redirected = false;
+    fixture.serverPage.locator.mockImplementation((selector: string) => {
+      if (selector === USER_MESSAGE_SELECTOR && !redirected) {
+        redirected = true;
+        fixture.local.page.url.mockReturnValue(foreignLocalUrl);
+      }
+      return originalServerLocator(selector);
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await fixture.run(join(stateDir, 'foreign-local-retained.txt'), randomUUID());
+
+    expect(redirected).toBe(true);
+    expect(outcome).toMatchObject({ code: 0, result: { state: 'ok', send_count: 1, conversation_id: SHARED_CONV } });
+    expect(fixture.local.getSends()).toBe(1);
+    expect(fixture.local.page.close).not.toHaveBeenCalled();
+    expect(fixture.serverPage.close).not.toHaveBeenCalled();
+    expect(fixture.retryClicks).not.toHaveBeenCalled();
+  });
+
+  it('retains the original local-ID Page when its Failed to fetch evidence disappears before close (#2541 AC9)', async () => {
+    const prompt = 'FETCH-ERROR-VANISHED-BEFORE-CLOSE';
+    const fixture = freshLocalFetchLossFixture(prompt, 'OWNED-REPLY');
+    const originalGetByText = fixture.local.page.getByText.getMockImplementation()!;
+    let fetchFailureReads = 0;
+    fixture.local.page.getByText.mockImplementation((value: string, options: unknown) => value === 'Failed to fetch'
+      ? scalarLocator({ count: vi.fn(async () => (++fetchFailureReads === 1 ? 1 : 0)) })
+      : originalGetByText(value, options));
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await fixture.run(join(stateDir, 'fetch-error-vanished.txt'), randomUUID());
+
+    expect(outcome).toMatchObject({ code: 0, result: { state: 'ok', send_count: 1, conversation_id: SHARED_CONV } });
+    expect(fetchFailureReads).toBeGreaterThanOrEqual(2);
+    expect(fixture.local.page.close).not.toHaveBeenCalled();
+    expect(fixture.serverPage.close).not.toHaveBeenCalled();
+    expect(fixture.retryClicks).not.toHaveBeenCalled();
   });
 
   it('keeps the full bound-reply observation window after a fresh fetch-loss recovery claim', async () => {
