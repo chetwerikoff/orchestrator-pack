@@ -1510,7 +1510,8 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
       reviewCycleId: authority.cycle!.cycleId, logicalRoundOrdinal: 1, logicalRoundCap: 1,
       automaticBudgetDisposition: 'consume',
     }).run;
-    const findings = [{ severity: 'blocking', title: 'old findings' }];
+    const findings = [{ severity: 'blocking', title: 'old findings',
+      ...(reviewer === 'gpt' ? { sourceSlotId: 'source-01' } : {}) }];
     setPackReviewRunTerminal(run.id, 'changes_requested', {
       reviewVerdict: 'findings', findingCount: 1, findings,
       automaticBudgetDisposition: 'consume',
@@ -2420,7 +2421,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   });
 
   it('retries status publication without a new logical round or duplicate settlement transition', async () => {
-    const f = unchangedDescendantFixture();
+    const f = fixture();
     f.input.fixtureRequiredStatusWriter = async () => { throw new Error('offline status transport failed'); };
     const first = await reconcileStalePackReviewRuns(f.input);
     expect(first.results).toContainEqual(expect.objectContaining({
