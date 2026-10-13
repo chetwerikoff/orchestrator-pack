@@ -3,6 +3,7 @@ import {
   parseBehaviorKind,
 } from '../draft-discipline.mjs';
 import { checkContractEvidence } from '../contract-evidence-validator.mjs';
+import { canonicalizeEntry } from '../pr-scope-declaration.ts';
 
 export interface TierGateFloorOptions {
   repoRoot?: string;
@@ -47,6 +48,20 @@ export function checkWorkerSafetyFloor(draftText: string): { ok: boolean; errors
     if (!deny.includes(required)) {
       errors.push('worker-safety floor: denylist must include ' + required);
     }
+  }
+  for (const [fence, field] of [
+    ['denylist', 'denylist'],
+    ['allowed-roots', 'allowed_roots'],
+  ] as const) {
+    const body = new RegExp('`{3}' + fence + '\\s*\\n([\\s\\S]*?)`{3}', 'm').exec(draftText)?.[1];
+    if (body === undefined) continue;
+    // Match the Issue parser's entry indexing (blank and comment lines are ignored).
+    const entries = body.split(/\r?\n/).map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith('#'));
+    entries.forEach((entry, index) => {
+      const result = canonicalizeEntry(entry, field, index);
+      if (!result.ok) errors.push(result.error);
+    });
   }
   return { ok: errors.length === 0, errors };
 }

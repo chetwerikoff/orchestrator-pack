@@ -1,7 +1,8 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 import { describe, expect, it } from 'vitest';
-import { checkTierGateGuard, formatTierGatePassMessage, parseComplexityTierFence } from './lib/tier-gate-core.ts';
+import { checkTierGateGuard, checkWorkerSafetyFloor, formatTierGatePassMessage, parseComplexityTierFence } from './lib/tier-gate-core.ts';
+import { canonicalizeEntry } from './pr-scope-declaration.ts';
 
 const valid = `## Prerequisite
 None.
@@ -90,6 +91,52 @@ describe('current substantive Issue floor', () => {
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toContain('packages/core/**');
     expect(result.errors.join('\n')).toContain('missing ## Verification');
+  });
+
+  it('accepts T1 denylist filename suffixes without widening the allowed-roots ceiling', () => {
+    const realistic = valid
+      .replace('tier: T2', 'tier: T1')
+      .replace('size: single-component-design-judgment', 'size: small-obvious-self-contained')
+      .replace(
+        'packages/core/**\nvendor/**\n',
+        'packages/core/**\nvendor/**\n.env*\n.env.*\nsecrets/key*\n',
+      );
+    expect(checkTierGateGuard(realistic)).toMatchObject({ ok: true, errors: [] });
+    expect(checkWorkerSafetyFloor(realistic)).toEqual({ ok: true, errors: [] });
+    expect(checkWorkerSafetyFloor(valid.replace('allowed-roots\nscripts/**\n', 'allowed-roots\nsrc/**\n')))
+      .toEqual({ ok: true, errors: [] });
+    expect(checkWorkerSafetyFloor(valid)).toEqual({ ok: true, errors: [] });
+  });
+
+  it('rejects malformed Issue policy entries with exact shared field/index errors', () => {
+    const cases: Array<{ field: 'allowed_roots' | 'denylist'; pattern: string }> = [
+      { field: 'allowed_roots', pattern: 'src/*.py' },
+      { field: 'allowed_roots', pattern: 'scripts/*.ts' },
+      { field: 'allowed_roots', pattern: 'plugins/**/tests/*.test.ts' },
+      { field: 'allowed_roots', pattern: 'scripts/*/secret/**' },
+      { field: 'denylist', pattern: 'scripts/*/secret/**' },
+      { field: 'denylist', pattern: '**/credentials/**' },
+      { field: 'denylist', pattern: '**/secrets/**' },
+      { field: 'denylist', pattern: 'secrets/*.pem' },
+      { field: 'denylist', pattern: 'scripts/*.ts' },
+      { field: 'denylist', pattern: 'scripts/*' },
+      { field: 'denylist', pattern: 'scripts/foo*bar' },
+      { field: 'denylist', pattern: 'scripts/foo**' },
+    ];
+    for (const { field, pattern } of cases) {
+      const index = field === 'denylist' ? 2 : 1;
+      const canonical = canonicalizeEntry(pattern, field, index);
+      expect(canonical.ok).toBe(false);
+      if (canonical.ok) throw new Error('expected invalid canonicalization');
+      const issue = field === 'denylist'
+        ? valid.replace('packages/core/**\nvendor/**\n', 'packages/core/**\nvendor/**\n' + pattern + '\n')
+        : valid.replace('allowed-roots\nscripts/**\n', 'allowed-roots\nscripts/**\n' + pattern + '\n');
+      expect(checkWorkerSafetyFloor(issue).errors).toContain(canonical.error);
+      expect(checkTierGateGuard(issue)).toMatchObject({
+        ok: false,
+        errors: expect.arrayContaining([canonical.error]),
+      });
+    }
   });
 
   it('rejects an invalid tier without adding review topology', () => {
