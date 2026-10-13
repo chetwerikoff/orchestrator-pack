@@ -702,22 +702,54 @@ export function reconcilePackReviewTier(input: {
   prNumber: number;
   tier: PackReviewTier;
   options: PackReviewAuthorityOptions;
+  /** A started run, even before its first consumed terminal, owns the cycle identity. */
+  startedRunExists?: boolean;
+  /** Only an open, unmerged PR can gain another required round. */
+  prMerged?: boolean;
 }): PackReviewAuthorityDocument {
   const current = readPackReviewAuthority(input.prNumber, input.options);
   if (!current) throw new PackReviewAuthorityError('authority_missing', `PR ${input.prNumber}`);
   if (!current.cycle || current.cycle.frozenTier === input.tier) return current;
   const cycle = current.cycle;
+  const consumed = cycleConsumedCount(cycle);
   const safelyReplaceable = cycle.state === 'open'
+    && consumed === 0
     && cycle.consumedHeadShas.length === 0
+    && input.startedRunExists !== true
+    && input.prMerged !== true
     && cycle.reviewStageComplete !== true
     && !current.terminal
     && !current.evidence
     && !current.triage
     && !current.publication;
-  if (!safelyReplaceable) {
+  if (safelyReplaceable) {
+    return commitPackReviewAuthorityTransition({
+      prNumber: input.prNumber,
+      expectedTransitionSeq: current.transitionSeq,
+      nextPhase: current.phase,
+      mutate(authority) {
+        authority.cycle = createNewPackReviewCycle(input.tier, {
+          now: input.options.now,
+          capMapVersion: isLogicalRoundCycle(cycle)
+            ? PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+            : PACK_REVIEW_CAP_MAP_VERSION,
+        });
+        return authority;
+      },
+      options: input.options,
+    });
+  }
+
+  // Frozen history never moves downward. A completed/merged review never reopens.
+  const tierRank = { T1: 1, T2: 2, T3: 3 } as const;
+  if (tierRank[input.tier] <= tierRank[cycle.frozenTier]
+      || input.prMerged === true
+      || cycle.reviewStageComplete === true
+      || cycle.state === 'closed') return current;
+  if (!isLogicalRoundCycle(cycle)) {
     throw new PackReviewAuthorityError(
       'tier_change_requires_reset',
-      `persisted ${cycle.frozenTier} cycle cannot be replaced with authoritative ${input.tier}`,
+      `persisted ${cycle.frozenTier} cycle uses legacy accounting and cannot be promoted`,
     );
   }
   return commitPackReviewAuthorityTransition({
@@ -725,12 +757,32 @@ export function reconcilePackReviewTier(input: {
     expectedTransitionSeq: current.transitionSeq,
     nextPhase: current.phase,
     mutate(authority) {
-      authority.cycle = createNewPackReviewCycle(input.tier, {
-        now: input.options.now,
-        capMapVersion: isLogicalRoundCycle(cycle)
-          ? PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
-          : PACK_REVIEW_CAP_MAP_VERSION,
-      });
+      const promoted = authority.cycle!;
+      if (promoted.cycleId !== cycle.cycleId || promoted.reviewStageComplete
+          || promoted.state === 'closed') {
+        throw new PackReviewAuthorityError('authority_transition_conflict', 'cycle settled during tier promotion');
+      }
+      promoted.frozenTier = input.tier;
+      promoted.frozenCap = PACK_REVIEW_LOGICAL_CAPS[input.tier];
+      // The consumed ordinal, terminal, publication, triage and evidence are historical.
+      // Reclassify the *open* finding checkpoint under the expanded cap; a strict
+      // descendant remains required before the next reviewer can be admitted.
+      if (consumed < promoted.frozenCap
+          && ['open_findings', 'at_cap_open_findings', 'at_cap_continuation_required']
+            .includes(promoted.state)) {
+        if (authority.terminal?.reviewVerdict !== 'findings') {
+          throw new PackReviewAuthorityError('cap_state_invalid', 'promoted finding checkpoint lacks its terminal');
+        }
+        promoted.state = 'open_findings';
+        promoted.closedAtUtc = undefined;
+        promoted.atCapHash = sha256(stableJson({
+          cycleId: promoted.cycleId,
+          frozenCap: promoted.frozenCap,
+          consumedRoundOrdinals: promoted.consumedRoundOrdinals,
+          terminalRunId: authority.terminal.runId,
+          terminalDigest: authority.terminal.digest,
+        }));
+      }
       return authority;
     },
     options: input.options,

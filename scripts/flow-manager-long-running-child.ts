@@ -147,14 +147,24 @@ export function readInvocationReceiptLocator(input: {
   readonly receiptLocator?: string;
   readonly runIdentity: string;
   readonly attemptIdentity: string;
+  readonly ownerTaskId?: string;
+  readonly ownerDispatchId?: string;
   readonly terminalEnvelopeRoot?: string;
 }): { readonly locator: InvocationReceiptLocator; readonly receipt: HandoffReceipt; readonly path: string } {
+  const taskBound = input.ownerTaskId !== undefined || input.ownerDispatchId !== undefined;
+  if (taskBound && (!input.ownerTaskId?.trim()
+    || (input.ownerDispatchId !== undefined && !input.ownerDispatchId.trim()))) {
+    throw new Error('wait_owner_identity_required');
+  }
+  // Task-bound recovery requires the caller's independently retained invocation
+  // even when a locator path is provided; it is an expectation, not a selector.
+  if (taskBound && !input.invocationId?.trim()) throw new Error('wait_invocation_identity_required');
   const root = input.terminalEnvelopeRoot ?? effectiveTerminalRoot();
-  if (input.invocationId && input.receiptLocator) throw new Error('wait_locator_selector_ambiguous');
+  if (input.invocationId && input.receiptLocator && !taskBound) throw new Error('wait_locator_selector_ambiguous');
   if (!input.invocationId && !input.receiptLocator) throw new Error('wait_locator_selector_required');
-  const path = input.invocationId
-    ? invocationReceiptLocatorPath(input.invocationId, root)
-    : resolve(input.receiptLocator!);
+  const path = input.receiptLocator
+    ? resolve(input.receiptLocator)
+    : invocationReceiptLocatorPath(input.invocationId!, root);
   const locator = readLocatorIndex(path, root, {
     ...(input.invocationId ? { invocationId: input.invocationId } : {}),
     runIdentity: input.runIdentity,
@@ -170,6 +180,10 @@ export function readInvocationReceiptLocator(input: {
     || typeof receipt.child_cwd !== 'string' || !isAbsolute(receipt.child_cwd)
     || receipt.completion_mode !== COMPLETION_MODE) {
     throw new Error('receipt_locator_handoff_missing_or_mismatched');
+  }
+  if (taskBound && (receipt.owner_task_id !== input.ownerTaskId
+    || (input.ownerDispatchId !== undefined && receipt.owner_dispatch_id !== input.ownerDispatchId))) {
+    throw new Error('wait_receipt_owner_mismatch');
   }
   return { locator, receipt, path };
 }
@@ -1583,23 +1597,52 @@ export async function runWait(options: {
   readonly handoffReceiptPath?: string;
   readonly invocationId?: string;
   readonly receiptLocator?: string;
+  readonly ownerTaskId?: string;
+  readonly ownerDispatchId?: string;
   readonly terminalEnvelopeRoot?: string;
   readonly deadlineMs: number;
 }): Promise<void> {
-  const indexed = options.invocationId !== undefined || options.receiptLocator !== undefined;
-  if (indexed && (options.terminalEnvelopePath !== undefined || options.handoffReceiptPath !== undefined)) {
+  const taskBound = options.ownerTaskId !== undefined || options.ownerDispatchId !== undefined;
+  if (taskBound && (!options.ownerTaskId?.trim()
+    || (options.ownerDispatchId !== undefined && !options.ownerDispatchId.trim()))) {
+    throw new Error('wait_owner_identity_required');
+  }
+  const explicit = options.terminalEnvelopePath !== undefined || options.handoffReceiptPath !== undefined;
+  // With Task-bound explicit paths, the existing invocation ID names the
+  // expected receipt invocation rather than selecting an index.
+  if (explicit && options.invocationId !== undefined && !taskBound) {
     throw new Error('wait_locator_and_explicit_paths_conflict');
+  }
+  const indexed = options.receiptLocator !== undefined || (options.invocationId !== undefined && !explicit);
+  if (indexed && explicit) throw new Error('wait_locator_and_explicit_paths_conflict');
+  if (taskBound && !options.invocationId?.trim()) {
+    throw new Error('wait_invocation_identity_required');
   }
   const bound = indexed ? readInvocationReceiptLocator({
     ...(options.invocationId !== undefined ? { invocationId: options.invocationId } : {}),
     ...(options.receiptLocator !== undefined ? { receiptLocator: options.receiptLocator } : {}),
     runIdentity: options.runIdentity,
     attemptIdentity: options.attemptIdentity,
+    ...(taskBound ? { ownerTaskId: options.ownerTaskId, ownerDispatchId: options.ownerDispatchId } : {}),
     ...(options.terminalEnvelopeRoot ? { terminalEnvelopeRoot: options.terminalEnvelopeRoot } : {}),
   }) : null;
   const terminalEnvelopePath = bound?.locator.terminal_envelope_path ?? options.terminalEnvelopePath;
   const handoffReceiptPath = bound?.locator.handoff_receipt_path ?? options.handoffReceiptPath;
   if (!terminalEnvelopePath || !handoffReceiptPath) throw new Error('wait_paths_or_locator_required');
+  // Task-bound waits bind the original receipt before exposing any result.
+  const initialReceipt = taskBound
+    ? (bound?.receipt ?? readHandoffReceipt(handoffReceiptPath, {
+      runIdentity: options.runIdentity, attemptIdentity: options.attemptIdentity,
+    }))
+    : null;
+  if (taskBound && (!initialReceipt
+    || initialReceipt.owner_task_id !== options.ownerTaskId
+    || (options.ownerDispatchId !== undefined && initialReceipt.owner_dispatch_id !== options.ownerDispatchId)
+    || !initialReceipt.invocation_id?.trim()
+    || (!indexed && initialReceipt.invocation_id !== options.invocationId)
+    || initialReceipt.completion_mode !== COMPLETION_MODE)) {
+    throw new Error('wait_receipt_owner_mismatch');
+  }
   const started = Date.now();
   let envelope: TerminalEnvelope | null = null;
   while (Date.now() - started < options.deadlineMs) {
@@ -1620,26 +1663,37 @@ export async function runWait(options: {
       ...(options.receiptLocator !== undefined ? { receiptLocator: options.receiptLocator } : {}),
       runIdentity: options.runIdentity,
       attemptIdentity: options.attemptIdentity,
+      ...(taskBound ? { ownerTaskId: options.ownerTaskId, ownerDispatchId: options.ownerDispatchId } : {}),
       ...(options.terminalEnvelopeRoot ? { terminalEnvelopeRoot: options.terminalEnvelopeRoot } : {}),
     });
-    // An older terminal preserves the caller's relative handoff spelling. The
-    // wait caller may now have a different cwd, so resolving that spelling here
-    // would resolve against the wrong directory. The locator owns the absolute
-    // original receipt; match the relative filename plus the receipt's original
-    // committed launch identity instead of guessing the launching cwd.
-    const terminalHandoffMatches = !envelope || (
-      (isAbsolute(envelope.handoff_receipt_path)
-        ? resolve(envelope.handoff_receipt_path) === handoffReceiptPath
-        : basename(normalize(envelope.handoff_receipt_path)) === basename(handoffReceiptPath))
-      && envelope.launcher_started_at === handoff?.launcher_started_at
-      && envelope.handoff_committed_at === handoff?.handoff_committed_at
-    );
     if (reread.locator.handoff_receipt_path !== handoffReceiptPath
       || reread.locator.terminal_envelope_path !== terminalEnvelopePath
-      || !handoff || JSON.stringify(reread.receipt) !== JSON.stringify(handoff)
-      || !terminalHandoffMatches) {
+      || !handoff || JSON.stringify(reread.receipt) !== JSON.stringify(handoff)) {
       throw new Error('wait_locator_identity_changed');
     }
+  }
+  // Relative terminal receipt names are historical; the committed launch
+  // identity, not today's cwd, must still match the selected receipt.
+  const terminalHandoffMatches = !envelope || (
+    (isAbsolute(envelope.handoff_receipt_path)
+      ? resolve(envelope.handoff_receipt_path) === resolve(handoffReceiptPath)
+      : basename(normalize(envelope.handoff_receipt_path)) === basename(handoffReceiptPath))
+    && envelope.launcher_started_at === handoff?.launcher_started_at
+    && envelope.handoff_committed_at === handoff?.handoff_committed_at
+  );
+  // The legacy explicit unbound wait is diagnostic even if its receipt is
+  // absent. Indexed and Task-bound waits still require exact launch identity.
+  if ((indexed || taskBound) && !terminalHandoffMatches) {
+    throw new Error(indexed ? 'wait_locator_identity_changed' : 'wait_receipt_identity_changed');
+  }
+  if (taskBound && (!handoff || JSON.stringify(initialReceipt) !== JSON.stringify(handoff)
+    || handoff.owner_task_id !== options.ownerTaskId
+    || (options.ownerDispatchId !== undefined && handoff.owner_dispatch_id !== options.ownerDispatchId)
+    || (!indexed && handoff.invocation_id !== options.invocationId)
+    || (envelope?.observed_invocation_id !== undefined
+      && envelope.observed_invocation_id !== handoff.invocation_id)
+    || !terminalHandoffMatches)) {
+    throw new Error('wait_receipt_identity_changed');
   }
   process.stdout.write(JSON.stringify({
     schema: WAIT_SCHEMA,
@@ -1700,6 +1754,8 @@ async function main(): Promise<void> {
       ...(options.has('handoff-receipt') ? { handoffReceiptPath: requiredOption(options, 'handoff-receipt') } : {}),
       ...(options.has('invocation-id') ? { invocationId: requiredOption(options, 'invocation-id') } : {}),
       ...(options.has('receipt-locator') ? { receiptLocator: requiredOption(options, 'receipt-locator') } : {}),
+      ...(options.has('owner-task-id') ? { ownerTaskId: requiredOption(options, 'owner-task-id') } : {}),
+      ...(options.has('owner-dispatch-id') ? { ownerDispatchId: requiredOption(options, 'owner-dispatch-id') } : {}),
       ...(process.env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
         && process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT
         && isAbsolute(process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT)

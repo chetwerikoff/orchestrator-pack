@@ -109,6 +109,22 @@ exact authoritative binding needed to identify that turn **is** available, make
 a fresh live observation of the actual owned conversation before any new prompt.
 Do not restart an arbitrary timer and blindly wait or send.
 
+**Task-owned recovery candidates, before presentation.** Inspect each candidate's
+existing original `flow-manager-long-running-child-handoff/v1` receipt **before
+displaying, selecting or consuming** it. Compare against independently retained
+exact Task, Run, attempt and invocation and expected Dispatch when supplied.
+A locator checks **one supplied candidate**, never enumerates candidates.
+Run+Issue, filenames or another Task's closed status are not ownership.
+For indexed waits use `readInvocationReceiptLocator` with independently expected
+`ownerTaskId`/`ownerDispatchId`; for both Task-bound wait modes pass
+`--owner-task-id`, `--owner-dispatch-id` when expected and retained
+`--invocation-id`. With explicit `--terminal-envelope` +
+`--handoff-receipt`, the invocation flag checks the expected original
+receipt invocation instead of selecting an index. Reject foreign, missing,
+blank and legacy owner Task, and recheck owner and original/final receipt
+identity before any result. Preserve ordinary unbound legacy waits; do not
+add a candidate lister, receipt schema or registry.
+
 ## Per-turn execution contract
 
 At the start of every manager turn, before preparing or sending any ChatGPT
@@ -122,9 +138,14 @@ Every manager -> ChatGPT execution turn is one ordinary tracked Browser-GPT turn
 under `docs/browser-gpt-turn-runbook.md` plus the execution-only checkpoint in
 the next section.
 
-A new user turn is legal after the previous owned turn is settled, or after a
-failed or unobserved turn enters GitHub-first recovery, when there is a concrete
-reason to continue.
+A new user turn requires **independent positive settlement** of the exact
+previous owned invocation and all existing Browser-GPT send/no-resend,
+attribution and final-revalidation gates. GitHub-first entry for an
+unobserved turn is **read-only**, not settlement or Send authority. Missing
+target/envelope, partial binding, expired observer/grace window and
+unchanged HEAD alone preserve the incumbent, cannot count as a failure
+streak or authorize another user turn/fresh chat. Use a distinct available
+owned read/harvest, GitHub-first and existing supervisor identity recovery.
 The workflow is completion-driven, not iteration-count-driven.
 
 ### Exact context in every manager-authored execution prompt
@@ -370,6 +391,17 @@ For every submitted execution turn:
    enters harvest, and a failed or unobserved turn enters GitHub-first recovery.
    Do not infer completion from helper/launcher PID, shell state, or a missing envelope.
 
+**Unavailable probe is not dead-page evidence.** A
+`not_found/target_not_found` probe proves missing CDP target only. Try a
+*different* available exact-owned observation/harvest, existing GitHub-first
+read-only reconciliation and supervisor identity recovery rather than
+repeating that identical missing target. Only separately eligible exact-owned
+`runTurnCore` page observation, with unique carrier/window, elapsed dispatch
+deadline and **two qualifying reads**, may emit positive
+`dead_turn_page_evidence`. `classifyBrowserGptPageTurnStatus(false, 0)`
+is just a two-input helper truth-table, not a proof of those guards.
+Neither missing target nor GitHub progress overrides positive page death.
+
 The probe's `execution_recovery_cause` is derived from the same Browser-GPT
 product-state helper used by the immediate state-light path. That classifier owns
 the exact `Error in message stream` -> `message_stream_error` mapping; the manager
@@ -393,7 +425,7 @@ Interpret the checkpoint evidence only through this mapping:
 
 ## Product-error recovery (GitHub-first)
 
-Every failed or unobserved owned Browser-GPT turn enters this existing recovery,
+Every failed or unobserved owned Browser-GPT turn enters this existing **read-only** recovery,
 including exact product errors and `no_reply`, `dead_turn_page_evidence`,
 `send_failed`, `driver_error`, `stream_timeout`, delivery or helper timeout,
 browser loss, missing envelope, process death, and `target_not_found`.
@@ -418,6 +450,18 @@ Issue before sending any continuation:
 5. if PR/branch ownership is ambiguous, fail closed and resolve that ambiguity;
    do not send a continuation or open a fresh execution chat.
 
+**Exact GitHub repository-progress observation.** Read the resolved
+Issue-bound PR's live current head through the existing tracked `scripts/gh`
+transport; when no PR exists use only one unambiguously verified Issue-owned
+published branch head. Compare against the previously retained verified
+baseline and finally re-read **that same exact PR/branch** before fallback.
+Head advancement proves repository/task progress only; it defeats only
+*no-repository-progress* fallback, not Browser invocation liveness or commit
+authorship. An unrelated/stale/ambiguous PR or branch and PR author cannot
+prove attribution. Unchanged head cannot prove death, and independently
+valid exact-owned page-death evidence survives head advancement. No extra
+poller or attribution cache.
+
 If current state already establishes a candidate-complete implementation, do
 **not** send `Доделай и сообщи статус` and do not open an implementation conversation.
 Resolve the exact live Issue-bound PR/head and required CI state; when the
@@ -427,8 +471,12 @@ before required same-manager smoke completes.
 
 ### Same-conversation continuation first
 
-Otherwise save the exact selected baseline and send exactly one ordinary tracked
-continuation user turn in the **same exact owned ChatGPT conversation**:
+Otherwise first establish **positive settlement of the previous exact owned
+Browser invocation** and pass all existing send/no-resend, identity, attribution
+and final-read gates. An unavailable/unobserved turn cannot take this path:
+preserve its incumbent, use a distinct owned read/harvest or supervisor
+identity recovery. Only after these gates pass save the verified baseline
+and send one tracked user turn in the **same exact owned conversation**:
 
 - **Existing PR:** exact live Issue URL, verified Issue-bound PR URL and
   GitHub-observed 40-hex head baseline; name the gap or ask to complete
@@ -440,17 +488,21 @@ continuation user turn in the **same exact owned ChatGPT conversation**:
   `HEAD: none`, explicit no-work observation and the same footer;
   do not synthesize a branch/head.
 
-This is a new tracked user turn after GitHub-first reconciliation of the failed
-or unobserved turn, not a retry of that turn. Never press the product `Retry` control. Reuse the
+This is a new tracked user turn after GitHub-first reconciliation **and
+independently established settlement** of the previous owned failed turn,
+not a retry of that turn. Unobserved/unavailable-only evidence cannot
+authorize this user turn. Never press the product `Retry` control. Reuse the
 existing Browser-GPT existing-conversation send, attribution, observation, and
 settlement path; add no second transport or generic resend authority.
 
-If the continuation shows positive progress—active generation, an attributable
-completed assistant reply, advancement of the same PR/branch head, or creation
-of a valid Issue-bound PR/branch from a no-work baseline—keep the same
-conversation authoritative and continue the ordinary multi-turn flow. A
-candidate-complete repository state still short-circuits into review
-convergence.
+If the continuation shows exact owned-chat progress (active generation or
+an attributable completed reply), retain the incumbent conversation and
+observe/harvest it. Advancement of the exact Issue-bound PR/verified branch
+head, or verified first publication from a no-work baseline, is separately
+**repository progress only**: suppress no-repository-progress fallback
+without claiming exact Browser-turn liveness or commit authorship. A
+candidate-complete repository still short-circuits to review convergence
+without a new implementation Send.
 
 ### Minimum no-progress grace and fallback
 
@@ -464,14 +516,18 @@ fallback; continue the normal observation and consume any completed reply.
 The 10-minute grace is not turn-settlement, cancellation, close, navigation, or
 replacement-send authority. If the continuation is proved still generating or has an attributable completed
 reply at grace expiry, observe or harvest it without opening a fresh chat.
-A failed or unobserved continuation enters GitHub-first recovery and the same
-streak, without waiting for a product-error receipt. A repeated failed or unobserved turn follows **Repeated recovery-failure streak**
-below instead of this grace.
+A positively settled failed continuation enters GitHub-first recovery
+and may count toward the streak. A missing/unobserved continuation enters
+read-only GitHub-first recovery **without** settlement or streak increment,
+then distinct exact-owned observation and supervisor recovery when blind.
+Only repeated independently settled failures follow the streak section.
 
-At or after the full grace, perform fresh final reads of both the exact owned
-conversation and live repository state. A no-progress fallback is permitted when no active generation, attributable
-completed reply, or other chat progress exists and the saved repository baseline
-is unchanged:
+At or after the full grace, perform fresh final reads of the exact owned
+conversation and Issue-bound GitHub head. **Independent positive turn
+settlement** and the existing send/no-resend/attribution/final-read gates
+are mandatory before any fallback. Expired grace, absent chat observation
+and unchanged head are insufficient. The no-progress fallback additionally
+requires that the exact verified repository baseline remains unchanged:
 
 - **Existing PR:** same Issue-bound PR and same head;
 - **No PR, one Issue-owned branch:** same branch and same head;
@@ -483,8 +539,10 @@ ambiguous, or implementation is candidate-complete, do not send a prepared
 fallback. Return to same-conversation observation/current-state evaluation or
 enter review convergence when its preconditions hold.
 
-Only after all fallback gates pass, or at streak 3 of **Repeated recovery-failure
-streak** below, may the manager open exactly one fresh execution conversation:
+Only after separately established settlement and **all** existing send/
+no-resend/attribution/final-read gates pass, including at streak 3, may the
+manager open at most one fresh execution conversation. A settled streak 3
+waives grace/no-progress only, not Send or owner-identity gates:
 
 - **Existing PR:** exact live Issue URL + same bound PR URL + unchanged
   GitHub-observed 40-hex head baseline; continue that implementation.
@@ -505,42 +563,48 @@ of repository or server-side state.
 
 ### Repeated recovery-failure streak
 
-The existing per-conversation streak counts consecutive failed or unobserved
-owned turns, including transport failures and reserved product causes.
-An attributable completed assistant reply resets it to zero; a fresh execution
-conversation starts at zero.
+The per-conversation streak counts only **positively settled failed exact-owned
+turns**, including independently settled transport/product errors. Missing
+target/envelope, partial binding, expired observer/grace window or unchanged
+head is not positive failure evidence. An attributable completed reply resets
+the streak; an authorized fresh chat starts at zero.
 
-- **Streak 1** — the original owned turn failed: GitHub-first reconciliation,
-  then one same-conversation continuation as above.
-- **Streak 2** — the continuation also failed or remained unobserved: reconcile
-  GitHub first, then send one more tracked continuation in the same conversation.
-- **Streak 3** — the third consecutive failure: send no further continuation
-  in that chat. Reconcile GitHub first and open exactly one fresh execution
-  conversation with the reconciled PR/head, branch/head, or Issue-only baseline;
-  the 10-minute grace and unchanged-baseline gate do not apply. Close only the
-  exact old owned conversation under existing tab-lifecycle authority.
+- **Streak 1:** the original exact owned turn separately settled in failure;
+  GitHub-first, then at most one gated same-chat continuation.
+- **Streak 2:** a second independently settled failure; GitHub-first, then at
+  most one more same-chat continuation, subject to ordinary Send gates.
+- **Streak 3:** a third independently settled failure; no further sends in
+  that chat. GitHub-first, then at most one fresh conversation with reconciled
+  Issue-bound PR/head, branch/head or no-work baseline **only after settlement
+  and all existing send/no-resend/identity/final-read gates**. Streak 3 waives
+  grace/unchanged-head only, not Send authority. Close only the exact old
+  owned tab under existing lifecycle authority.
 
-Every streak step retains the generating, reply-present, and candidate-complete
-short-circuits before sending. Derive the streak from the manager's retained
-turn results for that conversation; when they cannot be reconstructed after
-a restart or replacement, treat the streak as 1.
+All steps preserve generating/reply-present/candidate-complete short-circuits.
+If the streak cannot be reconstructed after restart/replacement, **do not**
+invent streak 1 or a settled failure. Retain the incumbent and use a different
+exact-owned read/harvest, GitHub-first and supervisor identity recovery.
 
 ## Multi-turn completion loop
 
 ```text
 submitted GPT turn
   -> failed or unobserved owned turn, including a reserved product cause
-       OR a 30-minute checkpoint failure
-       -> inspect live GitHub first and save PR/head, branch/head, or no-work baseline
+       OR an unavailable 30-minute checkpoint
+       -> different exact-owned observation/harvest + GitHub-first head check
+       -> preserve incumbent until independent positive settlement
+       -> if blind: supervisor identity recovery, no Send
+       -> only after settlement and Send gates: save exact PR/branch baseline
        -> candidate implementation already complete
             -> no implementation continuation chat
             -> manager-owned PR-review convergence
        -> otherwise send one tracked continuation in same exact owned conversation
-       -> continuation fails again (streak 2)
-            -> GitHub-first again, one more continuation in the same conversation
-       -> third consecutive failure (streak 3)
-            -> GitHub-first again, one fresh chat with the reconciled baseline
-       -> positive chat/repository progress: stay in same conversation
+       -> continuation independently settles in failure (streak 2)
+            -> GitHub-first, at most one gated same-chat continuation
+       -> third independently settled failure (streak 3)
+            -> GitHub-first, at most one gated fresh chat
+       -> exact owned chat progress: observe/harvest incumbent
+       -> exact Issue-bound HEAD progress: rules out no-repository-progress only
        -> confirmed send: observe same continuation for at least 10 minutes
        -> unsettled at grace expiry: no fresh chat; continue existing settlement/recovery
        -> settled, no progress, full grace, unchanged baseline
@@ -830,8 +894,9 @@ partial implementation, red CI, or another concrete implementation gap.
 If a possible send occurred and the exact authoritative recovery identity is
 unavailable after the legal existing recovery path is exhausted, the supervisor
 fails closed: no fresh execution conversation, no duplicate prompt, no invented
-history, and `OPERATOR_ACTION_REQUIRED` names the missing identity/evidence
-boundary.
+history. Existing coordinator-owned pause/identity recovery continues.
+`OPERATOR_ACTION_REQUIRED` remains reserved for an observed credential/CAPTCHA
+human action, never absent target or receipt evidence alone.
 
 ## Operator-visible outcomes
 

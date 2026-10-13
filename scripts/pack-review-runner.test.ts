@@ -812,7 +812,7 @@ describe('Issue #2474 Claude same-ordinal child rollover and original budget', (
       fixturePrState: 'OPEN' as const,
       fixturePrBody: 'Closes #2474', fixturePostReviewPrBody: 'Closes #2474',
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack', fixtureIssueNumber: 2474,
-      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureIssueTitle: "[T2] Accepted reviewer fixture", fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
       fixtureReviewStdout: cleanPayload(), fixtureGithubReviewId: 247401,
       fixtureReviewerLayerOverrides: { Process: 'claude', User: 'claude' },
       fixtureEmulateWin32Selector: true,
@@ -851,7 +851,7 @@ describe('Issue #1826 native initial pre-spawn binding', () => {
       fixturePostReviewPrBody: 'Closes #' + prNumber,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
+      fixtureIssueTitle: "[T3] Multi-round review fixture", fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
       fixtureReviewStdout: cleanPayload(),
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
       fixtureEmulateWin32Selector: true,
@@ -921,7 +921,7 @@ describe('Issue #1826 native fallback pre-spawn binding', () => {
       fixturePostReviewPrBody: 'Closes #' + prNumber,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
+      fixtureIssueTitle: "[T3] Carryover round fixture", fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
       fixtureCarryoverReplay: mergeCompositeReplay(head),
       fixtureCarryoverSourceCleanRunId: 'fixture-source-clean',
       fixtureFocusedResolutionBundleDigest: 'wrong-bundle',
@@ -1008,7 +1008,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
       fixturePostReviewPrBody: 'Closes #1826',
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: 1826,
-      fixtureIssueBody: issueBody,
+      fixtureIssueTitle: "[T3] Same-head two rounds fixture", fixtureIssueBody: issueBody,
       fixtureReviewStdout: cleanPayload(),
       fixtureGithubReviewId: 182601,
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
@@ -1033,7 +1033,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
       fixturePostReviewPrBody: 'Closes #1826',
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: 1826,
-      fixtureIssueBody: issueBody,
+      fixtureIssueTitle: "[T3] Second round fixture", fixtureIssueBody: issueBody,
       fixtureReviewStdout: cleanPayload(),
       fixtureGithubReviewId: 182602,
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
@@ -1082,7 +1082,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
       fixturePostReviewPrBody: `Closes #${prNumber}`,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: issueBody,
+      fixtureIssueTitle: "[T3] Findings descendant fixture", fixtureIssueBody: issueBody,
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
       fixtureEmulateWin32Selector: true,
       fixtureRequiredStatusWriter: async () => {},
@@ -1177,7 +1177,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
       fixturePostReviewPrBody: `Closes #${prNumber}`,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
+      fixtureIssueTitle: "[T3] Native incumbent fixture", fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
       fixtureReviewStdout: cleanPayload(),
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
       fixtureEmulateWin32Selector: true,
@@ -1251,7 +1251,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
       fixturePostReviewPrBody: `Closes #${prNumber}`,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
+      fixtureIssueTitle: "[T3] Reviewer retry fixture", fixtureIssueBody: '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
       fixtureReviewStdout: cleanPayload(),
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
       fixtureEmulateWin32Selector: true,
@@ -1259,7 +1259,7 @@ describe('Issue #1826 logical-round smoke independence', () => {
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
     });
 
-    expect(result).toMatchObject({ ok: true, created: true, reused: false });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, created: true, reused: false });
     expect(result.runId).not.toBe(prior.run.id);
   });
 });
@@ -1299,7 +1299,7 @@ describe('Issue #2412 first bound snapshot tier admission', () => {
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
     };
     const malformedBody = '```complexity-tier\nT2\n```';
-    const rejected = await startPackReview({ ...common, fixtureIssueBody: malformedBody });
+    const rejected = await startPackReview({ ...common, fixtureIssueTitle: "[T2] Rejected malformed block", fixtureIssueBody: malformedBody });
     expect(rejected).toMatchObject({ ok: false, created: false });
     expect(existsSync(paths.snapshotPath)).toBe(false);
     expect(existsSync(paths.metadataPath)).toBe(false);
@@ -1308,14 +1308,14 @@ describe('Issue #2412 first bound snapshot tier admission', () => {
     expect(rejected.reason).toContain('tier: T1|T2|T3');
 
     const correctedBody = '```complexity-tier\ntier: T2\n```';
-    const admitted = await startPackReview({ ...common, fixtureIssueBody: correctedBody });
+    const admitted = await startPackReview({ ...common, fixtureIssueTitle: "[T2] Corrected block", fixtureIssueBody: correctedBody });
     expect(admitted).toMatchObject({ ok: true, created: true });
     const snapshot = resolveBoundIssueSnapshot(binding);
     expect(snapshot.status).toBe('found');
     expect(readFileSync(paths.snapshotPath, 'utf8')).toBe(correctedBody);
     const metadataBytes = readFileSync(paths.metadataPath, 'utf8');
 
-    const reused = await startPackReview({ ...common, fixtureIssueBody: malformedBody });
+    const reused = await startPackReview({ ...common, fixtureIssueTitle: "[T2] Historical frozen block", fixtureIssueBody: malformedBody });
     expect(reused).toMatchObject({ ok: true, created: false, reused: true });
     expect(readFileSync(paths.snapshotPath, 'utf8')).toBe(correctedBody);
     expect(readFileSync(paths.metadataPath, 'utf8')).toBe(metadataBytes);
@@ -1360,7 +1360,7 @@ describe('Issue #1647 authoritative tier resolution', () => {
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixturePostReviewHeadSha: HEAD,
       fixturePostReviewPrBody: 'Closes #1647',
-      fixtureIssueBody: '# Firefighter repair\n\nNo complexity tier is required.',
+      fixtureIssueTitle: "Firefighter repair", fixtureIssueBody: '# Firefighter repair\n\nNo complexity tier is required.',
       fixtureReviewStdout: cleanPayload(),
       fixtureGithubReviewId: 1647,
       fixtureRequiredStatusWriter: async () => {},
@@ -2087,7 +2087,7 @@ describe('Issue #2479 frozen reviewer and accepted-verdict provenance', () => {
       fixturePostReviewPrBody: `Closes #${prNumber}`,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureIssueTitle: "[T2] Delivery retry fixture", fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
       fixtureReviewStdout: cleanPayload(),
       fixtureRequiredStatusWriter: async () => {},
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
@@ -2322,7 +2322,7 @@ describe('Issue #2496 r03 native reviewer no-regression controls', () => {
       fixturePrBody: `Closes #${prNumber}`, fixturePostReviewPrBody: `Closes #${prNumber}`,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureIssueTitle: "[T2] Verdict state fixture", fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
       reviewerOverride: reviewer,
       fixtureReviewStdout: cleanPayload(),
       fixtureGithubReviewId: 249601,
@@ -2448,4 +2448,422 @@ describe('Issue #2496 r03 native reviewer no-regression controls', () => {
         .toMatchObject({ status: 'succeeded', headSha: HEAD });
     },
   );
+});
+
+
+describe('Issue #2537 linked Issue title and body tier authority', () => {
+  const fenced = (tier: string) => `\`\`\`complexity-tier\ntier: ${tier}\n\`\`\``;
+
+  it('takes the higher valid linked-Issue tier in both disagreement directions', () => {
+    expect(parseAuthoritativeTier(fenced('T2'), '[T3] Actual linked Issue')).toBe('T3');
+    expect(parseAuthoritativeTier(fenced('T3'), '[T2] Actual linked Issue')).toBe('T3');
+    expect(parseAuthoritativeTier(fenced('T1'), '2537 — [T2] Actual Issue')).toBe('T2');
+    expect(parseAuthoritativeTier(fenced('T2'), '2537 – [T3] Actual Issue')).toBe('T3');
+    expect(parseAuthoritativeTier(fenced('T1'), '[T1] Actual Issue')).toBe('T1');
+  });
+
+  it('honors valid missing tiers without inventing a title or interpreting prose', () => {
+    expect(parseAuthoritativeTier('No fenced tier.', '[T1] Bare title')).toBe('T1');
+    expect(parseAuthoritativeTier(fenced('T1'), 'Markerless linked Issue')).toBe('T1');
+    expect(parseAuthoritativeTier('Ordinary body', 'Markerless linked Issue')).toBe('T2');
+    expect(parseAuthoritativeTier('Ordinary body [T3] tier T3', 'A title with later [T3]'))
+      .toBe('T2');
+    expect(parseAuthoritativeTier('No tier here', '2537 — [T2] Normal Issue')).toBe('T2');
+    expect(parseAuthoritativeTier('No tier here', '[T3] A real Issue')).toBe('T3');
+    expect(parseAuthoritativeTier('No tier here', '[Task] Normal labeled Issue')).toBe('T2');
+    expect(parseAuthoritativeTier('No tier here')).toBe('T2');
+    expect(parseAuthoritativeTier('<!-- ARCH tier T3 -->', 'Markerless linked Issue')).toBe('T2');
+    expect(parseAuthoritativeTier('no authority', 'Title with incidental [T3]')).toBe('T2');
+    expect(parseAuthoritativeTier('no authority', '[T1] Simple')).toBe('T1');
+  });
+
+  it('does not allow skip-line to erase an explicitly higher fenced tier', () => {
+    const body = ['```complexity-tier', 'tier: T3', 'skip-line: true', '```'].join('\n');
+    expect(parseAuthoritativeTier(body, '[T1] Real Issue')).toBe('T3');
+  });
+
+  it('rejects malformed leading title markers and malformed fenced tiers', () => {
+    expect(() => parseAuthoritativeTier(fenced('T2'), '[T4] Unsupported'))
+      .toThrow('title tier marker is malformed');
+    expect(() => parseAuthoritativeTier(fenced('T1'), '[T3 Not Closed'))
+      .toThrow('title tier marker is malformed');
+    expect(() => parseAuthoritativeTier(fenced('T4'), '[T3] Looks valid'))
+      .toThrow('authoritative Issue tier is invalid');
+    expect(() => parseAuthoritativeTier('```complexity-tier\ntier: T2', '[T3] Valid title'))
+      .toThrow('authoritative Issue tier is invalid');
+    for (const opener of ['```complexity-tier draft', '```complexity-tier extra']) {
+      expect(() => parseAuthoritativeTier([opener, 'tier: T3', '```'].join('\n'), '[T2] Lower title'))
+        .toThrow('authoritative Issue tier is invalid');
+    }
+  });
+
+  it('fails fresh linked-Issue admission on an unrecognized tier opening rather than freezing T2', async () => {
+    for (const [index, suffix] of ['draft', 'extra'].entries()) {
+      const root = mkdtempSync(join(tmpdir(), 'pack-review-2537-malformed-'));
+      roots.push(root);
+      const storeRoot = join(root, 'store');
+      setupHarness(storeRoot);
+      const prNumber = 253750 + index;
+      const rejected = await startPackReview({
+        projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+        prNumber, headSha: HEAD,
+        fixtureCurrentPrHeadSha: HEAD, fixturePrState: 'OPEN',
+        fixturePrBody: `Closes #${prNumber}`,
+        fixtureRepoSlug: 'chetwerikoff/orchestrator-pack', fixtureIssueNumber: prNumber,
+        fixtureIssueTitle: '[T2] Real lower linked title',
+        fixtureIssueBody: ['```complexity-tier ' + suffix, 'tier: T3', '```'].join('\n'),
+        fixtureReviewStdout: cleanPayload(), fixtureGithubReviewId: 2537501 + index,
+      });
+      expect(rejected).toMatchObject({ ok: false, created: false });
+      expect(String(rejected.reason)).toContain('tier');
+      expect(readPackReviewAuthority(prNumber, { storeRoot })?.cycle?.consumedRoundOrdinals ?? [])
+        .toEqual([]);
+    }
+  });
+
+  it('uses independently authored higher title to freeze cap 2 and publishes pending after clean ordinal one', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2537-title-cap-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const statuses: string[] = [];
+    const prNumber = 25371;
+    const result = await startPackReview({
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+      prNumber, headSha: HEAD,
+      fixtureCurrentPrHeadSha: HEAD, fixturePostReviewHeadSha: HEAD,
+      fixturePrState: 'OPEN', fixturePrBody: 'Closes #25371',
+      fixturePostReviewPrBody: 'Closes #25371',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: 25371,
+      fixtureIssueTitle: '25371 — [T3] independently authored title',
+      fixtureIssueBody: fenced('T2'),
+      fixtureReviewStdout: cleanPayload(),
+      fixtureGithubReviewId: 2537101,
+      fixtureRequiredStatusWriter: async (request) => { statuses.push(request.state); },
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    });
+    expect(result).toMatchObject({ ok: true, created: true });
+    const authority = readPackReviewAuthority(prNumber, { storeRoot });
+    expect(authority?.cycle).toMatchObject({
+      frozenTier: 'T3', frozenCap: 2, state: 'open',
+      consumedRoundOrdinals: [1],
+    });
+    expect(authority?.cycle?.reviewStageComplete).not.toBe(true);
+    expect(statuses.at(-1)).toBe('pending');
+  });
+});
+
+
+describe('Issue #2537 promoted T2-at-cap second-round required CI gate', () => {
+  it('denies round two until the existing required-CI resolver certifies the exact descendant head/base', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2537-ci-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const prNumber = 25372;
+    const reviewed = '1'.repeat(40);
+    const descendant = '2'.repeat(40);
+    const base = {
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+      prNumber, claimMode: 'preacquired' as const,
+      fixturePrState: 'OPEN' as const, fixturePrBody: `Closes #${prNumber}`,
+      fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: prNumber,
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    };
+    const first = await startPackReview({
+      ...base, headSha: reviewed,
+      fixtureCurrentPrHeadSha: reviewed, fixturePostReviewHeadSha: reviewed,
+      fixtureIssueTitle: '[T2] Original linked Issue',
+      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureReviewStdout: JSON.stringify({ verdict: 'findings', findingCount: 1,
+        findings: [{ severity: 'blocking', title: 'fix before round two' }] }),
+      fixtureGithubReviewId: 2537201,
+    });
+    expect(first).toMatchObject({ ok: true, created: true });
+    const historicCycle = readPackReviewAuthority(prNumber, { storeRoot })!.cycle!;
+    expect(historicCycle).toMatchObject({
+      frozenTier: 'T2', frozenCap: 1, state: 'at_cap_open_findings',
+      consumedRoundOrdinals: [1],
+    });
+    const issueAmendment = {
+      ...base, surface: 'pr2-scheduler', headSha: descendant,
+      fixtureCurrentPrHeadSha: descendant, fixturePostReviewHeadSha: descendant,
+      fixtureReviewCompareStatus: 'ahead',
+      fixtureIssueTitle: '[T3] Promoted linked Issue',
+      fixtureIssueBody: '```complexity-tier\ntier: T3\n```',
+      fixtureReviewStdout: cleanPayload(), fixtureGithubReviewId: 2537202,
+      fixtureRequiredCiPolicy: { contexts: ['CI'] },
+      fixtureRequiredCiChecks: [] as Array<{name: string; state: string}>,
+    };
+    const absent = await startPackReview(issueAmendment);
+    expect(absent).toMatchObject({
+      ok: false, created: false, reason: 'required_ci_not_green_for_current_head',
+    });
+    const amended = readPackReviewAuthority(prNumber, { storeRoot })!.cycle!;
+    expect(amended).toMatchObject({
+      cycleId: historicCycle.cycleId, frozenTier: 'T3', frozenCap: 2,
+      state: 'open', consumedRoundOrdinals: [1],
+    });
+    const checks = [{ name: 'CI', state: 'SUCCESS' }];
+    for (const negative of [
+      { fixtureRequiredCiChecks: [{ name: 'CI', state: 'PENDING' }] },
+      { fixtureRequiredCiChecks: [{ name: 'CI', state: 'FAILURE' }] },
+      { fixtureRequiredCiChecks: checks, fixtureRequiredCiPostProjectionHead: reviewed },
+      { fixtureRequiredCiChecks: checks, fixtureRequiredCiPostProjectionBase: 'other-base' },
+      { fixtureRequiredCiChecks: checks, fixtureRequiredCiHeadAfterGate: reviewed },
+    ]) {
+      const result = await startPackReview({ ...issueAmendment, ...negative });
+      expect(result).toMatchObject({
+        ok: false, created: false, reason: 'required_ci_not_green_for_current_head',
+      });
+      expect(readPackReviewAuthority(prNumber, { storeRoot })!.cycle!.consumedRoundOrdinals)
+        .toEqual([1]);
+    }
+    const admitted = await startPackReview({
+      ...issueAmendment, fixtureRequiredCiChecks: checks,
+    });
+    expect(admitted).toMatchObject({ ok: true, created: true });
+    expect(readPackReviewAuthority(prNumber, { storeRoot })!.cycle).toMatchObject({
+      cycleId: historicCycle.cycleId, frozenTier: 'T3', frozenCap: 2,
+      consumedRoundOrdinals: [1, 2], reviewStageComplete: true,
+    });
+  });
+});
+
+
+describe('Issue #2537 historical first-round status readback', () => {
+  it('repairs old same-head cap-one success to pending without starting another reviewer', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2537-old-success-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const prNumber = 25373;
+    const statuses: string[] = [];
+    let currentStatus: string | undefined;
+    const common = {
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+      prNumber, headSha: HEAD, claimMode: 'preacquired' as const,
+      fixtureCurrentPrHeadSha: HEAD, fixturePostReviewHeadSha: HEAD,
+      fixturePrState: 'OPEN' as const,
+      fixturePrBody: `Closes #${prNumber}`, fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack', fixtureIssueNumber: prNumber,
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusReader: async () => currentStatus,
+      fixtureRequiredStatusWriter: async (request: { state: string }) => {
+        currentStatus = request.state; statuses.push(request.state);
+      },
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    };
+    const first = await startPackReview({
+      ...common,
+      fixtureIssueTitle: '[T2] Original Issue title',
+      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureReviewStdout: JSON.stringify({
+        verdict: 'findings', findingCount: 1,
+        findings: [{ severity: 'warning', title: 'non-blocking note' }],
+      }),
+      fixtureGithubReviewId: 2537301,
+    });
+    expect(first).toMatchObject({ ok: true, created: true });
+    expect(currentStatus).toBe('success');
+    const original = readPackReviewAuthority(prNumber, { storeRoot })!;
+    expect(original.cycle).toMatchObject({ frozenTier: 'T2', frozenCap: 1,
+      state: 'at_cap_open_findings', consumedRoundOrdinals: [1] });
+    const runId = original.terminal!.runId;
+    const old = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot })!;
+    expect(old.logicalRoundCap).toBe(1);
+    expect(old.logicalRoundOrdinal).toBe(1);
+    const reentered = await startPackReview({
+      ...common,
+      fixtureIssueTitle: '[T3] Amended linked Issue',
+      fixtureIssueBody: '```complexity-tier\ntier: T3\n```',
+      fixtureReviewStdout: cleanPayload(), fixtureGithubReviewId: 2537302,
+    });
+    expect(reentered).toMatchObject({
+      ok: false, created: false, reason: 'prior_round_findings_unresolved',
+    });
+    const current = readPackReviewAuthority(prNumber, { storeRoot })!;
+    expect(current.cycle).toMatchObject({
+      cycleId: original.cycle!.cycleId, frozenTier: 'T3', frozenCap: 2,
+      state: 'open_findings', consumedRoundOrdinals: [1],
+    });
+    expect(currentStatus).toBe('pending');
+    expect(statuses).toContain('success');
+    expect(statuses.at(-1)).toBe('pending');
+    const historical = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot })!;
+    expect(historical.logicalRoundCap).toBe(1);
+    expect(historical.logicalRoundOrdinal).toBe(1);
+    expect(historical.reviewRound?.tier).toBeUndefined();
+  });
+});
+
+
+describe('Issue #2537 in-flight first-round escalation', () => {
+  it('raises persisted T2 cap one before clean terminal while preserving the native run and publishing pending', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2537-inflight-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const prNumber = 25374;
+    const statuses: string[] = [];
+    const messages: string[] = [];
+    let currentStatus: string | undefined;
+    const reader = vi.fn(async (head: string) => {
+      expect(head).toBe(HEAD);
+      return currentStatus;
+    });
+    let armedRunId = '';
+    const input = {
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+      prNumber, headSha: HEAD, claimMode: 'preacquired' as const,
+      fixtureCurrentPrHeadSha: HEAD, fixturePostReviewHeadSha: HEAD,
+      fixturePrState: 'OPEN' as const,
+      fixturePrBody: `Closes #${prNumber}`,
+      fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack', fixtureIssueNumber: prNumber,
+      fixtureIssueTitle: '[T2] Original linked Issue',
+      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureReviewStdout: cleanPayload(), fixtureGithubReviewId: 2537401,
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusReader: reader,
+      fixtureRequiredStatusWriter: async (request: {state: string}) => {
+        statuses.push(request.state); currentStatus = request.state;
+      },
+      fixtureWorkerNotifier: async (request: {message: string}) => {
+        messages.push(request.message);
+        return { state: 'delivered' as const, reason: 'fixture' };
+      },
+      fixtureAfterNativeInitialArmed: async (run: PackReviewRunRecord) => {
+        armedRunId = run.id;
+        expect(run.logicalRoundOrdinal).toBe(1);
+        expect(run.logicalRoundCap).toBe(1);
+        input.fixtureIssueTitle = '[T3] Real Issue amended during round one';
+        input.fixtureIssueBody = '```complexity-tier\ntier: T3\n```';
+      },
+    };
+    const first = await startPackReview(input);
+    expect(first).toMatchObject({
+      ok: true, created: true, runId: armedRunId,
+      publicationVerified: true, requiredStatusState: 'pending',
+    });
+    const authority = readPackReviewAuthority(prNumber, { storeRoot });
+    expect(authority?.cycle).toMatchObject({
+      frozenTier: 'T3', frozenCap: 2, state: 'open',
+      consumedRoundOrdinals: [1],
+    });
+    expect(authority?.cycle?.reviewStageComplete).not.toBe(true);
+    expect(statuses.at(-1)).toBe('pending');
+    expect(messages).toEqual([expect.stringContaining('Pack-review status: pending')]);
+    expect(messages[0]).not.toContain('Pack-review status: success');
+    expect(reader).toHaveBeenCalledWith(HEAD);
+    expect(getPackReviewRun(armedRunId, { projectId: 'orchestrator-pack', storeRoot }))
+      .toMatchObject({ logicalRoundOrdinal: 1, logicalRoundCap: 1,
+        accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION });
+  });
+});
+
+describe('Issue #2537 scoped final-cap promotion and status integrity', () => {
+  async function seed(prNumber: number) {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2537-finalcap-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const statuses: string[] = [];
+    let published: string | undefined;
+    const writer = async (request: {state: string}) => {
+      published = request.state;
+      statuses.push(request.state);
+    };
+    const first = await startPackReview({
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+      prNumber, headSha: HEAD, claimMode: 'preacquired',
+      fixtureCurrentPrHeadSha: HEAD, fixturePostReviewHeadSha: HEAD,
+      fixturePrState: 'OPEN', fixturePrBody: `Closes #${prNumber}`,
+      fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack', fixtureIssueNumber: prNumber,
+      fixtureIssueTitle: '[T2] Original linked Issue',
+      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureReviewStdout: JSON.stringify({ verdict: 'findings', findingCount: 1,
+        findings: [{ severity: 'warning', title: 'historical nonblocking finding' }] }),
+      fixtureGithubReviewId: prNumber,
+      fixtureRequiredStatusWriter: writer,
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    });
+    expect(first).toMatchObject({ ok: true, created: true });
+    const authority = readPackReviewAuthority(prNumber, { storeRoot })!;
+    expect(authority.cycle).toMatchObject({
+      frozenTier: 'T2', frozenCap: 1, state: 'at_cap_open_findings',
+      consumedRoundOrdinals: [1],
+    });
+    expect(published).toBe('success');
+    return { storeRoot, authority, statuses, writer, getPublished: () => published };
+  }
+
+  function promotedInput(prNumber: number, seedState: Awaited<ReturnType<typeof seed>>) {
+    return {
+      projectId: 'orchestrator-pack', storeRoot: seedState.storeRoot,
+      sourceRepoRoot: process.cwd(), repoSlug: 'chetwerikoff/orchestrator-pack',
+      prNumber, immediate: true,
+      fixtureCurrentPrHeadSha: HEAD, fixturePrState: 'OPEN',
+      fixturePrMerged: false, fixturePrBody: `Closes #${prNumber}`,
+      fixtureIssueNumber: prNumber, fixtureIssueTitle: '[T3] Raised linked Issue',
+      fixtureIssueBody: '```complexity-tier\ntier: T3\n```',
+      fixtureRequiredStatusWriter: seedState.writer,
+      fixtureRequiredStatusReader: async (head: string) => {
+        expect(head).toBe(HEAD);
+        return seedState.getPublished();
+      },
+    };
+  }
+
+  it.each([
+    { label: 'merged PR', override: { fixturePrState: 'CLOSED', fixturePrMerged: true } },
+    { label: 're-linked Issue', override: { fixturePrBody: 'Closes #999999' } },
+    { label: 'changed PR head', override: { fixtureCurrentPrHeadSha: 'b'.repeat(40) } },
+  ])('does not promote a historical cap-one cycle for a $label', async ({ override }) => {
+    const prNumber = 253760 + (override.fixturePrBody ? 1 : override.fixtureCurrentPrHeadSha ? 2 : 0);
+    const seeded = await seed(prNumber);
+    const result = await reconcileStalePackReviewRuns({ ...promotedInput(prNumber, seeded), ...override });
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'final_cap_promotion_pr_binding_unverified', settled: false }),
+    ]));
+    const after = readPackReviewAuthority(prNumber, { storeRoot: seeded.storeRoot })!;
+    expect(after.cycle).toMatchObject({
+      cycleId: seeded.authority.cycle!.cycleId, frozenTier: 'T2',
+      frozenCap: 1, state: 'at_cap_open_findings', consumedRoundOrdinals: [1],
+    });
+    expect(seeded.getPublished()).toBe('success');
+    expect(seeded.statuses).toEqual(['pending', 'success']);
+  });
+
+  it('repairs historical same-head success after a verified final-cap raise and independently reads pending', async () => {
+    const prNumber = 253764;
+    const seeded = await seed(prNumber);
+    const runId = seeded.authority.terminal!.runId;
+    const result = await reconcileStalePackReviewRuns(promotedInput(prNumber, seeded));
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'prior_round_findings_unresolved_after_promotion' }),
+      expect.objectContaining({ runId, reason: 'promoted_current_head_pending_verified' }),
+    ]));
+    const current = readPackReviewAuthority(prNumber, { storeRoot: seeded.storeRoot })!;
+    expect(current.cycle).toMatchObject({
+      cycleId: seeded.authority.cycle!.cycleId, frozenTier: 'T3',
+      frozenCap: 2, state: 'open_findings', consumedRoundOrdinals: [1],
+    });
+    expect(current.cycle?.reviewStageComplete).not.toBe(true);
+    expect(seeded.statuses).toEqual(['pending', 'success', 'pending']);
+    expect(seeded.getPublished()).toBe('pending');
+    expect(getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot: seeded.storeRoot }))
+      .toMatchObject({ logicalRoundCap: 1, logicalRoundOrdinal: 1 });
+  });
 });
