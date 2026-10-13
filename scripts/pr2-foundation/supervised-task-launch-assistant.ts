@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { performance } from 'node:perf_hooks';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import { SUPPORTED_NODE_MAJOR } from '../toolchain/node-runtime-contract.mjs';
 import { evaluateCommandRuntimePreflight } from '../lib/command-runtime-bootstrap.mjs';
@@ -1144,14 +1144,26 @@ export async function createManagerTaskWithOrca(
   };
 }
 
+function githubRepositoryPath(path: string, remote: boolean): string {
+  const raw = remote ? path.trim().replace(/\.git$/i, '') : path.trim();
+  const parts = raw.split('/');
+  if (parts.length !== 2 || parts.some((part) => !/^[a-z0-9._-]+$/i.test(part))) return '';
+  return parts.join('/').toLowerCase();
+}
+
 export function repoCanonicalKey(remote: string): string {
-  const raw = remote.trim().replace(/\.git$/u, '');
-  const ssh = raw.match(/^[^@]+@([^:]+):(.+)$/u);
-  const url = raw.match(/^https?:\/\/([^/]+)\/(.+)$/u);
+  const raw = remote.trim();
+  const ssh = raw.match(/^git@([^:]+):(.+)$/i);
+  const url = raw.match(/^https?:\/\/([^/]+)\/(.+)$/i);
   const host = (ssh?.[1] ?? url?.[1] ?? '').toLowerCase();
-  const path = ssh?.[2] ?? url?.[2] ?? '';
-  const parts = path.split('/').filter(Boolean);
-  return host && parts.length >= 2 ? `${host}/${parts.at(-2)}/${parts.at(-1)}`.toLowerCase() : '';
+  if (host !== 'github.com') return '';
+  const path = githubRepositoryPath(ssh?.[2] ?? url?.[2] ?? '', true);
+  return path ? 'github.com/' + path : '';
+}
+
+function matchesGithubRepository(remote: string, repository: string): boolean {
+  const selected = githubRepositoryPath(repository, false);
+  return Boolean(selected) && repoCanonicalKey(remote) === 'github.com/' + selected;
 }
 
 function resultRecord(value: Record<string, unknown> | null): Record<string, unknown> | null {
@@ -1237,7 +1249,7 @@ async function observeManagerWorktreeIdentity(
   }
 
   const remote = await execute(['git', 'remote', 'get-url', 'origin'], undefined, undefined, path);
-  if (!remote.ok || repoCanonicalKey(remote.stdout) !== `github.com/${request.repository.trim().toLowerCase()}`) {
+  if (!remote.ok || !matchesGithubRepository(remote.stdout, request.repository)) {
     return worktreeContinue<ManagerWorktreeIdentity>(
       'manager_worktree_repository_identity_mismatch',
       { worktreeId: id, repository: request.repository.trim().toLowerCase() },
@@ -1576,22 +1588,35 @@ export async function prepareWorktreeWithOrca(
   if (!Array.isArray(repos) || repos.some((repo) => !record(repo))) {
     return worktreeContinue('worktree_repository_resolution_malformed', { repository }, repositoryResolutionNote);
   }
-  const canonicalKey = `github.com/${repository}`;
-  const matches = repos.filter((repo) => {
-    const repoRecord = record(repo) ? repo : null;
-    const gitRemoteIdentity = repoRecord && record(repoRecord.gitRemoteIdentity) ? repoRecord.gitRemoteIdentity : null;
-    return text(gitRemoteIdentity?.canonicalKey).toLowerCase() === canonicalKey;
-  });
+  if (!githubRepositoryPath(request.repository, false)) {
+    return worktreeContinue('worktree_repository_resolution_malformed', { repository }, repositoryResolutionNote);
+  }
+  const matches: string[] = [];
+  for (const repo of repos) {
+    const entry = repo as Record<string, unknown>;
+    const id = text(entry.id);
+    const registeredPath = typeof entry.path === 'string' ? entry.path : '';
+    if (!/^[a-z0-9][a-z0-9._-]*$/iu.test(id) || !registeredPath.trim() || !isAbsolute(registeredPath)) continue;
+    if (entry.kind !== undefined && entry.kind !== null && entry.kind !== 'git') continue;
+    if (entry.executionHostId !== undefined && entry.executionHostId !== null && entry.executionHostId !== 'local') continue;
+    if (entry.connectionId !== undefined && entry.connectionId !== null && entry.connectionId !== '') continue;
+
+    try {
+      const root = await execute(['git', 'rev-parse', '--show-toplevel'], undefined, undefined, registeredPath);
+      if (!root.ok || !isAbsolute(text(root.stdout)) || resolve(text(root.stdout)) !== resolve(registeredPath)) continue;
+      const origin = await execute(['git', 'remote', 'get-url', 'origin'], undefined, undefined, registeredPath);
+      if (origin.ok && matchesGithubRepository(origin.stdout, request.repository)) matches.push(id);
+    } catch {
+      // A failed local inspection cannot authorize this registered candidate.
+    }
+  }
   if (matches.length === 0) {
     return worktreeContinue('worktree_repository_resolution_absent', { repository, matchCount: 0 }, repositoryResolutionNote);
   }
   if (matches.length !== 1) {
     return worktreeContinue('worktree_repository_resolution_ambiguous', { repository, matchCount: matches.length }, repositoryResolutionNote);
   }
-  const repositoryId = record(matches[0]) ? text(matches[0].id) : '';
-  if (!repositoryId) {
-    return worktreeContinue('worktree_repository_resolution_id_unusable', { repository, matchCount: 1 }, repositoryResolutionNote);
-  }
+  const repositoryId = matches[0]!;
   if (request.providerTopLevel) {
     return {
       status: 'ok',
@@ -1700,7 +1725,7 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
     },
     repositoryPreflight: async (repository) => {
       const remote = await child(['git', 'remote', 'get-url', 'origin'], target.primaryRoot, env);
-      if (!remote.ok || repoCanonicalKey(remote.stdout) !== `github.com/${repository}`) return {
+      if (!remote.ok || !matchesGithubRepository(remote.stdout, repository)) return {
         status: 'continue', cause: 'repository_preflight_mismatch', actor: 'operator', evidence: { repository },
         nextAction: { kind: 'repair_preflight', note: 'repair the selected project card primaryRoot checkout origin before continuing' },
       };
