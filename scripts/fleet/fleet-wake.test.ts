@@ -28,6 +28,7 @@ import type { ChatErrorBanner, ProjectChat } from './chat-error-banners.ts';
 import { FileFleetStateStore, formatFleetSweep, runFleetSweep, visibleOpenCodePermission, type FleetPaneObservation, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
 import { runLaunch, readTerminalEnvelope } from '../flow-manager-long-running-child.ts';
 import { configuredProfileKey } from '../chatgpt-browser-turn/storage-common.ts';
+import type { PackReviewRunRecord } from '../lib/pack-review-run-store.ts';
 import { writeChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
 import { admitStateLightTurnObservation, transitionStateLightTurnObservation } from '../chatgpt-browser-turn/state-light-turn-observation.ts';
 
@@ -148,6 +149,9 @@ async function tick(input: {
   readNamedPull?: FleetAlarmTickOptions['readNamedPull'];
   readNamedReview?: FleetAlarmTickOptions['readNamedReview'];
   readPackReviewStage?: FleetAlarmTickOptions['readPackReviewStage'];
+  resolveSelectedReviewProject?: FleetAlarmTickOptions['resolveSelectedReviewProject'];
+  readPackReviewRuns?: FleetAlarmTickOptions['readPackReviewRuns'];
+  reconcilePackReview?: FleetAlarmTickOptions['reconcilePackReview'];
   sleepMs?: (ms: number) => void | Promise<void>;
   now?: () => number;
 }) {
@@ -173,6 +177,9 @@ async function tick(input: {
     ...(input.readNamedPull ? { readNamedPull: input.readNamedPull } : {}),
     ...(input.readNamedReview ? { readNamedReview: input.readNamedReview } : {}),
     ...(input.readPackReviewStage ? { readPackReviewStage: input.readPackReviewStage } : {}),
+    ...(input.resolveSelectedReviewProject ? { resolveSelectedReviewProject: input.resolveSelectedReviewProject } : {}),
+    ...(input.readPackReviewRuns ? { readPackReviewRuns: input.readPackReviewRuns } : {}),
+    ...(input.reconcilePackReview ? { reconcilePackReview: input.reconcilePackReview } : {}),
     ...(input.now ? { now: input.now } : {}),
   });
   return { result, calls, logs, sleeps, store };
@@ -2229,5 +2236,108 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
     const next = await tick({ screens, terminals: [terminals[0]!, unit], store, executor });
     expect(sendsTo(next.calls, 'coord')).toHaveLength(0);
     expect(sendsTo(next.calls, 'one')).toHaveLength(0);
+  });
+});
+
+describe('Issue #2556 stale-only selected-project pack-review fleet backstop', () => {
+  const repository = 'chetwerikoff/orchestrator-pack';
+  const selected = () => ({
+    projectId: 'orchestrator-pack', repository, primaryRoot: primary,
+  });
+  const staleHeartbeat = () => new Date(Date.now() - 60 * 60 * 1_000).toISOString();
+  const freshHeartbeat = () => new Date().toISOString();
+  const makeRun = (overrides: Record<string, unknown> = {}): PackReviewRunRecord => ({
+    id: 'prr-fixture-stale-2556',
+    projectId: 'orchestrator-pack',
+    canonicalRepository: repository,
+    sourceRepoRoot: primary,
+    prNumber: 2556,
+    targetSha: 'a'.repeat(40),
+    status: 'reviewing',
+    runnerPid: 2147483647,
+    heartbeatAtUtc: staleHeartbeat(),
+    reviewRound: { reviewer: 'gpt' },
+    ...overrides,
+  } as unknown as PackReviewRunRecord);
+
+  it('keeps fresh-heartbeat dead and still-live owners untouched, then settles on the first eligible no-coordinator tick', async () => {
+    const run = makeRun({ heartbeatAtUtc: freshHeartbeat() });
+    const calls: Array<Parameters<NonNullable<FleetAlarmTickOptions['reconcilePackReview']>>[0]> = [];
+    const reconcilePackReview: NonNullable<FleetAlarmTickOptions['reconcilePackReview']> = async (input) => {
+      calls.push(input);
+      run.status = 'up_to_date';
+      return { ok: true, results: [{
+        runId: run.id, reason: 'gpt_source_comments_recovered_and_delivered',
+        statusReconciled: true,
+      }] };
+    };
+    const input = {
+      terminals: [] as readonly FleetTerminal[],
+      screens: {},
+      config: config({ selectedRepository: repository }),
+      readPackReviewRuns: () => [run],
+      resolveSelectedReviewProject: selected,
+      reconcilePackReview,
+    };
+    const fresh = await tick(input);
+    expect(fresh.result).toEqual({ state: 'no_orchestrator' });
+    expect(calls).toEqual([]);
+
+    run.heartbeatAtUtc = staleHeartbeat();
+    run.runnerPid = process.pid;
+    await tick(input);
+    expect(calls).toEqual([]);
+
+    run.runnerPid = 2147483647;
+    const recovered = await tick(input);
+    expect(recovered.result).toEqual({ state: 'no_orchestrator' });
+    expect(calls).toEqual([expect.objectContaining({
+      projectId: 'orchestrator-pack', sourceRepoRoot: primary,
+      repoSlug: repository, prNumber: 2556, runId: run.id,
+      staleOnly: true, settlePartialAfterGrace: true,
+    })]);
+    expect(recovered.logs).toEqual(expect.arrayContaining([
+      expect.stringContaining('pack-review stale reconcile PR #2556'),
+    ]));
+
+    await tick(input);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('rejects missing, contradictory, foreign and observation-only repository identities', async () => {
+    const run = makeRun();
+    const calls: string[] = [];
+    const reconcilePackReview: NonNullable<FleetAlarmTickOptions['reconcilePackReview']> = async (input) => {
+      calls.push(input.repoSlug);
+      return { ok: true, results: [] };
+    };
+    const basic = {
+      terminals: [] as readonly FleetTerminal[],
+      screens: {},
+      readPackReviewRuns: () => [run],
+      reconcilePackReview,
+    };
+    await tick({ ...basic, config: config({
+      chatScope: { projectUrl: 'https://chatgpt.com/g/fixture/project', repository },
+    }), resolveSelectedReviewProject: selected });
+    await tick({ ...basic, config: config({ selectedRepository: repository }),
+      resolveSelectedReviewProject: () => ({
+        projectId: 'orchestrator-pack', repository: 'another-owner/another-repo', primaryRoot: primary,
+      }),
+    });
+    await tick({ ...basic, config: config({ selectedRepository: repository }),
+      resolveSelectedReviewProject: () => ({
+        projectId: 'another-project', repository, primaryRoot: primary,
+      }),
+    });
+    await tick({ ...basic, config: config({ selectedRepository: repository }),
+      resolveSelectedReviewProject: () => ({
+        projectId: 'orchestrator-pack', repository, primaryRoot: '/foreign/worktree',
+      }),
+    });
+    const foreignRun = makeRun({ id: 'prr-foreign-2556', canonicalRepository: 'foreign/repo' });
+    await tick({ ...basic, config: config({ selectedRepository: repository }),
+      resolveSelectedReviewProject: selected, readPackReviewRuns: () => [foreignRun] });
+    expect(calls).toEqual([]);
   });
 });
