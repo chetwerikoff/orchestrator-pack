@@ -312,6 +312,9 @@ export interface ReconcileStalePackReviewRunsInput {
   baseRef?: string;
   fixtureCurrentPrHeadSha?: string;
   fixtureReadCurrentPrHead?: () => string | Promise<string>;
+  fixturePrState?: string;
+  fixturePrMerged?: boolean;
+  fixturePrBody?: string;
   fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
   fixtureBeforeGptRoundFreeze?: (event: {
     runId: string;
@@ -773,7 +776,9 @@ export async function resolveCurrentPrTarget(
   const state = trim(row.state);
   const baseRef = trim(base.ref);
   if (!/^[0-9a-f]{40}$/i.test(headSha)) throw new Error(`PR #${prNumber} returned invalid head SHA`);
-  if (state.toUpperCase() !== 'OPEN') throw new Error(`PR #${prNumber} is not open`);
+  if (state.toUpperCase() !== 'OPEN' || row.merged === true || trim(row.merged_at)) {
+    throw new Error(`PR #${prNumber} is not open and unmerged`);
+  }
   if (typeof row.body !== 'string') throw new Error(`PR #${prNumber} returned invalid body`);
   if (!baseRef) throw new Error(`PR #${prNumber} returned invalid base ref`);
   return { headSha: headSha.toLowerCase(), body: row.body, baseRef };
@@ -1081,7 +1086,7 @@ export function parseAuthoritativeTier(body: string, title?: string): PackReview
   const parsed = parseComplexityTierFromIssueBody(body);
   const fenceSeen = /\`\`\`complexity-tier\b/i.test(body);
   const fence = body.match(/\`\`\`complexity-tier[^\n]*\n([\s\S]*?)\`\`\`/i);
-  if ((fenceSeen && !fence) || parsed.kind === 'invalid') {
+  if ((fenceSeen && (!fence || parsed.kind === 'missing')) || parsed.kind === 'invalid') {
     throw new Error('authoritative Issue tier is invalid');
   }
   let bodyTier: PackReviewTier | undefined;
@@ -4030,7 +4035,13 @@ async function ensurePromotedRoundPublicPending(input: {
     sourceRepoRoot: input.sourceRepoRoot, repoSlug: input.repoSlug,
     fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
   }, input.repoSlug, input.run.targetSha);
-  if (await observe() === 'pending') return;
+  if (await observe() === 'pending') {
+    if (!outstandingPackReviewCycle(input.run, input.storeRoot)
+        || await currentLiveHead() !== input.run.targetSha.toLowerCase()) {
+      throw new Error('promoted current-head pending changed during confirmation');
+    }
+    return;
+  }
   if (!outstandingPackReviewCycle(input.run, input.storeRoot)
       || await currentLiveHead() !== input.run.targetSha.toLowerCase()) {
     throw new Error('promoted cycle authority or head changed before pending restoration');
@@ -4092,8 +4103,10 @@ async function observePackReviewVerdictDelivery(options: {
   if (!(await current())) return unresolved('status_not_published:head_or_authority_changed');
   const observe = async (): Promise<string | undefined> => {
     if (process.env.OPK_VITEST_HARNESS === '1' && !options.input.fixtureRequiredStatusReader) {
-      return load()?.deliveryOutcomes.requiredStatus?.state === 'succeeded'
-        ? requiredStatusState : undefined;
+      return outstandingPackReviewCycle(run, options.storeRoot)
+        ? undefined
+        : load()?.deliveryOutcomes.requiredStatus?.state === 'succeeded'
+          ? requiredStatusState : undefined;
     }
     return readFinalCapRequiredStatus({
       sourceRepoRoot: options.sourceRepoRoot, repoSlug: options.repoSlug,
@@ -4151,7 +4164,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     const terminalRun = getPackReviewRun(authority.terminal.runId, {
       projectId: options.projectId, storeRoot: options.storeRoot,
     });
-    let issueNumber = input.fixtureIssueNumber ?? terminalRun?.reviewRound?.issueNumber;
+    let issueNumber = terminalRun?.reviewRound?.issueNumber ?? input.fixtureIssueNumber;
     let currentFields: { title: string; body: string } | undefined;
     if (input.fixtureIssueBody !== undefined && input.fixtureIssueTitle !== undefined) {
       currentFields = { title: input.fixtureIssueTitle, body: input.fixtureIssueBody };
@@ -4177,15 +4190,46 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           reason: 'final_cap_live_issue_invalid', detail: describeError(error),
           nextAction: 'correct the linked Issue tier fields before final-cap settlement' };
       }
-      authority = reconcilePackReviewTier({
-        prNumber, tier: effective, startedRunExists: true,
-        options: { storeRoot: options.storeRoot },
-      });
-      if (authority.cycle?.state === 'open_findings') {
-        return { prNumber, headSha: authority.currentHeadSha,
-          finalCapSettlement: true, settled: false,
-          reason: 'prior_round_findings_unresolved_after_promotion',
-          nextAction: 'prove the strict-descendant fix before starting required round 2' };
+      const rank = { T1: 1, T2: 2, T3: 3 } as const;
+      if (rank[effective] > rank[authority.cycle.frozenTier]) {
+        // A mutable Issue read is not sufficient authority to change a historical
+        // cycle: validate the *current* open PR, exact head and closing Issue.
+        // A missing fixture witness is not synthetic permission to promote.
+        let linkedPr: { headSha: string; body: string };
+        try {
+          if (process.env.OPK_VITEST_HARNESS === '1') {
+            if (input.fixturePrState?.toUpperCase() !== 'OPEN'
+                || input.fixturePrMerged === true || !input.fixturePrBody
+                || !input.fixtureCurrentPrHeadSha) {
+              throw new Error('unverified synthetic open/unmerged PR binding');
+            }
+            linkedPr = {
+              headSha: trim(input.fixtureCurrentPrHeadSha).toLowerCase(),
+              body: input.fixturePrBody,
+            };
+          } else {
+            linkedPr = await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, prNumber);
+          }
+          if (linkedPr.headSha !== authority.currentHeadSha.toLowerCase()
+              || !issueNumber || extractClosingIssueNumber(linkedPr.body) !== issueNumber) {
+            throw new Error('PR head or linked closing Issue changed');
+          }
+        } catch (error) {
+          return { prNumber, headSha: authority.currentHeadSha,
+            finalCapSettlement: true, settled: false,
+            reason: 'final_cap_promotion_pr_binding_unverified', detail: describeError(error),
+            nextAction: 'verify the open, unmerged PR head and its exact closing Issue before retrying scoped reconcile' };
+        }
+        authority = reconcilePackReviewTier({
+          prNumber, tier: effective, startedRunExists: true,
+          options: { storeRoot: options.storeRoot },
+        });
+        if (authority.cycle?.state === 'open_findings') {
+          return { prNumber, headSha: authority.currentHeadSha,
+            finalCapSettlement: true, settled: false,
+            reason: 'prior_round_findings_unresolved_after_promotion',
+            nextAction: 'prove the strict-descendant fix before starting required round 2' };
+        }
       }
     }
   }
@@ -5328,6 +5372,11 @@ export async function reconcileStalePackReviewRuns(
     });
   }
 
+  if (input.immediate && input.prNumber) {
+    const settlement = await reconcileFinalCapSettlement(input, { projectId, storeRoot, repoSlug });
+    if (settlement) results.push(settlement);
+  }
+
   // A scoped reconcile is also a status-repair entrypoint when a previously
   // delivered cap-one run is now an outstanding cap-two cycle. No new reviewer.
   if (input.prNumber) {
@@ -5354,11 +5403,6 @@ export async function reconcileStalePackReviewRuns(
           nextAction: scopedReconcileAction(input.prNumber) });
       }
     }
-  }
-
-  if (input.immediate && input.prNumber) {
-    const settlement = await reconcileFinalCapSettlement(input, { projectId, storeRoot, repoSlug });
-    if (settlement) results.push(settlement);
   }
 
   return { ok: true, results };
@@ -5887,9 +5931,18 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
                 run: freshAfter,
                 projectId,
                 storeRoot,
-                writeRequiredStatus: originalWriter,
+                writeRequiredStatus: currentCycleRequiredStatusWriter(freshAfter, storeRoot, originalWriter),
                 forceRepublish: true,
               });
+              if (restored?.state === 'succeeded') {
+                await ensurePromotedRoundPublicPending({
+                  run: freshAfter, projectId, storeRoot,
+                  repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+                  fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
+                  fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+                  fixtureRequiredStatusWriter: originalWriter,
+                });
+              }
               throw new Error(restored?.state === 'succeeded'
                 ? 'status_not_published:no_judgment_superseded; authoritative_verdict_status_restored'
                 : 'status_not_published:verdict_superseded_error; rerun scoped reconcile to restore verdict status');
@@ -7540,13 +7593,22 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           headSha: target.headSha, request,
         })),
       ),
-      notifyWorker: input.fixtureWorkerNotifier ?? ((request) => sendPackReviewWorkerNotification({
-        trustedPackRoot: trusted.trustedPackRoot,
-        sessionId: target.sessionId,
-        projectId,
-        storeRoot,
-        request,
-      })),
+      notifyWorker: async (request) => {
+        const deliver = input.fixtureWorkerNotifier ?? ((value) => sendPackReviewWorkerNotification({
+          trustedPackRoot: trusted.trustedPackRoot,
+          sessionId: target.sessionId,
+          projectId,
+          storeRoot,
+          request: value,
+        }));
+        const stillPending = !classifyPackReviewPayload(payload).blocking
+          && outstandingPackReviewCycle(deliveryRun, storeRoot);
+        return deliver(stillPending
+          ? { ...request, message: request.message.replace(
+              /^Pack-review status: success$/m, 'Pack-review status: pending',
+            ) }
+          : request);
+      },
     });
     const currentAuthority = readPackReviewAuthority(target.prNumber, authorityOptions);
     if (!currentAuthority
@@ -7554,9 +7616,12 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         || currentAuthority.terminal?.runId !== run.id) {
       throw new Error('pack review authority changed before publication');
     }
-    // The exact-head status observation and authorized reprojection introduced
-    // by #2496 are GPT-only. Native reviewer publication is unchanged.
-    const confirmation = reviewer === 'gpt'
+    // A promoted native ordinal-one run also needs independent current-head
+    // status confirmation; the historical delivery ACK/cap cannot certify it.
+    const confirmRequiredStatus = reviewer === 'gpt'
+      || (!classifyPackReviewPayload(payload).blocking
+        && outstandingPackReviewCycle(deliveryRun, storeRoot));
+    const confirmation = confirmRequiredStatus
       ? await observePackReviewVerdictDelivery({
           input, projectId, storeRoot, runId: run.id,
           prNumber: target.prNumber, headSha: target.headSha,

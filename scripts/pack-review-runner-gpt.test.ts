@@ -32,6 +32,7 @@ import {
   commitPackReviewTerminal,
   initializePackReviewAuthority,
   readPackReviewAuthority,
+  reconcilePackReviewTier,
 } from './pack-review-state.js';
 import { packReviewDeliveryNeedsResume } from './lib/pack-review-delivery.js';
 import {
@@ -5854,5 +5855,81 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     expect(f.launches).toEqual([]);
     expect(f.statusStates).not.toContain('success');
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
+  });
+});
+
+describe('Issue #2537 GPT delayed no-judgment error cannot restore cap-one success', () => {
+  it('restores and independently observes pending when the same-run verdict supersedes an error', async () => {
+    const storeRoot = tempRoot('opk-2537-gpt-error-race-');
+    harnessEnv(storeRoot, path.join(storeRoot, 'review.json'));
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const prNumber = 253770;
+    const opts = { projectId: 'orchestrator-pack', storeRoot };
+    const slots: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+    const writes: string[] = [];
+    let currentStatus: string | undefined;
+    let raced = false;
+    const input = {
+      ...opts, sourceRepoRoot: repoRoot, prNumber, headSha: HEAD_A,
+      tier: 'T2' as const, claimMode: 'preacquired' as const,
+      fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack', fixturePrState: 'OPEN',
+      fixturePrBody: `Closes #${prNumber}`,
+      fixtureIssueNumber: prNumber,
+      fixtureIssueTitle: '[T2] Original linked Issue',
+      fixtureIssueBody: ['```complexity-tier', 'tier: T2', '```'].join('\n'),
+      fixtureReviewBySourceSlot: slots,
+      fixtureAfterGptInvocationBound: ({ slotId, invocationId }: {slotId: string; invocationId: string}) => {
+        slots[slotId] = [{ stdout: terminalTurnPayload({
+          state: 'driver_error', cause: 'connect_over_cdp_failed', invocationId,
+        }), exitCode: 1 }];
+      },
+      fixtureRequiredStatusReader: async (headSha: string) => {
+        expect(headSha).toBe(HEAD_A);
+        return currentStatus;
+      },
+      fixtureRequiredStatusWriter: async (request: {state: string}) => {
+        currentStatus = request.state;
+        writes.push(request.state);
+        if (request.state !== 'error' || raced) return;
+        raced = true;
+        const run = listPackReviewRuns(opts)[0]!;
+        const upgraded = reconcilePackReviewTier({
+          prNumber, tier: 'T3', startedRunExists: true, options: { storeRoot },
+        });
+        expect(upgraded.cycle).toMatchObject({ frozenTier: 'T3', frozenCap: 2 });
+        const now = '2026-10-13T00:00:00.000Z';
+        setPackReviewRunTerminal(run.id, 'up_to_date', {
+          reviewVerdict: 'clean', findingCount: 0, findings: [],
+          journalOutcome: {
+            state: 'persisted', reason: 'credentialed_verdict',
+            recordedAtUtc: now, idempotencyKey: `verdict:${run.id}:${HEAD_A}`,
+            attempts: 1,
+          },
+        }, opts);
+        commitPackReviewTerminal({
+          prNumber, expectedTransitionSeq: upgraded.transitionSeq,
+          terminal: {
+            schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal',
+            runId: run.id, targetSha: HEAD_A, reviewVerdict: 'clean',
+            findingCount: 0, findingsDigest: 'fixture-2537-credentialed-verdict',
+            automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 1,
+          },
+          status: 'clean', findingCount: 0, options: { storeRoot },
+        });
+      },
+    };
+    await startPackReview(input);
+    expect(raced).toBe(true);
+    expect(writes.at(-1)).toBe('pending');
+    expect(writes).not.toEqual(expect.arrayContaining(['success']));
+    const authority = readPackReviewAuthority(prNumber, { storeRoot })!;
+    expect(authority.cycle).toMatchObject({
+      frozenTier: 'T3', frozenCap: 2, consumedRoundOrdinals: [1],
+      reviewStageComplete: false,
+    });
+    const historical = listPackReviewRuns(opts)[0]!;
+    expect(historical).toMatchObject({ logicalRoundCap: 1, logicalRoundOrdinal: 1 });
   });
 });

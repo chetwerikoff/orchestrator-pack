@@ -2491,6 +2491,34 @@ describe('Issue #2537 linked Issue title and body tier authority', () => {
       .toThrow('authoritative Issue tier is invalid');
     expect(() => parseAuthoritativeTier('```complexity-tier\ntier: T2', '[T3] Valid title'))
       .toThrow('authoritative Issue tier is invalid');
+    for (const opener of ['```complexity-tier draft', '```complexity-tier extra']) {
+      expect(() => parseAuthoritativeTier([opener, 'tier: T3', '```'].join('\n'), '[T2] Lower title'))
+        .toThrow('authoritative Issue tier is invalid');
+    }
+  });
+
+  it('fails fresh linked-Issue admission on an unrecognized tier opening rather than freezing T2', async () => {
+    for (const [index, suffix] of ['draft', 'extra'].entries()) {
+      const root = mkdtempSync(join(tmpdir(), 'pack-review-2537-malformed-'));
+      roots.push(root);
+      const storeRoot = join(root, 'store');
+      setupHarness(storeRoot);
+      const prNumber = 253750 + index;
+      const rejected = await startPackReview({
+        projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+        prNumber, headSha: HEAD,
+        fixtureCurrentPrHeadSha: HEAD, fixturePrState: 'OPEN',
+        fixturePrBody: `Closes #${prNumber}`,
+        fixtureRepoSlug: 'chetwerikoff/orchestrator-pack', fixtureIssueNumber: prNumber,
+        fixtureIssueTitle: '[T2] Real lower linked title',
+        fixtureIssueBody: ['```complexity-tier ' + suffix, 'tier: T3', '```'].join('\n'),
+        fixtureReviewStdout: cleanPayload(), fixtureGithubReviewId: 2537501 + index,
+      });
+      expect(rejected).toMatchObject({ ok: false, created: false });
+      expect(String(rejected.reason)).toContain('tier');
+      expect(readPackReviewAuthority(prNumber, { storeRoot })?.cycle?.consumedRoundOrdinals ?? [])
+        .toEqual([]);
+    }
   });
 
   it('uses independently authored higher title to freeze cap 2 and publishes pending after clean ordinal one', async () => {
@@ -2685,6 +2713,12 @@ describe('Issue #2537 in-flight first-round escalation', () => {
     setupHarness(storeRoot);
     const prNumber = 25374;
     const statuses: string[] = [];
+    const messages: string[] = [];
+    let currentStatus: string | undefined;
+    const reader = vi.fn(async (head: string) => {
+      expect(head).toBe(HEAD);
+      return currentStatus;
+    });
     let armedRunId = '';
     const input = {
       projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
@@ -2699,8 +2733,14 @@ describe('Issue #2537 in-flight first-round escalation', () => {
       fixtureReviewStdout: cleanPayload(), fixtureGithubReviewId: 2537401,
       fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
       fixtureEmulateWin32Selector: true,
-      fixtureRequiredStatusWriter: async (request: {state: string}) => { statuses.push(request.state); },
-      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+      fixtureRequiredStatusReader: reader,
+      fixtureRequiredStatusWriter: async (request: {state: string}) => {
+        statuses.push(request.state); currentStatus = request.state;
+      },
+      fixtureWorkerNotifier: async (request: {message: string}) => {
+        messages.push(request.message);
+        return { state: 'delivered' as const, reason: 'fixture' };
+      },
       fixtureAfterNativeInitialArmed: async (run: PackReviewRunRecord) => {
         armedRunId = run.id;
         expect(run.logicalRoundOrdinal).toBe(1);
@@ -2710,7 +2750,10 @@ describe('Issue #2537 in-flight first-round escalation', () => {
       },
     };
     const first = await startPackReview(input);
-    expect(first).toMatchObject({ ok: true, created: true, runId: armedRunId });
+    expect(first).toMatchObject({
+      ok: true, created: true, runId: armedRunId,
+      publicationVerified: true, requiredStatusState: 'pending',
+    });
     const authority = readPackReviewAuthority(prNumber, { storeRoot });
     expect(authority?.cycle).toMatchObject({
       frozenTier: 'T3', frozenCap: 2, state: 'open',
@@ -2718,8 +2761,109 @@ describe('Issue #2537 in-flight first-round escalation', () => {
     });
     expect(authority?.cycle?.reviewStageComplete).not.toBe(true);
     expect(statuses.at(-1)).toBe('pending');
+    expect(messages).toEqual([expect.stringContaining('Pack-review status: pending')]);
+    expect(messages[0]).not.toContain('Pack-review status: success');
+    expect(reader).toHaveBeenCalledWith(HEAD);
     expect(getPackReviewRun(armedRunId, { projectId: 'orchestrator-pack', storeRoot }))
       .toMatchObject({ logicalRoundOrdinal: 1, logicalRoundCap: 1,
         accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION });
+  });
+});
+
+describe('Issue #2537 scoped final-cap promotion and status integrity', () => {
+  async function seed(prNumber: number) {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2537-finalcap-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const statuses: string[] = [];
+    let published: string | undefined;
+    const writer = async (request: {state: string}) => {
+      published = request.state;
+      statuses.push(request.state);
+    };
+    const first = await startPackReview({
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+      prNumber, headSha: HEAD, claimMode: 'preacquired',
+      fixtureCurrentPrHeadSha: HEAD, fixturePostReviewHeadSha: HEAD,
+      fixturePrState: 'OPEN', fixturePrBody: `Closes #${prNumber}`,
+      fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack', fixtureIssueNumber: prNumber,
+      fixtureIssueTitle: '[T2] Original linked Issue',
+      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureReviewStdout: JSON.stringify({ verdict: 'findings', findingCount: 1,
+        findings: [{ severity: 'warning', title: 'historical nonblocking finding' }] }),
+      fixtureGithubReviewId: prNumber,
+      fixtureRequiredStatusWriter: writer,
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    });
+    expect(first).toMatchObject({ ok: true, created: true });
+    const authority = readPackReviewAuthority(prNumber, { storeRoot })!;
+    expect(authority.cycle).toMatchObject({
+      frozenTier: 'T2', frozenCap: 1, state: 'at_cap_open_findings',
+      consumedRoundOrdinals: [1],
+    });
+    expect(published).toBe('success');
+    return { storeRoot, authority, statuses, writer, getPublished: () => published };
+  }
+
+  function promotedInput(prNumber: number, seedState: Awaited<ReturnType<typeof seed>>) {
+    return {
+      projectId: 'orchestrator-pack', storeRoot: seedState.storeRoot,
+      sourceRepoRoot: process.cwd(), repoSlug: 'chetwerikoff/orchestrator-pack',
+      prNumber, immediate: true,
+      fixtureCurrentPrHeadSha: HEAD, fixturePrState: 'OPEN',
+      fixturePrMerged: false, fixturePrBody: `Closes #${prNumber}`,
+      fixtureIssueNumber: prNumber, fixtureIssueTitle: '[T3] Raised linked Issue',
+      fixtureIssueBody: '```complexity-tier\ntier: T3\n```',
+      fixtureRequiredStatusWriter: seedState.writer,
+      fixtureRequiredStatusReader: async (head: string) => {
+        expect(head).toBe(HEAD);
+        return seedState.getPublished();
+      },
+    };
+  }
+
+  it.each([
+    { label: 'merged PR', override: { fixturePrState: 'CLOSED', fixturePrMerged: true } },
+    { label: 're-linked Issue', override: { fixturePrBody: 'Closes #999999' } },
+    { label: 'changed PR head', override: { fixtureCurrentPrHeadSha: 'b'.repeat(40) } },
+  ])('does not promote a historical cap-one cycle for a $label', async ({ override }) => {
+    const prNumber = 253760 + (override.fixturePrBody ? 1 : override.fixtureCurrentPrHeadSha ? 2 : 0);
+    const seeded = await seed(prNumber);
+    const result = await reconcileStalePackReviewRuns({ ...promotedInput(prNumber, seeded), ...override });
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'final_cap_promotion_pr_binding_unverified', settled: false }),
+    ]));
+    const after = readPackReviewAuthority(prNumber, { storeRoot: seeded.storeRoot })!;
+    expect(after.cycle).toMatchObject({
+      cycleId: seeded.authority.cycle!.cycleId, frozenTier: 'T2',
+      frozenCap: 1, state: 'at_cap_open_findings', consumedRoundOrdinals: [1],
+    });
+    expect(seeded.getPublished()).toBe('success');
+    expect(seeded.statuses).toEqual(['success']);
+  });
+
+  it('repairs historical same-head success after a verified final-cap raise and independently reads pending', async () => {
+    const prNumber = 253764;
+    const seeded = await seed(prNumber);
+    const runId = seeded.authority.terminal!.runId;
+    const result = await reconcileStalePackReviewRuns(promotedInput(prNumber, seeded));
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'prior_round_findings_unresolved_after_promotion' }),
+      expect.objectContaining({ runId, reason: 'promoted_current_head_pending_verified' }),
+    ]));
+    const current = readPackReviewAuthority(prNumber, { storeRoot: seeded.storeRoot })!;
+    expect(current.cycle).toMatchObject({
+      cycleId: seeded.authority.cycle!.cycleId, frozenTier: 'T3',
+      frozenCap: 2, state: 'open_findings', consumedRoundOrdinals: [1],
+      reviewStageComplete: false,
+    });
+    expect(seeded.statuses).toEqual(['success', 'pending']);
+    expect(seeded.getPublished()).toBe('pending');
+    expect(getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot: seeded.storeRoot }))
+      .toMatchObject({ logicalRoundCap: 1, logicalRoundOrdinal: 1 });
   });
 });
