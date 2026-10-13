@@ -4326,7 +4326,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
 
   // A non-descendant has never been eligible for final-cap success. Keep that
   // existing refusal ahead of body-validation errors and status publication.
-  if (logicalFinalFindings && authority.cycle.frozenTier !== 'T1'
+  if (logicalFinalFindings && authority.cycle?.frozenTier !== 'T1'
       && authority.terminal
       && authority.currentHeadSha !== authority.terminal.targetSha) {
     const strict = await resolvePackReviewStrictDescendant({
@@ -4345,7 +4345,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   // At the findings cap, review completion and required success use the old
   // preflight body snapshot, not a revision tag or an amended current Issue.
   let verifiedFinalIssue: { issueNumber: number; digest: string } | undefined;
-  if (logicalAccounting && authority.cycle.frozenTier !== 'T1'
+  if (logicalAccounting && authority.cycle?.frozenTier !== 'T1'
       && authority.currentHeadSha !== authority.terminal.targetSha) {
     try {
       const cycle = authority.cycle;
