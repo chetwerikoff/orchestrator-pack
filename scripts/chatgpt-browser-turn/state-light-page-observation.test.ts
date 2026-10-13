@@ -1038,6 +1038,35 @@ describe('Issue #2467 committed composer readiness under the absolute deadline',
   });
 });
 
+describe('Issue #2541 observed composer readiness diagnostics', () => {
+  it.each([
+    { visible: true, enabled: true, contentEditable: true, expected: 'ready', ok: true },
+    { visible: true, enabled: false, contentEditable: true, expected: 'disabled', ok: false },
+    { visible: false, enabled: true, contentEditable: true, expected: 'hidden', ok: false },
+    { visible: true, enabled: true, contentEditable: false, expected: 'not_editable', ok: false },
+  ] as const)('observes $expected without inferring a network failure', async ({ visible, enabled, contentEditable, expected, ok }) => {
+    const observed: string[] = [];
+    const composer = {
+      count: vi.fn(async () => 1),
+      evaluate: vi.fn(async () => ({ visible, enabled, contentEditable })),
+    };
+    const page = { locator: vi.fn((selector: string) => selector === COMPOSER_SELECTOR ? composer : scalarLocator()) };
+    expect(await __testComposerMutation.readComposerReadiness(
+      page, Date.now() + 2_000, (state) => observed.push(state),
+    )).toBe(ok);
+    expect(observed).toEqual([expected]);
+  });
+
+  it('records positive absence instead of interpreting a sibling or timeout as activity', async () => {
+    const observed: string[] = [];
+    const page = { locator: vi.fn(() => ({ count: vi.fn(async () => 0) })) };
+    expect(await __testComposerMutation.readComposerReadiness(
+      page, Date.now() + 2_000, (state) => observed.push(state),
+    )).toBe(false);
+    expect(observed).toEqual(['absent']);
+  });
+});
+
 describe('existing generation behind a connection-recovery status', () => {
   function recoveryPage(recoveryShown: boolean) {
     const state = { stopped: false, recovery: recoveryShown };
