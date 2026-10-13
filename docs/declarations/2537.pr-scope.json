@@ -1,0 +1,33 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2537,
+  "declared_paths": [
+    "scripts/lib/pack-gpt-source-comment-runner.cases.ts",
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner-issue-1591.test.ts",
+    "scripts/pack-review-runner-issue-898.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
+    "scripts/pack-review-state.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/lib/pack-gpt-source-comment-runner.cases.ts",
+    "scripts/pack-review-ordering.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner-issue-1591.test.ts",
+    "scripts/pack-review-runner-issue-898.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
+    "scripts/pack-review-state.ts"
+  ],
+  "source_revision": "1a1cb4810502cad36ada550960446394431efa7b"
+}
