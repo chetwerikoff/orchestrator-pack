@@ -7300,84 +7300,13 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       if (input.fixtureBeforeGptAggregateSettlement) {
         await input.fixtureBeforeGptAggregateSettlement({ runId: run.id, payload });
       }
-      // The original runner still owns this exact run. Use the same source
-      // census, durable freeze, authority and delivery path as scoped recovery,
-      // before returning to the public command. A locally complete slot alone
-      // cannot certify its still-present original GitHub publication.
-      if ((process.env.OPK_VITEST_HARNESS !== '1' || input.fixtureGptSourceCommentTransport)
-          && !hasPersistedPackReviewVerdict(getPackReviewRun(run.id, { projectId, storeRoot }) ?? run)) {
-        let reconciliation: Awaited<ReturnType<typeof reconcileStalePackReviewRuns>> | undefined;
-        let reconcileError: string | undefined;
-        try {
-          reconciliation = await reconcileStalePackReviewRuns({
-            repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
-            projectId, storeRoot, prNumber: target.prNumber, runId: run.id,
-            recoverActiveGptSources: true, settlePartialAfterGrace: true,
-            fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
-            fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
-            fixtureGithubReviewId: input.fixtureGithubReviewId,
-            fixtureGithubReviewTransport: input.fixtureGithubReviewTransport,
-            fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
-            fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
-            fixtureWorkerNotifier: input.fixtureWorkerNotifier,
-            fixtureIssueBody: input.fixtureIssueBody, fixtureIssueTitle: input.fixtureIssueTitle,
-            fixtureIssueNumber: input.fixtureIssueNumber,
-            fixtureChangedPaths: input.fixtureChangedPaths,
-            fixtureBoundIssueSnapshotBytes: input.fixtureBoundIssueSnapshotBytes,
-            resolveRepositorySlug: resolveSlug,
-          });
-        } catch (error) {
-          reconcileError = describeError(error);
-        }
-        const recovered = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
-        const reconciliationResult = reconciliation?.results.find((item) => item.runId === run!.id);
-        const verdictExists = hasPersistedPackReviewVerdict(recovered);
-        let confirmation: Awaited<ReturnType<typeof observePackReviewVerdictDelivery>> | undefined;
-        if (verdictExists) {
-          confirmation = await observePackReviewVerdictDelivery({
-            input, projectId, storeRoot, runId: run.id,
-            prNumber: target.prNumber, headSha: target.headSha,
-            repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
-            readHead: readProjectionHead,
-            writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) =>
-              publishPackReviewRequiredStatus({
-                repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
-                headSha: target.headSha, request,
-              })),
-          });
-        }
-        const verified = confirmation?.verified === true;
-        const reason = reconcileError ? `gpt_reconcile_failed:${reconcileError}`
-          : verdictExists ? (verified ? 'completed' : confirmation?.reason ?? 'publication_unverified')
-            : String(reconciliationResult?.reason ?? 'gpt_source_census_not_settled');
-        terminal = verdictExists;
-        const runs = listPackReviewRuns({ projectId, storeRoot });
-        if (claimLease) await claimLease.release('run_started', runs);
-        return {
-          ok: verified, created: true, reused: false,
-          reason, publicationVerified: verified,
-          ...(verified ? {
-            publicationHeadSha: target.headSha,
-            requiredStatusState: confirmation!.requiredStatusState,
-          } : {
-            nextAction: String(reconciliationResult?.nextAction
-              ?? 'repair the exact incumbent GitHub source/status evidence and rerun scoped reconcile; do not resend uncertain sources'),
-          }),
-          prNumber: target.prNumber, headSha: target.headSha, runId: run.id,
-          status: recovered.status,
-          coverage: derivePackReviewGptCoverage(recovered.reviewRound),
-          ...(recovered.githubReviewId !== undefined ? { githubReviewId: recovered.githubReviewId } : {}),
-          ...(recovered.githubReviewUrl ? { githubReviewUrl: recovered.githubReviewUrl } : {}),
-          httpStatus: verified ? 201 : verdictExists ? 409 : 202,
-        };
-      }
-
       let persistedRun = getPackReviewRun(run.id, { projectId, storeRoot });
       if (!persistedRun) throw new Error(`pack review run ${run.id} disappeared before GPT settlement`);
       const persistedRound = persistedRun.reviewRound;
       if (!persistedRound) throw new Error(`pack review run ${run.id} lost its GPT round before settlement`);
       const usableSourceCount = gptUsableSourceCount(persistedRound);
-      if (persistedRound.cardinality >= 3
+      if (process.env.OPK_VITEST_HARNESS === '1' && !input.fixtureGptSourceCommentTransport
+          && persistedRound.cardinality >= 3
           && usableSourceCount === persistedRound.cardinality
           && persistedRound.settledSourceCount === undefined) {
         const frozen = freezeGptRoundSourceCount(
@@ -7458,6 +7387,78 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           httpStatus: 202,
         };
       }
+      // The original runner still owns this exact run. Use the same source
+      // census, durable freeze, authority and delivery path as scoped recovery,
+      // before returning to the public command. A locally complete slot alone
+      // cannot certify its still-present original GitHub publication.
+      if ((process.env.OPK_VITEST_HARNESS !== '1' || input.fixtureGptSourceCommentTransport)
+          && !hasPersistedPackReviewVerdict(getPackReviewRun(run.id, { projectId, storeRoot }) ?? run)) {
+        let reconciliation: Awaited<ReturnType<typeof reconcileStalePackReviewRuns>> | undefined;
+        let reconcileError: string | undefined;
+        try {
+          reconciliation = await reconcileStalePackReviewRuns({
+            repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+            projectId, storeRoot, prNumber: target.prNumber, runId: run.id,
+            recoverActiveGptSources: true, settlePartialAfterGrace: true,
+            fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
+            fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
+            fixtureGithubReviewId: input.fixtureGithubReviewId,
+            fixtureGithubReviewTransport: input.fixtureGithubReviewTransport,
+            fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
+            fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+            fixtureWorkerNotifier: input.fixtureWorkerNotifier,
+            fixtureIssueBody: input.fixtureIssueBody, fixtureIssueTitle: input.fixtureIssueTitle,
+            fixtureIssueNumber: input.fixtureIssueNumber,
+            fixtureChangedPaths: input.fixtureChangedPaths,
+            fixtureBoundIssueSnapshotBytes: input.fixtureBoundIssueSnapshotBytes,
+            resolveRepositorySlug: resolveSlug,
+          });
+        } catch (error) {
+          reconcileError = describeError(error);
+        }
+        const recovered = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
+        const reconciliationResult = reconciliation?.results.find((item) => item.runId === run!.id);
+        const verdictExists = hasPersistedPackReviewVerdict(recovered);
+        let confirmation: Awaited<ReturnType<typeof observePackReviewVerdictDelivery>> | undefined;
+        if (verdictExists) {
+          confirmation = await observePackReviewVerdictDelivery({
+            input, projectId, storeRoot, runId: run.id,
+            prNumber: target.prNumber, headSha: target.headSha,
+            repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+            readHead: readProjectionHead,
+            writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) =>
+              publishPackReviewRequiredStatus({
+                repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+                headSha: target.headSha, request,
+              })),
+          });
+        }
+        const verified = confirmation?.verified === true;
+        const reason = reconcileError ? `gpt_reconcile_failed:${reconcileError}`
+          : verdictExists ? (verified ? 'completed' : confirmation?.reason ?? 'publication_unverified')
+            : String(reconciliationResult?.reason ?? 'gpt_source_census_not_settled');
+        terminal = verdictExists;
+        const runs = listPackReviewRuns({ projectId, storeRoot });
+        if (claimLease) await claimLease.release('run_started', runs);
+        return {
+          ok: verified, created: true, reused: false,
+          reason, publicationVerified: verified,
+          ...(verified ? {
+            publicationHeadSha: target.headSha,
+            requiredStatusState: confirmation!.requiredStatusState,
+          } : {
+            nextAction: String(reconciliationResult?.nextAction
+              ?? 'repair the exact incumbent GitHub source/status evidence and rerun scoped reconcile; do not resend uncertain sources'),
+          }),
+          prNumber: target.prNumber, headSha: target.headSha, runId: run.id,
+          status: recovered.status,
+          coverage: derivePackReviewGptCoverage(recovered.reviewRound),
+          ...(recovered.githubReviewId !== undefined ? { githubReviewId: recovered.githubReviewId } : {}),
+          ...(recovered.githubReviewUrl ? { githubReviewUrl: recovered.githubReviewUrl } : {}),
+          httpStatus: verified ? 201 : verdictExists ? 409 : 202,
+        };
+      }
+
       payload = validatePersistedGptReviewPayload(run.id, payload, { projectId, storeRoot });
       const writeRequiredStatus = input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
         repoRoot: target.sourceRepoRoot,
