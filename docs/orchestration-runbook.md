@@ -698,8 +698,7 @@ degraded 2/3 verdict does consume its logical round, even if the late third
 comment appears before the original review/status publication finishes.
 A T3 clean round 1 still requires round 2. Once required rounds and findings settle,
 the durable `reviewStageComplete` state prevents later commits, smoke fixes, or
-CI-only changes from reopening the required stage. A cap never converts findings
-into approval.
+CI-only changes from reopening the required stage. At the T2/T3 findings cap, both scoped reconciliation and normal PR-led start require canonical equality of the live PR-closing Issue body digest and the verified last terminal findings round's bound Issue snapshot before strict-descendant settlement or success; a body amendment (including one with unchanged rNN) instead requires target-selected audited `reset --project <id> --pr-number <n> --actor <actor> --reason <reason> --nonce <nonce>` followed by `npm run --silent pack-gpt-review -- --project <id> --pr-number <n>`, advancing that same PR to a genuinely fresh head first if its immutable exact-head Issue snapshot is stale, while comment-only changes remain undetected and a cap never converts findings into approval.
 
 Manual start, degraded-source settlement, and interrupted-review recovery follow
 `## Deterministic reconciliation`; do not duplicate those rules here.
