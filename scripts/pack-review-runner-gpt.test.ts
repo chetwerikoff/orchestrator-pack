@@ -2347,9 +2347,12 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
         ...slot, lifecycle: 'terminal' as const,
         invocationId, attemptOrdinal: 1,
         admissionStartedAtUtc: '2026-08-27T10:00:00.000Z',
-        terminalClass: completed ? 'complete_clean' : 'profile_busy:profile_busy',
+        terminalClass: completed ? 'complete_clean' : 'driver_error:connect_over_cdp_failed',
         terminalResult: storedTerminalTurnResult(invocationId, completed
-          ? {} : { state: 'profile_busy', scope: 'profile', cause: 'profile_busy', send_count: 0 }),
+          ? {} : {
+            state: 'driver_error', cause: 'connect_over_cdp_failed',
+            send_count: 0, send_attempted: false,
+          }),
         ...(completed ? { payload: { verdict: 'clean' as const, findingCount: 0, findings: [] } } : {}),
       };
     });
