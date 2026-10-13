@@ -32,6 +32,7 @@ import {
   commitPackReviewTerminal,
   initializePackReviewAuthority,
   readPackReviewAuthority,
+  reconcilePackReviewTier,
 } from './pack-review-state.js';
 import { packReviewDeliveryNeedsResume } from './lib/pack-review-delivery.js';
 import {
@@ -47,7 +48,7 @@ import {
 import { acquireReviewStartClaim, testReviewStartClaimOwnership } from './lib/review-start-claim-store.js';
 import type { StateLightTurnObservationRecord } from './chatgpt-browser-turn/state-light-turn-observation.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
-import { computeBoundIssueSnapshotHash } from './lib/reverify-bound-issue-snapshot.js';
+import { captureBoundIssueSnapshot, computeBoundIssueSnapshotHash } from './lib/reverify-bound-issue-snapshot.js';
 import {
   formatPackGptSourceCommentEnvelope,
   type PackGptSourceIdentity,
@@ -388,7 +389,7 @@ describe('Issue #1417 direct-CLI operator-only pack-review start', () => {
         fixturePrState: 'OPEN',
         fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
         fixturePostReviewHeadSha: HEAD_A,
-        fixtureIssueBody: issueBody,
+        fixtureIssueTitle: "Independent operator Issue", fixtureIssueBody: issueBody,
         fixtureIssueNumber: 1341,
         fixtureReviewStdout: cleanTerminalPayload(),
         fixtureReviewExitCode: 0,
@@ -416,7 +417,7 @@ describe('Issue #1417 direct-CLI operator-only pack-review start', () => {
       operatorReason: 'forged programmatic operator start',
       fixtureCurrentPrHeadSha: HEAD_A,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
-      fixtureIssueBody: issueBody,
+      fixtureIssueTitle: "Independent operator Issue", fixtureIssueBody: issueBody,
       fixtureIssueNumber: 1341,
       fixtureReviewStdout: cleanTerminalPayload(),
     } as unknown as Parameters<typeof startPackReview>[0];
@@ -1059,7 +1060,7 @@ describe('Issue #2376 pre-start credentialed recovery isolation', () => {
       fixturePrState: 'OPEN',
       fixturePrBody: `Closes #${prNumber}`,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
-      fixtureIssueBody: issueBody,
+      fixtureIssueTitle: "Independent linked Issue", fixtureIssueBody: issueBody,
       fixtureIssueNumber: prNumber,
       fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
       fixtureBoundIssueSnapshotBytes: issueBody,
@@ -1271,7 +1272,7 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
         'source-02': [{ stdout: successfulCleanReviewPayload('inv-2372-source-02') }],
         'source-03': [{ stdout: successfulCleanReviewPayload('inv-2372-source-03') }],
       },
-      fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      fixtureIssueTitle: "[T1] GPT source fixture", fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
       fixtureIssueNumber: 2372,
     });
 
@@ -1756,7 +1757,7 @@ describe('GPT plural source round (Issue #1276)', () => {
         'source-02': [{ stdout: successfulCleanReviewPayload('inv-plural-source-02') }],
         'source-03': [{ stdout: successfulCleanReviewPayload('inv-plural-source-03') }],
       },
-      fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      fixtureIssueTitle: "[T1] Existing source cardinality", fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
       fixtureIssueNumber: 1276,
       claimMode: 'preacquired',
     });
@@ -1786,7 +1787,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixturePostReviewHeadSha: HEAD_A,
       fixtureReviewStdout: cleanTerminalPayload(),
-      fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      fixtureIssueTitle: "[T1] Source confirmation", fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
       fixtureIssueNumber: 1276,
       claimMode: 'preacquired',
       ...overrides,
@@ -3177,7 +3178,7 @@ describe('Issue #1393 legacy aggregate compatibility and runner harvest matrix',
       fixturePrState: 'OPEN',
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixturePostReviewHeadSha: HEAD_A,
-      fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      fixtureIssueTitle: "[T1] Source slot recovery", fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
       fixtureIssueNumber: 1276,
       claimMode: 'preacquired',
       ...overrides,
@@ -3570,7 +3571,7 @@ describe('Issue #1741 failed GPT round source-comment settlement', () => {
       fixtureGithubReviewTransport: finalReviewTransport,
       fixtureRequiredStatusWriter: async () => {},
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
-      fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      fixtureIssueTitle: "[T1] Recovery notification", fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
       fixtureIssueNumber: 1741,
       fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
       fixtureBoundIssueSnapshotBytes: '```complexity-tier\ntier: T1\n```',
@@ -3693,7 +3694,7 @@ describe('Issue #1741 failed GPT round source-comment settlement', () => {
       },
       fixtureRequiredStatusWriter: async () => {},
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
-      fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      fixtureIssueTitle: "[T1] Recovered journal", fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
       fixtureIssueNumber: 1741,
       fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
       fixtureBoundIssueSnapshotBytes: '```complexity-tier\ntier: T1\n```',
@@ -3867,7 +3868,7 @@ describe('recovered sub-quorum blocking source regression', () => {
         statusStates.push(request.state);
       },
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
-      fixtureIssueBody: issueBody,
+      fixtureIssueTitle: "Independent linked Issue", fixtureIssueBody: issueBody,
       fixtureIssueNumber: 1787,
       fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
       fixtureBoundIssueSnapshotBytes: issueBody,
@@ -4001,7 +4002,7 @@ describe('Issue #2451 three-source no-judgment delivery', () => {
         fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
         fixturePrState: 'OPEN',
         claimMode: 'preacquired',
-        fixtureIssueBody: ['```complexity-tier', 'tier: T2', '```'].join('\n'),
+        fixtureIssueTitle: "[T2] Journaled delivery", fixtureIssueBody: ['```complexity-tier', 'tier: T2', '```'].join('\n'),
         fixtureIssueNumber: 2451,
         fixtureReviewBySourceSlot: slots,
         fixtureAfterGptInvocationBound: ({ slotId, invocationId }) => {
@@ -4082,7 +4083,7 @@ describe('Issue #2451 final-cap fixer regressions', () => {
       tier: 'T2', fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixturePrState: 'OPEN', claimMode: 'preacquired',
-      fixtureIssueBody: ["```complexity-tier", 'tier: T2', "```"].join('\n'),
+      fixtureIssueTitle: "[T2] Later head", fixtureIssueBody: ["```complexity-tier", 'tier: T2', "```"].join('\n'),
       fixtureIssueNumber: 2451,
       fixtureReviewBySourceSlot: slots,
       fixtureAfterGptInvocationBound: ({ slotId, invocationId }) => {
@@ -4538,7 +4539,7 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
       preacquiredClaim: ownedFixtureReviewStartClaim(f.options.storeRoot, prNumber, HEAD_A),
       fixturePrState: 'OPEN', fixtureRepoSlug: repoSlug,
       fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
-      fixtureIssueBody: issueBody,
+      fixtureIssueTitle: "Independent linked Issue", fixtureIssueBody: issueBody,
       fixtureIssueNumber: prNumber,
       fixtureGptAttemptObserver: async () => ({
         state: 'observation_unavailable' as const, replacementEligible: false,
@@ -4570,7 +4571,7 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
       preacquiredClaim: ownedFixtureReviewStartClaim(f.options.storeRoot, prNumber, HEAD_A),
       fixturePrState: 'OPEN', fixtureRepoSlug: repoSlug,
       fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
-      fixtureIssueBody: issueBody,
+      fixtureIssueTitle: "Independent linked Issue", fixtureIssueBody: issueBody,
       fixtureIssueNumber: prNumber,
       fixtureGptAttemptObserver: async () => ({
         state: 'replacement_eligible' as const, replacementEligible: true,
@@ -4778,7 +4779,7 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
       fixturePrBody: `Closes #${prNumber}`, fixturePostReviewPrBody: `Closes #${prNumber}`,
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixtureIssueNumber: prNumber,
-      fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
+      fixtureIssueTitle: "[T2] Same head status", fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
       claimMode: 'preacquired' as const,
       fixtureGithubReviewId: 249601,
       fixtureReviewBySourceSlot: {
@@ -5075,7 +5076,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       fixtureGptSourceCommentTransport: sourceTransport,
       fixtureGithubReviewTransport: finalReviewTransport,
       fixtureRequiredStatusWriter: async (request) => { statusStates.push(request.state); },
-      fixtureIssueBody: issueBody, fixtureIssueNumber: 2523,
+      fixtureIssueTitle: "Independent linked Issue", fixtureIssueBody: issueBody, fixtureIssueNumber: 2523,
       fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
       fixtureBoundIssueSnapshotBytes: issueBody,
     };
@@ -5537,7 +5538,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       ...options, sourceRepoRoot: repoRoot, prNumber, headSha: HEAD_A,
       tier: 'T2', fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
       fixturePrState: 'OPEN', fixtureRepoSlug: repository,
-      fixtureIssueNumber: prNumber, fixtureIssueBody: issueBody,
+      fixtureIssueNumber: prNumber, fixtureIssueTitle: "Independent linked Issue", fixtureIssueBody: issueBody,
       fixtureGptSourceCommentTransport: sourceTransport,
       // Supplying an observation reader keeps the real 30s admission interval.
       // Unreadable state-light must not become invented predecessor send proof.
@@ -5578,6 +5579,52 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     });
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
     expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([1]);
+  });
+
+  it('preserves original T2 GPT source identity after live T3 promotion and confirms pending on the exact head', async () => {
+    const f = await seedDeadIncumbent();
+    const before = getPackReviewRun(f.runId, f.options)!;
+    const initialCycle = readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })!.cycle!;
+    const oldRound = structuredClone(before.reviewRound!);
+    // Freeze the T2 body under the standard snapshot-store transport. The
+    // independent mutable title/body below must never rewrite this artifact.
+    process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR = path.join(f.options.storeRoot, 'bound-snapshots');
+    captureBoundIssueSnapshot({
+      projectId, prNumber, prHeadSha: HEAD_A, issueNumber: prNumber, issueBody,
+      storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+    });
+    f.input.fixtureIssueTitle = '[T3] Real amended linked Issue';
+    f.input.fixtureIssueBody = ['```complexity-tier', 'tier: T3', '```'].join('\n');
+    f.input.fixtureRequiredStatusReader = async (headSha) => {
+      expect(headSha).toBe(HEAD_A);
+      return f.statusStates.at(-1);
+    };
+    const resumed = await startPackReview({ ...f.input, claimMode: 'acquire' });
+    expect(resumed, JSON.stringify(resumed)).toMatchObject({
+      ok: true, runId: f.runId, status: 'up_to_date',
+      publicationVerified: true, requiredStatusState: 'pending',
+    });
+    const after = getPackReviewRun(f.runId, f.options)!;
+    const authority = readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })!;
+    expect(authority.cycle).toMatchObject({
+      cycleId: initialCycle.cycleId, frozenTier: 'T3', frozenCap: 2,
+      consumedRoundOrdinals: [1], state: 'open',
+    });
+    expect(authority.cycle?.reviewStageComplete).not.toBe(true);
+    expect(after.logicalRoundCap).toBe(1);
+    expect(after.logicalRoundOrdinal).toBe(1);
+    expect(after.reviewRound).toMatchObject({
+      tier: 'T2', roundOrdinal: 1,
+      boundIssueSnapshotDigest: oldRound.boundIssueSnapshotDigest,
+    });
+    expect(after.reviewRound?.sourceSlots[0]?.invocationId)
+      .toBe(oldRound.sourceSlots[0]?.invocationId);
+    expect(after.reviewRound?.sourceSlots[1]?.invocationId)
+      .toBe(oldRound.sourceSlots[1]?.invocationId);
+    expect(f.launches.map((launch) => launch.slotId)).toEqual(['source-03']);
+    expect(f.statusStates.at(-1)).toBe('pending');
+    expect(f.statusStates).not.toContain('success');
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
   });
 
   it('continues the same dead GPT round with a genuinely held preacquired claim', async () => {
@@ -5808,5 +5855,103 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     expect(f.launches).toEqual([]);
     expect(f.statusStates).not.toContain('success');
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
+  });
+});
+
+describe('Issue #2537 GPT delayed no-judgment error cannot restore cap-one success', () => {
+  it('restores and independently observes pending when the same-run verdict supersedes an error', async () => {
+    const storeRoot = tempRoot('opk-2537-gpt-error-race-');
+    harnessEnv(storeRoot, path.join(storeRoot, 'review.json'));
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const prNumber = 253770;
+    const opts = { projectId: 'orchestrator-pack', storeRoot };
+    const slots: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+    const writes: string[] = [];
+    let currentStatus: string | undefined;
+    let raced = false;
+    const input = {
+      ...opts, sourceRepoRoot: repoRoot, prNumber, headSha: HEAD_A,
+      tier: 'T2' as const, claimMode: 'preacquired' as const,
+      fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack', fixturePrState: 'OPEN',
+      fixturePrBody: `Closes #${prNumber}`,
+      fixtureIssueNumber: prNumber,
+      fixtureIssueTitle: '[T2] Original linked Issue',
+      fixtureIssueBody: ['```complexity-tier', 'tier: T2', '```'].join('\n'),
+      fixtureReviewBySourceSlot: slots,
+      fixtureAfterGptInvocationBound: ({ slotId, invocationId }: {slotId: string; invocationId: string}) => {
+        slots[slotId] = [{ stdout: terminalTurnPayload({
+          state: 'driver_error', cause: 'connect_over_cdp_failed', invocationId,
+        }), exitCode: 1 }];
+      },
+      fixtureRequiredStatusReader: async (headSha: string) => {
+        expect(headSha).toBe(HEAD_A);
+        return currentStatus;
+      },
+      fixtureRequiredStatusWriter: async (request: {state: string}) => {
+        currentStatus = request.state;
+        writes.push(request.state);
+        if (request.state !== 'error' || raced) return;
+        raced = true;
+        const run = listPackReviewRuns(opts)[0]!;
+        const upgraded = reconcilePackReviewTier({
+          prNumber, tier: 'T3', startedRunExists: true, options: { storeRoot },
+        });
+        expect(upgraded.cycle).toMatchObject({ frozenTier: 'T3', frozenCap: 2 });
+        // A same-run verdict requires authenticated original source evidence;
+        // otherwise the run store correctly rejects a synthetic clean verdict.
+        updatePackReviewRun(run.id, {
+          reviewRound: {
+            ...run.reviewRound!,
+            settledSourceCount: 2,
+            sourceSlots: run.reviewRound!.sourceSlots.map((slot, index) => index < 2
+              ? {
+                  ...slot,
+                  terminalClass: 'complete_clean',
+                  terminalResult: {
+                    schema: 'turn-result/v1', state: 'ok',
+                    scope: 'invocation', cause: 'completed_page_only',
+                    invocation_id: slot.invocationId, send_count: 1,
+                    source_comment_authority: 'credentialed_github',
+                    source_comment_receipt: { id: 253770 + index },
+                  },
+                  payload: { verdict: 'clean' as const, findingCount: 0, findings: [] },
+                }
+              : slot),
+          },
+        }, opts);
+        const now = '2026-10-13T00:00:00.000Z';
+        setPackReviewRunTerminal(run.id, 'up_to_date', {
+          reviewVerdict: 'clean', findingCount: 0, findings: [],
+          journalOutcome: {
+            state: 'persisted', reason: 'credentialed_verdict',
+            recordedAtUtc: now, idempotencyKey: `verdict:${run.id}:${HEAD_A}`,
+            attempts: 1,
+          },
+        }, opts);
+        commitPackReviewTerminal({
+          prNumber, expectedTransitionSeq: upgraded.transitionSeq,
+          terminal: {
+            schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal',
+            runId: run.id, targetSha: HEAD_A, reviewVerdict: 'clean',
+            findingCount: 0, findingsDigest: 'fixture-2537-credentialed-verdict',
+            automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 1,
+          },
+          status: 'clean', findingCount: 0, options: { storeRoot },
+        });
+      },
+    };
+    await startPackReview(input);
+    expect(raced).toBe(true);
+    expect(writes.at(-1)).toBe('pending');
+    expect(writes).not.toEqual(expect.arrayContaining(['success']));
+    const authority = readPackReviewAuthority(prNumber, { storeRoot })!;
+    expect(authority.cycle).toMatchObject({
+      frozenTier: 'T3', frozenCap: 2, consumedRoundOrdinals: [1],
+    });
+    expect(authority.cycle?.reviewStageComplete).not.toBe(true);
+    const historical = listPackReviewRuns(opts)[0]!;
+    expect(historical).toMatchObject({ logicalRoundCap: 1, logicalRoundOrdinal: 1 });
   });
 });
