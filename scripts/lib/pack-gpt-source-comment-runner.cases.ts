@@ -154,7 +154,7 @@ function baseStart(storeRoot: string, transport: PackGptSourceCommentTransport) 
     prNumber: 1436,
     headSha: HEAD,
     tier: 'T1' as const,
-    fixtureIssueBody: ISSUE_BODY,
+    fixtureIssueTitle: "[T1] Source comment fixture", fixtureIssueBody: ISSUE_BODY,
     fixtureIssueNumber: 1435,
     fixtureCurrentPrHeadSha: HEAD,
     fixturePostReviewHeadSha: HEAD,
@@ -509,7 +509,7 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
         workerWrites.push(request);
         return { state: 'delivered' as const, reason: 'fixture' };
       },
-      fixtureIssueBody: ISSUE_BODY,
+      fixtureIssueTitle: "[T1] Source recovery fixture", fixtureIssueBody: ISSUE_BODY,
       fixtureIssueNumber: 1435,
       fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
       fixtureBoundIssueSnapshotBytes: ISSUE_BODY,
@@ -619,7 +619,7 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
       stderr: { write: (value) => boundaryErrors.push(String(value)) },
       currentArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
     });
-    expect(boundaryExit).toBe(0);
+    expect(boundaryExit, JSON.stringify({ recoveredRunner: second, boundaryErrors, boundaryOutput })).toBe(0);
     expect(boundaryErrors).toEqual([]);
     expect(boundaryOutput).toHaveLength(1);
     expect(JSON.parse(boundaryOutput[0]!)).toMatchObject({

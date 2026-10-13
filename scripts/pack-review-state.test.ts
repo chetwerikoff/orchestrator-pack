@@ -1071,3 +1071,116 @@ describe('Issue #2250 smoke-ordering no longer governs pack-review authority', (
     expect(authority.smokeOrdering).toEqual(oldOrdering);
   });
 });
+
+
+describe('Issue #2537 monotonic linked-Issue tier promotion', () => {
+  it('promotes consumed T2 findings to a second required T3 round without rewriting its first terminal', () => {
+    const opts = options();
+    const old = sha('a');
+    const next = sha('b');
+    let authority = initializePackReviewAuthority({
+      prNumber: 2537, headSha: old, tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: opts,
+    });
+    const cycleId = authority.cycle!.cycleId;
+    authority = commitPackReviewTerminal({
+      prNumber: 2537, expectedTransitionSeq: authority.transitionSeq,
+      terminal: { ...findingsTerminal('old-tier-first-round', old), logicalRoundOrdinal: 1 },
+      status: 'changes_requested', findingCount: 1, options: opts,
+    });
+    expect(authority.cycle).toMatchObject({
+      frozenTier: 'T2', frozenCap: 1, state: 'at_cap_open_findings',
+      consumedRoundOrdinals: [1],
+    });
+    const historicalTerminal = authority.terminal;
+
+    authority = reconcilePackReviewTier({
+      prNumber: 2537, tier: 'T3', startedRunExists: true, options: opts,
+    });
+    expect(authority.cycle).toMatchObject({
+      cycleId, frozenTier: 'T3', frozenCap: 2,
+      state: 'open_findings', consumedRoundOrdinals: [1],
+    });
+    expect(authority.terminal).toEqual(historicalTerminal);
+    expect(authority.cycle!.atCapHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(authority.cycle!.reviewStageComplete).not.toBe(true);
+
+    authority = observePackReviewHead({
+      prNumber: 2537, expectedTransitionSeq: authority.transitionSeq,
+      headSha: next, options: opts,
+    });
+    authority = settleLogicalPackReviewFindingsByStrictDescendant({
+      prNumber: 2537, expectedTransitionSeq: authority.transitionSeq,
+      reviewedHeadSha: old, currentHeadSha: next,
+      reviewedHeadIsAncestor: true, options: opts,
+    });
+    expect(authority.cycle).toMatchObject({ state: 'open', consumedRoundOrdinals: [1] });
+    expect(authority.cycle!.reviewStageComplete).not.toBe(true);
+
+    authority = observePackReviewHead({
+      prNumber: 2537, expectedTransitionSeq: authority.transitionSeq,
+      headSha: next, options: opts,
+    });
+    authority = commitPackReviewTerminal({
+      prNumber: 2537, expectedTransitionSeq: authority.transitionSeq,
+      terminal: {
+        schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal',
+        runId: 'raised-tier-second-round', targetSha: next,
+        reviewVerdict: 'clean', findingCount: 0, findingsDigest: 'clean',
+        logicalRoundOrdinal: 2,
+      },
+      status: 'clean', findingCount: 0, options: opts,
+    });
+    expect(authority.cycle).toMatchObject({
+      cycleId, frozenTier: 'T3', frozenCap: 2,
+      state: 'closed', consumedRoundOrdinals: [1, 2],
+      reviewStageComplete: true,
+    });
+  });
+
+  it('keeps an already started zero-consumed run in the same cycle when its tier rises', () => {
+    const opts = options();
+    let authority = initializePackReviewAuthority({
+      prNumber: 2538, headSha: sha('a'), tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: opts,
+    });
+    const cycleId = authority.cycle!.cycleId;
+    authority = reconcilePackReviewTier({
+      prNumber: 2538, tier: 'T3', startedRunExists: true, options: opts,
+    });
+    expect(authority.cycle).toMatchObject({
+      cycleId, frozenTier: 'T3', frozenCap: 2, consumedRoundOrdinals: [],
+    });
+    authority = reconcilePackReviewTier({
+      prNumber: 2538, tier: 'T1', startedRunExists: true, options: opts,
+    });
+    expect(authority.cycle).toMatchObject({ cycleId, frozenTier: 'T3', frozenCap: 2 });
+  });
+
+  it('does not promote a merged or durably completed T2 cycle', () => {
+    const opts = options();
+    let authority = initializePackReviewAuthority({
+      prNumber: 2539, headSha: sha('a'), tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: opts,
+    });
+    const cycleId = authority.cycle!.cycleId;
+    authority = reconcilePackReviewTier({
+      prNumber: 2539, tier: 'T3', prMerged: true, options: opts,
+    });
+    expect(authority.cycle).toMatchObject({ cycleId, frozenTier: 'T2', frozenCap: 1 });
+    authority = commitPackReviewTerminal({
+      prNumber: 2539, expectedTransitionSeq: authority.transitionSeq,
+      terminal: {
+        schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal',
+        runId: 'settled-first', targetSha: sha('a'), reviewVerdict: 'clean',
+        findingCount: 0, findingsDigest: 'clean', logicalRoundOrdinal: 1,
+      },
+      status: 'clean', findingCount: 0, options: opts,
+    });
+    expect(authority.cycle?.reviewStageComplete).toBe(true);
+    authority = reconcilePackReviewTier({
+      prNumber: 2539, tier: 'T3', startedRunExists: true, options: opts,
+    });
+    expect(authority.cycle).toMatchObject({ cycleId, frozenTier: 'T2', frozenCap: 1 });
+  });
+});
