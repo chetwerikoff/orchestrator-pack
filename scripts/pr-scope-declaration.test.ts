@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync as rawMkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -157,6 +157,16 @@ function syncDefaultBranch(root: string): void {
   fixtureGit(root, ['push', '--quiet', '--force', 'origin', 'HEAD:refs/heads/main']);
   fixtureGit(root, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
   fixtureGit(root, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
+}
+
+// Concurrent main-line producer regressions use bare temp roots. Supply those
+// guarded-mode fixtures with real authoritative workflow/remote configuration.
+function mkdtempSync(prefix: string): string {
+  const root = rawMkdtempSync(prefix);
+  if (prefix.includes('opk-deny-star-') || prefix.includes('opk-live-grammar-')) {
+    initializeDefaultWorkflow(root);
+  }
+  return root;
 }
 
 type BootstrapIssueOptions = {
