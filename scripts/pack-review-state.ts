@@ -721,7 +721,10 @@ export function reconcilePackReviewTier(input: {
     && !current.terminal
     && !current.evidence
     && !current.triage
-    && !current.publication;
+    && !current.publication
+    // An audited reset's empty new cycle is not a replaceable fresh cycle:
+    // preserve its exact ID and actor/reason/nonce through the next start.
+    && !cycle.resetProvenance;
   if (safelyReplaceable) {
     return commitPackReviewAuthorityTransition({
       prNumber: input.prNumber,
