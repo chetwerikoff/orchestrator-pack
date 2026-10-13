@@ -1065,6 +1065,82 @@ describe('Issue #2541 observed composer readiness diagnostics', () => {
     )).toBe(false);
     expect(observed).toEqual(['absent']);
   });
+  it.each([
+    ['locator count', 'browser_operation_timeout:locator_count', 'browser_operation_timeout:locator_count'],
+    ['network evaluation', 'page.evaluate: net::ERR_NETWORK_CHANGED', 'network_changed'],
+  ])('retains a witnessed %s failure through exhausted readiness (#2541 AC4)', async (kind, errorText, cause) => {
+    let now = 10_000;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const composer = {
+        count: vi.fn(async () => {
+          if (kind === 'locator count') throw new Error(errorText);
+          return 1;
+        }),
+        evaluate: vi.fn(async () => { throw new Error(errorText); }),
+      };
+      const page = {
+        __fakeBrowserGptPage: true,
+        locator: (selector: string) => selector === COMPOSER_SELECTOR ? composer : scalarLocator(),
+        waitForTimeout: async (ms: number) => { now += ms; },
+      };
+      const result = await __testComposerMutation.waitForComposer(page, now + 1_500, true);
+      expect(result).toEqual({ state: 'ui_contract_mismatch', cause });
+      expect(now).toBeGreaterThanOrEqual(11_500);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each(['absent', 'disabled', 'ordinary read timeout'] as const)(
+    'does not invent a network or locator failure for a %s composer (#2541 AC4)', async (kind) => {
+      let now = 10_000;
+      const spy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      try {
+        const composer = {
+          count: vi.fn(async () => kind === 'absent' ? 0 : 1),
+          evaluate: vi.fn(async () => {
+            if (kind === 'ordinary read timeout') throw new Error('TimeoutError: slow hydration');
+            return { visible: true, enabled: false, contentEditable: true };
+          }),
+        };
+        const page = {
+          __fakeBrowserGptPage: true,
+          locator: (selector: string) => selector === COMPOSER_SELECTOR ? composer : scalarLocator(),
+          waitForTimeout: async (ms: number) => { now += ms; },
+        };
+        expect(await __testComposerMutation.waitForComposer(page, now + 1_500, true)).toEqual({
+          state: 'ui_contract_mismatch', cause: 'composer_unavailable',
+        });
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+
+  it('a ready composer supersedes an earlier observed network failure (#2541 AC4)', async () => {
+    let now = 10_000;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    let attempts = 0;
+    try {
+      const composer = {
+        count: vi.fn(async () => 1),
+        evaluate: vi.fn(async () => {
+          if (++attempts === 1) throw new Error('net::ERR_NETWORK_CHANGED');
+          return { visible: true, enabled: true, contentEditable: true };
+        }),
+      };
+      const page = {
+        __fakeBrowserGptPage: true,
+        locator: (selector: string) => selector === COMPOSER_SELECTOR ? composer : scalarLocator(),
+        waitForTimeout: async (ms: number) => { now += ms; },
+      };
+      expect(await __testComposerMutation.waitForComposer(page, now + 1_500, true)).toEqual({ state: 'ready' });
+      expect(attempts).toBeGreaterThanOrEqual(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe('existing generation behind a connection-recovery status', () => {
