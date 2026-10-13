@@ -4696,6 +4696,30 @@ export async function reconcileStalePackReviewRuns(
     }
   };
 
+  const verifyStaleDelivery = async (
+    recoveredRun: PackReviewRunRecord,
+    statusWriter: PackReviewRequiredStatusWriter,
+  ): Promise<{ verified: boolean; reason: string }> => {
+    if (!input.staleOnly) return { verified: true, reason: 'completed' };
+    // A stale fleet pass must not label POST acknowledgement as verified
+    // status. Observe the exact current-head status through the incumbent
+    // read-back path, including authority re-checks around external IO.
+    try {
+      return await observePackReviewVerdictDelivery({
+        input, projectId, storeRoot, runId: recoveredRun.id,
+        prNumber: recoveredRun.prNumber, headSha: recoveredRun.targetSha,
+        repoSlug, sourceRepoRoot: input.sourceRepoRoot,
+        readHead: () => readCheckedReviewPrHead(
+          input, repoSlug, recoveredRun.prNumber, recoveredRun.targetSha,
+        ),
+        writeRequiredStatus: statusWriter,
+        resumeFailedStatus: true,
+      });
+    } catch (error) {
+      return { verified: false, reason: `status_unverified:${describeError(error)}` };
+    }
+  };
+
   for (const candidate of records) {
     if (input.runId && candidate.id !== input.runId) continue;
     const activeStale = isPackReviewRunStale(candidate);
@@ -4769,15 +4793,19 @@ export async function reconcileStalePackReviewRuns(
           repoSlug,
           writeRequiredStatus: statusWriter,
         });
+        const publication = resumed.reason === 'completed'
+          ? await verifyStaleDelivery(getPackReviewRun(run.id, { projectId, storeRoot }) ?? run, statusWriter)
+          : { verified: false, reason: resumed.reason };
         results.push({
           runId: run.id,
           terminalized: false,
-          statusReconciled: resumed.reason === 'completed',
+          statusReconciled: publication.verified,
           recovered: true,
           degraded: run.reviewRound?.settledSourceCount === 2,
           settledSourceCount: run.reviewRound?.settledSourceCount,
           reason: resumed.reason === 'completed'
-            ? 'gpt_journaled_delivery_resumed'
+            ? publication.verified ? 'gpt_journaled_delivery_resumed'
+              : `gpt_journaled_delivery_unverified:${publication.reason}`
             : `gpt_journaled_delivery_${resumed.reason}`,
           deliveryReason: resumed.reason,
           status: resumed.status,
@@ -4843,15 +4871,19 @@ export async function reconcileStalePackReviewRuns(
             repoSlug,
             writeRequiredStatus: statusWriter,
           });
+          const publication = resumed.reason === 'completed'
+            ? await verifyStaleDelivery(getPackReviewRun(run.id, { projectId, storeRoot }) ?? recoveredRun, statusWriter)
+            : { verified: false, reason: resumed.reason };
           results.push({
             runId: run.id,
             terminalized: false,
-            statusReconciled: resumed.reason === 'completed',
+            statusReconciled: publication.verified,
             recovered: true,
             degraded: recoveredRun.reviewRound?.settledSourceCount === 2,
             settledSourceCount: recoveredRun.reviewRound?.settledSourceCount,
             reason: resumed.reason === 'completed'
-              ? 'gpt_source_comments_recovered_and_delivered'
+              ? publication.verified ? 'gpt_source_comments_recovered_and_delivered'
+                : `gpt_source_comments_recovered_delivery_unverified:${publication.reason}`
               : `gpt_source_comments_recovered_delivery_${resumed.reason}`,
             deliveryReason: resumed.reason,
             status: resumed.status,
