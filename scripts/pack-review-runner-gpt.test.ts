@@ -5899,6 +5899,28 @@ describe('Issue #2537 GPT delayed no-judgment error cannot restore cap-one succe
           prNumber, tier: 'T3', startedRunExists: true, options: { storeRoot },
         });
         expect(upgraded.cycle).toMatchObject({ frozenTier: 'T3', frozenCap: 2 });
+        // A same-run verdict requires authenticated original source evidence;
+        // otherwise the run store correctly rejects a synthetic clean verdict.
+        updatePackReviewRun(run.id, {
+          reviewRound: {
+            ...run.reviewRound!,
+            settledSourceCount: 2,
+            sourceSlots: run.reviewRound!.sourceSlots.map((slot, index) => index < 2
+              ? {
+                  ...slot,
+                  terminalClass: 'complete_clean',
+                  terminalResult: {
+                    schema: 'turn-result/v1', state: 'ok',
+                    scope: 'invocation', cause: 'completed_page_only',
+                    invocation_id: slot.invocationId, send_count: 1,
+                    source_comment_authority: 'credentialed_github',
+                    source_comment_receipt: { id: 253770 + index },
+                  },
+                  payload: { verdict: 'clean' as const, findingCount: 0, findings: [] },
+                }
+              : slot),
+          },
+        }, opts);
         const now = '2026-10-13T00:00:00.000Z';
         setPackReviewRunTerminal(run.id, 'up_to_date', {
           reviewVerdict: 'clean', findingCount: 0, findings: [],
