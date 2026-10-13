@@ -3,7 +3,7 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { acceptsClaudeRawReview, runClaudePackReview } from '../bin/review-claude.js';
 import type { ProcessResult, RunProcessOptions } from '../../../scripts/kernel/subprocess.js';
@@ -93,7 +93,13 @@ function initializeReviewTargetDefaultBranch(root: string, guarded: boolean): vo
   writeFileSync(join(root, '.github', 'workflows', 'scope.yml'), workflow, 'utf8');
   git(['add', '.github/workflows/scope.yml']);
   git(['commit', '--quiet', '-m', 'workflow']);
-  git(['remote', 'add', 'origin', `https://github.com/fixture/${guarded ? 'guarded' : 'unguarded'}.git`]);
+  const remoteUrl = 'https://github.com/fixture/' + (guarded ? 'guarded' : 'unguarded') + '.git';
+  git(['remote', 'add', 'origin', remoteUrl]);
+  const bareRemote = join(root, '.git', 'fixture-origin.git');
+  git(['init', '--bare', '--quiet', bareRemote]);
+  git(['--git-dir', bareRemote, 'symbolic-ref', 'HEAD', 'refs/heads/main']);
+  git(['config', 'url.' + pathToFileURL(bareRemote).href + '.insteadOf', remoteUrl]);
+  git(['push', '--quiet', 'origin', 'HEAD:refs/heads/main']);
   git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
   git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
 }
@@ -2106,6 +2112,57 @@ describe('buildReviewPrompt', () => {
 });
 
 describe('resolveScopeContext committed snapshots', () => {
+  it('uses a PR release base even if the remote default and tracking origin/HEAD disagree', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pr-base-'));
+    const git = (args: string[]) => {
+      const result = runProcessSync({ command: 'git', args, cwd: dir, inheritParentEnv: true });
+      if (!result.ok) throw new Error(result.stderr || result.error || 'git failed');
+    };
+    try {
+      initializeReviewTargetDefaultBranch(dir, true);
+      git(['push', '--quiet', 'origin', 'HEAD:refs/heads/release']);
+      writeFileSync(join(dir, '.github', 'workflows', 'scope.yml'), [
+        'on:', '  push:', 'jobs:', '  build:',
+        '    steps:', '      - run: echo not-guarded',
+      ].join('\n'), 'utf8');
+      git(['add', '.github/workflows/scope.yml']);
+      git(['commit', '--quiet', '-m', 'remove default guard']);
+      git(['push', '--quiet', 'origin', 'HEAD:refs/heads/main']);
+      git(['update-ref', 'refs/remotes/origin/release', 'HEAD~1']);
+      git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/release']);
+      expect(resolveScopeContext({ repoRoot: dir, issueNumber: 99 }).guardApplicability).toBe('guard-free');
+      expect(resolveScopeContext({
+        repoRoot: dir, issueNumber: 99, baseRef: 'origin/release',
+      }).guardApplicability).toBe('guarded');
+
+      const saved = {
+        actions: process.env.GITHUB_ACTIONS,
+        event: process.env.GITHUB_EVENT_NAME,
+        base: process.env.GITHUB_BASE_REF,
+      };
+      try {
+        process.env.GITHUB_ACTIONS = 'true';
+        process.env.GITHUB_EVENT_NAME = 'pull_request';
+        process.env.GITHUB_BASE_REF = 'release';
+        // The existing executeReview caller does not pass a new argument:
+        // its scope resolver still selects the actual Actions PR base.
+        const scope = resolveScopeContext({ repoRoot: dir, issueNumber: 99 });
+        expect(scope.guardApplicability).toBe('guarded');
+        expect(formatScopeSection({ ...scope, hasScope: true })).toContain('guarded');
+      } finally {
+        for (const [key, value] of [
+          ['GITHUB_ACTIONS', saved.actions], ['GITHUB_EVENT_NAME', saved.event],
+          ['GITHUB_BASE_REF', saved.base],
+        ] as const) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('prefers chain head over lexicographically later iteration ids', () => {
     const dir = mkdtempSync(join(tmpdir(), 'codex-scope-'));
     const snapshotDir = join(dir, 'docs', 'declarations');
