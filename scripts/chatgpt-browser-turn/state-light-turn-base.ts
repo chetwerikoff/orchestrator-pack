@@ -4267,10 +4267,14 @@ async function runTurnCore(
       if (composerState.state !== 'ready' && Date.now() >= invocationDeadlineMs) {
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
-      if (composerState.state !== 'ready' && composerState.cause === 'composer_unavailable') {
+      if (reopenedExistingComposer && composerState.state !== 'ready'
+        && composerState.cause === 'composer_unavailable') {
         return returnComposerMutationFailure('composer_unavailable');
       }
-      if (composerState.state !== 'ready') {
+      // Preserve the pre-existing mutation fallback for initial readiness probes.
+      // A very short timeout can make their reserved readiness window zero,
+      // even though a physical composer remains actionable (#2495/#2538).
+      if (composerState.state !== 'ready' && composerState.cause !== 'composer_unavailable') {
         incident('invocation_blocker', composerState.cause, 'return_local_error');
         return {
           page, browser,
