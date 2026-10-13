@@ -995,6 +995,7 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     expect(run.send).toHaveBeenCalledTimes(1);
     expect(run.fill).toHaveBeenCalledTimes(1);
     expect(run.result.send_count).toBe(1);
+    expect(run.result.send_attempted).toBe(true);
     expect(run.observer.phase).toBe('sent_unharvested');
     expect(run.finalUrl).toBe('https://chatgpt.com/c/25602560-2560-4560-8560-256025602560');
   });
