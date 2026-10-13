@@ -127,7 +127,7 @@ export interface PackReviewCycle {
 
 export interface PackReviewResetProvenance {
   priorCycleId: string;
-  priorAtCapHash: string;
+  priorAtCapHash?: string;
   actor: string;
   reason: string;
   timestampUtc: string;
@@ -1465,6 +1465,8 @@ export function acknowledgePackReviewReset(input: {
   headSha: string;
   tier: PackReviewTier;
   provenance: PackReviewResetProvenance;
+  /** Runner proved a changed linked body against the terminal's immutable snapshot. */
+  completedFindingsBodyAmended?: boolean;
   capMapVersion?: typeof PACK_REVIEW_CAP_MAP_VERSION | typeof PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
   options: PackReviewAuthorityOptions;
 }): PackReviewAuthorityDocument {
@@ -1474,15 +1476,29 @@ export function acknowledgePackReviewReset(input: {
     nextPhase: 'head_observed',
     mutate(current) {
       const cycle = current.cycle;
-      if (!cycle || !['at_cap_open_findings', 'at_cap_continuation_required'].includes(cycle.state)) {
-        throw new PackReviewAuthorityError('reset_invalid', 'cycle is not at cap');
+      const pendingAtCap = cycle && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(cycle.state)
+        && cycle.reviewStageComplete !== true;
+      const completedFindings = cycle && input.completedFindingsBodyAmended === true
+        && cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+        && cycle.state === 'closed' && cycle.reviewStageComplete === true
+        && cycle.consumedRoundOrdinals?.length === cycle.frozenCap
+        && cycle.consumedRoundOrdinals.at(-1) === cycle.frozenCap
+        && current.terminal?.reviewVerdict === 'findings'
+        && current.terminal.logicalRoundOrdinal === cycle.frozenCap
+        && (cycle.settlementKind === 'same_head_issue_resolution'
+          || current.currentHeadSha !== current.terminal.targetSha);
+      if (!pendingAtCap && !completedFindings) {
+        throw new PackReviewAuthorityError('reset_invalid', 'cycle is not an eligible findings cap');
       }
-      if (cycle.reviewStageComplete === true) {
-        throw new PackReviewAuthorityError('reset_invalid', 'completed review stage cannot replenish automatic budget');
-      }
-      if (input.provenance.priorCycleId !== cycle.cycleId
-          || input.provenance.priorAtCapHash !== cycle.atCapHash) {
+      if (input.provenance.priorCycleId !== cycle!.cycleId
+          || (cycle!.atCapHash
+            ? input.provenance.priorAtCapHash !== cycle!.atCapHash
+            : !completedFindings || input.provenance.priorAtCapHash !== undefined)) {
         throw new PackReviewAuthorityError('reset_invalid', 'prior cycle/hash mismatch');
+      }
+      if (input.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+          && ({ T1: 1, T2: 2, T3: 3 } as const)[input.tier] < ({ T1: 1, T2: 2, T3: 3 } as const)[cycle!.frozenTier]) {
+        throw new PackReviewAuthorityError('reset_invalid', 'authoritative tier cannot be lowered');
       }
       nonEmpty(input.provenance.actor, 'actor');
       nonEmpty(input.provenance.reason, 'reason');
