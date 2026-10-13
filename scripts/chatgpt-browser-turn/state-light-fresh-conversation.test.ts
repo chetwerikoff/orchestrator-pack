@@ -1637,6 +1637,25 @@ describe('state-light fresh conversation collision recovery', () => {
   }
 
   it.each([
+    ['locator timeout', 'count', 'browser_operation_timeout:locator_count', 'browser_operation_timeout:locator_count'],
+    ['network change', 'evaluate', 'page.evaluate: net::ERR_NETWORK_CHANGED', 'network_changed'],
+  ])('reports observed pre-Send %s without dispatching a fresh prompt (#2541 AC4)', async (_kind, source, failure, cause) => {
+    const prompt = 'OBSERVED-PRE-SEND-FAILURE';
+    const solo = makeLoserPage(prompt, 'SHOULD-NOT-SEND');
+    if (source === 'count') solo.composer.count.mockRejectedValue(new Error(failure));
+    else solo.composer.evaluate.mockRejectedValue(new Error(failure));
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(
+      solo.page, join(stateDir, 'composer-probe-' + randomUUID() + '.txt'), '61000',
+    );
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause, send_count: 0,
+    });
+    expect(solo.getSends()).toBe(0);
+    expect(solo.sendButton.click).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ['root', 'https://chatgpt.com/c/not-a-uuid'],
     ['project', `${PROJECT_CONVERSATION_ROOT}/c/not-a-uuid`],
     ['legacy', 'https://chat.openai.com/c/11111111-1111-4111-8111-not-a-uuid'],
