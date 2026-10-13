@@ -524,11 +524,27 @@ function classifyProbe(
       if (inspect) {
         return recoverObservation(context, producer, value, 'execute_owned_turn_reobserve');
       }
+      // Successful inspect transport without owned recovery evidence is not settlement.
+      if (value.operation === 'inspect') {
+        return recoverObservation(context, producer, value, 'execute_probe_observation_unavailable');
+      }
       return completed(context, producer, 'execute_probe_observation_completed');
     }
     case 'not_found':
-      if (trustedMissingInspectTarget(value, context)) {
-        return recoverable(context, producer, 'execute_github_first_reconciliation', githubFirstAction(context));
+      if (reason === 'target_not_found') {
+        if (trustedMissingInspectTarget(value, context)) {
+          return recoverable(context, producer, 'execute_github_first_reconciliation', githubFirstAction(context));
+        }
+        // Missing CDP target is not owned-page death; do not retry that target blindly.
+        if (hasIdentity(context)) {
+          return pause(context, producer, 'external:content_authority_conflict', value,
+            'recover the retained exact profile/invocation/target binding before further owned observation');
+        }
+        const census = censusAction(context);
+        return census
+          ? recoverable(context, producer, 'execute_probe_target_unavailable', census)
+          : pause(context, producer, 'external:chrome_not_running', value,
+            'restore CDP for a distinct read-only census; preserve the incumbent invocation');
       }
       return recoverObservation(context, producer, value, 'execute_probe_reobserve');
     case 'stale_node':

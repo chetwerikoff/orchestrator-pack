@@ -1,6 +1,9 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
 import type { ProbeStatus } from '../browser-gpt-page-probe.ts';
 import {
@@ -16,6 +19,11 @@ import {
   type ExecuteIssueManagerBoundaryContext,
 } from './execute-issue-manager-boundary.ts';
 import { runExecuteIssueManagerBoundaryCli } from '../execute-issue-manager-boundary.ts';
+import { classifyBrowserGptPageTurnStatus } from '../chatgpt-browser-turn/state-light-turn-base.ts';
+import {
+  COMPLETION_MODE, HANDOFF_SCHEMA, RECEIPT_LOCATOR_SCHEMA, TERMINAL_SCHEMA,
+  invocationReceiptLocatorPath, readInvocationReceiptLocator, runWait,
+} from '../flow-manager-long-running-child.ts';
 
 const context: ExecuteIssueManagerBoundaryContext = {
   repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2081, sourceRevision: 'r03', phase: 'smoke',
@@ -685,4 +693,195 @@ describe('execute-Issue manager boundary', () => {
     expect(expectReadOnly(accepted).argv).toEqual(valid.argv);
   });
 
+});
+
+describe('Issue #2544: unavailable observation and Task-owned receipt recovery', () => {
+  const roots: string[] = [];
+  const runIdentity = 'run-shared-2544';
+  const attemptIdentity = 'attempt-shared-2544';
+  const ownTask = 'task-owned-2544';
+  const ownDispatch = 'dispatch-owned-2544';
+
+  function fixture(ownerTaskId: string | null = ownTask, ownerDispatchId: string | null = ownDispatch, invocationId = '3082cce5') {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2544-owner-'));
+    roots.push(root);
+    const receiptPath = join(root, 'handoff.json');
+    const envelopePath = join(root, 'terminal.json');
+    const locatorPath = invocationReceiptLocatorPath(invocationId, root);
+    mkdirSync(join(root, 'browser-gpt-receipts'), { recursive: true, mode: 0o700 });
+    const receipt = {
+      schema: HANDOFF_SCHEMA, run_identity: runIdentity, attempt_identity: attemptIdentity,
+      launcher_started_at: '2026-10-13T00:00:00.000Z',
+      handoff_committed_at: '2026-10-13T00:00:01.000Z',
+      completion_mode: COMPLETION_MODE, invocation_id: invocationId,
+      ...(ownerTaskId !== null ? { owner_task_id: ownerTaskId } : {}),
+      ...(ownerDispatchId !== null ? { owner_dispatch_id: ownerDispatchId } : {}),
+      child_cwd: root, launcher_pid: process.pid,
+    };
+    const saveReceipt = (updated: Record<string, unknown> = receipt) =>
+      writeFileSync(receiptPath, JSON.stringify(updated), { mode: 0o600 });
+    saveReceipt();
+    writeFileSync(locatorPath, JSON.stringify({
+      schema: RECEIPT_LOCATOR_SCHEMA, invocation_id: invocationId,
+      run_identity: runIdentity, attempt_identity: attemptIdentity,
+      handoff_receipt_path: receiptPath, terminal_envelope_path: envelopePath,
+    }), { mode: 0o600 });
+    const saveTerminal = (observedInvocationId: string = invocationId) =>
+      writeFileSync(envelopePath, JSON.stringify({
+        schema: TERMINAL_SCHEMA, run_identity: runIdentity, attempt_identity: attemptIdentity,
+        completion_mode: COMPLETION_MODE, handoff_receipt_path: receiptPath,
+        launcher_started_at: receipt.launcher_started_at,
+        handoff_committed_at: receipt.handoff_committed_at,
+        terminal_at: '2026-10-13T00:00:02.000Z',
+        lifecycle_outcome: 'success', delivery: 'landed', recovery_available: false,
+        observed_invocation_id: observedInvocationId,
+      }), { mode: 0o600 });
+    return { root, receiptPath, envelopePath, locatorPath, receipt, invocationId, saveReceipt, saveTerminal };
+  }
+
+  const indexed = (f: ReturnType<typeof fixture>) => ({
+    runIdentity, attemptIdentity, invocationId: f.invocationId,
+    terminalEnvelopeRoot: f.root, deadlineMs: 30,
+  });
+  const explicit = (f: ReturnType<typeof fixture>) => ({
+    runIdentity, attemptIdentity, invocationId: f.invocationId,
+    handoffReceiptPath: f.receiptPath, terminalEnvelopePath: f.envelopePath,
+    deadlineMs: 30,
+  });
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it('keeps target_not_found uncertain, changes observation surface, and never manufactures page death or Send', () => {
+    const bound = { ...context, profile: 'owned-profile', invocationId: 'owned-invocation', targetId: 'owned-target' };
+    const missing = probe('not_found', { reason: 'target_not_found' });
+    for (const headSha of ['a'.repeat(40), 'b'.repeat(40)]) {
+      const result = classifyExecuteIssueManagerRecord(missing, { ...bound, headSha });
+      expect(result.exitCode).toBe(3);
+      expect(expectReadOnly(result).kind).toBe('execute-github-first-read-only');
+      expect(JSON.stringify(result.result)).not.toContain('dead_turn_page_evidence');
+    }
+    const unbound = classifyExecuteIssueManagerRecord(missing, context);
+    expect(expectReadOnly(unbound)).toMatchObject({ kind: 'execute-observe-owned-turn' });
+    expect(expectReadOnly(unbound).argv).toContain('list');
+    for (const partial of [
+      { ...bound, invocationId: undefined },
+      { ...bound, profile: undefined },
+    ]) {
+      const result = classifyExecuteIssueManagerRecord(missing, partial);
+      expect(result.exitCode).toBe(4);
+      expect(result.result).toMatchObject({ cause: 'external:content_authority_conflict', nextAction: null });
+    }
+    const contradictory = classifyExecuteIssueManagerRecord(probe('not_found', {
+      reason: 'target_not_found', profile: 'other-profile',
+    }), bound);
+    expect(contradictory.exitCode).toBe(4);
+    const absentInspect = classifyExecuteIssueManagerRecord(probe('ok'), bound);
+    expect(absentInspect.exitCode).toBe(3);
+    expect(expectReadOnly(absentInspect).kind).toBe('execute-observe-owned-turn');
+    expect(expectReadOnly(classifyExecuteIssueManagerRecord(probe('surface_unknown'), bound)).kind)
+      .toBe('execute-observe-owned-turn');
+    expect(classifyExecuteIssueManagerRecord(probe('unavailable', { reason: 'cdp_unavailable' }), bound))
+      .toMatchObject({ exitCode: 4, result: { nextAction: null } });
+    expect(expectReadOnly(classifyExecuteIssueManagerRecord(probe('ok', {
+      execution_recovery_inspect: { generation_in_progress: true },
+    }), bound)).kind).toBe('execute-observe-owned-turn');
+  });
+
+  it('checks only the page helper truth-table, not runTurnCore ownership/deadline/two-read proof', () => {
+    expect(classifyBrowserGptPageTurnStatus(false, 0)).toBe('dead');
+    expect(classifyBrowserGptPageTurnStatus(true, 0)).toBe('long_running');
+    expect(classifyBrowserGptPageTurnStatus('unknown', 0)).toBe('unknown');
+    expect(classifyBrowserGptPageTurnStatus(false, 1)).toBe('completed');
+  });
+
+  it('rejects foreign, missing, blank, Dispatch-drift and wrong Run/attempt/invocation in indexed selection and both wait modes', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      for (const foreignOwner of ['task_7788ba8bad1c', null, '']) {
+        const f = fixture(foreignOwner);
+        expect(() => readInvocationReceiptLocator({
+          ...indexed(f), ownerTaskId: ownTask, ownerDispatchId: ownDispatch,
+        })).toThrow(/wait_receipt_owner_mismatch/u);
+        for (const opts of [indexed(f), explicit(f)]) {
+          await expect(runWait({ ...opts, ownerTaskId: ownTask, ownerDispatchId: ownDispatch }))
+            .rejects.toThrow(/wait_receipt_owner_mismatch/u);
+        }
+      }
+      const f = fixture();
+      await expect(runWait({
+        ...indexed(f), receiptLocator: f.locatorPath,
+        invocationId: 'f7c20424', ownerTaskId: ownTask,
+      })).rejects.toThrow(/receipt_locator_identity_mismatch/u);
+      await expect(runWait({
+        runIdentity, attemptIdentity, receiptLocator: f.locatorPath,
+        ownerTaskId: ownTask, deadlineMs: 30,
+      })).rejects.toThrow(/wait_invocation_identity_required/u);
+      expect(() => readInvocationReceiptLocator({
+        ...indexed(f), ownerTaskId: ownTask, ownerDispatchId: 'dispatch-foreign',
+      })).toThrow(/wait_receipt_owner_mismatch/u);
+      for (const opts of [indexed(f), explicit(f)]) {
+        await expect(runWait({ ...opts, ownerTaskId: ownTask, ownerDispatchId: 'dispatch-foreign' }))
+          .rejects.toThrow(/wait_receipt_owner_mismatch/u);
+        await expect(runWait({ ...opts, runIdentity: 'other-run', ownerTaskId: ownTask }))
+          .rejects.toThrow();
+        await expect(runWait({ ...opts, attemptIdentity: 'other-attempt', ownerTaskId: ownTask }))
+          .rejects.toThrow();
+        await expect(runWait({ ...opts, invocationId: 'f7c20424', ownerTaskId: ownTask }))
+          .rejects.toThrow();
+      }
+      expect(stdout).not.toHaveBeenCalled();
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('returns matching Task/Dispatch receipts and preserves unbound indexed and explicit legacy results', async () => {
+    const f = fixture();
+    f.saveTerminal();
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      for (const opts of [indexed(f), explicit(f), {
+        ...indexed(f), receiptLocator: f.locatorPath,
+      }]) {
+        await runWait({ ...opts, ownerTaskId: ownTask, ownerDispatchId: ownDispatch });
+        expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+          schema: 'flow-manager-long-running-child-wait/v1', terminal: true,
+          envelope: { delivery: 'landed', observed_invocation_id: f.invocationId },
+        });
+      }
+      // A legacy receipt without owner fields must remain usable only when unbound.
+      const legacy = fixture(null, null, 'legacy-invocation');
+      legacy.saveTerminal();
+      await runWait(indexed(legacy));
+      await runWait({
+        runIdentity, attemptIdentity, handoffReceiptPath: legacy.receiptPath,
+        terminalEnvelopePath: legacy.envelopePath, deadlineMs: 30,
+      });
+      expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).envelope.delivery).toBe('landed');
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('rejects final receipt replacement on indexed and explicit Task-bound waits before any output', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      for (const mode of ['indexed', 'explicit'] as const) {
+        const f = fixture();
+        const options = mode === 'indexed' ? indexed(f) : explicit(f);
+        setTimeout(() => f.saveReceipt({ ...f.receipt, owner_task_id: 'task_7788ba8bad1c' }), 5);
+        await expect(runWait({
+          ...options, ownerTaskId: ownTask, ownerDispatchId: ownDispatch, deadlineMs: 75,
+        })).rejects.toThrow(/wait_receipt_owner_mismatch|wait_receipt_identity_changed/u);
+      }
+      const f = fixture();
+      f.saveTerminal('foreign-invocation');
+      await expect(runWait({ ...explicit(f), ownerTaskId: ownTask, ownerDispatchId: ownDispatch }))
+        .rejects.toThrow(/wait_receipt_identity_changed/u);
+      expect(stdout).not.toHaveBeenCalled();
+    } finally {
+      stdout.mockRestore();
+    }
+  });
 });
