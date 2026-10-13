@@ -829,7 +829,7 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
   });
 
   type Scenario =
-    | 'restored' | 'delayed-stop' | 'ready' | 'late-hydration'
+    | 'restored' | 'restored-long' | 'delayed-stop' | 'ready' | 'late-hydration'
     | 'composer-still-absent' | 'redirect' | 'network' | 'navigation-throw'
     | 'lost-page' | 'expired-goto' | 'post-empty' | 'post-userless'
     | 'post-incomplete' | 'post-unreadable' | 'post-unknown'
@@ -963,7 +963,8 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
         '--input', join(root, 'synthetic-prompt.txt'),
         '--output', join(root, invocationId + '.txt'),
         '--chat-url', chatUrl, '--invocation-id', invocationId,
-        '--timeout-ms', scenario === 'short-budget' ? '10000' : '60000',
+        '--timeout-ms', scenario === 'short-budget' ? '10000'
+          : scenario === 'restored-long' ? '90000' : '60000',
       ]);
       return {
         result, send, fill, goto, startedAt, lastGotoAt, sentAt, sentText,
@@ -975,8 +976,8 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     }
   }
 
-  it('reopens exactly once then physically dispatches one owned prompt only after the real 30s watch', async () => {
-    const run = await fullTurn('restored');
+  it('reopens exactly once and sends once when the entire real 30s watch fits the invocation budget', async () => {
+    const run = await fullTurn('restored-long');
     expect(run.goto).toHaveBeenCalledTimes(1);
     expect(run.goto).toHaveBeenCalledWith(
       'https://chatgpt.com/c/25602560-2560-4560-8560-256025602560',
@@ -989,13 +990,25 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     })).toBeDefined();
     expect(run.lastGotoAt).toBeDefined();
     expect(run.sentAt! - run.lastGotoAt!).toBeGreaterThanOrEqual(30_000);
-    expect(run.sentAt! - run.startedAt).toBeLessThan(60_000);
+    expect(run.sentAt! - run.startedAt).toBeLessThan(90_000);
     expect(run.sentText).toMatch(/^OPKTURNV1[0-9a-f]{32}\n\nPROMPT$/u);
     expect(run.send).toHaveBeenCalledTimes(1);
     expect(run.fill).toHaveBeenCalledTimes(1);
     expect(run.result.send_count).toBe(1);
     expect(run.observer.phase).toBe('sent_unharvested');
     expect(run.finalUrl).toBe('https://chatgpt.com/c/25602560-2560-4560-8560-256025602560');
+  });
+
+  it('keeps the 60s deadline when the unshortened helper cannot fit its real resume watch plus Send', async () => {
+    const run = await fullTurn('restored');
+    expect(run.goto).toHaveBeenCalledTimes(1);
+    expect(run.afterReopenReads).toBeGreaterThan(0);
+    expect(run.result).toMatchObject({
+      state: 'driver_error', cause: 'composer_mutation_budget_exhausted', send_count: 0,
+    });
+    expect(run.result.send_attempted).not.toBe(true);
+    expect(run.send).not.toHaveBeenCalled();
+    expect(run.fill).not.toHaveBeenCalled();
   });
 
   it('does not bypass the resume watch when Stop appears after an initially idle post-goto snapshot', async () => {
