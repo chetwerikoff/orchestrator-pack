@@ -6295,7 +6295,63 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         httpStatus: 409,
       };
     }
+    // A completed findings reset does not re-key the historical exact-head
+    // snapshot. Refuse stale H1/B0 before the producer or any new review run.
+    const reopened = readPackReviewAuthority(target.prNumber, { storeRoot });
+    const firstResetRound = reopened?.cycle?.state === 'open'
+      && reopened.cycle.resetProvenance !== undefined
+      && reopened.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && reopened.cycle.consumedRoundOrdinals?.length === 0;
+    let reopenedLiveBody: string | undefined;
+    if (firstResetRound) {
+      try {
+        if (!target.issueNumber) throw new Error('actual PR closing Issue unresolved');
+        reopenedLiveBody = process.env.OPK_VITEST_HARNESS === '1'
+          ? input.fixtureIssueBody
+          : (await resolveCurrentIssueFields(target.sourceRepoRoot, target.repoSlug, target.issueNumber)).body;
+        if (reopenedLiveBody === undefined) throw new Error('amended PR-closing Issue body unavailable');
+        const existingSnapshot = resolveBoundIssueSnapshot({
+          projectId, prNumber: target.prNumber, prHeadSha: target.headSha,
+          issueNumber: target.issueNumber,
+          storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+        });
+        if (existingSnapshot.status === 'corrupted') throw new Error('existing exact-head Issue snapshot corrupted');
+        if (existingSnapshot.status === 'found'
+            && existingSnapshot.snapshotHash !== computeBoundIssueSnapshotHash(reopenedLiveBody)) {
+          await releaseEarlyClaim('completed_reset_stale_exact_head_snapshot');
+          return {
+            ok: false, created: false, reused: false, httpStatus: 409,
+            prNumber: target.prNumber, headSha: target.headSha,
+            cycleId: reopened?.cycle?.cycleId,
+            reason: 'completed_reset_stale_exact_head_snapshot',
+            nextAction: `start one new review round on the current head; an Issue amendment resets the cap: the immutable snapshot on this PR head is stale; advance this same PR to a fresh head with a genuine change, then run npm run --silent pack-gpt-review -- --project ${projectId} --pr-number ${target.prNumber} on that new head; do not overwrite the historical snapshot or consume a stale review round.`,
+          };
+        }
+      } catch (error) {
+        await releaseEarlyClaim('completed_reset_snapshot_unverified');
+        return { ok: false, created: false, reused: false, httpStatus: 409,
+          prNumber: target.prNumber, headSha: target.headSha,
+          reason: 'completed_reset_snapshot_unverified', detail: describeError(error),
+          nextAction: 'restore the real PR-closing Issue and exact bound snapshot binding before starting this audited cycle' };
+      }
+    }
     const authoritative = await resolveAuthoritativeReviewContext(input, target, projectId);
+    if (firstResetRound) {
+      const captured = target.issueNumber && resolveBoundIssueSnapshot({
+        projectId, prNumber: target.prNumber, prHeadSha: target.headSha,
+        issueNumber: target.issueNumber,
+        storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+      });
+      if (!captured || captured.status !== 'found'
+          || captured.snapshotHash !== authoritative.snapshotDigest
+          || authoritative.snapshotDigest !== computeBoundIssueSnapshotHash(reopenedLiveBody!)) {
+        await releaseEarlyClaim('completed_reset_new_head_snapshot_unverified');
+        return { ok: false, created: false, reused: false, httpStatus: 409,
+          prNumber: target.prNumber, headSha: target.headSha,
+          reason: 'completed_reset_new_head_snapshot_unverified',
+          nextAction: 'verify the persisted new-head snapshot against the live amended Issue body before retrying the same audited cycle' };
+      }
+    }
     if (target.operatorStart?.boundSnapshot
         && authoritative.snapshotDigest !== target.operatorStart.boundSnapshot) {
       throw new Error(
@@ -6378,10 +6434,40 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       });
     }
 
+    // Reuse the same final-cap evidence and publication decision as scoped
+    // reconciliation. Do not let start settle first or swallow its refusal.
+    const finalFindings = authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && authority.terminal?.reviewVerdict === 'findings'
+      && (['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
+        || (authority.cycle.state === 'closed' && authority.cycle.reviewStageComplete === true
+          && authority.terminal.targetSha !== target.headSha));
+    if (finalFindings) {
+      const result = await reconcileFinalCapSettlement({
+        projectId, storeRoot, prNumber: target.prNumber,
+        repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+        fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
+        fixturePrBody: input.fixturePrBody, fixturePrState: input.fixturePrState,
+        fixtureIssueNumber: input.fixtureIssueNumber,
+        fixtureIssueBody: input.fixtureIssueBody, fixtureIssueTitle: input.fixtureIssueTitle,
+        fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
+        fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+        fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
+      }, { projectId, storeRoot, repoSlug: target.repoSlug });
+      await releaseEarlyClaim(result?.settled === true ? 'final_cap_descendant_settled' : 'final_cap_settlement_refused');
+      return result?.settled === true
+        ? { ok: true, created: false, reused: true, prNumber: target.prNumber,
+            headSha: target.headSha, reason: result.reason,
+            statusPublished: true, publicationVerified: true, httpStatus: 200 }
+        : { ok: false, created: false, reused: false, prNumber: target.prNumber,
+            headSha: target.headSha, reason: result?.reason ?? 'final_cap_settlement_unverified',
+            ...(result?.detail ? { detail: result.detail } : {}),
+            nextAction: result?.nextAction ?? 'restore verified final-cap binding and retry scoped reconcile',
+            httpStatus: 409 };
+    }
     if (authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
         && authority.terminal?.reviewVerdict === 'findings'
         && authority.terminal.targetSha !== target.headSha
-        && ['open_findings', 'at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)) {
+        && authority.cycle.state === 'open_findings') {
       const reviewedHeadSha = authority.terminal.targetSha;
       const strictDescendant = await resolvePackReviewStrictDescendant({
         repoRoot: target.sourceRepoRoot,
@@ -6392,12 +6478,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       });
       if (strictDescendant) {
         authority = settleLogicalPackReviewFindingsByStrictDescendant({
-          prNumber: target.prNumber,
-          expectedTransitionSeq: authority.transitionSeq,
-          reviewedHeadSha,
-          currentHeadSha: target.headSha,
-          reviewedHeadIsAncestor: true,
-          options: authorityOptions,
+          prNumber: target.prNumber, expectedTransitionSeq: authority.transitionSeq,
+          reviewedHeadSha, currentHeadSha: target.headSha,
+          reviewedHeadIsAncestor: true, options: authorityOptions,
         });
       }
     }
@@ -8072,32 +8155,139 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
 
 async function resetPackReview(input: Record<string, unknown>): Promise<Record<string, unknown>> {
   const trusted = resolveTrustedRunnerPaths();
-  const projectId = trim(input.projectId) || DEFAULT_PROJECT_ID;
-  const target = await resolveTarget(input as StartInput, trusted.trustedPackRoot);
-  const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: trim(input.storeRoot) || undefined });
+  const projectId = trim(input.projectId || input.targetProjectId);
+  const selected = resolveTargetContext({ projectId, env: process.env });
+  if (trim(input.projectId) && trim(input.projectId) !== selected.projectId) {
+    throw new Error('reset selected project/store mismatch');
+  }
+  const target = await resolveTarget(input as StartInput, trusted.trustedPackRoot, undefined, selected);
+  if (target.repoSlug.toLowerCase() !== selected.repository.toLowerCase()) {
+    throw new Error('reset selected repository mismatch');
+  }
+  const storeRoot = resolvePackReviewRunStoreRoot({
+    projectId: selected.projectId, storeRoot: trim(input.storeRoot) || undefined,
+  });
   const authority = readPackReviewAuthority(target.prNumber, { storeRoot });
-  if (!authority?.cycle?.atCapHash) throw new Error('reset requires an at-cap authority record');
+  if (!authority?.cycle) throw new Error('reset requires an authoritative review cycle');
+  if (authority.currentHeadSha !== target.headSha) {
+    throw new Error('reset PR head/authority changed; observe this selected PR head before retrying');
+  }
   const actor = trim(input.actor);
   const reason = trim(input.reason);
   const nonce = trim(input.nonce);
   if (!actor || !reason || !nonce) throw new Error('reset requires --actor, --reason, and --nonce');
+  if (!target.issueNumber) throw new Error('reset requires the actual PR-closing Issue');
+  const fields = process.env.OPK_VITEST_HARNESS === '1'
+    && (input as StartInput).fixtureIssueBody !== undefined
+    && (input as StartInput).fixtureIssueTitle !== undefined
+    ? { body: (input as StartInput).fixtureIssueBody!, title: (input as StartInput).fixtureIssueTitle! }
+    : await resolveCurrentIssueFields(target.sourceRepoRoot, target.repoSlug, target.issueNumber);
+  const liveTier = parseAuthoritativeTier(fields.body, fields.title);
+  const tierRank = { T1: 1, T2: 2, T3: 3 } as const;
+  const authoritativeTier = tierRank[liveTier] > tierRank[authority.cycle.frozenTier]
+    ? liveTier : authority.cycle.frozenTier;
+  const completed = authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    && authority.cycle.state === 'closed'
+    && authority.cycle.reviewStageComplete === true
+    && authority.cycle.consumedRoundOrdinals?.length === authority.cycle.frozenCap
+    && authority.terminal?.reviewVerdict === 'findings'
+    && authority.terminal.logicalRoundOrdinal === authority.cycle.frozenCap
+    && (authority.cycle.settlementKind === 'same_head_issue_resolution'
+      || authority.currentHeadSha !== authority.terminal.targetSha);
+  let completedFindingsBodyAmended = false;
+  if (completed) {
+    const terminal = authority.terminal!;
+    const priorRun = getPackReviewRun(terminal.runId, {
+      projectId: selected.projectId, storeRoot,
+    });
+    const frozen = resolveBoundIssueSnapshot({
+      projectId: selected.projectId, prNumber: target.prNumber,
+      prHeadSha: terminal.targetSha, issueNumber: target.issueNumber,
+      storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+    });
+    if (!priorRun || priorRun.id !== terminal.runId || priorRun.runId !== terminal.runId
+        || priorRun.projectId !== selected.projectId || priorRun.prNumber !== target.prNumber
+        || priorRun.canonicalRepository?.toLowerCase() !== selected.repository.toLowerCase()
+        || priorRun.targetSha !== terminal.targetSha
+        || priorRun.headSha !== terminal.targetSha
+        || priorRun.reviewCycleId !== authority.cycle.cycleId
+        || priorRun.logicalRoundOrdinal !== authority.cycle.frozenCap
+        || priorRun.logicalRoundCap !== authority.cycle.frozenCap
+        || priorRun.reviewVerdict !== 'findings'
+        || frozen.status !== 'found' || !frozen.snapshotHash
+        || frozen.metadata?.capturePhase !== 'review-preflight'
+        || (priorRun.reviewRound
+          ? priorRun.reviewRound.issueNumber !== target.issueNumber
+            || priorRun.reviewRound.boundIssueSnapshotDigest !== frozen.snapshotHash
+          : !['codex', 'claude'].includes(priorRun.resolvedReviewer ?? ''))) {
+      throw new Error('completed reset requires verified exact last findings terminal and bound Issue body');
+    }
+    completedFindingsBodyAmended = computeBoundIssueSnapshotHash(fields.body) !== frozen.snapshotHash;
+    if (!completedFindingsBodyAmended) {
+      throw new Error('completed findings reset requires an actual linked Issue body amendment');
+    }
+    const liveHead = process.env.OPK_VITEST_HARNESS === '1'
+      ? trim((input as StartInput).fixtureCurrentPrHeadSha).toLowerCase()
+      : await resolveCurrentPrHead(target.sourceRepoRoot, target.repoSlug, target.prNumber);
+    if (liveHead !== target.headSha) throw new Error('PR head moved before reset pending publication');
+    const writeStatus = (input as StartInput).fixtureRequiredStatusWriter
+      ?? ((request: Parameters<PackReviewRequiredStatusWriter>[0]) => publishPackReviewRequiredStatus({
+        repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+        headSha: target.headSha, request,
+      }));
+    await writeStatus({
+      state: 'pending', context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+      description: 'Amended Issue requires a new audited review cycle.',
+      idempotencyKey: `issue-amendment-reset:${authority.cycle.cycleId}:${nonce}:${target.headSha}`,
+    });
+    const pending = await readFinalCapRequiredStatus({
+      sourceRepoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+      fixtureRequiredStatusReader: (input as StartInput).fixtureRequiredStatusReader,
+    }, target.repoSlug, target.headSha);
+    const latest = readPackReviewAuthority(target.prNumber, { storeRoot });
+    const liveHeadAfter = process.env.OPK_VITEST_HARNESS === '1'
+      ? trim((input as StartInput).fixtureCurrentPrHeadSha).toLowerCase()
+      : await resolveCurrentPrHead(target.sourceRepoRoot, target.repoSlug, target.prNumber);
+    if (pending !== 'pending' || liveHeadAfter !== target.headSha
+        || latest?.transitionSeq !== authority.transitionSeq
+        || latest.currentHeadSha !== target.headSha) {
+      throw new Error('completed reset pending status/unchanged authority not confirmed; restore pending status before retrying');
+    }
+  } else if (!authority.cycle.atCapHash) {
+    throw new Error('reset requires an eligible at-cap findings record');
+  }
+
+  const suppliedHash = trim(input.priorAtCapHash);
+  if (suppliedHash && suppliedHash !== authority.cycle.atCapHash) {
+    throw new Error('reset supplied prior at-cap hash mismatch');
+  }
   const reset = acknowledgePackReviewReset({
     prNumber: target.prNumber,
     expectedTransitionSeq: authority.transitionSeq,
     headSha: target.headSha,
-    tier: (trim(input.tier) || 'T3').toUpperCase() as PackReviewTier,
+    tier: authoritativeTier,
+    completedFindingsBodyAmended,
     provenance: {
       priorCycleId: trim(input.priorCycleId) || authority.cycle.cycleId,
-      priorAtCapHash: trim(input.priorAtCapHash) || authority.cycle.atCapHash,
-      actor,
-      reason,
-      timestampUtc: trim(input.timestampUtc) || new Date().toISOString(),
-      nonce,
+      ...(authority.cycle.atCapHash ? { priorAtCapHash: authority.cycle.atCapHash } : {}),
+      actor, reason, timestampUtc: trim(input.timestampUtc) || new Date().toISOString(), nonce,
     },
     capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
     options: { storeRoot },
   });
-  return { ok: true, prNumber: target.prNumber, headSha: target.headSha, cycleId: reset.cycle?.cycleId };
+  if (completed) {
+    const confirmed = await readFinalCapRequiredStatus({
+      sourceRepoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+      fixtureRequiredStatusReader: (input as StartInput).fixtureRequiredStatusReader,
+    }, target.repoSlug, target.headSha);
+    if (confirmed !== 'pending') throw new Error('reopened cycle was persisted but current-head non-success is unverified');
+  }
+  return {
+    ok: true, projectId: selected.projectId, repository: selected.repository,
+    prNumber: target.prNumber, headSha: target.headSha, cycleId: reset.cycle?.cycleId,
+    previousCycleId: authority.cycle.cycleId,
+    ...(completed ? { requiredStatusState: 'pending' } : {}),
+  };
 }
 
 function usage(): string {
@@ -8117,7 +8307,7 @@ function usage(): string {
     '  node --experimental-strip-types scripts/pack-review-runner.ts reconcile --source-repo-root <path> --repo-slug owner/name [--pr-number <n>] [--immediate]',
     '',
     'Audited cap reset:',
-    '  node --experimental-strip-types scripts/pack-review-runner.ts reset --pr-number <n> --actor <id> --reason <text> --nonce <value>',
+    '  node --experimental-strip-types scripts/pack-review-runner.ts reset --project <id> --pr-number <n> --actor <actor> --reason <reason> --nonce <nonce>',
     '',
     'The runner/store/reviewer scripts resolve from the trusted pack checkout, never from the reviewed PR worktree.',
   ].join('\n');
@@ -8227,6 +8417,7 @@ async function main(): Promise<void> {
     return;
   }
   if (subcommand === 'reset') {
+    applyCliTargetProject(input as StartInput);
     process.stdout.write(`${JSON.stringify(await resetPackReview(input))}\n`);
     return;
   }
