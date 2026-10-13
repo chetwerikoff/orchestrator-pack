@@ -8153,7 +8153,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
   }
 }
 
-async function resetPackReview(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function resetPackReview(input: Record<string, unknown>): Promise<Record<string, unknown>> {
   const trusted = resolveTrustedRunnerPaths();
   const projectId = trim(input.projectId || input.targetProjectId);
   const selected = resolveTargetContext({ projectId, env: process.env });
