@@ -1,0 +1,24 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2544,
+  "declared_paths": [
+    "docs/chatgpt-task-execution-runbook.md",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/execute-issue-manager-boundary.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "scripts/pr-scope-declaration.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/chatgpt-task-execution-runbook.md",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/execute-issue-manager-boundary.ts"
+  ],
+  "source_revision": "d0bd1311597f072128e4b52b52454ffa97a74560"
+}
