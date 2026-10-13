@@ -168,6 +168,43 @@ describe('Issue #2565 completed findings logical reset', () => {
     expect(readPackReviewAuthority(2566, cleanOptions)?.cycle?.reviewStageComplete).toBe(true);
   });
 
+  it('does not introduce hashless completed-cycle reset for T1', () => {
+    const config = options();
+    const prNumber = 2567;
+    let state = initializePackReviewAuthority({
+      prNumber, headSha: sha('a'), tier: 'T1',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: config,
+    });
+    state = commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: state.transitionSeq,
+      terminal: { ...findingsTerminal('t1-last', sha('a')),
+        logicalRoundOrdinal: 1, automaticBudgetDisposition: 'consume' },
+      status: 'changes_requested', findingCount: 1, options: config,
+    });
+    state = observePackReviewHead({
+      prNumber, expectedTransitionSeq: state.transitionSeq, headSha: sha('b'), options: config,
+    });
+    state = settleLogicalPackReviewFindingsByStrictDescendant({
+      prNumber, expectedTransitionSeq: state.transitionSeq,
+      reviewedHeadSha: sha('a'), currentHeadSha: sha('b'),
+      reviewedHeadIsAncestor: true, options: config,
+    });
+    expect(state.cycle).toMatchObject({ state: 'closed', frozenTier: 'T1',
+      reviewStageComplete: true, consumedRoundOrdinals: [1] });
+    expect(() => acknowledgePackReviewReset({
+      prNumber, expectedTransitionSeq: state.transitionSeq,
+      headSha: sha('b'), tier: 'T1',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      completedFindingsBodyAmended: true,
+      provenance: {
+        priorCycleId: state.cycle!.cycleId, actor: 'owner', reason: 'amended',
+        timestampUtc: '2026-10-14T01:00:00.000Z', nonce: 't1-not-eligible',
+      },
+      options: config,
+    })).toThrow(/reset_invalid/);
+    expect(readPackReviewAuthority(prNumber, config)?.cycle?.cycleId).toBe(state.cycle?.cycleId);
+  });
+
   it('reset validates optional at-cap hash on pending and completed cycles', () => {
     const { state, config, prNumber, descendant } = completedFindings();
     const provenance = {
