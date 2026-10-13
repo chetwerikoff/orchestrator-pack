@@ -4203,28 +4203,43 @@ async function runTurnCore(
         );
       }
 
-      // Preserve 20s late hydration but reserve the real 30s generation
-      // resume observation, local reads and insertion from the one deadline.
+      // Preserve late hydration without freezing reopen eligibility before it.
+      // A short-budget turn keeps its original full readiness window unless
+      // there is time to reserve a full watch or an actually finished turn.
       const insertionBudgetMs = deriveComposerInsertionBudgetMs(markedPayload);
       const postReopenReserveMs = EXISTING_GENERATION_RESUME_WINDOW_MS
         + insertionBudgetMs + MAX_LOCAL_READ_WAIT_MS;
       const remainingBeforeHydrationMs = invocationDeadlineMs - Date.now();
-      const mayReopenComposer = remainingBeforeHydrationMs > postReopenReserveMs + 20_000;
+      const fullWatchHydrationRoom = remainingBeforeHydrationMs
+        > postReopenReserveMs + 20_000;
+      const canBoundInitialHydration = fullWatchHydrationRoom
+        || (remainingBeforeHydrationMs > 20_000 + insertionBudgetMs + MAX_LOCAL_READ_WAIT_MS
+          && await existingTurnHasNothingToResume(page, invocationDeadlineMs)
+          && Date.now() + 20_000 + insertionBudgetMs + MAX_LOCAL_READ_WAIT_MS < invocationDeadlineMs);
       const initialHydrationWaitMs = Math.min(
         EXISTING_GENERATION_RESUME_WINDOW_MS,
-        Math.max(0, remainingBeforeHydrationMs - postReopenReserveMs - INITIAL_POLL_MS),
+        Math.max(20_000, remainingBeforeHydrationMs - postReopenReserveMs - INITIAL_POLL_MS),
       );
-      const initialComposerDeadline = mayReopenComposer
+      const initialComposerDeadline = canBoundInitialHydration
         ? Math.min(composerReadinessDeadline(), Date.now() + initialHydrationWaitMs)
         : composerReadinessDeadline();
       const initialComposer = await waitForComposerWithAccountRecovery(initialComposerDeadline);
       if ('result' in initialComposer) return initialComposer;
       let composerState = initialComposer;
-      if (composerState.state !== 'ready' && composerState.cause === 'composer_unavailable'
-        && mayReopenComposer && sendCount === 0 && !sendAttempted
+      // A present-tense idle snapshot cannot waive the incumbent 30s watcher.
+      // Only the existing observed finished-action/alert branch may do so.
+      const nothingToResumeBeforeReopen = composerState.state !== 'ready'
+        && composerState.cause === 'composer_unavailable'
         && !browserOrPageDefinitelyLost(page, browser)
         && readOwnedConversationIdentity(page, chatUrlTarget).matched
-        && Date.now() + postReopenReserveMs < invocationDeadlineMs) {
+        && await existingTurnHasNothingToResume(page, invocationDeadlineMs);
+      const reopenReserveMs = insertionBudgetMs + MAX_LOCAL_READ_WAIT_MS
+        + (nothingToResumeBeforeReopen ? 0 : EXISTING_GENERATION_RESUME_WINDOW_MS);
+      if (composerState.state !== 'ready' && composerState.cause === 'composer_unavailable'
+        && sendCount === 0 && !sendAttempted
+        && !browserOrPageDefinitelyLost(page, browser)
+        && readOwnedConversationIdentity(page, chatUrlTarget).matched
+        && Date.now() + reopenReserveMs < invocationDeadlineMs) {
         const stop = await readFreshStopVisible(page, invocationDeadlineMs);
         const observation = await readPageObservation(page, undefined, undefined, true, invocationDeadlineMs);
         if (stop === false && !observation.transcriptIncomplete
@@ -4235,10 +4250,12 @@ async function runTurnCore(
             carrier.role === 'user' && normalizeVisibleText(carrier.text).length > 0)
           && !browserOrPageDefinitelyLost(page, browser)
           && readOwnedConversationIdentity(page, chatUrlTarget).matched
-          && Date.now() + postReopenReserveMs < invocationDeadlineMs) {
+          && Date.now() + reopenReserveMs < invocationDeadlineMs) {
+          const reopenDeadlineMs = invocationDeadlineMs
+            - (nothingToResumeBeforeReopen ? 0 : EXISTING_GENERATION_RESUME_WINDOW_MS)
+            - insertionBudgetMs;
           try {
-            await navigateOwnedTurnPage(page, config, navigation,
-              invocationDeadlineMs - EXISTING_GENERATION_RESUME_WINDOW_MS - insertionBudgetMs);
+            await navigateOwnedTurnPage(page, config, navigation, reopenDeadlineMs);
           } catch (error) {
             if (browserOrPageDefinitelyLost(page, browser)) throw new Error('Target closed');
             const identity = readOwnedConversationIdentity(page, chatUrlTarget);
@@ -4256,9 +4273,11 @@ async function runTurnCore(
             pollCount, navigation, incidents, journalWriteFailed, incident, false,
           );
           reopenedExistingComposer = true;
+          // A composer reading from the old Page is not post-navigation evidence.
+          preSendComposerState = 'not_probed';
           const reopenedComposer = await waitForComposerWithAccountRecovery(Math.min(
             composerReadinessDeadline(),
-            invocationDeadlineMs - EXISTING_GENERATION_RESUME_WINDOW_MS - insertionBudgetMs,
+            reopenDeadlineMs,
           ));
           if ('result' in reopenedComposer) return reopenedComposer;
           composerState = reopenedComposer;
@@ -4269,6 +4288,18 @@ async function runTurnCore(
       }
       if (reopenedExistingComposer && composerState.state !== 'ready'
         && composerState.cause === 'composer_unavailable') {
+        if (browserOrPageDefinitelyLost(page, browser)) throw new Error('Target closed');
+        const identity = readOwnedConversationIdentity(page, chatUrlTarget);
+        if (!identity.matched) return returnOwnedConversationIdentityMismatch(
+          identity, page, browser, invocationId, profileKey, sendCount,
+          pollCount, navigation, incidents, journalWriteFailed, incident, false,
+        );
+        if (Date.now() >= invocationDeadlineMs
+          || !['absent', 'hidden', 'disabled', 'not_editable'].includes(preSendComposerState)) {
+          // Exhausted renewed readiness without an affirmative post-goto
+          // unavailable observation is a budget failure, not a missing editor.
+          return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+        }
         return returnComposerMutationFailure('composer_unavailable');
       }
       // Preserve the pre-existing mutation fallback for initial readiness probes.

@@ -20,7 +20,10 @@ vi.mock('./ui-adapter.ts', async (original) => buildUiAdapterTestMock(
 ));
 
 import { buildUiAdapterTestMock, collectionLocator, createBrowserSessionModuleMock, createCoordinationModuleMock, enqueueBrowserForTurn, runStateLightTurnWithStdoutCapture, scalarLocator, stableTurnInput } from './state-light-turn.test-fixtures.ts';
-import { COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR, MESSAGE_NODE_SELECTOR, MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE } from './product-page-selectors.ts';
+import {
+  COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR, MESSAGE_NODE_SELECTOR,
+  MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE, RENDERED_CONVERSATION_TURN_SECTION_SELECTOR,
+} from './product-page-selectors.ts';
 import { __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { configuredProfileKey } from './storage-common.ts';
@@ -830,8 +833,9 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
 
   type Scenario =
     | 'restored' | 'restored-long' | 'delayed-stop' | 'ready' | 'late-hydration'
-    | 'composer-still-absent' | 'redirect' | 'network' | 'navigation-throw'
-    | 'lost-page' | 'expired-goto' | 'post-empty' | 'post-userless'
+    | 'finished-setup' | 'composer-still-absent' | 'redirect' | 'network' | 'navigation-throw'
+    | 'lost-page' | 'late-redirect' | 'late-close' | 'expired-goto' | 'expired-readiness'
+    | 'post-empty' | 'post-userless'
     | 'post-incomplete' | 'post-unreadable' | 'post-unknown'
     | 'post-active' | 'post-stop' | 'initial-active'
     | 'initial-unknown' | 'initial-empty' | 'initial-incomplete'
@@ -854,12 +858,16 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     let reopened = false;
     let resumedStopObserved = false;
     let afterReopenReads = 0;
+    let postReopenComposerProbes = 0;
     const usableComposer = () => scenario === 'ready'
       || (scenario === 'late-hydration' && now - startedAt >= 20_000)
-      || (reopened && scenario !== 'composer-still-absent');
+      || (reopened && !['composer-still-absent', 'late-redirect', 'late-close'].includes(scenario));
     const fill = vi.fn(async (value: string) => { composerText = value; });
     const composer = scalarLocator({
-      count: vi.fn(async () => usableComposer() ? 1 : 0),
+      count: vi.fn(async () => {
+        if (reopened) postReopenComposerProbes++;
+        return usableComposer() ? 1 : 0;
+      }),
       click: vi.fn(async () => {
         if (!usableComposer()) throw new Error('no composer in the rendered page');
       }),
@@ -880,6 +888,7 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
       else if (scenario === 'navigation-throw') throw new Error('unexpected navigation failure');
       else if (scenario === 'lost-page') closed = true;
       else if (scenario === 'expired-goto') now += 40_000;
+      else if (scenario === 'expired-readiness') now = startedAt + 60_000 - 30_000 - 3_000;
       else url = target;
     });
     const rows = () => {
@@ -889,7 +898,8 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
       const userless = !isInitial && scenario === 'post-userless';
       const incomplete = (isInitial && scenario === 'initial-incomplete')
         || (!isInitial && (scenario === 'post-incomplete' || scenario === 'post-unreadable'));
-      return empty ? [] : [{
+      if (empty) return [];
+      return [{
         role: userless ? 'assistant' : 'user',
         text: 'historical user',
         key: 'data-message-id:history-user-2560',
@@ -897,7 +907,12 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
         complete: !incomplete,
         completionReady: false,
         continuationVisible: false,
-      }];
+      }, ...(scenario === 'finished-setup' ? [{
+        role: 'assistant', text: 'finished historical assistant',
+        key: 'data-message-id:history-assistant-2560',
+        domIndex: 1, complete: true, completionReady: true,
+        continuationVisible: false,
+      }] : [])];
     };
     const nodes = {
       ...collectionLocator([{ role: 'user', text: 'historical user' }]),
@@ -916,7 +931,7 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
           ...(currentRows.length > 0 ? {
             pageTurnEvidence: {
               generationInProgress,
-              observedAssistantNodes: currentRows[0]!.role === 'assistant' ? 1 : 0,
+              observedAssistantNodes: currentRows.filter((row) => row.role === 'assistant').length,
               continueGeneratingVisible: false,
             },
           } : {}),
@@ -945,11 +960,18 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
         if (scenario === 'delayed-stop' && lastGotoAt !== undefined
           && now - lastGotoAt >= 12_000) stop = true;
         if (scenario === 'post-stop' && reopened) stop = true;
+        if (reopened && lastGotoAt !== undefined && now - lastGotoAt >= 500) {
+          if (scenario === 'late-redirect') url = 'https://chatgpt.com/c/foreign';
+          if (scenario === 'late-close') closed = true;
+        }
       }),
       locator: vi.fn((selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => 1, click: send });
         if (selector === MESSAGE_NODE_SELECTOR) return nodes;
+        if (selector === RENDERED_CONVERSATION_TURN_SECTION_SELECTOR) return scalarLocator({
+          last: () => scalarLocator({ turnActionButtons: scenario === 'finished-setup' }),
+        });
         if (selector.includes('stop-button') || selector.includes('Stop')) return stopLocator;
         return scalarLocator();
       }),
@@ -957,6 +979,12 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     const browserFixture = enqueueBrowserForTurn(mocks, page);
     Object.assign(browserFixture.context, { pages: () => [page] });
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    if (scenario === 'finished-setup') {
+      mocks.verifyProfile.mockImplementationOnce(async () => {
+        now += 2_500; // Setup consumes more than the former 2s eligibility margin.
+        return { state: 'verified' };
+      });
+    }
     try {
       const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
         '--profile', profile, '--cdp', cdp,
@@ -968,7 +996,7 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
       ]);
       return {
         result, send, fill, goto, startedAt, lastGotoAt, sentAt, sentText,
-        finalUrl: url, afterReopenReads, resumedStopObserved,
+        finalUrl: url, afterReopenReads, resumedStopObserved, postReopenComposerProbes,
         observer: readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId),
       };
     } finally {
@@ -998,6 +1026,17 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     expect(run.result.send_attempted).toBe(true);
     expect(run.observer.phase).toBe('sent_unharvested');
     expect(run.finalUrl).toBe('https://chatgpt.com/c/25602560-2560-4560-8560-256025602560');
+  });
+
+  it('reopens after >2s setup when a positively finished historical turn permits early resume exit', async () => {
+    const run = await fullTurn('finished-setup');
+    expect(run.goto).toHaveBeenCalledTimes(1);
+    expect(run.lastGotoAt! - run.startedAt).toBeGreaterThanOrEqual(22_500);
+    expect(run.sentAt! - run.startedAt).toBeLessThan(60_000);
+    expect(run.sentAt! - run.lastGotoAt!).toBeLessThan(30_000);
+    expect(run.fill).toHaveBeenCalledTimes(1);
+    expect(run.send).toHaveBeenCalledTimes(1);
+    expect(run.result).toMatchObject({ send_count: 1, send_attempted: true });
   });
 
   it('keeps the 60s deadline when the unshortened helper cannot fit its real resume watch plus Send', async () => {
@@ -1032,7 +1071,10 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     ['network', 'ui_contract_mismatch', 'network_changed'],
     ['navigation-throw', 'driver_error', 'unexpected navigation failure'],
     ['lost-page', 'driver_error', 'Target closed'],
+    ['late-redirect', 'ui_contract_mismatch', 'owned_conversation_identity_mismatch'],
+    ['late-close', 'driver_error', 'Target closed'],
     ['expired-goto', 'driver_error', 'composer_mutation_budget_exhausted'],
+    ['expired-readiness', 'driver_error', 'composer_mutation_budget_exhausted'],
     ['post-empty', 'ui_contract_mismatch', 'owned_conversation_render_mismatch'],
     ['post-userless', 'ui_contract_mismatch', 'owned_conversation_render_mismatch'],
     ['post-incomplete', 'ui_contract_mismatch', 'baseline_transcript_incomplete'],
@@ -1044,6 +1086,10 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     const run = await fullTurn(scenario);
     expect(run.goto).toHaveBeenCalledTimes(1);
     expect(run.result).toMatchObject({ state, cause, send_count: 0 });
+    if (scenario === 'expired-readiness') {
+      // No time remains for even one post-goto composer DOM probe.
+      expect(run.postReopenComposerProbes).toBe(0);
+    }
     expect(run.result.send_attempted).not.toBe(true);
     expect(run.fill).not.toHaveBeenCalled();
     expect(run.send).not.toHaveBeenCalled();
