@@ -146,7 +146,15 @@ resolved repository and absolute path before effects.
 - Never signal PID 1, a negative PID, process-group zero, or a process selected by name.
   Process selection is the exact target CWD plus descendants only.
 
-Before resolving any PR/Issue, resolve the selected project card with `node --experimental-strip-types scripts/lib/target-context.ts check`. Bind its exact `repository` as `TARGET_REPOSITORY` and its exact `defaultBranch` as `TARGET_DEFAULT_BRANCH`. Missing selection or any explicit repository/base mismatch is terminal; do not infer target identity from cwd/origin.
+Before resolving any PR/Issue, resolve the selected project card with `node --experimental-strip-types scripts/lib/target-context.ts check`.
+Bind the selected card's `repository` as `TARGET_REPOSITORY` and its exact
+`defaultBranch` as `TARGET_DEFAULT_BRANCH`. Compare explicit GitHub owner/repo
+names case-insensitively: `chetwerikoff/appliedin` and
+`chetwerikoff/AppliedIn` identify the same repository. Casing alone is never a
+repository mismatch; a different owner or repository still mismatches. Missing
+selection, a genuinely different explicit repository, or an explicit base that
+differs from the exact selected `defaultBranch` is terminal. Never select the
+target from cwd/origin.
 
 Bind that same card's `projectId` and `primaryRoot` as `PROJECT_ID` and `PRIMARY_ROOT`;
 `REPO` is exactly that selected `PRIMARY_ROOT` for primary-checkout adoption. Run pack
@@ -154,7 +162,10 @@ tools from `{PACK_ROOT}` with `OPK_PROJECT_ID` selected, never from a target che
 Bind `PACK_REPOSITORY` from the trusted `{PACK_ROOT}` checkout using the existing
 `originSlugFromGitConfig` helper in `scripts/lib/git-origin-slug.mjs`; missing pack origin
 is unresolved identity, so repair that checkout's origin before proceeding. Compare the
-exact canonical `TARGET_REPOSITORY` with `PACK_REPOSITORY` for all adoption routing.
+GitHub owner/repo identities in `TARGET_REPOSITORY` and `PACK_REPOSITORY`
+case-insensitively for all adoption routing. Case-fold both values to the same
+comparison spelling before the existing equality-based pack/target route checks;
+casing alone never selects a different route, while a different owner/repository does.
 A pack card named `pack-local` still takes the pack route;
 a foreign card named `orchestrator-pack` still takes the target route. Project ids and
 registry presence do not authorize pack effects; do not use a pack registry fallback.
