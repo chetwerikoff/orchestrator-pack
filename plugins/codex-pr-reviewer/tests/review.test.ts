@@ -2071,17 +2071,23 @@ describe('buildReviewPrompt', () => {
       '## Acceptance criteria',
       'Only `tests/a.py` may change; no other path or a second changed path is permitted.',
     ].join('\n');
+    const scope = {
+      issueNumber: 22,
+      hasScope: true,
+      issueConstraints: { denylist: ['vendor/**'], allowed_roots: ['tests/**'] },
+      declaredPaths: [] as string[],
+      declaredGlobs: [] as string[],
+      unverifiedIssueConstraints: false,
+      issueBody,
+      guardApplicability: 'guard-free' as const,
+    };
     const prompt = buildReviewPrompt({
-      scope: {
-        issueNumber: 22,
-        hasScope: true,
-        issueConstraints: { denylist: ['vendor/**'], allowed_roots: ['tests/**'] },
-        declaredPaths: [],
-        declaredGlobs: [],
-        unverifiedIssueConstraints: false,
-        issueBody,
-        guardApplicability: 'guard-free',
-      },
+      scope,
+      source: 'codex-local',
+      baseRef: 'origin/main',
+    });
+    const guardedPrompt = buildReviewPrompt({
+      scope: { ...scope, guardApplicability: 'guarded' as const, declaredPaths: ['tests/a.py'] },
       source: 'codex-local',
       baseRef: 'origin/main',
     });
@@ -2089,7 +2095,13 @@ describe('buildReviewPrompt', () => {
     expect(prompt).toContain('Files in/out of scope and path/count limits');
     expect(prompt).toContain('In a **confirmed guard-free** target');
     expect(prompt).toContain('docs/declarations/**');
+    expect(prompt).toContain('.orchestrator-pack/**');
     expect(prompt).toContain('an untouched stale control artifact alone is irrelevant');
+    expect(prompt).toContain('complete live Issue like every other changed file');
+    expect(guardedPrompt).toContain('In a **confirmed guard-enabled** target');
+    expect(guardedPrompt).toContain('Control-artifact carve-out (guarded targets only)');
+    expect(guardedPrompt).toContain('Still report those paths when they intersect `denylist`');
+    expect(guardedPrompt).toContain('declared-paths');
   });
 });
 
