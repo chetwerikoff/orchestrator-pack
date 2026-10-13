@@ -7,7 +7,8 @@
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
-    "scripts/chatgpt-browser-turn/ui-adapter.test.ts"
+    "scripts/chatgpt-browser-turn/ui-adapter.test.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
   "denylist": [
     "credentials/",
@@ -25,4 +26,5 @@
     "scripts/chatgpt-browser-turn/ui-adapter.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
-  "source_revision": "90724572d3514d948dd5a7afba9fd7793e072ad4"
+  "source_revision": "13de05a3f63e09f307252016685d91b589691051"
+}
