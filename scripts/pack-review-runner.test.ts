@@ -6,6 +6,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mapGptReplyToReviewPayload } from './lib/pack-gpt-reviewer.ts';
+import { formatPackGptSourceCommentEnvelope, type PackGptSourceIdentity } from './lib/pack-gpt-source-comment-contract.ts';
+import {
+  resolvePackGptSourceComment,
+  type PackGptSourceCommentTransport,
+  type PackGptSourceGithubComment,
+} from './lib/pack-gpt-source-comment.ts';
 import {
   observeGptPackReviewAttempt,
   observeNativePackReviewAttempt,
@@ -21,6 +27,7 @@ import {
   setPackReviewRunTerminal,
   updatePackReviewRun,
   type PackReviewRunRecord,
+  type PackReviewGptRoundRecord,
 } from './lib/pack-review-run-store.ts';
 import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 import { runProcess } from './kernel/subprocess.ts';
@@ -2866,4 +2873,224 @@ describe('Issue #2537 scoped final-cap promotion and status integrity', () => {
     expect(getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot: seeded.storeRoot }))
       .toMatchObject({ logicalRoundCap: 1, logicalRoundOrdinal: 1 });
   });
+});
+
+describe('Issue #2573 complete-slot persisted JSON reconciliation', () => {
+  const repository = 'chetwerikoff/orchestrator-pack';
+  const prNumber = 257301;
+  const issueBody = '# Synthetic pathless-source review';
+  const rawPathlessFinding = JSON.stringify({
+    findings: [{
+      type: 'quality',
+      code: 'GPT-2573-PATHLESS',
+      severity: 'blocking',
+      path: null,
+      summary: 'A source finding without a file path',
+      source: 'gpt-browser',
+    }],
+  });
+
+  async function fixture() {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2573-persisted-json-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    process.env.PACK_REVIEWER = 'gpt';
+
+    const mapped = mapGptReplyToReviewPayload(rawPathlessFinding);
+    expect(mapped).toMatchObject({ verdict: 'findings', findingCount: 1 });
+    expect(Object.prototype.hasOwnProperty.call(mapped.findings[0], 'filePath')).toBe(true);
+    expect(mapped.findings[0]!.filePath).toBeUndefined();
+
+    const options = { projectId: 'orchestrator-pack', storeRoot };
+    const authority = initializePackReviewAuthority({
+      prNumber, headSha: HEAD, tier: 'T1',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: { storeRoot },
+    });
+    const round: PackReviewGptRoundRecord = {
+      schema: 'pack-review-gpt-round/v1',
+      reviewer: 'gpt',
+      tier: 'T1',
+      roundOrdinal: 1,
+      cardinality: 3,
+      issueNumber: prNumber,
+      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(issueBody),
+      sourceSlots: [1, 2, 3].map((ordinal) => ({
+        slotId: 'source-' + String(ordinal).padStart(2, '0'),
+        ordinal,
+        lifecycle: 'planned' as const,
+      })),
+    };
+    const run = createPackReviewRun({
+      ...options, prNumber, headSha: HEAD,
+      trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      canonicalRepository: repository,
+      reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      resolvedReviewer: 'gpt', automaticBudgetDisposition: 'consume',
+      reviewRound: round,
+    }).run;
+
+    const comments: PackGptSourceGithubComment[] = [];
+    const transport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'synthetic-gpt-reviewer',
+      listComments: async () => [...comments],
+      getComment: async (id) => {
+        const comment = comments.find((item) => item.id === id);
+        if (!comment) throw new Error('missing original synthetic source comment');
+        return comment;
+      },
+    };
+    const sourceSlots = await Promise.all(round.sourceSlots.map(async (slot, index) => {
+      const invocationId = '25732573-2573-4257-8257-' + String(index + 1).padStart(12, '0');
+      const identity: PackGptSourceIdentity = {
+        repository, prNumber, headSha: HEAD, runId: run.id,
+        slotId: slot.slotId, invocationId,
+      };
+      const commentId = 25730100 + index;
+      comments.push({
+        id: commentId,
+        body: formatPackGptSourceCommentEnvelope(
+          identity, index === 0 ? rawPathlessFinding : 'NO_FINDINGS',
+        ),
+        url: 'https://github.com/' + repository + '/pull/' + prNumber + '#issuecomment-' + commentId,
+        issueUrl: 'https://api.github.com/repos/' + repository + '/issues/' + prNumber,
+        actorLogin: 'synthetic-gpt-reviewer',
+        createdAt: '2026-10-14T00:00:00Z',
+        updatedAt: '2026-10-14T00:00:00Z',
+      });
+      const witnessed = await resolvePackGptSourceComment({ identity, transport });
+      if (witnessed.kind !== 'credentialed') throw new Error('synthetic source was not credentialed');
+      return {
+        ...slot, lifecycle: 'terminal' as const, invocationId,
+        attemptOrdinal: 1, admissionStartedAtUtc: '2026-10-14T00:00:00Z',
+        terminalClass: index === 0 ? 'complete_findings' : 'complete_clean',
+        terminalResult: {
+          schema: 'turn-result/v1', state: 'ok', scope: 'none',
+          cause: 'github_source_comment_credentialed',
+          invocation_id: invocationId, send_count: 1,
+          source_comment_authority: 'credentialed_github',
+          source_comment_receipt: witnessed.receipt,
+        },
+        payload: witnessed.payload,
+      };
+    }));
+    updatePackReviewRun(run.id, {
+      status: 'reviewing', latestRunStatus: 'reviewing',
+      runnerPid: 2147483647,
+      reviewRound: { ...round, sourceSlots },
+    }, options);
+
+    const restored = getPackReviewRun(run.id, options)!;
+    const storedPayload = restored.reviewRound!.sourceSlots[0]!.payload as {
+      verdict: string; findings: Array<{ filePath?: string; body: string }>;
+    };
+    expect(storedPayload.verdict).toBe('findings');
+    expect(storedPayload.findings[0]!.body).toContain('path: (none)');
+    expect(Object.prototype.hasOwnProperty.call(storedPayload.findings[0], 'filePath')).toBe(false);
+    const originalBody = comments[0]!.body;
+    const originalReceipt = (restored.reviewRound!.sourceSlots[0]!.terminalResult as {
+      source_comment_receipt: Record<string, unknown>;
+    }).source_comment_receipt;
+
+    const reviews: Array<{
+      id: number; state: string; userLogin: string; submittedAt: string;
+      body: string; commitId: string; url: string;
+    }> = [];
+    let currentStatus: string | undefined;
+    const statuses: string[] = [];
+    const reconcile = () => reconcileStalePackReviewRuns({
+      ...options, sourceRepoRoot: process.cwd(), repoSlug: repository,
+      prNumber, immediate: true, fixtureCurrentPrHeadSha: HEAD,
+      fixtureGptSourceCommentTransport: transport,
+      fixtureGithubReviewTransport: {
+        resolveActorLogin: async () => 'synthetic-final-reviewer',
+        listReviews: async () => [...reviews],
+        postReview: async ({ body, commitId }) => {
+          const id = 25730190 + reviews.length;
+          const url = 'https://github.com/' + repository + '/pull/' + prNumber + '#pullrequestreview-' + id;
+          reviews.push({
+            id, state: 'COMMENTED', userLogin: 'synthetic-final-reviewer',
+            submittedAt: new Date().toISOString(), body, commitId, url,
+          });
+          return { id, url };
+        },
+        dismissReview: async () => {},
+      },
+      fixtureRequiredStatusReader: async () => currentStatus,
+      fixtureRequiredStatusWriter: async (request) => {
+        currentStatus = request.state;
+        statuses.push(request.state);
+      },
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+      fixtureIssueTitle: '[T1] Synthetic pathless source',
+      fixtureIssueBody: issueBody, fixtureIssueNumber: prNumber,
+      fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
+      fixtureBoundIssueSnapshotBytes: issueBody,
+      resolveRepositorySlug: async () => repository,
+    });
+    return { runId: run.id, storeRoot, options, comments, originalBody, originalReceipt, reviews, statuses, reconcile };
+  }
+
+  it('complete slot persisted JSON accepts a reloaded pathless finding and settles scoped reconcile', async () => {
+    const f = await fixture();
+    const result = await f.reconcile();
+    expect(result.results).toContainEqual(expect.objectContaining({
+      runId: f.runId, recovered: true, statusReconciled: true,
+      reason: 'gpt_source_comments_recovered_and_delivered',
+      deliveryReason: 'completed',
+    }));
+    const settled = getPackReviewRun(f.runId, f.options);
+    expect(settled).toMatchObject({
+      reviewVerdict: 'findings', findingCount: 1,
+      journalOutcome: { state: 'persisted' },
+      deliveryOutcomes: {
+        githubComment: { state: 'succeeded' },
+        requiredStatus: { state: 'succeeded' },
+      },
+    });
+    expect(settled?.reviewRound?.settledSourceCount).toBe(3);
+    expect(f.reviews).toHaveLength(1);
+    expect(f.statuses).toContain('failure');
+  });
+
+  it.each(['GitHub body', 'stored receipt', 're-parsed verdict', 'finding content'] as const)(
+    'complete slot genuine mismatch refuses %s without settling', async (kind) => {
+      const f = await fixture();
+      const file = join(f.storeRoot, 'runs', f.runId + '.json');
+      const persisted = JSON.parse(readFileSync(file, 'utf8')) as PackReviewRunRecord;
+      const slot = persisted.reviewRound!.sourceSlots[0]!;
+      if (kind === 'GitHub body') {
+        f.comments[0]!.body += '\n';
+      } else if (kind === 'stored receipt') {
+        (slot.terminalResult as { source_comment_receipt: { bodySha256: string } })
+          .source_comment_receipt.bodySha256 = '0'.repeat(64);
+      } else if (kind === 're-parsed verdict') {
+        slot.terminalClass = 'complete_clean';
+        slot.payload = { verdict: 'clean', findingCount: 0, findings: [] };
+      } else {
+        (slot.payload as { findings: Array<{ body: string }> }).findings[0]!.body =
+          'Altered stored finding text, with the original comment and receipt intact';
+      }
+      if (kind !== 'GitHub body') writeFileSync(file, JSON.stringify(persisted));
+
+      if (kind === 're-parsed verdict' || kind === 'finding content') {
+        expect(f.comments[0]!.body).toBe(f.originalBody);
+        const unchangedReceipt = (getPackReviewRun(f.runId, f.options)!
+          .reviewRound!.sourceSlots[0]!.terminalResult as {
+            source_comment_receipt: Record<string, unknown>;
+          }).source_comment_receipt;
+        expect(unchangedReceipt).toEqual(f.originalReceipt);
+      }
+
+      const result = await f.reconcile();
+      expect(result.results).toContainEqual(expect.objectContaining({
+        runId: f.runId, terminalized: false,
+        reason: expect.stringContaining('gpt_complete_source_uncredentialable:source-01:stored_publication_mismatch'),
+      }));
+      expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
+      expect(f.reviews).toEqual([]);
+      expect(f.statuses).not.toContain('success');
+    },
+  );
 });
