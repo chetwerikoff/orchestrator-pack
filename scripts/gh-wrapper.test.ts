@@ -43,6 +43,7 @@ import { tmpdir } from 'node:os';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { fileURLToPath } from 'node:url';
 import {
+  commandTemplateToArgv,
   extractAmbientGhExecutableSelections,
   isClassifiedGhReadCommand,
   scanFileForViolations,
@@ -2777,5 +2778,63 @@ describe('Issue #2507 exact checks arguments and actionable non-equivalent read 
       }
     }
     expect(existsSync(nativeAudit)).toBe(false);
+  });
+});
+
+
+describe('Issue #2589 merge-skill executable gh read coverage', () => {
+  const skillPath = join(repoRoot, '.cursor', 'skills', 'merge-with-local-adoption', 'SKILL.md');
+  const fields = 'name,state,bucket,link,startedAt,completedAt,workflow,description';
+  const mergeWrite = 'gh pr merge 42 --repo example/target --merge --delete-branch';
+
+  function executableGhCommands(source: string): string[] {
+    // Join continued shell commands before examining executable instructions.
+    const joined = source.replace(/\\\r?\n[ \t]*/g, ' ');
+    const shellLines = joined.split(/\r?\n/).map((line) => line.trim())
+      .filter((line) => /^gh\s+/.test(line));
+    const inlineCommands = [...joined.matchAll(/\x60(gh\s+[^\x60\r\n]+)\x60/g)]
+      .map((match) => match[1])
+      // The bare command-family mention in Step 2 has no executable arguments.
+      .filter((command) => command !== 'gh pr view');
+    return [...shellLines, ...inlineCommands].map((command) =>
+      command.replace(/\$TARGET_REPOSITORY\b/g, 'example/target').replace(/\bP\b/g, '42'));
+  }
+
+  function checkAllSkillReads(source: string): string[] {
+    const commands = executableGhCommands(source);
+    for (const command of commands) {
+      if (command.startsWith('gh pr merge ')) {
+        expect(command).toBe(mergeWrite); // Known Step 5 write, not an inventory read.
+      } else {
+        expect(commandTemplateToArgv(command), command).not.toBeNull();
+        expect(isClassifiedGhReadCommand(command), command).toBe(true);
+      }
+    }
+    return commands;
+  }
+
+  it('classifies every executable read across Steps 2/3/5 and rejects both stale forms', () => {
+    const skill = readFileSync(skillPath, 'utf8');
+    const commands = checkAllSkillReads(skill);
+    const checks = 'gh pr checks 42 --repo example/target --json ' + fields;
+
+    expect(commands).toEqual(expect.arrayContaining([
+      'gh pr view 42 --repo example/target --json state,isDraft,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus',
+      checks,
+      'gh pr view 42 --repo example/target --json state,isDraft,mergeable,mergeStateStatus,headRefOid',
+      'gh api repos/example/target/pulls/42/reviews',
+      mergeWrite,
+      'gh pr view 42 --repo example/target --json state,mergedAt,mergeCommit,headRefName,headRefOid,baseRefName',
+    ]));
+    expect(commands.length).toBeGreaterThanOrEqual(6);
+    expect(classifyArgv(commandTemplateToArgv(checks)!).route?.id).toBe('pr-checks');
+
+    for (const staleCommand of [
+      'gh pr checks 42 --repo example/target',
+      'gh pr view 42 --repo example/target --json state,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid',
+    ]) {
+      expect(isClassifiedGhReadCommand(staleCommand), staleCommand).toBe(false);
+      expect(() => checkAllSkillReads(skill + '\n' + staleCommand)).toThrow();
+    }
   });
 });
