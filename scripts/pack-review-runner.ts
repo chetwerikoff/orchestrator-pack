@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -156,6 +157,7 @@ import type { PackGptSourceIdentity } from './lib/pack-gpt-source-comment-contra
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import { CHAT_BINDING_WORKTREE_ENV, chatBindingWorktree } from './chatgpt-browser-turn/chat-bindings.ts';
 import {
+  boundIssueSnapshotArtifactPaths,
   captureBoundIssueSnapshot,
   computeBoundIssueSnapshotHash,
   loadValidatedBoundSnapshotBody,
@@ -285,6 +287,7 @@ interface StartInput {
   fixtureChangedPaths?: string[];
   fixtureBoundIssueSnapshotBytes?: string;
   fixtureReviewCompareStatus?: string;
+  fixtureSameHeadIssueResolutionRunner?: typeof runProcess;
 }
 
 interface DirectCliStartInput extends StartInput {
@@ -4406,8 +4409,44 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
             || round.tier !== cycle.frozenTier) {
           throw new Error('last GPT findings round or snapshot digest mismatch');
         }
-      } else if (!['codex', 'claude'].includes(priorRun.resolvedReviewer ?? '')) {
-        throw new Error('native findings review lacks a validated preflight snapshot binding');
+      } else {
+        if (!['codex', 'claude'].includes(priorRun.resolvedReviewer ?? '')) {
+          throw new Error('native findings review lacks a validated preflight snapshot binding');
+        }
+        // Native has no GPT reviewRound: only one validated same-head Issue
+        // snapshot captured before this run began can bind its terminal.
+        const runCreatedAt = Date.parse(priorRun.createdAt);
+        const capturedAt = Date.parse(frozen.metadata.capturedAt);
+        if (!Number.isFinite(runCreatedAt) || !Number.isFinite(capturedAt)
+            || capturedAt > runCreatedAt) {
+          throw new Error('native Issue snapshot was not captured before the terminal run');
+        }
+        const snapshotPaths = boundIssueSnapshotArtifactPaths({
+          projectId: options.projectId, prNumber, prHeadSha: terminal.targetSha,
+          issueNumber, storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+        });
+        const originalIssues = readdirSync(snapshotPaths.artifactDir)
+          .filter((name) => /^issue-\d+\.meta\.json$/.test(name))
+          .flatMap((name) => {
+            const number = Number(/^issue-(\d+)\.meta\.json$/.exec(name)![1]);
+            const candidate = resolveBoundIssueSnapshot({
+              projectId: options.projectId, prNumber, prHeadSha: terminal.targetSha,
+              issueNumber: number, storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+            });
+            if (candidate.status !== 'found' || !candidate.metadata
+                || candidate.metadata.capturePhase !== 'review-preflight'
+                || candidate.metadata.projectId !== options.projectId
+                || candidate.metadata.prNumber !== prNumber
+                || candidate.metadata.issueNumber !== number
+                || candidate.metadata.prHeadSha.toLowerCase() !== terminal.targetSha.toLowerCase()
+                || !Number.isFinite(Date.parse(candidate.metadata.capturedAt))) {
+              throw new Error('native same-head Issue snapshot identity is ambiguous or corrupt');
+            }
+            return Date.parse(candidate.metadata.capturedAt) <= runCreatedAt ? [number] : [];
+          });
+        if (originalIssues.length !== 1 || originalIssues[0] !== issueNumber) {
+          throw new Error('native terminal original pre-run closing Issue binding is missing or ambiguous');
+        }
       }
       const liveIssue = process.env.OPK_VITEST_HARNESS === '1'
         ? (input.fixtureIssueBody !== undefined && input.fixtureIssueTitle
@@ -4417,7 +4456,28 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       if (!liveIssue) throw new Error('current linked Issue body/title unavailable');
       parseAuthoritativeTier(liveIssue.body, liveIssue.title);
       const digest = computeBoundIssueSnapshotHash(liveIssue.body);
-      if (digest !== frozen.snapshotHash) {
+      let expectedDigest: string | undefined = frozen.snapshotHash;
+      if (completedFinalFindings && cycle.settlementKind === 'same_head_issue_resolution') {
+        // The completed #2428 Issue-only resolution reviewed B0 but expressly
+        // settled owner-edited B1. Its durable completion time bounds the last
+        // accepted body edit; a later amendment must not inherit that status.
+        if (!priorRun.reviewRound || !cycle.reviewStageCompletedAtUtc) {
+          throw new Error('completed same-head Issue resolution source or completion time missing');
+        }
+        const revision = await resolveFinalCapIssueBodyRevision({
+          sourceRepoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+          issueNumber, terminalizedAt: priorRun.completedAtUtc,
+          frozenBodyHash: frozen.snapshotHash,
+        }, process.env.OPK_VITEST_HARNESS === '1'
+          ? input.fixtureSameHeadIssueResolutionRunner ?? runProcess : runProcess);
+        const completedAt = Date.parse(cycle.reviewStageCompletedAtUtc);
+        if (!Number.isFinite(completedAt)) {
+          throw new Error('completed same-head Issue resolution time invalid');
+        }
+        expectedDigest = Date.parse(revision.editedAt) <= completedAt
+          ? computeBoundIssueSnapshotHash(revision.body) : undefined;
+      }
+      if (digest !== expectedDigest) {
         const command = `npm run --silent pack-gpt-review -- --project ${options.projectId} --pr-number ${prNumber}`;
         return {
           prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
@@ -6461,14 +6521,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       && (['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
         || (authority.cycle.state === 'closed' && authority.cycle.reviewStageComplete === true
           && authority.terminal.targetSha !== target.headSha));
-    const finalStrictDescendant = finalFindings
-      && authority.terminal!.targetSha !== target.headSha
-      && await resolvePackReviewStrictDescendant({
-        repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
-        reviewedHeadSha: authority.terminal!.targetSha, currentHeadSha: target.headSha,
-        fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
-      });
-    if (finalStrictDescendant) {
+    // Completed final-cap stages still require verified Issue binding on
+    // rewritten/diverged heads; ancestry is decided inside reconciliation.
+    if (finalFindings && authority.terminal!.targetSha !== target.headSha) {
       const result = await reconcileFinalCapSettlement({
         projectId, storeRoot, prNumber: target.prNumber,
         repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
@@ -6477,6 +6532,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         fixtureIssueNumber: input.fixtureIssueNumber,
         fixtureIssueBody: input.fixtureIssueBody, fixtureIssueTitle: input.fixtureIssueTitle,
         fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
+        fixtureSameHeadIssueResolutionRunner: input.fixtureSameHeadIssueResolutionRunner,
         fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
         fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
       }, { projectId, storeRoot, repoSlug: target.repoSlug });

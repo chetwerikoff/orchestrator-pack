@@ -1640,6 +1640,79 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     expect(f.statusWrites).not.toContain('success');
   });
 
+  it('final-cap native snapshot binding rejects post-terminal Issue rebinding and ambiguous originals on reconcile and start', async () => {
+    const f = fixture('codex');
+    const issueB = f.issueNumber + 1;
+    const bodyB = originalBody + 'Second Issue body at unchanged r01\n';
+    const closingB = 'Closes #' + issueB;
+    // A normal at-cap PR-led start can capture B/H0 before refusing a
+    // second terminal, but that later snapshot cannot prove the old A run.
+    const sameHeadStart = await startPackReview({
+      ...f.request(bodyB), headSha: f.reviewed, immediate: undefined,
+      claimMode: 'preacquired', fixtureCurrentPrHeadSha: f.reviewed,
+      fixturePrBody: closingB, fixtureIssueNumber: issueB,
+      fixtureIssueTitle: '[T2] Second Issue',
+      fixturePostReviewHeadSha: f.reviewed, fixturePostReviewPrBody: closingB,
+      fixtureReviewStdout: cleanPayload(),
+    });
+    expect(sameHeadStart.ok).toBe(false);
+    expect(resolveBoundIssueSnapshot({
+      projectId: f.projectId, prNumber: f.prNumber,
+      prHeadSha: f.reviewed, issueNumber: issueB,
+    }).status).toBe('found');
+    const changedClosing = {
+      ...f.request(bodyB), fixturePrBody: closingB, fixtureIssueNumber: issueB,
+      fixtureIssueTitle: '[T2] Second Issue',
+    };
+    const reconciled = await reconcileStalePackReviewRuns(changedClosing);
+    expect(reconciled.results).toContainEqual(expect.objectContaining({
+      settled: false, reason: 'final_cap_review_binding_unverified',
+    }));
+    const started = await startPackReview({
+      ...changedClosing, headSha: f.current, immediate: undefined,
+      claimMode: 'preacquired', fixturePostReviewHeadSha: f.current,
+      fixturePostReviewPrBody: closingB,
+    });
+    expect(started).toMatchObject({
+      ok: false, created: false, reason: 'final_cap_review_binding_unverified',
+    });
+    expect(f.statusWrites).not.toContain('success');
+
+    const ambiguous = fixture('codex');
+    captureBoundIssueSnapshot({
+      projectId: ambiguous.projectId, prNumber: ambiguous.prNumber,
+      prHeadSha: ambiguous.reviewed, issueNumber: ambiguous.issueNumber + 1,
+      issueBody: originalBody, capturedAt: new Date(Date.parse(ambiguous.run.createdAt) - 1000).toISOString(),
+    });
+    const refused = await reconcileStalePackReviewRuns(ambiguous.request(originalBody));
+    expect(refused.results).toContainEqual(expect.objectContaining({
+      settled: false, reason: 'final_cap_review_binding_unverified',
+      detail: expect.stringContaining('ambiguous'),
+    }));
+    expect(ambiguous.statusWrites).not.toContain('success');
+  });
+
+  it('final-cap completed diverged-head start refuses amended body instead of publishing success', async () => {
+    const f = fixture('codex');
+    const completed = await reconcileStalePackReviewRuns(f.request(originalBody));
+    expect(completed.results).toContainEqual(expect.objectContaining({ settled: true }));
+    const priorSuccessCount = f.statusWrites.filter((s) => s === 'success').length;
+    const diverged = '6'.repeat(40);
+    const refused = await startPackReview({
+      ...f.request(originalBody + 'Changed binding at unchanged r01\n'),
+      headSha: diverged, fixtureCurrentPrHeadSha: diverged,
+      fixtureReviewCompareStatus: 'diverged', immediate: undefined,
+      claimMode: 'preacquired', fixturePostReviewHeadSha: diverged,
+      fixturePostReviewPrBody: 'Closes #' + f.issueNumber,
+    });
+    expect(refused).toMatchObject({
+      ok: false, created: false, reason: 'final_cap_issue_body_amended',
+    });
+    expect(f.statusWrites.filter((s) => s === 'success')).toHaveLength(priorSuccessCount);
+    expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
+      .toMatchObject({ state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1] });
+  });
+
   it('does not claim to detect a comment-only amendment when Issue body is identical', async () => {
     const f = fixture();
     // Comment text never enters computeBoundIssueSnapshotHash; only a folded body would differ.
@@ -1651,7 +1724,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
 });
 
 describe('Issue #2565 selected-target reset and immutable H1/B0 to H2/B1 review', () => {
-  it('reset target project card, status deassertion, stale H1 refusal and H2 ordinal one retention', async () => {
+  it('reset target project card; start after completed logical reset; completed reset required status deassertion; completed reset stale snapshot H1 to H2', async () => {
     const root = mkdtempSync(join(tmpdir(), 'pack-review-2565-selected-'));
     roots.push(root);
     setupHarness(join(root, 'pack-harness'));
@@ -2077,6 +2150,55 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     await reconcileStalePackReviewRuns(f.input);
     expect(readPackReviewAuthority(prNumber, f.options)?.transitionSeq).toBe(settled?.transitionSeq);
   });
+
+  it.each(['scoped reconcile', 'PR-led start'] as const)(
+    'completed same-head Issue resolution projects unchanged B1 to descendant without a new review via %s',
+    async (entrypoint) => {
+      const f = fixture();
+      let liveHead = reviewedHead;
+      const statusesByHead = new Map<string, string>();
+      f.input.fixtureRequiredStatusWriter = async (request) => {
+        f.statuses.push(request);
+        statusesByHead.set(liveHead, request.state);
+      };
+      f.input.fixtureRequiredStatusReader = async (head) => statusesByHead.get(head);
+      const initial = await reconcileStalePackReviewRuns(f.input);
+      expect(initial.results).toContainEqual(expect.objectContaining({
+        settled: true, reason: 'final_cap_same_head_issue_resolution_settled',
+      }));
+      expect(statusesByHead.get(reviewedHead)).toBe('success');
+      liveHead = HEAD;
+      const target = {
+        ...f.input, fixtureCurrentPrHeadSha: HEAD,
+        fixturePrState: 'OPEN', fixturePrBody: 'Closes #' + issueNumber,
+        fixtureIssueNumber: issueNumber, fixtureIssueTitle: '[T3] Amended scope Issue',
+        fixtureIssueBody: revisedBody, fixtureReviewCompareStatus: 'ahead',
+      };
+      if (entrypoint === 'scoped reconcile') {
+        const result = await reconcileStalePackReviewRuns(target);
+        expect(result.results).toContainEqual(expect.objectContaining({
+          settled: true, reason: 'final_cap_descendant_settled', headSha: HEAD,
+        }));
+      } else {
+        const outcome = await startPackReview({
+          ...target, headSha: HEAD, immediate: undefined, claimMode: 'preacquired',
+          fixtureRepoSlug: repository,
+          fixturePostReviewHeadSha: HEAD,
+          fixturePostReviewPrBody: 'Closes #' + issueNumber,
+        });
+        expect(outcome).toMatchObject({
+          ok: true, created: false, reason: 'final_cap_descendant_settled',
+        });
+      }
+      expect(statusesByHead.get(HEAD)).toBe('success');
+      expect(readPackReviewAuthority(prNumber, f.options)?.cycle).toMatchObject({
+        state: 'closed', reviewStageComplete: true,
+        settlementKind: 'same_head_issue_resolution',
+        consumedRoundOrdinals: [1, 2],
+      });
+      expect(getPackReviewRun(f.run.id, f.options)?.reviewVerdict).toBe('findings');
+    },
+  );
 
   it('R1 findings regression: accepts the observed raw type scope source through mapping and production reconcile', async () => {
     const f = fixture();
