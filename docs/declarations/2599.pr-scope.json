@@ -1,0 +1,19 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2599,
+  "declared_paths": [
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/browser-gpt-page-probe.ts"
+  ],
+  "source_revision": "c1f35591e41b4086341cc49eb2e6a75b25140acb"
+}
