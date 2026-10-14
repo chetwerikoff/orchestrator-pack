@@ -1018,9 +1018,6 @@ export function parseCliArgs(argv: readonly string[]): ParsedArgs {
     if (openIfMissingValue === 'true' && targetId) {
       throw new ProbeError('input_invalid', 'open_if_missing_requires_url');
     }
-    if (openIfMissingValue === 'true' && profile) {
-      throw new ProbeError('input_invalid', 'identity_bound_open_if_missing_forbidden');
-    }
     return {
       operation,
       cdp,
@@ -1629,7 +1626,7 @@ async function inspectWithReadiness(
   target: CompatibleTarget,
   requestedIdentity: string,
   deps: ProbeDependencies,
-): Promise<InspectionSnapshot> {
+): Promise<{ readonly snapshot: InspectionSnapshot; readonly raw: unknown }> {
   const deadline = clockNow(deps) + ACQUISITION_READINESS_TIMEOUT_MS;
   let previousKey: string | undefined;
   while (clockNow(deps) < deadline) {
@@ -1662,7 +1659,7 @@ async function inspectWithReadiness(
       }
       if (snapshot.ready_state !== 'loading') {
         const key = readinessKey(snapshot);
-        if (key === previousKey) return snapshot;
+        if (key === previousKey) return { snapshot, raw: value };
         previousKey = key;
       } else {
         previousKey = undefined;
@@ -1712,6 +1709,7 @@ function validateCreatedTarget(
 async function inspectAcquiredUrl(
   args: ParsedInspectArgs,
   deps: ProbeDependencies,
+  identityObservation: IdentityBoundInspectObservation | null = null,
 ): Promise<ProbeEnvelope> {
   const requestedIdentity = normalizeConversationUrl(args.conversationUrl!);
   const rawTargets = await listTargetCensus(args.cdp, deps);
@@ -1737,11 +1735,11 @@ async function inspectAcquiredUrl(
       ...baseEnvelope('inspect', 'ok'),
       target_id: target.target_id,
       acquisition: 'reused',
-      ...inspectRecoveryEnvelopeFields(value),
-      snapshot,
+      ...inspectRecoveryEnvelopeFields(value, identityObservation),
+      snapshot: identityObservation ? identityBoundSnapshot(snapshot) : snapshot,
     };
   }
-  if (!args.openIfMissing) throw new ProbeError('not_found', 'target_not_found');
+  if (!args.openIfMissing && !identityObservation) throw new ProbeError('not_found', 'target_not_found');
   if (!deps.createPage) throw new ProbeError('unavailable', 'page_create_unavailable');
 
   let ownedTarget: CompatibleTarget;
@@ -1759,9 +1757,9 @@ async function inspectAcquiredUrl(
   }
 
   let primaryError: ProbeError | undefined;
-  let snapshot: InspectionSnapshot | undefined;
+  let finalInspection: Awaited<ReturnType<typeof inspectWithReadiness>> | undefined;
   try {
-    snapshot = await inspectWithReadiness(ownedTarget, requestedIdentity, deps);
+    finalInspection = await inspectWithReadiness(ownedTarget, requestedIdentity, deps);
   } catch (error) {
     primaryError = error instanceof ProbeError
       ? error
@@ -1807,16 +1805,20 @@ async function inspectAcquiredUrl(
     readiness_timeout_ms: ACQUISITION_READINESS_TIMEOUT_MS,
     readiness_interval_ms: ACQUISITION_READINESS_INTERVAL_MS,
     cleanup,
-    execution_recovery_cause: null,
-    execution_recovery_inspect: {
-      cause: null,
-      owned_user_turn_key: null,
-      candidate_assistant_turn_key: null,
-      retry_control_present: false,
-      generation_in_progress: 'unknown',
-      reason: 'no_owned_prompt',
-    },
-    snapshot,
+    ...(identityObservation ? inspectRecoveryEnvelopeFields(finalInspection!.raw, identityObservation) : {
+      execution_recovery_cause: null,
+      execution_recovery_inspect: {
+        cause: null,
+        owned_user_turn_key: null,
+        candidate_assistant_turn_key: null,
+        retry_control_present: false,
+        generation_in_progress: 'unknown',
+        reason: 'no_owned_prompt',
+      },
+    }),
+    snapshot: identityObservation
+      ? identityBoundSnapshot(finalInspection!.snapshot)
+      : finalInspection!.snapshot,
   };
 }
 
@@ -2421,16 +2423,14 @@ export async function runProbe(args: ParsedArgs, deps: ProbeDependencies = defau
   const identityObservation = args.operation === 'inspect'
     ? readIdentityBoundInspectObservation(args)
     : null;
-  if (args.operation === 'inspect' && identityObservation && args.openIfMissing) {
-    throw new ProbeError('input_invalid', 'identity_bound_open_if_missing_forbidden');
-  }
-  if (args.operation === 'inspect'
-    && identityObservation?.conversationUrl
-    && args.conversationUrl) {
+  if (args.operation === 'inspect' && identityObservation && args.conversationUrl) {
+    if (!identityObservation.conversationUrl) {
+      throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+    }
     requireIdentityBoundConversation(identityObservation, args.conversationUrl);
   }
-  if (args.operation === 'inspect' && args.conversationUrl && args.openIfMissing) {
-    return inspectAcquiredUrl(args, deps);
+  if (args.operation === 'inspect' && args.conversationUrl && (args.openIfMissing || identityObservation)) {
+    return inspectAcquiredUrl(args, deps, identityObservation);
   }
 
   const targets = await availableTargets(args.cdp, deps);
