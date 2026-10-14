@@ -74,6 +74,7 @@ import {
   acquireReviewStartClaim,
   claimKey,
   claimPath,
+  readClaimRecord,
   completeAfterRunInvoke,
   releaseAfterRunFailure,
   resolveReviewStartClaimNamespace,
@@ -1773,27 +1774,42 @@ async function registeredReviewWorktreeMatchesSource(ctx: ReviewWorktreeContext,
   const gitfile = reviewWorktreeLstat(join(target, '.git'));
   if (!gitfile?.isFile() || gitfile.isSymbolicLink()) return false;
   try {
-    const [sourceCommon, checkoutCommon, checkoutTop] = await Promise.all([
+    const [sourceCommon, checkoutCommon, checkoutTop, checkoutGitDir] = await Promise.all([
       runGit(ctx.repoRoot, ['rev-parse', '--git-common-dir'], 'source Git common directory'),
       runGit(target, ['rev-parse', '--git-common-dir'], 'checkout Git common directory'),
       runGit(target, ['rev-parse', '--show-toplevel'], 'checkout Git root'),
+      runGit(target, ['rev-parse', '--absolute-git-dir'], 'checkout Git directory'),
     ]);
+    const gitDir = resolve(target, checkoutGitDir);
+    const gitfile = readFileSync(join(target, '.git'), 'utf8').trim();
+    if (!gitfile.startsWith('gitdir: ')) return false;
+    const namedGitDir = resolve(target, gitfile.slice('gitdir: '.length).trim());
+    const backlink = readFileSync(join(gitDir, 'gitdir'), 'utf8').trim();
     return resolve(ctx.repoRoot, sourceCommon) === resolve(target, checkoutCommon)
-      && resolve(checkoutTop) === target;
+      && resolve(checkoutTop) === target
+      && namedGitDir === gitDir
+      && resolve(gitDir, backlink) === join(target, '.git');
   } catch {
     return false;
   }
 }
 
-/** Terminal status is not process exit: reuse the existing dead-PID + heartbeat grace predicate. */
+/** Hard-killed active and terminal runs need the same dead-PID + grace evidence. */
 function reviewWorktreeHolderAbandoned(record: PackReviewRunRecord): boolean {
-  // An active run must pass existing stale-run reconciliation before cleanup
-  // can infer it has no concurrent claim/replacement owner.
-  if (PACK_REVIEW_ACTIVE_STATUSES.has(record.status)) return false;
   if (!isPackReviewRunStale({ ...record, status: 'reviewing' })) return false;
-  // Even all-terminal GPT source slots can await same-round aggregate recovery.
-  return !(record.reviewRound && record.reviewRound.settledSourceCount === undefined
-    && !hasPersistedPackReviewVerdict(record));
+  // Even a dead GPT owner may retain unfinished source slots for same-round recovery.
+  if (record.reviewRound && record.reviewRound.settledSourceCount === undefined
+      && !hasPersistedPackReviewVerdict(record)) return false;
+  // A different active PR/head claim holder may be taking over an unchanged stale record.
+  // Preserve unreadable or ambiguous claims rather than deleting a concurrent checkout.
+  const namespace = resolveReviewStartClaimNamespace({ projectId: record.projectId });
+  const claim = readClaimRecord(claimPath(namespace, record.prNumber, record.targetSha));
+  if (!claim.ok && claim.reason !== 'missing') return false;
+  if (claim.record?.state === 'active'
+      && (claim.record.holder.pid !== record.runnerPid || claim.record.holder.host !== hostname())) {
+    return false;
+  }
+  return true;
 }
 
 function referencesReviewWorktree(reference: string | undefined, target: string): boolean {
@@ -1839,9 +1855,12 @@ async function removeReviewWorktree(
   ctx: ReviewWorktreeContext,
   runId: string,
   target: string,
-  mode: 'sweep' | 'finally',
+  mode: 'sweep' | 'finally' | 'reuse',
   fixtureFailGitRemove = false,
+  reuseClaimOwned?: () => boolean,
 ): Promise<string> {
+  const claimHeld = () => mode !== 'reuse' || reuseClaimOwned?.() === true;
+  if (!claimHeld()) return 'same-round review start claim is not owned';
   const unavailable = verifyReviewWorktreeOwner(ctx, runId, target, mode);
   if (unavailable) return unavailable;
   let registrations = await registeredReviewWorktrees(ctx.repoRoot);
@@ -1858,6 +1877,7 @@ async function removeReviewWorktree(
   // The awaited inventory can race a new reuse; do not use earlier data as deletion authority.
   const changedOwner = verifyReviewWorktreeOwner(ctx, runId, target, mode);
   if (changedOwner) return changedOwner;
+  if (!claimHeld()) return 'same-round review start claim changed before removal';
   registrations = await registeredReviewWorktrees(ctx.repoRoot);
   if (registrations.has(target)) {
     if (!(await registeredReviewWorktreeMatchesSource(ctx, target))) {
@@ -1884,6 +1904,7 @@ async function removeReviewWorktree(
   }
   const beforeFilesystemRemove = verifyReviewWorktreeOwner(ctx, runId, target, mode);
   if (beforeFilesystemRemove) return beforeFilesystemRemove;
+  if (!claimHeld()) return 'same-round review start claim changed before filesystem removal';
   if (reviewWorktreeLstat(target)) rmSync(target, { recursive: true, force: true });
   if (reviewWorktreeLstat(target) || (await registeredReviewWorktrees(ctx.repoRoot)).has(target)) {
     throw new Error('review checkout residual directory or Git registration after cleanup');
@@ -7561,7 +7582,16 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         }
         worktree = storedTarget;
       } else if (registered.has(storedTarget)) {
-        throw new Error('persisted review checkout has a missing directory but retained Git registration');
+        // The incumbent has already been conditionally requeued under the exact
+        // same-round claim. Repair only its verified registration-only checkout.
+        if (!ownsStartClaim()) throw new Error('same-round review start claim is not owned');
+        const cleanup = await removeReviewWorktree(
+          reviewWorktreeContext, run.id, storedTarget, 'reuse', false, ownsStartClaim,
+        );
+        if (cleanup !== 'removed') {
+          throw new Error('persisted review checkout registration repair deferred: ' + cleanup);
+        }
+        // createReviewWorktree below restores this same run-ID target, not a new round.
       }
     }
     if (!worktree && process.env.OPK_VITEST_HARNESS === '1'
