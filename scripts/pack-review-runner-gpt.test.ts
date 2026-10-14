@@ -5511,21 +5511,296 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       .toBe(newerId);
   });
 
-  it('retains actual head-drift reason instead of an unproven 0/3 census', async () => {
-    const f = seed(3);
-    f.expireGrace();
-    const result = await reconcileStalePackReviewRuns({
-      ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+  function installSameRunVerdict(
+    f: ReturnType<typeof seed>, verdict: 'clean' | 'findings' = 'clean',
+  ): void {
+    const original = getPackReviewRun(f.runId, f.options)!;
+    const findings = verdict === 'findings' ? [{
+      type: 'quality', code: 'quality:head-drift-fixture',
+      severity: 'blocking', path: 'scripts/pack-review-runner.ts',
+      summary: 'synthetic existing finding', source: 'gpt-browser',
+    }] : [];
+    const recordedAtUtc = new Date().toISOString();
+    setPackReviewRunTerminal(f.runId, verdict === 'clean' ? 'up_to_date' : 'changes_requested', {
+      reviewVerdict: verdict, findingCount: findings.length, findings,
+      journalOutcome: {
+        state: 'persisted', reason: 'synthetic_concurrent_verdict',
+        recordedAtUtc, idempotencyKey: 'verdict:' + f.runId + ':' + HEAD_A,
+        attempts: 1,
+      },
+    }, f.options);
+    const authority = readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })!;
+    commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: authority.transitionSeq,
+      terminal: {
+        schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal',
+        runId: f.runId, targetSha: HEAD_A,
+        reviewVerdict: verdict, findingCount: findings.length,
+        findingsDigest: 'synthetic-2523-head-drift-verdict',
+        automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 1,
+      },
+      status: verdict, findingCount: findings.length,
+      options: { storeRoot: f.storeRoot },
     });
-    expect(result.results).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        runId: f.runId, terminalized: false, statusReconciled: false,
-        reason: 'gpt_source_head_changed', nextAction: 'run review for the current PR head',
-      }),
-    ]));
-    expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
-    expect(f.statusStates).toEqual([]);
-    expect(f.reviewBodies).toEqual([]);
+    expect(getPackReviewRun(f.runId, f.options)?.reviewCycleId)
+      .toBe(original.reviewCycleId);
+  }
+
+  describe('scoped reconcile head drift (Issue #2580)', () => {
+    it.each(['early', 'after-census'] as const)(
+      'closes a 3/3 original-head run and publishes its error only once: %s', async (timing) => {
+        const f = seed(3);
+        f.expireGrace();
+        const input = {
+          ...f.input, fixtureCurrentPrHeadSha: timing === 'early' ? HEAD_B : HEAD_A,
+        };
+        if (timing === 'after-census') {
+          const originalList = f.sourceTransport.listComments;
+          input.fixtureGptSourceCommentTransport = {
+            ...f.sourceTransport,
+            listComments: async () => {
+              input.fixtureCurrentPrHeadSha = HEAD_B;
+              return originalList();
+            },
+          };
+        }
+        const result = await reconcileStalePackReviewRuns(input);
+        const after = getPackReviewRun(f.runId, f.options)!;
+        expect(result.results).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            runId: f.runId, terminalized: true, statusReconciled: true,
+            reason: timing === 'early'
+              ? 'gpt_source_head_changed' : 'gpt_source_head_changed_after_census',
+            nextAction: expect.stringContaining('review-cap rules'),
+          }),
+        ]));
+        expect(result.results.find((row) => row.runId === f.runId)?.nextAction)
+          .toContain(HEAD_B);
+        expect(after).toMatchObject({
+          targetSha: HEAD_A, status: 'failed', latestRunStatus: 'failed',
+          failureReason: 'stale_head_before_terminal', exitCode: 1,
+          deliveryOutcomes: { requiredStatus: { state: 'succeeded',
+            reason: 'status_unfinished_execution' } },
+        });
+        expect(after.completedAtUtc).toEqual(expect.any(String));
+        expect(after.reviewVerdict).toBeUndefined();
+        expect(f.statusStates).toEqual(['error']);
+        expect(f.reviewBodies).toEqual([]);
+        expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+          .toEqual([]);
+        const saved = getPackReviewRun(f.runId, f.options);
+        const second = await reconcileStalePackReviewRuns({ ...input, immediate: false });
+        expect(second.results).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            runId: f.runId, terminalized: false, reason: 'status_already_reconciled',
+          }),
+        ]));
+        expect(getPackReviewRun(f.runId, f.options)).toEqual(saved);
+        expect(f.statusStates).toEqual(['error']);
+      },
+    );
+
+    it.each(['clean', 'findings'] as const)(
+      'keeps a persisted same-run %s verdict that wins during source census', async (verdict) => {
+        const f = seed(3);
+        f.expireGrace();
+        const input = { ...f.input, fixtureCurrentPrHeadSha: HEAD_A };
+        let settled = false;
+        input.fixtureGptSourceCommentTransport = {
+          ...f.sourceTransport,
+          listComments: async () => {
+            if (!settled) {
+              settled = true;
+              installSameRunVerdict(f, verdict);
+            }
+            input.fixtureCurrentPrHeadSha = HEAD_B;
+            return f.sourceTransport.listComments();
+          },
+        };
+        const result = await reconcileStalePackReviewRuns(input);
+        const stored = getPackReviewRun(f.runId, f.options)!;
+        expect(result.results).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            runId: f.runId, terminalized: false, statusReconciled: true,
+            reason: 'same_run_verdict_authoritative',
+          }),
+        ]));
+        expect(stored).toMatchObject({
+          status: verdict === 'clean' ? 'up_to_date' : 'changes_requested',
+          reviewVerdict: verdict, journalOutcome: { state: 'persisted' },
+        });
+        expect(stored.failureReason).not.toBe('stale_head_before_terminal');
+        expect(stored.findings).toHaveLength(verdict === 'clean' ? 0 : 1);
+        expect(f.statusStates).toEqual([verdict === 'clean' ? 'success' : 'failure']);
+        expect(f.statusStates).not.toContain('error');
+      },
+    );
+
+    it('does not overwrite a verdict established directly before the conditional store write', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      let called = 0;
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+        beforeStaleStatusWrite: async () => {
+          called += 1;
+          installSameRunVerdict(f);
+        },
+      });
+      expect(called).toBe(1);
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: false, statusReconciled: true,
+          reason: 'same_run_verdict_authoritative',
+        }),
+      ]));
+      expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+        status: 'up_to_date', reviewVerdict: 'clean', journalOutcome: { state: 'persisted' },
+      });
+      expect(f.statusStates).toEqual(['success']);
+    });
+
+    it('restores a same-run verdict published while its obsolete error POST is in flight', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      const writes: string[] = [];
+      let restored = false;
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+        fixtureRequiredStatusWriter: async (request) => {
+          if (request.state === 'error' && !restored) {
+            restored = true;
+            installSameRunVerdict(f);
+            writes.push('success');
+            await Promise.resolve();
+          }
+          writes.push(request.state);
+        },
+      });
+      expect(writes).toEqual(['success', 'error', 'success']);
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true, statusReconciled: true,
+          reason: 'same_run_verdict_authoritative',
+        }),
+      ]));
+      expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+        reviewVerdict: 'clean', journalOutcome: { state: 'persisted' },
+        deliveryOutcomes: { requiredStatus: { state: 'succeeded' } },
+      });
+    });
+
+    it('suppresses an obsolete error when a newer original-SHA run exists before reconcile', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      const newerId = installNewerCleanRun(f);
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+      });
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true, statusReconciled: true,
+          reason: 'newer_run_authoritative',
+        }),
+      ]));
+      expect(f.statusStates).toEqual(['success']);
+      expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+        status: 'failed', failureReason: 'stale_head_before_terminal',
+        deliveryOutcomes: { requiredStatus: { reason: 'newer_run_authoritative' } },
+      });
+      expect(getPackReviewRun(newerId, f.options)).toMatchObject({
+        status: 'up_to_date', reviewVerdict: 'clean',
+        deliveryOutcomes: { requiredStatus: { state: 'succeeded' } },
+      });
+      const saved = getPackReviewRun(f.runId, f.options);
+      await reconcileStalePackReviewRuns({ ...f.input, fixtureCurrentPrHeadSha: HEAD_B, immediate: false });
+      expect(getPackReviewRun(f.runId, f.options)).toEqual(saved);
+      expect(f.statusStates).toEqual(['success']);
+    });
+
+    it('suppresses error when a newer original-SHA run wins before the status writer', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      let newerId: string | undefined;
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+        fixturePauseBeforeStaleStatusWrite: async () => {
+          if (!newerId) newerId = installNewerCleanRun(f);
+        },
+      });
+      expect(newerId).toBeDefined();
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true, statusReconciled: true,
+          reason: 'newer_run_authoritative',
+        }),
+      ]));
+      expect(f.statusStates).toEqual(['success']);
+      expect(getPackReviewRun(newerId!, f.options)?.reviewVerdict).toBe('clean');
+    });
+
+    it('restores a newer original-SHA success after a delayed old-head error POST', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      const writes: string[] = [];
+      let newerId: string | undefined;
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+        fixtureRequiredStatusWriter: async (request) => {
+          if (request.state === 'error' && !newerId) {
+            newerId = installNewerCleanRun(f);
+            writes.push('success');
+            await Promise.resolve();
+          }
+          writes.push(request.state);
+        },
+      });
+      expect(writes).toEqual(['success', 'error', 'success']);
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true, statusReconciled: true,
+          reason: 'newer_run_authoritative',
+        }),
+      ]));
+      expect(getPackReviewRun(newerId!, f.options)?.reviewVerdict).toBe('clean');
+      expect(getPackReviewRun(f.runId, f.options)?.deliveryOutcomes.requiredStatus).toMatchObject({
+        state: 'succeeded', reason: 'newer_run_authoritative',
+      });
+    });
+
+    it('keeps a failed old-head status delivery repairable without re-terminalizing', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      let fail = true;
+      const writes: string[] = [];
+      const input = {
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+        fixtureRequiredStatusWriter: async (request: { state: string }) => {
+          writes.push(request.state);
+          if (fail) throw new Error('synthetic head-drift status outage');
+        },
+      };
+      const first = await reconcileStalePackReviewRuns(input);
+      expect(first.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true, statusReconciled: false,
+        }),
+      ]));
+      expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+        status: 'failed', failureReason: 'stale_head_before_terminal',
+        deliveryOutcomes: { requiredStatus: { state: 'failed' } },
+      });
+      fail = false;
+      const second = await reconcileStalePackReviewRuns({ ...input, immediate: false });
+      expect(second.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ runId: f.runId, terminalized: false, statusReconciled: true }),
+      ]));
+      expect(writes).toEqual(['error', 'error']);
+      const saved = getPackReviewRun(f.runId, f.options);
+      await reconcileStalePackReviewRuns({ ...input, immediate: false });
+      expect(getPackReviewRun(f.runId, f.options)).toEqual(saved);
+      expect(writes).toEqual(['error', 'error']);
+    });
   });
 
   it('keeps incomplete actor/census evidence distinct from a missing-comment census', async () => {
