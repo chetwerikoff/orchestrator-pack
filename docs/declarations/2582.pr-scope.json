@@ -2,6 +2,7 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 2582,
   "declared_paths": [
+    "docs/declarations/2582.pr-scope.json",
     "scripts/fleet/fleet-wake.test.ts",
     "scripts/fleet/fleet-wake.ts",
     "scripts/kernel/subprocess.test.ts",
@@ -14,10 +15,11 @@
     "vendor/"
   ],
   "allowed_roots": [
+    "docs/declarations/",
     "scripts/fleet/fleet-wake.test.ts",
     "scripts/fleet/fleet-wake.ts",
     "scripts/kernel/subprocess.test.ts",
     "scripts/kernel/subprocess.ts"
   ],
-  "source_revision": "f5c7d428d48c5072223dc5289639f891d66a69be"
+  "source_revision": "dbb9d44fba257cd5da08ebd544b9d43dddd2edb9"
 }
