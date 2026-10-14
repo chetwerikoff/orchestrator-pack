@@ -548,6 +548,23 @@ function classifyProbe(
       ) {
         return recoverable(context, producer, 'execute_github_first_reconciliation', githubFirstAction(context));
       }
+      // A page-wide Stop/generating signal does not attribute the active turn.
+      // Hand the exact retained invocation to its existing coordinator-owned
+      // observation episode instead of recommending the just-executed inspect.
+      if (
+        inspect?.generation_in_progress === true
+        && value.identity_bound === true
+        && text(context.cdp) && text(context.profile) && text(context.invocationId)
+        && (text(context.targetId) || text(context.conversationUrl))
+        && (!text(context.targetId) || text(value.target_id) === text(context.targetId))
+        && (value.profile === undefined || text(value.profile) === text(context.profile))
+        && (value.invocation_id === undefined || text(value.invocation_id) === text(context.invocationId))
+      ) {
+        return pause(
+          context, producer, 'external:content_authority_conflict', value,
+          'preserve this exact unsettled invocation and its original single 1_800_000 ms post-checkpoint observation episode (never reset it); on an existing coordinator wake use only the caller-retained Task/Run/attempt/receipt-bound finite wait within the remaining budget, when its original receipt is trustworthy; harvest only after exact-owned attributable settlement; on exhaustion or missing original waiter/receipt keep the Dispatch nonterminal for existing supervisor recovery; the page-wide generation signal does not prove the incumbent is generating; do not send, replace, or create a wake',
+        );
+      }
       if (inspect) {
         return recoverObservation(context, producer, value, 'execute_owned_turn_reobserve');
       }
