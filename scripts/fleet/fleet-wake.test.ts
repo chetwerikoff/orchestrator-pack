@@ -16,6 +16,7 @@ import {
   managerBannerMessage,
   parseNamedParkedProducer,
   runFleetAlarmTick,
+  runFleetWakeLoop,
   runFleetDiagnosticTick,
   type FleetAlarmTickOptions,
   type FleetWakeConfig,
@@ -2395,5 +2396,193 @@ describe('Issue #2556 stale-only selected-project pack-review fleet backstop', (
     await tick({ ...basic, config: config({ selectedRepository: repository }),
       resolveSelectedReviewProject: selected, readPackReviewRuns: () => [foreignRun] });
     expect(calls).toEqual([]);
+  });
+});
+
+const startupWakeText = 'fleet-wake started: run your PROMPT §7 start steps; resume every unit with an open Issue/PR and no live pane';
+
+interface StartupFrame {
+  readonly terminals: readonly FleetTerminal[];
+  readonly screens: Readonly<Record<string, string>>;
+  readonly unreadableList?: boolean;
+  readonly textFailure?: 'false' | 'throw';
+  readonly submitFailure?: 'false' | 'throw';
+}
+
+// Stop only at the existing interval sleep: every iteration runs its full ordinary tick.
+async function boundedStartupWake(input: {
+  frames: readonly StartupFrame[];
+  settings?: FleetWakeConfig;
+  store?: MemoryWakeStore;
+  listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
+}) {
+  const settings = input.settings ?? config();
+  const store = input.store ?? new MemoryWakeStore();
+  const calls: string[][] = [];
+  const logs: string[] = [];
+  const sleeps: number[] = [];
+  let poll = 0;
+  let awaitingStartupEnter = false;
+  const executor: OrcaExecutor = (args) => {
+    calls.push([...args]);
+    const frame = input.frames[poll]!;
+    if (frame.unreadableList && args[0] === 'terminal' && args[1] === 'list') {
+      return commandResult('{malformed');
+    }
+    if (args[0] === 'terminal' && args[1] === 'send') {
+      const message = args.includes('--text') ? args[args.indexOf('--text') + 1] : undefined;
+      if (message === startupWakeText) {
+        if (frame.textFailure === 'throw') throw new Error('synthetic startup text send error');
+        if (frame.textFailure === 'false') return commandResult('', false);
+        awaitingStartupEnter = true;
+      } else if (!message && awaitingStartupEnter) {
+        awaitingStartupEnter = false;
+        if (frame.submitFailure === 'throw') throw new Error('synthetic startup Enter error');
+        if (frame.submitFailure === 'false') return commandResult('', false);
+      }
+    }
+    return fakeOrca(frame.screens, [], frame.terminals)(args);
+  };
+  await expect(runFleetWakeLoop(settings, {
+    executor,
+    store,
+    log: (line) => { logs.push(line); },
+    listTerminalEnvelopes: input.listTerminalEnvelopes ?? (() => []),
+    listUnreadRunMessages: () => [],
+    listOpenPulls: () => [],
+    readPackReviewRuns: () => [],
+    readWorktreeHead: () => undefined,
+    now: () => 100_000,
+    sleepMs: async (ms) => {
+      sleeps.push(ms);
+      if (ms === settings.intervalSeconds * 1_000 && ++poll >= input.frames.length) {
+        throw new Error('bounded fleet-wake stop');
+      }
+    },
+  })).rejects.toThrow('bounded fleet-wake stop');
+  return { calls, logs, sleeps, store };
+}
+
+function startupTextSends(calls: readonly string[][]): string[][] {
+  return sends(calls).filter((call) => call[call.indexOf('--text') + 1] === startupWakeText);
+}
+
+describe('Issue #2575 process-local startup wake', () => {
+  const coordinator = terminals[0]!;
+  const readable: StartupFrame = { terminals: [coordinator], screens: { coord: 'idle' } };
+  const startupTextCommand = ['terminal', 'send', '--terminal', 'coord', '--text', startupWakeText, '--enter'];
+  const startupEnterCommand = ['terminal', 'send', '--terminal', 'coord', '--enter'];
+
+  it('startup wake immediately after the ordinary tick, once even if coordinator changes', async () => {
+    const replacement: FleetTerminal = { handle: 'coord-new', title: 'Cursor coordinator', worktreePath: primary };
+    const observed = await boundedStartupWake({ frames: [
+      readable,
+      { terminals: [replacement], screens: { 'coord-new': 'working\\nesc interrupt' } },
+      { terminals: [replacement], screens: { 'coord-new': 'idle' } },
+    ] });
+    expect(observed.logs.filter((line) => line === 'nothing stopped')).toHaveLength(3);
+    expect(sends(observed.calls)).toEqual([startupTextCommand, startupEnterCommand]);
+    expect(startupTextSends(observed.calls)).toHaveLength(1);
+    const firstSend = observed.calls.findIndex((call) => call.includes(startupWakeText));
+    expect(firstSend).toBeGreaterThan(0);
+    expect(observed.calls.slice(0, firstSend).some((call) =>
+      call[0] === 'terminal' && call[1] === 'read' && call.includes('--screen') && call.includes('coord'))).toBe(true);
+    expect(observed.sleeps.filter((ms) => ms === 4_000)).toHaveLength(1);
+    expect(startupTextSends((await boundedStartupWake({ frames: [readable] })).calls)).toHaveLength(1);
+  });
+
+  it('startup wake deferred across stale pin, known-exited and unreadable selected screen', async () => {
+    const pinned: FleetTerminal = { handle: 'pinned', title: 'Cursor coordinator', worktreePath: primary };
+    const selected: readonly FleetTerminal[] = [coordinator, pinned];
+    const observed = await boundedStartupWake({
+      settings: config({ orchestratorHandle: 'pinned' }),
+      frames: [
+        readable,
+        { terminals: [coordinator, { ...pinned, status: 'exited' }], screens: { coord: 'idle', pinned: 'idle' } },
+        { terminals: selected, screens: { coord: 'idle' } },
+        { terminals: selected, screens: { coord: 'idle', pinned: 'idle' } },
+        { terminals: selected, screens: { coord: 'idle', pinned: 'idle' } },
+      ],
+    });
+    expect(observed.logs).toContain('normal fleet result: no orchestrator pane found');
+    expect(sendsTo(observed.calls, 'coord')).toHaveLength(0);
+    expect(startupTextSends(observed.calls)).toEqual([
+      ['terminal', 'send', '--terminal', 'pinned', '--text', startupWakeText, '--enter'],
+    ]);
+    expect(sendsTo(observed.calls, 'pinned')).toEqual([
+      ['terminal', 'send', '--terminal', 'pinned', '--text', startupWakeText, '--enter'],
+      ['terminal', 'send', '--terminal', 'pinned', '--enter'],
+    ]);
+  });
+
+  it('startup wake deferred after a malformed terminal census', async () => {
+    const observed = await boundedStartupWake({ frames: [
+      { ...readable, unreadableList: true },
+      readable,
+      readable,
+    ] });
+    expect(observed.logs).toContain('terminal list unreadable');
+    expect(startupTextSends(observed.calls)).toEqual([startupTextCommand]);
+    expect(sends(observed.calls)).toEqual([startupTextCommand, startupEnterCommand]);
+  });
+
+  it('startup wake failed submit consumes the text attempt and ordinary ticks continue', async () => {
+    const observed = await boundedStartupWake({ frames: [
+      { ...readable, submitFailure: 'false' },
+      readable,
+      readable,
+    ] });
+    expect(observed.logs.filter((line) => line === 'nothing stopped')).toHaveLength(3);
+    expect(observed.logs).toContain('startup wake delivery unverified: coord');
+    expect(startupTextSends(observed.calls)).toEqual([startupTextCommand]);
+    expect(sends(observed.calls)).toEqual([startupTextCommand, startupEnterCommand]);
+  });
+
+  it.each(['false', 'throw'] as const)(
+    'startup wake failed first text send (%s) never retries', async (textFailure) => {
+      const observed = await boundedStartupWake({ frames: [
+        { ...readable, textFailure },
+        readable,
+        readable,
+      ] });
+      expect(startupTextSends(observed.calls)).toEqual([startupTextCommand]);
+      expect(sends(observed.calls)).toEqual([startupTextCommand]);
+      expect(observed.logs.filter((line) => line === 'nothing stopped')).toHaveLength(3);
+    },
+  );
+
+  it('startup wake ordinary alarm delivers STOPPED and named event first without changing marks', async () => {
+    const id = '2575-startup-event';
+    const event: TerminalEnvelopeEvent = {
+      path: '/tmp/opencode/2575-startup-event-terminal.json', invocationId: id,
+    };
+    const rows = [coordinator, terminals[1]!, terminals[2]!];
+    const screens = { coord: 'idle prompt', one: 'finished\\n>', two: 'PARKED on GPT turn ' + id };
+    const frame: StartupFrame = { terminals: rows, screens };
+    const baselineStore = new MemoryWakeStore();
+    const baselineInput = { terminals: rows, screens, store: baselineStore,
+      listTerminalEnvelopes: () => [event], now: () => 100_000 };
+    const first = await tick(baselineInput);
+    const second = await tick(baselineInput);
+    expect(first.result.state).toBe('sent');
+    expect(sendsTo(first.calls, 'coord').some((call) => call.some((value) => value.includes('STOPPED one')))).toBe(true);
+    expect(sendsTo(first.calls, 'two').filter((call) => call.includes('--text'))).toHaveLength(1);
+    expect(sends(second.calls)).toHaveLength(0);
+
+    const observed = await boundedStartupWake({
+      frames: [frame, frame],
+      listTerminalEnvelopes: () => [event],
+    });
+    const actual = sends(observed.calls);
+    const startupAt = actual.findIndex((call) => call.includes(startupWakeText));
+    expect(startupAt).toBe(sends(first.calls).length);
+    expect(actual.slice(0, startupAt)).toEqual(sends(first.calls));
+    expect(actual.slice(startupAt, startupAt + 2)).toEqual([startupTextCommand, startupEnterCommand]);
+    expect(actual.slice(startupAt + 2)).toEqual(sends(second.calls));
+    expect(observed.store.signature).toEqual(baselineStore.signature);
+    expect(observed.store.sentAt).toEqual(baselineStore.sentAt);
+    expect([...observed.store.marks]).toEqual([...baselineStore.marks]);
+    expect([...observed.store.parkedWakeEvents].sort()).toEqual([...baselineStore.parkedWakeEvents].sort());
+    expect([...observed.store.eventStatus.entries()]).toEqual([...baselineStore.eventStatus.entries()]);
   });
 });
