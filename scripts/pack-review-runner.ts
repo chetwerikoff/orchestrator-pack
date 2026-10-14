@@ -6231,7 +6231,6 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
   const reviewWorktreeContext: ReviewWorktreeContext = {
     projectId, storeRoot, repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
   };
-  await reclaimReviewWorktrees(reviewWorktreeContext);
   const readProjectionHead = () => readCheckedReviewPrHead({
     sourceRepoRoot: target.sourceRepoRoot,
     fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
@@ -6576,6 +6575,10 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
   };
 
   try {
+    // Run the ordinary cleanup sweep only after the existing PR/head claim is
+    // acquired: an unclaimed async Git inventory can stagger concurrent starts
+    // until both separately enter the reviewer path.
+    await reclaimReviewWorktrees(reviewWorktreeContext);
     try {
       await assertBoundHeadStillCurrent({
         repoRoot: target.sourceRepoRoot,
