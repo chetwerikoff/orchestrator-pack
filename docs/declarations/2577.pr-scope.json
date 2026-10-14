@@ -1,0 +1,17 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2577,
+  "declared_paths": [
+    "scripts/flow-manager-long-running-child.test.ts"
+  ],
+  "denylist": [
+    "credentials/**",
+    "packages/core/**",
+    "secrets/**",
+    "vendor/**"
+  ],
+  "allowed_roots": [
+    "scripts/flow-manager-long-running-child.test.ts"
+  ],
+  "source_revision": "f5c7d428d48c5072223dc5289639f891d66a69be"
+}
