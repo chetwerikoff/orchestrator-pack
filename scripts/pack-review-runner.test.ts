@@ -1,7 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -3611,7 +3610,11 @@ describe('Issue #2576 owned worktree lifecycle with real disposable Git', () => 
   const repository = 'chetwerikoff/orchestrator-pack';
 
   function git(repo: string, ...args: string[]): string {
-    return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const result = runProcessSync({
+      command: 'git', args, cwd: repo, inheritParentEnv: true, allowEmptyStdout: true,
+    });
+    if (!result.ok) throw new Error('disposable Git command failed: ' + args.join(' ') + ': ' + result.stderr);
+    return result.stdout.trim();
   }
 
   function realGitFixture() {
