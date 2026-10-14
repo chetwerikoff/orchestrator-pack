@@ -5929,6 +5929,15 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
             });
             expect(created.created).toBe(true);
             newerId = created.run.id;
+            // The per-ordinal create fixture starts sameKeyOrder at 1 for
+            // round 2. Model the later same-original-SHA authoritative run's
+            // actual run ordering without changing any production store code.
+            const newerPath = path.join(f.storeRoot, 'runs', `${newerId}.json`);
+            const newerRaw = JSON.parse(readFileSync(newerPath, 'utf8'));
+            newerRaw.sameKeyOrder = Number(old.sameKeyOrder) + 1;
+            writeFileSync(newerPath, JSON.stringify(newerRaw) + '\n', 'utf8');
+            expect(getPackReviewRun(newerId, f.options)?.sameKeyOrder)
+              .toBe(Number(old.sameKeyOrder) + 1);
             const finding = {
               type: 'quality', code: 'quality:newer-findings-wins',
               severity: 'blocking', path: 'scripts/pack-review-runner.ts',
