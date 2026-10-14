@@ -2792,9 +2792,10 @@ describe('Issue #2589 merge-skill executable gh read coverage', () => {
     const joined = source.replace(/[ \t]*\\\r?\n[ \t]*/g, ' ');
     // Match commands also inside shell conditionals, substitutions and chains.
     const commands = [...joined.matchAll(/\bgh[ \t]+[^`\r\n;&|)]+/g)]
-      .map((match) => match[0].trim())
-      // The bare command-family mention in Step 2 has no executable arguments.
-      .filter((command) => command !== 'gh pr view');
+      // Exempt only the known Step 2 prose reference, never a shell instruction.
+      .filter((match) => !(match[0].trim() === 'gh pr view'
+        && joined.slice(0, match.index).endsWith('Resolve the concrete PR with `')))
+      .map((match) => match[0].trim());
     return commands.map((command) =>
       command.replace(/\$TARGET_REPOSITORY\b/g, 'example/target').replace(/\bP\b/g, '42'));
   }
@@ -2842,5 +2843,8 @@ describe('Issue #2589 merge-skill executable gh read coverage', () => {
     ]) {
       expect(() => checkAllSkillReads(skill + '\n' + embeddedRead)).toThrow();
     }
+    const bareView = 'gh pr view';
+    expect(isClassifiedGhReadCommand(bareView)).toBe(false);
+    expect(() => checkAllSkillReads(skill + '\n```bash\n' + bareView + '\n```')).toThrow();
   });
 });
