@@ -5186,7 +5186,10 @@ export async function reconcileStalePackReviewRuns(
           const after = getPackReviewRun(run.id, { projectId, storeRoot });
           const afterOrder = resolvePackReviewRunOrder(await readBoundRecords(), latest);
           if (afterOrder.kind === 'newer') {
-            const newer = await restoreAndSettleNewerAuthority(latest, statusWriter);
+            // This old verdict-status POST may have landed after the newer
+            // original-SHA projection. Always force the newer winner back;
+            // a verdict-bearing old run has no unfinished-error repair need.
+            const newer = await restoreLatestAuthority(latest, statusWriter, true);
             return {
               reason: newer.reason,
               statusReconciled: newer.reason === 'newer_run_authoritative'
@@ -5887,11 +5890,47 @@ export async function reconcileStalePackReviewRuns(
       if (!current || hasPersistedPackReviewVerdict(current)) continue;
       let verified = false;
       try {
-        const headBefore = await readCheckedReviewPrHead(
-          input, repoSlug, current.prNumber, current.targetSha,
-        );
-        const authorityBefore = readPackReviewAuthority(current.prNumber, { storeRoot });
-        if (current.status === 'failed'
+        if (current.status === 'failed' && current.failureReason === 'stale_head_before_terminal') {
+          // A moved-head closure owns the original SHA, not the live PR HEAD.
+          // Confirm that SHA's actual required-status projection and unchanged
+          // run-order authority; the live-head equality rule below is for other
+          // stale statuses only.
+          const beforeOrder = resolvePackReviewRunOrder(await readBoundRecords(), current);
+          const newer = beforeOrder.kind === 'newer' ? beforeOrder.run : null;
+          const winnerOutcome = newer?.deliveryOutcomes.requiredStatus;
+          const winnerPayload = newer ? packReviewJournaledPayload(newer) : null;
+          const classification = winnerPayload ? classifyPackReviewPayload(winnerPayload) : null;
+          const expectedStatus = beforeOrder.kind === 'none' ? 'error'
+            : beforeOrder.kind === 'newer'
+              && current.deliveryOutcomes.requiredStatus?.reason === 'newer_run_authoritative'
+              && winnerOutcome?.state === 'succeeded'
+              ? classification
+                ? winnerOutcome.reason === 'status_pending_round_restored'
+                  || (classification.requiredStatus === 'success'
+                    && outstandingPackReviewCycle(beforeOrder.run, storeRoot))
+                  ? 'pending' : classification.requiredStatus
+                : newer && PACK_REVIEW_ACTIVE_STATUSES.has(newer.status) ? 'pending' : undefined
+              : undefined;
+          if (expectedStatus && packReviewRequiredStatusStaleReconciliationComplete(current)) {
+            const observed = await readFinalCapRequiredStatus(input, repoSlug, current.targetSha);
+            const after = getPackReviewRun(current.id, { projectId, storeRoot });
+            const afterOrder = resolvePackReviewRunOrder(await readBoundRecords(), current);
+            verified = observed === expectedStatus
+              && after?.status === 'failed'
+              && after.failureReason === 'stale_head_before_terminal'
+              && packReviewRequiredStatusStaleReconciliationComplete(after)
+              && (beforeOrder.kind === 'none' && afterOrder.kind === 'none'
+                || beforeOrder.kind === 'newer' && afterOrder.kind === 'newer'
+                  && beforeOrder.run.id === afterOrder.run.id
+                  && packReviewRequiredStatusProjectionKey(beforeOrder.run)
+                    === packReviewRequiredStatusProjectionKey(afterOrder.run));
+          }
+        } else {
+          const headBefore = await readCheckedReviewPrHead(
+            input, repoSlug, current.prNumber, current.targetSha,
+          );
+          const authorityBefore = readPackReviewAuthority(current.prNumber, { storeRoot });
+          if (current.status === 'failed'
             && headBefore === current.targetSha.toLowerCase()
             && authorityBefore?.currentHeadSha.toLowerCase() === headBefore
             && authorityBefore.cycle?.cycleId === current.reviewCycleId
@@ -5908,6 +5947,7 @@ export async function reconcileStalePackReviewRuns(
             && authorityAfter.cycle?.cycleId === current.reviewCycleId
             && !authorityAfter.terminal
             && resolvePackReviewRunOrder(await readBoundRecords(), current).kind === 'none';
+          }
         }
       } catch {
         // An unavailable, conflicting or overwritten current-head status is
