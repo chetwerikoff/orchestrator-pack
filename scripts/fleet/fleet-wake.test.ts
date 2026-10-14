@@ -1977,7 +1977,7 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
       expect(rendered).not.toContain('ctrl+f fullscreen');
     }
     const alarm = await tick({
-      screens: { coord: 'working\\nctrl+c to stop', one: envModal },
+      screens: { coord: 'working\nctrl+c to stop', one: envModal },
       terminals: fleet, store: new MemoryWakeStore(),
     });
     expect(msg(alarm.calls)).toContain('Verify this visible OpenCode prompt');
@@ -1985,8 +1985,8 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
     expect(sendsTo(alarm.calls, 'one')).toHaveLength(0);
 
     for (const staleOrUnsafe of [
-      envModal + '  ┃  Assistant: completed a distinct ordinary step\\n',
-      'Tool: quoted modal\\n' + envModal + '\\nTool: done',
+      envModal + '  ┃  Assistant: completed a distinct ordinary step\n',
+      'Tool: quoted modal\n' + envModal + '\nTool: done',
       envModal.replace('Path: .env', 'Path: other.env'),
       envModal.replace('Allow always', 'Allow someday'),
       envModal.replace('⇆ select  enter confirm', 'no selection footer'),
