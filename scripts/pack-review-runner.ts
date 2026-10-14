@@ -1796,6 +1796,12 @@ function reviewWorktreeHolderAbandoned(record: PackReviewRunRecord): boolean {
     && !hasPersistedPackReviewVerdict(record));
 }
 
+function referencesReviewWorktree(reference: string | undefined, target: string): boolean {
+  if (!reference) return false;
+  if (resolve(reference) === target) return true;
+  try { return realpathSync(reference) === target; } catch { return false; }
+}
+
 function verifyReviewWorktreeOwner(
   ctx: ReviewWorktreeContext,
   runId: string,
@@ -1814,8 +1820,7 @@ function verifyReviewWorktreeOwner(
     return 'persisted reviewTargetRoot is not the owned direct child';
   }
   for (const record of records) {
-    if (record.id !== runId && record.reviewTargetRoot !== target
-        && (!record.reviewTargetRoot || resolve(record.reviewTargetRoot) !== target)) continue;
+    if (record.id !== runId && !referencesReviewWorktree(record.reviewTargetRoot, target)) continue;
     if (record.id !== runId && record.reviewTargetRoot !== target) {
       return 'other run has an aliased checkout reference';
     }
