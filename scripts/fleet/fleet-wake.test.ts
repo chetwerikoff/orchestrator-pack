@@ -1454,7 +1454,7 @@ describe('Issue #2471 local-chatgpt coordinator-only and one-attempt routing', (
     const base = row(saved).banners[0]!;
     const message = managerBannerMessage(base);
     expect(managerBannerMessage({ ...base, review: true })).toBe(message);
-    expect(message).toContain('Only for confirmed execution');
+    expect(message).toContain('Only for confirmed execution and an authorized same-chat product-error continuation');
     expect(message).toContain('Only for confirmed PR review');
     expect(message).toContain('Доделай и сообщи статус');
     expect(message).toContain('Заверши ревью:');
@@ -1478,10 +1478,12 @@ describe('Issue #2342 unloadable chat', () => {
       retry: false,
     };
     expect(managerBannerMessage(banner)).toContain('continue the task in a new chat');
+    expect(managerBannerMessage(banner)).toContain('for a confirmed author turn whose Issue already exists, open one fresh-project-chat author turn on that Issue with fm-prompt-universal-existing-issue.md, never a second Issue');
     expect(managerBannerMessage(banner)).not.toContain('same chat');
     expect(managerBannerMessage({ ...banner, review: true })).toContain('Restart the review in a new chat');
     const alarm = fleetAlarmMessage('idle', [], [banner]);
     expect(alarm).toContain('cannot be loaded');
+    expect(alarm).toContain('a confirmed author turn whose Issue already exists may open one fresh-project-chat author turn on that Issue with fm-prompt-universal-existing-issue.md, never a second Issue');
     expect(alarm).not.toContain('need a continuation');
   });
 });
