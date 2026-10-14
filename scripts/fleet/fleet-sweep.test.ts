@@ -431,7 +431,7 @@ describe('Issue #2585 supervised primary-root admission', () => {
     expect(runFleetSweep({ ...opts, terminals, executor: polling })[0]?.state).toBe('busy');
     expect(runFleetSweep({ ...opts, terminals, executor: polling })[0]?.state).toBe('POLLING');
     expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'show'))
-      .toHaveLength(4);
+      .toHaveLength(5); // diagnostics independently reconcile branch for attribution
     expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'read'))
       .toHaveLength(4);
     expect(calls.every((args) => args[0] === 'terminal'
