@@ -157,6 +157,174 @@ describe('execute-Issue manager boundary', () => {
     expect(JSON.stringify(unsafe.result)).toContain('unsafe-evidence-2081');
   });
 
+  describe('Issue #2571: a generating identity-bound inspect has a nonterminal handoff', () => {
+    const inspectArgv = [
+      'node', '--experimental-strip-types', 'scripts/browser-gpt-page-probe.ts', 'inspect',
+      '--cdp', context.cdp!, '--target-id', 'target-2081',
+      '--profile', '/operator/profile', '--invocation-id', 'invocation-2571',
+    ];
+    const bound: ExecuteIssueManagerBoundaryContext = {
+      ...context, issueNumber: 2571, sourceRevision: 'r02', phase: 'implementation',
+      targetId: 'target-2081', conversationUrl: undefined,
+      profile: '/operator/profile', invocationId: 'invocation-2571',
+      productionArgv: inspectArgv,
+    };
+    const recovery = {
+      cause: null, owned_user_turn_key: 'owned-user-2571',
+      candidate_assistant_turn_key: null, retry_control_present: false,
+      generation_in_progress: true,
+    };
+    const generating = probe('ok', {
+      identity_bound: true, observation_phase: 'sent_unharvested',
+      execution_recovery_inspect: recovery,
+      snapshot: { page_url: 'https://chatgpt.com/c/owned-2081', generation_in_progress: true },
+    });
+
+    it('projects an evidence-preserving coordinator pause for exact repeated inspect argv, including the CLI', () => {
+      const evaluation = classifyExecuteIssueManagerRecord(generating, bound);
+      expect(evaluation).toMatchObject({
+        exitCode: 4,
+        result: {
+          ok: false, cause: 'external:content_authority_conflict', nextAction: null,
+          pause: { resume_when: { coordinator: true } },
+        },
+      });
+      if (evaluation.result.ok !== false || !('pause' in evaluation.result)) throw new Error('expected external pause');
+      expect(JSON.parse(evaluation.result.pause.evidence)).toEqual(generating);
+      expect(evaluation.result.pause.remedy).toContain('1_800_000 ms');
+      expect(evaluation.result.pause.remedy).toContain('existing coordinator wake');
+      expect(evaluation.result.pause.remedy).toContain('attributable settlement');
+      expect(JSON.stringify(evaluation.result)).not.toContain('--new-chat');
+      expect(JSON.stringify(evaluation.result)).not.toContain('self_recommendation');
+
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const exitCode = runExecuteIssueManagerBoundaryCli([
+        'classify', '--record', '/fixture/owned-generating.json', '--repo', bound.repository,
+        '--issue-number', String(bound.issueNumber), '--source-revision', bound.sourceRevision,
+        '--phase', bound.phase, '--production-argv-json', JSON.stringify(inspectArgv),
+        '--cdp', bound.cdp!, '--target-id', bound.targetId!,
+        '--profile', bound.profile!, '--invocation-id', bound.invocationId!,
+      ], {
+        readFile: () => JSON.stringify(generating),
+        stdout: { write: (chunk) => stdout.push(chunk) },
+        stderr: { write: (chunk) => stderr.push(chunk) },
+        currentArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
+      });
+      expect(exitCode).toBe(4);
+      expect(stderr).toEqual([]);
+      expect(stdout).toHaveLength(1);
+      expect(JSON.parse(stdout[0]!)).toMatchObject({
+        cause: 'external:content_authority_conflict', nextAction: null,
+        pause: { resume_when: { coordinator: true } },
+      });
+    });
+
+    it('leaves stopped product errors, stopped non-errors, unknown, and ambiguous markers on their old routes', () => {
+      const stoppedError = probe('ok', {
+        identity_bound: true,
+        execution_recovery_inspect: { ...recovery, cause: 'message_stream_error', generation_in_progress: false },
+      });
+      const product = classifyExecuteIssueManagerRecord(stoppedError, bound);
+      expect(product.exitCode).toBe(3);
+      expect(expectReadOnly(product).kind).toBe('execute-github-first-read-only');
+
+      for (const generation of [false, 'unknown'] as const) {
+        const envelope = probe('ok', {
+          identity_bound: true,
+          execution_recovery_inspect: { ...recovery, generation_in_progress: generation },
+        });
+        expect(classifyExecuteIssueManagerRecord(envelope, bound)).toMatchObject({
+          exitCode: 5, result: { cause: 'self_recommendation', nextAction: null },
+        });
+        const distinctClassifierArgv = { ...bound, productionArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'] };
+        const recovered = classifyExecuteIssueManagerRecord(envelope, distinctClassifierArgv);
+        expect(recovered.exitCode).toBe(3);
+        expect(expectReadOnly(recovered).argv).toEqual(inspectArgv);
+      }
+
+      const ambiguous = classifyExecuteIssueManagerRecord(probe('ok', {
+        ...generating,
+        execution_recovery_inspect: { ...recovery, reason: 'ambiguous_marker' },
+      }), bound);
+      expect(ambiguous).toMatchObject({
+        exitCode: 4, result: { cause: 'external:content_authority_conflict', nextAction: null },
+      });
+      if (ambiguous.result.ok !== false || !('pause' in ambiguous.result)) throw new Error('expected ambiguous-marker pause');
+      expect(ambiguous.result.pause.remedy).toContain('ambiguous owned-marker');
+    });
+
+    it('does not grant the generation pause to unbound, missing-target, or contradictory producer identity', () => {
+      for (const unbound of [
+        { ...generating, identity_bound: false },
+        { ...generating, identity_bound: undefined },
+        { ...generating, target_id: 'sibling-target' },
+        { ...generating, profile: '/foreign/profile' },
+        { ...generating, invocation_id: 'foreign-invocation' },
+      ]) {
+        expect(classifyExecuteIssueManagerRecord(unbound, bound)).toMatchObject({
+          exitCode: 5, result: { cause: 'self_recommendation', nextAction: null },
+        });
+      }
+      for (const unretained of [
+        { ...bound, profile: undefined },
+        { ...bound, invocationId: undefined },
+        { ...bound, targetId: undefined, conversationUrl: undefined },
+      ]) {
+        const evaluated = classifyExecuteIssueManagerRecord(generating, unretained);
+        expect(evaluated.exitCode).not.toBe(4);
+        expect(evaluated.exitCode).not.toBe(0);
+      }
+      // The existing no-identity fixture above still reobserves rather than pausing.
+    });
+
+    it('does not attribute sibling page generation or an uncommitted harvest, but accepts an exact-owned completed harvest', () => {
+      const unrelatedGenerator = probe('ok', {
+        ...generating,
+        execution_recovery_inspect: {
+          ...recovery, owned_user_turn_key: null, candidate_assistant_turn_key: 'sibling-answer',
+        },
+      });
+      const paused = classifyExecuteIssueManagerRecord(unrelatedGenerator, bound);
+      expect(paused).toMatchObject({
+        exitCode: 4,
+        result: { ok: false, cause: 'external:content_authority_conflict', nextAction: null },
+      });
+      if (paused.result.ok !== false || !('pause' in paused.result)) throw new Error('expected uncertainty pause');
+      expect(JSON.parse(paused.result.pause.evidence)).toEqual(unrelatedGenerator);
+      expect(paused.result.pause.remedy).toContain('does not prove the incumbent');
+
+      // A later snapshot is not an authorized re-inspect from the pause.
+      const stoppedNonError = probe('ok', {
+        identity_bound: true,
+        execution_recovery_inspect: { ...recovery, generation_in_progress: false },
+      });
+      expect(classifyExecuteIssueManagerRecord(stoppedNonError, bound)).toMatchObject({
+        exitCode: 5, result: { cause: 'self_recommendation', nextAction: null },
+      });
+
+      // The existing harvest producer, not this classifier, proves exact ownership.
+      // Fixtures do not establish a real Chrome settlement, receipt, or coordinator wake.
+      const harvested = probe('ok', {
+        operation: 'harvest', diagnostic_only: false, harvested: true, classifier: 'completed',
+        observation_phase: 'harvested',
+        node: { role: 'assistant', ordinal: 1, message_id: 'owned-assistant-2571' },
+        output: '/tmp/owned-2571.txt', byte_length: 5, sha256: 'a'.repeat(64),
+      });
+      for (const unattributable of [
+        { ...harvested, harvested: false, observation_phase: 'sent_unharvested' },
+        { ...harvested, node: { role: 'user', message_id: 'sibling-user' } },
+      ]) {
+        const outcome = classifyExecuteIssueManagerRecord(unattributable, bound);
+        expect(outcome.exitCode).not.toBe(0);
+        expect(outcome.result).not.toMatchObject({ cause: 'execute_probe_observation_completed' });
+      }
+      expect(classifyExecuteIssueManagerRecord(harvested, bound)).toMatchObject({
+        exitCode: 0, result: { ok: true, cause: 'execute_probe_observation_completed', nextAction: null },
+      });
+    });
+  });
+
   it('Issue #2495: bound vanished inspect selects only the existing GitHub-first read', () => {
     // The actual error envelope does not echo target, profile, invocation or identity_bound.
     const missing = {
