@@ -8480,7 +8480,8 @@ function readStdinPayload(): Record<string, unknown> {
 
 async function main(): Promise<void> {
   const [subcommand = 'help', ...argv] = process.argv.slice(2);
-  if (subcommand === 'help' || argv.includes('--help') || argv.includes('-h')) {
+  if (subcommand === 'help' || subcommand === '--help' || subcommand === '-h'
+      || argv.includes('--help') || argv.includes('-h')) {
     process.stdout.write(`${usage()}\n`);
     return;
   }

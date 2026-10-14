@@ -48,6 +48,25 @@ const roots: string[] = [];
 const originalEnv = { ...process.env };
 const HEAD = 'a'.repeat(40);
 
+describe('Issue #2565 CLI help smoke regression', () => {
+  it.each(['--help', '-h'] as const)(
+    'accepts standalone %s and prints audited reset usage successfully', (flag) => {
+      const output = runProcessSync({
+        command: process.execPath,
+        args: ['--experimental-strip-types', 'scripts/pack-review-runner.ts', flag],
+        cwd: process.cwd(),
+        inheritParentEnv: false,
+      });
+      expect(output).toMatchObject({ outcome: 'exit', ok: true, exitCode: 0 });
+      for (const fragment of ['reset --project <id>', '--pr-number <n>',
+        '--actor <actor>', '--reason <text>', '--nonce <value>']) {
+        expect(output.stdout).toContain(fragment);
+      }
+      expect(output.stderr).not.toContain('unknown subcommand');
+    },
+  );
+});
+
 describe('Issue #1887 GitHub compare ancestry normalization', () => {
   it('fails closed when compare transport throws', async () => {
     const reviewed = '1'.repeat(40);
