@@ -42,7 +42,7 @@ interface ConsumerDefinition {
   readonly id: string;
   readonly entrypoints: readonly string[];
   readonly extraPaths?: readonly string[];
-  readonly control: 'supervisor' | 'scheduler' | 'systemd-user' | 'agent-hook' | 'unsupported';
+  readonly control: 'scheduler' | 'systemd-user' | 'agent-hook' | 'unsupported';
 }
 interface SupervisorStatus {
   readonly supervisorPid?: number;
@@ -68,6 +68,9 @@ const FLEET_WAKE_UNIT = 'scripts/fleet/fleet-wake@.service';
 const FLEET_TEMPLATE_CONSUMER = 'fleet-wake-template';
 const FLEET_INVENTORY_CONSUMER = 'fleet-wake-inventory';
 const FLEET_CONSUMER_RE = /^fleet-wake@([A-Za-z0-9][A-Za-z0-9._-]*)\.service$/u;
+const SUPERVISOR_CONSUMER_RE = /^orchestrator-side-process-supervisor@([A-Za-z0-9][A-Za-z0-9._-]*)$/u;
+const SUPERVISOR_INVENTORY_CONSUMER = 'orchestrator-side-process-supervisor-inventory';
+const SUPERVISOR_STATE_AMBIGUOUS_CONSUMER = 'orchestrator-side-process-supervisor-state-ambiguous';
 const TYPESCRIPT_CLI_ENTRYPOINT = 'scripts/lib/Invoke-TypeScriptCli.ts';
 const AGENT_HOOK_ENTRYPOINTS = [
   'scripts/invoke-read-delegation-audit-stop.ts',
@@ -182,10 +185,57 @@ function consumerDefinitions(repoRoot: string): ConsumerDefinition[] {
     };
   });
   return [
-    { id: 'orchestrator-side-process-supervisor', entrypoints: [SUPERVISOR_ENTRYPOINT], extraPaths: [REGISTRY_PATH], control: 'supervisor' },
     ...children,
     { id: 'agent-hooks', entrypoints: AGENT_HOOK_ENTRYPOINTS, control: 'agent-hook' },
   ];
+}
+
+/** Reuse the validated, selector-independent registered-card inventory for fleet and supervisors. */
+function registeredProjectIds(env: Readonly<NodeJS.ProcessEnv>): string[] {
+  const directory = path.dirname(projectCardPath('inventory-probe', env));
+  const directoryStat = lstatSync(directory);
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) throw new Error('inventory_directory_invalid');
+  const files = readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.name.endsWith('.json'))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  if (files.length === 0) throw new Error('inventory_empty');
+  const selectedEnv: NodeJS.ProcessEnv = { ...env };
+  delete selectedEnv.OPK_PROJECT_ID;
+  const identities = new Set<string>();
+  return files.map((entry) => {
+    const fullPath = path.join(directory, entry.name);
+    const stat = lstatSync(fullPath);
+    if (!entry.isFile() || !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('card_alias');
+    const projectId = entry.name.slice(0, -'.json'.length);
+    const context = resolveTargetContext({ projectId, env: selectedEnv });
+    if (context.projectId !== projectId || path.resolve(context.cardPath) !== path.resolve(fullPath)) throw new Error('card_identity');
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(projectId) || identities.has(projectId.toLowerCase())) throw new Error('project_alias');
+    identities.add(projectId.toLowerCase());
+    return context.projectId;
+  });
+}
+
+/** Relevant supervisor changes map to all registered projects, never a caller-selected singleton. */
+function supervisorConsumersForChangedPaths(repoRoot: string, changed: readonly string[], env: Readonly<NodeJS.ProcessEnv>): AdoptionConsumer[] {
+  const closure = staticDependencyClosure(repoRoot, [SUPERVISOR_ENTRYPOINT]);
+  closure.add(REGISTRY_PATH);
+  const matchedPaths = changed.filter((item) => closure.has(item));
+  if (matchedPaths.length === 0) return [];
+  let projects: string[];
+  try { projects = registeredProjectIds(env); }
+  catch { return [{ id: SUPERVISOR_INVENTORY_CONSUMER, matchedPaths }]; }
+  try {
+    const distinctRoots = new Set<string>();
+    for (const projectId of projects) {
+      const root = path.resolve(resolveWakeSupervisorStateRoot({ projectId, env }));
+      const effectiveRoot = existsSync(root) ? realpathSync(root) : root;
+      if (distinctRoots.has(effectiveRoot)) throw new Error('supervisor_state_root_alias');
+      distinctRoots.add(effectiveRoot);
+    }
+  } catch {
+    return [{ id: SUPERVISOR_STATE_AMBIGUOUS_CONSUMER, matchedPaths }];
+  }
+  return projects.map((projectId) => ({ id: 'orchestrator-side-process-supervisor@' + projectId, matchedPaths }));
 }
 
 /** Cards are the only fleet inventory. An invalid relevant inventory is a v1 consumer failure, never a singleton fallback. */
@@ -195,30 +245,10 @@ function fleetConsumersForChangedPaths(repoRoot: string, changed: readonly strin
   if (matchedPaths.length === 0) return [];
   // The tracked template must be installed and activated by the operator; code+template is no exception.
   if (matchedPaths.includes(FLEET_WAKE_UNIT)) return [{ id: FLEET_TEMPLATE_CONSUMER, matchedPaths }];
-  const directory = path.dirname(projectCardPath('inventory-probe', env));
   try {
-    const directoryStat = lstatSync(directory);
-    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) throw new Error('inventory_directory_invalid');
-    const files = readdirSync(directory, { withFileTypes: true })
-      .filter((entry) => entry.name.endsWith('.json'))
-      .sort((left, right) => left.name.localeCompare(right.name));
-    if (files.length === 0) throw new Error('inventory_empty');
-    const selectedEnv: NodeJS.ProcessEnv = { ...env };
-    delete selectedEnv.OPK_PROJECT_ID;
-    const identities = new Set<string>();
-    return files.map((entry) => {
-      const fullPath = path.join(directory, entry.name);
-      const stat = lstatSync(fullPath);
-      if (!entry.isFile() || !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('card_alias');
-      const projectId = entry.name.slice(0, -'.json'.length);
-      const context = resolveTargetContext({ projectId, env: selectedEnv });
-      if (context.projectId !== projectId || path.resolve(context.cardPath) !== path.resolve(fullPath)) throw new Error('card_identity');
-      const unit = 'fleet-wake@' + context.projectId + '.service';
-      // Case aliases cannot silently select two spellings of one unit on another host.
-      if (!FLEET_CONSUMER_RE.test(unit) || identities.has(unit.toLowerCase())) throw new Error('unit_alias');
-      identities.add(unit.toLowerCase());
-      return { id: unit, matchedPaths };
-    });
+    return registeredProjectIds(env).map((projectId) => ({
+      id: 'fleet-wake@' + projectId + '.service', matchedPaths,
+    }));
   } catch {
     // Never place card paths, local values, parser errors or operator configuration in the v1 report.
     return [{ id: FLEET_INVENTORY_CONSUMER, matchedPaths }];
@@ -238,7 +268,7 @@ export function mapChangedPathsToConsumers(
     const matchedPaths = changed.filter((item) => closure.has(item));
     return matchedPaths.length > 0 ? [{ id: definition.id, matchedPaths }] : [];
   });
-  return [...otherConsumers, ...fleetConsumersForChangedPaths(repoRoot, changed, env)];
+  return [...supervisorConsumersForChangedPaths(repoRoot, changed, env), ...otherConsumers, ...fleetConsumersForChangedPaths(repoRoot, changed, env)];
 }
 
 function runCommand(command: string, args: readonly string[], cwd?: string, timeout = 30_000) {
@@ -252,13 +282,31 @@ function runCommand(command: string, args: readonly string[], cwd?: string, time
   return { ok: result.ok, status: result.exitCode, stdout: result.stdout };
 }
 
-function procStartTicks(pid: number): string | null {
-  if (process.platform !== 'linux' || !Number.isInteger(pid) || pid <= 1) return null;
+type ProcStartTicksObservation =
+  | { readonly state: 'running'; readonly ticks: string }
+  | { readonly state: 'not_running' }
+  | { readonly state: 'unknown'; readonly reason: string };
+
+function inspectProcStartTicks(pid: number): ProcStartTicksObservation {
+  if (process.platform !== 'linux') return { state: 'unknown', reason: 'managed_process_os_unsupported' };
+  if (!Number.isSafeInteger(pid) || pid <= 1) return { state: 'unknown', reason: 'managed_process_identity_missing' };
   try {
     const raw = readFileSync('/proc/' + String(pid) + '/stat', 'utf8');
     const close = raw.lastIndexOf(')');
-    return close < 0 ? null : raw.slice(close + 2).trim().split(/\s+/u)[19] ?? null;
-  } catch { return null; }
+    const ticks = close < 0 ? undefined : raw.slice(close + 2).trim().split(/\s+/u)[19];
+    if (!ticks || !/^\d+$/u.test(ticks)) return { state: 'unknown', reason: 'managed_process_stat_invalid' };
+    return { state: 'running', ticks };
+  } catch (error) {
+    // A missing proc stat is conclusive absence; permissions and malformed/unreadable proc are not.
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' && existsSync('/proc/self/stat')
+      ? { state: 'not_running' }
+      : { state: 'unknown', reason: 'managed_process_stat_unreadable' };
+  }
+}
+
+function procStartTicks(pid: number): string | null {
+  const current = inspectProcStartTicks(pid);
+  return current.state === 'running' ? current.ticks : null;
 }
 
 export function linuxProcessStartTimeMs(pid: number): number | null {
@@ -289,27 +337,45 @@ function managedProcessObservation(pidValue: unknown, expectedStartTicks: unknow
   const pid = Number(pidValue);
   const expected = String(expectedStartTicks ?? '').trim();
   if (!Number.isInteger(pid) || pid <= 1 || !expected) return { state: 'unknown', reason: 'managed_process_identity_missing' };
-  const actual = procStartTicks(pid);
-  if (!actual) return { state: 'not_running' };
+  const observed = inspectProcStartTicks(pid);
+  if (observed.state === 'not_running') return { state: 'not_running' };
+  if (observed.state === 'unknown') return { state: 'unknown', reason: observed.reason };
+  const actual = observed.ticks;
   if (actual !== expected) return { state: 'unknown', reason: 'managed_process_identity_mismatch' };
   const startedAtMs = linuxProcessStartTimeMs(pid);
   if (startedAtMs === null) return { state: 'unknown', reason: 'managed_process_start_time_unavailable' };
   return { state: 'running', startedAtMs, identity: String(pid) + ':' + actual };
 }
 
-function supervisorController(stateDir: string, restartArgv: readonly string[] | undefined): ConsumerController {
+function supervisorController(projectId: string, env: Readonly<NodeJS.ProcessEnv>): ConsumerController {
+  const stateDir = path.join(path.resolve(resolveWakeSupervisorStateRoot({ projectId, env })), 'supervisor');
+  const observe = (): ConsumerObservation => {
+    const status = readSupervisorStatus(stateDir);
+    if (!status) return { state: 'unknown', reason: 'supervisor_status_missing_or_invalid' };
+    return managedProcessObservation(status.supervisorPid, status.supervisorStartTicks);
+  };
   return {
-    observe() {
-      const status = readSupervisorStatus(stateDir);
-      if (!status) return { state: 'unknown', reason: 'supervisor_status_missing_or_invalid' };
-      return managedProcessObservation(status.supervisorPid, status.supervisorStartTicks);
+    observe,
+    restart(before) {
+      // Re-observe immediately before any control: a drifted/fresh/stopped PID is not our stale target.
+      const current = observe();
+      if (!before?.identity || current.state !== 'running' || current.identity !== before.identity) {
+        throw new Error('supervisor_precontrol_identity_changed');
+      }
+      // The argv project ID is authoritative; do not leak the caller's OPK_PROJECT_ID=A into B.
+      const childEnv: NodeJS.ProcessEnv = { ...env };
+      delete childEnv.OPK_PROJECT_ID;
+      for (const action of ['stop', 'start'] as const) {
+        const result = runProcessSync({
+          command: 'opk-wake-supervisor',
+          args: [projectId, action],
+          env: childEnv,
+          inheritParentEnv: false,
+          timeoutMs: 120_000,
+        });
+        if (!result.ok) throw new Error('supervisor_' + action + '_failed');
+      }
     },
-    ...(restartArgv && restartArgv.length > 0 ? { restart() {
-      const [command, ...args] = restartArgv;
-      if (!command) throw new Error('supervisor restart control is empty');
-      const result = runCommand(command, args, undefined, 120_000);
-      if (!result.ok) throw new Error('supervisor normal control failed:' + String(result.status ?? 'unknown'));
-    } } : {}),
   };
 }
 
@@ -429,6 +495,18 @@ function controllersFor(repoRoot: string, consumers: readonly AdoptionConsumer[]
   const definitions = new Map(consumerDefinitions(repoRoot).map((row) => [row.id, row]));
   const output: Record<string, ConsumerController | undefined> = {};
   for (const consumer of consumers) {
+    if (consumer.id === SUPERVISOR_INVENTORY_CONSUMER || consumer.id === SUPERVISOR_STATE_AMBIGUOUS_CONSUMER) {
+      const reason = consumer.id === SUPERVISOR_INVENTORY_CONSUMER
+        ? 'supervisor_inventory_invalid_or_missing_repair_registered_cards'
+        : 'supervisor_state_roots_ambiguous_reconcile_per_project_override';
+      output[consumer.id] = { observe: () => ({ state: 'unknown', reason }) };
+      continue;
+    }
+    const projectSupervisor = SUPERVISOR_CONSUMER_RE.exec(consumer.id);
+    if (projectSupervisor) {
+      output[consumer.id] = supervisorController(projectSupervisor[1]!, process.env);
+      continue;
+    }
     if (consumer.id === FLEET_TEMPLATE_CONSUMER) {
       output[consumer.id] = { observe: () => ({ state: 'unknown', reason: 'template_operator_activation_pending_install_render_daemon-reload_restart_effective-unit_readback' }) };
       continue;
@@ -444,8 +522,7 @@ function controllersFor(repoRoot: string, consumers: readonly AdoptionConsumer[]
     }
     const definition = definitions.get(consumer.id);
     if (!definition) continue;
-    if (definition.control === 'supervisor') output[consumer.id] = supervisorController(options.supervisorStateDir, options.restartControls[consumer.id]);
-    else if (definition.control === 'scheduler') output[consumer.id] = schedulerController(options.supervisorStateDir, adoptionStartedAtMs);
+    if (definition.control === 'scheduler') output[consumer.id] = schedulerController(options.supervisorStateDir, adoptionStartedAtMs);
     else if (definition.control === 'agent-hook') output[consumer.id] = { observe: () => ({ state: 'ephemeral' }) };
   }
   return output;
@@ -471,19 +548,23 @@ export async function verifyAdoptionEffect(input: VerifyAdoptionEffectInput): Pr
   if (!Number.isFinite(input.adoptionStartedAtMs) || input.adoptionStartedAtMs <= 0) throw new TypeError('adoptionStartedAtMs must be a positive timestamp');
   const results: ConsumerEffectResult[] = [];
   const failures: string[] = [];
-  // Observe all registered fleet instances first: an aliased MainPID must not cause either unit to be controlled.
-  const initialFleet = new Map<string, ConsumerObservation>();
-  const fleetIdentities = new Map<string, string>();
+  // Observe all per-project instances before any control; aliases cannot authorize either restart.
+  const initialQualified = new Map<string, ConsumerObservation>();
+  const qualifiedIdentities = new Map<string, string>();
   for (const consumer of input.consumers) {
-    if (!FLEET_CONSUMER_RE.test(consumer.id) || !input.controllers[consumer.id]) continue;
+    const isFleet = FLEET_CONSUMER_RE.test(consumer.id);
+    const isSupervisor = SUPERVISOR_CONSUMER_RE.test(consumer.id);
+    if ((!isFleet && !isSupervisor) || !input.controllers[consumer.id]) continue;
     const before = await input.controllers[consumer.id]!.observe();
-    initialFleet.set(consumer.id, before);
+    initialQualified.set(consumer.id, before);
     if (before.state !== 'running' || !before.identity) continue;
-    const previous = fleetIdentities.get(before.identity);
+    const key = (isFleet ? 'fleet:' : 'supervisor:') + before.identity;
+    const previous = qualifiedIdentities.get(key);
     if (previous) {
-      initialFleet.set(previous, { state: 'unknown', reason: 'fleet_wake_shared_process_identity' });
-      initialFleet.set(consumer.id, { state: 'unknown', reason: 'fleet_wake_shared_process_identity' });
-    } else fleetIdentities.set(before.identity, consumer.id);
+      const reason = isFleet ? 'fleet_wake_shared_process_identity' : 'supervisor_shared_process_identity';
+      initialQualified.set(previous, { state: 'unknown', reason });
+      initialQualified.set(consumer.id, { state: 'unknown', reason });
+    } else qualifiedIdentities.set(key, consumer.id);
   }
   for (const consumer of input.consumers) {
     const controller = input.controllers[consumer.id];
@@ -494,14 +575,16 @@ export async function verifyAdoptionEffect(input: VerifyAdoptionEffectInput): Pr
       continue;
     }
     const isFleet = FLEET_CONSUMER_RE.test(consumer.id);
-    const cutoff = isFleet ? input.fleetAdoptedAtMs : input.adoptionStartedAtMs;
-    if (isFleet && (!Number.isFinite(cutoff) || (cutoff ?? 0) <= 0)) {
-      const reason = consumer.id + ':fleet_adopted_at_missing_or_invalid';
+    const isSupervisor = SUPERVISOR_CONSUMER_RE.test(consumer.id);
+    const usesLateCutoff = isFleet || isSupervisor;
+    const cutoff = usesLateCutoff ? input.fleetAdoptedAtMs : input.adoptionStartedAtMs;
+    if (usesLateCutoff && (!Number.isFinite(cutoff) || (cutoff ?? 0) <= 0)) {
+      const reason = consumer.id + ':' + (isFleet ? 'fleet_adopted_at_missing_or_invalid' : 'supervisor_fleet_adopted_at_missing_or_invalid');
       failures.push(reason);
-      results.push({ id: consumer.id, matchedPaths: consumer.matchedPaths, before: initialFleet.get(consumer.id) ?? { state: 'unknown', reason }, action: 'none', verified: false, reason });
+      results.push({ id: consumer.id, matchedPaths: consumer.matchedPaths, before: initialQualified.get(consumer.id) ?? { state: 'unknown', reason }, action: 'none', verified: false, reason });
       continue;
     }
-    const before = initialFleet.get(consumer.id) ?? await controller.observe();
+    const before = initialQualified.get(consumer.id) ?? await controller.observe();
     if (before.state === 'ephemeral') {
       results.push({ id: consumer.id, matchedPaths: consumer.matchedPaths, before, action: 'fresh_invocation', verified: true });
       continue;
@@ -510,7 +593,7 @@ export async function verifyAdoptionEffect(input: VerifyAdoptionEffectInput): Pr
       results.push({ id: consumer.id, matchedPaths: consumer.matchedPaths, before, action: 'not_running', verified: true });
       continue;
     }
-    if (before.state !== 'running' || !Number.isFinite(before.startedAtMs)) {
+    if (before.state !== 'running' || !Number.isFinite(before.startedAtMs) || (usesLateCutoff && !before.identity)) {
       const reason = consumer.id + ':' + (before.reason ?? 'start_time_unverified');
       failures.push(reason);
       results.push({ id: consumer.id, matchedPaths: consumer.matchedPaths, before, action: 'none', verified: false, reason });
@@ -533,9 +616,16 @@ export async function verifyAdoptionEffect(input: VerifyAdoptionEffectInput): Pr
       results.push({ id: consumer.id, matchedPaths: consumer.matchedPaths, before, action: 'restart', verified: false, reason });
       continue;
     }
-    const after = await observeFresh(controller, cutoff!, before.identity);
+    let after: ConsumerObservation;
+    try { after = await observeFresh(controller, cutoff!, before.identity); }
+    catch {
+      const reason = 'restart_readback_failed:' + consumer.id;
+      failures.push(reason);
+      results.push({ id: consumer.id, matchedPaths: consumer.matchedPaths, before, action: 'restart', verified: false, reason });
+      continue;
+    }
     const fresh = after.state === 'running' && Number.isFinite(after.startedAtMs) && (after.startedAtMs ?? 0) > cutoff!
-      && (isFleet ? Boolean(before.identity && after.identity && before.identity !== after.identity)
+      && (usesLateCutoff ? Boolean(before.identity && after.identity && before.identity !== after.identity)
         : (!before.identity || !after.identity || before.identity !== after.identity));
     if (!fresh) {
       const reason = 'restart_not_observed:' + consumer.id;
@@ -545,22 +635,25 @@ export async function verifyAdoptionEffect(input: VerifyAdoptionEffectInput): Pr
     }
     results.push({ id: consumer.id, matchedPaths: consumer.matchedPaths, before, action: 'restart', after, verified: true });
   }
-  // A shared post-control MainPID/start-ticks across distinct units cannot verify either consumer.
-  const postFleet = new Map<string, number>();
+  // Aliased post-control identities cannot establish two independent verified projects.
+  const postQualified = new Map<string, number>();
   for (let index = 0; index < results.length; index++) {
     const row = results[index]!;
-    if (!FLEET_CONSUMER_RE.test(row.id)) continue;
+    const isFleet = FLEET_CONSUMER_RE.test(row.id);
+    const isSupervisor = SUPERVISOR_CONSUMER_RE.test(row.id);
+    if (!isFleet && !isSupervisor) continue;
     const observed = row.after ?? row.before;
     if (observed.state !== 'running' || !observed.identity) continue;
-    const previous = postFleet.get(observed.identity);
+    const key = (isFleet ? 'fleet:' : 'supervisor:') + observed.identity;
+    const previous = postQualified.get(key);
     if (previous !== undefined) {
       for (const position of [previous, index]) {
         const conflicting = results[position]!;
-        const reason = conflicting.id + ':fleet_wake_shared_post_control_identity';
+        const reason = conflicting.id + ':' + (isFleet ? 'fleet_wake_shared_post_control_identity' : 'supervisor_shared_post_control_identity');
         failures.push(reason);
         results[position] = { ...conflicting, verified: false, reason };
       }
-    } else postFleet.set(observed.identity, index);
+    } else postQualified.set(key, index);
   }
   let liveCheck: LiveCheckResult;
   try { liveCheck = await input.runLiveCheck(); }
@@ -580,7 +673,13 @@ export async function verifyAdoptionEffect(input: VerifyAdoptionEffectInput): Pr
           ? 'Operator must install/render the tracked fleet template, daemon-reload, activate and read back the effective installed unit.'
           : input.consumers.some((row) => row.id === FLEET_INVENTORY_CONSUMER)
             ? 'Repair the registered project-card inventory and rerun this verifier without starting any fleet units.'
-            : 'Reconcile the named unit through the supported normal control before claiming completion.'),
+            : input.consumers.some((row) => row.id === SUPERVISOR_INVENTORY_CONSUMER)
+              ? 'Repair the registered project-card inventory and rerun this verifier without controlling wake supervisors.'
+              : input.consumers.some((row) => row.id === SUPERVISOR_STATE_AMBIGUOUS_CONSUMER)
+                ? 'Remove the ambiguous shared wake-supervisor state override and rerun the verifier without controlling either project.'
+                : input.consumers.some((row) => SUPERVISOR_CONSUMER_RE.test(row.id))
+                  ? 'Reconcile each named project via opk-wake-supervisor <projectId> status and the supported stop/start controls before claiming completion.'
+                  : 'Reconcile the named unit through the supported normal control before claiming completion.'),
   };
 }
 
