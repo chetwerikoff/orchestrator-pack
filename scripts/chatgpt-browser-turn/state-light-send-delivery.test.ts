@@ -26,6 +26,7 @@ import {
 } from './product-page-selectors.ts';
 import { __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
+import { runPostSendRecovery, takeRecoveryCensus, type PostSendRecoveryAdapter, type PostSendRecoveryState } from './state-light-turn-recovery.ts';
 import { configuredProfileKey } from './storage-common.ts';
 import { deriveDelivery, readTerminalEnvelope, runLaunch } from '../flow-manager-long-running-child.ts';
 import { authoritativePreSend } from '../pack-review-no-review-reconcile.ts';
@@ -33,6 +34,208 @@ import { authoritativePreSend } from '../pack-review-no-review-reconcile.ts';
 const MARKER = `OPKTURNV1${'ab'.repeat(16)}`;
 const MARKED_PROMPT = `${MARKER}\n\nPROMPT`;
 
+
+function recoveryFixture(options: {
+  readonly originalIncomplete?: boolean;
+  readonly successorIncomplete?: boolean;
+  readonly includeOriginalMarker?: boolean;
+  readonly successorMarker?: boolean;
+  readonly foreign?: boolean;
+} = {}) {
+  const url = 'https://chatgpt.com/c/25962596-2596-4596-8596-259625962596';
+  const original = { name: 'owned-original' };
+  const foreign = { name: 'foreign' };
+  const successor = { name: 'owned-successor' };
+  const pages: unknown[] = [original, ...(options.foreign ? [foreign] : [])];
+  let now = 100;
+  const reads = new Map<unknown, number>();
+  const createSuccessor = vi.fn(async () => { pages.push(successor); return successor; });
+  const adapter: PostSendRecoveryAdapter = {
+    enumeratePages: async () => pages,
+    pageUrl: (page) => page === foreign ? 'https://chatgpt.com/c/other' : url,
+    normalizeConversationUrl: (value) => value.endsWith('/') ? value.slice(0, -1) : value,
+    isSupportedConversationUrl: (value) => value.startsWith('https://chatgpt.com/c/'),
+    readAuthoritativeMessages: async (page) => {
+      reads.set(page, (reads.get(page) ?? 0) + 1);
+      if (page === foreign) return { messages: [], incomplete: true };
+      if (page === original) return {
+        messages: options.includeOriginalMarker ? [{ role: 'user' as const, text: MARKER }] : [],
+        incomplete: options.originalIncomplete ?? false,
+      };
+      return {
+        messages: options.successorMarker ? [{ role: 'user' as const, text: MARKER }] : [],
+        incomplete: options.successorIncomplete ?? false,
+      };
+    },
+    browserDefinitelyDisconnected: () => false,
+    pageDefinitelyLost: () => false,
+    reconnect: async () => ({}),
+    createSuccessor,
+    sleep: async (milliseconds) => { now += milliseconds; },
+    now: () => now,
+  };
+  const state: PostSendRecoveryState = {
+    lossEpoch: 0, successorCreated: false, immutableConversationUrl: url,
+  };
+  return { url, original, foreign, successor, pages, reads, createSuccessor, adapter, state, setNow: (value: number) => { now = value; } };
+}
+
+describe('Issue #2596 known-conversation post-send recovery', () => {
+  it('ignores foreign unreadable conversations and recovers the owned marker', async () => {
+    const fixture = recoveryFixture({ foreign: true, includeOriginalMarker: true });
+    const result = await runPostSendRecovery({
+      browser: {}, currentPage: fixture.original, marker: MARKER, hardDeadlineMs: 500, pollMs: 1,
+      state: fixture.state, adapter: fixture.adapter,
+    });
+    expect(result).toMatchObject({ kind: 'recovered', page: fixture.original, conversationUrl: fixture.url });
+    expect(fixture.reads.get(fixture.foreign)).toBeUndefined();
+    expect(fixture.createSuccessor).not.toHaveBeenCalled();
+  });
+
+  it('uses one complete successor as the authoritative same-conversation view', async () => {
+    const fixture = recoveryFixture({
+      originalIncomplete: true, includeOriginalMarker: true, successorMarker: true, foreign: true,
+    });
+    const result = await runPostSendRecovery({
+      browser: {}, currentPage: fixture.original, marker: MARKER, hardDeadlineMs: 500, pollMs: 1,
+      state: fixture.state, adapter: fixture.adapter,
+    });
+    expect(result).toMatchObject({ kind: 'recovered', page: fixture.successor, cleanupOwned: true });
+    expect(fixture.createSuccessor).toHaveBeenCalledTimes(1);
+    expect(fixture.createSuccessor).toHaveBeenCalledWith(expect.anything(), fixture.url);
+    expect(fixture.reads.get(fixture.foreign)).toBeUndefined();
+  });
+
+  it('fails closed with a bounded URL-hash diagnostic when successor observations stay incomplete', async () => {
+    const fixture = recoveryFixture({ originalIncomplete: true, successorIncomplete: true });
+    fixture.setNow(498);
+    const result = await runPostSendRecovery({
+      browser: {}, currentPage: fixture.original, marker: MARKER, hardDeadlineMs: 500, pollMs: 1,
+      state: fixture.state, adapter: fixture.adapter,
+    });
+    expect(result).toMatchObject({
+      kind: 'failure', cause: 'owned_conversation_recovery_census_failed',
+      diagnostic: {
+        conversationUrlSha256: createHash('sha256').update(fixture.url).digest('hex'),
+        reason: 'read_incomplete',
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(fixture.url);
+    expect(fixture.createSuccessor).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['incomplete', 'threw', 'unreadable-url'] as const)('never reads a foreign %s page', async (mode) => {
+    const fixture = recoveryFixture({ foreign: true, includeOriginalMarker: true });
+    const read = vi.fn(fixture.adapter.readAuthoritativeMessages);
+    const adapter = { ...fixture.adapter, readAuthoritativeMessages: read,
+      pageUrl: (page: unknown) => {
+        if (page === fixture.foreign && mode === 'unreadable-url') throw new Error('unreadable');
+        return fixture.adapter.pageUrl(page);
+      },
+    };
+    read.mockImplementation(async (page) => {
+      if (page === fixture.foreign && mode === 'threw') throw new Error('foreign read must not occur');
+      return await fixture.adapter.readAuthoritativeMessages(page);
+    });
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter,
+    });
+    expect(result).toMatchObject({ kind: 'recovered', page: fixture.original, cleanupOwned: false });
+    expect(read.mock.calls.map(([page]) => page)).toEqual([fixture.original]);
+  });
+
+  it('recovers an absent original through the same URL before the existing deadline', async () => {
+    const fixture = recoveryFixture({ successorMarker: true });
+    fixture.pages.splice(0);
+    fixture.setNow(499);
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter: fixture.adapter,
+    });
+    expect(result).toMatchObject({ kind: 'recovered', page: fixture.successor, stopAuthorityPage: fixture.successor });
+    expect(fixture.state.cleanupAuthorityPage).toBe(fixture.successor);
+    expect(fixture.createSuccessor).toHaveBeenCalledTimes(1);
+    expect(fixture.reads.get(fixture.successor)).toBe(1);
+  });
+
+  it.each(['original', 'successor'] as const)('rejects duplicate tokens in an incomplete %s snapshot', async (duplicatePage) => {
+    const fixture = recoveryFixture({ originalIncomplete: true, successorIncomplete: true, successorMarker: true });
+    const adapter = { ...fixture.adapter, readAuthoritativeMessages: async (page: unknown) => {
+      if (page === fixture[duplicatePage]) return {
+        messages: [{ role: 'user' as const, text: MARKER + MARKER }], incomplete: true,
+      };
+      return await fixture.adapter.readAuthoritativeMessages(page);
+    } };
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter,
+    });
+    expect(result).toMatchObject({ kind: 'failure', cause: 'owned_prompt_marker_ambiguous', action: 'retain_owned_page_no_resend' });
+    expect(fixture.createSuccessor).toHaveBeenCalledTimes(duplicatePage === 'original' ? 0 : 1);
+  });
+
+  it.each([true, false])('rejects conflicting complete owned observations (second marker: %s)', async (secondMarker) => {
+    const fixture = recoveryFixture({ includeOriginalMarker: true, successorMarker: secondMarker });
+    fixture.pages.push(fixture.successor);
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter: fixture.adapter,
+    });
+    expect(result).toMatchObject({ kind: 'failure', cause: 'owned_prompt_marker_ambiguous', action: 'retain_owned_page_no_resend' });
+    expect(fixture.createSuccessor).not.toHaveBeenCalled();
+  });
+
+  it('preserves the unbound and local-fetch-failure whole-census behavior', async () => {
+    const fixture = recoveryFixture({ includeOriginalMarker: true, foreign: true });
+    fixture.state.immutableConversationUrl = undefined;
+    const census = await takeRecoveryCensus({}, MARKER, fixture.adapter);
+    expect(census.complete).toBe(false);
+    expect(fixture.reads.get(fixture.foreign)).toBe(1);
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 100, state: fixture.state, adapter: fixture.adapter,
+    });
+    expect(result).toMatchObject({ kind: 'failure', cause: 'owned_conversation_recovery_census_failed', action: 'retain_owned_page_no_resend' });
+    expect(result).not.toHaveProperty('diagnostic');
+    expect(fixture.createSuccessor).not.toHaveBeenCalled();
+  });
+
+  it.each(['read_threw', 'enumeration_failed'] as const)('reports a normalized target hash for %s', async (reason) => {
+    const fixture = recoveryFixture();
+    fixture.state.immutableConversationUrl = fixture.url + '/';
+    fixture.setNow(500);
+    const adapter = { ...fixture.adapter,
+      ...(reason === 'read_threw'
+        ? { readAuthoritativeMessages: async () => { throw new Error('private page content'); } }
+        : { enumeratePages: async () => { throw new Error('private URL'); } }),
+    };
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter,
+    });
+    expect(result).toMatchObject({ kind: 'failure', cause: 'owned_conversation_recovery_census_failed',
+      diagnostic: { conversationUrlSha256: createHash('sha256').update(fixture.url).digest('hex'), reason },
+    });
+    expect(JSON.stringify(result)).not.toContain('private');
+    expect(JSON.stringify(result)).not.toContain(fixture.url);
+    expect(fixture.createSuccessor).not.toHaveBeenCalled();
+  });
+
+  it('never creates a successor at the deadline or resends an unresolved successor', async () => {
+    const fixture = recoveryFixture({ originalIncomplete: true });
+    fixture.setNow(500);
+    const expired = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter: fixture.adapter,
+    });
+    expect(expired).toMatchObject({ kind: 'failure', cause: 'owned_conversation_recovery_census_failed' });
+    expect(fixture.createSuccessor).not.toHaveBeenCalled();
+    const live = recoveryFixture({ originalIncomplete: true });
+    const unresolved = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 100, state: live.state, adapter: live.adapter,
+    });
+    expect(unresolved).toMatchObject({ kind: 'failure', action: 'retain_owned_page_no_resend' });
+    expect(live.createSuccessor).toHaveBeenCalledTimes(1);
+    expect(deriveDelivery({
+      state: 'observation_uncertain', resolved_send_count: 1, send_attempted: true,
+      cause: unresolved.kind === 'failure' ? unresolved.cause : '',
+    } as NonNullable<Parameters<typeof deriveDelivery>[0]>, false)).toBe('POSSIBLY_DELIVERED');
+  });
+});
 type Transport = 'click' | 'enter';
 type DeliveryEffect = 'none' | 'owned_user_node' | 'composer_cleared' | 'both';
 

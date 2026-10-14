@@ -23,5 +23,5 @@
     "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
     "scripts/chatgpt-browser-turn/state-light-turn-recovery.ts"
   ],
-  "source_revision": "e16c6d195f0d5d0a7950e35639a0094ffa130889"
+  "source_revision": "9c727c9f5a166ce21c4920659a80204eed3a4fb3"
 }
