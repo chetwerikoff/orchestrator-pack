@@ -846,6 +846,8 @@ describe('fleet alarm', () => {
       { ...firstRow, id: 'malformed', subject: '' },
     ];
     let unitScreen = 'done\n>';
+    let oversizedInbox = false;
+    let invalidInbox = false;
     const executor: OrcaExecutor = (args) => {
       if (args[0] === 'terminal' && args[1] === 'list' && args.includes('--include-visual-layouts')) {
         return commandResult(JSON.stringify({
@@ -863,10 +865,14 @@ describe('fleet alarm', () => {
         }));
       }
       if (args[0] === 'orchestration' && args[1] === 'inbox' && args.includes('--full')) {
-        return commandResult(JSON.stringify({
+        if (invalidInbox) return commandResult('{malformed inbox', false);
+        const reply = JSON.stringify({
           ok: true,
           result: { messages: inboxMessages },
-        }));
+          ...(oversizedInbox ? { padding: 'x'.repeat(2 * 1024 * 1024) } : {}),
+        });
+        if (oversizedInbox) expect(Buffer.byteLength(reply)).toBeGreaterThan(2 * 1024 * 1024);
+        return commandResult(reply);
       }
       if (args[0] === 'orchestration' && args[1] === 'check' && args.includes('run-1')) {
         return commandResult(JSON.stringify({ ok: false, error: { code: 'consumer_fenced' } }), false);
@@ -914,10 +920,14 @@ describe('fleet alarm', () => {
       ]);
 
       inboxMessages = [firstRow];
+      oversizedInbox = true;
       const singular = await tick({ executor, terminals: currentTerminals, config: settings,
         screens: { 'term_coord_new': 'idle', one: 'done\n>' } });
       expect(alarmText(singular.calls)).toContain('1 eligible unread Run message');
       expect(alarmText(singular.calls)).not.toContain('1 eligible unread Run messages');
+      expect(sendsTo(singular.calls, 'term_coord_new').some((call) =>
+        call.includes('--text') && call[call.indexOf('--text') + 1]?.includes('Need approval'))).toBe(true);
+      oversizedInbox = false;
 
       inboxMessages = eligibleRows;
       const quietStore = new MemoryWakeStore();
@@ -928,6 +938,13 @@ describe('fleet alarm', () => {
         screens: { 'term_coord_new': 'idle', one: 'working\nesc interrupt' } });
       expect(quiet.result.state).toBe('nothing_stopped');
       expect(sendsTo(quiet.calls, 'term_coord_new')).toHaveLength(0);
+
+      invalidInbox = true;
+      const failed = await tick({ executor, store: new MemoryWakeStore(), terminals: currentTerminals,
+        config: settings, screens: { 'term_coord_new': 'idle', one: 'working\nesc interrupt' } });
+      expect(failed.logs.filter((line) => line.startsWith('run inbox read failed:')))
+        .toEqual(['run inbox read failed: orca_invalid_json']);
+      expect(sendsTo(failed.calls, 'term_coord_new')).toHaveLength(0);
     } finally {
       if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
       else process.env.XDG_STATE_HOME = previousStateHome;
