@@ -1767,6 +1767,24 @@ function validateReviewWorktreePath(storeRoot: string, runId: string, target: st
   }
 }
 
+/** A Git registration alone must not authorize deletion of a substituted checkout. */
+async function registeredReviewWorktreeMatchesSource(ctx: ReviewWorktreeContext, target: string): Promise<boolean> {
+  if (!reviewWorktreeLstat(target)) return true; // Prunable registration-only orphan.
+  const gitfile = reviewWorktreeLstat(join(target, '.git'));
+  if (!gitfile?.isFile() || gitfile.isSymbolicLink()) return false;
+  try {
+    const [sourceCommon, checkoutCommon, checkoutTop] = await Promise.all([
+      runGit(ctx.repoRoot, ['rev-parse', '--git-common-dir'], 'source Git common directory'),
+      runGit(target, ['rev-parse', '--git-common-dir'], 'checkout Git common directory'),
+      runGit(target, ['rev-parse', '--show-toplevel'], 'checkout Git root'),
+    ]);
+    return resolve(ctx.repoRoot, sourceCommon) === resolve(target, checkoutCommon)
+      && resolve(checkoutTop) === target;
+  } catch {
+    return false;
+  }
+}
+
 /** Terminal status is not process exit: reuse the existing dead-PID + heartbeat grace predicate. */
 function reviewWorktreeHolderAbandoned(record: PackReviewRunRecord): boolean {
   // An active run must pass existing stale-run reconciliation before cleanup
@@ -1829,11 +1847,17 @@ async function removeReviewWorktree(
       && readdirSync(target).length !== 0) {
     return 'unregistered nonempty directory has ambiguous ownership';
   }
+  if (priorRegistration && !(await registeredReviewWorktreeMatchesSource(ctx, target))) {
+    return 'registered checkout Git identity differs from selected source repository';
+  }
   // The awaited inventory can race a new reuse; do not use earlier data as deletion authority.
   const changedOwner = verifyReviewWorktreeOwner(ctx, runId, target, mode);
   if (changedOwner) return changedOwner;
   registrations = await registeredReviewWorktrees(ctx.repoRoot);
   if (registrations.has(target)) {
+    if (!(await registeredReviewWorktreeMatchesSource(ctx, target))) {
+      return 'registered checkout Git identity changed before removal';
+    }
     if (fixtureFailGitRemove && process.env.OPK_VITEST_HARNESS === '1') {
       throw new Error('review checkout Git worktree removal failed (fixture)');
     }
@@ -7522,6 +7546,10 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         if (!registered.has(storedTarget)
             && (process.env.OPK_VITEST_HARNESS !== '1' || input.fixtureUseRealReviewWorktree)) {
           throw new Error('persisted review checkout is not registered to the selected Git repository');
+        }
+        if (registered.has(storedTarget)
+            && !(await registeredReviewWorktreeMatchesSource(reviewWorktreeContext, storedTarget))) {
+          throw new Error('persisted review checkout Git identity differs from selected source repository');
         }
         worktree = storedTarget;
       } else if (registered.has(storedTarget)) {
