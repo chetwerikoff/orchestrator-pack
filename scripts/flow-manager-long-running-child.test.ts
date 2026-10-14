@@ -2096,6 +2096,28 @@ describe('Issue #2478: invocation-addressable launcher evidence', () => {
         .toBe(childFails ? 'incident' : 'success');
       expect(readTerminalEnvelope(paths.envelope)?.child_exit_code)
         .toBe(childFails ? 7 : 0);
+    } else {
+      // Acceptance precedes detached completion; wait before afterEach removes its fixture.
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        const terminal = readTerminalEnvelope(paths.envelope, {
+          runIdentity: 'adapter-run', attemptIdentity: 'adapter-attempt',
+        });
+        if (terminal?.lifecycle_outcome === 'success'
+          && terminal.launcher_started_at === receipt.launcher_started_at
+          && terminal.handoff_committed_at === receipt.handoff_committed_at
+          && terminal.observed_invocation_id === invocationId) break;
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      expect(readTerminalEnvelope(paths.envelope, {
+        runIdentity: 'adapter-run', attemptIdentity: 'adapter-attempt',
+      })).toMatchObject({
+        lifecycle_outcome: 'success',
+        handoff_receipt_path: paths.receipt,
+        launcher_started_at: receipt.launcher_started_at,
+        handoff_committed_at: receipt.handoff_committed_at,
+        observed_invocation_id: invocationId,
+      });
     }
   });
 
@@ -2134,10 +2156,15 @@ describe('Issue #2478: invocation-addressable launcher evidence', () => {
         expect(JSON.parse(firstAck.trim()).launcher_pid).toBe(readHandoffReceipt(paths.receipt)?.launcher_pid);
         stdout.mockClear();
         // Detached acceptance may precede the original Browser child terminal.
-        for (let tick = 0; tick < 100 && !existsSync(paths.envelope); tick += 1) {
-          await new Promise((done) => setTimeout(done, 30));
+        const terminalDeadline = Date.now() + 10_000;
+        while (Date.now() < terminalDeadline && !readTerminalEnvelope(paths.envelope, {
+          runIdentity: 'same-run', attemptIdentity: 'same-attempt',
+        })) {
+          await new Promise((done) => setTimeout(done, 50));
         }
-        expect(readTerminalEnvelope(paths.envelope)?.lifecycle_outcome).toBe('success');
+        expect(readTerminalEnvelope(paths.envelope, {
+          runIdentity: 'same-run', attemptIdentity: 'same-attempt',
+        })?.lifecycle_outcome).toBe('success');
         const firstPid = readHandoffReceipt(paths.receipt)?.launcher_pid;
         const originalBytes = readFileSync(paths.receipt, 'utf8');
         const alternateReceipt = launchPaths(root, 'new-receipt');

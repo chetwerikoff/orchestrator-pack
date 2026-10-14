@@ -2,13 +2,14 @@
 import { runProcessSync } from './kernel/subprocess.mjs';
 import { chmodSync, copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { renderMergeSpec } from './gen-merge-spec.mjs';
 
 const generator = fileURLToPath(new URL('./gen-merge-spec.mjs', import.meta.url));
 const kernel = fileURLToPath(new URL('./kernel/subprocess.mjs', import.meta.url));
+const mergeProcedure = fileURLToPath(new URL('../.cursor/skills/merge-with-local-adoption/SKILL.md', import.meta.url));
 const roots: string[] = [];
 const caseA = {
   repo: 'test-org/alpha-A_REPO', pr: 301, issue: 401, head: 'a'.repeat(40),
@@ -67,7 +68,7 @@ process.stdout.write(process.env.OPK_GH_BODY);
 `, 'utf8');
   chmodSync(gh, 0o755);
   const result = runProcessSync({
-    command: process.execPath, args: [script, ...commandArgs(item)], cwd: root,
+    command: process.execPath, args: [script, ...commandArgs(item)], cwd: tmpdir(),
     inheritParentEnv: true,
     env: {
       OPK_GH_ARGV_CAPTURE: capture,
@@ -75,7 +76,11 @@ process.stdout.write(process.env.OPK_GH_BODY);
       OPK_GH_BODY: stub?.body ?? JSON.stringify({ number: item.pr, headRefOid: item.head }),
     },
   });
-  return { ...result, status: result.exitCode, argv: JSON.parse(readFileSync(capture, 'utf8')) as string[] };
+  return {
+    ...result, status: result.exitCode,
+    argv: JSON.parse(readFileSync(capture, 'utf8')) as string[],
+    procedurePath: join(root, '.cursor', 'skills', 'merge-with-local-adoption', 'SKILL.md'),
+  };
 }
 
 afterEach(() => {
@@ -94,6 +99,22 @@ const uniqueB = [
 ];
 
 describe('Issue #2509 whole merge spec', () => {
+  it('renders a pack-owned absolute procedure path and an explicit direct-read instruction', () => {
+    const value = renderMergeSpec({
+      ...caseA, repo: 'chetwerikoff/AppliedIn', pr: 46, issue: 46,
+      title: 'AppliedIn approved merge',
+      mergeInstruction: 'Integrate the caller-authorized AppliedIn PR using the existing skill',
+    });
+    expect(value).toContain('Repository (caller selection): chetwerikoff/AppliedIn');
+    expect(isAbsolute(mergeProcedure)).toBe(true);
+    expect(mergeProcedure.endsWith(join('.cursor', 'skills', 'merge-with-local-adoption', 'SKILL.md'))).toBe(true);
+    expect(value).toContain(`The sole procedure owner is ${mergeProcedure}. Read that file directly before following its existing procedure.`);
+    expect(value).toContain('It determines actual merge/readiness, selected-main adoption and read-back');
+    expect(value).toContain('This generator has not performed or verified any of these actions.');
+    expect(value).not.toContain('The sole procedure owner is .cursor/skills/merge-with-local-adoption/SKILL.md.');
+    expect(value).not.toContain('{PACK_ROOT}');
+  });
+
   it('renders A→B and B→A without any prior-request field, in the same process', () => {
     for (const [first, second, firstTokens, secondTokens] of [
       [caseA, caseB, uniqueA, uniqueB],
@@ -169,7 +190,11 @@ describe('Issue #2509 whole merge spec', () => {
         expect(result.status).toBe(0);
         expect(result.stderr).toBe('');
         expect(result.argv).toEqual(['pr', 'view', String(item.pr), '--repo', item.repo, '--json', 'number,headRefOid']);
-        expect(result.stdout).toBe(renderMergeSpec(item));
+        expect(isAbsolute(result.procedurePath)).toBe(true);
+        expect(result.procedurePath).not.toBe(mergeProcedure);
+        expect(result.stdout).toContain(`The sole procedure owner is ${result.procedurePath}. Read that file directly before following its existing procedure.`);
+        expect(result.stdout).not.toContain(mergeProcedure);
+        expect(result.stdout).toBe(renderMergeSpec(item).replace(mergeProcedure, result.procedurePath));
       }
       expect(secondResult.stdout).not.toContain(first.mergeInstruction);
       expect(secondResult.stdout).not.toContain(first.head);
