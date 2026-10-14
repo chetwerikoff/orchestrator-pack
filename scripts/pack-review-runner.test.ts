@@ -3835,6 +3835,13 @@ describe('Issue #2576 owned worktree lifecycle with real disposable Git', () => 
       runnerPid: 99999999, heartbeatAtUtc: '2000-01-01T00:00:00.000Z',
     }, { projectId, storeRoot: f.storeRoot });
     await startPackReview(input(f, 257624));
+    // Stale status alone does not clear the still-resolving aliased reference.
+    expect(existsSync(old.target)).toBe(true);
+    expect(registered(f.repo, old.target)).toBe(true);
+
+    // Reclamation becomes safe only after the alias no longer references the checkout.
+    rmSync(alias);
+    await startPackReview(input(f, 257625));
     expect(existsSync(old.target)).toBe(false);
     expect(registered(f.repo, old.target)).toBe(false);
   });
