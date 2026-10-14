@@ -444,7 +444,7 @@ function verifiedPrimaryBindings(
   const candidates = terminals.filter((terminal) => {
     if (terminal.handle === coordinatorHandle || terminal.handle === architectHandle
       || !terminal.worktreePath || normalizedPath(terminal.worktreePath) !== root
-      || ![terminal.handle, terminal.incarnationId, terminal.worktreePath, terminal.branch]
+      || ![terminal.handle, terminal.incarnationId, terminal.worktreePath]
         .every((value) => typeof value === 'string' && value.trim().length > 0)
       || terminals.filter((other) => other.handle === terminal.handle).length !== 1) return false;
     workspaceRe.lastIndex = 0;
@@ -486,6 +486,10 @@ function verifiedPrimaryBindings(
     const row = matches[0]!;
     if (typeof row.taskId !== 'string' || !row.taskId.trim()
       || typeof row.dispatchId !== 'string' || !row.dispatchId.trim()) continue;
+    // Terminal list need not contain branch. Reconcile it from native show only
+    // when its handle, incarnation and worktree still match the same census.
+    const detailed = terminal.branch?.trim() ? terminal : diagnosticTerminalDetails(terminal, executor, true);
+    if (!detailed.branch?.trim()) continue;
     const shown = read(['orchestration', 'worker-show', '--dispatch', row.dispatchId, '--json']);
     const dispatch = shown?.dispatch as {
       id?: unknown; taskId?: unknown; run_id?: unknown; status?: unknown;
@@ -499,14 +503,14 @@ function verifiedPrimaryBindings(
       || !observed || ![observed.handle, observed.incarnationId, observed.worktreePath, observed.branch]
         .every((value) => typeof value === 'string' && value.trim().length > 0)
       || observed.handle !== terminal.handle || observed.incarnationId !== terminal.incarnationId
-      || observed.worktreePath !== terminal.worktreePath || observed.branch !== terminal.branch
+      || observed.worktreePath !== terminal.worktreePath || observed.branch !== detailed.branch
       || (typeof row.dispatchStatus === 'string' && typeof dispatch.status === 'string'
         && row.dispatchStatus !== dispatch.status)) continue;
     const runResult = read(['orchestration', 'run-show', '--id', dispatch.run_id, '--json']);
     const run = runResult?.run as { id?: unknown; coordinator_handle?: unknown } | undefined;
     if (run?.id !== dispatch.run_id || run.coordinator_handle !== coordinatorHandle) continue;
     verified.set(terminal.handle, JSON.stringify([
-      projectId, terminal.handle, terminal.incarnationId, terminal.worktreePath, terminal.branch,
+      projectId, terminal.handle, terminal.incarnationId, terminal.worktreePath, detailed.branch,
       row.taskId, row.dispatchId, dispatch.run_id,
     ]));
   }
@@ -874,8 +878,10 @@ const HUNG_AFTER_MS = 900_000;
 // The terminal-list summary contract does not promise branch or agentIdentity.
 // Terminal show is the existing native field-bearing read; consume it only after
 // checking the list incarnation/worktree/handle against the returned metadata.
-function diagnosticTerminalDetails(terminal: FleetTerminal, executor: OrcaExecutor): FleetTerminal {
-  if (!terminal.incarnationId?.trim() || terminal.status === 'exited'
+function diagnosticTerminalDetails(
+  terminal: FleetTerminal, executor: OrcaExecutor, allowExited = false,
+): FleetTerminal {
+  if (!terminal.incarnationId?.trim() || (terminal.status === 'exited' && !allowExited)
     || (terminal.branch?.trim() && terminal.agentIdentity?.trim())) return terminal;
   const response = executor(['terminal', 'show', '--terminal', terminal.handle, '--json']);
   if (!response.ok) return terminal;

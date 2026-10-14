@@ -89,8 +89,9 @@ function primaryOrcaExecutor(
   screens: Readonly<Record<string, string>>,
   workers: readonly PrimaryWorkerFixture[],
   calls: string[][] = [],
+  shows: Readonly<Record<string, Record<string, unknown>>> = {},
 ): OrcaExecutor {
-  const terminalExecutor = fakeExecutor(terminals, screens, calls);
+  const terminalExecutor = fakeExecutor(terminals, screens, calls, shows);
   return (args) => {
     if (args[0] !== 'orchestration') return terminalExecutor(args);
     calls.push([...args]);
@@ -409,6 +410,72 @@ describe('Issue #2585 supervised primary-root admission', () => {
     expect(calls.every((args) =>
       (args[0] === 'terminal' && ['list', 'read', 'show'].includes(args[1]!))
       || (args[0] === 'orchestration' && ['worker-list', 'worker-show', 'run-show'].includes(args[1]!)))).toBe(true);
+  });
+
+  it('primary-root branchless native census: uses same-generation show branch for STOPPED, POLLING and diagnostics', () => {
+    const complete = primaryTerminal('native-merge');
+    const listed = { ...complete, branch: undefined }; // OrcaTerminalSummary has no branch.
+    const terminals = [currentCoordinator, listed];
+    const workers: PrimaryWorkerFixture[] = [{ terminal: complete, runId: 'run-main', coordinator: 'coordinator' }];
+    const calls: string[][] = [];
+    const executor = primaryOrcaExecutor(terminals, { 'native-merge': 'done' }, workers, calls,
+      { 'native-merge': complete });
+    const stopped = runFleetSweep({ ...opts, terminals, executor });
+    expect(stopped.map((row) => [row.handle, row.state])).toEqual([['native-merge', 'STOPPED']]);
+    expect(stopped[0]?.taskBinding).toContain('refs/heads/merge-task');
+    expect(collectFleetDiagnostics({ ...opts, terminals, executor, observations: stopped }))
+      .toMatchObject([{ handle: 'native-merge', state: 'STOPPED', reason: 'agent_unverified' }]);
+
+    const polling = primaryOrcaExecutor(terminals, { 'native-merge': '⠏ sleep 30\nesc interrupt' },
+      workers, calls, { 'native-merge': complete });
+    expect(runFleetSweep({ ...opts, terminals, executor: polling })[0]?.state).toBe('busy');
+    expect(runFleetSweep({ ...opts, terminals, executor: polling })[0]?.state).toBe('POLLING');
+    expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'show'))
+      .toHaveLength(4);
+    expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'read'))
+      .toHaveLength(4);
+    expect(calls.every((args) => args[0] === 'terminal'
+      ? ['list', 'show', 'read'].includes(args[1]!)
+      : args[0] === 'orchestration' && ['worker-list', 'worker-show', 'run-show'].includes(args[1]!))).toBe(true);
+  });
+
+  it('primary-root branchless native census: rejects absent, mismatched and conflicting show evidence', () => {
+    const complete = primaryTerminal('native-merge');
+    const listed = { ...complete, branch: undefined };
+    const terminals = [currentCoordinator, listed];
+    const workers: PrimaryWorkerFixture[] = [{ terminal: complete, runId: 'run-main', coordinator: 'coordinator' }];
+    const cases: readonly [string, FleetTerminal | undefined][] = [
+      ['unavailable', undefined],
+      ['wrong handle', { ...complete, handle: 'reused' }],
+      ['reused incarnation', { ...complete, incarnationId: 'new-incarnation' }],
+      ['wrong checkout', { ...complete, worktreePath: '/other/checkout' }],
+      ['missing branch', { ...complete, branch: undefined }],
+      ['conflicting worker branch', { ...complete, branch: 'refs/heads/other' }],
+    ];
+    for (const [label, shown] of cases) {
+      const calls: string[][] = [];
+      const executor = primaryOrcaExecutor(terminals, { 'native-merge': 'done' }, workers, calls,
+        shown ? { 'native-merge': shown } : {});
+      expect(runFleetSweep({ ...opts, terminals, executor }), label).toEqual([]);
+      expect(collectFleetDiagnostics({ ...opts, terminals, executor }), label).toEqual([]);
+      expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'read'), label).toBe(false);
+      expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'show'), label).toHaveLength(2);
+    }
+  });
+
+  it('primary-root branchless native census: retains exact native exited worker without a screen read', () => {
+    const complete = primaryTerminal('native-exited', 'OpenCode merge worker', 'exited');
+    const listed = { ...complete, branch: undefined };
+    const terminals = [currentCoordinator, listed];
+    const workers: PrimaryWorkerFixture[] = [{ terminal: complete, runId: 'run-main',
+      coordinator: 'coordinator', dispatchStatus: 'failed', observationStatus: 'exited' }];
+    const calls: string[][] = [];
+    const executor = primaryOrcaExecutor(terminals, {}, workers, calls, { 'native-exited': complete });
+    const observed = runFleetSweep({ ...opts, terminals, executor });
+    expect(observed.map((row) => [row.handle, row.state])).toEqual([['native-exited', 'STOPPED']]);
+    expect(collectFleetDiagnostics({ ...opts, terminals, executor, observations: observed }))
+      .toMatchObject([{ handle: 'native-exited', state: 'STOPPED', reason: 'terminal_exited' }]);
+    expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'read')).toBe(false);
   });
 
   it('primary-root foreign Run: excludes valid foreign, ambiguous and incomplete identities before reading', () => {
