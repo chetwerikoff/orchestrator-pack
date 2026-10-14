@@ -405,18 +405,116 @@ export function selectAgentTerminals(
   coordinatorHandle?: string,
   coordinatorTitleRe: RegExp = DEFAULT_ORCHESTRATOR_TITLE_RE,
   architectHandle?: string,
+  primaryBindings: ReadonlyMap<string, string> = new Map(),
 ): FleetTerminal[] {
   const primaryPath = normalizedPath(primary);
   return terminals.filter((terminal) => {
     if (!terminal.worktreePath) return false;
     if (terminal.handle === coordinatorHandle || terminal.handle === architectHandle) return false;
-    coordinatorTitleRe.lastIndex = 0;
-    if (normalizedPath(terminal.worktreePath) === primaryPath && coordinatorTitleRe.test(terminal.title)) return false;
+    const isPrimary = normalizedPath(terminal.worktreePath) === primaryPath;
     const worktree = terminal.worktreePath.replaceAll('\\', '/');
     workspaceRe.lastIndex = 0;
-    if (!workspaceRe.test(worktree)) return false;
-    return looksLikeAgentPane(terminal.title);
+    const inWorkspace = workspaceRe.test(worktree);
+    // Only a positively Run- and same-census-bound primary worker bypasses the old root/title filters.
+    if (isPrimary && !inWorkspace && primaryBindings.has(terminal.handle)) return true;
+    coordinatorTitleRe.lastIndex = 0;
+    if (isPrimary && coordinatorTitleRe.test(terminal.title)) return false;
+    return inWorkspace && looksLikeAgentPane(terminal.title);
   });
+}
+
+// Read-only, per-tick admission. Run's recorded coordinator handle is historical:
+// the exact selected coordinator must also be present and not exited in this census.
+function verifiedPrimaryBindings(
+  terminals: readonly FleetTerminal[],
+  primary: string,
+  workspaceRe: RegExp,
+  projectId: string | undefined,
+  coordinatorHandle: string | undefined,
+  architectHandle: string | undefined,
+  executor: OrcaExecutor,
+): Map<string, string> {
+  const verified = new Map<string, string>();
+  if (!projectId?.trim() || !coordinatorHandle?.trim()) return verified;
+  const root = normalizedPath(primary);
+  const coordinator = terminals.filter((terminal) => terminal.handle === coordinatorHandle);
+  if (coordinator.length !== 1 || !coordinator[0]?.worktreePath
+    || normalizedPath(coordinator[0].worktreePath) !== root
+    || coordinator[0].status?.trim().toLowerCase() === 'exited') return verified;
+  const candidates = terminals.filter((terminal) => {
+    if (terminal.handle === coordinatorHandle || terminal.handle === architectHandle
+      || !terminal.worktreePath || normalizedPath(terminal.worktreePath) !== root
+      || ![terminal.handle, terminal.incarnationId, terminal.worktreePath]
+        .every((value) => typeof value === 'string' && value.trim().length > 0)
+      || terminals.filter((other) => other.handle === terminal.handle).length !== 1) return false;
+    workspaceRe.lastIndex = 0;
+    return !workspaceRe.test(terminal.worktreePath.replaceAll('\\', '/'));
+  });
+  if (candidates.length === 0) return verified;
+
+  const read = (args: readonly string[]): Record<string, unknown> | undefined => {
+    const response = executor(args);
+    if (!response.ok) return undefined;
+    try {
+      const payload = JSON.parse(response.stdout) as { ok?: boolean; result?: unknown } | null;
+      return payload?.ok === true && payload.result !== null
+        && typeof payload.result === 'object' && !Array.isArray(payload.result)
+        ? payload.result as Record<string, unknown> : undefined;
+    } catch { return undefined; }
+  };
+  const rows: Record<string, unknown>[] = [];
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  do {
+    const census = read(['orchestration', 'worker-list', ...(cursor ? ['--cursor', cursor] : []), '--json']);
+    const page = census?.page as { hasMore?: unknown; nextCursor?: unknown } | undefined;
+    const workers = census?.workers;
+    if (!Array.isArray(workers) || typeof page?.hasMore !== 'boolean'
+      || !workers.every((row) => row && typeof row === 'object' && !Array.isArray(row))) return verified;
+    rows.push(...(workers as Record<string, unknown>[]));
+    if (!page.hasMore) break;
+    if (typeof page.nextCursor !== 'string' || !page.nextCursor.trim()
+      || cursors.has(page.nextCursor)) return verified;
+    cursor = page.nextCursor;
+    cursors.add(cursor);
+  } while (cursor);
+
+  for (const terminal of candidates) {
+    // No status shortcut: a failed/exited Dispatch may retain exact terminal identity.
+    const matches = rows.filter((row) => row.agentTerminalHandle === terminal.handle);
+    if (matches.length !== 1) continue;
+    const row = matches[0]!;
+    if (typeof row.taskId !== 'string' || !row.taskId.trim()
+      || typeof row.dispatchId !== 'string' || !row.dispatchId.trim()) continue;
+    // Terminal list need not contain branch. Reconcile it from native show only
+    // when its handle, incarnation and worktree still match the same census.
+    const detailed = terminal.branch?.trim() ? terminal : diagnosticTerminalDetails(terminal, executor, true);
+    if (!detailed.branch?.trim()) continue;
+    const shown = read(['orchestration', 'worker-show', '--dispatch', row.dispatchId, '--json']);
+    const dispatch = shown?.dispatch as {
+      id?: unknown; taskId?: unknown; run_id?: unknown; status?: unknown;
+    } | undefined;
+    const observation = shown?.observation as { exactWorker?: unknown; status?: unknown } | undefined;
+    const observed = shown?.terminal as Partial<FleetTerminal> | undefined;
+    if (dispatch?.id !== row.dispatchId || dispatch.taskId !== row.taskId
+      || typeof dispatch.run_id !== 'string' || !dispatch.run_id.trim()
+      || observation?.exactWorker !== true || typeof observation.status !== 'string'
+      || !observation.status.trim()
+      || !observed || ![observed.handle, observed.incarnationId, observed.worktreePath, observed.branch]
+        .every((value) => typeof value === 'string' && value.trim().length > 0)
+      || observed.handle !== terminal.handle || observed.incarnationId !== terminal.incarnationId
+      || observed.worktreePath !== terminal.worktreePath || observed.branch !== detailed.branch
+      || (typeof row.dispatchStatus === 'string' && typeof dispatch.status === 'string'
+        && row.dispatchStatus !== dispatch.status)) continue;
+    const runResult = read(['orchestration', 'run-show', '--id', dispatch.run_id, '--json']);
+    const run = runResult?.run as { id?: unknown; coordinator_handle?: unknown } | undefined;
+    if (run?.id !== dispatch.run_id || run.coordinator_handle !== coordinatorHandle) continue;
+    verified.set(terminal.handle, JSON.stringify([
+      projectId, terminal.handle, terminal.incarnationId, terminal.worktreePath, detailed.branch,
+      row.taskId, row.dispatchId, dispatch.run_id,
+    ]));
+  }
+  return verified;
 }
 
 // Only the final own response is an outcome. A park quoted in a tool result, instruction,
@@ -681,18 +779,9 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
   const executor = options.executor ?? defaultOrcaExecutor;
   const store = options.store ?? new FileFleetStateStore(options.projectId ?? '');
   const terminals = options.terminals ?? listFleetTerminals(executor);
-  const selected = selectAgentTerminals(
-    terminals,
-    options.primary,
-    options.workspaceRe ?? defaultWorkspaceRegex(options.primary),
-    options.coordinatorHandle ?? process.env.ORCH_HANDLE?.trim(),
-    options.coordinatorTitleRe ?? compileRegex(process.env.ORCH_TITLE_RE, DEFAULT_ORCHESTRATOR_TITLE_RE),
-    options.architectHandle ?? process.env.ARCHITECT_HANDLE?.trim(),
-  );
-  const lineCount = options.lines ?? 4;
-  store.prunePaneWaits?.(new Set(selected.map((terminal) => terminal.handle)));
-  if (!Number.isInteger(lineCount) || lineCount < 0) throw new Error('--lines must be a non-negative integer');
-  const busyRe = options.busyRe ?? DEFAULT_BUSY_RE;
+  const workspaceRe = options.workspaceRe ?? defaultWorkspaceRegex(options.primary);
+  const coordinatorHandle = options.coordinatorHandle ?? process.env.ORCH_HANDLE?.trim();
+  const architectHandle = options.architectHandle ?? process.env.ARCHITECT_HANDLE?.trim();
   const censusCache = new Map<string, OrcaCommandResult>();
   const bindingExecutor: OrcaExecutor = (args) => {
     if (args[0] !== 'orchestration' || args[1] !== 'worker-list') return executor(args);
@@ -700,21 +789,48 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
     if (!censusCache.has(key)) censusCache.set(key, executor(args));
     return censusCache.get(key)!;
   };
+  const primaryBindings = verifiedPrimaryBindings(
+    terminals, options.primary, workspaceRe, options.projectId,
+    coordinatorHandle, architectHandle, bindingExecutor,
+  );
+  const selected = selectAgentTerminals(
+    terminals,
+    options.primary,
+    workspaceRe,
+    coordinatorHandle,
+    options.coordinatorTitleRe ?? compileRegex(process.env.ORCH_TITLE_RE, DEFAULT_ORCHESTRATOR_TITLE_RE),
+    architectHandle,
+    primaryBindings,
+  );
+  const lineCount = options.lines ?? 4;
+  store.prunePaneWaits?.(new Set(selected.map((terminal) => terminal.handle)));
+  if (!Number.isInteger(lineCount) || lineCount < 0) throw new Error('--lines must be a non-negative integer');
+  const busyRe = options.busyRe ?? DEFAULT_BUSY_RE;
 
-  return selected.map((terminal) => {
+  return selected.flatMap((terminal): FleetPaneObservation[] => {
+    const primaryBinding = primaryBindings.get(terminal.handle);
+    if (primaryBinding && terminal.status?.trim().toLowerCase() === 'exited') {
+      store.clearPollingMark(terminal.handle);
+      store.clearPaneWait?.(terminal.handle);
+      return [{ ...terminal, state: 'STOPPED', lines: [], taskBinding: primaryBinding }];
+    }
     let screen: string;
     try {
       screen = readFleetScreen(terminal.handle, executor);
     } catch (error) {
       store.clearPollingMark(terminal.handle);
+      if (primaryBinding) {
+        store.clearPaneWait?.(terminal.handle);
+        return []; // No inferred state for an unreadable primary pane; preserve readable peers.
+      }
       throw error;
     }
     const outcome = ownPaneOutcome(screen);
     const parkedLine = lastFleetParkedLine(screen);
-    const binding = terminal.incarnationId && terminal.status !== 'exited'
+    const binding = primaryBinding ?? (terminal.incarnationId && terminal.status !== 'exited'
       ? liveTaskBinding(terminal, options.projectId ?? '', bindingExecutor)
         ?? JSON.stringify([options.projectId ?? '', terminal.handle, terminal.incarnationId, terminal.worktreePath, terminal.branch])
-      : undefined;
+      : undefined);
     const previous = store.readPaneWait?.(terminal.handle);
     // Acknowledgment-only retention belongs to the previous Task/incarnation.
     // A literal final PARKED line still needs no Task or generation proof.
@@ -740,7 +856,7 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
       // Keep a mismatched old outcome only as rejection evidence until it leaves the screen.
       else if (!stale) store.clearPaneWait?.(terminal.handle);
     }
-    return {
+    return [{
       ...terminal,
       ...(permissionTerminal?.incarnationId && !terminal.incarnationId
         ? { incarnationId: permissionTerminal.incarnationId } : {}),
@@ -750,7 +866,7 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
       ...(wait ? { wait } : {}),
       ...(binding ? { taskBinding: binding } : {}),
       lines: permission || lineCount === 0 ? [] : nonChromeLines(screen).slice(-lineCount),
-    };
+    }];
   });
 }
 
@@ -762,8 +878,10 @@ const HUNG_AFTER_MS = 900_000;
 // The terminal-list summary contract does not promise branch or agentIdentity.
 // Terminal show is the existing native field-bearing read; consume it only after
 // checking the list incarnation/worktree/handle against the returned metadata.
-function diagnosticTerminalDetails(terminal: FleetTerminal, executor: OrcaExecutor): FleetTerminal {
-  if (!terminal.incarnationId?.trim() || terminal.status === 'exited'
+function diagnosticTerminalDetails(
+  terminal: FleetTerminal, executor: OrcaExecutor, allowExited = false,
+): FleetTerminal {
+  if (!terminal.incarnationId?.trim() || (terminal.status === 'exited' && !allowExited)
     || (terminal.branch?.trim() && terminal.agentIdentity?.trim())) return terminal;
   const response = executor(['terminal', 'show', '--terminal', terminal.handle, '--json']);
   if (!response.ok) return terminal;
@@ -815,18 +933,28 @@ export function collectFleetDiagnostics(options: FleetDiagnosticOptions): FleetD
   const workspaceRe = options.workspaceRe ?? defaultWorkspaceRegex(options.primary);
   const coordinatorRe = options.coordinatorTitleRe ?? DEFAULT_ORCHESTRATOR_TITLE_RE;
   const primary = normalizedPath(options.primary);
+  const primaryBindings = verifiedPrimaryBindings(
+    terminals, options.primary, workspaceRe, options.projectId,
+    options.coordinatorHandle, options.architectHandle, executor,
+  );
   const now = (options.now ?? Date.now)();
   const diagnostics: FleetDiagnostic[] = [];
   for (const listed of terminals) {
     if (listed.handle === options.coordinatorHandle || listed.handle === options.architectHandle) continue;
     if (!listed.worktreePath || !listed.handle) continue;
-    coordinatorRe.lastIndex = 0;
-    if (normalizedPath(listed.worktreePath) === primary && coordinatorRe.test(listed.title)) continue;
     workspaceRe.lastIndex = 0;
-    if (!workspaceRe.test(listed.worktreePath.replaceAll('\\', '/'))) continue;
+    const inWorkspace = workspaceRe.test(listed.worktreePath.replaceAll('\\', '/'));
+    const boundPrimary = primaryBindings.has(listed.handle);
+    if (normalizedPath(listed.worktreePath) === primary && !inWorkspace && boundPrimary) {
+      // A positive Run/current-terminal join overrides the conservative primary title fallback.
+    } else {
+      coordinatorRe.lastIndex = 0;
+      if (normalizedPath(listed.worktreePath) === primary && coordinatorRe.test(listed.title)) continue;
+      if (!inWorkspace) continue;
+    }
     const old = store.readDiagnosticHistory?.(listed.handle);
     // Never-agent shells without exact historical designation are not diagnostic candidates.
-    if (!listed.agentIdentity && !looksLikeAgentPane(listed.title)
+    if (!boundPrimary && !listed.agentIdentity && !looksLikeAgentPane(listed.title)
       && listed.status?.toLowerCase() !== 'exited' && !(old?.designatedAgent && old.agentIdentity)) continue;
     const terminal = diagnosticTerminalDetails(listed, executor);
     const key = diagnosticKey(options.projectId, terminal);
@@ -836,7 +964,7 @@ export function collectFleetDiagnostics(options: FleetDiagnosticOptions): FleetD
     const shell = SHELL_TITLE_RE.test(terminal.title);
     const previouslyDesignated = prior?.designatedAgent === true && Boolean(prior.agentIdentity);
     const formerAgentShell = shell && previouslyDesignated;
-    if (!designated && !looksLikeAgentPane(terminal.title) && !previouslyDesignated
+    if (!boundPrimary && !designated && !looksLikeAgentPane(terminal.title) && !previouslyDesignated
       && terminal.status?.toLowerCase() !== 'exited') continue;
     const fields = {
       handle: terminal.handle,
