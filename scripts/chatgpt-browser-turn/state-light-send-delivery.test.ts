@@ -20,12 +20,16 @@ vi.mock('./ui-adapter.ts', async (original) => buildUiAdapterTestMock(
 ));
 
 import { buildUiAdapterTestMock, collectionLocator, createBrowserSessionModuleMock, createCoordinationModuleMock, enqueueBrowserForTurn, runStateLightTurnWithStdoutCapture, scalarLocator, stableTurnInput } from './state-light-turn.test-fixtures.ts';
+import { messageLocator, readyTurnObservationFrames } from './state-light-turn.test-fixtures.ts';
 import {
   COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR, MESSAGE_NODE_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE, RENDERED_CONVERSATION_TURN_SECTION_SELECTOR,
+  USER_MESSAGE_SELECTOR, ASSISTANT_MESSAGE_SELECTOR, ASSISTANT_TURN_ANCESTOR_XPATH,
 } from './product-page-selectors.ts';
 import { __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
+import { runPostSendRecovery, takeRecoveryCensus, type PostSendRecoveryAdapter, type PostSendRecoveryState } from './state-light-turn-recovery.ts';
+import * as recoveryModule from './state-light-turn-recovery.ts';
 import { configuredProfileKey } from './storage-common.ts';
 import { deriveDelivery, readTerminalEnvelope, runLaunch } from '../flow-manager-long-running-child.ts';
 import { authoritativePreSend } from '../pack-review-no-review-reconcile.ts';
@@ -33,6 +37,362 @@ import { authoritativePreSend } from '../pack-review-no-review-reconcile.ts';
 const MARKER = `OPKTURNV1${'ab'.repeat(16)}`;
 const MARKED_PROMPT = `${MARKER}\n\nPROMPT`;
 
+
+function recoveryFixture(options: {
+  readonly originalIncomplete?: boolean;
+  readonly successorIncomplete?: boolean;
+  readonly includeOriginalMarker?: boolean;
+  readonly successorMarker?: boolean;
+  readonly foreign?: boolean;
+} = {}) {
+  const url = 'https://chatgpt.com/c/25962596-2596-4596-8596-259625962596';
+  const original = { name: 'owned-original' };
+  const foreign = { name: 'foreign' };
+  const successor = { name: 'owned-successor' };
+  const pages: unknown[] = [original, ...(options.foreign ? [foreign] : [])];
+  let now = 100;
+  const reads = new Map<unknown, number>();
+  const createSuccessor = vi.fn(async () => { pages.push(successor); return successor; });
+  const adapter: PostSendRecoveryAdapter = {
+    enumeratePages: async () => pages,
+    pageUrl: (page) => page === foreign ? 'https://chatgpt.com/c/other' : url,
+    normalizeConversationUrl: (value) => value.endsWith('/') ? value.slice(0, -1) : value,
+    isSupportedConversationUrl: (value) => value.startsWith('https://chatgpt.com/c/'),
+    readAuthoritativeMessages: async (page) => {
+      reads.set(page, (reads.get(page) ?? 0) + 1);
+      if (page === foreign) return { messages: [], incomplete: true };
+      if (page === original) return {
+        messages: options.includeOriginalMarker ? [{ role: 'user' as const, text: MARKER }] : [],
+        incomplete: options.originalIncomplete ?? false,
+      };
+      return {
+        messages: options.successorMarker ? [{ role: 'user' as const, text: MARKER }] : [],
+        incomplete: options.successorIncomplete ?? false,
+      };
+    },
+    browserDefinitelyDisconnected: () => false,
+    pageDefinitelyLost: () => false,
+    reconnect: async () => ({}),
+    createSuccessor,
+    sleep: async (milliseconds) => { now += milliseconds; },
+    now: () => now,
+  };
+  const state: PostSendRecoveryState = {
+    lossEpoch: 0, successorCreated: false, immutableConversationUrl: url,
+  };
+  return { url, original, foreign, successor, pages, reads, createSuccessor, adapter, state, setNow: (value: number) => { now = value; } };
+}
+
+describe('Issue #2596 known-conversation post-send recovery', () => {
+  it('ignores foreign unreadable conversations and recovers the owned marker', async () => {
+    const fixture = recoveryFixture({ foreign: true, includeOriginalMarker: true });
+    const result = await runPostSendRecovery({
+      browser: {}, currentPage: fixture.original, marker: MARKER, hardDeadlineMs: 500, pollMs: 1,
+      state: fixture.state, adapter: fixture.adapter,
+    });
+    expect(result).toMatchObject({ kind: 'recovered', page: fixture.original, conversationUrl: fixture.url });
+    expect(fixture.reads.get(fixture.foreign)).toBeUndefined();
+    expect(fixture.createSuccessor).not.toHaveBeenCalled();
+  });
+
+  it('uses one complete successor as the authoritative same-conversation view', async () => {
+    const fixture = recoveryFixture({
+      originalIncomplete: true, includeOriginalMarker: true, successorMarker: true, foreign: true,
+    });
+    const result = await runPostSendRecovery({
+      browser: {}, currentPage: fixture.original, marker: MARKER, hardDeadlineMs: 500, pollMs: 1,
+      state: fixture.state, adapter: fixture.adapter,
+    });
+    expect(result).toMatchObject({ kind: 'recovered', page: fixture.successor, cleanupOwned: true });
+    expect(fixture.createSuccessor).toHaveBeenCalledTimes(1);
+    expect(fixture.createSuccessor).toHaveBeenCalledWith(expect.anything(), fixture.url);
+    expect(fixture.reads.get(fixture.foreign)).toBeUndefined();
+  });
+
+  it.each(['transient-original', 'hydrating-successor'] as const)('keeps polling marker-unproven successor observations (%s)', async (scenario) => {
+    const fixture = recoveryFixture({ originalIncomplete: true, includeOriginalMarker: true });
+    const scripted = new Map<unknown, number>();
+    const adapter = { ...fixture.adapter, readAuthoritativeMessages: vi.fn(async (page: unknown) => {
+      const count = (scripted.get(page) ?? 0) + 1;
+      scripted.set(page, count);
+      if (page === fixture.original) return { messages: [{ role: 'user' as const, text: MARKER }], incomplete: true };
+      if (scenario === 'hydrating-successor' && count === 1) return { messages: [], incomplete: false };
+      return { messages: [{ role: 'user' as const, text: MARKER }], incomplete: false };
+    }) };
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter,
+    });
+    expect(result).toMatchObject({ kind: 'recovered', page: fixture.successor, cleanupOwned: true });
+    expect(adapter.readAuthoritativeMessages).toHaveBeenCalledTimes(scenario === 'hydrating-successor' ? 3 : 2);
+    expect(fixture.createSuccessor).toHaveBeenCalledTimes(1);
+  });
+
+  it('reserves deadline observation time for the successor and identifies its exact URL failures', async () => {
+    const fixture = recoveryFixture({ originalIncomplete: true });
+    let clock = 0;
+    const adapter = { ...fixture.adapter,
+      now: () => clock,
+      readAuthoritativeMessages: vi.fn(async (page: unknown) => {
+        clock += page === fixture.original ? 5_000 : 900;
+        return page === fixture.original
+          ? { messages: [{ role: 'user' as const, text: MARKER }], incomplete: true }
+          : { messages: [{ role: 'user' as const, text: MARKER }], incomplete: false };
+      }),
+      createSuccessor: vi.fn(async () => { clock += 100; fixture.pages.push(fixture.successor); return fixture.successor; }),
+    };
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 6_000, pollMs: 1, state: fixture.state, adapter,
+    });
+    expect(result).toMatchObject({ kind: 'recovered', page: fixture.successor });
+    expect(clock).toBe(6_000);
+    expect(adapter.readAuthoritativeMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['wrong-url', 'unreadable-url'] as const)('classifies the exact owned successor %s without reading it', async (mode) => {
+    const fixture = recoveryFixture({ originalIncomplete: true });
+    const adapter = { ...fixture.adapter,
+      pageUrl: (page: unknown) => {
+        if (page === fixture.successor && mode === 'wrong-url') return 'https://chatgpt.com/c/foreign';
+        if (page === fixture.successor && mode === 'unreadable-url') throw new Error('private');
+        return fixture.adapter.pageUrl(page);
+      },
+    };
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter,
+    });
+    expect(result).toMatchObject({ kind: 'failure', cause: mode === 'wrong-url'
+      ? 'owned_conversation_identity_mismatch' : 'owned_conversation_recovery_census_failed' });
+    if (mode === 'unreadable-url') expect(result).toMatchObject({ diagnostic: { reason: 'page_url_unreadable' } });
+    expect(fixture.reads.get(fixture.successor)).toBeUndefined();
+  });
+
+  it('fails closed with a bounded URL-hash diagnostic when successor observations stay incomplete', async () => {
+    const fixture = recoveryFixture({ originalIncomplete: true, successorIncomplete: true });
+    fixture.setNow(498);
+    const result = await runPostSendRecovery({
+      browser: {}, currentPage: fixture.original, marker: MARKER, hardDeadlineMs: 500, pollMs: 1,
+      state: fixture.state, adapter: fixture.adapter,
+    });
+    expect(result).toMatchObject({
+      kind: 'failure', cause: 'owned_conversation_recovery_census_failed',
+      diagnostic: {
+        conversationUrlSha256: createHash('sha256').update(fixture.url).digest('hex'),
+        reason: 'read_incomplete',
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(fixture.url);
+    expect(fixture.createSuccessor).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['incomplete', 'threw', 'unreadable-url'] as const)('never reads a foreign %s page', async (mode) => {
+    const fixture = recoveryFixture({ foreign: true, includeOriginalMarker: true });
+    const read = vi.fn(fixture.adapter.readAuthoritativeMessages);
+    const adapter = { ...fixture.adapter, readAuthoritativeMessages: read,
+      pageUrl: (page: unknown) => {
+        if (page === fixture.foreign && mode === 'unreadable-url') throw new Error('unreadable');
+        return fixture.adapter.pageUrl(page);
+      },
+    };
+    read.mockImplementation(async (page) => {
+      if (page === fixture.foreign && mode === 'threw') throw new Error('foreign read must not occur');
+      return await fixture.adapter.readAuthoritativeMessages(page);
+    });
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter,
+    });
+    expect(result).toMatchObject({ kind: 'recovered', page: fixture.original, cleanupOwned: false });
+    expect(read.mock.calls.map(([page]) => page)).toEqual([fixture.original]);
+  });
+
+  it('recovers an absent original through the same URL before the existing deadline', async () => {
+    const fixture = recoveryFixture({ successorMarker: true });
+    fixture.pages.splice(0);
+    fixture.setNow(499);
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter: fixture.adapter,
+    });
+    expect(result).toMatchObject({ kind: 'recovered', page: fixture.successor, stopAuthorityPage: fixture.successor });
+    expect(fixture.state.cleanupAuthorityPage).toBe(fixture.successor);
+    expect(fixture.createSuccessor).toHaveBeenCalledTimes(1);
+    expect(fixture.reads.get(fixture.successor)).toBe(1);
+  });
+
+  it.each(['original', 'successor'] as const)('rejects duplicate tokens in an incomplete %s snapshot', async (duplicatePage) => {
+    const fixture = recoveryFixture({ originalIncomplete: true, successorIncomplete: true, successorMarker: true });
+    const adapter = { ...fixture.adapter, readAuthoritativeMessages: async (page: unknown) => {
+      if (page === fixture[duplicatePage]) return {
+        messages: [{ role: 'user' as const, text: MARKER + MARKER }], incomplete: true,
+      };
+      return await fixture.adapter.readAuthoritativeMessages(page);
+    } };
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter,
+    });
+    expect(result).toMatchObject({ kind: 'failure', cause: 'owned_prompt_marker_ambiguous', action: 'retain_owned_page_no_resend' });
+    expect(fixture.createSuccessor).toHaveBeenCalledTimes(duplicatePage === 'original' ? 0 : 1);
+  });
+
+  it.each([true, false])('rejects conflicting complete owned observations (second marker: %s)', async (secondMarker) => {
+    const fixture = recoveryFixture({ includeOriginalMarker: true, successorMarker: secondMarker });
+    fixture.pages.push(fixture.successor);
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter: fixture.adapter,
+    });
+    expect(result).toMatchObject({ kind: 'failure', cause: 'owned_prompt_marker_ambiguous', action: 'retain_owned_page_no_resend' });
+    expect(fixture.createSuccessor).not.toHaveBeenCalled();
+  });
+
+  it('preserves the unbound and local-fetch-failure whole-census behavior', async () => {
+    const fixture = recoveryFixture({ includeOriginalMarker: true, foreign: true });
+    fixture.state.immutableConversationUrl = undefined;
+    const census = await takeRecoveryCensus({}, MARKER, fixture.adapter);
+    expect(census.complete).toBe(false);
+    expect(fixture.reads.get(fixture.foreign)).toBe(1);
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 100, state: fixture.state, adapter: fixture.adapter,
+    });
+    expect(result).toMatchObject({ kind: 'failure', cause: 'owned_conversation_recovery_census_failed', action: 'retain_owned_page_no_resend' });
+    expect(result).not.toHaveProperty('diagnostic');
+    expect(fixture.createSuccessor).not.toHaveBeenCalled();
+  });
+
+  it.each(['read_threw', 'enumeration_failed'] as const)('reports a normalized target hash for %s', async (reason) => {
+    const fixture = recoveryFixture();
+    fixture.state.immutableConversationUrl = fixture.url + '/';
+    fixture.setNow(500);
+    const adapter = { ...fixture.adapter,
+      ...(reason === 'read_threw'
+        ? { readAuthoritativeMessages: async () => { throw new Error('private page content'); } }
+        : { enumeratePages: async () => { throw new Error('private URL'); } }),
+    };
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter,
+    });
+    expect(result).toMatchObject({ kind: 'failure', cause: 'owned_conversation_recovery_census_failed',
+      diagnostic: { conversationUrlSha256: createHash('sha256').update(fixture.url).digest('hex'), reason },
+    });
+    expect(JSON.stringify(result)).not.toContain('private');
+    expect(JSON.stringify(result)).not.toContain(fixture.url);
+    expect(fixture.createSuccessor).not.toHaveBeenCalled();
+  });
+
+  it('never creates a successor at the deadline or resends an unresolved successor', async () => {
+    const fixture = recoveryFixture({ originalIncomplete: true });
+    fixture.setNow(500);
+    const expired = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter: fixture.adapter,
+    });
+    expect(expired).toMatchObject({ kind: 'failure', cause: 'owned_conversation_recovery_census_failed' });
+    expect(fixture.createSuccessor).not.toHaveBeenCalled();
+    const live = recoveryFixture({ originalIncomplete: true });
+    const unresolved = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 100, state: live.state, adapter: live.adapter,
+    });
+    expect(unresolved).toMatchObject({ kind: 'failure', action: 'retain_owned_page_no_resend' });
+    expect(live.createSuccessor).toHaveBeenCalledTimes(1);
+    expect(deriveDelivery({
+      state: 'observation_uncertain', resolved_send_count: 1, send_attempted: true,
+      cause: unresolved.kind === 'failure' ? unresolved.cause : '',
+    } as NonNullable<Parameters<typeof deriveDelivery>[0]>, false)).toBe('POSSIBLY_DELIVERED');
+  });
+});
+
+describe('Issue #2596 production recovery caller boundaries', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'recovery-caller-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    vi.stubEnv('ORCA_TERMINAL_HANDLE', undefined);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks(); vi.unstubAllEnvs(); mocks.browserQueue.length = 0;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each(['local-empty', 'local-incomplete', 'known-successor'] as const)(
+    'production caller preserves Send, locator and cleanup boundaries: %s', async (mode) => {
+      const project = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test/project';
+      const url = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test/c/11111111-1111-4111-8111-111111111111';
+      const localUrl = 'https://chatgpt.com/c/local-chatgpt%3A11111111-1111-4111-8111-111111111111';
+      const known = mode === 'known-successor';
+      let clock = 10_000;
+      let sent = false;
+      let draft = '';
+      const send = vi.fn(async () => { sent = true; });
+      const retry = vi.fn(async () => undefined);
+      const finalMessages = readyTurnObservationFrames('PROMPT', 'RECOVERED-REPLY').at(-1)!;
+      const composer = scalarLocator({ count: async () => 1, fill: async (value: string) => { draft = value; },
+        innerText: async () => sent ? '' : draft, textContent: async () => sent ? '' : draft, press: send });
+      const makePage = (kind: 'original' | 'foreign' | 'successor'): any => ({
+        __fakeBrowserGptPage: true,
+        url: vi.fn(() => kind === 'foreign' ? 'https://chatgpt.com/c/22222222-2222-4222-8222-222222222222'
+          : kind === 'successor' || known ? url : sent ? localUrl : project),
+        isClosed: vi.fn(() => kind === 'original' && known && sent),
+        goto: vi.fn(async () => undefined), close: vi.fn(async () => undefined),
+        waitForTimeout: vi.fn(async (ms: number) => { clock += ms; }),
+        getByText: vi.fn((text: string) => scalarLocator({ count: async () => sent && text === 'Failed to fetch' ? 1 : 0 })),
+        getByRole: vi.fn(() => scalarLocator({ count: async () => sent ? 1 : 0, click: retry })),
+        locator: vi.fn((selector: string) => {
+          if (kind === 'foreign') return scalarLocator({ count: async () => { throw new Error('foreign unreadable'); } });
+          if (selector === COMPOSER_SELECTOR) return composer;
+          if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => 1, click: kind === 'original' ? send : retry });
+          if (kind === 'original' && known && sent && selector === USER_MESSAGE_SELECTOR)
+            return scalarLocator({ count: async () => { throw new Error('owned read lost'); } });
+          const messages = kind === 'successor' ? finalMessages
+            : sent ? known ? finalMessages.slice(0, 1) : [] : known ? [{ role: 'user' as const, text: 'history' }] : [];
+          if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(messages);
+          if (selector === USER_MESSAGE_SELECTOR) return collectionLocator(messages.filter((message) => message.role === 'user'));
+          if (selector === ASSISTANT_MESSAGE_SELECTOR) return collectionLocator(messages.filter((message) => message.role === 'assistant'));
+          if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section'))
+            return kind === 'successor' ? messageLocator(finalMessages.at(-1)!) : scalarLocator();
+          return scalarLocator();
+        }),
+      });
+      const original = makePage('original');
+      const foreign = makePage('foreign');
+      const successor = makePage('successor');
+      const harness = enqueueBrowserForTurn(mocks, original);
+      const pages = [original, ...(mode === 'local-empty' ? [] : [foreign])];
+      Object.assign(harness.context, { pages: vi.fn(() => pages) });
+      harness.context.newPage.mockImplementation(async () => { pages.push(successor); return successor; });
+      if (!known) harness.context.newPage.mockImplementation(async () => original);
+      const actualRecover = recoveryModule.runPostSendRecovery;
+      const selection = vi.spyOn(recoveryModule, 'runPostSendRecovery').mockImplementation(async (input) => {
+        expect(await input.adapter.enumeratePages(input.browser)).toEqual([original]);
+        return await actualRecover(input);
+      });
+      vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      const invocationId = randomUUID();
+      const output = join(root, invocationId + '.txt');
+      const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        '--profile', join(root, 'profile'), '--cdp', 'http://127.0.0.1:9222', '--input', join(root, 'input'),
+        '--output', output, '--invocation-id', invocationId, '--timeout-ms', '90000', '--poll-ms', '1',
+        ...(known ? ['--chat-url', url] : ['--new-chat', '--project-url', project]),
+      ]);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(retry).not.toHaveBeenCalled();
+      expect(original.close).not.toHaveBeenCalled();
+      expect(foreign.close).not.toHaveBeenCalled();
+      expect(foreign.goto).not.toHaveBeenCalled();
+      if (known) {
+        expect(selection).toHaveBeenCalledTimes(1);
+        expect(foreign.locator).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ state: 'ok', conversation_id: url, send_count: 1 });
+        expect(successor.close).toHaveBeenCalledTimes(1);
+        expect(readFileSync(output, 'utf8')).toBe('RECOVERED-REPLY');
+      } else {
+        expect(selection).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ state: 'observation_uncertain', send_count: 1, send_attempted: true,
+          cause: mode === 'local-empty' ? 'fresh_send_fetch_failed' : 'owned_conversation_recovery_census_failed' });
+        expect(result.conversation_id).toBeUndefined();
+        expect(readStateLightTurnObservation(configuredProfileKey(join(root, 'profile'), 'http://127.0.0.1:9222'), invocationId).conversation_url).toBeNull();
+        expect(successor.close).not.toHaveBeenCalled();
+        expect(existsSync(output)).toBe(false);
+        if (mode === 'local-incomplete') expect(foreign.locator).toHaveBeenCalled();
+      }
+    },
+  );
+});
 type Transport = 'click' | 'enter';
 type DeliveryEffect = 'none' | 'owned_user_node' | 'composer_cleared' | 'both';
 

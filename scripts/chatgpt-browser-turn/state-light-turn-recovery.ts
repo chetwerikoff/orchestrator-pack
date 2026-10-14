@@ -16,12 +16,22 @@ export interface RecoveryPageSnapshot {
   readonly matchingUserCarrierCount: number;
   readonly exactMarkerTokenCount: number;
   readonly eligible: boolean;
+  readonly incomplete: boolean;
+}
+
+export type RecoveryIncompleteReason = 'read_incomplete' | 'read_threw' | 'page_url_unreadable' | 'enumeration_failed';
+
+export interface RecoveryIncompleteDiagnostic {
+  readonly conversationUrlSha256: string;
+  readonly reason: RecoveryIncompleteReason;
 }
 
 export interface RecoveryCensus {
   readonly complete: boolean;
   readonly monotonicAmbiguity: boolean;
+  readonly ownedIdentityMismatch?: boolean;
   readonly pages: readonly RecoveryPageSnapshot[];
+  readonly incompleteReason?: RecoveryIncompleteReason;
 }
 
 export interface PostSendRecoveryState {
@@ -107,6 +117,7 @@ export interface PostSendRecoveryFailure {
     | 'helper_failure_after_send'
     | 'observation_exhausted';
   readonly action: 'retain_owned_page_no_resend';
+  readonly diagnostic?: RecoveryIncompleteDiagnostic;
   /** Present only for an exact invocation-created page whose handle is still held. */
   readonly stopAuthorityPage?: unknown;
 }
@@ -149,14 +160,18 @@ export async function takeRecoveryCensus(
   browser: unknown,
   marker: string,
   adapter: PostSendRecoveryAdapter,
-): Promise<RecoveryCensus> {
+  immutableConversationUrl?: string,
+  exactOwnedPage?: unknown,
+ ): Promise<RecoveryCensus> {
   const snapshots: RecoveryPageSnapshot[] = [];
   let complete = true;
+  let incompleteReason: RecoveryIncompleteReason | undefined;
+  let ownedIdentityMismatch = false;
   let pages: readonly unknown[];
   try {
-    pages = await adapter.enumeratePages(browser);
+    pages = exactOwnedPage ? [exactOwnedPage] : await adapter.enumeratePages(browser);
   } catch {
-    return { complete: false, monotonicAmbiguity: false, pages: [] };
+    return { complete: false, monotonicAmbiguity: false, pages: [], incompleteReason: 'enumeration_failed' };
   }
 
   for (const page of pages) {
@@ -164,14 +179,24 @@ export async function takeRecoveryCensus(
     try {
       normalizedUrl = adapter.normalizeConversationUrl(adapter.pageUrl(page));
     } catch {
-      complete = false;
+      if (page === exactOwnedPage || !immutableConversationUrl) {
+        complete = false;
+        incompleteReason ??= 'page_url_unreadable';
+      }
       continue;
     }
+    if (page === exactOwnedPage && immutableConversationUrl && normalizedUrl !== immutableConversationUrl) {
+      ownedIdentityMismatch = true;
+      continue;
+    }
+    if (immutableConversationUrl && normalizedUrl !== immutableConversationUrl) continue;
     if (!adapter.isSupportedConversationUrl(normalizedUrl)) continue;
-
     try {
       const observed = await adapter.readAuthoritativeMessages(page);
-      if (observed.incomplete) complete = false;
+      if (observed.incomplete) {
+        complete = false;
+        incompleteReason ??= 'read_incomplete';
+      }
       const cardinality = recoveryMarkerCardinality(observed.messages, marker);
       snapshots.push({
         page,
@@ -179,17 +204,18 @@ export async function takeRecoveryCensus(
         ...cardinality,
         eligible: cardinality.matchingUserCarrierCount === 1
           && cardinality.exactMarkerTokenCount === 1,
+        incomplete: observed.incomplete,
       });
     } catch {
       complete = false;
+      incompleteReason ??= 'read_threw';
     }
   }
 
-  const eligiblePageCount = snapshots.filter((page) => page.eligible).length;
   const monotonicAmbiguity = snapshots.some((page) => (
     page.matchingUserCarrierCount > 1 || page.exactMarkerTokenCount > 1
-  )) || eligiblePageCount > 1;
-  return { complete, monotonicAmbiguity, pages: snapshots };
+  )) || (!immutableConversationUrl && snapshots.filter((page) => page.eligible).length > 1);
+  return { complete, monotonicAmbiguity, ownedIdentityMismatch, pages: snapshots, ...(incompleteReason ? { incompleteReason } : {}) };
 }
 
 function failure(
@@ -199,8 +225,15 @@ function failure(
   cause: string,
   eventClass: PostSendRecoveryFailure['eventClass'],
   observer?: (event: RecoveryObserverEvent) => void,
+  incompleteReason?: RecoveryIncompleteReason,
 ): PostSendRecoveryFailure {
   observer?.({ event: 'terminal', lossEpoch: recoveryState.lossEpoch, cause });
+  const diagnostic = recoveryState.immutableConversationUrl && incompleteReason
+    ? {
+      conversationUrlSha256: conversationUrlSha256(recoveryState.immutableConversationUrl)!,
+      reason: incompleteReason,
+    }
+    : undefined;
   return {
     kind: 'failure',
     browser,
@@ -208,6 +241,7 @@ function failure(
     cause,
     eventClass,
     action: 'retain_owned_page_no_resend',
+    ...(diagnostic ? { diagnostic } : {}),
     ...(recoveryState.stopAuthorityPage
       ? { stopAuthorityPage: recoveryState.stopAuthorityPage }
       : {}),
@@ -221,7 +255,10 @@ export async function runPostSendRecovery(
   let browser = input.browser;
   let currentPage = input.currentPage;
   let beginLossEpoch = true;
-
+  let seenMonotonicAmbiguity = false;
+  if (state.immutableConversationUrl) {
+    state.immutableConversationUrl = adapter.normalizeConversationUrl(state.immutableConversationUrl);
+  }
   while (true) {
     if (beginLossEpoch) {
       state.lossEpoch += 1;
@@ -275,8 +312,33 @@ export async function runPostSendRecovery(
       continue;
     }
 
-    const census = await takeRecoveryCensus(browser, marker, adapter);
+    const census = await takeRecoveryCensus(
+      browser, marker, adapter, state.immutableConversationUrl, state.successorPage,
+    );
+    seenMonotonicAmbiguity ||= census.monotonicAmbiguity;
+    if (census.ownedIdentityMismatch) {
+      return failure(browser, state, 'ui_contract_mismatch', 'owned_conversation_identity_mismatch',
+        'conversation_identity_mismatch', observer, census.incompleteReason);
+    }
+    const successorSnapshot = state.successorPage
+      ? census.pages.find((candidate) => candidate.page === state.successorPage)
+      : undefined;
     const eligible = census.pages.filter((page) => page.eligible);
+    const authoritativeSuccessor = successorSnapshot && !successorSnapshot.incomplete && successorSnapshot.eligible
+      ? successorSnapshot
+      : undefined;
+    const toleratedSameConversationDuplicate = Boolean(
+      authoritativeSuccessor
+      && eligible.every((candidate) => candidate === authoritativeSuccessor || (
+        candidate.normalizedUrl === state.immutableConversationUrl
+        && candidate.matchingUserCarrierCount === 1
+        && candidate.exactMarkerTokenCount === 1
+      ))
+    );
+    const conflictingEligibleViews = (eligible.length > 1 && !toleratedSameConversationDuplicate)
+      || Boolean(state.immutableConversationUrl && eligible.length > 0
+        && census.pages.some((candidate) => candidate.page !== state.successorPage
+          && !candidate.incomplete && !candidate.eligible));
     observer?.({
       event: 'census',
       lossEpoch: state.lossEpoch,
@@ -285,7 +347,7 @@ export async function runPostSendRecovery(
       censusComplete: census.complete,
     });
 
-    if (census.monotonicAmbiguity) {
+    if (seenMonotonicAmbiguity || conflictingEligibleViews) {
       return failure(
         browser,
         state,
@@ -293,34 +355,13 @@ export async function runPostSendRecovery(
         'owned_prompt_marker_ambiguous',
         'post_send_observation_error',
         observer,
+        census.incompleteReason,
       );
     }
 
-    if (!census.complete) {
-      if (adapter.browserDefinitelyDisconnected(browser)) {
-        beginLossEpoch = true;
-        continue;
-      }
-      if (currentPage && adapter.pageDefinitelyLost(currentPage)) {
-        beginLossEpoch = true;
-        continue;
-      }
-      if (adapter.now() >= hardDeadlineMs) {
-        return failure(
-          browser,
-          state,
-          'driver_error',
-          'owned_conversation_recovery_census_failed',
-          'helper_failure_after_send',
-          observer,
-        );
-      }
-      await adapter.sleep(Math.max(1, input.pollMs));
-      continue;
-    }
-
-    if (eligible.length === 1) {
-      const match = eligible[0]!;
+    const accepted = authoritativeSuccessor ?? (census.complete && eligible.length === 1 ? eligible[0] : undefined);
+    if (accepted) {
+      const match = accepted;
       if (state.immutableConversationUrl && match.normalizedUrl !== state.immutableConversationUrl) {
         return failure(
           browser,
@@ -329,11 +370,10 @@ export async function runPostSendRecovery(
           'owned_conversation_identity_mismatch',
           'conversation_identity_mismatch',
           observer,
+          census.incompleteReason,
         );
       }
-      if (!state.immutableConversationUrl) {
-        state.immutableConversationUrl = match.normalizedUrl;
-      }
+      if (!state.immutableConversationUrl) state.immutableConversationUrl = match.normalizedUrl;
       observer?.({
         event: 'recovered',
         lossEpoch: state.lossEpoch,
@@ -351,88 +391,64 @@ export async function runPostSendRecovery(
     }
 
     const immutableUrl = state.immutableConversationUrl;
-    if (immutableUrl && state.successorPage) {
-      const successorSnapshot = census.pages.find((candidate) => candidate.page === state.successorPage);
-      if (successorSnapshot && successorSnapshot.normalizedUrl !== immutableUrl) {
-        return failure(
-          browser,
-          state,
-          'ui_contract_mismatch',
-          'owned_conversation_identity_mismatch',
-          'conversation_identity_mismatch',
-          observer,
-        );
-      }
-    }
-
-    const sameUrlPages = immutableUrl
-      ? census.pages.filter((candidate) => candidate.normalizedUrl === immutableUrl)
-      : [];
     const deadlineReached = adapter.now() >= hardDeadlineMs;
-
-    if (immutableUrl && sameUrlPages.length > 0) {
-      if (deadlineReached) {
-        return failure(
-          browser,
-          state,
-          'ui_contract_mismatch',
-          'owned_prompt_marker_unresolved',
-          'post_send_observation_error',
-          observer,
-        );
-      }
-      await adapter.sleep(Math.max(1, input.pollMs));
+    if (!census.complete && adapter.browserDefinitelyDisconnected(browser)) {
+      beginLossEpoch = true;
+      continue;
+    }
+    if (!census.complete && currentPage && adapter.pageDefinitelyLost(currentPage)) {
+      beginLossEpoch = true;
       continue;
     }
 
-    if (immutableUrl && !state.successorCreated && !deadlineReached) {
+    // The existing one-shot successor is a read-only observation of this URL.
+    if (immutableUrl && !state.successorCreated && !deadlineReached
+      && (!census.complete || census.pages.length === 0)) {
       state.successorCreated = true;
-      let successor: unknown;
       try {
-        successor = await adapter.createSuccessor(browser, immutableUrl);
+        const successor = await adapter.createSuccessor(browser, immutableUrl);
+        state.successorPage = successor;
+        state.cleanupAuthorityPage = successor;
+        state.stopAuthorityPage = successor;
+        currentPage = successor;
+        observer?.({
+          event: 'successor_created',
+          lossEpoch: state.lossEpoch,
+          conversationUrlSha256: conversationUrlSha256(immutableUrl),
+        });
+        continue;
       } catch {
         return failure(
-          browser,
-          state,
-          'driver_error',
-          'replacement_observation_page_create_failed',
-          'helper_failure_after_send',
-          observer,
+          browser, state, 'driver_error', 'replacement_observation_page_create_failed',
+          'helper_failure_after_send', observer, census.incompleteReason,
         );
       }
-      state.successorPage = successor;
-      state.cleanupAuthorityPage = successor;
-      state.stopAuthorityPage = successor;
-      currentPage = successor;
-      observer?.({
-        event: 'successor_created',
-        lossEpoch: state.lossEpoch,
-        conversationUrlSha256: conversationUrlSha256(immutableUrl),
-      });
-      continue;
     }
 
     if (deadlineReached) {
+      if (!census.complete) {
+        return failure(
+          browser, state, 'driver_error', 'owned_conversation_recovery_census_failed',
+          'helper_failure_after_send', observer, census.incompleteReason,
+        );
+      }
       if (immutableUrl && state.successorCreated) {
         return failure(
-          browser,
-          state,
-          'no_reply',
-          'observation_exhausted_no_resend',
-          'observation_exhausted',
-          observer,
+          browser, state, 'no_reply', 'observation_exhausted_no_resend',
+          'observation_exhausted', observer,
+        );
+      }
+      if (immutableUrl && census.pages.length > 0) {
+        return failure(
+          browser, state, 'ui_contract_mismatch', 'owned_prompt_marker_unresolved',
+          'post_send_observation_error', observer,
         );
       }
       return failure(
-        browser,
-        state,
-        'ui_contract_mismatch',
-        'owned_conversation_recovery_zero_match',
-        'post_send_observation_error',
-        observer,
+        browser, state, 'ui_contract_mismatch', 'owned_conversation_recovery_zero_match',
+        'post_send_observation_error', observer,
       );
     }
-
     await adapter.sleep(Math.max(1, input.pollMs));
   }
 }
