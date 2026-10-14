@@ -491,7 +491,7 @@ export const REVIEW_CONTINUATION_TEXT = 'Заверши ревью: выдай �
 
 export function managerBannerMessage(banner: ChatErrorBanner): string {
   if (banner.kind === 'unloadable') {
-    return `ChatGPT chat ${banner.url} cannot be loaded ("${banner.text}", no composer). The DOM review hint does not prove workflow role. Independently verify the actual owner, role and GitHub-first Browser-GPT send/no-resend authority. Only for confirmed execution, continue the task in a new chat with the reconciled baseline; only for confirmed PR review, Restart the review in a new chat through the review tool. Never press Try again or Retry.`;
+    return `ChatGPT chat ${banner.url} cannot be loaded ("${banner.text}", no composer). The DOM review hint does not prove workflow role. Independently verify the actual owner, role and GitHub-first Browser-GPT send/no-resend authority. Only for confirmed execution, continue the task in a new chat with the reconciled baseline; only for confirmed PR review, Restart the review in a new chat through the review tool; for a confirmed author turn whose Issue already exists, open one fresh-project-chat author turn on that Issue with fm-prompt-universal-existing-issue.md, never a second Issue. Never press Try again or Retry.`
   }
   const reason = banner.kind === 'stalled' ? banner.text
     : `red banner "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}`;
@@ -522,7 +522,7 @@ export function fleetAlarmMessage(
   const unloadable = banners.filter((banner) => banner.kind === 'unloadable');
   const continuable = banners.filter((banner) => banner.kind !== 'unloadable');
   const unloadableText = unloadable.length > 0
-    ? ` ${unloadable.length} ChatGPT chat(s) cannot be loaded (no composer): ${unloadable.map((banner) => banner.url).join('; ')}. Independently identify owner/role and verify GitHub-first send authority. Only confirmed execution may continue the task in a new chat with the reconciled baseline; only confirmed PR review may restart review in a new chat through its review tool. Never press Try again or Retry.`
+    ? ` ${unloadable.length} ChatGPT chat(s) cannot be loaded (no composer): ${unloadable.map((banner) => banner.url).join('; ')}. Independently identify owner/role and verify GitHub-first send authority. Only confirmed execution may continue the task in a new chat with the reconciled baseline; only confirmed PR review may restart review in a new chat through its review tool; a confirmed author turn whose Issue already exists may open one fresh-project-chat author turn on that Issue with fm-prompt-universal-existing-issue.md, never a second Issue. Never press Try again or Retry.`
     : '';
   const bannerText = continuable.length > 0
     ? ` ${continuable.length} ChatGPT chat(s) require independent role and delivery reconciliation: ${continuable.map((banner) => `${banner.url} "${banner.text}"${banner.retry ? ' (Retry shown)' : ''}`).join('; ')}. The DOM review flag is untrusted. Only after confirming execution and GitHub-first Browser-GPT send/no-resend authority may its owner use "${EXECUTION_CONTINUATION_TEXT}" in the same chat (runbook: up to two repeats, fresh chat on the third continuation failure); only after confirming PR review and its own recovery authority may its reviewer use "${REVIEW_CONTINUATION_TEXT}" for verdict only, never code fixes. Never press Retry.`
