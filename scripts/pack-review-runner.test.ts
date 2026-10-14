@@ -1655,7 +1655,9 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
       fixturePostReviewHeadSha: f.reviewed, fixturePostReviewPrBody: closingB,
       fixtureReviewStdout: cleanPayload(),
     });
-    expect(sameHeadStart.ok).toBe(false);
+    expect(sameHeadStart).toMatchObject({
+      ok: true, created: false, reused: true, reason: 'terminal_run_exists',
+    });
     expect(resolveBoundIssueSnapshot({
       projectId: f.projectId, prNumber: f.prNumber,
       prHeadSha: f.reviewed, issueNumber: issueB,
