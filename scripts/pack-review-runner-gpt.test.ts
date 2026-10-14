@@ -5962,7 +5962,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
                 findingsDigest: 'fixture-2580-newer-round-2-findings',
                 automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 2,
               },
-              status: 'findings', findingCount: 1, options: { storeRoot: f.storeRoot },
+              status: 'changes_requested', findingCount: 1, options: { storeRoot: f.storeRoot },
             });
             const newer = getPackReviewRun(newerId, f.options)!;
             const published = await restorePackReviewAuthoritativeRequiredStatus({
