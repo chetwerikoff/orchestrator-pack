@@ -2477,7 +2477,7 @@ describe('Issue #2575 process-local startup wake', () => {
     const replacement: FleetTerminal = { handle: 'coord-new', title: 'Cursor coordinator', worktreePath: primary };
     const observed = await boundedStartupWake({ frames: [
       readable,
-      { terminals: [replacement], screens: { 'coord-new': 'working\\nesc interrupt' } },
+      { terminals: [replacement], screens: { 'coord-new': 'working\nesc interrupt' } },
       { terminals: [replacement], screens: { 'coord-new': 'idle' } },
     ] });
     expect(observed.logs.filter((line) => line === 'nothing stopped')).toHaveLength(3);
@@ -2557,7 +2557,7 @@ describe('Issue #2575 process-local startup wake', () => {
       path: '/tmp/opencode/2575-startup-event-terminal.json', invocationId: id,
     };
     const rows = [coordinator, terminals[1]!, terminals[2]!];
-    const screens = { coord: 'idle prompt', one: 'finished\\n>', two: 'PARKED on GPT turn ' + id };
+    const screens = { coord: 'idle prompt', one: 'finished\n>', two: 'PARKED on GPT turn ' + id };
     const frame: StartupFrame = { terminals: rows, screens };
     const baselineStore = new MemoryWakeStore();
     const baselineInput = { terminals: rows, screens, store: baselineStore,
