@@ -106,6 +106,63 @@ describe('Issue #2596 known-conversation post-send recovery', () => {
     expect(fixture.reads.get(fixture.foreign)).toBeUndefined();
   });
 
+  it.each(['transient-original', 'hydrating-successor'] as const)('keeps polling marker-unproven successor observations (%s)', async (scenario) => {
+    const fixture = recoveryFixture({ originalIncomplete: true, includeOriginalMarker: true });
+    const scripted = new Map<unknown, number>();
+    const adapter = { ...fixture.adapter, readAuthoritativeMessages: vi.fn(async (page: unknown) => {
+      const count = (scripted.get(page) ?? 0) + 1;
+      scripted.set(page, count);
+      if (page === fixture.original) return { messages: [{ role: 'user' as const, text: MARKER }], incomplete: true };
+      if (scenario === 'hydrating-successor' && count === 1) return { messages: [], incomplete: false };
+      return { messages: [{ role: 'user' as const, text: MARKER }], incomplete: false };
+    }) };
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter,
+    });
+    expect(result).toMatchObject({ kind: 'recovered', page: fixture.successor, cleanupOwned: true });
+    expect(adapter.readAuthoritativeMessages).toHaveBeenCalledTimes(scenario === 'hydrating-successor' ? 3 : 2);
+    expect(fixture.createSuccessor).toHaveBeenCalledTimes(1);
+  });
+
+  it('reserves deadline observation time for the successor and identifies its exact URL failures', async () => {
+    const fixture = recoveryFixture({ originalIncomplete: true });
+    let clock = 0;
+    const adapter = { ...fixture.adapter,
+      now: () => clock,
+      readAuthoritativeMessages: vi.fn(async (page: unknown) => {
+        clock += page === fixture.original ? 5_000 : 900;
+        return page === fixture.original
+          ? { messages: [{ role: 'user' as const, text: MARKER }], incomplete: true }
+          : { messages: [{ role: 'user' as const, text: MARKER }], incomplete: false };
+      }),
+      createSuccessor: vi.fn(async () => { clock += 100; fixture.pages.push(fixture.successor); return fixture.successor; }),
+    };
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 6_000, pollMs: 1, state: fixture.state, adapter,
+    });
+    expect(result).toMatchObject({ kind: 'recovered', page: fixture.successor });
+    expect(clock).toBe(6_000);
+    expect(adapter.readAuthoritativeMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['wrong-url', 'unreadable-url'] as const)('classifies the exact owned successor %s without reading it', async (mode) => {
+    const fixture = recoveryFixture({ originalIncomplete: true });
+    const adapter = { ...fixture.adapter,
+      pageUrl: (page: unknown) => {
+        if (page === fixture.successor && mode === 'wrong-url') return 'https://chatgpt.com/c/foreign';
+        if (page === fixture.successor && mode === 'unreadable-url') throw new Error('private');
+        return fixture.adapter.pageUrl(page);
+      },
+    };
+    const result = await runPostSendRecovery({
+      browser: {}, marker: MARKER, hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter,
+    });
+    expect(result).toMatchObject({ kind: 'failure', cause: mode === 'wrong-url'
+      ? 'owned_conversation_identity_mismatch' : 'owned_conversation_recovery_census_failed' });
+    if (mode === 'unreadable-url') expect(result).toMatchObject({ diagnostic: { reason: 'page_url_unreadable' } });
+    expect(fixture.reads.get(fixture.successor)).toBeUndefined();
+  });
+
   it('fails closed with a bounded URL-hash diagnostic when successor observations stay incomplete', async () => {
     const fixture = recoveryFixture({ originalIncomplete: true, successorIncomplete: true });
     fixture.setNow(498);

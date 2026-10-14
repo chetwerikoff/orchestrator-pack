@@ -29,6 +29,7 @@ export interface RecoveryIncompleteDiagnostic {
 export interface RecoveryCensus {
   readonly complete: boolean;
   readonly monotonicAmbiguity: boolean;
+  readonly ownedIdentityMismatch?: boolean;
   readonly pages: readonly RecoveryPageSnapshot[];
   readonly incompleteReason?: RecoveryIncompleteReason;
 }
@@ -160,13 +161,15 @@ export async function takeRecoveryCensus(
   marker: string,
   adapter: PostSendRecoveryAdapter,
   immutableConversationUrl?: string,
-): Promise<RecoveryCensus> {
+  exactOwnedPage?: unknown,
+ ): Promise<RecoveryCensus> {
   const snapshots: RecoveryPageSnapshot[] = [];
   let complete = true;
   let incompleteReason: RecoveryIncompleteReason | undefined;
+  let ownedIdentityMismatch = false;
   let pages: readonly unknown[];
   try {
-    pages = await adapter.enumeratePages(browser);
+    pages = exactOwnedPage ? [exactOwnedPage] : await adapter.enumeratePages(browser);
   } catch {
     return { complete: false, monotonicAmbiguity: false, pages: [], incompleteReason: 'enumeration_failed' };
   }
@@ -176,15 +179,18 @@ export async function takeRecoveryCensus(
     try {
       normalizedUrl = adapter.normalizeConversationUrl(adapter.pageUrl(page));
     } catch {
-      if (!immutableConversationUrl) {
+      if (page === exactOwnedPage || !immutableConversationUrl) {
         complete = false;
         incompleteReason ??= 'page_url_unreadable';
       }
       continue;
     }
+    if (page === exactOwnedPage && immutableConversationUrl && normalizedUrl !== immutableConversationUrl) {
+      ownedIdentityMismatch = true;
+      continue;
+    }
     if (immutableConversationUrl && normalizedUrl !== immutableConversationUrl) continue;
     if (!adapter.isSupportedConversationUrl(normalizedUrl)) continue;
-
     try {
       const observed = await adapter.readAuthoritativeMessages(page);
       if (observed.incomplete) {
@@ -209,7 +215,7 @@ export async function takeRecoveryCensus(
   const monotonicAmbiguity = snapshots.some((page) => (
     page.matchingUserCarrierCount > 1 || page.exactMarkerTokenCount > 1
   )) || (!immutableConversationUrl && snapshots.filter((page) => page.eligible).length > 1);
-  return { complete, monotonicAmbiguity, pages: snapshots, ...(incompleteReason ? { incompleteReason } : {}) };
+  return { complete, monotonicAmbiguity, ownedIdentityMismatch, pages: snapshots, ...(incompleteReason ? { incompleteReason } : {}) };
 }
 
 function failure(
@@ -249,10 +255,10 @@ export async function runPostSendRecovery(
   let browser = input.browser;
   let currentPage = input.currentPage;
   let beginLossEpoch = true;
+  let seenMonotonicAmbiguity = false;
   if (state.immutableConversationUrl) {
     state.immutableConversationUrl = adapter.normalizeConversationUrl(state.immutableConversationUrl);
   }
-
   while (true) {
     if (beginLossEpoch) {
       state.lossEpoch += 1;
@@ -306,7 +312,14 @@ export async function runPostSendRecovery(
       continue;
     }
 
-    const census = await takeRecoveryCensus(browser, marker, adapter, state.immutableConversationUrl);
+    const census = await takeRecoveryCensus(
+      browser, marker, adapter, state.immutableConversationUrl, state.successorPage,
+    );
+    seenMonotonicAmbiguity ||= census.monotonicAmbiguity;
+    if (census.ownedIdentityMismatch) {
+      return failure(browser, state, 'ui_contract_mismatch', 'owned_conversation_identity_mismatch',
+        'conversation_identity_mismatch', observer, census.incompleteReason);
+    }
     const successorSnapshot = state.successorPage
       ? census.pages.find((candidate) => candidate.page === state.successorPage)
       : undefined;
@@ -318,14 +331,14 @@ export async function runPostSendRecovery(
       authoritativeSuccessor
       && eligible.every((candidate) => candidate === authoritativeSuccessor || (
         candidate.normalizedUrl === state.immutableConversationUrl
-        && candidate.incomplete
         && candidate.matchingUserCarrierCount === 1
         && candidate.exactMarkerTokenCount === 1
       ))
     );
     const conflictingEligibleViews = (eligible.length > 1 && !toleratedSameConversationDuplicate)
       || Boolean(state.immutableConversationUrl && eligible.length > 0
-        && census.pages.some((candidate) => !candidate.incomplete && !candidate.eligible));
+        && census.pages.some((candidate) => candidate.page !== state.successorPage
+          && !candidate.incomplete && !candidate.eligible));
     observer?.({
       event: 'census',
       lossEpoch: state.lossEpoch,
@@ -334,7 +347,7 @@ export async function runPostSendRecovery(
       censusComplete: census.complete,
     });
 
-    if (census.monotonicAmbiguity || conflictingEligibleViews) {
+    if (seenMonotonicAmbiguity || conflictingEligibleViews) {
       return failure(
         browser,
         state,
@@ -419,16 +432,16 @@ export async function runPostSendRecovery(
           'helper_failure_after_send', observer, census.incompleteReason,
         );
       }
-      if (immutableUrl && census.pages.length > 0) {
-        return failure(
-          browser, state, 'ui_contract_mismatch', 'owned_prompt_marker_unresolved',
-          'post_send_observation_error', observer,
-        );
-      }
       if (immutableUrl && state.successorCreated) {
         return failure(
           browser, state, 'no_reply', 'observation_exhausted_no_resend',
           'observation_exhausted', observer,
+        );
+      }
+      if (immutableUrl && census.pages.length > 0) {
+        return failure(
+          browser, state, 'ui_contract_mismatch', 'owned_prompt_marker_unresolved',
+          'post_send_observation_error', observer,
         );
       }
       return failure(
