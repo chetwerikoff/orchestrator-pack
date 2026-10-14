@@ -394,6 +394,7 @@ export function runProcessSync(options: RunProcessSyncOptions): ProcessResult {
       encoding,
       input: options.input,
       timeout: options.timeoutMs,
+      maxBuffer: 64 * 1024 * 1024,
       stdio: options.forwardOutputToStderr
         ? (['pipe', 2, 2] as Array<'pipe' | 'ignore' | number>)
         : inheritedSyncStdio(options.inheritedFileDescriptors),
@@ -417,16 +418,17 @@ export function runProcessSync(options: RunProcessSyncOptions): ProcessResult {
 
   if (child.error) {
     const timedOut = 'code' in child.error && child.error.code === 'ETIMEDOUT';
+    const overflowed = 'code' in child.error && child.error.code === 'ENOBUFS';
     return {
       outcome: timedOut ? 'timeout' : 'spawn-failure',
       ok: false,
       exitCode: null,
       signal: null,
-      stdout: child.stdout ?? '',
-      stderr: child.stderr ?? '',
+      stdout: overflowed ? '' : (child.stdout ?? ''),
+      stderr: overflowed ? '' : (child.stderr ?? ''),
       timedOut,
       cancelled: false,
-      error: describeError(child.error),
+      error: overflowed ? `ENOBUFS: ${describeError(child.error)}` : describeError(child.error),
     };
   }
 
