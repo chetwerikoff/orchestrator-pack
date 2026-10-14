@@ -4976,7 +4976,8 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
   const issueBody = [String.fromCharCode(96).repeat(3) + 'complexity-tier',
     'tier: T2', String.fromCharCode(96).repeat(3)].join('\n');
 
-  function seed(commentsToPublish: number, sourceReplies: Record<number, string> = {}) {
+  function seed(commentsToPublish: number, sourceReplies: Record<number, string> = {}, tier: 'T2' | 'T3' = 'T2') {
+    const sourceIssueBody = tier === 'T2' ? issueBody : issueBody.replace('tier: T2', 'tier: T3');
     const storeRoot = tempRoot('opk-2523-source-recovery-');
     harnessEnv(storeRoot, path.join(storeRoot, 'review.json'));
     process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
@@ -4984,16 +4985,16 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
     vi.setSystemTime(new Date('2026-10-10T08:00:00.000Z'));
     const options = { projectId, storeRoot };
     const authority = initializePackReviewAuthority({
-      prNumber, headSha: HEAD_A, tier: 'T2',
+      prNumber, headSha: HEAD_A, tier,
       capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
       options: { storeRoot },
     });
     const invocationIds = Array.from({ length: 3 }, (_, index) =>
       '25232523-2523-4252-8252-' + String(index + 1).padStart(12, '0'));
     const reviewRound: PackReviewGptRoundRecord = {
-      schema: 'pack-review-gpt-round/v1', reviewer: 'gpt', tier: 'T2',
+      schema: 'pack-review-gpt-round/v1', reviewer: 'gpt', tier,
       roundOrdinal: 1, cardinality: 3, issueNumber: 2523,
-      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(issueBody),
+      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(sourceIssueBody),
       sourceSlots: invocationIds.map((invocationId, index) => ({
         slotId: 'source-' + String(index + 1).padStart(2, '0'),
         ordinal: index + 1, lifecycle: 'terminal' as const,
@@ -5011,7 +5012,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
       reviewCycleId: authority.cycle!.cycleId, logicalRoundOrdinal: 1,
-      logicalRoundCap: 1, automaticBudgetDisposition: 'consume',
+      logicalRoundCap: tier === 'T3' ? 2 : 1, automaticBudgetDisposition: 'consume',
       resolvedReviewer: 'gpt', reviewRound,
     }).run;
     updatePackReviewRun(run.id, {
@@ -5070,9 +5071,9 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       fixtureGptSourceCommentTransport: sourceTransport,
       fixtureGithubReviewTransport: finalReviewTransport,
       fixtureRequiredStatusWriter: async (request) => { statusStates.push(request.state); },
-      fixtureIssueTitle: "Independent linked Issue", fixtureIssueBody: issueBody, fixtureIssueNumber: 2523,
+      fixtureIssueTitle: "Independent linked Issue", fixtureIssueBody: sourceIssueBody, fixtureIssueNumber: 2523,
       fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
-      fixtureBoundIssueSnapshotBytes: issueBody,
+      fixtureBoundIssueSnapshotBytes: sourceIssueBody,
     };
     return {
       runId: run.id, storeRoot, options, input, sourceTransport,
@@ -5087,7 +5088,8 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       ...f.options, prNumber, headSha: HEAD_A, canonicalRepository: repoSlug,
       trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
-      reviewCycleId: older.reviewCycleId, logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      reviewCycleId: older.reviewCycleId, logicalRoundOrdinal: 1,
+      logicalRoundCap: Number(older.logicalRoundCap ?? 1),
       automaticBudgetDisposition: 'consume', resolvedReviewer: 'gpt',
       allowSameRoundReplacement: true,
     });
@@ -5601,7 +5603,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
     );
 
     it.each(['clean', 'findings'] as const)(
-      'keeps a persisted same-run %s verdict that wins during source census', async (verdict) => {
+      'head drift same-run verdict preserves persisted %s during source census', async (verdict) => {
         const f = seed(3);
         f.expireGrace();
         const input = { ...f.input, fixtureCurrentPrHeadSha: HEAD_A };
@@ -5636,7 +5638,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       },
     );
 
-    it('does not overwrite a verdict established directly before the conditional store write', async () => {
+    it('head drift same-run verdict wins directly before the conditional store write', async () => {
       const f = seed(3);
       f.expireGrace();
       let called = 0;
@@ -5660,7 +5662,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       expect(f.statusStates).toEqual(['success']);
     });
 
-    it('restores a same-run verdict published while its obsolete error POST is in flight', async () => {
+    it('head drift same-run verdict restores after an obsolete error POST in flight', async () => {
       const f = seed(3);
       f.expireGrace();
       const writes: string[] = [];
@@ -5690,7 +5692,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       });
     });
 
-    it('suppresses an obsolete error when a newer original-SHA run exists before reconcile', async () => {
+    it('head drift newer authority suppresses obsolete error for a pre-existing winner', async () => {
       const f = seed(3);
       f.expireGrace();
       const newerId = installNewerCleanRun(f);
@@ -5718,7 +5720,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       expect(f.statusStates).toEqual(['success']);
     });
 
-    it('suppresses error when a newer original-SHA run wins before the status writer', async () => {
+    it('head drift newer authority suppresses error for a winner before the status writer', async () => {
       const f = seed(3);
       f.expireGrace();
       let newerId: string | undefined;
@@ -5739,7 +5741,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       expect(getPackReviewRun(newerId!, f.options)?.reviewVerdict).toBe('clean');
     });
 
-    it('restores a newer original-SHA success after a delayed old-head error POST', async () => {
+    it('head drift newer authority restores after an old-head error POST', async () => {
       const f = seed(3);
       f.expireGrace();
       const writes: string[] = [];
@@ -5766,6 +5768,56 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       expect(getPackReviewRun(f.runId, f.options)?.deliveryOutcomes.requiredStatus).toMatchObject({
         state: 'succeeded', reason: 'newer_run_authoritative',
       });
+    });
+
+    it('head drift newer authority keeps legitimate pending with an outstanding required round', async () => {
+      const f = seed(3, {}, 'T3');
+      f.expireGrace();
+      const newerId = installNewerCleanRun(f);
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+      });
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true, statusReconciled: true,
+          reason: 'newer_run_authoritative',
+        }),
+      ]));
+      expect(f.statusStates).toEqual(['pending']);
+      expect(getPackReviewRun(newerId, f.options)).toMatchObject({
+        reviewVerdict: 'clean',
+        deliveryOutcomes: { requiredStatus: {
+          state: 'succeeded', reason: 'status_pending_round_restored',
+        } },
+      });
+      const saved = getPackReviewRun(f.runId, f.options);
+      await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B, immediate: false,
+      });
+      expect(f.statusStates).toEqual(['pending']);
+      expect(getPackReviewRun(f.runId, f.options)).toEqual(saved);
+    });
+
+    it('head drift newer authority reports a failed winner restoration as unresolved', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      installNewerCleanRun(f);
+      const writes: string[] = [];
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+        fixtureRequiredStatusWriter: async (request) => {
+          writes.push(request.state);
+          throw new Error('synthetic newer restoration failure');
+        },
+      });
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true, statusReconciled: false,
+          reason: 'newer_run_restore_failed',
+          nextAction: expect.stringContaining('Rerun scoped reconcile'),
+        }),
+      ]));
+      expect(writes).not.toContain('error');
     });
 
     it('keeps a failed old-head status delivery repairable without re-terminalizing', async () => {
