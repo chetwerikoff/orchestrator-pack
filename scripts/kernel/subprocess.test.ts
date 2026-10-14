@@ -63,6 +63,25 @@ describe('sanctioned subprocess kernel', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('captures a synchronous reply larger than the 1 MiB default buffer', () => {
+    const bytes = 2 * 1024 * 1024 + 1;
+    const result = runProcessSync({
+      command: process.execPath,
+      args: nodeArgs(`process.stdout.write('x'.repeat(${bytes}))`),
+    });
+    expect(result).toMatchObject({ outcome: 'exit', ok: true, exitCode: 0 });
+    expect(result.stdout).toHaveLength(bytes);
+  });
+
+  it('reports ENOBUFS without exposing partial stdout', () => {
+    const result = runProcessSync({
+      command: process.execPath,
+      args: nodeArgs("process.stdout.write('x'.repeat(64 * 1024 * 1024 + 1))"),
+    });
+    expect(result).toMatchObject({ outcome: 'spawn-failure', ok: false, stdout: '', stderr: '' });
+    expect(result.error).toContain('ENOBUFS');
+  });
+
   it('reports process-group liveness without turning uncertainty into stopped', async () => {
     expect(observePosixProcessGroup(-1)).toBe('observation_unavailable');
     if (process.platform === 'win32') {
