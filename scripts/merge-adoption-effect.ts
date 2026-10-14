@@ -42,7 +42,7 @@ interface ConsumerDefinition {
   readonly id: string;
   readonly entrypoints: readonly string[];
   readonly extraPaths?: readonly string[];
-  readonly control: 'supervisor' | 'scheduler' | 'systemd-user' | 'agent-hook' | 'unsupported';
+  readonly control: 'scheduler' | 'systemd-user' | 'agent-hook' | 'unsupported';
 }
 interface SupervisorStatus {
   readonly supervisorPid?: number;
@@ -185,7 +185,6 @@ function consumerDefinitions(repoRoot: string): ConsumerDefinition[] {
     };
   });
   return [
-    { id: 'orchestrator-side-process-supervisor', entrypoints: [SUPERVISOR_ENTRYPOINT], extraPaths: [REGISTRY_PATH], control: 'supervisor' },
     ...children,
     { id: 'agent-hooks', entrypoints: AGENT_HOOK_ENTRYPOINTS, control: 'agent-hook' },
   ];
@@ -264,7 +263,6 @@ export function mapChangedPathsToConsumers(
   const repoRoot = realpathSync(repoRootValue);
   const changed = [...new Set(changedPaths.map(normalizeRepoPath))].sort();
   const otherConsumers = consumerDefinitions(repoRoot).flatMap((definition) => {
-    if (definition.control === 'supervisor') return [];
     const closure = staticDependencyClosure(repoRoot, definition.entrypoints);
     for (const extra of definition.extraPaths ?? []) closure.add(normalizeRepoPath(extra));
     const matchedPaths = changed.filter((item) => closure.has(item));
@@ -300,7 +298,7 @@ function inspectProcStartTicks(pid: number): ProcStartTicksObservation {
     return { state: 'running', ticks };
   } catch (error) {
     // A missing proc stat is conclusive absence; permissions and malformed/unreadable proc are not.
-    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' && existsSync('/proc/self/stat')
       ? { state: 'not_running' }
       : { state: 'unknown', reason: 'managed_process_stat_unreadable' };
   }
