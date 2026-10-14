@@ -535,6 +535,7 @@ export function withOpenCodeFleetBrowserDenies(permission: unknown): Record<stri
     ...inherited,
     bash: bashPatterns.reduce<unknown>((rules, pattern) => appendDeny(rules, pattern), inherited.bash),
     skill: appendDeny(inherited.skill, 'browser-skill'),
+    read: ['*.env', '*.env.*'].reduce<unknown>((rules, pattern) => appendDeny(rules, pattern), inherited.read),
   };
 }
 

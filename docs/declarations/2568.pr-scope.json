@@ -1,0 +1,19 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2568,
+  "declared_paths": [
+    "scripts/executor-profile-policy.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/executor-profile-policy.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts"
+  ],
+  "source_revision": "0a7017ff08ebe9c836fe9baef3de76caca16885a"
+}
