@@ -43,6 +43,7 @@ import {
 } from './chatgpt-browser-turn/state-light-turn-observation.ts';
 import { publishStateLightReply } from './chatgpt-browser-turn/state-light-turn.ts';
 import { classifyProductWall } from './chatgpt-browser-turn/ui-adapter.ts';
+import type { TerminalEnvelope } from './flow-manager-long-running-child.ts';
 
 let fixtureMessageId = 0;
 
@@ -329,9 +330,9 @@ test('closed CLI rejects arbitrary selectors, JavaScript, watch mode, and ambigu
     () => parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--target-id', 'x', '--invocation-id', 'inv-1']),
     /identity_pair_required/,
   );
-  assert.throws(
-    () => parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--url', 'https://chatgpt.com/c/x', '--profile', '/tmp/profile', '--invocation-id', 'inv-1', '--open-if-missing', 'true']),
-    /identity_bound_open_if_missing_forbidden/,
+  assert.deepEqual(
+    parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--url', 'https://chatgpt.com/c/x', '--profile', '/tmp/profile', '--invocation-id', 'inv-1', '--open-if-missing', 'true']),
+    { operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/x', openIfMissing: true, profile: '/tmp/profile', invocationId: 'inv-1' },
   );
   assert.deepEqual(parseCliArgs(['liveness', '--cdp', 'http://127.0.0.1:9222']), { operation: 'liveness', cdp: 'http://127.0.0.1:9222' });
   assert.deepEqual(
@@ -952,6 +953,212 @@ async function withIdentityBoundInspectObservation<T>(
     await rm(stateDir, { recursive: true, force: true });
   }
 }
+
+test('Issue #2592 completed terminal locator reopens only a probe-owned tab and projects its final raw own-marker error', async () => {
+  const locator = 'https://chatgpt.com/c/test';
+  await withIdentityBoundInspectObservation('sent_unharvested', locator, async ({ profile, cdp, invocationId, marker, profileKey }) => {
+    const terminal: TerminalEnvelope = {
+      schema: 'flow-manager-long-running-child-terminal/v1',
+      run_identity: 'run-2592',
+      attempt_identity: 'attempt-2592',
+      completion_mode: 'browser-turn-result-v1',
+      handoff_receipt_path: '/tmp/issue-2592-handoff.json',
+      launcher_started_at: '2026-10-14T00:00:00Z',
+      handoff_committed_at: '2026-10-14T00:00:01Z',
+      terminal_at: '2026-10-14T00:00:02Z',
+      lifecycle_outcome: 'incident',
+      delivery: 'POSSIBLY_DELIVERED',
+      observed_invocation_id: invocationId,
+      recovery_available: true,
+      conversation_locator: locator,
+    };
+    assert.equal(terminal.recovery_available, true);
+    assert.equal(terminal.observed_invocation_id, invocationId);
+    const fixture = productionRecoveryFixture({ marker, literal: 'Message delivery timed out. Please try again.' });
+    const raw = await evaluateExpression(INSPECTION_EXPRESSION, fixture.nodes, false, locator, 'complete', fixture.productSurfaces);
+    (raw as any).title = marker + ' PRIVATE TITLE';
+    assert.equal(projectExecutionRecoveryInspect(raw, marker)?.cause, 'message_delivery_timed_out');
+    let fakeNow = 0;
+    const createdUrls: string[] = [];
+    const closedIds: string[] = [];
+    let evaluations = 0;
+    const result = await runProbe({
+      operation: 'inspect', cdp, conversationUrl: terminal.conversation_locator!, profile, invocationId,
+    }, deps({
+      listTargets: async () => [],
+      createPage: async (_cdp, url) => {
+        createdUrls.push(url);
+        return {
+          id: 'probe-owned-2592', type: 'page', url: 'about:blank', title: 'Loading',
+          webSocketDebuggerUrl: 'ws://example/probe-owned-2592',
+        };
+      },
+      now: () => fakeNow,
+      sleep: async (delay) => { fakeNow += delay; },
+      evaluate: async (target, expression) => {
+        assert.equal(target.target_id, 'probe-owned-2592');
+        assert.equal(expression, INSPECTION_EXPRESSION);
+        evaluations += 1;
+        return raw;
+      },
+      closePage: async (_cdp, id) => { closedIds.push(id); return 'closed'; },
+    }));
+    assert.deepEqual(createdUrls, [locator]);
+    assert.deepEqual(closedIds, ['probe-owned-2592']);
+    assert.equal(evaluations, 2); // Existing readiness's two matching observations; no extra DOM read.
+    assert.equal(result.status, 'ok');
+    assert.equal(result.acquisition, 'created');
+    assert.equal(result.target_id, 'probe-owned-2592');
+    assert.equal(result.owned_target_id, 'probe-owned-2592');
+    assert.equal(result.cleanup, 'closed');
+    assert.equal(result.identity_bound, true);
+    assert.equal(result.observation_phase, 'sent_unharvested');
+    assert.equal(result.execution_recovery_cause, 'message_delivery_timed_out');
+    assert.equal((result.execution_recovery_inspect as any).owned_user_turn_key, 'conversation-turn-1');
+    assert.equal((result.execution_recovery_inspect as any).candidate_assistant_turn_key, 'conversation-turn-2');
+    assert.equal((result.snapshot as any).text_witnesses_redacted, true);
+    assert.equal((result.snapshot as any).nodes, undefined);
+    assert.equal(JSON.stringify(result).includes(marker), false);
+    assert.equal(JSON.stringify(result).includes('PRIVATE TITLE'), false);
+    assert.equal(JSON.stringify(result).includes('Message delivery timed out.'), false);
+    assert.equal(result.diagnostic_only, true);
+    assert.equal(result.workflow_authority, 'none');
+    assert.equal(readStateLightTurnObservation(profileKey, invocationId).phase, 'sent_unharvested');
+  });
+});
+
+test('Issue #2592 never acquires or reads on a null, absent, stale, or mismatched durable bound URL', async () => {
+  const locator = 'https://chatgpt.com/c/test';
+  await withIdentityBoundInspectObservation('sent_unharvested', null, async ({ profile, cdp, invocationId, profileKey }) => {
+    assert.equal(readStateLightTurnObservation(profileKey, invocationId).conversation_url, null);
+    const calls: string[] = [];
+    await assert.rejects(runProbe({
+      operation: 'inspect', cdp, profile, invocationId, conversationUrl: 'https://chatgpt.com/c/foreign',
+    }, deps({
+      listTargets: async () => { calls.push('list'); return []; },
+      createPage: async () => { calls.push('create'); throw new Error('unexpected_create'); },
+      evaluate: async () => { calls.push('evaluate'); throw new Error('unexpected_evaluate'); },
+      closePage: async () => { calls.push('close'); return 'closed'; },
+    })), (error: any) => error.status !== 'ok' && error.reason === 'conversation_identity_mismatch');
+    assert.deepEqual(calls, []);
+  });
+  await withIdentityBoundInspectObservation('sent_unharvested', locator, async ({ profile, cdp, invocationId }) => {
+    const calls: string[] = [];
+    const noEffects = deps({
+      listTargets: async () => { calls.push('list'); return []; },
+      createPage: async () => { calls.push('create'); throw new Error('unexpected_create'); },
+      evaluate: async () => { calls.push('evaluate'); throw new Error('unexpected_evaluate'); },
+      closePage: async () => { calls.push('close'); return 'closed'; },
+    });
+    for (const override of [
+      { profile, invocationId, conversationUrl: 'https://chatgpt.com/c/foreign' },
+      { profile: profile + '-wrong', invocationId, conversationUrl: locator },
+      { profile, invocationId: invocationId + '-stale', conversationUrl: locator },
+    ]) {
+      await assert.rejects(runProbe({ operation: 'inspect', cdp, ...override }, noEffects));
+    }
+    assert.deepEqual(calls, []);
+    const ambiguousTargets: CdpTarget[] = ['foreign-one', 'foreign-two'].map((id) => ({
+      id, type: 'page', url: locator, title: id, webSocketDebuggerUrl: 'ws://example/' + id,
+    }));
+    await assert.rejects(runProbe({
+      operation: 'inspect', cdp, profile, invocationId, conversationUrl: locator,
+    }, deps({
+      listTargets: async () => ambiguousTargets,
+      createPage: noEffects.createPage,
+      evaluate: noEffects.evaluate,
+      closePage: noEffects.closePage,
+    })), (error: any) => error.status === 'ambiguous' && error.reason === 'target_url_ambiguous');
+    await assert.rejects(runProbe({
+      operation: 'inspect', cdp, profile, invocationId, targetId: 'absent-id',
+    }, deps({ listTargets: async () => [], createPage: noEffects.createPage, closePage: noEffects.closePage })),
+    (error: any) => error.status === 'not_found');
+    assert.deepEqual(calls, []);
+  });
+});
+
+test('Issue #2592 reused bound tab keeps foreign ownership and acquires no replacement', async () => {
+  const locator = 'https://chatgpt.com/c/test';
+  await withIdentityBoundInspectObservation('sent_unharvested', locator, async ({ profile, cdp, invocationId, marker }) => {
+    const fixture = productionRecoveryFixture({ marker, literal: 'Message delivery timed out. Please try again.' });
+    const raw = await evaluateExpression(INSPECTION_EXPRESSION, fixture.nodes, false, locator, 'complete', fixture.productSurfaces);
+    let createCalls = 0;
+    let closeCalls = 0;
+    const result = await runProbe({
+      operation: 'inspect', cdp, profile, invocationId, conversationUrl: locator, openIfMissing: true,
+    }, deps({
+      listTargets: async () => [{ id: 'foreign-open-tab', type: 'page', url: locator, title: 'Already open', webSocketDebuggerUrl: 'ws://example/foreign-open-tab' }],
+      createPage: async () => { createCalls += 1; throw new Error('unexpected_create'); },
+      closePage: async () => { closeCalls += 1; return 'closed'; },
+      evaluate: async () => raw,
+    }));
+    assert.equal(result.acquisition, 'reused');
+    assert.equal(result.target_id, 'foreign-open-tab');
+    assert.equal(result.identity_bound, true);
+    assert.equal(result.observation_phase, 'sent_unharvested');
+    assert.equal(result.execution_recovery_cause, 'message_delivery_timed_out');
+    assert.equal((result.snapshot as any).text_witnesses_redacted, true);
+    assert.equal((result.snapshot as any).nodes, undefined);
+    assert.equal(result.diagnostic_only, true);
+    assert.equal(result.workflow_authority, 'none');
+    assert.deepEqual({ createCalls, closeCalls }, { createCalls: 0, closeCalls: 0 });
+    const foreignMarker = 'OPKTURNV1' + '61'.repeat(16);
+    const foreign = productionRecoveryFixture({ marker: foreignMarker, literal: 'Message delivery timed out. Please try again.' });
+    const foreignRaw = await evaluateExpression(INSPECTION_EXPRESSION, foreign.nodes, false, locator, 'complete', foreign.productSurfaces);
+    let fakeNow = 0;
+    const ownedClose: string[] = [];
+    const rejectedForeign = await runProbe({
+      operation: 'inspect', cdp, profile, invocationId, conversationUrl: locator,
+    }, deps({
+      listTargets: async () => [],
+      createPage: async () => ({
+        id: 'new-foreign-content', type: 'page', url: locator, title: 'Probe tab', webSocketDebuggerUrl: 'ws://example/new-foreign-content',
+      }),
+      now: () => fakeNow,
+      sleep: async (delay) => { fakeNow += delay; },
+      evaluate: async () => foreignRaw,
+      closePage: async (_cdp, id) => { ownedClose.push(id); return 'closed'; },
+    }));
+    assert.equal(rejectedForeign.status, 'ok'); // Diagnostic snapshot, not a recovery-cause grant.
+    assert.equal(rejectedForeign.execution_recovery_cause, null);
+    assert.equal((rejectedForeign.execution_recovery_inspect as any).reason, 'no_owned_prompt');
+    assert.deepEqual(ownedClose, ['new-foreign-content']);
+    assert.equal(rejectedForeign.workflow_authority, 'none');
+  });
+});
+
+test('Issue #2592 acquired bound inspect preserves read failure and failed owned cleanup statuses', async () => {
+  await withIdentityBoundInspectObservation('sent_unharvested', 'https://chatgpt.com/c/test', async ({ profile, cdp, invocationId }) => {
+    const args = { operation: 'inspect' as const, cdp, profile, invocationId, conversationUrl: 'https://chatgpt.com/c/test' };
+    const createPage = async (): Promise<CdpTarget> => ({
+      id: 'failure-owned-tab', type: 'page', url: args.conversationUrl, title: 'Created', webSocketDebuggerUrl: 'ws://example/failure-owned-tab',
+    });
+    const closeIds: string[] = [];
+    await assert.rejects(runProbe(args, deps({
+      listTargets: async () => [], createPage,
+      evaluate: async () => { throw new Error('injected_read_failure'); },
+      closePage: async (_cdp, id) => { closeIds.push(id); return 'closed'; },
+    })), (error: any) => error.status === 'unavailable' && error.reason === 'target_read_unavailable'
+      && error.details?.cleanup === 'closed');
+    assert.deepEqual(closeIds, ['failure-owned-tab']);
+
+    const fixture = productionRecoveryFixture({
+      marker: 'OPKTURNV1' + '62'.repeat(16),
+      literal: 'Message delivery timed out. Please try again.',
+    });
+    const raw = await evaluateExpression(INSPECTION_EXPRESSION, fixture.nodes, false, args.conversationUrl, 'complete', fixture.productSurfaces);
+    let fakeNow = 0;
+    await assert.rejects(runProbe(args, deps({
+      listTargets: async () => [], createPage,
+      now: () => fakeNow,
+      sleep: async (delay) => { fakeNow += delay; },
+      evaluate: async () => raw,
+      closePage: async (_cdp, id) => { closeIds.push(id); throw new Error('injected_close_failure'); },
+    })), (error: any) => error.status === 'cleanup_failed' && error.reason === 'cleanup_failed'
+      && error.details?.cleanup === 'cleanup_failed' && error.details?.owned_target_id === 'failure-owned-tab');
+    assert.deepEqual(closeIds, ['failure-owned-tab', 'failure-owned-tab']);
+  });
+});
 
 test('identity-bound inspect ignores foreign historical markers and redacts prompt witnesses', async () => {
   await withIdentityBoundInspectObservation(
