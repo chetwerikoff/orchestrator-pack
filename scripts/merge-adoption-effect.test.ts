@@ -7,6 +7,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import * as subprocess from './kernel/subprocess.ts';
 import { canonicalFoundationPaths } from './lib/cutover/foundation-observation.ts';
+import { resolveWakeSupervisorStateRoot } from './pr2-foundation/wake-supervisor-state-root.ts';
 import { readOriginUrlFromGitConfig } from './lib/git-origin-slug.mjs';
 import {
   defaultSupervisorStateDir,
@@ -239,6 +240,77 @@ async function startUnrelatedFleetFixture(root: string, projectId: string, kind:
     : ['--experimental-strip-types', path.join(root, 'scripts/lib/unrelated.ts'), ...flags]);
 }
 
+
+/** Every wake-supervisor regression uses registered synthetic cards and disposable state roots. */
+function supervisorCards(primaryRoot: string, configHome: string): NodeJS.ProcessEnv {
+  for (const projectId of ['alpha', 'beta']) {
+    write(configHome, 'orchestrator-pack/projects/' + projectId + '.json', JSON.stringify({
+      projectId, repository: 'chetwerikoff/orchestrator-pack', primaryRoot, defaultBranch: 'main',
+      orcaWorkspacePattern: '.*', orchestratorTitlePattern: '.*',
+      browserGpt: { projectUrl: 'https://example.test/project' },
+    }));
+  }
+  const env: NodeJS.ProcessEnv = {
+    ...process.env, XDG_CONFIG_HOME: configHome,
+    XDG_STATE_HOME: path.join(configHome, 'state'), OPK_PROJECT_ID: 'alpha',
+  };
+  delete env.OPK_WAKE_SUPERVISOR_STATE_DIR;
+  return env;
+}
+
+function activateSupervisorEnv(env: NodeJS.ProcessEnv): () => void {
+  const keys = ['XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'OPK_PROJECT_ID', 'OPK_WAKE_SUPERVISOR_STATE_DIR'] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  for (const key of keys) {
+    if (env[key] === undefined) delete process.env[key];
+    else process.env[key] = env[key];
+  }
+  return () => {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
+}
+
+function supervisorStatusFile(projectId: string, env: NodeJS.ProcessEnv): string {
+  return path.join(resolveWakeSupervisorStateRoot({ projectId, env }), 'supervisor', 'typescript-supervisor-status.json');
+}
+
+function fixtureStartTicks(pid: number): string {
+  const stat = readFileSync('/proc/' + String(pid) + '/stat', 'utf8');
+  const ticks = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/u)[19];
+  if (!ticks) throw new Error('synthetic supervisor start-ticks missing');
+  return ticks;
+}
+
+function writeSupervisorIdentity(projectId: string, env: NodeJS.ProcessEnv, pid: number, ticks?: string): void {
+  const file = supervisorStatusFile(projectId, env);
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ supervisorPid: pid, supervisorStartTicks: ticks ?? fixtureStartTicks(pid) }));
+}
+
+/** No call to an installed opk-wake-supervisor can escape this argv/environment stub. */
+function fakeSupervisorControls(env: NodeJS.ProcessEnv, freshPids: Readonly<Record<string, number>>, failedStart?: string) {
+  const commands: Array<{ readonly argv: string[]; readonly childEnv: Readonly<NodeJS.ProcessEnv> | undefined }> = [];
+  const original = subprocess.runProcessSync;
+  const spy = vi.spyOn(subprocess, 'runProcessSync').mockImplementation((request) => {
+    if (request.command !== 'opk-wake-supervisor') return original(request);
+    const argv = [...(request.args ?? [])];
+    commands.push({ argv, childEnv: request.env });
+    const [projectId, action] = argv;
+    if (request.inheritParentEnv !== false || request.env?.OPK_PROJECT_ID !== undefined
+      || !projectId || !['alpha', 'beta'].includes(projectId) || !['stop', 'start'].includes(action ?? '')) {
+      return systemctlResult('selector-mismatch', false);
+    }
+    if (action === 'start' && projectId === failedStart) return systemctlResult('synthetic-start-failed', false);
+    if (action === 'start' && freshPids[projectId]) writeSupervisorIdentity(projectId, env, freshPids[projectId]!);
+    return systemctlResult('');
+  });
+  return { commands, restore: () => spy.mockRestore() };
+}
+
 describe('Issue #2145 merge adoption effect verification', () => {
   it.each([false, true])('refuses a target root (copied registry=%s) before Git, restart controls, or live checks and names target-owned adoption', async (copiedRegistry) => {
     const root = mkdtempSync(path.join(tmpdir(), 'target-adoption-'));
@@ -289,8 +361,8 @@ describe('Issue #2145 merge adoption effect verification', () => {
         'scripts/invoke-read-delegation-audit-stop.ts',
       ], { XDG_CONFIG_HOME: path.join(root, 'nonexistent-config') });
       const byId = new Map(consumers.map((row) => [row.id, row.matchedPaths]));
-      expect(byId.get('orchestrator-side-process-supervisor')).toContain('scripts/lib/supervisor-core.ts');
-      expect(byId.get('orchestrator-side-process-supervisor')).toContain('scripts/kernel/shared.ts');
+      expect(byId.get('orchestrator-side-process-supervisor-inventory')).toContain('scripts/lib/supervisor-core.ts');
+      expect(byId.get('orchestrator-side-process-supervisor-inventory')).toContain('scripts/kernel/shared.ts');
       expect(byId.get('pr2-scheduler')).toContain('scripts/pr2-foundation/scheduler-core.ts');
       expect(byId.get('fleet-wake-template')).toContain('scripts/fleet/fleet-wake@.service');
       expect(byId.get('agent-hooks')).toContain('scripts/invoke-read-delegation-audit-stop.ts');
@@ -510,8 +582,10 @@ describe('Issue #2145 merge adoption effect verification', () => {
         writeFileSync(badCard, savedCard);
         corrupt();
         expect(mapChangedPathsToConsumers(root, ['scripts/fleet/fleet-wake.ts'], env).map((row) => row.id)).toContain('fleet-wake-inventory');
-        const unrelated = mapChangedPathsToConsumers(root, ['scripts/lib/supervisor-core.ts'], env);
-        expect(unrelated.map((row) => row.id)).toEqual(['orchestrator-side-process-supervisor']);
+        const relevantSupervisor = mapChangedPathsToConsumers(root, ['scripts/lib/supervisor-core.ts'], env);
+        expect(relevantSupervisor.map((row) => row.id)).toEqual(['orchestrator-side-process-supervisor-inventory']);
+        const unrelated = mapChangedPathsToConsumers(root, ['scripts/lib/unrelated.ts'], env);
+        expect(unrelated).toEqual([]);
         rmSync(badCard, { force: true });
       }
       writeFileSync(badCard, savedCard);
@@ -755,20 +829,20 @@ describe('Issue #2145 merge adoption effect verification', () => {
     }
   });
 
-  it('Issue #2445: cutoff crossover is fleet-only and does not change supervisor/scheduler freshness', async () => {
+  it('Issue #2597: supervisor and fleet use the late cutoff without changing scheduler/hook freshness', async () => {
     const oldAt = Date.now() - 4_000;
     const fleetAt = Date.now() - 1_000;
     const between = oldAt + 2_000;
     const report = await verifyAdoptionEffect({
       adoptionStartedAtMs: oldAt, fleetAdoptedAtMs: fleetAt,
       consumers: [
-        { id: 'orchestrator-side-process-supervisor', matchedPaths: ['scripts/orchestrator-wake-supervisor.ts'] },
+        { id: 'orchestrator-side-process-supervisor@alpha', matchedPaths: ['scripts/orchestrator-wake-supervisor.ts'] },
         { id: 'pr2-scheduler', matchedPaths: ['scripts/pr2-foundation/scheduler.ts'] },
         { id: 'agent-hooks', matchedPaths: ['scripts/invoke-read-delegation-audit-stop.ts'] },
         { id: 'fleet-wake@leopoker.service', matchedPaths: ['scripts/fleet/fleet-wake.ts'] },
       ],
       controllers: {
-        'orchestrator-side-process-supervisor': { observe: () => ({ state: 'running', startedAtMs: between, identity: 'sup:1' }) },
+        'orchestrator-side-process-supervisor@alpha': { observe: () => ({ state: 'running', startedAtMs: between, identity: 'sup:1' }) },
         'pr2-scheduler': { observe: () => ({ state: 'running', startedAtMs: between, identity: 'scheduler:2' }) },
         'agent-hooks': { observe: () => ({ state: 'ephemeral' }) },
         'fleet-wake@leopoker.service': { observe: () => ({ state: 'running', startedAtMs: between, identity: 'fleet:3' }) },
@@ -776,7 +850,8 @@ describe('Issue #2145 merge adoption effect verification', () => {
       restartStaleConsumers: false,
       runLiveCheck: () => ({ ok: true }),
     });
-    expect(report.consumers.slice(0, 3).map((row) => row.verified)).toEqual([true, true, true]);
+    expect(report.consumers.slice(0, 3).map((row) => row.verified)).toEqual([false, true, true]);
+    expect(report.effect).toContain('stale_consumer:orchestrator-side-process-supervisor@alpha');
     expect(report.consumers[3]?.verified).toBe(false);
     expect(report.effect).toContain('stale_consumer:fleet-wake@leopoker.service');
     const noFleetTime = await verifyAdoptionEffect({
@@ -875,5 +950,287 @@ describe('Issue #2145 merge adoption effect verification', () => {
     for (const command of ['rev-parse --show-toplevel', 'branch --show-current', 'status --short', 'diff --stat', 'diff --cached --stat', 'stash list', 'merge-base --is-ancestor "$MERGE_SHA" HEAD', 'log -1 --oneline']) {
       expect(skill).toContain('git -C "$PRIMARY_ROOT" ' + command);
     }
+  });
+});
+
+
+describe('Issue #2597 project-qualified wake-supervisor adoption', () => {
+  it('maps entrypoint, imported dependencies and registry to both validated projects, but not unrelated paths', () => {
+    const root = mappingFixture();
+    const config = mkdtempSync(path.join(tmpdir(), 'supervisor-map-'));
+    try {
+      const env = supervisorCards(root, config);
+      const expected = ['orchestrator-side-process-supervisor@alpha', 'orchestrator-side-process-supervisor@beta'];
+      for (const changed of [
+        'scripts/orchestrator-wake-supervisor.ts', 'scripts/lib/supervisor-core.ts',
+        'scripts/kernel/shared.ts', 'scripts/orchestrator-side-process-registry.json',
+      ]) {
+        expect(mapChangedPathsToConsumers(root, [changed], env).filter((row) => row.id.startsWith('orchestrator-side-process-supervisor')).map((row) => row.id)).toEqual(expected);
+      }
+      expect(mapChangedPathsToConsumers(root, ['scripts/lib/unrelated.ts'], env)).toEqual([]);
+      expect(mapChangedPathsToConsumers(root, ['scripts/fleet/wake-library.ts'], env).filter((row) => row.id.startsWith('fleet-wake@')).map((row) => row.id)).toEqual([
+        'fleet-wake@alpha.service', 'fleet-wake@beta.service',
+      ]);
+      expect(supervisorStatusFile('alpha', env)).not.toBe(supervisorStatusFile('beta', env));
+
+      const missing = { ...env, XDG_CONFIG_HOME: path.join(config, 'missing') };
+      expect(mapChangedPathsToConsumers(root, ['scripts/orchestrator-wake-supervisor.ts'], missing).map((row) => row.id)).toEqual(['orchestrator-side-process-supervisor-inventory']);
+      const badCard = path.join(config, 'orchestrator-pack/projects/beta.json');
+      const original = readFileSync(badCard, 'utf8');
+      writeFileSync(badCard, '{ malformed');
+      expect(mapChangedPathsToConsumers(root, ['scripts/orchestrator-wake-supervisor.ts'], env).map((row) => row.id)).toEqual(['orchestrator-side-process-supervisor-inventory']);
+      rmSync(badCard);
+      symlinkSync('alpha.json', badCard);
+      expect(mapChangedPathsToConsumers(root, ['scripts/orchestrator-wake-supervisor.ts'], env).map((row) => row.id)).toEqual(['orchestrator-side-process-supervisor-inventory']);
+      rmSync(badCard);
+      writeFileSync(badCard, original);
+      const shared = { ...env, OPK_WAKE_SUPERVISOR_STATE_DIR: path.join(config, 'shared-root') };
+      expect(mapChangedPathsToConsumers(root, ['scripts/orchestrator-wake-supervisor.ts'], shared).map((row) => row.id)).toEqual(['orchestrator-side-process-supervisor-state-ambiguous']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(config, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform !== 'linux')('restarts both stale running projects via selector-free argv and distinct post-Step-7 identities in runCli', async () => {
+    const root = mappingFixture();
+    const config = mkdtempSync(path.join(tmpdir(), 'supervisor-two-project-'));
+    const env = supervisorCards(root, config);
+    const restoreEnv = activateSupervisorEnv(env);
+    const children: FixtureProcess[] = [];
+    let stub: ReturnType<typeof fakeSupervisorControls> | undefined;
+    try {
+      const mergeSha = fixtureMerge(root, 'scripts/orchestrator-wake-supervisor.ts');
+      const early = Date.now() - 1_000;
+      for (const projectId of ['alpha', 'beta']) {
+        const child = await startFixture();
+        children.push(child);
+        writeSupervisorIdentity(projectId, env, child.pid);
+      }
+      await delay(180);
+      const late = Date.now(); // Both stale processes started after early but before this completed-checkout cutoff.
+      await delay(170);
+      const fresh: Record<string, number> = {};
+      for (const projectId of ['alpha', 'beta']) {
+        const child = await startFixture();
+        children.push(child);
+        fresh[projectId] = child.pid;
+      }
+      stub = fakeSupervisorControls(env, fresh);
+      const parentSelector = process.env.OPK_PROJECT_ID;
+      const report = await runCli(fixtureVerifyArgv(root, mergeSha, early, late));
+      expect(report.schema).toBe('orchestrator-pack/merge-adoption-effect/v1');
+      expect(report.effect).toBe('effect_verified');
+      expect(report.operationalOutcome).toBe('operationally_complete');
+      const rows = report.consumers.filter((row) => row.id.startsWith('orchestrator-side-process-supervisor@'));
+      expect(rows).toHaveLength(2);
+      expect(rows.every((row) => row.action === 'restart' && row.verified && row.before.identity !== row.after?.identity)).toBe(true);
+      expect(rows.every((row) => (row.before.startedAtMs ?? 0) > early && (row.before.startedAtMs ?? 0) < late)).toBe(true);
+      expect(rows.every((row) => (row.after?.startedAtMs ?? 0) > late)).toBe(true);
+      expect(new Set(rows.map((row) => row.after?.identity)).size).toBe(2);
+      expect(stub.commands.map((row) => row.argv)).toEqual([['alpha', 'stop'], ['alpha', 'start'], ['beta', 'stop'], ['beta', 'start']]);
+      expect(stub.commands.every((row) => row.childEnv?.OPK_PROJECT_ID === undefined)).toBe(true);
+      expect(process.env.OPK_PROJECT_ID).toBe(parentSelector);
+    } finally {
+      stub?.restore();
+      for (const child of children) await stopFixture(child);
+      restoreEnv();
+      rmSync(root, { recursive: true, force: true });
+      rmSync(config, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform !== 'linux')('reports a failed B start without hiding A, and refuses ambiguous shared state roots without controls', async () => {
+    const root = mappingFixture();
+    const config = mkdtempSync(path.join(tmpdir(), 'supervisor-failed-start-'));
+    const env = supervisorCards(root, config);
+    const restoreEnv = activateSupervisorEnv(env);
+    const children: FixtureProcess[] = [];
+    let stub: ReturnType<typeof fakeSupervisorControls> | undefined;
+    try {
+      const mergeSha = fixtureMerge(root, 'scripts/orchestrator-wake-supervisor.ts');
+      for (const projectId of ['alpha', 'beta']) {
+        const child = await startFixture();
+        children.push(child);
+        writeSupervisorIdentity(projectId, env, child.pid);
+      }
+      await delay(180);
+      const late = Date.now();
+      await delay(160);
+      const fresh = await startFixture();
+      children.push(fresh);
+      stub = fakeSupervisorControls(env, { alpha: fresh.pid }, 'beta');
+      const report = await runCli(fixtureVerifyArgv(root, mergeSha, late - 3_000, late));
+      expect(report.effect).toContain('restart_failed:orchestrator-side-process-supervisor@beta:supervisor_start_failed');
+      expect(report.operationalOutcome).toBe('operationally_incomplete');
+      expect(report.consumers.find((row) => row.id.endsWith('@alpha'))?.verified).toBe(true);
+      expect(report.consumers.find((row) => row.id.endsWith('@beta'))?.verified).toBe(false);
+      expect(stub.commands.map((row) => row.argv)).toEqual([['alpha', 'stop'], ['alpha', 'start'], ['beta', 'stop'], ['beta', 'start']]);
+      stub.restore();
+      stub = undefined;
+      process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = path.join(config, 'shared-root');
+      const ambiguous = await runCli(fixtureVerifyArgv(root, mergeSha, late - 3_000, late));
+      expect(ambiguous.effect).toContain('supervisor_state_roots_ambiguous');
+      expect(ambiguous.operationalOutcome).toBe('operationally_incomplete');
+      expect(ambiguous.consumers.map((row) => row.id)).toEqual(['orchestrator-side-process-supervisor-state-ambiguous']);
+    } finally {
+      stub?.restore();
+      for (const child of children) await stopFixture(child);
+      restoreEnv();
+      rmSync(root, { recursive: true, force: true });
+      rmSync(config, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform !== 'linux')('distinguishes confirmed absent, malformed status and already-fresh supervisors without starting stopped projects', async () => {
+    const root = mappingFixture();
+    const config = mkdtempSync(path.join(tmpdir(), 'supervisor-states-'));
+    const env = supervisorCards(root, config);
+    const restoreEnv = activateSupervisorEnv(env);
+    let fresh: FixtureProcess | undefined;
+    let stub: ReturnType<typeof fakeSupervisorControls> | undefined;
+    try {
+      const mergeSha = fixtureMerge(root, 'scripts/orchestrator-wake-supervisor.ts');
+      const late = Date.now();
+      await delay(160);
+      fresh = await startFixture();
+      writeSupervisorIdentity('alpha', env, fresh.pid);
+      writeSupervisorIdentity('beta', env, 999_999_999, '123');
+      stub = fakeSupervisorControls(env, {});
+      const noControl = await runCli(fixtureVerifyArgv(root, mergeSha, late - 3_000, late));
+      expect(noControl.effect).toBe('effect_verified');
+      expect(noControl.consumers.find((row) => row.id.endsWith('@alpha'))).toMatchObject({ verified: true, action: 'none' });
+      expect(noControl.consumers.find((row) => row.id.endsWith('@beta'))).toMatchObject({ verified: true, action: 'not_running' });
+      expect(stub.commands).toEqual([]);
+      writeFileSync(supervisorStatusFile('beta', env), '{ invalid');
+      const unknown = await runCli(fixtureVerifyArgv(root, mergeSha, late - 3_000, late));
+      expect(unknown.effect).toContain('supervisor_status_missing_or_invalid');
+      expect(unknown.consumers.find((row) => row.id.endsWith('@beta'))).toMatchObject({ verified: false, action: 'none', before: { state: 'unknown' } });
+      expect(stub.commands).toEqual([]);
+      const noCutoff = await runCli(fixtureVerifyArgv(root, mergeSha, late - 3_000));
+      expect(noCutoff.effect).toContain('supervisor_fleet_adopted_at_missing_or_invalid');
+      expect(stub.commands).toEqual([]);
+    } finally {
+      stub?.restore();
+      if (fresh) await stopFixture(fresh);
+      restoreEnv();
+      rmSync(root, { recursive: true, force: true });
+      rmSync(config, { recursive: true, force: true });
+    }
+  });
+
+  it('never controls either initially aliased project and rejects aliased post-control readbacks', async () => {
+    const ids = ['orchestrator-side-process-supervisor@alpha', 'orchestrator-side-process-supervisor@beta'];
+    const consumers = ids.map((id) => ({ id, matchedPaths: ['scripts/orchestrator-wake-supervisor.ts'] }));
+    const early = Date.now() - 5_000;
+    const late = Date.now() - 1_000;
+    let attempted = 0;
+    const alias = await verifyAdoptionEffect({
+      adoptionStartedAtMs: early, fleetAdoptedAtMs: late, consumers,
+      controllers: Object.fromEntries(ids.map((id) => [id, {
+        observe: () => ({ state: 'running' as const, startedAtMs: early, identity: '501:902' }),
+        restart: () => { attempted++; },
+      }])),
+      runLiveCheck: () => ({ ok: true }),
+    });
+    expect(attempted).toBe(0);
+    expect(alias.consumers.map((row) => row.before.reason)).toEqual(['supervisor_shared_process_identity', 'supervisor_shared_process_identity']);
+    expect(alias.consumers.every((row) => row.action === 'none' && !row.verified)).toBe(true);
+    const controllers: Record<string, ConsumerController> = {};
+    for (const id of ids) {
+      let restarted = false;
+      controllers[id] = {
+        observe: () => ({ state: 'running', startedAtMs: restarted ? late + 500 : early, identity: restarted ? '999:901' : id + ':old' }),
+        restart: () => { restarted = true; },
+      };
+    }
+    const post = await verifyAdoptionEffect({
+      adoptionStartedAtMs: early, fleetAdoptedAtMs: late, consumers, controllers,
+      runLiveCheck: () => ({ ok: true }),
+    });
+    expect(post.effect).toContain('supervisor_shared_post_control_identity');
+    expect(post.consumers.every((row) => !row.verified)).toBe(true);
+  });
+
+  it.skipIf(process.platform !== 'linux')('same-project pre-control drift cannot stop the changed supervisor', async () => {
+    const root = mappingFixture();
+    const config = mkdtempSync(path.join(tmpdir(), 'supervisor-drift-'));
+    const env = supervisorCards(root, config);
+    const restoreEnv = activateSupervisorEnv(env);
+    const children: FixtureProcess[] = [];
+    let spy: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      const mergeSha = fixtureMerge(root, 'scripts/orchestrator-wake-supervisor.ts');
+      for (const id of ['alpha', 'beta']) {
+        const old = await startFixture();
+        children.push(old);
+        writeSupervisorIdentity(id, env, old.pid);
+      }
+      await delay(180);
+      const late = Date.now();
+      await delay(150);
+      const newAlpha = await startFixture();
+      const newBeta = await startFixture();
+      children.push(newAlpha, newBeta);
+      const observed: string[][] = [];
+      const original = subprocess.runProcessSync;
+      let getconfReads = 0;
+      spy = vi.spyOn(subprocess, 'runProcessSync').mockImplementation((request) => {
+        if (request.command === 'getconf') {
+          const result = original(request);
+          getconfReads++;
+          if (getconfReads === 2) writeSupervisorIdentity('alpha', env, newAlpha.pid);
+          return result;
+        }
+        if (request.command !== 'opk-wake-supervisor') return original(request);
+        const args = [...(request.args ?? [])];
+        observed.push(args);
+        if (args[0] === 'beta' && args[1] === 'start') writeSupervisorIdentity('beta', env, newBeta.pid);
+        return systemctlResult('');
+      });
+      const report = await runCli(fixtureVerifyArgv(root, mergeSha, late - 3_000, late));
+      expect(report.effect).toContain('supervisor_precontrol_identity_changed');
+      expect(report.consumers.find((row) => row.id.endsWith('@alpha'))?.verified).toBe(false);
+      expect(observed.every((args) => args[0] === 'beta')).toBe(true);
+      expect(observed).toEqual([['beta', 'stop'], ['beta', 'start']]);
+    } finally {
+      spy?.mockRestore();
+      for (const child of children) await stopFixture(child);
+      restoreEnv();
+      rmSync(root, { recursive: true, force: true });
+      rmSync(config, { recursive: true, force: true });
+    }
+  });
+
+  it('unknown per-project identity and failed post-control readback remain named v1 incomplete without new controls', async () => {
+    const id = 'orchestrator-side-process-supervisor@alpha';
+    const cut = Date.now() - 1_000;
+    let attempted = 0;
+    for (const reason of ['managed_process_os_unsupported', 'managed_process_stat_unreadable', 'managed_process_stat_invalid', 'managed_process_start_time_unavailable']) {
+      const report = await verifyAdoptionEffect({
+        adoptionStartedAtMs: cut - 500, fleetAdoptedAtMs: cut,
+        consumers: [{ id, matchedPaths: ['scripts/orchestrator-wake-supervisor.ts'] }],
+        controllers: { [id]: { observe: () => ({ state: 'unknown', reason }), restart: () => { attempted++; } } },
+        runLiveCheck: () => ({ ok: true }),
+      });
+      expect(report.effect).toContain(reason);
+      expect(report.operationalOutcome).toBe('operationally_incomplete');
+    }
+    expect(attempted).toBe(0);
+    let afterControl = false;
+    const failedReadback = await verifyAdoptionEffect({
+      adoptionStartedAtMs: cut - 500, fleetAdoptedAtMs: cut,
+      consumers: [{ id, matchedPaths: ['scripts/orchestrator-wake-supervisor.ts'] }],
+      controllers: { [id]: {
+        observe: () => {
+          if (afterControl) throw new Error('synthetic_readback_denied');
+          return { state: 'running', startedAtMs: cut - 700, identity: 'abc:old' };
+        },
+        restart: () => { afterControl = true; },
+      } },
+      runLiveCheck: () => ({ ok: true }),
+    });
+    expect(failedReadback.effect).toContain('restart_readback_failed:orchestrator-side-process-supervisor@alpha');
+    expect(failedReadback.operationalOutcome).toBe('operationally_incomplete');
   });
 });

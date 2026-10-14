@@ -379,8 +379,8 @@ unless the same direct user message explicitly requested it.
 ## Verify effect — mandatory after Step 7
 
 Immediately after Step 7 finishes, before invoking the pack verifier, capture the separate
-pack fleet completed-checkout cutoff (without moving or replacing the pre-Step-6
-`ADOPTION_STARTED_AT_UTC` for supervisor, scheduler, and hooks):
+pack fleet/wake-supervisor completed-checkout cutoff (without moving or replacing
+the pre-Step-6 `ADOPTION_STARTED_AT_UTC` for scheduler and hooks):
 
 ```bash
 if [ "$TARGET_REPOSITORY" = "$PACK_REPOSITORY" ]; then
@@ -449,16 +449,20 @@ node --experimental-strip-types scripts/merge-adoption-effect.ts verify \
 The script, rather than merge prose, maps changed paths through the static import closures of
 the supervisor entrypoint, every child named by
 `scripts/orchestrator-side-process-registry.json`, the fleet-wake executable entrypoint
-and TypeScript launcher, and tracked agent-hook entrypoints. For fleet paths only, it
-validates all registered project cards from the existing configured directory and maps
-one exact `fleet-wake@<projectId>.service` per card. A missing/invalid fleet inventory is
-reported as existing-v1 operationally_incomplete, not replaced by the pack singleton.
-Unrelated pack changes do not consult the fleet inventory.
+and TypeScript launcher, and tracked agent-hook entrypoints. On relevant fleet
+or wake-supervisor paths it validates **all** registered project cards from the existing
+configured directory, independently of caller `OPK_PROJECT_ID`. It maps exact
+`fleet-wake@<projectId>.service` consumers for fleet code or exact
+`orchestrator-side-process-supervisor@<projectId>` consumers for supervisor
+entrypoint/import/registry changes. Missing, malformed, or aliased relevant inventory
+is existing-v1 `operationally_incomplete`, never a singleton fallback. Unrelated
+pack changes do not consult or control those project instances.
 
-The original `ADOPTION_STARTED_AT_UTC` continues to govern supervisor and scheduler normal
-control/cadence and ephemeral hooks. Fleet process freshness uses only
-`FLEET_ADOPTED_AT_UTC` recorded **after** Step 7. A missing fleet cutoff never falls
-back to the earlier adoption-start time.
+`ADOPTION_STARTED_AT_UTC` continues to govern the registered `pr2-scheduler`
+normal cadence and unchanged ephemeral hooks. **Both fleet and wake-supervisor**
+process freshness use only `FLEET_ADOPTED_AT_UTC` recorded **after** Step 7,
+including already-running exemptions and post-control readbacks. A missing or invalid
+late cutoff never falls back to the earlier adoption-start time.
 
 For #2445 pack-code-only merges, the direct operator-ordered brief authorizes a narrow
 exception to the general integration-actor restart rule of `docs/fleet-alarm.md`:
@@ -479,18 +483,34 @@ executes daemon-reload, or edits machine-local configuration. Any change touchin
 **no automatic fleet restart** and stays `effect_unverified` pending operator
 render/install, daemon-reload, activation and effective-unit readback.
 
-For other mapped running consumers, normal control remains anchored to
-`ADOPTION_STARTED_AT_UTC`. The registered `pr2-scheduler` keeps its
-supervisor-owned normal cadence. When the current supervisor installation has an existing
-supported normal restart command identified in Step 4, pass that exact argv (never shell text)
-through `--restart-control-json`, for example an object keyed by
-`orchestrator-side-process-supervisor`. If no supported supervisor restart control can be
-established, the verifier fails closed. **Never direct-signal a supervisor PID to make this
-check pass.** Agent-hook entrypoints are fresh per hook invocation, so they have no stale hook
-process to restart; their effect remains covered by the mandatory Issue live check.
+For each **stale running** wake supervisor, the verifier resolves that validated
+project's state root and live PID/start-ticks identity, checks all projects for
+shared identities **before any control**, then re-observes the same process immediately
+before its own control. Only an unchanged, unambiguous stale instance receives
+the normal argv controls in order:
 
-Use `--supervisor-state-dir <path>` only when the live installation uses a non-default state
-root. Do not invent a state root or restart command.
+```bash
+opk-wake-supervisor <projectId> stop
+opk-wake-supervisor <projectId> start
+opk-wake-supervisor <projectId> status  # supported optional operator readback
+```
+
+The verifier runs stop/start with the **validated project ID** as argv and without
+inheriting the caller's `OPK_PROJECT_ID` selector, so project B remains reachable
+when the caller selected A. It reads back B's own status/PID/start-ticks and
+post-Step-7 start time; status-file/process absence must be conclusively observed
+before declaring `not_running`. Unknown or aliased state is incomplete and receives
+no control. An already-stopped project is **never started**. Stop/start is not atomic:
+a failed start can leave that project's supervisor unavailable and requires operator
+reconciliation using the same normal project-specific controls. No direct PID signals,
+fallback restart scheme, or automatic rollback.
+
+The registered `pr2-scheduler` retains its supervisor-owned normal cadence under
+`ADOPTION_STARTED_AT_UTC`. Generic `--restart-control-json` remains available for
+other applicable consumers, but the merge agent never supplies a speculative singleton
+supervisor argv. `--supervisor-state-dir` remains a generic scheduler/other-consumer
+option and **must not** replace any project-qualified wake-supervisor root. Agent
+hooks are fresh per invocation and covered by the mandatory Issue live check.
 
 On the primary-eligible path, the verifier's JSON is the effect receipt. Success requires exactly
 `effect_verified` and `operationally_complete`. Any
