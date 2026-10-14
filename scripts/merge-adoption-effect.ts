@@ -295,8 +295,8 @@ function inspectProcStartTicks(pid: number): ProcStartTicksObservation {
   try {
     const raw = readFileSync('/proc/' + String(pid) + '/stat', 'utf8');
     const close = raw.lastIndexOf(')');
-    const ticks = close < 0 ? undefined : raw.slice(close + 2).trim().split(/\\s+/u)[19];
-    if (!ticks || !/^\\d+$/u.test(ticks)) return { state: 'unknown', reason: 'managed_process_stat_invalid' };
+    const ticks = close < 0 ? undefined : raw.slice(close + 2).trim().split(/\s+/u)[19];
+    if (!ticks || !/^\d+$/u.test(ticks)) return { state: 'unknown', reason: 'managed_process_stat_invalid' };
     return { state: 'running', ticks };
   } catch (error) {
     // A missing proc stat is conclusive absence; permissions and malformed/unreadable proc are not.
