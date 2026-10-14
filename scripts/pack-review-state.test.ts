@@ -62,6 +62,166 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+describe('Issue #2565 completed findings logical reset', () => {
+  function completedFindings(tier: 'T2' | 'T3' = 'T2') {
+    const config = options();
+    const prNumber = 2565;
+    let state = initializePackReviewAuthority({
+      prNumber, headSha: sha('a'), tier,
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: config,
+    });
+    // A terminal at the genuine last ordinal; T3 must first consume round one.
+    if (tier === 'T3') {
+      state = commitPackReviewTerminal({
+        prNumber, expectedTransitionSeq: state.transitionSeq,
+        terminal: { ...findingsTerminal('round-one', sha('a')),
+          logicalRoundOrdinal: 1, automaticBudgetDisposition: 'consume' },
+        status: 'changes_requested', findingCount: 1, options: config,
+      });
+      state = observePackReviewHead({
+        prNumber, expectedTransitionSeq: state.transitionSeq, headSha: sha('b'), options: config,
+      });
+      state = settleLogicalPackReviewFindingsByStrictDescendant({
+        prNumber, expectedTransitionSeq: state.transitionSeq, reviewedHeadSha: sha('a'),
+        currentHeadSha: sha('b'), reviewedHeadIsAncestor: true, options: config,
+      });
+    }
+    const terminalHead = tier === 'T2' ? sha('a') : sha('b');
+    const descendant = tier === 'T2' ? sha('b') : sha('c');
+    state = commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: state.transitionSeq,
+      terminal: { ...findingsTerminal('last-findings', terminalHead),
+        logicalRoundOrdinal: tier === 'T2' ? 1 : 2, automaticBudgetDisposition: 'consume' },
+      status: 'changes_requested', findingCount: 1, options: config,
+    });
+    state = observePackReviewHead({
+      prNumber, expectedTransitionSeq: state.transitionSeq, headSha: descendant, options: config,
+    });
+    state = settleLogicalPackReviewFindingsByStrictDescendant({
+      prNumber, expectedTransitionSeq: state.transitionSeq, reviewedHeadSha: terminalHead,
+      currentHeadSha: descendant, reviewedHeadIsAncestor: true, options: config,
+    });
+    expect(state.cycle).toMatchObject({
+      state: 'closed', reviewStageComplete: true, frozenTier: tier,
+      frozenCap: tier === 'T2' ? 1 : 2,
+    });
+    expect(state.cycle?.atCapHash).toBeUndefined();
+    return { state, config, prNumber, descendant };
+  }
+
+  it.each(['T2', 'T3'] as const)('completed logical reset without at-cap hash: %s', (tier) => {
+    const { state, config, prNumber, descendant } = completedFindings(tier);
+    const previous = state.cycle!.cycleId;
+    const provenance = {
+      priorCycleId: previous, actor: 'actual-operator', reason: 'Issue amended',
+      timestampUtc: '2026-10-14T01:00:00.000Z', nonce: 'amend-1',
+    };
+    const reset = acknowledgePackReviewReset({
+      prNumber, expectedTransitionSeq: state.transitionSeq, headSha: descendant,
+      tier, capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      completedFindingsBodyAmended: true, provenance, options: config,
+    });
+    expect(reset.cycle).toMatchObject({
+      state: 'open', frozenTier: tier, frozenCap: tier === 'T2' ? 1 : 2,
+      consumedRoundOrdinals: [], resetProvenance: provenance,
+    });
+    expect(reset.cycle?.cycleId).not.toBe(previous);
+    expect(readPackReviewAuthority(prNumber, config)?.cycle?.resetProvenance).toEqual(provenance);
+  });
+
+  it('completed reset eligibility negatives: clean, unrelated, nonlogical and unproved amendment', () => {
+    const { state, config, prNumber, descendant } = completedFindings();
+    const provenance = {
+      priorCycleId: state.cycle!.cycleId, actor: 'operator', reason: 'amended',
+      timestampUtc: '2026-10-14T01:00:00.000Z', nonce: 'amend-neg',
+    };
+    const input = {
+      prNumber, expectedTransitionSeq: state.transitionSeq, headSha: descendant,
+      tier: 'T2' as const, capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      provenance, options: config,
+    };
+    expect(() => acknowledgePackReviewReset(input)).toThrow(/reset_invalid/);
+    expect(() => acknowledgePackReviewReset({
+      ...input, completedFindingsBodyAmended: true,
+      provenance: { ...provenance, priorCycleId: 'wrong-cycle' },
+    })).toThrow(/reset_invalid/);
+    // Completed clean T2 consumes its cap and is not a findings-bearing reset.
+    const cleanOptions = options();
+    let clean = initializePackReviewAuthority({
+      prNumber: 2566, headSha: sha('d'), tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: cleanOptions,
+    });
+    clean = commitPackReviewTerminal({
+      prNumber: 2566, expectedTransitionSeq: clean.transitionSeq,
+      terminal: { schemaVersion: 1, terminalContractVersion: 2,
+        terminalSource: 'normal', runId: 'clean-last', targetSha: sha('d'),
+        logicalRoundOrdinal: 1, automaticBudgetDisposition: 'consume',
+        reviewVerdict: 'clean', findingCount: 0, findingsDigest: 'clean' },
+      status: 'clean', findingCount: 0, options: cleanOptions,
+    });
+    expect(() => acknowledgePackReviewReset({
+      ...input, prNumber: 2566, expectedTransitionSeq: clean.transitionSeq,
+      headSha: sha('d'), completedFindingsBodyAmended: true,
+      provenance: { ...provenance, priorCycleId: clean.cycle!.cycleId },
+      options: cleanOptions,
+    })).toThrow(/reset_invalid/);
+    expect(readPackReviewAuthority(2566, cleanOptions)?.cycle?.reviewStageComplete).toBe(true);
+  });
+
+  it('does not introduce hashless completed-cycle reset for T1', () => {
+    const config = options();
+    const prNumber = 2567;
+    let state = initializePackReviewAuthority({
+      prNumber, headSha: sha('a'), tier: 'T1',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: config,
+    });
+    state = commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: state.transitionSeq,
+      terminal: { ...findingsTerminal('t1-last', sha('a')),
+        logicalRoundOrdinal: 1, automaticBudgetDisposition: 'consume' },
+      status: 'changes_requested', findingCount: 1, options: config,
+    });
+    state = observePackReviewHead({
+      prNumber, expectedTransitionSeq: state.transitionSeq, headSha: sha('b'), options: config,
+    });
+    state = settleLogicalPackReviewFindingsByStrictDescendant({
+      prNumber, expectedTransitionSeq: state.transitionSeq,
+      reviewedHeadSha: sha('a'), currentHeadSha: sha('b'),
+      reviewedHeadIsAncestor: true, options: config,
+    });
+    expect(state.cycle).toMatchObject({ state: 'closed', frozenTier: 'T1',
+      reviewStageComplete: true, consumedRoundOrdinals: [1] });
+    expect(() => acknowledgePackReviewReset({
+      prNumber, expectedTransitionSeq: state.transitionSeq,
+      headSha: sha('b'), tier: 'T1',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      completedFindingsBodyAmended: true,
+      provenance: {
+        priorCycleId: state.cycle!.cycleId, actor: 'owner', reason: 'amended',
+        timestampUtc: '2026-10-14T01:00:00.000Z', nonce: 't1-not-eligible',
+      },
+      options: config,
+    })).toThrow(/reset_invalid/);
+    expect(readPackReviewAuthority(prNumber, config)?.cycle?.cycleId).toBe(state.cycle?.cycleId);
+  });
+
+  it('reset validates optional at-cap hash on pending and completed cycles', () => {
+    const { state, config, prNumber, descendant } = completedFindings();
+    const provenance = {
+      priorCycleId: state.cycle!.cycleId, actor: 'operator', reason: 'amended',
+      timestampUtc: '2026-10-14T01:00:00.000Z', nonce: 'amend-hash',
+    };
+    expect(() => acknowledgePackReviewReset({
+      prNumber, expectedTransitionSeq: state.transitionSeq, headSha: descendant,
+      tier: 'T2', capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      completedFindingsBodyAmended: true,
+      provenance: { ...provenance, priorAtCapHash: 'a'.repeat(64) },
+      options: config,
+    })).toThrow(/reset_invalid/);
+    expect(readPackReviewAuthority(prNumber, config)?.cycle?.cycleId).toBe(state.cycle!.cycleId);
+  });
+});
+
 describe('Issue #898 authority and cap state', () => {
   it('preserves issue 1063 caps for new cycles and retains open frozen cap without retroactive rewrite', () => {
     const current = createInitialPackReviewAuthority({

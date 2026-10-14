@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -51,6 +52,7 @@ import {
   commitPackReviewTerminal,
   commitPackReviewTriage,
   initializePackReviewAuthority,
+  listPackReviewImmutableRecords,
   observePackReviewHead,
   packReviewFindingsSatisfiedByStrictDescendant,
   readPackReviewAuthority,
@@ -155,6 +157,7 @@ import type { PackGptSourceIdentity } from './lib/pack-gpt-source-comment-contra
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import { CHAT_BINDING_WORKTREE_ENV, chatBindingWorktree } from './chatgpt-browser-turn/chat-bindings.ts';
 import {
+  boundIssueSnapshotArtifactPaths,
   captureBoundIssueSnapshot,
   computeBoundIssueSnapshotHash,
   loadValidatedBoundSnapshotBody,
@@ -284,6 +287,7 @@ interface StartInput {
   fixtureChangedPaths?: string[];
   fixtureBoundIssueSnapshotBytes?: string;
   fixtureReviewCompareStatus?: string;
+  fixtureSameHeadIssueResolutionRunner?: typeof runProcess;
 }
 
 interface DirectCliStartInput extends StartInput {
@@ -1002,15 +1006,15 @@ async function resolveTarget(
     );
   }
   const prNumber = requestedPr;
-  const sourceRepoRoot = resolve(trim(input.sourceRepoRoot || input.repoRoot) || trustedPackRoot);
+  const sourceRepoRoot = resolve(trim(input.sourceRepoRoot || input.repoRoot) || selectedTarget?.primaryRoot || trustedPackRoot);
   if (!harness && !existsSync(join(sourceRepoRoot, '.git')) && !existsSync(join(sourceRepoRoot, 'HEAD'))) {
     throw new Error(`source repository root is not a git checkout: ${sourceRepoRoot}`);
   }
   const requestedHead = trim(input.headSha).toLowerCase();
-  const repoSlug = harnessExplicit
-    ? trim(input.fixtureRepoSlug) || 'fixture/orchestrator-pack'
-    : selectedTarget
-      ? await resolvePackReviewSelectedRepository({ sourceRepoRoot, selectedTarget })
+  const repoSlug = selectedTarget
+    ? await resolvePackReviewSelectedRepository({ sourceRepoRoot, selectedTarget })
+    : harnessExplicit
+      ? trim(input.fixtureRepoSlug) || 'fixture/orchestrator-pack'
       : await resolveRepositorySlug(sourceRepoRoot);
   if (harnessExplicit && trim(input.fixturePrState || 'OPEN').toUpperCase() !== 'OPEN') {
     throw new Error(`PR #${prNumber} is not open`);
@@ -1019,7 +1023,7 @@ async function resolveTarget(
     ? {
         headSha: fixtureCurrentHead || requestedHead,
         body: input.fixturePrBody ?? '',
-        baseRef: 'main',
+        baseRef: selectedTarget?.defaultBranch ?? 'main',
       }
     : await resolveCurrentPrTarget(sourceRepoRoot, repoSlug, prNumber);
   const liveHead = liveTarget.headSha;
@@ -4324,6 +4328,175 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     };
   }
 
+  // A non-descendant has never been eligible for final-cap success. Keep that
+  // existing refusal ahead of body-validation errors and status publication.
+  if (logicalFinalFindings && authority.cycle?.frozenTier !== 'T1'
+      && authority.terminal
+      && authority.currentHeadSha !== authority.terminal.targetSha) {
+    const strict = await resolvePackReviewStrictDescendant({
+      repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+      reviewedHeadSha: authority.terminal.targetSha,
+      currentHeadSha: authority.currentHeadSha,
+      fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
+    });
+    if (!strict) {
+      return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
+        settled: false, reason: 'final_cap_strict_descendant_required',
+        nextAction: 'advance the same PR from the final findings head with a verified strict descendant, then reconcile' };
+    }
+  }
+
+  // At the findings cap, review completion and required success use the old
+  // preflight body snapshot, not a revision tag or an amended current Issue.
+  let verifiedFinalIssue: { issueNumber: number; digest: string } | undefined;
+  if (logicalAccounting && authority.cycle?.frozenTier !== 'T1'
+      && authority.currentHeadSha !== authority.terminal.targetSha) {
+    try {
+      const cycle = authority.cycle;
+      const terminal = authority.terminal;
+      if (!cycle || cycle.consumedRoundOrdinals?.length !== cycle.frozenCap
+          || cycle.consumedRoundOrdinals.at(-1) !== cycle.frozenCap
+          || terminal.logicalRoundOrdinal !== cycle.frozenCap
+          || priorRun.id !== terminal.runId || priorRun.runId !== terminal.runId
+          || priorRun.projectId !== options.projectId || priorRun.prNumber !== prNumber
+          || priorRun.canonicalRepository?.toLowerCase() !== options.repoSlug.toLowerCase()
+          || priorRun.targetSha !== terminal.targetSha || priorRun.headSha !== terminal.targetSha
+          || priorRun.reviewCycleId !== cycle.cycleId
+          || priorRun.accountingVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+          || priorRun.logicalRoundOrdinal !== cycle.frozenCap
+          || priorRun.logicalRoundCap !== cycle.frozenCap || !priorRun.completedAtUtc) {
+        throw new Error('last terminal findings project/PR/head/cycle/ordinal binding missing');
+      }
+      const immutableTerminal = listPackReviewImmutableRecords('terminal', { storeRoot: options.storeRoot })
+        .filter((entry) => entry.digest === terminal.digest
+          && (entry.value as PackReviewTerminalV2 | undefined)?.runId === priorRun.id
+          && (entry.value as PackReviewTerminalV2 | undefined)?.targetSha === terminal.targetSha
+          && (entry.value as PackReviewTerminalV2 | undefined)?.logicalRoundOrdinal === cycle.frozenCap
+          && (entry.value as PackReviewTerminalV2 | undefined)?.reviewVerdict === 'findings');
+      if (immutableTerminal.length !== 1) throw new Error('exact final terminal immutable evidence missing or ambiguous');
+
+      const reviewedIssue = priorRun.reviewRound?.issueNumber
+        ?? (process.env.OPK_VITEST_HARNESS === '1' ? input.fixtureIssueNumber : undefined);
+      const livePr = process.env.OPK_VITEST_HARNESS === '1'
+        ? (input.fixturePrBody && input.fixtureCurrentPrHeadSha
+          ? { body: input.fixturePrBody, headSha: trim(input.fixtureCurrentPrHeadSha).toLowerCase() }
+          : undefined)
+        : await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, prNumber);
+      if (!livePr || livePr.headSha !== authority.currentHeadSha.toLowerCase()) {
+        throw new Error('current selected PR head or closing Issue binding unavailable');
+      }
+      const issueNumber = extractClosingIssueNumber(livePr.body);
+      if (!issueNumber || (reviewedIssue && reviewedIssue !== issueNumber)) {
+        throw new Error('reviewed Issue differs from the actual current PR-closing Issue');
+      }
+      const frozen = resolveBoundIssueSnapshot({
+        projectId: options.projectId, prNumber, prHeadSha: terminal.targetSha,
+        issueNumber, storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+      });
+      if (frozen.status !== 'found' || !frozen.snapshotHash
+          || frozen.metadata?.capturePhase !== 'review-preflight'
+          || frozen.metadata.projectId !== options.projectId
+          || frozen.metadata.prNumber !== prNumber
+          || frozen.metadata.issueNumber !== issueNumber
+          || frozen.metadata.prHeadSha.toLowerCase() !== terminal.targetSha.toLowerCase()) {
+        throw new Error('verified last findings frozen Issue snapshot missing or corrupt');
+      }
+      if (priorRun.reviewRound) {
+        const round = priorRun.reviewRound;
+        if (round.reviewer !== 'gpt' || priorRun.resolvedReviewer !== 'gpt'
+            || round.issueNumber !== issueNumber || round.boundIssueSnapshotDigest !== frozen.snapshotHash
+            || round.roundOrdinal !== cycle.frozenCap
+            || round.accountingVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+            || round.tier !== cycle.frozenTier) {
+          throw new Error('last GPT findings round or snapshot digest mismatch');
+        }
+      } else {
+        if (!['codex', 'claude'].includes(priorRun.resolvedReviewer ?? '')) {
+          throw new Error('native findings review lacks a validated preflight snapshot binding');
+        }
+        // Native has no GPT reviewRound: only one validated same-head Issue
+        // snapshot captured before this run began can bind its terminal.
+        const runCreatedAt = Date.parse(priorRun.createdAt);
+        const capturedAt = Date.parse(frozen.metadata.capturedAt);
+        if (!Number.isFinite(runCreatedAt) || !Number.isFinite(capturedAt)
+            || capturedAt > runCreatedAt) {
+          throw new Error('native Issue snapshot was not captured before the terminal run');
+        }
+        const snapshotPaths = boundIssueSnapshotArtifactPaths({
+          projectId: options.projectId, prNumber, prHeadSha: terminal.targetSha,
+          issueNumber, storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+        });
+        const originalIssues = readdirSync(snapshotPaths.artifactDir)
+          .filter((name) => /^issue-\d+\.meta\.json$/.test(name))
+          .flatMap((name) => {
+            const number = Number(/^issue-(\d+)\.meta\.json$/.exec(name)![1]);
+            const candidate = resolveBoundIssueSnapshot({
+              projectId: options.projectId, prNumber, prHeadSha: terminal.targetSha,
+              issueNumber: number, storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+            });
+            if (candidate.status !== 'found' || !candidate.metadata
+                || candidate.metadata.capturePhase !== 'review-preflight'
+                || candidate.metadata.projectId !== options.projectId
+                || candidate.metadata.prNumber !== prNumber
+                || candidate.metadata.issueNumber !== number
+                || candidate.metadata.prHeadSha.toLowerCase() !== terminal.targetSha.toLowerCase()
+                || !Number.isFinite(Date.parse(candidate.metadata.capturedAt))) {
+              throw new Error('native same-head Issue snapshot identity is ambiguous or corrupt');
+            }
+            return Date.parse(candidate.metadata.capturedAt) <= runCreatedAt ? [number] : [];
+          });
+        if (originalIssues.length !== 1 || originalIssues[0] !== issueNumber) {
+          throw new Error('native terminal original pre-run closing Issue binding is missing or ambiguous');
+        }
+      }
+      const liveIssue = process.env.OPK_VITEST_HARNESS === '1'
+        ? (input.fixtureIssueBody !== undefined && input.fixtureIssueTitle
+          ? { title: input.fixtureIssueTitle, body: input.fixtureIssueBody }
+          : undefined)
+        : await resolveCurrentIssueFields(input.sourceRepoRoot, options.repoSlug, issueNumber);
+      if (!liveIssue) throw new Error('current linked Issue body/title unavailable');
+      parseAuthoritativeTier(liveIssue.body, liveIssue.title);
+      const digest = computeBoundIssueSnapshotHash(liveIssue.body);
+      let expectedDigest: string | undefined = frozen.snapshotHash;
+      if (completedFinalFindings && cycle.settlementKind === 'same_head_issue_resolution') {
+        // The completed #2428 Issue-only resolution reviewed B0 but expressly
+        // settled owner-edited B1. Its durable completion time bounds the last
+        // accepted body edit; a later amendment must not inherit that status.
+        if (!priorRun.reviewRound || !cycle.reviewStageCompletedAtUtc) {
+          throw new Error('completed same-head Issue resolution source or completion time missing');
+        }
+        const revision = await resolveFinalCapIssueBodyRevision({
+          sourceRepoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+          issueNumber, terminalizedAt: priorRun.completedAtUtc,
+          frozenBodyHash: frozen.snapshotHash,
+        }, process.env.OPK_VITEST_HARNESS === '1'
+          ? input.fixtureSameHeadIssueResolutionRunner ?? runProcess : runProcess);
+        const completedAt = Date.parse(cycle.reviewStageCompletedAtUtc);
+        if (!Number.isFinite(completedAt)) {
+          throw new Error('completed same-head Issue resolution time invalid');
+        }
+        expectedDigest = Date.parse(revision.editedAt) <= completedAt
+          ? computeBoundIssueSnapshotHash(revision.body) : undefined;
+      }
+      if (digest !== expectedDigest) {
+        const command = `npm run --silent pack-gpt-review -- --project ${options.projectId} --pr-number ${prNumber}`;
+        return {
+          prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
+          settled: false, reason: 'final_cap_issue_body_amended',
+          reviewedIssueNumber: issueNumber,
+          nextAction: `start one new review round on the current head; an Issue amendment resets the cap: node --experimental-strip-types scripts/pack-review-runner.ts reset --project ${options.projectId} --pr-number ${prNumber} --actor <actor> --reason <reason> --nonce <nonce>; then ${command}. If the existing bound snapshot on this PR head differs from the amended live Issue body, no review can start on this head: advance this same PR to a fresh head with a genuine change, then run ${command} on the new current head; do not overwrite the historical snapshot.`,
+        };
+      }
+      verifiedFinalIssue = { issueNumber, digest };
+    } catch (error) {
+      return {
+        prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
+        settled: false, reason: 'final_cap_review_binding_unverified', detail: describeError(error),
+        nextAction: 'restore the existing exact terminal/Issue/snapshot binding or obtain a newly reviewed current Issue body; do not publish final-cap success',
+      };
+    }
+  }
+
   const publishFinalCapStatus = async (
     description: string,
     digest: string,
@@ -4337,7 +4510,23 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       const liveRun = getPackReviewRun(priorRun.id, {
         projectId: options.projectId, storeRoot: options.storeRoot,
       });
-      return liveHead === publicationHead.toLowerCase()
+      let currentIssueStillBound = true;
+      if (verifiedFinalIssue) {
+        try {
+          const currentPr = process.env.OPK_VITEST_HARNESS === '1'
+            ? { headSha: trim(input.fixtureCurrentPrHeadSha).toLowerCase(), body: input.fixturePrBody }
+            : await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, prNumber);
+          const currentIssue = process.env.OPK_VITEST_HARNESS === '1'
+            ? { body: input.fixtureIssueBody }
+            : await resolveCurrentIssueFields(input.sourceRepoRoot, options.repoSlug, verifiedFinalIssue.issueNumber);
+          currentIssueStillBound = currentPr.headSha === publicationHead.toLowerCase()
+            && extractClosingIssueNumber(currentPr.body ?? '') === verifiedFinalIssue.issueNumber
+            && typeof currentIssue.body === 'string'
+            && computeBoundIssueSnapshotHash(currentIssue.body) === verifiedFinalIssue.digest;
+        } catch { currentIssueStillBound = false; }
+      }
+      return currentIssueStillBound
+        && liveHead === publicationHead.toLowerCase()
         && latest?.currentHeadSha.toLowerCase() === publicationHead.toLowerCase()
         && latest.terminal?.runId === priorRun.id
         && latest.terminal?.reviewVerdict === 'findings'
@@ -6186,7 +6375,63 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         httpStatus: 409,
       };
     }
+    // A completed findings reset does not re-key the historical exact-head
+    // snapshot. Refuse stale H1/B0 before the producer or any new review run.
+    const reopened = readPackReviewAuthority(target.prNumber, { storeRoot });
+    const firstResetRound = reopened?.cycle?.state === 'open'
+      && reopened.cycle.resetProvenance !== undefined
+      && reopened.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && reopened.cycle.consumedRoundOrdinals?.length === 0;
+    let reopenedLiveBody: string | undefined;
+    if (firstResetRound) {
+      try {
+        if (!target.issueNumber) throw new Error('actual PR closing Issue unresolved');
+        reopenedLiveBody = process.env.OPK_VITEST_HARNESS === '1'
+          ? input.fixtureIssueBody
+          : (await resolveCurrentIssueFields(target.sourceRepoRoot, target.repoSlug, target.issueNumber)).body;
+        if (reopenedLiveBody === undefined) throw new Error('amended PR-closing Issue body unavailable');
+        const existingSnapshot = resolveBoundIssueSnapshot({
+          projectId, prNumber: target.prNumber, prHeadSha: target.headSha,
+          issueNumber: target.issueNumber,
+          storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+        });
+        if (existingSnapshot.status === 'corrupted') throw new Error('existing exact-head Issue snapshot corrupted');
+        if (existingSnapshot.status === 'found'
+            && existingSnapshot.snapshotHash !== computeBoundIssueSnapshotHash(reopenedLiveBody)) {
+          await releaseEarlyClaim('completed_reset_stale_exact_head_snapshot');
+          return {
+            ok: false, created: false, reused: false, httpStatus: 409,
+            prNumber: target.prNumber, headSha: target.headSha,
+            cycleId: reopened?.cycle?.cycleId,
+            reason: 'completed_reset_stale_exact_head_snapshot',
+            nextAction: `start one new review round on the current head; an Issue amendment resets the cap: the immutable snapshot on this PR head is stale; advance this same PR to a fresh head with a genuine change, then run npm run --silent pack-gpt-review -- --project ${projectId} --pr-number ${target.prNumber} on that new head; do not overwrite the historical snapshot or consume a stale review round.`,
+          };
+        }
+      } catch (error) {
+        await releaseEarlyClaim('completed_reset_snapshot_unverified');
+        return { ok: false, created: false, reused: false, httpStatus: 409,
+          prNumber: target.prNumber, headSha: target.headSha,
+          reason: 'completed_reset_snapshot_unverified', detail: describeError(error),
+          nextAction: 'restore the real PR-closing Issue and exact bound snapshot binding before starting this audited cycle' };
+      }
+    }
     const authoritative = await resolveAuthoritativeReviewContext(input, target, projectId);
+    if (firstResetRound) {
+      const captured = target.issueNumber && resolveBoundIssueSnapshot({
+        projectId, prNumber: target.prNumber, prHeadSha: target.headSha,
+        issueNumber: target.issueNumber,
+        storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+      });
+      if (!captured || captured.status !== 'found'
+          || captured.snapshotHash !== authoritative.snapshotDigest
+          || authoritative.snapshotDigest !== computeBoundIssueSnapshotHash(reopenedLiveBody!)) {
+        await releaseEarlyClaim('completed_reset_new_head_snapshot_unverified');
+        return { ok: false, created: false, reused: false, httpStatus: 409,
+          prNumber: target.prNumber, headSha: target.headSha,
+          reason: 'completed_reset_new_head_snapshot_unverified',
+          nextAction: 'verify the persisted new-head snapshot against the live amended Issue body before retrying the same audited cycle' };
+      }
+    }
     if (target.operatorStart?.boundSnapshot
         && authoritative.snapshotDigest !== target.operatorStart.boundSnapshot) {
       throw new Error(
@@ -6269,10 +6514,44 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       });
     }
 
+    // Reuse the same final-cap evidence and publication decision as scoped
+    // reconciliation. Do not let start settle first or swallow its refusal.
+    const finalFindings = authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && authority.cycle.frozenTier !== 'T1'
+      && authority.terminal?.reviewVerdict === 'findings'
+      && (['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
+        || (authority.cycle.state === 'closed' && authority.cycle.reviewStageComplete === true
+          && authority.terminal.targetSha !== target.headSha));
+    // Completed final-cap stages still require verified Issue binding on
+    // rewritten/diverged heads; ancestry is decided inside reconciliation.
+    if (finalFindings && authority.terminal!.targetSha !== target.headSha) {
+      const result = await reconcileFinalCapSettlement({
+        projectId, storeRoot, prNumber: target.prNumber,
+        repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+        fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
+        fixturePrBody: input.fixturePrBody, fixturePrState: input.fixturePrState,
+        fixtureIssueNumber: input.fixtureIssueNumber,
+        fixtureIssueBody: input.fixtureIssueBody, fixtureIssueTitle: input.fixtureIssueTitle,
+        fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
+        fixtureSameHeadIssueResolutionRunner: input.fixtureSameHeadIssueResolutionRunner,
+        fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+        fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
+      }, { projectId, storeRoot, repoSlug: target.repoSlug });
+      await releaseEarlyClaim(result?.settled === true ? 'final_cap_descendant_settled' : 'final_cap_settlement_refused');
+      return result?.settled === true
+        ? { ok: true, created: false, reused: true, prNumber: target.prNumber,
+            headSha: target.headSha, reason: result.reason,
+            statusPublished: true, publicationVerified: true, httpStatus: 200 }
+        : { ok: false, created: false, reused: false, prNumber: target.prNumber,
+            headSha: target.headSha, reason: result?.reason ?? 'final_cap_settlement_unverified',
+            ...(result?.detail ? { detail: result.detail } : {}),
+            nextAction: result?.nextAction ?? 'restore verified final-cap binding and retry scoped reconcile',
+            httpStatus: 409 };
+    }
     if (authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
         && authority.terminal?.reviewVerdict === 'findings'
         && authority.terminal.targetSha !== target.headSha
-        && ['open_findings', 'at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)) {
+        && authority.cycle.state === 'open_findings') {
       const reviewedHeadSha = authority.terminal.targetSha;
       const strictDescendant = await resolvePackReviewStrictDescendant({
         repoRoot: target.sourceRepoRoot,
@@ -6283,12 +6562,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       });
       if (strictDescendant) {
         authority = settleLogicalPackReviewFindingsByStrictDescendant({
-          prNumber: target.prNumber,
-          expectedTransitionSeq: authority.transitionSeq,
-          reviewedHeadSha,
-          currentHeadSha: target.headSha,
-          reviewedHeadIsAncestor: true,
-          options: authorityOptions,
+          prNumber: target.prNumber, expectedTransitionSeq: authority.transitionSeq,
+          reviewedHeadSha, currentHeadSha: target.headSha,
+          reviewedHeadIsAncestor: true, options: authorityOptions,
         });
       }
     }
@@ -7961,34 +8237,148 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
   }
 }
 
-async function resetPackReview(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function resetPackReview(input: Record<string, unknown>): Promise<Record<string, unknown>> {
   const trusted = resolveTrustedRunnerPaths();
-  const projectId = trim(input.projectId) || DEFAULT_PROJECT_ID;
-  const target = await resolveTarget(input as StartInput, trusted.trustedPackRoot);
-  const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: trim(input.storeRoot) || undefined });
+  const projectId = trim(input.projectId || input.targetProjectId);
+  const selected = resolveTargetContext({ projectId, env: process.env });
+  if (trim(input.projectId) && trim(input.projectId) !== selected.projectId) {
+    throw new Error('reset selected project/store mismatch');
+  }
+  if (trim(input.sourceRepoRoot) || trim(input.repoRoot) || trim(input.repoSlug)) {
+    throw new Error('reset requires the selected project-card primaryRoot/repository; no checkout or repository override');
+  }
+  const target = await resolveTarget(input as StartInput, trusted.trustedPackRoot, undefined, selected);
+  if (target.repoSlug.toLowerCase() !== selected.repository.toLowerCase()) {
+    throw new Error('reset selected repository mismatch');
+  }
+  const storeRoot = resolvePackReviewRunStoreRoot({ projectId: selected.projectId });
+  if (trim(input.storeRoot) && resolve(trim(input.storeRoot)) !== storeRoot) {
+    throw new Error('reset selected project/store mismatch');
+  }
   const authority = readPackReviewAuthority(target.prNumber, { storeRoot });
-  if (!authority?.cycle?.atCapHash) throw new Error('reset requires an at-cap authority record');
+  if (!authority?.cycle) throw new Error('reset requires an authoritative review cycle');
+  if (authority.currentHeadSha !== target.headSha) {
+    throw new Error('reset PR head/authority changed; observe this selected PR head before retrying');
+  }
   const actor = trim(input.actor);
   const reason = trim(input.reason);
   const nonce = trim(input.nonce);
   if (!actor || !reason || !nonce) throw new Error('reset requires --actor, --reason, and --nonce');
+  if (!target.issueNumber) throw new Error('reset requires the actual PR-closing Issue');
+  const requestedCycleId = trim(input.priorCycleId) || authority.cycle.cycleId;
+  const suppliedHash = trim(input.priorAtCapHash);
+  if (requestedCycleId !== authority.cycle.cycleId
+      || (suppliedHash && suppliedHash !== authority.cycle.atCapHash)) {
+    throw new Error('reset prior cycle/hash mismatch');
+  }
+  const fields = process.env.OPK_VITEST_HARNESS === '1'
+    && (input as StartInput).fixtureIssueBody !== undefined
+    && (input as StartInput).fixtureIssueTitle !== undefined
+    ? { body: (input as StartInput).fixtureIssueBody!, title: (input as StartInput).fixtureIssueTitle! }
+    : await resolveCurrentIssueFields(target.sourceRepoRoot, target.repoSlug, target.issueNumber);
+  const liveTier = parseAuthoritativeTier(fields.body, fields.title);
+  const tierRank = { T1: 1, T2: 2, T3: 3 } as const;
+  const authoritativeTier = tierRank[liveTier] > tierRank[authority.cycle.frozenTier]
+    ? liveTier : authority.cycle.frozenTier;
+  const completed = authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    && authority.cycle.frozenTier !== 'T1'
+    && authority.cycle.state === 'closed'
+    && authority.cycle.reviewStageComplete === true
+    && authority.cycle.consumedRoundOrdinals?.length === authority.cycle.frozenCap
+    && authority.terminal?.reviewVerdict === 'findings'
+    && authority.terminal.logicalRoundOrdinal === authority.cycle.frozenCap
+    && (authority.cycle.settlementKind === 'same_head_issue_resolution'
+      || authority.currentHeadSha !== authority.terminal.targetSha);
+  let completedFindingsBodyAmended = false;
+  if (completed) {
+    const terminal = authority.terminal!;
+    const priorRun = getPackReviewRun(terminal.runId, {
+      projectId: selected.projectId, storeRoot,
+    });
+    const frozen = resolveBoundIssueSnapshot({
+      projectId: selected.projectId, prNumber: target.prNumber,
+      prHeadSha: terminal.targetSha, issueNumber: target.issueNumber,
+      storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+    });
+    if (!priorRun || priorRun.id !== terminal.runId || priorRun.runId !== terminal.runId
+        || priorRun.projectId !== selected.projectId || priorRun.prNumber !== target.prNumber
+        || priorRun.canonicalRepository?.toLowerCase() !== selected.repository.toLowerCase()
+        || priorRun.targetSha !== terminal.targetSha
+        || priorRun.headSha !== terminal.targetSha
+        || priorRun.reviewCycleId !== authority.cycle.cycleId
+        || priorRun.logicalRoundOrdinal !== authority.cycle.frozenCap
+        || priorRun.logicalRoundCap !== authority.cycle.frozenCap
+        || priorRun.reviewVerdict !== 'findings'
+        || frozen.status !== 'found' || !frozen.snapshotHash
+        || frozen.metadata?.capturePhase !== 'review-preflight'
+        || (priorRun.reviewRound
+          ? priorRun.reviewRound.issueNumber !== target.issueNumber
+            || priorRun.reviewRound.boundIssueSnapshotDigest !== frozen.snapshotHash
+          : !['codex', 'claude'].includes(priorRun.resolvedReviewer ?? ''))) {
+      throw new Error('completed reset requires verified exact last findings terminal and bound Issue body');
+    }
+    completedFindingsBodyAmended = computeBoundIssueSnapshotHash(fields.body) !== frozen.snapshotHash;
+    if (!completedFindingsBodyAmended) {
+      throw new Error('completed findings reset requires an actual linked Issue body amendment');
+    }
+    const liveHead = process.env.OPK_VITEST_HARNESS === '1'
+      ? trim((input as StartInput).fixtureCurrentPrHeadSha).toLowerCase()
+      : await resolveCurrentPrHead(target.sourceRepoRoot, target.repoSlug, target.prNumber);
+    if (liveHead !== target.headSha) throw new Error('PR head moved before reset pending publication');
+    const writeStatus = (input as StartInput).fixtureRequiredStatusWriter
+      ?? ((request: Parameters<PackReviewRequiredStatusWriter>[0]) => publishPackReviewRequiredStatus({
+        repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+        headSha: target.headSha, request,
+      }));
+    await writeStatus({
+      state: 'pending', context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+      description: 'Amended Issue requires a new audited review cycle.',
+      idempotencyKey: `issue-amendment-reset:${authority.cycle.cycleId}:${nonce}:${target.headSha}`,
+    });
+    const pending = await readFinalCapRequiredStatus({
+      sourceRepoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+      fixtureRequiredStatusReader: (input as StartInput).fixtureRequiredStatusReader,
+    }, target.repoSlug, target.headSha);
+    const latest = readPackReviewAuthority(target.prNumber, { storeRoot });
+    const liveHeadAfter = process.env.OPK_VITEST_HARNESS === '1'
+      ? trim((input as StartInput).fixtureCurrentPrHeadSha).toLowerCase()
+      : await resolveCurrentPrHead(target.sourceRepoRoot, target.repoSlug, target.prNumber);
+    if (pending !== 'pending' || liveHeadAfter !== target.headSha
+        || latest?.transitionSeq !== authority.transitionSeq
+        || latest.currentHeadSha !== target.headSha) {
+      throw new Error('completed reset pending status/unchanged authority not confirmed; restore pending status before retrying');
+    }
+  } else if (!authority.cycle.atCapHash) {
+    throw new Error('reset requires an eligible at-cap findings record');
+  }
+
   const reset = acknowledgePackReviewReset({
     prNumber: target.prNumber,
     expectedTransitionSeq: authority.transitionSeq,
     headSha: target.headSha,
-    tier: (trim(input.tier) || 'T3').toUpperCase() as PackReviewTier,
+    tier: authoritativeTier,
+    completedFindingsBodyAmended,
     provenance: {
-      priorCycleId: trim(input.priorCycleId) || authority.cycle.cycleId,
-      priorAtCapHash: trim(input.priorAtCapHash) || authority.cycle.atCapHash,
-      actor,
-      reason,
-      timestampUtc: trim(input.timestampUtc) || new Date().toISOString(),
-      nonce,
+      priorCycleId: requestedCycleId,
+      ...(authority.cycle.atCapHash ? { priorAtCapHash: authority.cycle.atCapHash } : {}),
+      actor, reason, timestampUtc: trim(input.timestampUtc) || new Date().toISOString(), nonce,
     },
     capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
     options: { storeRoot },
   });
-  return { ok: true, prNumber: target.prNumber, headSha: target.headSha, cycleId: reset.cycle?.cycleId };
+  if (completed) {
+    const confirmed = await readFinalCapRequiredStatus({
+      sourceRepoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+      fixtureRequiredStatusReader: (input as StartInput).fixtureRequiredStatusReader,
+    }, target.repoSlug, target.headSha);
+    if (confirmed !== 'pending') throw new Error('reopened cycle was persisted but current-head non-success is unverified');
+  }
+  return {
+    ok: true, projectId: selected.projectId, repository: selected.repository,
+    prNumber: target.prNumber, headSha: target.headSha, cycleId: reset.cycle?.cycleId,
+    previousCycleId: authority.cycle.cycleId,
+    ...(completed ? { requiredStatusState: 'pending' } : {}),
+  };
 }
 
 function usage(): string {
@@ -8008,7 +8398,7 @@ function usage(): string {
     '  node --experimental-strip-types scripts/pack-review-runner.ts reconcile --source-repo-root <path> --repo-slug owner/name [--pr-number <n>] [--immediate]',
     '',
     'Audited cap reset:',
-    '  node --experimental-strip-types scripts/pack-review-runner.ts reset --pr-number <n> --actor <id> --reason <text> --nonce <value>',
+    '  node --experimental-strip-types scripts/pack-review-runner.ts reset --project <id> --pr-number <n> --actor <actor> --reason <text> --nonce <value>',
     '',
     'The runner/store/reviewer scripts resolve from the trusted pack checkout, never from the reviewed PR worktree.',
   ].join('\n');
@@ -8091,7 +8481,8 @@ function readStdinPayload(): Record<string, unknown> {
 
 async function main(): Promise<void> {
   const [subcommand = 'help', ...argv] = process.argv.slice(2);
-  if (subcommand === 'help' || argv.includes('--help') || argv.includes('-h')) {
+  if (subcommand === 'help' || subcommand === '--help' || subcommand === '-h'
+      || argv.includes('--help') || argv.includes('-h')) {
     process.stdout.write(`${usage()}\n`);
     return;
   }
@@ -8118,6 +8509,7 @@ async function main(): Promise<void> {
     return;
   }
   if (subcommand === 'reset') {
+    applyCliTargetProject(input as StartInput);
     process.stdout.write(`${JSON.stringify(await resetPackReview(input))}\n`);
     return;
   }
