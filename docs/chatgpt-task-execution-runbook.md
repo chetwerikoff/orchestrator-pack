@@ -372,10 +372,18 @@ For every submitted execution turn:
    only. It does not settle the turn. Preserve the exact run identity, attempt
    identity, invocation id, profile, CDP endpoint, and conversation binding for
    continued observation;
-5. do not use `--open-if-missing`, create a page, close a page, navigate, Retry,
-   resend, or invent a replacement target for this checkpoint; the probe is
-   diagnostic/observation-only and its envelope keeps `workflow_authority:
-   none`;
+5. do not Send, Retry, resend, or let the manager independently create,
+   close, or navigate a tab or invent a replacement target. **At this active
+   30-minute checkpoint**, when the exact invocation's durable observation
+   contains a **non-null conversation URL** that exactly matches the normalized
+   caller-retained `--url` and no matching tab is open, the **one-shot probe
+   itself** may create, read, and close only its temporary diagnostic tab.
+   Identity-bound URL inspection needs no explicit `--open-if-missing` flag
+   (but accepts `--open-if-missing true` with the same bound proof). The same
+   diagnostic is allowed on the post-terminal re-read. A missing CDP target
+   alone proves neither page death nor terminal settlement; the probe remains
+   read-only/diagnostic-only with `workflow_authority: none` and must never
+   close an existing, foreign, or ambiguously matched tab;
 6. if the identity-bound checkpoint reports the exact owned turn still
    generating with no supported cause, send zero new user messages and continue
    bounded observation/re-observation of that same invocation. The first
