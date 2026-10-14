@@ -338,7 +338,7 @@ describe('owned marker primitive', () => {
 
 describe('DOM observation boundary', () => {
   async function readAtomicEvidence(
-    messages: Array<{ role: 'user' | 'assistant'; text: string; code?: { rendered: string; complete: string }; domTextContent?: string }>,
+    messages: Array<{ role: 'user' | 'assistant'; text: string; code?: { visible: string; domTextContent: string }; domTextContent?: string }>,
     generationQuery: () => unknown,
   ) {
     const elements = messages.map((message, index) => ({
@@ -352,7 +352,7 @@ describe('DOM observation boundary', () => {
         ? { getAttribute: () => message.role === 'user' ? 'user-message' : 'assistant-message' }
         : null,
       querySelectorAll: (selector: string) => selector === 'pre code' && message.role === 'assistant' && message.code
-        ? [{ innerText: message.code.rendered, textContent: message.code.complete, getBoundingClientRect: () => ({ height: 1 }) }]
+        ? [{ innerText: message.code.visible, textContent: message.code.domTextContent, getBoundingClientRect: () => ({ height: 1 }) }]
         : [],
       getBoundingClientRect: () => ({ height: 1 }),
       innerText: message.text,
@@ -510,21 +510,42 @@ describe('DOM observation boundary', () => {
     expect(replyStabilityMatches(full, full.replace('        print', '       print'))).toBe(false);
   });
 
-  it('recovers a synthetic code-prefix omission without replacing prose or screen-reader copy', async () => {
-    // Fixture-only source: AC1 remains unverified (two tabs, zero assistant code blocks).
-    const renderedCode = [
-      'def compare_digests():',
-      '    if serial_digest.digest() != pooled_digest.digest():',
-    ].join('\n');
-    const completeCode = renderedCode + '\n        raise ValueError("different")\n    return True';
-    const footer = '\n\nFollowing prose\nEXECUTION_STATUS: complete';
-    const partialOuter = 'Before\n\n' + renderedCode + footer;
-    const expected = 'Before\n\n' + completeCode + footer;
+  const parentPrefix2590 = [
+    'def compare_digests():',
+    '    if serial_digest.digest() != pooled_digest.digest():',
+  ].join('\n');
+  const threeVisibleLines2590 = parentPrefix2590 + '\n        raise ValueError("different")';
+  const fullVisibleCode2590 = threeVisibleLines2590 + '\n    return True';
+
+  it.each([
+    {
+      caseName: 'parent shorter than fully rendered code child',
+      visible: fullVisibleCode2590, domTextContent: fullVisibleCode2590, expectedCode: fullVisibleCode2590,
+    },
+    {
+      // <pre><code>visible text<span style="display:none">HIDDEN-DESCENDANT</span></code></pre>
+      caseName: 'hidden descendant after complete visible code',
+      visible: fullVisibleCode2590, domTextContent: fullVisibleCode2590 + 'HIDDEN-DESCENDANT', expectedCode: fullVisibleCode2590,
+    },
+    {
+      caseName: 'child innerText extends parent but textContent alone has a further line',
+      visible: threeVisibleLines2590, domTextContent: fullVisibleCode2590, expectedCode: threeVisibleLines2590,
+    },
+    {
+      caseName: 'only a hidden descendant extends textContent',
+      visible: parentPrefix2590, domTextContent: parentPrefix2590 + '\n        HIDDEN-DESCENDANT', expectedCode: parentPrefix2590,
+    },
+  ])('uses only atomic rendered code and preserves following prose ($caseName)', async ({ visible, domTextContent, expectedCode }) => {
+    // Fixture-only evidence. AC1 remains unverified: two tabs, zero assistant code blocks.
+    const footer = '\n\nFollowing  prose\nEXECUTION_STATUS: complete';
+    const partialOuter = 'Before\n\n' + parentPrefix2590 + footer;
+    const expected = 'Before\n\n' + expectedCode + footer;
     const { result, page } = await readAtomicEvidence([
       { role: 'user', text: markedPrompt },
-      { role: 'assistant', text: partialOuter, code: { rendered: renderedCode, complete: completeCode }, domTextContent: 'SCREEN-READER-ONLY' },
+      { role: 'assistant', text: partialOuter, code: { visible, domTextContent }, domTextContent: 'SCREEN-READER-ONLY' },
     ], () => null);
     expect(result.messages[1]?.text).toBe(expected);
+    expect(result.messages[1]?.text).not.toContain('HIDDEN-DESCENDANT');
     expect(result.messages[1]?.text).not.toContain('SCREEN-READER-ONLY');
     expect(result.snapshot?.carriers[1]?.text).toBe(expected);
     const snapshot = result.snapshot!;

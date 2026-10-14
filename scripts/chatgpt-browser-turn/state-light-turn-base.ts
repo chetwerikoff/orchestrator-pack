@@ -668,17 +668,32 @@ export async function revalidateKeyedHarvest(
             const role = style === args.userMessageStyle ? 'user' : style === args.assistantMessageStyle ? 'assistant' : '';
             let text = (element as HTMLElement).innerText;
             if (role === 'assistant') {
-              // Restore only an unambiguous truncated prefix from its visible code element.
-              // The outer rendered text continues to own surrounding prose and message order.
+              // Preserve only text exposed by the code element's rendered innerText.
+              // textContent can include hidden descendants and is never publication evidence.
               for (const code of Array.from(element.querySelectorAll('pre code'))) {
-                if (code.getBoundingClientRect().height <= 0) continue;
-                const rendered = (code as HTMLElement).innerText;
-                const complete = code.textContent ?? '';
-                if (!rendered || !complete.startsWith(rendered) || complete.length <= rendered.length) continue;
-                if (text.includes(complete)) continue;
-                const offset = text.indexOf(rendered);
-                if (offset < 0 || text.indexOf(rendered, offset + rendered.length) !== -1) continue;
-                text = text.slice(0, offset) + complete + text.slice(offset + rendered.length);
+              if (code.getBoundingClientRect().height <= 0) continue;
+              const visible = (code as HTMLElement).innerText;
+              const lines = visible.split('\n');
+              const firstLine = lines[0] ?? '';
+              if (!firstLine || lines.length < 2 || text.includes(visible)) continue;
+              // A unique, line-aligned prefix binds the code node to this outer message.
+              const offset = text.indexOf(firstLine);
+              if (offset < 0 || (offset > 0 && text[offset - 1] !== '\n')
+              || text.indexOf(firstLine, offset + firstLine.length) !== -1) continue;
+              let end = offset + firstLine.length;
+              if (end < text.length && text[end] !== '\n') continue;
+              let matchedLines = 1;
+              while (matchedLines < lines.length) {
+              const line = lines[matchedLines]!;
+              const nextEnd = end + 1 + line.length;
+              if (text[end] !== '\n' || !text.startsWith(line, end + 1)
+              || (nextEnd < text.length && text[nextEnd] !== '\n')) break;
+              end = nextEnd;
+              matchedLines += 1;
+              }
+              if (matchedLines === lines.length) continue;
+              // Keep the outer message's non-code prose and footer byte-for-byte.
+              text = text.slice(0, offset) + visible + text.slice(end);
               }
             }
             rows.push({
@@ -1709,17 +1724,32 @@ export async function readPageObservation(
               }
               let text = (element as HTMLElement).innerText;
               if (role === 'assistant') {
-                // Restore only an unambiguous truncated prefix from its visible code element.
-                // The outer rendered text continues to own surrounding prose and message order.
+                // Preserve only text exposed by the code element's rendered innerText.
+                // textContent can include hidden descendants and is never publication evidence.
                 for (const code of Array.from(element.querySelectorAll('pre code'))) {
-                  if (code.getBoundingClientRect().height <= 0) continue;
-                  const rendered = (code as HTMLElement).innerText;
-                  const complete = code.textContent ?? '';
-                  if (!rendered || !complete.startsWith(rendered) || complete.length <= rendered.length) continue;
-                  if (text.includes(complete)) continue;
-                  const offset = text.indexOf(rendered);
-                  if (offset < 0 || text.indexOf(rendered, offset + rendered.length) !== -1) continue;
-                  text = text.slice(0, offset) + complete + text.slice(offset + rendered.length);
+                if (code.getBoundingClientRect().height <= 0) continue;
+                const visible = (code as HTMLElement).innerText;
+                const lines = visible.split('\n');
+                const firstLine = lines[0] ?? '';
+                if (!firstLine || lines.length < 2 || text.includes(visible)) continue;
+                // A unique, line-aligned prefix binds the code node to this outer message.
+                const offset = text.indexOf(firstLine);
+                if (offset < 0 || (offset > 0 && text[offset - 1] !== '\n')
+                || text.indexOf(firstLine, offset + firstLine.length) !== -1) continue;
+                let end = offset + firstLine.length;
+                if (end < text.length && text[end] !== '\n') continue;
+                let matchedLines = 1;
+                while (matchedLines < lines.length) {
+                const line = lines[matchedLines]!;
+                const nextEnd = end + 1 + line.length;
+                if (text[end] !== '\n' || !text.startsWith(line, end + 1)
+                || (nextEnd < text.length && text[nextEnd] !== '\n')) break;
+                end = nextEnd;
+                matchedLines += 1;
+                }
+                if (matchedLines === lines.length) continue;
+                // Keep the outer message's non-code prose and footer byte-for-byte.
+                text = text.slice(0, offset) + visible + text.slice(end);
                 }
               }
               let completionReady = false;
