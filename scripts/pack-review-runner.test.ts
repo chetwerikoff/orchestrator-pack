@@ -3815,6 +3815,30 @@ describe('Issue #2576 owned worktree lifecycle with real disposable Git', () => 
     expect(existsSync(outside)).toBe(true);
   });
 
+  it('preserves an abandoned owner while a live run references its checkout through a symlink alias', async () => {
+    const f = realGitFixture();
+    const old = seedCheckout(f, 257621);
+    const alias = join(f.root, 'alias-to-live-review');
+    symlinkSync(old.target, alias, 'dir');
+    const live = createPackReviewRun({
+      projectId, storeRoot: f.storeRoot, prNumber: 257622, headSha: f.head,
+      trustedPackRoot: process.cwd(), sourceRepoRoot: f.repo, canonicalRepository: repository,
+    }).run;
+    updatePackReviewRun(live.id, {
+      reviewTargetRoot: alias, runnerPid: process.pid,
+    }, { projectId, storeRoot: f.storeRoot });
+    await startPackReview(input(f, 257623));
+    expect(existsSync(old.target)).toBe(true);
+    expect(registered(f.repo, old.target)).toBe(true);
+
+    setPackReviewRunTerminal(live.id, 'failed', {
+      runnerPid: 99999999, heartbeatAtUtc: '2000-01-01T00:00:00.000Z',
+    }, { projectId, storeRoot: f.storeRoot });
+    await startPackReview(input(f, 257624));
+    expect(existsSync(old.target)).toBe(false);
+    expect(registered(f.repo, old.target)).toBe(false);
+  });
+
   it('preserves a registered checkout whose on-disk Git identity was replaced', async () => {
     const f = realGitFixture();
     const owned = seedCheckout(f, 257619);
