@@ -3,7 +3,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mapGptReplyToReviewPayload } from './lib/pack-gpt-reviewer.ts';
 import { formatPackGptSourceCommentEnvelope, type PackGptSourceIdentity } from './lib/pack-gpt-source-comment-contract.ts';
@@ -3765,6 +3765,30 @@ describe('Issue #2576 owned worktree lifecycle with real disposable Git', () => 
     expect(existsSync(unrelated)).toBe(true);
   });
 
+  it('reclaims a hard-killed, grace-expired active PR A checkout on an ordinary PR B start', async () => {
+    const f = realGitFixture();
+    const original = createPackReviewRun({
+      projectId, storeRoot: f.storeRoot, prNumber: 257630, headSha: f.head,
+      trustedPackRoot: process.cwd(), sourceRepoRoot: f.repo, canonicalRepository: repository,
+    }).run;
+    const target = join(f.storeRoot, 'worktrees', original.id);
+    mkdirSync(join(f.storeRoot, 'worktrees'), { recursive: true });
+    git(f.repo, 'worktree', 'add', '--detach', target, f.head);
+    updatePackReviewRun(original.id, {
+      status: 'reviewing', latestRunStatus: 'reviewing', reviewTargetRoot: target,
+      runnerPid: 99999999,
+    }, { projectId, storeRoot: f.storeRoot, now: new Date('2000-01-01T00:00:00.000Z') });
+    const before = getPackReviewRun(original.id, { projectId, storeRoot: f.storeRoot });
+    expect(before?.status).toBe('reviewing');
+    expect(registered(f.repo, target)).toBe(true);
+
+    await startPackReview(input(f, 257631));
+    expect(existsSync(target)).toBe(false);
+    expect(registered(f.repo, target)).toBe(false);
+    // The cleanup sweep never terminalizes, reclaims or edits another PR's run record.
+    expect(getPackReviewRun(original.id, { projectId, storeRoot: f.storeRoot })).toEqual(before);
+  });
+
   it('does not delete an outside-store persisted path, a symlink, or a cross-record live alias', async () => {
     const f = realGitFixture();
     const outside = join(f.root, 'private-unrelated');
@@ -3860,6 +3884,110 @@ describe('Issue #2576 owned worktree lifecycle with real disposable Git', () => 
     await startPackReview(input(f, 257620));
     expect(existsSync(owned.target)).toBe(true);
     expect(registered(f.repo, owned.target)).toBe(true);
+  });
+
+  it('refuses a same-repository sibling Gitdir substituted into a registered checkout', async () => {
+    const f = realGitFixture();
+    const owned = seedCheckout(f, 257632);
+    const sibling = join(f.root, 'sibling-worktree');
+    git(f.repo, 'worktree', 'add', '--detach', sibling, f.head);
+    const originalGitDir = git(owned.target, 'rev-parse', '--absolute-git-dir');
+    const siblingGitDir = git(sibling, 'rev-parse', '--absolute-git-dir');
+    expect(originalGitDir).not.toBe(siblingGitDir);
+    writeFileSync(join(owned.target, '.git'), readFileSync(join(sibling, '.git'), 'utf8'));
+    // These were the old, insufficient identity checks: both still succeed.
+    expect(resolve(owned.target, git(owned.target, 'rev-parse', '--git-common-dir')))
+      .toBe(resolve(f.repo, git(f.repo, 'rev-parse', '--git-common-dir')));
+    expect(git(owned.target, 'rev-parse', '--show-toplevel')).toBe(owned.target);
+    expect(git(owned.target, 'rev-parse', '--absolute-git-dir')).toBe(siblingGitDir);
+
+    const diagnostics: string[] = [];
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      diagnostics.push(String(chunk));
+      return true;
+    });
+    try {
+      await startPackReview(input(f, 257633));
+    } finally {
+      write.mockRestore();
+    }
+    expect(diagnostics.join('')).toContain('registered checkout Git identity differs from selected source repository');
+    expect(existsSync(owned.target)).toBe(true);
+    expect(registered(f.repo, owned.target)).toBe(true);
+    expect(existsSync(sibling)).toBe(true);
+    expect(registered(f.repo, sibling)).toBe(true);
+  });
+
+  it('repairs a missing-directory GPT same-round registration without losing saved source slots', async () => {
+    const f = realGitFixture();
+    const prNumber = 257640;
+    process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    const sourceClean = (invocationId: string) => JSON.stringify({
+      schema: 'turn-result/v1', state: 'ok', scope: 'invocation',
+      cause: 'completed_page_only', invocation_id: invocationId, send_count: 1,
+    }) + '\n' + cleanPayload();
+    const busy = JSON.stringify({
+      schema: 'turn-result/v1', state: 'profile_busy', scope: 'profile',
+      cause: 'profile_busy', invocation_id: 'inv-busy-2576', send_count: 0,
+    });
+    const first = await startPackReview({
+      ...input(f, prNumber),
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: sourceClean('inv-2576-source-01') }],
+        'source-02': [{ stdout: busy, exitCode: 13 }, { stdout: busy, exitCode: 13 }],
+        'source-03': [{ stdout: sourceClean('inv-2576-source-03') }],
+      },
+    });
+    expect(first, JSON.stringify(first)).toMatchObject({
+      ok: true, status: 'reviewing',
+      coverage: { kind: 'partial', completedSourceCount: 2, cardinality: 3 },
+    });
+    const runId = String(first.runId);
+    const target = join(f.storeRoot, 'worktrees', runId);
+    const before = getPackReviewRun(runId, { projectId, storeRoot: f.storeRoot })!;
+    const completed = before.reviewRound!.sourceSlots
+      .filter((slot) => slot.slotId !== 'source-02')
+      .map((slot) => ({ slotId: slot.slotId, invocationId: slot.invocationId, payload: slot.payload }));
+    expect(existsSync(target)).toBe(true);
+    expect(registered(f.repo, target)).toBe(true);
+
+    // Reproduce the legacy rmSync-only crash footprint while retaining Git registration.
+    rmSync(target, { recursive: true, force: true });
+    expect(existsSync(target)).toBe(false);
+    expect(registered(f.repo, target)).toBe(true);
+    updatePackReviewRun(runId, { runnerPid: 99999999 }, {
+      projectId, storeRoot: f.storeRoot, now: new Date('2000-01-01T00:00:00.000Z'),
+    });
+    let readded = false;
+    const second = await startPackReview({
+      ...input(f, prNumber),
+      claimMode: 'acquire',
+      fixtureGptAttemptObserver: async () => ({
+        state: 'replacement_eligible' as const, replacementEligible: true, slotId: 'source-02',
+      }),
+      fixtureReviewBySourceSlot: {
+        'source-02': [{ stdout: sourceClean('inv-2576-replacement-02') }],
+      },
+      fixtureAfterReviewWorktreeAdd: (path) => {
+        expect(path).toBe(target);
+        expect(existsSync(path)).toBe(true);
+        expect(registered(f.repo, path)).toBe(true);
+        readded = true;
+      },
+    });
+    expect(second.ok, JSON.stringify(second)).toBe(true);
+    expect(second.runId).toBe(runId);
+    expect(readded).toBe(true);
+    const after = getPackReviewRun(runId, { projectId, storeRoot: f.storeRoot })!;
+    expect(after.reviewRound!.sourceSlots
+      .filter((slot) => slot.slotId !== 'source-02')
+      .map((slot) => ({ slotId: slot.slotId, invocationId: slot.invocationId, payload: slot.payload })))
+      .toEqual(completed);
+    expect(existsSync(target)).toBe(false);
+    expect(registered(f.repo, target)).toBe(false);
   });
 
   it('preserves a terminal-status owner paused before finally and removes only after it exits', async () => {
