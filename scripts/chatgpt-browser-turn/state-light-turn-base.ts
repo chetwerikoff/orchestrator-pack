@@ -614,8 +614,8 @@ export function keyedHarvestCandidate(
   // Keyed recovery proves one owned assistant, never merely the last candidate.
   if (assistants.length !== 1) return { state: 'continuity-unproven' };
   const assistant = assistants[0]!;
-  const reply = normalizeVisibleText(assistant.text);
-  if (!assistant.key || !reply) return { state: 'continuity-unproven' };
+  const reply = assistant.text;
+  if (!assistant.key || !normalizeVisibleText(reply)) return { state: 'continuity-unproven' };
   return { state: 'ready', reply, assistantKey: assistant.key };
 }
 
@@ -666,9 +666,39 @@ export async function revalidateKeyedHarvest(
               ? rawStyle
               : (element.getAttribute?.(args.unitKeyAttribute) ?? '').endsWith(':user') ? args.userMessageStyle : undefined;
             const role = style === args.userMessageStyle ? 'user' : style === args.assistantMessageStyle ? 'assistant' : '';
+            let text = (element as HTMLElement).innerText;
+            if (role === 'assistant') {
+              // Preserve only text exposed by the code element's rendered innerText.
+              // textContent can include hidden descendants and is never publication evidence.
+              for (const code of Array.from(element.querySelectorAll('pre code'))) {
+                if (code.getBoundingClientRect().height <= 0) continue;
+                const visible = (code as HTMLElement).innerText;
+                const lines = visible.split('\n');
+                const firstLine = lines[0] ?? '';
+                if (!firstLine || lines.length < 2 || text.includes(visible)) continue;
+                // A unique, line-aligned prefix binds the code node to this outer message.
+                const offset = text.indexOf(firstLine);
+                if (offset < 0 || (offset > 0 && text[offset - 1] !== '\n')
+                  || text.indexOf(firstLine, offset + firstLine.length) !== -1) continue;
+                let end = offset + firstLine.length;
+                if (end < text.length && text[end] !== '\n') continue;
+                let matchedLines = 1;
+                while (matchedLines < lines.length) {
+                  const line = lines[matchedLines]!;
+                  const nextEnd = end + 1 + line.length;
+                  if (text[end] !== '\n' || !text.startsWith(line, end + 1)
+                    || (nextEnd < text.length && text[nextEnd] !== '\n')) break;
+                  end = nextEnd;
+                  matchedLines += 1;
+                }
+                if (matchedLines === lines.length) continue;
+                // Keep the outer message's non-code prose and footer byte-for-byte.
+                text = text.slice(0, offset) + visible + text.slice(end);
+              }
+            }
             rows.push({
               role,
-              text: (element as HTMLElement).innerText,
+              text,
               key: canonicalKey(element),
               domIndex,
               complete: true,
@@ -785,8 +815,8 @@ export function ownedPromptMatches(visibleText: string, expectedMarker: string):
 }
 
 function normalizeReplyForStability(text: string): string {
-  // The stability oracle is the original observed innerText; output normalization
-  // remains exclusively in normalizeVisibleText at the incumbent publication seam.
+  // Stability and publication use the same original observation; normalization is
+  // reserved for explicit comparison-only callers.
   return text;
 }
 
@@ -1319,8 +1349,8 @@ export function classifyPageObservation(
         ...(observedUserHeads ? { observedUserHeads } : {}),
       };
     }
-    const finalReply = normalizeVisibleText(assistants.at(-1)?.text ?? '');
-    if (finalReply) return { state: 'ready', reply: finalReply };
+    const finalReply = assistants.at(-1)?.text ?? '';
+    if (normalizeVisibleText(finalReply)) return { state: 'ready', reply: finalReply };
     return {
       state: 'uncertain',
       cause: uncertainCause,
@@ -1329,8 +1359,8 @@ export function classifyPageObservation(
   }
 
   if (!inProgress && assistants.length > 0) {
-    const finalReply = normalizeVisibleText(assistants.at(-1)?.text ?? '');
-    if (finalReply) return { state: 'ready', reply: finalReply };
+    const finalReply = assistants.at(-1)?.text ?? '';
+    if (normalizeVisibleText(finalReply)) return { state: 'ready', reply: finalReply };
   }
 
   return { state: 'waiting' };
@@ -1692,7 +1722,36 @@ export async function readPageObservation(
                 observedMessageNodes += 1;
                 if (role === 'assistant') observedAssistantNodes += 1;
               }
-              const text = (element as HTMLElement).innerText;
+              let text = (element as HTMLElement).innerText;
+              if (role === 'assistant') {
+                // Preserve only text exposed by the code element's rendered innerText.
+                // textContent can include hidden descendants and is never publication evidence.
+                for (const code of Array.from(element.querySelectorAll('pre code'))) {
+                  if (code.getBoundingClientRect().height <= 0) continue;
+                  const visible = (code as HTMLElement).innerText;
+                  const lines = visible.split('\n');
+                  const firstLine = lines[0] ?? '';
+                  if (!firstLine || lines.length < 2 || text.includes(visible)) continue;
+                  // A unique, line-aligned prefix binds the code node to this outer message.
+                  const offset = text.indexOf(firstLine);
+                  if (offset < 0 || (offset > 0 && text[offset - 1] !== '\n')
+                    || text.indexOf(firstLine, offset + firstLine.length) !== -1) continue;
+                  let end = offset + firstLine.length;
+                  if (end < text.length && text[end] !== '\n') continue;
+                  let matchedLines = 1;
+                  while (matchedLines < lines.length) {
+                    const line = lines[matchedLines]!;
+                    const nextEnd = end + 1 + line.length;
+                    if (text[end] !== '\n' || !text.startsWith(line, end + 1)
+                      || (nextEnd < text.length && text[nextEnd] !== '\n')) break;
+                    end = nextEnd;
+                    matchedLines += 1;
+                  }
+                  if (matchedLines === lines.length) continue;
+                  // Keep the outer message's non-code prose and footer byte-for-byte.
+                  text = text.slice(0, offset) + visible + text.slice(end);
+                }
+              }
               let completionReady = false;
               let continuationVisible = false;
               try {
@@ -5268,8 +5327,8 @@ async function runTurnCore(
         && freshTranscriptAssistants.length === 1
         && (ownedWindowCompletionReady || transcriptSnapshot.carriers.length === 1 && transcriptSnapshot.carriers[0]!.role === 'assistant' && transcriptSnapshot.carriers[0]!.completionReady === true)
       ) {
-        const reply = normalizeVisibleText(freshTranscriptAssistants[0]!.text);
-        if (reply && reply === freshMarkerlessReply) {
+        const reply = freshTranscriptAssistants[0]!.text;
+        if (normalizeVisibleText(reply) && reply === freshMarkerlessReply) {
           forcedDecision = { state: 'ready', reply };
           uncertainCause = '';
           completionReadySeen = true;
@@ -5678,15 +5737,15 @@ async function runTurnCore(
           const finalAssistantMessages = finalObservation.messages.filter((message) => message.role === 'assistant');
           const finalUsers = finalObservation.messages.filter((message) => message.role === 'user');
           const finalMarkerlessReply = finalKeyedAssistant.length === 1
-            ? normalizeVisibleText(finalKeyedAssistant[0]!.text)
+            ? finalKeyedAssistant[0]!.text
             : finalAssistantMessages.length === 1
-              ? normalizeVisibleText(finalAssistantMessages[0]!.text)
+              ? finalAssistantMessages[0]!.text
               : '';
           const finalMarkerlessEligible = finalReady
             && (ownedCarrierKey
               ? finalKeyedCandidate?.state === 'ready'
                 && finalKeyedAssistant.length === 1
-                && normalizeVisibleText(finalKeyedAssistant[0]!.text) === managerReply
+                && finalKeyedAssistant[0]!.text === managerReply
               : !hasOwnedUserMessage(finalObservation.messages, marker)
                 && finalUsers.length === 0
                 && finalMarkerlessReply === managerReply
