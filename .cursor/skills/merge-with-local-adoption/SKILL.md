@@ -220,9 +220,10 @@ real ambiguity.
 Read required checks, review state, draft state, and current PR head:
 
 ```bash
-gh pr checks P --repo $TARGET_REPOSITORY
+gh pr checks P --repo $TARGET_REPOSITORY --json name,state,bucket,link,startedAt,completedAt,workflow,description
 gh pr view P --repo $TARGET_REPOSITORY \
-  --json state,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid
+  --json state,isDraft,mergeable,mergeStateStatus,headRefOid
+gh api repos/$TARGET_REPOSITORY/pulls/P/reviews
 ```
 
 In delegated-integration mode, apply the stricter admission section above: no repository-owned
