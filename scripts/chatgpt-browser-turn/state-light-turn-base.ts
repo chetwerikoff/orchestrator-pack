@@ -695,10 +695,6 @@ export async function revalidateKeyedHarvest(
                 // Keep the outer message's non-code prose and footer byte-for-byte.
                 text = text.slice(0, offset) + visible + text.slice(end);
               }
-              if (matchedLines === lines.length) continue;
-              // Keep the outer message's non-code prose and footer byte-for-byte.
-              text = text.slice(0, offset) + visible + text.slice(end);
-              }
             }
             rows.push({
               role,
@@ -1754,10 +1750,6 @@ export async function readPageObservation(
                   if (matchedLines === lines.length) continue;
                   // Keep the outer message's non-code prose and footer byte-for-byte.
                   text = text.slice(0, offset) + visible + text.slice(end);
-                }
-                if (matchedLines === lines.length) continue;
-                // Keep the outer message's non-code prose and footer byte-for-byte.
-                text = text.slice(0, offset) + visible + text.slice(end);
                 }
               }
               let completionReady = false;
