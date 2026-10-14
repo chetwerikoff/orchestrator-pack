@@ -1769,10 +1769,13 @@ function validateReviewWorktreePath(storeRoot: string, runId: string, target: st
 
 /** Terminal status is not process exit: reuse the existing dead-PID + heartbeat grace predicate. */
 function reviewWorktreeHolderAbandoned(record: PackReviewRunRecord): boolean {
+  // An active run must pass existing stale-run reconciliation before cleanup
+  // can infer it has no concurrent claim/replacement owner.
+  if (PACK_REVIEW_ACTIVE_STATUSES.has(record.status)) return false;
   if (!isPackReviewRunStale({ ...record, status: 'reviewing' })) return false;
-  // A frozen, unfinished GPT round is still eligible for the existing same-round recovery.
+  // Even all-terminal GPT source slots can await same-round aggregate recovery.
   return !(record.reviewRound && record.reviewRound.settledSourceCount === undefined
-    && record.reviewRound.sourceSlots.some((slot) => slot.lifecycle !== 'terminal'));
+    && !hasPersistedPackReviewVerdict(record));
 }
 
 function verifyReviewWorktreeOwner(
