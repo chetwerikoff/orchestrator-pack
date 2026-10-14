@@ -17,7 +17,7 @@ import {
   RENDERED_STOP_BUTTON_SELECTOR,
   matchesStopButtonSelector,
 } from './product-page-selectors.ts';
-import { __testComposerMutation, __testWaitForExistingGeneration } from './state-light-turn-base.ts';
+import { __testComposerMutation, __testWaitForExistingGeneration, atomicSnapshotSignature, keyedHarvestCandidate, revalidateKeyedHarvest } from './state-light-turn-base.ts';
 import {
   buildObservationHeartbeat,
   classifyBrowserGptPageTurnStatus,
@@ -338,7 +338,7 @@ describe('owned marker primitive', () => {
 
 describe('DOM observation boundary', () => {
   async function readAtomicEvidence(
-    messages: Array<{ role: 'user' | 'assistant'; text: string }>,
+    messages: Array<{ role: 'user' | 'assistant'; text: string; code?: { rendered: string; complete: string }; domTextContent?: string }>,
     generationQuery: () => unknown,
   ) {
     const elements = messages.map((message, index) => ({
@@ -347,13 +347,16 @@ describe('DOM observation boundary', () => {
         if (name === 'data-message-id') return `${message.role}-${index}-12345678`;
         return null;
       },
-      closest: () => ({ querySelector: () => null }),
+      closest: () => ({ querySelector: (selector: string) => message.code && selector === ASSISTANT_TURN_ACTION_SELECTOR ? {} : null }),
       querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
         ? { getAttribute: () => message.role === 'user' ? 'user-message' : 'assistant-message' }
         : null,
-      querySelectorAll: () => [],
+      querySelectorAll: (selector: string) => selector === 'pre code' && message.role === 'assistant' && message.code
+        ? [{ innerText: message.code.rendered, textContent: message.code.complete, getBoundingClientRect: () => ({ height: 1 }) }]
+        : [],
       getBoundingClientRect: () => ({ height: 1 }),
       innerText: message.text,
+      textContent: message.domTextContent,
     }));
     const querySelectorAll = vi.fn((selector: string) => {
       if (selector !== '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]') return [];
@@ -373,7 +376,7 @@ describe('DOM observation boundary', () => {
         : scalarLocator()),
     };
     try {
-      return { result: await readPageObservation(page), querySelectorAll };
+      return { result: await readPageObservation(page), querySelectorAll, page };
     } finally {
       if (priorDocument === undefined) delete (globalThis as { document?: unknown }).document;
       else (globalThis as { document?: unknown }).document = priorDocument;
@@ -483,6 +486,58 @@ describe('DOM observation boundary', () => {
       observation.result.pageTurnEvidence!.generationInProgress,
       observation.result.pageTurnEvidence!.observedAssistantNodes,
     )).toBe('unknown');
+  });
+
+
+  it('preserves all raw Python indentation, tabs and blank lines from an atomic assistant observation', async () => {
+    const full = [
+      'Before  code',
+      '',
+      'def process():',
+      '    if ready:',
+      '        print("eight spaces")',
+      '\t\tprint("two tabs")',
+      '',
+      'After  code',
+      'EXECUTION_STATUS: complete',
+    ].join('\n');
+    const { result } = await readAtomicEvidence([
+      { role: 'user', text: markedPrompt },
+      { role: 'assistant', text: full },
+    ], () => null);
+    expect(result.messages[1]?.text).toBe(full);
+    expect(classifyPageObservation(result.messages, 0, marker, false)).toEqual({ state: 'ready', reply: full });
+    expect(replyStabilityMatches(full, full.replace('        print', '       print'))).toBe(false);
+  });
+
+  it('recovers a synthetic code-prefix omission without replacing prose or screen-reader copy', async () => {
+    // Fixture-only source: AC1 remains unverified (two tabs, zero assistant code blocks).
+    const renderedCode = [
+      'def compare_digests():',
+      '    if serial_digest.digest() != pooled_digest.digest():',
+    ].join('\n');
+    const completeCode = renderedCode + '\n        raise ValueError("different")\n    return True';
+    const footer = '\n\nFollowing prose\nEXECUTION_STATUS: complete';
+    const partialOuter = 'Before\n\n' + renderedCode + footer;
+    const expected = 'Before\n\n' + completeCode + footer;
+    const { result, page } = await readAtomicEvidence([
+      { role: 'user', text: markedPrompt },
+      { role: 'assistant', text: partialOuter, code: { rendered: renderedCode, complete: completeCode }, domTextContent: 'SCREEN-READER-ONLY' },
+    ], () => null);
+    expect(result.messages[1]?.text).toBe(expected);
+    expect(result.messages[1]?.text).not.toContain('SCREEN-READER-ONLY');
+    expect(result.snapshot?.carriers[1]?.text).toBe(expected);
+    const snapshot = result.snapshot!;
+    const userKey = snapshot.carriers[0]!.key!;
+    const previous = { complete: true, carriers: [] };
+    const candidate = keyedHarvestCandidate(snapshot, previous, userKey);
+    expect(candidate.state).toBe('ready');
+    if (candidate.state !== 'ready') throw new Error('expected_keyed_candidate');
+    expect(candidate.reply).toBe(expected);
+    expect(await revalidateKeyedHarvest(page, previous, userKey, {
+      ...candidate,
+      snapshotSignature: atomicSnapshotSignature(snapshot),
+    })).toEqual({ state: 'ready', reply: expected });
   });
 
   it('reads complete rendered innerText and never textContent', async () => {

@@ -1484,6 +1484,7 @@ describe('state-light fresh conversation collision recovery', () => {
       userMarkerlessFromRead?: number;
       assistantCarrierKeysByRead?: readonly string[];
       neverMarkerProof?: boolean;
+      assistantCode?: { rendered: string; complete: string };
     } = {},
   ) {
     const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0, composerText: '' };
@@ -1587,7 +1588,13 @@ describe('state-light fresh conversation collision recovery', () => {
                 if (query === uiAdapter.ASSISTANT_TURN_IN_PROGRESS_SELECTOR) return generating ? {} : null;
                 return null;
               },
-              querySelectorAll: () => [],
+              querySelectorAll: (selector: string) => selector === 'pre code' && message.role === 'assistant' && observationOverrides.assistantCode
+                ? [{
+                  innerText: observationOverrides.assistantCode.rendered,
+                  textContent: observationOverrides.assistantCode.complete,
+                  getBoundingClientRect: () => ({ height: 1 }),
+                }]
+                : [],
               closest: () => ({
                 querySelector: (query: string) => {
                   if (query.includes('continue-generating') || query.includes('continue_generating')) return continuationVisible ? {} : null;
@@ -2160,6 +2167,84 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(state.reloads).toBe(0);
     expect(existsSync(output)).toBe(false);
+  });
+
+
+  it.each([
+    { mode: 'marker-visible', options: { includeOwnedUser: true } },
+    { mode: 'keyed-markerless', options: { includeOwnedUser: true, keyedOwnedMessages: true, markerlessOwnedUserFromRead: 4 } },
+    { mode: 'fresh-markerless', options: {} },
+  ])('publishes the complete formatted primary through $mode without normalization', async ({ mode, options }) => {
+    const prompt = 'PROMPT-2590-' + mode;
+    const reply = [
+      'Leading  prose',
+      '',
+      'def main():',
+      '    if ready:',
+      '        if nested:',
+      '\t\t\treturn "kept"',
+      '        return "eight"',
+      '',
+      'Trailing  prose',
+      'EXECUTION_STATUS: complete',
+    ].join('\n');
+    const output = join(stateDir, 'formatted-2590-' + mode + '.txt');
+    const { page, state } = unrenderedOwnedMessagePage(prompt, reply, false, false, false, [reply], [], options);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+    const expectedBytes = Buffer.from(reply, 'utf8');
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'ok', cause: 'completed_page_only', send_count: 1,
+      output: {
+        byte_length: expectedBytes.byteLength,
+        sha256: createHash('sha256').update(expectedBytes).digest('hex'),
+      },
+    });
+    expect(readFileSync(output)).toEqual(expectedBytes);
+    expect(state.reads).toBeGreaterThanOrEqual(5);
+  });
+
+  it('publishes complete fixture-only long code and following footer via the existing primary', async () => {
+    const prompt = 'PROMPT-2590-LONG-CODE';
+    const renderedCode = 'def verify():\n    if serial_digest.digest() != pooled_digest.digest():';
+    const completeCode = renderedCode + '\n        raise ValueError("digest mismatch")\n    return True';
+    const outer = 'Before\n\n' + renderedCode + '\n\nFollowing prose\nEXECUTION_STATUS: complete';
+    const expected = outer.replace(renderedCode, completeCode);
+    const output = join(stateDir, 'long-code-2590.txt');
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt, outer, false, false, false, [outer], [],
+      { includeOwnedUser: true, assistantCode: { rendered: renderedCode, complete: completeCode } },
+    );
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'ok', cause: 'completed_page_only', send_count: 1,
+      output: {
+        byte_length: Buffer.byteLength(expected, 'utf8'),
+        sha256: createHash('sha256').update(expected, 'utf8').digest('hex'),
+      },
+    });
+    expect(readFileSync(output, 'utf8')).toBe(expected);
+    expect(state.reads).toBeGreaterThanOrEqual(5);
+  });
+
+  it('rejects a changed middle indentation on the fresh precommit read', async () => {
+    const prompt = 'PROMPT-2590-INDENT-DRIFT';
+    const reply = 'Start\n\n    if ready:\n        return "eight"\n\nEXECUTION_STATUS: complete';
+    const drift = reply.replace('        return', '       return');
+    const output = join(stateDir, 'indent-drift-2590.txt');
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt, reply, false, false, false, [reply, reply, drift, reply, reply, reply],
+      [],
+      { includeOwnedUser: true },
+    );
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'ok', cause: 'completed_page_only', send_count: 1,
+    });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+    expect(state.reads).toBeGreaterThanOrEqual(8);
   });
 
   it('publishes the full final owned reply once through the atomic evaluateAll observation', async () => {
