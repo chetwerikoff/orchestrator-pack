@@ -1,0 +1,19 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2571,
+  "declared_paths": [
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/execute-issue-manager-boundary.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/execute-issue-manager-boundary.ts"
+  ],
+  "source_revision": "00c6f7efd5130400bcdf2e81d59f79042355d487"
+}
