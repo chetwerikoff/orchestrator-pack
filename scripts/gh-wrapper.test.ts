@@ -2789,7 +2789,7 @@ describe('Issue #2589 merge-skill executable gh read coverage', () => {
 
   function executableGhCommands(source: string): string[] {
     // Join continued shell commands before examining executable instructions.
-    const joined = source.replace(/\\\r?\n[ \t]*/g, ' ');
+    const joined = source.replace(/[ \t]*\\\r?\n[ \t]*/g, ' ');
     const shellLines = joined.split(/\r?\n/).map((line) => line.trim())
       .filter((line) => /^gh\s+/.test(line));
     const inlineCommands = [...joined.matchAll(/\x60(gh\s+[^\x60\r\n]+)\x60/g)]
