@@ -5513,15 +5513,43 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       .toBe(newerId);
   });
 
-  function installSameRunVerdict(
+  async function installSameRunVerdict(
     f: ReturnType<typeof seed>, verdict: 'clean' | 'findings' = 'clean',
-  ): void {
+  ): Promise<void> {
     const original = getPackReviewRun(f.runId, f.options)!;
-    const findings = verdict === 'findings' ? [{
-      type: 'quality', code: 'quality:head-drift-fixture',
-      severity: 'blocking', path: 'scripts/pack-review-runner.ts',
-      summary: 'synthetic existing finding', source: 'gpt-browser',
-    }] : [];
+    // Journaled GPT verdicts are valid only with a credentialed source
+    // census. Populate the existing exact-invocation slots as the concurrent
+    // review publisher would, rather than manufacturing a bare verdict.
+    const sourceSlots = await Promise.all(original.reviewRound!.sourceSlots.map(async (slot) => {
+      const identity: PackGptSourceIdentity = {
+        repository: repoSlug, prNumber, headSha: HEAD_A, runId: f.runId,
+        slotId: slot.slotId, invocationId: slot.invocationId!,
+      };
+      const resolved = await resolvePackGptSourceComment({
+        identity, transport: f.sourceTransport,
+      });
+      if (resolved.kind !== 'credentialed') throw new Error('same-run fixture requires credentialed sources');
+      return {
+        ...slot,
+        lifecycle: 'terminal' as const,
+        terminalClass: resolved.payload.verdict === 'findings' ? 'complete_findings' : 'complete_clean',
+        terminalResult: {
+          schema: 'turn-result/v1', state: 'ok', scope: 'invocation',
+          cause: 'completed_page_only', invocation_id: identity.invocationId, send_count: 1,
+          source_comment_authority: 'credentialed_github',
+          source_comment_receipt: resolved.receipt,
+        },
+        payload: resolved.payload,
+      };
+    }));
+    const findings = sourceSlots.flatMap((slot) =>
+      (slot.payload.findings as Array<Record<string, unknown>>).map((finding) => ({
+        ...finding, sourceSlotId: slot.slotId,
+      })));
+    expect(findings.length > 0 ? 'findings' : 'clean').toBe(verdict);
+    updatePackReviewRun(f.runId, {
+      reviewRound: { ...original.reviewRound!, sourceSlots },
+    }, f.options);
     const recordedAtUtc = new Date().toISOString();
     setPackReviewRunTerminal(f.runId, verdict === 'clean' ? 'up_to_date' : 'changes_requested', {
       reviewVerdict: verdict, findingCount: findings.length, findings,
@@ -5604,7 +5632,13 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
 
     it.each(['clean', 'findings'] as const)(
       'head drift same-run verdict preserves persisted %s during source census', async (verdict) => {
-        const f = seed(3);
+        const f = seed(3, verdict === 'findings' ? {
+          0: JSON.stringify({ findings: [{
+            type: 'quality', code: 'quality:head-drift-fixture',
+            severity: 'blocking', path: 'scripts/pack-review-runner.ts',
+            summary: 'synthetic existing finding', source: 'gpt-browser',
+          }] }),
+        } : {});
         f.expireGrace();
         const input = { ...f.input, fixtureCurrentPrHeadSha: HEAD_A };
         let settled = false;
@@ -5613,7 +5647,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
           listComments: async () => {
             if (!settled) {
               settled = true;
-              installSameRunVerdict(f, verdict);
+              await installSameRunVerdict(f, verdict);
             }
             input.fixtureCurrentPrHeadSha = HEAD_B;
             return f.sourceTransport.listComments();
@@ -5646,7 +5680,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
         ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
         beforeStaleStatusWrite: async () => {
           called += 1;
-          installSameRunVerdict(f);
+          await installSameRunVerdict(f);
         },
       });
       expect(called).toBe(1);
@@ -5672,7 +5706,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
         fixtureRequiredStatusWriter: async (request) => {
           if (request.state === 'error' && !restored) {
             restored = true;
-            installSameRunVerdict(f);
+            await installSameRunVerdict(f);
             writes.push('success');
             await Promise.resolve();
           }
