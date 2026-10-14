@@ -757,7 +757,7 @@ describe('supervised Task launch assistant', () => {
     ['firefighter-manager', 'task', profileNamesForTask('manager')],
     ['routine-smoke', 'smoke', profileNamesForSmoke('routine')],
     ['complex-smoke', 'smoke', profileNamesForSmoke('complex')],
-  ] as const)('emits global and agent browser denies in OpenCode JSON for %s', (_name, surface, names) => {
+  ] as const)('emits global and agent browser and .env read denies in OpenCode JSON for %s', (_name, surface, names) => {
     const resolved = resolveSemanticExecutorProfile({
       surface,
       names,
@@ -767,7 +767,7 @@ describe('supervised Task launch assistant', () => {
     const invocation = buildExecutorCommand(resolved.profile);
     const agentName = invocation.agentName ?? '';
     const config = JSON.parse(invocation.inlineConfigJson ?? '{}') as {
-      permission?: { bash?: Record<string, string>; skill?: Record<string, string> };
+      permission?: { bash?: Record<string, string>; skill?: Record<string, string>; read?: Record<string, string> };
       agent?: Record<string, Record<string, unknown>>;
     };
     const agent = config.agent?.[agentName];
@@ -778,7 +778,7 @@ describe('supervised Task launch assistant', () => {
     };
     expect(agentName).toMatch(/^pack-opk-[a-f0-9]{32}$/u);
     expect(config.agent).not.toHaveProperty('pack');
-    expect(config.permission).toEqual({ bash: bashDenies, skill: { 'browser-skill': 'deny' } });
+    expect(config.permission).toEqual({ bash: bashDenies, skill: { 'browser-skill': 'deny' }, read: { '*.env': 'deny', '*.env.*': 'deny' } });
     expect(agent).toMatchObject({
       model: 'fixture/provider-model',
       variant: 'high',
@@ -917,6 +917,18 @@ describe('supervised Task launch assistant', () => {
     const fixture = JSON.parse(readFileSync(new URL('./fixtures/opencode-1.18.35-tool-output-order.json', import.meta.url), 'utf8')) as {
       baseline: FixtureAgent; contextual: FixtureAgent;
     };
+    // Preserve the historical raw fixture; project the new read policy only in test memory.
+    const withSyntheticReadDenies = (rules: FixtureRule[]): FixtureRule[] => {
+      const remaining = rules.filter((rule) => rule.permission !== 'read'
+        || (rule.pattern !== '*.env' && rule.pattern !== '*.env.*'));
+      const lastReadIndex = remaining.findLastIndex((rule) => rule.permission === 'read');
+      return [
+        ...remaining.slice(0, lastReadIndex + 1),
+        { permission: 'read', pattern: '*.env', action: 'deny' },
+        { permission: 'read', pattern: '*.env.*', action: 'deny' },
+        ...remaining.slice(lastReadIndex + 1),
+      ];
+    };
     const runtimePattern = pathKind === 'tilde' ? '~/.local/share/opencode/tool-output/*'
       : pathKind === 'foreign' ? join(homedir(), 'unrelated-home', '.local', 'share', 'opencode', 'tool-output', '*')
         : join(homedir(), '.local', 'share', 'opencode', 'tool-output', '*');
@@ -948,13 +960,13 @@ describe('supervised Task launch assistant', () => {
     expect(legacyRules[3]).toEqual(toolOutput);
     const withoutToolOutput = legacyRules.filter((rule) =>
       !(rule.permission === toolOutput.permission && rule.pattern === toolOutput.pattern && rule.action === toolOutput.action));
-    // This is the precise r02 difference: strict old-main parity fails, while
-    // removing only TO preserves every remaining rule's exact position.
-    expect(withoutToolOutput).toEqual(fixture.contextual.permission.slice(0, -1));
+    // Only the two new read overrides may differ from the captured 1.18.35 ordering.
+    const contextualWithReadDenies = withSyntheticReadDenies(fixture.contextual.permission);
+    expect(withoutToolOutput).toEqual(contextualWithReadDenies.slice(0, -1));
     expect(openCodeAgentSemantics({ ...fixture.baseline, permission: legacyExpected }))
       .not.toBe(openCodeAgentSemantics(fixture.contextual));
     expect(openCodeAgentSemantics({ ...fixture.baseline, permission: [...withoutToolOutput, toolOutput] }))
-      .toBe(openCodeAgentSemantics(fixture.contextual));
+      .toBe(openCodeAgentSemantics({ ...fixture.contextual, permission: contextualWithReadDenies }));
     if (drift === 'inherited-allow') {
       const inherited = { permission: 'external_directory', pattern: '~/already-allowed/*', action: 'allow' };
       const baselineIndex = fixture.baseline.permission.findIndex((rule) => rule.permission === 'question');
@@ -991,6 +1003,7 @@ describe('supervised Task launch assistant', () => {
             const name = args[3] ?? '';
             const resolved = JSON.parse(JSON.stringify(fixture.contextual)) as FixtureAgent;
             resolved.name = name;
+            resolved.permission = withSyntheticReadDenies(resolved.permission);
             if (name !== 'general' && name !== 'explore') {
               if (drift === 'other-order') {
                 const question = resolved.permission.findIndex((rule) => rule.permission === 'question');
@@ -1142,6 +1155,7 @@ describe('supervised Task launch assistant', () => {
         '~?*/bsk': 'deny', '~?*/bsk *': 'deny', 'env bsk': 'deny', 'env bsk *': 'deny',
       },
       skill: { 'browser-skill': 'deny' },
+      read: { '*.env': 'deny', '*.env.*': 'deny' },
     });
     expect(config.agent?.general?.permission).toEqual(config.permission);
     expect(config.agent?.explore?.permission).toEqual(config.permission);
@@ -1158,6 +1172,7 @@ describe('supervised Task launch assistant', () => {
         '~?*/bsk': 'deny', '~?*/bsk *': 'deny', 'env bsk': 'deny', 'env bsk *': 'deny',
       },
       skill: { 'browser-skill': 'deny' },
+      read: { '*.env': 'deny', '*.env.*': 'deny' },
     });
     expect(openCodeFleetBrowserDenyRulesAreTerminal(agent?.permission)).toBe(true);
     expect(agent).not.toHaveProperty('native');
@@ -1180,6 +1195,11 @@ describe('supervised Task launch assistant', () => {
           { permission: 'skill', pattern: 'fixture-safe', action: 'allow' },
           { permission: 'skill', pattern: '*', action: 'allow' },
           { permission: 'edit', pattern: '*', action: 'allow' },
+          { permission: 'read', pattern: '*', action: 'allow' },
+          { permission: 'read', pattern: '*.env', action: 'ask' },
+          { permission: 'read', pattern: '*.env.*', action: 'ask' },
+          { permission: 'read', pattern: '*.env.example', action: 'allow' },
+          { permission: 'read', pattern: 'README.md', action: 'allow' },
         ],
       },
       model: 'fixture/provider-model', effort: 'high',
@@ -1188,7 +1208,7 @@ describe('supervised Task launch assistant', () => {
       permission?: Record<string, Record<string, unknown>>;
       agent: Record<string, {
         model: string; variant: string; prompt: string;
-        permission: { bash: Record<string, unknown>; skill: Record<string, unknown>; edit: string };
+        permission: { bash: Record<string, unknown>; skill: Record<string, unknown>; read: Record<string, string>; edit: string };
       }>
     };
     const agent = parsed.agent['pack-opk-fixture']!;
@@ -1203,9 +1223,24 @@ describe('supervised Task launch assistant', () => {
     expect(agent.permission.bash).toMatchObject({ 'bsk*': 'allow', 'git *': 'allow', '*': 'allow' });
     expect(agent.permission.skill).toEqual({ 'fixture-safe': 'allow', '*': 'allow', 'browser-skill': 'deny' });
     expect(agent.permission.edit).toBe('allow');
+    const readRules = Object.entries(agent.permission.read);
+    expect(readRules).toEqual([
+      ['*', 'allow'],
+      ['*.env.example', 'allow'],
+      ['README.md', 'allow'],
+      ['*.env', 'deny'],
+      ['*.env.*', 'deny'],
+    ]);
+    const matchingReadRule = (path: string) => readRules.filter(([pattern]) =>
+      new RegExp('^' + pattern.replaceAll('.', '\\.').replaceAll('*', '.*') + '$', 'u').test(path)).at(-1);
+    for (const path of ['.env', 'sub/.env', '.env.local', 'sub/.env.local', 'sub/.env.example']) {
+      expect(matchingReadRule(path)?.[1]).toBe('deny');
+    }
+    expect(matchingReadRule('README.md')).toEqual(['README.md', 'allow']);
     expect(parsed.permission).toEqual({
       bash: Object.fromEntries(deniedBash.map((pattern) => [pattern, 'deny'])),
       skill: { 'browser-skill': 'deny' },
+      read: { '*.env': 'deny', '*.env.*': 'deny' },
     });
     expect(openCodeFleetBrowserDenyRulesAreTerminal(agent.permission)).toBe(true);
   });
@@ -1218,6 +1253,9 @@ describe('supervised Task launch assistant', () => {
     ['bash', false],
     ['bash-order', false],
     ['skill', false],
+    ['missing-read-deny', false],
+    ['non-terminal-read-deny', false],
+    ['subagent-read-deny', false],
     ['subagent-bash', false],
     ['subagent-skill', false],
     ['model', false],
@@ -1284,6 +1322,17 @@ describe('supervised Task launch assistant', () => {
             if (drift === 'skill' && !isChild) {
               removeOne(globalRules, 'skill', 'browser-skill');
               removeOne(agentRules, 'skill', 'browser-skill');
+            }
+            if (drift === 'missing-read-deny' && !isChild) {
+              removeOne(globalRules, 'read', '*.env.*');
+              removeOne(agentRules, 'read', '*.env.*');
+            }
+            if (drift === 'non-terminal-read-deny' && !isChild) {
+              agentRules.push({ permission: 'read', pattern: '*', action: 'allow' });
+            }
+            if (drift === 'subagent-read-deny' && name === 'general') {
+              removeOne(globalRules, 'read', '*.env.*');
+              removeOne(agentRules, 'read', '*.env.*');
             }
             if (drift === 'subagent-bash' && name === 'general') {
               removeOne(globalRules, 'bash', 'bsk *');
