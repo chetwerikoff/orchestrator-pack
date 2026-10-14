@@ -748,10 +748,16 @@ function requireIdentityBoundConversation(
     expected = normalizeConversationUrl(observation.conversationUrl);
     actual = normalizeConversationUrl(actualUrl);
   } catch {
-    throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+    throw new ProbeError('surface_unknown', 'conversation_identity_mismatch', undefined, {
+      requested_page_url: observation.conversationUrl,
+      observed_page_url_hash: hashBytes(Buffer.from(actualUrl, 'utf8')),
+    });
   }
-  if (expected !== actual) {
-    throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+  if (!sameConversationIdentity(expected, actual)) {
+    throw new ProbeError('surface_unknown', 'conversation_identity_mismatch', undefined, {
+      requested_page_url: expected,
+      observed_page_url: actual,
+    });
   }
 }
 
@@ -1622,6 +1628,47 @@ function normalizedConversationIdentity(value: unknown): string | undefined {
   }
 }
 
+function conversationIdFromUrl(value: string): string | undefined {
+  if (!isConversationUrl(value)) return undefined;
+  try {
+    const match = /(?:^|\/)c\/([^/]+)(?:$|\/)/u.exec(new URL(value).pathname);
+    return match?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function sameConversationIdentity(expected: string, actual: string): boolean {
+  if (expected === actual) return true;
+  const expectedId = conversationIdFromUrl(expected);
+  const actualId = conversationIdFromUrl(actual);
+  return expectedId !== undefined && actualId !== undefined && expectedId === actualId;
+}
+
+function conversationIdentityMismatchDetails(
+  requestedUrl: string,
+  value: unknown,
+): Readonly<Record<string, unknown>> {
+  const details: Record<string, unknown> = { requested_page_url: requestedUrl };
+  const observed = normalizedConversationIdentity(value);
+  if (observed !== undefined) {
+    details.observed_page_url = observed;
+  } else if (isRecord(value) && typeof value.page_url === 'string') {
+    details.observed_page_url_hash = hashBytes(Buffer.from(value.page_url, 'utf8'));
+  }
+  return details;
+}
+
+function readinessTimeoutError(
+  lastRejectionReason: string,
+  readyState: InspectionSnapshot['ready_state'] | 'unknown',
+): ProbeError {
+  return new ProbeError('surface_unknown', 'readiness_timeout', undefined, {
+    last_rejection_reason: lastRejectionReason,
+    ready_state: readyState,
+  });
+}
+
 async function inspectWithReadiness(
   target: CompatibleTarget,
   requestedIdentity: string,
@@ -1629,6 +1676,8 @@ async function inspectWithReadiness(
 ): Promise<{ readonly snapshot: InspectionSnapshot; readonly raw: unknown }> {
   const deadline = clockNow(deps) + ACQUISITION_READINESS_TIMEOUT_MS;
   let previousKey: string | undefined;
+  let lastRejectionReason = 'no_sample';
+  let lastReadyState: InspectionSnapshot['ready_state'] | 'unknown' = 'unknown';
   while (clockNow(deps) < deadline) {
     const remaining = deadline - clockNow(deps);
     if (remaining <= 0) break;
@@ -1640,37 +1689,58 @@ async function inspectWithReadiness(
         deps,
         'readiness_sample_timeout',
       );
-      if (clockNow(deps) >= deadline) throw new ProbeError('unavailable', 'readiness_sample_timeout');
     } catch (error) {
       if ((error instanceof ProbeError && error.reason === 'readiness_sample_timeout')
         || (error instanceof Error && error.message === 'cdp_evaluate_timeout')) {
-        throw new ProbeError('surface_unknown', 'readiness_timeout');
+        throw readinessTimeoutError(lastRejectionReason, lastReadyState);
       }
       throw new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
     }
+    if (isRecord(value)
+      && (value.ready_state === 'loading'
+        || value.ready_state === 'interactive'
+        || value.ready_state === 'complete')) {
+      lastReadyState = value.ready_state;
+    }
+    if (clockNow(deps) >= deadline) {
+      throw readinessTimeoutError(lastRejectionReason, lastReadyState);
+    }
     const actualIdentity = normalizedConversationIdentity(value);
-    if (actualIdentity !== undefined && actualIdentity !== requestedIdentity) {
-      throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+    if (actualIdentity !== undefined && !sameConversationIdentity(requestedIdentity, actualIdentity)) {
+      throw new ProbeError(
+        'surface_unknown',
+        'conversation_identity_mismatch',
+        undefined,
+        conversationIdentityMismatchDetails(requestedIdentity, value),
+      );
     }
     try {
       const snapshot = validateInspectionSnapshot(value, target, false);
-      if (snapshot.page_url !== requestedIdentity) {
-        throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+      if (!sameConversationIdentity(requestedIdentity, snapshot.page_url)) {
+        throw new ProbeError(
+          'surface_unknown',
+          'conversation_identity_mismatch',
+          undefined,
+          conversationIdentityMismatchDetails(requestedIdentity, snapshot),
+        );
       }
       if (snapshot.ready_state !== 'loading') {
         const key = readinessKey(snapshot);
         if (key === previousKey) return { snapshot, raw: value };
         previousKey = key;
+        lastRejectionReason = 'readiness_not_stable';
       } else {
         previousKey = undefined;
+        lastRejectionReason = 'document_loading';
       }
     } catch (error) {
       if (!(error instanceof ProbeError) || error.status !== 'surface_unknown') throw error;
+      lastRejectionReason = error.reason;
     }
     if (clockNow(deps) >= deadline) break;
     await delay(deps, Math.min(ACQUISITION_READINESS_INTERVAL_MS, Math.max(0, deadline - clockNow(deps))));
   }
-  throw new ProbeError('surface_unknown', 'readiness_timeout');
+  throw readinessTimeoutError(lastRejectionReason, lastReadyState);
 }
 
 function validateCreatedTarget(
@@ -1784,6 +1854,7 @@ async function inspectAcquiredUrl(
   }
 
   const details = {
+    ...primaryError?.details,
     acquisition: 'created',
     owned_target_id: ownedTarget.target_id,
     readiness_timeout_ms: ACQUISITION_READINESS_TIMEOUT_MS,
