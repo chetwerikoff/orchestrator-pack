@@ -3815,6 +3815,22 @@ describe('Issue #2576 owned worktree lifecycle with real disposable Git', () => 
     expect(existsSync(outside)).toBe(true);
   });
 
+  it('preserves a registered checkout whose on-disk Git identity was replaced', async () => {
+    const f = realGitFixture();
+    const owned = seedCheckout(f, 257619);
+    const foreign = join(f.root, 'foreign-source');
+    mkdirSync(foreign);
+    git(foreign, 'init', '-q', '-b', 'main');
+    // Keep the selected repository's original registration; substitute only its
+    // working directory Gitfile with a foreign repository binding.
+    writeFileSync(join(owned.target, '.git'), 'gitdir: ' + join(foreign, '.git') + '\n');
+    expect(registered(f.repo, owned.target)).toBe(true);
+
+    await startPackReview(input(f, 257620));
+    expect(existsSync(owned.target)).toBe(true);
+    expect(registered(f.repo, owned.target)).toBe(true);
+  });
+
   it('preserves a terminal-status owner paused before finally and removes only after it exits', async () => {
     const f = realGitFixture();
     let releaseCleanup!: () => void;
