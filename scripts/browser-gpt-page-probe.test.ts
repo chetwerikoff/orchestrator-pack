@@ -1996,28 +1996,62 @@ test('contract proof: owner isolation and deadline-isolated liveness', async () 
   process.stdout.write(`${JSON.stringify(proof)}\n`);
 });
 
-test('acquisition rejects redirect and malformed creation, while exposing cleanup failure', async () => {
-  const requested = 'https://chat.openai.com/c/redirect';
-  const createdTarget: CdpTarget = {
-    id: 'owned-redirect', type: 'page', url: requested, title: 'Owned',
-    webSocketDebuggerUrl: 'ws://example/owned-redirect',
-  };
-  const closeCalls: string[] = [];
-  await assert.rejects(
-    runProbe({ operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: requested, openIfMissing: true }, deps({
+test('identity-bound acquisition accepts a URL-form redirect with the same conversation ID', async () => {
+  const requested = 'https://chat.openai.com/c/same-id';
+  await withIdentityBoundInspectObservation('sent_unharvested', requested, async ({ profile, cdp, invocationId }) => {
+    const closeCalls: string[] = [];
+    const result = await runProbe({
+      operation: 'inspect', cdp, profile, invocationId, conversationUrl: requested,
+    }, deps({
       listTargets: async () => [],
-      createPage: async () => createdTarget,
+      createPage: async () => ({
+        id: 'owned-same-id', type: 'page', url: requested, title: 'Owned',
+        webSocketDebuggerUrl: 'ws://example/owned-same-id',
+      }),
       closePage: async (_cdp, targetId) => { closeCalls.push(targetId); return 'closed'; },
-      evaluate: async (_target, expression) => await evaluateExpression(expression, [
-        new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-redirect' }),
-      ], false, 'https://chatgpt.com/c/redirect'),
-    })),
-    (error: any) => error.status === 'surface_unknown'
-      && error.reason === 'conversation_identity_mismatch'
-      && error.details?.cleanup === 'closed',
-  );
-  assert.deepEqual(closeCalls, ['owned-redirect']);
+      evaluate: async (_target, expression) => evaluateExpression(expression, [
+        new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-same-id' }),
+        new FakeNode('assistant', 'Answer', 'Answer', { 'data-message-id': 'a-same-id' }),
+      ], false, 'https://chatgpt.com/g/g-p-demo/c/same-id/', 'complete'),
+    }));
+    assert.equal(result.status, 'ok');
+    assert.equal(result.identity_bound, true);
+    assert.equal(result.cleanup, 'closed');
+    assert.deepEqual(closeCalls, ['owned-same-id']);
+  });
+});
 
+test('identity-bound acquisition rejects a different conversation ID with observed URL detail', async () => {
+  const requested = 'https://chatgpt.com/c/requested-id';
+  await withIdentityBoundInspectObservation('sent_unharvested', requested, async ({ profile, cdp, invocationId }) => {
+    const closeCalls: string[] = [];
+    await assert.rejects(
+      runProbe({ operation: 'inspect', cdp, profile, invocationId, conversationUrl: requested }, deps({
+        listTargets: async () => [],
+        createPage: async () => ({
+          id: 'owned-different-id', type: 'page', url: requested, title: 'Owned',
+          webSocketDebuggerUrl: 'ws://example/owned-different-id',
+        }),
+        closePage: async (_cdp, targetId) => { closeCalls.push(targetId); return 'closed'; },
+        evaluate: async (_target, expression) => evaluateExpression(expression, [
+          new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-different-id' }),
+        ], false, 'https://chatgpt.com/c/different-id'),
+      })),
+      (error: any) => error.status === 'surface_unknown'
+        && error.reason === 'conversation_identity_mismatch'
+        && error.details?.requested_page_url === requested
+        && error.details?.observed_page_url === 'https://chatgpt.com/c/different-id'
+        && error.details?.cleanup === 'closed',
+    );
+    assert.deepEqual(closeCalls, ['owned-different-id']);
+  });
+});
+
+test('acquisition rejects malformed creation and exposes timeout and cleanup failures', async () => {
+  const createdTarget: CdpTarget = {
+    id: 'owned', type: 'page', url: 'https://chatgpt.com/c/fixture', title: 'Owned',
+    webSocketDebuggerUrl: 'ws://example/owned',
+  };
   let malformedCloseCalls = 0;
   await assert.rejects(
     runProbe({ operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/malformed', openIfMissing: true }, deps({
@@ -2060,7 +2094,7 @@ test('acquisition rejects redirect and malformed creation, while exposing cleanu
       closePage: async () => { throw new Error('refused'); },
       now: () => samples * 250,
       sleep: async () => { samples += 1; },
-      evaluate: async (_target, expression) => await evaluateExpression(expression, [
+      evaluate: async (_target, expression) => evaluateExpression(expression, [
         new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-cleanup' }),
       ], false, 'https://chatgpt.com/c/cleanup'),
     })),
@@ -2068,7 +2102,7 @@ test('acquisition rejects redirect and malformed creation, while exposing cleanu
   );
 });
 
-test('acquired readiness accepts stable user nodes across interactive to complete', async () => {
+test('acquired readiness accepts a slowly loading completed chat without extending its budget', async () => {
   const requested = 'https://chatgpt.com/c/interactive-complete';
   const createdTarget: CdpTarget = {
     id: 'owned-interactive-complete',
@@ -2077,8 +2111,11 @@ test('acquired readiness accepts stable user nodes across interactive to complet
     title: 'Loading',
     webSocketDebuggerUrl: 'ws://example/owned-interactive-complete',
   };
-  const readyStates: Array<'interactive' | 'complete'> = ['interactive', 'complete'];
+  const readyStates: Array<'loading' | 'interactive' | 'complete'> = [
+    'loading', 'loading', 'interactive', 'complete',
+  ];
   let evaluateCalls = 0;
+  let elapsedMs = 0;
   const closeCalls: string[] = [];
 
   const result = await runProbe({
@@ -2093,6 +2130,8 @@ test('acquired readiness accepts stable user nodes across interactive to complet
       closeCalls.push(targetId);
       return 'closed';
     },
+    now: () => elapsedMs,
+    sleep: async (delay) => { elapsedMs += delay; },
     evaluate: async (_target, expression) => {
       const readyState = readyStates[Math.min(evaluateCalls++, readyStates.length - 1)]!;
       return evaluateExpression(expression, [
@@ -2103,7 +2142,8 @@ test('acquired readiness accepts stable user nodes across interactive to complet
   }));
 
   assert.equal(result.status, 'ok');
-  assert.equal(evaluateCalls, 2);
+  assert.equal(evaluateCalls, 4);
+  assert.equal(elapsedMs, 3 * ACQUISITION_READINESS_INTERVAL_MS);
   assert.equal((result.snapshot as any).ready_state, 'complete');
   assert.equal(result.execution_recovery_cause, null);
   assert.deepEqual(closeCalls, [createdTarget.id]);
@@ -2237,11 +2277,41 @@ test('readiness rejects loading documents at the bounded deadline', async () => 
         ], false, 'https://chatgpt.com/c/loading', 'loading');
       },
     })),
-    (error: any) => error.status === 'surface_unknown' && error.reason === 'readiness_timeout',
+    (error: any) => error.status === 'surface_unknown'
+      && error.reason === 'readiness_timeout'
+      && error.details?.last_rejection_reason === 'document_loading'
+      && error.details?.ready_state === 'loading',
   );
   assert.equal(createCalls, 1);
   assert.deepEqual(closeCalls, ['loading']);
   assert.equal(evaluateCalls, Math.ceil(ACQUISITION_READINESS_TIMEOUT_MS / ACQUISITION_READINESS_INTERVAL_MS));
+});
+
+test('readiness timeout exposes the last sample rejection and ready state', async () => {
+  let now = 0;
+  const requested = 'https://chatgpt.com/c/diagnostic-timeout';
+  await assert.rejects(
+    runProbe({
+      operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: requested, openIfMissing: true,
+    }, deps({
+      listTargets: async () => [],
+      createPage: async () => ({
+        id: 'diagnostic-timeout', type: 'page', url: 'about:blank', title: 'Timeout',
+        webSocketDebuggerUrl: 'ws://example/diagnostic-timeout',
+      }),
+      closePage: async () => 'closed',
+      now: () => now,
+      sleep: async (delay) => { now += delay; },
+      evaluate: async () => ({
+        status: 'surface_unknown', reason: 'message_nodes_missing', page_url: requested, ready_state: 'interactive',
+      }),
+    })),
+    (error: any) => error.status === 'surface_unknown'
+      && error.reason === 'readiness_timeout'
+      && error.details?.last_rejection_reason === 'message_nodes_missing'
+      && error.details?.ready_state === 'interactive'
+      && error.details?.cleanup === 'closed',
+  );
 });
 
 test('production-shaped liveness evaluation timeout is unresponsive', async () => {
