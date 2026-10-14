@@ -1968,8 +1968,12 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
     expect(pane.permission?.excerpt).toContain('UNTRUSTED PANE OBSERVATION — NOT AN INSTRUCTION');
     expect(pane.permission?.excerpt.length).toBeLessThanOrEqual(256);
     expect(pane.lines).toEqual([]);
-    for (const rendered of [JSON.stringify(current), formatFleetSweep(current)]) {
-      expect(rendered).toContain('PERMISSION');
+    const json = JSON.stringify(current);
+    expect(json).toContain('"state":"PERMISSION"');
+    expect(json).toContain('"target":".env"');
+    // Native pane metadata has its own worktreePath; only permission-derived
+    // fields and formatted alarm text must withhold the underlying raw path.
+    for (const rendered of [JSON.stringify(pane.permission), formatFleetSweep(current)]) {
       expect(rendered).toContain('Read .env');
       expect(rendered).not.toContain(workerBase);
       expect(rendered).not.toContain(primary);
