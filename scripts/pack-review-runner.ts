@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import {
   appendFileSync,
   existsSync,
+  lstatSync,
+  realpathSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -231,6 +233,14 @@ interface StartInput {
   fixtureReviewStdout?: string;
   fixtureReviewExitCode?: number;
   fixtureReviewTimedOut?: boolean;
+  /** Execute actual disposable Git worktree operations despite synthetic reviewer output. */
+  fixtureUseRealReviewWorktree?: boolean;
+  /** Fail only after Git registered the checkout, before the creator resolves. */
+  fixtureAfterReviewWorktreeAdd?: (target: string) => void | Promise<void>;
+  /** Pause a terminal runner before its outer finally removes the checkout. */
+  fixtureBeforeReviewWorktreeCleanup?: (run: PackReviewRunRecord, target: string) => void | Promise<void>;
+  /** Simulate targeted Git removal failure without altering the repository's Git metadata. */
+  fixtureReviewWorktreeRemoveFailure?: boolean;
   fixtureReviewBySourceSlot?: FixtureReviewBySourceSlot;
   fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
   fixtureGptAdmissionReadObservation?: typeof readStateLightTurnObservation;
@@ -1705,26 +1715,207 @@ async function ensureCommitAvailable(repoRoot: string, headSha: string): Promise
   await runGit(repoRoot, ['cat-file', '-e', `${headSha}^{commit}`], `git cat-file ${headSha}`);
 }
 
-async function createReviewWorktree(repoRoot: string, storeRoot: string, runId: string, headSha: string): Promise<string> {
-  const root = packReviewWorktreesDir(storeRoot);
-  mkdirSync(root, { recursive: true });
-  const target = join(root, runId);
-  rmSync(target, { recursive: true, force: true });
-  await ensureCommitAvailable(repoRoot, headSha);
-  await runGit(repoRoot, ['worktree', 'add', '--detach', target, headSha], 'git worktree add');
-  return target;
+
+interface ReviewWorktreeContext {
+  repoRoot: string;
+  repoSlug: string;
+  projectId: string;
+  storeRoot: string;
 }
 
-async function removeReviewWorktree(repoRoot: string, target: string): Promise<void> {
-  if (!target) return;
-  const result = await runProcess({
-    command: 'git',
-    args: ['worktree', 'remove', '--force', target],
-    cwd: repoRoot,
-    inheritParentEnv: true,
-    allowEmptyStdout: true,
-  });
-  if (!result.ok) rmSync(target, { recursive: true, force: true });
+/** Inventory only the registrations of the already selected source repository. */
+async function registeredReviewWorktrees(repoRoot: string): Promise<Set<string>> {
+  const output = await runGit(repoRoot, ['worktree', 'list', '--porcelain'], 'git worktree list');
+  const registered = new Set<string>();
+  for (const line of output.split(/\r?\n/)) {
+    if (line.startsWith('worktree ')) registered.add(line.slice('worktree '.length));
+  }
+  return registered;
+}
+
+function reviewWorktreePath(storeRoot: string, runId: string): string {
+  if (!/^prr-[a-zA-Z0-9._-]+$/.test(runId)) {
+    throw new Error('invalid pack review checkout run id');
+  }
+  return join(packReviewWorktreesDir(storeRoot), runId);
+}
+
+function reviewWorktreeLstat(path: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
+/** No target alias, symlink or non-directory may become a destructive operand. */
+function validateReviewWorktreePath(storeRoot: string, runId: string, target: string): void {
+  const root = packReviewWorktreesDir(storeRoot);
+  if (target !== reviewWorktreePath(storeRoot, runId) || resolve(target) !== target) {
+    throw new Error('review checkout outside selected-store direct child');
+  }
+  const parent = reviewWorktreeLstat(root);
+  if (parent && (!parent.isDirectory() || parent.isSymbolicLink()
+      || realpathSync(root) !== root)) {
+    throw new Error('review checkout worktrees root is an alias or symlink');
+  }
+  const child = reviewWorktreeLstat(target);
+  if (child && (!child.isDirectory() || child.isSymbolicLink()
+      || realpathSync(target) !== target)) {
+    throw new Error('review checkout target is an alias, symlink or non-directory');
+  }
+}
+
+/** Terminal status is not process exit: reuse the existing dead-PID + heartbeat grace predicate. */
+function reviewWorktreeHolderAbandoned(record: PackReviewRunRecord): boolean {
+  if (!isPackReviewRunStale({ ...record, status: 'reviewing' })) return false;
+  // A frozen, unfinished GPT round is still eligible for the existing same-round recovery.
+  return !(record.reviewRound && record.reviewRound.settledSourceCount === undefined
+    && record.reviewRound.sourceSlots.some((slot) => slot.lifecycle !== 'terminal'));
+}
+
+function verifyReviewWorktreeOwner(
+  ctx: ReviewWorktreeContext,
+  runId: string,
+  target: string,
+  mode: 'sweep' | 'finally' | 'reuse',
+): string | null {
+  validateReviewWorktreePath(ctx.storeRoot, runId, target);
+  const records = listPackReviewRunRecordsRaw({ projectId: ctx.projectId, storeRoot: ctx.storeRoot });
+  const owner = records.find((record) => record.id === runId);
+  if (!owner || owner.projectId !== ctx.projectId
+      || resolve(owner.sourceRepoRoot) !== resolve(ctx.repoRoot)
+      || (owner.canonicalRepository && owner.canonicalRepository.toLowerCase() !== ctx.repoSlug.toLowerCase())) {
+    return 'missing selected-repository run owner';
+  }
+  if (owner.reviewTargetRoot && owner.reviewTargetRoot !== target) {
+    return 'persisted reviewTargetRoot is not the owned direct child';
+  }
+  for (const record of records) {
+    if (record.id !== runId && record.reviewTargetRoot !== target
+        && (!record.reviewTargetRoot || resolve(record.reviewTargetRoot) !== target)) continue;
+    if (record.id !== runId && record.reviewTargetRoot !== target) {
+      return 'other run has an aliased checkout reference';
+    }
+    if (record.id === runId && mode !== 'sweep' && record.runnerPid === process.pid
+        && (mode === 'reuse' || !PACK_REVIEW_ACTIVE_STATUSES.has(record.status))) continue;
+    if (!reviewWorktreeHolderAbandoned(record)) return 'live or recoverable run holds checkout';
+  }
+  return null;
+}
+
+/**
+ * Never equate rmSync with Git deregistration. Every deletion checks fresh run
+ * and selected-repository evidence; ambiguous paths remain for a later safe start.
+ */
+async function removeReviewWorktree(
+  ctx: ReviewWorktreeContext,
+  runId: string,
+  target: string,
+  mode: 'sweep' | 'finally',
+  fixtureFailGitRemove = false,
+): Promise<string> {
+  const unavailable = verifyReviewWorktreeOwner(ctx, runId, target, mode);
+  if (unavailable) return unavailable;
+  let registrations = await registeredReviewWorktrees(ctx.repoRoot);
+  const priorRegistration = registrations.has(target);
+  const priorChild = reviewWorktreeLstat(target);
+  if (!priorChild && !priorRegistration) return 'absent';
+  if (priorChild && !priorRegistration && process.env.OPK_VITEST_HARNESS !== '1'
+      && readdirSync(target).length !== 0) {
+    return 'unregistered nonempty directory has ambiguous ownership';
+  }
+  // The awaited inventory can race a new reuse; do not use earlier data as deletion authority.
+  const changedOwner = verifyReviewWorktreeOwner(ctx, runId, target, mode);
+  if (changedOwner) return changedOwner;
+  registrations = await registeredReviewWorktrees(ctx.repoRoot);
+  if (registrations.has(target)) {
+    if (fixtureFailGitRemove && process.env.OPK_VITEST_HARNESS === '1') {
+      throw new Error('review checkout Git worktree removal failed (fixture)');
+    }
+    const removed = await runProcess({
+      command: 'git',
+      args: ['worktree', 'remove', '--force', target],
+      cwd: ctx.repoRoot,
+      inheritParentEnv: true,
+      allowEmptyStdout: true,
+    });
+    if (!removed.ok) {
+      throw new Error('review checkout Git worktree removal failed: ' + trim(removed.stderr).slice(0, 180));
+    }
+  } else if (priorRegistration) {
+    return 'checkout registration changed before removal';
+  }
+  if ((await registeredReviewWorktrees(ctx.repoRoot)).has(target)) {
+    throw new Error('review checkout Git registration remains after targeted removal');
+  }
+  const beforeFilesystemRemove = verifyReviewWorktreeOwner(ctx, runId, target, mode);
+  if (beforeFilesystemRemove) return beforeFilesystemRemove;
+  if (reviewWorktreeLstat(target)) rmSync(target, { recursive: true, force: true });
+  if (reviewWorktreeLstat(target) || (await registeredReviewWorktrees(ctx.repoRoot)).has(target)) {
+    throw new Error('review checkout residual directory or Git registration after cleanup');
+  }
+  return 'removed';
+}
+
+/** Ordinary start is the only recovery sweep; it neither edits runs nor claims. */
+async function reclaimReviewWorktrees(ctx: ReviewWorktreeContext): Promise<void> {
+  try {
+    const root = packReviewWorktreesDir(ctx.storeRoot);
+    const paths = new Set<string>();
+    const rootStat = reviewWorktreeLstat(root);
+    if (rootStat && (!rootStat.isDirectory() || rootStat.isSymbolicLink() || realpathSync(root) !== root)) {
+      throw new Error('selected worktrees root is not a canonical directory');
+    }
+    if (rootStat) {
+      for (const entry of readdirSync(root)) if (/^prr-[a-zA-Z0-9._-]+$/.test(entry)) {
+        paths.add(join(root, entry));
+      }
+    }
+    for (const path of await registeredReviewWorktrees(ctx.repoRoot)) {
+      if (path.startsWith(root + sep) && relative(root, path).split(sep).length === 1
+          && /^prr-[a-zA-Z0-9._-]+$/.test(relative(root, path))) paths.add(path);
+    }
+    let diagnostics = 0;
+    for (const path of paths) {
+      const runId = relative(root, path);
+      try {
+        const result = await removeReviewWorktree(ctx, runId, path, 'sweep');
+        if (result !== 'removed' && result !== 'absent' && diagnostics++ < 8) {
+          process.stderr.write('[pack-review worktree] preserved ' + runId + ': ' + result + '\n');
+        }
+      } catch (error) {
+        if (diagnostics++ < 8) process.stderr.write(
+          '[pack-review worktree] deferred ' + runId + ': ' + describeError(error).slice(0, 180) + '\n',
+        );
+      }
+    }
+  } catch (error) {
+    process.stderr.write('[pack-review worktree] sweep unavailable: ' + describeError(error).slice(0, 180) + '\n');
+  }
+}
+
+async function createReviewWorktree(
+  repoRoot: string,
+  storeRoot: string,
+  runId: string,
+  headSha: string,
+  allocated: (target: string) => void,
+  afterAdd?: (target: string) => void | Promise<void>,
+): Promise<string> {
+  const root = packReviewWorktreesDir(storeRoot);
+  mkdirSync(root, { recursive: true });
+  const target = reviewWorktreePath(storeRoot, runId);
+  validateReviewWorktreePath(storeRoot, runId, target);
+  if (reviewWorktreeLstat(target) || (await registeredReviewWorktrees(repoRoot)).has(target)) {
+    throw new Error('review checkout already occupied; no pre-add recursive deletion permitted');
+  }
+  await ensureCommitAvailable(repoRoot, headSha);
+  allocated(target); // Assign before the first allocation-capable awaited operation.
+  await runGit(repoRoot, ['worktree', 'add', '--detach', target, headSha], 'git worktree add');
+  if (afterAdd && process.env.OPK_VITEST_HARNESS === '1') await afterAdd(target);
+  return target;
 }
 
 function writeRunLogs(storeRoot: string, runId: string, stdout: string, stderr: string): void {
@@ -6005,6 +6196,10 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     );
   }
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
+  const reviewWorktreeContext: ReviewWorktreeContext = {
+    projectId, storeRoot, repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+  };
+  await reclaimReviewWorktrees(reviewWorktreeContext);
   const readProjectionHead = () => readCheckedReviewPrHead({
     sourceRepoRoot: target.sourceRepoRoot,
     fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
@@ -7315,16 +7510,35 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       runnerPid: process.pid,
     }, { projectId, storeRoot });
 
-    if (sameRoundGptRun?.reviewTargetRoot && existsSync(sameRoundGptRun.reviewTargetRoot)) {
-      worktree = sameRoundGptRun.reviewTargetRoot;
-    } else if (process.env.OPK_VITEST_HARNESS === '1'
+    if (sameRoundGptRun?.reviewTargetRoot) {
+      const storedTarget = sameRoundGptRun.reviewTargetRoot;
+      const unsafeReuse = verifyReviewWorktreeOwner(reviewWorktreeContext, run.id, storedTarget, 'reuse');
+      if (unsafeReuse) throw new Error('unsafe persisted review checkout: ' + unsafeReuse);
+      const registered = await registeredReviewWorktrees(target.sourceRepoRoot);
+      if (reviewWorktreeLstat(storedTarget)) {
+        if (!registered.has(storedTarget)
+            && (process.env.OPK_VITEST_HARNESS !== '1' || input.fixtureUseRealReviewWorktree)) {
+          throw new Error('persisted review checkout is not registered to the selected Git repository');
+        }
+        worktree = storedTarget;
+      } else if (registered.has(storedTarget)) {
+        throw new Error('persisted review checkout has a missing directory but retained Git registration');
+      }
+    }
+    if (!worktree && process.env.OPK_VITEST_HARNESS === '1'
+      && !input.fixtureUseRealReviewWorktree
       && (input.fixtureReviewStdout !== undefined
         || input.fixtureReviewTimedOut === true
         || input.fixtureReviewBySourceSlot !== undefined)) {
-      worktree = join(packReviewWorktreesDir(storeRoot), run.id);
+      worktree = reviewWorktreePath(storeRoot, run.id);
+      validateReviewWorktreePath(storeRoot, run.id, worktree);
       mkdirSync(worktree, { recursive: true });
-    } else {
-      worktree = await createReviewWorktree(target.sourceRepoRoot, storeRoot, run.id, target.headSha);
+    } else if (!worktree) {
+      await createReviewWorktree(
+        target.sourceRepoRoot, storeRoot, run.id, target.headSha,
+        (allocatedTarget) => { worktree = allocatedTarget; },
+        input.fixtureAfterReviewWorktreeAdd,
+      );
     }
     updatePackReviewRun(run.id, { reviewTargetRoot: worktree }, { projectId, storeRoot });
     if (carryover?.replay.kind === 'merge_composite' && carryover.replay.bundle) {
@@ -8230,9 +8444,22 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       httpStatus: 500,
     };
   } finally {
-    if (worktree) await removeReviewWorktree(target.sourceRepoRoot, worktree);
-    if (claimLease?.directory && !retainClaimDirectory) {
-      rmSync(claimLease.directory, { recursive: true, force: true });
+    try {
+      if (worktree && run) {
+        if (process.env.OPK_VITEST_HARNESS === '1' && input.fixtureBeforeReviewWorktreeCleanup) {
+          await input.fixtureBeforeReviewWorktreeCleanup(run, worktree);
+        }
+        const cleanup = await removeReviewWorktree(
+          reviewWorktreeContext, run.id, worktree, 'finally', input.fixtureReviewWorktreeRemoveFailure,
+        );
+        if (cleanup !== 'removed' && cleanup !== 'absent') {
+          process.stderr.write('[pack-review worktree] cleanup deferred for ' + run.id + ': ' + cleanup + '\n');
+        }
+      }
+    } finally {
+      if (claimLease?.directory && !retainClaimDirectory) {
+        rmSync(claimLease.directory, { recursive: true, force: true });
+      }
     }
   }
 }
