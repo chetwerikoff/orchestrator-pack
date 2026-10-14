@@ -5513,13 +5513,11 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       .toBe(newerId);
   });
 
-  async function installSameRunVerdict(
-    f: ReturnType<typeof seed>, verdict: 'clean' | 'findings' = 'clean',
-  ): Promise<void> {
+  async function credentialSameRunSources(f: ReturnType<typeof seed>): Promise<void> {
     const original = getPackReviewRun(f.runId, f.options)!;
-    // Journaled GPT verdicts are valid only with a credentialed source
-    // census. Populate the existing exact-invocation slots as the concurrent
-    // review publisher would, rather than manufacturing a bare verdict.
+    // The competing reviewer has authentic, exact-invocation 3/3 source
+    // evidence. Prepare it before triggering the concurrent verdict so the
+    // in-progress reconciler sees no malformed or partially written witness.
     const sourceSlots = await Promise.all(original.reviewRound!.sourceSlots.map(async (slot) => {
       const identity: PackGptSourceIdentity = {
         repository: repoSlug, prNumber, headSha: HEAD_A, runId: f.runId,
@@ -5542,14 +5540,24 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
         payload: resolved.payload,
       };
     }));
-    const findings = sourceSlots.flatMap((slot) =>
-      (slot.payload.findings as Array<Record<string, unknown>>).map((finding) => ({
-        ...finding, sourceSlotId: slot.slotId,
-      })));
-    expect(findings.length > 0 ? 'findings' : 'clean').toBe(verdict);
     updatePackReviewRun(f.runId, {
       reviewRound: { ...original.reviewRound!, sourceSlots },
     }, f.options);
+  }
+
+  function installSameRunVerdict(
+    f: ReturnType<typeof seed>, verdict: 'clean' | 'findings' = 'clean',
+  ): void {
+    const original = getPackReviewRun(f.runId, f.options)!;
+    const sources = original.reviewRound!.sourceSlots;
+    expect(sources.every((slot) => slot.lifecycle === 'terminal'
+      && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')))
+      .toBe(true);
+    const findings = sources.flatMap((slot) =>
+      ((slot.payload as { findings: Array<Record<string, unknown>> }).findings).map((finding) => ({
+        ...finding, sourceSlotId: slot.slotId,
+      })));
+    expect(findings.length > 0 ? 'findings' : 'clean').toBe(verdict);
     const recordedAtUtc = new Date().toISOString();
     setPackReviewRunTerminal(f.runId, verdict === 'clean' ? 'up_to_date' : 'changes_requested', {
       reviewVerdict: verdict, findingCount: findings.length, findings,
@@ -5640,6 +5648,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
           }] }),
         } : {});
         f.expireGrace();
+        await credentialSameRunSources(f);
         const input = { ...f.input, fixtureCurrentPrHeadSha: HEAD_A };
         let settled = false;
         input.fixtureGptSourceCommentTransport = {
@@ -5647,7 +5656,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
           listComments: async () => {
             if (!settled) {
               settled = true;
-              await installSameRunVerdict(f, verdict);
+              installSameRunVerdict(f, verdict);
             }
             input.fixtureCurrentPrHeadSha = HEAD_B;
             return f.sourceTransport.listComments();
@@ -5675,12 +5684,13 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
     it('head drift same-run verdict wins directly before the conditional store write', async () => {
       const f = seed(3);
       f.expireGrace();
+      await credentialSameRunSources(f);
       let called = 0;
       const result = await reconcileStalePackReviewRuns({
         ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
         beforeStaleStatusWrite: async () => {
           called += 1;
-          await installSameRunVerdict(f);
+          installSameRunVerdict(f);
         },
       });
       expect(called).toBe(1);
@@ -5699,6 +5709,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
     it('head drift same-run verdict restores after an obsolete error POST in flight', async () => {
       const f = seed(3);
       f.expireGrace();
+      await credentialSameRunSources(f);
       const writes: string[] = [];
       let restored = false;
       const result = await reconcileStalePackReviewRuns({
@@ -5706,7 +5717,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
         fixtureRequiredStatusWriter: async (request) => {
           if (request.state === 'error' && !restored) {
             restored = true;
-            await installSameRunVerdict(f);
+            installSameRunVerdict(f);
             writes.push('success');
             await Promise.resolve();
           }
