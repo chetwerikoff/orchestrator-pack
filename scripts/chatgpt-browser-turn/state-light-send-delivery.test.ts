@@ -20,13 +20,16 @@ vi.mock('./ui-adapter.ts', async (original) => buildUiAdapterTestMock(
 ));
 
 import { buildUiAdapterTestMock, collectionLocator, createBrowserSessionModuleMock, createCoordinationModuleMock, enqueueBrowserForTurn, runStateLightTurnWithStdoutCapture, scalarLocator, stableTurnInput } from './state-light-turn.test-fixtures.ts';
+import { messageLocator, readyTurnObservationFrames } from './state-light-turn.test-fixtures.ts';
 import {
   COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR, MESSAGE_NODE_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE, RENDERED_CONVERSATION_TURN_SECTION_SELECTOR,
+  USER_MESSAGE_SELECTOR, ASSISTANT_MESSAGE_SELECTOR, ASSISTANT_TURN_ANCESTOR_XPATH,
 } from './product-page-selectors.ts';
 import { __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { runPostSendRecovery, takeRecoveryCensus, type PostSendRecoveryAdapter, type PostSendRecoveryState } from './state-light-turn-recovery.ts';
+import * as recoveryModule from './state-light-turn-recovery.ts';
 import { configuredProfileKey } from './storage-common.ts';
 import { deriveDelivery, readTerminalEnvelope, runLaunch } from '../flow-manager-long-running-child.ts';
 import { authoritativePreSend } from '../pack-review-no-review-reconcile.ts';
@@ -292,6 +295,103 @@ describe('Issue #2596 known-conversation post-send recovery', () => {
       cause: unresolved.kind === 'failure' ? unresolved.cause : '',
     } as NonNullable<Parameters<typeof deriveDelivery>[0]>, false)).toBe('POSSIBLY_DELIVERED');
   });
+});
+
+describe('Issue #2596 production recovery caller boundaries', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'recovery-caller-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    vi.stubEnv('ORCA_TERMINAL_HANDLE', undefined);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks(); vi.unstubAllEnvs(); mocks.browserQueue.length = 0;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each(['local-empty', 'local-incomplete', 'known-successor'] as const)(
+    'production caller preserves Send, locator and cleanup boundaries: %s', async (mode) => {
+      const project = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test/project';
+      const url = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test/c/11111111-1111-4111-8111-111111111111';
+      const localUrl = 'https://chatgpt.com/c/local-chatgpt%3A11111111-1111-4111-8111-111111111111';
+      const known = mode === 'known-successor';
+      let clock = 10_000;
+      let sent = false;
+      let draft = '';
+      const send = vi.fn(async () => { sent = true; });
+      const retry = vi.fn(async () => undefined);
+      const finalMessages = readyTurnObservationFrames('PROMPT', 'RECOVERED-REPLY').at(-1)!;
+      const composer = scalarLocator({ count: async () => 1, fill: async (value: string) => { draft = value; },
+        innerText: async () => sent ? '' : draft, textContent: async () => sent ? '' : draft, press: send });
+      const makePage = (kind: 'original' | 'foreign' | 'successor'): any => ({
+        __fakeBrowserGptPage: true,
+        url: vi.fn(() => kind === 'foreign' ? 'https://chatgpt.com/c/22222222-2222-4222-8222-222222222222'
+          : kind === 'successor' || known ? url : sent ? localUrl : project),
+        isClosed: vi.fn(() => kind === 'original' && known && sent),
+        goto: vi.fn(async () => undefined), close: vi.fn(async () => undefined),
+        waitForTimeout: vi.fn(async (ms: number) => { clock += ms; }),
+        getByText: vi.fn((text: string) => scalarLocator({ count: async () => sent && text === 'Failed to fetch' ? 1 : 0 })),
+        getByRole: vi.fn(() => scalarLocator({ count: async () => sent ? 1 : 0, click: retry })),
+        locator: vi.fn((selector: string) => {
+          if (kind === 'foreign') return scalarLocator({ count: async () => { throw new Error('foreign unreadable'); } });
+          if (selector === COMPOSER_SELECTOR) return composer;
+          if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => 1, click: kind === 'original' ? send : retry });
+          if (kind === 'original' && known && sent && selector === USER_MESSAGE_SELECTOR)
+            return scalarLocator({ count: async () => { throw new Error('owned read lost'); } });
+          const messages = kind === 'successor' ? finalMessages
+            : sent ? known ? finalMessages.slice(0, 1) : [] : known ? [{ role: 'user' as const, text: 'history' }] : [];
+          if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(messages);
+          if (selector === USER_MESSAGE_SELECTOR) return collectionLocator(messages.filter((message) => message.role === 'user'));
+          if (selector === ASSISTANT_MESSAGE_SELECTOR) return collectionLocator(messages.filter((message) => message.role === 'assistant'));
+          if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section'))
+            return kind === 'successor' ? messageLocator(finalMessages.at(-1)!) : scalarLocator();
+          return scalarLocator();
+        }),
+      });
+      const original = makePage('original');
+      const foreign = makePage('foreign');
+      const successor = makePage('successor');
+      const harness = enqueueBrowserForTurn(mocks, original);
+      const pages = [original, ...(mode === 'local-empty' ? [] : [foreign])];
+      Object.assign(harness.context, { pages: vi.fn(() => pages) });
+      harness.context.newPage.mockImplementation(async () => { pages.push(successor); return successor; });
+      if (!known) harness.context.newPage.mockImplementation(async () => original);
+      const actualRecover = recoveryModule.runPostSendRecovery;
+      const selection = vi.spyOn(recoveryModule, 'runPostSendRecovery').mockImplementation(async (input) => {
+        expect(await input.adapter.enumeratePages(input.browser)).toEqual([original]);
+        return await actualRecover(input);
+      });
+      vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      const invocationId = randomUUID();
+      const output = join(root, invocationId + '.txt');
+      const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        '--profile', join(root, 'profile'), '--cdp', 'http://127.0.0.1:9222', '--input', join(root, 'input'),
+        '--output', output, '--invocation-id', invocationId, '--timeout-ms', '90000', '--poll-ms', '1',
+        ...(known ? ['--chat-url', url] : ['--new-chat', '--project-url', project]),
+      ]);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(retry).not.toHaveBeenCalled();
+      expect(original.close).not.toHaveBeenCalled();
+      expect(foreign.close).not.toHaveBeenCalled();
+      expect(foreign.goto).not.toHaveBeenCalled();
+      if (known) {
+        expect(selection).toHaveBeenCalledTimes(1);
+        expect(foreign.locator).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ state: 'ok', conversation_id: url, send_count: 1 });
+        expect(successor.close).toHaveBeenCalledTimes(1);
+        expect(readFileSync(output, 'utf8')).toBe('RECOVERED-REPLY');
+      } else {
+        expect(selection).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ state: 'observation_uncertain', send_count: 1, send_attempted: true,
+          cause: mode === 'local-empty' ? 'fresh_send_fetch_failed' : 'owned_conversation_recovery_census_failed' });
+        expect(result.conversation_id).toBeUndefined();
+        expect(readStateLightTurnObservation(configuredProfileKey(join(root, 'profile'), 'http://127.0.0.1:9222'), invocationId).conversation_url).toBeNull();
+        expect(successor.close).not.toHaveBeenCalled();
+        expect(existsSync(output)).toBe(false);
+        if (mode === 'local-incomplete') expect(foreign.locator).toHaveBeenCalled();
+      }
+    },
+  );
 });
 type Transport = 'click' | 'enter';
 type DeliveryEffect = 'none' | 'owned_user_node' | 'composer_cleared' | 'both';
