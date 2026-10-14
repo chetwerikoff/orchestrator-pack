@@ -1744,11 +1744,29 @@ export async function runFleetWakeLoop(
   const sleepMs = dependencies.sleepMs ?? defaultSleep;
   const log = dependencies.log ?? ((line: string) => process.stdout.write(`${line}\n`));
   log(`start ${config.projectId} interval=${config.intervalSeconds}s`);
+  let startupWakePending = true;
   while (true) {
     try {
       await runFleetAlarmTick({ ...dependencies, config, sleepMs, log });
     } catch (error) {
       log(`tick failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (startupWakePending) {
+      try {
+        const executor = dependencies.executor ?? defaultOrcaExecutor;
+        const selected = resolveCoordinatorPane(listFleetTerminals(executor), config);
+        if (selected && selected.status !== 'exited') {
+          readFleetScreen(selected.handle, executor);
+          // Consume the process-local attempt before the first effectful send.
+          startupWakePending = false;
+          const submitted = sendCoordinator(executor, selected.handle,
+            'fleet-wake started: run your PROMPT §7 start steps; resume every unit with an open Issue/PR and no live pane')
+            && (await sleepMs(4_000), submitCoordinator(executor, selected.handle));
+          if (!submitted) log('startup wake delivery unverified: ' + selected.handle);
+        }
+      } catch {
+        log('startup wake selection failed or delivery uncertain');
+      }
     }
     await sleepMs(config.intervalSeconds * 1_000);
   }
