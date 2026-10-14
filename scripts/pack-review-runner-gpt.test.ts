@@ -34,7 +34,7 @@ import {
   readPackReviewAuthority,
   reconcilePackReviewTier,
 } from './pack-review-state.js';
-import { packReviewDeliveryNeedsResume } from './lib/pack-review-delivery.js';
+import { packReviewDeliveryNeedsResume, restorePackReviewAuthoritativeRequiredStatus } from './lib/pack-review-delivery.js';
 import {
   createPackReviewRun,
   derivePackReviewNoJudgmentBudgetOutcome,
@@ -4976,7 +4976,8 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
   const issueBody = [String.fromCharCode(96).repeat(3) + 'complexity-tier',
     'tier: T2', String.fromCharCode(96).repeat(3)].join('\n');
 
-  function seed(commentsToPublish: number, sourceReplies: Record<number, string> = {}) {
+  function seed(commentsToPublish: number, sourceReplies: Record<number, string> = {}, tier: 'T2' | 'T3' = 'T2') {
+    const sourceIssueBody = tier === 'T2' ? issueBody : issueBody.replace('tier: T2', 'tier: T3');
     const storeRoot = tempRoot('opk-2523-source-recovery-');
     harnessEnv(storeRoot, path.join(storeRoot, 'review.json'));
     process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
@@ -4984,16 +4985,16 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
     vi.setSystemTime(new Date('2026-10-10T08:00:00.000Z'));
     const options = { projectId, storeRoot };
     const authority = initializePackReviewAuthority({
-      prNumber, headSha: HEAD_A, tier: 'T2',
+      prNumber, headSha: HEAD_A, tier,
       capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
       options: { storeRoot },
     });
     const invocationIds = Array.from({ length: 3 }, (_, index) =>
       '25232523-2523-4252-8252-' + String(index + 1).padStart(12, '0'));
     const reviewRound: PackReviewGptRoundRecord = {
-      schema: 'pack-review-gpt-round/v1', reviewer: 'gpt', tier: 'T2',
+      schema: 'pack-review-gpt-round/v1', reviewer: 'gpt', tier,
       roundOrdinal: 1, cardinality: 3, issueNumber: 2523,
-      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(issueBody),
+      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(sourceIssueBody),
       sourceSlots: invocationIds.map((invocationId, index) => ({
         slotId: 'source-' + String(index + 1).padStart(2, '0'),
         ordinal: index + 1, lifecycle: 'terminal' as const,
@@ -5011,7 +5012,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
       reviewCycleId: authority.cycle!.cycleId, logicalRoundOrdinal: 1,
-      logicalRoundCap: 1, automaticBudgetDisposition: 'consume',
+      logicalRoundCap: tier === 'T3' ? 2 : 1, automaticBudgetDisposition: 'consume',
       resolvedReviewer: 'gpt', reviewRound,
     }).run;
     updatePackReviewRun(run.id, {
@@ -5070,9 +5071,9 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       fixtureGptSourceCommentTransport: sourceTransport,
       fixtureGithubReviewTransport: finalReviewTransport,
       fixtureRequiredStatusWriter: async (request) => { statusStates.push(request.state); },
-      fixtureIssueTitle: "Independent linked Issue", fixtureIssueBody: issueBody, fixtureIssueNumber: 2523,
+      fixtureIssueTitle: "Independent linked Issue", fixtureIssueBody: sourceIssueBody, fixtureIssueNumber: 2523,
       fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
-      fixtureBoundIssueSnapshotBytes: issueBody,
+      fixtureBoundIssueSnapshotBytes: sourceIssueBody,
     };
     return {
       runId: run.id, storeRoot, options, input, sourceTransport,
@@ -5087,7 +5088,8 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       ...f.options, prNumber, headSha: HEAD_A, canonicalRepository: repoSlug,
       trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
-      reviewCycleId: older.reviewCycleId, logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      reviewCycleId: older.reviewCycleId, logicalRoundOrdinal: 1,
+      logicalRoundCap: Number(older.logicalRoundCap ?? 1),
       automaticBudgetDisposition: 'consume', resolvedReviewer: 'gpt',
       allowSameRoundReplacement: true,
     });
@@ -5511,21 +5513,596 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       .toBe(newerId);
   });
 
-  it('retains actual head-drift reason instead of an unproven 0/3 census', async () => {
-    const f = seed(3);
-    f.expireGrace();
-    const result = await reconcileStalePackReviewRuns({
-      ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+  async function credentialSameRunSources(f: ReturnType<typeof seed>): Promise<void> {
+    const original = getPackReviewRun(f.runId, f.options)!;
+    // The competing reviewer has authentic, exact-invocation 3/3 source
+    // evidence. Prepare it before triggering the concurrent verdict so the
+    // in-progress reconciler sees no malformed or partially written witness.
+    const sourceSlots = await Promise.all(original.reviewRound!.sourceSlots.map(async (slot) => {
+      const identity: PackGptSourceIdentity = {
+        repository: repoSlug, prNumber, headSha: HEAD_A, runId: f.runId,
+        slotId: slot.slotId, invocationId: slot.invocationId!,
+      };
+      const resolved = await resolvePackGptSourceComment({
+        identity, transport: f.sourceTransport,
+      });
+      if (resolved.kind !== 'credentialed') throw new Error('same-run fixture requires credentialed sources');
+      return {
+        ...slot,
+        lifecycle: 'terminal' as const,
+        terminalClass: resolved.payload.verdict === 'findings' ? 'complete_findings' : 'complete_clean',
+        terminalResult: {
+          schema: 'turn-result/v1', state: 'ok', scope: 'invocation',
+          cause: 'completed_page_only', invocation_id: identity.invocationId, send_count: 1,
+          source_comment_authority: 'credentialed_github',
+          source_comment_receipt: resolved.receipt,
+        },
+        payload: resolved.payload,
+      };
+    }));
+    updatePackReviewRun(f.runId, {
+      reviewRound: { ...original.reviewRound!, sourceSlots },
+    }, f.options);
+  }
+
+  function installSameRunVerdict(
+    f: ReturnType<typeof seed>, verdict: 'clean' | 'findings' = 'clean',
+  ): void {
+    const original = getPackReviewRun(f.runId, f.options)!;
+    const sources = original.reviewRound!.sourceSlots;
+    expect(sources.every((slot) => slot.lifecycle === 'terminal'
+      && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')))
+      .toBe(true);
+    const findings = sources.flatMap((slot) =>
+      ((slot.payload as { findings: Array<Record<string, unknown>> }).findings).map((finding) => ({
+        ...finding, sourceSlotId: slot.slotId,
+      })));
+    expect(findings.length > 0 ? 'findings' : 'clean').toBe(verdict);
+    const recordedAtUtc = new Date().toISOString();
+    setPackReviewRunTerminal(f.runId, verdict === 'clean' ? 'up_to_date' : 'changes_requested', {
+      reviewVerdict: verdict, findingCount: findings.length, findings,
+      journalOutcome: {
+        state: 'persisted', reason: 'synthetic_concurrent_verdict',
+        recordedAtUtc, idempotencyKey: 'verdict:' + f.runId + ':' + HEAD_A,
+        attempts: 1,
+      },
+    }, f.options);
+    const authority = readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })!;
+    commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: authority.transitionSeq,
+      terminal: {
+        schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal',
+        runId: f.runId, targetSha: HEAD_A,
+        reviewVerdict: verdict, findingCount: findings.length,
+        findingsDigest: 'synthetic-2523-head-drift-verdict',
+        automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 1,
+      },
+      status: verdict, findingCount: findings.length,
+      options: { storeRoot: f.storeRoot },
     });
-    expect(result.results).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        runId: f.runId, terminalized: false, statusReconciled: false,
-        reason: 'gpt_source_head_changed', nextAction: 'run review for the current PR head',
-      }),
-    ]));
-    expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
-    expect(f.statusStates).toEqual([]);
-    expect(f.reviewBodies).toEqual([]);
+    expect(getPackReviewRun(f.runId, f.options)?.reviewCycleId)
+      .toBe(original.reviewCycleId);
+  }
+
+  describe('scoped reconcile head drift (Issue #2580)', () => {
+    it('head drift staleOnly preserves confirmed original-SHA error after head movement', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      const writes: string[] = [];
+      const reads: string[] = [];
+      let observed = 'pending';
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, runId: f.runId, staleOnly: true,
+        fixtureCurrentPrHeadSha: HEAD_B,
+        fixtureRequiredStatusWriter: async (request) => {
+          writes.push(request.state);
+          observed = request.state;
+        },
+        fixtureRequiredStatusReader: async (sha) => {
+          reads.push(sha);
+          return sha === HEAD_A ? observed : undefined;
+        },
+      });
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true, statusReconciled: true,
+          reason: 'gpt_source_head_changed',
+          nextAction: expect.stringContaining('review-cap rules'),
+        }),
+      ]));
+      expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+        targetSha: HEAD_A, status: 'failed',
+        failureReason: 'stale_head_before_terminal',
+        deliveryOutcomes: { requiredStatus: {
+          state: 'succeeded', reason: 'status_unfinished_execution',
+        } },
+      });
+      expect(reads).toEqual([HEAD_A]);
+      expect(writes).toEqual(['error']);
+      expect(f.reviewBodies).toEqual([]);
+      expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+        .toEqual([]);
+    });
+
+    it('head drift staleOnly reports the original-SHA error as unverified if overwritten', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      const writes: string[] = [];
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, runId: f.runId, staleOnly: true,
+        fixtureCurrentPrHeadSha: HEAD_B,
+        fixtureRequiredStatusWriter: async ({ state }) => { writes.push(state); },
+        fixtureRequiredStatusReader: async (sha) => {
+          expect(sha).toBe(HEAD_A);
+          return 'pending';
+        },
+      });
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true, statusReconciled: false,
+          reason: 'status_unverified:gpt_source_head_changed',
+        }),
+      ]));
+      expect(writes).toEqual(['error']);
+    });
+
+    it.each(['early', 'after-census'] as const)(
+      'closes a 3/3 original-head run and publishes its error only once: %s', async (timing) => {
+        const f = seed(3);
+        f.expireGrace();
+        const input = {
+          ...f.input, fixtureCurrentPrHeadSha: timing === 'early' ? HEAD_B : HEAD_A,
+        };
+        if (timing === 'after-census') {
+          const originalList = f.sourceTransport.listComments;
+          input.fixtureGptSourceCommentTransport = {
+            ...f.sourceTransport,
+            listComments: async () => {
+              input.fixtureCurrentPrHeadSha = HEAD_B;
+              return originalList();
+            },
+          };
+        }
+        const result = await reconcileStalePackReviewRuns(input);
+        const after = getPackReviewRun(f.runId, f.options)!;
+        expect(result.results).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            runId: f.runId, terminalized: true, statusReconciled: true,
+            reason: timing === 'early'
+              ? 'gpt_source_head_changed' : 'gpt_source_head_changed_after_census',
+            nextAction: expect.stringContaining('review-cap rules'),
+          }),
+        ]));
+        expect(result.results.find((row) => row.runId === f.runId)?.nextAction)
+          .toContain(HEAD_B);
+        expect(after).toMatchObject({
+          targetSha: HEAD_A, status: 'failed', latestRunStatus: 'failed',
+          failureReason: 'stale_head_before_terminal', exitCode: 1,
+          deliveryOutcomes: { requiredStatus: { state: 'succeeded',
+            reason: 'status_unfinished_execution' } },
+        });
+        expect(after.completedAtUtc).toEqual(expect.any(String));
+        expect(after.reviewVerdict).toBeUndefined();
+        expect(f.statusStates).toEqual(['error']);
+        expect(f.reviewBodies).toEqual([]);
+        expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+          .toEqual([]);
+        const saved = getPackReviewRun(f.runId, f.options);
+        const second = await reconcileStalePackReviewRuns({ ...input, immediate: false });
+        expect(second.results).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            runId: f.runId, terminalized: false, reason: 'status_already_reconciled',
+          }),
+        ]));
+        expect(getPackReviewRun(f.runId, f.options)).toEqual(saved);
+        expect(f.statusStates).toEqual(['error']);
+      },
+    );
+
+    it.each(['clean', 'findings'] as const)(
+      'head drift same-run verdict preserves persisted %s during source census', async (verdict) => {
+        const f = seed(3, verdict === 'findings' ? {
+          0: JSON.stringify({ findings: [{
+            type: 'quality', code: 'quality:head-drift-fixture',
+            severity: 'blocking', path: 'scripts/pack-review-runner.ts',
+            summary: 'synthetic existing finding', source: 'gpt-browser',
+          }] }),
+        } : {});
+        f.expireGrace();
+        await credentialSameRunSources(f);
+        const input = { ...f.input, fixtureCurrentPrHeadSha: HEAD_A };
+        let settled = false;
+        input.fixtureGptSourceCommentTransport = {
+          ...f.sourceTransport,
+          listComments: async () => {
+            if (!settled) {
+              settled = true;
+              installSameRunVerdict(f, verdict);
+            }
+            input.fixtureCurrentPrHeadSha = HEAD_B;
+            return f.sourceTransport.listComments();
+          },
+        };
+        const result = await reconcileStalePackReviewRuns(input);
+        const stored = getPackReviewRun(f.runId, f.options)!;
+        expect(result.results).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            runId: f.runId, terminalized: false, statusReconciled: true,
+            reason: 'same_run_verdict_authoritative',
+          }),
+        ]));
+        expect(stored).toMatchObject({
+          status: verdict === 'clean' ? 'up_to_date' : 'changes_requested',
+          reviewVerdict: verdict, journalOutcome: { state: 'persisted' },
+        });
+        expect(stored.failureReason).not.toBe('stale_head_before_terminal');
+        expect(stored.findings).toHaveLength(verdict === 'clean' ? 0 : 1);
+        expect(f.statusStates).toEqual([verdict === 'clean' ? 'success' : 'failure']);
+        expect(f.statusStates).not.toContain('error');
+      },
+    );
+
+    it('head drift same-run verdict wins directly before the conditional store write', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      await credentialSameRunSources(f);
+      let called = 0;
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+        beforeStaleStatusWrite: async () => {
+          called += 1;
+          installSameRunVerdict(f);
+        },
+      });
+      expect(called).toBe(1);
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: false, statusReconciled: true,
+          reason: 'same_run_verdict_authoritative',
+        }),
+      ]));
+      expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+        status: 'up_to_date', reviewVerdict: 'clean', journalOutcome: { state: 'persisted' },
+      });
+      expect(f.statusStates).toEqual(['success']);
+    });
+
+    it('head drift same-run verdict restores after an obsolete error POST in flight', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      await credentialSameRunSources(f);
+      const writes: string[] = [];
+      let restored = false;
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+        fixtureRequiredStatusWriter: async (request) => {
+          if (request.state === 'error' && !restored) {
+            restored = true;
+            installSameRunVerdict(f);
+            writes.push('success');
+            await Promise.resolve();
+          }
+          writes.push(request.state);
+        },
+      });
+      expect(writes).toEqual(['success', 'error', 'success']);
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true, statusReconciled: true,
+          reason: 'same_run_verdict_authoritative',
+        }),
+      ]));
+      expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+        reviewVerdict: 'clean', journalOutcome: { state: 'persisted' },
+        deliveryOutcomes: { requiredStatus: { state: 'succeeded' } },
+      });
+    });
+
+    it('head drift newer authority suppresses obsolete error for a pre-existing winner', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      const newerId = installNewerCleanRun(f);
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+      });
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true, statusReconciled: true,
+          reason: 'newer_run_authoritative',
+        }),
+      ]));
+      expect(f.statusStates).toEqual(['success']);
+      expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+        status: 'failed', failureReason: 'stale_head_before_terminal',
+        deliveryOutcomes: { requiredStatus: { reason: 'newer_run_authoritative' } },
+      });
+      expect(getPackReviewRun(newerId, f.options)).toMatchObject({
+        status: 'up_to_date', reviewVerdict: 'clean',
+        deliveryOutcomes: { requiredStatus: { state: 'succeeded' } },
+      });
+      const saved = getPackReviewRun(f.runId, f.options);
+      await reconcileStalePackReviewRuns({ ...f.input, fixtureCurrentPrHeadSha: HEAD_B, immediate: false });
+      expect(getPackReviewRun(f.runId, f.options)).toEqual(saved);
+      expect(f.statusStates).toEqual(['success']);
+    });
+
+    it('head drift newer authority suppresses error for a winner before the status writer', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      let newerId: string | undefined;
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+        fixturePauseBeforeStaleStatusWrite: async () => {
+          if (!newerId) newerId = installNewerCleanRun(f);
+        },
+      });
+      expect(newerId).toBeDefined();
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true, statusReconciled: true,
+          reason: 'newer_run_authoritative',
+        }),
+      ]));
+      expect(f.statusStates).toEqual(['success']);
+      expect(getPackReviewRun(newerId!, f.options)?.reviewVerdict).toBe('clean');
+    });
+
+    it('head drift newer authority restores after an old-head error POST', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      const writes: string[] = [];
+      let newerId: string | undefined;
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+        fixtureRequiredStatusWriter: async (request) => {
+          if (request.state === 'error' && !newerId) {
+            newerId = installNewerCleanRun(f);
+            writes.push('success');
+            await Promise.resolve();
+          }
+          writes.push(request.state);
+        },
+      });
+      expect(writes).toEqual(['success', 'error', 'success']);
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true, statusReconciled: true,
+          reason: 'newer_run_authoritative',
+        }),
+      ]));
+      expect(getPackReviewRun(newerId!, f.options)?.reviewVerdict).toBe('clean');
+      expect(getPackReviewRun(f.runId, f.options)?.deliveryOutcomes.requiredStatus).toMatchObject({
+        state: 'succeeded', reason: 'newer_run_authoritative',
+      });
+    });
+
+    it('head drift newer authority keeps legitimate pending with an outstanding required round', async () => {
+      const f = seed(3, {}, 'T3');
+      f.expireGrace();
+      const newerId = installNewerCleanRun(f);
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+      });
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true, statusReconciled: true,
+          reason: 'newer_run_authoritative',
+        }),
+      ]));
+      expect(f.statusStates).toEqual(['pending']);
+      expect(getPackReviewRun(newerId, f.options)).toMatchObject({
+        reviewVerdict: 'clean',
+        deliveryOutcomes: { requiredStatus: {
+          state: 'succeeded', reason: 'status_pending_round_restored',
+        } },
+      });
+      const saved = getPackReviewRun(f.runId, f.options);
+      await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B, immediate: false,
+      });
+      expect(f.statusStates).toEqual(['pending']);
+      expect(getPackReviewRun(f.runId, f.options)).toEqual(saved);
+    });
+
+    it('head drift newer authority force-restores findings after an in-flight older clean verdict status', async () => {
+      const f = seed(3, {}, 'T3');
+      f.expireGrace();
+      await credentialSameRunSources(f);
+      const writes: string[] = [];
+      let observed: string | undefined = 'pending';
+      let newerId: string | undefined;
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+        beforeStaleStatusWrite: async () => { installSameRunVerdict(f); },
+        fixtureRequiredStatusWriter: async (request) => {
+          if (request.state === 'pending' && !newerId) {
+            // Clean T3 round 1 projects pending because round 2 is required.
+            // The second, findings-bearing round wins and posts failure while
+            // this older clean projection is still awaiting its POST.
+            const old = getPackReviewRun(f.runId, f.options)!;
+            const created = createPackReviewRun({
+              ...f.options, prNumber, headSha: HEAD_A, canonicalRepository: repoSlug,
+              trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+              accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+              reviewCycleId: old.reviewCycleId, logicalRoundOrdinal: 2, logicalRoundCap: 2,
+              automaticBudgetDisposition: 'consume', resolvedReviewer: 'gpt',
+            });
+            expect(created.created).toBe(true);
+            newerId = created.run.id;
+            // The per-ordinal create fixture starts sameKeyOrder at 1 for
+            // round 2. Model the later same-original-SHA authoritative run's
+            // actual run ordering without changing any production store code.
+            const newerPath = path.join(f.storeRoot, 'runs', `${newerId}.json`);
+            const newerRaw = JSON.parse(readFileSync(newerPath, 'utf8'));
+            newerRaw.sameKeyOrder = Number(old.sameKeyOrder) + 1;
+            writeFileSync(newerPath, JSON.stringify(newerRaw) + '\n', 'utf8');
+            expect(getPackReviewRun(newerId, f.options)?.sameKeyOrder)
+              .toBe(Number(old.sameKeyOrder) + 1);
+            const finding = {
+              type: 'quality', code: 'quality:newer-findings-wins',
+              severity: 'blocking', path: 'scripts/pack-review-runner.ts',
+              summary: 'synthetic newer source finding', source: 'gpt-browser',
+            };
+            setPackReviewRunTerminal(newerId, 'changes_requested', {
+              reviewVerdict: 'findings', findingCount: 1, findings: [finding],
+              journalOutcome: {
+                state: 'persisted', reason: 'newer_credentialed_findings',
+                recordedAtUtc: new Date().toISOString(),
+                idempotencyKey: 'verdict:' + newerId + ':' + HEAD_A,
+                attempts: 1,
+              },
+            }, f.options);
+            const authority = readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })!;
+            commitPackReviewTerminal({
+              prNumber, expectedTransitionSeq: authority.transitionSeq,
+              terminal: {
+                schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal',
+                runId: newerId, targetSha: HEAD_A,
+                reviewVerdict: 'findings', findingCount: 1,
+                findingsDigest: 'fixture-2580-newer-round-2-findings',
+                automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 2,
+              },
+              status: 'changes_requested', findingCount: 1, options: { storeRoot: f.storeRoot },
+            });
+            const newer = getPackReviewRun(newerId, f.options)!;
+            const published = await restorePackReviewAuthoritativeRequiredStatus({
+              run: newer, projectId, storeRoot: f.storeRoot,
+              writeRequiredStatus: async (next) => {
+                writes.push(next.state);
+                observed = next.state;
+              },
+              forceRepublish: true,
+            });
+            expect(published).toMatchObject({
+              state: 'succeeded', reason: 'status_failure_restored',
+            });
+            // Complete the older pending write after newer failure: without a
+            // forced newer projection the original SHA ends incorrectly pending.
+            await Promise.resolve();
+          }
+          writes.push(request.state);
+          observed = request.state;
+        },
+        fixtureRequiredStatusReader: async (sha) => {
+          expect(sha).toBe(HEAD_A);
+          return observed;
+        },
+      });
+      expect(newerId).toBeDefined();
+      expect(writes).toEqual(['failure', 'pending', 'failure']);
+      expect(observed).toBe('failure');
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: false, statusReconciled: true,
+          reason: 'newer_run_authoritative',
+          nextAction: expect.stringContaining('review-cap rules'),
+        }),
+      ]));
+      expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+        status: 'up_to_date', reviewVerdict: 'clean', journalOutcome: { state: 'persisted' },
+      });
+      expect(getPackReviewRun(newerId!, f.options)).toMatchObject({
+        status: 'changes_requested', reviewVerdict: 'findings', findingCount: 1,
+        deliveryOutcomes: { requiredStatus: {
+          state: 'succeeded', reason: 'status_failure_restored',
+        } },
+      });
+      expect(f.reviewBodies).toEqual([]);
+      expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+        .toEqual([1, 2]);
+    });
+
+    it('head drift staleOnly confirms the newer original-SHA projection without live-head equality', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      let observed = 'pending';
+      const reads: string[] = [];
+      let newerId: string | undefined;
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, runId: f.runId, staleOnly: true,
+        fixtureCurrentPrHeadSha: HEAD_B,
+        fixtureRequiredStatusWriter: async (request) => {
+          if (request.state === 'error' && !newerId) {
+            newerId = installNewerCleanRun(f);
+            observed = 'success';
+            await Promise.resolve();
+          }
+          observed = request.state;
+        },
+        fixtureRequiredStatusReader: async (sha) => {
+          reads.push(sha);
+          return sha === HEAD_A ? observed : undefined;
+        },
+      });
+      expect(newerId).toBeDefined();
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true,
+          statusReconciled: true, reason: 'newer_run_authoritative',
+        }),
+      ]));
+      expect(observed).toBe('success');
+      expect(reads).toEqual([HEAD_A]);
+      expect(getPackReviewRun(f.runId, f.options)?.deliveryOutcomes.requiredStatus).toMatchObject({
+        state: 'succeeded', reason: 'newer_run_authoritative',
+      });
+    });
+
+    it('head drift newer authority reports a failed winner restoration as unresolved', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      installNewerCleanRun(f);
+      const writes: string[] = [];
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+        fixtureRequiredStatusWriter: async (request) => {
+          writes.push(request.state);
+          throw new Error('synthetic newer restoration failure');
+        },
+      });
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true, statusReconciled: false,
+          reason: 'newer_run_restore_failed',
+          nextAction: expect.stringContaining('Rerun scoped reconcile'),
+        }),
+      ]));
+      expect(writes).not.toContain('error');
+    });
+
+    it('keeps a failed old-head status delivery repairable without re-terminalizing', async () => {
+      const f = seed(3);
+      f.expireGrace();
+      let fail = true;
+      const writes: string[] = [];
+      const input = {
+        ...f.input, fixtureCurrentPrHeadSha: HEAD_B,
+        fixtureRequiredStatusWriter: async (request: { state: string }) => {
+          writes.push(request.state);
+          if (fail) throw new Error('synthetic head-drift status outage');
+        },
+      };
+      const first = await reconcileStalePackReviewRuns(input);
+      expect(first.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: f.runId, terminalized: true, statusReconciled: false,
+        }),
+      ]));
+      expect(getPackReviewRun(f.runId, f.options)).toMatchObject({
+        status: 'failed', failureReason: 'stale_head_before_terminal',
+        deliveryOutcomes: { requiredStatus: { state: 'failed' } },
+      });
+      fail = false;
+      const second = await reconcileStalePackReviewRuns({ ...input, immediate: false });
+      expect(second.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ runId: f.runId, terminalized: false, statusReconciled: true }),
+      ]));
+      expect(writes).toEqual(['error', 'error']);
+      const saved = getPackReviewRun(f.runId, f.options);
+      await reconcileStalePackReviewRuns({ ...input, immediate: false });
+      expect(getPackReviewRun(f.runId, f.options)).toEqual(saved);
+      expect(writes).toEqual(['error', 'error']);
+    });
   });
 
   it('keeps incomplete actor/census evidence distinct from a missing-comment census', async () => {

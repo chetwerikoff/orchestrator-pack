@@ -5190,6 +5190,21 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
 
+    // A resolved moved-head failure (including a restored newer-run status) is
+    // closed on its original SHA. Repeating scoped reconcile must not post again.
+    if (candidate.status === 'failed'
+        && candidate.failureReason === 'stale_head_before_terminal'
+        && packReviewRequiredStatusStaleReconciliationComplete(candidate)) {
+      results.push({
+        runId: candidate.id,
+        terminalized: false,
+        statusReconciled: true,
+        reason: 'status_already_reconciled',
+        nextAction: `PR #${candidate.prNumber} head moved from ${candidate.targetSha}; old-head status is already settled. Review the current head only if existing project review-cap rules permit another required round.`,
+      });
+      continue;
+    }
+
     const initialOrder = resolvePackReviewRunOrder(records, candidate);
     if (initialOrder.kind === 'ambiguous'
         || ((input.runId || input.staleOnly) && initialOrder.kind === 'newer')) {
@@ -5338,11 +5353,211 @@ export async function reconcileStalePackReviewRuns(
 
       const recoveredSnapshot = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
       const recoveryCoverage = derivePackReviewGptCoverage(recoveredSnapshot.reviewRound);
+      if (recovery.reason === 'gpt_source_head_changed'
+          || recovery.reason === 'gpt_source_head_changed_after_census') {
+        // Recovery's initial snapshot and the source census are not a terminal
+        // authority. A concurrent, journaled verdict may have won either one.
+        let observedHead = 'another SHA';
+        try {
+          observedHead = await readCheckedReviewPrHead(
+            input, repoSlug, run.prNumber, run.targetSha,
+          );
+        } catch {
+          // The recovery already observed head movement; do not invent a SHA.
+        }
+        const movedAction = (disposition: string, repair = false) =>
+          `PR #${run.prNumber} head moved from ${run.targetSha} to ${observedHead}; ${disposition}. ${repair ? 'Rerun scoped reconcile for old-head status repair; ' : ''}Review the current head only if existing project review-cap rules permit another required round.`;
+
+        // The existing interleaving hook also permits a verdict to settle
+        // immediately before the locked terminal mutation.
+        if (input.beforeStaleStatusWrite) await input.beforeStaleStatusWrite(recoveredSnapshot);
+        const beforeTerminal = getPackReviewRun(run.id, { projectId, storeRoot }) ?? recoveredSnapshot;
+        const alreadyFailed = beforeTerminal.status === 'failed'
+          && beforeTerminal.failureReason === 'stale_head_before_terminal';
+        let movedTerminalized = false;
+        if (!alreadyFailed && !hasPersistedPackReviewVerdict(beforeTerminal)
+            && PACK_REVIEW_ACTIVE_STATUSES.has(beforeTerminal.status)) {
+          const changed = updatePackReviewRunIf(
+            run.id,
+            (all) => {
+              const current = all.find((record) => record.id === run.id);
+              return Boolean(current
+                && current.targetSha === beforeTerminal.targetSha
+                && current.reviewCycleId === beforeTerminal.reviewCycleId
+                && current.canonicalRepository === beforeTerminal.canonicalRepository
+                && PACK_REVIEW_ACTIVE_STATUSES.has(current.status)
+                && !hasPersistedPackReviewVerdict(current));
+            },
+            {
+              status: 'failed',
+              latestRunStatus: 'failed',
+              failureReason: 'stale_head_before_terminal',
+              completedAtUtc: new Date().toISOString(),
+              exitCode: 1,
+            },
+            { projectId, storeRoot },
+          );
+          movedTerminalized = changed !== null;
+        }
+
+        const movedWinner = async (forceRepublish = false, newerAlreadyRestored = false) => {
+          const latest = getPackReviewRun(run.id, { projectId, storeRoot }) ?? beforeTerminal;
+          const order = resolvePackReviewRunOrder(await readBoundRecords(), latest);
+          if (order.kind === 'ambiguous') {
+            return { reason: order.reason, statusReconciled: false };
+          }
+          if (order.kind === 'newer') {
+            // A post-write repair may already have restored and recorded this
+            // winner; do not publish it again on the same reconciliation.
+            if (newerAlreadyRestored
+                && latest.deliveryOutcomes.requiredStatus?.state === 'succeeded'
+                && latest.deliveryOutcomes.requiredStatus.reason === 'newer_run_authoritative') {
+              return { reason: 'newer_run_authoritative', statusReconciled: true };
+            }
+            const restoration = await restoreAndSettleNewerAuthority(latest, statusWriter);
+            return {
+              reason: restoration.reason,
+              statusReconciled: restoration.reason === 'newer_run_authoritative'
+                && restoration.outcome?.state === 'succeeded',
+            };
+          }
+          if (!hasPersistedPackReviewVerdict(latest)) return null;
+          const restored = await restorePackReviewAuthoritativeRequiredStatus({
+            run: latest, projectId, storeRoot,
+            writeRequiredStatus: currentCycleRequiredStatusWriter(latest, storeRoot, statusWriter),
+            forceRepublish,
+          });
+          const after = getPackReviewRun(run.id, { projectId, storeRoot });
+          const afterOrder = resolvePackReviewRunOrder(await readBoundRecords(), latest);
+          if (afterOrder.kind === 'newer') {
+            // This old verdict-status POST may have landed after the newer
+            // original-SHA projection. Always force the newer winner back;
+            // a verdict-bearing old run has no unfinished-error repair need.
+            const newer = await restoreLatestAuthority(latest, statusWriter, true);
+            return {
+              reason: newer.reason,
+              statusReconciled: newer.reason === 'newer_run_authoritative'
+                && newer.outcome?.state === 'succeeded',
+            };
+          }
+          const verified = restored?.state === 'succeeded'
+            && Boolean(after && hasPersistedPackReviewVerdict(after))
+            && afterOrder.kind === 'none';
+          return {
+            reason: verified ? 'same_run_verdict_authoritative'
+              : afterOrder.kind === 'ambiguous' ? afterOrder.reason
+                : 'same_run_verdict_restoration_unverified',
+            statusReconciled: verified,
+          };
+        };
+        const movedResult = (reason: string, reconciled: boolean, deliveryReason?: string) => {
+          const latest = getPackReviewRun(run.id, { projectId, storeRoot }) ?? beforeTerminal;
+          return {
+            runId: run.id,
+            terminalized: movedTerminalized,
+            statusReconciled: reconciled,
+            reason,
+            status: latest.status,
+            hydratedSourceCount: recovery.hydratedSourceCount,
+            usableSourceCount: recovery.usableSourceCount,
+            graceExpired: recovery.graceExpired,
+            coverage: derivePackReviewGptCoverage(latest.reviewRound),
+            ...(deliveryReason ? { deliveryReason } : {}),
+            nextAction: movedAction(
+              reason === 'same_run_verdict_authoritative' ? 'the existing same-run verdict is preserved'
+                : reason === 'newer_run_authoritative' ? 'the newer original-SHA run remains authoritative'
+                  : latest.status === 'failed' && latest.failureReason === 'stale_head_before_terminal'
+                    ? 'the original-head run is closed as failed/stale_head_before_terminal'
+                    : 'the original-head terminal authority has changed',
+              !reconciled,
+            ),
+          };
+        };
+
+        const incumbent = await movedWinner();
+        if (incumbent) {
+          results.push(movedResult(incumbent.reason, incumbent.statusReconciled));
+          continue;
+        }
+        const failedRun = getPackReviewRun(run.id, { projectId, storeRoot }) ?? beforeTerminal;
+        if (failedRun.status !== 'failed'
+            || failedRun.failureReason !== 'stale_head_before_terminal') {
+          results.push(movedResult('moved_head_terminal_authority_changed', false));
+          continue;
+        }
+
+        const authorizeOldError = async () => {
+          const current = getPackReviewRun(run.id, { projectId, storeRoot });
+          return Boolean(current
+            && current.targetSha === failedRun.targetSha
+            && current.reviewCycleId === failedRun.reviewCycleId
+            && current.canonicalRepository === failedRun.canonicalRepository
+            && current.status === 'failed'
+            && current.failureReason === 'stale_head_before_terminal'
+            && !hasPersistedPackReviewVerdict(current)
+            && resolvePackReviewRunOrder(await readBoundRecords(), current).kind === 'none');
+        };
+        const repairOldError = async () => {
+          const latest = getPackReviewRun(run.id, { projectId, storeRoot }) ?? failedRun;
+          const order = resolvePackReviewRunOrder(await readBoundRecords(), latest);
+          if (order.kind === 'newer') {
+            const restoration = await restoreAndSettleNewerAuthority(latest, statusWriter);
+            return { reason: restoration.reason };
+          }
+          if (order.kind === 'ambiguous') return { reason: order.reason };
+          if (hasPersistedPackReviewVerdict(latest)) {
+            const restored = await restorePackReviewAuthoritativeRequiredStatus({
+              run: latest, projectId, storeRoot,
+              writeRequiredStatus: currentCycleRequiredStatusWriter(latest, storeRoot, statusWriter),
+              forceRepublish: true,
+            });
+            const after = getPackReviewRun(run.id, { projectId, storeRoot });
+            return {
+              reason: restored?.state === 'succeeded' && after
+                && hasPersistedPackReviewVerdict(after)
+                ? 'same_run_verdict_status_restored'
+                : 'same_run_verdict_restoration_unverified',
+            };
+          }
+          return { reason: 'moved_head_status_authority_changed' };
+        };
+
+        const needsStatus = packReviewRequiredStatusNeedsStaleReconciliation(failedRun);
+        const publication = await recordPackReviewStaleRequiredStatus({
+          run: failedRun, projectId, storeRoot,
+          writeRequiredStatus: statusWriter,
+          authorizeWrite: authorizeOldError,
+          repairSupersededWrite: repairOldError,
+          pauseBeforeWrite: input.fixturePauseBeforeStaleStatusWrite,
+          pauseAfterWrite: input.fixturePauseAfterStaleStatusWrite,
+        });
+        const winnerAfterWrite = await movedWinner(
+          publication.state === 'succeeded',
+          publication.reason === 'newer_run_authoritative',
+        );
+        if (winnerAfterWrite) {
+          results.push(movedResult(
+            winnerAfterWrite.reason, winnerAfterWrite.statusReconciled, publication.reason,
+          ));
+          continue;
+        }
+        const afterPublication = getPackReviewRun(run.id, { projectId, storeRoot }) ?? failedRun;
+        const afterOrder = resolvePackReviewRunOrder(await readBoundRecords(), afterPublication);
+        const oldStatusReconciled = afterOrder.kind === 'none'
+          && publication.state === 'succeeded'
+          && afterPublication.status === 'failed'
+          && afterPublication.failureReason === 'stale_head_before_terminal'
+          && packReviewRequiredStatusStaleReconciliationComplete(afterPublication);
+        results.push(movedResult(
+          afterOrder.kind === 'ambiguous' ? afterOrder.reason : recovery.reason,
+          oldStatusReconciled,
+          needsStatus ? publication.reason : 'status_already_reconciled',
+        ));
+        continue;
+      }
       // These failures occur before a complete source census or exact-head
       // authority exists. Never reinterpret them as a proven empty 0/3.
-      if (recovery.reason === 'gpt_source_head_changed'
-          || recovery.reason === 'gpt_source_head_changed_after_census'
-          || recovery.reason.startsWith('gpt_source_unavailable:')
+      if (recovery.reason.startsWith('gpt_source_unavailable:')
           || recovery.reason.startsWith('gpt_source_unavailable_after_census:')
           || recovery.reason.startsWith('gpt_source_census_unresolved:')
           || recovery.reason.startsWith('gpt_complete_source_uncredentialable:')) {
@@ -5919,11 +6134,47 @@ export async function reconcileStalePackReviewRuns(
       if (!current || hasPersistedPackReviewVerdict(current)) continue;
       let verified = false;
       try {
-        const headBefore = await readCheckedReviewPrHead(
-          input, repoSlug, current.prNumber, current.targetSha,
-        );
-        const authorityBefore = readPackReviewAuthority(current.prNumber, { storeRoot });
-        if (current.status === 'failed'
+        if (current.status === 'failed' && current.failureReason === 'stale_head_before_terminal') {
+          // A moved-head closure owns the original SHA, not the live PR HEAD.
+          // Confirm that SHA's actual required-status projection and unchanged
+          // run-order authority; the live-head equality rule below is for other
+          // stale statuses only.
+          const beforeOrder = resolvePackReviewRunOrder(await readBoundRecords(), current);
+          const newer = beforeOrder.kind === 'newer' ? beforeOrder.run : null;
+          const winnerOutcome = newer?.deliveryOutcomes.requiredStatus;
+          const winnerPayload = newer ? packReviewJournaledPayload(newer) : null;
+          const classification = winnerPayload ? classifyPackReviewPayload(winnerPayload) : null;
+          const expectedStatus = beforeOrder.kind === 'none' ? 'error'
+            : beforeOrder.kind === 'newer'
+              && current.deliveryOutcomes.requiredStatus?.reason === 'newer_run_authoritative'
+              && winnerOutcome?.state === 'succeeded'
+              ? classification
+                ? winnerOutcome.reason === 'status_pending_round_restored'
+                  || (classification.requiredStatus === 'success'
+                    && outstandingPackReviewCycle(beforeOrder.run, storeRoot))
+                  ? 'pending' : classification.requiredStatus
+                : newer && PACK_REVIEW_ACTIVE_STATUSES.has(newer.status) ? 'pending' : undefined
+              : undefined;
+          if (expectedStatus && packReviewRequiredStatusStaleReconciliationComplete(current)) {
+            const observed = await readFinalCapRequiredStatus(input, repoSlug, current.targetSha);
+            const after = getPackReviewRun(current.id, { projectId, storeRoot });
+            const afterOrder = resolvePackReviewRunOrder(await readBoundRecords(), current);
+            verified = observed === expectedStatus
+              && after?.status === 'failed'
+              && after.failureReason === 'stale_head_before_terminal'
+              && packReviewRequiredStatusStaleReconciliationComplete(after)
+              && (beforeOrder.kind === 'none' && afterOrder.kind === 'none'
+                || beforeOrder.kind === 'newer' && afterOrder.kind === 'newer'
+                  && beforeOrder.run.id === afterOrder.run.id
+                  && packReviewRequiredStatusProjectionKey(beforeOrder.run)
+                    === packReviewRequiredStatusProjectionKey(afterOrder.run));
+          }
+        } else {
+          const headBefore = await readCheckedReviewPrHead(
+            input, repoSlug, current.prNumber, current.targetSha,
+          );
+          const authorityBefore = readPackReviewAuthority(current.prNumber, { storeRoot });
+          if (current.status === 'failed'
             && headBefore === current.targetSha.toLowerCase()
             && authorityBefore?.currentHeadSha.toLowerCase() === headBefore
             && authorityBefore.cycle?.cycleId === current.reviewCycleId
@@ -5940,6 +6191,7 @@ export async function reconcileStalePackReviewRuns(
             && authorityAfter.cycle?.cycleId === current.reviewCycleId
             && !authorityAfter.terminal
             && resolvePackReviewRunOrder(await readBoundRecords(), current).kind === 'none';
+          }
         }
       } catch {
         // An unavailable, conflicting or overwritten current-head status is
