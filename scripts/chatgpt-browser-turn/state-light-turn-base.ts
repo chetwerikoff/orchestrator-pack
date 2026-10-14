@@ -671,25 +671,29 @@ export async function revalidateKeyedHarvest(
               // Preserve only text exposed by the code element's rendered innerText.
               // textContent can include hidden descendants and is never publication evidence.
               for (const code of Array.from(element.querySelectorAll('pre code'))) {
-              if (code.getBoundingClientRect().height <= 0) continue;
-              const visible = (code as HTMLElement).innerText;
-              const lines = visible.split('\n');
-              const firstLine = lines[0] ?? '';
-              if (!firstLine || lines.length < 2 || text.includes(visible)) continue;
-              // A unique, line-aligned prefix binds the code node to this outer message.
-              const offset = text.indexOf(firstLine);
-              if (offset < 0 || (offset > 0 && text[offset - 1] !== '\n')
-              || text.indexOf(firstLine, offset + firstLine.length) !== -1) continue;
-              let end = offset + firstLine.length;
-              if (end < text.length && text[end] !== '\n') continue;
-              let matchedLines = 1;
-              while (matchedLines < lines.length) {
-              const line = lines[matchedLines]!;
-              const nextEnd = end + 1 + line.length;
-              if (text[end] !== '\n' || !text.startsWith(line, end + 1)
-              || (nextEnd < text.length && text[nextEnd] !== '\n')) break;
-              end = nextEnd;
-              matchedLines += 1;
+                if (code.getBoundingClientRect().height <= 0) continue;
+                const visible = (code as HTMLElement).innerText;
+                const lines = visible.split('\n');
+                const firstLine = lines[0] ?? '';
+                if (!firstLine || lines.length < 2 || text.includes(visible)) continue;
+                // A unique, line-aligned prefix binds the code node to this outer message.
+                const offset = text.indexOf(firstLine);
+                if (offset < 0 || (offset > 0 && text[offset - 1] !== '\n')
+                  || text.indexOf(firstLine, offset + firstLine.length) !== -1) continue;
+                let end = offset + firstLine.length;
+                if (end < text.length && text[end] !== '\n') continue;
+                let matchedLines = 1;
+                while (matchedLines < lines.length) {
+                  const line = lines[matchedLines]!;
+                  const nextEnd = end + 1 + line.length;
+                  if (text[end] !== '\n' || !text.startsWith(line, end + 1)
+                    || (nextEnd < text.length && text[nextEnd] !== '\n')) break;
+                  end = nextEnd;
+                  matchedLines += 1;
+                }
+                if (matchedLines === lines.length) continue;
+                // Keep the outer message's non-code prose and footer byte-for-byte.
+                text = text.slice(0, offset) + visible + text.slice(end);
               }
               if (matchedLines === lines.length) continue;
               // Keep the outer message's non-code prose and footer byte-for-byte.
@@ -1727,25 +1731,29 @@ export async function readPageObservation(
                 // Preserve only text exposed by the code element's rendered innerText.
                 // textContent can include hidden descendants and is never publication evidence.
                 for (const code of Array.from(element.querySelectorAll('pre code'))) {
-                if (code.getBoundingClientRect().height <= 0) continue;
-                const visible = (code as HTMLElement).innerText;
-                const lines = visible.split('\n');
-                const firstLine = lines[0] ?? '';
-                if (!firstLine || lines.length < 2 || text.includes(visible)) continue;
-                // A unique, line-aligned prefix binds the code node to this outer message.
-                const offset = text.indexOf(firstLine);
-                if (offset < 0 || (offset > 0 && text[offset - 1] !== '\n')
-                || text.indexOf(firstLine, offset + firstLine.length) !== -1) continue;
-                let end = offset + firstLine.length;
-                if (end < text.length && text[end] !== '\n') continue;
-                let matchedLines = 1;
-                while (matchedLines < lines.length) {
-                const line = lines[matchedLines]!;
-                const nextEnd = end + 1 + line.length;
-                if (text[end] !== '\n' || !text.startsWith(line, end + 1)
-                || (nextEnd < text.length && text[nextEnd] !== '\n')) break;
-                end = nextEnd;
-                matchedLines += 1;
+                  if (code.getBoundingClientRect().height <= 0) continue;
+                  const visible = (code as HTMLElement).innerText;
+                  const lines = visible.split('\n');
+                  const firstLine = lines[0] ?? '';
+                  if (!firstLine || lines.length < 2 || text.includes(visible)) continue;
+                  // A unique, line-aligned prefix binds the code node to this outer message.
+                  const offset = text.indexOf(firstLine);
+                  if (offset < 0 || (offset > 0 && text[offset - 1] !== '\n')
+                    || text.indexOf(firstLine, offset + firstLine.length) !== -1) continue;
+                  let end = offset + firstLine.length;
+                  if (end < text.length && text[end] !== '\n') continue;
+                  let matchedLines = 1;
+                  while (matchedLines < lines.length) {
+                    const line = lines[matchedLines]!;
+                    const nextEnd = end + 1 + line.length;
+                    if (text[end] !== '\n' || !text.startsWith(line, end + 1)
+                      || (nextEnd < text.length && text[nextEnd] !== '\n')) break;
+                    end = nextEnd;
+                    matchedLines += 1;
+                  }
+                  if (matchedLines === lines.length) continue;
+                  // Keep the outer message's non-code prose and footer byte-for-byte.
+                  text = text.slice(0, offset) + visible + text.slice(end);
                 }
                 if (matchedLines === lines.length) continue;
                 // Keep the outer message's non-code prose and footer byte-for-byte.
