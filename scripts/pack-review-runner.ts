@@ -3294,7 +3294,8 @@ async function recoverStaleGptSourceComments(options: {
         // GitHub comment must still agree with its stored receipt and verdict.
         const terminal = currentSlot.terminalResult as Record<string, unknown> | undefined;
         if (stableJson(terminal?.source_comment_receipt) !== stableJson(resolution.receipt)
-          || stableJson(currentSlot.payload) !== stableJson(payload)) {
+          || stableJson(JSON.parse(JSON.stringify(currentSlot.payload)))
+            !== stableJson(JSON.parse(JSON.stringify(payload)))) {
           uncredentialableCompletedSources.push(`${currentSlot.slotId}:stored_publication_mismatch`);
         }
         continue;
