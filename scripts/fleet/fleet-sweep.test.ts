@@ -67,6 +67,65 @@ function pane(handle: string, title: string, worktreePath = workerPath): FleetTe
   return { handle, title, worktreePath };
 }
 
+
+interface PrimaryWorkerFixture {
+  readonly terminal: FleetTerminal;
+  readonly runId: string;
+  readonly coordinator: string;
+  readonly dispatchStatus?: string;
+  readonly observationStatus?: string;
+  readonly shownTerminal?: FleetTerminal | null;
+  readonly exactWorker?: boolean;
+}
+
+function primaryTerminal(handle: string, title = 'OpenCode merge worker', status = 'running'): FleetTerminal {
+  return { handle, title, worktreePath: primary, incarnationId: 'inc-' + handle,
+    branch: 'refs/heads/merge-task', status, agentIdentity: 'opencode' };
+}
+
+// Read-only fake of the real worker-list -> worker-show -> run-show Orca envelopes.
+function primaryOrcaExecutor(
+  terminals: readonly FleetTerminal[],
+  screens: Readonly<Record<string, string>>,
+  workers: readonly PrimaryWorkerFixture[],
+  calls: string[][] = [],
+): OrcaExecutor {
+  const terminalExecutor = fakeExecutor(terminals, screens, calls);
+  return (args) => {
+    if (args[0] !== 'orchestration') return terminalExecutor(args);
+    calls.push([...args]);
+    if (args[1] === 'worker-list') {
+      return result(JSON.stringify({ ok: true, result: {
+        workers: workers.map((worker, index) => ({
+          agentTerminalHandle: worker.terminal.handle, taskId: 'task-' + index,
+          dispatchId: 'dispatch-' + index, dispatchStatus: worker.dispatchStatus ?? 'dispatched',
+        })),
+        page: { hasMore: false },
+      } }));
+    }
+    if (args[1] === 'worker-show') {
+      const dispatchId = args[args.indexOf('--dispatch') + 1];
+      const index = workers.findIndex((_worker, i) => dispatchId === 'dispatch-' + i);
+      if (index < 0) return result('', false);
+      const worker = workers[index]!;
+      return result(JSON.stringify({ ok: true, result: {
+        dispatch: { id: dispatchId, taskId: 'task-' + index, run_id: worker.runId,
+          status: worker.dispatchStatus ?? 'dispatched' },
+        observation: { exactWorker: worker.exactWorker ?? true, status: worker.observationStatus ?? 'live' },
+        ...(worker.shownTerminal === null ? {} : { terminal: worker.shownTerminal ?? worker.terminal }),
+      } }));
+    }
+    if (args[1] === 'run-show') {
+      const runId = args[args.indexOf('--id') + 1];
+      const worker = workers.find((entry) => entry.runId === runId);
+      return worker ? result(JSON.stringify({ ok: true, result: {
+        run: { id: runId, coordinator_handle: worker.coordinator },
+      } })) : result('', false);
+    }
+    return result('', false);
+  };
+}
+
 describe('fleet sweep classification', () => {
   it.each([
     ['OpenCode', 'doing work\nesc interrupt\n'],
@@ -317,6 +376,127 @@ describe('fleet sweep pane selection and reads', () => {
     });
     expect(observed).toHaveLength(1);
     expect(observed[0]?.lines).toEqual([]);
+  });
+});
+
+
+describe('Issue #2585 supervised primary-root admission', () => {
+  const currentCoordinator = pane('coordinator', 'Cursor coordinator', primary);
+  const opts = { projectId: 'project', primary, coordinatorHandle: 'coordinator',
+    store: new MemoryPollingStore() };
+
+  it('primary-root bound worker: reports STOPPED and consecutive POLLING without losing a workspace peer', () => {
+    const merge = primaryTerminal('merge');
+    const workspace = pane('workspace', 'Claude Code workspace worker');
+    const terminals = [currentCoordinator, merge, workspace];
+    const workers: PrimaryWorkerFixture[] = [{ terminal: merge, runId: 'run-main', coordinator: 'coordinator' }];
+    const calls: string[][] = [];
+    const executor = primaryOrcaExecutor(terminals, { merge: 'done', workspace: 'done' }, workers, calls);
+    const initial = runFleetSweep({ ...opts, terminals, executor });
+    expect(initial.map(({ handle, state }) => [handle, state])).toEqual([
+      ['merge', 'STOPPED'], ['workspace', 'STOPPED'],
+    ]);
+    expect(initial[0]?.taskBinding).toContain('run-main');
+    const diagnostic = collectFleetDiagnostics({ ...opts, terminals, executor, observations: initial });
+    expect(diagnostic.find((row) => row.handle === 'merge')?.state).toBe('STOPPED');
+
+    const polling = primaryOrcaExecutor(terminals, { merge: '⠏ sleep 30\nesc interrupt', workspace: 'done' }, workers);
+    const first = runFleetSweep({ ...opts, terminals, executor: polling });
+    const second = runFleetSweep({ ...opts, terminals, executor: polling });
+    expect(first[0]?.state).toBe('busy');
+    expect(second[0]?.state).toBe('POLLING');
+    expect(second.find((row) => row.handle === 'workspace')?.state).toBe('STOPPED');
+    expect(calls.every((args) =>
+      (args[0] === 'terminal' && ['list', 'read', 'show'].includes(args[1]!))
+      || (args[0] === 'orchestration' && ['worker-list', 'worker-show', 'run-show'].includes(args[1]!)))).toBe(true);
+  });
+
+  it('primary-root foreign Run: excludes valid foreign, ambiguous and incomplete identities before reading', () => {
+    const allowed = primaryTerminal('allowed');
+    const foreign = primaryTerminal('foreign', 'Cursor merge worker');
+    const duplicate = primaryTerminal('duplicate');
+    const noGeneration = { ...primaryTerminal('no-inc'), incarnationId: undefined };
+    const wrongBranch = primaryTerminal('wrong-branch');
+    const terminals = [currentCoordinator, allowed, foreign, duplicate, noGeneration, wrongBranch];
+    const workers: PrimaryWorkerFixture[] = [
+      { terminal: allowed, runId: 'run-main', coordinator: 'coordinator' },
+      { terminal: foreign, runId: 'run-foreign', coordinator: 'other-coordinator' },
+      { terminal: duplicate, runId: 'run-main', coordinator: 'coordinator' },
+      { terminal: duplicate, runId: 'run-main', coordinator: 'coordinator' },
+      { terminal: noGeneration, runId: 'run-main', coordinator: 'coordinator' },
+      { terminal: wrongBranch, runId: 'run-main', coordinator: 'coordinator',
+        shownTerminal: { ...wrongBranch, branch: 'refs/heads/reused' } },
+    ];
+    const calls: string[][] = [];
+    const executor = primaryOrcaExecutor(terminals, { allowed: 'done', foreign: 'done',
+      duplicate: 'done', 'no-inc': 'done', 'wrong-branch': 'done' }, workers, calls);
+    expect(runFleetSweep({ ...opts, terminals, executor }).map((row) => row.handle)).toEqual(['allowed']);
+    expect(collectFleetDiagnostics({ ...opts, terminals, executor }).map((row) => row.handle)).toEqual(['allowed']);
+    expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'read')
+      .map((args) => args[args.indexOf('--terminal') + 1])).toEqual(['allowed', 'allowed']);
+    expect(calls.some((args) => args[1] === 'run-show' && args.includes('run-foreign'))).toBe(true);
+    expect(runFleetSweep({ ...opts, coordinatorHandle: 'missing',
+      terminals, executor }).map((row) => row.handle)).toEqual([]);
+    expect(collectFleetDiagnostics({ ...opts, coordinatorHandle: undefined,
+      terminals, executor })).toEqual([]);
+    const exitedCoordinator = [{ ...currentCoordinator, status: 'exited' }, ...terminals.slice(1)];
+    expect(runFleetSweep({ ...opts, terminals: exitedCoordinator, executor }).map((row) => row.handle)).toEqual([]);
+  });
+
+  it('primary-root Cursor titles: admits bound Cursor while excluding coordinator, architect and unbound operators', () => {
+    const bound = primaryTerminal('bound-cursor', 'Cursor merge agent');
+    const architect = primaryTerminal('architect', 'Claude architect');
+    const unbound = primaryTerminal('unbound-cursor', 'Cursor coordinator');
+    const operator = primaryTerminal('operator', 'Claude Code operator');
+    const shell = primaryTerminal('shell', 'bash');
+    const terminals = [currentCoordinator, bound, architect, unbound, operator, shell];
+    const workers: PrimaryWorkerFixture[] = [
+      { terminal: bound, runId: 'run-main', coordinator: 'coordinator' },
+      { terminal: currentCoordinator, runId: 'run-main', coordinator: 'coordinator' },
+      { terminal: architect, runId: 'run-main', coordinator: 'coordinator' },
+    ];
+    const calls: string[][] = [];
+    const executor = primaryOrcaExecutor(terminals, { 'bound-cursor': 'done', architect: 'done',
+      coordinator: 'done', 'unbound-cursor': 'done', operator: 'done', shell: 'done' }, workers, calls);
+    const options = { ...opts, architectHandle: 'architect', terminals, executor };
+    expect(runFleetSweep(options).map((row) => row.handle)).toEqual(['bound-cursor']);
+    expect(collectFleetDiagnostics(options).map((row) => row.handle)).toEqual(['bound-cursor']);
+    expect(calls.filter((args) => args[1] === 'read').every((args) => args.includes('bound-cursor'))).toBe(true);
+    expect(calls.filter((args) => args[1] === 'read')).toHaveLength(2);
+  });
+
+  it('primary-root exited and unreadable: native exact exit alarms without screen and does not hide stopped peer', () => {
+    const exited = primaryTerminal('exited', 'OpenCode merge worker', 'exited');
+    const missingTuple = primaryTerminal('missing-tuple', 'OpenCode merge worker', 'exited');
+    const unreadable = primaryTerminal('unreadable');
+    const peer = primaryTerminal('peer');
+    const terminals = [currentCoordinator, exited, missingTuple, unreadable, peer];
+    const workers: PrimaryWorkerFixture[] = [
+      { terminal: exited, runId: 'run-main', coordinator: 'coordinator',
+        dispatchStatus: 'failed', observationStatus: 'exited' },
+      { terminal: missingTuple, runId: 'run-main', coordinator: 'coordinator',
+        dispatchStatus: 'failed', observationStatus: 'exited', shownTerminal: null },
+      { terminal: unreadable, runId: 'run-main', coordinator: 'coordinator' },
+      { terminal: peer, runId: 'run-main', coordinator: 'coordinator' },
+    ];
+    const calls: string[][] = [];
+    const executor = primaryOrcaExecutor(terminals, { peer: 'done' }, workers, calls);
+    const observations = runFleetSweep({ ...opts, terminals, executor });
+    expect(observations.map((row) => [row.handle, row.state])).toEqual([
+      ['exited', 'STOPPED'], ['peer', 'STOPPED'],
+    ]);
+    expect(observations[0]?.lines).toEqual([]);
+    const diagnostics = collectFleetDiagnostics({ ...opts, terminals, executor, observations });
+    expect(diagnostics.map((row) => [row.handle, row.reason])).toEqual([
+      ['exited', 'terminal_exited'], ['unreadable', 'unverified:screen_unreadable'], ['peer', 'agent_unverified'],
+    ]);
+    expect(diagnostics[0]?.state).toBe('STOPPED');
+    expect(diagnostics[1]?.state).toBeUndefined();
+    expect(calls.filter((args) => args[1] === 'read')
+      .every((args) => !args.includes('exited') && !args.includes('missing-tuple'))).toBe(true);
+    expect(calls.filter((args) => args[1] === 'read')
+      .map((args) => args[args.indexOf('--terminal') + 1]))
+      .toEqual(['unreadable', 'peer', 'unreadable', 'peer']);
   });
 });
 
