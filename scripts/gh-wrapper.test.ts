@@ -2790,13 +2790,12 @@ describe('Issue #2589 merge-skill executable gh read coverage', () => {
   function executableGhCommands(source: string): string[] {
     // Join continued shell commands before examining executable instructions.
     const joined = source.replace(/[ \t]*\\\r?\n[ \t]*/g, ' ');
-    const shellLines = joined.split(/\r?\n/).map((line) => line.trim())
-      .filter((line) => /^gh\s+/.test(line));
-    const inlineCommands = [...joined.matchAll(/\x60(gh\s+[^\x60\r\n]+)\x60/g)]
-      .map((match) => match[1])
+    // Match commands also inside shell conditionals, substitutions and chains.
+    const commands = [...joined.matchAll(/\bgh[ \t]+[^`\r\n;&|)]+/g)]
+      .map((match) => match[0].trim())
       // The bare command-family mention in Step 2 has no executable arguments.
       .filter((command) => command !== 'gh pr view');
-    return [...shellLines, ...inlineCommands].map((command) =>
+    return commands.map((command) =>
       command.replace(/\$TARGET_REPOSITORY\b/g, 'example/target').replace(/\bP\b/g, '42'));
   }
 
@@ -2835,6 +2834,13 @@ describe('Issue #2589 merge-skill executable gh read coverage', () => {
     ]) {
       expect(isClassifiedGhReadCommand(staleCommand), staleCommand).toBe(false);
       expect(() => checkAllSkillReads(skill + '\n' + staleCommand)).toThrow();
+    }
+    for (const embeddedRead of [
+      'if gh pr checks 42 --repo example/target; then :; fi',
+      'result=$(gh pr checks 42 --repo example/target)',
+      'gh pr view 42 --repo example/target --json state && gh release view 42 --repo example/target',
+    ]) {
+      expect(() => checkAllSkillReads(skill + '\n' + embeddedRead)).toThrow();
     }
   });
 });
