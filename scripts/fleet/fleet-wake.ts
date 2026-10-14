@@ -719,6 +719,7 @@ function listUnreadRunMessages(
   coordinatorHandle: string,
   executor: OrcaExecutor,
   projectId: string,
+  log: (line: string) => void,
 ): RunMailWakeEvent[] {
   const runJson = executorRunJson(executor);
   const adapter = new OrcaRuntimeAdapter({ runJson });
@@ -733,7 +734,10 @@ function listUnreadRunMessages(
     runPaneKeyPath,
   );
   const inbox = mail.readInbox?.();
-  if (!inbox?.ok) return [];
+  if (!inbox?.ok) {
+    log(`run inbox read failed: ${inbox?.error?.code ?? inbox?.error?.message ?? 'orchestration_inbox_unavailable'}`);
+    return [];
+  }
 
   const byRun = new Map<string, Array<{ id: string; toHandle: string; subject: string; fromHandle: string }>>();
   for (const row of inbox.result?.messages ?? []) {
@@ -1163,7 +1167,7 @@ async function wakePanesOnEvents(
   }
   const unread = options.listUnreadRunMessages
     ? options.listUnreadRunMessages(coordinator.handle)
-    : listUnreadRunMessages(coordinator.handle, executor, options.config.projectId);
+    : listUnreadRunMessages(coordinator.handle, executor, options.config.projectId, log);
   for (const event of unread) {
     if (event.toHandle === coordinator.handle || !event.toHandle.startsWith('run:')) continue;
     const key = `mail:${event.fromHandle}:${event.id}`;
