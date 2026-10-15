@@ -27,12 +27,18 @@ import {
 import {
   createPackReviewRun,
   getPackReviewRun,
+  resolvePackReviewRequiredRunOrder,
   resolvePackReviewRunStoreRoot,
   setPackReviewRunTerminal,
   updatePackReviewRun,
   type PackReviewRunRecord,
   type PackReviewGptRoundRecord,
 } from './lib/pack-review-run-store.ts';
+import {
+  recordPackReviewPendingStatus,
+  recordPackReviewStaleRequiredStatus,
+  deliverPackReviewVerdict,
+} from './lib/pack-review-delivery.ts';
 import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 import { runProcess, runProcessSync } from './kernel/subprocess.ts';
 import { getPackReviewerPreferencePath, writePackReviewerPreference } from './lib/pack-reviewer-preference.ts';
@@ -4021,5 +4027,126 @@ describe('Issue #2576 owned worktree lifecycle with real disposable Git', () => 
     }
     expect(existsSync(target)).toBe(false);
     expect(registered(f.repo, target)).toBe(false);
+  });
+});
+
+describe('Issue #2607 supplemental reviewer provenance and required-status isolation', () => {
+  function setup() {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'opk-review-2607-'));
+    roots.push(storeRoot);
+    return { projectId: 'orchestrator-pack', storeRoot };
+  }
+
+  it('requires explicit admission and disjoint reviewer reuse without changing run schema', () => {
+    const store = setup();
+    const base = {
+      ...store, prNumber: 2607, headSha: HEAD, trustedPackRoot: process.cwd(),
+      sourceRepoRoot: process.cwd(), canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      surface: 'pack-gpt-review', startReason: 'manual-browser-gpt',
+      resolvedReviewerSource: 'invocation-bound' as const,
+      reviewCycleId: 'existing-2607-cycle',
+      automaticBudgetDisposition: 'non_consuming_explicit' as const,
+    };
+    expect(() => createPackReviewRun({ ...base, resolvedReviewer: 'codex' })).toThrow(/non_consuming_explicit/);
+    const admissible = { ...base, allowExplicitSupplementalStart: true };
+    const original = createPackReviewRun({ ...admissible, resolvedReviewer: 'codex' });
+    expect(original.created).toBe(true);
+    const date = new Date().toISOString();
+    setPackReviewRunTerminal(original.run.id, 'commented', {
+      reviewVerdict: 'clean', findingCount: 0, findings: [],
+      journalOutcome: {
+        state: 'persisted', reason: 'fixture-accepted',
+        idempotencyKey: `verdict:${original.run.id}:${HEAD}`,
+        recordedAtUtc: date, attempts: 1,
+      },
+    }, store);
+    const sameReviewer = createPackReviewRun({ ...admissible, resolvedReviewer: 'codex' });
+    expect(sameReviewer).toMatchObject({ created: false, reused: true, reason: 'terminal_run_exists' });
+    expect(sameReviewer.run.id).toBe(original.run.id);
+    const differentReviewer = createPackReviewRun({ ...admissible, resolvedReviewer: 'claude' });
+    expect(differentReviewer.created).toBe(true);
+    expect(differentReviewer.run.sameKeyOrder).toBeGreaterThan(original.run.sameKeyOrder ?? 0);
+    setPackReviewRunTerminal(differentReviewer.run.id, 'commented', {
+      reviewVerdict: 'clean', findingCount: 0, findings: [],
+      journalOutcome: {
+        state: 'persisted', reason: 'fixture-accepted',
+        idempotencyKey: `verdict:${differentReviewer.run.id}:${HEAD}`,
+        recordedAtUtc: date, attempts: 1,
+      },
+    }, store);
+    const required = createPackReviewRun({
+      ...base, automaticBudgetDisposition: 'consume',
+      allowExplicitSupplementalStart: undefined,
+      resolvedReviewer: 'claude',
+      logicalRoundOrdinal: 1, logicalRoundCap: 2,
+    });
+    expect(required.created).toBe(true);
+    const ordered = resolvePackReviewRequiredRunOrder(
+      [original.run, differentReviewer.run, required.run], required.run,
+    );
+    expect(ordered.kind).toBe('none');
+    expect(getPackReviewRun(original.run.id, store)?.automaticBudgetDisposition).toBe('non_consuming_explicit');
+    expect(getPackReviewRun(required.run.id, store)?.automaticBudgetDisposition).toBe('consume');
+  });
+
+  it('never publishes pending/stale required statuses from a supplemental run', async () => {
+    const store = setup();
+    const supplemental = createPackReviewRun({
+      ...store, prNumber: 2607, headSha: HEAD,
+      trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      surface: 'pack-gpt-review', startReason: 'manual-browser-gpt',
+      resolvedReviewer: 'codex', resolvedReviewerSource: 'invocation-bound',
+      reviewCycleId: 'cycle-2607',
+      automaticBudgetDisposition: 'non_consuming_explicit',
+      allowExplicitSupplementalStart: true,
+      linkedSessionId: 'fixture-worker',
+    }).run;
+    const writeRequiredStatus = vi.fn(async () => undefined);
+    const notifyWorker = vi.fn(async () => ({ state: 'succeeded' as const, reason: 'unexpected' }));
+    const pending = await recordPackReviewPendingStatus({
+      ...store, run: supplemental, writeRequiredStatus,
+    });
+    const stale = await recordPackReviewStaleRequiredStatus({
+      ...store, run: supplemental, writeRequiredStatus, notifyWorker,
+    });
+    expect(pending.reason).toBe('supplemental_no_required_status');
+    expect(stale.reason).toBe('supplemental_no_required_status');
+    expect(writeRequiredStatus).not.toHaveBeenCalled();
+    expect(notifyWorker).not.toHaveBeenCalled();
+    expect(getPackReviewRun(supplemental.id, store)?.deliveryOutcomes.requiredStatus).toBeUndefined();
+  });
+
+  it('advisory verdict delivery journals the original run and never updates required status or worker', async () => {
+    const store = setup();
+    const run = createPackReviewRun({
+      ...store, prNumber: 2607, headSha: HEAD,
+      trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      surface: 'pack-gpt-review', startReason: 'manual-browser-gpt',
+      resolvedReviewer: 'claude', resolvedReviewerSource: 'invocation-bound',
+      reviewCycleId: 'cycle-2607',
+      automaticBudgetDisposition: 'non_consuming_explicit',
+      allowExplicitSupplementalStart: true,
+      linkedSessionId: 'fixture-worker',
+    }).run;
+    const writeRequiredStatus = vi.fn(async () => undefined);
+    const notifyWorker = vi.fn(async () => ({ state: 'succeeded' as const, reason: 'unexpected' }));
+    const postGithubComment = vi.fn(async () => ({
+      id: 2607, url: 'https://github.com/example/repo/pull/42#issuecomment-2607',
+      event: 'COMMENT' as const,
+    }));
+    await deliverPackReviewVerdict({
+      ...store, run, payload: { verdict: 'clean', findingCount: 0, findings: [] },
+      writeRequiredStatus, notifyWorker, postGithubComment,
+    });
+    const persisted = getPackReviewRun(run.id, store);
+    expect(persisted?.journalOutcome?.state).toBe('persisted');
+    expect(persisted?.reviewVerdict).toBe('clean');
+    expect(postGithubComment).toHaveBeenCalledTimes(1);
+    expect(writeRequiredStatus).not.toHaveBeenCalled();
+    expect(notifyWorker).not.toHaveBeenCalled();
+    expect(persisted?.deliveryOutcomes.requiredStatus).toBeUndefined();
+    expect(persisted?.deliveryOutcomes.workerNotification).toBeUndefined();
   });
 });
