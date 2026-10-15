@@ -361,6 +361,8 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   resolvedReviewer?: PackReviewer;
   resolvedReviewerSource?: PackReviewerResolutionSource;
   automaticBudgetDisposition?: PackReviewAutomaticBudgetDisposition;
+  /** Ephemeral authorization from an explicit post-cap PR-led invocation; never stored. */
+  allowExplicitSupplementalStart?: boolean;
   allowCompletedSameHeadReplay?: boolean;
   allowSameRoundReplacement?: boolean;
 }
@@ -483,12 +485,24 @@ function normalizeAutomaticBudgetDisposition(
   return disposition;
 }
 
-function normalizeNewAutomaticBudgetDisposition(value: unknown): 'consume' {
+function normalizeNewAutomaticBudgetDisposition(
+  value: unknown,
+  input: CreatePackReviewRunInput,
+): PackReviewAutomaticBudgetDisposition {
   const disposition = normalizeAutomaticBudgetDisposition(value);
-  if (disposition !== 'consume') {
-    throw new Error('non_consuming_explicit is legacy-read-only and cannot be produced by new pack-review runs');
+  if (disposition === 'non_consuming_explicit' && !(
+    input.allowExplicitSupplementalStart === true
+    && input.surface === 'pack-gpt-review'
+    && input.startReason === 'manual-browser-gpt'
+    && input.resolvedReviewerSource === 'invocation-bound'
+    && input.resolvedReviewer !== undefined
+    && input.logicalRoundOrdinal === undefined
+    && input.logicalRoundCap === undefined
+    && Boolean(input.reviewCycleId)
+  )) {
+    throw new Error('non_consuming_explicit is only producible by an explicit post-cap supplemental review');
   }
-  return 'consume';
+  return disposition;
 }
 
 function validateCompleteGptPayload(payload: unknown, terminalClass: string, path: string): void {
@@ -1759,6 +1773,18 @@ function selectLatestSameKeyRun(
   return latest;
 }
 
+/** Required-status ordering must never select or be displaced by an advisory run. */
+export function resolvePackReviewRequiredRunOrder(
+  records: readonly PackReviewRunRecord[],
+  run: PackReviewRunRecord,
+): PackReviewRunOrderResolution {
+  if (run.automaticBudgetDisposition === 'non_consuming_explicit') return { kind: 'none' };
+  return resolvePackReviewRunOrder(
+    records.filter((candidate) => candidate.automaticBudgetDisposition !== 'non_consuming_explicit'),
+    run,
+  );
+}
+
 export function hasNewerPackReviewRunForKey(
   records: readonly PackReviewRunRecord[],
   run: PackReviewRunRecord,
@@ -1845,6 +1871,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
   if (!Number.isInteger(input.prNumber) || input.prNumber <= 0) throw new Error('pack review runner requires a positive PR number');
   const headSha = normalizePackReviewHeadSha(input.headSha);
   const storeRoot = resolvePackReviewRunStoreRoot(input);
+  const disposition = normalizeNewAutomaticBudgetDisposition(input.automaticBudgetDisposition, input);
   return withStoreLock(storeRoot, () => {
     const records = readRecordsUnlocked(storeRoot);
     const legacyRepositoryBindings = new Map(
@@ -1880,7 +1907,9 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       input.sourceRepoRoot,
       input.reviewCycleId,
       input.logicalRoundOrdinal,
-    );
+    ) && (disposition !== 'non_consuming_explicit'
+      || (record.automaticBudgetDisposition === 'non_consuming_explicit'
+        && record.resolvedReviewer === input.resolvedReviewer));
     const active = boundRecords.filter((record) => matchesTargetIdentity(record)
       && PACK_REVIEW_ACTIVE_STATUSES.has(record.status)
       && !isPackReviewRunStale(record));
@@ -1959,7 +1988,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       surface: input.surface?.trim() || 'pack-review-runner',
       trustedPackRoot: resolve(input.trustedPackRoot),
       sourceRepoRoot: resolve(input.sourceRepoRoot),
-      automaticBudgetDisposition: normalizeNewAutomaticBudgetDisposition(input.automaticBudgetDisposition),
+      automaticBudgetDisposition: disposition,
       canonicalRepository,
       ...(input.accountingVersion ? { accountingVersion: input.accountingVersion } : {}),
       ...(input.reviewCycleId ? { reviewCycleId: input.reviewCycleId } : {}),
