@@ -1907,9 +1907,9 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       input.sourceRepoRoot,
       input.reviewCycleId,
       input.logicalRoundOrdinal,
-    ) && (disposition !== 'non_consuming_explicit'
-      || (record.automaticBudgetDisposition === 'non_consuming_explicit'
-        && record.resolvedReviewer === input.resolvedReviewer));
+    ) && record.automaticBudgetDisposition === disposition
+      && (disposition !== 'non_consuming_explicit'
+        || record.resolvedReviewer === input.resolvedReviewer);
     const active = boundRecords.filter((record) => matchesTargetIdentity(record)
       && PACK_REVIEW_ACTIVE_STATUSES.has(record.status)
       && !isPackReviewRunStale(record));
@@ -1968,7 +1968,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
 
     const now = (input.now ?? new Date()).toISOString();
     const sameKeyOrders = boundRecords
-      .filter((record) => matchesInput(record) && record.sameKeyOrder !== undefined)
+      .filter((record) => matchesTargetIdentity(record) && record.sameKeyOrder !== undefined)
       .map((record) => record.sameKeyOrder!);
     const sameKeyOrder = (sameKeyOrders.length > 0 ? Math.max(...sameKeyOrders) : 0) + 1;
     const runId = `prr-${randomUUID().replaceAll('-', '')}`;
