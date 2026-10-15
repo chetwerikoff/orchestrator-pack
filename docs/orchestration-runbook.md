@@ -580,9 +580,9 @@ there is no automatic completion deadline. An uncredentialable locally complete
 source remains unresolved rather than becoming an invented 2/3 verdict.
 
 The command below is an **operator diagnostic/fallback**, not a routine manager
-step. Recover interrupted or stale reviews only through the scoped runner; do
-not start a replacement same-head review merely because a browser or runner
-child stopped.
+step. Scoped reconciliation covers stale-active runs, unfinished-terminal runs
+without a persisted verdict, and opted-in active GPT recovery; use it only
+for those eligible records, not as a universal retry of terminal delivery.
 
 ```text
 node --experimental-strip-types scripts/pack-review-runner.ts reconcile \
@@ -592,6 +592,39 @@ node --experimental-strip-types scripts/pack-review-runner.ts reconcile \
 
 Never start a replacement review on the same head merely because a runner/browser
 child stopped.
+
+For a post-cap **supplemental** GPT or native review in terminal `up_to_date`,
+`commented`, or `changes_requested` with a persisted verdict and an unconfirmed
+or failed GitHub reviewer COMMENT, **scoped reconcile does not retry the COMMENT**,
+even when an explicit `runId` is supplied. `packReviewDeliveryNeedsResume` may
+be true for this run, but it does not make the terminal supplemental record
+eligible for scoped stale reconciliation.
+
+To resume its existing journaled COMMENT delivery, use a fresh PR-led
+`pack-gpt-review` invocation for the **same original reviewer** (`gpt`,
+`claude`, or `codex`):
+
+```text
+npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER> --reviewer <ORIGINAL_REVIEWER>
+```
+
+That existing route can resume the persisted COMMENT only when the live PR
+head equals the originating run's `targetSha` and the journaled delivery
+remains eligible. The CLI resolves the live PR head, not an older reviewed
+head. Same-head delivery resume is neither automatic scoped reconciliation
+nor a new review round, and an unconfirmed COMMENT is not a delivered COMMENT.
+If the terminal supplemental verdict/journal belongs to H1 and the PR has
+advanced to H2, inspect the H1 run/journal and actual GitHub reviewer COMMENT,
+report **H1 COMMENT delivery unresolved** unless delivery is confirmed, and
+never describe a new-head H2 invocation or run as recovery of H1's COMMENT.
+
+This documents the `supplemental:terminal-comment-reconcile-skip` finding on
+[PR #2611](https://github.com/chetwerikoff/orchestrator-pack/pull/2611),
+[deferred as non-blocking in Issue #2607](https://github.com/chetwerikoff/orchestrator-pack/issues/2607#issuecomment-6192914156).
+Recurrence frequency is unknown; no new selector or runtime recovery is
+required. The distinct final-cap same-head Issue-only *required-status* retry
+in [the ChatGPT task execution runbook](chatgpt-task-execution-runbook.md)
+remains unchanged; it is not supplemental COMMENT delivery.
 
 A launch counts as started only on `outcome=ready` /
 `ready_and_assignment_bound`. Provider recovery runs only through the returned
