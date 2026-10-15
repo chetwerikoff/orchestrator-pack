@@ -692,10 +692,10 @@ describe('pack-owned lifecycle tool paths', () => {
     expect(ghCalls.every((call) => call.command === WRAPPER_PATH && call.cwd === PACK_ROOT)).toBe(true);
     expect(ghCalls.some((call) => call.args.join(' ') ===
       'pr view 1300 --json headRefName,state,headRefOid,mergeCommit,headRepository,baseRefName')).toBe(true);
-    const child = value.invocations.find((call) => call.command === process.execPath);
-    expect(child?.args[1]).toBe(PACK_TEARDOWN);
-    expect(child?.cwd).toBe(PACK_ROOT);
-    expect(child?.args.slice(child.args.indexOf('--repo-root'), child.args.indexOf('--repo-root') + 2))
+    const child = value.invocations.find((call) => call.command === process.execPath)!;
+    expect(child.args[1]).toBe(PACK_TEARDOWN);
+    expect(child.cwd).toBe(PACK_ROOT);
+    expect(child.args.slice(child.args.indexOf('--repo-root'), child.args.indexOf('--repo-root') + 2))
       .toEqual(['--repo-root', PACK_ROOT]);
     expect(value.removeCount).toBe(0);
   });
