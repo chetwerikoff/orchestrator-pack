@@ -4260,6 +4260,7 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
           throw new Error('synthetic ambiguous COMMENT acknowledgement');
         }
         reviews.push(review);
+        if (mode === 'missing') visible = true;
         return { id, url: review.url };
       },
       dismissReview: async () => undefined,
