@@ -116,6 +116,17 @@ content authority for the runner.
 
 ### Clean review
 
+`NO_FINDINGS` is a strong claim. Use it only after you read the linked Issue in
+full, read every changed file and the whole diff at the bound head (large files
+in `fetch_file` pieces until complete), and checked every acceptance criterion
+against the code and tests. Not finding a defect in the part you read is not a
+clean review: if any of that coverage is missing, keep reading, or publish
+nothing. A late verdict is better than a false clean one.
+
+An incomplete review must not emit `NO_FINDINGS`, fabricate findings, or publish
+a canonical source comment/payload; if the reads cannot finish, leave the
+existing no-valid-review/no-source outcome, not a new payload token.
+
 Exactly one line:
 
 ```
