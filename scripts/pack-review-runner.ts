@@ -6717,7 +6717,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         heartbeatAtUtc: candidate.heartbeatAtUtc,
       }] as const),
   );
-  await reconcileStalePackReviewRuns({
+  // The advisory entrypoint may inspect old required authority but must not
+  // initiate status-repair writes for a completed required stage.
+  if (!supplementalMode) await reconcileStalePackReviewRuns({
     repoSlug: target.repoSlug,
     sourceRepoRoot: target.sourceRepoRoot,
     projectId,
