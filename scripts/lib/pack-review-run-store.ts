@@ -1908,6 +1908,11 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       input.reviewCycleId,
       input.logicalRoundOrdinal,
     ) && record.automaticBudgetDisposition === disposition
+      // Only the proof-backed dead foreign owner may be bypassed by a DIFFERENT
+      // selected reviewer. Its source slots and old journal remain immutable.
+      && !(record.failureReason === 'explicit_reviewer_superseded_proven_dead_original'
+        && input.resolvedReviewer !== undefined
+        && record.resolvedReviewer !== input.resolvedReviewer)
       && (disposition !== 'non_consuming_explicit'
         || record.resolvedReviewer === input.resolvedReviewer);
     const active = boundRecords.filter((record) => matchesTargetIdentity(record)
