@@ -361,6 +361,8 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   resolvedReviewer?: PackReviewer;
   resolvedReviewerSource?: PackReviewerResolutionSource;
   automaticBudgetDisposition?: PackReviewAutomaticBudgetDisposition;
+  /** Ephemeral authorization from an explicit post-cap PR-led invocation; never stored. */
+  allowExplicitSupplementalStart?: boolean;
   allowCompletedSameHeadReplay?: boolean;
   allowSameRoundReplacement?: boolean;
 }
@@ -483,12 +485,24 @@ function normalizeAutomaticBudgetDisposition(
   return disposition;
 }
 
-function normalizeNewAutomaticBudgetDisposition(value: unknown): 'consume' {
+function normalizeNewAutomaticBudgetDisposition(
+  value: unknown,
+  input: CreatePackReviewRunInput,
+): PackReviewAutomaticBudgetDisposition {
   const disposition = normalizeAutomaticBudgetDisposition(value);
-  if (disposition !== 'consume') {
-    throw new Error('non_consuming_explicit is legacy-read-only and cannot be produced by new pack-review runs');
+  if (disposition === 'non_consuming_explicit' && !(
+    input.allowExplicitSupplementalStart === true
+    && input.surface === 'pack-gpt-review'
+    && input.startReason === 'manual-browser-gpt'
+    && input.resolvedReviewerSource === 'invocation-bound'
+    && input.resolvedReviewer !== undefined
+    && input.logicalRoundOrdinal === undefined
+    && input.logicalRoundCap === undefined
+    && Boolean(input.reviewCycleId)
+  )) {
+    throw new Error('non_consuming_explicit is only producible by an explicit post-cap supplemental review; cannot be produced by an ordinary start');
   }
-  return 'consume';
+  return disposition;
 }
 
 function validateCompleteGptPayload(payload: unknown, terminalClass: string, path: string): void {
@@ -1770,6 +1784,18 @@ function selectLatestSameKeyRun(
   return latest;
 }
 
+/** Required-status ordering must never select or be displaced by an advisory run. */
+export function resolvePackReviewRequiredRunOrder(
+  records: readonly PackReviewRunRecord[],
+  run: PackReviewRunRecord,
+): PackReviewRunOrderResolution {
+  if (run.automaticBudgetDisposition === 'non_consuming_explicit') return { kind: 'none' };
+  return resolvePackReviewRunOrder(
+    records.filter((candidate) => candidate.automaticBudgetDisposition !== 'non_consuming_explicit'),
+    run,
+  );
+}
+
 export function hasNewerPackReviewRunForKey(
   records: readonly PackReviewRunRecord[],
   run: PackReviewRunRecord,
@@ -1856,6 +1882,14 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
   if (!Number.isInteger(input.prNumber) || input.prNumber <= 0) throw new Error('pack review runner requires a positive PR number');
   const headSha = normalizePackReviewHeadSha(input.headSha);
   const storeRoot = resolvePackReviewRunStoreRoot(input);
+  // Legacy explicit replay can reuse a consuming run, but cannot create a new one.
+  const legacyReplayOnly = input.automaticBudgetDisposition === 'non_consuming_explicit'
+    && input.allowCompletedSameHeadReplay === true
+    && input.allowExplicitSupplementalStart !== true
+    && input.resolvedReviewer === undefined;
+  const disposition = legacyReplayOnly
+    ? 'consume'
+    : normalizeNewAutomaticBudgetDisposition(input.automaticBudgetDisposition, input);
   return withStoreLock(storeRoot, () => {
     const records = readRecordsUnlocked(storeRoot);
     const legacyRepositoryBindings = new Map(
@@ -1891,7 +1925,14 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       input.sourceRepoRoot,
       input.reviewCycleId,
       input.logicalRoundOrdinal,
-    );
+    ) && record.automaticBudgetDisposition === disposition
+      // Only the proof-backed dead foreign owner may be bypassed by a DIFFERENT
+      // selected reviewer. Its source slots and old journal remain immutable.
+      && !(record.failureReason === 'explicit_reviewer_superseded_proven_dead_original'
+        && input.resolvedReviewer !== undefined
+        && record.resolvedReviewer !== input.resolvedReviewer)
+      && (disposition !== 'non_consuming_explicit'
+        || record.resolvedReviewer === input.resolvedReviewer);
     const active = boundRecords.filter((record) => matchesTargetIdentity(record)
       && PACK_REVIEW_ACTIVE_STATUSES.has(record.status)
       && !isPackReviewRunStale(record));
@@ -1948,6 +1989,8 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       };
     }
 
+    // A legacy replay may return an existing run, never manufacture an advisory one.
+    if (legacyReplayOnly) normalizeNewAutomaticBudgetDisposition(input.automaticBudgetDisposition, input);
     const now = (input.now ?? new Date()).toISOString();
     const sameKeyOrders = boundRecords
       .filter((record) => matchesTargetIdentity(record) && record.sameKeyOrder !== undefined)
@@ -1970,7 +2013,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       surface: input.surface?.trim() || 'pack-review-runner',
       trustedPackRoot: resolve(input.trustedPackRoot),
       sourceRepoRoot: resolve(input.sourceRepoRoot),
-      automaticBudgetDisposition: normalizeNewAutomaticBudgetDisposition(input.automaticBudgetDisposition),
+      automaticBudgetDisposition: disposition,
       canonicalRepository,
       ...(input.accountingVersion ? { accountingVersion: input.accountingVersion } : {}),
       ...(input.reviewCycleId ? { reviewCycleId: input.reviewCycleId } : {}),

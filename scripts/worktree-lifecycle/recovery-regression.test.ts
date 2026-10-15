@@ -6,8 +6,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
 import type { ProcessResult } from '../kernel/subprocess.ts';
+import { WRAPPER_PATH } from '../lib/gh-resolve-real-binary.mjs';
 import type { ExpectedWorktreeIdentity } from './core.ts';
-import { runLifecycle, type CommandRunner } from './operations.ts';
+import { runLifecycle, type CommandInvocation, type CommandRunner } from './operations.ts';
 
 const TARGET_SHA = 'a'.repeat(40);
 const MERGE_SHA = 'b'.repeat(40);
@@ -243,5 +244,39 @@ describe('historical recovery preservation', () => {
       effects: [],
     });
     expect(scenario.removalAttempts).toBe(0);
+  });
+});
+
+describe('cross-repository pack transport recovery regression', () => {
+  test('a target without a local gh wrapper retains explicit target cwd and eligible dry-run', () => {
+    const scenario = buildScenario();
+    const invocations: CommandInvocation[] = [];
+    const original = scenario.runner;
+    scenario.runner = (call) => {
+      invocations.push(call);
+      return original(call);
+    };
+
+    expect(fs.existsSync(path.join(scenario.repo, 'scripts', 'gh'))).toBe(false);
+    const report = invoke(scenario, false);
+    expect(report.outcome).toBe('git_only_recovery_eligible');
+    expect(report.effects).toEqual([]);
+    expect(scenario.removalAttempts).toBe(0);
+
+    const prCalls = invocations.filter((call) => call.args[0] === 'pr');
+    expect(prCalls.length).toBeGreaterThanOrEqual(2);
+    expect(prCalls.every((call) => call.command === WRAPPER_PATH && call.cwd === scenario.repo)).toBe(true);
+    expect(prCalls).toEqual(expect.arrayContaining([
+      {
+        command: WRAPPER_PATH,
+        args: ['pr', 'view', '1300', '--json', 'headRefName,state,headRefOid,mergeCommit,headRepository,baseRefName'],
+        cwd: scenario.repo,
+      },
+      {
+        command: WRAPPER_PATH,
+        args: ['pr', 'list', '--state', 'open', '--json', 'number,headRefName,headRepository', '--repo', 'chetwerikoff/orchestrator-pack'],
+        cwd: scenario.repo,
+      },
+    ]));
   });
 });

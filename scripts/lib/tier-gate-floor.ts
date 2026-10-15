@@ -1,5 +1,6 @@
 import {
   checkPositiveOutcome,
+  checkSmokeTestPlan,
   parseBehaviorKind,
 } from '../draft-discipline.mjs';
 import { checkContractEvidence } from '../contract-evidence-validator.mjs';
@@ -98,6 +99,7 @@ export function checkNeverSkippedFloors(
     checkWorkerSafetyFloor(draftText),
     checkBehaviorKindFloor(draftText),
     checkContractEvidenceFloor(draftText, options),
+    checkSmokeTestPlan(draftText),
   ];
   const errors = checks.flatMap((check) => check.ok ? [] : check.errors);
   return { ok: errors.length === 0, errors };

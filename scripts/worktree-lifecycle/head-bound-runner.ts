@@ -1,8 +1,10 @@
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { runProcessSync, type ProcessResult } from '../kernel/subprocess.ts';
+import { WRAPPER_PATH } from '../lib/gh-resolve-real-binary.mjs';
 import {
   normalizeBranchName,
   normalizeHeadSha,
+  normalizeWorktreePath,
   type ExpectedWorktreeIdentity,
   type LifecycleContext,
 } from './core.ts';
@@ -50,7 +52,7 @@ export function readLivePrBinding(
   if (expected.bindingKind !== 'pr') {
     throw new TypeError('live PR binding is available only for PR-bound lifecycle operations');
   }
-  const gh = join(expected.repositoryRoot, 'scripts', 'gh');
+  const gh = WRAPPER_PATH;
   const args = [
     'pr',
     'view',
@@ -58,7 +60,7 @@ export function readLivePrBinding(
     '--json',
     'headRefName,state,headRefOid',
   ];
-  const result = runner({ command: gh, args, cwd: expected.repositoryRoot });
+  const result = runner({ command: gh, args, cwd: normalizeWorktreePath(expected.repositoryRoot) });
   if (!result.ok) {
     throw new TypeError(
       result.stderr.trim()
@@ -123,10 +125,7 @@ export function validateExpectedPrBinding(
   return null;
 }
 
-function isDestructiveLifecycleInvocation(
-  invocation: CommandInvocation,
-  expected: ExpectedWorktreeIdentity,
-): boolean {
+function isDestructiveLifecycleInvocation(invocation: CommandInvocation): boolean {
   const args = [...invocation.args];
   if (invocation.command === 'git') {
     if (args.includes('worktree') && args.includes('remove')) return true;
@@ -134,7 +133,7 @@ function isDestructiveLifecycleInvocation(
     if (args.includes('update-ref') && args.includes('-d')) return true;
   }
   return invocation.command === process.execPath
-    && args.includes(join(expected.repositoryRoot, 'scripts', 'worktree-teardown.ts'))
+    && args.includes(join(dirname(WRAPPER_PATH), 'worktree-teardown.ts'))
     && args.includes('--post-merge-destructive')
     && args.includes('--apply');
 }
@@ -146,7 +145,7 @@ export function createPrHeadBoundRunner(
 ): CommandRunner {
   if (expected.bindingKind !== 'pr') return runner;
   return (invocation) => {
-    if (!isDestructiveLifecycleInvocation(invocation, expected)) {
+    if (!isDestructiveLifecycleInvocation(invocation)) {
       return runner(invocation);
     }
     try {
