@@ -714,6 +714,64 @@ function terminalizeDecision(input: {
   return withMutex(lock, execute) as UnknownRecord;
 }
 
+export interface ExplicitDeadReviewerTakeover {
+  runId: string;
+  existingReviewer: 'gpt' | 'claude' | 'codex';
+  requestedReviewer: 'gpt' | 'claude' | 'codex';
+  runnerPid: number;
+  reviewCycleId: string;
+  logicalRoundOrdinal: number;
+  canonicalRepository: string;
+}
+
+/** Only the exact previous claim generation may unlock a dead, in-flight foreign reviewer. */
+function verifiedDeadReviewerClaimTakeover(input: {
+  existing: ReviewStartClaimRecord;
+  reviewRuns: unknown[];
+  projectId: string;
+  prNumber: number;
+  headSha: string;
+  surface: string;
+  startReason: string;
+  takeover?: ExplicitDeadReviewerTakeover;
+}): boolean {
+  const requested = input.takeover;
+  if (!requested || input.surface !== 'pack-gpt-review'
+      || input.startReason !== 'manual-browser-gpt'
+      || requested.existingReviewer === requested.requestedReviewer
+      || !requested.reviewCycleId || !requested.canonicalRepository
+      || !Number.isInteger(requested.logicalRoundOrdinal)
+      || requested.logicalRoundOrdinal <= 0) return false;
+  const claim = input.existing;
+  if (claim.state !== 'active' || claim.prNumber !== input.prNumber
+      || claim.headSha !== input.headSha
+      || claim.projectNamespace !== input.projectId
+      || !claim.holder.startTimeTicks || !claim.holder.bootIdHash
+      || claim.holder.pid !== requested.runnerPid
+      || holderLiveness(claim).outcome !== 'provably_not_alive') return false;
+  const rows = input.reviewRuns.map(asRecord).filter((row) =>
+    Number(row.prNumber) === input.prNumber
+    && asString(row.targetSha).toLowerCase() === input.headSha.toLowerCase()
+    && asString(row.projectId) === input.projectId);
+  const source = rows.find((row) => asString(row.id) === requested.runId);
+  if (!source || rows.some((row) => row !== source && ['queued', 'preparing', 'reviewing'].includes(asString(row.status)))) {
+    return false;
+  }
+  return (claim.boundRunId === undefined || claim.boundRunId === requested.runId)
+    && Number(source.runnerPid) === requested.runnerPid
+    && source.status !== 'failed' && source.status !== 'timed_out'
+    && source.status !== 'cancelled'
+    && ['queued', 'preparing', 'reviewing'].includes(asString(source.status))
+    && source.resolvedReviewer === requested.existingReviewer
+    && source.reviewCycleId === requested.reviewCycleId
+    && source.logicalRoundOrdinal === requested.logicalRoundOrdinal
+    && asString(source.canonicalRepository).toLowerCase() === requested.canonicalRepository.toLowerCase()
+    && asString(source.automaticBudgetDisposition) === 'consume'
+    && source.reviewVerdict === undefined
+    && source.journalOutcome?.state !== 'persisted'
+    && source.executedReviewer === undefined;
+}
+
 function resolveExisting(input: {
   namespace: string;
   path: string;
@@ -725,7 +783,33 @@ function resolveExisting(input: {
   reviewRuns: unknown[];
   existing: ReviewStartClaimRecord;
   holderContext?: UnknownRecord;
+  takeover?: ExplicitDeadReviewerTakeover;
 }): ClaimResult {
+  if (verifiedDeadReviewerClaimTakeover(input)) {
+    const terminalPath = moveToTerminal(
+      input.namespace, input.path, input.existing, 'dead_foreign_reviewer_reclaimed',
+      { deadReviewerRunId: input.takeover!.runId },
+    );
+    writeAudit(input.namespace, input.existing, 'dead_foreign_reviewer_reclaimed',
+      'explicit_same_head_positive_holder_liveness', { deadReviewerRunId: input.takeover!.runId });
+    const record = newActiveRecord({
+      prNumber: input.prNumber, headSha: input.headSha, surface: input.surface,
+      startReason: input.startReason, projectId: input.projectId,
+      recoveredFrom: { path: terminalPath, holder: input.existing.holder,
+        acquiredAtUtc: input.existing.acquiredAtUtc, outcome: 'dead_foreign_reviewer_reclaimed' },
+      priorFirstAttemptMonotonicMs: priorFirstAttempt(input.existing),
+      holderContext: input.holderContext,
+    });
+    atomicWriteJson(input.path, record);
+    const verified = readClaimRecord(input.path);
+    if (!verified.ok || !verified.record || !sameGeneration(verified.record, record)) {
+      return { acquired: false, reason: 'ambiguous_claim', blocking: true,
+        path: input.path, namespace: input.namespace, key: record.key };
+    }
+    return { acquired: true, recovered: true, reason: 'dead_foreign_reviewer_reclaimed',
+      claim: record, recoveredRecord: input.existing,
+      path: input.path, namespace: input.namespace, key: record.key };
+  }
   const covering = visibleRun(input.reviewRuns, input.prNumber, input.headSha, input.projectId);
   if (covering) {
     const terminalPath = input.existing.state === 'active'
@@ -797,6 +881,7 @@ export function acquireReviewStartClaim(input: {
   projectId?: string;
   startReason?: string;
   holderContext?: UnknownRecord;
+  takeover?: ExplicitDeadReviewerTakeover;
 }): ClaimResult {
   const projectId = asString(input.projectId) || DEFAULT_PROJECT_ID;
   const namespace = resolveReviewStartClaimNamespace({ projectId, namespace: input.namespace });
@@ -827,6 +912,7 @@ export function acquireReviewStartClaim(input: {
           reviewRuns: asArray(input.reviewRuns),
           existing: existing.record,
           holderContext: input.holderContext,
+          takeover: input.takeover,
         });
       }
       if (existing.reason !== 'missing') {
