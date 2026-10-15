@@ -2051,7 +2051,10 @@ function recordProductWallAdvisory(
     || diagnostic.wall_kind === 'account_conversations_http_429') return;
   recordStateLightAdvisoryWall(
     profileKey, diagnostic.wall_kind, `${diagnostic.wall_kind}_detected`,
-    invocationId, undefined, undefined, diagnostic,
+    invocationId, undefined, undefined, {
+      wall_kind: diagnostic.wall_kind, matched_text: diagnostic.matched_text,
+      matched_selector: diagnostic.matched_selector,
+    },
   );
 }
 
