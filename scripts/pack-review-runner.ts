@@ -6993,6 +6993,64 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         httpStatus: 409,
       };
     }
+    if (foreignCandidates.length > 1) {
+      await releaseEarlyClaim('ambiguous_foreign_reviewer_runs');
+      return { ok: false, created: false, reused: true,
+        reason: 'ambiguous_foreign_reviewer_runs',
+        nextAction: 'resolve competing original exact-head runs before an explicit switch',
+        prNumber: target.prNumber, headSha: target.headSha, httpStatus: 409 };
+    }
+    if (foreignRun) {
+      const currentAuthority = readPackReviewAuthority(target.prNumber, { storeRoot });
+      const head = await readProjectionHead();
+      if (!claimLease?.deadForeignRunClaimReclaimed || !claimLease.owns()
+          || head !== target.headSha.toLowerCase()
+          || currentAuthority?.currentHeadSha.toLowerCase() !== head
+          || currentAuthority.cycle?.cycleId !== foreignRun.reviewCycleId
+          || currentAuthority.cycle.reviewStageComplete === true
+          || currentAuthority.cycle.consumedRoundOrdinals?.includes(foreignRun.logicalRoundOrdinal!) === true
+          || currentAuthority.terminal?.runId === foreignRun.id) {
+        await releaseEarlyClaim('foreign_reviewer_owner_unverified');
+        return { ok: false, created: false, reused: true,
+          reason: 'foreign_reviewer_owner_unverified',
+          nextAction: 'verify the exact claim process generation is dead and the original run has no accepted verdict; do not replace a live or ambiguous owner',
+          prNumber: target.prNumber, headSha: target.headSha,
+          runId: foreignRun.id, httpStatus: 409 };
+      }
+      const originalRound = stableJson(foreignRun.reviewRound);
+      const originalAttempt = stableJson(foreignRun.nativeAttempt);
+      const retired = updatePackReviewRunIf(foreignRun.id, (records) => {
+        const latest = records.find((candidate) => candidate.id === foreignRun.id);
+        return Boolean(latest
+          && latest.status === foreignRun.status
+          && PACK_REVIEW_ACTIVE_STATUSES.has(latest.status)
+          && latest.runnerPid === foreignRun.runnerPid
+          && latest.updatedAt === foreignRun.updatedAt
+          && latest.heartbeatAtUtc === foreignRun.heartbeatAtUtc
+          && latest.reviewCycleId === foreignRun.reviewCycleId
+          && latest.logicalRoundOrdinal === foreignRun.logicalRoundOrdinal
+          && latest.canonicalRepository === foreignRun.canonicalRepository
+          && latest.targetSha === foreignRun.targetSha
+          && latest.resolvedReviewer === foreignRun.resolvedReviewer
+          && stableJson(latest.reviewRound) === originalRound
+          && stableJson(latest.nativeAttempt) === originalAttempt
+          && !latest.executedReviewer && !hasPersistedPackReviewVerdict(latest));
+      }, {
+        status: 'failed',
+        latestRunStatus: 'failed',
+        failureReason: 'explicit_reviewer_superseded_proven_dead_original',
+        completedAtUtc: new Date().toISOString(),
+        exitCode: 1,
+      }, { projectId, storeRoot });
+      if (!retired) {
+        await releaseEarlyClaim('foreign_reviewer_changed_before_retirement');
+        return { ok: false, created: false, reused: true,
+          reason: 'foreign_reviewer_changed_before_retirement',
+          nextAction: 'reconcile original reviewer journal; do not create a replacement after concurrent owner change',
+          prNumber: target.prNumber, headSha: target.headSha,
+          runId: foreignRun.id, httpStatus: 409 };
+      }
+    }
     // A completed findings reset does not re-key the historical exact-head
     // snapshot. Refuse stale H1/B0 before the producer or any new review run.
     const reopened = readPackReviewAuthority(target.prNumber, { storeRoot });
