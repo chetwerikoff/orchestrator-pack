@@ -4084,6 +4084,8 @@ async function runTurnCore(
         }
         const duringPrepareError = await checkAccountLoadError();
         if (duringPrepareError && duringPrepareError !== 'recovered') return duringPrepareError;
+        // A redirected URL must not mask a 429/cooldown refusal swallowed by fresh preparation.
+        if (initialPrepare.state !== 'ready') beforeBrowserAction();
         assertFreshOwner();
         const initialPrepareFailure = returnFreshPrepareFailure(initialPrepare);
         if (initialPrepareFailure) return initialPrepareFailure;

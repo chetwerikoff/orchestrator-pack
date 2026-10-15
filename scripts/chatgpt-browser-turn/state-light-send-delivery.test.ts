@@ -1869,7 +1869,9 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
       const { result } = await runFresh(profile, invocationId, fixture.page);
       expect(fixture.page.goto).toHaveBeenCalledTimes(1);
       expect(fixture.send.click).not.toHaveBeenCalled();
+      expect(fixture.composer.click).not.toHaveBeenCalled();
       expect(fixture.composer.fill).not.toHaveBeenCalled();
+      expect(result.send_attempted).not.toBe(true);
       expect(result.send_count).toBe(0);
       expect(result).toMatchObject({
         state: 'rate_limit',
