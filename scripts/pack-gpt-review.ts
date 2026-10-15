@@ -194,7 +194,30 @@ export async function runPackGptReviewCommand(
       && result.reason === 'completed' && result.httpStatus === 201
       && result.publicationVerified === undefined
       && (result.status === 'up_to_date' || result.status === 'commented' || result.status === 'changes_requested');
-    if (result.ok === true && (deliveredRound || recoveredRound || stageCompleteReuse || nativeDeliveredRound)) {
+    const explicitOriginVerified = Boolean(reviewer
+      && /^[0-9a-f]{40}$/.test(trim(result.headSha))
+      && trim(result.targetSha) === trim(result.headSha)
+      && trim(result.runId)
+      && result.resolvedReviewer === reviewer
+      && result.executedReviewer === reviewer
+      && result.reviewerInvokedForThisRun === true
+      && trim(result.reviewerExecutionRunId) === trim(result.runId));
+    const supplementalDelivered = result.outcome === 'supplemental_review_delivered'
+      && result.reason === 'supplemental_review_delivered'
+      && (result.reviewVerdict === 'clean' || result.reviewVerdict === 'findings')
+      && Boolean(trim(result.githubReviewId))
+      && Boolean(trim(result.githubReviewUrl))
+      && (result.status === 'up_to_date' || result.status === 'commented'
+        || result.status === 'changes_requested');
+    // An explicit CLI request may never succeed on projected status or foreign
+    // reviewer evidence; advisory delivery is not required-stage completion.
+    const settled = reviewer
+      ? explicitOriginVerified
+        && (supplementalDelivered || (
+          result.outcome !== 'supplemental_review_delivered'
+          && (deliveredRound || recoveredRound || nativeDeliveredRound)))
+      : (deliveredRound || recoveredRound || stageCompleteReuse || nativeDeliveredRound);
+    if (result.ok === true && settled) {
       return { exitCode: 0, result };
     }
 
