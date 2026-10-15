@@ -3092,6 +3092,7 @@ async function runTurnCore(
   let preSendComposerState = 'not_probed';
   let observedProductErrorText = '';
   let held429Witness: HeldPage429Witness | undefined;
+  let held429Page: any;
   const preSendPageRoute = (): string => {
     try {
       const url = new URL(String(page.url()));
@@ -3126,6 +3127,7 @@ async function runTurnCore(
   };
   const attachHeld429 = (heldPage: any, ownedChatUrl?: string): void => {
     held429Witness?.dispose();
+    held429Page = heldPage;
     held429Witness = observeHeldPageConversation429(heldPage, ownedChatUrl, (observed) => {
       const published = publishWitnessedStateLight429(profileKey);
       if (published.diagnostic) {
@@ -4577,6 +4579,11 @@ async function runTurnCore(
     }
 
     if (config.newChat && ownedConversationUrl && !browserOrPageDefinitelyLost(page, browser)) {
+      if (normalizeConversationUrl(String(page.url())) !== ownedConversationUrl) {
+        beforeBrowserAction();
+        attachHeld429(page, ownedConversationUrl);
+        held429Witness?.beforeNavigation();
+      }
       await navigateToProjectConversationIfNeeded(
         page,
         ownedConversationUrl,
@@ -4656,7 +4663,7 @@ async function runTurnCore(
           pollCount,
           navigation,
           incidents,
-          {},
+          { ...(sendAttempted ? { send_attempted: true } : {}) },
           journalWriteFailed,
         ),
       };
@@ -4677,6 +4684,15 @@ async function runTurnCore(
         ? Math.min(hardExhaustionDeadline, freshUnboundReturnByMs)
         : hardExhaustionDeadline;
       const recoveryAdapter: PostSendRecoveryAdapter = {
+      accountActionBlocker: () => {
+        const observed = held429Witness?.current();
+        if (observed) return observed.wall_kind;
+        const cooldown = readStateLightAccountCooldown(profileKey);
+        if (cooldown.diagnostic) {
+          incident('shared_account_cooldown_diagnostic', cooldown.diagnostic, 'fail_open');
+        }
+        return cooldown.active ? 'account_cooldown_active' : undefined;
+      },
       enumeratePages: async (activeBrowser) => {
         const contexts = (activeBrowser as any).contexts();
         if (!Array.isArray(contexts) || contexts.length !== 1) {
@@ -4750,10 +4766,14 @@ async function runTurnCore(
         });
       },
       createSuccessor: async (activeBrowser, immutableConversationUrl) => {
+        beforeBrowserAction();
         const recoveryBudget = createTurnOperationBudget(
           Math.max(0, recoveryDeadlineMs - Date.now()),
         );
         const successor = await createDedicatedTurnPage(activeBrowser, recoveryBudget);
+        attachHeld429(successor, immutableConversationUrl);
+        beforeBrowserAction();
+        held429Witness?.beforeNavigation();
         navigation.recordGoto();
         await successor.goto(immutableConversationUrl, {
           waitUntil: 'domcontentloaded',
@@ -4787,7 +4807,7 @@ async function runTurnCore(
         if (census.monotonicAmbiguity || matches.length > 1) {
           return unbound('owned_prompt_marker_ambiguous');
         }
-        if (!census.complete) return unbound('owned_conversation_recovery_census_failed');
+        if (!census.complete) return unbound(recoveryAdapter.accountActionBlocker?.() ?? 'owned_conversation_recovery_census_failed');
         if (matches.length === 0) return unbound('fresh_send_fetch_failed');
         const match = matches[0]!;
         if (!config.projectUrl || !projectConversationUrlMatchesProject(match.normalizedUrl, config.projectUrl)) {
@@ -4897,6 +4917,7 @@ async function runTurnCore(
         freshCleanup.ownedDeadLocalTimeoutMs = config.timeoutMs;
       }
       page = recovered.page;
+      if (held429Page !== page) attachHeld429(page, recovered.conversationUrl);
       if (!recovered.cleanupOwned && page && typeof page === 'object') {
         cleanupAuthorityUnprovenPages.add(page);
       }
@@ -4962,6 +4983,11 @@ async function runTurnCore(
       pollCount++;
       if (config.newChat && sendCount >= 1 && ownedConversationUrl) {
         recoveryState.immutableConversationUrl = ownedConversationUrl;
+        if (normalizeConversationUrl(String(page.url())) !== ownedConversationUrl) {
+          beforeBrowserAction();
+          attachHeld429(page, ownedConversationUrl);
+          held429Witness?.beforeNavigation();
+        }
         await navigateToProjectConversationIfNeeded(
           page,
           ownedConversationUrl,
