@@ -417,7 +417,7 @@ describe('Issue #2605 escape-safe Actions job logs', () => {
     };
   }
 
-  it('routes/classifies only bare job-log argv, not user flags or unrelated endpoints', () => {
+  it('admits only bare job-log argv and rejects unsupported public modifiers', () => {
     expect(classifyArgv(job).route).toMatchObject({
       id: 'actions-job-log', repoSlug: 'example/target', jobId: 17001,
     });
@@ -440,12 +440,10 @@ describe('Issue #2605 escape-safe Actions job logs', () => {
     ]) {
       // Runtime non-admission never implies refusal: unmatched api uses native passthrough.
       expect(classifyArgv(argv).route, argv.join(' ')).toBeNull();
-      // The static read recognizer discards pre-endpoint flags when normalizing
-      // the REST endpoint. That existing classifier false-positive is not route
-      // admission, and changing it is outside this Issue's editable surfaces.
-      if (argv[1] === '--allow-escape-sequences') {
-        expect(isClassifiedGhReadCommand('gh ' + argv.join(' '))).toBe(true);
-      } else {
+      // The out-of-scope static classifier incorrectly accepts a flag before
+      // the endpoint. AC2 remains unmet for that prefix shape; do not assert
+      // this false-positive as an accepted outcome in an AC2 regression.
+      if (argv[1] !== '--allow-escape-sequences') {
         expect(isClassifiedGhReadCommand('gh ' + argv.join(' ')), argv.join(' ')).toBe(false);
       }
     }
@@ -509,6 +507,9 @@ describe('Issue #2605 escape-safe Actions job logs', () => {
         ['bad DCS terminator', 'prefix\x1bPpayload\x07\x1b\\'],
         ['BEL', 'prefix\x07suffix'],
         ['backspace', 'prefix\bsuffix'],
+        ['isolated CR before spoofed success', 'build step failed\rPASS: all good\n'],
+        ['trailing CR', 'build step failed\r'],
+        ['double CR before LF', 'build step failed\r\r\n'],
         ['DEL', 'prefix\x7fsuffix'],
         ['isolated C1 ST', 'prefix\u009csuffix'],
         ['isolated C1 byte', 'prefix\u0081suffix'],
@@ -592,6 +593,12 @@ describe('Issue #2605 escape-safe Actions job logs', () => {
       expect(failedSecond.exitCode).not.toBe(0);
       expect(failedSecond.stdout).toBe('');
       expect(failedSecond.stderr).toContain('job-log download failed');
+
+      const unsafeSecond = f.call(run, [listing, first,
+        { ...second, stdout: 'tests failed\rPASS\n' }]);
+      expect(unsafeSecond.exitCode).not.toBe(0);
+      expect(unsafeSecond.stdout).toBe('');
+      expect(unsafeSecond.stderr).toContain('unsafe or incomplete Actions job-log terminal control');
     } finally {
       rmSync(f.root, { recursive: true, force: true });
     }

@@ -508,7 +508,7 @@ export function routeRuntimeHistoryStatusHistory(realGh, repo, headSha, cwd) {
 /**
  * Remove known terminal controls from a native Actions job log before printing it.
  * Unknown, malformed and incomplete controls fail closed without partial stdout.
- * Preserve ordinary Unicode, tabs, CR and LF byte-for-byte.
+ * Preserve ordinary Unicode, tabs, LF and CRLF byte-for-byte.
  */
 function sanitizeActionsJobLog(log) {
   const kept = [];
@@ -563,6 +563,7 @@ function sanitizeActionsJobLog(log) {
       from = i;
       continue;
     }
+    if (code === 0x0d && log.charCodeAt(i + 1) !== 0x0a) unsafe();
     if ((code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d)
       || (code >= 0x7f && code <= 0x9f)) unsafe();
     i += 1;
