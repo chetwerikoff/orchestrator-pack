@@ -2117,8 +2117,16 @@ async function findJournaledDeliveryResumeCandidate(options: {
     const identity = await resolvePackReviewRunCanonicalRepository(
       candidate, options.resolveSlug ?? resolveRepositorySlug,
     );
+    const nativeSupplemental = candidate.automaticBudgetDisposition === 'non_consuming_explicit'
+      && !candidate.reviewRound;
     if (!identity.ok || identity.slug !== options.repoSlug
-      || !hasCredentialedGptSourceAuthority(candidate)) continue;
+      || (candidate.reviewRound !== undefined && !hasCredentialedGptSourceAuthority(candidate))
+      || (nativeSupplemental && (!hasPersistedPackReviewVerdict(candidate)
+        || !candidate.resolvedReviewer
+        || candidate.resolvedReviewer !== candidate.executedReviewer
+        || candidate.reviewerInvokedForThisRun !== true
+        || candidate.reviewerExecutionRunId !== candidate.id
+        || candidate.nativeAttempt?.reviewer !== candidate.resolvedReviewer))) continue;
     if (candidate.automaticBudgetDisposition === 'non_consuming_explicit') {
       if (packReviewDeliveryNeedsResume(candidate)) repositoryBoundCandidates.push(candidate);
       continue;
@@ -2874,6 +2882,28 @@ function hasCredentialedGptSourceAuthority(run: PackReviewRunRecord): boolean {
     }
   }
   return true;
+}
+
+/** Bind the original GPT execution only from credentialed, frozen source evidence. */
+function bindSupplementalGptExecutionProvenance(
+  run: PackReviewRunRecord,
+  options: { projectId: string; storeRoot: string },
+): PackReviewRunRecord {
+  if (run.automaticBudgetDisposition !== 'non_consuming_explicit') return run;
+  const round = run.reviewRound;
+  if (run.resolvedReviewer !== 'gpt' || round?.reviewer !== 'gpt'
+      || !hasCredentialedGptSourceAuthority(run)
+      || gptUsableSourceCount(round) < (round.settledSourceCount ?? round.cardinality)
+      || (run.executedReviewer !== undefined && run.executedReviewer !== 'gpt')
+      || (run.reviewerExecutionRunId !== undefined && run.reviewerExecutionRunId !== run.id)
+      || run.reviewerInvokedForThisRun === false) {
+    throw new Error('supplemental GPT original execution lacks credentialed source provenance');
+  }
+  return updatePackReviewRun(run.id, {
+    executedReviewer: 'gpt',
+    reviewerInvokedForThisRun: true,
+    reviewerExecutionRunId: run.id,
+  }, options);
 }
 
 function assertCredentialedGptSourceAuthority(run: PackReviewRunRecord): void {
@@ -3764,6 +3794,11 @@ async function recoverStaleGptSourceComments(options: {
     findingCount: aggregate.findingCount,
     findings: aggregate.findings,
   }, { projectId: options.projectId, storeRoot: options.storeRoot });
+  if (persistedBeforeAggregate.automaticBudgetDisposition === 'non_consuming_explicit') {
+    bindSupplementalGptExecutionProvenance(persistedBeforeAggregate, {
+      projectId: options.projectId, storeRoot: options.storeRoot,
+    });
+  }
   const classification = classifyPackReviewPayload(aggregate);
   setPackReviewRunTerminal(options.run.id, classification.terminalStatus, {
     reviewVerdict: aggregate.verdict,
@@ -3975,6 +4010,16 @@ async function settleRecoveredGptDelivery(options: {
 }): Promise<Awaited<ReturnType<typeof resumePackReviewVerdictDelivery>>> {
   if (options.run.automaticBudgetDisposition !== 'non_consuming_explicit') {
     await commitRecoveredGptAuthority(options);
+  } else {
+    const journaled = getPackReviewRun(options.run.id, {
+      projectId: options.projectId, storeRoot: options.storeRoot,
+    }) ?? options.run;
+    if (!hasPersistedPackReviewVerdict(journaled)) {
+      throw new Error('supplemental GPT journaled verdict missing before COMMENT recovery');
+    }
+    bindSupplementalGptExecutionProvenance(journaled, {
+      projectId: options.projectId, storeRoot: options.storeRoot,
+    });
   }
   const latestRun = getPackReviewRun(options.run.id, {
     projectId: options.projectId,
@@ -8431,6 +8476,24 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       run = persistedRun;
       const diagnostics = gptRoundDiagnostics(run.reviewRound);
       if (hasPersistedPackReviewVerdict(run)) {
+        if (run.automaticBudgetDisposition === 'non_consuming_explicit') {
+          const proven = bindSupplementalGptExecutionProvenance(run, { projectId, storeRoot });
+          const receipt = supplementalReviewReceipt(proven);
+          let exactHead = false;
+          try { exactHead = await readProjectionHead() === target.headSha.toLowerCase(); } catch {
+            // Unobservable head cannot certify supplemental COMMENT delivery.
+          }
+          terminal = true;
+          if (claimLease) await claimLease.release('run_started', listPackReviewRuns({ projectId, storeRoot }));
+          return receipt && exactHead
+            ? { ok: true, created: true, reused: false, recovered: true,
+                reason: 'supplemental_review_delivered', ...receipt, prNumber: target.prNumber,
+                headSha: target.headSha, runId: run.id, status: proven.status, httpStatus: 201 }
+            : { ok: false, created: true, reused: false,
+                reason: 'supplemental_delivery_unverified', prNumber: target.prNumber,
+                headSha: target.headSha, runId: run.id, status: proven.status, httpStatus: 409,
+                nextAction: 'observe the original GPT journal and reviewer COMMENT, then resume that same run; do not resend sources' };
+        }
         const concurrentAuthority = readPackReviewAuthority(target.prNumber, authorityOptions);
         const published = concurrentAuthority?.currentHeadSha === target.headSha
           && concurrentAuthority.terminal?.runId === run.id
@@ -8500,8 +8563,18 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         const recovered = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
         const reconciliationResult = reconciliation?.results.find((item) => item.runId === run!.id);
         const verdictExists = hasPersistedPackReviewVerdict(recovered);
+        const supplemental = recovered.automaticBudgetDisposition === 'non_consuming_explicit';
+        const receipt = supplemental && verdictExists ? supplementalReviewReceipt(recovered) : null;
+        let supplementalHeadVerified = false;
+        if (receipt) {
+          try {
+            supplementalHeadVerified = await readProjectionHead() === target.headSha.toLowerCase();
+          } catch {
+            // No exact-head observation means no supplemental success.
+          }
+        }
         let confirmation: Awaited<ReturnType<typeof observePackReviewVerdictDelivery>> | undefined;
-        if (verdictExists) {
+        if (verdictExists && !supplemental) {
           confirmation = await observePackReviewVerdictDelivery({
             input, projectId, storeRoot, runId: run.id,
             prNumber: target.prNumber, headSha: target.headSha,
@@ -8514,7 +8587,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
               })),
           });
         }
-        const verified = confirmation?.verified === true;
+        const verified = supplemental
+          ? Boolean(receipt && supplementalHeadVerified && !reconcileError)
+          : confirmation?.verified === true;
         const unresolvedReason = String(reconciliationResult?.reason ?? '');
         const stillPendingOriginal = !verdictExists && !reconcileError
           && pendingSource
@@ -8527,7 +8602,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
             || unresolvedReason.startsWith('gpt_sources_'))
           ? pendingSource : undefined;
         const reason = reconcileError ? `gpt_reconcile_failed:${reconcileError}`
-          : verdictExists ? (verified ? 'completed' : confirmation?.reason ?? 'publication_unverified')
+          : verdictExists ? supplemental
+            ? verified ? 'supplemental_review_delivered' : 'supplemental_delivery_unverified'
+            : verified ? 'completed' : confirmation?.reason ?? 'publication_unverified'
             : stillPendingOriginal ? 'gpt_original_invocation_recovery_required'
               : String(reconciliationResult?.reason ?? 'gpt_source_census_not_settled');
         terminal = verdictExists;
@@ -8535,18 +8612,25 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         if (claimLease) await claimLease.release('run_started', runs);
         return {
           ok: verified, created: true, reused: false,
-          reason, publicationVerified: verified,
-          ...(verified ? {
-            publicationHeadSha: target.headSha,
-            requiredStatusState: confirmation!.requiredStatusState,
-          } : {
-            nextAction: stillPendingOriginal
-              ? 'recover original ' + stillPendingOriginal.slotId + ' invocation '
-                + stillPendingOriginal.invocationId
-                + ' through its existing chat/transport and exact credentialed GitHub comment; do not resend'
-              : String(reconciliationResult?.nextAction
-                ?? 'repair the exact incumbent GitHub source/status evidence and rerun scoped reconcile; do not resend uncertain sources'),
-          }),
+          reason,
+          ...(supplemental
+            ? (verified && receipt ? receipt : {
+                nextAction: 'observe the exact-head original GPT journal and reviewer COMMENT; use same-run recovery without another Send or required-status projection',
+              })
+            : {
+                publicationVerified: verified,
+                ...(verified ? {
+                  publicationHeadSha: target.headSha,
+                  requiredStatusState: confirmation!.requiredStatusState,
+                } : {
+                  nextAction: stillPendingOriginal
+                    ? 'recover original ' + stillPendingOriginal.slotId + ' invocation '
+                      + stillPendingOriginal.invocationId
+                      + ' through its existing chat/transport and exact credentialed GitHub comment; do not resend'
+                    : String(reconciliationResult?.nextAction
+                      ?? 'repair the exact incumbent GitHub source/status evidence and rerun scoped reconcile; do not resend uncertain sources'),
+                }),
+              }),
           prNumber: target.prNumber, headSha: target.headSha, runId: run.id,
           status: recovered.status,
           coverage: derivePackReviewGptCoverage(recovered.reviewRound),
@@ -8992,7 +9076,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       } : {}),
       ...reviewerProvenanceReceipt(run),
       runId: run.id,
-      ...(confirmation ? { prNumber: target.prNumber, headSha: target.headSha } : {}),
+      prNumber: target.prNumber,
+      headSha: target.headSha,
       status: delivered.status,
       ...(terminalCoverage ? { coverage: terminalCoverage } : {}),
       ...(sameRoundGptDiagnostics?.length ? { observationDiagnostics: sameRoundGptDiagnostics } : {}),
