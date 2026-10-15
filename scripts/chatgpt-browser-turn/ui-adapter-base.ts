@@ -1545,16 +1545,99 @@ export async function runtimeWitnessSurfaceAvailable(
 }
 
 
+/** Only live GET responses on this exact held Page, with an observed request in its
+ * current attachment/navigation epoch, can produce HTTP 429 evidence. */
+export type HeldPage429Kind = 'conversation_fetch_http_429' | 'account_conversations_http_429';
+export interface HeldPage429Observation {
+  readonly wall_kind: HeldPage429Kind;
+  readonly http_status: 429;
+  readonly status_source: 'owned_page_response';
+}
+export interface HeldPage429Witness {
+  readonly current: () => HeldPage429Observation | undefined;
+  readonly beforeNavigation: () => void;
+  readonly dispose: () => void;
+}
+const heldPage429Witnesses = new WeakMap<object, HeldPage429Witness>();
+
+export function observeHeldPageConversation429(
+  page: any,
+  ownedConversationUrl?: string,
+  onFirst429?: (evidence: HeldPage429Observation) => void,
+): HeldPage429Witness {
+  let targetUuid: string | undefined;
+  try {
+    const match = /\\/c\\/([0-9a-f-]+)$/iu.exec(new URL(normalizeConversationUrl(ownedConversationUrl ?? '')).pathname);
+    if (match && SERVICE_CONVERSATION_UUID_RE.test(match[1]!)) targetUuid = match[1]!.toLowerCase();
+  } catch { /* No owned exact-chat ID on a fresh-chat Page. */ }
+  let epoch = 0;
+  let observed: HeldPage429Observation | undefined;
+  const requestEpochs = new WeakMap<object, number>();
+  const responseKind = (request: any): HeldPage429Kind | undefined => {
+    if (request?.method?.() !== 'GET') return undefined;
+    try {
+      const url = new URL(String(request.url()));
+      if (!allowedChatGptOrigin(url)) return undefined;
+      if (url.pathname === '/backend-api/conversations') return 'account_conversations_http_429';
+      const match = /^\\/backend-api\\/conversations\\/([0-9a-f-]+)$/iu.exec(url.pathname);
+      return match && targetUuid && match[1]!.toLowerCase() === targetUuid
+        ? 'conversation_fetch_http_429' : undefined;
+    } catch { return undefined; }
+  };
+  const onRequest = (request: any): void => {
+    if (request && typeof request === 'object' && responseKind(request)) requestEpochs.set(request, epoch);
+  };
+  const onResponse = (response: any): void => {
+    if (observed) return; // The first active-epoch 429 is sticky, even if a 200 follows.
+    try {
+      const request = response.request();
+      if (!request || requestEpochs.get(request) !== epoch || response.status() !== 429) return;
+      const kind = responseKind(request);
+      if (!kind) return;
+      observed = { wall_kind: kind, http_status: 429, status_source: 'owned_page_response' };
+      onFirst429?.(observed);
+    } catch { /* Missing request/status evidence is not a 429. */ }
+  };
+  if (typeof page?.on === 'function') {
+    page.on('request', onRequest);
+    page.on('response', onResponse);
+  }
+  const witness: HeldPage429Witness = {
+    current: () => observed,
+    beforeNavigation: () => { epoch++; },
+    dispose: () => {
+      if (typeof page?.off === 'function') {
+        page.off('request', onRequest);
+        page.off('response', onResponse);
+      } else if (typeof page?.removeListener === 'function') {
+        page.removeListener('request', onRequest);
+        page.removeListener('response', onResponse);
+      }
+      if (page && typeof page === 'object') heldPage429Witnesses.delete(page);
+    },
+  };
+  if (page && typeof page === 'object') heldPage429Witnesses.set(page, witness);
+  return witness;
+}
+
+export function heldPage429Diagnostic(page: any): ProductWallDiagnostic | undefined {
+  const event = page && typeof page === 'object' ? heldPage429Witnesses.get(page)?.current() : undefined;
+  return event ? { ...event, matched_text: 'none', matched_selector: 'none' } : undefined;
+}
+
 export interface ProductStatusSurface {
   readonly text: string;
   readonly composer: boolean;
   /** Preserve each product-owned node's selector for bounded wall diagnostics. */
   readonly parts?: readonly { readonly selector: string; readonly text: string }[];
+  readonly witnessed_http_429?: HeldPage429Observation;
 }
 
 /** A full-screen product heading is not an assistant quotation or a status toast. */
 export const ACCOUNT_LOAD_ERROR_HEADING_SELECTOR = 'h1, h2, [role="heading"][aria-level="1"], [role="heading"][aria-level="2"]';
 const ACCOUNT_LOAD_ERROR_HEADING_RE = /^we\s+couldn['’]t\s+load\s+your\s+account[.!]?\s*$/iu;
+export const CONVERSATION_LOAD_ERROR_HEADING_SELECTOR = ACCOUNT_LOAD_ERROR_HEADING_SELECTOR;
+const CONVERSATION_LOAD_ERROR_HEADING_RE = /^(?:could\s+not\s+load\s+this\s+chatgpt\s+conversation|we\s+couldn['’]t\s+load\s+this\s+conversation)[.!]?\s*$/iu;
 
 /** Read only the held Page. Presence of a composer or chat transcript vetoes
  * this full-page classification, even if an assistant quotes the heading.
@@ -1591,6 +1674,33 @@ export async function probeAccountLoadError(
   return null;
 }
 
+/** A full-page conversation load heading; sidebar text and assistant quotations never qualify. */
+export async function probeConversationLoadError(
+  page: any, waitSource?: OperationWaitSource,
+): Promise<ProductWallDiagnostic | null> {
+  const limitMs = Math.min(600, requireOperationWait(waitSource, 'product_status'));
+  if (limitMs <= 0) return null;
+  const deadline = Date.now() + limitMs;
+  const remaining = () => Math.max(1, Math.min(200, deadline - Date.now()));
+  try {
+    if (await boundedLocatorCount(page.locator(COMPOSER_SELECTOR), remaining()) > 0) return null;
+    if (await boundedLocatorCount(page.locator(MESSAGE_NODE_SELECTOR), remaining()) > 0) return null;
+    const headings = page.locator(CONVERSATION_LOAD_ERROR_HEADING_SELECTOR);
+    const count = Math.min(4, await boundedLocatorCount(headings, remaining()));
+    for (let i = 0; i < count && Date.now() < deadline; i++) {
+      const text = String(await boundedPlaywrightOperation(
+        remaining(), () => headings.nth(i).innerText({ timeout: remaining() }),
+      ));
+      if (CONVERSATION_LOAD_ERROR_HEADING_RE.test(text)) return {
+        wall_kind: 'conversation_load_error',
+        matched_text: text.slice(0, 500),
+        matched_selector: CONVERSATION_LOAD_ERROR_HEADING_SELECTOR,
+      };
+    }
+  } catch { /* An unreadable heading never authorizes retry or inferred HTTP status. */ }
+  return null;
+}
+
 export async function productStatusText(page: any, waitSource?: OperationWaitSource): Promise<ProductStatusSurface> {
   const composer = (await boundedLocatorCount(
     page.locator(COMPOSER_SELECTOR),
@@ -1599,6 +1709,10 @@ export async function productStatusText(page: any, waitSource?: OperationWaitSou
   const parts: { selector: string; text: string }[] = [];
   const accountHeading = !composer ? await probeAccountLoadError(page, waitSource) : null;
   if (accountHeading) parts.push({ selector: accountHeading.matched_selector, text: accountHeading.matched_text });
+  else if (!composer) {
+    const conversationHeading = await probeConversationLoadError(page, waitSource);
+    if (conversationHeading) parts.push({ selector: conversationHeading.matched_selector, text: conversationHeading.matched_text });
+  }
   for (const selector of PRODUCT_STATUS_PROBE_SELECTORS) {
     const locator = page.locator(selector);
     const countWait = requireOperationWait(waitSource, 'product_status');
@@ -1609,7 +1723,13 @@ export async function productStatusText(page: any, waitSource?: OperationWaitSou
       if (text) parts.push({ selector, text: String(text) });
     }
   }
-  return { text: parts.map((part) => part.text).join('\n'), composer, parts };
+  const witnessed = heldPage429Diagnostic(page);
+  return { text: parts.map((part) => part.text).join('\n'), composer, parts,
+    ...(witnessed ? { witnessed_http_429: {
+      wall_kind: witnessed.wall_kind === 'account_conversations_http_429'
+        ? 'account_conversations_http_429' : 'conversation_fetch_http_429',
+      http_status: 429, status_source: 'owned_page_response',
+    } } : {}) };
 }
 
 const PRODUCT_RATE_LIMIT_WALL_RE = /too many requests|(?:making |sending )?requests too quickly|you(?:'|’)re (?:making requests|sending messages) too quickly|temporarily limited(?:\s+access)?(?:\s+to your conversations)?|(?:please )?wait(?: a)? few minutes before trying again|try again in a few minutes|you(?:'|’)re going too fast|rate limit exceeded/i;
@@ -1617,12 +1737,15 @@ const PRODUCT_RATE_LIMIT_WALL_RE = /too many requests|(?:making |sending )?reque
 const PRODUCT_QUOTA_WALL_RE = /you(?:'|’)ve reached[^\n]{0,120}\blimit\b|\busage limit\b|\bmessage limit\b|\breached the current usage\b|\breached your usage limit\b/i;
 const PRODUCT_WALL_TEXT_CAP = 500;
 
-export type ProductWallKind = 'quota' | 'rate_limit' | 'challenge' | 'login' | 'account_load_error';
+export type ProductWallKind = 'quota' | 'rate_limit' | 'challenge' | 'login' | 'account_load_error'
+  | 'conversation_fetch_http_429' | 'conversation_load_error' | 'account_conversations_http_429';
 export interface ProductWallDiagnostic {
   /** Advisory evidence only; a page-text match cannot become a terminal state. */
   readonly wall_kind: ProductWallKind | 'none';
   readonly matched_text: string;
   readonly matched_selector: string;
+  readonly http_status?: 429;
+  readonly status_source?: 'owned_page_response';
   readonly state?: never;
   readonly cause?: never;
 }
@@ -1637,6 +1760,12 @@ function matchingProductStatusPart(
 }
 
 export function classifyProductWall(surface: ProductStatusSurface): ProductWallDiagnostic {
+  if (surface.witnessed_http_429) {
+    const heading = surface.parts?.find((part) => part.selector === CONVERSATION_LOAD_ERROR_HEADING_SELECTOR
+      && CONVERSATION_LOAD_ERROR_HEADING_RE.test(part.text));
+    return { ...surface.witnessed_http_429, matched_text: heading?.text.slice(0, PRODUCT_WALL_TEXT_CAP) ?? 'none',
+      matched_selector: heading?.selector ?? 'none' };
+  }
   // Only the positively probed product heading has this selector. Never infer
   // an account failure from generic sign-in copy or assistant-rendered text.
   const heading = surface.parts?.find((part) =>
@@ -1646,6 +1775,13 @@ export function classifyProductWall(surface: ProductStatusSurface): ProductWallD
     wall_kind: 'account_load_error',
     matched_text: heading.text.slice(0, PRODUCT_WALL_TEXT_CAP),
     matched_selector: heading.selector,
+  };
+  const conversationHeading = surface.parts?.find((part) => part.selector === CONVERSATION_LOAD_ERROR_HEADING_SELECTOR
+    && CONVERSATION_LOAD_ERROR_HEADING_RE.test(part.text));
+  if (conversationHeading) return {
+    wall_kind: 'conversation_load_error',
+    matched_text: conversationHeading.text.slice(0, PRODUCT_WALL_TEXT_CAP),
+    matched_selector: conversationHeading.selector,
   };
   const patterns: readonly [ProductWallKind, RegExp][] = [
     ['challenge', /verify you are human|checking your browser|just a moment|unusual activity/i],
