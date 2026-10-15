@@ -2884,26 +2884,39 @@ function hasCredentialedGptSourceAuthority(run: PackReviewRunRecord): boolean {
   return true;
 }
 
-/** Bind the original GPT execution only from credentialed, frozen source evidence. */
-function bindSupplementalGptExecutionProvenance(
+/** Recover original execution identity from credentialed source slots, never projection. */
+function bindCredentialedGptExecutionProvenance(
   run: PackReviewRunRecord,
   options: { projectId: string; storeRoot: string },
 ): PackReviewRunRecord {
-  if (run.automaticBudgetDisposition !== 'non_consuming_explicit') return run;
   const round = run.reviewRound;
-  if (run.resolvedReviewer !== 'gpt' || round?.reviewer !== 'gpt'
+  if ((run.resolvedReviewer !== undefined && run.resolvedReviewer !== 'gpt')
+      || round?.reviewer !== 'gpt'
       || !hasCredentialedGptSourceAuthority(run)
       || gptUsableSourceCount(round) < (round.settledSourceCount ?? round.cardinality)
       || (run.executedReviewer !== undefined && run.executedReviewer !== 'gpt')
       || (run.reviewerExecutionRunId !== undefined && run.reviewerExecutionRunId !== run.id)
       || run.reviewerInvokedForThisRun === false) {
-    throw new Error('supplemental GPT original execution lacks credentialed source provenance');
+    throw new Error('GPT original execution lacks credentialed source provenance');
   }
-  return updatePackReviewRun(run.id, {
+  const bound = updatePackReviewRunIf(run.id, (records) => {
+    const current = records.find((candidate) => candidate.id === run.id);
+    return Boolean(current && current.targetSha === run.targetSha
+      && (current.resolvedReviewer === undefined || current.resolvedReviewer === 'gpt')
+      && current.automaticBudgetDisposition === run.automaticBudgetDisposition
+      && stableJson(current.reviewRound) === stableJson(round)
+      && hasCredentialedGptSourceAuthority(current)
+      && (current.executedReviewer === undefined || current.executedReviewer === 'gpt')
+      && (current.reviewerExecutionRunId === undefined || current.reviewerExecutionRunId === run.id)
+      && current.reviewerInvokedForThisRun !== false);
+  }, {
+    resolvedReviewer: 'gpt',
     executedReviewer: 'gpt',
     reviewerInvokedForThisRun: true,
     reviewerExecutionRunId: run.id,
   }, options);
+  if (!bound) throw new Error('GPT source execution provenance changed before binding');
+  return bound;
 }
 
 function assertCredentialedGptSourceAuthority(run: PackReviewRunRecord): void {
@@ -3794,11 +3807,11 @@ async function recoverStaleGptSourceComments(options: {
     findingCount: aggregate.findingCount,
     findings: aggregate.findings,
   }, { projectId: options.projectId, storeRoot: options.storeRoot });
-  if (persistedBeforeAggregate.automaticBudgetDisposition === 'non_consuming_explicit') {
-    bindSupplementalGptExecutionProvenance(persistedBeforeAggregate, {
-      projectId: options.projectId, storeRoot: options.storeRoot,
-    });
-  }
+  // Both required and supplemental recovered source rounds need the same
+  // original execution identity before journal/COMMENT/status settlement.
+  bindCredentialedGptExecutionProvenance(persistedBeforeAggregate, {
+    projectId: options.projectId, storeRoot: options.storeRoot,
+  });
   const classification = classifyPackReviewPayload(aggregate);
   setPackReviewRunTerminal(options.run.id, classification.terminalStatus, {
     reviewVerdict: aggregate.verdict,
@@ -4017,7 +4030,7 @@ async function settleRecoveredGptDelivery(options: {
     if (!hasPersistedPackReviewVerdict(journaled)) {
       throw new Error('supplemental GPT journaled verdict missing before COMMENT recovery');
     }
-    bindSupplementalGptExecutionProvenance(journaled, {
+    bindCredentialedGptExecutionProvenance(journaled, {
       projectId: options.projectId, storeRoot: options.storeRoot,
     });
   }
@@ -6765,7 +6778,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
   );
   // The advisory entrypoint may inspect old required authority but must not
   // initiate status-repair writes for a completed required stage.
-  if (!supplementalMode) await reconcileStalePackReviewRuns({
+  const preStartReconciliation = !supplementalMode ? await reconcileStalePackReviewRuns({
     repoSlug: target.repoSlug,
     sourceRepoRoot: target.sourceRepoRoot,
     projectId,
@@ -6787,7 +6800,53 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     resolveRepositorySlug: resolveSlug,
     settlePartialAfterGrace: false,
     beforeStaleStatusWrite: input.fixtureBeforeStaleStatusWrite,
-  });
+  }) : null;
+  // A dead original GPT runner can have its credentialed journal, COMMENT and
+  // exact-head required status settled by the incumbent pre-start reconciler.
+  // A fresh explicit invocation must acknowledge only that original run,
+  // without engaging another reviewer or borrowing a projected stage status.
+  if (explicitReviewer && reviewer === 'gpt' && preStartReconciliation) {
+    for (const settled of preStartReconciliation.results) {
+      if (settled.recovered !== true || settled.statusReconciled !== true) continue;
+      const original = getPackReviewRun(String(settled.runId), { projectId, storeRoot });
+      if (!original || original.prNumber !== target.prNumber
+          || original.targetSha !== target.headSha
+          || original.canonicalRepository?.toLowerCase() !== target.repoSlug.toLowerCase()
+          || original.automaticBudgetDisposition === 'non_consuming_explicit'
+          || original.resolvedReviewer !== 'gpt'
+          || original.executedReviewer !== 'gpt'
+          || original.reviewerInvokedForThisRun !== true
+          || original.reviewerExecutionRunId !== original.id
+          || !hasPersistedPackReviewVerdict(original)
+          || original.journalOutcome?.state !== 'persisted'
+          || !hasCredentialedGptSourceAuthority(original)
+          || original.deliveryOutcomes.githubComment?.state !== 'succeeded'
+          || original.deliveryOutcomes.requiredStatus?.state !== 'succeeded'
+          || original.githubReviewEvent !== 'COMMENT'
+          || !original.githubReviewId || !trim(original.githubReviewUrl)) continue;
+      const selected = readPackReviewAuthority(target.prNumber, { storeRoot });
+      if (selected?.currentHeadSha !== target.headSha
+          || selected.terminal?.runId !== original.id
+          || selected.publication?.terminalRunId !== original.id
+          || selected.publication.headSha !== target.headSha
+          || selected.publication.status !== 'succeeded') continue;
+      let exactHead = false;
+      try { exactHead = await readProjectionHead() === target.headSha.toLowerCase(); } catch {
+        // No live head observation, no explicit success.
+      }
+      if (!exactHead) continue;
+      return {
+        ok: true, created: false, reused: true, recovered: true,
+        reason: 'resumed_journaled_delivery',
+        ...reviewerProvenanceReceipt(original),
+        publicationVerified: true, publicationHeadSha: target.headSha,
+        prNumber: target.prNumber, headSha: target.headSha, runId: original.id,
+        status: original.status, httpStatus: 200,
+        githubReviewId: original.githubReviewId,
+        githubReviewUrl: original.githubReviewUrl,
+      };
+    }
+  }
   const claimMode = input.claimMode ?? 'acquire';
   const preacquiredClaimOwned = () => ownsBoundPreacquiredClaim(input.preacquiredClaim, {
     projectId, prNumber: target.prNumber, headSha: target.headSha,
@@ -7447,7 +7506,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         };
       }
     }
-    if (!supplementalMode) {
+    if (!supplementalMode && !explicitReviewer) {
       carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
     }
     const conflictFreeCarryover = carryover?.replay.kind === 'conflict_free_carryover';
@@ -7954,6 +8013,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       terminal = true;
       const runs = listPackReviewRuns({ projectId, storeRoot });
       if (claimLease) await claimLease.release('run_started', runs);
+      const recoveredNativeJournal = !gptResume
+        ? getPackReviewRun(resumeCandidate.id, { projectId, storeRoot })
+        : null;
       return {
         ok: true,
         created: false,
@@ -7962,6 +8024,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         reason: 'resumed_journaled_delivery',
         ...reviewerProvenanceReceipt(resumeCandidate),
         deliveryReason: resumed.reason,
+        ...(recoveredNativeJournal ? { deliveryOutcomes: recoveredNativeJournal.deliveryOutcomes } : {}),
         ...(confirmed ? {
           publicationVerified: confirmed.verified,
           ...(confirmed.verified
@@ -8477,7 +8540,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       const diagnostics = gptRoundDiagnostics(run.reviewRound);
       if (hasPersistedPackReviewVerdict(run)) {
         if (run.automaticBudgetDisposition === 'non_consuming_explicit') {
-          const proven = bindSupplementalGptExecutionProvenance(run, { projectId, storeRoot });
+          const proven = bindCredentialedGptExecutionProvenance(run, { projectId, storeRoot });
           const receipt = supplementalReviewReceipt(proven);
           let exactHead = false;
           try { exactHead = await readProjectionHead() === target.headSha.toLowerCase(); } catch {

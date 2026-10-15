@@ -194,6 +194,28 @@ export async function runPackGptReviewCommand(
       && result.reason === 'completed' && result.httpStatus === 201
       && result.publicationVerified === undefined
       && (result.status === 'up_to_date' || result.status === 'commented' || result.status === 'changes_requested');
+    // Native required journal resumes have no GPT-only publicationVerified.
+    // Trust only the original run's persisted COMMENT and required-status
+    // delivery channels, along with the ordinary exact-head origin checks.
+    const nativeJournal = result.deliveryOutcomes
+      && typeof result.deliveryOutcomes === 'object'
+      && !Array.isArray(result.deliveryOutcomes)
+      ? result.deliveryOutcomes as {
+          githubComment?: { state?: unknown };
+          requiredStatus?: { state?: unknown };
+        }
+      : null;
+    const nativeRecoveredRound = (result.resolvedReviewer === 'claude' || result.resolvedReviewer === 'codex')
+      && result.created === false && result.reused === true
+      && result.reason === 'resumed_journaled_delivery'
+      && result.deliveryReason === 'completed'
+      && result.httpStatus === 200
+      && result.publicationVerified === undefined
+      && (result.status === 'up_to_date' || result.status === 'commented'
+        || result.status === 'changes_requested')
+      && Boolean(trim(result.githubReviewId)) && Boolean(trim(result.githubReviewUrl))
+      && nativeJournal?.githubComment?.state === 'succeeded'
+      && nativeJournal.requiredStatus?.state === 'succeeded';
     const explicitOriginVerified = Boolean(reviewer
       && /^[0-9a-f]{40}$/.test(trim(result.headSha))
       && trim(result.targetSha) === trim(result.headSha)
@@ -215,8 +237,8 @@ export async function runPackGptReviewCommand(
       ? explicitOriginVerified
         && (supplementalDelivered || (
           result.outcome !== 'supplemental_review_delivered'
-          && (deliveredRound || recoveredRound || nativeDeliveredRound)))
-      : (deliveredRound || recoveredRound || stageCompleteReuse || nativeDeliveredRound);
+          && (deliveredRound || recoveredRound || nativeDeliveredRound || nativeRecoveredRound)))
+      : (deliveredRound || recoveredRound || stageCompleteReuse || nativeDeliveredRound || nativeRecoveredRound);
     if (result.ok === true && settled) {
       return { exitCode: 0, result };
     }
