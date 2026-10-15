@@ -14,6 +14,7 @@ import { dirname, isAbsolute, join, posix, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
 import { resolveTargetContext } from './lib/target-context.ts';
+import { WRAPPER_PATH } from './lib/gh-resolve-real-binary.mjs';
 import {
   acquireLifecycleExclusion,
   borrowLifecycleExclusion,
@@ -540,7 +541,7 @@ function readPr(
   repositoryRoot: string,
   pr: number,
 ): PrInfo {
-  const gh = join(repositoryRoot, 'scripts', 'gh');
+  const gh = WRAPPER_PATH;
   const stdout = runChecked(runner, {
     command: gh,
     args: [
@@ -622,7 +623,7 @@ function proveBranchOwnership(
   if (!branch) return true;
   const repo = info.headRepository?.nameWithOwner;
   if (!repo) return false;
-  const gh = join(repositoryRoot, 'scripts', 'gh');
+  const gh = WRAPPER_PATH;
   const stdout = runChecked(runner, {
     command: gh,
     args: [

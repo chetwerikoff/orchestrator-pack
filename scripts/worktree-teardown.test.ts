@@ -1,11 +1,12 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ProcessResult } from './kernel/subprocess.ts';
+import { WRAPPER_PATH } from './lib/gh-resolve-real-binary.mjs';
 import {
   parseDiscardEntries,
   runPostMergeTeardown,
@@ -443,5 +444,55 @@ describe('manifest and capability parsing', () => {
   it('requires the exact installed force-removal help surface', () => {
     expect(validateForceRemovalHelp('orca worktree rm --worktree path:x --force --json')).toBe(true);
     expect(validateForceRemovalHelp('orca worktree rm --worktree path:x --json')).toBe(false);
+  });
+});
+
+describe('pack GH path in direct post-merge teardown', () => {
+  const prViewArgs = [
+    'pr', 'view', '1329', '--json',
+    'headRefName,state,headRefOid,mergeCommit,headRepository,baseRefName',
+  ];
+  const prListArgs = [
+    'pr', 'list', '--state', 'open', '--json',
+    'number,headRefName,headRepository', '--repo', 'chetwerikoff/orchestrator-pack',
+  ];
+
+  it('preserves a target checkout without scripts/gh and runs both exact pack GH commands with target cwd', async () => {
+    const paths = fixture();
+    const state = defaultState(paths);
+    expect(existsSync(join(paths.repo, 'scripts', 'gh'))).toBe(false);
+    const report = await runPostMergeTeardown(paths.args, dependencies(paths, state));
+    expect(report.outcome).toBe('cleanup_eligible');
+    expect(report.effects).toEqual([]);
+
+    const prCalls = state.invocations.filter((call) => call.args[0] === 'pr');
+    expect(prCalls).toEqual([
+      { command: WRAPPER_PATH, args: prViewArgs, cwd: paths.repo },
+      { command: WRAPPER_PATH, args: prListArgs, cwd: paths.repo },
+    ]);
+    expect(state.gitPresent).toBe(true);
+    expect(state.orcaPresent).toBe(true);
+  });
+
+  it('preserves explicit pack-root cwd and the same PR argv when the pack itself is selected', async () => {
+    const original = fixture();
+    const packRoot = dirname(dirname(WRAPPER_PATH));
+    const paths: Fixture = {
+      ...original,
+      repo: packRoot,
+      args: { ...original.args, repositoryRoot: packRoot },
+    };
+    const state = defaultState(paths);
+    const report = await runPostMergeTeardown(paths.args, dependencies(paths, state));
+    expect(report.outcome).toBe('cleanup_eligible');
+    expect(report.effects).toEqual([]);
+
+    const prCalls = state.invocations.filter((call) => call.args[0] === 'pr');
+    expect(prCalls).toEqual([
+      { command: WRAPPER_PATH, args: prViewArgs, cwd: packRoot },
+      { command: WRAPPER_PATH, args: prListArgs, cwd: packRoot },
+    ]);
+    expect(state.gitPresent).toBe(true);
+    expect(state.orcaPresent).toBe(true);
   });
 });

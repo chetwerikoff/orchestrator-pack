@@ -1,13 +1,15 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ProcessResult } from '../kernel/subprocess.ts';
+import { WRAPPER_PATH } from '../lib/gh-resolve-real-binary.mjs';
 import {
   collectCensus,
+  readPrIdentity,
   runLifecycle,
   type CommandInvocation,
   type CommandRunner,
@@ -578,5 +580,123 @@ describe('post-create observation', () => {
       classification: { classification: 'exact_dual' },
       decision: { terminalSpawnAuthorized: false },
     });
+  });
+});
+
+const PACK_ROOT = dirname(dirname(WRAPPER_PATH));
+const PACK_TEARDOWN = join(dirname(WRAPPER_PATH), 'worktree-teardown.ts');
+
+describe('pack-owned lifecycle tool paths', () => {
+  it('uses the exact pack gh and explicit normalized target cwd for PR identity and branch ownership', () => {
+    const paths = fixture();
+    const value = state();
+    const opts = operations(paths, value);
+    expect(existsSync(join(paths.repo, 'scripts', 'gh'))).toBe(false);
+
+    const identity = readPrIdentity(join(paths.repo, 'unused', '..'), 1300, opts);
+    expect(identity).toMatchObject({
+      headRefName: BRANCH,
+      headRefOid: HEAD,
+      state: 'MERGED',
+    });
+
+    const report = runLifecycle({
+      expected: paths.expected,
+      context: 'explicit-recovery',
+      apply: false,
+      operations: opts,
+    });
+    expect(report.outcome).toBe('git_only_recovery_eligible');
+    expect(report.effects).toEqual([]);
+
+    const ghCalls = value.invocations.filter((call) => call.args[0] === 'pr');
+    expect(ghCalls.length).toBeGreaterThanOrEqual(3);
+    expect(ghCalls.every((call) => call.command === WRAPPER_PATH && call.cwd === paths.repo)).toBe(true);
+    expect(ghCalls).toEqual(expect.arrayContaining([
+      {
+        command: WRAPPER_PATH,
+        args: ['pr', 'view', '1300', '--json', 'headRefName,state,headRefOid,mergeCommit,headRepository,baseRefName'],
+        cwd: paths.repo,
+      },
+      {
+        command: WRAPPER_PATH,
+        args: [
+          'pr', 'list', '--state', 'open', '--json',
+          'number,headRefName,headRepository', '--repo', 'chetwerikoff/orchestrator-pack',
+        ],
+        cwd: paths.repo,
+      },
+    ]));
+  });
+
+  it('spawns the exact pack teardown child from a target that lacks both pack scripts', () => {
+    const paths = fixture();
+    const value = state({
+      orcaPresent: true,
+      standardTeardownResult: result({ stdout: JSON.stringify({ outcome: 'cleanup_eligible' }) }),
+    });
+    expect(existsSync(join(paths.repo, 'scripts', 'gh'))).toBe(false);
+    expect(existsSync(join(paths.repo, 'scripts', 'worktree-teardown.ts'))).toBe(false);
+
+    const report = runLifecycle({
+      expected: { ...paths.expected, finalPrHeadSha: HEAD },
+      context: 'post-merge-cleanup',
+      apply: false,
+      operations: operations(paths, value),
+    });
+    expect(report.outcome).toBe('cleanup_eligible');
+    expect(report.effects).toEqual([]);
+
+    const children = value.invocations.filter((call) => call.command === process.execPath);
+    expect(children).toHaveLength(1);
+    const child = children[0]!;
+    expect(child.cwd).toBe(paths.repo);
+    expect(child.args[0]).toBe('--experimental-strip-types');
+    expect(child.args[1]).toBe(PACK_TEARDOWN);
+    expect(child.args.slice(child.args.indexOf('--repo-root'), child.args.indexOf('--repo-root') + 2))
+      .toEqual(['--repo-root', paths.repo]);
+    expect(child.args).toContain('--post-merge-destructive');
+    expect(child.args).not.toContain('--apply');
+  });
+
+  it('keeps explicit pack-root cwd and intended PR argv when the pack is the target', () => {
+    const paths = fixture();
+    const packPaths: Paths = {
+      ...paths,
+      repo: PACK_ROOT,
+      expected: { ...paths.expected, repositoryRoot: PACK_ROOT },
+    };
+    const value = state({
+      orcaPresent: false,
+      standardTeardownResult: result({ stdout: JSON.stringify({ outcome: 'cleanup_eligible' }) }),
+    });
+    const opts = operations(packPaths, value);
+    expect(readPrIdentity(PACK_ROOT, 1300, opts).state).toBe('MERGED');
+    expect(runLifecycle({
+      expected: packPaths.expected,
+      context: 'explicit-recovery',
+      apply: false,
+      operations: opts,
+    }).outcome).toBe('git_only_recovery_eligible');
+
+    value.orcaPresent = true;
+    expect(runLifecycle({
+      expected: { ...packPaths.expected, finalPrHeadSha: HEAD },
+      context: 'post-merge-cleanup',
+      apply: false,
+      operations: opts,
+    }).outcome).toBe('cleanup_eligible');
+
+    const ghCalls = value.invocations.filter((call) => call.args[0] === 'pr');
+    expect(ghCalls.length).toBeGreaterThan(0);
+    expect(ghCalls.every((call) => call.command === WRAPPER_PATH && call.cwd === PACK_ROOT)).toBe(true);
+    expect(ghCalls.some((call) => call.args.join(' ') ===
+      'pr view 1300 --json headRefName,state,headRefOid,mergeCommit,headRepository,baseRefName')).toBe(true);
+    const child = value.invocations.find((call) => call.command === process.execPath)!;
+    expect(child.args[1]).toBe(PACK_TEARDOWN);
+    expect(child.cwd).toBe(PACK_ROOT);
+    expect(child.args.slice(child.args.indexOf('--repo-root'), child.args.indexOf('--repo-root') + 2))
+      .toEqual(['--repo-root', PACK_ROOT]);
+    expect(value.removeCount).toBe(0);
   });
 });
