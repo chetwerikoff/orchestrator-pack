@@ -4103,7 +4103,7 @@ describe('Issue #2607 supplemental reviewer provenance and required-status isola
       linkedSessionId: 'fixture-worker',
     }).run;
     const writeRequiredStatus = vi.fn(async () => undefined);
-    const notifyWorker = vi.fn(async () => ({ state: 'succeeded' as const, reason: 'unexpected' }));
+    const notifyWorker = vi.fn(async () => ({ state: 'delivered' as const, reason: 'unexpected' }));
     const pending = await recordPackReviewPendingStatus({
       ...store, run: supplemental, writeRequiredStatus,
     });
@@ -4131,7 +4131,7 @@ describe('Issue #2607 supplemental reviewer provenance and required-status isola
       linkedSessionId: 'fixture-worker',
     }).run;
     const writeRequiredStatus = vi.fn(async () => undefined);
-    const notifyWorker = vi.fn(async () => ({ state: 'succeeded' as const, reason: 'unexpected' }));
+    const notifyWorker = vi.fn(async () => ({ state: 'delivered' as const, reason: 'unexpected' }));
     const postGithubComment = vi.fn(async () => ({
       id: 2607, url: 'https://github.com/example/repo/pull/42#issuecomment-2607',
       event: 'COMMENT' as const,
