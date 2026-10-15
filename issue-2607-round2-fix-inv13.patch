@@ -1,0 +1,444 @@
+diff --git a/scripts/pack-review-runner.ts b/scripts/pack-review-runner.ts
+--- a/scripts/pack-review-runner.ts
++++ b/scripts/pack-review-runner.ts
+@@ -2884,26 +2884,40 @@
+   return true;
+ }
+ 
+-/** Bind the original GPT execution only from credentialed, frozen source evidence. */
+-function bindSupplementalGptExecutionProvenance(
+-  run: PackReviewRunRecord,
+-  options: { projectId: string; storeRoot: string },
+-): PackReviewRunRecord {
+-  if (run.automaticBudgetDisposition !== 'non_consuming_explicit') return run;
+-  const round = run.reviewRound;
+-  if (run.resolvedReviewer !== 'gpt' || round?.reviewer !== 'gpt'
++/** Recover original execution identity from credentialed source slots, never projection. */
++function bindCredentialedGptExecutionProvenance(
++  run: PackReviewRunRecord,
++  options: { projectId: string; storeRoot: string },
++): PackReviewRunRecord {
++  const round = run.reviewRound;
++  if (run.resolvedReviewer !== 'gpt' || round?.reviewer !== 'gpt'
++      || !round.sourceSlots.some((slot) =>
++        slot.lifecycle === 'terminal'
++        && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings'))
+       || !hasCredentialedGptSourceAuthority(run)
+       || gptUsableSourceCount(round) < (round.settledSourceCount ?? round.cardinality)
+       || (run.executedReviewer !== undefined && run.executedReviewer !== 'gpt')
+       || (run.reviewerExecutionRunId !== undefined && run.reviewerExecutionRunId !== run.id)
+       || run.reviewerInvokedForThisRun === false) {
+-    throw new Error('supplemental GPT original execution lacks credentialed source provenance');
+-  }
+-  return updatePackReviewRun(run.id, {
+-    executedReviewer: 'gpt',
+-    reviewerInvokedForThisRun: true,
+-    reviewerExecutionRunId: run.id,
+-  }, options);
++    throw new Error('GPT original execution lacks credentialed source provenance');
++  }
++  const bound = updatePackReviewRunIf(run.id, (records) => {
++    const current = records.find((candidate) => candidate.id === run.id);
++    return Boolean(current && current.targetSha === run.targetSha
++      && current.resolvedReviewer === 'gpt'
++      && current.automaticBudgetDisposition === run.automaticBudgetDisposition
++      && stableJson(current.reviewRound) === stableJson(round)
++      && hasCredentialedGptSourceAuthority(current)
++      && (current.executedReviewer === undefined || current.executedReviewer === 'gpt')
++      && (current.reviewerExecutionRunId === undefined || current.reviewerExecutionRunId === run.id)
++      && current.reviewerInvokedForThisRun !== false);
++  }, {
++    executedReviewer: 'gpt',
++    reviewerInvokedForThisRun: true,
++    reviewerExecutionRunId: run.id,
++  }, options);
++  if (!bound) throw new Error('GPT source execution provenance changed before binding');
++  return bound;
+ }
+ 
+ function assertCredentialedGptSourceAuthority(run: PackReviewRunRecord): void {
+@@ -3794,11 +3808,11 @@
+     findingCount: aggregate.findingCount,
+     findings: aggregate.findings,
+   }, { projectId: options.projectId, storeRoot: options.storeRoot });
+-  if (persistedBeforeAggregate.automaticBudgetDisposition === 'non_consuming_explicit') {
+-    bindSupplementalGptExecutionProvenance(persistedBeforeAggregate, {
+-      projectId: options.projectId, storeRoot: options.storeRoot,
+-    });
+-  }
++  // Both required and supplemental recovered source rounds need the same
++  // original execution identity before journal/COMMENT/status settlement.
++  bindCredentialedGptExecutionProvenance(persistedBeforeAggregate, {
++    projectId: options.projectId, storeRoot: options.storeRoot,
++  });
+   const classification = classifyPackReviewPayload(aggregate);
+   setPackReviewRunTerminal(options.run.id, classification.terminalStatus, {
+     reviewVerdict: aggregate.verdict,
+@@ -4017,7 +4031,7 @@
+     if (!hasPersistedPackReviewVerdict(journaled)) {
+       throw new Error('supplemental GPT journaled verdict missing before COMMENT recovery');
+     }
+-    bindSupplementalGptExecutionProvenance(journaled, {
++    bindCredentialedGptExecutionProvenance(journaled, {
+       projectId: options.projectId, storeRoot: options.storeRoot,
+     });
+   }
+@@ -6765,7 +6779,7 @@
+   );
+   // The advisory entrypoint may inspect old required authority but must not
+   // initiate status-repair writes for a completed required stage.
+-  if (!supplementalMode) await reconcileStalePackReviewRuns({
++  const preStartReconciliation = !supplementalMode ? await reconcileStalePackReviewRuns({
+     repoSlug: target.repoSlug,
+     sourceRepoRoot: target.sourceRepoRoot,
+     projectId,
+@@ -6787,7 +6801,53 @@
+     resolveRepositorySlug: resolveSlug,
+     settlePartialAfterGrace: false,
+     beforeStaleStatusWrite: input.fixtureBeforeStaleStatusWrite,
+-  });
++  }) : null;
++  // A dead original GPT runner can have its credentialed journal, COMMENT and
++  // exact-head required status settled by the incumbent pre-start reconciler.
++  // A fresh explicit invocation must acknowledge only that original run,
++  // without engaging another reviewer or borrowing a projected stage status.
++  if (explicitReviewer && reviewer === 'gpt' && preStartReconciliation) {
++    for (const settled of preStartReconciliation.results) {
++      if (settled.recovered !== true || settled.statusReconciled !== true) continue;
++      const original = getPackReviewRun(String(settled.runId), { projectId, storeRoot });
++      if (!original || original.prNumber !== target.prNumber
++          || original.targetSha !== target.headSha
++          || original.canonicalRepository?.toLowerCase() !== target.repoSlug.toLowerCase()
++          || original.automaticBudgetDisposition === 'non_consuming_explicit'
++          || original.resolvedReviewer !== 'gpt'
++          || original.executedReviewer !== 'gpt'
++          || original.reviewerInvokedForThisRun !== true
++          || original.reviewerExecutionRunId !== original.id
++          || !hasPersistedPackReviewVerdict(original)
++          || original.journalOutcome?.state !== 'persisted'
++          || !hasCredentialedGptSourceAuthority(original)
++          || original.deliveryOutcomes.githubComment?.state !== 'succeeded'
++          || original.deliveryOutcomes.requiredStatus?.state !== 'succeeded'
++          || original.githubReviewEvent !== 'COMMENT'
++          || !original.githubReviewId || !trim(original.githubReviewUrl)) continue;
++      const selected = readPackReviewAuthority(target.prNumber, { storeRoot });
++      if (selected?.currentHeadSha !== target.headSha
++          || selected.terminal?.runId !== original.id
++          || selected.publication?.terminalRunId !== original.id
++          || selected.publication.headSha !== target.headSha
++          || selected.publication.status !== 'succeeded') continue;
++      let exactHead = false;
++      try { exactHead = await readProjectionHead() === target.headSha.toLowerCase(); } catch {
++        // No live head observation, no explicit success.
++      }
++      if (!exactHead) continue;
++      return {
++        ok: true, created: false, reused: true, recovered: true,
++        reason: 'resumed_journaled_delivery',
++        ...reviewerProvenanceReceipt(original),
++        publicationVerified: true, publicationHeadSha: target.headSha,
++        prNumber: target.prNumber, headSha: target.headSha, runId: original.id,
++        status: original.status, httpStatus: 200,
++        githubReviewId: original.githubReviewId,
++        githubReviewUrl: original.githubReviewUrl,
++      };
++    }
++  }
+   const claimMode = input.claimMode ?? 'acquire';
+   const preacquiredClaimOwned = () => ownsBoundPreacquiredClaim(input.preacquiredClaim, {
+     projectId, prNumber: target.prNumber, headSha: target.headSha,
+@@ -7447,7 +7507,9 @@
+         };
+       }
+     }
+-    if (!supplementalMode) {
++    // Carry-over is authority for automatic/common reviews only. An explicit
++    // reviewer switch must execute that reviewer on the real target head.
++    if (!supplementalMode && !explicitReviewer) {
+       carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
+     }
+     const conflictFreeCarryover = carryover?.replay.kind === 'conflict_free_carryover';
+@@ -7954,6 +8016,9 @@
+       terminal = true;
+       const runs = listPackReviewRuns({ projectId, storeRoot });
+       if (claimLease) await claimLease.release('run_started', runs);
++      const recoveredNativeJournal = !gptResume
++        ? getPackReviewRun(resumeCandidate.id, { projectId, storeRoot })
++        : null;
+       return {
+         ok: true,
+         created: false,
+@@ -7962,6 +8027,7 @@
+         reason: 'resumed_journaled_delivery',
+         ...reviewerProvenanceReceipt(resumeCandidate),
+         deliveryReason: resumed.reason,
++        ...(recoveredNativeJournal ? { deliveryOutcomes: recoveredNativeJournal.deliveryOutcomes } : {}),
+         ...(confirmed ? {
+           publicationVerified: confirmed.verified,
+           ...(confirmed.verified
+@@ -8477,7 +8543,7 @@
+       const diagnostics = gptRoundDiagnostics(run.reviewRound);
+       if (hasPersistedPackReviewVerdict(run)) {
+         if (run.automaticBudgetDisposition === 'non_consuming_explicit') {
+-          const proven = bindSupplementalGptExecutionProvenance(run, { projectId, storeRoot });
++          const proven = bindCredentialedGptExecutionProvenance(run, { projectId, storeRoot });
+           const receipt = supplementalReviewReceipt(proven);
+           let exactHead = false;
+           try { exactHead = await readProjectionHead() === target.headSha.toLowerCase(); } catch {
+diff --git a/scripts/pack-gpt-review.ts b/scripts/pack-gpt-review.ts
+--- a/scripts/pack-gpt-review.ts
++++ b/scripts/pack-gpt-review.ts
+@@ -194,6 +194,28 @@
+       && result.reason === 'completed' && result.httpStatus === 201
+       && result.publicationVerified === undefined
+       && (result.status === 'up_to_date' || result.status === 'commented' || result.status === 'changes_requested');
++    // Native required journal resumes have no GPT-only publicationVerified.
++    // Trust only the original run's persisted COMMENT and required-status
++    // delivery channels, along with the ordinary exact-head origin checks.
++    const nativeJournal = result.deliveryOutcomes
++      && typeof result.deliveryOutcomes === 'object'
++      && !Array.isArray(result.deliveryOutcomes)
++      ? result.deliveryOutcomes as {
++          githubComment?: { state?: unknown };
++          requiredStatus?: { state?: unknown };
++        }
++      : null;
++    const nativeRecoveredRound = (result.resolvedReviewer === 'claude' || result.resolvedReviewer === 'codex')
++      && result.created === false && result.reused === true
++      && result.reason === 'resumed_journaled_delivery'
++      && result.deliveryReason === 'completed'
++      && result.httpStatus === 200
++      && result.publicationVerified === undefined
++      && (result.status === 'up_to_date' || result.status === 'commented'
++        || result.status === 'changes_requested')
++      && Boolean(trim(result.githubReviewId)) && Boolean(trim(result.githubReviewUrl))
++      && nativeJournal?.githubComment?.state === 'succeeded'
++      && nativeJournal.requiredStatus?.state === 'succeeded';
+     const explicitOriginVerified = Boolean(reviewer
+       && /^[0-9a-f]{40}$/.test(trim(result.headSha))
+       && trim(result.targetSha) === trim(result.headSha)
+@@ -215,8 +237,8 @@
+       ? explicitOriginVerified
+         && (supplementalDelivered || (
+           result.outcome !== 'supplemental_review_delivered'
+-          && (deliveredRound || recoveredRound || nativeDeliveredRound)))
+-      : (deliveredRound || recoveredRound || stageCompleteReuse || nativeDeliveredRound);
++          && (deliveredRound || recoveredRound || nativeDeliveredRound || nativeRecoveredRound)))
++      : (deliveredRound || recoveredRound || stageCompleteReuse || nativeDeliveredRound || nativeRecoveredRound);
+     if (result.ok === true && settled) {
+       return { exitCode: 0, result };
+     }
+diff --git a/scripts/pack-review-runner.test.ts b/scripts/pack-review-runner.test.ts
+--- a/scripts/pack-review-runner.test.ts
++++ b/scripts/pack-review-runner.test.ts
+@@ -4462,4 +4462,210 @@
+       expect(f.getNotificationCount()).toBe(f.notificationCount);
+     },
+   );
++  it('executes explicit Codex on T3 conflict-free H2 without a synthetic carry-over terminal', async () => {
++    const prNumber = 260717;
++    const h1 = '1'.repeat(40);
++    const h2 = '2'.repeat(40);
++    const storeRoot = fixtureRoot2607('opk-2607-exact-h2-carryover-');
++    setupHarness(storeRoot);
++    let observedStatus: string | undefined;
++    const base = {
++      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
++      prNumber, fixturePrState: 'OPEN' as const,
++      fixturePrBody: 'Closes #' + prNumber,
++      fixturePostReviewPrBody: 'Closes #' + prNumber,
++      fixtureRepoSlug: repository, fixtureIssueNumber: prNumber,
++      fixtureIssueTitle: '[T3] Explicit H2 reviewer',
++      fixtureIssueBody: ['\`\`\`complexity-tier', 'tier: T3', '\`\`\`'].join('\\n'),
++      fixtureReviewStdout: cleanPayload(),
++      fixtureRequiredStatusWriter: async (request: { state: string }) => { observedStatus = request.state; },
++      fixtureRequiredStatusReader: async () => observedStatus,
++      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
++    };
++    const first = await startPackReview({
++      ...base, headSha: h1, fixtureCurrentPrHeadSha: h1, fixturePostReviewHeadSha: h1,
++    });
++    expect(first, JSON.stringify(first)).toMatchObject({ ok: true, created: true });
++    expect(readPackReviewAuthority(prNumber, { storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([1]);
++    const log = join(storeRoot, 'actual-h2-invocations.jsonl');
++    process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = log;
++    const beforeInvocation = vi.fn(async () => {
++      const authority = readPackReviewAuthority(prNumber, { storeRoot });
++      expect(authority?.terminal?.runId).toBe(first.runId);
++      expect(authority?.terminal?.targetSha).toBe(h1);
++      expect(authority?.cycle?.consumedRoundOrdinals).toEqual([1]);
++    });
++    const second = await startPackReview({
++      ...base, headSha: h2, fixtureCurrentPrHeadSha: h2, fixturePostReviewHeadSha: h2,
++      reviewerOverride: 'codex', surface: 'pack-gpt-review',
++      fixtureRequiredCiPolicy: { contexts: ['pr scope guard'], checks: [] },
++      fixtureRequiredCiChecks: [{ name: 'pr scope guard', state: 'SUCCESS' }],
++      fixtureRequiredCiHeadAfterGate: h2,
++      fixtureCarryoverReplay: {
++        kind: 'conflict_free_carryover', sourceHeadSha: h1, targetHeadSha: h2,
++        mainSha: '3'.repeat(40), mergeBaseSha: '4'.repeat(40),
++        replayTreeSha: '5'.repeat(40), replayDigest: 'two-parent-clean-merge',
++      },
++      fixtureCarryoverSourceCleanRunId: String(first.runId),
++      fixtureAfterNativeInitialArmed: beforeInvocation,
++    });
++    expect(second, JSON.stringify(second)).toMatchObject({
++      ok: true, created: true, headSha: h2, targetSha: h2,
++      resolvedReviewer: 'codex', executedReviewer: 'codex',
++      reviewerInvokedForThisRun: true,
++    });
++    expect(second.reviewerExecutionRunId).toBe(second.runId);
++    expect(beforeInvocation).toHaveBeenCalledTimes(1);
++    expect(JSON.parse(readFileSync(log, 'utf8').trim()).reviewer).toBe('codex');
++    expect(readPackReviewAuthority(prNumber, { storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([1, 2]);
++  });
++
++  it('accepts a real required native journal and COMMENT/status resume through explicit CLI', async () => {
++    const prNumber = 260718;
++    const storeRoot = fixtureRoot2607('opk-2607-native-required-resume-');
++    setupHarness(storeRoot);
++    const review = reviewTransport(prNumber, 'missing');
++    let nativeInvocations = 0;
++    let observedStatus: string | undefined;
++    const startReview = commandStart2607(storeRoot, {
++      fixturePrBody: 'Closes #' + prNumber,
++      fixturePostReviewPrBody: 'Closes #' + prNumber,
++      fixtureIssueNumber: prNumber, fixtureIssueTitle: '[T3] Required journal resume',
++      fixtureIssueBody: ['\`\`\`complexity-tier', 'tier: T3', '\`\`\`'].join('\\n'),
++      fixtureGithubReviewTransport: review.transport,
++      fixtureAfterNativeInitialArmed: async () => { nativeInvocations += 1; },
++      fixtureRequiredStatusWriter: async (request: { state: string }) => { observedStatus = request.state; },
++      fixtureRequiredStatusReader: async () => observedStatus,
++    });
++    const first = await runPackGptReviewCommand({ prNumber, reviewer: 'codex' }, {
++      env: process.env, stderr: { write: () => undefined }, startReview,
++    });
++    expect(first.exitCode).toBe(1);
++    const originalId = String(first.result.runId);
++    expect(getPackReviewRun(originalId, { projectId: 'orchestrator-pack', storeRoot }))
++      .toMatchObject({ journalOutcome: { state: 'persisted' }, resolvedReviewer: 'codex' });
++    review.permitPost();
++    const resumed = await runPackGptReviewCommand({ prNumber, reviewer: 'codex' }, {
++      env: process.env, stderr: { write: () => undefined }, startReview,
++    });
++    expect(resumed, JSON.stringify(resumed.result)).toMatchObject({
++      exitCode: 0,
++      result: {
++        ok: true, created: false, reused: true, recovered: true,
++        reason: 'resumed_journaled_delivery', deliveryReason: 'completed',
++        headSha: HEAD, targetSha: HEAD, runId: originalId,
++        resolvedReviewer: 'codex', executedReviewer: 'codex',
++        reviewerInvokedForThisRun: true,
++        deliveryOutcomes: {
++          githubComment: { state: 'succeeded' },
++          requiredStatus: { state: 'succeeded' },
++        },
++      },
++    });
++    expect(resumed.result.reviewerExecutionRunId).toBe(originalId);
++    expect(resumed.result).not.toHaveProperty('publicationVerified');
++    expect(nativeInvocations).toBe(1);
++    expect(review.posts()).toBe(2);
++  });
++
++  it('recovers a crash before required GPT aggregate from original credentialed comments through explicit CLI', async () => {
++    const prNumber = 260719;
++    const storeRoot = fixtureRoot2607('opk-2607-required-gpt-crash-');
++    setupHarness(storeRoot);
++    const source = originalSourceTransport(prNumber);
++    const review = reviewTransport(prNumber, 'success');
++    let observedStatus: string | undefined;
++    const fixture = {
++      fixturePrBody: 'Closes #' + prNumber,
++      fixturePostReviewPrBody: 'Closes #' + prNumber,
++      fixtureIssueNumber: prNumber, fixtureIssueTitle: '[T1] Required GPT crash',
++      fixtureIssueBody: issueBody,
++      fixtureGptSourceCommentTransport: source.transport,
++      fixtureBeforeGptSourceCommentCensus: source.publishOriginal,
++      fixtureGithubReviewTransport: review.transport,
++      fixtureRequiredStatusWriter: async (request: { state: string }) => { observedStatus = request.state; },
++      fixtureRequiredStatusReader: async () => observedStatus,
++    };
++    const first = await runPackGptReviewCommand({ prNumber, reviewer: 'gpt' }, {
++      env: process.env, stderr: { write: () => undefined },
++      startReview: commandStart2607(storeRoot, {
++        ...fixture, fixtureCrashAfterGptSourceCredentialedCount: 3,
++      }),
++    });
++    expect(first.exitCode).toBe(1);
++    expect(source.sent()).toBe(3);
++    const originalId = String(first.result.runId);
++    expect(getPackReviewRun(originalId, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
++      reviewerExecutionRunId: undefined, executedReviewer: undefined,
++      reviewVerdict: undefined,
++    });
++    const resumed = await runPackGptReviewCommand({ prNumber, reviewer: 'gpt' }, {
++      env: process.env, stderr: { write: () => undefined },
++      startReview: commandStart2607(storeRoot, fixture),
++    });
++    expect(resumed, JSON.stringify(resumed.result)).toMatchObject({
++      exitCode: 0,
++      result: {
++        ok: true, created: false, reused: true, recovered: true,
++        reason: 'resumed_journaled_delivery', runId: originalId,
++        headSha: HEAD, targetSha: HEAD,
++        publicationVerified: true, publicationHeadSha: HEAD,
++        resolvedReviewer: 'gpt', executedReviewer: 'gpt',
++        reviewerInvokedForThisRun: true,
++        githubReviewId: expect.any(Number),
++      },
++    });
++    expect(resumed.result.reviewerExecutionRunId).toBe(originalId);
++    expect(source.sent()).toBe(3);
++    expect(review.posts()).toBe(1);
++    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(1);
++    expect(getPackReviewRun(originalId, { projectId: 'orchestrator-pack', storeRoot }))
++      .toMatchObject({
++        reviewVerdict: 'clean', reviewerExecutionRunId: originalId,
++        reviewerInvokedForThisRun: true, journalOutcome: { state: 'persisted' },
++        deliveryOutcomes: {
++          githubComment: { state: 'succeeded' },
++          requiredStatus: { state: 'succeeded' },
++        },
++      });
++  });
++
++  it('refuses contradictory invocation provenance during required GPT credentialed recovery', async () => {
++    const prNumber = 260720;
++    const storeRoot = fixtureRoot2607('opk-2607-required-gpt-origin-conflict-');
++    setupHarness(storeRoot);
++    const source = originalSourceTransport(prNumber);
++    const review = reviewTransport(prNumber, 'success');
++    const fixture = {
++      fixturePrBody: 'Closes #' + prNumber,
++      fixturePostReviewPrBody: 'Closes #' + prNumber,
++      fixtureIssueNumber: prNumber, fixtureIssueTitle: '[T1] Credentialed original',
++      fixtureIssueBody: issueBody,
++      fixtureGptSourceCommentTransport: source.transport,
++      fixtureBeforeGptSourceCommentCensus: source.publishOriginal,
++      fixtureGithubReviewTransport: review.transport,
++      fixtureRequiredStatusWriter: async () => undefined,
++      fixtureRequiredStatusReader: async () => 'success',
++    };
++    const first = await runPackGptReviewCommand({ prNumber, reviewer: 'gpt' }, {
++      env: process.env, stderr: { write: () => undefined },
++      startReview: commandStart2607(storeRoot, {
++        ...fixture, fixtureCrashAfterGptSourceCredentialedCount: 3,
++      }),
++    });
++    expect(first.exitCode).toBe(1);
++    const id = String(first.result.runId);
++    updatePackReviewRun(id, { reviewerInvokedForThisRun: false },
++      { projectId: 'orchestrator-pack', storeRoot });
++    const second = await runPackGptReviewCommand({ prNumber, reviewer: 'gpt' }, {
++      env: process.env, stderr: { write: () => undefined },
++      startReview: commandStart2607(storeRoot, fixture),
++    });
++    expect(second.exitCode).toBe(1);
++    const original = getPackReviewRun(id, { projectId: 'orchestrator-pack', storeRoot });
++    expect(original?.reviewerInvokedForThisRun).toBe(false);
++    expect(original?.reviewerExecutionRunId).toBeUndefined();
++    expect(original?.journalOutcome?.state).not.toBe('persisted');
++    expect(review.posts()).toBe(0);
++  });
+ });
