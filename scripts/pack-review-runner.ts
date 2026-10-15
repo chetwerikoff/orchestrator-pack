@@ -5247,6 +5247,16 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
 
+    // A proven-dead foreign attempt was retired specifically to free the
+    // incomplete required ordinal. Preserve its immutable attempted sources,
+    // but never let its later reconciliation overwrite the replacement verdict.
+    if (candidate.failureReason === 'explicit_reviewer_superseded_proven_dead_original') {
+      results.push({ runId: candidate.id, terminalized: false, statusReconciled: false,
+        reason: 'superseded_dead_foreign_reviewer_preserved',
+        nextAction: 'observe the original source history and the replacement run; do not publish status from the retired origin' });
+      continue;
+    }
+
     // A resolved moved-head failure (including a restored newer-run status) is
     // closed on its original SHA. Repeating scoped reconcile must not post again.
     if (candidate.status === 'failed'
