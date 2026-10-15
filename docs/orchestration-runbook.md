@@ -390,6 +390,35 @@ contract adds no watcher, polling daemon, queue, lease, parking store,
 acknowledgement protocol, prose parser, reverse dependency lookup, epoch,
 fingerprint record, or second persistent coordinator mechanism.
 
+## Manager report and completion authority (Issue #2618)
+
+This is the canonical pack-owned manager report/completion rule for an existing Task/Dispatch, not an Orca provider implementation. An Orca `worker_report outcome=failed` is a **terminal provider-side report**, unlike `orca orchestration send --type escalation`, which parks a still-live Dispatch **nonterminally**. Manager `worker_done --outcome failed` is also terminal completion, not a recovery signal. `scripts/orca-runtime/task-adapter.ts::parseOrcaWorkerShowResult` and `normalizedWorkerLifecycle` only consume/normalize Orca `worker-show`; `scripts/pack-worker-report.ts` writes the separate pack WorkerReport store, not Orca `worker_report` or capability revocation.
+
+The [#2618 architect brief](https://github.com/chetwerikoff/orchestrator-pack/issues/2618) reports an incident during [#2607](https://github.com/chetwerikoff/orchestrator-pack/issues/2607): Run `run_7a42800c6796`, Task `task_314a313d7d60`, manager terminal `term_c762140f-20ae-40c9-9e56-b19a75c8887c`, original Dispatch `ctx_7309a8fba5ed`, and `worker_report` message `msg_50a5388d2320` with `outcome=failed` at `2026-10-15T10:54:34.874Z`, followed by reported Dispatch `failed` / `capability_revoked_at` at `2026-10-15T10:54:34.875Z` and a later `consumer_fenced` response. This **reported 1 ms correlation is not an independently replayed event or established causation**. The installed-version Orca report handler, precise revocation sequence and subsequent `check`/`report`/`heartbeat` error schema remain unverified. A possible clearer provider next-call reason, such as `dispatch_failed_by_own_report`, is an **external provider/architect investigation**, not a pack deliverable or established CLI behavior.
+
+For a manager whose original Dispatch is still live, retain the existing exclusive boundary outcome and send owners:
+
+1. **First executable `recoverable`:** execute the validated, distinct `nextAction.argv` **exactly once**, then re-evaluate through existing reconciliation/fixer/CI flow. A no-patch GPT response with a lawful next action is recoverable, **not** mandatory escalation or terminal failure. Boundary classification never authorizes another GPT send; execute-Issue sends still require their send/no-resend/final-revalidation gates.
+2. **Actionable red CI, missing patch or fixer failure:** continue through the already-authorized CI/fixer/PR workflow and its GPT gates where permitted. These symptoms alone establish neither `external_pause` nor `contract_defect`, cancellation or Task terminality.
+3. **Consecutive byte-identical `nextAction.argv` or actual `contract_defect`:** do not execute the repeated argv or synthesize the effect through another tool. Escalate the producer defect with diagnostics and a coordinator-owned remedy, never either terminal-failed completion.
+4. **Genuine `external_pause`:** send a nonterminal escalation with its actual remedy and a **sourced typed** `resume_when`. An external Issue/PR predicate is legal only when authoritatively supplied as the active blocker, never reconstructed from prose, cause, the managed Issue or reverse lookup. Use `{ coordinator: true }` for a coordinator-owned remedy, not an invented external dependency. **No further GPT send while paused**; await an existing coordinator wake and satisfied predicate before continuing the **same Dispatch**.
+
+For cases 3–4, use a genuinely sourced typed `resume_when` (the supplied external predicate or `{ coordinator: true }` for an actual coordinator-owned remedy), then use the existing `orca orchestration send --type escalation --thread-id <escalation-id>` route, derive the id deterministically from `(issue, stage, cause, resume_when)`, and retry **once only if the escalation send itself fails**. Keep the Task/Dispatch owned and nonterminal, perform independent plan items, drain the bound inbox before ending without `worker_done`, and emit no liveness chatter. None of these conditions authorizes Orca `worker_report outcome=failed` or manager `worker_done --outcome failed`. A manager may originate either terminal-failed completion only after a **current direct coordinator/operator cancellation message** and under applicable existing provider/report authority, not from exhausted/unsafe/no-patch/CI recovery or repository-owned refusal. Direct cancellation retains existing terminal/fencing semantics; `worker_done` finality, provider outcomes and generation are unchanged. Already provider-terminal Tasks/Dispatches stay terminal/fenced, never reclassified recoverable.
+
+**Immediate known-terminal containment:** once a manager **knows its own terminal Orca `worker_report outcome=failed` was accepted**, even before another lifecycle request, **or** at the **first observed** provider `consumer_fenced` / stale or revoked-identity response, stop **every Dispatch-bound mutation and manager send**, including commits and pushes. Preserve available scratch work. Only read-only diagnosis and coordinator handoff of the exact known Task, Dispatch, worker and terminal identities remain allowed. Require no speculative probe before every effect; generic Orca grounding advice to re-read a handle does not reauthorize a fenced Dispatch.
+
+**Conditional #2015 coordinator route, never same-Task resurrection:** a **new Task on the same exact terminal/worktree** is eligible only when the old Dispatch is `failed` **and** `worker-show --dispatch <original-dispatch>` positively observes `observation.exactWorker=true`, `observation.status=live`, `terminalResource.releaseState=retained`, a valid **current assignment** for the same Issue and requested exact terminal, `hasRecordedDispatchTerminalMail(oldDispatch)`, and successful existing supervised-start admission plus terminal-worktree placement witness/read-back. An old Dispatch still `dispatched`, generic `consumer_fenced`, released/missing/mismatched/unproven worker, absent terminal mail or absent placement witness is **ineligible**. Make no old-capability effects; request an existing supported coordinator recovery/placement decision. The #2607 reported replacement Task/Dispatch is not evidence that these admission witnesses were satisfied; never promise old-Task rebind, new generation or guaranteed same-terminal recovery.
+
+**Fixed-means is one optional post-adoption read-only observation, not PR smoke:** in an adopted scratch Run with a legitimately classified nonterminal escalation, record `ORIGINAL_TASK_ID` and `ORIGINAL_DISPATCH_ID` from the **pre-escalation binding**. **Before coordinator continuation**, run exactly:
+
+```sh
+orca orchestration dispatch-show --task "$ORIGINAL_TASK_ID" --json
+```
+
+Report the **actually returned** Dispatch ID and status versus the recorded original ID, expecting the original ID and `status=dispatched`, **not** a replacement Dispatch. Missing or mismatched identity/status is unverified or failed, never silently substituted. `dispatched` alone proves **neither** an unrevoked capability nor absence of a terminal failed `worker_report` or send permission. Assert no revocation only if a version-matched authoritative field actually exposes it; otherwise say `capability revocation: unknown / not observed`. Absence of a failed report requires separate authoritative message evidence. This command does not establish local preamble adoption or a new gate.
+
+PR acceptance for #2618 is the scoped three-document diff plus the implicit generated-only declaration, with `smoke-test-plan` **not-applicable**. It is not a shell check, Orca reproduction, operator-local adoption or scratch Run result. After merge, the operator adopts and reads back the shared manager preamble under [target repository setup](target_repo_setup.md#operator-adoption); if that or optional runtime observations are missing, report `not observed / operationally incomplete` and the concrete remaining operator action, not machine activation.
+
 ## Core operating laws
 
 1. Watch objective state: live Issue/Task, assignment generation, S1, S2, PR/head, CI/review/smoke and accepted reports. Worker prose is context only.
@@ -551,9 +580,9 @@ there is no automatic completion deadline. An uncredentialable locally complete
 source remains unresolved rather than becoming an invented 2/3 verdict.
 
 The command below is an **operator diagnostic/fallback**, not a routine manager
-step. Recover interrupted or stale reviews only through the scoped runner; do
-not start a replacement same-head review merely because a browser or runner
-child stopped.
+step. Scoped reconciliation covers stale-active runs, unfinished-terminal runs
+without a persisted verdict, and opted-in active GPT recovery; use it only
+for those eligible records, not as a universal retry of terminal delivery.
 
 ```text
 node --experimental-strip-types scripts/pack-review-runner.ts reconcile \
@@ -563,6 +592,39 @@ node --experimental-strip-types scripts/pack-review-runner.ts reconcile \
 
 Never start a replacement review on the same head merely because a runner/browser
 child stopped.
+
+For a post-cap **supplemental** GPT or native review in terminal `up_to_date`,
+`commented`, or `changes_requested` with a persisted verdict and an unconfirmed
+or failed GitHub reviewer COMMENT, **scoped reconcile does not retry the COMMENT**,
+even when an explicit `runId` is supplied. `packReviewDeliveryNeedsResume` may
+be true for this run, but it does not make the terminal supplemental record
+eligible for scoped stale reconciliation.
+
+To resume its existing journaled COMMENT delivery, use a fresh PR-led
+`pack-gpt-review` invocation for the **same original reviewer** (`gpt`,
+`claude`, or `codex`):
+
+```text
+npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER> --reviewer <ORIGINAL_REVIEWER>
+```
+
+That existing route can resume the persisted COMMENT only when the live PR
+head equals the originating run's `targetSha` and the journaled delivery
+remains eligible. The CLI resolves the live PR head, not an older reviewed
+head. Same-head delivery resume is neither automatic scoped reconciliation
+nor a new review round, and an unconfirmed COMMENT is not a delivered COMMENT.
+If the terminal supplemental verdict/journal belongs to H1 and the PR has
+advanced to H2, inspect the H1 run/journal and actual GitHub reviewer COMMENT,
+report **H1 COMMENT delivery unresolved** unless delivery is confirmed, and
+never describe a new-head H2 invocation or run as recovery of H1's COMMENT.
+
+This documents the `supplemental:terminal-comment-reconcile-skip` finding on
+[PR #2611](https://github.com/chetwerikoff/orchestrator-pack/pull/2611),
+[deferred as non-blocking in Issue #2607](https://github.com/chetwerikoff/orchestrator-pack/issues/2607#issuecomment-6192914156).
+Recurrence frequency is unknown; no new selector or runtime recovery is
+required. The distinct final-cap same-head Issue-only *required-status* retry
+in [the ChatGPT task execution runbook](chatgpt-task-execution-runbook.md)
+remains unchanged; it is not supplemental COMMENT delivery.
 
 A launch counts as started only on `outcome=ready` /
 `ready_and_assignment_bound`. Provider recovery runs only through the returned
