@@ -1734,11 +1734,14 @@ const PRODUCT_RATE_LIMIT_WALL_RE = /too many requests|(?:making |sending )?reque
 const PRODUCT_QUOTA_WALL_RE = /you(?:'|’)ve reached[^\n]{0,120}\blimit\b|\busage limit\b|\bmessage limit\b|\breached the current usage\b|\breached your usage limit\b/i;
 const PRODUCT_WALL_TEXT_CAP = 500;
 
-export type ProductWallKind = 'quota' | 'rate_limit' | 'challenge' | 'login' | 'account_load_error'
+// Keep the existing advisory-wall kind contract narrow: a conversation
+// transport failure must not become a profile-wide advisory kind.
+export type ProductWallKind = 'quota' | 'rate_limit' | 'challenge' | 'login' | 'account_load_error';
+export type ConversationFetchWallKind =
   | 'conversation_fetch_http_429' | 'conversation_load_error' | 'account_conversations_http_429';
 export interface ProductWallDiagnostic {
   /** Advisory evidence only; a page-text match cannot become a terminal state. */
-  readonly wall_kind: ProductWallKind | 'none';
+  readonly wall_kind: ProductWallKind | ConversationFetchWallKind | 'none';
   readonly matched_text: string;
   readonly matched_selector: string;
   readonly http_status?: 429;
