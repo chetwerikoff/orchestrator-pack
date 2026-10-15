@@ -69,6 +69,7 @@ import {
   ASSISTANT_TURN_ACTION_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   classifyProductWall,
+  classifyConversationProductWall,
   heldPage429Diagnostic,
   observeHeldPageConversation429,
   type HeldPage429Witness,
@@ -2054,15 +2055,27 @@ function recordProductWallAdvisory(
   );
 }
 
+type StateLightObservedWall = ReturnType<typeof classifyProductWall> | ProductWallDiagnostic;
+
+function classifyStateLightProductWall(
+  surface: Awaited<ReturnType<typeof productStatusText>>,
+): StateLightObservedWall {
+  const legacy = classifyProductWall(surface);
+  const conversation = classifyConversationProductWall(surface);
+  if (conversation.http_status === 429) return conversation;
+  if (legacy.state === 'recovery_required') return legacy;
+  return conversation.wall_kind === 'none' ? legacy : conversation;
+}
+
 async function readPostSendObservation(
   page: any,
   expectedMarker: string,
   baselineCount: number,
   deadlineMs: number,
-  observeProductWall?: (diagnostic: ReturnType<typeof classifyProductWall>) => void,
+  observeProductWall?: (diagnostic: StateLightObservedWall) => void,
 ): Promise<{
   readonly messages: PageMessage[];
-  readonly wall: ReturnType<typeof classifyProductWall>;
+  readonly wall: StateLightObservedWall;
   readonly pageTurnEvidence?: BrowserGptPageTurnEvidence;
   readonly ownedWindowCompletionReady: boolean;
   readonly transcriptIncomplete: boolean;
@@ -2081,11 +2094,11 @@ async function readPostSendObservation(
     false,
     deadlineMs,
   );
-  let wall: ReturnType<typeof classifyProductWall> = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
+  let wall: StateLightObservedWall = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
   try {
     const wallProbeMs = Math.min(POST_SEND_PRODUCT_WALL_PROBE_MS, deadlineMs - Date.now());
     if (wallProbeMs > 0) {
-      wall = classifyProductWall(await productStatusText(page, wallProbeMs));
+      wall = classifyStateLightProductWall(await productStatusText(page, wallProbeMs));
       observeProductWall?.(wall);
     }
   } catch (error) {
@@ -2495,7 +2508,7 @@ async function waitForComposer(
   page: any,
   invocationDeadlineMs: number,
   useWholePreSendDeadline = false,
-  observeProductWall?: (diagnostic: ReturnType<typeof classifyProductWall>) => void,
+  observeProductWall?: (diagnostic: StateLightObservedWall) => void,
   detectAccountLoadError = false,
   observeComposer?: (state: 'absent' | 'disabled' | 'hidden' | 'not_editable' | 'ready' | 'unknown') => void,
 ): Promise<{ state: 'ready' } | { state: TurnState; cause: string }> {
@@ -2509,7 +2522,7 @@ async function waitForComposer(
     let remainingMs = readinessDeadline - Date.now();
     if (remainingMs <= 0) break;
     try {
-      const wall = classifyProductWall(
+      const wall = classifyStateLightProductWall(
         await productStatusText(page, Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs)),
       );
       observeProductWall?.(wall);
@@ -3115,7 +3128,7 @@ async function runTurnCore(
       `${cause};composer=${preSendComposerState};url=${preSendPageRoute()};product_error=${observedProductErrorText.slice(0, 160)}`,
       'return_local_error');
   };
-  const observeProductWall = (wall: ReturnType<typeof classifyProductWall>): void => {
+  const observeProductWall = (wall: StateLightObservedWall): void => {
     const witnessed = heldPage429Diagnostic(page);
     const isAccountHeading = 'wall_kind' in wall && wall.wall_kind === 'account_load_error';
     const hasConversationHeading = 'wall_kind' in wall
