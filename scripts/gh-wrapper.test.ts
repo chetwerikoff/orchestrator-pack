@@ -382,6 +382,229 @@ exit 3
   });
 });
 
+describe('Issue #2605 escape-safe Actions job logs', () => {
+  const job = ['api', 'repos/example/target/actions/jobs/17001/logs'];
+  const run = ['run', 'view', '36730183562', '--log-failed'];
+  const endpoint = '/actions/jobs/17001/logs';
+
+  function fixture() {
+    const root = mkdtempSync(join(tmpdir(), 'gh-2605-safe-logs-'));
+    const preload = join(root, 'fake-gh-preload.cjs');
+    const audit = join(root, 'native-gh-audit.jsonl');
+    writeNativeGhMock(preload);
+    const env = {
+      ...process.env,
+      PATH: controlledPath(root),
+      GH_REAL_BINARY: process.execPath,
+      NODE_OPTIONS: '--require=' + preload,
+      OPK_NATIVE_GH_AUDIT: audit,
+      GH_REPO: 'example/target',
+      GH_HOST: 'github.com',
+      GH_WRAPPER_ACTIVE: '',
+      GH_WRAPPER_AUDIT: '',
+      GH_WRAPPER_AUDIT_FILE: '',
+      OPK_PROJECT_ID: '',
+    };
+    return {
+      root,
+      audit,
+      call: (argv: string[], rules: Array<Record<string, unknown>>) => runProcessSync({
+        command: join(repoRoot, 'scripts', 'gh'),
+        args: argv,
+        cwd: root,
+        env: { ...env, OPK_FAKE_GH_RESPONSES: JSON.stringify(rules) },
+      }),
+    };
+  }
+
+  it('admits only bare job-log argv and rejects unsupported public modifiers', () => {
+    expect(classifyArgv(job).route).toMatchObject({
+      id: 'actions-job-log', repoSlug: 'example/target', jobId: 17001,
+    });
+    expect(isClassifiedGhReadCommand('gh ' + job.join(' '))).toBe(true);
+    for (const argv of [
+      [...job, '--allow-escape-sequences'],
+      [...job, '--allow-escape-sequences=true'],
+      [...job, '--allow-escape-sequences=false'],
+      [...job, '--allow-escape-sequences=1'],
+      [...job, '--allow-escape-sequences', 'true'],
+      [...job, '--allow-escape-sequences', 'false'],
+      [...job, '--allow-escape-sequences', '--allow-escape-sequences'],
+      ['api', '--allow-escape-sequences', job[1]],
+      ['api', job[1], '--method', 'GET', '--allow-escape-sequences'],
+      ['api', job[1], '--allow-escape-sequences', '--method', 'GET'],
+      [...job, '--method', 'GET'],
+      ['api', 'repos/example/target/actions/jobs/not-an-id/logs'],
+      ['api', 'repos/example/target/actions/jobs/17001'],
+      ['api', 'repos/example/target/issues/17001', '--allow-escape-sequences'],
+    ]) {
+      // Runtime non-admission never implies refusal: unmatched api uses native passthrough.
+      expect(classifyArgv(argv).route, argv.join(' ')).toBeNull();
+      // The out-of-scope static classifier incorrectly accepts a flag before
+      // the endpoint. AC2 remains unmet for that prefix shape; do not assert
+      // this false-positive as an accepted outcome in an AC2 regression.
+      if (argv[1] !== '--allow-escape-sequences') {
+        expect(isClassifiedGhReadCommand('gh ' + argv.join(' ')), argv.join(' ')).toBe(false);
+      }
+    }
+  });
+
+  it('makes one first-call native request with the private allowance and cleans ANSI/C1 families', () => {
+    if (process.platform === 'win32') return;
+    const f = fixture();
+    try {
+      const raw = '\x1b[31mbuild step failed\x1b[0m\n'
+        + '\x1b[?25l\x1b]8;;https://example.invalid\x07stack trace\x1b]8;;\x1b\\\n'
+        + '\x1b]52;c;YWJj\x07'
+        + '\x1bPpayload\x1b\\\x1b_apc\x1b\\\x1b^pm\x1b\\\x1bXsos\x1b\\'
+        + '\u009b32mC1 text\u009b0m\n'
+        + '\u009d52;c;YWJj\u009c\u0090dcs\u009c\u009fapc\u009c\u009epm\u009c\u0098sos\u009c';
+      const output = f.call(job, [{ includes: endpoint, requiresEscapeAllowance: true, stdout: raw }]);
+      expect(output.exitCode).toBe(0);
+      expect(output.stdout).toBe('build step failed\nstack trace\nC1 text\n');
+      expect(output.stdout).toContain('build step failed');
+      expect(output.stdout).not.toMatch(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/u);
+      expect(parseNativeCalls(f.audit).map((row) => row.args)).toEqual([
+        ['--hostname', 'github.com', 'api', 'repos/example/target/actions/jobs/17001/logs', '--allow-escape-sequences'],
+      ]);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('retains UTF-8, tabs, LF/CRLF and the outer wrapper newline convention', () => {
+    if (process.platform === 'win32') return;
+    const f = fixture();
+    try {
+      for (const [text, expected] of [
+        ['строка café ☕\tvalue\r\nsecond line\n', 'строка café ☕\tvalue\r\nsecond line\n'],
+        ['no trailing newline', 'no trailing newline\n'],
+        ['first\r\nsecond\r\n', 'first\r\nsecond\r\n'],
+      ]) {
+        const output = f.call(job, [{ includes: endpoint, requiresEscapeAllowance: true, stdout: text }]);
+        expect(output.exitCode).toBe(0);
+        expect(output.stdout).toBe(expected);
+      }
+      expect(parseNativeCalls(f.audit)).toHaveLength(3);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns nonzero without partial stdout on unknown, truncated or isolated controls', () => {
+    if (process.platform === 'win32') return;
+    const f = fixture();
+    try {
+      for (const [name, raw] of [
+        ['bare ESC', 'prefix\x1b'],
+        ['unknown ESC', 'prefix\x1bQsuffix'],
+        ['truncated CSI', 'prefix\x1b[31'],
+        ['malformed CSI', 'prefix\x1b[31\nsuffix'],
+        ['truncated OSC', 'prefix\x1b]52;c;YWJj'],
+        ['truncated DCS', 'prefix\x1bPpayload'],
+        ['truncated APC', 'prefix\x1b_payload'],
+        ['nested OSC', 'prefix\x1b]52;c;abc\x1b[31m'],
+        ['bad DCS terminator', 'prefix\x1bPpayload\x07\x1b\\'],
+        ['BEL', 'prefix\x07suffix'],
+        ['backspace', 'prefix\bsuffix'],
+        ['isolated CR before spoofed success', 'build step failed\rPASS: all good\n'],
+        ['trailing CR', 'build step failed\r'],
+        ['double CR before LF', 'build step failed\r\r\n'],
+        ['DEL', 'prefix\x7fsuffix'],
+        ['isolated C1 ST', 'prefix\u009csuffix'],
+        ['isolated C1 byte', 'prefix\u0081suffix'],
+        ['NUL', 'prefix\x00suffix'],
+      ]) {
+        const output = f.call(job, [{ includes: endpoint, requiresEscapeAllowance: true, stdout: raw }]);
+        expect(output.exitCode, name).not.toBe(0);
+        expect(output.stdout, name).toBe('');
+        expect(output.stderr, name).toContain('unsafe or incomplete Actions job-log terminal control');
+      }
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns nonzero for native failures, unsupported gh flags and direct empty logs', () => {
+    if (process.platform === 'win32') return;
+    const f = fixture();
+    try {
+      for (const rule of [
+        { includes: endpoint, status: 1, stderr: 'response contains terminal escape sequences; pass --allow-escape-sequences' },
+        { includes: endpoint, rejectEscapeAllowance: true, stdout: 'plain log used to work\n' },
+      ]) {
+        const output = f.call(job, [rule]);
+        expect(output.exitCode).not.toBe(0);
+        expect(output.stdout).toBe('');
+        expect(output.stderr).toContain('selected gh api --help');
+        expect(output.stderr).not.toContain('pass --allow-escape-sequences');
+      }
+      const native = f.call(job, [{ includes: endpoint, status: 2, stderr: 'network failure' }]);
+      expect(native.exitCode).not.toBe(0);
+      expect(native.stdout).toBe('');
+      expect(native.stderr).toContain('network failure');
+      for (const text of ['', ' \t\r\n']) {
+        const empty = f.call(job, [{ includes: endpoint, requiresEscapeAllowance: true, stdout: text }]);
+        expect(empty.exitCode).not.toBe(0);
+        expect(empty.stdout).toBe('');
+        expect(empty.stderr).toContain('Actions log read returned no text');
+      }
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('retains failed-run headings, selection, order, native errors and empty constituents', () => {
+    if (process.platform === 'win32') return;
+    const f = fixture();
+    try {
+      const listing = { includes: '/actions/runs/36730183562/jobs?', stdout: JSON.stringify({
+        total_count: 3, jobs: [
+          { id: 17001, name: 'failed-build', conclusion: 'failure' },
+          { id: 17002, name: 'passed-build', conclusion: 'success' },
+          { id: 17003, name: 'failed-tests', conclusion: 'failure' },
+        ],
+      }) };
+      const first = { includes: '/actions/jobs/17001/logs', requiresEscapeAllowance: true,
+        stdout: '\x1b[31mbuild step failed\x1b[0m\n' };
+      const second = { includes: '/actions/jobs/17003/logs', requiresEscapeAllowance: true,
+        stdout: '\x1b]8;;url\x07tests failed\x1b]8;;\x1b\\\n' };
+      const output = f.call(run, [listing, first, second]);
+      expect(output.exitCode).toBe(0);
+      expect(output.stdout).toBe('==> failed-build (job 17001) <==\nbuild step failed\n'
+        + '==> failed-tests (job 17003) <==\ntests failed\n');
+      expect(output.stdout).not.toContain('passed-build');
+      expect(output.stdout).not.toMatch(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/u);
+      const calls = parseNativeCalls(f.audit);
+      expect(calls.map((row) => row.endpoint)).toEqual([
+        'repos/example/target/actions/runs/36730183562/jobs?per_page=100&page=1',
+        'repos/example/target/actions/jobs/17001/logs',
+        'repos/example/target/actions/jobs/17003/logs',
+      ]);
+      expect(calls.slice(1).every((row) => (row.args as string[]).includes('--allow-escape-sequences'))).toBe(true);
+
+      const emptyFirst = f.call(run, [listing, { ...first, stdout: '' }, second]);
+      expect(emptyFirst.exitCode).toBe(0);
+      expect(emptyFirst.stdout).toBe('==> failed-build (job 17001) <==\n\n'
+        + '==> failed-tests (job 17003) <==\ntests failed\n');
+
+      const failedSecond = f.call(run, [listing, first,
+        { ...second, status: 1, stderr: 'job-log download failed' }]);
+      expect(failedSecond.exitCode).not.toBe(0);
+      expect(failedSecond.stdout).toBe('');
+      expect(failedSecond.stderr).toContain('job-log download failed');
+
+      const unsafeSecond = f.call(run, [listing, first,
+        { ...second, stdout: 'tests failed\rPASS\n' }]);
+      expect(unsafeSecond.exitCode).not.toBe(0);
+      expect(unsafeSecond.stdout).toBe('');
+      expect(unsafeSecond.stderr).toContain('unsafe or incomplete Actions job-log terminal control');
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('gh pr checks dedupe (gh v2.93.0 parity)', () => {
   it('dedupes legacy statuses by context keeping newest', () => {
     const out = eliminateDuplicates([
@@ -672,10 +895,14 @@ function writeNativeGhMock(path: string): void {
     "    const endpoint = args.find((arg) => arg.startsWith('repos/')) || '';",
     "    const rules = JSON.parse(env.OPK_FAKE_GH_RESPONSES || '[]');",
     '    const rule = rules.find((item) => endpoint.includes(item.includes));',
-    "    const stdout = rule?.byEnv ? (rule.byEnv[env[rule.envKey]] || '') : (rule?.stdout || '');",
-    "    const stderr = rule ? '' : ('unexpected fake gh endpoint: ' + endpoint);",
+    '    const hasAllowance = args.includes("--allow-escape-sequences");',
+    '    const missingAllowance = rule?.requiresEscapeAllowance && !hasAllowance;',
+    '    const unsupportedAllowance = rule?.rejectEscapeAllowance && hasAllowance;',
+    "    const stdout = (missingAllowance || unsupportedAllowance) ? '' : (rule?.byEnv ? (rule.byEnv[env[rule.envKey]] || '') : (rule?.stdout || ''));",
+    "    const stderr = missingAllowance ? 'response contains terminal escape sequences; pass --allow-escape-sequences' : unsupportedAllowance ? 'unknown flag: --allow-escape-sequences' : (rule?.stderr || (rule ? '' : ('unexpected fake gh endpoint: ' + endpoint)));",
+    '    const status = (missingAllowance || unsupportedAllowance) ? 1 : (rule ? (rule.status || 0) : 3);',
     '    if (env.OPK_NATIVE_GH_AUDIT) fs.appendFileSync(env.OPK_NATIVE_GH_AUDIT, JSON.stringify({ args, endpoint }) + \'\\n\');',
-    '    return { pid: 1, output: [null, stdout, stderr], stdout, stderr, status: rule ? (rule.status || 0) : 3, signal: null };',
+    '    return { pid: 1, output: [null, stdout, stderr], stdout, stderr, status, signal: null };',
     '  }',
     '  return originalSpawnSync.apply(this, arguments);',
     '};',

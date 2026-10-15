@@ -6,10 +6,11 @@ import {
   readdirSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { runProcessSync, type ProcessResult } from '../kernel/subprocess.ts';
 import { resolveOrcaExecutable } from '../orca-runtime/native.ts';
 import { resolveTargetContext } from '../lib/target-context.ts';
+import { WRAPPER_PATH } from '../lib/gh-resolve-real-binary.mjs';
 import {
   classifyWorktree,
   decideContinuation,
@@ -425,7 +426,7 @@ export function readPrIdentity(
   operations: LifecycleOperations = {},
 ): PrIdentity {
   const runner = operations.runner ?? defaultRunner;
-  const gh = join(normalizeWorktreePath(repositoryRoot), 'scripts', 'gh');
+  const gh = WRAPPER_PATH;
   const args = [
     'pr',
     'view',
@@ -433,7 +434,7 @@ export function readPrIdentity(
     '--json',
     'headRefName,state,headRefOid,mergeCommit,headRepository,baseRefName',
   ];
-  const result = runner({ command: gh, args });
+  const result = runner({ command: gh, args, cwd: normalizeWorktreePath(repositoryRoot) });
   if (!result.ok) throw new TypeError(commandError(result, gh, args));
   const parsed = parseJson(result.stdout, 'gh pr view');
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -558,7 +559,7 @@ function checkBranchOwnership(
 ): boolean {
   if (expected.mode === 'detached-confirmed') return true;
   if (!pr.headRepository || !expected.branchName) return false;
-  const gh = join(expected.repositoryRoot, 'scripts', 'gh');
+  const gh = WRAPPER_PATH;
   const args = [
     'pr',
     'list',
@@ -569,7 +570,7 @@ function checkBranchOwnership(
     '--repo',
     pr.headRepository,
   ];
-  const result = runner({ command: gh, args });
+  const result = runner({ command: gh, args, cwd: normalizeWorktreePath(expected.repositoryRoot) });
   if (!result.ok) return false;
   try {
     const rows = JSON.parse(result.stdout) as Array<{ number?: number; headRefName?: string }>;
@@ -919,7 +920,7 @@ function standardTeardown(
     const beforeNonTarget = nonTargetFingerprint(expected, census);
     const args = [
       '--experimental-strip-types',
-      join(expected.repositoryRoot, 'scripts', 'worktree-teardown.ts'),
+      join(dirname(WRAPPER_PATH), 'worktree-teardown.ts'),
       '--post-merge-destructive',
       '--repo-root',
       expected.repositoryRoot,

@@ -1,0 +1,29 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2613,
+  "declared_paths": [
+    "scripts/worktree-lifecycle/core.test.ts",
+    "scripts/worktree-lifecycle/head-bound-runner.ts",
+    "scripts/worktree-lifecycle/operations.test.ts",
+    "scripts/worktree-lifecycle/operations.ts",
+    "scripts/worktree-lifecycle/recovery-regression.test.ts",
+    "scripts/worktree-teardown.test.ts",
+    "scripts/worktree-teardown.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/worktree-lifecycle/core.test.ts",
+    "scripts/worktree-lifecycle/head-bound-runner.ts",
+    "scripts/worktree-lifecycle/operations.test.ts",
+    "scripts/worktree-lifecycle/operations.ts",
+    "scripts/worktree-lifecycle/recovery-regression.test.ts",
+    "scripts/worktree-teardown.test.ts",
+    "scripts/worktree-teardown.ts"
+  ],
+  "source_revision": "71bda3e3cd571aed3ceaee419cca51210a7b5129"
+}
