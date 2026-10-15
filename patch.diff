@@ -1,0 +1,13 @@
+diff --git a/scripts/pack-review-runner.test.ts b/scripts/pack-review-runner.test.ts
+--- a/scripts/pack-review-runner.test.ts
++++ b/scripts/pack-review-runner.test.ts
+@@ -4258,8 +4258,9 @@
+         if (mode === 'confirmed' || mode === 'ambiguous') {
+           if (mode === 'confirmed') reviews.push(review);
+           throw new Error('synthetic ambiguous COMMENT acknowledgement');
+         }
+         reviews.push(review);
++        visible = true;
+         return { id, url: review.url };
+       },
+       dismissReview: async () => undefined,
