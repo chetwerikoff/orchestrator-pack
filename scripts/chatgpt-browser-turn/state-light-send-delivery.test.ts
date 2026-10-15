@@ -1,6 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
 import { execFileSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1578,5 +1579,113 @@ process.stdout.write(JSON.stringify(readStateLightAccountCooldown(${JSON.stringi
     publishWitnessedStateLight429(profileKey, now);
     expect(readStateLightAccountCooldown(other, now).active).toBe(false);
     expect(readFromOtherNodeProcess(other, now).active).toBe(false);
+  });
+});
+
+
+describe('conversation fetch HTTP 429 — physical Send and recovery gates (#2617)', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'opk-2617-send-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    mocks.verifyProfile.mockResolvedValue({ state: 'verified' });
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    mocks.browserQueue.length = 0;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('blocks physical Send and composer fill on a witnessed pre-insertion conversation fetch HTTP 429', async () => {
+    const url = 'https://chatgpt.com/c/26172617-2617-4617-8617-261726172617';
+    const request = { method: () => 'GET',
+      url: () => 'https://chatgpt.com/backend-api/conversations/26172617-2617-4617-8617-261726172617?num_turns=20' };
+    const events = new EventEmitter();
+    const fill = vi.fn(async () => undefined);
+    const click = vi.fn(async () => undefined);
+    const composer = scalarLocator({
+      count: async () => 1,
+      evaluate: async () => ({ visible: true, enabled: true, contentEditable: true }),
+      fill, innerText: async () => '',
+    });
+    let injected = false;
+    const page = Object.assign(events, {
+      __fakeBrowserGptPage: true,
+      url: () => url, isClosed: () => false,
+      goto: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      waitForTimeout: vi.fn(async () => undefined),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) {
+          if (!injected && events.listenerCount('response') > 0) {
+            injected = true;
+            events.emit('request', request);
+            events.emit('response', { request: () => request, status: () => 429 });
+          }
+          return composer;
+        }
+        if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => 1, click });
+        return scalarLocator();
+      }),
+    });
+    const context = enqueueBrowserForTurn(mocks, page).context;
+    Object.assign(context, { pages: () => [page] });
+    const profile = join(root, 'profile');
+    const invocationId = randomUUID();
+    const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      '--profile', profile, '--cdp', 'http://127.0.0.1:9222',
+      '--input', join(root, 'input'), '--output', join(root, 'output'),
+      '--chat-url', url, '--invocation-id', invocationId, '--timeout-ms', '60000',
+    ]);
+    expect(injected).toBe(true);
+    expect(fill).not.toHaveBeenCalled();
+    expect(click).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      state: 'rate_limit', cause: 'conversation_fetch_http_429',
+      send_count: 0,
+      product_wall_diagnostic: {
+        wall_kind: 'conversation_fetch_http_429',
+        http_status: 429,
+        status_source: 'owned_page_response',
+        matched_text: 'none', matched_selector: 'none',
+      },
+    });
+    expect(result.send_attempted).not.toBe(true);
+    expect(readStateLightAccountCooldown(configuredProfileKey(profile, 'http://127.0.0.1:9222')).active).toBe(true);
+    expect(page.goto).not.toHaveBeenCalled();
+  });
+
+  it('stops successor navigation when an owned conversation fetch HTTP 429 arises during census', async () => {
+    const fixture = recoveryFixture({ originalIncomplete: true });
+    let observed429 = false;
+    const adapter = {
+      ...fixture.adapter,
+      readAuthoritativeMessages: vi.fn(async () => {
+        observed429 = true;
+        return { messages: [], incomplete: true };
+      }),
+      accountActionBlocker: vi.fn(() => observed429 ? 'conversation_fetch_http_429' : undefined),
+    };
+    const result = await runPostSendRecovery({
+      browser: {}, currentPage: fixture.original, marker: MARKER,
+      hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter,
+    });
+    expect(result).toMatchObject({
+      kind: 'failure', state: 'observation_uncertain',
+      cause: 'conversation_fetch_http_429', action: 'retain_owned_page_no_resend',
+    });
+    expect(fixture.createSuccessor).not.toHaveBeenCalled();
+  });
+
+  it('lets positive exact owned marker recovery complete even when a 429 cooldown is already active', async () => {
+    const fixture = recoveryFixture({ includeOriginalMarker: true });
+    const adapter = { ...fixture.adapter, accountActionBlocker: () => 'account_cooldown_active' };
+    const result = await runPostSendRecovery({
+      browser: {}, currentPage: fixture.original, marker: MARKER,
+      hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter,
+    });
+    expect(result).toMatchObject({ kind: 'recovered', page: fixture.original, conversationUrl: fixture.url });
+    expect(fixture.createSuccessor).not.toHaveBeenCalled();
   });
 });
