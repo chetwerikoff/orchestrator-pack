@@ -1,0 +1,28 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2605,
+  "declared_paths": [
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-rest-routes.mjs"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "scripts/gh",
+    "scripts/lib/gh-inventory-static-guard.mjs",
+    "scripts/lib/gh-parse-argv.mjs",
+    "scripts/lib/gh-target-authorization.ts",
+    "scripts/lib/gh-wrapper.mjs",
+    "scripts/lib/graphql-quota-github-read-inventory.json",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-rest-routes.mjs"
+  ],
+  "source_revision": "f19b2e15bde924717ee96e66cee872cdc7f8727e"
+}
