@@ -1,7 +1,8 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
+import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -26,11 +27,11 @@ import {
   MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE, RENDERED_CONVERSATION_TURN_SECTION_SELECTOR,
   USER_MESSAGE_SELECTOR, ASSISTANT_MESSAGE_SELECTOR, ASSISTANT_TURN_ANCESTOR_XPATH,
 } from './product-page-selectors.ts';
-import { __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
+import { publishWitnessedStateLight429, readStateLightAccountCooldown, __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { runPostSendRecovery, takeRecoveryCensus, type PostSendRecoveryAdapter, type PostSendRecoveryState } from './state-light-turn-recovery.ts';
 import * as recoveryModule from './state-light-turn-recovery.ts';
-import { configuredProfileKey } from './storage-common.ts';
+import { configuredProfileKey, profileDirs } from './storage-common.ts';
 import { deriveDelivery, readTerminalEnvelope, runLaunch } from '../flow-manager-long-running-child.ts';
 import { authoritativePreSend } from '../pack-review-no-review-reconcile.ts';
 
@@ -1473,5 +1474,109 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
       expect(run.send).not.toHaveBeenCalled();
       expect(run.result.send_count).toBe(0);
     }
+  });
+});
+
+
+describe('conversation fetch HTTP 429 — shared 5-minute cross-process cooldown (#2617)', () => {
+  let root: string;
+  let profileKey: string;
+  let now: number;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'opk-2617-account-cooldown-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    profileKey = configuredProfileKey(join(root, 'configured-profile'), 'http://127.0.0.1:9222');
+    now = Date.now();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const filename = 'state-light-account-cooldown.v1.json';
+  const pathFor = (key: string) => join(profileDirs(key).locks, filename);
+  const readFromOtherNodeProcess = (key: string, at: number) => {
+    const moduleUrl = new URL('./state-light-turn-base.ts', import.meta.url).href;
+    const program = `import { readStateLightAccountCooldown } from ${JSON.stringify(moduleUrl)};
+process.stdout.write(JSON.stringify(readStateLightAccountCooldown(${JSON.stringify(key)}, ${at})));`;
+    return JSON.parse(execFileSync(process.execPath, [
+      '--experimental-strip-types', '--input-type=module', '--eval', program,
+    ], { env: { ...process.env, CHATGPT_BROWSER_TURN_STATE_DIR: root }, encoding: 'utf8' }));
+  };
+
+  it('records exactly one epoch-ms field, expires at 300000ms and is shared across separate Node processes', () => {
+    const first = publishWitnessedStateLight429(profileKey, now);
+    expect(first).toEqual({ active: true, until: now + 300_000 });
+    expect(JSON.parse(readFileSync(pathFor(profileKey), 'utf8'))).toEqual({
+      cooldown_until_ms: now + 300_000,
+    });
+    expect(readStateLightAccountCooldown(profileKey, now + 299_999)).toMatchObject({
+      active: true, until: now + 300_000,
+    });
+    expect(readFromOtherNodeProcess(profileKey, now + 1)).toMatchObject({
+      active: true, until: now + 300_000,
+    });
+    expect(readStateLightAccountCooldown(profileKey, now + 300_000).active).toBe(false);
+  });
+
+  it('never shortens the previous valid deadline on a separately witnessed 429', () => {
+    expect(publishWitnessedStateLight429(profileKey, now)).toMatchObject({
+      until: now + 300_000,
+    });
+    expect(publishWitnessedStateLight429(profileKey, now + 1_000)).toMatchObject({
+      until: now + 301_000,
+    });
+    expect(readFromOtherNodeProcess(profileKey, now + 1_100)).toMatchObject({
+      active: true, until: now + 301_000,
+    });
+    expect(JSON.parse(readFileSync(pathFor(profileKey), 'utf8')))
+      .toEqual({ cooldown_until_ms: now + 301_000 });
+  });
+
+  it('rejects a +24-hour future deadline and replaces it with only newly witnessed 5-minute authority', () => {
+    const path = pathFor(profileKey);
+    writeFileSync(path, JSON.stringify({ cooldown_until_ms: now + 86_400_000 }));
+    expect(readStateLightAccountCooldown(profileKey, now)).toMatchObject({
+      active: false, diagnostic: 'account_cooldown_far_future',
+    });
+    expect(publishWitnessedStateLight429(profileKey, now)).toEqual({
+      active: true, until: now + 300_000,
+    });
+    expect(readFromOtherNodeProcess(profileKey, now + 100)).toMatchObject({
+      active: true, until: now + 300_000,
+    });
+  });
+
+  it.each([
+    [null, 'account_cooldown_wrong_shape'],
+    [{ cooldown_until_ms: 'tomorrow' }, 'account_cooldown_invalid_deadline'],
+    [{ cooldown_until_ms: 0 }, 'account_cooldown_expired'],
+    [{ cooldown_until_ms: 50, wrong: true }, 'account_cooldown_wrong_shape'],
+  ] as const)('fails open invalid single-record data %j: %s', (record, diagnostic) => {
+    const path = pathFor(profileKey);
+    writeFileSync(path, JSON.stringify(record));
+    expect(readStateLightAccountCooldown(profileKey, now)).toMatchObject({
+      active: false, diagnostic,
+    });
+  });
+
+  it('fails open malformed JSON and a contended writer integrity guard', () => {
+    const path = pathFor(profileKey);
+    writeFileSync(path, '{invalid');
+    expect(readStateLightAccountCooldown(profileKey, now)).toMatchObject({
+      active: false, diagnostic: 'account_cooldown_malformed',
+    });
+    const guard = join(profileDirs(profileKey).locks, 'state-light-account-cooldown.v1.guard');
+    writeFileSync(guard, 'occupied');
+    expect(publishWitnessedStateLight429(profileKey, now)).toMatchObject({
+      active: false, diagnostic: 'account_cooldown_write_unavailable',
+    });
+    expect(readFileSync(path, 'utf8')).toBe('{invalid');
+  });
+
+  it('keeps exact configured profile keys separate despite a shared root', () => {
+    const other = configuredProfileKey(join(root, 'other-profile'), 'http://127.0.0.1:9222');
+    publishWitnessedStateLight429(profileKey, now);
+    expect(readStateLightAccountCooldown(other, now).active).toBe(false);
+    expect(readFromOtherNodeProcess(other, now).active).toBe(false);
   });
 });
