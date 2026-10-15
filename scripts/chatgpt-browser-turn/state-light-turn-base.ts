@@ -3266,7 +3266,8 @@ async function runTurnCore(
         freshCleanup.projectUrl = config.projectUrl;
       }
       try {
-        await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs, () => { beforeBrowserAction(); held429Witness?.beforeNavigation(); });
+        // First owned-page load is not a shared cooldown admission gate.
+        await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs, () => { if (heldPage429Diagnostic(page)) beforeBrowserAction(); held429Witness?.beforeNavigation(); });
       } catch (error) {
         // One total pre-Send reopen: an initial failed committed navigation
         // consumes the first opening; retry only on the same created Page.
@@ -3354,7 +3355,9 @@ async function runTurnCore(
         : invocationDeadlineMs - RESOURCE_CLEANUP_BOUND_MS - 2_000;
       const availableMs = returnByMs - Date.now();
       if (availableMs <= 1_000) return accountErrorTerminal();
+      beforeBrowserAction(); // Shared cooldown and first witnessed 429 forbid a new reload.
       accountReloadAttempted = true; // Failure consumes the only allowance.
+      held429Witness?.beforeNavigation();
       try {
         await boundedBrowserRead(
           page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(25_000, availableMs - 500) }),
@@ -3651,6 +3654,7 @@ async function runTurnCore(
         freshCleanup.markedPayload = markedPayload;
       }
       const insertionContext: { insertionDeadlineMs?: number; diagnostic?: ComposerMutationDiagnosticV1 } = {};
+      beforeBrowserAction();
       const mutationFailure = await mutateComposerOrCause(page, markedPayload, invocationDeadlineMs, insertionContext);
       assertFreshOwner();
       if (mutationFailure) return returnComposerMutationFailure(mutationFailure, insertionContext.diagnostic);
@@ -3702,6 +3706,7 @@ async function runTurnCore(
         };
       }
       const beforeClick = (): void => {
+        beforeBrowserAction();
         assertFreshOwner();
         if (Date.now() >= invocationDeadlineMs) throw new Error('state_light_new_chat_send_budget_unavailable');
         if (Date.now() >= readinessDeadlineMs) throw new Error('fresh_send_readiness_deadline_exhausted');
@@ -3777,6 +3782,10 @@ async function runTurnCore(
     const sendOwnedPrompt = async (): Promise<TurnRunOutcome | null> => {
       if (config.newChat) return await sendOwnedFreshPrompt();
       setHeartbeatPhase('composer_dispatch');
+      // Initial and reopened continuations share the incumbent complete-history guard.
+      const preInsertHistoryFailure = await verifyReopenedExistingPage();
+      if (preInsertHistoryFailure) return preInsertHistoryFailure;
+      beforeBrowserAction();
       const insertionContext: { insertionDeadlineMs?: number; diagnostic?: ComposerMutationDiagnosticV1 } = {};
       const mutationFailure = await mutateComposerOrCause(
         page,
@@ -3809,7 +3818,7 @@ async function runTurnCore(
       await markPreSendAlerts(page, Math.min(MAX_LOCAL_READ_WAIT_MS, sendWaitMs));
       sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
-      if (reopenedExistingComposer) {
+      {
         const beforeDispatchFailure = await verifyReopenedExistingPage();
         if (beforeDispatchFailure) return beforeDispatchFailure;
         sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
@@ -3854,6 +3863,7 @@ async function runTurnCore(
           invocationDeadlineMs,
           preSendAlertsAlreadyMarked: true,
           onDispatch: () => {
+            beforeBrowserAction();
             transitionStateLightTurnObservation({
               profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
             });
