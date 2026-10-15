@@ -110,6 +110,8 @@ If an operation fails, do not repeat the same action blindly. Inspect current st
 
 ### Structured external-dependency parking
 
+Manager **report/completion authority** (Orca terminal `worker_report outcome=failed` versus nonterminal `escalation`, direct-cancellation limits, immediate fence containment, conditional new-Task recovery and post-adoption observation) is owned only by the [manager reporting rule](orchestration-runbook.md#manager-report-and-completion-authority-issue-2618). This section retains shared result routing and Browser-GPT send ownership; it does not separately define or broaden failed-report authority.
+
 The shared #2078/#2081 manager boundary returns exactly one of four outcomes:
 `completed`, `recoverable`, `external_pause`, or boundary-only
 `contract_defect`. A `recoverable` result carries a validated executable
