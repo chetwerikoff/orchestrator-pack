@@ -7017,8 +7017,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           || head !== target.headSha.toLowerCase()
           || currentAuthority?.currentHeadSha.toLowerCase() !== head
           || currentAuthority.cycle?.cycleId !== foreignRun.reviewCycleId
-          || currentAuthority.cycle.reviewStageComplete === true
-          || currentAuthority.cycle.consumedRoundOrdinals?.includes(foreignRun.logicalRoundOrdinal!) === true
+          || currentAuthority?.cycle?.reviewStageComplete === true
+          || currentAuthority?.cycle?.consumedRoundOrdinals?.includes(foreignRun.logicalRoundOrdinal!) === true
           || currentAuthority.terminal?.runId === foreignRun.id) {
         await releaseEarlyClaim('foreign_reviewer_owner_unverified');
         return { ok: false, created: false, reused: true,
@@ -8791,8 +8791,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         : {}, { projectId, storeRoot });
 
     if (supplementalMode) {
+      const supplementalDeliveryRun = run;
       const delivered = await deliverPackReviewVerdict({
-        run,
+        run: supplementalDeliveryRun,
         payload,
         projectId,
         storeRoot,
@@ -8800,7 +8801,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         postGithubComment: async () => {
           const posted = await postGithubReview({
             repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
-            prNumber: target.prNumber, headSha: target.headSha, run, payload,
+            prNumber: target.prNumber, headSha: target.headSha, run: supplementalDeliveryRun, payload,
             projectId, storeRoot, transport: githubReviewTransport,
           });
           return { id: posted.id, url: posted.url, event: 'COMMENT' };
