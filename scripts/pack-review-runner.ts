@@ -7871,10 +7871,11 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       sourceRepoRoot: target.sourceRepoRoot,
       canonicalRepository: target.repoSlug,
       legacyRepositoryBySourceRoot,
-      automaticBudgetDisposition: 'consume',
+      automaticBudgetDisposition: supplementalMode ? 'non_consuming_explicit' : 'consume',
+      ...(supplementalMode ? { allowExplicitSupplementalStart: true } : {}),
       ...(accountingVersion ? { accountingVersion } : {}),
       ...(authority.cycle?.cycleId ? { reviewCycleId: authority.cycle.cycleId } : {}),
-      ...(logicalAccounting ? {
+      ...(logicalAccounting && !supplementalMode ? {
         logicalRoundOrdinal: roundOrdinal,
         logicalRoundCap: authority.cycle!.frozenCap,
       } : {}),
@@ -7884,29 +7885,45 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       });
       run = created.run;
     }
-    authority = advancePackReviewAuthority(
-      authority,
-      'review_or_bundle_staged',
-      target.prNumber,
-      authorityOptions,
-    );
+    if (!supplementalMode) {
+      authority = advancePackReviewAuthority(
+        authority,
+        'review_or_bundle_staged',
+        target.prNumber,
+        authorityOptions,
+      );
+    }
     if (created.reused) {
+      const original = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
+      const receipt = supplementalMode ? supplementalReviewReceipt(original) : null;
+      const validRequiredOrigin = explicitReviewer
+        && !supplementalMode
+        && original.targetSha === target.headSha
+        && original.resolvedReviewer === reviewer
+        && original.executedReviewer === reviewer
+        && original.reviewerInvokedForThisRun === true
+        && original.reviewerExecutionRunId === original.id
+        && hasPersistedPackReviewVerdict(original);
       if (claimLease) await claimLease.release('run_started', listPackReviewRuns({ projectId, storeRoot }));
       return {
-        ok: true,
+        ok: !explicitReviewer || Boolean(receipt || validRequiredOrigin),
         created: false,
         reused: true,
-        reason: created.reason,
+        reason: receipt ? 'supplemental_review_delivered' : created.reason,
+        ...(receipt ?? (validRequiredOrigin ? reviewerProvenanceReceipt(original) : {})),
+        ...(!explicitReviewer || receipt || validRequiredOrigin ? {} : {
+          nextAction: 'inspect the existing run and original reviewer; an explicit switch requires a distinct eligible run or confirmed same-reviewer origin',
+        }),
         prNumber: target.prNumber,
         headSha: target.headSha,
         runId: run.id,
-        httpStatus: 200,
+        httpStatus: explicitReviewer && !(receipt || validRequiredOrigin) ? 409 : 200,
         status: run.status,
         coverage: derivePackReviewGptCoverage(run.reviewRound),
       };
     }
 
-    await recordPackReviewPendingStatus({
+    if (!supplementalMode) await recordPackReviewPendingStatus({
       run,
       projectId,
       storeRoot,
@@ -8639,6 +8656,40 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
             reviewerExecutionRunId: run.id,
           }
         : {}, { projectId, storeRoot });
+
+    if (supplementalMode) {
+      const delivered = await deliverPackReviewVerdict({
+        run,
+        payload,
+        projectId,
+        storeRoot,
+        journalWriter: input.fixtureJournalWriter,
+        postGithubComment: async () => {
+          const posted = await postGithubReview({
+            repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+            prNumber: target.prNumber, headSha: target.headSha, run, payload,
+            projectId, storeRoot, transport: githubReviewTransport,
+          });
+          return { id: posted.id, url: posted.url, event: 'COMMENT' };
+        },
+        writeRequiredStatus: async () => { throw new Error('supplemental cannot publish required status'); },
+        notifyWorker: async () => { throw new Error('supplemental cannot notify required worker'); },
+      });
+      const latest = getPackReviewRun(run.id, { projectId, storeRoot });
+      const receipt = latest && supplementalReviewReceipt(latest);
+      const headStillCurrent = await readProjectionHead() === target.headSha.toLowerCase();
+      terminal = true;
+      if (claimLease) await claimLease.release('run_started', listPackReviewRuns({ projectId, storeRoot }));
+      return receipt && headStillCurrent && delivered.reason === 'completed'
+        ? { ok: true, created: true, reused: false,
+            reason: 'supplemental_review_delivered', ...receipt,
+            prNumber: target.prNumber, headSha: target.headSha,
+            status: latest?.status, httpStatus: 201 }
+        : { ok: false, created: true, reused: false,
+            reason: 'supplemental_delivery_unverified', runId: run.id,
+            nextAction: 'inspect the originating journal and GitHub reviewer COMMENT; use same-run reconciliation, never duplicate an uncertain post',
+            prNumber: target.prNumber, headSha: target.headSha, httpStatus: 409 };
+    }
 
     authority = await reconcileTierBeforeTerminal({
       start: input, target, projectId, storeRoot,
