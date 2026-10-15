@@ -213,6 +213,7 @@ describe('Issue #1998 Target crash classification', () => {
     let composed = '';
     let sends = 0;
     const assistant = { role: 'assistant' as const, text: 'working', inProgress: true };
+    const historicalUser = { role: 'user' as const, text: 'historical user' };
     const composer = scalarLocator({
       count: vi.fn(async () => 1),
       fill: vi.fn(async (value: string) => { composed = value; }),
@@ -247,17 +248,26 @@ describe('Issue #1998 Target crash classification', () => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: vi.fn(async () => 0) });
         if (selector === MESSAGE_NODE_SELECTOR) {
-          return sent
-            ? collectionLocator([
-              { role: 'user', text: composed },
-              assistant,
-            ], true)
-            : collectionLocator([]);
+          const messages = sent
+            ? [historicalUser, { role: 'user' as const, text: composed }, assistant]
+            : [historicalUser];
+          return Object.assign(collectionLocator(messages, sent), {
+            evaluateAll: vi.fn(async () => ({
+              rows: messages.map((message, domIndex) => ({
+                role: message.role, text: message.text, key: `historical-user-1998-${domIndex}`,
+                domIndex, complete: true, completionReady: false, continuationVisible: false,
+              })),
+              pageTurnEvidence: {
+                generationInProgress: sent, observedAssistantNodes: sent ? 1 : 0,
+                continueGeneratingVisible: false,
+              },
+            })),
+          });
         }
         if (selector === USER_MESSAGE_SELECTOR) {
-          return sent
-            ? collectionLocator([{ role: 'user', text: composed }])
-            : collectionLocator([]);
+          return collectionLocator(sent
+            ? [historicalUser, { role: 'user', text: composed }]
+            : [historicalUser]);
         }
         if (selector === ASSISTANT_MESSAGE_SELECTOR) {
           return sent ? collectionLocator([assistant], true) : collectionLocator([]);

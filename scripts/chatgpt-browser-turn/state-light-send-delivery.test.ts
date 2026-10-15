@@ -342,7 +342,23 @@ describe('Issue #2596 production recovery caller boundaries', () => {
             return scalarLocator({ count: async () => { throw new Error('owned read lost'); } });
           const messages = kind === 'successor' ? finalMessages
             : sent ? known ? finalMessages.slice(0, 1) : [] : known ? [{ role: 'user' as const, text: 'history' }] : [];
-          if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(messages);
+          if (selector === MESSAGE_NODE_SELECTOR) {
+            if (known && kind === 'original' && !sent) {
+              return Object.assign(collectionLocator(messages), {
+                evaluateAll: vi.fn(async () => ({
+                  rows: [{
+                    role: 'user', text: 'history', key: 'historical-user-2596', domIndex: 0,
+                    complete: true, completionReady: false, continuationVisible: false,
+                  }],
+                  pageTurnEvidence: {
+                    generationInProgress: false, observedAssistantNodes: 0,
+                    continueGeneratingVisible: false,
+                  },
+                })),
+              });
+            }
+            return collectionLocator(messages);
+          }
           if (selector === USER_MESSAGE_SELECTOR) return collectionLocator(messages.filter((message) => message.role === 'user'));
           if (selector === ASSISTANT_MESSAGE_SELECTOR) return collectionLocator(messages.filter((message) => message.role === 'assistant'));
           if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section'))
@@ -684,7 +700,7 @@ describe('production attempted-send result and durable envelope', () => {
     ['generic-timeout', 1],
     ['possibly-clicked', 1],
     ['enter', 0],
-    ['empty-baseline', 1],
+    ['empty-baseline', 0],
     ['empty-after-click', 1],
     ['vanished-user', 1],
     ['reordered', 1],
@@ -792,7 +808,16 @@ describe('production attempted-send result and durable envelope', () => {
       expect(click).toHaveBeenCalledTimes(expectedClicks);
       expect(firstAction).toHaveBeenCalledTimes(scenario === 'enter' ? 1 : expectedClicks);
       expect(result.send_count).toBe(0);
-      expect(result.send_attempted).toBe(true);
+      if (scenario === 'empty-baseline') {
+        expect(result).toMatchObject({
+          state: 'ui_contract_mismatch',
+          cause: 'owned_conversation_render_mismatch',
+          send_count: 0,
+        });
+        expect(result.send_attempted).not.toBe(true);
+      } else {
+        expect(result.send_attempted).toBe(true);
+      }
       expect(page.close).not.toHaveBeenCalled();
     } finally {
       clock.mockRestore();
@@ -946,7 +971,23 @@ describe('production attempted-send result and durable envelope', () => {
         locator: vi.fn((selector: string) => {
           if (selector === COMPOSER_SELECTOR) return composer;
           if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => transport === 'click' ? 1 : 0, click: send });
-          if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(users);
+          if (selector === MESSAGE_NODE_SELECTOR) {
+            if (scenario !== 'pre_dispatch') {
+              return Object.assign(collectionLocator(users), {
+                evaluateAll: vi.fn(async () => ({
+                  rows: users.map((message, domIndex) => ({
+                    role: message.role, text: message.text, key: `historical-user-2541-${domIndex}`,
+                    domIndex, complete: true, completionReady: false, continuationVisible: false,
+                  })),
+                  pageTurnEvidence: {
+                    generationInProgress: false, observedAssistantNodes: 0,
+                    continueGeneratingVisible: false,
+                  },
+                })),
+              });
+            }
+            return collectionLocator(users);
+          }
           return scalarLocator();
         }),
       };

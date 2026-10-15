@@ -1007,10 +1007,14 @@ describe('Issue #2457 unproven terminal locator', () => {
           count: vi.fn(async () => 1),
           click: vi.fn(async () => { sent = true; currentUrl = conversationUrl; }),
         });
-        const finalMessages = () => sent ? [
-          { role: 'user' as const, text: composerText },
-          { role: 'assistant' as const, text: 'synthetic reply', finalAction: true, finalActionInTurnContainer: true },
-        ] : [];
+        const historicalUser = { role: 'user' as const, text: 'historical user' };
+        const finalMessages = () => [
+          ...(currentUrl === conversationUrl ? [historicalUser] : []),
+          ...(sent ? [
+            { role: 'user' as const, text: composerText },
+            { role: 'assistant' as const, text: 'synthetic reply', finalAction: true, finalActionInTurnContainer: true },
+          ] : []),
+        ];
         const page: any = {
           __fakeBrowserGptPage: true,
           goto: vi.fn(async (url: string) => { currentUrl = url; }),
@@ -1024,9 +1028,26 @@ describe('Issue #2457 unproven terminal locator', () => {
             if (selector === selectors.COMPOSER_SELECTOR) return composer;
             if (selector === selectors.SEND_BUTTON_SELECTOR) return sendButton;
             if (selector === selectors.USER_MESSAGE_SELECTOR) return fixture.collectionLocator(
-              sent ? [{ role: 'user', text: composerText }] : [],
+              finalMessages().filter((message) => message.role === 'user'),
             );
-            if (selector === selectors.MESSAGE_NODE_SELECTOR) return fixture.collectionLocator(finalMessages());
+            if (selector === selectors.MESSAGE_NODE_SELECTOR) {
+              const messages = finalMessages();
+              if (currentUrl !== conversationUrl) return fixture.collectionLocator(messages);
+              return Object.assign(fixture.collectionLocator(messages), {
+                evaluateAll: vi.fn(async () => ({
+                  rows: messages.map((message, domIndex) => ({
+                    role: message.role, text: message.text, key: `historical-user-2457-${domIndex}`,
+                    domIndex, complete: true,
+                    completionReady: Boolean('finalActionInTurnContainer' in message && message.finalActionInTurnContainer),
+                    continuationVisible: false,
+                  })),
+                  pageTurnEvidence: {
+                    generationInProgress: false,
+                    observedAssistantNodes: sent ? 1 : 0, continueGeneratingVisible: false,
+                  },
+                })),
+              });
+            }
             if (selector === selectors.ASSISTANT_MESSAGE_SELECTOR) return fixture.collectionLocator(
               finalMessages().filter((message) => message.role === 'assistant'),
             );

@@ -204,14 +204,31 @@ function clearSendSlotDisableEnv(): void {
   delete process.env.OPK_STATE_LIGHT_SEND_SLOT_DISABLE_REASON;
 }
 
-function makeLoserPage(prompt: string, reply: string, onSend?: () => void) {
+function makeLoserPage(prompt: string, reply: string, onSend?: () => void, ownedPriorHistory = false) {
   let sends = 0;
   let sent = false;
   let composerText = '';
   let url = PROJECT_URL;
   let observationIndex = 0;
+  const priorHistory: StateLightTestMessage[] = ownedPriorHistory
+    ? [{ role: 'user', text: 'historical user' }] : [];
+  const atomicOwnedHistory = (messages: StateLightTestMessage[], generating = false) =>
+    Object.assign(collectionLocator(messages, generating), {
+      evaluateAll: vi.fn(async () => ({
+        rows: messages.map((message, domIndex) => ({
+          role: message.role, text: message.text, key: `fixture-turn-${domIndex}`, domIndex,
+          complete: true, completionReady: Boolean(message.finalActionInTurnContainer),
+          continuationVisible: false,
+        })),
+        pageTurnEvidence: {
+          generationInProgress: generating,
+          observedAssistantNodes: messages.filter((message) => message.role === 'assistant').length,
+          continueGeneratingVisible: false,
+        },
+      })),
+    });
   const snapshotFrames = readyTurnObservationFrames(prompt, reply).map((messages, index) => ({
-    messages,
+    messages: [...priorHistory, ...messages],
     generating: index < 2,
   }));
   let activeSnapshot = snapshotFrames[0]!;
@@ -258,14 +275,16 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void) {
       if (selector === SEND_BUTTON_SELECTOR) return sendButton;
       if (selector === USER_MESSAGE_SELECTOR) {
         return collectionLocator(sent
-          ? [{ role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` }]
-          : []);
+          ? [...priorHistory, { role: 'user', text: `${TEST_OWNED_MARKER}\n\n${prompt}` }]
+          : priorHistory);
       }
       if (selector === MESSAGE_NODE_SELECTOR) {
-        if (!sent) return collectionLocator([]);
+        if (!sent) return ownedPriorHistory ? atomicOwnedHistory(priorHistory) : collectionLocator([]);
         activeSnapshot = snapshotFrames[Math.min(observationIndex, snapshotFrames.length - 1)]!;
         observationIndex++;
-        return collectionLocator(activeSnapshot.messages, activeSnapshot.generating);
+        return ownedPriorHistory
+          ? atomicOwnedHistory(activeSnapshot.messages, activeSnapshot.generating)
+          : collectionLocator(activeSnapshot.messages, activeSnapshot.generating);
       }
       if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
         const last = activeSnapshot.messages.at(-1);
@@ -1142,7 +1161,7 @@ describe('state-light fresh conversation collision recovery', () => {
 
   it('dispatches an existing-chat composer mounted 20 seconds after commit without DCL', async () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-LATE-EXISTING'));
-    const owned = makeLoserPage('PROMPT-LATE-EXISTING', 'LATE-EXISTING-OK');
+    const owned = makeLoserPage('PROMPT-LATE-EXISTING', 'LATE-EXISTING-OK', undefined, true);
     owned.composer.count.mockImplementation(async () => mocks.nowMs >= 30_000 ? 1 : 0);
     enqueueBrowserForTurn(mocks, owned.page);
     const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
@@ -1181,7 +1200,7 @@ describe('state-light fresh conversation collision recovery', () => {
 
   it('rejects a late foreign existing-chat redirect after readiness and baseline', async () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-REDIRECT'));
-    const solo = makeLoserPage('PROMPT-REDIRECT', 'SHOULD-NOT-SEND');
+    const solo = makeLoserPage('PROMPT-REDIRECT', 'SHOULD-NOT-SEND', undefined, true);
     const initialUrl = solo.page.url.getMockImplementation()!;
     let redirected = false;
     solo.page.url.mockImplementation(() => redirected ? LOSER_CONV : initialUrl());
@@ -1206,7 +1225,7 @@ describe('state-light fresh conversation collision recovery', () => {
 
   it('rejects an existing-chat redirect during the final pre-send alert probe', async () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-ALERT-REDIRECT'));
-    const solo = makeLoserPage('PROMPT-ALERT-REDIRECT', 'SHOULD-NOT-SEND');
+    const solo = makeLoserPage('PROMPT-ALERT-REDIRECT', 'SHOULD-NOT-SEND', undefined, true);
     const initialUrl = solo.page.url.getMockImplementation()!;
     let redirected = false;
     solo.page.url.mockImplementation(() => redirected ? LOSER_CONV : initialUrl());
@@ -3385,7 +3404,7 @@ describe('state-light fresh conversation collision recovery', () => {
   });
 
   it('recovers an account error during selected existing-chat composer readiness', async () => {
-    const existing = makeLoserPage('PROMPT', 'LATE-EXISTING-COMPOSER-OK');
+    const existing = makeLoserPage('PROMPT', 'LATE-EXISTING-COMPOSER-OK', undefined, true);
     const originalUrl = existing.page.url;
     existing.page.url = vi.fn(() => originalUrl() === PROJECT_URL ? SHARED_CONV : originalUrl());
     const fault = installAccountLoadError(existing.page);
@@ -3497,7 +3516,7 @@ describe('state-light fresh conversation collision recovery', () => {
   });
 
   it('reloads a previously exact-selected existing chat on an error-route but never closes it', async () => {
-    const existing = makeLoserPage('PROMPT', 'NEVER-SENT');
+    const existing = makeLoserPage('PROMPT', 'NEVER-SENT', undefined, true);
     const baseUrl = existing.page.url;
     existing.page.url = vi.fn(() => baseUrl() === PROJECT_URL ? SHARED_CONV : baseUrl());
     const fault = installAccountLoadError(existing.page, { persistent: true });
@@ -5063,6 +5082,16 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
       count: vi.fn(async () => 1),
       click: sendClicks,
     });
+    const historicalUser = {
+      getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user-message' : null,
+      getBoundingClientRect: () => ({ height: 1 }),
+      innerText: 'historical user',
+      closest: (selector: string) => selector.includes('data-turn-key')
+        ? { getAttribute: () => 'conversation-turn-history' } : null,
+      querySelectorAll: () => [],
+      querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+        ? { getAttribute: () => 'user-message' } : null,
+    };
 
     function currentPhase(): 'generating' | 'banner' {
       if (!sent) return 'generating';
@@ -5139,16 +5168,24 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
         }
         if (selector === MESSAGE_NODE_SELECTOR) {
           if (!sent) {
-            return Object.assign(collectionLocator([]), {
-              evaluateAll: async (callback: (elements: Element[], args: unknown) => unknown, args: unknown) => (
-                callback([], args)
-              ),
+            return Object.assign(collectionLocator([{ role: 'user', text: 'historical user' }]), {
+              evaluateAll: vi.fn(async () => ({
+                rows: [{
+                  role: 'user', text: 'historical user', key: 'historical-user-1990', domIndex: 0,
+                  complete: true, completionReady: false, continuationVisible: false,
+                }],
+                pageTurnEvidence: {
+                  generationInProgress: false, observedAssistantNodes: 0,
+                  continueGeneratingVisible: false,
+                },
+              })),
             });
           }
           const snapshot = messageElements();
           const pollIndex = observationIndex;
           observationIndex += 1;
           const messages = [
+            { role: 'user' as const, text: 'historical user' },
             { role: 'user' as const, text: filled },
             {
               role: 'assistant' as const,
@@ -5166,6 +5203,7 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
               querySelectorAll: (sel: string) => {
                 if (sel.includes('data-turn-key')) {
                   return [
+                    { getAttribute: () => 'conversation-turn-history' },
                     { getAttribute: () => 'conversation-turn-1' },
                     { getAttribute: () => 'conversation-turn-2' },
                   ];
@@ -5181,7 +5219,7 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
               },
             };
             try {
-              return callback([snapshot.user, snapshot.assistant] as unknown as Element[], args);
+              return callback([historicalUser, snapshot.user, snapshot.assistant] as unknown as Element[], args);
             } finally {
               if (prior === undefined) delete (globalThis as { document?: unknown }).document;
               else (globalThis as { document?: unknown }).document = prior;
