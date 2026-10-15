@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
-import { execFileSync } from 'node:child_process';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -1499,9 +1499,16 @@ describe('conversation fetch HTTP 429 — shared 5-minute cross-process cooldown
     const moduleUrl = new URL('./state-light-turn-base.ts', import.meta.url).href;
     const program = `import { readStateLightAccountCooldown } from ${JSON.stringify(moduleUrl)};
 process.stdout.write(JSON.stringify(readStateLightAccountCooldown(${JSON.stringify(key)}, ${at})));`;
-    return JSON.parse(execFileSync(process.execPath, [
-      '--experimental-strip-types', '--input-type=module', '--eval', program,
-    ], { env: { ...process.env, CHATGPT_BROWSER_TURN_STATE_DIR: root }, encoding: 'utf8' }));
+    const child = runProcessSync({
+      command: process.execPath,
+      args: ['--experimental-strip-types', '--input-type=module', '--eval', program],
+      env: { CHATGPT_BROWSER_TURN_STATE_DIR: root },
+      inheritParentEnv: true,
+      encoding: 'utf8',
+      timeoutMs: 15_000,
+    });
+    expect(child.ok, child.stderr || child.error).toBe(true);
+    return JSON.parse(child.stdout);
   };
 
   it('records exactly one epoch-ms field, expires at 300000ms and is shared across separate Node processes', () => {
