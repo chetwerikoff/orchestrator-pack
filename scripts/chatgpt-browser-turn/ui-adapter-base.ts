@@ -1757,12 +1757,8 @@ function matchingProductStatusPart(
 }
 
 export function classifyProductWall(surface: ProductStatusSurface): ProductWallDiagnostic {
-  if (surface.witnessed_http_429) {
-    const heading = surface.parts?.find((part) => part.selector === CONVERSATION_LOAD_ERROR_HEADING_SELECTOR
-      && CONVERSATION_LOAD_ERROR_HEADING_RE.test(part.text));
-    return { ...surface.witnessed_http_429, matched_text: heading?.text.slice(0, PRODUCT_WALL_TEXT_CAP) ?? 'none',
-      matched_selector: heading?.selector ?? 'none' };
-  }
+  // #2538's positively probed account heading wins over a conversation
+  // projection; a separately witnessed account-list 429 still sets cooldown.
   // Only the positively probed product heading has this selector. Never infer
   // an account failure from generic sign-in copy or assistant-rendered text.
   const heading = surface.parts?.find((part) =>
@@ -1773,6 +1769,15 @@ export function classifyProductWall(surface: ProductStatusSurface): ProductWallD
     matched_text: heading.text.slice(0, PRODUCT_WALL_TEXT_CAP),
     matched_selector: heading.selector,
   };
+  if (surface.witnessed_http_429) {
+    const heading = surface.parts?.find((part) => part.selector === CONVERSATION_LOAD_ERROR_HEADING_SELECTOR
+      && CONVERSATION_LOAD_ERROR_HEADING_RE.test(part.text));
+    return {
+      ...surface.witnessed_http_429,
+      matched_text: heading?.text.slice(0, PRODUCT_WALL_TEXT_CAP) ?? 'none',
+      matched_selector: heading?.selector ?? 'none',
+    };
+  }
   const conversationHeading = surface.parts?.find((part) => part.selector === CONVERSATION_LOAD_ERROR_HEADING_SELECTOR
     && CONVERSATION_LOAD_ERROR_HEADING_RE.test(part.text));
   if (conversationHeading) return {
