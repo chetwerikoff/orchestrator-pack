@@ -1,7 +1,9 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { WRAPPER_PATH } from '../lib/gh-resolve-real-binary.mjs';
 import type { ProcessResult } from '../kernel/subprocess.ts';
 import {
   classifyWorktree,
@@ -14,9 +16,10 @@ import {
 } from './core.ts';
 import {
   createPrHeadBoundRunner,
+  readLivePrBinding,
   validateExpectedPrBinding,
 } from './head-bound-runner.ts';
-import type { CommandRunner } from './operations.ts';
+import type { CommandInvocation, CommandRunner } from './operations.ts';
 
 const HEAD = 'a'.repeat(40);
 const OTHER_HEAD = 'b'.repeat(40);
@@ -386,5 +389,120 @@ describe('current PR-head effect binding', () => {
     expect(forwarded).toEqual([
       `git -C ${prExpected.repositoryRoot} worktree remove ${prExpected.path}`,
     ]);
+  });
+});
+
+describe('pack-owned live PR head binding and teardown authorization', () => {
+  const PACK_TEARDOWN = join(dirname(WRAPPER_PATH), 'worktree-teardown.ts');
+  const PACK_ROOT = dirname(dirname(WRAPPER_PATH));
+  const prViewArgs = ['pr', 'view', '1300', '--json', 'headRefName,state,headRefOid'];
+
+  it('reads live PR binding directly through the exact pack executable with normalized target cwd', () => {
+    const calls: CommandInvocation[] = [];
+    const targetRoot = '/tmp/target-project';
+    const prExpected = expected({
+      repositoryRoot: join(targetRoot, 'somewhere', '..'),
+      bindingKind: 'pr',
+      bindingNumber: 1300,
+    });
+    const live = readLivePrBinding(prExpected, (invocation) => {
+      calls.push(invocation);
+      return commandResult({ stdout: JSON.stringify({
+        headRefName: BRANCH,
+        state: 'MERGED',
+        headRefOid: HEAD,
+      }) });
+    });
+    expect(live).toEqual({ headRefName: BRANCH, state: 'MERGED', headRefOid: HEAD });
+    expect(calls).toEqual([{
+      command: WRAPPER_PATH,
+      args: prViewArgs,
+      cwd: targetRoot,
+    }]);
+  });
+
+  it('uses explicit pack-root cwd when reading live PR binding for the pack itself', () => {
+    const calls: CommandInvocation[] = [];
+    const prExpected = expected({
+      repositoryRoot: PACK_ROOT,
+      bindingKind: 'pr',
+      bindingNumber: 1300,
+    });
+    const live = readLivePrBinding(prExpected, (invocation) => {
+      calls.push(invocation);
+      return commandResult({ stdout: JSON.stringify({
+        headRefName: BRANCH,
+        state: 'MERGED',
+        headRefOid: HEAD,
+      }) });
+    });
+    expect(live.headRefOid).toBe(HEAD);
+    expect(calls).toEqual([{
+      command: WRAPPER_PATH,
+      args: prViewArgs,
+      cwd: PACK_ROOT,
+    }]);
+  });
+
+  it('blocks an injected --apply teardown child on a moved or unmerged PR, and forwards only the matching merged head', () => {
+    const targetRoot = '/tmp/target-project';
+    const prExpected = expected({
+      repositoryRoot: targetRoot,
+      bindingKind: 'pr',
+      bindingNumber: 1300,
+    });
+    const child: CommandInvocation = {
+      command: process.execPath,
+      args: [
+        '--experimental-strip-types',
+        PACK_TEARDOWN,
+        '--post-merge-destructive',
+        '--repo-root',
+        targetRoot,
+        '--pr',
+        '1300',
+        '--apply',
+      ],
+      cwd: targetRoot,
+    };
+
+    for (const scenario of [
+      { state: 'MERGED', headRefOid: OTHER_HEAD, permitted: false },
+      { state: 'OPEN', headRefOid: HEAD, permitted: false },
+      { state: 'MERGED', headRefOid: HEAD, permitted: true },
+    ]) {
+      const checks: CommandInvocation[] = [];
+      const forwarded: CommandInvocation[] = [];
+      const injected: CommandRunner = (call) => {
+        if (call.command === WRAPPER_PATH) {
+          checks.push(call);
+          return commandResult({ stdout: JSON.stringify({
+            headRefName: BRANCH,
+            state: scenario.state,
+            headRefOid: scenario.headRefOid,
+          }) });
+        }
+        if (call.command === process.execPath) {
+          forwarded.push(call);
+          return commandResult();
+        }
+        throw new Error('unexpected command in injected head-bound guard');
+      };
+
+      const guarded = createPrHeadBoundRunner(
+        { ...prExpected, finalPrHeadSha: HEAD },
+        injected,
+        'post-merge-cleanup',
+      );
+      const response = guarded(child);
+      expect(response.ok).toBe(scenario.permitted);
+      if (!scenario.permitted) expect(response.stderr).toMatch(/effect blocked/);
+      expect(checks).toEqual([{
+        command: WRAPPER_PATH,
+        args: prViewArgs,
+        cwd: targetRoot,
+      }]);
+      expect(forwarded).toEqual(scenario.permitted ? [child] : []);
+    }
   });
 });
