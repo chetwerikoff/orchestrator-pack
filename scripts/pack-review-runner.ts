@@ -97,6 +97,7 @@ import {
   packReviewRunStaleMinutes,
   packReviewWorktreesDir,
   resolvePackReviewRunOrder,
+  resolvePackReviewRequiredRunOrder,
   resolvePackReviewRunStoreRoot,
   setPackReviewRunTerminal,
   terminalizePackReviewStaleRun,
@@ -1587,11 +1588,36 @@ function selectGithubReviewEvent(_payload: ReviewPayload): 'COMMENT' {
 
 function reviewerProvenanceReceipt(run: PackReviewRunRecord): Record<string, unknown> {
   return {
+    runId: run.id,
+    targetSha: run.targetSha,
     ...(run.resolvedReviewer ? { resolvedReviewer: run.resolvedReviewer } : {}),
     ...(run.resolvedReviewerSource ? { resolvedReviewerSource: run.resolvedReviewerSource } : {}),
     ...(run.executedReviewer ? { executedReviewer: run.executedReviewer } : {}),
     ...(run.reviewerExecutionRunId ? { reviewerExecutionRunId: run.reviewerExecutionRunId } : {}),
     ...(run.reviewerInvokedForThisRun !== undefined ? { reviewerInvokedForThisRun: run.reviewerInvokedForThisRun } : {}),
+  };
+}
+
+function supplementalReviewReceipt(run: PackReviewRunRecord): Record<string, unknown> | null {
+  if (run.automaticBudgetDisposition !== 'non_consuming_explicit'
+      || run.targetSha !== run.headSha
+      || !run.resolvedReviewer
+      || run.resolvedReviewer !== run.executedReviewer
+      || run.reviewerInvokedForThisRun !== true
+      || run.reviewerExecutionRunId !== run.id
+      || !hasPersistedPackReviewVerdict(run)
+      || run.journalOutcome?.state !== 'persisted'
+      || (run.reviewVerdict !== 'clean' && run.reviewVerdict !== 'findings')
+      || run.githubReviewReconciliation?.phase !== 'complete'
+      || run.githubReviewEvent !== 'COMMENT'
+      || !run.githubReviewId || !trim(run.githubReviewUrl)
+      || run.deliveryOutcomes.githubComment?.state !== 'succeeded') return null;
+  return {
+    outcome: 'supplemental_review_delivered',
+    reviewVerdict: run.reviewVerdict,
+    ...reviewerProvenanceReceipt(run),
+    githubReviewId: run.githubReviewId,
+    githubReviewUrl: run.githubReviewUrl,
   };
 }
 
@@ -1604,6 +1630,9 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
     '',
     `Run: \`${run.id}\``,
     `Head: \`${run.targetSha}\``,
+    ...(run.automaticBudgetDisposition === 'non_consuming_explicit'
+      ? ['Mode: supplemental advisory review (does not change required pack-review status).']
+      : []),
     `Selected reviewer: \`${run.resolvedReviewer ?? 'unrecorded'}\``,
     `Selection source: \`${run.resolvedReviewerSource ?? 'unrecorded'}\``,
     `Verdict reviewer: \`${run.executedReviewer ?? 'unrecorded'}\``,
@@ -6512,6 +6541,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
   const productionRequiredCiStart = directCliStarts.has(input)
     || trim(input.surface) === 'pack-gpt-review'
     || trim(input.surface) === 'pr2-scheduler';
+  const explicitReviewer = input.reviewerOverride !== undefined;
   const existingAuthorityBeforeCi = productionRequiredCiStart
     ? readPackReviewAuthority(target.prNumber, { storeRoot })
     : null;
@@ -6530,8 +6560,13 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     || input.fixtureRequiredCiHeadAfterGate !== undefined
     || input.fixtureRequiredCiBaseAfterGate !== undefined
   );
+  let supplementalMode = Boolean(explicitReviewer && existingAuthorityBeforeCi?.cycle
+    && existingAuthorityBeforeCi.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    && (existingAuthorityBeforeCi.cycle.reviewStageComplete === true
+      || (existingAuthorityBeforeCi.cycle.consumedRoundOrdinals?.length ?? 0)
+        >= existingAuthorityBeforeCi.cycle.frozenCap));
   const requiredCiGateApplies = productionRequiredCiStart
-    && !existingStateCannotStartReviewer
+    && (!existingStateCannotStartReviewer || explicitReviewer)
     && (process.env.OPK_VITEST_HARNESS !== '1' || harnessRequiredCiOptIn);
   if (requiredCiGateApplies) {
     const requiredCiGreen = await manualPackReviewRequiredCiGreen({
@@ -6827,6 +6862,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       surface: claimSurface,
       startReason: target.operatorStart?.reason ?? (trim(input.startReason) || 'manual'),
       resumeRunId: resumeCandidate?.id,
+      allowCompletedSameHeadReplay: supplementalMode,
     });
     if (!claimLease.acquired) {
       return {
@@ -6987,10 +7023,14 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     // A historical T2 run's immutable cap-one delivery may already have
     // published success. Reconcile that exact same-head public status before
     // starting any newly eligible reviewer or returning an old-cap receipt.
+    supplementalMode = Boolean(explicitReviewer && authority.cycle
+      && authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && (authority.cycle.reviewStageComplete === true
+        || (authority.cycle.consumedRoundOrdinals?.length ?? 0) >= authority.cycle.frozenCap));
     const priorTerminalRun = authority.currentHeadSha === target.headSha && authority.terminal?.runId
       ? getPackReviewRun(authority.terminal.runId, { projectId, storeRoot })
       : null;
-    if (priorTerminalRun) {
+    if (priorTerminalRun && !supplementalMode) {
       try {
         await ensurePromotedRoundPublicPending({
           run: priorTerminalRun, projectId, storeRoot,
@@ -7027,7 +7067,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           && authority.terminal.targetSha !== target.headSha));
     // Completed final-cap stages still require verified Issue binding on
     // rewritten/diverged heads; ancestry is decided inside reconciliation.
-    if (finalFindings && authority.terminal!.targetSha !== target.headSha) {
+    if (finalFindings && authority.terminal!.targetSha !== target.headSha && !supplementalMode) {
       const result = await reconcileFinalCapSettlement({
         projectId, storeRoot, prNumber: target.prNumber,
         repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
@@ -7082,7 +7122,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       && resumeCandidate.targetSha.toLowerCase() === target.headSha.toLowerCase();
     if (authority.cycle?.reviewStageComplete === true
         && authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
-        && !incumbentGptDeliveryResume) {
+        && !incumbentGptDeliveryResume
+        && !explicitReviewer) {
       const cycleId = authority.cycle.cycleId;
       const verifyStageCompleteHead = async () => {
         const head = await readProjectionHead();
@@ -7164,7 +7205,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         && authority.cycle
         && consumedLogicalRoundCount >= authority.cycle.frozenCap
         && authority.terminal?.targetSha === target.headSha
-        && !resumeCandidate) {
+        && !resumeCandidate && !explicitReviewer) {
       const terminalRun = authority.terminal.runId
         ? getPackReviewRun(authority.terminal.runId, { projectId, storeRoot })
         : null;
@@ -7211,9 +7252,11 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         };
       }
     }
-    carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
+    if (!supplementalMode) {
+      carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
+    }
     const conflictFreeCarryover = carryover?.replay.kind === 'conflict_free_carryover';
-    if (!conflictFreeCarryover && authority.cycle?.state === 'open_findings') {
+    if (!supplementalMode && !conflictFreeCarryover && authority.cycle?.state === 'open_findings') {
       await releaseEarlyClaim('prior_round_findings_unresolved');
       return {
         ok: false,
@@ -7227,7 +7270,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         httpStatus: 409,
       };
     }
-    if (!conflictFreeCarryover
+    if (!supplementalMode && !conflictFreeCarryover
         && authority.cycle
         && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)) {
       await releaseEarlyClaim('at_cap_continuation_required');
@@ -7280,8 +7323,10 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       });
     }
 
-    const roundOrdinal = logicalAccounting
-      ? (authority.cycle?.consumedRoundOrdinals?.length ?? 0) + 1
+    const roundOrdinal = supplementalMode
+      ? Math.max(1, authority.cycle?.frozenCap ?? 1)
+      : logicalAccounting
+        ? (authority.cycle?.consumedRoundOrdinals?.length ?? 0) + 1
       : (authority.cycle?.consumedHeadShas.length ?? 0) + 1;
     const accountingVersion = authority.cycle?.capMapVersion;
     const cardinality = selectPackReviewGptSourceCardinality({
@@ -7389,7 +7434,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         httpStatus: 409,
       };
     };
-    if (logicalAccounting && reviewer === 'gpt' && authority.cycle) {
+    if (logicalAccounting && reviewer === 'gpt' && authority.cycle && !supplementalMode) {
       const allRecords = listPackReviewRunRecordsRaw({ projectId, storeRoot });
       const storedCandidates = incumbentCandidates(allRecords);
       const otherSameHead = allRecords.find((candidate) => (
@@ -7471,7 +7516,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       }
     }
 
-    if (logicalAccounting && reviewer && reviewer !== 'gpt' && authority.cycle) {
+    if (logicalAccounting && reviewer && reviewer !== 'gpt' && authority.cycle && !supplementalMode) {
       const priorSameRound = listPackReviewRunRecordsRaw({ projectId, storeRoot })
         .filter((candidate) => candidate.prNumber === target.prNumber
           && candidate.reviewCycleId === authority.cycle!.cycleId
@@ -7503,12 +7548,14 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       }
     }
 
-    authority = advancePackReviewAuthority(
-      authority,
-      'claim_acquired',
-      target.prNumber,
-      authorityOptions,
-    );
+    if (!supplementalMode) {
+      authority = advancePackReviewAuthority(
+        authority,
+        'claim_acquired',
+        target.prNumber,
+        authorityOptions,
+      );
+    }
 
     if (resumeCandidate) {
       const resumePayload = packReviewJournaledPayload(resumeCandidate);
