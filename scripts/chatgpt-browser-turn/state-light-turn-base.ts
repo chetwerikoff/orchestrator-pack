@@ -3659,7 +3659,10 @@ async function runTurnCore(
       beforeBrowserAction();
       const mutationFailure = await mutateComposerOrCause(page, markedPayload, invocationDeadlineMs, insertionContext);
       assertFreshOwner();
-      if (mutationFailure) return returnComposerMutationFailure(mutationFailure, insertionContext.diagnostic);
+      if (mutationFailure) {
+        if (held429Witness?.current()) beforeBrowserAction();
+        return returnComposerMutationFailure(mutationFailure, insertionContext.diagnostic);
+      }
       requireFreshSendReserve(FRESH_SEND_PREPARE_RESERVE_MS);
       if (!await readComposerReadiness(page, invocationDeadlineMs)) {
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
@@ -3795,7 +3798,10 @@ async function runTurnCore(
         invocationDeadlineMs,
         insertionContext,
       );
-      if (mutationFailure) return returnComposerMutationFailure(mutationFailure, insertionContext.diagnostic);
+      if (mutationFailure) {
+        if (held429Witness?.current()) beforeBrowserAction();
+        return returnComposerMutationFailure(mutationFailure, insertionContext.diagnostic);
+      }
       const insertionDeadlineMs = insertionContext.insertionDeadlineMs ?? invocationDeadlineMs;
       let remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
@@ -4060,6 +4066,7 @@ async function runTurnCore(
         let sendAuthorized = true;
         let lastAttemptConversationUrl: string | undefined;
         for (let recovery = 0; recovery < STATE_LIGHT_FRESH_RECOVERY_ATTEMPTS && !claimed; recovery++) {
+          if (recovery > 0) beforeBrowserAction();
           // A dispatched action with unknown delivery is never a pre-Send
           // collision license for another fresh Send.
           if (recovery > 0 && sendAttempted) {
@@ -4617,6 +4624,7 @@ async function runTurnCore(
     let freshMarkerlessReply = '';
     let streamRecoveryBannerReads = 0;
     let streamRecoveryBannerCause: string | undefined;
+    let witnessed429ReadOnlyPolls = 0;
     // Roleless recovery banners outlive the turn that raised them; one ends this
     // turn only after its own Stop was seen or the Stop grace since the send ran out.
     let ownedGenerationSeen = false;
@@ -4944,6 +4952,19 @@ async function runTurnCore(
     // must instead return within its pre-Send invocation budget, including
     // bounded cleanup; the 2 x timeout threshold is not a hard exit.
     while (true) {
+      const witnessed429 = held429Witness?.current();
+      if (witnessed429 && ++witnessed429ReadOnlyPolls > 3) {
+        incident('post_send_observation_error', witnessed429.wall_kind, 'retain_owned_page_no_resend');
+        return {
+          page, browser, cleanupAction: 'preserve',
+          result: compactResult(
+            'observation_uncertain', 'invocation', witnessed429.wall_kind,
+            invocationId, profileKey, sendCount, pollCount, navigation, incidents,
+            { ...(sendAttempted ? { send_attempted: true } : {}) },
+            journalWriteFailed,
+          ),
+        };
+      }
       if (config.newChat && !ownedConversationUrl
         && (sendCount >= 1 || deliveryProofPendingRecovery || zeroWitnessAccountRecovery)
         && Date.now() >= freshUnboundReturnByMs) {
@@ -5139,7 +5160,7 @@ async function runTurnCore(
           incident,
         );
       }
-      if (wall.state === 'recovery_required' && (
+      if (wall.state === 'recovery_required' && !held429Witness?.current() && (
         recoveryBannerTrusted || (wall.cause !== 'stream_recovery_polling_timed_out' && wall.cause !== 'message_stream_error')
       )) {
         const cause = wall.cause;
