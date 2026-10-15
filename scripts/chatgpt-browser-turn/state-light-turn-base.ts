@@ -2042,7 +2042,7 @@ export async function classifySendLandingEvidence(
 
 function recordProductWallAdvisory(
   profileKey: string,
-  diagnostic: ProductWallDiagnostic,
+  diagnostic: ProductWallDiagnostic<true>,
   invocationId: string,
 ): void {
   if (diagnostic.wall_kind === 'none'
@@ -2055,7 +2055,7 @@ function recordProductWallAdvisory(
   );
 }
 
-type StateLightObservedWall = ReturnType<typeof classifyProductWall> | ProductWallDiagnostic;
+type StateLightObservedWall = ReturnType<typeof classifyProductWall> | ProductWallDiagnostic<true>;
 
 function classifyStateLightProductWall(
   surface: Awaited<ReturnType<typeof productStatusText>>,
@@ -2508,9 +2508,10 @@ async function waitForComposer(
   page: any,
   invocationDeadlineMs: number,
   useWholePreSendDeadline = false,
-  observeProductWall?: (diagnostic: StateLightObservedWall) => void,
+  observeProductWall?: (diagnostic: ReturnType<typeof classifyProductWall>) => void,
   detectAccountLoadError = false,
   observeComposer?: (state: 'absent' | 'disabled' | 'hidden' | 'not_editable' | 'ready' | 'unknown') => void,
+  observeConversationWall?: (diagnostic: ProductWallDiagnostic<true>) => void,
 ): Promise<{ state: 'ready' } | { state: TurnState; cause: string }> {
   // Preserve the legacy two-argument helper contract used by in-process tests.
   // Committed pre-send navigations explicitly opt into the whole invocation deadline.
@@ -2522,13 +2523,15 @@ async function waitForComposer(
     let remainingMs = readinessDeadline - Date.now();
     if (remainingMs <= 0) break;
     try {
-      const wall = classifyStateLightProductWall(
-        await productStatusText(page, Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs)),
-      );
-      observeProductWall?.(wall);
+      const surface = await productStatusText(page, Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs));
+      const wall = classifyStateLightProductWall(surface);
+      observeProductWall?.(classifyProductWall(surface));
+      if ('wall_kind' in wall && (wall.wall_kind === 'conversation_load_error'
+        || wall.wall_kind === 'conversation_fetch_http_429'
+        || wall.wall_kind === 'account_conversations_http_429')) observeConversationWall?.(wall);
       const held429 = heldPage429Diagnostic(page);
       if (held429) {
-        observeProductWall?.(held429);
+        observeConversationWall?.(held429);
         return { state: 'rate_limit', cause: held429.wall_kind };
       }
       if (detectAccountLoadError && 'wall_kind' in wall && wall.wall_kind === 'account_load_error') {
@@ -2549,7 +2552,7 @@ async function waitForComposer(
     })) {
       const late429 = heldPage429Diagnostic(page);
       if (late429) {
-        observeProductWall?.(late429);
+        observeConversationWall?.(late429);
         return { state: 'rate_limit', cause: late429.wall_kind };
       }
       return { state: 'ready' };
@@ -3013,7 +3016,7 @@ async function runTurn(
   heartbeatSchedulerReady?: (scheduler: TurnScopedHeartbeatScheduler) => void,
   freshCleanup?: FreshComposerCleanupContext,
 ): Promise<TurnRunOutcome> {
-  let diagnostic: ProductWallDiagnostic = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
+  let diagnostic: ProductWallDiagnostic<true> = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
   freshCleanup ??= {};
   try {
     const outcome = await runTurnCore(args, recoveryHooks, entryLivenessHeartbeat, heartbeatSchedulerReady, (value) => {
@@ -3048,7 +3051,7 @@ async function runTurnCore(
   recoveryHooks: StateLightRecoveryHooks,
   entryLivenessHeartbeat: boolean,
   heartbeatSchedulerReady: ((scheduler: TurnScopedHeartbeatScheduler) => void) | undefined,
-  onProductWallDiagnostic: (diagnostic: ProductWallDiagnostic) => void,
+  onProductWallDiagnostic: (diagnostic: ProductWallDiagnostic<true>) => void,
   freshCleanup?: FreshComposerCleanupContext,
 ): Promise<TurnRunOutcome> {
   rejectUnknownOptions(args, [
@@ -3446,6 +3449,7 @@ async function runTurnCore(
       let readiness = await waitForComposer(
         page, deadlineMs, true, observeProductWall, true,
         (state) => { preSendComposerState = state; },
+        observeProductWall,
       );
       while (readiness.state === 'ui_contract_mismatch' && readiness.cause === 'account_load_error') {
         const recovery = await checkAccountLoadError();
@@ -3453,6 +3457,7 @@ async function runTurnCore(
         readiness = await waitForComposer(
           page, deadlineMs, true, observeProductWall, true,
           (state) => { preSendComposerState = state; },
+          observeProductWall,
         );
       }
       return readiness;
