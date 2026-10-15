@@ -519,7 +519,9 @@ function completedResumeChannelOutcome(
     return (hasValidPackReviewDeliveryOutcome(run.deliveryOutcomes?.githubComment, idempotencyKey)
       && run.deliveryOutcomes?.githubComment?.state === 'succeeded')
       || completedGithubCommentReview(run) !== null
-      || (hasValidPackReviewGithubReconciliation(reconciliation, 'prepared')
+      // A definitely rejected advisory COMMENT is safe to retry on the same run.
+      || (run.automaticBudgetDisposition !== 'non_consuming_explicit'
+        && hasValidPackReviewGithubReconciliation(reconciliation, 'prepared')
         && reconciliation.postOutcome === 'definitely_rejected');
   }
 
