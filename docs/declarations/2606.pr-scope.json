@@ -1,0 +1,17 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2606,
+  "declared_paths": [
+    "prompts/gpt_pack_review_prompt.md"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "prompts/gpt_pack_review_prompt.md"
+  ],
+  "source_revision": "9955d35edb3d8992bdfadd0ccbe5c83b93ce9998"
+}
