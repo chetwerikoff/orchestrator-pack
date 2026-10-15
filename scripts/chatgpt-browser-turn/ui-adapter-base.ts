@@ -1723,13 +1723,10 @@ export async function productStatusText(page: any, waitSource?: OperationWaitSou
       if (text) parts.push({ selector, text: String(text) });
     }
   }
-  const witnessed = heldPage429Diagnostic(page);
+  const witnessed = page && typeof page === 'object'
+    ? heldPage429Witnesses.get(page)?.current() : undefined;
   return { text: parts.map((part) => part.text).join('\n'), composer, parts,
-    ...(witnessed ? { witnessed_http_429: {
-      wall_kind: witnessed.wall_kind === 'account_conversations_http_429'
-        ? 'account_conversations_http_429' : 'conversation_fetch_http_429',
-      http_status: 429, status_source: 'owned_page_response',
-    } } : {}) };
+    ...(witnessed ? { witnessed_http_429: witnessed } : {}) };
 }
 
 const PRODUCT_RATE_LIMIT_WALL_RE = /too many requests|(?:making |sending )?requests too quickly|you(?:'|’)re (?:making requests|sending messages) too quickly|temporarily limited(?:\s+access)?(?:\s+to your conversations)?|(?:please )?wait(?: a)? few minutes before trying again|try again in a few minutes|you(?:'|’)re going too fast|rate limit exceeded/i;
