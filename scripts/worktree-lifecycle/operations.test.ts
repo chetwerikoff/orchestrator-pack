@@ -667,7 +667,7 @@ describe('pack-owned lifecycle tool paths', () => {
       expected: { ...paths.expected, repositoryRoot: PACK_ROOT },
     };
     const value = state({
-      orcaPresent: true,
+      orcaPresent: false,
       standardTeardownResult: result({ stdout: JSON.stringify({ outcome: 'cleanup_eligible' }) }),
     });
     const opts = operations(packPaths, value);
@@ -679,6 +679,7 @@ describe('pack-owned lifecycle tool paths', () => {
       operations: opts,
     }).outcome).toBe('git_only_recovery_eligible');
 
+    value.orcaPresent = true;
     expect(runLifecycle({
       expected: { ...packPaths.expected, finalPrHeadSha: HEAD },
       context: 'post-merge-cleanup',
