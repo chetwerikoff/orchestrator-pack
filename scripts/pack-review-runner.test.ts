@@ -6,6 +6,12 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mapGptReplyToReviewPayload } from './lib/pack-gpt-reviewer.ts';
+import { runPackGptReviewCommand } from './pack-gpt-review.ts';
+import {
+  GithubReviewPostError,
+  type GithubReviewSummary,
+  type GithubReviewTransport,
+} from './lib/github-review-reconciliation.ts';
 import { formatPackGptSourceCommentEnvelope, type PackGptSourceIdentity } from './lib/pack-gpt-source-comment-contract.ts';
 import {
   resolvePackGptSourceComment,
@@ -27,12 +33,19 @@ import {
 import {
   createPackReviewRun,
   getPackReviewRun,
+  listPackReviewRuns,
+  resolvePackReviewRequiredRunOrder,
   resolvePackReviewRunStoreRoot,
   setPackReviewRunTerminal,
   updatePackReviewRun,
   type PackReviewRunRecord,
   type PackReviewGptRoundRecord,
 } from './lib/pack-review-run-store.ts';
+import {
+  recordPackReviewPendingStatus,
+  recordPackReviewStaleRequiredStatus,
+  deliverPackReviewVerdict,
+} from './lib/pack-review-delivery.ts';
 import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 import { runProcess, runProcessSync } from './kernel/subprocess.ts';
 import { getPackReviewerPreferencePath, writePackReviewerPreference } from './lib/pack-reviewer-preference.ts';
@@ -4021,5 +4034,654 @@ describe('Issue #2576 owned worktree lifecycle with real disposable Git', () => 
     }
     expect(existsSync(target)).toBe(false);
     expect(registered(f.repo, target)).toBe(false);
+  });
+});
+
+describe('Issue #2607 supplemental reviewer provenance and required-status isolation', () => {
+  function setup() {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'opk-review-2607-'));
+    roots.push(storeRoot);
+    return { projectId: 'orchestrator-pack', storeRoot };
+  }
+
+  it('requires explicit admission and disjoint reviewer reuse without changing run schema', () => {
+    const store = setup();
+    const base = {
+      ...store, prNumber: 2607, headSha: HEAD, trustedPackRoot: process.cwd(),
+      sourceRepoRoot: process.cwd(), canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      surface: 'pack-gpt-review', startReason: 'manual-browser-gpt',
+      resolvedReviewerSource: 'invocation-bound' as const,
+      reviewCycleId: 'existing-2607-cycle',
+      automaticBudgetDisposition: 'non_consuming_explicit' as const,
+    };
+    expect(() => createPackReviewRun({ ...base, resolvedReviewer: 'codex' })).toThrow(/non_consuming_explicit/);
+    const admissible = { ...base, allowExplicitSupplementalStart: true };
+    const original = createPackReviewRun({ ...admissible, resolvedReviewer: 'codex' });
+    expect(original.created).toBe(true);
+    const date = new Date().toISOString();
+    setPackReviewRunTerminal(original.run.id, 'commented', {
+      reviewVerdict: 'clean', findingCount: 0, findings: [],
+      journalOutcome: {
+        state: 'persisted', reason: 'fixture-accepted',
+        idempotencyKey: `verdict:${original.run.id}:${HEAD}`,
+        recordedAtUtc: date, attempts: 1,
+      },
+    }, store);
+    const sameReviewer = createPackReviewRun({ ...admissible, resolvedReviewer: 'codex' });
+    expect(sameReviewer).toMatchObject({ created: false, reused: true, reason: 'terminal_run_exists' });
+    expect(sameReviewer.run.id).toBe(original.run.id);
+    const differentReviewer = createPackReviewRun({ ...admissible, resolvedReviewer: 'claude' });
+    expect(differentReviewer.created).toBe(true);
+    expect(differentReviewer.run.sameKeyOrder).toBeGreaterThan(original.run.sameKeyOrder ?? 0);
+    setPackReviewRunTerminal(differentReviewer.run.id, 'commented', {
+      reviewVerdict: 'clean', findingCount: 0, findings: [],
+      journalOutcome: {
+        state: 'persisted', reason: 'fixture-accepted',
+        idempotencyKey: `verdict:${differentReviewer.run.id}:${HEAD}`,
+        recordedAtUtc: date, attempts: 1,
+      },
+    }, store);
+    const required = createPackReviewRun({
+      ...base, automaticBudgetDisposition: 'consume',
+      allowExplicitSupplementalStart: undefined,
+      resolvedReviewer: 'claude',
+      logicalRoundOrdinal: 1, logicalRoundCap: 2,
+    });
+    expect(required.created).toBe(true);
+    const ordered = resolvePackReviewRequiredRunOrder(
+      [original.run, differentReviewer.run, required.run], required.run,
+    );
+    expect(ordered.kind).toBe('none');
+    expect(getPackReviewRun(original.run.id, store)?.automaticBudgetDisposition).toBe('non_consuming_explicit');
+    expect(getPackReviewRun(required.run.id, store)?.automaticBudgetDisposition).toBe('consume');
+  });
+
+  it('never publishes pending/stale required statuses from a supplemental run', async () => {
+    const store = setup();
+    const supplemental = createPackReviewRun({
+      ...store, prNumber: 2607, headSha: HEAD,
+      trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      surface: 'pack-gpt-review', startReason: 'manual-browser-gpt',
+      resolvedReviewer: 'codex', resolvedReviewerSource: 'invocation-bound',
+      reviewCycleId: 'cycle-2607',
+      automaticBudgetDisposition: 'non_consuming_explicit',
+      allowExplicitSupplementalStart: true,
+      linkedSessionId: 'fixture-worker',
+    }).run;
+    const writeRequiredStatus = vi.fn(async () => undefined);
+    const notifyWorker = vi.fn(async () => ({ state: 'delivered' as const, reason: 'unexpected' }));
+    const pending = await recordPackReviewPendingStatus({
+      ...store, run: supplemental, writeRequiredStatus,
+    });
+    const stale = await recordPackReviewStaleRequiredStatus({
+      ...store, run: supplemental, writeRequiredStatus, notifyWorker,
+    });
+    expect(pending.reason).toBe('supplemental_no_required_status');
+    expect(stale.reason).toBe('supplemental_no_required_status');
+    expect(writeRequiredStatus).not.toHaveBeenCalled();
+    expect(notifyWorker).not.toHaveBeenCalled();
+    expect(getPackReviewRun(supplemental.id, store)?.deliveryOutcomes.requiredStatus).toBeUndefined();
+  });
+
+  it('advisory verdict delivery journals the original run and never updates required status or worker', async () => {
+    const store = setup();
+    const run = createPackReviewRun({
+      ...store, prNumber: 2607, headSha: HEAD,
+      trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      surface: 'pack-gpt-review', startReason: 'manual-browser-gpt',
+      resolvedReviewer: 'claude', resolvedReviewerSource: 'invocation-bound',
+      reviewCycleId: 'cycle-2607',
+      automaticBudgetDisposition: 'non_consuming_explicit',
+      allowExplicitSupplementalStart: true,
+      linkedSessionId: 'fixture-worker',
+    }).run;
+    const writeRequiredStatus = vi.fn(async () => undefined);
+    const notifyWorker = vi.fn(async () => ({ state: 'delivered' as const, reason: 'unexpected' }));
+    const postGithubComment = vi.fn(async () => ({
+      id: 2607, url: 'https://github.com/example/repo/pull/42#issuecomment-2607',
+      event: 'COMMENT' as const,
+    }));
+    await deliverPackReviewVerdict({
+      ...store, run, payload: { verdict: 'clean', findingCount: 0, findings: [] },
+      writeRequiredStatus, notifyWorker, postGithubComment,
+    });
+    const persisted = getPackReviewRun(run.id, store);
+    expect(persisted?.journalOutcome?.state).toBe('persisted');
+    expect(persisted?.reviewVerdict).toBe('clean');
+    expect(postGithubComment).toHaveBeenCalledTimes(1);
+    expect(writeRequiredStatus).not.toHaveBeenCalled();
+    expect(notifyWorker).not.toHaveBeenCalled();
+    expect(persisted?.deliveryOutcomes.requiredStatus).toBeUndefined();
+    expect(persisted?.deliveryOutcomes.workerNotification).toBeUndefined();
+  });
+});
+
+describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', () => {
+  const repository = 'chetwerikoff/orchestrator-pack';
+  const issueBody = [
+    String.fromCharCode(96).repeat(3) + 'complexity-tier',
+    'tier: T1',
+    String.fromCharCode(96).repeat(3),
+  ].join('\n');
+
+
+  function fixtureRoot2607(prefix: string): string {
+    const root = mkdtempSync(join(tmpdir(), prefix));
+    roots.push(root);
+    return root;
+  }
+
+  function commandStart2607(storeRoot: string, overrides: Record<string, unknown> = {}) {
+    return (input: Parameters<typeof startPackReview>[0]) => startPackReview({
+      ...input,
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+      fixtureCurrentPrHeadSha: HEAD,
+      fixtureRequiredCiPolicy: {
+        contexts: ['verify orchestrator-pack structure', 'pr scope guard', 'orchestrator-pack/pack-review'],
+        checks: [],
+      },
+      fixtureRequiredCiChecks: [
+        { name: 'verify orchestrator-pack structure', state: 'SUCCESS' },
+        { name: 'pr scope guard', state: 'SUCCESS' },
+        { name: 'orchestrator-pack/pack-review', state: 'PENDING' },
+      ],
+      fixtureRequiredCiHeadAfterGate: HEAD,
+      fixturePrState: 'OPEN',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixturePostReviewHeadSha: HEAD,
+      fixtureReviewStdout: cleanPayload(),
+      ...overrides,
+    });
+  }
+
+  async function completedRequiredStage(prNumber: number) {
+    const storeRoot = fixtureRoot2607('opk-2607-reviewed-delivery-');
+    setupHarness(storeRoot);
+    process.env.PACK_REVIEWER = 'codex';
+    const statusWrites: string[] = [];
+    let notifications = 0;
+    const fixture = {
+      fixtureCurrentPrHeadSha: HEAD,
+      fixturePostReviewHeadSha: HEAD,
+      fixturePrState: 'OPEN' as const,
+      fixturePrBody: 'Closes #' + prNumber,
+      fixturePostReviewPrBody: 'Closes #' + prNumber,
+      fixtureRepoSlug: repository,
+      fixtureIssueNumber: prNumber,
+      fixtureIssueTitle: '[T1] Existing required review',
+      fixtureIssueBody: issueBody,
+      fixtureReviewStdout: cleanPayload(),
+      fixtureRequiredStatusWriter: async (request: { state: string }) => {
+        statusWrites.push(request.state);
+      },
+      fixtureWorkerNotifier: async () => {
+        notifications += 1;
+        return { state: 'delivered' as const, reason: 'fixture' };
+      },
+    };
+    const required = await startPackReview({
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+      prNumber, headSha: HEAD, ...fixture,
+    });
+    expect(required, JSON.stringify(required)).toMatchObject({ ok: true, created: true });
+    expect(readPackReviewAuthority(prNumber, { storeRoot })?.cycle?.reviewStageComplete).toBe(true);
+    const statusCount = statusWrites.length;
+    const notificationCount = notifications;
+    return {
+      storeRoot, fixture, statusWrites, statusCount, notificationCount,
+      getNotificationCount: () => notifications,
+    };
+  }
+
+  function reviewTransport(prNumber: number, mode: 'success' | 'missing' | 'confirmed' | 'ambiguous') {
+    const reviews: GithubReviewSummary[] = [];
+    let posts = 0;
+    let visible = mode === 'success';
+    let permitPost = mode === 'success';
+    const transport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'fixture-2607-reviewer',
+      listReviews: async () => visible ? [...reviews] : [],
+      postReview: async ({ body, commitId }) => {
+        posts += 1;
+        if (mode === 'missing' && !permitPost) {
+          throw new GithubReviewPostError('definitely_rejected', 'synthetic definite COMMENT rejection');
+        }
+        const id = prNumber * 100 + posts;
+        const review: GithubReviewSummary = {
+          id, body, commitId, state: 'COMMENTED',
+          submittedAt: new Date().toISOString(),
+          userLogin: 'fixture-2607-reviewer',
+          url: 'https://github.com/' + repository + '/pull/' + prNumber + '#pullrequestreview-' + id,
+        };
+        if (mode === 'confirmed' || mode === 'ambiguous') {
+          if (mode === 'confirmed') reviews.push(review);
+          throw new Error('synthetic ambiguous COMMENT acknowledgement');
+        }
+        reviews.push(review);
+        if (mode === 'missing') visible = true;
+        return { id, url: review.url };
+      },
+      dismissReview: async () => undefined,
+    };
+    return {
+      transport, posts: () => posts,
+      expose: () => { visible = true; },
+      permitPost: () => { permitPost = true; },
+    };
+  }
+
+  function originalSourceTransport(prNumber: number) {
+    const comments: PackGptSourceGithubComment[] = [];
+    let invocations = 0;
+    const transport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'fixture-2607-gpt-source',
+      listComments: async () => [...comments],
+      getComment: async (id) => {
+        const found = comments.find((item) => item.id === id);
+        if (!found) throw new Error('original GPT source comment unavailable');
+        return found;
+      },
+    };
+    return {
+      transport, sent: () => invocations,
+      publishOriginal: async ({ identity }: { identity: PackGptSourceIdentity }) => {
+        invocations += 1;
+        const id = prNumber * 1000 + invocations;
+        const timestamp = new Date().toISOString();
+        comments.push({
+          id, body: formatPackGptSourceCommentEnvelope(identity, 'NO_FINDINGS'),
+          actorLogin: 'fixture-2607-gpt-source',
+          createdAt: timestamp, updatedAt: timestamp,
+          url: 'https://github.com/' + repository + '/pull/' + prNumber + '#issuecomment-' + id,
+          issueUrl: 'https://api.github.com/repos/' + repository + '/issues/' + prNumber,
+        });
+      },
+    };
+  }
+
+  it('passes real final required Codex runner output to explicit CLI with verified head', async () => {
+    const storeRoot = fixtureRoot2607('opk-2607-native-final-cli-');
+    setupHarness(storeRoot);
+    const prNumber = 260711;
+    const execution = await runPackGptReviewCommand({ prNumber, reviewer: 'codex' }, {
+      env: process.env,
+      stderr: { write: () => undefined },
+      startReview: commandStart2607(storeRoot, {
+        fixturePrBody: 'Closes #' + prNumber,
+        fixturePostReviewPrBody: 'Closes #' + prNumber,
+        fixtureIssueNumber: prNumber,
+        fixtureIssueTitle: '[T1] Native required review',
+        fixtureIssueBody: issueBody,
+        fixtureReviewStdout: cleanPayload(),
+      }),
+    });
+    expect(execution, JSON.stringify(execution.result)).toMatchObject({
+      exitCode: 0,
+      result: {
+        ok: true, created: true, reason: 'completed',
+        prNumber, headSha: HEAD, targetSha: HEAD,
+        resolvedReviewer: 'codex', executedReviewer: 'codex',
+        reviewerInvokedForThisRun: true,
+      },
+    });
+    expect(execution.result.reviewerExecutionRunId).toBe(execution.result.runId);
+    expect(execution.result.outcome).not.toBe('supplemental_review_delivered');
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(1);
+  });
+
+  it.each(['success', 'confirmed'] as const)(
+    'delivers credentialed supplemental GPT %s through real runner and CLI without required-status writes',
+    async (mode) => {
+      const prNumber = mode === 'success' ? 260712 : 260713;
+      const f = await completedRequiredStage(prNumber);
+      const source = originalSourceTransport(prNumber);
+      const review = reviewTransport(prNumber, mode);
+      const startReview = commandStart2607(f.storeRoot, {
+        ...f.fixture,
+        fixtureReviewStdout: cleanPayload(),
+        fixtureGptSourceCommentTransport: source.transport,
+        fixtureBeforeGptSourceCommentCensus: source.publishOriginal,
+        fixtureGithubReviewTransport: review.transport,
+      });
+      const first = await runPackGptReviewCommand({ prNumber, reviewer: 'gpt' }, {
+        env: process.env, stderr: { write: () => undefined }, startReview,
+      });
+      if (mode === 'confirmed') {
+        expect(first.exitCode).toBe(1);
+        const journaled = getPackReviewRun(String(first.result.runId), {
+          projectId: 'orchestrator-pack', storeRoot: f.storeRoot,
+        });
+        expect(journaled).toMatchObject({
+          automaticBudgetDisposition: 'non_consuming_explicit',
+          journalOutcome: { state: 'persisted' },
+          executedReviewer: 'gpt',
+          reviewerExecutionRunId: first.result.runId,
+        });
+        review.expose();
+      }
+      const final = mode === 'confirmed'
+        ? await runPackGptReviewCommand({ prNumber, reviewer: 'gpt' }, {
+            env: process.env, stderr: { write: () => undefined }, startReview,
+          })
+        : first;
+      expect(final, JSON.stringify(final.result)).toMatchObject({
+        exitCode: 0,
+        result: {
+          ok: true, reason: 'supplemental_review_delivered',
+          outcome: 'supplemental_review_delivered', reviewVerdict: 'clean',
+          headSha: HEAD, targetSha: HEAD, prNumber,
+          resolvedReviewer: 'gpt', executedReviewer: 'gpt',
+          reviewerInvokedForThisRun: true,
+          githubReviewId: expect.any(Number),
+          githubReviewUrl: expect.stringContaining('pullrequestreview-'),
+        },
+      });
+      expect(final.result.reviewerExecutionRunId).toBe(final.result.runId);
+      if (mode === 'confirmed') {
+        expect(final.result.runId).toBe(first.result.runId);
+        expect(final.result.recovered).toBe(true);
+      }
+      expect(final.result).not.toHaveProperty('publicationVerified');
+      expect(review.posts()).toBe(1);
+      expect(source.sent()).toBeGreaterThan(0);
+      expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot: f.storeRoot })).toHaveLength(2);
+      const advisory = getPackReviewRun(String(final.result.runId), {
+        projectId: 'orchestrator-pack', storeRoot: f.storeRoot,
+      });
+      expect(advisory).toMatchObject({
+        automaticBudgetDisposition: 'non_consuming_explicit',
+        reviewVerdict: 'clean', journalOutcome: { state: 'persisted' },
+        deliveryOutcomes: { githubComment: { state: 'succeeded' } },
+      });
+      expect(advisory?.deliveryOutcomes.requiredStatus).toBeUndefined();
+      expect(f.statusWrites).toHaveLength(f.statusCount);
+      expect(f.getNotificationCount()).toBe(f.notificationCount);
+      expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.reviewStageComplete).toBe(true);
+    },
+  );
+
+  it.each(['missing', 'confirmed', 'ambiguous'] as const)(
+    'resumes only the original native supplemental COMMENT for %s delivery evidence',
+    async (mode) => {
+      const prNumber = mode === 'missing' ? 260714 : mode === 'confirmed' ? 260715 : 260716;
+      const f = await completedRequiredStage(prNumber);
+      const review = reviewTransport(prNumber, mode);
+      let nativeInvocations = 0;
+      const startReview = commandStart2607(f.storeRoot, {
+        ...f.fixture,
+        fixtureGithubReviewTransport: review.transport,
+        fixtureAfterNativeInitialArmed: async () => { nativeInvocations += 1; },
+      });
+      const first = await runPackGptReviewCommand({ prNumber, reviewer: 'codex' }, {
+        env: process.env, stderr: { write: () => undefined }, startReview,
+      });
+      expect(first.exitCode).toBe(1);
+      const originalRunId = String(first.result.runId);
+      const incomplete = getPackReviewRun(originalRunId, {
+        projectId: 'orchestrator-pack', storeRoot: f.storeRoot,
+      });
+      expect(incomplete).toMatchObject({
+        automaticBudgetDisposition: 'non_consuming_explicit',
+        journalOutcome: { state: 'persisted' }, reviewVerdict: 'clean',
+        resolvedReviewer: 'codex', executedReviewer: 'codex',
+        reviewerExecutionRunId: originalRunId,
+      });
+      if (mode === 'confirmed') review.expose();
+      if (mode === 'missing') review.permitPost();
+      const second = await runPackGptReviewCommand({ prNumber, reviewer: 'codex' }, {
+        env: process.env, stderr: { write: () => undefined }, startReview,
+      });
+      if (mode === 'ambiguous') {
+        expect(second.exitCode).toBe(1);
+        expect(second.result.runnerReason).not.toBe('supplemental_review_delivered');
+        expect(review.posts()).toBe(1);
+      } else {
+        expect(second, JSON.stringify(second.result)).toMatchObject({
+          exitCode: 0,
+          result: {
+            ok: true, recovered: true, reused: true, created: false,
+            outcome: 'supplemental_review_delivered',
+            reason: 'supplemental_review_delivered', reviewVerdict: 'clean',
+            targetSha: HEAD, headSha: HEAD,
+            resolvedReviewer: 'codex', executedReviewer: 'codex',
+            githubReviewId: expect.any(Number),
+          },
+        });
+        expect(review.posts()).toBe(mode === 'missing' ? 2 : 1);
+      }
+      expect(String(second.result.runId)).toBe(originalRunId);
+      expect(nativeInvocations).toBe(1);
+      expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot: f.storeRoot })).toHaveLength(2);
+      const after = getPackReviewRun(originalRunId, {
+        projectId: 'orchestrator-pack', storeRoot: f.storeRoot,
+      });
+      expect(after?.deliveryOutcomes.requiredStatus).toBeUndefined();
+      expect(f.statusWrites).toHaveLength(f.statusCount);
+      expect(f.getNotificationCount()).toBe(f.notificationCount);
+    },
+  );
+  it('executes explicit Codex on T3 conflict-free H2 without a synthetic carry-over terminal', async () => {
+    const prNumber = 260717;
+    const h1 = '1'.repeat(40);
+    const h2 = '2'.repeat(40);
+    const storeRoot = fixtureRoot2607('opk-2607-exact-h2-carryover-');
+    setupHarness(storeRoot);
+    let observedStatus: string | undefined;
+    const base = {
+      projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+      prNumber, fixturePrState: 'OPEN' as const,
+      fixturePrBody: 'Closes #' + prNumber,
+      fixturePostReviewPrBody: 'Closes #' + prNumber,
+      fixtureRepoSlug: repository, fixtureIssueNumber: prNumber,
+      fixtureIssueTitle: '[T3] Explicit H2 reviewer',
+      fixtureIssueBody: ['```complexity-tier', 'tier: T3', '```'].join('\n'),
+      fixtureReviewStdout: cleanPayload(),
+      fixtureRequiredStatusWriter: async (request: { state: string }) => { observedStatus = request.state; },
+      fixtureRequiredStatusReader: async () => observedStatus,
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    };
+    const first = await startPackReview({
+      ...base, headSha: h1, fixtureCurrentPrHeadSha: h1, fixturePostReviewHeadSha: h1,
+    });
+    expect(first, JSON.stringify(first)).toMatchObject({ ok: true, created: true });
+    expect(readPackReviewAuthority(prNumber, { storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([1]);
+    const log = join(storeRoot, 'actual-h2-invocations.jsonl');
+    process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = log;
+    const beforeInvocation = vi.fn(async () => {
+      const authority = readPackReviewAuthority(prNumber, { storeRoot });
+      expect(authority?.terminal?.targetSha).not.toBe(h2);
+      expect(authority?.cycle?.consumedRoundOrdinals).toEqual([1]);
+    });
+    const second = await startPackReview({
+      ...base, headSha: h2, fixtureCurrentPrHeadSha: h2, fixturePostReviewHeadSha: h2,
+      reviewerOverride: 'codex', surface: 'pack-gpt-review',
+      fixtureRequiredCiPolicy: { contexts: ['pr scope guard'], checks: [] },
+      fixtureRequiredCiChecks: [{ name: 'pr scope guard', state: 'SUCCESS' }],
+      fixtureRequiredCiHeadAfterGate: h2,
+      fixtureCarryoverReplay: {
+        kind: 'conflict_free_carryover', sourceHeadSha: h1, targetHeadSha: h2,
+        mainSha: '3'.repeat(40), mergeBaseSha: '4'.repeat(40),
+        replayTreeSha: '5'.repeat(40), replayDigest: 'two-parent-clean-merge',
+      },
+      fixtureCarryoverSourceCleanRunId: String(first.runId),
+      fixtureAfterNativeInitialArmed: beforeInvocation,
+    });
+    expect(second, JSON.stringify(second)).toMatchObject({
+      ok: true, created: true, headSha: h2, targetSha: h2,
+      resolvedReviewer: 'codex', executedReviewer: 'codex',
+      reviewerInvokedForThisRun: true,
+    });
+    expect(second.reviewerExecutionRunId).toBe(second.runId);
+    expect(beforeInvocation).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(readFileSync(log, 'utf8').trim()).reviewer).toBe('codex');
+    expect(readPackReviewAuthority(prNumber, { storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([1, 2]);
+  });
+
+  it('accepts a real required native journal and COMMENT/status resume through explicit CLI', async () => {
+    const prNumber = 260718;
+    const storeRoot = fixtureRoot2607('opk-2607-native-required-resume-');
+    setupHarness(storeRoot);
+    const review = reviewTransport(prNumber, 'success');
+    let observedStatus: string | undefined;
+    let nativeInvocations = 0;
+    const startReview = commandStart2607(storeRoot, {
+      fixturePrBody: 'Closes #' + prNumber,
+      fixturePostReviewPrBody: 'Closes #' + prNumber,
+      fixtureIssueNumber: prNumber, fixtureIssueTitle: '[T3] Required journal resume',
+      fixtureIssueBody: ['```complexity-tier', 'tier: T3', '```'].join('\n'),
+      fixtureGithubReviewTransport: review.transport,
+      fixtureAfterNativeInitialArmed: async () => { nativeInvocations += 1; },
+      fixtureRequiredStatusWriter: async (request: { state: string }) => { observedStatus = request.state; },
+      fixtureRequiredStatusReader: async () => observedStatus,
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    });
+    const seeded = createPackReviewRun({
+      projectId: 'orchestrator-pack', storeRoot, prNumber, headSha: HEAD,
+      trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      canonicalRepository: repository, resolvedReviewer: 'codex',
+    }).run;
+    const recordedAtUtc = new Date().toISOString();
+    updatePackReviewRun(seeded.id, {
+      status: 'reviewing', latestRunStatus: 'reviewing',
+      resolvedReviewer: 'codex', executedReviewer: 'codex',
+      reviewerInvokedForThisRun: true, reviewerExecutionRunId: seeded.id,
+      reviewVerdict: 'clean', findingCount: 0, findings: [],
+      journalOutcome: {
+        state: 'persisted', reason: 'verdict_persisted', recordedAtUtc,
+        idempotencyKey: `verdict:${seeded.id}:${HEAD}`, attempts: 1,
+      },
+      deliveryOutcomes: {
+        githubComment: {
+          state: 'failed', recordedAtUtc, reason: 'initial COMMENT transport failed',
+          idempotencyKey: `github-comment:${seeded.id}:${HEAD}`,
+        },
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const resumed = await runPackGptReviewCommand({ prNumber, reviewer: 'codex' }, {
+      env: process.env, stderr: { write: () => undefined }, startReview,
+    });
+    expect(resumed, JSON.stringify(resumed.result)).toMatchObject({
+      exitCode: 0,
+      result: {
+        ok: true, created: false, reused: true, recovered: true,
+        reason: 'resumed_journaled_delivery', deliveryReason: 'completed',
+        headSha: HEAD, targetSha: HEAD, runId: seeded.id,
+        resolvedReviewer: 'codex', executedReviewer: 'codex',
+        reviewerInvokedForThisRun: true,
+        deliveryOutcomes: {
+          githubComment: { state: 'succeeded' },
+          requiredStatus: { state: 'succeeded' },
+        },
+      },
+    });
+    expect(resumed.result.reviewerExecutionRunId).toBe(seeded.id);
+    expect(resumed.result).not.toHaveProperty('publicationVerified');
+    expect(nativeInvocations).toBe(0);
+    expect(review.posts()).toBe(1);
+  });
+
+  it('recovers a crash before required GPT aggregate from original credentialed comments through explicit CLI', async () => {
+    const prNumber = 260719;
+    const storeRoot = fixtureRoot2607('opk-2607-required-gpt-crash-');
+    setupHarness(storeRoot);
+    const source = originalSourceTransport(prNumber);
+    const review = reviewTransport(prNumber, 'success');
+    let observedStatus: string | undefined;
+    const fixture = {
+      fixturePrBody: 'Closes #' + prNumber,
+      fixturePostReviewPrBody: 'Closes #' + prNumber,
+      fixtureIssueNumber: prNumber, fixtureIssueTitle: '[T1] Required GPT crash',
+      fixtureIssueBody: issueBody,
+      fixtureGptSourceCommentTransport: source.transport,
+      fixtureBeforeGptSourceCommentCensus: source.publishOriginal,
+      fixtureGithubReviewTransport: review.transport,
+      fixtureRequiredStatusWriter: async (request: { state: string }) => { observedStatus = request.state; },
+      fixtureRequiredStatusReader: async () => observedStatus,
+    };
+    const first = await runPackGptReviewCommand({ prNumber, reviewer: 'gpt' }, {
+      env: process.env, stderr: { write: () => undefined },
+      startReview: commandStart2607(storeRoot, {
+        ...fixture, fixtureCrashAfterGptSourceCredentialedCount: 3,
+      }),
+    });
+    expect(first.exitCode).toBe(1);
+    expect(source.sent()).toBe(3);
+    const originalId = String(first.result.runId);
+    expect(getPackReviewRun(originalId, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
+      reviewerExecutionRunId: undefined, executedReviewer: undefined,
+      reviewVerdict: undefined,
+    });
+    const resumed = await runPackGptReviewCommand({ prNumber, reviewer: 'gpt' }, {
+      env: process.env, stderr: { write: () => undefined },
+      startReview: commandStart2607(storeRoot, fixture),
+    });
+    expect(resumed, JSON.stringify(resumed.result)).toMatchObject({
+      exitCode: 0,
+      result: {
+        ok: true, created: false, reused: true, recovered: true,
+        reason: 'resumed_journaled_delivery', runId: originalId,
+        headSha: HEAD, targetSha: HEAD,
+        publicationVerified: true, publicationHeadSha: HEAD,
+        resolvedReviewer: 'gpt', executedReviewer: 'gpt',
+        reviewerInvokedForThisRun: true,
+        githubReviewId: expect.any(Number),
+      },
+    });
+    expect(resumed.result.reviewerExecutionRunId).toBe(originalId);
+    expect(source.sent()).toBe(3);
+    expect(review.posts()).toBe(1);
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(1);
+    expect(getPackReviewRun(originalId, { projectId: 'orchestrator-pack', storeRoot }))
+      .toMatchObject({
+        reviewVerdict: 'clean', reviewerExecutionRunId: originalId,
+        reviewerInvokedForThisRun: true, journalOutcome: { state: 'persisted' },
+        deliveryOutcomes: {
+          githubComment: { state: 'succeeded' },
+          requiredStatus: { state: 'succeeded' },
+        },
+      });
+  });
+
+  it('refuses contradictory invocation provenance during required GPT credentialed recovery', async () => {
+    const prNumber = 260720;
+    const storeRoot = fixtureRoot2607('opk-2607-required-gpt-origin-conflict-');
+    setupHarness(storeRoot);
+    const source = originalSourceTransport(prNumber);
+    const review = reviewTransport(prNumber, 'success');
+    const fixture = {
+      fixturePrBody: 'Closes #' + prNumber,
+      fixturePostReviewPrBody: 'Closes #' + prNumber,
+      fixtureIssueNumber: prNumber, fixtureIssueTitle: '[T1] Credentialed original',
+      fixtureIssueBody: issueBody,
+      fixtureGptSourceCommentTransport: source.transport,
+      fixtureBeforeGptSourceCommentCensus: source.publishOriginal,
+      fixtureGithubReviewTransport: review.transport,
+      fixtureRequiredStatusWriter: async () => undefined,
+      fixtureRequiredStatusReader: async () => 'success',
+    };
+    const first = await runPackGptReviewCommand({ prNumber, reviewer: 'gpt' }, {
+      env: process.env, stderr: { write: () => undefined },
+      startReview: commandStart2607(storeRoot, {
+        ...fixture, fixtureCrashAfterGptSourceCredentialedCount: 3,
+      }),
+    });
+    expect(first.exitCode).toBe(1);
+    const id = String(first.result.runId);
+    updatePackReviewRun(id, {
+      executedReviewer: 'codex', reviewerInvokedForThisRun: false, reviewerExecutionRunId: 'foreign-run-id',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const second = await runPackGptReviewCommand({ prNumber, reviewer: 'gpt' }, {
+      env: process.env, stderr: { write: () => undefined },
+      startReview: commandStart2607(storeRoot, fixture),
+    });
+    expect(second.exitCode).toBe(1);
+    const original = getPackReviewRun(id, { projectId: 'orchestrator-pack', storeRoot });
+    expect(original?.reviewerInvokedForThisRun).toBe(false);
+    expect(original?.executedReviewer).toBe('codex');
+    expect(original?.reviewerExecutionRunId).toBe('foreign-run-id');
+    expect(original?.journalOutcome?.state).not.toBe('persisted');
+    expect(review.posts()).toBe(0);
   });
 });

@@ -81,6 +81,7 @@ import {
   testReviewStartClaimOwnership,
   type ClaimResult,
 } from './lib/review-start-claim-store.ts';
+import type { ExplicitDeadReviewerTakeover } from './lib/review-start-claim-cli.ts';
 import {
   PACK_REVIEW_ACTIVE_STATUSES,
   createPackReviewRun,
@@ -97,6 +98,7 @@ import {
   packReviewRunStaleMinutes,
   packReviewWorktreesDir,
   resolvePackReviewRunOrder,
+  resolvePackReviewRequiredRunOrder,
   resolvePackReviewRunStoreRoot,
   setPackReviewRunTerminal,
   terminalizePackReviewStaleRun,
@@ -440,6 +442,7 @@ interface ClaimLease {
   acquired: boolean;
   reason: string;
   directory: string;
+  deadForeignRunClaimReclaimed?: boolean;
   owns: () => boolean;
   release: (action: 'run_started' | 'failure', reviewRuns: PackReviewRunRecord[], detail?: string) => Promise<void>;
 }
@@ -1587,11 +1590,36 @@ function selectGithubReviewEvent(_payload: ReviewPayload): 'COMMENT' {
 
 function reviewerProvenanceReceipt(run: PackReviewRunRecord): Record<string, unknown> {
   return {
+    runId: run.id,
+    targetSha: run.targetSha,
     ...(run.resolvedReviewer ? { resolvedReviewer: run.resolvedReviewer } : {}),
     ...(run.resolvedReviewerSource ? { resolvedReviewerSource: run.resolvedReviewerSource } : {}),
     ...(run.executedReviewer ? { executedReviewer: run.executedReviewer } : {}),
     ...(run.reviewerExecutionRunId ? { reviewerExecutionRunId: run.reviewerExecutionRunId } : {}),
     ...(run.reviewerInvokedForThisRun !== undefined ? { reviewerInvokedForThisRun: run.reviewerInvokedForThisRun } : {}),
+  };
+}
+
+function supplementalReviewReceipt(run: PackReviewRunRecord): Record<string, unknown> | null {
+  if (run.automaticBudgetDisposition !== 'non_consuming_explicit'
+      || run.targetSha !== run.headSha
+      || !run.resolvedReviewer
+      || run.resolvedReviewer !== run.executedReviewer
+      || run.reviewerInvokedForThisRun !== true
+      || run.reviewerExecutionRunId !== run.id
+      || !hasPersistedPackReviewVerdict(run)
+      || run.journalOutcome?.state !== 'persisted'
+      || (run.reviewVerdict !== 'clean' && run.reviewVerdict !== 'findings')
+      || run.githubReviewReconciliation?.phase !== 'complete'
+      || run.githubReviewEvent !== 'COMMENT'
+      || !run.githubReviewId || !trim(run.githubReviewUrl)
+      || run.deliveryOutcomes.githubComment?.state !== 'succeeded') return null;
+  return {
+    outcome: 'supplemental_review_delivered',
+    reviewVerdict: run.reviewVerdict,
+    ...reviewerProvenanceReceipt(run),
+    githubReviewId: run.githubReviewId,
+    githubReviewUrl: run.githubReviewUrl,
   };
 }
 
@@ -1604,6 +1632,9 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
     '',
     `Run: \`${run.id}\``,
     `Head: \`${run.targetSha}\``,
+    ...(run.automaticBudgetDisposition === 'non_consuming_explicit'
+      ? ['Mode: supplemental advisory review (does not change required pack-review status).']
+      : []),
     `Selected reviewer: \`${run.resolvedReviewer ?? 'unrecorded'}\``,
     `Selection source: \`${run.resolvedReviewerSource ?? 'unrecorded'}\``,
     `Verdict reviewer: \`${run.executedReviewer ?? 'unrecorded'}\``,
@@ -2007,6 +2038,7 @@ async function acquireClaimLease(options: {
   startReason: string;
   resumeRunId?: string;
   allowCompletedSameHeadReplay?: boolean;
+  takeover?: ExplicitDeadReviewerTakeover;
 }): Promise<ClaimLease> {
   void options.trustedPackRoot;
   void options.claimPath;
@@ -2035,6 +2067,7 @@ async function acquireClaimLease(options: {
     reviewRuns: claimRuns,
     projectId: options.projectId,
     startReason: options.startReason,
+    takeover: options.takeover,
   });
   if (!claim.acquired) {
     return {
@@ -2049,6 +2082,8 @@ async function acquireClaimLease(options: {
     acquired: true,
     reason: 'acquired',
     directory: '',
+    deadForeignRunClaimReclaimed: Boolean(
+      options.takeover && claim.reason === 'dead_foreign_reviewer_reclaimed'),
     owns: () => testReviewStartClaimOwnership(claim),
     release: async (action, reviewRuns, detail = '') => {
       const completion = action === 'run_started'
@@ -2066,18 +2101,36 @@ async function findJournaledDeliveryResumeCandidate(options: {
   repoSlug: string; sourceRepoRoot: string;
   resolveSlug?: (repoRoot: string) => Promise<string>;
   fixtureRequiredStatusReader?: (headSha: string) => string | undefined | Promise<string | undefined>;
+  explicitReviewer?: PackReviewer;
+  supplementalMode?: boolean;
 }): Promise<PackReviewRunRecord | null> {
   const candidates = listPackReviewRuns({ projectId: options.projectId, storeRoot: options.storeRoot })
     .filter((candidate) => candidate.prNumber === options.prNumber
       && candidate.targetSha === options.headSha
+      && (options.explicitReviewer
+        ? candidate.resolvedReviewer === options.explicitReviewer
+          && (candidate.automaticBudgetDisposition === 'non_consuming_explicit') === (options.supplementalMode === true)
+        : candidate.automaticBudgetDisposition !== 'non_consuming_explicit')
       && Boolean(packReviewJournaledPayload(candidate)));
   const repositoryBoundCandidates: PackReviewRunRecord[] = [];
   for (const candidate of candidates) {
     const identity = await resolvePackReviewRunCanonicalRepository(
       candidate, options.resolveSlug ?? resolveRepositorySlug,
     );
+    const nativeSupplemental = candidate.automaticBudgetDisposition === 'non_consuming_explicit'
+      && !candidate.reviewRound;
     if (!identity.ok || identity.slug !== options.repoSlug
-      || !hasCredentialedGptSourceAuthority(candidate)) continue;
+      || (candidate.reviewRound !== undefined && !hasCredentialedGptSourceAuthority(candidate))
+      || (nativeSupplemental && (!hasPersistedPackReviewVerdict(candidate)
+        || !candidate.resolvedReviewer
+        || candidate.resolvedReviewer !== candidate.executedReviewer
+        || candidate.reviewerInvokedForThisRun !== true
+        || candidate.reviewerExecutionRunId !== candidate.id
+        || candidate.nativeAttempt?.reviewer !== candidate.resolvedReviewer))) continue;
+    if (candidate.automaticBudgetDisposition === 'non_consuming_explicit') {
+      if (packReviewDeliveryNeedsResume(candidate)) repositoryBoundCandidates.push(candidate);
+      continue;
+    }
     if (packReviewDeliveryNeedsResume(candidate)
         || (candidate.reviewRound?.reviewer === 'gpt'
           && candidate.deliveryOutcomes.requiredStatus?.state === 'failed')) {
@@ -2829,6 +2882,41 @@ function hasCredentialedGptSourceAuthority(run: PackReviewRunRecord): boolean {
     }
   }
   return true;
+}
+
+/** Recover original execution identity from credentialed source slots, never projection. */
+function bindCredentialedGptExecutionProvenance(
+  run: PackReviewRunRecord,
+  options: { projectId: string; storeRoot: string },
+): PackReviewRunRecord {
+  const round = run.reviewRound;
+  if ((run.resolvedReviewer !== undefined && run.resolvedReviewer !== 'gpt')
+      || round?.reviewer !== 'gpt'
+      || !hasCredentialedGptSourceAuthority(run)
+      || gptUsableSourceCount(round) < (round.settledSourceCount ?? round.cardinality)
+      || (run.executedReviewer !== undefined && run.executedReviewer !== 'gpt')
+      || (run.reviewerExecutionRunId !== undefined && run.reviewerExecutionRunId !== run.id)
+      || run.reviewerInvokedForThisRun === false) {
+    throw new Error('GPT original execution lacks credentialed source provenance');
+  }
+  const bound = updatePackReviewRunIf(run.id, (records) => {
+    const current = records.find((candidate) => candidate.id === run.id);
+    return Boolean(current && current.targetSha === run.targetSha
+      && (current.resolvedReviewer === undefined || current.resolvedReviewer === 'gpt')
+      && current.automaticBudgetDisposition === run.automaticBudgetDisposition
+      && stableJson(current.reviewRound) === stableJson(round)
+      && hasCredentialedGptSourceAuthority(current)
+      && (current.executedReviewer === undefined || current.executedReviewer === 'gpt')
+      && (current.reviewerExecutionRunId === undefined || current.reviewerExecutionRunId === run.id)
+      && current.reviewerInvokedForThisRun !== false);
+  }, {
+    resolvedReviewer: 'gpt',
+    executedReviewer: 'gpt',
+    reviewerInvokedForThisRun: true,
+    reviewerExecutionRunId: run.id,
+  }, options);
+  if (!bound) throw new Error('GPT source execution provenance changed before binding');
+  return bound;
 }
 
 function assertCredentialedGptSourceAuthority(run: PackReviewRunRecord): void {
@@ -3719,6 +3807,11 @@ async function recoverStaleGptSourceComments(options: {
     findingCount: aggregate.findingCount,
     findings: aggregate.findings,
   }, { projectId: options.projectId, storeRoot: options.storeRoot });
+  // Both required and supplemental recovered source rounds need the same
+  // original execution identity before journal/COMMENT/status settlement.
+  bindCredentialedGptExecutionProvenance(persistedBeforeAggregate, {
+    projectId: options.projectId, storeRoot: options.storeRoot,
+  });
   const classification = classifyPackReviewPayload(aggregate);
   setPackReviewRunTerminal(options.run.id, classification.terminalStatus, {
     reviewVerdict: aggregate.verdict,
@@ -3928,12 +4021,28 @@ async function settleRecoveredGptDelivery(options: {
   repoSlug: string;
   writeRequiredStatus: PackReviewRequiredStatusWriter;
 }): Promise<Awaited<ReturnType<typeof resumePackReviewVerdictDelivery>>> {
-  await commitRecoveredGptAuthority(options);
+  if (options.run.automaticBudgetDisposition !== 'non_consuming_explicit') {
+    await commitRecoveredGptAuthority(options);
+  } else {
+    const journaled = getPackReviewRun(options.run.id, {
+      projectId: options.projectId, storeRoot: options.storeRoot,
+    }) ?? options.run;
+    if (!hasPersistedPackReviewVerdict(journaled)) {
+      throw new Error('supplemental GPT journaled verdict missing before COMMENT recovery');
+    }
+    bindCredentialedGptExecutionProvenance(journaled, {
+      projectId: options.projectId, storeRoot: options.storeRoot,
+    });
+  }
   const latestRun = getPackReviewRun(options.run.id, {
     projectId: options.projectId,
     storeRoot: options.storeRoot,
   }) ?? options.run;
   const resumed = await resumeRecoveredGptDelivery({ ...options, run: latestRun });
+  if (options.run.automaticBudgetDisposition === 'non_consuming_explicit') {
+    // Journal and the original reviewer COMMENT alone settle advisory recovery.
+    return resumed;
+  }
   const authorityOptions: PackReviewAuthorityOptions = { storeRoot: options.storeRoot };
   const currentAuthority = readPackReviewAuthority(options.run.prNumber, authorityOptions);
   if (!currentAuthority
@@ -5043,7 +5152,7 @@ export async function reconcileStalePackReviewRuns(
   ) => {
     let restored: Awaited<ReturnType<typeof restorePackReviewAuthoritativeRequiredStatus>> = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const currentOrder = resolvePackReviewRunOrder(await readBoundRecords(), staleRun);
+      const currentOrder = resolvePackReviewRequiredRunOrder(await readBoundRecords(), staleRun);
       if (currentOrder.kind !== 'newer') {
         return {
           outcome: restored,
@@ -5066,7 +5175,7 @@ export async function reconcileStalePackReviewRuns(
       if (input.fixturePauseAfterRestoreRead) {
         await input.fixturePauseAfterRestoreRead(currentOrder.run);
       }
-      const afterWrite = resolvePackReviewRunOrder(await readBoundRecords(), staleRun);
+      const afterWrite = resolvePackReviewRequiredRunOrder(await readBoundRecords(), staleRun);
       if (afterWrite.kind === 'newer') {
         const afterProjection = packReviewRequiredStatusProjectionKey(afterWrite.run);
         if (afterWrite.run.id !== selectedId || afterProjection !== selectedProjection) continue;
@@ -5112,7 +5221,7 @@ export async function reconcileStalePackReviewRuns(
         run: staleRun,
         authorityGuard: (boundRecords) => {
           if (!restoration.authorityId || !restoration.authorityProjection) return false;
-          const currentOrder = resolvePackReviewRunOrder(boundRecords, staleRun);
+          const currentOrder = resolvePackReviewRequiredRunOrder(boundRecords, staleRun);
           return currentOrder.kind === 'newer'
             && currentOrder.run.id === restoration.authorityId
             && packReviewRequiredStatusProjectionKey(currentOrder.run)
@@ -5134,6 +5243,12 @@ export async function reconcileStalePackReviewRuns(
     recoveredRun: PackReviewRunRecord,
     statusWriter: PackReviewRequiredStatusWriter,
   ): Promise<{ verified: boolean; reason: string }> => {
+    if (recoveredRun.automaticBudgetDisposition === 'non_consuming_explicit') {
+      const fresh = getPackReviewRun(recoveredRun.id, { projectId, storeRoot }) ?? recoveredRun;
+      const receipt = supplementalReviewReceipt(fresh);
+      return { verified: Boolean(receipt), reason: receipt
+        ? 'supplemental_review_delivered' : 'supplemental_comment_or_journal_unconfirmed' };
+    }
     // Both explicit recovery and stale fleet reconciliation must verify the
     // exact-head required status; a successful POST alone is not publication.
     try {
@@ -5190,6 +5305,16 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
 
+    // A proven-dead foreign attempt was retired specifically to free the
+    // incomplete required ordinal. Preserve its immutable attempted sources,
+    // but never let its later reconciliation overwrite the replacement verdict.
+    if (candidate.failureReason === 'explicit_reviewer_superseded_proven_dead_original') {
+      results.push({ runId: candidate.id, terminalized: false, statusReconciled: false,
+        reason: 'superseded_dead_foreign_reviewer_preserved',
+        nextAction: 'observe the original source history and the replacement run; do not publish status from the retired origin' });
+      continue;
+    }
+
     // A resolved moved-head failure (including a restored newer-run status) is
     // closed on its original SHA. Repeating scoped reconcile must not post again.
     if (candidate.status === 'failed'
@@ -5205,7 +5330,7 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
 
-    const initialOrder = resolvePackReviewRunOrder(records, candidate);
+    const initialOrder = resolvePackReviewRequiredRunOrder(records, candidate);
     if (initialOrder.kind === 'ambiguous'
         || ((input.runId || input.staleOnly) && initialOrder.kind === 'newer')) {
       results.push({
@@ -5402,7 +5527,7 @@ export async function reconcileStalePackReviewRuns(
 
         const movedWinner = async (forceRepublish = false, newerAlreadyRestored = false) => {
           const latest = getPackReviewRun(run.id, { projectId, storeRoot }) ?? beforeTerminal;
-          const order = resolvePackReviewRunOrder(await readBoundRecords(), latest);
+          const order = resolvePackReviewRequiredRunOrder(await readBoundRecords(), latest);
           if (order.kind === 'ambiguous') {
             return { reason: order.reason, statusReconciled: false };
           }
@@ -5428,7 +5553,7 @@ export async function reconcileStalePackReviewRuns(
             forceRepublish,
           });
           const after = getPackReviewRun(run.id, { projectId, storeRoot });
-          const afterOrder = resolvePackReviewRunOrder(await readBoundRecords(), latest);
+          const afterOrder = resolvePackReviewRequiredRunOrder(await readBoundRecords(), latest);
           if (afterOrder.kind === 'newer') {
             // This old verdict-status POST may have landed after the newer
             // original-SHA projection. Always force the newer winner back;
@@ -5495,11 +5620,11 @@ export async function reconcileStalePackReviewRuns(
             && current.status === 'failed'
             && current.failureReason === 'stale_head_before_terminal'
             && !hasPersistedPackReviewVerdict(current)
-            && resolvePackReviewRunOrder(await readBoundRecords(), current).kind === 'none');
+            && resolvePackReviewRequiredRunOrder(await readBoundRecords(), current).kind === 'none');
         };
         const repairOldError = async () => {
           const latest = getPackReviewRun(run.id, { projectId, storeRoot }) ?? failedRun;
-          const order = resolvePackReviewRunOrder(await readBoundRecords(), latest);
+          const order = resolvePackReviewRequiredRunOrder(await readBoundRecords(), latest);
           if (order.kind === 'newer') {
             const restoration = await restoreAndSettleNewerAuthority(latest, statusWriter);
             return { reason: restoration.reason };
@@ -5542,7 +5667,7 @@ export async function reconcileStalePackReviewRuns(
           continue;
         }
         const afterPublication = getPackReviewRun(run.id, { projectId, storeRoot }) ?? failedRun;
-        const afterOrder = resolvePackReviewRunOrder(await readBoundRecords(), afterPublication);
+        const afterOrder = resolvePackReviewRequiredRunOrder(await readBoundRecords(), afterPublication);
         const oldStatusReconciled = afterOrder.kind === 'none'
           && publication.state === 'succeeded'
           && afterPublication.status === 'failed'
@@ -5602,7 +5727,7 @@ export async function reconcileStalePackReviewRuns(
           && recovery.reason.startsWith('gpt_sources_incomplete_after_grace:')) {
         // The first run-order read preceded GitHub source observation. A newer
         // run may have become authoritative while that observation was pending.
-        const beforeOrder = resolvePackReviewRunOrder(await readBoundRecords(), run);
+        const beforeOrder = resolvePackReviewRequiredRunOrder(await readBoundRecords(), run);
         if (beforeOrder.kind !== 'none') {
           if (beforeOrder.kind === 'newer') {
             const restoration = await restoreAndSettleNewerAuthority(run, statusWriter);
@@ -5638,7 +5763,7 @@ export async function reconcileStalePackReviewRuns(
           writeRequiredStatus: async (request) => {
             const head = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
             const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
-            const order = resolvePackReviewRunOrder(await readBoundRecords(), run);
+            const order = resolvePackReviewRequiredRunOrder(await readBoundRecords(), run);
             if (head !== run.targetSha.toLowerCase()
                 || authority?.currentHeadSha.toLowerCase() !== head
                 || authority.cycle?.cycleId !== run.reviewCycleId
@@ -5664,7 +5789,7 @@ export async function reconcileStalePackReviewRuns(
             // An unavailable post-write head/authority check cannot certify publication.
           }
         }
-        const afterOrder = resolvePackReviewRunOrder(await readBoundRecords(), run);
+        const afterOrder = resolvePackReviewRequiredRunOrder(await readBoundRecords(), run);
         if (afterOrder.kind === 'newer') {
           // The older error may have landed after the newer success. Force the
           // existing projector to restore the latest authority after the write.
@@ -5737,7 +5862,7 @@ export async function reconcileStalePackReviewRuns(
             && authority?.currentHeadSha.toLowerCase() === currentHead
             && authority.cycle?.cycleId === run.reviewCycleId
             && !authority.terminal
-            && resolvePackReviewRunOrder(await readBoundRecords(), run).kind === 'none';
+            && resolvePackReviewRequiredRunOrder(await readBoundRecords(), run).kind === 'none';
         } catch {
           // No current-head evidence means no certified required-status result.
         }
@@ -5808,7 +5933,7 @@ export async function reconcileStalePackReviewRuns(
             beforeZero, recovery.missingFirstAttemptIdentities ?? [],
           )
           && virtualFailed && noJudgmentBudgetOutcome(virtualFailed, storeRoot)
-          && resolvePackReviewRunOrder(await readBoundRecords(), beforeZero).kind === 'none';
+          && resolvePackReviewRequiredRunOrder(await readBoundRecords(), beforeZero).kind === 'none';
         if (authorized && beforeZero) {
           const snapshotRound = stableJson(beforeZero.reviewRound);
           // Authority and run-store share one filesystem lock. Read authority
@@ -5835,7 +5960,7 @@ export async function reconcileStalePackReviewRuns(
                 && derivePackReviewNoJudgmentBudgetOutcome({
                   ...current, status: 'failed', failureReason: failedReason,
                 }, authorityAtCas.cycle.consumedRoundOrdinals ?? []) !== null
-                && resolvePackReviewRunOrder(all, current).kind === 'none');
+                && resolvePackReviewRequiredRunOrder(all, current).kind === 'none');
             },
             {
               status: 'failed',
@@ -5891,6 +6016,16 @@ export async function reconcileStalePackReviewRuns(
     }
 
     if (!isPackReviewUnfinishedTerminalRun(run)) continue;
+    if (run.automaticBudgetDisposition === 'non_consuming_explicit') {
+      results.push({
+        runId: run.id,
+        terminalized,
+        statusReconciled: false,
+        reason: 'supplemental_no_required_status',
+        nextAction: 'observe original journal and reviewer COMMENT; no required-status repair is permitted for advisory runs',
+      });
+      continue;
+    }
 
     // A previous zero-judgment terminal may have been reconciled before its
     // dedicated worker submission could be attempted. The locked channel
@@ -5914,7 +6049,7 @@ export async function reconcileStalePackReviewRuns(
       }
     }
 
-    const currentOrder = resolvePackReviewRunOrder(await readBoundRecords(), run);
+    const currentOrder = resolvePackReviewRequiredRunOrder(await readBoundRecords(), run);
     if (currentOrder.kind === 'ambiguous') {
       results.push({
         runId: run.id,
@@ -5940,7 +6075,7 @@ export async function reconcileStalePackReviewRuns(
     if (needsStaleStatus && input.beforeStaleStatusWrite) await input.beforeStaleStatusWrite(run);
 
     const recordsBeforeStaleStatusWrite = await readBoundRecords();
-    const orderBeforeStaleStatusWrite = resolvePackReviewRunOrder(recordsBeforeStaleStatusWrite, run);
+    const orderBeforeStaleStatusWrite = resolvePackReviewRequiredRunOrder(recordsBeforeStaleStatusWrite, run);
     if (orderBeforeStaleStatusWrite.kind === 'ambiguous') {
       results.push({
         runId: run.id,
@@ -5987,7 +6122,7 @@ export async function reconcileStalePackReviewRuns(
         && !authority.terminal;
     };
     const authorizeStaleWrite = async () => {
-      if (resolvePackReviewRunOrder(await readBoundRecords(), run).kind !== 'none') return false;
+      if (resolvePackReviewRequiredRunOrder(await readBoundRecords(), run).kind !== 'none') return false;
       if (zeroJudgmentStaleStatus) return verifyNoJudgmentStatusTarget();
       if (failedPartialStaleStatus) return !needsStaleStatus || verifyPartialStatusTarget();
       return true;
@@ -6025,7 +6160,7 @@ export async function reconcileStalePackReviewRuns(
           && head === run.targetSha.toLowerCase()
           && authority?.currentHeadSha.toLowerCase() === head
           && authority.cycle?.cycleId === current.reviewCycleId
-          && resolvePackReviewRunOrder(await readBoundRecords(), run).kind === 'none') {
+          && resolvePackReviewRequiredRunOrder(await readBoundRecords(), run).kind === 'none') {
           // A same-ID requeue can publish pending while an older error is
           // in flight. The last external write wins: republish that pending.
           const projection = packReviewRequiredStatusProjectionKey(current);
@@ -6042,7 +6177,7 @@ export async function reconcileStalePackReviewRuns(
             && packReviewRequiredStatusProjectionKey(after) === projection
             && afterHead === head && afterAuthority?.currentHeadSha.toLowerCase() === head
             && afterAuthority.cycle?.cycleId === after.reviewCycleId
-            && resolvePackReviewRunOrder(await readBoundRecords(), run).kind === 'none') {
+            && resolvePackReviewRequiredRunOrder(await readBoundRecords(), run).kind === 'none') {
             return { reason: 'same_run_pending_status_restored' };
           }
           return { reason: 'status_not_published:same_run_pending_restoration_unverified; rerun scoped reconcile' };
@@ -6139,7 +6274,7 @@ export async function reconcileStalePackReviewRuns(
           // Confirm that SHA's actual required-status projection and unchanged
           // run-order authority; the live-head equality rule below is for other
           // stale statuses only.
-          const beforeOrder = resolvePackReviewRunOrder(await readBoundRecords(), current);
+          const beforeOrder = resolvePackReviewRequiredRunOrder(await readBoundRecords(), current);
           const newer = beforeOrder.kind === 'newer' ? beforeOrder.run : null;
           const winnerOutcome = newer?.deliveryOutcomes.requiredStatus;
           const winnerPayload = newer ? packReviewJournaledPayload(newer) : null;
@@ -6158,7 +6293,7 @@ export async function reconcileStalePackReviewRuns(
           if (expectedStatus && packReviewRequiredStatusStaleReconciliationComplete(current)) {
             const observed = await readFinalCapRequiredStatus(input, repoSlug, current.targetSha);
             const after = getPackReviewRun(current.id, { projectId, storeRoot });
-            const afterOrder = resolvePackReviewRunOrder(await readBoundRecords(), current);
+            const afterOrder = resolvePackReviewRequiredRunOrder(await readBoundRecords(), current);
             verified = observed === expectedStatus
               && after?.status === 'failed'
               && after.failureReason === 'stale_head_before_terminal'
@@ -6179,7 +6314,7 @@ export async function reconcileStalePackReviewRuns(
             && authorityBefore?.currentHeadSha.toLowerCase() === headBefore
             && authorityBefore.cycle?.cycleId === current.reviewCycleId
             && !authorityBefore.terminal
-            && resolvePackReviewRunOrder(await readBoundRecords(), current).kind === 'none') {
+            && resolvePackReviewRequiredRunOrder(await readBoundRecords(), current).kind === 'none') {
           const observed = await readFinalCapRequiredStatus(input, repoSlug, current.targetSha);
           const headAfter = await readCheckedReviewPrHead(
             input, repoSlug, current.prNumber, current.targetSha,
@@ -6190,7 +6325,7 @@ export async function reconcileStalePackReviewRuns(
             && authorityAfter?.currentHeadSha.toLowerCase() === headAfter
             && authorityAfter.cycle?.cycleId === current.reviewCycleId
             && !authorityAfter.terminal
-            && resolvePackReviewRunOrder(await readBoundRecords(), current).kind === 'none';
+            && resolvePackReviewRequiredRunOrder(await readBoundRecords(), current).kind === 'none';
           }
         }
       } catch {
@@ -6512,6 +6647,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
   const productionRequiredCiStart = directCliStarts.has(input)
     || trim(input.surface) === 'pack-gpt-review'
     || trim(input.surface) === 'pr2-scheduler';
+  const explicitReviewer = input.reviewerOverride !== undefined;
   const existingAuthorityBeforeCi = productionRequiredCiStart
     ? readPackReviewAuthority(target.prNumber, { storeRoot })
     : null;
@@ -6530,8 +6666,13 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     || input.fixtureRequiredCiHeadAfterGate !== undefined
     || input.fixtureRequiredCiBaseAfterGate !== undefined
   );
+  let supplementalMode = Boolean(explicitReviewer && existingAuthorityBeforeCi?.cycle
+    && existingAuthorityBeforeCi.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    && (existingAuthorityBeforeCi.cycle.reviewStageComplete === true
+      || (existingAuthorityBeforeCi.cycle.consumedRoundOrdinals?.length ?? 0)
+        >= existingAuthorityBeforeCi.cycle.frozenCap));
   const requiredCiGateApplies = productionRequiredCiStart
-    && !existingStateCannotStartReviewer
+    && (!existingStateCannotStartReviewer || explicitReviewer)
     && (process.env.OPK_VITEST_HARNESS !== '1' || harnessRequiredCiOptIn);
   if (requiredCiGateApplies) {
     const requiredCiGreen = await manualPackReviewRequiredCiGreen({
@@ -6603,8 +6744,11 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     projectId, storeRoot, prNumber: target.prNumber, headSha: target.headSha,
     repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot, resolveSlug,
     fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+    explicitReviewer: explicitReviewer ? reviewer ?? undefined : undefined,
+    supplementalMode,
   });
-  if (journaledResumeBeforeReconcile) {
+  if (journaledResumeBeforeReconcile && !(supplementalMode && explicitReviewer
+      && journaledResumeBeforeReconcile.resolvedReviewer === reviewer)) {
     const invalidAuthority = packReviewResumeReviewerAuthorityError(process.env);
     if (invalidAuthority) throw new Error(invalidAuthority);
   }
@@ -6632,7 +6776,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         heartbeatAtUtc: candidate.heartbeatAtUtc,
       }] as const),
   );
-  await reconcileStalePackReviewRuns({
+  // The advisory entrypoint may inspect old required authority but must not
+  // initiate status-repair writes for a completed required stage.
+  const preStartReconciliation = !supplementalMode ? await reconcileStalePackReviewRuns({
     repoSlug: target.repoSlug,
     sourceRepoRoot: target.sourceRepoRoot,
     projectId,
@@ -6654,7 +6800,53 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     resolveRepositorySlug: resolveSlug,
     settlePartialAfterGrace: false,
     beforeStaleStatusWrite: input.fixtureBeforeStaleStatusWrite,
-  });
+  }) : null;
+  // A dead original GPT runner can have its credentialed journal, COMMENT and
+  // exact-head required status settled by the incumbent pre-start reconciler.
+  // A fresh explicit invocation must acknowledge only that original run,
+  // without engaging another reviewer or borrowing a projected stage status.
+  if (explicitReviewer && reviewer === 'gpt' && preStartReconciliation) {
+    for (const settled of preStartReconciliation.results) {
+      if (settled.recovered !== true || settled.statusReconciled !== true) continue;
+      const original = getPackReviewRun(String(settled.runId), { projectId, storeRoot });
+      if (!original || original.prNumber !== target.prNumber
+          || original.targetSha !== target.headSha
+          || original.canonicalRepository?.toLowerCase() !== target.repoSlug.toLowerCase()
+          || original.automaticBudgetDisposition === 'non_consuming_explicit'
+          || original.resolvedReviewer !== 'gpt'
+          || original.executedReviewer !== 'gpt'
+          || original.reviewerInvokedForThisRun !== true
+          || original.reviewerExecutionRunId !== original.id
+          || !hasPersistedPackReviewVerdict(original)
+          || original.journalOutcome?.state !== 'persisted'
+          || !hasCredentialedGptSourceAuthority(original)
+          || original.deliveryOutcomes.githubComment?.state !== 'succeeded'
+          || original.deliveryOutcomes.requiredStatus?.state !== 'succeeded'
+          || original.githubReviewEvent !== 'COMMENT'
+          || !original.githubReviewId || !trim(original.githubReviewUrl)) continue;
+      const selected = readPackReviewAuthority(target.prNumber, { storeRoot });
+      if (selected?.currentHeadSha !== target.headSha
+          || selected.terminal?.runId !== original.id
+          || selected.publication?.terminalRunId !== original.id
+          || selected.publication.headSha !== target.headSha
+          || selected.publication.status !== 'succeeded') continue;
+      let exactHead = false;
+      try { exactHead = await readProjectionHead() === target.headSha.toLowerCase(); } catch {
+        // No live head observation, no explicit success.
+      }
+      if (!exactHead) continue;
+      return {
+        ok: true, created: false, reused: true, recovered: true,
+        reason: 'resumed_journaled_delivery',
+        ...reviewerProvenanceReceipt(original),
+        publicationVerified: true, publicationHeadSha: target.headSha,
+        prNumber: target.prNumber, headSha: target.headSha, runId: original.id,
+        status: original.status, httpStatus: 200,
+        githubReviewId: original.githubReviewId,
+        githubReviewUrl: original.githubReviewUrl,
+      };
+    }
+  }
   const claimMode = input.claimMode ?? 'acquire';
   const preacquiredClaimOwned = () => ownsBoundPreacquiredClaim(input.preacquiredClaim, {
     projectId, prNumber: target.prNumber, headSha: target.headSha,
@@ -6688,6 +6880,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     sourceRepoRoot: target.sourceRepoRoot,
     resolveSlug,
     fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+    explicitReviewer: explicitReviewer ? reviewer ?? undefined : undefined,
+    supplementalMode,
   });
   const githubReviewTransport = createGithubReviewTransport({
     repoRoot: target.sourceRepoRoot,
@@ -6813,6 +7007,42 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     };
   };
 
+  // An explicit incomplete-round switch is claim-authorized only after the
+  // original owner is positively proven dead. The caller may not infer death
+  // from a stale heartbeat, a changed reviewer preference, or PID alone.
+  const foreignAuthority = existingAuthorityBeforeCi?.cycle;
+  const foreignExpectedOrdinal = (foreignAuthority?.consumedRoundOrdinals?.length ?? 0) + 1;
+  const foreignCandidates = explicitReviewer && reviewer && !supplementalMode
+      && foreignAuthority?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && foreignAuthority.reviewStageComplete !== true
+      && (foreignAuthority.consumedRoundOrdinals?.length ?? 0) < foreignAuthority.frozenCap
+    ? listPackReviewRunRecordsRaw({ projectId, storeRoot }).filter((candidate) =>
+      candidate.prNumber === target.prNumber
+      && candidate.targetSha === target.headSha
+      && candidate.projectId === projectId
+      && candidate.canonicalRepository?.toLowerCase() === target.repoSlug.toLowerCase()
+      && resolve(candidate.sourceRepoRoot) === resolve(target.sourceRepoRoot)
+      && candidate.reviewCycleId === foreignAuthority.cycleId
+      && candidate.logicalRoundOrdinal === foreignExpectedOrdinal
+      && candidate.automaticBudgetDisposition === 'consume'
+      && candidate.resolvedReviewer && candidate.resolvedReviewer !== reviewer
+      && PACK_REVIEW_ACTIVE_STATUSES.has(candidate.status)
+      && !hasPersistedPackReviewVerdict(candidate)
+      && !candidate.executedReviewer)
+    : [];
+  const foreignRun = foreignCandidates.length === 1 ? foreignCandidates[0] : undefined;
+  const foreignTakeover: ExplicitDeadReviewerTakeover | undefined = foreignRun && reviewer
+    ? {
+        runId: foreignRun.id,
+        existingReviewer: foreignRun.resolvedReviewer!,
+        requestedReviewer: reviewer,
+        runnerPid: foreignRun.runnerPid,
+        reviewCycleId: foreignRun.reviewCycleId!,
+        logicalRoundOrdinal: foreignRun.logicalRoundOrdinal!,
+        canonicalRepository: foreignRun.canonicalRepository!,
+      }
+    : undefined;
+
   const claimSurface = target.operatorStart
     ? `operator_adjudicated;session-binding=advisory;issue=${target.issueNumber ?? 'unresolved'}`
     : (trim(input.surface) || 'pack-review-runner-manual');
@@ -6827,6 +7057,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       surface: claimSurface,
       startReason: target.operatorStart?.reason ?? (trim(input.startReason) || 'manual'),
       resumeRunId: resumeCandidate?.id,
+      allowCompletedSameHeadReplay: supplementalMode,
+      takeover: foreignTakeover,
     });
     if (!claimLease.acquired) {
       return {
@@ -6877,6 +7109,64 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         headSha: target.headSha,
         httpStatus: 409,
       };
+    }
+    if (foreignCandidates.length > 1) {
+      await releaseEarlyClaim('ambiguous_foreign_reviewer_runs');
+      return { ok: false, created: false, reused: true,
+        reason: 'ambiguous_foreign_reviewer_runs',
+        nextAction: 'resolve competing original exact-head runs before an explicit switch',
+        prNumber: target.prNumber, headSha: target.headSha, httpStatus: 409 };
+    }
+    if (foreignRun) {
+      const currentAuthority = readPackReviewAuthority(target.prNumber, { storeRoot });
+      const head = await readProjectionHead();
+      if (!claimLease?.deadForeignRunClaimReclaimed || !claimLease.owns()
+          || head !== target.headSha.toLowerCase()
+          || currentAuthority?.currentHeadSha.toLowerCase() !== head
+          || currentAuthority.cycle?.cycleId !== foreignRun.reviewCycleId
+          || currentAuthority?.cycle?.reviewStageComplete === true
+          || currentAuthority?.cycle?.consumedRoundOrdinals?.includes(foreignRun.logicalRoundOrdinal!) === true
+          || currentAuthority.terminal?.runId === foreignRun.id) {
+        await releaseEarlyClaim('foreign_reviewer_owner_unverified');
+        return { ok: false, created: false, reused: true,
+          reason: 'foreign_reviewer_owner_unverified',
+          nextAction: 'verify the exact claim process generation is dead and the original run has no accepted verdict; do not replace a live or ambiguous owner',
+          prNumber: target.prNumber, headSha: target.headSha,
+          runId: foreignRun.id, httpStatus: 409 };
+      }
+      const originalRound = stableJson(foreignRun.reviewRound);
+      const originalAttempt = stableJson(foreignRun.nativeAttempt);
+      const retired = updatePackReviewRunIf(foreignRun.id, (records) => {
+        const latest = records.find((candidate) => candidate.id === foreignRun.id);
+        return Boolean(latest
+          && latest.status === foreignRun.status
+          && PACK_REVIEW_ACTIVE_STATUSES.has(latest.status)
+          && latest.runnerPid === foreignRun.runnerPid
+          && latest.updatedAt === foreignRun.updatedAt
+          && latest.heartbeatAtUtc === foreignRun.heartbeatAtUtc
+          && latest.reviewCycleId === foreignRun.reviewCycleId
+          && latest.logicalRoundOrdinal === foreignRun.logicalRoundOrdinal
+          && latest.canonicalRepository === foreignRun.canonicalRepository
+          && latest.targetSha === foreignRun.targetSha
+          && latest.resolvedReviewer === foreignRun.resolvedReviewer
+          && stableJson(latest.reviewRound) === originalRound
+          && stableJson(latest.nativeAttempt) === originalAttempt
+          && !latest.executedReviewer && !hasPersistedPackReviewVerdict(latest));
+      }, {
+        status: 'failed',
+        latestRunStatus: 'failed',
+        failureReason: 'explicit_reviewer_superseded_proven_dead_original',
+        completedAtUtc: new Date().toISOString(),
+        exitCode: 1,
+      }, { projectId, storeRoot });
+      if (!retired) {
+        await releaseEarlyClaim('foreign_reviewer_changed_before_retirement');
+        return { ok: false, created: false, reused: true,
+          reason: 'foreign_reviewer_changed_before_retirement',
+          nextAction: 'reconcile original reviewer journal; do not create a replacement after concurrent owner change',
+          prNumber: target.prNumber, headSha: target.headSha,
+          runId: foreignRun.id, httpStatus: 409 };
+      }
     }
     // A completed findings reset does not re-key the historical exact-head
     // snapshot. Refuse stale H1/B0 before the producer or any new review run.
@@ -6987,10 +7277,14 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     // A historical T2 run's immutable cap-one delivery may already have
     // published success. Reconcile that exact same-head public status before
     // starting any newly eligible reviewer or returning an old-cap receipt.
+    supplementalMode = Boolean(explicitReviewer && authority.cycle
+      && authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && (authority.cycle.reviewStageComplete === true
+        || (authority.cycle.consumedRoundOrdinals?.length ?? 0) >= authority.cycle.frozenCap));
     const priorTerminalRun = authority.currentHeadSha === target.headSha && authority.terminal?.runId
       ? getPackReviewRun(authority.terminal.runId, { projectId, storeRoot })
       : null;
-    if (priorTerminalRun) {
+    if (priorTerminalRun && !supplementalMode) {
       try {
         await ensurePromotedRoundPublicPending({
           run: priorTerminalRun, projectId, storeRoot,
@@ -7027,7 +7321,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           && authority.terminal.targetSha !== target.headSha));
     // Completed final-cap stages still require verified Issue binding on
     // rewritten/diverged heads; ancestry is decided inside reconciliation.
-    if (finalFindings && authority.terminal!.targetSha !== target.headSha) {
+    if (finalFindings && authority.terminal!.targetSha !== target.headSha && !supplementalMode) {
       const result = await reconcileFinalCapSettlement({
         projectId, storeRoot, prNumber: target.prNumber,
         repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
@@ -7082,7 +7376,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       && resumeCandidate.targetSha.toLowerCase() === target.headSha.toLowerCase();
     if (authority.cycle?.reviewStageComplete === true
         && authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
-        && !incumbentGptDeliveryResume) {
+        && !incumbentGptDeliveryResume
+        && !explicitReviewer) {
       const cycleId = authority.cycle.cycleId;
       const verifyStageCompleteHead = async () => {
         const head = await readProjectionHead();
@@ -7164,7 +7459,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         && authority.cycle
         && consumedLogicalRoundCount >= authority.cycle.frozenCap
         && authority.terminal?.targetSha === target.headSha
-        && !resumeCandidate) {
+        && !resumeCandidate && !explicitReviewer) {
       const terminalRun = authority.terminal.runId
         ? getPackReviewRun(authority.terminal.runId, { projectId, storeRoot })
         : null;
@@ -7211,9 +7506,11 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         };
       }
     }
-    carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
+    if (!supplementalMode && !explicitReviewer) {
+      carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
+    }
     const conflictFreeCarryover = carryover?.replay.kind === 'conflict_free_carryover';
-    if (!conflictFreeCarryover && authority.cycle?.state === 'open_findings') {
+    if (!supplementalMode && !conflictFreeCarryover && authority.cycle?.state === 'open_findings') {
       await releaseEarlyClaim('prior_round_findings_unresolved');
       return {
         ok: false,
@@ -7227,7 +7524,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         httpStatus: 409,
       };
     }
-    if (!conflictFreeCarryover
+    if (!supplementalMode && !conflictFreeCarryover
         && authority.cycle
         && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)) {
       await releaseEarlyClaim('at_cap_continuation_required');
@@ -7280,8 +7577,10 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       });
     }
 
-    const roundOrdinal = logicalAccounting
-      ? (authority.cycle?.consumedRoundOrdinals?.length ?? 0) + 1
+    const roundOrdinal = supplementalMode
+      ? Math.max(1, authority.cycle?.frozenCap ?? 1)
+      : logicalAccounting
+        ? (authority.cycle?.consumedRoundOrdinals?.length ?? 0) + 1
       : (authority.cycle?.consumedHeadShas.length ?? 0) + 1;
     const accountingVersion = authority.cycle?.capMapVersion;
     const cardinality = selectPackReviewGptSourceCardinality({
@@ -7389,7 +7688,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         httpStatus: 409,
       };
     };
-    if (logicalAccounting && reviewer === 'gpt' && authority.cycle) {
+    if (logicalAccounting && reviewer === 'gpt' && authority.cycle && !supplementalMode) {
       const allRecords = listPackReviewRunRecordsRaw({ projectId, storeRoot });
       const storedCandidates = incumbentCandidates(allRecords);
       const otherSameHead = allRecords.find((candidate) => (
@@ -7405,7 +7704,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       }
       if (storedCandidates.length > 0) {
         const priorSameRound = storedCandidates[0]!;
-        if (storedCandidates.length !== 1 || resolvePackReviewRunOrder(
+        if (storedCandidates.length !== 1 || resolvePackReviewRequiredRunOrder(
           listPackReviewRunRecordsRaw({ projectId, storeRoot }), priorSameRound,
         ).kind !== 'none') {
           return rejectIncumbent(priorSameRound, 'gpt_incumbent_ambiguous_run',
@@ -7471,7 +7770,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       }
     }
 
-    if (logicalAccounting && reviewer && reviewer !== 'gpt' && authority.cycle) {
+    if (logicalAccounting && reviewer && reviewer !== 'gpt' && authority.cycle && !supplementalMode) {
       const priorSameRound = listPackReviewRunRecordsRaw({ projectId, storeRoot })
         .filter((candidate) => candidate.prNumber === target.prNumber
           && candidate.reviewCycleId === authority.cycle!.cycleId
@@ -7503,13 +7802,22 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       }
     }
 
-    authority = advancePackReviewAuthority(
-      authority,
-      'claim_acquired',
-      target.prNumber,
-      authorityOptions,
-    );
+    if (!supplementalMode) {
+      authority = advancePackReviewAuthority(
+        authority,
+        'claim_acquired',
+        target.prNumber,
+        authorityOptions,
+      );
+    }
 
+    if (resumeCandidate && explicitReviewer && resumeCandidate.resolvedReviewer !== reviewer) {
+      await releaseEarlyClaim('reviewer_origin_mismatch');
+      return { ok: false, created: false, reused: true,
+        reason: 'reviewer_origin_mismatch',
+        nextAction: 'inspect the journaled origin and request only its actual same-head reviewer or a new eligible review',
+        prNumber: target.prNumber, headSha: target.headSha, runId: resumeCandidate.id, httpStatus: 409 };
+    }
     if (resumeCandidate) {
       const resumePayload = packReviewJournaledPayload(resumeCandidate);
       if (!resumePayload) {
@@ -7522,6 +7830,41 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           typedResumePayload,
           { projectId, storeRoot },
         );
+      }
+      if (resumeCandidate.automaticBudgetDisposition === 'non_consuming_explicit') {
+        await assertBoundHeadStillCurrent({
+          repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+          prNumber: target.prNumber, boundHeadSha: target.headSha,
+          boundIssueNumber: target.issueNumber,
+          fixturePostReviewHeadSha: input.fixturePostReviewHeadSha,
+          fixturePostReviewPrBody: input.fixturePostReviewPrBody ?? input.fixturePrBodyAfterClaim ?? input.fixturePrBody,
+        });
+        const resumed = await resumePackReviewVerdictDelivery({
+          run: resumeCandidate, projectId, storeRoot,
+          postGithubComment: async () => {
+            const posted = await postGithubReview({
+              repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug, prNumber: target.prNumber,
+              headSha: target.headSha, run: resumeCandidate, payload: typedResumePayload,
+              projectId, storeRoot, transport: githubReviewTransport,
+            });
+            return { id: posted.id, url: posted.url, event: 'COMMENT' };
+          },
+          writeRequiredStatus: async () => { throw new Error('supplemental cannot publish required status'); },
+          notifyWorker: async () => { throw new Error('supplemental cannot notify required worker'); },
+        });
+        const reloaded = getPackReviewRun(resumeCandidate.id, { projectId, storeRoot });
+        const receipt = reloaded && supplementalReviewReceipt(reloaded);
+        const headStillCurrent = await readProjectionHead() === target.headSha.toLowerCase();
+        terminal = true;
+        if (claimLease) await claimLease.release('run_started', listPackReviewRuns({ projectId, storeRoot }));
+        return receipt && headStillCurrent && resumed.reason === 'completed'
+          ? { ok: true, created: false, reused: true, recovered: true,
+              reason: 'supplemental_review_delivered', ...receipt, prNumber: target.prNumber,
+              headSha: target.headSha, status: reloaded?.status, httpStatus: 200 }
+          : { ok: false, created: false, reused: true,
+              reason: 'supplemental_delivery_unverified', runId: resumeCandidate.id,
+              nextAction: 'observe the original reviewer COMMENT and run journal before scoped delivery resume; never duplicate an uncertain post',
+              prNumber: target.prNumber, headSha: target.headSha, httpStatus: 409 };
       }
       if (!authority.terminal) {
         if (!(process.env.OPK_VITEST_HARNESS === '1' && input.fixturePostReviewHeadSha === undefined)) {
@@ -7670,6 +8013,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       terminal = true;
       const runs = listPackReviewRuns({ projectId, storeRoot });
       if (claimLease) await claimLease.release('run_started', runs);
+      const recoveredNativeJournal = !gptResume
+        ? getPackReviewRun(resumeCandidate.id, { projectId, storeRoot })
+        : null;
       return {
         ok: true,
         created: false,
@@ -7678,6 +8024,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         reason: 'resumed_journaled_delivery',
         ...reviewerProvenanceReceipt(resumeCandidate),
         deliveryReason: resumed.reason,
+        ...(recoveredNativeJournal ? { deliveryOutcomes: recoveredNativeJournal.deliveryOutcomes } : {}),
         ...(confirmed ? {
           publicationVerified: confirmed.verified,
           ...(confirmed.verified
@@ -7733,7 +8080,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           && incumbent.updatedAt === selectedRun.updatedAt
           && incumbent.sameKeyOrder === selectedRun.sameKeyOrder
           && stableJson(incumbent.reviewRound) === selectedRound
-          && resolvePackReviewRunOrder(records, incumbent).kind === 'none');
+          && resolvePackReviewRequiredRunOrder(records, incumbent).kind === 'none');
       }, {
         status: 'queued',
         latestRunStatus: 'queued',
@@ -7765,10 +8112,11 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       sourceRepoRoot: target.sourceRepoRoot,
       canonicalRepository: target.repoSlug,
       legacyRepositoryBySourceRoot,
-      automaticBudgetDisposition: 'consume',
+      automaticBudgetDisposition: supplementalMode ? 'non_consuming_explicit' : 'consume',
+      ...(supplementalMode ? { allowExplicitSupplementalStart: true } : {}),
       ...(accountingVersion ? { accountingVersion } : {}),
       ...(authority.cycle?.cycleId ? { reviewCycleId: authority.cycle.cycleId } : {}),
-      ...(logicalAccounting ? {
+      ...(logicalAccounting && !supplementalMode ? {
         logicalRoundOrdinal: roundOrdinal,
         logicalRoundCap: authority.cycle!.frozenCap,
       } : {}),
@@ -7778,29 +8126,45 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       });
       run = created.run;
     }
-    authority = advancePackReviewAuthority(
-      authority,
-      'review_or_bundle_staged',
-      target.prNumber,
-      authorityOptions,
-    );
+    if (!supplementalMode) {
+      authority = advancePackReviewAuthority(
+        authority,
+        'review_or_bundle_staged',
+        target.prNumber,
+        authorityOptions,
+      );
+    }
     if (created.reused) {
+      const original = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
+      const receipt = supplementalMode ? supplementalReviewReceipt(original) : null;
+      const validRequiredOrigin = explicitReviewer
+        && !supplementalMode
+        && original.targetSha === target.headSha
+        && original.resolvedReviewer === reviewer
+        && original.executedReviewer === reviewer
+        && original.reviewerInvokedForThisRun === true
+        && original.reviewerExecutionRunId === original.id
+        && hasPersistedPackReviewVerdict(original);
       if (claimLease) await claimLease.release('run_started', listPackReviewRuns({ projectId, storeRoot }));
       return {
-        ok: true,
+        ok: !explicitReviewer || Boolean(receipt || validRequiredOrigin),
         created: false,
         reused: true,
-        reason: created.reason,
+        reason: receipt ? 'supplemental_review_delivered' : created.reason,
+        ...(receipt ?? (validRequiredOrigin ? reviewerProvenanceReceipt(original) : {})),
+        ...(!explicitReviewer || receipt || validRequiredOrigin ? {} : {
+          nextAction: 'inspect the existing run and original reviewer; an explicit switch requires a distinct eligible run or confirmed same-reviewer origin',
+        }),
         prNumber: target.prNumber,
         headSha: target.headSha,
         runId: run.id,
-        httpStatus: 200,
+        httpStatus: explicitReviewer && !(receipt || validRequiredOrigin) ? 409 : 200,
         status: run.status,
         coverage: derivePackReviewGptCoverage(run.reviewRound),
       };
     }
 
-    await recordPackReviewPendingStatus({
+    if (!supplementalMode) await recordPackReviewPendingStatus({
       run,
       projectId,
       storeRoot,
@@ -8175,6 +8539,24 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       run = persistedRun;
       const diagnostics = gptRoundDiagnostics(run.reviewRound);
       if (hasPersistedPackReviewVerdict(run)) {
+        if (run.automaticBudgetDisposition === 'non_consuming_explicit') {
+          const proven = bindCredentialedGptExecutionProvenance(run, { projectId, storeRoot });
+          const receipt = supplementalReviewReceipt(proven);
+          let exactHead = false;
+          try { exactHead = await readProjectionHead() === target.headSha.toLowerCase(); } catch {
+            // Unobservable head cannot certify supplemental COMMENT delivery.
+          }
+          terminal = true;
+          if (claimLease) await claimLease.release('run_started', listPackReviewRuns({ projectId, storeRoot }));
+          return receipt && exactHead
+            ? { ok: true, created: true, reused: false, recovered: true,
+                reason: 'supplemental_review_delivered', ...receipt, prNumber: target.prNumber,
+                headSha: target.headSha, runId: run.id, status: proven.status, httpStatus: 201 }
+            : { ok: false, created: true, reused: false,
+                reason: 'supplemental_delivery_unverified', prNumber: target.prNumber,
+                headSha: target.headSha, runId: run.id, status: proven.status, httpStatus: 409,
+                nextAction: 'observe the original GPT journal and reviewer COMMENT, then resume that same run; do not resend sources' };
+        }
         const concurrentAuthority = readPackReviewAuthority(target.prNumber, authorityOptions);
         const published = concurrentAuthority?.currentHeadSha === target.headSha
           && concurrentAuthority.terminal?.runId === run.id
@@ -8244,8 +8626,18 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         const recovered = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
         const reconciliationResult = reconciliation?.results.find((item) => item.runId === run!.id);
         const verdictExists = hasPersistedPackReviewVerdict(recovered);
+        const supplemental = recovered.automaticBudgetDisposition === 'non_consuming_explicit';
+        const receipt = supplemental && verdictExists ? supplementalReviewReceipt(recovered) : null;
+        let supplementalHeadVerified = false;
+        if (receipt) {
+          try {
+            supplementalHeadVerified = await readProjectionHead() === target.headSha.toLowerCase();
+          } catch {
+            // No exact-head observation means no supplemental success.
+          }
+        }
         let confirmation: Awaited<ReturnType<typeof observePackReviewVerdictDelivery>> | undefined;
-        if (verdictExists) {
+        if (verdictExists && !supplemental) {
           confirmation = await observePackReviewVerdictDelivery({
             input, projectId, storeRoot, runId: run.id,
             prNumber: target.prNumber, headSha: target.headSha,
@@ -8258,7 +8650,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
               })),
           });
         }
-        const verified = confirmation?.verified === true;
+        const verified = supplemental
+          ? Boolean(receipt && supplementalHeadVerified && !reconcileError)
+          : confirmation?.verified === true;
         const unresolvedReason = String(reconciliationResult?.reason ?? '');
         const stillPendingOriginal = !verdictExists && !reconcileError
           && pendingSource
@@ -8271,7 +8665,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
             || unresolvedReason.startsWith('gpt_sources_'))
           ? pendingSource : undefined;
         const reason = reconcileError ? `gpt_reconcile_failed:${reconcileError}`
-          : verdictExists ? (verified ? 'completed' : confirmation?.reason ?? 'publication_unverified')
+          : verdictExists ? supplemental
+            ? verified ? 'supplemental_review_delivered' : 'supplemental_delivery_unverified'
+            : verified ? 'completed' : confirmation?.reason ?? 'publication_unverified'
             : stillPendingOriginal ? 'gpt_original_invocation_recovery_required'
               : String(reconciliationResult?.reason ?? 'gpt_source_census_not_settled');
         terminal = verdictExists;
@@ -8279,18 +8675,25 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         if (claimLease) await claimLease.release('run_started', runs);
         return {
           ok: verified, created: true, reused: false,
-          reason, publicationVerified: verified,
-          ...(verified ? {
-            publicationHeadSha: target.headSha,
-            requiredStatusState: confirmation!.requiredStatusState,
-          } : {
-            nextAction: stillPendingOriginal
-              ? 'recover original ' + stillPendingOriginal.slotId + ' invocation '
-                + stillPendingOriginal.invocationId
-                + ' through its existing chat/transport and exact credentialed GitHub comment; do not resend'
-              : String(reconciliationResult?.nextAction
-                ?? 'repair the exact incumbent GitHub source/status evidence and rerun scoped reconcile; do not resend uncertain sources'),
-          }),
+          reason,
+          ...(supplemental
+            ? (verified && receipt ? receipt : {
+                nextAction: 'observe the exact-head original GPT journal and reviewer COMMENT; use same-run recovery without another Send or required-status projection',
+              })
+            : {
+                publicationVerified: verified,
+                ...(verified ? {
+                  publicationHeadSha: target.headSha,
+                  requiredStatusState: confirmation!.requiredStatusState,
+                } : {
+                  nextAction: stillPendingOriginal
+                    ? 'recover original ' + stillPendingOriginal.slotId + ' invocation '
+                      + stillPendingOriginal.invocationId
+                      + ' through its existing chat/transport and exact credentialed GitHub comment; do not resend'
+                    : String(reconciliationResult?.nextAction
+                      ?? 'repair the exact incumbent GitHub source/status evidence and rerun scoped reconcile; do not resend uncertain sources'),
+                }),
+              }),
           prNumber: target.prNumber, headSha: target.headSha, runId: run.id,
           status: recovered.status,
           coverage: derivePackReviewGptCoverage(recovered.reviewRound),
@@ -8534,6 +8937,41 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           }
         : {}, { projectId, storeRoot });
 
+    if (supplementalMode) {
+      const supplementalDeliveryRun = run;
+      const delivered = await deliverPackReviewVerdict({
+        run: supplementalDeliveryRun,
+        payload,
+        projectId,
+        storeRoot,
+        journalWriter: input.fixtureJournalWriter,
+        postGithubComment: async () => {
+          const posted = await postGithubReview({
+            repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+            prNumber: target.prNumber, headSha: target.headSha, run: supplementalDeliveryRun, payload,
+            projectId, storeRoot, transport: githubReviewTransport,
+          });
+          return { id: posted.id, url: posted.url, event: 'COMMENT' };
+        },
+        writeRequiredStatus: async () => { throw new Error('supplemental cannot publish required status'); },
+        notifyWorker: async () => { throw new Error('supplemental cannot notify required worker'); },
+      });
+      const latest = getPackReviewRun(run.id, { projectId, storeRoot });
+      const receipt = latest && supplementalReviewReceipt(latest);
+      const headStillCurrent = await readProjectionHead() === target.headSha.toLowerCase();
+      terminal = true;
+      if (claimLease) await claimLease.release('run_started', listPackReviewRuns({ projectId, storeRoot }));
+      return receipt && headStillCurrent && delivered.reason === 'completed'
+        ? { ok: true, created: true, reused: false,
+            reason: 'supplemental_review_delivered', ...receipt,
+            prNumber: target.prNumber, headSha: target.headSha,
+            status: latest?.status, httpStatus: 201 }
+        : { ok: false, created: true, reused: false,
+            reason: 'supplemental_delivery_unverified', runId: run.id,
+            nextAction: 'inspect the originating journal and GitHub reviewer COMMENT; use same-run reconciliation, never duplicate an uncertain post',
+            prNumber: target.prNumber, headSha: target.headSha, httpStatus: 409 };
+    }
+
     authority = await reconcileTierBeforeTerminal({
       start: input, target, projectId, storeRoot,
       cycleId: authority.cycle?.cycleId, runId: run.id,
@@ -8701,7 +9139,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       } : {}),
       ...reviewerProvenanceReceipt(run),
       runId: run.id,
-      ...(confirmation ? { prNumber: target.prNumber, headSha: target.headSha } : {}),
+      prNumber: target.prNumber,
+      headSha: target.headSha,
       status: delivered.status,
       ...(terminalCoverage ? { coverage: terminalCoverage } : {}),
       ...(sameRoundGptDiagnostics?.length ? { observationDiagnostics: sameRoundGptDiagnostics } : {}),

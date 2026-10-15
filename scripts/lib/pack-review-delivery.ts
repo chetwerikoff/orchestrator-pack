@@ -59,6 +59,11 @@ export function packReviewStaleRequiredStatusIdempotencyKey(run: PackReviewRunRe
   return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}:stale-runner-disappeared`;
 }
 
+/** Advisory journal records never own a required review status or worker completion. */
+function supplementalRun(run: PackReviewRunRecord): boolean {
+  return run.automaticBudgetDisposition === 'non_consuming_explicit';
+}
+
 function packReviewRunNeedsAnotherRequiredRound(run: PackReviewRunRecord): boolean {
   return run.accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
     && Number.isInteger(run.logicalRoundOrdinal)
@@ -71,6 +76,7 @@ function packReviewIntermediateRoundDescription(run: PackReviewRunRecord): strin
 }
 
 function packReviewRequiredStatusOutcomeReason(run: PackReviewRunRecord): string | null {
+  if (supplementalRun(run)) return null;
   if (hasPersistedPackReviewVerdict(run) || PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)) {
     const payload = packReviewJournaledPayload(run);
     if (!payload) return null;
@@ -89,6 +95,7 @@ function packReviewRequiredStatusOutcomeReason(run: PackReviewRunRecord): string
 }
 
 export function packReviewRequiredStatusProjectionKey(run: PackReviewRunRecord): string | null {
+  if (supplementalRun(run)) return null;
   const expectedKey = hasPersistedPackReviewVerdict(run)
     || PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)
     ? requiredStatusIdempotencyKey(run)
@@ -121,6 +128,7 @@ export function packReviewRequiredStatusStaleReconciliationComplete(run: PackRev
 }
 
 export function packReviewRequiredStatusNeedsStaleReconciliation(run: PackReviewRunRecord): boolean {
+  if (supplementalRun(run)) return false;
   if (packReviewRequiredStatusStaleReconciliationComplete(run)) return false;
   const outcome = run.deliveryOutcomes?.requiredStatus;
   if (!isPackReviewUnfinishedTerminalRun(run)) return false;
@@ -142,6 +150,9 @@ export function recordPackReviewNewerAuthorityReconciliation(
     authorityGuard?: (records: readonly PackReviewRunRecord[]) => boolean;
   },
 ): PackReviewDeliveryOutcome {
+  if (supplementalRun(options.run)) {
+    return outcome('failed', 'supplemental_no_required_status', packReviewStaleRequiredStatusIdempotencyKey(options.run), options.clock);
+  }
   const marker = outcome(
     'succeeded',
     'newer_run_authoritative',
@@ -508,7 +519,9 @@ function completedResumeChannelOutcome(
     return (hasValidPackReviewDeliveryOutcome(run.deliveryOutcomes?.githubComment, idempotencyKey)
       && run.deliveryOutcomes?.githubComment?.state === 'succeeded')
       || completedGithubCommentReview(run) !== null
-      || (hasValidPackReviewGithubReconciliation(reconciliation, 'prepared')
+      // A definitely rejected advisory COMMENT is safe to retry on the same run.
+      || (run.automaticBudgetDisposition !== 'non_consuming_explicit'
+        && hasValidPackReviewGithubReconciliation(reconciliation, 'prepared')
         && reconciliation.postOutcome === 'definitely_rejected');
   }
 
@@ -536,6 +549,10 @@ export function packReviewDeliveryNeedsResume(run: PackReviewRunRecord): boolean
   }
   const classification = classifyPackReviewPayload(payload);
   if (run.status !== classification.terminalStatus) return true;
+  if (supplementalRun(run)) {
+    return completedGithubCommentReview(run) === null
+      || run.deliveryOutcomes.githubComment?.state !== 'succeeded';
+  }
   return !completedResumeChannelOutcome(run, 'githubComment', githubCommentIdempotencyKey(run))
     || !completedResumeChannelOutcome(run, 'requiredStatus', requiredStatusIdempotencyKey(run));
 }
@@ -707,6 +724,9 @@ function persistRequiredStatusOutcome(
   value: PackReviewDeliveryOutcome,
   options: PackReviewStoreOptions,
 ): void {
+  if (supplementalRun(safeGetPackReviewRun(runId, options) ?? { automaticBudgetDisposition: 'consume' } as PackReviewRunRecord)) {
+    throw new Error('supplemental review cannot persist required-status outcomes');
+  }
   if (!persistChannelOutcome(runId, 'requiredStatus', value, options)) {
     throw new Error('required-status delivery outcome was not durably persisted');
   }
@@ -776,6 +796,7 @@ export async function deliverPackReviewVerdict(
   }
   const payload = resumedPayload ?? options.payload;
   const classification = classifyPackReviewPayload(payload);
+  const supplemental = supplementalRun(options.run);
   const intermediateRoundPending = !classification.blocking && packReviewRunNeedsAnotherRequiredRound(options.run);
   const projectedRequiredStatus: PackReviewRequiredStatusState = intermediateRoundPending
     ? 'pending'
@@ -839,7 +860,7 @@ export async function deliverPackReviewVerdict(
 
   const requiredStatusComplete = options.resumeFromJournal
     && completedResumeChannelOutcome(options.run, 'requiredStatus', statusKey);
-  if (!requiredStatusComplete) {
+  if (!supplemental && !requiredStatusComplete) {
     try {
       await options.writeRequiredStatus({
         state: projectedRequiredStatus,
@@ -859,7 +880,7 @@ export async function deliverPackReviewVerdict(
 
   const workerNotificationComplete = options.resumeFromJournal
     && completedResumeChannelOutcome(options.run, 'workerNotification', workerKey);
-  if (!workerNotificationComplete) {
+  if (!supplemental && !workerNotificationComplete) {
     try {
       const notified = await options.notifyWorker({
         message: [
@@ -896,7 +917,9 @@ export async function deliverPackReviewVerdict(
 
   const finalDeliveryFailed = deliveryFailed
     || (deliveryOutcomes.githubComment?.state === 'failed')
-    || (deliveryOutcomes.requiredStatus?.state === 'failed');
+    || (supplemental
+      ? !githubReview || deliveryOutcomes.githubComment?.state !== 'succeeded'
+      : deliveryOutcomes.requiredStatus?.state === 'failed');
 
   return {
     ok: true,
@@ -926,6 +949,7 @@ async function publishPackReviewTerminalRequiredStatus(
   run: PackReviewRunRecord,
   options: RecordPendingReviewOptions,
 ): Promise<PackReviewDeliveryOutcome | null> {
+  if (supplementalRun(run)) return null;
   const payload = packReviewJournaledPayload(run);
   if (!payload) return null;
   const classification = classifyPackReviewPayload(payload);
@@ -965,6 +989,7 @@ export async function restorePackReviewAuthoritativeRequiredStatus(
   const storeOpts = storeOptions(options);
   const reload = () => safeGetPackReviewRun(options.run.id, options) ?? options.run;
   const run = reload();
+  if (supplementalRun(run)) return null;
   const expectedKey = hasPersistedPackReviewVerdict(run)
     || PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)
     ? requiredStatusIdempotencyKey(run)
@@ -1041,6 +1066,9 @@ function workerNotificationOutcome(
 export async function recordPackReviewStaleRequiredStatus(
   options: RecordStaleRequiredStatusOptions,
 ): Promise<PackReviewDeliveryOutcome> {
+  if (supplementalRun(options.run)) {
+    return outcome('failed', 'supplemental_no_required_status', packReviewStaleRequiredStatusIdempotencyKey(options.run), options.clock);
+  }
   const failureReason = trim(options.run.failureReason) || 'runner_disappeared_stale';
   const idempotencyKey = unfinishedRequiredStatusKey(options.run, failureReason);
   const description = unfinishedRequiredStatusDescription(failureReason);
@@ -1104,6 +1132,9 @@ export async function recordPackReviewStaleRequiredStatus(
 export async function recordPackReviewPendingStatus(
   options: RecordPendingReviewOptions,
 ): Promise<PackReviewDeliveryOutcome> {
+  if (supplementalRun(options.run)) {
+    return outcome('failed', 'supplemental_no_required_status', packReviewPendingRequiredStatusIdempotencyKey(options.run), options.clock);
+  }
   persistWorkerNotificationBinding(options.run, options);
   const idempotencyKey = packReviewPendingRequiredStatusIdempotencyKey(options.run);
   let statusOutcome = outcome('failed', 'status_pending_unpublished', idempotencyKey, options.clock);
@@ -1160,6 +1191,9 @@ async function publishPackReviewUnfinishedRequiredStatus(
   run: PackReviewRunRecord,
   options: RecordPendingReviewOptions,
 ): Promise<PackReviewDeliveryOutcome> {
+  if (supplementalRun(run)) {
+    return outcome('failed', 'supplemental_no_required_status', packReviewStaleRequiredStatusIdempotencyKey(run), options.clock);
+  }
   const failureReason = trim(run.failureReason) || 'runner_internal_failure';
   const idempotencyKey = unfinishedRequiredStatusKey(run, failureReason);
   let statusOutcome: PackReviewDeliveryOutcome;
