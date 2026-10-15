@@ -3004,11 +3004,19 @@ async function runTurn(
   freshCleanup ??= {};
   try {
     const outcome = await runTurnCore(args, recoveryHooks, entryLivenessHeartbeat, heartbeatSchedulerReady, (value) => {
-      if (value.wall_kind === 'conversation_fetch_http_429'
-        || value.wall_kind === 'account_conversations_http_429') diagnostic = value;
-      else if (diagnostic.http_status !== 429
+      if (value.wall_kind === 'account_load_error') diagnostic = value;
+      else if (value.wall_kind === 'conversation_fetch_http_429'
+        || value.wall_kind === 'account_conversations_http_429') {
+        if (diagnostic.wall_kind !== 'account_load_error') diagnostic = value;
+      } else if (diagnostic.http_status !== 429 && diagnostic.wall_kind !== 'account_load_error'
         && (value.wall_kind !== 'none' || value.matched_text !== 'none')) diagnostic = value;
     }, freshCleanup);
+    // A named product-wall stop never grants authority to close the held Page.
+    if (outcome.page && typeof outcome.page === 'object'
+      && (diagnostic.http_status === 429 || diagnostic.wall_kind === 'conversation_load_error'
+        || outcome.result.cause === 'account_cooldown_active')) {
+      cleanupAuthorityUnprovenPages.add(outcome.page);
+    }
     return { ...outcome, result: { ...outcome.result, product_wall_diagnostic: diagnostic } };
   } finally {
     try {
@@ -3109,12 +3117,15 @@ async function runTurnCore(
   };
   const observeProductWall = (wall: ReturnType<typeof classifyProductWall>): void => {
     const witnessed = heldPage429Diagnostic(page);
-    const value = witnessed
+    const isAccountHeading = 'wall_kind' in wall && wall.wall_kind === 'account_load_error';
+    const hasConversationHeading = 'wall_kind' in wall
+      && (wall.wall_kind === 'conversation_load_error'
+        || wall.wall_kind === 'conversation_fetch_http_429')
+      && wall.matched_text !== 'none';
+    const value = witnessed && !isAccountHeading
       ? { ...witnessed,
-        matched_text: 'wall_kind' in wall && wall.wall_kind === 'conversation_load_error'
-          ? wall.matched_text : witnessed.matched_text,
-        matched_selector: 'wall_kind' in wall && wall.wall_kind === 'conversation_load_error'
-          ? wall.matched_selector : witnessed.matched_selector }
+        matched_text: hasConversationHeading ? wall.matched_text : witnessed.matched_text,
+        matched_selector: hasConversationHeading ? wall.matched_selector : witnessed.matched_selector }
       : wall;
     if (!('wall_kind' in value) || (value.matched_text === 'none' && value.wall_kind === 'none')) return;
     if (value.matched_text !== 'none') {
@@ -5159,6 +5170,18 @@ async function runTurnCore(
           journalWriteFailed,
           incident,
         );
+      }
+      if ('wall_kind' in wall && wall.wall_kind === 'conversation_load_error' && !held429Witness?.current()) {
+        incident('post_send_observation_error', 'conversation_load_error', 'retain_owned_page_no_resend');
+        return {
+          page, browser, cleanupAction: 'preserve',
+          result: compactResult(
+            'observation_uncertain', 'invocation', 'conversation_load_error',
+            invocationId, profileKey, sendCount, pollCount, navigation, incidents,
+            { ...(sendAttempted ? { send_attempted: true } : {}) },
+            journalWriteFailed,
+          ),
+        };
       }
       if (wall.state === 'recovery_required' && !held429Witness?.current() && (
         recoveryBannerTrusted || (wall.cause !== 'stream_recovery_polling_timed_out' && wall.cause !== 'message_stream_error')
