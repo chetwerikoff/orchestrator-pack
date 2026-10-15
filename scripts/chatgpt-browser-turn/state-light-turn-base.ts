@@ -2592,6 +2592,7 @@ async function mutateComposerOrCause(
     insertionDeadlineMs?: number;
     diagnostic?: ComposerMutationDiagnosticV1;
   },
+  beforeAction?: () => void,
 ): Promise<PreSendComposerFailureCause | null> {
   const composer = page.locator(COMPOSER_SELECTOR);
   const insertionStart = Date.now();
@@ -2628,13 +2629,18 @@ async function mutateComposerOrCause(
     try {
       let actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (actionBudgetMs <= 0) return exhausted('budget_before_click');
+      beforeAction?.();
       await composer.click({ timeout: actionBudgetMs });
       actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (actionBudgetMs <= 0) return exhausted('budget_before_fill');
+      beforeAction?.();
       await composer.fill(text, { timeout: actionBudgetMs });
       // If readiness recovered during the attempt, proceed to dispatch.
       if (await readComposerReadiness(page, insertionDeadlineMs)) return null;
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && (error.message === 'conversation_fetch_http_429'
+        || error.message === 'account_conversations_http_429'
+        || error.message === 'account_cooldown_active')) throw error;
       // The mutation was attempted; classify from the pre-attempt presence proof.
     }
     return composerAbsent ? 'composer_unavailable' : exhausted('readiness_before_click');
@@ -2643,6 +2649,7 @@ async function mutateComposerOrCause(
   try {
     let actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
     if (actionBudgetMs <= 0) return exhausted('budget_before_click');
+    beforeAction?.();
     await composer.click({ timeout: actionBudgetMs });
     if (Date.now() >= insertionDeadlineMs) return exhausted('after_click');
 
@@ -2653,10 +2660,14 @@ async function mutateComposerOrCause(
     }
     actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
     if (actionBudgetMs <= 0) return exhausted('budget_before_fill2');
+    beforeAction?.();
     await composer.fill(text, { timeout: actionBudgetMs });
     if (Date.now() >= insertionDeadlineMs) return 'composer_mutation_budget_exhausted';
     return null;
   } catch (error) {
+    if (error instanceof Error && (error.message === 'conversation_fetch_http_429'
+      || error.message === 'account_conversations_http_429'
+      || error.message === 'account_cooldown_active')) throw error;
     if (
       isPlaywrightTimeoutError(error)
       && await hasBlockingPageOverlay(page, invocationDeadlineMs)
@@ -3040,6 +3051,7 @@ async function runTurn(
   } finally {
     try {
       if (freshCleanup.page && !freshCleanup.sendAttempted
+        && diagnostic.http_status !== 429
         && isBlankProjectSurfaceUrl(String(freshCleanup.page.url()), freshCleanup.projectUrl ?? '')) {
         await clearFreshComposerDraft(freshCleanup.page);
       }
@@ -3178,6 +3190,18 @@ async function runTurnCore(
     }
     if (cooldown.active) throw new Error('account_cooldown_active');
   };
+  // Fresh preparation owns its internal goto. Intercept its existing counter hook
+  // immediately before that goto without modifying the excluded helper module.
+  const guardedFreshPreparationNavigation = new Proxy(navigation, {
+    get(target, property, receiver) {
+      if (property === 'recordGoto') return () => {
+        beforeBrowserAction();
+        target.recordGoto();
+        held429Witness?.beforeNavigation();
+      };
+      return Reflect.get(target, property, receiver);
+    },
+  });
 
   try {
     if (!invocationId) throw new Error('input_invalid:invocation_id_required');
@@ -3689,7 +3713,7 @@ async function runTurnCore(
       }
       const insertionContext: { insertionDeadlineMs?: number; diagnostic?: ComposerMutationDiagnosticV1 } = {};
       beforeBrowserAction();
-      const mutationFailure = await mutateComposerOrCause(page, markedPayload, invocationDeadlineMs, insertionContext);
+      const mutationFailure = await mutateComposerOrCause(page, markedPayload, invocationDeadlineMs, insertionContext, beforeBrowserAction);
       assertFreshOwner();
       if (mutationFailure) {
         if (held429Witness?.current()) beforeBrowserAction();
@@ -3829,6 +3853,7 @@ async function runTurnCore(
         markedPayload,
         invocationDeadlineMs,
         insertionContext,
+        beforeBrowserAction,
       );
       if (mutationFailure) {
         if (held429Witness?.current()) beforeBrowserAction();
@@ -3995,6 +4020,8 @@ async function runTurnCore(
           prepared: Awaited<ReturnType<typeof prepareStateLightFreshConversation>>,
         ): TurnRunOutcome | null => {
           if (prepared.state === 'ready') return null;
+          // A swallowed internal navigation refusal must retain its named first-wall/cooldown cause.
+          beforeBrowserAction();
           incident('invocation_blocker', prepared.cause, 'return_local_error');
           return {
             page,
@@ -4040,7 +4067,7 @@ async function runTurnCore(
           config,
           profileKey,
           invocationId,
-          navigation,
+          guardedFreshPreparationNavigation,
           invocationDeadlineMs,
           Date.now,
           observeProductWall,
@@ -4050,7 +4077,7 @@ async function runTurnCore(
           const recovery = await checkAccountLoadError();
           if (recovery && recovery !== 'recovered') return recovery;
           if (recovery === 'recovered') initialPrepare = await prepareStateLightFreshConversation(
-            page, config, profileKey, invocationId, navigation, invocationDeadlineMs,
+            page, config, profileKey, invocationId, guardedFreshPreparationNavigation, invocationDeadlineMs,
             Date.now, observeProductWall, 2,
           );
           if (initialPrepare.state === 'recovery_required') return accountErrorTerminal();
@@ -4081,7 +4108,7 @@ async function runTurnCore(
             await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs, () => { beforeBrowserAction(); held429Witness?.beforeNavigation(); });
           }
           const reopened = await prepareStateLightFreshConversation(
-            page, config, profileKey, invocationId, navigation, invocationDeadlineMs,
+            page, config, profileKey, invocationId, guardedFreshPreparationNavigation, invocationDeadlineMs,
             Date.now, observeProductWall, 2,
           );
           const prepareFailure = returnFreshPrepareFailure(reopened);
@@ -4156,7 +4183,7 @@ async function runTurnCore(
               config,
               profileKey,
               invocationId,
-              navigation,
+              guardedFreshPreparationNavigation,
               invocationDeadlineMs,
               Date.now,
               observeProductWall,
@@ -4375,6 +4402,9 @@ async function runTurnCore(
             }
             claimed = true;
             ownedConversationUrl = conversationUrl;
+            // The fresh Send positively owns this /c/<id> on the original Page too.
+            // Keep an earlier account-list first wall instead of replacing it.
+            if (!held429Witness?.current()) attachHeld429(page, conversationUrl);
             if (!deliveryProofPendingRecovery) emitCancellationReceipt(conversationUrl);
             break;
           }
@@ -4957,7 +4987,9 @@ async function runTurnCore(
         freshCleanup.ownedDeadLocalTimeoutMs = config.timeoutMs;
       }
       page = recovered.page;
-      if (held429Page !== page) attachHeld429(page, recovered.conversationUrl);
+      if (held429Page !== page || (config.newChat && !held429Witness?.current())) {
+        attachHeld429(page, recovered.conversationUrl);
+      }
       if (!recovered.cleanupOwned && page && typeof page === 'object') {
         cleanupAuthorityUnprovenPages.add(page);
       }
@@ -5347,6 +5379,7 @@ async function runTurnCore(
             conversationUrl: observedConversationUrl,
           });
           ownedConversationUrl = observedConversationUrl;
+          if (!held429Witness?.current()) attachHeld429(page, observedConversationUrl);
           recoveryState.immutableConversationUrl = observedConversationUrl;
           emitCancellationReceipt(observedConversationUrl);
         }

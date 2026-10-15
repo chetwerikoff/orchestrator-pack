@@ -28,8 +28,9 @@ import {
   MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE, RENDERED_CONVERSATION_TURN_SECTION_SELECTOR,
   USER_MESSAGE_SELECTOR, ASSISTANT_MESSAGE_SELECTOR, ASSISTANT_TURN_ANCESTOR_XPATH,
 } from './product-page-selectors.ts';
-import { publishWitnessedStateLight429, readStateLightAccountCooldown, __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
+import { publishWitnessedStateLight429, readStateLightAccountCooldown, __testComposerMutation, __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
+import { heldPage429Diagnostic, observeHeldPageConversation429 } from './ui-adapter-base.ts';
 import { runPostSendRecovery, takeRecoveryCensus, type PostSendRecoveryAdapter, type PostSendRecoveryState } from './state-light-turn-recovery.ts';
 import * as recoveryModule from './state-light-turn-recovery.ts';
 import { configuredProfileKey, profileDirs } from './storage-common.ts';
@@ -1735,5 +1736,216 @@ describe('conversation fetch HTTP 429 — physical Send and recovery gates (#261
     });
     expect(result).toMatchObject({ kind: 'recovered', page: fixture.original, conversationUrl: fixture.url });
     expect(fixture.createSuccessor).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('conversation fetch HTTP 429 — fresh preparation and same-Page ownership (#2617 review)', () => {
+  let root: string;
+  const cdp = 'http://127.0.0.1:9222';
+  const projectRoot = 'https://chatgpt.com/g/g-p-26172617261726172617261726172617-test';
+  const projectUrl = projectRoot + '/project';
+  const conversationUuid = '26172617-2617-4617-8617-261726172617';
+  const conversationUrl = projectRoot + '/c/' + conversationUuid;
+  const exactRequestUrl = 'https://chatgpt.com/backend-api/conversations/' + conversationUuid + '?num_turns=20';
+  const listRequestUrl = 'https://chatgpt.com/backend-api/conversations?limit=20';
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'opk-2617-fresh-review-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    mocks.verifyProfile.mockResolvedValue({ state: 'verified' });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    mocks.browserQueue.length = 0;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function freshPage(
+    profile: string,
+    invocationId: string,
+    options: { redirectOnOpen?: boolean; account429OnOpen?: boolean; exact429AfterOwnedSend?: boolean } = {},
+  ) {
+    let currentUrl = 'about:blank';
+    let draft = '';
+    let sentText = '';
+    let sent = false;
+    let opened = false;
+    let exact429Emitted = false;
+    let activeMessages = readyTurnObservationFrames('PROMPT', 'REPLY')[0]!;
+    let observationIndex = 0;
+    const frames = readyTurnObservationFrames('PROMPT', 'REPLY');
+    const events = new EventEmitter();
+    const emit429 = (requestUrl: string): void => {
+      const request = { method: () => 'GET', url: () => requestUrl };
+      events.emit('request', request);
+      events.emit('response', { request: () => request, status: () => 429 });
+    };
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      evaluate: vi.fn(async () => ({ visible: true, enabled: true, contentEditable: true })),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async (value: string) => { draft = value; }),
+      innerText: vi.fn(async () => sent ? '' : draft),
+      textContent: vi.fn(async () => sent ? '' : draft),
+    });
+    const send = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => {
+        sent = true;
+        sentText = draft;
+        draft = '';
+        currentUrl = conversationUrl;
+      }),
+    });
+    const page = Object.assign(events, {
+      __fakeBrowserGptPage: true,
+      url: vi.fn(() => currentUrl),
+      isClosed: vi.fn(() => false),
+      goto: vi.fn(async (target: string) => {
+        currentUrl = !opened && options.redirectOnOpen ? conversationUrl : target;
+        if (!opened && options.account429OnOpen) emit429(listRequestUrl);
+        opened = true;
+      }),
+      waitForTimeout: vi.fn(async (milliseconds: number) => { clock.now += milliseconds; }),
+      close: vi.fn(async () => undefined),
+      getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return send;
+        if (selector === USER_MESSAGE_SELECTOR) return collectionLocator(
+          sent ? [{ role: 'user', text: sentText }] : [],
+        );
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          // Ownership becomes positive only after the fresh Send's claimed URL
+          // has been persisted. Emit a *new* GET on the same Page after that.
+          if (options.exact429AfterOwnedSend && sent && !exact429Emitted
+            && readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase === 'sent_unharvested') {
+            exact429Emitted = true;
+            emit429(exactRequestUrl);
+          }
+          if (!sent) return collectionLocator([]);
+          activeMessages = frames[Math.min(observationIndex++, frames.length - 1)]!;
+          return collectionLocator(activeMessages, observationIndex < 3);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          const last = activeMessages.at(-1);
+          return last?.finalActionInTurnContainer ? messageLocator(last) : scalarLocator();
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) return collectionLocator(
+          activeMessages.filter((message) => message.role === 'assistant'), observationIndex < 3,
+        );
+        return scalarLocator();
+      }),
+    });
+    return { page, composer, send, getExact429Emitted: () => exact429Emitted };
+  }
+
+  const clock = { now: 100_000 };
+  async function runFresh(profile: string, invocationId: string, page: any) {
+    enqueueBrowserForTurn(mocks, page);
+    return runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      '--profile', profile, '--cdp', cdp, '--input', join(root, 'input'),
+      '--output', join(root, 'output'), '--new-chat', '--project-url', projectUrl,
+      '--invocation-id', invocationId, '--timeout-ms', '90000', '--poll-ms', '1',
+    ]);
+  }
+
+  it.each(['held-account-429', 'shared-cooldown'] as const)(
+    'refuses a second fresh preparation goto after first redirect: %s', async (mode) => {
+      clock.now = 100_000;
+      vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+      const profile = join(root, 'profile');
+      const invocationId = randomUUID();
+      const fixture = freshPage(profile, invocationId, {
+        redirectOnOpen: true,
+        account429OnOpen: mode === 'held-account-429',
+      });
+      if (mode === 'shared-cooldown') {
+        publishWitnessedStateLight429(configuredProfileKey(profile, cdp), clock.now);
+      }
+      const { result } = await runFresh(profile, invocationId, fixture.page);
+      expect(fixture.page.goto).toHaveBeenCalledTimes(1);
+      expect(fixture.send.click).not.toHaveBeenCalled();
+      expect(fixture.composer.fill).not.toHaveBeenCalled();
+      expect(result.send_count).toBe(0);
+      expect(result).toMatchObject({
+        state: 'rate_limit',
+        cause: mode === 'held-account-429' ? 'account_conversations_http_429' : 'account_cooldown_active',
+      });
+      if (mode === 'held-account-429') {
+        expect(result.product_wall_diagnostic).toMatchObject({
+          wall_kind: 'account_conversations_http_429', http_status: 429,
+        });
+      }
+    },
+  );
+
+  it('does not clear a blank fresh composer after its first account-list GET 429', async () => {
+    clock.now = 100_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const profile = join(root, 'profile');
+    const invocationId = randomUUID();
+    const fixture = freshPage(profile, invocationId, { account429OnOpen: true });
+    const { result } = await runFresh(profile, invocationId, fixture.page);
+    expect(fixture.page.goto).toHaveBeenCalledTimes(1);
+    expect(fixture.send.click).not.toHaveBeenCalled();
+    expect(fixture.composer.fill).not.toHaveBeenCalled();
+    expect(result.product_wall_diagnostic).toMatchObject({
+      wall_kind: 'account_conversations_http_429', http_status: 429,
+    });
+    expect(result.send_count).toBe(0);
+  });
+
+  it.each(['ready', 'fallback'] as const)(
+    'stops a separately awaited composer fill when click witnesses 429 (%s)', async (branch) => {
+      const events = new EventEmitter();
+      const request = { method: () => 'GET', url: () => exactRequestUrl };
+      const fill = vi.fn(async () => undefined);
+      const click = vi.fn(async () => {
+        events.emit('request', request);
+        events.emit('response', { request: () => request, status: () => 429 });
+      });
+      const composer = scalarLocator({
+        count: vi.fn(async () => 1), click, fill,
+        evaluate: vi.fn(async () => ({
+          visible: branch === 'ready', enabled: true, contentEditable: true,
+        })),
+      });
+      const page = Object.assign(events, { locator: () => composer });
+      const witness = observeHeldPageConversation429(page, conversationUrl);
+      try {
+        const preflight = () => {
+          const wall = heldPage429Diagnostic(page);
+          if (wall) throw new Error(wall.wall_kind);
+        };
+        await expect(__testComposerMutation.mutateComposerOrCause(
+          page, 'PROMPT', Date.now() + 30_000, undefined, preflight,
+        )).rejects.toThrow('conversation_fetch_http_429');
+        expect(click).toHaveBeenCalledTimes(1);
+        expect(fill).not.toHaveBeenCalled();
+      } finally {
+        witness.dispose();
+      }
+    },
+  );
+
+  it('binds a same-Page post-Send exact-chat GET 429 only after owned /c/ identity is proven', async () => {
+    clock.now = 100_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const profile = join(root, 'profile');
+    const invocationId = randomUUID();
+    const fixture = freshPage(profile, invocationId, { exact429AfterOwnedSend: true });
+    const { result } = await runFresh(profile, invocationId, fixture.page);
+    expect(fixture.getExact429Emitted()).toBe(true);
+    expect(fixture.send.click).toHaveBeenCalledTimes(1);
+    expect(result.send_count).toBe(1);
+    expect(result.product_wall_diagnostic).toMatchObject({
+      wall_kind: 'conversation_fetch_http_429',
+      http_status: 429, status_source: 'owned_page_response',
+    });
+    expect(readStateLightAccountCooldown(configuredProfileKey(profile, cdp), clock.now).active).toBe(true);
   });
 });
