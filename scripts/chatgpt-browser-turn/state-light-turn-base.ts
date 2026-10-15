@@ -57,7 +57,7 @@ import {
   verifyStateLightFreshClaimOwnerFence,
   waitForConversationUrlAfterSend,
 } from './state-light-fresh-conversation.ts';
-import { configuredProfileKey } from './storage-common.ts';
+import { atomicJson, configuredProfileKey, profileDirs } from './storage-common.ts';
 import {
   admitStateLightTurnObservation,
   finalizeStateLightPrimaryPublication,
@@ -69,6 +69,9 @@ import {
   ASSISTANT_TURN_ACTION_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   classifyProductWall,
+  heldPage429Diagnostic,
+  observeHeldPageConversation429,
+  type HeldPage429Witness,
   COMPOSER_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
   loadChromium,
@@ -126,6 +129,77 @@ import {
   type ObservationHeartbeatV1,
   type TurnScopedHeartbeatScheduler,
 } from './liveness-contract.ts';
+
+// #2617: the sole shared-Chrome cross-invocation admission value is an
+// actionable, finite epoch-ms cooldown (no turn slots or failure hold).
+const ACCOUNT_COOLDOWN_FILE = 'state-light-account-cooldown.v1.json';
+const ACCOUNT_COOLDOWN_GUARD = 'state-light-account-cooldown.v1.guard';
+const ACCOUNT_COOLDOWN_MS = 300_000;
+const ACCOUNT_COOLDOWN_ACTIONABLE_MS = ACCOUNT_COOLDOWN_MS + 1_000;
+
+export interface StateLightAccountCooldown {
+  readonly active: boolean;
+  readonly until?: number;
+  readonly diagnostic?: string;
+}
+
+export function readStateLightAccountCooldown(
+  profileKey: string, nowMs = Date.now(),
+): StateLightAccountCooldown {
+  try {
+    const path = join(profileDirs(profileKey).locks, ACCOUNT_COOLDOWN_FILE);
+    let raw: string;
+    try {
+      raw = readFileSync(path, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { active: false };
+      return { active: false, diagnostic: 'account_cooldown_unreadable' };
+    }
+    let record: unknown;
+    try { record = JSON.parse(raw); }
+    catch { return { active: false, diagnostic: 'account_cooldown_malformed' }; }
+    if (!record || typeof record !== 'object' || Array.isArray(record)
+      || Object.keys(record).length !== 1 || !Object.hasOwn(record, 'cooldown_until_ms')) {
+      return { active: false, diagnostic: 'account_cooldown_wrong_shape' };
+    }
+    const until = (record as { cooldown_until_ms?: unknown }).cooldown_until_ms;
+    if (typeof until !== 'number' || !Number.isSafeInteger(until) || until < 0) {
+      return { active: false, diagnostic: 'account_cooldown_invalid_deadline' };
+    }
+    if (until <= nowMs) return { active: false, diagnostic: 'account_cooldown_expired' };
+    if (until > nowMs + ACCOUNT_COOLDOWN_ACTIONABLE_MS) {
+      return { active: false, diagnostic: 'account_cooldown_far_future' };
+    }
+    return { active: true, until };
+  } catch {
+    // An inaccessible shared store never becomes a physical Send admission failure.
+    return { active: false, diagnostic: 'account_cooldown_store_unavailable' };
+  }
+}
+
+export function publishWitnessedStateLight429(
+  profileKey: string, nowMs = Date.now(),
+): StateLightAccountCooldown {
+  let guardFd: number | undefined;
+  let guardPath: string | undefined;
+  try {
+    const locks = profileDirs(profileKey).locks;
+    guardPath = join(locks, ACCOUNT_COOLDOWN_GUARD);
+    // Short writer-integrity guard only: no persistent owner, lease, wait or slot.
+    guardFd = openSync(guardPath, 'wx', 0o600);
+    const previous = readStateLightAccountCooldown(profileKey, nowMs);
+    const until = Math.max(nowMs + ACCOUNT_COOLDOWN_MS, previous.active ? previous.until! : 0);
+    atomicJson(join(locks, ACCOUNT_COOLDOWN_FILE), { cooldown_until_ms: until });
+    return { active: true, until };
+  } catch {
+    return { active: false, diagnostic: 'account_cooldown_write_unavailable' };
+  } finally {
+    if (guardFd !== undefined) {
+      try { closeSync(guardFd); } catch { /* the unavailability remains fail-open */ }
+      try { if (guardPath) unlinkSync(guardPath); } catch { /* diagnostic only */ }
+    }
+  }
+}
 
 export { stopOwnedGeneration };
 export type { StopOwnedGenerationOutcome };
