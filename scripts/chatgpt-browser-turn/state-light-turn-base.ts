@@ -2044,7 +2044,10 @@ function recordProductWallAdvisory(
   diagnostic: ProductWallDiagnostic,
   invocationId: string,
 ): void {
-  if (diagnostic.wall_kind === 'none') return;
+  if (diagnostic.wall_kind === 'none'
+    || diagnostic.wall_kind === 'conversation_fetch_http_429'
+    || diagnostic.wall_kind === 'conversation_load_error'
+    || diagnostic.wall_kind === 'account_conversations_http_429') return;
   recordStateLightAdvisoryWall(
     profileKey, diagnostic.wall_kind, `${diagnostic.wall_kind}_detected`,
     invocationId, undefined, undefined, diagnostic,
@@ -2510,8 +2513,16 @@ async function waitForComposer(
         await productStatusText(page, Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs)),
       );
       observeProductWall?.(wall);
+      const held429 = heldPage429Diagnostic(page);
+      if (held429) {
+        observeProductWall?.(held429);
+        return { state: 'rate_limit', cause: held429.wall_kind };
+      }
       if (detectAccountLoadError && 'wall_kind' in wall && wall.wall_kind === 'account_load_error') {
         return { state: 'ui_contract_mismatch', cause: 'account_load_error' };
+      }
+      if ('wall_kind' in wall && wall.wall_kind === 'conversation_load_error') {
+        return { state: 'recovery_required', cause: 'conversation_load_error' };
       }
       if (wall.state === 'recovery_required') return { state: 'recovery_required', cause: wall.cause };
     } catch {
@@ -2522,7 +2533,14 @@ async function waitForComposer(
       // Preserve only witnessed transport failures; a slow/disabled composer is
       // not a network error. A later ready composer supersedes these probes.
       if (cause === 'network_changed' || observedFailure !== 'network_changed') observedFailure = cause;
-    })) return { state: 'ready' };
+    })) {
+      const late429 = heldPage429Diagnostic(page);
+      if (late429) {
+        observeProductWall?.(late429);
+        return { state: 'rate_limit', cause: late429.wall_kind };
+      }
+      return { state: 'ready' };
+    }
     remainingMs = readinessDeadline - Date.now();
     if (remainingMs <= 0) break;
     await sleep(page, Math.min(INITIAL_POLL_MS, remainingMs));
@@ -2741,6 +2759,7 @@ async function navigateOwnedTurnPage(
   config: BrowserConfig,
   navigation: StateLightNavigationCounter,
   invocationDeadlineMs: number,
+  beforeGoto?: () => void,
 ): Promise<void> {
   const target = config.newChat
     ? projectConversationPrefix(config.projectUrl ?? '')
@@ -2748,6 +2767,7 @@ async function navigateOwnedTurnPage(
   if (!target) throw new Error('ui_contract_mismatch:target_required');
   const remainingMs = invocationDeadlineMs - Date.now();
   if (remainingMs <= 0) throw new BrowserOperationTimeoutError('navigation');
+  beforeGoto?.();
   navigation.recordGoto();
   await page.goto(target, {
     waitUntil: 'commit',
@@ -2984,7 +3004,10 @@ async function runTurn(
   freshCleanup ??= {};
   try {
     const outcome = await runTurnCore(args, recoveryHooks, entryLivenessHeartbeat, heartbeatSchedulerReady, (value) => {
-      if (value.matched_text !== 'none') diagnostic = value;
+      if (value.wall_kind === 'conversation_fetch_http_429'
+        || value.wall_kind === 'account_conversations_http_429') diagnostic = value;
+      else if (diagnostic.http_status !== 429
+        && (value.wall_kind !== 'none' || value.matched_text !== 'none')) diagnostic = value;
     }, freshCleanup);
     return { ...outcome, result: { ...outcome.result, product_wall_diagnostic: diagnostic } };
   } finally {
@@ -3068,6 +3091,7 @@ async function runTurnCore(
 
   let preSendComposerState = 'not_probed';
   let observedProductErrorText = '';
+  let held429Witness: HeldPage429Witness | undefined;
   const preSendPageRoute = (): string => {
     try {
       const url = new URL(String(page.url()));
@@ -3083,12 +3107,44 @@ async function runTurnCore(
       'return_local_error');
   };
   const observeProductWall = (wall: ReturnType<typeof classifyProductWall>): void => {
-    if (!('wall_kind' in wall) || wall.matched_text === 'none') return;
-    observedProductErrorText = wall.matched_text.replace(/\s+/gu, ' ').slice(0, 160);
-    onProductWallDiagnostic(wall);
-    if (wall.wall_kind !== 'none') {
-      try { recordProductWallAdvisory(profileKey, wall, invocationId); } catch { /* advisory I/O is fail-open */ }
+    const witnessed = heldPage429Diagnostic(page);
+    const value = witnessed
+      ? { ...witnessed,
+        matched_text: 'wall_kind' in wall && wall.wall_kind === 'conversation_load_error'
+          ? wall.matched_text : witnessed.matched_text,
+        matched_selector: 'wall_kind' in wall && wall.wall_kind === 'conversation_load_error'
+          ? wall.matched_selector : witnessed.matched_selector }
+      : wall;
+    if (!('wall_kind' in value) || (value.matched_text === 'none' && value.wall_kind === 'none')) return;
+    if (value.matched_text !== 'none') {
+      observedProductErrorText = value.matched_text.replace(/\s+/gu, ' ').slice(0, 160);
     }
+    onProductWallDiagnostic(value);
+    if (value.wall_kind !== 'none') {
+      try { recordProductWallAdvisory(profileKey, value, invocationId); } catch { /* advisory I/O is fail-open */ }
+    }
+  };
+  const attachHeld429 = (heldPage: any, ownedChatUrl?: string): void => {
+    held429Witness?.dispose();
+    held429Witness = observeHeldPageConversation429(heldPage, ownedChatUrl, (observed) => {
+      const published = publishWitnessedStateLight429(profileKey);
+      if (published.diagnostic) {
+        incident('shared_account_cooldown_diagnostic', published.diagnostic, 'fail_open');
+      }
+      onProductWallDiagnostic({ ...observed, matched_text: 'none', matched_selector: 'none' });
+    });
+  };
+  const beforeBrowserAction = (): void => {
+    const owned429 = heldPage429Diagnostic(page);
+    if (owned429) {
+      onProductWallDiagnostic(owned429);
+      throw new Error(owned429.wall_kind);
+    }
+    const cooldown = readStateLightAccountCooldown(profileKey);
+    if (cooldown.diagnostic) {
+      incident('shared_account_cooldown_diagnostic', cooldown.diagnostic, 'fail_open');
+    }
+    if (cooldown.active) throw new Error('account_cooldown_active');
   };
 
   try {
@@ -3196,6 +3252,7 @@ async function runTurnCore(
     const selection = await selectConversationPage(browser, chromium, config, invocationBudget);
     browser = selection.browser;
     page = selection.page;
+    if (page) attachHeld429(page, !config.newChat ? config.chatUrl : undefined);
     if (page && typeof page === 'object') {
       // Existing tabs and URL-reselected CDP targets are not direct creation
       // handles; never infer cleanup authority from matching URLs.
@@ -3203,12 +3260,13 @@ async function runTurnCore(
     }
     if (!page) {
       page = await createDedicatedTurnPage(browser, invocationBudget);
+      attachHeld429(page, !config.newChat ? config.chatUrl : undefined);
       if (config.newChat && freshCleanup) {
         freshCleanup.page = page;
         freshCleanup.projectUrl = config.projectUrl;
       }
       try {
-        await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs);
+        await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs, () => { beforeBrowserAction(); held429Witness?.beforeNavigation(); });
       } catch (error) {
         // One total pre-Send reopen: an initial failed committed navigation
         // consumes the first opening; retry only on the same created Page.
@@ -3218,7 +3276,7 @@ async function runTurnCore(
             && !(error instanceof Error && /timeout|net::ERR_|navigation|fetch/iu.test(error.message))) {
           throw error;
         }
-        await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs);
+        await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs, () => { beforeBrowserAction(); held429Witness?.beforeNavigation(); });
       }
     }
 
@@ -3970,7 +4028,7 @@ async function runTurnCore(
           const beforeReopen = await checkAccountLoadError();
           if (beforeReopen && beforeReopen !== 'recovered') return beforeReopen;
           if (beforeReopen !== 'recovered') {
-            await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs);
+            await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs, () => { beforeBrowserAction(); held429Witness?.beforeNavigation(); });
           }
           const reopened = await prepareStateLightFreshConversation(
             page, config, profileKey, invocationId, navigation, invocationDeadlineMs,
@@ -4388,7 +4446,7 @@ async function runTurnCore(
             - (nothingToResumeBeforeReopen ? 0 : EXISTING_GENERATION_RESUME_WINDOW_MS)
             - insertionBudgetMs;
           try {
-            await navigateOwnedTurnPage(page, config, navigation, reopenDeadlineMs);
+            await navigateOwnedTurnPage(page, config, navigation, reopenDeadlineMs, () => { beforeBrowserAction(); held429Witness?.beforeNavigation(); });
           } catch (error) {
             if (browserOrPageDefinitelyLost(page, browser)) throw new Error('Target closed');
             const identity = readOwnedConversationIdentity(page, chatUrlTarget);
