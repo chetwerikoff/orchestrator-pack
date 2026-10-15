@@ -2095,10 +2095,16 @@ async function findJournaledDeliveryResumeCandidate(options: {
   repoSlug: string; sourceRepoRoot: string;
   resolveSlug?: (repoRoot: string) => Promise<string>;
   fixtureRequiredStatusReader?: (headSha: string) => string | undefined | Promise<string | undefined>;
+  explicitReviewer?: PackReviewer;
+  supplementalMode?: boolean;
 }): Promise<PackReviewRunRecord | null> {
   const candidates = listPackReviewRuns({ projectId: options.projectId, storeRoot: options.storeRoot })
     .filter((candidate) => candidate.prNumber === options.prNumber
       && candidate.targetSha === options.headSha
+      && (options.explicitReviewer
+        ? candidate.resolvedReviewer === options.explicitReviewer
+          && (candidate.automaticBudgetDisposition === 'non_consuming_explicit') === (options.supplementalMode === true)
+        : candidate.automaticBudgetDisposition !== 'non_consuming_explicit')
       && Boolean(packReviewJournaledPayload(candidate)));
   const repositoryBoundCandidates: PackReviewRunRecord[] = [];
   for (const candidate of candidates) {
@@ -2107,6 +2113,10 @@ async function findJournaledDeliveryResumeCandidate(options: {
     );
     if (!identity.ok || identity.slug !== options.repoSlug
       || !hasCredentialedGptSourceAuthority(candidate)) continue;
+    if (candidate.automaticBudgetDisposition === 'non_consuming_explicit') {
+      if (packReviewDeliveryNeedsResume(candidate)) repositoryBoundCandidates.push(candidate);
+      continue;
+    }
     if (packReviewDeliveryNeedsResume(candidate)
         || (candidate.reviewRound?.reviewer === 'gpt'
           && candidate.deliveryOutcomes.requiredStatus?.state === 'failed')) {
@@ -6638,6 +6648,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     projectId, storeRoot, prNumber: target.prNumber, headSha: target.headSha,
     repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot, resolveSlug,
     fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+    explicitReviewer: explicitReviewer ? reviewer ?? undefined : undefined,
+    supplementalMode,
   });
   if (journaledResumeBeforeReconcile) {
     const invalidAuthority = packReviewResumeReviewerAuthorityError(process.env);
@@ -6723,6 +6735,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     sourceRepoRoot: target.sourceRepoRoot,
     resolveSlug,
     fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+    explicitReviewer: explicitReviewer ? reviewer ?? undefined : undefined,
+    supplementalMode,
   });
   const githubReviewTransport = createGithubReviewTransport({
     repoRoot: target.sourceRepoRoot,
@@ -7557,6 +7571,13 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       );
     }
 
+    if (resumeCandidate && explicitReviewer && resumeCandidate.resolvedReviewer !== reviewer) {
+      await releaseEarlyClaim('reviewer_origin_mismatch');
+      return { ok: false, created: false, reused: true,
+        reason: 'reviewer_origin_mismatch',
+        nextAction: 'inspect the journaled origin and request only its actual same-head reviewer or a new eligible review',
+        prNumber: target.prNumber, headSha: target.headSha, runId: resumeCandidate.id, httpStatus: 409 };
+    }
     if (resumeCandidate) {
       const resumePayload = packReviewJournaledPayload(resumeCandidate);
       if (!resumePayload) {
@@ -7569,6 +7590,44 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           typedResumePayload,
           { projectId, storeRoot },
         );
+      }
+      if (supplementalMode) {
+        if (resumeCandidate.automaticBudgetDisposition !== 'non_consuming_explicit') {
+          throw new Error('supplemental resume requires its own original non-consuming run journal');
+        }
+        await assertBoundHeadStillCurrent({
+          repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+          prNumber: target.prNumber, boundHeadSha: target.headSha,
+          boundIssueNumber: target.issueNumber,
+          fixturePostReviewHeadSha: input.fixturePostReviewHeadSha,
+          fixturePostReviewPrBody: input.fixturePostReviewPrBody ?? input.fixturePrBodyAfterClaim ?? input.fixturePrBody,
+        });
+        const resumed = await resumePackReviewVerdictDelivery({
+          run: resumeCandidate, projectId, storeRoot,
+          postGithubComment: async () => {
+            const posted = await postGithubReview({
+              repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug, prNumber: target.prNumber,
+              headSha: target.headSha, run: resumeCandidate, payload: typedResumePayload,
+              projectId, storeRoot, transport: githubReviewTransport,
+            });
+            return { id: posted.id, url: posted.url, event: 'COMMENT' };
+          },
+          writeRequiredStatus: async () => { throw new Error('supplemental cannot publish required status'); },
+          notifyWorker: async () => { throw new Error('supplemental cannot notify required worker'); },
+        });
+        const reloaded = getPackReviewRun(resumeCandidate.id, { projectId, storeRoot });
+        const receipt = reloaded && supplementalReviewReceipt(reloaded);
+        const headStillCurrent = await readProjectionHead() === target.headSha.toLowerCase();
+        terminal = true;
+        if (claimLease) await claimLease.release('run_started', listPackReviewRuns({ projectId, storeRoot }));
+        return receipt && headStillCurrent && resumed.reason === 'completed'
+          ? { ok: true, created: false, reused: true, recovered: true,
+              reason: 'supplemental_review_delivered', ...receipt, prNumber: target.prNumber,
+              headSha: target.headSha, status: reloaded?.status, httpStatus: 200 }
+          : { ok: false, created: false, reused: true,
+              reason: 'supplemental_delivery_unverified', runId: resumeCandidate.id,
+              nextAction: 'observe the original reviewer COMMENT and run journal before scoped delivery resume; never duplicate an uncertain post',
+              prNumber: target.prNumber, headSha: target.headSha, httpStatus: 409 };
       }
       if (!authority.terminal) {
         if (!(process.env.OPK_VITEST_HARNESS === '1' && input.fixturePostReviewHeadSha === undefined)) {
