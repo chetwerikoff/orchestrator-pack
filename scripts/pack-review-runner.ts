@@ -6689,7 +6689,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     explicitReviewer: explicitReviewer ? reviewer ?? undefined : undefined,
     supplementalMode,
   });
-  if (journaledResumeBeforeReconcile) {
+  if (journaledResumeBeforeReconcile && !(supplementalMode && explicitReviewer
+      && journaledResumeBeforeReconcile.resolvedReviewer === reviewer)) {
     const invalidAuthority = packReviewResumeReviewerAuthorityError(process.env);
     if (invalidAuthority) throw new Error(invalidAuthority);
   }
