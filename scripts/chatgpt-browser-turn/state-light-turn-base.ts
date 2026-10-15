@@ -3549,6 +3549,8 @@ async function runTurnCore(
 
     const markedPayload = wrapOwnedPromptPayload(marker, snapshot.text);
     const assertFreshOwner = (): void => {
+      // Preserve a positively witnessed first wall before diagnosing a redirected fresh URL.
+      beforeBrowserAction();
       if (Date.now() >= invocationDeadlineMs) {
         throw new Error('state_light_new_chat_owner_pre_dispatch_deadline_exhausted');
       }
@@ -4084,8 +4086,6 @@ async function runTurnCore(
         }
         const duringPrepareError = await checkAccountLoadError();
         if (duringPrepareError && duringPrepareError !== 'recovered') return duringPrepareError;
-        // A redirected URL must not mask a 429/cooldown refusal swallowed by fresh preparation.
-        if (initialPrepare.state !== 'ready') beforeBrowserAction();
         assertFreshOwner();
         const initialPrepareFailure = returnFreshPrepareFailure(initialPrepare);
         if (initialPrepareFailure) return initialPrepareFailure;
