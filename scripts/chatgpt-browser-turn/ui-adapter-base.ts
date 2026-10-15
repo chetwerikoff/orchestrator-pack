@@ -1620,7 +1620,7 @@ export function observeHeldPageConversation429(
   return witness;
 }
 
-export function heldPage429Diagnostic(page: any): ProductWallDiagnostic | undefined {
+export function heldPage429Diagnostic(page: any): ProductWallDiagnostic<true> | undefined {
   const event = page && typeof page === 'object' ? heldPage429Witnesses.get(page)?.current() : undefined;
   return event ? { ...event, matched_text: 'none', matched_selector: 'none' } : undefined;
 }
@@ -1677,7 +1677,7 @@ export async function probeAccountLoadError(
 /** A full-page conversation load heading; sidebar text and assistant quotations never qualify. */
 export async function probeConversationLoadError(
   page: any, waitSource?: OperationWaitSource,
-): Promise<ProductWallDiagnostic | null> {
+): Promise<ProductWallDiagnostic<true> | null> {
   const limitMs = Math.min(600, requireOperationWait(waitSource, 'product_status'));
   if (limitMs <= 0) return null;
   const deadline = Date.now() + limitMs;
@@ -1739,9 +1739,9 @@ const PRODUCT_WALL_TEXT_CAP = 500;
 export type ProductWallKind = 'quota' | 'rate_limit' | 'challenge' | 'login' | 'account_load_error';
 export type ConversationFetchWallKind =
   | 'conversation_fetch_http_429' | 'conversation_load_error' | 'account_conversations_http_429';
-export interface ProductWallDiagnostic {
+export interface ProductWallDiagnostic<WithConversation extends boolean = false> {
   /** Advisory evidence only; a page-text match cannot become a terminal state. */
-  readonly wall_kind: ProductWallKind | ConversationFetchWallKind | 'none';
+  readonly wall_kind: ProductWallKind | (WithConversation extends true ? ConversationFetchWallKind : never) | 'none';
   readonly matched_text: string;
   readonly matched_selector: string;
   readonly http_status?: 429;
@@ -1812,7 +1812,7 @@ export function classifyProductWall(surface: ProductStatusSurface): ProductWallC
 
 /** Conversation-specific diagnosis is deliberately separate from legacy
  * session-wide advisory classification, which has narrower wall kinds. */
-export function classifyConversationProductWall(surface: ProductStatusSurface): ProductWallDiagnostic {
+export function classifyConversationProductWall(surface: ProductStatusSurface): ProductWallDiagnostic<true> {
   const accountHeading = surface.parts?.find((part) =>
     part.selector === ACCOUNT_LOAD_ERROR_HEADING_SELECTOR
     && ACCOUNT_LOAD_ERROR_HEADING_RE.test(part.text));
