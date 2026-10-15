@@ -1749,7 +1749,16 @@ export interface ProductWallDiagnostic {
   readonly state?: never;
   readonly cause?: never;
 }
-export type ProductWallClassification = ProductWallDiagnostic;
+/** The legacy classifier remains typed for the older state-light session.
+ * Conversation-specific walls are exposed by classifyConversationProductWall
+ * only to the Issue-bound state-light-turn caller. */
+export type ProductWallClassification = {
+  readonly wall_kind: ProductWallKind | 'none';
+  readonly matched_text: string;
+  readonly matched_selector: string;
+  readonly state?: never;
+  readonly cause?: never;
+};
 
 function matchingProductStatusPart(
   surface: ProductStatusSurface,
@@ -1759,7 +1768,7 @@ function matchingProductStatusPart(
   return parts.find((part) => pattern.test(part.text));
 }
 
-export function classifyProductWall(surface: ProductStatusSurface): ProductWallDiagnostic {
+export function classifyProductWall(surface: ProductStatusSurface): ProductWallClassification {
   // #2538's positively probed account heading wins over a conversation
   // projection; a separately witnessed account-list 429 still sets cooldown.
   // Only the positively probed product heading has this selector. Never infer
@@ -1771,22 +1780,6 @@ export function classifyProductWall(surface: ProductStatusSurface): ProductWallD
     wall_kind: 'account_load_error',
     matched_text: heading.text.slice(0, PRODUCT_WALL_TEXT_CAP),
     matched_selector: heading.selector,
-  };
-  if (surface.witnessed_http_429) {
-    const heading = surface.parts?.find((part) => part.selector === CONVERSATION_LOAD_ERROR_HEADING_SELECTOR
-      && CONVERSATION_LOAD_ERROR_HEADING_RE.test(part.text));
-    return {
-      ...surface.witnessed_http_429,
-      matched_text: heading?.text.slice(0, PRODUCT_WALL_TEXT_CAP) ?? 'none',
-      matched_selector: heading?.selector ?? 'none',
-    };
-  }
-  const conversationHeading = surface.parts?.find((part) => part.selector === CONVERSATION_LOAD_ERROR_HEADING_SELECTOR
-    && CONVERSATION_LOAD_ERROR_HEADING_RE.test(part.text));
-  if (conversationHeading) return {
-    wall_kind: 'conversation_load_error',
-    matched_text: conversationHeading.text.slice(0, PRODUCT_WALL_TEXT_CAP),
-    matched_selector: conversationHeading.selector,
   };
   const patterns: readonly [ProductWallKind, RegExp][] = [
     ['challenge', /verify you are human|checking your browser|just a moment|unusual activity/i],
@@ -1815,6 +1808,33 @@ export function classifyProductWall(surface: ProductStatusSurface): ProductWallD
     };
   }
   return { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
+}
+
+/** Conversation-specific diagnosis is deliberately separate from legacy
+ * session-wide advisory classification, which has narrower wall kinds. */
+export function classifyConversationProductWall(surface: ProductStatusSurface): ProductWallDiagnostic {
+  const accountHeading = surface.parts?.find((part) =>
+    part.selector === ACCOUNT_LOAD_ERROR_HEADING_SELECTOR
+    && ACCOUNT_LOAD_ERROR_HEADING_RE.test(part.text));
+  if (accountHeading) return {
+    wall_kind: 'account_load_error',
+    matched_text: accountHeading.text.slice(0, PRODUCT_WALL_TEXT_CAP),
+    matched_selector: accountHeading.selector,
+  };
+  const conversationHeading = surface.parts?.find((part) =>
+    part.selector === CONVERSATION_LOAD_ERROR_HEADING_SELECTOR
+    && CONVERSATION_LOAD_ERROR_HEADING_RE.test(part.text));
+  if (surface.witnessed_http_429) return {
+    ...surface.witnessed_http_429,
+    matched_text: conversationHeading?.text.slice(0, PRODUCT_WALL_TEXT_CAP) ?? 'none',
+    matched_selector: conversationHeading?.selector ?? 'none',
+  };
+  if (conversationHeading) return {
+    wall_kind: 'conversation_load_error',
+    matched_text: conversationHeading.text.slice(0, PRODUCT_WALL_TEXT_CAP),
+    matched_selector: conversationHeading.selector,
+  };
+  return classifyProductWall(surface);
 }
 
 export async function locateLastAssistantTurnContainer(
