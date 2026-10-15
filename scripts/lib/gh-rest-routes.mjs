@@ -506,6 +506,72 @@ export function routeRuntimeHistoryStatusHistory(realGh, repo, headSha, cwd) {
 }
 
 /**
+ * Remove known terminal controls from a native Actions job log before printing it.
+ * Unknown, malformed and incomplete controls fail closed without partial stdout.
+ * Preserve ordinary Unicode, tabs, CR and LF byte-for-byte.
+ */
+function sanitizeActionsJobLog(log) {
+  const kept = [];
+  let from = 0;
+  let i = 0;
+  const unsafe = () => {
+    throw new Error(REST_ERROR_MARKER + ': unsafe or incomplete Actions job-log terminal control; log withheld');
+  };
+
+  while (i < log.length) {
+    const code = log.charCodeAt(i);
+    if (code === 0x1b || code === 0x9b || code === 0x9d || code === 0x90
+      || code === 0x9f || code === 0x9e || code === 0x98) {
+      kept.push(log.slice(from, i));
+      let kind;
+      if (code === 0x1b) {
+        const intro = log[i + 1];
+        if (intro === '[') kind = 'csi';
+        else if (intro === ']') kind = 'osc';
+        else if (intro === 'P' || intro === '_' || intro === '^' || intro === 'X') kind = 'string';
+        else unsafe();
+        i += 2;
+      } else {
+        kind = code === 0x9b ? 'csi' : code === 0x9d ? 'osc' : 'string';
+        i += 1;
+      }
+
+      let complete = false;
+      while (i < log.length) {
+        const value = log.charCodeAt(i);
+        if (kind === 'csi') {
+          if (value >= 0x40 && value <= 0x7e) {
+            i += 1;
+            complete = true;
+            break;
+          }
+          if (value < 0x20 || value > 0x3f) unsafe();
+        } else if ((kind === 'osc' && value === 0x07) || value === 0x9c) {
+          i += 1;
+          complete = true;
+          break;
+        } else if (value === 0x1b && log[i + 1] === '\\') {
+          i += 2;
+          complete = true;
+          break;
+        } else if (value < 0x20 || (value >= 0x7f && value <= 0x9f)) {
+          unsafe();
+        }
+        i += 1;
+      }
+      if (!complete) unsafe();
+      from = i;
+      continue;
+    }
+    if ((code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d)
+      || (code >= 0x7f && code <= 0x9f)) unsafe();
+    i += 1;
+  }
+  kept.push(log.slice(from));
+  return kept.join('');
+}
+
+/**
  * Read the downloaded plain-text Actions job log, not JSON. Native gh api
  * follows the GitHub redirect to the log download URL.
  */
@@ -513,7 +579,7 @@ function routeActionsJobLog(realGh, repo, jobId, cwd) {
   if (!Number.isSafeInteger(jobId) || jobId <= 0) {
     throw new Error(`${REST_ERROR_MARKER}: invalid Actions job id`);
   }
-  const args = ['api', `repos/${repo.slug}/actions/jobs/${jobId}/logs`];
+  const args = ['api', `repos/${repo.slug}/actions/jobs/${jobId}/logs`, '--allow-escape-sequences'];
   if (repo.host) args.unshift('--hostname', repo.host);
   const result = runProcessSync({
     command: realGh,
@@ -523,9 +589,15 @@ function routeActionsJobLog(realGh, repo, jobId, cwd) {
     env: { GH_WRAPPER_ACTIVE: '1' },
   });
   if (!result.ok) {
-    throw new Error(`${REST_ERROR_MARKER}: ${result.stderr.trim() || result.error || 'Actions job log read failed'}`);
+    const message = result.stderr.trim() || result.error || 'Actions job log read failed';
+    if (String(message).includes('--allow-escape-sequences')) {
+      throw new Error(REST_ERROR_MARKER
+        + ': selected native gh api could not read this Actions job log; '
+        + 'check the selected gh api --help for escape handling or use the GitHub Actions job-log UI');
+    }
+    throw new Error(REST_ERROR_MARKER + ': ' + message);
   }
-  return result.stdout;
+  return sanitizeActionsJobLog(result.stdout);
 }
 
 function routeRunViewLogFailed(realGh, repo, runId, cwd) {
