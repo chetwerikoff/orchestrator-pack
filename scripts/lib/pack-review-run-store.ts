@@ -500,7 +500,7 @@ function normalizeNewAutomaticBudgetDisposition(
     && input.logicalRoundCap === undefined
     && Boolean(input.reviewCycleId)
   )) {
-    throw new Error('non_consuming_explicit is only producible by an explicit post-cap supplemental review');
+    throw new Error('non_consuming_explicit is only producible by an explicit post-cap supplemental review; cannot be produced by an ordinary start');
   }
   return disposition;
 }
