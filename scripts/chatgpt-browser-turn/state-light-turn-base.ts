@@ -5526,6 +5526,7 @@ async function runTurnCore(
       ) {
         markerlessFinishedReads += 1;
         if (markerlessFinishedReads >= MARKERLESS_RELOAD_SETTLE_READS) {
+          beforeBrowserAction();
           markerlessReloadUsed = true;
           incident(
             'post_send_observation_error',
@@ -5533,6 +5534,7 @@ async function runTurnCore(
             'reload_owned_conversation_no_resend',
           );
           try {
+            held429Witness?.beforeNavigation();
             navigation.recordGoto();
             await page.goto(durableConversationUrl, {
               waitUntil: 'domcontentloaded',
@@ -5715,7 +5717,9 @@ async function runTurnCore(
               page,
               hardExhaustionDeadline,
               continuationCarrier.domIndex,
-              continuationCarrier.continuationVisible === true,
+              continuationCarrier.continuationVisible === true
+                && !held429Witness?.current()
+                && !readStateLightAccountCooldown(profileKey).active,
             );
           }
         } catch (error) {
@@ -6172,18 +6176,24 @@ async function runTurnCore(
     const isInput = message.startsWith('input_invalid:');
     const isOutput = message.startsWith('output_conflict:');
     const isUi = message.startsWith('ui_contract_mismatch:');
+    const isAccountCooldown = message === 'account_cooldown_active';
+    const isNamed429 = message === 'conversation_fetch_http_429'
+      || message === 'account_conversations_http_429';
+    const isSharedBlocked = isNamed429 || isAccountCooldown;
     const state: TurnState = isInput
       ? 'input_invalid'
       : isOutput
         ? 'output_conflict'
-        : isUi || (!afterSend && /ERR_NETWORK_CHANGED/iu.test(message))
-          ? 'ui_contract_mismatch'
-          : 'driver_error';
+        : isSharedBlocked
+          ? (afterSend || sendAttempted ? 'observation_uncertain' : 'rate_limit')
+          : isUi || (!afterSend && /ERR_NETWORK_CHANGED/iu.test(message))
+            ? 'ui_contract_mismatch'
+            : 'driver_error';
     const retirementCleanupRequired = message === 'observation_mutation_retirement_cleanup_required';
     const holderTimeout = error instanceof StateLightSendSlotTimeoutError ? error : undefined;
     const lostAfterSend = afterSend && browserOrPageDefinitelyLost(page, browser);
     const observedNetworkChange = !afterSend && /ERR_NETWORK_CHANGED/iu.test(message);
-    const cause = observedNetworkChange ? 'network_changed' : retirementCleanupRequired
+    const cause = isSharedBlocked ? message : observedNetworkChange ? 'network_changed' : retirementCleanupRequired
       ? message
       : afterSend
         ? lostAfterSend
@@ -6203,17 +6213,20 @@ async function runTurnCore(
         cause,
         retirementCleanupRequired
           ? 'retry_cleanup_later_no_resend'
-          : afterSend
-            ? lostAfterSend
-              ? 'skip_lost_page_no_resend'
-              : 'retain_owned_page_no_resend'
-            : 'return_local_error',
+          : isSharedBlocked
+            ? 'retain_owned_page_no_resend'
+            : afterSend
+              ? lostAfterSend
+                ? 'skip_lost_page_no_resend'
+                : 'retain_owned_page_no_resend'
+              : 'return_local_error',
       );
     }
     return {
       ...(page ? { page } : {}),
       ...(browser ? { browser } : {}),
       ...(lostAfterSend ? { cleanupAction: 'skip' as const } : {}),
+      ...(isSharedBlocked && !lostAfterSend ? { cleanupAction: 'preserve' as const } : {}),
       ...(ownershipForfeited ? { ownershipForfeited: true, cleanupAction: 'preserve' as const } : {}),
       result: {
         ...compactResult(
@@ -6237,6 +6250,8 @@ async function runTurnCore(
         ...(retirementCleanupRequired ? { retirement_cleanup_required: true } : {}),
       },
     };
+  } finally {
+    held429Witness?.dispose();
   }
 }
 
