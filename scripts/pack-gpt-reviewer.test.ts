@@ -497,4 +497,90 @@ describe('GPT pack reviewer adapter', () => {
     expect(startReview).not.toHaveBeenCalled();
   });
 
+  it('binds supplemental CLI success to actual exact-head reviewer, original run and COMMENT for all reviewers', async () => {
+    const head = 'b'.repeat(40);
+    const original = {
+      ok: true, created: true, reused: false,
+      reason: 'supplemental_review_delivered', outcome: 'supplemental_review_delivered',
+      prNumber: 42, headSha: head, targetSha: head,
+      runId: 'prr-supplement-1', reviewerExecutionRunId: 'prr-supplement-1',
+      reviewerInvokedForThisRun: true,
+      status: 'commented', reviewVerdict: 'findings',
+      githubReviewId: 123, githubReviewUrl: 'https://github.com/example/repo/pull/42#issuecomment-123',
+      httpStatus: 201,
+    };
+    for (const reviewer of ['gpt', 'claude', 'codex'] as const) {
+      const startReview = vi.fn(async () => ({
+        ...original, resolvedReviewer: reviewer, executedReviewer: reviewer,
+      }));
+      const delivery = await runPackGptReviewCommand({ prNumber: 42, reviewer }, {
+        startReview, stderr: { write: () => undefined }, env: {},
+      });
+      expect(delivery.exitCode).toBe(0);
+      expect(delivery.result).toMatchObject({
+        outcome: 'supplemental_review_delivered',
+        reviewVerdict: 'findings',
+        resolvedReviewer: reviewer,
+        reviewerExecutionRunId: original.runId,
+        targetSha: head,
+      });
+    }
+  });
+
+  it('rejects status-only success, foreign provenance and unconfirmed supplemental COMMENT', async () => {
+    const head = 'a'.repeat(40);
+    const base = {
+      ok: true, created: true, reused: false,
+      reason: 'completed', prNumber: 42, headSha: head, targetSha: head,
+      runId: 'prr-origin', reviewerExecutionRunId: 'prr-origin',
+      reviewerInvokedForThisRun: true,
+      resolvedReviewer: 'codex', executedReviewer: 'codex',
+      status: 'up_to_date', httpStatus: 201,
+      publicationVerified: true, publicationHeadSha: head,
+    };
+    const cases = [
+      { ...base, created: false, reused: true, reason: 'review_stage_complete', statusPublished: true },
+      { ...base, executedReviewer: 'gpt' },
+      { ...base, targetSha: 'b'.repeat(40) },
+      { ...base, reviewerExecutionRunId: 'prr-foreign' },
+      { ...base, reviewerInvokedForThisRun: false },
+      {
+        ...base, outcome: 'supplemental_review_delivered',
+        reason: 'supplemental_review_delivered', reviewVerdict: 'clean',
+        githubReviewId: undefined, githubReviewUrl: '',
+      },
+    ];
+    for (const result of cases) {
+      const execution = await runPackGptReviewCommand({ prNumber: 42, reviewer: 'codex' }, {
+        startReview: async () => result,
+        stderr: { write: () => undefined }, env: {},
+      });
+      expect(execution.exitCode).toBe(1);
+      expect(execution.result.outcome).not.toBe('supplemental_review_delivered');
+    }
+  });
+
+  it('preserves ordinary required versus supplemental CLI result classes', async () => {
+    const head = 'c'.repeat(40);
+    const required = await runPackGptReviewCommand({ prNumber: 42, reviewer: 'gpt' }, {
+      startReview: async () => ({
+        ok: true, created: true, reused: false, reason: 'completed',
+        prNumber: 42, headSha: head, targetSha: head, runId: 'prr-required',
+        resolvedReviewer: 'gpt', executedReviewer: 'gpt',
+        reviewerExecutionRunId: 'prr-required', reviewerInvokedForThisRun: true,
+        publicationVerified: true, publicationHeadSha: head,
+      }),
+      stderr: { write: () => undefined }, env: {},
+    });
+    expect(required.exitCode).toBe(0);
+    expect(required.result.outcome).not.toBe('supplemental_review_delivered');
+    const stale = await runPackGptReviewCommand({ prNumber: 42, reviewer: 'gpt' }, {
+      startReview: async () => ({
+        ...required.result, headSha: 'd'.repeat(40), targetSha: head,
+      }),
+      stderr: { write: () => undefined }, env: {},
+    });
+    expect(stale.exitCode).toBe(1);
+  });
+
 });
