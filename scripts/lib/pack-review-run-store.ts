@@ -1871,7 +1871,14 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
   if (!Number.isInteger(input.prNumber) || input.prNumber <= 0) throw new Error('pack review runner requires a positive PR number');
   const headSha = normalizePackReviewHeadSha(input.headSha);
   const storeRoot = resolvePackReviewRunStoreRoot(input);
-  const disposition = normalizeNewAutomaticBudgetDisposition(input.automaticBudgetDisposition, input);
+  // Legacy explicit replay can reuse a consuming run, but cannot create a new one.
+  const legacyReplayOnly = input.automaticBudgetDisposition === 'non_consuming_explicit'
+    && input.allowCompletedSameHeadReplay === true
+    && input.allowExplicitSupplementalStart !== true
+    && input.resolvedReviewer === undefined;
+  const disposition = legacyReplayOnly
+    ? 'consume'
+    : normalizeNewAutomaticBudgetDisposition(input.automaticBudgetDisposition, input);
   return withStoreLock(storeRoot, () => {
     const records = readRecordsUnlocked(storeRoot);
     const legacyRepositoryBindings = new Map(
@@ -1971,6 +1978,8 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       };
     }
 
+    // A legacy replay may return an existing run, never manufacture an advisory one.
+    if (legacyReplayOnly) normalizeNewAutomaticBudgetDisposition(input.automaticBudgetDisposition, input);
     const now = (input.now ?? new Date()).toISOString();
     const sameKeyOrders = boundRecords
       .filter((record) => matchesTargetIdentity(record) && record.sameKeyOrder !== undefined)
