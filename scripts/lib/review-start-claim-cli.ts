@@ -768,7 +768,7 @@ function verifiedDeadReviewerClaimTakeover(input: {
     && asString(source.canonicalRepository).toLowerCase() === requested.canonicalRepository.toLowerCase()
     && asString(source.automaticBudgetDisposition) === 'consume'
     && source.reviewVerdict === undefined
-    && source.journalOutcome?.state !== 'persisted'
+    && asRecord(source.journalOutcome).state !== 'persisted'
     && source.executedReviewer === undefined;
 }
 
