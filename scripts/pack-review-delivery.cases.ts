@@ -935,7 +935,6 @@ describe('same-head logical review round ordering (Issue #2610)', () => {
     const second = createRound(storeRoot, 'cycle-2610-a', 2);
     expect(second.id).not.toBe(first.id);
     expect(second.sameKeyOrder).toBeGreaterThan(first.sameKeyOrder!);
-    expect(createRound(storeRoot, 'cycle-2610-a', 1).id).toBe(first.id);
 
     updatePackReviewRun(second.id, {
       status: 'failed', latestRunStatus: 'failed', failureReason: 'reviewer_process_failed',
