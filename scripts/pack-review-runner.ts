@@ -81,6 +81,7 @@ import {
   testReviewStartClaimOwnership,
   type ClaimResult,
 } from './lib/review-start-claim-store.ts';
+import type { ExplicitDeadReviewerTakeover } from './lib/review-start-claim-cli.ts';
 import {
   PACK_REVIEW_ACTIVE_STATUSES,
   createPackReviewRun,
@@ -441,6 +442,7 @@ interface ClaimLease {
   acquired: boolean;
   reason: string;
   directory: string;
+  deadForeignRunClaimReclaimed?: boolean;
   owns: () => boolean;
   release: (action: 'run_started' | 'failure', reviewRuns: PackReviewRunRecord[], detail?: string) => Promise<void>;
 }
@@ -2036,6 +2038,7 @@ async function acquireClaimLease(options: {
   startReason: string;
   resumeRunId?: string;
   allowCompletedSameHeadReplay?: boolean;
+  takeover?: ExplicitDeadReviewerTakeover;
 }): Promise<ClaimLease> {
   void options.trustedPackRoot;
   void options.claimPath;
@@ -2064,6 +2067,7 @@ async function acquireClaimLease(options: {
     reviewRuns: claimRuns,
     projectId: options.projectId,
     startReason: options.startReason,
+    takeover: options.takeover,
   });
   if (!claim.acquired) {
     return {
@@ -2078,6 +2082,8 @@ async function acquireClaimLease(options: {
     acquired: true,
     reason: 'acquired',
     directory: '',
+    deadForeignRunClaimReclaimed: Boolean(
+      options.takeover && claim.reason === 'dead_foreign_reviewer_reclaimed'),
     owns: () => testReviewStartClaimOwnership(claim),
     release: async (action, reviewRuns, detail = '') => {
       const completion = action === 'run_started'
@@ -6884,6 +6890,42 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     };
   };
 
+  // An explicit incomplete-round switch is claim-authorized only after the
+  // original owner is positively proven dead. The caller may not infer death
+  // from a stale heartbeat, a changed reviewer preference, or PID alone.
+  const foreignAuthority = existingAuthorityBeforeCi?.cycle;
+  const foreignExpectedOrdinal = (foreignAuthority?.consumedRoundOrdinals?.length ?? 0) + 1;
+  const foreignCandidates = explicitReviewer && reviewer && !supplementalMode
+      && foreignAuthority?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && foreignAuthority.reviewStageComplete !== true
+      && (foreignAuthority.consumedRoundOrdinals?.length ?? 0) < foreignAuthority.frozenCap
+    ? listPackReviewRunRecordsRaw({ projectId, storeRoot }).filter((candidate) =>
+      candidate.prNumber === target.prNumber
+      && candidate.targetSha === target.headSha
+      && candidate.projectId === projectId
+      && candidate.canonicalRepository?.toLowerCase() === target.repoSlug.toLowerCase()
+      && resolve(candidate.sourceRepoRoot) === resolve(target.sourceRepoRoot)
+      && candidate.reviewCycleId === foreignAuthority.cycleId
+      && candidate.logicalRoundOrdinal === foreignExpectedOrdinal
+      && candidate.automaticBudgetDisposition === 'consume'
+      && candidate.resolvedReviewer && candidate.resolvedReviewer !== reviewer
+      && PACK_REVIEW_ACTIVE_STATUSES.has(candidate.status)
+      && !hasPersistedPackReviewVerdict(candidate)
+      && !candidate.executedReviewer)
+    : [];
+  const foreignRun = foreignCandidates.length === 1 ? foreignCandidates[0] : undefined;
+  const foreignTakeover: ExplicitDeadReviewerTakeover | undefined = foreignRun && reviewer
+    ? {
+        runId: foreignRun.id,
+        existingReviewer: foreignRun.resolvedReviewer!,
+        requestedReviewer: reviewer,
+        runnerPid: foreignRun.runnerPid,
+        reviewCycleId: foreignRun.reviewCycleId!,
+        logicalRoundOrdinal: foreignRun.logicalRoundOrdinal!,
+        canonicalRepository: foreignRun.canonicalRepository!,
+      }
+    : undefined;
+
   const claimSurface = target.operatorStart
     ? `operator_adjudicated;session-binding=advisory;issue=${target.issueNumber ?? 'unresolved'}`
     : (trim(input.surface) || 'pack-review-runner-manual');
@@ -6899,6 +6941,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       startReason: target.operatorStart?.reason ?? (trim(input.startReason) || 'manual'),
       resumeRunId: resumeCandidate?.id,
       allowCompletedSameHeadReplay: supplementalMode,
+      takeover: foreignTakeover,
     });
     if (!claimLease.acquired) {
       return {
