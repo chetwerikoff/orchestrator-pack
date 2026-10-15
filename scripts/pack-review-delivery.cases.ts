@@ -1062,9 +1062,6 @@ describe('same-head logical review round ordering (Issue #2610)', () => {
       const rows = listPackReviewRunRecordsRaw(storeOptions(storeRoot));
       const candidate = rows.find((row) => row.id === second.id)!;
       expect(candidate.sameKeyOrder).toBe(first.sameKeyOrder);
-      // First-red on main: initialOrder is ambiguous and returns
-      // legacy_order_ambiguous before the required-status writer is reached.
-      expect(resolvePackReviewRunOrder(rows, candidate)).toEqual({ kind: 'none' });
       const firstFile = path.join(storeRoot, 'runs', first.id + '.json');
       const settledFirstBytes = readFileSync(firstFile, 'utf8');
       const writes: PackReviewRequiredStatusRequest[] = [];
@@ -1077,6 +1074,12 @@ describe('same-head logical review round ordering (Issue #2610)', () => {
         fixtureRequiredStatusWriter: async (request) => { writes.push(request); },
         fixtureWorkerNotifier: async () => ({ state: 'delivered', reason: 'fixture_notified' }),
       });
+      // On unpatched main this eligible candidate reaches initialOrder,
+      // returns legacy_order_ambiguous and must not publish required status.
+      if (result.results.some((entry) =>
+        entry.runId === second.id && entry.reason === 'legacy_order_ambiguous')) {
+        expect(writes).toHaveLength(0);
+      }
       expect(result.results).toEqual(expect.arrayContaining([
         expect.objectContaining({
           runId: second.id,
@@ -1089,6 +1092,7 @@ describe('same-head logical review round ordering (Issue #2610)', () => {
         context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
         idempotencyKey: expect.stringContaining(HEAD_SHA),
       })]);
+      expect(resolvePackReviewRunOrder(rows, candidate)).toEqual({ kind: 'none' });
       expect(readFileSync(firstFile, 'utf8')).toBe(settledFirstBytes);
       const settledSecond = getPackReviewRun(second.id, storeOptions(storeRoot))!;
       expect(settledSecond).toMatchObject({
@@ -1988,4 +1992,3 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
     expect(typeof resolveRepositorySlug).toBe('function');
   });
 });
-
