@@ -7727,10 +7727,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           { projectId, storeRoot },
         );
       }
-      if (supplementalMode) {
-        if (resumeCandidate.automaticBudgetDisposition !== 'non_consuming_explicit') {
-          throw new Error('supplemental resume requires its own original non-consuming run journal');
-        }
+      if (resumeCandidate.automaticBudgetDisposition === 'non_consuming_explicit') {
         await assertBoundHeadStillCurrent({
           repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
           prNumber: target.prNumber, boundHeadSha: target.headSha,
