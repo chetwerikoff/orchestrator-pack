@@ -1,10 +1,10 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { checkTierGateGuard, checkWorkerSafetyFloor, formatTierGatePassMessage, parseComplexityTierFence } from './lib/tier-gate-core.ts';
 import { canonicalizeEntry } from './pr-scope-declaration.ts';
+import { runProcessSync } from './kernel/subprocess.ts';
 
 const valid = `## Prerequisite
 None.
@@ -77,20 +77,20 @@ describe('current substantive Issue floor', () => {
       '  - action: run | expected: pass',
       '- action: run\nexpected: pass',
     );
-    const runGuard = (body: string) => spawnSync(
-      process.execPath,
-      [
+    const runGuard = (body: string) => runProcessSync({
+      command: process.execPath,
+      args: [
         '--experimental-strip-types',
         fileURLToPath(new URL('./tier-gate-guard.ts', import.meta.url)),
         '--text',
         body,
       ],
-      { encoding: 'utf8' },
-    );
+      inheritParentEnv: true,
+    });
 
     const invalid = runGuard(invalidBody);
     expect(invalid.error).toBeUndefined();
-    expect(invalid.status).toBe(1);
+    expect(invalid.exitCode).toBe(1);
     expect(invalid.stderr).toContain(
       'tier-gate guard: smoke-test-plan must list at least one scenario with action and expected result, or declare not-applicable with reason',
     );
@@ -98,7 +98,7 @@ describe('current substantive Issue floor', () => {
 
     const corrected = runGuard(invalidBody.replace('\nexpected: pass', '\n  expected: pass'));
     expect(corrected.error).toBeUndefined();
-    expect(corrected.status).toBe(0);
+    expect(corrected.exitCode).toBe(0);
     expect(corrected.stdout).toContain('tier-gate guard: PASS T2');
   });
 
