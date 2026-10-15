@@ -3967,12 +3967,18 @@ async function settleRecoveredGptDelivery(options: {
   repoSlug: string;
   writeRequiredStatus: PackReviewRequiredStatusWriter;
 }): Promise<Awaited<ReturnType<typeof resumePackReviewVerdictDelivery>>> {
-  await commitRecoveredGptAuthority(options);
+  if (options.run.automaticBudgetDisposition !== 'non_consuming_explicit') {
+    await commitRecoveredGptAuthority(options);
+  }
   const latestRun = getPackReviewRun(options.run.id, {
     projectId: options.projectId,
     storeRoot: options.storeRoot,
   }) ?? options.run;
   const resumed = await resumeRecoveredGptDelivery({ ...options, run: latestRun });
+  if (options.run.automaticBudgetDisposition === 'non_consuming_explicit') {
+    // Journal and the original reviewer COMMENT alone settle advisory recovery.
+    return resumed;
+  }
   const authorityOptions: PackReviewAuthorityOptions = { storeRoot: options.storeRoot };
   const currentAuthority = readPackReviewAuthority(options.run.prNumber, authorityOptions);
   if (!currentAuthority
@@ -5082,7 +5088,7 @@ export async function reconcileStalePackReviewRuns(
   ) => {
     let restored: Awaited<ReturnType<typeof restorePackReviewAuthoritativeRequiredStatus>> = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const currentOrder = resolvePackReviewRunOrder(await readBoundRecords(), staleRun);
+      const currentOrder = resolvePackReviewRequiredRunOrder(await readBoundRecords(), staleRun);
       if (currentOrder.kind !== 'newer') {
         return {
           outcome: restored,
@@ -5105,7 +5111,7 @@ export async function reconcileStalePackReviewRuns(
       if (input.fixturePauseAfterRestoreRead) {
         await input.fixturePauseAfterRestoreRead(currentOrder.run);
       }
-      const afterWrite = resolvePackReviewRunOrder(await readBoundRecords(), staleRun);
+      const afterWrite = resolvePackReviewRequiredRunOrder(await readBoundRecords(), staleRun);
       if (afterWrite.kind === 'newer') {
         const afterProjection = packReviewRequiredStatusProjectionKey(afterWrite.run);
         if (afterWrite.run.id !== selectedId || afterProjection !== selectedProjection) continue;
@@ -5151,7 +5157,7 @@ export async function reconcileStalePackReviewRuns(
         run: staleRun,
         authorityGuard: (boundRecords) => {
           if (!restoration.authorityId || !restoration.authorityProjection) return false;
-          const currentOrder = resolvePackReviewRunOrder(boundRecords, staleRun);
+          const currentOrder = resolvePackReviewRequiredRunOrder(boundRecords, staleRun);
           return currentOrder.kind === 'newer'
             && currentOrder.run.id === restoration.authorityId
             && packReviewRequiredStatusProjectionKey(currentOrder.run)
@@ -5173,6 +5179,12 @@ export async function reconcileStalePackReviewRuns(
     recoveredRun: PackReviewRunRecord,
     statusWriter: PackReviewRequiredStatusWriter,
   ): Promise<{ verified: boolean; reason: string }> => {
+    if (recoveredRun.automaticBudgetDisposition === 'non_consuming_explicit') {
+      const fresh = getPackReviewRun(recoveredRun.id, { projectId, storeRoot }) ?? recoveredRun;
+      const receipt = supplementalReviewReceipt(fresh);
+      return { verified: Boolean(receipt), reason: receipt
+        ? 'supplemental_review_delivered' : 'supplemental_comment_or_journal_unconfirmed' };
+    }
     // Both explicit recovery and stale fleet reconciliation must verify the
     // exact-head required status; a successful POST alone is not publication.
     try {
@@ -5244,7 +5256,7 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
 
-    const initialOrder = resolvePackReviewRunOrder(records, candidate);
+    const initialOrder = resolvePackReviewRequiredRunOrder(records, candidate);
     if (initialOrder.kind === 'ambiguous'
         || ((input.runId || input.staleOnly) && initialOrder.kind === 'newer')) {
       results.push({
@@ -5441,7 +5453,7 @@ export async function reconcileStalePackReviewRuns(
 
         const movedWinner = async (forceRepublish = false, newerAlreadyRestored = false) => {
           const latest = getPackReviewRun(run.id, { projectId, storeRoot }) ?? beforeTerminal;
-          const order = resolvePackReviewRunOrder(await readBoundRecords(), latest);
+          const order = resolvePackReviewRequiredRunOrder(await readBoundRecords(), latest);
           if (order.kind === 'ambiguous') {
             return { reason: order.reason, statusReconciled: false };
           }
@@ -5467,7 +5479,7 @@ export async function reconcileStalePackReviewRuns(
             forceRepublish,
           });
           const after = getPackReviewRun(run.id, { projectId, storeRoot });
-          const afterOrder = resolvePackReviewRunOrder(await readBoundRecords(), latest);
+          const afterOrder = resolvePackReviewRequiredRunOrder(await readBoundRecords(), latest);
           if (afterOrder.kind === 'newer') {
             // This old verdict-status POST may have landed after the newer
             // original-SHA projection. Always force the newer winner back;
@@ -5534,11 +5546,11 @@ export async function reconcileStalePackReviewRuns(
             && current.status === 'failed'
             && current.failureReason === 'stale_head_before_terminal'
             && !hasPersistedPackReviewVerdict(current)
-            && resolvePackReviewRunOrder(await readBoundRecords(), current).kind === 'none');
+            && resolvePackReviewRequiredRunOrder(await readBoundRecords(), current).kind === 'none');
         };
         const repairOldError = async () => {
           const latest = getPackReviewRun(run.id, { projectId, storeRoot }) ?? failedRun;
-          const order = resolvePackReviewRunOrder(await readBoundRecords(), latest);
+          const order = resolvePackReviewRequiredRunOrder(await readBoundRecords(), latest);
           if (order.kind === 'newer') {
             const restoration = await restoreAndSettleNewerAuthority(latest, statusWriter);
             return { reason: restoration.reason };
@@ -5581,7 +5593,7 @@ export async function reconcileStalePackReviewRuns(
           continue;
         }
         const afterPublication = getPackReviewRun(run.id, { projectId, storeRoot }) ?? failedRun;
-        const afterOrder = resolvePackReviewRunOrder(await readBoundRecords(), afterPublication);
+        const afterOrder = resolvePackReviewRequiredRunOrder(await readBoundRecords(), afterPublication);
         const oldStatusReconciled = afterOrder.kind === 'none'
           && publication.state === 'succeeded'
           && afterPublication.status === 'failed'
@@ -5641,7 +5653,7 @@ export async function reconcileStalePackReviewRuns(
           && recovery.reason.startsWith('gpt_sources_incomplete_after_grace:')) {
         // The first run-order read preceded GitHub source observation. A newer
         // run may have become authoritative while that observation was pending.
-        const beforeOrder = resolvePackReviewRunOrder(await readBoundRecords(), run);
+        const beforeOrder = resolvePackReviewRequiredRunOrder(await readBoundRecords(), run);
         if (beforeOrder.kind !== 'none') {
           if (beforeOrder.kind === 'newer') {
             const restoration = await restoreAndSettleNewerAuthority(run, statusWriter);
@@ -5677,7 +5689,7 @@ export async function reconcileStalePackReviewRuns(
           writeRequiredStatus: async (request) => {
             const head = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
             const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
-            const order = resolvePackReviewRunOrder(await readBoundRecords(), run);
+            const order = resolvePackReviewRequiredRunOrder(await readBoundRecords(), run);
             if (head !== run.targetSha.toLowerCase()
                 || authority?.currentHeadSha.toLowerCase() !== head
                 || authority.cycle?.cycleId !== run.reviewCycleId
@@ -5703,7 +5715,7 @@ export async function reconcileStalePackReviewRuns(
             // An unavailable post-write head/authority check cannot certify publication.
           }
         }
-        const afterOrder = resolvePackReviewRunOrder(await readBoundRecords(), run);
+        const afterOrder = resolvePackReviewRequiredRunOrder(await readBoundRecords(), run);
         if (afterOrder.kind === 'newer') {
           // The older error may have landed after the newer success. Force the
           // existing projector to restore the latest authority after the write.
@@ -5776,7 +5788,7 @@ export async function reconcileStalePackReviewRuns(
             && authority?.currentHeadSha.toLowerCase() === currentHead
             && authority.cycle?.cycleId === run.reviewCycleId
             && !authority.terminal
-            && resolvePackReviewRunOrder(await readBoundRecords(), run).kind === 'none';
+            && resolvePackReviewRequiredRunOrder(await readBoundRecords(), run).kind === 'none';
         } catch {
           // No current-head evidence means no certified required-status result.
         }
@@ -5847,7 +5859,7 @@ export async function reconcileStalePackReviewRuns(
             beforeZero, recovery.missingFirstAttemptIdentities ?? [],
           )
           && virtualFailed && noJudgmentBudgetOutcome(virtualFailed, storeRoot)
-          && resolvePackReviewRunOrder(await readBoundRecords(), beforeZero).kind === 'none';
+          && resolvePackReviewRequiredRunOrder(await readBoundRecords(), beforeZero).kind === 'none';
         if (authorized && beforeZero) {
           const snapshotRound = stableJson(beforeZero.reviewRound);
           // Authority and run-store share one filesystem lock. Read authority
@@ -5874,7 +5886,7 @@ export async function reconcileStalePackReviewRuns(
                 && derivePackReviewNoJudgmentBudgetOutcome({
                   ...current, status: 'failed', failureReason: failedReason,
                 }, authorityAtCas.cycle.consumedRoundOrdinals ?? []) !== null
-                && resolvePackReviewRunOrder(all, current).kind === 'none');
+                && resolvePackReviewRequiredRunOrder(all, current).kind === 'none');
             },
             {
               status: 'failed',
@@ -5930,6 +5942,16 @@ export async function reconcileStalePackReviewRuns(
     }
 
     if (!isPackReviewUnfinishedTerminalRun(run)) continue;
+    if (run.automaticBudgetDisposition === 'non_consuming_explicit') {
+      results.push({
+        runId: run.id,
+        terminalized,
+        statusReconciled: false,
+        reason: 'supplemental_no_required_status',
+        nextAction: 'observe original journal and reviewer COMMENT; no required-status repair is permitted for advisory runs',
+      });
+      continue;
+    }
 
     // A previous zero-judgment terminal may have been reconciled before its
     // dedicated worker submission could be attempted. The locked channel
@@ -5953,7 +5975,7 @@ export async function reconcileStalePackReviewRuns(
       }
     }
 
-    const currentOrder = resolvePackReviewRunOrder(await readBoundRecords(), run);
+    const currentOrder = resolvePackReviewRequiredRunOrder(await readBoundRecords(), run);
     if (currentOrder.kind === 'ambiguous') {
       results.push({
         runId: run.id,
@@ -5979,7 +6001,7 @@ export async function reconcileStalePackReviewRuns(
     if (needsStaleStatus && input.beforeStaleStatusWrite) await input.beforeStaleStatusWrite(run);
 
     const recordsBeforeStaleStatusWrite = await readBoundRecords();
-    const orderBeforeStaleStatusWrite = resolvePackReviewRunOrder(recordsBeforeStaleStatusWrite, run);
+    const orderBeforeStaleStatusWrite = resolvePackReviewRequiredRunOrder(recordsBeforeStaleStatusWrite, run);
     if (orderBeforeStaleStatusWrite.kind === 'ambiguous') {
       results.push({
         runId: run.id,
@@ -6026,7 +6048,7 @@ export async function reconcileStalePackReviewRuns(
         && !authority.terminal;
     };
     const authorizeStaleWrite = async () => {
-      if (resolvePackReviewRunOrder(await readBoundRecords(), run).kind !== 'none') return false;
+      if (resolvePackReviewRequiredRunOrder(await readBoundRecords(), run).kind !== 'none') return false;
       if (zeroJudgmentStaleStatus) return verifyNoJudgmentStatusTarget();
       if (failedPartialStaleStatus) return !needsStaleStatus || verifyPartialStatusTarget();
       return true;
@@ -6064,7 +6086,7 @@ export async function reconcileStalePackReviewRuns(
           && head === run.targetSha.toLowerCase()
           && authority?.currentHeadSha.toLowerCase() === head
           && authority.cycle?.cycleId === current.reviewCycleId
-          && resolvePackReviewRunOrder(await readBoundRecords(), run).kind === 'none') {
+          && resolvePackReviewRequiredRunOrder(await readBoundRecords(), run).kind === 'none') {
           // A same-ID requeue can publish pending while an older error is
           // in flight. The last external write wins: republish that pending.
           const projection = packReviewRequiredStatusProjectionKey(current);
@@ -6081,7 +6103,7 @@ export async function reconcileStalePackReviewRuns(
             && packReviewRequiredStatusProjectionKey(after) === projection
             && afterHead === head && afterAuthority?.currentHeadSha.toLowerCase() === head
             && afterAuthority.cycle?.cycleId === after.reviewCycleId
-            && resolvePackReviewRunOrder(await readBoundRecords(), run).kind === 'none') {
+            && resolvePackReviewRequiredRunOrder(await readBoundRecords(), run).kind === 'none') {
             return { reason: 'same_run_pending_status_restored' };
           }
           return { reason: 'status_not_published:same_run_pending_restoration_unverified; rerun scoped reconcile' };
@@ -6178,7 +6200,7 @@ export async function reconcileStalePackReviewRuns(
           // Confirm that SHA's actual required-status projection and unchanged
           // run-order authority; the live-head equality rule below is for other
           // stale statuses only.
-          const beforeOrder = resolvePackReviewRunOrder(await readBoundRecords(), current);
+          const beforeOrder = resolvePackReviewRequiredRunOrder(await readBoundRecords(), current);
           const newer = beforeOrder.kind === 'newer' ? beforeOrder.run : null;
           const winnerOutcome = newer?.deliveryOutcomes.requiredStatus;
           const winnerPayload = newer ? packReviewJournaledPayload(newer) : null;
@@ -6197,7 +6219,7 @@ export async function reconcileStalePackReviewRuns(
           if (expectedStatus && packReviewRequiredStatusStaleReconciliationComplete(current)) {
             const observed = await readFinalCapRequiredStatus(input, repoSlug, current.targetSha);
             const after = getPackReviewRun(current.id, { projectId, storeRoot });
-            const afterOrder = resolvePackReviewRunOrder(await readBoundRecords(), current);
+            const afterOrder = resolvePackReviewRequiredRunOrder(await readBoundRecords(), current);
             verified = observed === expectedStatus
               && after?.status === 'failed'
               && after.failureReason === 'stale_head_before_terminal'
@@ -6218,7 +6240,7 @@ export async function reconcileStalePackReviewRuns(
             && authorityBefore?.currentHeadSha.toLowerCase() === headBefore
             && authorityBefore.cycle?.cycleId === current.reviewCycleId
             && !authorityBefore.terminal
-            && resolvePackReviewRunOrder(await readBoundRecords(), current).kind === 'none') {
+            && resolvePackReviewRequiredRunOrder(await readBoundRecords(), current).kind === 'none') {
           const observed = await readFinalCapRequiredStatus(input, repoSlug, current.targetSha);
           const headAfter = await readCheckedReviewPrHead(
             input, repoSlug, current.prNumber, current.targetSha,
@@ -6229,7 +6251,7 @@ export async function reconcileStalePackReviewRuns(
             && authorityAfter?.currentHeadSha.toLowerCase() === headAfter
             && authorityAfter.cycle?.cycleId === current.reviewCycleId
             && !authorityAfter.terminal
-            && resolvePackReviewRunOrder(await readBoundRecords(), current).kind === 'none';
+            && resolvePackReviewRequiredRunOrder(await readBoundRecords(), current).kind === 'none';
           }
         }
       } catch {
@@ -7464,7 +7486,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       }
       if (storedCandidates.length > 0) {
         const priorSameRound = storedCandidates[0]!;
-        if (storedCandidates.length !== 1 || resolvePackReviewRunOrder(
+        if (storedCandidates.length !== 1 || resolvePackReviewRequiredRunOrder(
           listPackReviewRunRecordsRaw({ projectId, storeRoot }), priorSameRound,
         ).kind !== 'none') {
           return rejectIncumbent(priorSameRound, 'gpt_incumbent_ambiguous_run',
@@ -7839,7 +7861,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           && incumbent.updatedAt === selectedRun.updatedAt
           && incumbent.sameKeyOrder === selectedRun.sameKeyOrder
           && stableJson(incumbent.reviewRound) === selectedRound
-          && resolvePackReviewRunOrder(records, incumbent).kind === 'none');
+          && resolvePackReviewRequiredRunOrder(records, incumbent).kind === 'none');
       }, {
         status: 'queued',
         latestRunStatus: 'queued',
