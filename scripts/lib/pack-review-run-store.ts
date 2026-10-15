@@ -1690,7 +1690,18 @@ export type PackReviewRunOrderResolution =
 
 function compareSameKeyRuns(left: PackReviewRunRecord, right: PackReviewRunRecord): number | null {
   if (left.sameKeyOrder !== undefined && right.sameKeyOrder !== undefined) {
-    if (left.sameKeyOrder === right.sameKeyOrder) return null;
+    if (left.sameKeyOrder === right.sameKeyOrder) {
+      const leftOrdinal = left.logicalRoundOrdinal;
+      const rightOrdinal = right.logicalRoundOrdinal;
+      if (left.reviewCycleId !== undefined
+        && left.reviewCycleId === right.reviewCycleId
+        && leftOrdinal !== undefined && Number.isInteger(leftOrdinal) && leftOrdinal > 0
+        && rightOrdinal !== undefined && Number.isInteger(rightOrdinal) && rightOrdinal > 0
+        && leftOrdinal !== rightOrdinal) {
+        return leftOrdinal > rightOrdinal ? 1 : -1;
+      }
+      return null;
+    }
     return left.sameKeyOrder > right.sameKeyOrder ? 1 : -1;
   }
   if (left.sameKeyOrder !== undefined) return 1;

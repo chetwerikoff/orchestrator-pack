@@ -872,6 +872,260 @@ describe('pack review corrective contracts (Issue #1307)', () => {
   });
 });
 
+
+describe('same-head logical review round ordering (Issue #2610)', () => {
+  const storeOptions = (storeRoot: string) => ({ projectId: 'orchestrator-pack', storeRoot });
+
+  function createRound(
+    storeRoot: string,
+    reviewCycleId: string,
+    logicalRoundOrdinal: number,
+    overrides: Partial<Parameters<typeof createPackReviewRun>[0]> = {},
+  ): PackReviewRunRecord {
+    return createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 2610,
+      headSha: HEAD_SHA,
+      linkedSessionId: 'worker-2610',
+      startReason: 'same-head-round',
+      surface: 'pack-review-delivery-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      reviewCycleId,
+      logicalRoundOrdinal,
+      logicalRoundCap: 2,
+      ...overrides,
+    }).run;
+  }
+
+  function settleClean(storeRoot: string, run: PackReviewRunRecord): void {
+    updatePackReviewRun(run.id, {
+      status: 'up_to_date',
+      latestRunStatus: 'up_to_date',
+      reviewVerdict: 'clean',
+      findingCount: 0,
+      findings: [],
+      journalOutcome: {
+        state: 'persisted',
+        recordedAtUtc: '2026-10-15T00:00:00.000Z',
+        reason: 'verdict_persisted',
+        idempotencyKey: 'verdict:' + run.id + ':' + run.targetSha,
+        attempts: 1,
+      },
+    }, storeOptions(storeRoot));
+  }
+
+  function persistDuplicateOrder(storeRoot: string, runId: string, order: number): void {
+    const file = path.join(storeRoot, 'runs', runId + '.json');
+    const row = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    row.sameKeyOrder = order;
+    writeFileSync(file, JSON.stringify(row) + '\n', 'utf8');
+  }
+
+  afterEach(() => {
+    process.env = { ...staleEnvSnapshot };
+  });
+
+  it('allocates above every prior round and cycle while keeping identity boundaries and reuse', () => {
+    const storeRoot = tempRoot('opk-2610-round-allocation-');
+    const first = createRound(storeRoot, 'cycle-2610-a', 1);
+    settleClean(storeRoot, first);
+    const second = createRound(storeRoot, 'cycle-2610-a', 2);
+    expect(second.id).not.toBe(first.id);
+    expect(second.sameKeyOrder).toBeGreaterThan(first.sameKeyOrder!);
+
+    updatePackReviewRun(second.id, {
+      status: 'failed', latestRunStatus: 'failed', failureReason: 'reviewer_process_failed',
+    }, storeOptions(storeRoot));
+    const laterCycle = createRound(storeRoot, 'cycle-2610-b', 1);
+    expect(laterCycle.sameKeyOrder).toBeGreaterThan(
+      Math.max(first.sameKeyOrder!, second.sameKeyOrder!),
+    );
+    const all = listPackReviewRunRecordsRaw(storeOptions(storeRoot));
+    expect(resolvePackReviewRunOrder(all, first)).toMatchObject({
+      kind: 'newer', run: { id: laterCycle.id },
+    });
+
+    for (const override of [
+      { projectId: 'another-project' },
+      { canonicalRepository: 'fixture/other-repo', sourceRepoRoot: path.join(storeRoot, 'other-repo') },
+      { prNumber: 2611 },
+      { headSha: '8'.repeat(40) },
+    ]) {
+      expect(createRound(storeRoot, 'cycle-2610-a', 1, override).sameKeyOrder).toBe(1);
+    }
+  });
+
+  it('orders persisted equal-order runs by distinct ordinals within one defined cycle without rewriting them', () => {
+    const storeRoot = tempRoot('opk-2610-historical-tie-');
+    const first = createRound(storeRoot, 'cycle-2610-a', 1);
+    updatePackReviewRun(first.id, { status: 'failed', latestRunStatus: 'failed' }, storeOptions(storeRoot));
+    const second = createRound(storeRoot, 'cycle-2610-a', 2);
+    persistDuplicateOrder(storeRoot, second.id, first.sameKeyOrder!);
+    const firstFile = path.join(storeRoot, 'runs', first.id + '.json');
+    const secondFile = path.join(storeRoot, 'runs', second.id + '.json');
+    const oldRow = JSON.parse(readFileSync(firstFile, 'utf8')) as Record<string, unknown>;
+    const newRow = JSON.parse(readFileSync(secondFile, 'utf8')) as Record<string, unknown>;
+    oldRow.createdAt = '2026-10-15T02:00:00.000Z';
+    newRow.createdAt = '2026-10-15T01:00:00.000Z';
+    writeFileSync(firstFile, JSON.stringify(oldRow) + '\n', 'utf8');
+    writeFileSync(secondFile, JSON.stringify(newRow) + '\n', 'utf8');
+    const before = [readFileSync(firstFile, 'utf8'), readFileSync(secondFile, 'utf8')];
+
+    const rows = listPackReviewRunRecordsRaw(storeOptions(storeRoot));
+    const persistedFirst = rows.find((row) => row.id === first.id)!;
+    const persistedSecond = rows.find((row) => row.id === second.id)!;
+    expect(resolvePackReviewRunOrder(rows, persistedFirst)).toMatchObject({
+      kind: 'newer', run: { id: second.id },
+    });
+    expect(resolvePackReviewRunOrder(rows, persistedSecond)).toEqual({ kind: 'none' });
+    expect([readFileSync(firstFile, 'utf8'), readFileSync(secondFile, 'utf8')]).toEqual(before);
+  });
+
+  it.each([
+    ['equal ordinals', 'equal-ordinal'],
+    ['different cycles', 'different-cycle'],
+    ['missing cycle', 'missing-cycle'],
+    ['missing ordinal', 'missing-ordinal'],
+  ] as const)('fails closed for equal orders with %s', async (_label, variant) => {
+    const storeRoot = tempRoot('opk-2610-conservative-tie-');
+    const first = createRound(storeRoot, 'cycle-2610-a', 1);
+    updatePackReviewRun(first.id, { status: 'failed', latestRunStatus: 'failed' }, storeOptions(storeRoot));
+    const second = createRound(storeRoot, 'cycle-2610-a', 2);
+    const file = path.join(storeRoot, 'runs', second.id + '.json');
+    const row = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    row.sameKeyOrder = first.sameKeyOrder;
+    if (variant === 'equal-ordinal') row.logicalRoundOrdinal = 1;
+    if (variant === 'different-cycle') row.reviewCycleId = 'cycle-2610-other';
+    if (variant === 'missing-cycle') delete row.reviewCycleId;
+    if (variant === 'missing-ordinal') delete row.logicalRoundOrdinal;
+    writeFileSync(file, JSON.stringify(row) + '\n', 'utf8');
+
+    const records = listPackReviewRunRecordsRaw(storeOptions(storeRoot));
+    expect(resolvePackReviewRunOrder(records, records.find((run) => run.id === first.id)!))
+      .toEqual({ kind: 'ambiguous', reason: 'legacy_order_ambiguous' });
+    const writes: PackReviewRequiredStatusRequest[] = [];
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      fixtureRequiredStatusWriter: async (request) => { writes.push(request); },
+    });
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: first.id, reason: 'legacy_order_ambiguous', statusReconciled: false,
+      }),
+    ]));
+    expect(writes).toHaveLength(0);
+  });
+
+  it('keeps unequal defined orders primary even against a higher round ordinal', () => {
+    const storeRoot = tempRoot('opk-2610-explicit-precedence-');
+    const first = createRound(storeRoot, 'cycle-2610-a', 1);
+    updatePackReviewRun(first.id, { status: 'failed', latestRunStatus: 'failed' }, storeOptions(storeRoot));
+    const second = createRound(storeRoot, 'cycle-2610-a', 2);
+    persistDuplicateOrder(storeRoot, first.id, 3);
+    persistDuplicateOrder(storeRoot, second.id, 1);
+    const rows = listPackReviewRunRecordsRaw(storeOptions(storeRoot));
+    expect(resolvePackReviewRunOrder(rows, rows.find((row) => row.id === second.id)!))
+      .toMatchObject({ kind: 'newer', run: { id: first.id } });
+    expect(resolvePackReviewRunOrder(rows, rows.find((row) => row.id === first.id)!))
+      .toEqual({ kind: 'none' });
+  });
+
+  it.each(['stale-active', 'unfinished-terminal'] as const)(
+    'settles an eligible round-two %s through scoped reconcile, not a fabricated verdict',
+    async (variant) => {
+      const storeRoot = tempRoot('opk-2610-reconcile-');
+      harnessStaleEnv(storeRoot, path.join(storeRoot, 'status.json'));
+      const first = createRound(storeRoot, 'cycle-2610-a', 1);
+      settleClean(storeRoot, first);
+      const second = createRound(storeRoot, 'cycle-2610-a', 2);
+      persistDuplicateOrder(storeRoot, second.id, first.sameKeyOrder!);
+
+      if (variant === 'stale-active') {
+        markRunStale(storeRoot, second.id);
+        expect(isPackReviewRunStale(getPackReviewRun(second.id, storeOptions(storeRoot))!)).toBe(true);
+      } else {
+        updatePackReviewRun(second.id, {
+          status: 'timed_out', latestRunStatus: 'timed_out',
+          failureReason: 'reviewer_process_timeout',
+        }, storeOptions(storeRoot));
+        expect(packReviewRequiredStatusNeedsStaleReconciliation(
+          getPackReviewRun(second.id, storeOptions(storeRoot))!,
+        )).toBe(true);
+      }
+
+      const rows = listPackReviewRunRecordsRaw(storeOptions(storeRoot));
+      const candidate = rows.find((row) => row.id === second.id)!;
+      expect(candidate.sameKeyOrder).toBe(first.sameKeyOrder);
+      const firstFile = path.join(storeRoot, 'runs', first.id + '.json');
+      const settledFirstBytes = readFileSync(firstFile, 'utf8');
+      const writes: PackReviewRequiredStatusRequest[] = [];
+      const result = await reconcileStalePackReviewRuns({
+        repoSlug: 'chetwerikoff/orchestrator-pack',
+        sourceRepoRoot: repoRoot,
+        projectId: 'orchestrator-pack',
+        storeRoot,
+        fixtureCurrentPrHeadSha: HEAD_SHA,
+        fixtureRequiredStatusWriter: async (request) => { writes.push(request); },
+        fixtureWorkerNotifier: async () => ({ state: 'delivered', reason: 'fixture_notified' }),
+      });
+      // On unpatched main this eligible candidate reaches initialOrder,
+      // returns legacy_order_ambiguous and must not publish required status.
+      if (result.results.some((entry) =>
+        entry.runId === second.id && entry.reason === 'legacy_order_ambiguous')) {
+        expect(writes).toHaveLength(0);
+      }
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          runId: second.id,
+          terminalized: variant === 'stale-active',
+          statusReconciled: true,
+        }),
+      ]));
+      expect(writes).toEqual([expect.objectContaining({
+        state: 'error',
+        context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+        idempotencyKey: expect.stringContaining(HEAD_SHA),
+      })]);
+      expect(resolvePackReviewRunOrder(rows, candidate)).toEqual({ kind: 'none' });
+      expect(readFileSync(firstFile, 'utf8')).toBe(settledFirstBytes);
+      const settledSecond = getPackReviewRun(second.id, storeOptions(storeRoot))!;
+      expect(settledSecond).toMatchObject({
+        status: variant === 'stale-active' ? 'failed' : 'timed_out',
+        sameKeyOrder: first.sameKeyOrder,
+        deliveryOutcomes: { requiredStatus: { state: 'succeeded' } },
+      });
+      expect(settledSecond.reviewVerdict).toBeUndefined();
+      expect(settledSecond.journalOutcome).toBeUndefined();
+    },
+  );
+
+  it('does not admit a verdict-bearing terminal round merely because an equal-order tie is resolved', async () => {
+    const storeRoot = tempRoot('opk-2610-no-new-reconcile-admission-');
+    const first = createRound(storeRoot, 'cycle-2610-a', 1);
+    settleClean(storeRoot, first);
+    const second = createRound(storeRoot, 'cycle-2610-a', 2);
+    settleClean(storeRoot, second);
+    persistDuplicateOrder(storeRoot, second.id, first.sameKeyOrder!);
+    const writes: PackReviewRequiredStatusRequest[] = [];
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      fixtureRequiredStatusWriter: async (request) => { writes.push(request); },
+    });
+    expect(result.results).toEqual([]);
+    expect(writes).toEqual([]);
+    expect(getPackReviewRun(second.id, storeOptions(storeRoot))?.status).toBe('up_to_date');
+  });
+});
+
 describe('pack review stale reconciliation (Issue #1067)', () => {
   afterEach(() => {
     process.env = { ...staleEnvSnapshot };
