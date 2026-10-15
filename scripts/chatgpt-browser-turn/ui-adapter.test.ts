@@ -4,6 +4,7 @@ import {
   ACCOUNT_LOAD_ERROR_HEADING_SELECTOR,
   CONVERSATION_LOAD_ERROR_HEADING_SELECTOR,
   classifyProductWall,
+  classifyConversationProductWall,
   observeHeldPageConversation429,
   heldPage429Diagnostic,
   probeConversationLoadError,
@@ -425,7 +426,7 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
     const target = fixture.request(FETCH_2617);
     fixture.dispatch(target, 429);
     fixture.dispatch(fixture.request(FETCH_2617), 200);
-    const classified = classifyProductWall(await productStatusText(fixture.page, 500));
+    const classified = classifyConversationProductWall(await productStatusText(fixture.page, 500));
     expect(classified).toEqual({
       wall_kind: 'conversation_fetch_http_429', http_status: 429, status_source: 'owned_page_response',
       matched_text: 'none', matched_selector: 'none',
@@ -480,7 +481,7 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
     expect(witness.current()).toEqual({
       wall_kind: 'account_conversations_http_429', http_status: 429, status_source: 'owned_page_response',
     });
-    expect(classifyProductWall({
+    expect(classifyConversationProductWall({
       composer: true, text: 'Recents: Unable to load history', parts: [
         { selector: '[data-testid="sidebar"]', text: 'Recents: Unable to load history' },
       ],
@@ -495,7 +496,7 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
       expect(await probeConversationLoadError(fixture.page, 400)).toMatchObject({
         wall_kind: 'conversation_load_error', matched_selector: CONVERSATION_LOAD_ERROR_HEADING_SELECTOR,
       });
-      expect(classifyProductWall(await productStatusText(fixture.page, 400))).toMatchObject({
+      expect(classifyConversationProductWall(await productStatusText(fixture.page, 400))).toMatchObject({
         wall_kind: 'conversation_load_error', matched_text: heading,
       });
     },
@@ -509,11 +510,11 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
     fixture.setMessages(false);
     fixture.setComposer(true);
     expect(await probeConversationLoadError(fixture.page, 400)).toBeNull();
-    expect(classifyProductWall({ composer: true, text: 'Recents: Unable to load history',
+    expect(classifyConversationProductWall({ composer: true, text: 'Recents: Unable to load history',
       parts: [{ selector: '[data-testid="sidebar"]', text: 'Recents: Unable to load history' }] })).toMatchObject({
       wall_kind: 'none',
     });
-    expect(classifyProductWall({ composer: true, text: 'Could not load this ChatGPT conversation',
+    expect(classifyConversationProductWall({ composer: true, text: 'Could not load this ChatGPT conversation',
       parts: [{ selector: '[data-message-author-role="assistant"]', text: 'Could not load this ChatGPT conversation' }] }))
       .toMatchObject({ wall_kind: 'none' });
   });
@@ -523,7 +524,7 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
     const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617);
     fixture.dispatch(fixture.request(FETCH_2617), 429);
     fixture.setHeading('Could not load this ChatGPT conversation');
-    expect(classifyProductWall(await productStatusText(fixture.page, 400))).toMatchObject({
+    expect(classifyConversationProductWall(await productStatusText(fixture.page, 400))).toMatchObject({
       wall_kind: 'conversation_fetch_http_429', matched_text: 'Could not load this ChatGPT conversation',
       http_status: 429, status_source: 'owned_page_response',
     });
