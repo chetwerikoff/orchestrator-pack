@@ -1559,7 +1559,7 @@ export interface HeldPage429Witness {
   /** Invocation-local positive issuance; never reply/acceptance authority. */
   readonly ownSubmissionIssued: () => boolean;
   readonly beforeNavigation: () => void;
-  readonly markDispatch: (marker: string) => void;
+  readonly markDispatch: (marker: string, exactSubmittedText?: string) => void;
   readonly dispose: () => void;
 }
 const heldPage429Witnesses = new WeakMap<object, HeldPage429Witness>();
@@ -1577,6 +1577,7 @@ export function observeHeldPageConversation429(
   let epoch = 0;
   let observed: HeldPage429Observation | undefined;
   let dispatchMarker: string | undefined;
+  let dispatchText: string | undefined;
   let ownSubmissionIssuedEpoch: number | undefined;
   const requestEpochs = new WeakMap<object, number>();
   const responseKind = (request: any): HeldPage429Kind | undefined => {
@@ -1606,13 +1607,15 @@ export function observeHeldPageConversation429(
     const kind = responseKind(request);
     if (!kind) return;
     requestEpochs.set(request, epoch);
-    if (kind !== 'rate_limit' || !dispatchMarker || ownSubmissionIssuedEpoch === epoch) return;
+    if (kind !== 'rate_limit' || !dispatchMarker || !dispatchText || ownSubmissionIssuedEpoch === epoch) return;
     try {
       // D45 accepts a leading marker for 429; D46 counts an issued request
-      // only when that marker occurs once in its sole submitted user part.
+      // only for the exact invocation payload with one marker token.
       const body = JSON.parse(request.postData());
       const text = body.messages.find((message: any) => message?.author?.role === 'user')?.content?.parts?.[0];
-      if (typeof text === 'string' && text.split(dispatchMarker).length === 2) ownSubmissionIssuedEpoch = epoch;
+      if (typeof text === 'string' && text === dispatchText && text.split(dispatchMarker).length === 2) {
+        ownSubmissionIssuedEpoch = epoch;
+      }
     } catch { /* Unreadable request data cannot prove issuance. */ }
   };
   const onResponse = (response: any): void => {
@@ -1633,8 +1636,12 @@ export function observeHeldPageConversation429(
   const witness: HeldPage429Witness = {
     current: () => observed,
     ownSubmissionIssued: () => ownSubmissionIssuedEpoch === epoch,
-    beforeNavigation: () => { epoch++; dispatchMarker = undefined; },
-    markDispatch: (marker) => { dispatchMarker = isOwnedPromptMarker(marker) ? marker : undefined; },
+    beforeNavigation: () => { epoch++; dispatchMarker = undefined; dispatchText = undefined; },
+    markDispatch: (marker, exactSubmittedText) => {
+      dispatchMarker = isOwnedPromptMarker(marker) ? marker : undefined;
+      dispatchText = dispatchMarker && typeof exactSubmittedText === 'string'
+        && exactSubmittedText.startsWith(dispatchMarker + '\n\n') ? exactSubmittedText : undefined;
+    },
     dispose: () => {
       if (typeof page?.off === 'function') {
         page.off('request', onRequest);
