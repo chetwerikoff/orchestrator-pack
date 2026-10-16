@@ -4801,9 +4801,19 @@ async function runTurnCore(
         });
         return successor;
       },
-      sleep: recoveryHooks.sleep ?? (async (milliseconds) => {
-        await sleep(page, milliseconds);
-      }),
+      sleep: async (milliseconds) => {
+        // An unproved attempted existing-chat Send cannot poll past its original cutoff.
+        const remainingMs = !config.newChat && sendAttempted && sendCount === 0
+          ? recoveryDeadlineMs - Date.now()
+          : milliseconds;
+        if (remainingMs <= 0) return;
+        const waitMs = Math.min(milliseconds, remainingMs);
+        if (recoveryHooks.sleep) {
+          await recoveryHooks.sleep(waitMs);
+        } else {
+          await sleep(page, waitMs);
+        }
+      },
       now: () => Date.now(),
       };
       let recovered: PostSendRecoveryResult;
