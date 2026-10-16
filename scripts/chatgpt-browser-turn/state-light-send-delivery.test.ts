@@ -1766,7 +1766,7 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
     profile: string,
     invocationId: string,
     options: { redirectOnOpen?: boolean; account429OnOpen?: boolean; exact429AfterOwnedSend?: boolean;
-      send429?: 'own' | 'slash' | 'markerless' | 'mismatch' | 'plain'; uncertainSend?: boolean;
+      send429?: 'own' | 'slash' | 'markerless' | 'mismatch' | 'plain' | 'duplicate' | 'unreadable' | 'pre-dispatch'; uncertainSend?: boolean;
       existing?: boolean; listFirst?: boolean } = {},
   ) {
     let currentUrl = options.existing ? conversationUrl : 'about:blank';
@@ -1779,9 +1779,25 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
     let activeMessages = readyTurnObservationFrames('PROMPT', 'REPLY')[0]!;
     let observationIndex = 0;
     const frames = readyTurnObservationFrames('PROMPT', 'REPLY');
+    const history = [{ role: 'user' as const, text: 'Prior user' },
+      { role: 'assistant' as const, text: 'Prior reply', finalActionInTurnContainer: true }];
     const events = new EventEmitter();
     const emit429 = (requestUrl: string): void => {
       const request = { method: () => 'GET', url: () => requestUrl };
+      events.emit('request', request);
+      events.emit('response', { request: () => request, status: () => 429 });
+    };
+    const emitSend429 = (payload: string): void => {
+      const text = options.send429 === 'markerless' ? 'PROMPT'
+        : options.send429 === 'mismatch' ? MARKED_PROMPT : payload;
+      const request = { method: () => 'POST',
+        url: () => 'https://chatgpt.com/backend-api/' + (options.send429 === 'plain' ? 'conversation' : 'f/conversation')
+          + (options.send429 === 'slash' ? '/' : ''),
+        postData: () => options.send429 === 'unreadable' ? '{not-json' : JSON.stringify({
+          messages: [{ author: { role: 'user' }, content: { content_type: 'text',
+            parts: options.send429 === 'duplicate' ? [text, text] : [text] } }],
+        }),
+      };
       events.emit('request', request);
       events.emit('response', { request: () => request, status: () => 429 });
     };
@@ -1789,25 +1805,17 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
       count: vi.fn(async () => 1),
       evaluate: vi.fn(async () => ({ visible: true, enabled: true, contentEditable: true })),
       click: vi.fn(async () => undefined),
-      fill: vi.fn(async (value: string) => { draft = value; }),
+      fill: vi.fn(async (value: string) => {
+        draft = value;
+        if (options.send429 === 'pre-dispatch') emitSend429(value);
+      }),
       innerText: vi.fn(async () => sent ? '' : draft),
       textContent: vi.fn(async () => sent ? '' : draft),
     });
     const send = scalarLocator({
       count: vi.fn(async () => 1),
       click: vi.fn(async () => {
-        if (options.send429) {
-          const text = options.send429 === 'markerless' ? 'PROMPT'
-            : options.send429 === 'mismatch' ? MARKED_PROMPT : draft;
-          const request = { method: () => 'POST',
-            url: () => 'https://chatgpt.com/backend-api/' + (options.send429 === 'plain' ? 'conversation' : 'f/conversation')
-              + (options.send429 === 'slash' ? '/' : ''),
-            postData: () => JSON.stringify({ messages: [{ author: { role: 'user' },
-              content: { content_type: 'text', parts: [text] } }] }),
-          };
-          events.emit('request', request);
-          events.emit('response', { request: () => request, status: () => 429 });
-        }
+        if (options.send429 && options.send429 !== 'pre-dispatch') emitSend429(draft);
         if (options.uncertainSend) throw new Error('Connection interrupted');
         sent = true;
         sentText = draft;
@@ -1843,7 +1851,7 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
           last: () => scalarLocator({ turnActionButtons: options.existing && !sent }),
         });
         if (selector === USER_MESSAGE_SELECTOR) return collectionLocator(
-          sent ? [{ role: 'user', text: sentText }] : [],
+          [...(options.existing ? [history[0]!] : []), ...(sent ? [{ role: 'user' as const, text: sentText }] : [])],
         );
         if (selector === MESSAGE_NODE_SELECTOR) {
           // Ownership becomes positive only after the fresh Send's claimed URL
@@ -1854,8 +1862,7 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
             emit429(exactRequestUrl);
           }
           if (!sent) {
-            activeMessages = options.existing ? [{ role: 'user', text: 'Prior user' },
-              { role: 'assistant', text: 'Prior reply', finalActionInTurnContainer: true }] : [];
+            activeMessages = options.existing ? history : [];
             const nodes = collectionLocator(activeMessages);
             if (options.existing) Object.assign(nodes, { evaluateAll: async () => ({
               rows: activeMessages.map((message, domIndex) => ({ ...message, domIndex,
@@ -1865,8 +1872,15 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
             }) });
             return nodes;
           }
-          activeMessages = frames[Math.min(observationIndex++, frames.length - 1)]!;
-          return collectionLocator(activeMessages, observationIndex < 3);
+          activeMessages = [...(options.existing ? history : []), ...frames[Math.min(observationIndex++, frames.length - 1)]!];
+          const nodes = collectionLocator(activeMessages, observationIndex < 3);
+          if (options.existing) Object.assign(nodes, { evaluateAll: async () => ({
+            rows: activeMessages.map((message, domIndex) => ({ ...message, domIndex,
+              key: `data-message-id:history-${domIndex}`, complete: true,
+              completionReady: Boolean(message.finalActionInTurnContainer), continuationVisible: false })),
+            pageTurnEvidence: { generationInProgress: observationIndex < 3, observedAssistantNodes: 2, continueGeneratingVisible: false },
+          }) });
+          return nodes;
         }
         if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
           const last = activeMessages.at(-1);
@@ -1936,6 +1950,18 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
     expect(readStateLightAccountCooldown(configuredProfileKey(profile, cdp), clock.now).active).toBe(false);
   });
 
+  it('retains a local blank-surface redirect failure alongside sidebar 429', async () => {
+    clock.now = 100_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const profile = join(root, 'profile');
+    const invocationId = randomUUID();
+    const fixture = freshPage(profile, invocationId, { redirectOnOpen: true, account429OnOpen: true });
+    const { result } = await runFresh(profile, invocationId, fixture.page);
+    expect(fixture.send.click).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ state: 'ui_contract_mismatch', cause: 'fresh_conversation_surface_unavailable', send_count: 0 });
+    expect(readStateLightAccountCooldown(configuredProfileKey(profile, cdp), clock.now).active).toBe(false);
+  });
+
   it.each([true, false])('allows existing-chat Send with exact GET 200 and list 429 (list first: %s)', async (listFirst) => {
     clock.now = 100_000;
     vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
@@ -1945,12 +1971,13 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
     const { result } = await runFresh(profile, invocationId, fixture.page, true);
     expect(fixture.send.click, JSON.stringify(result)).toHaveBeenCalledTimes(1);
     expect(result.send_count).toBe(1);
+    expect(result.state, JSON.stringify(result)).toBe('ok');
     const key = configuredProfileKey(profile, cdp);
     expect(readStateLightAccountCooldown(key, clock.now).active).toBe(false);
     expect(existsSync(join(profileDirs(key).locks, 'state-light-account-cooldown.v1.json'))).toBe(false);
   });
 
-  it.each(['own', 'slash', 'markerless', 'mismatch', 'plain'] as const)(
+  it.each(['own', 'slash', 'markerless', 'mismatch', 'plain', 'duplicate', 'unreadable', 'pre-dispatch'] as const)(
     'binds only the real onDispatch own Send POST 429 (%s), never resending', async (send429) => {
       clock.now = 100_000;
       vi.spyOn(Date, 'now').mockImplementation(() => clock.now);

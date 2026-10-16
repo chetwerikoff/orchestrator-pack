@@ -512,7 +512,7 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
     witness.dispose();
   });
 
-  it.each(['markerless', 'mismatch', 'quoted', 'metadata', 'duplicate', 'unreadable', 'absent',
+  it.each(['markerless', 'mismatch', 'quoted', 'metadata', 'duplicate', 'duplicate-parts', 'multiple-parts', 'unreadable', 'absent',
     'pre-dispatch', 'stale-epoch', 'foreign-page', 'wrong-origin', 'wrong-method', 'plain-route'])(
     'rejects ambiguous or unrelated Send 429: %s', (mode) => {
       const fixture = held429PageFixture();
@@ -524,6 +524,11 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
       if (mode === 'quoted') body = submission(`quoted ${marker}`);
       if (mode === 'metadata') body = JSON.stringify({ metadata: marker, messages: JSON.parse(submission('PROMPT')).messages });
       if (mode === 'duplicate') body = JSON.stringify({ messages: [...JSON.parse(body).messages, ...JSON.parse(body).messages] });
+      if (mode === 'duplicate-parts' || mode === 'multiple-parts') {
+        const parsed = JSON.parse(body);
+        parsed.messages[0].content.parts.push(mode === 'duplicate-parts' ? `${marker}\n\nPROMPT` : 'another text');
+        body = JSON.stringify(parsed);
+      }
       if (mode === 'unreadable') body = '{';
       if (mode === 'absent') body = undefined;
       if (mode !== 'pre-dispatch') witness.markDispatch(marker);
