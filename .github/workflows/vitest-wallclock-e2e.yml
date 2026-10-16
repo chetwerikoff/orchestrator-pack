@@ -119,6 +119,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node.js for wall-clock failure alert
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+
       - name: Emit operator-visible red signal
         env:
           GITHUB_SHA: ${{ github.sha }}
