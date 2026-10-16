@@ -4695,7 +4695,9 @@ async function runTurnCore(
       }
       const recoveryDeadlineMs = config.newChat && !ownedConversationUrl
         ? Math.min(hardExhaustionDeadline, freshUnboundReturnByMs)
-        : hardExhaustionDeadline;
+        : !config.newChat && sendAttempted && sendCount === 0
+          ? Math.min(hardExhaustionDeadline, invocationDeadlineMs)
+          : hardExhaustionDeadline;
       const recoveryAdapter: PostSendRecoveryAdapter = {
       accountActionBlocker: () => {
         const observed = held429Witness?.current();

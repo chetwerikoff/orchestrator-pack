@@ -1241,7 +1241,7 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
     expect(deriveDelivery(captured, false)).toBe('POSSIBLY_DELIVERED');
   });
 
-  it.each(['late-marker', 'own-post', 'no-evidence', 'lost-successor'] as const)(
+  it.each(['late-marker', 'own-post', 'no-evidence', 'lost-successor', 'lost-near-deadline'] as const)(
     'keeps one attempted Send after a stale five-second DOM and composer window (%s)',
     async (scenario) => {
       const root = mkdtempSync(join(tmpdir(), 'opk-2636-send-delivery-'));
@@ -1252,6 +1252,18 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
       const reply = 'D46 OWNED FINISHED ANSWER';
       let clock = 30_000;
       let sendAt = -1;
+      const invocationCutoffMs = clock + 180_000;
+      const lossAtMs = invocationCutoffMs - 100;
+      let lostNearDeadline = false;
+      const advanceClock = (ms: number) => {
+        if (scenario === 'lost-near-deadline' && sendAt >= 0 && !lostNearDeadline
+          && clock < lossAtMs && clock + ms >= lossAtMs) {
+          clock = lossAtMs;
+          lostNearDeadline = true;
+        } else {
+          clock += ms;
+        }
+      };
       let composerText = '';
       const prior = [
         { role: 'user' as const, text: 'previous prompt', key: 'data-message-id:d46-prior-user' },
@@ -1259,6 +1271,7 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
       ];
       const ownRows = () => sendAt >= 0 && clock - sendAt >= 36_000
         && scenario !== 'no-evidence' && scenario !== 'lost-successor'
+        && scenario !== 'lost-near-deadline'
         ? [
           ...prior,
           { role: 'user' as const, text: composerText, key: 'data-message-id:d46-current-user' },
@@ -1318,7 +1331,7 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
           };
         }),
       };
-      const successorRows = () => [
+      const successorRows = () => scenario === 'lost-near-deadline' ? prior : [
         ...prior,
         { role: 'user' as const, text: composerText, key: 'data-message-id:d46-successor-user' },
         { role: 'assistant' as const, text: reply, key: 'data-message-id:d46-successor-assistant' },
@@ -1338,16 +1351,18 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
           };
         }),
       };
-      // The original Page first outlives the unproven five-second proof probe.
-      const lostOriginal = () => scenario === 'lost-successor'
-        && sendAt >= 0 && clock - sendAt >= 9_000;
+      // Both losses occur after the original unproven five-second proof probe.
+      const lostOriginal = () => sendAt >= 0 && (
+        (scenario === 'lost-successor' && clock - sendAt >= 9_000)
+        || (scenario === 'lost-near-deadline' && lostNearDeadline)
+      );
       const successor = Object.assign(new EventEmitter(), {
         __fakeBrowserGptPage: true,
         url: () => target,
         isClosed: () => false,
         goto: vi.fn(async () => undefined),
         close: vi.fn(async () => undefined),
-        waitForTimeout: vi.fn(async (ms: number) => { clock += ms; }),
+        waitForTimeout: vi.fn(async (ms: number) => { advanceClock(ms); }),
         getByRole: () => scalarLocator(),
         getByText: () => scalarLocator(),
         locator: (selector: string) => {
@@ -1366,7 +1381,7 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
         isClosed: () => lostOriginal(),
         goto: vi.fn(async () => undefined),
         close: vi.fn(async () => undefined),
-        waitForTimeout: vi.fn(async (ms: number) => { clock += ms; }),
+        waitForTimeout: vi.fn(async (ms: number) => { advanceClock(ms); }),
         getByRole: () => scalarLocator(),
         getByText: () => scalarLocator(),
         locator: (selector: string) => {
@@ -1381,7 +1396,7 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
       });
       const browserFixture = enqueueBrowserForTurn(mocks, page);
       Object.assign(browserFixture.context, { pages: () => lostOriginal() ? [successor] : [page] });
-      const recoveryCall = scenario === 'lost-successor'
+      const recoveryCall = scenario === 'lost-successor' || scenario === 'lost-near-deadline'
         ? vi.spyOn(recoveryModule, 'runPostSendRecovery') : undefined;
       const date = vi.spyOn(Date, 'now').mockImplementation(() => clock);
       vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
@@ -1398,10 +1413,12 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
           .toBe(false);
         expect(sendAt).toBeGreaterThan(0);
         const observation = readStateLightTurnObservation(configuredProfileKey(profile, 'http://127.0.0.1:9222'), invocationId);
-        if (scenario === 'no-evidence') {
+        if (scenario === 'no-evidence' || scenario === 'lost-near-deadline') {
           expect(result).toMatchObject({
             state: 'observation_uncertain', send_count: 0,
-            send_attempted: true, cause: 'send_delivery_unproven',
+            send_attempted: true,
+            cause: scenario === 'lost-near-deadline'
+              ? 'owned_conversation_recovery_census_failed' : 'send_delivery_unproven',
           });
           // This is an existing, explicitly selected exact chat. Its URL may
           // remain recorded without constituting a Send or reply witness.
@@ -1409,7 +1426,15 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
             phase: 'dispatching', send_witness: 'none', conversation_url: target,
           });
           expect(observation.send_count).toBeUndefined();
-          expect(clock).toBeGreaterThanOrEqual(30_000 + 180_000);
+          if (scenario === 'lost-near-deadline') {
+            expect(lostNearDeadline).toBe(true);
+            expect(recoveryCall).toHaveBeenCalledTimes(1);
+            expect(recoveryCall?.mock.calls[0]?.[0]?.hardDeadlineMs).toBe(invocationCutoffMs);
+            expect(clock).toBeGreaterThanOrEqual(lossAtMs);
+            expect(clock).toBeLessThanOrEqual(invocationCutoffMs);
+          } else {
+            expect(clock).toBeGreaterThanOrEqual(invocationCutoffMs);
+          }
           expect(deriveDelivery({ ...result, resolved_send_count: result.send_count } as any, false))
             .toBe('POSSIBLY_DELIVERED');
           expect(existsSync(output)).toBe(false);
