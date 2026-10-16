@@ -2047,8 +2047,7 @@ function recordProductWallAdvisory(
 ): void {
   if (diagnostic.wall_kind === 'none'
     || diagnostic.wall_kind === 'conversation_fetch_http_429'
-    || diagnostic.wall_kind === 'conversation_load_error'
-    || diagnostic.wall_kind === 'account_conversations_http_429') return;
+    || diagnostic.wall_kind === 'conversation_load_error') return;
   recordStateLightAdvisoryWall(
     profileKey, diagnostic.wall_kind, `${diagnostic.wall_kind}_detected`,
     invocationId, undefined, undefined, {
@@ -2530,8 +2529,7 @@ async function waitForComposer(
       const wall = classifyStateLightProductWall(surface);
       observeProductWall?.(classifyProductWall(surface));
       if ('wall_kind' in wall && (wall.wall_kind === 'conversation_load_error'
-        || wall.wall_kind === 'conversation_fetch_http_429'
-        || wall.wall_kind === 'account_conversations_http_429')) observeConversationWall?.(wall);
+        || wall.wall_kind === 'conversation_fetch_http_429')) observeConversationWall?.(wall);
       const held429 = heldPage429Diagnostic(page);
       if (held429) {
         observeConversationWall?.(held429);
@@ -2639,7 +2637,7 @@ async function mutateComposerOrCause(
       if (await readComposerReadiness(page, insertionDeadlineMs)) return null;
     } catch (error) {
       if (error instanceof Error && (error.message === 'conversation_fetch_http_429'
-        || error.message === 'account_conversations_http_429'
+        || error.message === 'rate_limit'
         || error.message === 'account_cooldown_active')) throw error;
       // The mutation was attempted; classify from the pre-attempt presence proof.
     }
@@ -2666,7 +2664,7 @@ async function mutateComposerOrCause(
     return null;
   } catch (error) {
     if (error instanceof Error && (error.message === 'conversation_fetch_http_429'
-      || error.message === 'account_conversations_http_429'
+      || error.message === 'rate_limit'
       || error.message === 'account_cooldown_active')) throw error;
     if (
       isPlaywrightTimeoutError(error)
@@ -3035,8 +3033,7 @@ async function runTurn(
   try {
     const outcome = await runTurnCore(args, recoveryHooks, entryLivenessHeartbeat, heartbeatSchedulerReady, (value) => {
       if (value.wall_kind === 'account_load_error') diagnostic = value;
-      else if (value.wall_kind === 'conversation_fetch_http_429'
-        || value.wall_kind === 'account_conversations_http_429') {
+      else if (value.wall_kind === 'conversation_fetch_http_429' || value.http_status === 429) {
         if (diagnostic.wall_kind !== 'account_load_error') diagnostic = value;
       } else if (diagnostic.http_status !== 429 && diagnostic.wall_kind !== 'account_load_error'
         && (value.wall_kind !== 'none' || value.matched_text !== 'none')) diagnostic = value;
@@ -3132,6 +3129,7 @@ async function runTurnCore(
   let observedProductErrorText = '';
   let held429Witness: HeldPage429Witness | undefined;
   let held429Page: any;
+  let ownedSendMarker: string | undefined;
   const preSendPageRoute = (): string => {
     try {
       const url = new URL(String(page.url()));
@@ -3176,7 +3174,7 @@ async function runTurnCore(
         incident('shared_account_cooldown_diagnostic', published.diagnostic, 'fail_open');
       }
       onProductWallDiagnostic({ ...observed, matched_text: 'none', matched_selector: 'none' });
-    });
+    }, ownedSendMarker);
   };
   const beforeBrowserAction = (): void => {
     const owned429 = heldPage429Diagnostic(page);
@@ -3240,6 +3238,7 @@ async function runTurnCore(
     const destination = destinationIdentity(requireOption(args, 'output'));
     const config = baseConfig;
     const marker = generateOwnedPromptMarker();
+    ownedSendMarker = marker;
     admitStateLightTurnObservation({ profileKey, invocationId, marker });
     const invocationStartedAt = Date.now();
     const invocationDeadlineMs = invocationStartedAt + config.timeoutMs;
@@ -3777,6 +3776,7 @@ async function runTurnCore(
           profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
         });
         sendAttempted = true;
+        held429Witness?.armDispatch();
         if (freshCleanup) freshCleanup.sendAttempted = true;
       };
       // The composer can change during Send readiness polling. Do not send a
@@ -3935,6 +3935,7 @@ async function runTurnCore(
               profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
             });
             sendAttempted = true;
+            held429Witness?.armDispatch();
           },
           onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_resend'),
         });
@@ -4405,7 +4406,7 @@ async function runTurnCore(
             claimed = true;
             ownedConversationUrl = conversationUrl;
             // The fresh Send positively owns this /c/<id> on the original Page too.
-            // Keep an earlier account-list first wall instead of replacing it.
+            // Keep an earlier eligible first 429 instead of replacing it.
             if (!held429Witness?.current()) attachHeld429(page, conversationUrl);
             if (!deliveryProofPendingRecovery) emitCancellationReceipt(conversationUrl);
             break;
@@ -6278,7 +6279,7 @@ async function runTurnCore(
     const isUi = message.startsWith('ui_contract_mismatch:');
     const isAccountCooldown = message === 'account_cooldown_active';
     const isNamed429 = message === 'conversation_fetch_http_429'
-      || message === 'account_conversations_http_429';
+      || message === 'rate_limit';
     const isSharedBlocked = isNamed429 || isAccountCooldown;
     const state: TurnState = isInput
       ? 'input_invalid'
