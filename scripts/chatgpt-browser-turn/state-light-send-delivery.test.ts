@@ -1018,7 +1018,16 @@ describe('production attempted-send result and durable envelope', () => {
           expect(observation.send_witness).toBe('none');
         }
       }
-      if (scenario === 'throw_no_witness') expect(result.cause).toContain('Timeout 5000ms');
+      if (scenario === 'throw_no_witness') {
+        // The click/Enter exception is a diagnostic, not proof that no Send happened.
+        // The original-deadline outcome remains possibly delivered after no witness.
+        expect(result).toMatchObject({
+          state: 'observation_uncertain', cause: 'send_delivery_unproven',
+          send_attempted: true, send_count: 0,
+        });
+        expect(result.incidents).toContain('send_transport_error');
+        expect(result.incidents).not.toContain('helper_failure_before_send');
+      }
 
       // Consume the real finalized production result through the unchanged
       // child settlement producer and the launcher's actual JSON parser.
@@ -1349,9 +1358,12 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
             state: 'observation_uncertain', send_count: 0,
             send_attempted: true, cause: 'send_delivery_unproven',
           });
+          // This is an existing, explicitly selected exact chat. Its URL may
+          // remain recorded without constituting a Send or reply witness.
           expect(observation).toMatchObject({
-            phase: 'dispatching', send_witness: 'none', conversation_url: null,
+            phase: 'dispatching', send_witness: 'none', conversation_url: target,
           });
+          expect(observation.send_count).toBeUndefined();
           expect(clock).toBeGreaterThanOrEqual(30_000 + 180_000);
           expect(deriveDelivery({ ...result, resolved_send_count: result.send_count } as any, false))
             .toBe('POSSIBLY_DELIVERED');
@@ -2159,7 +2171,20 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
     const fixture = freshPage(profile, invocationId, { send429, uncertainSend: true });
     const { result } = await runFresh(profile, invocationId, fixture.page);
     expect(fixture.send.click).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ send_attempted: true, send_count: 0 });
+    const observation = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId);
+    if (send429 === 'own') {
+      // A witnessed own POST proves one physical Send even when the action throws
+      // and no conversation URL/reply is available. HTTP 429 still does not prove delivery.
+      expect(result.send_count).toBe(1);
+      expect(observation).toMatchObject({
+        phase: 'sent_unbound', send_count: 1, send_witness: 'numeric_send_count',
+      });
+    } else {
+      expect(result).toMatchObject({ send_attempted: true, send_count: 0 });
+      expect(observation).toMatchObject({ phase: 'dispatching', send_witness: 'none' });
+    }
+    expect(deriveDelivery({ ...result, resolved_send_count: result.send_count } as any, false))
+      .toBe('POSSIBLY_DELIVERED');
     expect(readStateLightAccountCooldown(configuredProfileKey(profile, cdp), clock.now).active).toBe(send429 === 'own');
   });
 
