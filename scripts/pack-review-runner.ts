@@ -31,7 +31,11 @@ import {
   toCompatibleTargets,
   type ProbeDependencies,
 } from './browser-gpt-page-probe.ts';
-import { readStateLightTurnObservation } from './chatgpt-browser-turn/state-light-turn-observation.ts';
+import {
+  observationRecordPath,
+  readStateLightTurnObservation,
+} from './chatgpt-browser-turn/state-light-turn-observation.ts';
+import { readStateLightAccountCooldown } from './chatgpt-browser-turn/state-light-turn-base.ts';
 import { authoritativePreSend, terminalHasPossibleDelivery } from './pack-review-no-review-reconcile.ts';
 import {
   deriveMergeTriageEvidenceTuple,
@@ -3509,6 +3513,152 @@ function provenFirstAttemptZeroSendCensus(
   });
 }
 
+/**
+ * Recognize original failed rate-limit-led rounds for scoped recovery.
+ * Ambiguous original attempts must lead to observation, not terminal reconcile
+ * or fresh-run admission. Only proveRateLimitOriginalZeroSend grants the latter.
+ */
+function hasFailedRateLimitSource(run: PackReviewRunRecord): boolean {
+  if (run.status !== 'failed' || !run.failureReason?.startsWith('gpt_source_non_complete:')
+    || !run.reviewRound) return false;
+  const slots = run.reviewRound.sourceSlots;
+  return slots.some((slot) => slot.terminalClass?.startsWith('rate_limit:'))
+    && slots.every((slot) => slot.lifecycle === 'planned'
+      || (slot.lifecycle === 'invocation_started' && Boolean(slot.invocationId))
+      || (slot.lifecycle === 'terminal'
+        && (slot.terminalClass === 'pre_launch_interrupted'
+          || slot.terminalClass?.startsWith('rate_limit:') === true
+          || slot.terminalClass === 'possible_delivery'
+          || slot.terminalClass?.startsWith('possible_delivery/') === true)));
+}
+
+function originalRateLimitZeroJudgment(
+  run: PackReviewRunRecord,
+  storeRoot: string,
+): boolean {
+  const round = run.reviewRound;
+  if (run.status !== 'failed'
+    || !run.failureReason?.startsWith('gpt_source_non_complete:')
+    || noJudgmentBudgetOutcome(run, storeRoot) === null
+    || round?.reviewer !== 'gpt' || round.cardinality !== 3
+    || round.sourceSlots.length !== 3) return false;
+  let witnessedRateLimit = false;
+  for (const slot of round.sourceSlots) {
+    if (slot.lifecycle === 'planned' || slot.terminalClass === 'pre_launch_interrupted') continue;
+    const result = slot.terminalResult;
+    if (slot.lifecycle !== 'terminal' || !result || typeof result !== 'object'
+      || Array.isArray(result)) return false;
+    const terminal = result as Record<string, unknown>;
+    if (terminal.state !== 'rate_limit'
+      || (terminal.cause !== 'account_cooldown_active'
+        && terminal.cause !== 'account_conversations_http_429')
+      || slot.terminalClass !== 'rate_limit:' + terminal.cause) return false;
+    const terminalProfile = trim(terminal.configured_profile_key ?? terminal.profile_key);
+    if (terminalProfile && terminalProfile !== trim(slot.launchProfileKey)) return false;
+    witnessedRateLimit = true;
+  }
+  return witnessedRateLimit;
+}
+
+/**
+ * Reconstruct the exact original invocation census from persisted zero-send
+ * terminals AND conclusive actor-bound GitHub source-comment absence. External
+ * original-invocation observations, if present, must not contradict pre-send.
+ * Re-run on every PR-led admission: a prior reconcile result is not authority.
+ */
+async function proveRateLimitOriginalZeroSend(input: {
+  run: PackReviewRunRecord;
+  projectId: string;
+  storeRoot: string;
+  repoSlug: string;
+  sourceRepoRoot: string;
+  transport?: PackGptSourceCommentTransport;
+}): Promise<boolean> {
+  const { run, projectId, storeRoot, repoSlug } = input;
+  if (!originalRateLimitZeroJudgment(run, storeRoot)) return false;
+  const invoked = run.reviewRound!.sourceSlots.filter((slot) => Boolean(slot.invocationId));
+  const identities = invoked.map((slot) => slot.slotId + ':' + slot.invocationId);
+  // Local proof is only a cheap rejection filter; it is not a comment census.
+  if (!provenFirstAttemptZeroSendCensus(run, identities)) return false;
+  if (process.env.OPK_VITEST_HARNESS === '1' && !input.transport) return false;
+  const transport = input.transport ?? createPackGptSourceCommentTransport({
+    repoRoot: input.sourceRepoRoot, repoSlug, prNumber: run.prNumber,
+  });
+  const verifiedMissing: string[] = [];
+  for (const slot of invoked) {
+    const invocationId = slot.invocationId!;
+    // Without the original namespace, an opposing persisted turn observation
+    // cannot be excluded. Do not substitute the current browser profile.
+    if (!slot.launchProfileKey) return false;
+    try {
+      const path = observationRecordPath(slot.launchProfileKey, invocationId);
+      if (existsSync(path)) {
+        const observation = readStateLightTurnObservation(slot.launchProfileKey, invocationId);
+        if ((observation.phase !== 'prepared' && observation.phase !== 'not_sent')
+          || observation.transition_reason === 'send_delivery_unproven'
+          || observation.send_witness === 'owned_marker'
+          || (observation.send_count !== undefined && observation.send_count !== 0)) return false;
+      }
+      const resolution = await resolvePackGptSourceComment({
+        identity: gptSourceIdentity({
+          repoSlug, prNumber: run.prNumber, headSha: run.targetSha,
+          runId: run.id, slotId: slot.slotId, invocationId,
+        }),
+        transport,
+      });
+      if (resolution.kind !== 'missing') return false;
+    } catch {
+      // An unreadable observation or incomplete GitHub actor/comment scan is
+      // never interpreted as proof that the original send did not occur.
+      return false;
+    }
+    verifiedMissing.push(slot.slotId + ':' + invocationId);
+  }
+  const current = getPackReviewRun(run.id, { projectId, storeRoot });
+  return Boolean(current
+    && current.status === run.status
+    && current.failureReason === run.failureReason
+    && current.targetSha === run.targetSha
+    && current.reviewCycleId === run.reviewCycleId
+    && stableJson(current.reviewRound) === stableJson(run.reviewRound)
+    && originalRateLimitZeroJudgment(current, storeRoot)
+    && provenFirstAttemptZeroSendCensus(current, verifiedMissing));
+}
+
+function rateLimitFreshReviewNextAction(run: PackReviewRunRecord, projectId: string): string {
+  const command = 'OPK_PROJECT_ID=' + projectId
+    + ' npm run --silent pack-gpt-review -- --project ' + projectId
+    + ' --pr-number ' + run.prNumber;
+  const profile = trim(process.env.PACK_GPT_BROWSER_PROFILE);
+  try {
+    const cdp = trim(process.env.PACK_GPT_BROWSER_CDP) || 'http://127.0.0.1:9222';
+    // The persisted original launch identity is a safe fallback when scoped
+    // reconciliation was invoked without a browser profile environment.
+    const originalKeys = new Set(run.reviewRound?.sourceSlots
+      .map((slot) => trim(slot.launchProfileKey))
+      .filter(Boolean) ?? []);
+    const profileKey = profile
+      ? configuredProfileKey(profile, cdp)
+      : originalKeys.size === 1 ? [...originalKeys][0] : undefined;
+    if (profileKey) {
+      const cooldown = readStateLightAccountCooldown(profileKey);
+      if (cooldown.active && cooldown.until !== undefined) {
+        return 'after the shared account cooldown expires at '
+          + new Date(cooldown.until).toISOString() + ' UTC, start a fresh review run: ' + command;
+      }
+    }
+  } catch {
+    // Missing, malformed or unreadable cooldown is not a fabricated wait.
+  }
+  return 'start the fresh review run now: ' + command;
+}
+
+function rateLimitOriginalRecoveryAction(run: PackReviewRunRecord): string {
+  return 'observe the original GPT turn and exact-identity GitHub source comments for run '
+    + run.id + ' (PR #' + run.prNumber
+    + '); resolve absent or conflicting first-attempt send evidence before any new run; do not resend';
+}
+
 async function recoverStaleGptSourceComments(options: {
   run: PackReviewRunRecord;
   input: ReconcileStalePackReviewRunsInput;
@@ -6207,12 +6357,31 @@ export async function reconcileStalePackReviewRuns(
       pauseAfterWrite: input.fixturePauseAfterStaleStatusWrite,
     });
 
+    let rateLimitAction: string | undefined;
+    if (zeroJudgmentStaleStatus && (terminalized || run.status === 'failed')
+      && (outcome.state === 'succeeded'
+        || (!needsStaleStatus && packReviewRequiredStatusStaleReconciliationComplete(run)))
+      && await verifyNoJudgmentStatusTarget()) {
+      const current = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
+      if (hasFailedRateLimitSource(current)) {
+        const proved = originalRateLimitZeroJudgment(current, storeRoot)
+          && await proveRateLimitOriginalZeroSend({
+            run: current, projectId, storeRoot, repoSlug,
+            sourceRepoRoot: input.sourceRepoRoot,
+            transport: input.fixtureGptSourceCommentTransport,
+          });
+        rateLimitAction = proved
+          ? rateLimitFreshReviewNextAction(current, projectId)
+          : rateLimitOriginalRecoveryAction(current);
+      }
+    }
     results.push({
       runId: run.id,
       terminalized,
       statusReconciled: needsStaleStatus && outcome.state === 'succeeded',
       reason: needsStaleStatus ? outcome.reason : 'status_already_reconciled',
-      ...(zeroJudgmentStaleStatus && terminalized ? { nextAction: scopedReconcileAction(run.prNumber) } : {}),
+      ...(zeroJudgmentStaleStatus && (terminalized || run.status === 'failed')
+        ? { nextAction: rateLimitAction ?? scopedReconcileAction(run.prNumber) } : {}),
       ...(failedPartialStaleStatus && needsStaleStatus && outcome.state !== 'succeeded' ? {
         nextAction: scopedReconcileAction(run.prNumber),
       } : {}),
@@ -7618,6 +7787,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
 
     let allowSameRoundReplacement = false;
     let sameRoundGptRun: PackReviewRunRecord | null = null;
+    let freshRateLimitGptRun: PackReviewRunRecord | null = null;
+    let freshRateLimitGptHistory: PackReviewRunRecord[] = [];
     let sameRoundGptEligibleSlotIds: ReadonlySet<string> | undefined;
     let sameRoundGptOrphanSlotIds: ReadonlySet<string> | undefined;
     let sameRoundGptDiagnostics: PackReviewGptTargetDiagnostic[] | undefined;
@@ -7626,8 +7797,10 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       : claimLease?.owns() === true;
     const incumbentCandidates = (records: readonly PackReviewRunRecord[]) => records.filter((candidate) => (
       candidate.prNumber === target.prNumber
-      && candidate.reviewCycleId === authority.cycle?.cycleId
-      && candidate.logicalRoundOrdinal === roundOrdinal
+      && ((
+        candidate.reviewCycleId === authority.cycle?.cycleId
+        && candidate.logicalRoundOrdinal === roundOrdinal
+      ) || hasFailedRateLimitSource(candidate))
       && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
       && candidate.reviewRound?.reviewer === 'gpt'
       && !hasPersistedPackReviewVerdict(candidate)
@@ -7636,6 +7809,13 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       const cycle = authority.cycle;
       const historicalRound = candidate.reviewRound;
       if (!cycle || !historicalRound) return false;
+      // Unlike an unfinished incumbent continuation, a distinct rate-limit
+      // replacement requires the exact original frozen tier and cap.
+      if (hasFailedRateLimitSource(candidate)) {
+        return candidate.logicalRoundCap === cycle.frozenCap
+          && historicalRound.tier === cycle.frozenTier
+          && historicalRound.tier === authoritative.tier;
+      }
       if (candidate.logicalRoundCap === cycle.frozenCap
           && historicalRound.tier === authoritative.tier) return true;
       // A live upward amendment changes the unfinished cycle, not the original
@@ -7710,10 +7890,12 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           'reconcile the existing same-head GPT run cycle/round before starting or rebinding work');
       }
       if (storedCandidates.length > 0) {
-        const priorSameRound = storedCandidates[0]!;
-        if (storedCandidates.length !== 1 || resolvePackReviewRequiredRunOrder(
-          listPackReviewRunRecordsRaw({ projectId, storeRoot }), priorSameRound,
-        ).kind !== 'none') {
+        // Retained zero-send failures are history, not competing live owners.
+        // Existing required-run ordering must identify exactly one newest run.
+        const newest = storedCandidates.filter((candidate) =>
+          resolvePackReviewRequiredRunOrder(allRecords, candidate).kind === 'none');
+        const priorSameRound = newest.length === 1 ? newest[0]! : storedCandidates[0]!;
+        if (newest.length !== 1) {
           return rejectIncumbent(priorSameRound, 'gpt_incumbent_ambiguous_run',
             'inspect competing same-round records; do not reassign any incumbent owner');
         }
@@ -7721,15 +7903,64 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           return rejectIncumbent(priorSameRound, 'gpt_incumbent_identity_mismatch',
             'reconcile the exact repository, frozen Issue snapshot and round before any incumbent continuation');
         }
-        if (!incumbentOwnerDead(priorSameRound)) {
-          return rejectIncumbent(priorSameRound, 'gpt_incumbent_owner_not_dead',
-            'observe the original runner PID and stale grace; do not take over a live or fresh incumbent');
+        const older = storedCandidates.filter((candidate) => candidate.id !== priorSameRound.id);
+        const failedRateLimitRound = hasFailedRateLimitSource(priorSameRound);
+        if (older.length > 0 && !failedRateLimitRound) {
+          return rejectIncumbent(priorSameRound, 'gpt_incumbent_ambiguous_run',
+            'inspect competing same-round records; do not reassign any incumbent owner');
         }
-        if (!ownsStartClaim()) {
-          return rejectIncumbent(priorSameRound, 'gpt_incumbent_claim_not_owned',
-            'acquire or retain the exact current PR/head start claim before resuming');
+        // An older verdict-bearing record is never made safe by a newer failed
+        // record; likewise every older no-verdict record needs its own census.
+        const verdictHistory = allRecords.find((candidate) =>
+          candidate.projectId === projectId && candidate.prNumber === target.prNumber
+          && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
+          && candidate.reviewCycleId === authority.cycle!.cycleId
+          && candidate.logicalRoundOrdinal === roundOrdinal
+          && candidate.automaticBudgetDisposition !== 'non_consuming_explicit'
+          && candidate.reviewRound?.reviewer === 'gpt'
+          && hasPersistedPackReviewVerdict(candidate));
+        if (verdictHistory) {
+          return rejectIncumbent(verdictHistory, 'gpt_incumbent_ambiguous_run',
+            'resolve verdict-bearing same-round history before any new review');
         }
-        const observeAttempt = input.fixtureGptAttemptObserver ?? observeGptPackReviewAttempt;
+        for (const historical of older) {
+          if (resolvePackReviewRequiredRunOrder(allRecords, historical).kind !== 'newer'
+            || !incumbentIdentityMatches(historical)
+            || !originalRateLimitZeroJudgment(historical, storeRoot)
+            || !(await proveRateLimitOriginalZeroSend({
+              run: historical, projectId, storeRoot, repoSlug: target.repoSlug,
+              sourceRepoRoot: target.sourceRepoRoot,
+              transport: input.fixtureGptSourceCommentTransport,
+            }))) {
+            return rejectIncumbent(historical, 'gpt_rate_limit_history_unsafe',
+              rateLimitOriginalRecoveryAction(historical));
+          }
+        }
+        if (failedRateLimitRound && !originalRateLimitZeroJudgment(priorSameRound, storeRoot)) {
+          return rejectIncumbent(priorSameRound, 'gpt_rate_limit_original_zero_send_unproven',
+            rateLimitOriginalRecoveryAction(priorSameRound));
+        }
+        if (failedRateLimitRound) {
+          if (!ownsStartClaim()) {
+            return rejectIncumbent(priorSameRound, 'gpt_incumbent_claim_not_owned',
+              'acquire the exact current PR/head start claim before a fresh rate-limit review');
+          }
+          // A failed, non-consuming 0/3 is historic evidence, not a reusable
+          // run owner. A fresh run ID may be allocated only after the original
+          // source/comment census is re-proved immediately before creation.
+          allowSameRoundReplacement = true;
+          freshRateLimitGptRun = priorSameRound;
+          freshRateLimitGptHistory = older;
+        } else {
+          if (!incumbentOwnerDead(priorSameRound)) {
+            return rejectIncumbent(priorSameRound, 'gpt_incumbent_owner_not_dead',
+              'observe the original runner PID and stale grace; do not take over a live or fresh incumbent');
+          }
+          if (!ownsStartClaim()) {
+            return rejectIncumbent(priorSameRound, 'gpt_incumbent_claim_not_owned',
+              'acquire or retain the exact current PR/head start claim before resuming');
+          }
+          const observeAttempt = input.fixtureGptAttemptObserver ?? observeGptPackReviewAttempt;
         const observation = await observeAttempt(priorSameRound);
         sameRoundGptDiagnostics = observation?.diagnostics;
         const originalLaunchIds = observation?.initialLaunchSlotIds ?? [];
@@ -7784,6 +8015,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           priorSameRound.reviewRound?.sourceSlots.some((slot) =>
             slot.slotId === slotId && slot.lifecycle === 'invocation_started')));
         gptRound = priorSameRound.reviewRound;
+        }
       }
     }
 
@@ -8067,6 +8299,74 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       if (record.canonicalRepository || !record.sourceRepoRoot) continue;
       const identity = await resolvePackReviewRunCanonicalRepository(record, resolveSlug);
       if (identity.ok) legacyRepositoryBySourceRoot[resolve(record.sourceRepoRoot)] = identity.slug;
+    }
+    // No persisted success, send witness or source comment from the old run
+    // can be superseded by a generic retry. Re-read all original evidence
+    // with the claim held before the synchronous run-store insertion.
+    if (freshRateLimitGptRun) {
+      const original = freshRateLimitGptRun;
+      const headBefore = await readProjectionHead();
+      const authorityBefore = readPackReviewAuthority(target.prNumber, authorityOptions);
+      if (!ownsStartClaim() || headBefore !== target.headSha.toLowerCase()
+        || authorityBefore?.currentHeadSha.toLowerCase() !== headBefore
+        || authorityBefore.cycle?.cycleId !== original.reviewCycleId
+        || authorityBefore.cycle?.state !== 'open'
+        || authorityBefore.cycle?.reviewStageComplete === true
+        || authorityBefore.cycle?.consumedRoundOrdinals?.includes(roundOrdinal)
+        || authorityBefore.terminal) {
+        return rejectIncumbent(original, 'gpt_rate_limit_fresh_authority_unverified',
+          'verify the original head, frozen cycle/cap and exact start claim; do not retry an uncertain source');
+      }
+      const admittedHistory = [original, ...freshRateLimitGptHistory];
+      for (const previous of admittedHistory) {
+        const current = getPackReviewRun(previous.id, { projectId, storeRoot });
+        if (!current || !incumbentIdentityMatches(current)
+          || current.status !== previous.status
+          || current.failureReason !== previous.failureReason
+          || current.sameKeyOrder !== previous.sameKeyOrder
+          || stableJson(current.reviewRound) !== stableJson(previous.reviewRound)
+          || !(await proveRateLimitOriginalZeroSend({
+            run: current, projectId, storeRoot, repoSlug: target.repoSlug,
+            sourceRepoRoot: target.sourceRepoRoot,
+            transport: input.fixtureGptSourceCommentTransport,
+          }))) {
+          return rejectIncumbent(previous, 'gpt_rate_limit_original_zero_send_unproven',
+            rateLimitOriginalRecoveryAction(previous));
+        }
+      }
+      const headAfter = await readProjectionHead();
+      const latest = getPackReviewRun(original.id, { projectId, storeRoot });
+      const latestAuthority = readPackReviewAuthority(target.prNumber, authorityOptions);
+      const latestRecords = listPackReviewRunRecordsRaw({ projectId, storeRoot });
+      const currentCandidates = incumbentCandidates(latestRecords);
+      const retainedHistoryUnchanged = currentCandidates.length === admittedHistory.length
+        && admittedHistory.every((previous) => {
+          const candidate = currentCandidates.find((row) => row.id === previous.id);
+          return Boolean(candidate && incumbentIdentityMatches(candidate)
+            && candidate.status === previous.status
+            && candidate.failureReason === previous.failureReason
+            && candidate.sameKeyOrder === previous.sameKeyOrder
+            && originalRateLimitZeroJudgment(candidate, storeRoot)
+            && stableJson(candidate.reviewRound) === stableJson(previous.reviewRound)
+            && resolvePackReviewRequiredRunOrder(latestRecords, candidate).kind
+              === (previous.id === original.id ? 'none' : 'newer'));
+        });
+      if (headAfter !== target.headSha.toLowerCase() || !ownsStartClaim()
+        || !latest || !originalRateLimitZeroJudgment(latest, storeRoot)
+        || stableJson(latest.reviewRound) !== stableJson(original.reviewRound)
+        || latest.failureReason !== original.failureReason
+        || !incumbentIdentityMatches(latest)
+        || !retainedHistoryUnchanged
+        || resolvePackReviewRequiredRunOrder(latestRecords, latest).kind !== 'none'
+        || latestAuthority?.currentHeadSha.toLowerCase() !== headAfter
+        || latestAuthority.cycle?.cycleId !== original.reviewCycleId
+        || latestAuthority.cycle?.state !== 'open'
+        || latestAuthority.cycle?.reviewStageComplete === true
+        || latestAuthority.cycle?.consumedRoundOrdinals?.includes(roundOrdinal)
+        || latestAuthority.terminal) {
+        return rejectIncumbent(original, 'gpt_rate_limit_fresh_authority_changed',
+          're-read the original run, GitHub source comments, current PR head and claim before any new review');
+      }
     }
     let created: ReturnType<typeof createPackReviewRun>;
     if (sameRoundGptRun) {
