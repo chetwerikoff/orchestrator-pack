@@ -5254,7 +5254,17 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       },
     }) });
     const result = await f.reconcile();
-    expect(String(result.results.find((item) => item.runId === f.original.id && typeof item.nextAction === 'string')?.nextAction))
-      .not.toContain(exactCommand);
+    const action = result.results.find((item) => item.runId === f.original.id && typeof item.nextAction === 'string')?.nextAction;
+    expect(action).toBe(
+      `node --experimental-strip-types scripts/pack-review-runner.ts reconcile --source-repo-root ${JSON.stringify(process.cwd())} --repo-slug ${repository} --pr-number ${prNumber}`,
+    );
+    const incumbent = await f.start();
+    expect(incumbent.result).toMatchObject({
+      created: false, reused: true, runnerReason: 'gpt_incumbent_owner_not_dead',
+      runId: f.original.id,
+    });
+    expect(String(incumbent.result.nextAction)).toContain('observe the original runner PID and stale grace');
+    expect(f.freshStarts).toEqual([]);
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
   });
 });

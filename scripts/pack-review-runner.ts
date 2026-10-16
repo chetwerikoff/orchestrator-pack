@@ -3518,9 +3518,14 @@ function provenFirstAttemptZeroSendCensus(
  * 0/3 failure, missing source, or rate-limit label alone never admits a send.
  */
 function hasFailedRateLimitSource(run: PackReviewRunRecord): boolean {
-  return run.status === 'failed'
-    && run.failureReason?.startsWith('gpt_source_non_complete:') === true
-    && run.reviewRound?.sourceSlots.some((slot) => slot.terminalClass?.startsWith('rate_limit:')) === true;
+  if (run.status !== 'failed' || !run.failureReason?.startsWith('gpt_source_non_complete:')
+    || !run.reviewRound) return false;
+  const slots = run.reviewRound.sourceSlots;
+  return slots.some((slot) => slot.terminalClass?.startsWith('rate_limit:'))
+    && slots.every((slot) => slot.lifecycle === 'planned'
+      || (slot.lifecycle === 'terminal'
+        && (slot.terminalClass === 'pre_launch_interrupted'
+          || slot.terminalClass?.startsWith('rate_limit:') === true)));
 }
 
 function originalRateLimitZeroJudgment(
