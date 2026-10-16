@@ -1,0 +1,25 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2623,
+  "declared_paths": [
+    "scripts/launch-watch/watch.test.ts",
+    "scripts/launch-watch/watch.ts",
+    "scripts/pr-scope-declaration.test.ts",
+    "scripts/pr-scope-declaration.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/launch-watch/watch.test.ts",
+    "scripts/launch-watch/watch.ts",
+    "scripts/pr-scope-declaration.test.ts",
+    "scripts/pr-scope-declaration.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "6d725ae59e7fb10df53615c129634008972d4294"
+}
