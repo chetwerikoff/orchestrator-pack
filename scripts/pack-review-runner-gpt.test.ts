@@ -6146,12 +6146,14 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
   const issueBody = ['```complexity-tier', 'tier: T2', '```'].join('\n');
   const originalSource01 = '25320001-0000-4000-8000-000000000001';
   const originalSource02 = '25320002-0000-4000-8000-000000000002';
+  const originalSource03 = '26350003-0000-4000-8000-000000000003';
   const oldPid = 2147483647;
   const staleAt = '2026-10-12T00:00:00.000Z';
   const restartAt = '2026-10-12T00:20:00.000Z';
 
   async function seedDeadIncumbent(config: {
     source02Comment?: boolean;
+    orphanedPair?: boolean;
     canonicalRepository?: string;
     sourceRepoRoot?: string;
     snapshotDigest?: string;
@@ -6246,11 +6248,22 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       ...round.sourceSlots[1]!,
       lifecycle: 'invocation_started',
       invocationId: originalSource02,
-      attemptOrdinal: 1,
+      attemptOrdinal: config.orphanedPair ? 2 : 1,
       admissionStartedAtUtc: '2026-10-12T00:00:30.000Z',
       launchProfileKey: 'profile-' + 'a'.repeat(32),
       launchCdpUrl: 'http://127.0.0.1:9222',
     };
+    if (config.orphanedPair) {
+      round.sourceSlots[2] = {
+        ...round.sourceSlots[2]!,
+        lifecycle: 'invocation_started',
+        invocationId: originalSource03,
+        attemptOrdinal: 2,
+        admissionStartedAtUtc: '2026-10-12T00:00:45.000Z',
+        launchProfileKey: 'profile-' + 'b'.repeat(32),
+        launchCdpUrl: 'http://127.0.0.1:9222',
+      };
+    }
     updatePackReviewRun(runId, {
       reviewRound: round, status: 'preparing', latestRunStatus: 'preparing',
       runnerPid: oldPid,
@@ -6286,6 +6299,47 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     return { runId, options, input, launches, originalFirst: firstSnapshot, statusStates,
       sourceTransport, addSource02Comment, comments, makeComment };
   }
+
+  it('Issue #2635: reclaims dead post-grace runner with two attempt-2 invocation_started orphans', async () => {
+    const f = await seedDeadIncumbent({ source02Comment: false, orphanedPair: true });
+    const original = getPackReviewRun(f.runId, f.options)!.reviewRound!;
+    expect(original.sourceSlots.map((slot) => slot.lifecycle))
+      .toEqual(['terminal', 'invocation_started', 'invocation_started']);
+    const result = await startPackReview({
+      ...f.input, claimMode: 'acquire',
+      fixtureGptAttemptObserver: async () => ({
+        state: 'replacement_eligible' as const,
+        replacementEligible: true,
+        replacementEligibleSlotIds: ['source-02', 'source-03'],
+      }),
+      fixtureBeforeGptSourceCommentCensus: ({ slotId, invocationId }) => {
+        if (slotId === 'source-02' || slotId === 'source-03') {
+          f.comments.push(f.makeComment(slotId, invocationId, slotId === 'source-02' ? 2635002 : 2635003));
+        }
+      },
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      ok: true, runId: f.runId,
+      coverage: { kind: 'complete', completedSourceCount: 3, cardinality: 3 },
+    });
+    expect(f.launches.map((launch) => launch.slotId).sort()).toEqual(['source-02', 'source-03']);
+    const recovered = getPackReviewRun(f.runId, f.options)!;
+    expect(recovered.reviewRound?.sourceSlots[0]).toEqual(f.originalFirst);
+    for (const [index, originalInvocation] of [[1, originalSource02], [2, originalSource03]] as const) {
+      const slot = recovered.reviewRound!.sourceSlots[index]!;
+      expect(slot).toMatchObject({
+        lifecycle: 'terminal', terminalClass: 'complete_clean', attemptOrdinal: 3,
+        attemptHistory: [{
+          invocationId: originalInvocation, attemptOrdinal: 2,
+          terminalClass: 'possible_delivery/missing_result',
+        }],
+      });
+      expect(slot.invocationId).not.toBe(originalInvocation);
+    }
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([1]);
+  });
 
   it('hydrates the original credentialed source-02 and admits only source-03 after real predecessor pacing', async () => {
     const f = await seedDeadIncumbent();
@@ -6508,6 +6562,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     expect(result, JSON.stringify(result)).toMatchObject({
       ok: false, created: false, runId: f.runId, reason: 'gpt_preacquired_claim_not_owned',
     });
+    expect(result.nextAction).toMatch(/^npm run --silent pack-gpt-review -- --project orchestrator-pack --pr-number 2532/);
     const stored = getPackReviewRun(f.runId, f.options)!;
     expect(stored.runnerPid).toBe(oldPid);
     expect(stored.reviewRound!.sourceSlots[0]).toEqual(f.originalFirst);
@@ -6525,7 +6580,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
 
   it.each(['alive', 'fresh'] as const)(
     'does not rebind a %s original runner despite a valid new start claim', async (mode) => {
-      const f = await seedDeadIncumbent();
+      const f = await seedDeadIncumbent({ source02Comment: false, orphanedPair: true });
       updatePackReviewRun(f.runId, { runnerPid: mode === 'alive' ? process.pid : oldPid }, {
         ...f.options, now: new Date(mode === 'alive' ? staleAt : restartAt),
       });
@@ -6533,8 +6588,9 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       const result = await startPackReview({ ...f.input, claimMode: 'acquire' });
       expect(result.reason).toBe('gpt_incumbent_owner_not_dead');
       expect(result.ok).toBe(false);
+      expect(result.nextAction).toMatch(/^node --experimental-strip-types scripts\/pack-review-runner\.ts reconcile /);
       expect(getPackReviewRun(f.runId, f.options)?.runnerPid).toBe(before.runnerPid);
-      expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[2]?.lifecycle).toBe('planned');
+      expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots).toEqual(before.reviewRound?.sourceSlots);
       expect(f.launches).toEqual([]);
       expect(f.statusStates).not.toContain('success');
     },
@@ -6550,6 +6606,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       const result = await startPackReview({ ...f.input, claimMode: 'acquire' });
       expect(result.ok).toBe(false);
       expect(result.reason).toBe('gpt_incumbent_identity_mismatch');
+      expect(result.nextAction).toMatch(/^node --experimental-strip-types scripts\/pack-review-runner\.ts reconcile /);
       expect(getPackReviewRun(f.runId, f.options)?.runnerPid).toBe(oldPid);
       expect(f.launches).toEqual([]);
     },
@@ -6567,6 +6624,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     const result = await startPackReview({ ...f.input, claimMode: 'acquire' });
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('gpt_incumbent_ambiguous_run');
+    expect(result.nextAction).toMatch(/^node --experimental-strip-types scripts\/pack-review-runner\.ts reconcile /);
     expect(getPackReviewRun(f.runId, f.options)?.runnerPid).toBe(oldPid);
     expect(f.launches).toEqual([]);
   });
@@ -6593,6 +6651,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('gpt_incumbent_concurrent_update');
+    expect(result.nextAction).toMatch(/^node --experimental-strip-types scripts\/pack-review-runner\.ts reconcile /);
     expect(f.launches).toEqual([]);
     expect(getPackReviewRun(f.runId, f.options)?.runnerPid).toBe(oldPid);
     expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[1]).toMatchObject({
@@ -6611,7 +6670,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
   }
 
   it.each(['generating', 'empty-reply', 'sent_unbound'] as const)(
-    'keeps old invocation after real observer %s replacement hint', async (mode) => {
+    'retries an orphaned invocation only after real observer %s replacement eligibility', async (mode) => {
       const f = await seedDeadIncumbent({ source02Comment: false });
       const observations: Array<{ replacementEligible: boolean; state: string }> = [];
       const result = await startPackReview({
@@ -6643,13 +6702,15 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       expect(observations).toEqual([expect.objectContaining({
         replacementEligible: true, state: 'replacement_eligible',
       })]);
-      expect(result.ok).toBe(false);
-      expect(f.launches).toEqual([]);
+      expect(result.runId).toBe(f.runId);
+      expect(f.launches.map((launch) => launch.slotId)).toContain('source-02');
       expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[1]).toMatchObject({
-        lifecycle: 'invocation_started', invocationId: originalSource02, attemptOrdinal: 1,
+        attemptOrdinal: 2,
+        attemptHistory: [{
+          invocationId: originalSource02, attemptOrdinal: 1,
+          terminalClass: 'possible_delivery/missing_result',
+        }],
       });
-      expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[1]?.attemptHistory).toBeUndefined();
-      expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[2]?.lifecycle).toBe('planned');
     },
   );
 
