@@ -4863,7 +4863,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     });
     const freshStarts: string[] = [];
     const start = (overrides: Record<string, unknown> = {}) =>
-      runPackGptReviewCommand({ projectId, prNumber, reviewer: 'gpt' }, {
+      runPackGptReviewCommand({ projectId, prNumber }, {
         env: process.env, stderr: { write: () => undefined },
         startReview: (request) => startPackReview({
           ...request,
@@ -4969,8 +4969,11 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
 
   it.each([
     ['positive send count within rate_limit terminal', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
-      ...slot,
-      terminalResult: { ...(slot.terminalResult as Record<string, unknown>), send_count: 1 },
+      ...slot, terminalClass: 'possible_delivery',
+      terminalResult: {
+        ...(slot.terminalResult as Record<string, unknown>),
+        send_count: 1, send_attempted: true,
+      },
     })],
     ['send attempted despite count zero', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
       ...slot, terminalResult: { ...(slot.terminalResult as Record<string, unknown>), send_attempted: true },
@@ -4982,13 +4985,24 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       },
     })],
     ['unknown original send count', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
-      ...slot, terminalResult: { ...(slot.terminalResult as Record<string, unknown>), send_count: 'unknown' },
+      ...slot, terminalClass: 'possible_delivery/missing_result',
+      terminalResult: { kind: 'missing_terminal_result', noResend: true },
     })],
     ['missing original terminal evidence', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
-      ...slot, terminalResult: undefined,
+      ...slot, lifecycle: 'invocation_started' as const,
+      terminalClass: undefined, terminalResult: undefined,
     })],
     ['rotated original invocation identity', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
-      ...slot, terminalResult: { ...(slot.terminalResult as Record<string, unknown>), invocation_id: 'rotated-2629' },
+      ...slot,
+      invocationId: '00002629-0000-4000-8000-000000000099',
+      attemptOrdinal: 2,
+      attemptHistory: [{
+        invocationId: slot.invocationId!, attemptOrdinal: 1, terminalClass: slot.terminalClass!,
+      }],
+      terminalResult: {
+        ...(slot.terminalResult as Record<string, unknown>),
+        invocation_id: '00002629-0000-4000-8000-000000000099',
+      },
     })],
     ['second attempt', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
       ...slot, attemptOrdinal: 2,
@@ -5150,7 +5164,6 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
   it.each([
     ['reviewer', { resolvedReviewer: 'codex' as const }],
     ['cycle', { reviewCycleId: 'different-cycle-2629' }],
-    ['verdict', { reviewVerdict: 'clean' as const }],
   ])('refuses exceptional same-head admission with mismatched %s', async (_name, changed) => {
     const f = fixture();
     updatePackReviewRun(f.original.id, changed, f.options);
@@ -5158,6 +5171,23 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     expect(next.result.created).not.toBe(true);
     expect(f.freshStarts).toEqual([]);
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
+  });
+
+  it('refuses another review after a schema-valid completed verdict and settled authority', async () => {
+    const f = fixture();
+    const first = await f.start();
+    expect(first.result.created).toBe(true);
+    const completed = getPackReviewRun(String(first.result.runId), f.options)!;
+    expect(completed).toMatchObject({ reviewVerdict: 'clean', findingCount: 0, findings: [] });
+    const authority = readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot });
+    expect(authority?.terminal?.runId).toBe(completed.id);
+    expect(authority?.cycle?.reviewStageComplete).toBe(true);
+
+    const repeated = await f.start();
+    expect(repeated.result.created).not.toBe(true);
+    expect(listPackReviewRuns(f.options)).toHaveLength(2);
+    expect(f.reviews).toHaveLength(1);
+    expect(f.freshStarts).toEqual(['source-01', 'source-02', 'source-03']);
   });
 
   it('never replays the historical HEAD as the current PR-led target after a head change', async () => {
