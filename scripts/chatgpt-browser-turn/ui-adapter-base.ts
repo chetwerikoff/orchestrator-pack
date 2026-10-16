@@ -1604,7 +1604,7 @@ export function observeHeldPageConversation429(
 ): HeldPage429Witness {
   let targetUuid: string | undefined;
   try {
-    const match = /\\/c\\/([0-9a-f-]+)$/iu.exec(new URL(normalizeConversationUrl(ownedConversationUrl ?? '')).pathname);
+    const match = /\/c\/([0-9a-f-]+)$/iu.exec(new URL(normalizeConversationUrl(ownedConversationUrl ?? '')).pathname);
     if (match && SERVICE_CONVERSATION_UUID_RE.test(match[1]!)) targetUuid = match[1]!.toLowerCase();
   } catch { /* No owned exact-chat ID on a fresh-chat Page. */ }
   let epoch = 0;
@@ -1617,7 +1617,7 @@ export function observeHeldPageConversation429(
       const url = new URL(String(request?.url?.()));
       if (!allowedChatGptOrigin(url)) return undefined;
       if (request?.method?.() === 'GET') {
-        const match = /^\\/backend-api\\/conversations\\/([0-9a-f-]+)$/iu.exec(url.pathname);
+        const match = /^\/backend-api\/conversations\/([0-9a-f-]+)$/iu.exec(url.pathname);
         return match && targetUuid && match[1]!.toLowerCase() === targetUuid
           ? 'conversation_fetch_http_429' : undefined;
       }
