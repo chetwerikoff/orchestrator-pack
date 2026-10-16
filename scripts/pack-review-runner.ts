@@ -3578,9 +3578,9 @@ async function proveRateLimitOriginalZeroSend(input: {
       if (existsSync(path)) {
         const observation = readStateLightTurnObservation(slot.launchProfileKey, invocationId);
         if ((observation.phase !== 'prepared' && observation.phase !== 'not_sent')
-          || observation.send_witness !== 'none'
-          || (observation.send_count !== undefined && observation.send_count !== 0)
-          || observation.conversation_url !== null) return false;
+          || observation.transition_reason === 'send_delivery_unproven'
+          || observation.send_witness === 'owned_marker'
+          || (observation.send_count !== undefined && observation.send_count !== 0)) return false;
       }
       const resolution = await resolvePackGptSourceComment({
         identity: gptSourceIdentity({
