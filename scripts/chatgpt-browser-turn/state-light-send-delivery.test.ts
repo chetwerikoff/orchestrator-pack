@@ -1018,7 +1018,16 @@ describe('production attempted-send result and durable envelope', () => {
           expect(observation.send_witness).toBe('none');
         }
       }
-      if (scenario === 'throw_no_witness') expect(result.cause).toContain('Timeout 5000ms');
+      if (scenario === 'throw_no_witness') {
+        // The click/Enter exception is a diagnostic, not proof that no Send happened.
+        // The original-deadline outcome remains possibly delivered after no witness.
+        expect(result).toMatchObject({
+          state: 'observation_uncertain', cause: 'send_delivery_unproven',
+          send_attempted: true, send_count: 0,
+        });
+        expect(result.incidents).toContain('send_transport_error');
+        expect(result.incidents).not.toContain('helper_failure_before_send');
+      }
 
       // Consume the real finalized production result through the unchanged
       // child settlement producer and the launcher's actual JSON parser.
@@ -1220,6 +1229,237 @@ describe('Issue #2536 ordinary end-to-end: one owned Send in a long reused conve
   });
 });
 
+
+describe('Issue #2636: delayed Send delivery on the original exact owned conversation', () => {
+  it.each(['D29', 'D44', 'D45'])('preserves the captured %s unproved-attempt envelope without inventing a 429', () => {
+    const captured = {
+      state: 'send_failed', cause: 'send_delivery_unproven',
+      resolved_send_count: 0, send_count: 0, send_attempted: true,
+    } as unknown as NonNullable<Parameters<typeof deriveDelivery>[0]>;
+    const observation = { phase: 'dispatching', send_witness: 'none', conversation_url: null };
+    expect(observation).toMatchObject({ phase: 'dispatching', send_witness: 'none', conversation_url: null });
+    expect(deriveDelivery(captured, false)).toBe('POSSIBLY_DELIVERED');
+  });
+
+  it.each(['late-marker', 'own-post', 'no-evidence', 'lost-successor', 'lost-near-deadline'] as const)(
+    'keeps one attempted Send after a stale five-second DOM and composer window (%s)',
+    async (scenario) => {
+      const root = mkdtempSync(join(tmpdir(), 'opk-2636-send-delivery-'));
+      const invocationId = randomUUID();
+      const profile = join(root, 'profile');
+      const target = 'https://chatgpt.com/c/26362636-2636-4636-8636-263626362636';
+      const output = join(root, 'reply.txt');
+      const reply = 'D46 OWNED FINISHED ANSWER';
+      let clock = 30_000;
+      let sendAt = -1;
+      const invocationCutoffMs = clock + 180_000;
+      const lossAtMs = invocationCutoffMs - 100;
+      let lostNearDeadline = false;
+      const advanceClock = (ms: number) => {
+        if (scenario === 'lost-near-deadline' && sendAt >= 0 && !lostNearDeadline
+          && clock < lossAtMs && clock + ms >= lossAtMs) {
+          clock = lossAtMs;
+          lostNearDeadline = true;
+        } else {
+          clock += ms;
+        }
+      };
+      let composerText = '';
+      const prior = [
+        { role: 'user' as const, text: 'previous prompt', key: 'data-message-id:d46-prior-user' },
+        { role: 'assistant' as const, text: 'previous reply', key: 'data-message-id:d46-prior-reply' },
+      ];
+      const ownRows = () => sendAt >= 0 && clock - sendAt >= 36_000
+        && scenario !== 'no-evidence' && scenario !== 'lost-successor'
+        && scenario !== 'lost-near-deadline'
+        ? [
+          ...prior,
+          { role: 'user' as const, text: composerText, key: 'data-message-id:d46-current-user' },
+          { role: 'assistant' as const, text: reply, key: 'data-message-id:d46-current-assistant' },
+        ]
+        : prior;
+      const events = new EventEmitter();
+      let neutralGetEventsEmitted = false;
+      const emitNeutralGets = () => {
+        if (neutralGetEventsEmitted || events.listenerCount('response') === 0 || sendAt >= 0) return;
+        neutralGetEventsEmitted = true;
+        const endpoints = [
+          ['https://chatgpt.com/backend-api/conversations?offset=0&limit=20', 429],
+          ['https://chatgpt.com/backend-api/conversations/26362636-2636-4636-8636-263626362636?num_turns=20', 200],
+        ] as const;
+        for (const [url, status] of endpoints) {
+          const request = { method: () => 'GET', url: () => url };
+          events.emit('request', request);
+          events.emit('response', { request: () => request, status: () => status });
+        }
+      };
+      const composer = scalarLocator({
+        count: vi.fn(async () => 1),
+        fill: vi.fn(async (text: string) => { composerText = text; }),
+        innerText: vi.fn(async () => composerText), // deliberately NOT cleared on Send
+        textContent: vi.fn(async () => composerText),
+      });
+      const click = vi.fn(async () => {
+        sendAt = clock;
+        if (scenario === 'own-post') {
+          const request = {
+            method: () => 'POST',
+            url: () => 'https://chatgpt.com/backend-api/f/conversation',
+            postData: () => JSON.stringify({ messages: [
+              { author: { role: 'user' }, content: { content_type: 'text', parts: [composerText] } },
+            ] }),
+          };
+          events.emit('request', request);
+          events.emit('request', request); // repeated observation cannot add a second Send
+          events.emit('response', { request: () => request, status: () => 200 });
+        }
+      });
+      const nodes = {
+        count: vi.fn(async () => ownRows().length),
+        nth: (index: number) => collectionLocator(ownRows()).nth(index),
+        evaluateAll: vi.fn(async () => {
+          const rows = ownRows();
+          return {
+            rows: rows.map((row, domIndex) => ({
+              ...row, domIndex, complete: true, completionReady: true, continuationVisible: false,
+            })),
+            pageTurnEvidence: {
+              generationInProgress: false,
+              observedAssistantNodes: rows.filter((row) => row.role === 'assistant').length,
+              continueGeneratingVisible: false,
+            },
+          };
+        }),
+      };
+      const successorRows = () => scenario === 'lost-near-deadline' ? prior : [
+        ...prior,
+        { role: 'user' as const, text: composerText, key: 'data-message-id:d46-successor-user' },
+        { role: 'assistant' as const, text: reply, key: 'data-message-id:d46-successor-assistant' },
+      ];
+      const successorNodes = {
+        count: vi.fn(async () => successorRows().length),
+        nth: (index: number) => collectionLocator(successorRows()).nth(index),
+        evaluateAll: vi.fn(async () => {
+          const rows = successorRows();
+          return {
+            rows: rows.map((row, domIndex) => ({
+              ...row, domIndex, complete: true, completionReady: true, continuationVisible: false,
+            })),
+            pageTurnEvidence: {
+              generationInProgress: false, observedAssistantNodes: 1, continueGeneratingVisible: false,
+            },
+          };
+        }),
+      };
+      // Both losses occur after the original unproven five-second proof probe.
+      const lostOriginal = () => sendAt >= 0 && (
+        (scenario === 'lost-successor' && clock - sendAt >= 9_000)
+        || (scenario === 'lost-near-deadline' && lostNearDeadline)
+      );
+      const successor = Object.assign(new EventEmitter(), {
+        __fakeBrowserGptPage: true,
+        url: () => target,
+        isClosed: () => false,
+        goto: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+        waitForTimeout: vi.fn(async (ms: number) => { advanceClock(ms); }),
+        getByRole: () => scalarLocator(),
+        getByText: () => scalarLocator(),
+        locator: (selector: string) => {
+          if (selector === COMPOSER_SELECTOR) return composer;
+          if (selector === MESSAGE_NODE_SELECTOR) return successorNodes;
+          if (selector === USER_MESSAGE_SELECTOR) return collectionLocator(
+            successorRows().filter((row) => row.role === 'user'));
+          if (selector === ASSISTANT_MESSAGE_SELECTOR) return collectionLocator(
+            successorRows().filter((row) => row.role === 'assistant'));
+          return scalarLocator();
+        },
+      });
+      const page = Object.assign(events, {
+        __fakeBrowserGptPage: true,
+        url: () => target,
+        isClosed: () => lostOriginal(),
+        goto: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+        waitForTimeout: vi.fn(async (ms: number) => { advanceClock(ms); }),
+        getByRole: () => scalarLocator(),
+        getByText: () => scalarLocator(),
+        locator: (selector: string) => {
+          emitNeutralGets(); // Sidebar GET 429 + owned exact GET 200 are not Send evidence.
+          if (selector === COMPOSER_SELECTOR) return composer;
+          if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => 1, click });
+          if (selector === MESSAGE_NODE_SELECTOR) return nodes;
+          if (selector === USER_MESSAGE_SELECTOR) return collectionLocator(
+            ownRows().filter((row) => row.role === 'user'));
+          return scalarLocator();
+        },
+      });
+      const browserFixture = enqueueBrowserForTurn(mocks, page);
+      Object.assign(browserFixture.context, { pages: () => lostOriginal() ? [successor] : [page] });
+      const recoveryCall = scenario === 'lost-successor' || scenario === 'lost-near-deadline'
+        ? vi.spyOn(recoveryModule, 'runPostSendRecovery') : undefined;
+      const date = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+      try {
+        const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+          '--profile', profile, '--cdp', 'http://127.0.0.1:9222',
+          '--input', join(root, 'synthetic-prompt.txt'),
+          '--output', output, '--chat-url', target,
+          '--invocation-id', invocationId, '--timeout-ms', '180000',
+        ]);
+        expect(click).toHaveBeenCalledTimes(1);
+        expect(neutralGetEventsEmitted).toBe(true);
+        expect(readStateLightAccountCooldown(configuredProfileKey(profile, 'http://127.0.0.1:9222'), clock).active)
+          .toBe(false);
+        expect(sendAt).toBeGreaterThan(0);
+        const observation = readStateLightTurnObservation(configuredProfileKey(profile, 'http://127.0.0.1:9222'), invocationId);
+        if (scenario === 'no-evidence' || scenario === 'lost-near-deadline') {
+          expect(result).toMatchObject({
+            state: 'observation_uncertain', send_count: 0,
+            send_attempted: true,
+            cause: scenario === 'lost-near-deadline'
+              ? 'owned_conversation_recovery_census_failed' : 'send_delivery_unproven',
+          });
+          // This is an existing, explicitly selected exact chat. Its URL may
+          // remain recorded without constituting a Send or reply witness.
+          expect(observation).toMatchObject({
+            phase: 'dispatching', send_witness: 'none', conversation_url: target,
+          });
+          expect(observation.send_count).toBeUndefined();
+          if (scenario === 'lost-near-deadline') {
+            expect(lostNearDeadline).toBe(true);
+            expect(recoveryCall).toHaveBeenCalledTimes(1);
+            expect(recoveryCall?.mock.calls[0]?.[0]?.hardDeadlineMs).toBe(invocationCutoffMs);
+            expect(clock).toBeGreaterThanOrEqual(lossAtMs);
+            expect(clock).toBeLessThanOrEqual(invocationCutoffMs);
+          } else {
+            expect(clock).toBeGreaterThanOrEqual(invocationCutoffMs);
+          }
+          expect(deriveDelivery({ ...result, resolved_send_count: result.send_count } as any, false))
+            .toBe('POSSIBLY_DELIVERED');
+          expect(existsSync(output)).toBe(false);
+        } else {
+          expect(clock - sendAt).toBeGreaterThanOrEqual(scenario === 'lost-successor' ? 9_000 : 36_000);
+          if (scenario === 'lost-successor') {
+            expect(recoveryCall).toHaveBeenCalledTimes(1);
+            expect(successorNodes.evaluateAll).toHaveBeenCalled();
+            expect(observation.send_witness).toBe('owned_marker');
+          }
+          expect(result.state, JSON.stringify(result)).toBe('ok');
+          expect(result.send_count).toBe(1);
+          expect(observation).toMatchObject({ phase: 'harvested', conversation_url: target, send_count: 1 });
+          expect(readFileSync(output, 'utf8')).toBe(reply);
+        }
+      } finally {
+        date.mockRestore();
+        vi.unstubAllEnvs();
+        vi.restoreAllMocks();
+        mocks.browserQueue.length = 0;
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+});
 
 describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
   let root: string;
@@ -2086,7 +2326,20 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
     const fixture = freshPage(profile, invocationId, { send429, uncertainSend: true });
     const { result } = await runFresh(profile, invocationId, fixture.page);
     expect(fixture.send.click).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ send_attempted: true, send_count: 0 });
+    const observation = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId);
+    if (send429 === 'own') {
+      // A witnessed own POST proves one physical Send even when the action throws
+      // and no conversation URL/reply is available. HTTP 429 still does not prove delivery.
+      expect(result.send_count).toBe(1);
+      expect(observation).toMatchObject({
+        phase: 'sent_unbound', send_count: 1, send_witness: 'numeric_send_count',
+      });
+    } else {
+      expect(result).toMatchObject({ send_attempted: true, send_count: 0 });
+      expect(observation).toMatchObject({ phase: 'dispatching', send_witness: 'none' });
+    }
+    expect(deriveDelivery({ ...result, resolved_send_count: result.send_count } as any, false))
+      .toBe('POSSIBLY_DELIVERED');
     expect(readStateLightAccountCooldown(configuredProfileKey(profile, cdp), clock.now).active).toBe(send429 === 'own');
   });
 
