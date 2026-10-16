@@ -49,6 +49,8 @@ import {
 import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 import { runProcess, runProcessSync } from './kernel/subprocess.ts';
 import { getPackReviewerPreferencePath, writePackReviewerPreference } from './lib/pack-reviewer-preference.ts';
+import { configuredProfileKey, profileDirs } from './chatgpt-browser-turn/storage-common.ts';
+import { acquireReviewStartClaim, completeAfterRunInvoke } from './lib/review-start-claim-store.ts';
 import {
   boundIssueSnapshotArtifactPaths,
   captureBoundIssueSnapshot,
@@ -4683,5 +4685,375 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
     expect(original?.reviewerExecutionRunId).toBe('foreign-run-id');
     expect(original?.journalOutcome?.state).not.toBe('persisted');
     expect(review.posts()).toBe(0);
+  });
+});
+
+
+describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
+  const projectId = 'leopoker';
+  const prNumber = 345;
+  const repository = 'chetwerikoff/orchestrator-pack';
+  const issueBody = [
+    String.fromCharCode(96).repeat(3) + 'complexity-tier',
+    'tier: T2',
+    String.fromCharCode(96).repeat(3),
+  ].join('\n');
+  const exactCommand = 'OPK_PROJECT_ID=leopoker npm run --silent pack-gpt-review -- --project leopoker --pr-number 345';
+
+  function fixture(input: {
+    mutate?: (slot: PackReviewGptRoundRecord['sourceSlots'][number]) =>
+      PackReviewGptRoundRecord['sourceSlots'][number];
+    commentMode?: 'missing' | 'duplicate' | 'unavailable-actor' | 'unavailable-census';
+  } = {}) {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2629-rate-limit-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    const projects = join(process.env.XDG_CONFIG_HOME!, 'orchestrator-pack', 'projects');
+    writeFileSync(join(projects, 'leopoker.json'), JSON.stringify({
+      projectId, repository, primaryRoot: process.cwd(), defaultBranch: 'main',
+      orcaWorkspacePattern: '^test-only$', orchestratorTitlePattern: '^test-only$',
+      browserGpt: { projectUrl: 'https://chatgpt.com/g/fixture/project' },
+    }));
+    process.env.OPK_PROJECT_ID = projectId;
+    process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_GPT_BROWSER_PROFILE = join(root, 'chrome-profile');
+    process.env.PACK_GPT_BROWSER_CDP = 'http://127.0.0.1:9222';
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = join(root, 'browser-state');
+    const profileKey = configuredProfileKey(
+      process.env.PACK_GPT_BROWSER_PROFILE,
+      process.env.PACK_GPT_BROWSER_CDP,
+    );
+    const options = { projectId, storeRoot };
+    const authority = initializePackReviewAuthority({
+      prNumber, headSha: HEAD, tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: { storeRoot },
+    });
+    const round: PackReviewGptRoundRecord = {
+      schema: 'pack-review-gpt-round/v1', reviewer: 'gpt', tier: 'T2',
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      roundOrdinal: 1, cardinality: 3, issueNumber: prNumber,
+      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(issueBody),
+      sourceSlots: [1, 2, 3].map((ordinal) => {
+        const invocationId = '2629-original-invocation-' + ordinal;
+        const cause = ordinal === 1 ? 'account_conversations_http_429' : 'account_cooldown_active';
+        const slot: PackReviewGptRoundRecord['sourceSlots'][number] = {
+          slotId: 'source-' + String(ordinal).padStart(2, '0'),
+          ordinal, lifecycle: 'terminal', invocationId, attemptOrdinal: 1,
+          admissionStartedAtUtc: '2026-01-01T00:00:00.000Z',
+          launchProfileKey: profileKey,
+          launchCdpUrl: process.env.PACK_GPT_BROWSER_CDP,
+          terminalClass: 'rate_limit:' + cause,
+          terminalResult: {
+            schema: 'turn-result/v1', state: 'rate_limit', cause,
+            scope: 'invocation', invocation_id: invocationId,
+            send_count: 0, send_attempted: false,
+          },
+        };
+        return ordinal === 1 && input.mutate ? input.mutate(slot) : slot;
+      }),
+    };
+    const original = createPackReviewRun({
+      ...options, prNumber, headSha: HEAD,
+      trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      canonicalRepository: repository,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      automaticBudgetDisposition: 'consume',
+      resolvedReviewer: 'gpt', reviewRound: round,
+    }).run;
+    updatePackReviewRun(original.id, {
+      status: 'failed', latestRunStatus: 'failed',
+      failureReason: 'gpt_source_non_complete:after_grace_zero_usable:0/3',
+      completedAtUtc: new Date().toISOString(),
+      runnerPid: 2147483647,
+    }, options);
+    const originalSlots = getPackReviewRun(original.id, options)!.reviewRound!.sourceSlots;
+    const comments: PackGptSourceGithubComment[] = [];
+    const actor = 'fixture-2629-source';
+    const commentTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => {
+        if (input.commentMode === 'unavailable-actor') throw new Error('synthetic actor lookup failure');
+        return actor;
+      },
+      listComments: async () => {
+        if (input.commentMode === 'unavailable-census') throw new Error('synthetic paginated census failure');
+        return [...comments];
+      },
+      getComment: async (id) => {
+        const found = comments.find((item) => item.id === id);
+        if (!found) throw new Error('original comment unreadable');
+        return found;
+      },
+    };
+    const publish = ({ identity }: { identity: PackGptSourceIdentity }) => {
+      const index = comments.length + 1;
+      const timestamp = new Date().toISOString();
+      const id = 2629000 + index;
+      comments.push({
+        id, body: formatPackGptSourceCommentEnvelope(identity, 'NO_FINDINGS'),
+        actorLogin: actor, createdAt: timestamp, updatedAt: timestamp,
+        url: 'https://github.com/' + repository + '/pull/' + prNumber + '#issuecomment-' + id,
+        issueUrl: 'https://api.github.com/repos/' + repository + '/issues/' + prNumber,
+      });
+    };
+    if (input.commentMode === 'duplicate') {
+      const first = originalSlots[0]!;
+      const identity: PackGptSourceIdentity = {
+        repository, prNumber, headSha: HEAD, runId: original.id,
+        slotId: first.slotId, invocationId: first.invocationId!,
+      };
+      publish({ identity });
+      publish({ identity });
+    }
+    const reviews: GithubReviewSummary[] = [];
+    const reviewTransport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'fixture-2629-final',
+      listReviews: async () => [...reviews],
+      postReview: async ({ body, commitId }) => {
+        const id = 2629990 + reviews.length;
+        const url = 'https://github.com/' + repository + '/pull/' + prNumber + '#pullrequestreview-' + id;
+        reviews.push({
+          id, body, commitId, state: 'COMMENTED',
+          submittedAt: new Date().toISOString(),
+          userLogin: 'fixture-2629-final', url,
+        });
+        return { id, url };
+      },
+      dismissReview: async () => undefined,
+    };
+    let requiredStatus: string | undefined;
+    const statusWrites: string[] = [];
+    const writeRequiredStatus = async (request: { state: string }) => {
+      requiredStatus = request.state;
+      statusWrites.push(request.state);
+    };
+    const common = {
+      ...options, prNumber, sourceRepoRoot: process.cwd(), headSha: HEAD,
+      fixtureCurrentPrHeadSha: HEAD, fixturePostReviewHeadSha: HEAD,
+      fixtureRepoSlug: repository, fixturePrState: 'OPEN' as const,
+      fixturePrBody: 'Closes #' + prNumber,
+      fixturePostReviewPrBody: 'Closes #' + prNumber,
+      fixtureIssueNumber: prNumber,
+      fixtureIssueTitle: '[T2] Synthetic LeoPoker GPT rate limit',
+      fixtureIssueBody: issueBody,
+      fixtureGptSourceCommentTransport: commentTransport,
+      fixtureRequiredStatusWriter: writeRequiredStatus,
+      fixtureRequiredStatusReader: async () => requiredStatus,
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    };
+    const reconcile = (overrides: Record<string, unknown> = {}) => reconcileStalePackReviewRuns({
+      ...common, ...overrides,
+    });
+    const freshStarts: string[] = [];
+    const start = (overrides: Record<string, unknown> = {}) =>
+      runPackGptReviewCommand({ projectId, prNumber, reviewer: 'gpt' }, {
+        env: process.env, stderr: { write: () => undefined },
+        startReview: (request) => startPackReview({
+          ...request,
+          ...common,
+          fixtureRequiredCiPolicy: {
+            contexts: ['verify orchestrator-pack structure', 'pr scope guard', 'orchestrator-pack/pack-review'],
+            checks: [],
+          },
+          fixtureRequiredCiChecks: [
+            { name: 'verify orchestrator-pack structure', state: 'SUCCESS' },
+            { name: 'pr scope guard', state: 'SUCCESS' },
+            { name: 'orchestrator-pack/pack-review', state: 'PENDING' },
+          ],
+          fixtureRequiredCiHeadAfterGate: HEAD,
+          fixtureReviewStdout: cleanPayload(),
+          fixtureBeforeGptSourceCommentCensus: publish,
+          fixtureGithubReviewTransport: reviewTransport,
+          fixtureAfterGptInvocationBound: ({ slotId }) => { freshStarts.push(slotId); },
+          ...overrides,
+        }),
+      });
+    const cooldownPath = join(profileDirs(profileKey).locks, 'state-light-account-cooldown.v1.json');
+    const setCooldown = (value?: unknown) => {
+      if (value !== undefined) writeFileSync(cooldownPath, JSON.stringify({ cooldown_until_ms: value }));
+    };
+    return {
+      options, original, originalSlots, profileKey, comments, publish,
+      reconcile, start, setCooldown, statusWrites, reviews, freshStarts,
+      cooldownPath,
+    };
+  }
+
+  it.each(['future', 'expired', 'malformed', 'unavailable'] as const)(
+    'returns a verified fresh-run command after rate-limit recovery with %s cooldown',
+    async (mode) => {
+      const f = fixture();
+      const future = Date.now() + 240_000;
+      if (mode === 'future') f.setCooldown(future);
+      if (mode === 'expired') f.setCooldown(Date.now() - 10_000);
+      if (mode === 'malformed') f.setCooldown('not-a-number');
+      const result = await f.reconcile();
+      const row = result.results.find((item) => item.runId === f.original.id);
+      expect(row).toMatchObject({ terminalized: false, statusReconciled: true });
+      expect(String(row!.nextAction)).toContain(exactCommand);
+      expect(String(row!.nextAction)).not.toContain('scripts/pack-review-runner.ts reconcile');
+      if (mode === 'future') {
+        expect(String(row!.nextAction)).toContain(new Date(future).toISOString());
+        expect(String(row!.nextAction)).toContain('after the shared account cooldown');
+      } else {
+        expect(String(row!.nextAction)).toContain('start the fresh review run now:');
+      }
+      expect(getPackReviewRun(f.original.id, f.options)).toMatchObject({
+        status: 'failed', failureReason: 'gpt_source_non_complete:after_grace_zero_usable:0/3',
+        deliveryOutcomes: { requiredStatus: { state: 'succeeded' } },
+      });
+      expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })
+        ?.cycle?.consumedRoundOrdinals).toEqual([]);
+    },
+  );
+
+  it('enters one original-SHA PR-led fresh run, preserves historic failed source IDs and terminal claim', async () => {
+    const f = fixture();
+    f.setCooldown(Date.now() - 5_000);
+    const oldClaim = acquireReviewStartClaim({
+      projectId, prNumber, headSha: HEAD,
+      surface: 'fixture-2629-historical-claim', startReason: 'fixture-first-attempt',
+      reviewRuns: listPackReviewRuns(f.options),
+    });
+    expect(oldClaim.acquired, JSON.stringify(oldClaim)).toBe(true);
+    const completedClaim = completeAfterRunInvoke(oldClaim, listPackReviewRuns(f.options));
+    expect(completedClaim).toMatchObject({ ok: true, outcome: 'run_started' });
+    const historicalClaimPath = String(completedClaim.terminalPath);
+    expect(existsSync(historicalClaimPath)).toBe(true);
+    const reconciled = await f.reconcile();
+    expect(String(reconciled.results.find((row) => row.runId === f.original.id)?.nextAction))
+      .toContain(exactCommand);
+
+    const next = await f.start();
+    expect(next, JSON.stringify(next.result)).toMatchObject({
+      exitCode: 0,
+      result: {
+        ok: true, created: true, reused: false,
+        prNumber, headSha: HEAD,
+        resolvedReviewer: 'gpt', executedReviewer: 'gpt',
+        reviewerInvokedForThisRun: true, publicationVerified: true,
+      },
+    });
+    const newId = String(next.result.runId);
+    expect(newId).not.toBe(f.original.id);
+    expect(next.result.reviewerExecutionRunId).toBe(newId);
+    expect(f.freshStarts).toEqual(['source-01', 'source-02', 'source-03']);
+    const old = getPackReviewRun(f.original.id, f.options)!;
+    expect(old).toMatchObject({
+      id: f.original.id, status: 'failed',
+      failureReason: 'gpt_source_non_complete:after_grace_zero_usable:0/3',
+      reviewVerdict: undefined, journalOutcome: undefined,
+    });
+    expect(old.reviewRound!.sourceSlots).toEqual(f.originalSlots);
+    expect(listPackReviewRuns(f.options)).toHaveLength(2);
+    expect(getPackReviewRun(newId, f.options)?.reviewRound?.sourceSlots.map((slot) => slot.invocationId))
+      .not.toEqual(f.originalSlots.map((slot) => slot.invocationId));
+    expect(existsSync(historicalClaimPath)).toBe(true);
+    expect(f.reviews).toHaveLength(1);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })
+      ?.cycle?.consumedRoundOrdinals).toEqual([1]);
+
+    const repeated = await f.start();
+    expect(repeated.result.created).not.toBe(true);
+    expect(listPackReviewRuns(f.options)).toHaveLength(2);
+    expect(f.reviews).toHaveLength(1);
+  });
+
+  it.each([
+    ['positive send count', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, terminalResult: { ...slot.terminalResult, send_count: 1 },
+    })],
+    ['send attempted despite count zero', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, terminalResult: { ...slot.terminalResult, send_attempted: true },
+    })],
+    ['persisted dispatch phase', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, terminalResult: {
+        ...slot.terminalResult,
+        diagnostics: { persisted_observation: { phase: 'dispatching', send_count: 0 } },
+      },
+    })],
+    ['second attempt', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, attemptOrdinal: 2,
+    })],
+    ['attempt history', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, attemptHistory: [{
+        invocationId: 'previous-2629', attemptOrdinal: 1, terminalClass: 'rate_limit:account_cooldown_active',
+      }],
+    })],
+    ['possible delivery', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, terminalClass: 'possible_delivery',
+    })],
+    ['contradictory source reconciliation', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, terminalResult: { ...slot.terminalResult, source_comment_reconciliation: 'conflict' },
+    })],
+  ] as const)('never starts an unsafe new run when original has %s', async (_name, mutate) => {
+    const f = fixture({ mutate });
+    const next = await f.start();
+    expect(next.result.created).not.toBe(true);
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    expect(f.freshStarts).toEqual([]);
+    expect(getPackReviewRun(f.original.id, f.options)?.reviewRound?.sourceSlots)
+      .toEqual(f.originalSlots);
+  });
+
+  it.each(['duplicate', 'unavailable-actor', 'unavailable-census'] as const)(
+    'preserves the original failed run on %s original comment census', async (commentMode) => {
+      const f = fixture({ commentMode });
+      const reconcile = await f.reconcile();
+      expect(String(reconcile.results.find((item) => item.runId === f.original.id)?.nextAction))
+        .not.toContain(exactCommand);
+      const next = await f.start();
+      expect(next.result.created).not.toBe(true);
+      expect(f.freshStarts).toEqual([]);
+      expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    },
+  );
+
+  it('does not claim fresh-run authority for a changed head, unowned claim, or mismatched frozen cap', async () => {
+    const moved = fixture();
+    const movedHead = 'b'.repeat(40);
+    const changed = await moved.reconcile({ fixtureCurrentPrHeadSha: movedHead });
+    expect(String(changed.results.find((item) => item.runId === moved.original.id)?.nextAction))
+      .not.toContain(exactCommand);
+    expect(listPackReviewRuns(moved.options)).toHaveLength(1);
+
+    const claim = fixture();
+    const noClaim = await startPackReview({
+      ...claim.options, sourceRepoRoot: process.cwd(), prNumber, headSha: HEAD,
+      claimMode: 'preacquired', fixtureRepoSlug: repository,
+      fixtureCurrentPrHeadSha: HEAD, fixturePrState: 'OPEN',
+      fixturePrBody: 'Closes #' + prNumber, fixtureIssueNumber: prNumber,
+      fixtureIssueTitle: '[T2] Synthetic LeoPoker GPT rate limit',
+      fixtureIssueBody: issueBody,
+      fixtureGptSourceCommentTransport: {
+        resolveActorLogin: async () => 'fixture-2629-source',
+        listComments: async () => [],
+        getComment: async () => { throw new Error('absent'); },
+      },
+      fixtureRequiredStatusWriter: async () => {},
+    });
+    expect(noClaim).toMatchObject({ ok: false, created: false });
+    expect(listPackReviewRuns(claim.options)).toHaveLength(1);
+
+    const cap = fixture();
+    updatePackReviewRun(cap.original.id, { logicalRoundCap: 2 }, cap.options);
+    const denied = await cap.start();
+    expect(denied.result.created).not.toBe(true);
+    expect(listPackReviewRuns(cap.options)).toHaveLength(1);
+  });
+
+  it('keeps the existing recovery path on unrelated non-rate-limit terminal failures', async () => {
+    const f = fixture({ mutate: (slot) => ({
+      ...slot,
+      terminalClass: 'driver_error:connect_over_cdp_failed',
+      terminalResult: {
+        ...slot.terminalResult, state: 'driver_error', cause: 'connect_over_cdp_failed',
+      },
+    }) });
+    const result = await f.reconcile();
+    expect(String(result.results.find((item) => item.runId === f.original.id)?.nextAction))
+      .not.toContain(exactCommand);
   });
 });
