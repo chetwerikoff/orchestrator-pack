@@ -8239,9 +8239,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       if (!ownsStartClaim() || headBefore !== target.headSha.toLowerCase()
         || authorityBefore?.currentHeadSha.toLowerCase() !== headBefore
         || authorityBefore.cycle?.cycleId !== original.reviewCycleId
-        || authorityBefore.cycle.state !== 'open'
-        || authorityBefore.cycle.reviewStageComplete === true
-        || authorityBefore.cycle.consumedRoundOrdinals?.includes(roundOrdinal)
+        || authorityBefore.cycle?.state !== 'open'
+        || authorityBefore.cycle?.reviewStageComplete === true
+        || authorityBefore.cycle?.consumedRoundOrdinals?.includes(roundOrdinal)
         || authorityBefore.terminal) {
         return rejectIncumbent(original, 'gpt_rate_limit_fresh_authority_unverified',
           'verify the original head, frozen cycle/cap and exact start claim; do not retry an uncertain source');
@@ -8270,9 +8270,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         || resolvePackReviewRequiredRunOrder(latestRecords, latest).kind !== 'none'
         || latestAuthority?.currentHeadSha.toLowerCase() !== headAfter
         || latestAuthority.cycle?.cycleId !== original.reviewCycleId
-        || latestAuthority.cycle.state !== 'open'
-        || latestAuthority.cycle.reviewStageComplete === true
-        || latestAuthority.cycle.consumedRoundOrdinals?.includes(roundOrdinal)
+        || latestAuthority.cycle?.state !== 'open'
+        || latestAuthority.cycle?.reviewStageComplete === true
+        || latestAuthority.cycle?.consumedRoundOrdinals?.includes(roundOrdinal)
         || latestAuthority.terminal) {
         return rejectIncumbent(original, 'gpt_rate_limit_fresh_authority_changed',
           're-read the original run, GitHub source comments, current PR head and claim before any new review');
