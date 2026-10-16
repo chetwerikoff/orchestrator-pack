@@ -1765,14 +1765,17 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
   function freshPage(
     profile: string,
     invocationId: string,
-    options: { redirectOnOpen?: boolean; account429OnOpen?: boolean; exact429AfterOwnedSend?: boolean } = {},
+    options: { redirectOnOpen?: boolean; account429OnOpen?: boolean; exact429AfterOwnedSend?: boolean;
+      send429?: 'own' | 'slash' | 'markerless' | 'mismatch' | 'plain'; uncertainSend?: boolean;
+      existing?: boolean; listFirst?: boolean } = {},
   ) {
-    let currentUrl = 'about:blank';
+    let currentUrl = options.existing ? conversationUrl : 'about:blank';
     let draft = '';
     let sentText = '';
     let sent = false;
     let opened = false;
     let exact429Emitted = false;
+    let initialFetchEmitted = false;
     let activeMessages = readyTurnObservationFrames('PROMPT', 'REPLY')[0]!;
     let observationIndex = 0;
     const frames = readyTurnObservationFrames('PROMPT', 'REPLY');
@@ -1793,6 +1796,19 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
     const send = scalarLocator({
       count: vi.fn(async () => 1),
       click: vi.fn(async () => {
+        if (options.send429) {
+          const text = options.send429 === 'markerless' ? 'PROMPT'
+            : options.send429 === 'mismatch' ? MARKED_PROMPT : draft;
+          const request = { method: () => 'POST',
+            url: () => 'https://chatgpt.com/backend-api/' + (options.send429 === 'plain' ? 'conversation' : 'f/conversation')
+              + (options.send429 === 'slash' ? '/' : ''),
+            postData: () => JSON.stringify({ messages: [{ author: { role: 'user' },
+              content: { content_type: 'text', parts: [text] } }] }),
+          };
+          events.emit('request', request);
+          events.emit('response', { request: () => request, status: () => 429 });
+        }
+        if (options.uncertainSend) throw new Error('Connection interrupted');
         sent = true;
         sentText = draft;
         draft = '';
@@ -1813,8 +1829,19 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
       getByText: vi.fn(() => scalarLocator()),
       getByRole: vi.fn(() => scalarLocator()),
       locator: vi.fn((selector: string) => {
+        if (options.existing && !initialFetchEmitted && events.listenerCount('response') > 0) {
+          initialFetchEmitted = true;
+          if (options.listFirst) emit429(listRequestUrl);
+          const request = { method: () => 'GET', url: () => exactRequestUrl };
+          events.emit('request', request);
+          events.emit('response', { request: () => request, status: () => 200 });
+          if (!options.listFirst) emit429(listRequestUrl);
+        }
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return send;
+        if (selector === RENDERED_CONVERSATION_TURN_SECTION_SELECTOR) return scalarLocator({
+          last: () => scalarLocator({ turnActionButtons: options.existing && !sent }),
+        });
         if (selector === USER_MESSAGE_SELECTOR) return collectionLocator(
           sent ? [{ role: 'user', text: sentText }] : [],
         );
@@ -1826,7 +1853,18 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
             exact429Emitted = true;
             emit429(exactRequestUrl);
           }
-          if (!sent) return collectionLocator([]);
+          if (!sent) {
+            activeMessages = options.existing ? [{ role: 'user', text: 'Prior user' },
+              { role: 'assistant', text: 'Prior reply', finalActionInTurnContainer: true }] : [];
+            const nodes = collectionLocator(activeMessages);
+            if (options.existing) Object.assign(nodes, { evaluateAll: async () => ({
+              rows: activeMessages.map((message, domIndex) => ({ ...message, domIndex,
+                key: `data-message-id:history-${domIndex}`, complete: true,
+                completionReady: message.role === 'assistant', continuationVisible: false })),
+              pageTurnEvidence: { generationInProgress: false, observedAssistantNodes: 1, continueGeneratingVisible: false },
+            }) });
+            return nodes;
+          }
           activeMessages = frames[Math.min(observationIndex++, frames.length - 1)]!;
           return collectionLocator(activeMessages, observationIndex < 3);
         }
@@ -1835,7 +1873,7 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
           return last?.finalActionInTurnContainer ? messageLocator(last) : scalarLocator();
         }
         if (selector === ASSISTANT_MESSAGE_SELECTOR) return collectionLocator(
-          activeMessages.filter((message) => message.role === 'assistant'), observationIndex < 3,
+          activeMessages.filter((message) => message.role === 'assistant'), sent && observationIndex < 3,
         );
         return scalarLocator();
       }),
@@ -1844,61 +1882,150 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
   }
 
   const clock = { now: 100_000 };
-  async function runFresh(profile: string, invocationId: string, page: any) {
+  async function runFresh(profile: string, invocationId: string, page: any, existing = false) {
     enqueueBrowserForTurn(mocks, page);
     return runStateLightTurnWithStdoutCapture(runStateLightTurn, [
       '--profile', profile, '--cdp', cdp, '--input', join(root, 'input'),
-      '--output', join(root, 'output'), '--new-chat', '--project-url', projectUrl,
+      '--output', join(root, 'output'), ...(existing ? ['--chat-url', conversationUrl] : ['--new-chat', '--project-url', projectUrl]),
       '--invocation-id', invocationId, '--timeout-ms', '90000', '--poll-ms', '1',
     ]);
   }
 
-  it.each(['held-account-429', 'shared-cooldown'] as const)(
-    'refuses a second fresh preparation goto after first redirect: %s', async (mode) => {
-      clock.now = 100_000;
-      vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
-      const profile = join(root, 'profile');
-      const invocationId = randomUUID();
-      const fixture = freshPage(profile, invocationId, {
-        redirectOnOpen: true,
-        account429OnOpen: mode === 'held-account-429',
-      });
-      if (mode === 'shared-cooldown') {
-        publishWitnessedStateLight429(configuredProfileKey(profile, cdp), clock.now);
-      }
-      const { result } = await runFresh(profile, invocationId, fixture.page);
-      expect(fixture.page.goto).toHaveBeenCalledTimes(1);
-      expect(fixture.send.click).not.toHaveBeenCalled();
-      expect(fixture.composer.click).not.toHaveBeenCalled();
-      expect(fixture.composer.fill).not.toHaveBeenCalled();
-      expect(result.send_attempted).not.toBe(true);
-      expect(result.send_count).toBe(0);
-      expect(result).toMatchObject({
-        state: 'rate_limit',
-        cause: mode === 'held-account-429' ? 'account_conversations_http_429' : 'account_cooldown_active',
-      });
-      if (mode === 'held-account-429') {
-        expect(result.product_wall_diagnostic).toMatchObject({
-          wall_kind: 'account_conversations_http_429', http_status: 429,
-        });
-      }
-    },
-  );
+  it('honors a valid earlier shared cooldown before a second fresh navigation', async () => {
+    clock.now = 100_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const profile = join(root, 'profile');
+    const invocationId = randomUUID();
+    const fixture = freshPage(profile, invocationId, { redirectOnOpen: true });
+    publishWitnessedStateLight429(configuredProfileKey(profile, cdp), clock.now);
+    const { result } = await runFresh(profile, invocationId, fixture.page);
+    expect(fixture.page.goto).toHaveBeenCalledTimes(1);
+    expect(fixture.send.click).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ state: 'rate_limit', cause: 'account_cooldown_active', send_count: 0 });
+  });
 
-  it('does not clear a blank fresh composer after its first account-list GET 429', async () => {
+  it('allows a usable blank fresh surface despite its sidebar-list 429', async () => {
     clock.now = 100_000;
     vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
     const profile = join(root, 'profile');
     const invocationId = randomUUID();
     const fixture = freshPage(profile, invocationId, { account429OnOpen: true });
     const { result } = await runFresh(profile, invocationId, fixture.page);
-    expect(fixture.page.goto).toHaveBeenCalledTimes(1);
-    expect(fixture.send.click).not.toHaveBeenCalled();
-    expect(fixture.composer.fill).not.toHaveBeenCalled();
-    expect(result.product_wall_diagnostic).toMatchObject({
-      wall_kind: 'account_conversations_http_429', http_status: 429,
+    expect(fixture.send.click).toHaveBeenCalledTimes(1);
+    expect(result.send_count).toBe(1);
+    expect(result.product_wall_diagnostic?.http_status).toBeUndefined();
+    expect(readStateLightAccountCooldown(configuredProfileKey(profile, cdp), clock.now).active).toBe(false);
+  });
+
+  it('retains an independent unavailable blank-surface failure alongside sidebar 429', async () => {
+    clock.now = 100_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const profile = join(root, 'profile');
+    const invocationId = randomUUID();
+    const fixture = freshPage(profile, invocationId, { account429OnOpen: true });
+    fixture.page.goto.mockImplementation(async () => {
+      const request = { method: () => 'GET', url: () => listRequestUrl };
+      fixture.page.emit('request', request);
+      fixture.page.emit('response', { request: () => request, status: () => 429 });
+      throw new Error('navigation failed');
     });
-    expect(result.send_count).toBe(0);
+    const { result } = await runFresh(profile, invocationId, fixture.page);
+    expect(fixture.send.click).not.toHaveBeenCalled();
+    expect(result.cause).toBe('navigation failed');
+    expect(result.product_wall_diagnostic?.http_status).toBeUndefined();
+    expect(readStateLightAccountCooldown(configuredProfileKey(profile, cdp), clock.now).active).toBe(false);
+  });
+
+  it.each([true, false])('allows existing-chat Send with exact GET 200 and list 429 (list first: %s)', async (listFirst) => {
+    clock.now = 100_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const profile = join(root, 'profile');
+    const invocationId = randomUUID();
+    const fixture = freshPage(profile, invocationId, { existing: true, listFirst });
+    const { result } = await runFresh(profile, invocationId, fixture.page, true);
+    expect(fixture.send.click, JSON.stringify(result)).toHaveBeenCalledTimes(1);
+    expect(result.send_count).toBe(1);
+    const key = configuredProfileKey(profile, cdp);
+    expect(readStateLightAccountCooldown(key, clock.now).active).toBe(false);
+    expect(existsSync(join(profileDirs(key).locks, 'state-light-account-cooldown.v1.json'))).toBe(false);
+  });
+
+  it.each(['own', 'slash', 'markerless', 'mismatch', 'plain'] as const)(
+    'binds only the real onDispatch own Send POST 429 (%s), never resending', async (send429) => {
+      clock.now = 100_000;
+      vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+      const profile = join(root, 'profile');
+      const invocationId = randomUUID();
+      const fixture = freshPage(profile, invocationId, { send429 });
+      const { result } = await runFresh(profile, invocationId, fixture.page);
+      expect(fixture.send.click).toHaveBeenCalledTimes(1);
+      expect(result.send_count).toBe(1);
+      const eligible = send429 === 'own' || send429 === 'slash';
+      const key = configuredProfileKey(profile, cdp);
+      expect(readStateLightAccountCooldown(key, clock.now).active).toBe(eligible);
+      if (eligible) {
+        expect(JSON.parse(readFileSync(join(profileDirs(key).locks, 'state-light-account-cooldown.v1.json'), 'utf8')))
+          .toEqual({ cooldown_until_ms: 400_000 });
+        expect(result.product_wall_diagnostic).toMatchObject({ wall_kind: 'rate_limit', http_status: 429 });
+      }
+    },
+  );
+
+  it.each(['own', 'markerless'] as const)('retains possible delivery after uncertain %s POST 429 without a second Send', async (send429) => {
+    clock.now = 100_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const profile = join(root, 'profile');
+    const invocationId = randomUUID();
+    const fixture = freshPage(profile, invocationId, { send429, uncertainSend: true });
+    const { result } = await runFresh(profile, invocationId, fixture.page);
+    expect(fixture.send.click).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ send_attempted: true, send_count: 0 });
+    expect(readStateLightAccountCooldown(configuredProfileKey(profile, cdp), clock.now).active).toBe(send429 === 'own');
+  });
+
+  it.each([false, true])('three source pages cannot create/refresh a hold or block a fourth unit (seeded: %s)', async (seeded) => {
+    clock.now = 100_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const profile = join(root, 'profile');
+    const key = configuredProfileKey(profile, cdp);
+    const path = join(profileDirs(key).locks, 'state-light-account-cooldown.v1.json');
+    if (seeded) publishWitnessedStateLight429(key, clock.now);
+    const before = seeded ? readFileSync(path, 'utf8') : undefined;
+    clock.now += 1_000;
+    for (let source = 0; source < 3; source++) {
+      const events = new EventEmitter();
+      const witness = observeHeldPageConversation429(events, conversationUrl, () => publishWitnessedStateLight429(key, clock.now));
+      const request = { method: () => 'GET', url: () => listRequestUrl };
+      events.emit('request', request);
+      events.emit('response', { request: () => request, status: () => 429 });
+      expect(witness.current()).toBeUndefined();
+      expect(readStateLightAccountCooldown(key, clock.now).active).toBe(seeded);
+      witness.dispose();
+      if (!seeded) {
+        const invocationId = randomUUID();
+        const fixture = freshPage(profile, invocationId, { account429OnOpen: true });
+        const { result } = await runFresh(profile, invocationId, fixture.page);
+        expect(result.send_count).toBe(1);
+      }
+    }
+    const moduleUrl = new URL('./state-light-turn-base.ts', import.meta.url).href;
+    const child = runProcessSync({
+      command: process.execPath, args: ['--experimental-strip-types', '--input-type=module', '--eval',
+        `import { readStateLightAccountCooldown } from ${JSON.stringify(moduleUrl)};
+process.stdout.write(JSON.stringify(readStateLightAccountCooldown(${JSON.stringify(key)}, ${clock.now})));`],
+      env: { CHATGPT_BROWSER_TURN_STATE_DIR: root }, inheritParentEnv: true, encoding: 'utf8', timeoutMs: 15_000,
+    });
+    expect(child.ok, child.stderr || child.error).toBe(true);
+    expect(JSON.parse(child.stdout).active).toBe(seeded);
+    if (seeded) {
+      expect(readFileSync(path, 'utf8')).toBe(before);
+      clock.now = 400_000;
+      expect(readStateLightAccountCooldown(key, clock.now).active).toBe(false);
+    } else expect(existsSync(path)).toBe(false);
+    const invocationId = randomUUID();
+    const fourth = freshPage(profile, invocationId, { existing: true });
+    const { result } = await runFresh(profile, invocationId, fourth.page, true);
+    expect(result.send_count).toBe(1);
   });
 
   it.each(['ready', 'fallback'] as const)(
