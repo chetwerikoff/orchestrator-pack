@@ -1650,6 +1650,8 @@ describe('conversation fetch HTTP 429 — physical Send and recovery gates (#261
     const url = 'https://chatgpt.com/c/26172617-2617-4617-8617-261726172617';
     const request = { method: () => 'GET',
       url: () => 'https://chatgpt.com/backend-api/conversations/26172617-2617-4617-8617-261726172617?num_turns=20' };
+    const listRequest = { method: () => 'GET',
+      url: () => 'https://chatgpt.com/backend-api/conversations?limit=20' };
     const events = new EventEmitter();
     const fill = vi.fn(async () => undefined);
     const click = vi.fn(async () => undefined);
@@ -1669,6 +1671,8 @@ describe('conversation fetch HTTP 429 — physical Send and recovery gates (#261
         if (selector === COMPOSER_SELECTOR) {
           if (!injected && events.listenerCount('response') > 0) {
             injected = true;
+            events.emit('request', listRequest);
+            events.emit('response', { request: () => listRequest, status: () => 429 });
             events.emit('request', request);
             events.emit('response', { request: () => request, status: () => 429 });
           }
@@ -1765,7 +1769,13 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
   function freshPage(
     profile: string,
     invocationId: string,
-    options: { redirectOnOpen?: boolean; account429OnOpen?: boolean; exact429AfterOwnedSend?: boolean } = {},
+    options: {
+      redirectOnOpen?: boolean;
+      account429OnOpen?: boolean;
+      exact429AfterOwnedSend?: boolean;
+      send429Mode?: 'owned' | 'markerless' | 'other-marker' | 'duplicate'
+        | 'unreadable' | 'plain-route' | 'pre-dispatch';
+    } = {},
   ) {
     let currentUrl = 'about:blank';
     let draft = '';
@@ -1782,17 +1792,41 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
       events.emit('request', request);
       events.emit('response', { request: () => request, status: () => 429 });
     };
+    const emitSend429 = (markedContent: string, mode: NonNullable<typeof options.send429Mode>): void => {
+      const content = mode === 'markerless' ? 'PROMPT' : mode === 'other-marker'
+        ? MARKED_PROMPT : markedContent;
+      const body = mode === 'unreadable' ? '{not-json' : JSON.stringify({
+        messages: [{ author: { role: 'user' },
+          content: { content_type: 'text', parts: mode === 'duplicate' ? [content, content] : [content] },
+        }],
+      });
+      const request = {
+        method: () => 'POST',
+        url: () => mode === 'plain-route'
+          ? 'https://chatgpt.com/backend-api/conversation'
+          : 'https://chatgpt.com/backend-api/f/conversation/',
+        postData: () => body,
+      };
+      events.emit('request', request);
+      events.emit('response', { request: () => request, status: () => 429 });
+    };
     const composer = scalarLocator({
       count: vi.fn(async () => 1),
       evaluate: vi.fn(async () => ({ visible: true, enabled: true, contentEditable: true })),
       click: vi.fn(async () => undefined),
-      fill: vi.fn(async (value: string) => { draft = value; }),
+      fill: vi.fn(async (value: string) => {
+        draft = value;
+        if (options.send429Mode === 'pre-dispatch') emitSend429(value, 'pre-dispatch');
+      }),
       innerText: vi.fn(async () => sent ? '' : draft),
       textContent: vi.fn(async () => sent ? '' : draft),
     });
     const send = scalarLocator({
       count: vi.fn(async () => 1),
       click: vi.fn(async () => {
+        if (options.send429Mode && options.send429Mode !== 'pre-dispatch') {
+          emitSend429(draft, options.send429Mode);
+        }
         sent = true;
         sentText = draft;
         draft = '';
@@ -1853,39 +1887,39 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
     ]);
   }
 
-  it.each(['held-account-429', 'shared-cooldown'] as const)(
-    'refuses a second fresh preparation goto after first redirect: %s', async (mode) => {
-      clock.now = 100_000;
-      vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
-      const profile = join(root, 'profile');
-      const invocationId = randomUUID();
-      const fixture = freshPage(profile, invocationId, {
-        redirectOnOpen: true,
-        account429OnOpen: mode === 'held-account-429',
-      });
-      if (mode === 'shared-cooldown') {
-        publishWitnessedStateLight429(configuredProfileKey(profile, cdp), clock.now);
-      }
-      const { result } = await runFresh(profile, invocationId, fixture.page);
-      expect(fixture.page.goto).toHaveBeenCalledTimes(1);
-      expect(fixture.send.click).not.toHaveBeenCalled();
-      expect(fixture.composer.click).not.toHaveBeenCalled();
-      expect(fixture.composer.fill).not.toHaveBeenCalled();
-      expect(result.send_attempted).not.toBe(true);
-      expect(result.send_count).toBe(0);
-      expect(result).toMatchObject({
-        state: 'rate_limit',
-        cause: mode === 'held-account-429' ? 'account_conversations_http_429' : 'account_cooldown_active',
-      });
-      if (mode === 'held-account-429') {
-        expect(result.product_wall_diagnostic).toMatchObject({
-          wall_kind: 'account_conversations_http_429', http_status: 429,
-        });
-      }
-    },
-  );
+  it('keeps a real independent blank-project redirect failure local despite sidebar GET 429', async () => {
+    clock.now = 100_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const profile = join(root, 'profile');
+    const fixture = freshPage(profile, randomUUID(), { redirectOnOpen: true, account429OnOpen: true });
+    const { result } = await runFresh(profile, randomUUID(), fixture.page);
+    expect(fixture.page.goto).toHaveBeenCalledTimes(1);
+    expect(fixture.send.click).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'fresh_conversation_surface_unavailable',
+      send_count: 0,
+    });
+    expect(existsSync(join(profileDirs(configuredProfileKey(profile, cdp)).locks,
+      'state-light-account-cooldown.v1.json'))).toBe(false);
+  });
 
-  it('does not clear a blank fresh composer after its first account-list GET 429', async () => {
+  it('retains an existing unexpired hold without a second fresh preparation goto', async () => {
+    clock.now = 100_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const profile = join(root, 'profile');
+    const invocationId = randomUUID();
+    const fixture = freshPage(profile, invocationId, { redirectOnOpen: true });
+    publishWitnessedStateLight429(configuredProfileKey(profile, cdp), clock.now);
+    const { result } = await runFresh(profile, invocationId, fixture.page);
+    expect(fixture.page.goto).toHaveBeenCalledTimes(1);
+    expect(fixture.send.click).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ state: 'rate_limit', cause: 'account_cooldown_active', send_count: 0 });
+    expect(readStateLightAccountCooldown(configuredProfileKey(profile, cdp), clock.now)).toMatchObject({
+      active: true, until: clock.now + 300_000,
+    });
+  });
+
+  it('allows a usable fresh blank surface to Send despite sidebar-only GET 429', async () => {
     clock.now = 100_000;
     vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
     const profile = join(root, 'profile');
@@ -1893,13 +1927,38 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
     const fixture = freshPage(profile, invocationId, { account429OnOpen: true });
     const { result } = await runFresh(profile, invocationId, fixture.page);
     expect(fixture.page.goto).toHaveBeenCalledTimes(1);
-    expect(fixture.send.click).not.toHaveBeenCalled();
-    expect(fixture.composer.fill).not.toHaveBeenCalled();
-    expect(result.product_wall_diagnostic).toMatchObject({
-      wall_kind: 'account_conversations_http_429', http_status: 429,
-    });
-    expect(result.send_count).toBe(0);
+    expect(fixture.send.click).toHaveBeenCalledTimes(1);
+    expect(fixture.composer.fill).toHaveBeenCalledTimes(1);
+    expect(result.send_count).toBe(1);
+    expect(result.send_attempted).toBe(true);
+    expect(readStateLightAccountCooldown(configuredProfileKey(profile, cdp), clock.now).active).toBe(false);
+    expect(existsSync(join(profileDirs(configuredProfileKey(profile, cdp)).locks,
+      'state-light-account-cooldown.v1.json'))).toBe(false);
   });
+
+  it.each(['owned', 'markerless', 'other-marker', 'duplicate', 'unreadable', 'plain-route', 'pre-dispatch'] as const)(
+    'only publishes an attributed own attempted Send 429, without a second Send (%s)', async (mode) => {
+      clock.now = 100_000;
+      vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+      const profile = join(root, 'profile');
+      const invocationId = randomUUID();
+      const fixture = freshPage(profile, invocationId, { send429Mode: mode });
+      const { result } = await runFresh(profile, invocationId, fixture.page);
+      expect(fixture.send.click).toHaveBeenCalledTimes(1);
+      expect(result.send_attempted).toBe(true);
+      const state = readStateLightAccountCooldown(configuredProfileKey(profile, cdp), clock.now);
+      if (mode === 'owned') {
+        expect(state).toEqual({ active: true, until: clock.now + 300_000 });
+        expect(result.product_wall_diagnostic).toMatchObject({
+          wall_kind: 'rate_limit', http_status: 429, status_source: 'owned_page_response',
+        });
+      } else {
+        expect(state.active).toBe(false);
+        expect(existsSync(join(profileDirs(configuredProfileKey(profile, cdp)).locks,
+          'state-light-account-cooldown.v1.json'))).toBe(false);
+      }
+    },
+  );
 
   it.each(['ready', 'fallback'] as const)(
     'stops a separately awaited composer fill when click witnesses 429 (%s)', async (branch) => {
