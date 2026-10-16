@@ -1,0 +1,21 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2626,
+  "declared_paths": [
+    ".github/workflows/vitest-wallclock-e2e.yml"
+  ],
+  "denylist": [
+    "credentials/",
+    "package.json",
+    "packages/core/",
+    "scripts/ci-wallclock-e2e-notify.ts",
+    "scripts/toolchain/node-version.json",
+    "scripts/vitest-wallclock-e2e-split.manifest.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".github/workflows/vitest-wallclock-e2e.yml"
+  ],
+  "source_revision": "3dd741a3b0e4d75659f61cab9a1edcfb9dce601a"
+}
