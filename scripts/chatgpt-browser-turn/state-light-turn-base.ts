@@ -4667,7 +4667,12 @@ async function runTurnCore(
         } : {}),
         cleanupAction: 'preserve',
         result: compactResult(
-          failure.state,
+          // An unproved attempted Send remains possibly delivered at its original cutoff,
+          // even when a lost-Page recovery census cannot complete.
+          !config.newChat && sendAttempted && sendCount === 0
+            && Date.now() >= invocationDeadlineMs
+            ? 'observation_uncertain'
+            : failure.state,
           'invocation',
           failure.cause,
           invocationId,
