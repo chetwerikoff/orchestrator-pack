@@ -4850,6 +4850,14 @@ async function runTurnCore(
         sendCount = 1;
         afterSend = true;
         deliveryProofPendingRecovery = false;
+      } else if (!config.newChat && sendAttempted && sendCount === 0) {
+        // A successful exact-chat recovery already requires one unique
+        // invocation-owned marker. Count it before persisting the irreversible
+        // sent_unharvested observation, not on the next DOM poll.
+        sendCount = 1;
+        afterSend = true;
+        markerDerivedSend = true;
+        zeroWitnessAccountRecovery = false;
       }
       if (config.newChat && !ownedConversationUrl) {
         if (!(await freshProjectMarkerProven(recovered.page, recovered.conversationUrl, recoveryDeadlineMs))) {
@@ -4914,7 +4922,7 @@ async function runTurnCore(
         phase: 'sent_unharvested',
         reason: 'recovered_conversation_url_bound',
         sendCount,
-        sendWitness: 'numeric_send_count',
+        sendWitness: markerDerivedSend ? 'owned_marker' : 'numeric_send_count',
         conversationUrl: recovered.conversationUrl,
       });
 

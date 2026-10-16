@@ -1241,7 +1241,7 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
     expect(deriveDelivery(captured, false)).toBe('POSSIBLY_DELIVERED');
   });
 
-  it.each(['late-marker', 'own-post', 'no-evidence'] as const)(
+  it.each(['late-marker', 'own-post', 'no-evidence', 'lost-successor'] as const)(
     'keeps one attempted Send after a stale five-second DOM and composer window (%s)',
     async (scenario) => {
       const root = mkdtempSync(join(tmpdir(), 'opk-2636-send-delivery-'));
@@ -1257,7 +1257,8 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
         { role: 'user' as const, text: 'previous prompt', key: 'data-message-id:d46-prior-user' },
         { role: 'assistant' as const, text: 'previous reply', key: 'data-message-id:d46-prior-reply' },
       ];
-      const ownRows = () => sendAt >= 0 && clock - sendAt >= 36_000 && scenario !== 'no-evidence'
+      const ownRows = () => sendAt >= 0 && clock - sendAt >= 36_000
+        && scenario !== 'no-evidence' && scenario !== 'lost-successor'
         ? [
           ...prior,
           { role: 'user' as const, text: composerText, key: 'data-message-id:d46-current-user' },
@@ -1317,10 +1318,52 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
           };
         }),
       };
-      const page = Object.assign(events, {
+      const successorRows = () => [
+        ...prior,
+        { role: 'user' as const, text: composerText, key: 'data-message-id:d46-successor-user' },
+        { role: 'assistant' as const, text: reply, key: 'data-message-id:d46-successor-assistant' },
+      ];
+      const successorNodes = {
+        count: vi.fn(async () => successorRows().length),
+        nth: (index: number) => collectionLocator(successorRows()).nth(index),
+        evaluateAll: vi.fn(async () => {
+          const rows = successorRows();
+          return {
+            rows: rows.map((row, domIndex) => ({
+              ...row, domIndex, complete: true, completionReady: true, continuationVisible: false,
+            })),
+            pageTurnEvidence: {
+              generationInProgress: false, observedAssistantNodes: 1, continueGeneratingVisible: false,
+            },
+          };
+        }),
+      };
+      // The original Page first outlives the unproven five-second proof probe.
+      const lostOriginal = () => scenario === 'lost-successor'
+        && sendAt >= 0 && clock - sendAt >= 9_000;
+      const successor = Object.assign(new EventEmitter(), {
         __fakeBrowserGptPage: true,
         url: () => target,
         isClosed: () => false,
+        goto: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+        waitForTimeout: vi.fn(async (ms: number) => { clock += ms; }),
+        getByRole: () => scalarLocator(),
+        getByText: () => scalarLocator(),
+        locator: (selector: string) => {
+          if (selector === COMPOSER_SELECTOR) return composer;
+          if (selector === MESSAGE_NODE_SELECTOR) return successorNodes;
+          if (selector === USER_MESSAGE_SELECTOR) return collectionLocator(
+            successorRows().filter((row) => row.role === 'user'));
+          if (selector === ASSISTANT_MESSAGE_SELECTOR) return collectionLocator(
+            successorRows().filter((row) => row.role === 'assistant'));
+          return scalarLocator();
+        },
+      });
+      const page = Object.assign(events, {
+        __fakeBrowserGptPage: true,
+        url: () => target,
+        isClosed: () => lostOriginal(),
         goto: vi.fn(async () => undefined),
         close: vi.fn(async () => undefined),
         waitForTimeout: vi.fn(async (ms: number) => { clock += ms; }),
@@ -1337,7 +1380,9 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
         },
       });
       const browserFixture = enqueueBrowserForTurn(mocks, page);
-      Object.assign(browserFixture.context, { pages: () => [page] });
+      Object.assign(browserFixture.context, { pages: () => lostOriginal() ? [successor] : [page] });
+      const recoveryCall = scenario === 'lost-successor'
+        ? vi.spyOn(recoveryModule, 'runPostSendRecovery') : undefined;
       const date = vi.spyOn(Date, 'now').mockImplementation(() => clock);
       vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
       try {
@@ -1369,7 +1414,12 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
             .toBe('POSSIBLY_DELIVERED');
           expect(existsSync(output)).toBe(false);
         } else {
-          expect(clock - sendAt).toBeGreaterThanOrEqual(36_000);
+          expect(clock - sendAt).toBeGreaterThanOrEqual(scenario === 'lost-successor' ? 9_000 : 36_000);
+          if (scenario === 'lost-successor') {
+            expect(recoveryCall).toHaveBeenCalledTimes(1);
+            expect(successorNodes.evaluateAll).toHaveBeenCalled();
+            expect(observation.send_witness).toBe('owned_marker');
+          }
           expect(result.state, JSON.stringify(result)).toBe('ok');
           expect(result.send_count).toBe(1);
           expect(observation).toMatchObject({ phase: 'harvested', conversation_url: target, send_count: 1 });
