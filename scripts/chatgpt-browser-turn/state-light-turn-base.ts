@@ -3631,51 +3631,44 @@ async function runTurnCore(
       };
     };
     const verifyReopenedExistingPage = async (): Promise<TurnRunOutcome | null> => {
-      if (browserOrPageDefinitelyLost(page, browser)) throw new Error('Target closed');
       const target = normalizeConversationUrl(config.chatUrl ?? '');
-      const identity = readOwnedConversationIdentity(page, target);
-      if (!identity.matched) return returnOwnedConversationIdentityMismatch(
-        identity, page, browser, invocationId, profileKey, sendCount,
-        pollCount, navigation, incidents, journalWriteFailed, incident, false,
-      );
-      if (Date.now() >= invocationDeadlineMs) {
-        return returnComposerMutationFailure('composer_mutation_budget_exhausted');
-      }
-      if (await readFreshStopVisible(page, invocationDeadlineMs) !== false) return returnExistingBusy();
-      const observed = await readPageObservation(page, undefined, undefined, true, invocationDeadlineMs);
-      if (observed.transcriptIncomplete || observed.snapshot?.complete !== true) {
-        incident('pre_send_observation_error', 'baseline_transcript_incomplete', 'return_local_error');
-        return {
-          page, browser,
-          result: compactResult(
-            'ui_contract_mismatch', 'invocation', 'baseline_transcript_incomplete',
-            invocationId, profileKey, sendCount, pollCount, navigation, incidents, {},
-            journalWriteFailed,
-          ),
-        };
-      }
-      if (!observed.snapshot.carriers.some((carrier) =>
-        carrier.role === 'user' && normalizeVisibleText(carrier.text).length > 0)) {
-        return returnOwnedConversationRenderMismatch(
-          page, browser, invocationId, profileKey, sendCount, pollCount,
-          navigation, incidents, journalWriteFailed, incident,
+      while (true) {
+        if (browserOrPageDefinitelyLost(page, browser)) throw new Error('Target closed');
+        const identity = readOwnedConversationIdentity(page, target);
+        if (!identity.matched) return returnOwnedConversationIdentityMismatch(
+          identity, page, browser, invocationId, profileKey, sendCount,
+          pollCount, navigation, incidents, journalWriteFailed, incident, false,
         );
+        // A slow transcript is not a wrong transcript. Observe the same owned
+        // page until the existing invocation deadline, without granting Send
+        // while its user history or generation state is still unproven.
+        beforeBrowserAction();
+        if (Date.now() >= invocationDeadlineMs) {
+          return returnOwnedConversationRenderMismatch(
+            page, browser, invocationId, profileKey, sendCount, pollCount,
+            navigation, incidents, journalWriteFailed, incident,
+          );
+        }
+        if (await readFreshStopVisible(page, invocationDeadlineMs) !== false) return returnExistingBusy();
+        const observed = await readPageObservation(page, undefined, undefined, true, invocationDeadlineMs);
+        beforeBrowserAction();
+        if (observed.pageTurnEvidence?.generationInProgress === true
+          || observed.pageTurnEvidence?.continueGeneratingVisible === true) return returnExistingBusy();
+        if (!observed.transcriptIncomplete && observed.snapshot?.complete === true
+          && observed.snapshot.carriers.some((carrier) =>
+            carrier.role === 'user' && normalizeVisibleText(carrier.text).length > 0)
+          && observed.pageTurnEvidence?.generationInProgress === false) {
+          if (await readFreshStopVisible(page, invocationDeadlineMs) !== false) return returnExistingBusy();
+          if (browserOrPageDefinitelyLost(page, browser)) throw new Error('Target closed');
+          const finalIdentity = readOwnedConversationIdentity(page, target);
+          return finalIdentity.matched ? null : returnOwnedConversationIdentityMismatch(
+            finalIdentity, page, browser, invocationId, profileKey, sendCount,
+            pollCount, navigation, incidents, journalWriteFailed, incident, false,
+          );
+        }
+        const remainingMs = invocationDeadlineMs - Date.now();
+        if (remainingMs > 0) await sleep(page, Math.min(INITIAL_POLL_MS, remainingMs));
       }
-      if (observed.pageTurnEvidence?.generationInProgress === true
-        || observed.pageTurnEvidence?.continueGeneratingVisible === true) return returnExistingBusy();
-      if (observed.pageTurnEvidence?.generationInProgress !== false) {
-        return returnOwnedConversationRenderMismatch(
-          page, browser, invocationId, profileKey, sendCount, pollCount,
-          navigation, incidents, journalWriteFailed, incident,
-        );
-      }
-      if (await readFreshStopVisible(page, invocationDeadlineMs) !== false) return returnExistingBusy();
-      if (browserOrPageDefinitelyLost(page, browser)) throw new Error('Target closed');
-      const finalIdentity = readOwnedConversationIdentity(page, target);
-      return finalIdentity.matched ? null : returnOwnedConversationIdentityMismatch(
-        finalIdentity, page, browser, invocationId, profileKey, sendCount,
-        pollCount, navigation, incidents, journalWriteFailed, incident, false,
-      );
     };
 
     const sendOwnedFreshPrompt = async (): Promise<TurnRunOutcome | null> => {
