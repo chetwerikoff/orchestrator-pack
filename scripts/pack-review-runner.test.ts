@@ -4706,6 +4706,8 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       PackReviewGptRoundRecord['sourceSlots'][number];
     commentMode?: 'missing' | 'duplicate' | 'unavailable-actor' | 'unavailable-census';
     historicalClaim?: boolean;
+    logicalRoundCap?: number;
+    reviewCycleId?: string;
   } = {}) {
     const root = mkdtempSync(join(tmpdir(), 'opk-2629-rate-limit-'));
     roots.push(root);
@@ -4760,8 +4762,8 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
       canonicalRepository: repository,
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
-      reviewCycleId: authority.cycle!.cycleId,
-      logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      reviewCycleId: input.reviewCycleId ?? authority.cycle!.cycleId,
+      logicalRoundOrdinal: 1, logicalRoundCap: input.logicalRoundCap ?? 1,
       automaticBudgetDisposition: 'consume',
       resolvedReviewer: 'gpt', reviewRound: round,
     }).run;
@@ -5075,8 +5077,8 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     expect(noClaim).toMatchObject({ ok: false, created: false });
     expect(listPackReviewRuns(claim.options)).toHaveLength(1);
 
-    const cap = fixture();
-    updatePackReviewRun(cap.original.id, { logicalRoundCap: 2 }, cap.options);
+    const cap = fixture({ logicalRoundCap: 2 });
+    expect(getPackReviewRun(cap.original.id, cap.options)?.logicalRoundCap).toBe(2);
     const denied = await cap.start();
     expect(denied.result.created).not.toBe(true);
     expect(listPackReviewRuns(cap.options)).toHaveLength(1);
@@ -5161,12 +5163,18 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
   });
 
-  it.each([
-    ['reviewer', { resolvedReviewer: 'codex' as const }],
-    ['cycle', { reviewCycleId: 'different-cycle-2629' }],
-  ])('refuses exceptional same-head admission with mismatched %s', async (_name, changed) => {
+  it('refuses exceptional same-head admission with a mismatched reviewer', async () => {
     const f = fixture();
-    updatePackReviewRun(f.original.id, changed, f.options);
+    updatePackReviewRun(f.original.id, { resolvedReviewer: 'codex' }, f.options);
+    const next = await f.start();
+    expect(next.result.created).not.toBe(true);
+    expect(f.freshStarts).toEqual([]);
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+  });
+
+  it('refuses exceptional same-head admission with a mismatched cycle', async () => {
+    const f = fixture({ reviewCycleId: 'different-cycle-2629' });
+    expect(getPackReviewRun(f.original.id, f.options)?.reviewCycleId).toBe('different-cycle-2629');
     const next = await f.start();
     expect(next.result.created).not.toBe(true);
     expect(f.freshStarts).toEqual([]);
