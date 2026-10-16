@@ -6356,6 +6356,54 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       .toEqual([1]);
   });
 
+  it('Issue #2635: harvests late original-invocation comment after terminal 900 s partial coverage', async () => {
+    const f = await seedDeadIncumbent({ source02Comment: false, orphanedPair: true });
+    const terminalRound = structuredClone(getPackReviewRun(f.runId, f.options)!.reviewRound!);
+    for (const slot of terminalRound.sourceSlots.slice(1)) {
+      slot.lifecycle = 'terminal';
+      slot.terminalClass = 'possible_delivery/missing_result';
+      slot.terminalResult = {
+        kind: 'missing_terminal_result', noResend: true,
+        process_timed_out: true, timeout_seconds: 900,
+      };
+    }
+    updatePackReviewRun(f.runId, {
+      status: 'failed', latestRunStatus: 'failed',
+      failureReason: 'gpt_sources_incomplete_after_grace:1/3',
+      reviewRound: terminalRound, runnerPid: oldPid,
+    }, { ...f.options, now: new Date(staleAt) });
+    const lateAt = '2026-10-12T00:19:00.000Z';
+    f.comments.push({
+      ...f.makeComment('source-02', originalSource02, 26352002),
+      createdAt: lateAt, updatedAt: lateAt,
+    });
+    const before = getPackReviewRun(f.runId, f.options)!;
+    expect(before.reviewRound!.sourceSlots.slice(1).map((slot) => slot.terminalClass))
+      .toEqual(['possible_delivery/missing_result', 'possible_delivery/missing_result']);
+
+    const result = await startPackReview({
+      ...f.input, claimMode: 'acquire',
+      fixtureGptAttemptObserver: async () => ({
+        state: 'reply_recovery_required' as const, replacementEligible: false,
+      }),
+    });
+    expect(result.reason).not.toBe('gpt_incumbent_owner_not_dead');
+    const recovered = getPackReviewRun(f.runId, f.options)!;
+    expect(recovered.reviewRound!.sourceSlots[1]).toMatchObject({
+      lifecycle: 'terminal', terminalClass: 'complete_clean',
+      invocationId: originalSource02, attemptOrdinal: 2,
+      terminalResult: { source_comment_authority: 'credentialed_github' },
+    });
+    expect(recovered.reviewRound!.sourceSlots[1]?.attemptHistory).toBeUndefined();
+    expect(recovered.reviewRound!.sourceSlots[2]).toMatchObject({
+      lifecycle: 'terminal', terminalClass: 'possible_delivery/missing_result',
+      invocationId: originalSource03, attemptOrdinal: 2,
+      terminalResult: { kind: 'missing_terminal_result', noResend: true },
+    });
+    expect(f.launches).toEqual([]);
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+  });
+
   it('hydrates the original credentialed source-02 and admits only source-03 after real predecessor pacing', async () => {
     const f = await seedDeadIncumbent();
     const result = await startPackReview({ ...f.input, claimMode: 'acquire' });
