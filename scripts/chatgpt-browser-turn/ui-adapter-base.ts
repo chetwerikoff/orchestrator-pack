@@ -12,6 +12,7 @@ import {
   type DispatchObservationBoundary,
 } from './dispatch-observation.ts';
 import { configuredProfileKey } from './storage-common.ts';
+import { extractOwnedPromptMarkerToken, isOwnedPromptMarker } from './owned-prompt-marker.ts';
 import {
   mergeContinuationSegments,
   SEMANTIC_UI_FILTER,
@@ -1545,9 +1546,9 @@ export async function runtimeWitnessSurfaceAvailable(
 }
 
 
-/** Only live GET responses on this exact held Page, with an observed request in its
- * current attachment/navigation epoch, can produce HTTP 429 evidence. */
-export type HeldPage429Kind = 'conversation_fetch_http_429' | 'account_conversations_http_429';
+/** Only an exact owned GET or a positively marker-attributed attempted Send on this
+ * held Page and active attachment/navigation epoch produces HTTP 429 evidence. */
+export type HeldPage429Kind = 'conversation_fetch_http_429' | 'rate_limit';
 export interface HeldPage429Observation {
   readonly wall_kind: HeldPage429Kind;
   readonly http_status: 429;
@@ -1556,45 +1557,87 @@ export interface HeldPage429Observation {
 export interface HeldPage429Witness {
   readonly current: () => HeldPage429Observation | undefined;
   readonly beforeNavigation: () => void;
+  readonly armDispatch: () => void;
   readonly dispose: () => void;
 }
 const heldPage429Witnesses = new WeakMap<object, HeldPage429Witness>();
+
+/** The first-party Send fixture and submission predicate agree on messages[].author
+ * and content.parts. Opaque or other body shapes cannot grant shared write authority. */
+function positivelyAttributedOwnedSendRequest(request: any, marker: string): boolean {
+  if (!isOwnedPromptMarker(marker) || !isRecognizedConversationSubmissionRequest(request)) return false;
+  try {
+    const url = new URL(String(request.url()));
+    if (!allowedChatGptOrigin(url)) return false;
+    const raw = request.postData?.();
+    if (typeof raw !== 'string' || !raw) return false;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+    const messages = (parsed as { messages?: unknown }).messages;
+    if (!Array.isArray(messages)) return false;
+    let submittedUserTextItems = 0;
+    let matchingItems = 0;
+    for (const message of messages) {
+      if (!message || typeof message !== 'object' || Array.isArray(message)) return false;
+      const author = (message as { author?: { role?: unknown } }).author;
+      if (!author || typeof author !== 'object' || author.role !== 'user') continue;
+      const content = (message as { content?: { content_type?: unknown; parts?: unknown } }).content;
+      if (!content || typeof content !== 'object' || content.content_type !== 'text'
+        || !Array.isArray(content.parts)) return false;
+      for (const part of content.parts) {
+        if (typeof part !== 'string') return false;
+        submittedUserTextItems++;
+        if (extractOwnedPromptMarkerToken(part) === marker) matchingItems++;
+      }
+    }
+    return submittedUserTextItems === 1 && matchingItems === 1;
+  } catch {
+    return false;
+  }
+}
 
 export function observeHeldPageConversation429(
   page: any,
   ownedConversationUrl?: string,
   onFirst429?: (evidence: HeldPage429Observation) => void,
+  expectedSendMarker?: string,
 ): HeldPage429Witness {
   let targetUuid: string | undefined;
   try {
-    const match = /\/c\/([0-9a-f-]+)$/iu.exec(new URL(normalizeConversationUrl(ownedConversationUrl ?? '')).pathname);
+    const match = /\\/c\\/([0-9a-f-]+)$/iu.exec(new URL(normalizeConversationUrl(ownedConversationUrl ?? '')).pathname);
     if (match && SERVICE_CONVERSATION_UUID_RE.test(match[1]!)) targetUuid = match[1]!.toLowerCase();
   } catch { /* No owned exact-chat ID on a fresh-chat Page. */ }
   let epoch = 0;
+  let dispatchAttempted = false;
   let observed: HeldPage429Observation | undefined;
-  const requestEpochs = new WeakMap<object, number>();
+  // Save only eligibility and epoch, never request bodies or marker-bearing text.
+  const requestEpochs = new WeakMap<object, { epoch: number; kind: HeldPage429Kind }>();
   const responseKind = (request: any): HeldPage429Kind | undefined => {
-    if (request?.method?.() !== 'GET') return undefined;
     try {
-      const url = new URL(String(request.url()));
+      const url = new URL(String(request?.url?.()));
       if (!allowedChatGptOrigin(url)) return undefined;
-      if (url.pathname === '/backend-api/conversations') return 'account_conversations_http_429';
-      const match = /^\/backend-api\/conversations\/([0-9a-f-]+)$/iu.exec(url.pathname);
-      return match && targetUuid && match[1]!.toLowerCase() === targetUuid
-        ? 'conversation_fetch_http_429' : undefined;
+      if (request?.method?.() === 'GET') {
+        const match = /^\\/backend-api\\/conversations\\/([0-9a-f-]+)$/iu.exec(url.pathname);
+        return match && targetUuid && match[1]!.toLowerCase() === targetUuid
+          ? 'conversation_fetch_http_429' : undefined;
+      }
+      return dispatchAttempted && expectedSendMarker
+        && positivelyAttributedOwnedSendRequest(request, expectedSendMarker)
+        ? 'rate_limit' : undefined;
     } catch { return undefined; }
   };
   const onRequest = (request: any): void => {
-    if (request && typeof request === 'object' && responseKind(request)) requestEpochs.set(request, epoch);
+    if (!request || typeof request !== 'object') return;
+    const kind = responseKind(request);
+    if (kind) requestEpochs.set(request, { epoch, kind });
   };
   const onResponse = (response: any): void => {
-    if (observed) return; // The first active-epoch 429 is sticky, even if a 200 follows.
+    if (observed) return; // The first eligible active-epoch 429 remains sticky.
     try {
       const request = response.request();
-      if (!request || requestEpochs.get(request) !== epoch || response.status() !== 429) return;
-      const kind = responseKind(request);
-      if (!kind) return;
-      observed = { wall_kind: kind, http_status: 429, status_source: 'owned_page_response' };
+      const witnessed = request && requestEpochs.get(request);
+      if (!witnessed || witnessed.epoch !== epoch || response.status() !== 429) return;
+      observed = { wall_kind: witnessed.kind, http_status: 429, status_source: 'owned_page_response' };
       onFirst429?.(observed);
     } catch { /* Missing request/status evidence is not a 429. */ }
   };
@@ -1605,6 +1648,7 @@ export function observeHeldPageConversation429(
   const witness: HeldPage429Witness = {
     current: () => observed,
     beforeNavigation: () => { epoch++; },
+    armDispatch: () => { dispatchAttempted = true; },
     dispose: () => {
       if (typeof page?.off === 'function') {
         page.off('request', onRequest);
@@ -1737,8 +1781,7 @@ const PRODUCT_WALL_TEXT_CAP = 500;
 // Keep the existing advisory-wall kind contract narrow: a conversation
 // transport failure must not become a profile-wide advisory kind.
 export type ProductWallKind = 'quota' | 'rate_limit' | 'challenge' | 'login' | 'account_load_error';
-export type ConversationFetchWallKind =
-  | 'conversation_fetch_http_429' | 'conversation_load_error' | 'account_conversations_http_429';
+export type ConversationFetchWallKind = 'conversation_fetch_http_429' | 'conversation_load_error';
 export interface ProductWallDiagnostic<WithConversation extends boolean = false> {
   /** Advisory evidence only; a page-text match cannot become a terminal state. */
   readonly wall_kind: ProductWallKind | (WithConversation extends true ? ConversationFetchWallKind : never) | 'none';
