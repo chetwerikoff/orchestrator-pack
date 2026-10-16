@@ -68,6 +68,39 @@ const roots: string[] = [];
 const originalEnv = { ...process.env };
 const HEAD = 'a'.repeat(40);
 
+describe('Issue #2635 public command incumbent 409 recovery actions', () => {
+  it.each([
+    'gpt_incumbent_owner_not_dead',
+    'gpt_incumbent_claim_not_owned',
+    'gpt_incumbent_identity_mismatch',
+    'gpt_incumbent_ambiguous_run',
+    'gpt_incumbent_authority_changed',
+    'gpt_incumbent_concurrent_update',
+    'gpt_preacquired_claim_not_owned',
+    'gpt_original_invocation_recovery_required',
+    'reply_recovery_required',
+    'gpt_observation_unavailable',
+  ])('preserves executable nextAction for %s', async (reason) => {
+    const nextAction = reason.includes('claim_not_owned')
+      ? 'npm run --silent pack-gpt-review -- --project orchestrator-pack --pr-number 2635'
+      : 'node --experimental-strip-types scripts/pack-review-runner.ts reconcile --source-repo-root "/fixture/repo" --repo-slug chetwerikoff/orchestrator-pack --pr-number 2635 --immediate';
+    const execution = await runPackGptReviewCommand({ prNumber: 2635 }, {
+      env: {},
+      stderr: { write: () => undefined },
+      startReview: async () => ({
+        ok: false, created: false, reused: true, reason, nextAction,
+        reviewer: 'gpt', prNumber: 2635, headSha: HEAD, httpStatus: 409,
+      }),
+    });
+    expect(execution.exitCode).toBe(1);
+    expect(execution.result.runnerReason).toBe(reason);
+    expect(execution.result.nextAction).toBe(nextAction);
+    expect(nextAction.startsWith('npm run --silent pack-gpt-review')
+      || nextAction.startsWith('node --experimental-strip-types scripts/pack-review-runner.ts reconcile')).toBe(true);
+    expect(nextAction.startsWith('observe')).toBe(false);
+  });
+});
+
 describe('Issue #2565 CLI help smoke regression', () => {
   it.each(['--help', '-h'] as const)(
     'accepts standalone %s and prints audited reset usage successfully', (flag) => {
