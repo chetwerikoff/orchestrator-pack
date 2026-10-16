@@ -4996,9 +4996,11 @@ describe('Issue #1752 production liveness regressions', () => {
   it('emits healthy heartbeats while profile verification exceeds the recurring idle window', async () => {
     const prompt = 'PROMPT-LIVENESS-PROFILE';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    mocks.verifyProfile.mockImplementationOnce(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 45));
-      return { state: 'verified' };
+    const profileEntered = Promise.withResolvers<void>();
+    const releaseProfile = Promise.withResolvers<{ state: 'verified' }>();
+    mocks.verifyProfile.mockImplementationOnce(() => {
+      profileEntered.resolve();
+      return releaseProfile.promise;
     });
     const fake = makeLoserPage(prompt, 'PROFILE-FINAL');
     enqueueBrowserForTurn(mocks, fake.page);
@@ -5009,22 +5011,41 @@ describe('Issue #1752 production liveness regressions', () => {
       return true;
     }) as typeof process.stdout.write);
     try {
-      const code = await runStateLightTurn(
+      // Drive the 5 ms heartbeat interval through 45 ms of pending profile
+      // verification; real CI scheduling must not decide how many ticks run.
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+      });
+      const turn = runStateLightTurn(
         livenessArgv(join(livenessStateDir, 'profile.txt')),
         { entryLivenessHeartbeat: true },
       );
+      await profileEntered.promise;
+      await vi.advanceTimersByTimeAsync(45);
+      const pendingRecords = parseRecords(writes);
+      const pendingHeartbeats = pendingRecords.filter(
+        (record) => record.schema === 'observation-heartbeat/v1',
+      );
+      expect(pendingHeartbeats.filter((record) => record.phase === 'admitted_pre_send').length)
+        .toBeGreaterThan(2);
+      expect(pendingRecords.some((record) => record.schema === 'turn-result/v1')).toBe(false);
+
+      // Let the rest of the owned Send and terminal publication use real timers.
+      vi.useRealTimers();
+      releaseProfile.resolve({ state: 'verified' });
+      const code = await turn;
       expect(code).toBe(0);
       const records = parseRecords(writes);
       const heartbeats = records.filter((record) => record.schema === 'observation-heartbeat/v1');
       expect(heartbeats.length).toBeGreaterThan(2);
-      expect(heartbeats.filter((record) => record.phase === 'admitted_pre_send').length)
-        .toBeGreaterThan(2);
       expect(records.at(-1)).toMatchObject({
         schema: 'turn-result/v1',
         state: 'ok',
         send_count: 1,
       });
     } finally {
+      vi.useRealTimers();
+      releaseProfile.resolve({ state: 'verified' });
       stdout.mockRestore();
     }
   });
