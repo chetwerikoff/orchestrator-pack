@@ -770,7 +770,7 @@ describe('state-light fresh conversation collision recovery', () => {
       name: 'TimeoutError',
     }));
     const outcome = await runNewChatTurn(turn.page, '/tmp/retry-unproven-2487.txt', '90000', invocationId);
-    expect(outcome.result).toMatchObject({ state: 'send_failed', send_count: 0, send_attempted: true, cleanup: 'confirmed' });
+    expect(outcome.result).toMatchObject({ state: 'observation_uncertain', send_count: 0, send_attempted: true, cleanup: 'confirmed' });
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.composer.fill).not.toHaveBeenLastCalledWith('');
     expect(turn.page.close).toHaveBeenCalledTimes(1);
@@ -815,7 +815,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(
       turn.page, join(stateDir, invocationId + '-log-guard.txt'), '90000', invocationId,
     );
-    expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'send_failed' });
+    expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'observation_uncertain' });
     expectPossibleEffect(outcome.result);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.getSends()).toBe(0);
@@ -855,7 +855,7 @@ describe('state-light fresh conversation collision recovery', () => {
       const outcome = await runNewChatTurn(
         turn.page, join(stateDir, invocationId + '-dom-guard.txt'), '90000', invocationId,
       );
-      expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'send_failed' });
+      expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'observation_uncertain' });
       expectPossibleEffect(outcome.result);
       expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
       expect(turn.getSends()).toBe(0);
@@ -960,7 +960,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(
       turn.page, join(stateDir, invocationId + '-second-final.txt'), '90000', invocationId,
     );
-    expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'send_failed' });
+    expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'observation_uncertain' });
     expectPossibleEffect(outcome.result);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
     expect(turn.getSends()).toBe(0);
