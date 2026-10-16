@@ -4975,8 +4975,8 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
   });
 
   it.each([
-    ['positive send count', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
-      ...slot, terminalClass: 'possible_delivery',
+    ['positive send count within rate_limit terminal', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot,
       terminalResult: { ...(slot.terminalResult as Record<string, unknown>), send_count: 1 },
     })],
     ['send attempted despite count zero', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
@@ -5014,6 +5014,12 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     })],
   ] as const)('never starts an unsafe new run when original has %s', async (_name, mutate) => {
     const f = fixture({ mutate });
+    const reconciled = await f.reconcile();
+    const nextAction = String(reconciled.results.find(
+      (row) => row.runId === f.original.id && typeof row.nextAction === 'string',
+    )?.nextAction);
+    expect(nextAction).not.toContain(exactCommand);
+    expect(nextAction).toContain('observe the original GPT turn');
     const next = await f.start();
     expect(next.result.created).not.toBe(true);
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
