@@ -219,7 +219,6 @@ const INITIAL_POLL_MS = 500;
 // before the helper reloads its owned conversation once (Issue #2197).
 const MARKERLESS_RELOAD_SETTLE_READS = 3;
 const DISPATCH_OBSERVATION_MS = 30_000;
-const FRESH_CONVERSATION_LANDING_MS = DISPATCH_OBSERVATION_MS;
 const STABILITY_READ_DELAY_MS = 1_000;
 const COMPLETION_CONFIRM_POLL_MS = 1_000;
 const DIAGNOSTIC_HEAD_CHARS = 300;
@@ -2921,44 +2920,6 @@ function returnOwnedConversationRenderMismatch(
   };
 }
 
-function returnFreshConversationLandingMismatch(
-  page: any,
-  browser: any,
-  invocationId: string,
-  profileKey: string,
-  sendCount: number,
-  pollCount: number,
-  navigation: StateLightNavigationCounter,
-  incidents: BrowserIncident[],
-  journalWriteFailed: boolean,
-  incident: (eventClass: string, symptom: string, action?: string) => void,
-): TurnRunOutcome {
-  incident(
-    'conversation_landing_mismatch',
-    'fresh_conversation_landing_mismatch',
-    'retain_owned_page_no_resend',
-  );
-  return {
-    page,
-    browser,
-    result: compactResult(
-      'ui_contract_mismatch',
-      'invocation',
-      'fresh_conversation_landing_mismatch',
-      invocationId,
-      profileKey,
-      sendCount,
-      pollCount,
-      navigation,
-      incidents,
-      {
-        ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
-      },
-      journalWriteFailed,
-    ),
-  };
-}
-
 function pageConversationUrl(page: any): string | undefined {
   try {
     const url = normalizeConversationUrl(String(page.url()));
@@ -4651,10 +4612,6 @@ async function runTurnCore(
     // `2 × timeout-ms` is a post-send decision threshold, not a hard observation ceiling.
     let hardExhaustionDeadline = startedAt + (config.timeoutMs * 2);
     const dispatchDeadline = startedAt + Math.min(DISPATCH_OBSERVATION_MS, config.timeoutMs);
-    const freshConversationLandingDeadline = startedAt + Math.min(
-      FRESH_CONVERSATION_LANDING_MS,
-      config.timeoutMs,
-    );
     let lastReadyReply = '';
     let lastReadyObservedText = '';
     let bestReadyReply = '';
@@ -6193,27 +6150,8 @@ async function runTurnCore(
       bestReadyReply = '';
       completionReadySeen = false;
       lastReadyAssistantIdentity = '';
-      if (
-        config.newChat
-        && sendCount >= 1
-        && Date.now() >= freshConversationLandingDeadline
-        && !readProjectConversationUrl(page, config.projectUrl ?? '')
-        && !ownedPromptEverSeen
-        && !ownedStopDeliveryObserved
-      ) {
-        return returnFreshConversationLandingMismatch(
-          page,
-          browser,
-          invocationId,
-          profileKey,
-          sendCount,
-          pollCount,
-          navigation,
-          incidents,
-          journalWriteFailed,
-          incident,
-        );
-      }
+      // Absence at the intermediate landing clock is not negative evidence.
+      // The existing freshUnboundReturnByMs guard owns unbound termination.
 
       if (Date.now() >= dispatchDeadline) {
         if (!hasOwnedUserMessage(messages, marker)) {

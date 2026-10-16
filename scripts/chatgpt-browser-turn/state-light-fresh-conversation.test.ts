@@ -1474,6 +1474,25 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readFileSync(output, 'utf8')).toBe(reply);
   });
 
+  it('Issue #2636 review source-03: counted own POST with cleared composer survives post-send landing clock', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'D46-COUNTED-CLEARED-COMPOSER';
+    const reply = 'D46-COUNTED-POST-LOOP-LATE-OWNER';
+    const output = join(stateDir, invocationId + '-counted-after-post-loop.txt');
+    const { turn, sentAt } = countedOwnPostWithLateFreshUrl(prompt, reply, 78_000, false);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await runNewChatTurn(turn.page, output, '180000', invocationId);
+    expect(sentAt()).toBeGreaterThanOrEqual(0);
+    expect(mocks.nowMs - sentAt()).toBeGreaterThanOrEqual(78_000);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.getSends()).toBe(1);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1, conversation_id: SHARED_CONV });
+    expect(readStateLightTurnObservation('collision-profile', invocationId))
+      .toMatchObject({ phase: 'harvested', conversation_url: SHARED_CONV, send_count: 1 });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+  });
+
   it.each(['late-owned', 'permanently-null', 'foreign-project'] as const)(
     'Issue #2636: attempted-zero fresh Send preserves original Page owner through delayed URL (%s)',
     async (scenario) => {
@@ -3434,7 +3453,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result.incidents).not.toContain('conversation_landing_mismatch');
   });
 
-  it('returns fresh_conversation_landing_mismatch when url and owned prompt never materialize', async () => {
+  it('returns fresh_conversation_owner_unproven at the original cutoff when url and owned prompt never materialize', async () => {
     const prompt = 'PROMPT-STUCK-FRESH';
     let sent = false;
     let composerText = '';
@@ -3485,13 +3504,13 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(page, '/tmp/fresh-landing-mismatch.txt', '90000');
 
     expect(outcome.result).toMatchObject({
-      state: 'ui_contract_mismatch',
-      cause: 'fresh_conversation_landing_mismatch',
+      state: 'observation_uncertain',
+      cause: 'fresh_conversation_owner_unproven',
       send_count: 1,
+      send_attempted: true,
     });
-    expect(outcome.result.incidents).toContain('conversation_landing_mismatch');
-    // Longer accepted timeout leaves a larger legitimate post-send observation budget.
-    expect(outcome.result.poll_count).toBeLessThan(100);
+    expect(outcome.result.incidents).toContain('post_send_observation_error');
+    expect(outcome.result.poll_count).toBeGreaterThan(0);
   });
 
   function installAccountLoadError(page: any, opts: {
