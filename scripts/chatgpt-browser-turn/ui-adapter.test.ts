@@ -539,9 +539,12 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
     const fixture = held429PageFixture();
     const first = vi.fn();
     const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617, first);
-    witness.markDispatch(marker, `${marker}\n\nPROMPT`);
+    // Keep the request identical to the invocation's actual filled text:
+    // only the count-only duplicate-token predicate may reject issuance.
+    const duplicatedText = `${marker}\n\nPROMPT \n${marker}`;
+    witness.markDispatch(marker, duplicatedText);
     const request = fixture.request('https://chatgpt.com/backend-api/f/conversation', 'POST',
-      submission(`${marker}\n\nPROMPT \n${marker}`));
+      submission(duplicatedText));
     fixture.page.emit('request', request);
     fixture.page.emit('request', request);
     expect(witness.ownSubmissionIssued()).toBe(false);
