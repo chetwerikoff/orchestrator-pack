@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -770,7 +771,7 @@ describe('state-light fresh conversation collision recovery', () => {
       name: 'TimeoutError',
     }));
     const outcome = await runNewChatTurn(turn.page, '/tmp/retry-unproven-2487.txt', '90000', invocationId);
-    expect(outcome.result).toMatchObject({ state: 'send_failed', send_count: 0, send_attempted: true, cleanup: 'confirmed' });
+    expect(outcome.result).toMatchObject({ state: 'observation_uncertain', send_count: 0, send_attempted: true, cleanup: 'confirmed' });
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.composer.fill).not.toHaveBeenLastCalledWith('');
     expect(turn.page.close).toHaveBeenCalledTimes(1);
@@ -815,7 +816,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(
       turn.page, join(stateDir, invocationId + '-log-guard.txt'), '90000', invocationId,
     );
-    expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'send_failed' });
+    expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'observation_uncertain' });
     expectPossibleEffect(outcome.result);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.getSends()).toBe(0);
@@ -855,7 +856,7 @@ describe('state-light fresh conversation collision recovery', () => {
       const outcome = await runNewChatTurn(
         turn.page, join(stateDir, invocationId + '-dom-guard.txt'), '90000', invocationId,
       );
-      expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'send_failed' });
+      expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'observation_uncertain' });
       expectPossibleEffect(outcome.result);
       expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
       expect(turn.getSends()).toBe(0);
@@ -877,10 +878,14 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(
       turn.page, join(stateDir, invocationId + '-page-identity.txt'), '90000', invocationId,
     );
+    // The Page changed after onDispatch, so preserve the post-dispatch
+    // failure classification and foreign-Page cleanup refusal, not a pre-Send error.
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch', send_count: 0, send_attempted: true,
-      cause: 'fresh_conversation_surface_unavailable', cleanup: 'skipped',
+      cause: 'helper_error_after_send_page_retained', cleanup: 'skipped',
     });
+    expect(outcome.result.incidents).toContain('helper_failure_after_send');
+    expect(outcome.result.incidents).not.toContain('helper_failure_before_send');
     expectPossibleEffect(outcome.result);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.page.close).not.toHaveBeenCalled();
@@ -960,7 +965,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(
       turn.page, join(stateDir, invocationId + '-second-final.txt'), '90000', invocationId,
     );
-    expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'send_failed' });
+    expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'observation_uncertain' });
     expectPossibleEffect(outcome.result);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
     expect(turn.getSends()).toBe(0);
@@ -1412,6 +1417,238 @@ describe('state-light fresh conversation collision recovery', () => {
       matched_text: 'temporarily limited access',
       matched_selector: '[role="alert"]',
     });
+  });
+
+  // Drive a real held-Page request witness while DOM and owner URL lag behind the click.
+  function countedOwnPostWithLateFreshUrl(prompt: string, reply: string, urlDelayMs: number, composerStays: boolean) {
+    const turn = makeLoserPage(prompt, reply);
+    const events = new EventEmitter();
+    turn.page.on = events.on.bind(events);
+    turn.page.off = events.off.bind(events);
+    let submittedText = '';
+    let sendAt = -1;
+    turn.composer.fill.mockImplementation(async (text: string) => { submittedText = text; });
+    turn.composer.innerText.mockImplementation(async () => composerStays || sendAt < 0 ? submittedText : '');
+    turn.composer.textContent.mockImplementation(async () => composerStays || sendAt < 0 ? submittedText : '');
+    const originalClick = turn.sendButton.click.getMockImplementation()!;
+    turn.sendButton.click.mockImplementation(async () => {
+      await originalClick();
+      sendAt = mocks.nowMs;
+      const request = {
+        method: () => 'POST',
+        url: () => 'https://chatgpt.com/backend-api/f/conversation',
+        postData: () => JSON.stringify({
+          messages: [{ author: { role: 'user' }, content: { content_type: 'text', parts: [submittedText] } }],
+        }),
+      };
+      events.emit('request', request);
+      events.emit('request', request); // Repeated observation of one physical request.
+      events.emit('response', { request: () => request, status: () => 200 });
+    });
+    turn.page.url.mockImplementation(() => sendAt >= 0 && mocks.nowMs - sendAt >= urlDelayMs
+      ? SHARED_CONV : PROJECT_URL);
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    turn.page.locator.mockImplementation((selector: string) =>
+      sendAt >= 0 && mocks.nowMs - sendAt < urlDelayMs
+        && (selector === MESSAGE_NODE_SELECTOR || selector === USER_MESSAGE_SELECTOR)
+        ? collectionLocator([]) : originalLocator(selector));
+    return { turn, sentAt: () => sendAt };
+  }
+
+  it('Issue #2636 review source-01: counted own POST with unchanged composer survives early fresh URL wait', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'D46-COUNTED-STILL-DRAFT';
+    const reply = 'D46-COUNTED-LATE-OWNER-ANSWER';
+    const output = join(stateDir, invocationId + '-counted-still-draft.txt');
+    const { turn, sentAt } = countedOwnPostWithLateFreshUrl(prompt, reply, 43_000, true);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await runNewChatTurn(turn.page, output, '180000', invocationId);
+    expect(sentAt()).toBeGreaterThanOrEqual(0);
+    expect(mocks.nowMs - sentAt()).toBeGreaterThanOrEqual(43_000);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.getSends()).toBe(1);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1, conversation_id: SHARED_CONV });
+    expect(readStateLightTurnObservation('collision-profile', invocationId))
+      .toMatchObject({ phase: 'harvested', conversation_url: SHARED_CONV, send_count: 1 });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+  });
+
+  it('Issue #2636 review source-03: counted own POST with cleared composer survives post-send landing clock', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'D46-COUNTED-CLEARED-COMPOSER';
+    const reply = 'D46-COUNTED-POST-LOOP-LATE-OWNER';
+    const output = join(stateDir, invocationId + '-counted-after-post-loop.txt');
+    const { turn, sentAt } = countedOwnPostWithLateFreshUrl(prompt, reply, 78_000, false);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await runNewChatTurn(turn.page, output, '180000', invocationId);
+    expect(sentAt()).toBeGreaterThanOrEqual(0);
+    expect(mocks.nowMs - sentAt()).toBeGreaterThanOrEqual(78_000);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.getSends()).toBe(1);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1, conversation_id: SHARED_CONV });
+    expect(readStateLightTurnObservation('collision-profile', invocationId))
+      .toMatchObject({ phase: 'harvested', conversation_url: SHARED_CONV, send_count: 1 });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+  });
+
+  it.each(['late-owned', 'permanently-null', 'foreign-project'] as const)(
+    'Issue #2636: attempted-zero fresh Send preserves original Page owner through delayed URL (%s)',
+    async (scenario) => {
+      const invocationId = randomUUID();
+      const prompt = 'D46-FRESH-DELAYED-OWNER';
+      const reply = 'D46-FRESH-COMPLETE';
+      const output = join(stateDir, invocationId + '-d46-fresh.txt');
+      const turn = makeLoserPage(prompt, reply);
+      let draft = '';
+      let sendAt = -1;
+      turn.composer.fill.mockImplementation(async (text: string) => { draft = text; });
+      // Reproduce the unproved five-second delivery window: Send issued,
+      // composer unchanged, transcript unreadable, and no usable own POST.
+      turn.composer.innerText.mockImplementation(async () => draft);
+      turn.composer.textContent.mockImplementation(async () => draft);
+      const originalClick = turn.sendButton.click.getMockImplementation()!;
+      turn.sendButton.click.mockImplementation(async () => {
+        await originalClick();
+        sendAt = mocks.nowMs;
+      });
+      const markerVisible = () => scenario === 'late-owned'
+        && sendAt >= 0 && mocks.nowMs - sendAt >= 36_000;
+      turn.page.url.mockImplementation(() => turn.getSends() === 0 || sendAt < 0
+        || mocks.nowMs - sendAt < 36_000 || scenario === 'permanently-null'
+        ? PROJECT_URL
+        : scenario === 'foreign-project' ? OTHER_PROJECT_CONVERSATION_URL : SHARED_CONV);
+      const originalLocator = turn.page.locator.getMockImplementation()!;
+      turn.page.locator.mockImplementation((selector: string) => {
+        if (turn.getSends() > 0
+          && (selector === MESSAGE_NODE_SELECTOR || selector === USER_MESSAGE_SELECTOR)
+          && !markerVisible()) return collectionLocator([]);
+        return originalLocator(selector);
+      });
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const result = await runNewChatTurn(turn.page, output, '180000', invocationId);
+      expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+      expect(turn.getSends()).toBe(1);
+      const observation = readStateLightTurnObservation('collision-profile', invocationId);
+      if (scenario === 'late-owned') {
+        expect(mocks.nowMs - sendAt).toBeGreaterThanOrEqual(36_000);
+        expect(result.result).toMatchObject({
+          state: 'ok', send_count: 1, conversation_id: SHARED_CONV,
+        });
+        expect(observation).toMatchObject({
+          phase: 'harvested', conversation_url: SHARED_CONV, send_count: 1,
+        });
+        expect(readFileSync(output, 'utf8')).toBe(reply);
+      } else {
+        expect(result.result.state).not.toBe('ok');
+        expect(result.result.send_count).toBe(0);
+        expect(result.result.send_attempted).toBe(true);
+        expect(result.result).not.toHaveProperty('conversation_id');
+        expect(observation).toMatchObject({
+          phase: 'dispatching', send_witness: 'none', conversation_url: null,
+        });
+        expect(existsSync(output)).toBe(false);
+        expect(deriveDelivery({ ...result.result,
+          resolved_send_count: result.result.send_count } as any, false)).toBe('POSSIBLY_DELIVERED');
+      }
+    },
+  );
+
+  it('Issue #2636 review source-01: attempted-zero foreign fresh Page never clicks Continue Generating', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'D46-UNBOUND-FOREIGN-CONTINUE';
+    const output = join(stateDir, invocationId + '-foreign-continue.txt');
+    const turn = makeLoserPage(prompt, 'INCOMPLETE-FOREIGN-REPLY');
+    let sentAt = -1;
+    let composerText = '';
+    turn.composer.fill.mockImplementation(async (text: string) => { composerText = text; });
+    turn.composer.innerText.mockImplementation(async () => composerText);
+    turn.composer.textContent.mockImplementation(async () => composerText);
+    const originalClick = turn.sendButton.click.getMockImplementation()!;
+    turn.sendButton.click.mockImplementation(async () => {
+      await originalClick();
+      sentAt = mocks.nowMs;
+    });
+    const visible = () => sentAt >= 0 && mocks.nowMs - sentAt >= 36_000;
+    turn.page.url.mockImplementation(() => sentAt < 0 ? PROJECT_URL : OTHER_PROJECT_CONVERSATION_URL);
+    const continueClick = vi.fn(async () => undefined);
+    const continueControl = scalarLocator({ count: vi.fn(async () => 1), click: continueClick });
+    const assistantTurn = scalarLocator({ getByRole: vi.fn(() => continueControl) });
+    const assistantNode = scalarLocator({
+      locator: vi.fn((selector: string) => selector === ASSISTANT_TURN_ANCESTOR_XPATH
+        ? scalarLocator({ first: vi.fn(() => assistantTurn) })
+        : scalarLocator()),
+    });
+    const ownedUser = { role: 'user' as const, text: `${TEST_OWNED_MARKER}\n\n${prompt}` };
+    const incompleteAssistant = { role: 'assistant' as const, text: 'INCOMPLETE-FOREIGN-REPLY' };
+    const messages = [ownedUser, incompleteAssistant];
+    const atomicNodes = Object.assign(collectionLocator(messages), {
+      evaluateAll: vi.fn(async () => ({
+        rows: [
+          { role: 'user', text: ownedUser.text, key: 'data-message-id:d46-foreign-user', domIndex: 0,
+            complete: true, completionReady: false, continuationVisible: false },
+          { role: 'assistant', text: incompleteAssistant.text, key: 'data-message-id:d46-foreign-assistant', domIndex: 1,
+            complete: true, completionReady: false, continuationVisible: true },
+        ],
+        pageTurnEvidence: {
+          generationInProgress: false, observedAssistantNodes: 1, continueGeneratingVisible: true,
+        },
+      })),
+      nth: vi.fn((index: number) => index === 1 ? assistantNode : messageLocator(ownedUser)),
+    });
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    turn.page.locator.mockImplementation((selector: string) => {
+      if (!visible()) {
+        if (selector === MESSAGE_NODE_SELECTOR || selector === USER_MESSAGE_SELECTOR) return collectionLocator([]);
+      } else {
+        if (selector === MESSAGE_NODE_SELECTOR) return atomicNodes;
+        if (selector === USER_MESSAGE_SELECTOR) return collectionLocator([ownedUser]);
+      }
+      return originalLocator(selector);
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const result = await runNewChatTurn(turn.page, output, '90000', invocationId);
+    const observed = await readPageObservation(turn.page, TEST_OWNED_MARKER);
+    expect(observed.snapshot.carriers[1]?.continuationVisible).toBe(true);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.getSends()).toBe(1);
+    expect(continueClick).not.toHaveBeenCalled();
+    expect(result.result).toMatchObject({
+      state: 'observation_uncertain', cause: 'fresh_conversation_owner_unproven',
+      send_count: 0, send_attempted: true,
+    });
+    expect(result.result).not.toHaveProperty('conversation_id');
+    expect(readStateLightTurnObservation('collision-profile', invocationId))
+      .toMatchObject({ phase: 'dispatching', send_witness: 'none', conversation_url: null });
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it('Issue #2636: post-onDispatch network-change cannot become a pre-Send helper failure', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'D46-POST-DISPATCH-ERROR';
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    turn.sendButton.click.mockRejectedValueOnce(new Error('locator.click: Timeout 5000ms exceeded'));
+    const beforeWait = turn.page.waitForTimeout.getMockImplementation()!;
+    turn.page.waitForTimeout.mockImplementation(async (ms: number) => {
+      if (turn.sendButton.click.mock.calls.length > 0) {
+        throw new Error('net::ERR_NETWORK_CHANGED');
+      }
+      return beforeWait(ms);
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const result = await runNewChatTurn(
+      turn.page, join(stateDir, invocationId + '-post-dispatch-error.txt'), '90000', invocationId,
+    );
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(result.result).toMatchObject({ state: 'driver_error', send_count: 0, send_attempted: true });
+    expect(result.result.incidents).toContain('helper_failure_after_send');
+    expect(result.result.incidents).not.toContain('helper_failure_before_send');
+    expect(readStateLightTurnObservation('collision-profile', invocationId))
+      .toMatchObject({ phase: 'dispatching', send_witness: 'none', conversation_url: null });
+    expect(deriveDelivery({ ...result.result,
+      resolved_send_count: result.result.send_count } as any, false)).toBe('POSSIBLY_DELIVERED');
   });
 
   it('continues observing after fresh-conversation URL wait expiry without send_failed', async () => {
@@ -3216,7 +3453,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result.incidents).not.toContain('conversation_landing_mismatch');
   });
 
-  it('returns fresh_conversation_landing_mismatch when url and owned prompt never materialize', async () => {
+  it('returns fresh_conversation_owner_unproven at the original cutoff when url and owned prompt never materialize', async () => {
     const prompt = 'PROMPT-STUCK-FRESH';
     let sent = false;
     let composerText = '';
@@ -3267,13 +3504,13 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(page, '/tmp/fresh-landing-mismatch.txt', '90000');
 
     expect(outcome.result).toMatchObject({
-      state: 'ui_contract_mismatch',
-      cause: 'fresh_conversation_landing_mismatch',
+      state: 'observation_uncertain',
+      cause: 'fresh_conversation_owner_unproven',
       send_count: 1,
+      send_attempted: true,
     });
-    expect(outcome.result.incidents).toContain('conversation_landing_mismatch');
-    // Longer accepted timeout leaves a larger legitimate post-send observation budget.
-    expect(outcome.result.poll_count).toBeLessThan(100);
+    expect(outcome.result.incidents).toContain('post_send_observation_error');
+    expect(outcome.result.poll_count).toBeGreaterThan(0);
   });
 
   function installAccountLoadError(page: any, opts: {
@@ -4759,9 +4996,11 @@ describe('Issue #1752 production liveness regressions', () => {
   it('emits healthy heartbeats while profile verification exceeds the recurring idle window', async () => {
     const prompt = 'PROMPT-LIVENESS-PROFILE';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    mocks.verifyProfile.mockImplementationOnce(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 45));
-      return { state: 'verified' };
+    const profileEntered = Promise.withResolvers<void>();
+    const releaseProfile = Promise.withResolvers<{ state: 'verified' }>();
+    mocks.verifyProfile.mockImplementationOnce(() => {
+      profileEntered.resolve();
+      return releaseProfile.promise;
     });
     const fake = makeLoserPage(prompt, 'PROFILE-FINAL');
     enqueueBrowserForTurn(mocks, fake.page);
@@ -4772,22 +5011,41 @@ describe('Issue #1752 production liveness regressions', () => {
       return true;
     }) as typeof process.stdout.write);
     try {
-      const code = await runStateLightTurn(
+      // Drive the 5 ms heartbeat interval through 45 ms of pending profile
+      // verification; real CI scheduling must not decide how many ticks run.
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+      });
+      const turn = runStateLightTurn(
         livenessArgv(join(livenessStateDir, 'profile.txt')),
         { entryLivenessHeartbeat: true },
       );
+      await profileEntered.promise;
+      await vi.advanceTimersByTimeAsync(45);
+      const pendingRecords = parseRecords(writes);
+      const pendingHeartbeats = pendingRecords.filter(
+        (record) => record.schema === 'observation-heartbeat/v1',
+      );
+      expect(pendingHeartbeats.filter((record) => record.phase === 'admitted_pre_send').length)
+        .toBeGreaterThan(2);
+      expect(pendingRecords.some((record) => record.schema === 'turn-result/v1')).toBe(false);
+
+      // Let the rest of the owned Send and terminal publication use real timers.
+      vi.useRealTimers();
+      releaseProfile.resolve({ state: 'verified' });
+      const code = await turn;
       expect(code).toBe(0);
       const records = parseRecords(writes);
       const heartbeats = records.filter((record) => record.schema === 'observation-heartbeat/v1');
       expect(heartbeats.length).toBeGreaterThan(2);
-      expect(heartbeats.filter((record) => record.phase === 'admitted_pre_send').length)
-        .toBeGreaterThan(2);
       expect(records.at(-1)).toMatchObject({
         schema: 'turn-result/v1',
         state: 'ok',
         send_count: 1,
       });
     } finally {
+      vi.useRealTimers();
+      releaseProfile.resolve({ state: 'verified' });
       stdout.mockRestore();
     }
   });

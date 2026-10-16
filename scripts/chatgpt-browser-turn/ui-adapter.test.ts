@@ -512,6 +512,64 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
     witness.dispose();
   });
 
+  it.each(['', '/'])('counts an actual marked POST once without requiring a reply or status (%s)', (slash) => {
+    const fixture = held429PageFixture();
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617);
+    witness.markDispatch(marker, `${marker}\n\nPROMPT`);
+    const request = fixture.request(
+      `https://chatgpt.com/backend-api/f/conversation${slash}`,
+      'POST', submission(`${marker}\n\nPROMPT`),
+    );
+    expect(witness.ownSubmissionIssued()).toBe(false);
+    // A response without the original request event is not issuance.
+    fixture.page.emit('response', { request: () => request, status: () => 200 });
+    expect(witness.ownSubmissionIssued()).toBe(false);
+    fixture.page.emit('request', request);
+    expect(witness.ownSubmissionIssued()).toBe(true);
+    expect(witness.current()).toBeUndefined(); // Own POST alone never proves acceptance or an answer.
+    fixture.page.emit('request', request);
+    fixture.page.emit('response', { request: () => request, status: () => 200 });
+    expect(witness.ownSubmissionIssued()).toBe(true); // One latched request, no per-event count.
+    witness.beforeNavigation();
+    expect(witness.ownSubmissionIssued()).toBe(false); // Stale epoch has no count authority.
+    witness.dispose();
+  });
+
+  it('rejects a second marker token for D46 issuance but preserves D45 own-POST 429', () => {
+    const fixture = held429PageFixture();
+    const first = vi.fn();
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617, first);
+    // Keep the request identical to the invocation's actual filled text:
+    // only the count-only duplicate-token predicate may reject issuance.
+    const duplicatedText = `${marker}\n\nPROMPT \n${marker}`;
+    witness.markDispatch(marker, duplicatedText);
+    const request = fixture.request('https://chatgpt.com/backend-api/f/conversation', 'POST',
+      submission(duplicatedText));
+    fixture.page.emit('request', request);
+    fixture.page.emit('request', request);
+    expect(witness.ownSubmissionIssued()).toBe(false);
+    fixture.page.emit('response', { request: () => request, status: () => 429 });
+    expect(witness.current()).toEqual({
+      wall_kind: 'rate_limit', http_status: 429, status_source: 'owned_page_response',
+    });
+    expect(witness.ownSubmissionIssued()).toBe(false);
+    expect(first).toHaveBeenCalledTimes(1);
+    witness.dispose();
+  });
+
+  it('does not count a same-marker POST whose user content differs from the filled invocation payload', () => {
+    const fixture = held429PageFixture();
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617);
+    witness.markDispatch(marker, `${marker}\n\nPROMPT`);
+    const request = fixture.request('https://chatgpt.com/backend-api/f/conversation', 'POST',
+      submission(`${marker}\n\nDIFFERENT USER TEXT`));
+    fixture.page.emit('request', request);
+    fixture.page.emit('response', { request: () => request, status: () => 200 });
+    expect(witness.ownSubmissionIssued()).toBe(false);
+    expect(witness.current()).toBeUndefined();
+    witness.dispose();
+  });
+
   it.each(['markerless', 'mismatch', 'quoted', 'metadata', 'duplicate', 'duplicate-parts', 'multiple-parts', 'unreadable', 'absent',
     'pre-dispatch', 'stale-epoch', 'foreign-page', 'wrong-origin', 'wrong-method', 'plain-route'])(
     'rejects ambiguous or unrelated Send 429: %s', (mode) => {
@@ -531,17 +589,18 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
       }
       if (mode === 'unreadable') body = '{';
       if (mode === 'absent') body = undefined;
-      if (mode !== 'pre-dispatch') witness.markDispatch(marker);
+      if (mode !== 'pre-dispatch') witness.markDispatch(marker, `${marker}\n\nPROMPT`);
       const request = fixture.request(
         mode === 'wrong-origin' ? 'https://example.com/backend-api/f/conversation'
           : mode === 'plain-route' ? 'https://chatgpt.com/backend-api/conversation' : 'https://chatgpt.com/backend-api/f/conversation',
         mode === 'wrong-method' ? 'GET' : 'POST', body,
       );
       (mode === 'foreign-page' ? foreign : fixture).page.emit('request', request);
-      if (mode === 'pre-dispatch') witness.markDispatch(marker);
-      if (mode === 'stale-epoch') { witness.beforeNavigation(); witness.markDispatch(marker); }
+      if (mode === 'pre-dispatch') witness.markDispatch(marker, `${marker}\n\nPROMPT`);
+      if (mode === 'stale-epoch') { witness.beforeNavigation(); witness.markDispatch(marker, `${marker}\n\nPROMPT`); }
       fixture.page.emit('response', { request: () => request, status: () => 429 });
       expect(witness.current()).toBeUndefined();
+      expect(witness.ownSubmissionIssued()).toBe(false);
       witness.dispose();
     },
   );
