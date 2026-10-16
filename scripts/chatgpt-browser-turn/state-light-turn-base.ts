@@ -2048,7 +2048,7 @@ function recordProductWallAdvisory(
   if (diagnostic.wall_kind === 'none'
     || diagnostic.wall_kind === 'conversation_fetch_http_429'
     || diagnostic.wall_kind === 'conversation_load_error'
-    || diagnostic.wall_kind === 'account_conversations_http_429') return;
+    || diagnostic.http_status === 429) return;
   recordStateLightAdvisoryWall(
     profileKey, diagnostic.wall_kind, `${diagnostic.wall_kind}_detected`,
     invocationId, undefined, undefined, {
@@ -2530,8 +2530,7 @@ async function waitForComposer(
       const wall = classifyStateLightProductWall(surface);
       observeProductWall?.(classifyProductWall(surface));
       if ('wall_kind' in wall && (wall.wall_kind === 'conversation_load_error'
-        || wall.wall_kind === 'conversation_fetch_http_429'
-        || wall.wall_kind === 'account_conversations_http_429')) observeConversationWall?.(wall);
+        || wall.wall_kind === 'conversation_fetch_http_429')) observeConversationWall?.(wall);
       const held429 = heldPage429Diagnostic(page);
       if (held429) {
         observeConversationWall?.(held429);
@@ -2639,7 +2638,7 @@ async function mutateComposerOrCause(
       if (await readComposerReadiness(page, insertionDeadlineMs)) return null;
     } catch (error) {
       if (error instanceof Error && (error.message === 'conversation_fetch_http_429'
-        || error.message === 'account_conversations_http_429'
+        || (error.message === 'rate_limit' && heldPage429Diagnostic(page)?.http_status === 429)
         || error.message === 'account_cooldown_active')) throw error;
       // The mutation was attempted; classify from the pre-attempt presence proof.
     }
@@ -2666,7 +2665,7 @@ async function mutateComposerOrCause(
     return null;
   } catch (error) {
     if (error instanceof Error && (error.message === 'conversation_fetch_http_429'
-      || error.message === 'account_conversations_http_429'
+      || (error.message === 'rate_limit' && heldPage429Diagnostic(page)?.http_status === 429)
       || error.message === 'account_cooldown_active')) throw error;
     if (
       isPlaywrightTimeoutError(error)
@@ -3035,8 +3034,7 @@ async function runTurn(
   try {
     const outcome = await runTurnCore(args, recoveryHooks, entryLivenessHeartbeat, heartbeatSchedulerReady, (value) => {
       if (value.wall_kind === 'account_load_error') diagnostic = value;
-      else if (value.wall_kind === 'conversation_fetch_http_429'
-        || value.wall_kind === 'account_conversations_http_429') {
+      else if (value.http_status === 429) {
         if (diagnostic.wall_kind !== 'account_load_error') diagnostic = value;
       } else if (diagnostic.http_status !== 429 && diagnostic.wall_kind !== 'account_load_error'
         && (value.wall_kind !== 'none' || value.matched_text !== 'none')) diagnostic = value;
@@ -3777,6 +3775,7 @@ async function runTurnCore(
           profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
         });
         sendAttempted = true;
+        held429Witness?.markDispatch(marker);
         if (freshCleanup) freshCleanup.sendAttempted = true;
       };
       // The composer can change during Send readiness polling. Do not send a
@@ -3935,6 +3934,7 @@ async function runTurnCore(
               profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
             });
             sendAttempted = true;
+            held429Witness?.markDispatch(marker);
           },
           onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_resend'),
         });
@@ -4758,7 +4758,7 @@ async function runTurnCore(
       const recoveryAdapter: PostSendRecoveryAdapter = {
       accountActionBlocker: () => {
         const observed = held429Witness?.current();
-        if (observed) return observed.wall_kind;
+        if (observed) return observed.wall_kind === 'rate_limit' ? 'account_cooldown_active' : observed.wall_kind;
         const cooldown = readStateLightAccountCooldown(profileKey);
         if (cooldown.diagnostic) {
           incident('shared_account_cooldown_diagnostic', cooldown.diagnostic, 'fail_open');
@@ -6278,7 +6278,7 @@ async function runTurnCore(
     const isUi = message.startsWith('ui_contract_mismatch:');
     const isAccountCooldown = message === 'account_cooldown_active';
     const isNamed429 = message === 'conversation_fetch_http_429'
-      || message === 'account_conversations_http_429';
+      || (message === 'rate_limit' && held429Witness?.current()?.http_status === 429);
     const isSharedBlocked = isNamed429 || isAccountCooldown;
     const state: TurnState = isInput
       ? 'input_invalid'
