@@ -4896,7 +4896,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     };
   }
 
-  it.each(['future', 'expired', 'malformed', 'unavailable'] as const)(
+  it.each(['future', 'expired', 'malformed', 'unavailable', 'invalid', 'unreadable', 'unresolvable'] as const)(
     'returns a verified fresh-run command after rate-limit recovery with %s cooldown',
     async (mode) => {
       const f = fixture();
@@ -4904,6 +4904,9 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       if (mode === 'future') f.setCooldown(future);
       if (mode === 'expired') f.setCooldown(Date.now() - 10_000);
       if (mode === 'malformed') f.setCooldown('not-a-number');
+      if (mode === 'invalid') f.setCooldown(Date.now() + 600_000);
+      if (mode === 'unreadable') mkdirSync(f.cooldownPath);
+      if (mode === 'unresolvable') delete process.env.PACK_GPT_BROWSER_PROFILE;
       const result = await f.reconcile();
       const row = result.results.find((item) => item.runId === f.original.id && typeof item.nextAction === 'string');
       expect(row).toMatchObject({ terminalized: false, statusReconciled: true });
@@ -4929,6 +4932,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     f.setCooldown(Date.now() - 5_000);
     const historicalClaimPath = f.historicalClaimPath!;
     expect(existsSync(historicalClaimPath)).toBe(true);
+    const originalClaimBytes = readFileSync(historicalClaimPath, 'utf8');
     const reconciled = await f.reconcile();
     expect(String(reconciled.results.find((row) => row.runId === f.original.id && typeof row.nextAction === 'string')?.nextAction))
       .toContain(exactCommand);
@@ -4959,6 +4963,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     expect(getPackReviewRun(newId, f.options)?.reviewRound?.sourceSlots.map((slot) => slot.invocationId))
       .not.toEqual(f.originalSlots.map((slot) => slot.invocationId));
     expect(existsSync(historicalClaimPath)).toBe(true);
+    expect(readFileSync(historicalClaimPath, 'utf8')).toBe(originalClaimBytes);
     expect(f.reviews).toHaveLength(1);
     expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })
       ?.cycle?.consumedRoundOrdinals).toEqual([1]);
@@ -4983,6 +4988,15 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
         diagnostics: { persisted_observation: { phase: 'dispatching', send_count: 0 } },
       },
     })],
+    ['unknown original send count', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, terminalResult: { ...(slot.terminalResult as Record<string, unknown>), send_count: 'unknown' },
+    })],
+    ['missing original terminal evidence', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, terminalResult: undefined,
+    })],
+    ['rotated original invocation identity', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
+      ...slot, terminalResult: { ...(slot.terminalResult as Record<string, unknown>), invocation_id: 'rotated-2629' },
+    })],
     ['second attempt', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
       ...slot, attemptOrdinal: 2,
     })],
@@ -5004,6 +5018,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     expect(next.result.created).not.toBe(true);
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
     expect(f.freshStarts).toEqual([]);
+    expect(f.statusWrites).not.toContain('success');
     expect(getPackReviewRun(f.original.id, f.options)?.reviewRound?.sourceSlots)
       .toEqual(f.originalSlots);
   });
@@ -5100,6 +5115,64 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     const denied = await f.start();
     expect(denied.result.created).not.toBe(true);
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
+  });
+
+
+  it('rejects a source comment under the last original invocation even if the deciding sources were rate-limited', async () => {
+    const f = fixture();
+    const last = f.originalSlots[2]!;
+    f.publish({ identity: {
+      repository, prNumber, headSha: HEAD, runId: f.original.id,
+      slotId: last.slotId, invocationId: last.invocationId!,
+    } });
+    const reconciled = await f.reconcile();
+    expect(String(reconciled.results.find((row) => row.runId === f.original.id && typeof row.nextAction === 'string')?.nextAction))
+      .not.toContain(exactCommand);
+    const next = await f.start();
+    expect(next.result.created).not.toBe(true);
+    expect(f.freshStarts).toEqual([]);
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+  });
+
+  it('does not override a concurrently active claim for this exact PR/head', async () => {
+    const f = fixture();
+    const active = acquireReviewStartClaim({
+      projectId, prNumber, headSha: HEAD,
+      surface: 'fixture-2629-active-claim', startReason: 'fixture-competing-start',
+      reviewRuns: listPackReviewRuns(f.options),
+    });
+    expect(active.acquired, JSON.stringify(active)).toBe(true);
+    const next = await f.start();
+    expect(next.result.created).not.toBe(true);
+    expect(f.freshStarts).toEqual([]);
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+  });
+
+  it.each([
+    ['reviewer', { resolvedReviewer: 'codex' as const }],
+    ['cycle', { reviewCycleId: 'different-cycle-2629' }],
+    ['verdict', { reviewVerdict: 'clean' as const }],
+  ])('refuses exceptional same-head admission with mismatched %s', async (_name, changed) => {
+    const f = fixture();
+    updatePackReviewRun(f.original.id, changed, f.options);
+    const next = await f.start();
+    expect(next.result.created).not.toBe(true);
+    expect(f.freshStarts).toEqual([]);
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+  });
+
+  it('never replays the historical HEAD as the current PR-led target after a head change', async () => {
+    const f = fixture();
+    const advancedHead = 'b'.repeat(40);
+    await f.start({
+      fixtureCurrentPrHeadSha: advancedHead,
+      fixturePostReviewHeadSha: advancedHead,
+      fixtureRequiredCiHeadAfterGate: advancedHead,
+    });
+    expect(getPackReviewRun(f.original.id, f.options)?.targetSha).toBe(HEAD);
+    for (const record of listPackReviewRuns(f.options)) {
+      if (record.id !== f.original.id) expect(record.targetSha).toBe(advancedHead);
+    }
   });
 
   it('keeps the existing recovery path on unrelated non-rate-limit terminal failures', async () => {
