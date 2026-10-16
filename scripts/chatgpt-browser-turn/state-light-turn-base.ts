@@ -2216,7 +2216,7 @@ async function readComposerReadiness(
   }
 }
 
-type StateLightSendDeliveryWitness = 'owned_user_node' | 'composer_cleared' | 'owned_stop' | 'unproven';
+type StateLightSendDeliveryWitness = 'owned_user_node' | 'composer_cleared' | 'owned_stop' | 'own_submission_issued' | 'unproven';
 
 async function readComposerTextForSendDelivery(
   composer: any,
@@ -2300,6 +2300,7 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
   readonly deliveryProofWaitMs?: number;
   readonly preSendAlertsAlreadyMarked?: boolean;
   readonly allowOwnedStopWitness?: boolean;
+  readonly ownSubmissionIssued?: () => boolean;
   readonly onDispatch?: () => void;
   readonly onActionError?: (diagnostic: string) => void;
 }): Promise<{ sendCount: 0 | 1; witness: StateLightSendDeliveryWitness; actionError?: string; preDispatchTimeoutProven?: boolean }> {
@@ -2337,9 +2338,13 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
       input.browser,
       input.allowOwnedStopWitness === true,
     );
+  // The request observer is on the same held Page and was marked before the
+  // action. An issued own POST proves one physical request, not a landed reply.
+  const resolvedWitness = witness === 'unproven' && input.ownSubmissionIssued?.()
+    ? 'own_submission_issued' as const : witness;
   return {
-    sendCount: witness === 'unproven' ? 0 : 1,
-    witness,
+    sendCount: resolvedWitness === 'unproven' ? 0 : 1,
+    witness: resolvedWitness,
     ...(actionError ? { actionError, preDispatchTimeoutProven: affirmativePreActionabilityTimeout(actionError) } : {}),
   };
 }
@@ -3348,6 +3353,7 @@ async function runTurnCore(
       ? normalizeConversationUrl(config.chatUrl) : undefined;
     let accountReloadAttempted = false;
     let zeroWitnessAccountRecovery = false;
+    let markerDerivedSend = false;
 
     const accountErrorTerminal = (): TurnRunOutcome => {
       incident('invocation_blocker', 'account_load_error', 'retain_page_no_resend');
@@ -3775,6 +3781,7 @@ async function runTurnCore(
           profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
         });
         sendAttempted = true;
+        afterSend = true; // Dispatch was attempted even without positive delivery proof.
         held429Witness?.markDispatch(marker);
         if (freshCleanup) freshCleanup.sendAttempted = true;
       };
@@ -3789,6 +3796,7 @@ async function runTurnCore(
         baselineUserNodeCount, sendWaitMs: Math.max(1, Math.min(MAX_LOCAL_READ_WAIT_MS, readinessDeadlineMs - Date.now())),
         invocationDeadlineMs, preSendAlertsAlreadyMarked: true, allowOwnedStopWitness: true,
         onDispatch: beforeClick,
+        ownSubmissionIssued: () => held429Witness?.ownSubmissionIssued() === true,
         onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_blind_resend'),
       });
       let delivery = await sendAction();
@@ -3819,16 +3827,11 @@ async function runTurnCore(
             return null;
           }
         }
-        incident('send_observation_error', 'send_delivery_unproven', 'retain_owned_page_no_resend');
-        return {
-          cleanupAction: 'preserve', page, browser,
-          result: compactResult(
-            'send_failed', 'invocation', delivery.actionError ?? 'send_delivery_unproven',
-            invocationId, profileKey, sendCount, pollCount, navigation, incidents,
-            { send_attempted: true, ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
-            journalWriteFailed,
-          ),
-        };
+        // The five-second DOM/composer probe is not negative Send evidence.
+        // Continue observing the same Page and original invocation; never resend.
+        incident('send_observation_deferred', 'send_delivery_unproven', 'continue_observing_after_send');
+        setHeartbeatPhase('post_send_observation');
+        return null;
       }
       sendCount += delivery.sendCount;
       if (delivery.witness === 'owned_stop') ownedStopDeliveryObserved = true;
@@ -3934,8 +3937,10 @@ async function runTurnCore(
               profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
             });
             sendAttempted = true;
+            afterSend = true; // Post-onDispatch exceptions must not become pre-Send failures.
             held429Witness?.markDispatch(marker);
           },
+          ownSubmissionIssued: () => held429Witness?.ownSubmissionIssued() === true,
           onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_resend'),
         });
       let delivery = await dispatchExisting(sendWaitMs);
@@ -3965,25 +3970,11 @@ async function runTurnCore(
             return null;
           }
         }
-        incident('send_observation_error', 'send_delivery_unproven', 'retain_owned_page_no_resend');
-        return {
-          cleanupAction: 'preserve',
-          page,
-          browser,
-          result: compactResult(
-            'send_failed',
-            'invocation',
-            delivery.actionError ?? 'send_delivery_unproven',
-            invocationId,
-            profileKey,
-            sendCount,
-            pollCount,
-            navigation,
-            incidents,
-            { send_attempted: true, ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
-            journalWriteFailed,
-          ),
-        };
+        // No immediate positive witness is not permission to re-send or
+        // terminalize an already attempted click/Enter.
+        incident('send_observation_deferred', 'send_delivery_unproven', 'continue_observing_after_send');
+        setHeartbeatPhase('post_send_observation');
+        return null;
       }
       sendCount += delivery.sendCount;
       afterSend = true;
@@ -4221,7 +4212,7 @@ async function runTurnCore(
             }
           }
 
-          if (sendCount >= 1 && Date.now() >= freshUnboundReturnByMs) {
+          if (sendAttempted && Date.now() >= freshUnboundReturnByMs) {
             incident('send_observation_deferred', 'fresh_conversation_url_wait_budget_exhausted', 'continue_observing_after_send');
             claimed = true;
             break;
@@ -4258,7 +4249,7 @@ async function runTurnCore(
             break; // observe the original possibly delivered Send; do not retry.
           }
           if (!conversationUrl) {
-            if (sendCount >= 1 && Date.now() >= freshUnboundReturnByMs) {
+            if (sendAttempted && Date.now() >= freshUnboundReturnByMs) {
               incident('send_observation_deferred', 'fresh_conversation_url_wait_budget_exhausted', 'continue_observing_after_send');
               claimed = true;
               break;
@@ -4290,6 +4281,11 @@ async function runTurnCore(
                 'continue_observing_after_send',
               );
               lastAttemptConversationUrl = pageConversationUrl(page) ?? lastAttemptConversationUrl;
+              claimed = true;
+              break;
+            }
+            if (sendAttempted) {
+              incident('send_observation_deferred', 'fresh_conversation_url_not_observed', 'continue_observing_after_send');
               claimed = true;
               break;
             }
@@ -4338,6 +4334,15 @@ async function runTurnCore(
             incident('send_observation_deferred', 'fresh_conversation_marker_unproven', 'continue_observing_after_send');
             claimed = true;
             break;
+          }
+          if (sendAttempted && sendCount === 0 && Date.now() < freshUnboundReturnByMs) {
+            sendCount = 1;
+            markerDerivedSend = true;
+            zeroWitnessAccountRecovery = false;
+            transitionStateLightTurnObservation({
+              profileKey, invocationId, phase: 'sent_unbound',
+              reason: 'fresh_owned_marker_observed', sendCount, sendWitness: 'owned_marker',
+            });
           }
           const claim = tryClaimStateLightFreshConversation(
             profileKey,
@@ -4398,7 +4403,7 @@ async function runTurnCore(
                 phase: 'sent_unharvested',
                 reason: 'fresh_conversation_url_bound',
                 sendCount,
-                sendWitness: 'numeric_send_count',
+                sendWitness: markerDerivedSend ? 'owned_marker' : 'numeric_send_count',
                 conversationUrl,
               });
             }
@@ -5018,6 +5023,26 @@ async function runTurnCore(
     // must instead return within its pre-Send invocation budget, including
     // bounded cleanup; the 2 x timeout threshold is not a hard exit.
     while (true) {
+      // A late observed own request is still the original physical Send.
+      const zeroCountCutoffMs = config.newChat && !ownedConversationUrl
+        ? freshUnboundReturnByMs : invocationDeadlineMs;
+      if (sendAttempted && sendCount === 0 && Date.now() < zeroCountCutoffMs
+        && held429Witness?.ownSubmissionIssued()) {
+        sendCount = 1;
+        if (config.newChat) {
+          transitionStateLightTurnObservation({
+            profileKey, invocationId, phase: 'sent_unbound',
+            reason: 'own_submission_post_issued', sendCount, sendWitness: 'numeric_send_count',
+          });
+        } else if (targetChatUrl) {
+          transitionStateLightTurnObservation({
+            profileKey, invocationId, phase: 'sent_unharvested',
+            reason: 'own_submission_post_issued', sendCount, sendWitness: 'numeric_send_count',
+            conversationUrl: targetChatUrl,
+          });
+          emitCancellationReceipt(targetChatUrl);
+        }
+      }
       const witnessed429 = held429Witness?.current();
       if (witnessed429 && ++witnessed429ReadOnlyPolls > 3) {
         incident('post_send_observation_error', witnessed429.wall_kind, 'retain_owned_page_no_resend');
@@ -5031,8 +5056,24 @@ async function runTurnCore(
           ),
         };
       }
+      // Count-gated 2x post-Send exits do not bound an unproved attempt.
+      // The original absolute deadline does, without inventing a zero-Send release.
+      if (sendAttempted && sendCount === 0 && Date.now() >= zeroCountCutoffMs) {
+        const cause = config.newChat && !ownedConversationUrl
+          ? 'fresh_conversation_owner_unproven' : 'send_delivery_unproven';
+        incident('post_send_observation_error', cause, 'retain_page_no_resend');
+        return {
+          page, browser,
+          cleanupAction: browserOrPageDefinitelyLost(page, browser) ? 'skip' : 'preserve',
+          result: compactResult(
+            'observation_uncertain', 'invocation', cause,
+            invocationId, profileKey, sendCount, pollCount, navigation, incidents,
+            { send_attempted: true }, journalWriteFailed,
+          ),
+        };
+      }
       if (config.newChat && !ownedConversationUrl
-        && (sendCount >= 1 || deliveryProofPendingRecovery || zeroWitnessAccountRecovery)
+        && (sendCount >= 1 || deliveryProofPendingRecovery || zeroWitnessAccountRecovery || sendAttempted)
         && Date.now() >= freshUnboundReturnByMs) {
         incident('post_send_observation_error', 'fresh_conversation_owner_unproven', 'retain_page_no_resend');
         return {
@@ -5054,7 +5095,7 @@ async function runTurnCore(
           ),
         };
       }
-      if ((sendCount >= 1 || deliveryProofPendingRecovery) && browserOrPageDefinitelyLost(page, browser)) {
+      if ((sendCount >= 1 || deliveryProofPendingRecovery || sendAttempted) && browserOrPageDefinitelyLost(page, browser)) {
         const terminal = await recoverCurrentObservation();
         if (terminal) return terminal;
         continue;
@@ -5106,9 +5147,11 @@ async function runTurnCore(
           page,
           marker,
           baselineCount,
-          config.newChat && !ownedConversationUrl
-            ? Math.min(hardExhaustionDeadline, freshUnboundReturnByMs)
-            : hardExhaustionDeadline,
+          sendAttempted && sendCount === 0
+            ? zeroCountCutoffMs
+            : config.newChat && !ownedConversationUrl
+              ? Math.min(hardExhaustionDeadline, freshUnboundReturnByMs)
+              : hardExhaustionDeadline,
           observeProductWall,
         );
       } catch (error) {
@@ -5306,16 +5349,23 @@ async function runTurnCore(
       }
 
       const markerCardinality = recoveryMarkerCardinality(messages, marker);
-      if (zeroWitnessAccountRecovery && sendCount === 0
+      if (sendAttempted && sendCount === 0 && Date.now() < zeroCountCutoffMs
         && markerCardinality.matchingUserCarrierCount === 1
         && markerCardinality.exactMarkerTokenCount === 1
         && (config.newChat
           ? Boolean(readProjectConversationUrl(page, config.projectUrl ?? ''))
           : Boolean(targetChatUrl && readOwnedConversationIdentity(page, targetChatUrl).matched))) {
-        // Positive rendered unique owned marker, not the absent numeric click
-        // witness, proves delivery. A missing marker never authorizes Send.
+        // The original exact Page's unique owned marker proves the attempted
+        // Send even if DOM evidence first appears after the 30s subwindow.
         sendCount = 1;
+        markerDerivedSend = true;
         zeroWitnessAccountRecovery = false;
+        if (config.newChat) {
+          transitionStateLightTurnObservation({
+            profileKey, invocationId, phase: 'sent_unbound',
+            reason: 'fresh_owned_marker_observed', sendCount, sendWitness: 'owned_marker',
+          });
+        }
       }
       if (
         ownedWindowCompletionReady
@@ -5377,7 +5427,7 @@ async function runTurnCore(
             phase: 'sent_unharvested',
             reason: 'fresh_conversation_url_observed_owned_marker',
             sendCount,
-            sendWitness: 'numeric_send_count',
+            sendWitness: markerDerivedSend ? 'owned_marker' : 'numeric_send_count',
             conversationUrl: observedConversationUrl,
           });
           ownedConversationUrl = observedConversationUrl;
@@ -5389,14 +5439,14 @@ async function runTurnCore(
       const durableConversationUrl = targetChatUrl ?? ownedConversationUrl;
       if (durableConversationUrl && sendCount >= 1) {
         const durableRecord = readStateLightTurnObservation(profileKey, invocationId);
-        if (!durableRecord.conversation_url) {
+        if (durableRecord.phase === 'dispatching' || !durableRecord.conversation_url) {
           transitionStateLightTurnObservation({
             profileKey,
             invocationId,
             phase: 'sent_unharvested',
             reason: 'conversation_url_observed',
             sendCount,
-            sendWitness: 'numeric_send_count',
+            sendWitness: markerDerivedSend ? 'owned_marker' : 'numeric_send_count',
             conversationUrl: durableConversationUrl,
           });
         }
@@ -6180,7 +6230,7 @@ async function runTurnCore(
 
       if (Date.now() >= dispatchDeadline) {
         if (!hasOwnedUserMessage(messages, marker)) {
-          if (sendCount >= 1 || zeroWitnessAccountRecovery) {
+          if (sendCount >= 1 || sendAttempted || zeroWitnessAccountRecovery) {
             if (!sendObservationDeferredLogged) {
               incident(
                 'send_observation_deferred',
@@ -6263,8 +6313,10 @@ async function runTurnCore(
           ? INITIAL_POLL_MS
           : POST_SEND_OBSERVATION_POLL_MS;
       const beforeSoftDeadline = Date.now() < softDeadline;
-      await sleep(page, config.newChat && !ownedConversationUrl
-        ? Math.min(delay, Math.max(1, freshUnboundReturnByMs - Date.now()))
+      await sleep(page, sendAttempted && sendCount === 0
+        ? Math.min(delay, Math.max(1, zeroCountCutoffMs - Date.now()))
+        : config.newChat && !ownedConversationUrl
+          ? Math.min(delay, Math.max(1, freshUnboundReturnByMs - Date.now()))
         : recoveryState.lossEpoch > 0
           ? Math.min(delay, Math.max(1, hardExhaustionDeadline - Date.now()))
           : beforeSoftDeadline
