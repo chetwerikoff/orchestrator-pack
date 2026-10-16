@@ -3514,8 +3514,9 @@ function provenFirstAttemptZeroSendCensus(
 }
 
 /**
- * Only the original, failed, non-consuming GPT round is eligible. A generic
- * 0/3 failure, missing source, or rate-limit label alone never admits a send.
+ * Recognize original failed rate-limit-led rounds for scoped recovery.
+ * Ambiguous original attempts must lead to observation, not terminal reconcile
+ * or fresh-run admission. Only proveRateLimitOriginalZeroSend grants the latter.
  */
 function hasFailedRateLimitSource(run: PackReviewRunRecord): boolean {
   if (run.status !== 'failed' || !run.failureReason?.startsWith('gpt_source_non_complete:')
@@ -3523,9 +3524,12 @@ function hasFailedRateLimitSource(run: PackReviewRunRecord): boolean {
   const slots = run.reviewRound.sourceSlots;
   return slots.some((slot) => slot.terminalClass?.startsWith('rate_limit:'))
     && slots.every((slot) => slot.lifecycle === 'planned'
+      || (slot.lifecycle === 'invocation_started' && Boolean(slot.invocationId))
       || (slot.lifecycle === 'terminal'
         && (slot.terminalClass === 'pre_launch_interrupted'
-          || slot.terminalClass?.startsWith('rate_limit:') === true)));
+          || slot.terminalClass?.startsWith('rate_limit:') === true
+          || slot.terminalClass === 'possible_delivery'
+          || slot.terminalClass?.startsWith('possible_delivery/') === true)));
 }
 
 function originalRateLimitZeroJudgment(
@@ -7900,6 +7904,11 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
             'reconcile the exact repository, frozen Issue snapshot and round before any incumbent continuation');
         }
         const older = storedCandidates.filter((candidate) => candidate.id !== priorSameRound.id);
+        const failedRateLimitRound = hasFailedRateLimitSource(priorSameRound);
+        if (older.length > 0 && !failedRateLimitRound) {
+          return rejectIncumbent(priorSameRound, 'gpt_incumbent_ambiguous_run',
+            'inspect competing same-round records; do not reassign any incumbent owner');
+        }
         // An older verdict-bearing record is never made safe by a newer failed
         // record; likewise every older no-verdict record needs its own census.
         const verdictHistory = allRecords.find((candidate) =>
@@ -7927,7 +7936,6 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
               rateLimitOriginalRecoveryAction(historical));
           }
         }
-        const failedRateLimitRound = hasFailedRateLimitSource(priorSameRound);
         if (failedRateLimitRound && !originalRateLimitZeroJudgment(priorSameRound, storeRoot)) {
           return rejectIncumbent(priorSameRound, 'gpt_rate_limit_original_zero_send_unproven',
             rateLimitOriginalRecoveryAction(priorSameRound));
