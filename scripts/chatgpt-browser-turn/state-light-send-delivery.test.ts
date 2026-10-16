@@ -1629,6 +1629,50 @@ process.stdout.write(JSON.stringify(readStateLightAccountCooldown(${JSON.stringi
     expect(readStateLightAccountCooldown(other, now).active).toBe(false);
     expect(readFromOtherNodeProcess(other, now).active).toBe(false);
   });
+  it.each([false, true])(
+    'three independent held Pages with only sidebar 429 cannot create or refresh the shared cooldown (seeded: %s)',
+    (seeded) => {
+      const original = seeded ? publishWitnessedStateLight429(profileKey, now).until : undefined;
+      const originalFile = seeded ? readFileSync(pathFor(profileKey), 'utf8') : undefined;
+      const witnessed: Array<ReturnType<typeof observeHeldPageConversation429>> = [];
+      for (let i = 1; i <= 3; i++) {
+        const events = new EventEmitter();
+        const ownedId = `26172617-2617-4617-8617-26172617261${i}`;
+        const witness = observeHeldPageConversation429(
+          events, `https://chatgpt.com/c/${ownedId}`,
+          () => publishWitnessedStateLight429(profileKey, now + 1_000 * i),
+        );
+        witnessed.push(witness);
+        const list = { method: () => 'GET',
+          url: () => `https://chatgpt.com/backend-api/conversations?offset=${i}&limit=20` };
+        const exact = { method: () => 'GET',
+          url: () => `https://chatgpt.com/backend-api/conversations/${ownedId}?num_turns=20` };
+        events.emit('request', list);
+        events.emit('response', { request: () => list, status: () => 429 });
+        events.emit('request', exact);
+        events.emit('response', { request: () => exact, status: () => 200 });
+        expect(witness.current()).toBeUndefined();
+        expect(heldPage429Diagnostic(events)).toBeUndefined();
+      }
+      // A fourth independently prepared Browser-GPT Page has no list-derived wall.
+      const fourthPage = new EventEmitter();
+      const fourth = observeHeldPageConversation429(fourthPage);
+      expect(fourth.current()).toBeUndefined();
+      if (seeded) {
+        expect(readFileSync(pathFor(profileKey), 'utf8')).toBe(originalFile);
+        expect(readFromOtherNodeProcess(profileKey, now + 2_000)).toEqual({
+          active: true, until: original,
+        });
+        expect(readFromOtherNodeProcess(profileKey, now + 300_000).active).toBe(false);
+      } else {
+        expect(existsSync(pathFor(profileKey))).toBe(false);
+        expect(readFromOtherNodeProcess(profileKey, now + 2_000).active).toBe(false);
+      }
+      fourth.dispose();
+      for (const witness of witnessed) witness.dispose();
+    },
+  );
+
 });
 
 
@@ -1708,6 +1752,100 @@ describe('conversation fetch HTTP 429 — physical Send and recovery gates (#261
     expect(readStateLightAccountCooldown(configuredProfileKey(profile, 'http://127.0.0.1:9222')).active).toBe(true);
     expect(page.goto).not.toHaveBeenCalled();
   });
+
+  it.each(['list-first', 'exact-first'] as const)(
+    'lets an owned existing chat Send with exact GET 200 despite passive sidebar 429 (%s)', async (order) => {
+      const url = 'https://chatgpt.com/c/26172617-2617-4617-8617-261726172617';
+      const profile = join(root, 'profile');
+      const cdp = 'http://127.0.0.1:9222';
+      const rows = [
+        { role: 'user' as const, text: 'older user', key: 'data-message-id:older-user-2630' },
+        { role: 'assistant' as const, text: 'older assistant', key: 'data-message-id:older-assistant-2630' },
+      ];
+      let currentRows = rows;
+      let draft = '';
+      let sent = '';
+      let sends = 0;
+      let injected = false;
+      let now = 100_000;
+      const events = new EventEmitter();
+      const inject = () => {
+        const list = { method: () => 'GET',
+          url: () => 'https://chatgpt.com/backend-api/conversations?offset=0' };
+        const exact = { method: () => 'GET',
+          url: () => 'https://chatgpt.com/backend-api/conversations/26172617-2617-4617-8617-261726172617?num_turns=20' };
+        const dispatch = (request: typeof list, status: number) => {
+          events.emit('request', request);
+          events.emit('response', { request: () => request, status: () => status });
+        };
+        if (order === 'list-first') { dispatch(list, 429); dispatch(exact, 200); }
+        else { dispatch(exact, 200); dispatch(list, 429); }
+      };
+      const composer = scalarLocator({
+        count: async () => 1,
+        fill: async (value: string) => { draft = value; },
+        innerText: async () => draft,
+      });
+      const click = vi.fn(async () => { sends++; sent = draft; draft = ''; });
+      const nodes = {
+        count: async () => currentRows.length,
+        nth: (index: number) => collectionLocator(currentRows).nth(index),
+        evaluateAll: async () => {
+          currentRows = sends ? [
+            ...rows,
+            { role: 'user' as const, text: sent, key: 'data-message-id:current-user-2630' },
+            { role: 'assistant' as const, text: 'DONE', key: 'data-message-id:current-assistant-2630' },
+          ] : rows;
+          return {
+            rows: currentRows.map((row, domIndex) => ({
+              ...row, domIndex, complete: true, completionReady: true, continuationVisible: false,
+            })),
+            pageTurnEvidence: {
+              generationInProgress: false, continueGeneratingVisible: false,
+              observedAssistantNodes: currentRows.filter((row) => row.role === 'assistant').length,
+            },
+          };
+        },
+      };
+      const page = Object.assign(events, {
+        __fakeBrowserGptPage: true,
+        url: () => url,
+        isClosed: () => false,
+        goto: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+        waitForTimeout: async (ms: number) => { now += ms; },
+        getByRole: () => scalarLocator(),
+        getByText: () => scalarLocator(),
+        locator: (selector: string) => {
+          if (selector === COMPOSER_SELECTOR) return composer;
+          if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => 1, click });
+          if (selector === MESSAGE_NODE_SELECTOR) {
+            if (!injected && events.listenerCount('response') > 0) { injected = true; inject(); }
+            return nodes;
+          }
+          return scalarLocator();
+        },
+      });
+      const context = enqueueBrowserForTurn(mocks, page).context;
+      Object.assign(context, { pages: () => [page] });
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      try {
+        const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+          '--profile', profile, '--cdp', cdp,
+          '--input', join(root, 'input'), '--output', join(root, 'result.txt'),
+          '--chat-url', url, '--invocation-id', randomUUID(), '--timeout-ms', '90000',
+        ]);
+        expect(injected).toBe(true);
+        expect(click).toHaveBeenCalledTimes(1);
+        expect(result.send_count).toBe(1);
+        expect(result.send_attempted).toBe(true);
+        expect(result.state, JSON.stringify(result)).toBe('ok');
+        expect(readStateLightAccountCooldown(configuredProfileKey(profile, cdp), now).active).toBe(false);
+        expect(existsSync(join(profileDirs(configuredProfileKey(profile, cdp)).locks,
+          'state-light-account-cooldown.v1.json'))).toBe(false);
+      } finally { clock.mockRestore(); }
+    },
+  );
 
   it('stops successor navigation when an owned conversation fetch HTTP 429 arises during census', async () => {
     const fixture = recoveryFixture({ originalIncomplete: true });
@@ -1891,8 +2029,9 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
     clock.now = 100_000;
     vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
     const profile = join(root, 'profile');
-    const fixture = freshPage(profile, randomUUID(), { redirectOnOpen: true, account429OnOpen: true });
-    const { result } = await runFresh(profile, randomUUID(), fixture.page);
+    const invocationId = randomUUID();
+    const fixture = freshPage(profile, invocationId, { redirectOnOpen: true, account429OnOpen: true });
+    const { result } = await runFresh(profile, invocationId, fixture.page);
     expect(fixture.page.goto).toHaveBeenCalledTimes(1);
     expect(fixture.send.click).not.toHaveBeenCalled();
     expect(result).toMatchObject({
