@@ -17,8 +17,49 @@ import {
   validatePrScopeDeclaration,
 } from './pr-scope-declaration.ts';
 import { runProcessSync } from './kernel/subprocess.ts';
+import { WRAPPER_PATH } from './lib/gh-resolve-real-binary.mjs';
 import { checkPrScope } from './pr-scope-check.ts';
 import { normalizeIssueConstraints } from '../plugins/task-declaration/lib/validate.ts';
+
+const mockedIssueRead = vi.hoisted(() => ({
+  body: null as string | null,
+  calls: [] as Array<{
+    command: string;
+    args: readonly string[];
+    cwd?: string;
+    inheritParentEnv?: boolean;
+  }>,
+}));
+
+vi.mock('./kernel/subprocess.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./kernel/subprocess.ts')>();
+  return {
+    ...actual,
+    runProcessSync: (options: Parameters<typeof actual.runProcessSync>[0]): ReturnType<typeof actual.runProcessSync> => {
+      if (mockedIssueRead.body !== null
+        && options.args?.[0] === 'issue'
+        && options.args?.[1] === 'view') {
+        mockedIssueRead.calls.push({
+          command: options.command,
+          args: [...(options.args ?? [])],
+          cwd: options.cwd,
+          inheritParentEnv: options.inheritParentEnv,
+        });
+        return {
+          outcome: 'exit',
+          ok: true,
+          exitCode: 0,
+          signal: null,
+          stdout: JSON.stringify({ body: mockedIssueRead.body }),
+          stderr: '',
+          timedOut: false,
+          cancelled: false,
+        };
+      }
+      return actual.runProcessSync(options);
+    },
+  };
+});
 
 const issueBody = [
   '```denylist',
@@ -395,6 +436,44 @@ describe('AO-free PR scope declaration contract', () => {
       roots.push(root);
       initializeDefaultWorkflow(root, yaml, 'fixture/ambiguous');
       expect(resolvePrScopeGuardApplicability(root)).toMatchObject({ status: 'unverified' });
+    }
+  });
+
+
+  it('reads a guarded target Issue through the pack wrapper with target cwd', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-guard-target-gh-'));
+    roots.push(root);
+    initializeDefaultWorkflow(root);
+    expect(resolvePrScopeGuardApplicability(root)).toMatchObject({ status: 'guarded' });
+    expect(existsSync(join(root, 'scripts', 'gh'))).toBe(false);
+
+    mockedIssueRead.body = issueBody;
+    mockedIssueRead.calls.length = 0;
+    const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    try {
+      const generated = producePrScopeDeclaration([
+        '--issue', '42',
+        '--declared-paths', 'scripts/allowed.ts',
+        '--repo-root', root,
+      ]);
+      expect(generated).toMatchObject({
+        schema_version: PR_SCOPE_DECLARATION_SCHEMA,
+        issue_number: 42,
+        declared_paths: ['scripts/allowed.ts'],
+      });
+      expect(mockedIssueRead.calls).toEqual([{
+        command: WRAPPER_PATH,
+        args: ['issue', 'view', '42', '--json', 'body'],
+        cwd: root,
+        inheritParentEnv: true,
+      }]);
+      expect(JSON.parse(
+        readFileSync(join(root, 'docs', 'declarations', '42.pr-scope.json'), 'utf8'),
+      )).toEqual(generated);
+    } finally {
+      stdout.mockRestore();
+      mockedIssueRead.body = null;
+      mockedIssueRead.calls.length = 0;
     }
   });
 

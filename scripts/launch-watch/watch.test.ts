@@ -1,4 +1,8 @@
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { WRAPPER_PATH } from '../lib/gh-resolve-real-binary.mjs';
 import { executeWatchRequest } from './watch.ts';
 import type { WatchRequest } from '../lib/launch-watch/contract.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
@@ -95,9 +99,88 @@ describe('watch wrapper producers', () => {
     });
     expect(output.outcome).toBe('matched');
     expect(calls[0]).toEqual({
-      command: '/pack/scripts/gh',
+      command: WRAPPER_PATH,
       args: ['pr', 'view', '42', '--repo', 'other/repo', '--json', 'state,mergedAt'],
     });
+  });
+
+
+  it('uses the pack wrapper for a target root lacking scripts/gh, preserving cwd and argv', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-watch-target-'));
+    try {
+      expect(existsSync(join(root, 'scripts', 'gh'))).toBe(false);
+      const request: WatchRequest = {
+        requestVersion: 'watch-request/v1', sourceId: 'github.pull-request', predicateId: 'pr.merged',
+        repo: 'target/project', prNumber: 73, deadlineMs: 10_000,
+      };
+      const calls: Array<{
+        command: string; args: readonly string[]; cwd?: string; timeoutMs?: number;
+      }> = [];
+      const observed = await executeWatchRequest(request, {
+        root,
+        now: () => 0,
+        run: async (command, args, options) => {
+          calls.push({ command, args, cwd: options.cwd, timeoutMs: options.timeoutMs });
+          return result('{"state":"MERGED","mergedAt":"2026-08-02T00:00:00Z"}');
+        },
+      });
+      const expectedArgs = ['pr', 'view', '73', '--repo', 'target/project', '--json', 'state,mergedAt'];
+      expect(calls).toEqual([{
+        command: WRAPPER_PATH,
+        args: expectedArgs,
+        cwd: root,
+        timeoutMs: 4_000,
+      }]);
+      expect(observed).toMatchObject({
+        outcome: 'matched',
+        operation: 'github-pr-read',
+        sourceId: 'github.pull-request',
+        predicateId: 'pr.merged',
+        reasonCode: 'matched',
+        evidence: { argv: [WRAPPER_PATH, ...expectedArgs] },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('classifies failed and throwing GitHub runners with cleanup under a target root', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-watch-failure-'));
+    try {
+      expect(existsSync(join(root, 'scripts', 'gh'))).toBe(false);
+      const request: WatchRequest = {
+        requestVersion: 'watch-request/v1', sourceId: 'github.pull-request', predicateId: 'pr.merged',
+        repo: 'target/project', prNumber: 73, deadlineMs: 10_000,
+      };
+      for (const mode of ['failed', 'throwing'] as const) {
+        const cleanup = vi.fn(async () => ({
+          completed: true,
+          evidence: { helperProcessGroupId: null, redirectedSinkId: null },
+        }));
+        const observed = await executeWatchRequest(request, {
+          root,
+          now: () => 0,
+          cleanupHelpers: cleanup,
+          run: async (command, args, options) => {
+            expect(command).toBe(WRAPPER_PATH);
+            expect(args).toEqual(['pr', 'view', '73', '--repo', 'target/project', '--json', 'state,mergedAt']);
+            expect(options.cwd).toBe(root);
+            if (mode === 'throwing') throw new Error('ENOENT: pack wrapper unavailable');
+            return result('', false);
+          },
+        });
+        expect(observed).toMatchObject({
+          outcome: 'partial-cleanup',
+          primaryOutcome: 'source-unavailable',
+          operation: 'github-pr-read',
+          reasonCode: 'github_command_failed',
+          cleanup: { cleanupOutcome: 'completed', cleanupErrorCode: null },
+        });
+        expect(cleanup).toHaveBeenCalledTimes(1);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('returns predicate-failed for a closed but unmerged PR', async () => {

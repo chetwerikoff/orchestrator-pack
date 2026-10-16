@@ -1,6 +1,6 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { WRAPPER_PATH } from '../lib/gh-resolve-real-binary.mjs';
 import { performance } from 'node:perf_hooks';
 import { emitResult } from '../lib/launch-watch/emission.ts';
 import { processEvidence, runOwnedProcess, type ProcessRunner } from '../lib/launch-watch/process.ts';
@@ -303,7 +303,7 @@ export async function executeWatchRequest(
     return observed.outcome === 'matched' ? observed : fail(observed);
   }
 
-  const gh = resolve(root, 'scripts/gh');
+  const gh = WRAPPER_PATH;
   const args = ['pr', 'view', String(request.prNumber), '--repo', request.repo ?? '', '--json', 'state,mergedAt'];
   for (let reads = 0; reads < 120; reads += 1) {
     const invoked = await invoke(run, gh, args, root, now, workDeadline);

@@ -10,6 +10,7 @@ import './toolchain/native-entrypoint-preflight.ts';
 
 import { runProcessSync } from './kernel/subprocess.ts';
 import { parseRemoteSlug } from './lib/git-origin-slug.mjs';
+import { WRAPPER_PATH } from './lib/gh-resolve-real-binary.mjs';
 import {
   existsSync,
   mkdirSync,
@@ -882,7 +883,7 @@ function issueBodyForProducer(
   bodyFile?: string,
 ): string {
   if (bodyFile) return readFileSync(bodyFile, 'utf8');
-  const ghWrapper = join(repoRoot, 'scripts', 'gh');
+  const ghWrapper = WRAPPER_PATH;
   if (!existsSync(ghWrapper)) {
     throw new Error(
       'pack scripts/gh wrapper is required when --issue-body-file is not supplied',
