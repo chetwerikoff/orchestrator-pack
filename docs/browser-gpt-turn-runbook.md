@@ -143,6 +143,37 @@ writes belong to the
 [create-Issue owner](../.cursor/skills/create-issue-draft/SKILL.md#possibly-sent-authordisposition-turns-at-owner-controlled-handoff),
 not this transport runbook.
 
+## Universal author prompt template
+
+Copy this prompt and substitute placeholders. Browser GPT sees only this chat and GitHub; never pass a local path (`~/.local/state/**`, `/tmp/**`, a worktree) as input — paste the content or give a GitHub link:
+
+```text
+Role: author for <REPOSITORY>.
+You write the Issue; you are not the manager.
+Use the GitHub plugin (connector) for every read and write of {REPOSITORY}; it is connected with push access. Call it before you say it is unavailable. You have no shell, test runner or database: never claim you ran them.
+Mode: <brief-only-create|revise-existing-issue>.
+Authoritative input for brief-only-create (paste binding sections, or the whole brief with background sections marked):
+<BRIEF_TEXT>
+[paste actual brief content here]
+</BRIEF_TEXT>
+For revise-existing-issue, authoritative input is live Issue <ISSUE_URL>; expected revision: <EXPECTED_REVISION>.
+
+Read the live target through GitHub when an Issue exists. Follow the canonical
+create-issue-draft procedure and current tier, floor, and scope rules.
+For brief-only-create, author from the supplied brief. For revise-existing-issue,
+preserve the source revision marker and increment it for a substantive body
+revision. Apply these requirements: <AUTHORING_REQUIREMENTS>.
+
+Only mutate the target Issue title/body. Do not create a PR, label, milestone,
+merge, or unrelated GitHub authority. Re-read the final body for consistency.
+After a successful mutation return only this receipt, at most 15 lines:
+Issue URL/number, revision marker, and changed sections.
+Use the existing audited genuine-write-failure fallback only when the direct
+GitHub mutation actually fails.
+Never include or fabricate an OPKTURNV1... transport marker; the tracked
+transport owns marker insertion.
+```
+
 ## Maintenance matrix
 
 Shared implementation owners:
