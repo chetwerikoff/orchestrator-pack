@@ -6,6 +6,7 @@ import {
   classifyProductWall,
   classifyConversationProductWall,
   observeHeldPageConversation429,
+  isRecognizedConversationSubmissionRequest,
   heldPage429Diagnostic,
   probeConversationLoadError,
   probeAccountLoadError,
@@ -405,7 +406,9 @@ function held429PageFixture() {
       nth: () => ({ innerText: async () => heading }),
     }),
   };
-  const request = (url: string, method = 'GET') => ({ url: () => url, method: () => method });
+  const request = (url: string, method = 'GET', body?: string) => ({
+    url: () => url, method: () => method, postData: () => body ?? null,
+  });
   const dispatch = (req: ReturnType<typeof request>, status: number) => {
     page.emit('request', req);
     page.emit('response', { request: () => req, status: () => status });
@@ -473,19 +476,110 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
     oldWitness.dispose();
   });
 
-  it('distinguishes a held-Page account-list GET 429 from a successful target thread', () => {
+  it.each(['list-before-owned', 'owned-before-list'] as const)(
+    'ignores passive sidebar-list 429 with an owned GET 200 (%s), then catches the exact 429', (order) => {
+      const fixture = held429PageFixture();
+      const first = vi.fn();
+      const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617, first);
+      const list = () => fixture.dispatch(
+        fixture.request('https://chatgpt.com/backend-api/conversations?offset=0&limit=50'), 429);
+      const exact200 = () => fixture.dispatch(fixture.request(FETCH_2617), 200);
+      if (order === 'list-before-owned') { list(); exact200(); }
+      else { exact200(); list(); }
+      expect(witness.current()).toBeUndefined();
+      expect(first).not.toHaveBeenCalled();
+      expect(heldPage429Diagnostic(fixture.page)).toBeUndefined();
+      expect(classifyConversationProductWall({
+        composer: true, text: 'Recents: Unable to load history', parts: [
+          { selector: '[data-testid="sidebar"]', text: 'Recents: Unable to load history' },
+        ],
+      })).toMatchObject({ wall_kind: 'none' });
+      fixture.dispatch(fixture.request(FETCH_2617), 429);
+      expect(witness.current()).toMatchObject({
+        wall_kind: 'conversation_fetch_http_429', http_status: 429, status_source: 'owned_page_response',
+      });
+      expect(first).toHaveBeenCalledTimes(1);
+      witness.dispose();
+    },
+  );
+
+  it.each(['/backend-api/f/conversation', '/backend-api/f/conversation/'])(
+    'only accepts a dispatched own Send POST tied to its same response request (%s)', (path) => {
+      const fixture = held429PageFixture();
+      const marker = generateOwnedPromptMarker(() => new Uint8Array(16).fill(0x24));
+      const sendBody = JSON.stringify({ messages: [{
+        author: { role: 'user' },
+        content: { content_type: 'text', parts: [wrapOwnedPromptPayload(marker, 'PROMPT')] },
+      }] });
+      const request = () => fixture.request('https://chatgpt.com' + path, 'POST', sendBody);
+      const first = vi.fn();
+      const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617, first, marker);
+      expect(isRecognizedConversationSubmissionRequest(request())).toBe(true);
+      fixture.dispatch(request(), 429); // Even a matching request before onDispatch is not owned.
+      expect(witness.current()).toBeUndefined();
+      witness.armDispatch();
+      const owned = request();
+      fixture.page.emit('request', owned);
+      fixture.page.emit('response', { request: request, status: () => 429 });
+      expect(witness.current()).toBeUndefined(); // Equal content is not the same request object.
+      fixture.page.emit('response', { request: () => owned, status: () => 429 });
+      expect(witness.current()).toEqual({
+        wall_kind: 'rate_limit', http_status: 429, status_source: 'owned_page_response',
+      });
+      expect(first).toHaveBeenCalledTimes(1);
+      witness.dispose();
+    },
+  );
+
+  it.each([
+    ['unproven route', '/backend-api/conversation', 'POST', 'owned'],
+    ['other origin', '/backend-api/f/conversation', 'POST', 'foreign-origin'],
+    ['wrong method', '/backend-api/f/conversation', 'GET', 'owned'],
+    ['markerless user content', '/backend-api/f/conversation', 'POST', 'markerless'],
+    ['wrong invocation marker', '/backend-api/f/conversation', 'POST', 'other-marker'],
+    ['duplicate user items', '/backend-api/f/conversation', 'POST', 'duplicate'],
+    ['marker only in metadata', '/backend-api/f/conversation', 'POST', 'metadata'],
+    ['quoted marker', '/backend-api/f/conversation', 'POST', 'quoted'],
+    ['unreadable JSON', '/backend-api/f/conversation', 'POST', 'unreadable'],
+  ] as const)('does not attribute arbitrary POST / ambiguous user content: %s', (_, path, method, kind) => {
     const fixture = held429PageFixture();
-    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617);
-    fixture.dispatch(fixture.request(FETCH_2617), 200);
-    fixture.dispatch(fixture.request('https://chatgpt.com/backend-api/conversations?offset=0&limit=50'), 429);
-    expect(witness.current()).toEqual({
-      wall_kind: 'account_conversations_http_429', http_status: 429, status_source: 'owned_page_response',
+    const marker = generateOwnedPromptMarker(() => new Uint8Array(16).fill(0x25));
+    const text = wrapOwnedPromptPayload(marker, 'PROMPT');
+    const content = kind === 'other-marker' ? wrapOwnedPromptPayload(
+      generateOwnedPromptMarker(() => new Uint8Array(16).fill(0x26)), 'PROMPT',
+    ) : kind === 'markerless' || kind === 'metadata' ? 'PROMPT'
+      : kind === 'quoted' ? JSON.stringify(text) : text;
+    const body = kind === 'unreadable' ? '{not-json' : JSON.stringify({
+      ...(kind === 'metadata' ? { metadata: { request_marker: marker } } : {}),
+      messages: [{ author: { role: 'user' }, content: { content_type: 'text',
+        parts: kind === 'duplicate' ? [content, content] : [content] } }],
     });
-    expect(classifyConversationProductWall({
-      composer: true, text: 'Recents: Unable to load history', parts: [
-        { selector: '[data-testid="sidebar"]', text: 'Recents: Unable to load history' },
-      ],
-    })).toMatchObject({ wall_kind: 'none' });
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617, undefined, marker);
+    witness.armDispatch();
+    fixture.dispatch(fixture.request(
+      (kind === 'foreign-origin' ? 'https://example.com' : 'https://chatgpt.com') + path, method, body,
+    ), 429);
+    expect(witness.current()).toBeUndefined();
+    witness.dispose();
+  });
+
+  it('rejects stale-epoch and foreign-Page Send responses without masking a later valid owned GET', () => {
+    const fixture = held429PageFixture();
+    const foreign = held429PageFixture();
+    const marker = generateOwnedPromptMarker(() => new Uint8Array(16).fill(0x27));
+    const body = JSON.stringify({ messages: [{ author: { role: 'user' },
+      content: { content_type: 'text', parts: [wrapOwnedPromptPayload(marker, 'PROMPT')] },
+    }] });
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617, undefined, marker);
+    witness.armDispatch();
+    const stale = fixture.request('https://chatgpt.com/backend-api/f/conversation', 'POST', body);
+    fixture.page.emit('request', stale);
+    witness.beforeNavigation();
+    fixture.page.emit('response', { request: () => stale, status: () => 429 });
+    foreign.dispatch(foreign.request('https://chatgpt.com/backend-api/f/conversation', 'POST', body), 429);
+    expect(witness.current()).toBeUndefined();
+    fixture.dispatch(fixture.request(FETCH_2617), 429);
+    expect(witness.current()?.wall_kind).toBe('conversation_fetch_http_429');
     witness.dispose();
   });
 
