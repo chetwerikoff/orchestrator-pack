@@ -6315,6 +6315,18 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
         replacementEligible: true,
         replacementEligibleSlotIds: ['source-02', 'source-03'],
       }),
+      onRunStarted: () => {
+        // The original invocations must be terminal before their successors
+        // receive another attempt ordinal.
+        const incumbent = getPackReviewRun(f.runId, f.options)!;
+        for (const slot of incumbent.reviewRound!.sourceSlots.slice(1)) {
+          expect(slot).toMatchObject({
+            lifecycle: 'terminal',
+            terminalClass: 'possible_delivery/missing_result',
+            terminalResult: { kind: 'missing_terminal_result', noResend: true },
+          });
+        }
+      },
       fixtureBeforeGptSourceCommentCensus: ({ slotId, invocationId }) => {
         if (slotId === 'source-02' || slotId === 'source-03') {
           f.comments.push(f.makeComment(slotId, invocationId, slotId === 'source-02' ? 2635002 : 2635003));
