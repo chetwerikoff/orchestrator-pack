@@ -538,6 +538,8 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
     ['markerless user content', '/backend-api/f/conversation', 'POST', 'markerless'],
     ['wrong invocation marker', '/backend-api/f/conversation', 'POST', 'other-marker'],
     ['duplicate user items', '/backend-api/f/conversation', 'POST', 'duplicate'],
+    ['second distinct user content', '/backend-api/f/conversation', 'POST', 'second-user-content'],
+    ['missing request body', '/backend-api/f/conversation', 'POST', 'missing'],
     ['marker only in metadata', '/backend-api/f/conversation', 'POST', 'metadata'],
     ['quoted marker', '/backend-api/f/conversation', 'POST', 'quoted'],
     ['unreadable JSON', '/backend-api/f/conversation', 'POST', 'unreadable'],
@@ -549,10 +551,11 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
       generateOwnedPromptMarker(() => new Uint8Array(16).fill(0x26)), 'PROMPT',
     ) : kind === 'markerless' || kind === 'metadata' ? 'PROMPT'
       : kind === 'quoted' ? JSON.stringify(text) : text;
-    const body = kind === 'unreadable' ? '{not-json' : JSON.stringify({
+    const body = kind === 'missing' ? undefined : kind === 'unreadable' ? '{not-json' : JSON.stringify({
       ...(kind === 'metadata' ? { metadata: { request_marker: marker } } : {}),
       messages: [{ author: { role: 'user' }, content: { content_type: 'text',
-        parts: kind === 'duplicate' ? [content, content] : [content] } }],
+        parts: kind === 'duplicate' ? [content, content]
+          : kind === 'second-user-content' ? [content, 'another user text'] : [content] } }],
     });
     const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617, undefined, marker);
     witness.armDispatch();
