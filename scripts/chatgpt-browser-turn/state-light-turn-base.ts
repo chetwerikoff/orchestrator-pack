@@ -4335,7 +4335,11 @@ async function runTurnCore(
             claimed = true;
             break;
           }
-          if (sendAttempted && sendCount === 0 && Date.now() < freshUnboundReturnByMs) {
+          if (sendAttempted && sendCount === 0 && Date.now() >= freshUnboundReturnByMs) {
+            claimed = true;
+            break; // A late census cannot extend this invocation's owner budget.
+          }
+          if (sendAttempted && sendCount === 0) {
             sendCount = 1;
             markerDerivedSend = true;
             zeroWitnessAccountRecovery = false;
