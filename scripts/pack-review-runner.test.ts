@@ -5245,6 +5245,79 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     }
   });
 
+  it.each([
+    ['safe repeated 429', false],
+    ['unsafe older attempted send', true],
+  ] as const)('admits R1 -> R2 -> R3 only with %s history', async (_case, unsafeOlder) => {
+    const f = fixture({ historicalClaim: true });
+    const claimBytes = readFileSync(f.historicalClaimPath!, 'utf8');
+    const zeroSendAttempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+    const r2 = await f.start({
+      fixtureReviewBySourceSlot: zeroSendAttempts,
+      fixtureBeforeGptSourceCommentCensus: async () => undefined,
+      fixtureAfterGptInvocationBound: ({ slotId, invocationId }: { slotId: string; invocationId: string }) => {
+        f.freshStarts.push(slotId);
+        zeroSendAttempts[slotId] = [{
+          stdout: JSON.stringify({
+            schema: 'turn-result/v1', state: 'rate_limit', cause: 'account_cooldown_active',
+            scope: 'invocation', invocation_id: invocationId, send_count: 0, send_attempted: false,
+          }),
+          exitCode: 13,
+        }];
+      },
+    });
+    expect(r2.result, JSON.stringify(r2.result)).toMatchObject({
+      created: true, headSha: HEAD, runnerReason: expect.stringContaining('gpt_source_non_complete:'),
+    });
+    const r2Id = String(r2.result.runId);
+    expect(r2Id).not.toBe(f.original.id);
+    expect(getPackReviewRun(r2Id, f.options)).toMatchObject({
+      status: 'failed', failureReason: expect.stringContaining('gpt_source_non_complete:'),
+    });
+    expect(getPackReviewRun(r2Id, f.options)?.reviewRound?.sourceSlots.every(
+      (slot) => slot.terminalClass?.startsWith('rate_limit:')
+        && (slot.terminalResult as Record<string, unknown>)?.send_count === 0,
+    )).toBe(true);
+    expect(f.comments).toHaveLength(0);
+    const reconciled = await f.reconcile();
+    expect(String(reconciled.results.find((row) => row.runId === r2Id && typeof row.nextAction === 'string')?.nextAction))
+      .toContain(exactCommand);
+
+    if (unsafeOlder) {
+      const path = join(f.options.storeRoot, 'runs', f.original.id + '.json');
+      const older = JSON.parse(readFileSync(path, 'utf8')) as PackReviewRunRecord;
+      (older.reviewRound!.sourceSlots[0]!.terminalResult as Record<string, unknown>).send_attempted = true;
+      writeFileSync(path, JSON.stringify(older));
+    }
+    const oldSlots = getPackReviewRun(f.original.id, f.options)!.reviewRound!.sourceSlots;
+    const r2Slots = getPackReviewRun(r2Id, f.options)!.reviewRound!.sourceSlots;
+    const r3 = await f.start();
+    if (unsafeOlder) {
+      expect(r3.result).toMatchObject({ created: false, runnerReason: 'gpt_rate_limit_history_unsafe' });
+      expect(f.reviews).toHaveLength(0);
+      expect(listPackReviewRuns(f.options)).toHaveLength(2);
+      expect(f.freshStarts).toHaveLength(3);
+    } else {
+      expect(r3.result, JSON.stringify(r3.result)).toMatchObject({
+        created: true, reused: false, headSha: HEAD, publicationVerified: true,
+      });
+      expect(String(r3.result.runId)).not.toBe(r2Id);
+      expect(String(r3.result.runId)).not.toBe(f.original.id);
+      expect(listPackReviewRuns(f.options)).toHaveLength(3);
+      expect(f.reviews).toHaveLength(1);
+      expect(f.freshStarts).toHaveLength(6);
+      expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })
+        ?.cycle?.consumedRoundOrdinals).toEqual([1]);
+    }
+    expect(getPackReviewRun(f.original.id, f.options)).toMatchObject({
+      status: 'failed', reviewRound: { sourceSlots: oldSlots },
+    });
+    expect(getPackReviewRun(r2Id, f.options)).toMatchObject({
+      status: 'failed', reviewRound: { sourceSlots: r2Slots },
+    });
+    expect(readFileSync(f.historicalClaimPath!, 'utf8')).toBe(claimBytes);
+  });
+
   it('keeps the existing recovery path on unrelated non-rate-limit terminal failures', async () => {
     const f = fixture({ mutate: (slot) => ({
       ...slot,

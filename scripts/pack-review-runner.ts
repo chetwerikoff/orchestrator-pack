@@ -7784,6 +7784,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     let allowSameRoundReplacement = false;
     let sameRoundGptRun: PackReviewRunRecord | null = null;
     let freshRateLimitGptRun: PackReviewRunRecord | null = null;
+    let freshRateLimitGptHistory: PackReviewRunRecord[] = [];
     let sameRoundGptEligibleSlotIds: ReadonlySet<string> | undefined;
     let sameRoundGptOrphanSlotIds: ReadonlySet<string> | undefined;
     let sameRoundGptDiagnostics: PackReviewGptTargetDiagnostic[] | undefined;
@@ -7885,16 +7886,46 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           'reconcile the existing same-head GPT run cycle/round before starting or rebinding work');
       }
       if (storedCandidates.length > 0) {
-        const priorSameRound = storedCandidates[0]!;
-        if (storedCandidates.length !== 1 || resolvePackReviewRequiredRunOrder(
-          listPackReviewRunRecordsRaw({ projectId, storeRoot }), priorSameRound,
-        ).kind !== 'none') {
+        // Retained zero-send failures are history, not competing live owners.
+        // Existing required-run ordering must identify exactly one newest run.
+        const newest = storedCandidates.filter((candidate) =>
+          resolvePackReviewRequiredRunOrder(allRecords, candidate).kind === 'none');
+        const priorSameRound = newest.length === 1 ? newest[0]! : storedCandidates[0]!;
+        if (newest.length !== 1) {
           return rejectIncumbent(priorSameRound, 'gpt_incumbent_ambiguous_run',
             'inspect competing same-round records; do not reassign any incumbent owner');
         }
         if (!incumbentIdentityMatches(priorSameRound)) {
           return rejectIncumbent(priorSameRound, 'gpt_incumbent_identity_mismatch',
             'reconcile the exact repository, frozen Issue snapshot and round before any incumbent continuation');
+        }
+        const older = storedCandidates.filter((candidate) => candidate.id !== priorSameRound.id);
+        // An older verdict-bearing record is never made safe by a newer failed
+        // record; likewise every older no-verdict record needs its own census.
+        const verdictHistory = allRecords.find((candidate) =>
+          candidate.projectId === projectId && candidate.prNumber === target.prNumber
+          && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
+          && candidate.reviewCycleId === authority.cycle!.cycleId
+          && candidate.logicalRoundOrdinal === roundOrdinal
+          && candidate.automaticBudgetDisposition !== 'non_consuming_explicit'
+          && candidate.reviewRound?.reviewer === 'gpt'
+          && hasPersistedPackReviewVerdict(candidate));
+        if (verdictHistory) {
+          return rejectIncumbent(verdictHistory, 'gpt_incumbent_ambiguous_run',
+            'resolve verdict-bearing same-round history before any new review');
+        }
+        for (const historical of older) {
+          if (resolvePackReviewRequiredRunOrder(allRecords, historical).kind !== 'newer'
+            || !incumbentIdentityMatches(historical)
+            || !originalRateLimitZeroJudgment(historical, storeRoot)
+            || !(await proveRateLimitOriginalZeroSend({
+              run: historical, projectId, storeRoot, repoSlug: target.repoSlug,
+              sourceRepoRoot: target.sourceRepoRoot,
+              transport: input.fixtureGptSourceCommentTransport,
+            }))) {
+            return rejectIncumbent(historical, 'gpt_rate_limit_history_unsafe',
+              rateLimitOriginalRecoveryAction(historical));
+          }
         }
         const failedRateLimitRound = hasFailedRateLimitSource(priorSameRound);
         if (failedRateLimitRound && !originalRateLimitZeroJudgment(priorSameRound, storeRoot)) {
@@ -7911,6 +7942,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           // source/comment census is re-proved immediately before creation.
           allowSameRoundReplacement = true;
           freshRateLimitGptRun = priorSameRound;
+          freshRateLimitGptHistory = older;
         } else {
           if (!incumbentOwnerDead(priorSameRound)) {
             return rejectIncumbent(priorSameRound, 'gpt_incumbent_owner_not_dead',
@@ -8277,27 +8309,46 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         return rejectIncumbent(original, 'gpt_rate_limit_fresh_authority_unverified',
           'verify the original head, frozen cycle/cap and exact start claim; do not retry an uncertain source');
       }
-      const originalNow = getPackReviewRun(original.id, { projectId, storeRoot });
-      if (!originalNow || !incumbentIdentityMatches(originalNow)
-        || stableJson(originalNow.reviewRound) !== stableJson(original.reviewRound)
-        || !(await proveRateLimitOriginalZeroSend({
-          run: originalNow, projectId, storeRoot, repoSlug: target.repoSlug,
-          sourceRepoRoot: target.sourceRepoRoot,
-          transport: input.fixtureGptSourceCommentTransport,
-        }))) {
-        return rejectIncumbent(original, 'gpt_rate_limit_original_zero_send_unproven',
-          rateLimitOriginalRecoveryAction(original));
+      const admittedHistory = [original, ...freshRateLimitGptHistory];
+      for (const previous of admittedHistory) {
+        const current = getPackReviewRun(previous.id, { projectId, storeRoot });
+        if (!current || !incumbentIdentityMatches(current)
+          || current.status !== previous.status
+          || current.failureReason !== previous.failureReason
+          || current.sameKeyOrder !== previous.sameKeyOrder
+          || stableJson(current.reviewRound) !== stableJson(previous.reviewRound)
+          || !(await proveRateLimitOriginalZeroSend({
+            run: current, projectId, storeRoot, repoSlug: target.repoSlug,
+            sourceRepoRoot: target.sourceRepoRoot,
+            transport: input.fixtureGptSourceCommentTransport,
+          }))) {
+          return rejectIncumbent(previous, 'gpt_rate_limit_original_zero_send_unproven',
+            rateLimitOriginalRecoveryAction(previous));
+        }
       }
       const headAfter = await readProjectionHead();
       const latest = getPackReviewRun(original.id, { projectId, storeRoot });
       const latestAuthority = readPackReviewAuthority(target.prNumber, authorityOptions);
       const latestRecords = listPackReviewRunRecordsRaw({ projectId, storeRoot });
+      const currentCandidates = incumbentCandidates(latestRecords);
+      const retainedHistoryUnchanged = currentCandidates.length === admittedHistory.length
+        && admittedHistory.every((previous) => {
+          const candidate = currentCandidates.find((row) => row.id === previous.id);
+          return Boolean(candidate && incumbentIdentityMatches(candidate)
+            && candidate.status === previous.status
+            && candidate.failureReason === previous.failureReason
+            && candidate.sameKeyOrder === previous.sameKeyOrder
+            && originalRateLimitZeroJudgment(candidate, storeRoot)
+            && stableJson(candidate.reviewRound) === stableJson(previous.reviewRound)
+            && resolvePackReviewRequiredRunOrder(latestRecords, candidate).kind
+              === (previous.id === original.id ? 'none' : 'newer'));
+        });
       if (headAfter !== target.headSha.toLowerCase() || !ownsStartClaim()
         || !latest || !originalRateLimitZeroJudgment(latest, storeRoot)
         || stableJson(latest.reviewRound) !== stableJson(original.reviewRound)
         || latest.failureReason !== original.failureReason
         || !incumbentIdentityMatches(latest)
-        || incumbentCandidates(latestRecords).length !== 1
+        || !retainedHistoryUnchanged
         || resolvePackReviewRequiredRunOrder(latestRecords, latest).kind !== 'none'
         || latestAuthority?.currentHeadSha.toLowerCase() !== headAfter
         || latestAuthority.cycle?.cycleId !== original.reviewCycleId
