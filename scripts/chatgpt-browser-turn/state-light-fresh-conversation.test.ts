@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1416,6 +1417,61 @@ describe('state-light fresh conversation collision recovery', () => {
       matched_text: 'temporarily limited access',
       matched_selector: '[role="alert"]',
     });
+  });
+
+  // Drive a real held-Page request witness while DOM and owner URL lag behind the click.
+  function countedOwnPostWithLateFreshUrl(prompt: string, reply: string, urlDelayMs: number, composerStays: boolean) {
+    const turn = makeLoserPage(prompt, reply);
+    const events = new EventEmitter();
+    turn.page.on = events.on.bind(events);
+    turn.page.off = events.off.bind(events);
+    let submittedText = '';
+    let sendAt = -1;
+    turn.composer.fill.mockImplementation(async (text: string) => { submittedText = text; });
+    turn.composer.innerText.mockImplementation(async () => composerStays || sendAt < 0 ? submittedText : '');
+    turn.composer.textContent.mockImplementation(async () => composerStays || sendAt < 0 ? submittedText : '');
+    const originalClick = turn.sendButton.click.getMockImplementation()!;
+    turn.sendButton.click.mockImplementation(async () => {
+      await originalClick();
+      sendAt = mocks.nowMs;
+      const request = {
+        method: () => 'POST',
+        url: () => 'https://chatgpt.com/backend-api/f/conversation',
+        postData: () => JSON.stringify({
+          messages: [{ author: { role: 'user' }, content: { content_type: 'text', parts: [submittedText] } }],
+        }),
+      };
+      events.emit('request', request);
+      events.emit('request', request); // Repeated observation of one physical request.
+      events.emit('response', { request: () => request, status: () => 200 });
+    });
+    turn.page.url.mockImplementation(() => sendAt >= 0 && mocks.nowMs - sendAt >= urlDelayMs
+      ? SHARED_CONV : PROJECT_URL);
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    turn.page.locator.mockImplementation((selector: string) =>
+      sendAt >= 0 && mocks.nowMs - sendAt < urlDelayMs
+        && (selector === MESSAGE_NODE_SELECTOR || selector === USER_MESSAGE_SELECTOR)
+        ? collectionLocator([]) : originalLocator(selector));
+    return { turn, sentAt: () => sendAt };
+  }
+
+  it('Issue #2636 review source-01: counted own POST with unchanged composer survives early fresh URL wait', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'D46-COUNTED-STILL-DRAFT';
+    const reply = 'D46-COUNTED-LATE-OWNER-ANSWER';
+    const output = join(stateDir, invocationId + '-counted-still-draft.txt');
+    const { turn, sentAt } = countedOwnPostWithLateFreshUrl(prompt, reply, 43_000, true);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const outcome = await runNewChatTurn(turn.page, output, '180000', invocationId);
+    expect(sentAt()).toBeGreaterThanOrEqual(0);
+    expect(mocks.nowMs - sentAt()).toBeGreaterThanOrEqual(43_000);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.getSends()).toBe(1);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1, conversation_id: SHARED_CONV });
+    expect(readStateLightTurnObservation('collision-profile', invocationId))
+      .toMatchObject({ phase: 'harvested', conversation_url: SHARED_CONV, send_count: 1 });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
   });
 
   it.each(['late-owned', 'permanently-null', 'foreign-project'] as const)(

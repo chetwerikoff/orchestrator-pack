@@ -4248,26 +4248,8 @@ async function runTurnCore(
               break;
             }
             if (sendCount >= 1) {
-              const landingEvidence = await classifySendLandingEvidence(
-                page,
-                markedPayload,
-                lastAttemptConversationUrl,
-                invocationDeadlineMs,
-              );
-              if (landingEvidence === 'not_landed' && !ownedStopDeliveryObserved && !pageConversationUrl(page)) {
-                return returnFreshConversationLandingMismatch(
-                  page,
-                  browser,
-                  invocationId,
-                  profileKey,
-                  sendCount,
-                  pollCount,
-                  navigation,
-                  incidents,
-                  journalWriteFailed,
-                  incident,
-                );
-              }
+              // A counted invocation-owned Send can leave the composer unchanged.
+              // Its absent early URL is uncertainty, not proof of non-landing.
               incident(
                 'send_observation_deferred',
                 'fresh_conversation_url_not_observed',
