@@ -5276,11 +5276,14 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
     // Simulate the same runner becoming dead and its real grace interval
     // elapsing; only the existing reconciler may then terminalize safe 0/3.
-    updatePackReviewRun(r2Id, { runnerPid: 2147483647 }, f.options);
-    vi.useFakeTimers({ toFake: ['Date'] });
+    const deadR2 = updatePackReviewRun(r2Id, { runnerPid: 2147483647 }, f.options);
+    // Anchor grace to this R2's persisted heartbeat rather than the ambient
+    // wall clock. Reconcile only R2: processing historic R1 first can restore
+    // R2's pending status, refresh its heartbeat and undo the stale predicate.
+    const afterGraceAt = new Date(Date.parse(deadR2.heartbeatAtUtc) + 60 * 60_000);
+    vi.useFakeTimers({ toFake: ['Date'], now: afterGraceAt });
     try {
-      vi.setSystemTime(new Date(Date.now() + 60 * 60_000));
-      const afterGrace = await f.reconcile();
+      const afterGrace = await f.reconcile({ runId: r2Id });
       expect(afterGrace.results.find((row) => row.runId === r2Id && row.terminalized)).toMatchObject({
         terminalized: true, statusReconciled: true,
       });
