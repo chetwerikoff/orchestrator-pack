@@ -4904,7 +4904,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       if (mode === 'expired') f.setCooldown(Date.now() - 10_000);
       if (mode === 'malformed') f.setCooldown('not-a-number');
       const result = await f.reconcile();
-      const row = result.results.find((item) => item.runId === f.original.id);
+      const row = result.results.find((item) => item.runId === f.original.id && typeof item.nextAction === 'string');
       expect(row).toMatchObject({ terminalized: false, statusReconciled: true });
       expect(String(row!.nextAction)).toContain(exactCommand);
       expect(String(row!.nextAction)).not.toContain('scripts/pack-review-runner.ts reconcile');
@@ -4929,7 +4929,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     const historicalClaimPath = f.historicalClaimPath!;
     expect(existsSync(historicalClaimPath)).toBe(true);
     const reconciled = await f.reconcile();
-    expect(String(reconciled.results.find((row) => row.runId === f.original.id)?.nextAction))
+    expect(String(reconciled.results.find((row) => row.runId === f.original.id && typeof row.nextAction === 'string')?.nextAction))
       .toContain(exactCommand);
 
     const next = await f.start();
@@ -4950,8 +4950,9 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     expect(old).toMatchObject({
       id: f.original.id, status: 'failed',
       failureReason: 'gpt_source_non_complete:after_grace_zero_usable:0/3',
-      reviewVerdict: undefined, journalOutcome: undefined,
     });
+    expect(old.reviewVerdict).toBeUndefined();
+    expect(old.journalOutcome).toBeUndefined();
     expect(old.reviewRound!.sourceSlots).toEqual(f.originalSlots);
     expect(listPackReviewRuns(f.options)).toHaveLength(2);
     expect(getPackReviewRun(newId, f.options)?.reviewRound?.sourceSlots.map((slot) => slot.invocationId))
@@ -4969,7 +4970,8 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
 
   it.each([
     ['positive send count', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
-      ...slot, terminalResult: { ...(slot.terminalResult as Record<string, unknown>), send_count: 1 },
+      ...slot, terminalClass: 'possible_delivery',
+      terminalResult: { ...(slot.terminalResult as Record<string, unknown>), send_count: 1 },
     })],
     ['send attempted despite count zero', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
       ...slot, terminalResult: { ...(slot.terminalResult as Record<string, unknown>), send_attempted: true },
@@ -4990,6 +4992,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     })],
     ['possible delivery', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
       ...slot, terminalClass: 'possible_delivery',
+      terminalResult: { ...(slot.terminalResult as Record<string, unknown>), send_attempted: true },
     })],
     ['contradictory source reconciliation', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
       ...slot, terminalResult: { ...(slot.terminalResult as Record<string, unknown>), source_comment_reconciliation: 'conflict' },
@@ -5008,7 +5011,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     'preserves the original failed run on %s original comment census', async (commentMode) => {
       const f = fixture({ commentMode });
       const reconcile = await f.reconcile();
-      expect(String(reconcile.results.find((item) => item.runId === f.original.id)?.nextAction))
+      expect(String(reconcile.results.find((item) => item.runId === f.original.id && typeof item.nextAction === 'string')?.nextAction))
         .not.toContain(exactCommand);
       const next = await f.start();
       expect(next.result.created).not.toBe(true);
@@ -5021,7 +5024,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     const moved = fixture();
     const movedHead = 'b'.repeat(40);
     const changed = await moved.reconcile({ fixtureCurrentPrHeadSha: movedHead });
-    expect(String(changed.results.find((item) => item.runId === moved.original.id)?.nextAction))
+    expect(String(changed.results.find((item) => item.runId === moved.original.id && typeof item.nextAction === 'string')?.nextAction))
       .not.toContain(exactCommand);
     expect(listPackReviewRuns(moved.options)).toHaveLength(1);
 
@@ -5059,7 +5062,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       },
     }) });
     const result = await f.reconcile();
-    expect(String(result.results.find((item) => item.runId === f.original.id)?.nextAction))
+    expect(String(result.results.find((item) => item.runId === f.original.id && typeof item.nextAction === 'string')?.nextAction))
       .not.toContain(exactCommand);
   });
 });
