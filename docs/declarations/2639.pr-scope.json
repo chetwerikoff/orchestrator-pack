@@ -2,7 +2,6 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 2639,
   "declared_paths": [
-    "docs/declarations/2639.pr-scope.json",
     "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts"
@@ -14,10 +13,9 @@
     "vendor/"
   ],
   "allowed_roots": [
-    "docs/declarations/",
     "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts"
   ],
-  "source_revision": "d54f38358eb0dece932dec6b74a8e3ae1a39641c"
+  "source_revision": "48fc804ce8bf590430100d9623e16a6140154a47"
 }
