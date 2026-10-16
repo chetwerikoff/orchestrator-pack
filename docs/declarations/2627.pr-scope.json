@@ -1,0 +1,19 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2627,
+  "declared_paths": [
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "docs/browser-gpt-turn-runbook.md"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "docs/browser-gpt-turn-runbook.md"
+  ],
+  "source_revision": "0fb4a3c895b44dd118fa85c5cdc08012a99fd761"
+}
