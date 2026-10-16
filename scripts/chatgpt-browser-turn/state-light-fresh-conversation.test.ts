@@ -1476,6 +1476,32 @@ describe('state-light fresh conversation collision recovery', () => {
     },
   );
 
+  it('Issue #2636: post-onDispatch network-change cannot become a pre-Send helper failure', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'D46-POST-DISPATCH-ERROR';
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    turn.sendButton.click.mockRejectedValueOnce(new Error('locator.click: Timeout 5000ms exceeded'));
+    const beforeWait = turn.page.waitForTimeout.getMockImplementation()!;
+    turn.page.waitForTimeout.mockImplementation(async (ms: number) => {
+      if (turn.sendButton.click.mock.calls.length > 0) {
+        throw new Error('net::ERR_NETWORK_CHANGED');
+      }
+      return beforeWait(ms);
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const result = await runNewChatTurn(
+      turn.page, join(stateDir, invocationId + '-post-dispatch-error.txt'), '90000', invocationId,
+    );
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(result.result).toMatchObject({ state: 'driver_error', send_count: 0, send_attempted: true });
+    expect(result.result.incidents).toContain('helper_failure_after_send');
+    expect(result.result.incidents).not.toContain('helper_failure_before_send');
+    expect(readStateLightTurnObservation('collision-profile', invocationId))
+      .toMatchObject({ phase: 'dispatching', send_witness: 'none', conversation_url: null });
+    expect(deriveDelivery({ ...result.result,
+      resolved_send_count: result.result.send_count } as any, false)).toBe('POSSIBLY_DELIVERED');
+  });
+
   it('continues observing after fresh-conversation URL wait expiry without send_failed', async () => {
     const prompt = 'PROMPT-SOLO';
     const reply = 'SOLO-OK';
