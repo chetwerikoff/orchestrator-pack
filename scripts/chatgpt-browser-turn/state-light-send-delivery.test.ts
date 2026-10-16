@@ -1256,6 +1256,20 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
         ]
         : prior;
       const events = new EventEmitter();
+      let neutralGetEventsEmitted = false;
+      const emitNeutralGets = () => {
+        if (neutralGetEventsEmitted || events.listenerCount('response') === 0 || sendAt >= 0) return;
+        neutralGetEventsEmitted = true;
+        const endpoints = [
+          ['https://chatgpt.com/backend-api/conversations?offset=0&limit=20', 429],
+          ['https://chatgpt.com/backend-api/conversations/26362636-2636-4636-8636-263626362636?num_turns=20', 200],
+        ] as const;
+        for (const [url, status] of endpoints) {
+          const request = { method: () => 'GET', url: () => url };
+          events.emit('request', request);
+          events.emit('response', { request: () => request, status: () => status });
+        }
+      };
       const composer = scalarLocator({
         count: vi.fn(async () => 1),
         fill: vi.fn(async (text: string) => { composerText = text; }),
@@ -1304,6 +1318,7 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
         getByRole: () => scalarLocator(),
         getByText: () => scalarLocator(),
         locator: (selector: string) => {
+          emitNeutralGets(); // Sidebar GET 429 + owned exact GET 200 are not Send evidence.
           if (selector === COMPOSER_SELECTOR) return composer;
           if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => 1, click });
           if (selector === MESSAGE_NODE_SELECTOR) return nodes;
@@ -1324,6 +1339,9 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
           '--invocation-id', invocationId, '--timeout-ms', '180000',
         ]);
         expect(click).toHaveBeenCalledTimes(1);
+        expect(neutralGetEventsEmitted).toBe(true);
+        expect(readStateLightAccountCooldown(configuredProfileKey(profile, 'http://127.0.0.1:9222'), clock).active)
+          .toBe(false);
         expect(sendAt).toBeGreaterThan(0);
         const observation = readStateLightTurnObservation(configuredProfileKey(profile, 'http://127.0.0.1:9222'), invocationId);
         if (scenario === 'no-evidence') {
