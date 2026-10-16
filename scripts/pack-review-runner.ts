@@ -7786,8 +7786,10 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       : claimLease?.owns() === true;
     const incumbentCandidates = (records: readonly PackReviewRunRecord[]) => records.filter((candidate) => (
       candidate.prNumber === target.prNumber
-      && candidate.reviewCycleId === authority.cycle?.cycleId
-      && candidate.logicalRoundOrdinal === roundOrdinal
+      && ((
+        candidate.reviewCycleId === authority.cycle?.cycleId
+        && candidate.logicalRoundOrdinal === roundOrdinal
+      ) || hasFailedRateLimitSource(candidate))
       && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
       && candidate.reviewRound?.reviewer === 'gpt'
       && !hasPersistedPackReviewVerdict(candidate)
@@ -7796,6 +7798,13 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       const cycle = authority.cycle;
       const historicalRound = candidate.reviewRound;
       if (!cycle || !historicalRound) return false;
+      // Unlike an unfinished incumbent continuation, a distinct rate-limit
+      // replacement requires the exact original frozen tier and cap.
+      if (hasFailedRateLimitSource(candidate)) {
+        return candidate.logicalRoundCap === cycle.frozenCap
+          && historicalRound.tier === cycle.frozenTier
+          && historicalRound.tier === authoritative.tier;
+      }
       if (candidate.logicalRoundCap === cycle.frozenCap
           && historicalRound.tier === authoritative.tier) return true;
       // A live upward amendment changes the unfinished cycle, not the original
