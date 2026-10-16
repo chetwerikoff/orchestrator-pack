@@ -108,7 +108,7 @@ export interface TurnResultV1 {
   send_slot_holder_phase?: string;
   product_wall_diagnostic?: {
     readonly wall_kind: 'quota' | 'rate_limit' | 'challenge' | 'login' | 'account_load_error'
-      | 'conversation_fetch_http_429' | 'conversation_load_error' | 'account_conversations_http_429' | 'none';
+      | 'conversation_fetch_http_429' | 'conversation_load_error' | 'none';
     readonly matched_text: string;
     readonly matched_selector: string;
     readonly http_status?: 429;
