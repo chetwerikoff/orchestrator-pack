@@ -5827,10 +5827,18 @@ async function runTurnCore(
           marker,
           ownedCarrierKey,
         });
-        const hasOwnershipEvidence = hasOwnedUserMessage(messages, marker)
+        const hasOwnershipEvidence = (
+          hasOwnedUserMessage(messages, marker)
           || Boolean(ownedCarrierKey)
           || Boolean(config.newChat && ownedConversationUrl && !ownershipForfeited
-            && freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs));
+            && freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs))
+        ) && (!config.newChat || Boolean(
+          ownedConversationUrl
+          && !ownershipForfeited
+          && readProjectConversationUrl(page, config.projectUrl ?? '')
+          && readOwnedConversationIdentity(page, ownedConversationUrl).matched
+          && freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs)
+        ));
         let continued = false;
         try {
           if (hasOwnershipEvidence && !continuationCarrier?.continuationVisible) {

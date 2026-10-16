@@ -1536,6 +1536,76 @@ describe('state-light fresh conversation collision recovery', () => {
     },
   );
 
+  it('Issue #2636 review source-01: attempted-zero foreign fresh Page never clicks Continue Generating', async () => {
+    const invocationId = randomUUID();
+    const prompt = 'D46-UNBOUND-FOREIGN-CONTINUE';
+    const output = join(stateDir, invocationId + '-foreign-continue.txt');
+    const turn = makeLoserPage(prompt, 'INCOMPLETE-FOREIGN-REPLY');
+    let sentAt = -1;
+    let composerText = '';
+    turn.composer.fill.mockImplementation(async (text: string) => { composerText = text; });
+    turn.composer.innerText.mockImplementation(async () => composerText);
+    turn.composer.textContent.mockImplementation(async () => composerText);
+    const originalClick = turn.sendButton.click.getMockImplementation()!;
+    turn.sendButton.click.mockImplementation(async () => {
+      await originalClick();
+      sentAt = mocks.nowMs;
+    });
+    const visible = () => sentAt >= 0 && mocks.nowMs - sentAt >= 36_000;
+    turn.page.url.mockImplementation(() => sentAt < 0 ? PROJECT_URL : OTHER_PROJECT_CONVERSATION_URL);
+    const continueClick = vi.fn(async () => undefined);
+    const continueControl = scalarLocator({ count: vi.fn(async () => 1), click: continueClick });
+    const assistantTurn = scalarLocator({ getByRole: vi.fn(() => continueControl) });
+    const assistantNode = scalarLocator({
+      locator: vi.fn((selector: string) => selector === ASSISTANT_TURN_ANCESTOR_XPATH
+        ? scalarLocator({ first: vi.fn(() => assistantTurn) })
+        : scalarLocator()),
+    });
+    const ownedUser = { role: 'user' as const, text: `${TEST_OWNED_MARKER}\n\n${prompt}` };
+    const incompleteAssistant = { role: 'assistant' as const, text: 'INCOMPLETE-FOREIGN-REPLY' };
+    const messages = [ownedUser, incompleteAssistant];
+    const atomicNodes = Object.assign(collectionLocator(messages), {
+      evaluateAll: vi.fn(async () => ({
+        rows: [
+          { role: 'user', text: ownedUser.text, key: 'data-message-id:d46-foreign-user', domIndex: 0,
+            complete: true, completionReady: false, continuationVisible: false },
+          { role: 'assistant', text: incompleteAssistant.text, key: 'data-message-id:d46-foreign-assistant', domIndex: 1,
+            complete: true, completionReady: false, continuationVisible: true },
+        ],
+        pageTurnEvidence: {
+          generationInProgress: false, observedAssistantNodes: 1, continueGeneratingVisible: true,
+        },
+      })),
+      nth: vi.fn((index: number) => index === 1 ? assistantNode : messageLocator(ownedUser)),
+    });
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    turn.page.locator.mockImplementation((selector: string) => {
+      if (!visible()) {
+        if (selector === MESSAGE_NODE_SELECTOR || selector === USER_MESSAGE_SELECTOR) return collectionLocator([]);
+      } else {
+        if (selector === MESSAGE_NODE_SELECTOR) return atomicNodes;
+        if (selector === USER_MESSAGE_SELECTOR) return collectionLocator([ownedUser]);
+      }
+      return originalLocator(selector);
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    const result = await runNewChatTurn(turn.page, output, '90000', invocationId);
+    const observed = await readPageObservation(turn.page, TEST_OWNED_MARKER);
+    expect(observed.snapshot.carriers[1]?.continuationVisible).toBe(true);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.getSends()).toBe(1);
+    expect(continueClick).not.toHaveBeenCalled();
+    expect(result.result).toMatchObject({
+      state: 'observation_uncertain', cause: 'fresh_conversation_owner_unproven',
+      send_count: 0, send_attempted: true,
+    });
+    expect(result.result).not.toHaveProperty('conversation_id');
+    expect(readStateLightTurnObservation('collision-profile', invocationId))
+      .toMatchObject({ phase: 'dispatching', send_witness: 'none', conversation_url: null });
+    expect(existsSync(output)).toBe(false);
+  });
+
   it('Issue #2636: post-onDispatch network-change cannot become a pre-Send helper failure', async () => {
     const invocationId = randomUUID();
     const prompt = 'D46-POST-DISPATCH-ERROR';
