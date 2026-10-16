@@ -1406,6 +1406,7 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     | 'lost-page' | 'late-redirect' | 'late-close' | 'expired-goto' | 'expired-readiness'
     | 'post-empty' | 'post-userless'
     | 'post-incomplete' | 'post-unreadable' | 'post-unknown'
+    | 'post-delayed-452' | 'post-generation-late' | 'post-fetch-429'
     | 'post-active' | 'post-stop' | 'initial-active'
     | 'initial-unknown' | 'initial-empty' | 'initial-incomplete'
     | 'initial-stop' | 'initial-wrong-url' | 'short-budget';
@@ -1427,6 +1428,8 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     let reopened = false;
     let resumedStopObserved = false;
     let afterReopenReads = 0;
+    let readsAtSend: number | undefined;
+    const events = new EventEmitter();
     let postReopenComposerProbes = 0;
     const usableComposer = () => scenario === 'ready'
       || (scenario === 'late-hydration' && now - startedAt >= 20_000)
@@ -1445,6 +1448,7 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     });
     const send = vi.fn(async () => {
       sentAt = now;
+      readsAtSend = afterReopenReads;
       sentText = composerText;
       composerText = ''; // Synthetic owned composer-cleared delivery witness.
     });
@@ -1452,6 +1456,14 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
       expect(options.waitUntil).toBe('commit');
       reopened = true;
       lastGotoAt = now;
+      if (scenario === 'post-delayed-452') {
+        // The recorded chat's fetch was HTTP 200 with 452 messages; rendering
+        // latency below is synthetic because no captured page timing exists.
+        const request = { method: () => 'GET',
+          url: () => 'https://chatgpt.com/backend-api/conversations/25602560-2560-4560-8560-256025602560?num_turns=452' };
+        events.emit('request', request);
+        events.emit('response', { request: () => request, status: () => 200 });
+      }
       if (scenario === 'redirect') url = 'https://chatgpt.com/c/foreign';
       else if (scenario === 'network') throw new Error('net::ERR_NETWORK_CHANGED');
       else if (scenario === 'navigation-throw') throw new Error('unexpected navigation failure');
@@ -1461,6 +1473,23 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
       else url = target;
     });
     const rows = () => {
+      const ownedReply = sentAt === undefined ? [] : [
+        { role: 'user' as const, text: sentText, key: 'data-message-id:turn-user-2639',
+          domIndex: 452, complete: true, completionReady: false, continuationVisible: false },
+        { role: 'assistant' as const, text: 'FINAL', key: 'data-message-id:turn-answer-2639',
+          domIndex: 453, complete: true, completionReady: true, continuationVisible: false },
+      ];
+      if (reopened && scenario === 'post-fetch-429') return [];
+      if (reopened && scenario === 'post-delayed-452') {
+        if (afterReopenReads <= 3 && sentAt === undefined) return [];
+        const history = Array.from({ length: 452 }, (_, index) => ({
+          role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+          text: 'historical message ' + index,
+          key: 'data-message-id:history-2639-' + index,
+          domIndex: index, complete: true, completionReady: index === 451, continuationVisible: false,
+        }));
+        return [...history, ...ownedReply];
+      }
       const isInitial = !reopened;
       const empty = (isInitial && scenario === 'initial-empty')
         || (!isInitial && scenario === 'post-empty');
@@ -1481,15 +1510,23 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
         key: 'data-message-id:history-assistant-2560',
         domIndex: 1, complete: true, completionReady: true,
         continuationVisible: false,
-      }] : [])];
+      }] : []), ...(reopened && scenario === 'post-generation-late' ? ownedReply : [])];
     };
     const nodes = {
       ...collectionLocator([{ role: 'user', text: 'historical user' }]),
       evaluateAll: vi.fn(async () => {
         if (reopened) afterReopenReads++;
+        if (reopened && scenario === 'post-fetch-429' && afterReopenReads === 2) {
+          const request = { method: () => 'GET',
+            url: () => 'https://chatgpt.com/backend-api/conversations/25602560-2560-4560-8560-256025602560?num_turns=20' };
+          events.emit('request', request);
+          events.emit('response', { request: () => request, status: () => 429 });
+        }
         const generationInProgress: boolean | 'unknown' =
           (!reopened && scenario === 'initial-unknown')
           || (reopened && scenario === 'post-unknown')
+          || (reopened && scenario === 'post-delayed-452' && afterReopenReads <= 5)
+          || (reopened && scenario === 'post-generation-late' && afterReopenReads <= 3)
             ? 'unknown'
             : (!reopened && scenario === 'initial-active')
               || (reopened && scenario === 'post-active')
@@ -1514,7 +1551,7 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
       }),
       isVisible: vi.fn(async () => stop),
     });
-    const page = {
+    const page = Object.assign(events, {
       __fakeBrowserGptPage: true,
       url: () => url,
       isClosed: () => closed,
@@ -1544,7 +1581,7 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
         if (selector.includes('stop-button') || selector.includes('Stop')) return stopLocator;
         return scalarLocator();
       }),
-    };
+    });
     const browserFixture = enqueueBrowserForTurn(mocks, page);
     Object.assign(browserFixture.context, { pages: () => [page] });
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
@@ -1561,11 +1598,12 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
         '--output', join(root, invocationId + '.txt'),
         '--chat-url', chatUrl, '--invocation-id', invocationId,
         '--timeout-ms', scenario === 'short-budget' ? '10000'
-          : scenario === 'restored-long' ? '90000' : '60000',
+          : ['restored-long', 'post-delayed-452', 'post-generation-late'].includes(scenario) ? '90000' : '60000',
       ]);
       return {
         result, send, fill, goto, startedAt, lastGotoAt, sentAt, sentText,
-        finalUrl: url, afterReopenReads, resumedStopObserved, postReopenComposerProbes,
+        finalUrl: url, afterReopenReads, readsAtSend, elapsedMs: now - startedAt,
+        resumedStopObserved, postReopenComposerProbes,
         observer: readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId),
       };
     } finally {
@@ -1595,6 +1633,48 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     expect(run.result.send_attempted).toBe(true);
     expect(run.observer.phase).toBe('sent_unharvested');
     expect(run.finalUrl).toBe('https://chatgpt.com/c/25602560-2560-4560-8560-256025602560');
+  });
+
+  it('waits for modeled late DOM render of the recorded 452-message chat, then sends exactly once (#2639)', async () => {
+    // No captured browser page/timing is available. The first three reopened
+    // observations are userless; the next two have users but unknown generation.
+    // The old single-snapshot guard would fail this test before the Send.
+    const run = await fullTurn('post-delayed-452');
+    expect(run.goto).toHaveBeenCalledTimes(1);
+    expect(run.readsAtSend).toBeGreaterThanOrEqual(6);
+    expect(run.send).toHaveBeenCalledTimes(1);
+    expect(run.result.send_count).toBe(1);
+    expect(run.result.cause).not.toBe('owned_conversation_render_mismatch');
+  });
+
+  it('waits for a visible user carrier with unknown then idle generation before sending (#2639)', async () => {
+    const run = await fullTurn('post-generation-late');
+    expect(run.readsAtSend).toBeGreaterThanOrEqual(4);
+    expect(run.send).toHaveBeenCalledTimes(1);
+    expect(run.result.send_count).toBe(1);
+  });
+
+  it('exhausts the existing invocation deadline for a never-rendered user carrier without sending (#2639)', async () => {
+    const run = await fullTurn('post-empty');
+    expect(run.afterReopenReads).toBeGreaterThan(1);
+    expect(run.elapsedMs).toBeGreaterThanOrEqual(60_000);
+    expect(run.result).toMatchObject({
+      state: 'ui_contract_mismatch', cause: 'owned_conversation_render_mismatch', send_count: 0,
+    });
+    expect(run.send).not.toHaveBeenCalled();
+    expect(run.fill).not.toHaveBeenCalled();
+  });
+
+  it('preserves exact same-page conversation fetch HTTP 429 during the render wait (#2639)', async () => {
+    const run = await fullTurn('post-fetch-429');
+    expect(run.afterReopenReads).toBeGreaterThanOrEqual(2);
+    expect(run.result).toMatchObject({
+      state: 'rate_limit', cause: 'conversation_fetch_http_429', send_count: 0,
+      product_wall_diagnostic: { wall_kind: 'conversation_fetch_http_429', http_status: 429,
+        status_source: 'owned_page_response' },
+    });
+    expect(run.fill).not.toHaveBeenCalled();
+    expect(run.send).not.toHaveBeenCalled();
   });
 
   it('reopens after >2s setup when a positively finished historical turn permits early resume exit', async () => {
@@ -1646,8 +1726,8 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     ['expired-readiness', 'driver_error', 'composer_mutation_budget_exhausted'],
     ['post-empty', 'ui_contract_mismatch', 'owned_conversation_render_mismatch'],
     ['post-userless', 'ui_contract_mismatch', 'owned_conversation_render_mismatch'],
-    ['post-incomplete', 'ui_contract_mismatch', 'baseline_transcript_incomplete'],
-    ['post-unreadable', 'ui_contract_mismatch', 'baseline_transcript_incomplete'],
+    ['post-incomplete', 'ui_contract_mismatch', 'owned_conversation_render_mismatch'],
+    ['post-unreadable', 'ui_contract_mismatch', 'owned_conversation_render_mismatch'],
     ['post-unknown', 'ui_contract_mismatch', 'owned_conversation_render_mismatch'],
     ['post-active', 'conversation_busy', 'another_turn_active'],
     ['post-stop', 'conversation_busy', 'another_turn_active'],

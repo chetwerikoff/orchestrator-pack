@@ -268,7 +268,23 @@ function makePage(
         }
         if (!sent) {
           activeSnapshot = { messages: options.preSendMessages ?? BASELINE, generating: false };
-          return collectionLocator(activeSnapshot.messages);
+          // The guarded existing-chat path reads an atomic generation state,
+          // not only legacy message locators. Keep the fixture's idle history
+          // observable without inventing user carriers for empty histories.
+          const preSendMessages = activeSnapshot.messages;
+          return Object.assign(collectionLocator(preSendMessages), {
+            evaluateAll: vi.fn(async () => ({
+              rows: preSendMessages.map((message, domIndex) => ({
+                role: message.role, text: message.text, domIndex,
+                complete: true, completionReady: false, continuationVisible: false,
+              })),
+              ...(preSendMessages.length > 0 ? { pageTurnEvidence: {
+                generationInProgress: false,
+                observedAssistantNodes: preSendMessages.filter((message) => message.role === 'assistant').length,
+                continueGeneratingVisible: false,
+              } } : {}),
+            })),
+          });
         }
         activeSnapshot = snapshots[Math.min(observationIndex, Math.max(0, snapshots.length - 1))]
           ?? { messages: [...BASELINE, { role: 'user', text: filled }], generating: true };
