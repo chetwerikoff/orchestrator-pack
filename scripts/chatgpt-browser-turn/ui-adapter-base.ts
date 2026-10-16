@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { abandonLatePageHandle, boundedResourceCleanup, RESOURCE_CLEANUP_BOUND_MS } from './browser-session.ts';
 import { revalidateProcessDestinationReservations } from './coordination.ts';
+import { isOwnedPromptMarker, ownedPromptMarkerMatches } from './owned-prompt-marker.ts';
 import {
   assertDispatchObservationReadyForDispatch,
   dispatchObservationCoverageComplete,
@@ -1545,9 +1546,9 @@ export async function runtimeWitnessSurfaceAvailable(
 }
 
 
-/** Only live GET responses on this exact held Page, with an observed request in its
- * current attachment/navigation epoch, can produce HTTP 429 evidence. */
-export type HeldPage429Kind = 'conversation_fetch_http_429' | 'account_conversations_http_429';
+/** Only exact owned GETs and marker-attributed attempted Sends on this held
+ * Page's current request/navigation epoch can produce HTTP 429 evidence. */
+export type HeldPage429Kind = 'conversation_fetch_http_429' | 'rate_limit';
 export interface HeldPage429Observation {
   readonly wall_kind: HeldPage429Kind;
   readonly http_status: 429;
@@ -1556,6 +1557,7 @@ export interface HeldPage429Observation {
 export interface HeldPage429Witness {
   readonly current: () => HeldPage429Observation | undefined;
   readonly beforeNavigation: () => void;
+  readonly markDispatch: (marker: string) => void;
   readonly dispose: () => void;
 }
 const heldPage429Witnesses = new WeakMap<object, HeldPage429Witness>();
@@ -1572,13 +1574,25 @@ export function observeHeldPageConversation429(
   } catch { /* No owned exact-chat ID on a fresh-chat Page. */ }
   let epoch = 0;
   let observed: HeldPage429Observation | undefined;
+  let dispatchMarker: string | undefined;
   const requestEpochs = new WeakMap<object, number>();
   const responseKind = (request: any): HeldPage429Kind | undefined => {
-    if (request?.method?.() !== 'GET') return undefined;
     try {
       const url = new URL(String(request.url()));
       if (!allowedChatGptOrigin(url)) return undefined;
-      if (url.pathname === '/backend-api/conversations') return 'account_conversations_http_429';
+      if (request?.method?.() === 'POST' && dispatchMarker
+        && /^\/backend-api\/f\/conversation\/?$/u.test(url.pathname)
+        && isRecognizedConversationSubmissionRequest(request)) {
+        const body = JSON.parse(request.postData());
+        if (!Array.isArray(body?.messages)) return undefined;
+        const users = body.messages.filter((message: any) => message?.author?.role === 'user');
+        if (users.length !== 1) return undefined;
+        const content = users[0]?.content;
+        return content?.content_type === 'text' && Array.isArray(content.parts)
+          && content.parts.length === 1 && typeof content.parts[0] === 'string'
+          && ownedPromptMarkerMatches(content.parts[0], dispatchMarker) ? 'rate_limit' : undefined;
+      }
+      if (request?.method?.() !== 'GET') return undefined;
       const match = /^\/backend-api\/conversations\/([0-9a-f-]+)$/iu.exec(url.pathname);
       return match && targetUuid && match[1]!.toLowerCase() === targetUuid
         ? 'conversation_fetch_http_429' : undefined;
@@ -1604,7 +1618,8 @@ export function observeHeldPageConversation429(
   }
   const witness: HeldPage429Witness = {
     current: () => observed,
-    beforeNavigation: () => { epoch++; },
+    beforeNavigation: () => { epoch++; dispatchMarker = undefined; },
+    markDispatch: (marker) => { dispatchMarker = isOwnedPromptMarker(marker) ? marker : undefined; },
     dispose: () => {
       if (typeof page?.off === 'function') {
         page.off('request', onRequest);
@@ -1738,7 +1753,7 @@ const PRODUCT_WALL_TEXT_CAP = 500;
 // transport failure must not become a profile-wide advisory kind.
 export type ProductWallKind = 'quota' | 'rate_limit' | 'challenge' | 'login' | 'account_load_error';
 export type ConversationFetchWallKind =
-  | 'conversation_fetch_http_429' | 'conversation_load_error' | 'account_conversations_http_429';
+  | 'conversation_fetch_http_429' | 'conversation_load_error';
 export interface ProductWallDiagnostic<WithConversation extends boolean = false> {
   /** Advisory evidence only; a page-text match cannot become a terminal state. */
   readonly wall_kind: ProductWallKind | (WithConversation extends true ? ConversationFetchWallKind : never) | 'none';
@@ -1770,7 +1785,7 @@ function matchingProductStatusPart(
 
 export function classifyProductWall(surface: ProductStatusSurface): ProductWallClassification {
   // #2538's positively probed account heading wins over a conversation
-  // projection; a separately witnessed account-list 429 still sets cooldown.
+  // projection; passive sidebar failures have no cooldown authority.
   // Only the positively probed product heading has this selector. Never infer
   // an account failure from generic sign-in copy or assistant-rendered text.
   const heading = surface.parts?.find((part) =>
