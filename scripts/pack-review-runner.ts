@@ -3608,22 +3608,30 @@ async function proveRateLimitOriginalZeroSend(input: {
     && provenFirstAttemptZeroSendCensus(current, verifiedMissing));
 }
 
-function rateLimitFreshReviewNextAction(projectId: string, prNumber: number): string {
+function rateLimitFreshReviewNextAction(run: PackReviewRunRecord, projectId: string): string {
   const command = 'OPK_PROJECT_ID=' + projectId
     + ' npm run --silent pack-gpt-review -- --project ' + projectId
-    + ' --pr-number ' + prNumber;
+    + ' --pr-number ' + run.prNumber;
   const profile = trim(process.env.PACK_GPT_BROWSER_PROFILE);
-  if (profile) {
-    try {
-      const cdp = trim(process.env.PACK_GPT_BROWSER_CDP) || 'http://127.0.0.1:9222';
-      const cooldown = readStateLightAccountCooldown(configuredProfileKey(profile, cdp));
+  try {
+    const cdp = trim(process.env.PACK_GPT_BROWSER_CDP) || 'http://127.0.0.1:9222';
+    // The persisted original launch identity is a safe fallback when scoped
+    // reconciliation was invoked without a browser profile environment.
+    const originalKeys = new Set(run.reviewRound?.sourceSlots
+      .map((slot) => trim(slot.launchProfileKey))
+      .filter(Boolean) ?? []);
+    const profileKey = profile
+      ? configuredProfileKey(profile, cdp)
+      : originalKeys.size === 1 ? [...originalKeys][0] : undefined;
+    if (profileKey) {
+      const cooldown = readStateLightAccountCooldown(profileKey);
       if (cooldown.active && cooldown.until !== undefined) {
         return 'after the shared account cooldown expires at '
           + new Date(cooldown.until).toISOString() + ' UTC, start a fresh review run: ' + command;
       }
-    } catch {
-      // Missing, malformed or unreadable cooldown is not a fabricated wait.
     }
+  } catch {
+    // Missing, malformed or unreadable cooldown is not a fabricated wait.
   }
   return 'start the fresh review run now: ' + command;
 }
@@ -6344,7 +6352,7 @@ export async function reconcileStalePackReviewRuns(
           sourceRepoRoot: input.sourceRepoRoot,
           transport: input.fixtureGptSourceCommentTransport,
         })
-          ? rateLimitFreshReviewNextAction(projectId, run.prNumber)
+          ? rateLimitFreshReviewNextAction(current, projectId)
           : rateLimitOriginalRecoveryAction(current);
       }
     }
