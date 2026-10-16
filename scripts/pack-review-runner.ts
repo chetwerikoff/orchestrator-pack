@@ -3544,6 +3544,8 @@ function originalRateLimitZeroJudgment(
       || (terminal.cause !== 'account_cooldown_active'
         && terminal.cause !== 'account_conversations_http_429')
       || slot.terminalClass !== 'rate_limit:' + terminal.cause) return false;
+    const terminalProfile = trim(terminal.configured_profile_key ?? terminal.profile_key);
+    if (terminalProfile && terminalProfile !== trim(slot.launchProfileKey)) return false;
     witnessedRateLimit = true;
   }
   return witnessedRateLimit;
