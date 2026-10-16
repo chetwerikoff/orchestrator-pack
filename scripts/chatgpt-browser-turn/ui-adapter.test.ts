@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { __testFreshSend, __testComposerMutation } from './state-light-turn-base.ts';
 import {
   ACCOUNT_LOAD_ERROR_HEADING_SELECTOR,
+  CONVERSATION_LOAD_ERROR_HEADING_SELECTOR,
   classifyProductWall,
+  classifyConversationProductWall,
+  observeHeldPageConversation429,
+  heldPage429Diagnostic,
+  probeConversationLoadError,
   probeAccountLoadError,
   createFreshIdentityRetention,
   enterExecutionRecoveryProductWallScope,
@@ -372,5 +377,157 @@ describe('Issue #2541 invocation-owned fresh composer without a profile lock', (
       bringToFront: async () => {},
       locator: () => ({ fill: async () => { throw new Error('closed'); } }),
     })).resolves.toBeUndefined();
+  });
+});
+
+
+const CONVERSATION_2617 = 'https://chatgpt.com/c/26172617-2617-4617-8617-261726172617';
+const FETCH_2617 = 'https://chatgpt.com/backend-api/conversations/26172617-2617-4617-8617-261726172617?num_turns=20';
+
+function held429PageFixture() {
+  const listeners = new Map<string, Set<(arg: any) => void>>();
+  let heading = '';
+  let composer = false;
+  let messages = false;
+  const page = {
+    on: (type: string, cb: (arg: any) => void) => {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type)!.add(cb);
+    },
+    off: (type: string, cb: (arg: any) => void) => listeners.get(type)?.delete(cb),
+    emit: (type: string, arg: any) => {
+      for (const listener of listeners.get(type) ?? []) listener(arg);
+    },
+    locator: (selector: string) => ({
+      count: async () => selector === COMPOSER_SELECTOR ? Number(composer)
+        : selector === MESSAGE_NODE_SELECTOR ? Number(messages)
+          : selector === CONVERSATION_LOAD_ERROR_HEADING_SELECTOR ? Number(Boolean(heading)) : 0,
+      nth: () => ({ innerText: async () => heading }),
+    }),
+  };
+  const request = (url: string, method = 'GET') => ({ url: () => url, method: () => method });
+  const dispatch = (req: ReturnType<typeof request>, status: number) => {
+    page.emit('request', req);
+    page.emit('response', { request: () => req, status: () => status });
+  };
+  return {
+    page, request, dispatch,
+    setHeading: (value: string) => { heading = value; },
+    setComposer: (value: boolean) => { composer = value; },
+    setMessages: (value: boolean) => { messages = value; },
+  };
+}
+
+describe('conversation fetch HTTP 429 — exact held-page source and generic full-page wall (#2617)', () => {
+  it('retains numeric target status/source with matched_text none and first 429 -> 200 stickiness', async () => {
+    const fixture = held429PageFixture();
+    const first = vi.fn();
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617, first);
+    const target = fixture.request(FETCH_2617);
+    fixture.dispatch(target, 429);
+    fixture.dispatch(fixture.request(FETCH_2617), 200);
+    const classified = classifyConversationProductWall(await productStatusText(fixture.page, 500));
+    expect(classified).toEqual({
+      wall_kind: 'conversation_fetch_http_429', http_status: 429, status_source: 'owned_page_response',
+      matched_text: 'none', matched_selector: 'none',
+    });
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(heldPage429Diagnostic(fixture.page)).toEqual(classified);
+    witness.dispose();
+    expect(heldPage429Diagnostic(fixture.page)).toBeUndefined();
+  });
+
+  it('accepts a late active-epoch 429 after target 200, without inferring status from /conversation/init 200', () => {
+    const fixture = held429PageFixture();
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617);
+    fixture.dispatch(fixture.request(FETCH_2617), 200);
+    fixture.dispatch(fixture.request('https://chatgpt.com/backend-api/conversation/init'), 200);
+    expect(witness.current()).toBeUndefined();
+    fixture.dispatch(fixture.request(FETCH_2617), 429);
+    expect(witness.current()).toMatchObject({ wall_kind: 'conversation_fetch_http_429', http_status: 429 });
+    witness.dispose();
+  });
+
+  it('ignores uninstrumented pre-attachment, previous epoch and foreign Page/URL/method responses', () => {
+    const fixture = held429PageFixture();
+    const oldPage = held429PageFixture();
+    const oldRequest = oldPage.request(FETCH_2617);
+    oldPage.dispatch(oldRequest, 429); // No witness attached yet: never replayed.
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617);
+    const stale = fixture.request(FETCH_2617);
+    fixture.page.emit('request', stale);
+    witness.beforeNavigation();
+    fixture.page.emit('response', { request: () => stale, status: () => 429 });
+    fixture.page.emit('response', { request: () => fixture.request(FETCH_2617), status: () => 429 });
+    fixture.dispatch(fixture.request(FETCH_2617, 'POST'), 429);
+    fixture.dispatch(fixture.request('https://chatgpt.com/backend-api/conversations/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), 429);
+    fixture.dispatch(fixture.request(FETCH_2617.replace('chatgpt.com', 'example.com')), 429);
+    fixture.dispatch(fixture.request('https://chatgpt.com/backend-api/conversation/init'), 429);
+    expect(witness.current()).toBeUndefined();
+    const oldWitness = observeHeldPageConversation429(oldPage.page,
+      'https://chatgpt.com/c/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    oldPage.dispatch(oldPage.request(FETCH_2617), 429);
+    expect(oldWitness.current()).toBeUndefined();
+    expect(witness.current()).toBeUndefined();
+    witness.dispose();
+    oldWitness.dispose();
+  });
+
+  it('distinguishes a held-Page account-list GET 429 from a successful target thread', () => {
+    const fixture = held429PageFixture();
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617);
+    fixture.dispatch(fixture.request(FETCH_2617), 200);
+    fixture.dispatch(fixture.request('https://chatgpt.com/backend-api/conversations?offset=0&limit=50'), 429);
+    expect(witness.current()).toEqual({
+      wall_kind: 'account_conversations_http_429', http_status: 429, status_source: 'owned_page_response',
+    });
+    expect(classifyConversationProductWall({
+      composer: true, text: 'Recents: Unable to load history', parts: [
+        { selector: '[data-testid="sidebar"]', text: 'Recents: Unable to load history' },
+      ],
+    })).toMatchObject({ wall_kind: 'none' });
+    witness.dispose();
+  });
+
+  it.each(["Could not load this ChatGPT conversation", "We couldn't load this conversation", "We couldn’t   load this conversation."])(
+    'recognizes standalone conversation-load heading %s with unknown status and selector', async (heading) => {
+      const fixture = held429PageFixture();
+      fixture.setHeading(heading);
+      expect(await probeConversationLoadError(fixture.page, 400)).toMatchObject({
+        wall_kind: 'conversation_load_error', matched_selector: CONVERSATION_LOAD_ERROR_HEADING_SELECTOR,
+      });
+      expect(classifyConversationProductWall(await productStatusText(fixture.page, 400))).toMatchObject({
+        wall_kind: 'conversation_load_error', matched_text: heading,
+      });
+    },
+  );
+
+  it('rejects an assistant quotation, composed thread or sidebar-only failure as full-page conversation error', async () => {
+    const fixture = held429PageFixture();
+    fixture.setHeading('Could not load this ChatGPT conversation');
+    fixture.setMessages(true);
+    expect(await probeConversationLoadError(fixture.page, 400)).toBeNull();
+    fixture.setMessages(false);
+    fixture.setComposer(true);
+    expect(await probeConversationLoadError(fixture.page, 400)).toBeNull();
+    expect(classifyConversationProductWall({ composer: true, text: 'Recents: Unable to load history',
+      parts: [{ selector: '[data-testid="sidebar"]', text: 'Recents: Unable to load history' }] })).toMatchObject({
+      wall_kind: 'none',
+    });
+    expect(classifyConversationProductWall({ composer: true, text: 'Could not load this ChatGPT conversation',
+      parts: [{ selector: '[data-message-author-role="assistant"]', text: 'Could not load this ChatGPT conversation' }] }))
+      .toMatchObject({ wall_kind: 'none' });
+  });
+
+  it('retains both captured status and the visible owned heading when 429 precedes the banner', async () => {
+    const fixture = held429PageFixture();
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617);
+    fixture.dispatch(fixture.request(FETCH_2617), 429);
+    fixture.setHeading('Could not load this ChatGPT conversation');
+    expect(classifyConversationProductWall(await productStatusText(fixture.page, 400))).toMatchObject({
+      wall_kind: 'conversation_fetch_http_429', matched_text: 'Could not load this ChatGPT conversation',
+      http_status: 429, status_source: 'owned_page_response',
+    });
+    witness.dispose();
   });
 });

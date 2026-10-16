@@ -1,7 +1,9 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 1
+import { runProcessSync } from '../kernel/subprocess.ts';
+import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -26,11 +28,12 @@ import {
   MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE, RENDERED_CONVERSATION_TURN_SECTION_SELECTOR,
   USER_MESSAGE_SELECTOR, ASSISTANT_MESSAGE_SELECTOR, ASSISTANT_TURN_ANCESTOR_XPATH,
 } from './product-page-selectors.ts';
-import { __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
+import { publishWitnessedStateLight429, readStateLightAccountCooldown, __testComposerMutation, __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
+import { heldPage429Diagnostic, observeHeldPageConversation429 } from './ui-adapter-base.ts';
 import { runPostSendRecovery, takeRecoveryCensus, type PostSendRecoveryAdapter, type PostSendRecoveryState } from './state-light-turn-recovery.ts';
 import * as recoveryModule from './state-light-turn-recovery.ts';
-import { configuredProfileKey } from './storage-common.ts';
+import { configuredProfileKey, profileDirs } from './storage-common.ts';
 import { deriveDelivery, readTerminalEnvelope, runLaunch } from '../flow-manager-long-running-child.ts';
 import { authoritativePreSend } from '../pack-review-no-review-reconcile.ts';
 
@@ -340,7 +343,23 @@ describe('Issue #2596 production recovery caller boundaries', () => {
             return scalarLocator({ count: async () => { throw new Error('owned read lost'); } });
           const messages = kind === 'successor' ? finalMessages
             : sent ? known ? finalMessages.slice(0, 1) : [] : known ? [{ role: 'user' as const, text: 'history' }] : [];
-          if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(messages);
+          if (selector === MESSAGE_NODE_SELECTOR) {
+            if (known && kind === 'original' && !sent) {
+              return Object.assign(collectionLocator(messages), {
+                evaluateAll: vi.fn(async () => ({
+                  rows: [{
+                    role: 'user', text: 'history', key: 'historical-user-2596', domIndex: 0,
+                    complete: true, completionReady: false, continuationVisible: false,
+                  }],
+                  pageTurnEvidence: {
+                    generationInProgress: false, observedAssistantNodes: 0,
+                    continueGeneratingVisible: false,
+                  },
+                })),
+              });
+            }
+            return collectionLocator(messages);
+          }
           if (selector === USER_MESSAGE_SELECTOR) return collectionLocator(messages.filter((message) => message.role === 'user'));
           if (selector === ASSISTANT_MESSAGE_SELECTOR) return collectionLocator(messages.filter((message) => message.role === 'assistant'));
           if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section'))
@@ -682,7 +701,7 @@ describe('production attempted-send result and durable envelope', () => {
     ['generic-timeout', 1],
     ['possibly-clicked', 1],
     ['enter', 0],
-    ['empty-baseline', 1],
+    ['empty-baseline', 0],
     ['empty-after-click', 1],
     ['vanished-user', 1],
     ['reordered', 1],
@@ -790,7 +809,16 @@ describe('production attempted-send result and durable envelope', () => {
       expect(click).toHaveBeenCalledTimes(expectedClicks);
       expect(firstAction).toHaveBeenCalledTimes(scenario === 'enter' ? 1 : expectedClicks);
       expect(result.send_count).toBe(0);
-      expect(result.send_attempted).toBe(true);
+      if (scenario === 'empty-baseline') {
+        expect(result).toMatchObject({
+          state: 'ui_contract_mismatch',
+          cause: 'owned_conversation_render_mismatch',
+          send_count: 0,
+        });
+        expect(result.send_attempted).not.toBe(true);
+      } else {
+        expect(result.send_attempted).toBe(true);
+      }
       expect(page.close).not.toHaveBeenCalled();
     } finally {
       clock.mockRestore();
@@ -944,7 +972,23 @@ describe('production attempted-send result and durable envelope', () => {
         locator: vi.fn((selector: string) => {
           if (selector === COMPOSER_SELECTOR) return composer;
           if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => transport === 'click' ? 1 : 0, click: send });
-          if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(users);
+          if (selector === MESSAGE_NODE_SELECTOR) {
+            if (scenario !== 'pre_dispatch') {
+              return Object.assign(collectionLocator(users), {
+                evaluateAll: vi.fn(async () => ({
+                  rows: users.map((message, domIndex) => ({
+                    role: message.role, text: message.text, key: `historical-user-2541-${domIndex}`,
+                    domIndex, complete: true, completionReady: false, continuationVisible: false,
+                  })),
+                  pageTurnEvidence: {
+                    generationInProgress: false, observedAssistantNodes: 0,
+                    continueGeneratingVisible: false,
+                  },
+                })),
+              });
+            }
+            return collectionLocator(users);
+          }
           return scalarLocator();
         }),
       };
@@ -1473,5 +1517,437 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
       expect(run.send).not.toHaveBeenCalled();
       expect(run.result.send_count).toBe(0);
     }
+  });
+});
+
+
+describe('conversation fetch HTTP 429 — shared 5-minute cross-process cooldown (#2617)', () => {
+  let root: string;
+  let profileKey: string;
+  let now: number;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'opk-2617-account-cooldown-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    profileKey = configuredProfileKey(join(root, 'configured-profile'), 'http://127.0.0.1:9222');
+    now = Date.now();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const filename = 'state-light-account-cooldown.v1.json';
+  const pathFor = (key: string) => join(profileDirs(key).locks, filename);
+  const readFromOtherNodeProcess = (key: string, at: number) => {
+    const moduleUrl = new URL('./state-light-turn-base.ts', import.meta.url).href;
+    const program = `import { readStateLightAccountCooldown } from ${JSON.stringify(moduleUrl)};
+process.stdout.write(JSON.stringify(readStateLightAccountCooldown(${JSON.stringify(key)}, ${at})));`;
+    const child = runProcessSync({
+      command: process.execPath,
+      args: ['--experimental-strip-types', '--input-type=module', '--eval', program],
+      env: { CHATGPT_BROWSER_TURN_STATE_DIR: root },
+      inheritParentEnv: true,
+      encoding: 'utf8',
+      timeoutMs: 15_000,
+    });
+    expect(child.ok, child.stderr || child.error).toBe(true);
+    return JSON.parse(child.stdout);
+  };
+
+  it('records exactly one epoch-ms field, expires at 300000ms and is shared across separate Node processes', () => {
+    const first = publishWitnessedStateLight429(profileKey, now);
+    expect(first).toEqual({ active: true, until: now + 300_000 });
+    expect(JSON.parse(readFileSync(pathFor(profileKey), 'utf8'))).toEqual({
+      cooldown_until_ms: now + 300_000,
+    });
+    expect(readStateLightAccountCooldown(profileKey, now + 299_999)).toMatchObject({
+      active: true, until: now + 300_000,
+    });
+    expect(readFromOtherNodeProcess(profileKey, now + 1)).toMatchObject({
+      active: true, until: now + 300_000,
+    });
+    expect(readStateLightAccountCooldown(profileKey, now + 300_000).active).toBe(false);
+  });
+
+  it('never shortens the previous valid deadline on a separately witnessed 429', () => {
+    expect(publishWitnessedStateLight429(profileKey, now)).toMatchObject({
+      until: now + 300_000,
+    });
+    expect(publishWitnessedStateLight429(profileKey, now + 1_000)).toMatchObject({
+      until: now + 301_000,
+    });
+    expect(readFromOtherNodeProcess(profileKey, now + 1_100)).toMatchObject({
+      active: true, until: now + 301_000,
+    });
+    expect(JSON.parse(readFileSync(pathFor(profileKey), 'utf8')))
+      .toEqual({ cooldown_until_ms: now + 301_000 });
+  });
+
+  it('rejects a +24-hour future deadline and replaces it with only newly witnessed 5-minute authority', () => {
+    const path = pathFor(profileKey);
+    writeFileSync(path, JSON.stringify({ cooldown_until_ms: now + 86_400_000 }));
+    expect(readStateLightAccountCooldown(profileKey, now)).toMatchObject({
+      active: false, diagnostic: 'account_cooldown_far_future',
+    });
+    expect(publishWitnessedStateLight429(profileKey, now)).toEqual({
+      active: true, until: now + 300_000,
+    });
+    expect(readFromOtherNodeProcess(profileKey, now + 100)).toMatchObject({
+      active: true, until: now + 300_000,
+    });
+  });
+
+  it.each([
+    [null, 'account_cooldown_wrong_shape'],
+    [{ cooldown_until_ms: 'tomorrow' }, 'account_cooldown_invalid_deadline'],
+    [{ cooldown_until_ms: 0 }, 'account_cooldown_expired'],
+    [{ cooldown_until_ms: 50, wrong: true }, 'account_cooldown_wrong_shape'],
+  ] as const)('fails open invalid single-record data %j: %s', (record, diagnostic) => {
+    const path = pathFor(profileKey);
+    writeFileSync(path, JSON.stringify(record));
+    expect(readStateLightAccountCooldown(profileKey, now)).toMatchObject({
+      active: false, diagnostic,
+    });
+  });
+
+  it('fails open malformed JSON and a contended writer integrity guard', () => {
+    const path = pathFor(profileKey);
+    writeFileSync(path, '{invalid');
+    expect(readStateLightAccountCooldown(profileKey, now)).toMatchObject({
+      active: false, diagnostic: 'account_cooldown_malformed',
+    });
+    const guard = join(profileDirs(profileKey).locks, 'state-light-account-cooldown.v1.guard');
+    writeFileSync(guard, 'occupied');
+    expect(publishWitnessedStateLight429(profileKey, now)).toMatchObject({
+      active: false, diagnostic: 'account_cooldown_write_unavailable',
+    });
+    expect(readFileSync(path, 'utf8')).toBe('{invalid');
+  });
+
+  it('keeps exact configured profile keys separate despite a shared root', () => {
+    const other = configuredProfileKey(join(root, 'other-profile'), 'http://127.0.0.1:9222');
+    publishWitnessedStateLight429(profileKey, now);
+    expect(readStateLightAccountCooldown(other, now).active).toBe(false);
+    expect(readFromOtherNodeProcess(other, now).active).toBe(false);
+  });
+});
+
+
+describe('conversation fetch HTTP 429 — physical Send and recovery gates (#2617)', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'opk-2617-send-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    mocks.verifyProfile.mockResolvedValue({ state: 'verified' });
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    mocks.browserQueue.length = 0;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('blocks physical Send and composer fill on a witnessed pre-insertion conversation fetch HTTP 429', async () => {
+    const url = 'https://chatgpt.com/c/26172617-2617-4617-8617-261726172617';
+    const request = { method: () => 'GET',
+      url: () => 'https://chatgpt.com/backend-api/conversations/26172617-2617-4617-8617-261726172617?num_turns=20' };
+    const events = new EventEmitter();
+    const fill = vi.fn(async () => undefined);
+    const click = vi.fn(async () => undefined);
+    const composer = scalarLocator({
+      count: async () => 1,
+      evaluate: async () => ({ visible: true, enabled: true, contentEditable: true }),
+      fill, innerText: async () => '',
+    });
+    let injected = false;
+    const page = Object.assign(events, {
+      __fakeBrowserGptPage: true,
+      url: () => url, isClosed: () => false,
+      goto: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      waitForTimeout: vi.fn(async () => undefined),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) {
+          if (!injected && events.listenerCount('response') > 0) {
+            injected = true;
+            events.emit('request', request);
+            events.emit('response', { request: () => request, status: () => 429 });
+          }
+          return composer;
+        }
+        if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => 1, click });
+        return scalarLocator();
+      }),
+    });
+    const context = enqueueBrowserForTurn(mocks, page).context;
+    Object.assign(context, { pages: () => [page] });
+    const profile = join(root, 'profile');
+    const invocationId = randomUUID();
+    const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      '--profile', profile, '--cdp', 'http://127.0.0.1:9222',
+      '--input', join(root, 'input'), '--output', join(root, 'output'),
+      '--chat-url', url, '--invocation-id', invocationId, '--timeout-ms', '60000',
+    ]);
+    expect(injected).toBe(true);
+    expect(fill).not.toHaveBeenCalled();
+    expect(click).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      state: 'rate_limit', cause: 'conversation_fetch_http_429',
+      send_count: 0,
+      product_wall_diagnostic: {
+        wall_kind: 'conversation_fetch_http_429',
+        http_status: 429,
+        status_source: 'owned_page_response',
+        matched_text: 'none', matched_selector: 'none',
+      },
+    });
+    expect(result.send_attempted).not.toBe(true);
+    expect(readStateLightAccountCooldown(configuredProfileKey(profile, 'http://127.0.0.1:9222')).active).toBe(true);
+    expect(page.goto).not.toHaveBeenCalled();
+  });
+
+  it('stops successor navigation when an owned conversation fetch HTTP 429 arises during census', async () => {
+    const fixture = recoveryFixture({ originalIncomplete: true });
+    let observed429 = false;
+    const adapter = {
+      ...fixture.adapter,
+      readAuthoritativeMessages: vi.fn(async () => {
+        observed429 = true;
+        return { messages: [], incomplete: true };
+      }),
+      accountActionBlocker: vi.fn(() => observed429 ? 'conversation_fetch_http_429' : undefined),
+    };
+    const result = await runPostSendRecovery({
+      browser: {}, currentPage: fixture.original, marker: MARKER,
+      hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter,
+    });
+    expect(result).toMatchObject({
+      kind: 'failure', state: 'observation_uncertain',
+      cause: 'conversation_fetch_http_429', action: 'retain_owned_page_no_resend',
+    });
+    expect(fixture.createSuccessor).not.toHaveBeenCalled();
+  });
+
+  it('lets positive exact owned marker recovery complete even when a 429 cooldown is already active', async () => {
+    const fixture = recoveryFixture({ includeOriginalMarker: true });
+    const adapter = { ...fixture.adapter, accountActionBlocker: () => 'account_cooldown_active' };
+    const result = await runPostSendRecovery({
+      browser: {}, currentPage: fixture.original, marker: MARKER,
+      hardDeadlineMs: 500, pollMs: 1, state: fixture.state, adapter,
+    });
+    expect(result).toMatchObject({ kind: 'recovered', page: fixture.original, conversationUrl: fixture.url });
+    expect(fixture.createSuccessor).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('conversation fetch HTTP 429 — fresh preparation and same-Page ownership (#2617 review)', () => {
+  let root: string;
+  const cdp = 'http://127.0.0.1:9222';
+  const projectRoot = 'https://chatgpt.com/g/g-p-26172617261726172617261726172617-test';
+  const projectUrl = projectRoot + '/project';
+  const conversationUuid = '26172617-2617-4617-8617-261726172617';
+  const conversationUrl = projectRoot + '/c/' + conversationUuid;
+  const exactRequestUrl = 'https://chatgpt.com/backend-api/conversations/' + conversationUuid + '?num_turns=20';
+  const listRequestUrl = 'https://chatgpt.com/backend-api/conversations?limit=20';
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'opk-2617-fresh-review-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    mocks.verifyProfile.mockResolvedValue({ state: 'verified' });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    mocks.browserQueue.length = 0;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function freshPage(
+    profile: string,
+    invocationId: string,
+    options: { redirectOnOpen?: boolean; account429OnOpen?: boolean; exact429AfterOwnedSend?: boolean } = {},
+  ) {
+    let currentUrl = 'about:blank';
+    let draft = '';
+    let sentText = '';
+    let sent = false;
+    let opened = false;
+    let exact429Emitted = false;
+    let activeMessages = readyTurnObservationFrames('PROMPT', 'REPLY')[0]!;
+    let observationIndex = 0;
+    const frames = readyTurnObservationFrames('PROMPT', 'REPLY');
+    const events = new EventEmitter();
+    const emit429 = (requestUrl: string): void => {
+      const request = { method: () => 'GET', url: () => requestUrl };
+      events.emit('request', request);
+      events.emit('response', { request: () => request, status: () => 429 });
+    };
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      evaluate: vi.fn(async () => ({ visible: true, enabled: true, contentEditable: true })),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async (value: string) => { draft = value; }),
+      innerText: vi.fn(async () => sent ? '' : draft),
+      textContent: vi.fn(async () => sent ? '' : draft),
+    });
+    const send = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => {
+        sent = true;
+        sentText = draft;
+        draft = '';
+        currentUrl = conversationUrl;
+      }),
+    });
+    const page = Object.assign(events, {
+      __fakeBrowserGptPage: true,
+      url: vi.fn(() => currentUrl),
+      isClosed: vi.fn(() => false),
+      goto: vi.fn(async (target: string) => {
+        currentUrl = !opened && options.redirectOnOpen ? conversationUrl : target;
+        if (!opened && options.account429OnOpen) emit429(listRequestUrl);
+        opened = true;
+      }),
+      waitForTimeout: vi.fn(async (milliseconds: number) => { clock.now += milliseconds; }),
+      close: vi.fn(async () => undefined),
+      getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return send;
+        if (selector === USER_MESSAGE_SELECTOR) return collectionLocator(
+          sent ? [{ role: 'user', text: sentText }] : [],
+        );
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          // Ownership becomes positive only after the fresh Send's claimed URL
+          // has been persisted. Emit a *new* GET on the same Page after that.
+          if (options.exact429AfterOwnedSend && sent && !exact429Emitted
+            && readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId).phase === 'sent_unharvested') {
+            exact429Emitted = true;
+            emit429(exactRequestUrl);
+          }
+          if (!sent) return collectionLocator([]);
+          activeMessages = frames[Math.min(observationIndex++, frames.length - 1)]!;
+          return collectionLocator(activeMessages, observationIndex < 3);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          const last = activeMessages.at(-1);
+          return last?.finalActionInTurnContainer ? messageLocator(last) : scalarLocator();
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) return collectionLocator(
+          activeMessages.filter((message) => message.role === 'assistant'), observationIndex < 3,
+        );
+        return scalarLocator();
+      }),
+    });
+    return { page, composer, send, getExact429Emitted: () => exact429Emitted };
+  }
+
+  const clock = { now: 100_000 };
+  async function runFresh(profile: string, invocationId: string, page: any) {
+    enqueueBrowserForTurn(mocks, page);
+    return runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      '--profile', profile, '--cdp', cdp, '--input', join(root, 'input'),
+      '--output', join(root, 'output'), '--new-chat', '--project-url', projectUrl,
+      '--invocation-id', invocationId, '--timeout-ms', '90000', '--poll-ms', '1',
+    ]);
+  }
+
+  it.each(['held-account-429', 'shared-cooldown'] as const)(
+    'refuses a second fresh preparation goto after first redirect: %s', async (mode) => {
+      clock.now = 100_000;
+      vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+      const profile = join(root, 'profile');
+      const invocationId = randomUUID();
+      const fixture = freshPage(profile, invocationId, {
+        redirectOnOpen: true,
+        account429OnOpen: mode === 'held-account-429',
+      });
+      if (mode === 'shared-cooldown') {
+        publishWitnessedStateLight429(configuredProfileKey(profile, cdp), clock.now);
+      }
+      const { result } = await runFresh(profile, invocationId, fixture.page);
+      expect(fixture.page.goto).toHaveBeenCalledTimes(1);
+      expect(fixture.send.click).not.toHaveBeenCalled();
+      expect(fixture.composer.click).not.toHaveBeenCalled();
+      expect(fixture.composer.fill).not.toHaveBeenCalled();
+      expect(result.send_attempted).not.toBe(true);
+      expect(result.send_count).toBe(0);
+      expect(result).toMatchObject({
+        state: 'rate_limit',
+        cause: mode === 'held-account-429' ? 'account_conversations_http_429' : 'account_cooldown_active',
+      });
+      if (mode === 'held-account-429') {
+        expect(result.product_wall_diagnostic).toMatchObject({
+          wall_kind: 'account_conversations_http_429', http_status: 429,
+        });
+      }
+    },
+  );
+
+  it('does not clear a blank fresh composer after its first account-list GET 429', async () => {
+    clock.now = 100_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const profile = join(root, 'profile');
+    const invocationId = randomUUID();
+    const fixture = freshPage(profile, invocationId, { account429OnOpen: true });
+    const { result } = await runFresh(profile, invocationId, fixture.page);
+    expect(fixture.page.goto).toHaveBeenCalledTimes(1);
+    expect(fixture.send.click).not.toHaveBeenCalled();
+    expect(fixture.composer.fill).not.toHaveBeenCalled();
+    expect(result.product_wall_diagnostic).toMatchObject({
+      wall_kind: 'account_conversations_http_429', http_status: 429,
+    });
+    expect(result.send_count).toBe(0);
+  });
+
+  it.each(['ready', 'fallback'] as const)(
+    'stops a separately awaited composer fill when click witnesses 429 (%s)', async (branch) => {
+      const events = new EventEmitter();
+      const request = { method: () => 'GET', url: () => exactRequestUrl };
+      const fill = vi.fn(async () => undefined);
+      const click = vi.fn(async () => {
+        events.emit('request', request);
+        events.emit('response', { request: () => request, status: () => 429 });
+      });
+      const composer = scalarLocator({
+        count: vi.fn(async () => 1), click, fill,
+        evaluate: vi.fn(async () => ({
+          visible: branch === 'ready', enabled: true, contentEditable: true,
+        })),
+      });
+      const page = Object.assign(events, { locator: () => composer });
+      const witness = observeHeldPageConversation429(page, conversationUrl);
+      try {
+        const preflight = () => {
+          const wall = heldPage429Diagnostic(page);
+          if (wall) throw new Error(wall.wall_kind);
+        };
+        await expect(__testComposerMutation.mutateComposerOrCause(
+          page, 'PROMPT', Date.now() + 30_000, undefined, preflight,
+        )).rejects.toThrow('conversation_fetch_http_429');
+        expect(click).toHaveBeenCalledTimes(1);
+        expect(fill).not.toHaveBeenCalled();
+      } finally {
+        witness.dispose();
+      }
+    },
+  );
+
+  it('binds a same-Page post-Send exact-chat GET 429 only after owned /c/ identity is proven', async () => {
+    clock.now = 100_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const profile = join(root, 'profile');
+    const invocationId = randomUUID();
+    const fixture = freshPage(profile, invocationId, { exact429AfterOwnedSend: true });
+    const { result } = await runFresh(profile, invocationId, fixture.page);
+    expect(fixture.getExact429Emitted()).toBe(true);
+    expect(fixture.send.click).toHaveBeenCalledTimes(1);
+    expect(result.send_count).toBe(1);
+    expect(result.product_wall_diagnostic).toMatchObject({
+      wall_kind: 'conversation_fetch_http_429',
+      http_status: 429, status_source: 'owned_page_response',
+    });
+    expect(readStateLightAccountCooldown(configuredProfileKey(profile, cdp), clock.now).active).toBe(true);
   });
 });
