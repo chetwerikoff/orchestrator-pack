@@ -50,6 +50,7 @@ import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 import { runProcess, runProcessSync } from './kernel/subprocess.ts';
 import { getPackReviewerPreferencePath, writePackReviewerPreference } from './lib/pack-reviewer-preference.ts';
 import { configuredProfileKey, profileDirs } from './chatgpt-browser-turn/storage-common.ts';
+import { observationRecordPath } from './chatgpt-browser-turn/state-light-turn-observation.ts';
 import { acquireReviewStartClaim, completeAfterRunInvoke } from './lib/review-start-claim-store.ts';
 import {
   boundIssueSnapshotArtifactPaths,
@@ -5051,6 +5052,54 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     const denied = await cap.start();
     expect(denied.result.created).not.toBe(true);
     expect(listPackReviewRuns(cap.options)).toHaveLength(1);
+  });
+
+
+  it.each(['planned', 'prelaunch'] as const)(
+    'accepts a pristine %s slot alongside original zero-send rate-limit slots', async (mode) => {
+      const f = fixture({ mutate: (slot) => mode === 'planned'
+        ? { slotId: slot.slotId, ordinal: slot.ordinal, lifecycle: 'planned' as const }
+        : {
+            slotId: slot.slotId, ordinal: slot.ordinal, lifecycle: 'terminal' as const,
+            terminalClass: 'pre_launch_interrupted',
+            terminalResult: { kind: 'stale_pre_launch_interruption', noResend: true },
+          } });
+      const result = await f.reconcile();
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ runId: f.original.id, statusReconciled: true, nextAction: expect.stringContaining(exactCommand) }),
+      ]));
+    },
+  );
+
+  it('accepts original numeric zero-send observation but rejects a later contradictory observation', async () => {
+    const f = fixture();
+    const invocationId = f.originalSlots[0]!.invocationId!;
+    mkdirSync(join(profileDirs(f.profileKey).root, 'observations'), { recursive: true });
+    const path = observationRecordPath(f.profileKey, invocationId);
+    const originalObservation = {
+      schema: 'state-light-turn-observation/v1', version: 1,
+      invocation_id: invocationId, profile_key: f.profileKey,
+      marker: 'OPKTURNV1-2629-original', phase: 'not_sent',
+      send_count: 0, send_witness: 'numeric_send_count',
+      conversation_url: null, transitioned_at: new Date().toISOString(),
+      transition_reason: 'account_cooldown_active',
+    };
+    writeFileSync(path, JSON.stringify(originalObservation));
+    const confirmed = await f.reconcile();
+    expect(confirmed.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ runId: f.original.id, nextAction: expect.stringContaining(exactCommand) }),
+    ]));
+    writeFileSync(path, JSON.stringify({
+      ...originalObservation, phase: 'dispatching', transition_reason: 'send_delivery_unproven',
+    }));
+    const contradicted = await f.reconcile();
+    const action = contradicted.results.find(
+      (item) => item.runId === f.original.id && typeof item.nextAction === 'string',
+    )?.nextAction;
+    expect(String(action)).not.toContain(exactCommand);
+    const denied = await f.start();
+    expect(denied.result.created).not.toBe(true);
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
   });
 
   it('keeps the existing recovery path on unrelated non-rate-limit terminal failures', async () => {
