@@ -6271,7 +6271,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     const firstSnapshot = getPackReviewRun(runId, options)!.reviewRound!.sourceSlots[0]!;
     expect(firstSnapshot.terminalClass).toBe('complete_clean');
     expect(getPackReviewRun(runId, options)!.reviewRound!.sourceSlots.map((slot) => slot.lifecycle))
-      .toEqual(['terminal', 'invocation_started', 'planned']);
+      .toEqual(['terminal', 'invocation_started', config.orphanedPair ? 'invocation_started' : 'planned']);
     vi.setSystemTime(new Date(restartAt));
 
     const statusStates: string[] = [];
