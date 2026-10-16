@@ -405,7 +405,9 @@ function held429PageFixture() {
       nth: () => ({ innerText: async () => heading }),
     }),
   };
-  const request = (url: string, method = 'GET') => ({ url: () => url, method: () => method });
+  const request = (url: string, method = 'GET', body?: string) => ({
+    url: () => url, method: () => method, postData: () => body,
+  });
   const dispatch = (req: ReturnType<typeof request>, status: number) => {
     page.emit('request', req);
     page.emit('response', { request: () => req, status: () => status });
@@ -473,21 +475,76 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
     oldWitness.dispose();
   });
 
-  it('distinguishes a held-Page account-list GET 429 from a successful target thread', () => {
+  it.each([true, false])('ignores sidebar-list 429 with exact GET 200 in either order (list first: %s)', (listFirst) => {
     const fixture = held429PageFixture();
     const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617);
+    const list = () => fixture.dispatch(fixture.request('https://chatgpt.com/backend-api/conversations?offset=0&limit=50'), 429);
+    if (listFirst) list();
     fixture.dispatch(fixture.request(FETCH_2617), 200);
-    fixture.dispatch(fixture.request('https://chatgpt.com/backend-api/conversations?offset=0&limit=50'), 429);
-    expect(witness.current()).toEqual({
-      wall_kind: 'account_conversations_http_429', http_status: 429, status_source: 'owned_page_response',
-    });
+    if (!listFirst) list();
+    expect(witness.current()).toBeUndefined();
     expect(classifyConversationProductWall({
       composer: true, text: 'Recents: Unable to load history', parts: [
         { selector: '[data-testid="sidebar"]', text: 'Recents: Unable to load history' },
       ],
     })).toMatchObject({ wall_kind: 'none' });
+    fixture.dispatch(fixture.request(FETCH_2617), 429);
+    expect(witness.current()).toMatchObject({ wall_kind: 'conversation_fetch_http_429', http_status: 429 });
     witness.dispose();
   });
+
+  const marker = `OPKTURNV1${'ab'.repeat(16)}`;
+  const submission = (text: string) => JSON.stringify({ messages: [
+    { author: { role: 'user' }, content: { content_type: 'text', parts: [text] } },
+  ] });
+  it.each(['', '/'])('accepts only a dispatched own marker-attributed Send response (%s)', (slash) => {
+    const fixture = held429PageFixture();
+    const first = vi.fn();
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617, first);
+    witness.markDispatch(marker);
+    const request = fixture.request(`https://chatgpt.com/backend-api/f/conversation${slash}`, 'POST', submission(`${marker}\n\nPROMPT`));
+    fixture.page.emit('request', request);
+    fixture.page.emit('response', { request: () => ({ ...request }), status: () => 429 });
+    expect(witness.current()).toBeUndefined();
+    fixture.page.emit('response', { request: () => request, status: () => 429 });
+    expect(witness.current()).toEqual({ wall_kind: 'rate_limit', http_status: 429, status_source: 'owned_page_response' });
+    expect(first).toHaveBeenCalledTimes(1);
+    witness.dispose();
+  });
+
+  it.each(['markerless', 'mismatch', 'quoted', 'metadata', 'duplicate', 'duplicate-parts', 'multiple-parts', 'unreadable', 'absent',
+    'pre-dispatch', 'stale-epoch', 'foreign-page', 'wrong-origin', 'wrong-method', 'plain-route'])(
+    'rejects ambiguous or unrelated Send 429: %s', (mode) => {
+      const fixture = held429PageFixture();
+      const foreign = held429PageFixture();
+      const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617);
+      let body: string | undefined = submission(`${marker}\n\nPROMPT`);
+      if (mode === 'markerless') body = submission('PROMPT');
+      if (mode === 'mismatch') body = submission(`OPKTURNV1${'cd'.repeat(16)}\n\nPROMPT`);
+      if (mode === 'quoted') body = submission(`quoted ${marker}`);
+      if (mode === 'metadata') body = JSON.stringify({ metadata: marker, messages: JSON.parse(submission('PROMPT')).messages });
+      if (mode === 'duplicate') body = JSON.stringify({ messages: [...JSON.parse(body).messages, ...JSON.parse(body).messages] });
+      if (mode === 'duplicate-parts' || mode === 'multiple-parts') {
+        const parsed = JSON.parse(body);
+        parsed.messages[0].content.parts.push(mode === 'duplicate-parts' ? `${marker}\n\nPROMPT` : 'another text');
+        body = JSON.stringify(parsed);
+      }
+      if (mode === 'unreadable') body = '{';
+      if (mode === 'absent') body = undefined;
+      if (mode !== 'pre-dispatch') witness.markDispatch(marker);
+      const request = fixture.request(
+        mode === 'wrong-origin' ? 'https://example.com/backend-api/f/conversation'
+          : mode === 'plain-route' ? 'https://chatgpt.com/backend-api/conversation' : 'https://chatgpt.com/backend-api/f/conversation',
+        mode === 'wrong-method' ? 'GET' : 'POST', body,
+      );
+      (mode === 'foreign-page' ? foreign : fixture).page.emit('request', request);
+      if (mode === 'pre-dispatch') witness.markDispatch(marker);
+      if (mode === 'stale-epoch') { witness.beforeNavigation(); witness.markDispatch(marker); }
+      fixture.page.emit('response', { request: () => request, status: () => 429 });
+      expect(witness.current()).toBeUndefined();
+      witness.dispose();
+    },
+  );
 
   it.each(["Could not load this ChatGPT conversation", "We couldn't load this conversation", "We couldn’t   load this conversation."])(
     'recognizes standalone conversation-load heading %s with unknown status and selector', async (heading) => {
