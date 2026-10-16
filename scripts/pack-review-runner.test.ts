@@ -5266,11 +5266,27 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
         }];
       },
     });
+    // The initial R2 run has no usable sources but has not passed the shared
+    // grace threshold. It must not terminalize or authorize another run yet.
     expect(r2.result, JSON.stringify(r2.result)).toMatchObject({
-      created: true, headSha: HEAD, runnerReason: expect.stringContaining('gpt_source_non_complete:'),
+      created: true, headSha: HEAD, runnerReason: 'gpt_sources_waiting_for_grace:0/3',
     });
     const r2Id = String(r2.result.runId);
     expect(r2Id).not.toBe(f.original.id);
+    expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
+    // Simulate the same runner becoming dead and its real grace interval
+    // elapsing; only the existing reconciler may then terminalize safe 0/3.
+    updatePackReviewRun(r2Id, { runnerPid: 2147483647 }, f.options);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(Date.now() + 60 * 60_000));
+      const afterGrace = await f.reconcile();
+      expect(afterGrace.results.find((row) => row.runId === r2Id && row.terminalized)).toMatchObject({
+        terminalized: true, statusReconciled: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
     expect(getPackReviewRun(r2Id, f.options)).toMatchObject({
       status: 'failed', failureReason: expect.stringContaining('gpt_source_non_complete:'),
     });
