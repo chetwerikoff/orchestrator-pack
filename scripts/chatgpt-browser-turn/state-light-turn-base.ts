@@ -57,7 +57,7 @@ import {
   verifyStateLightFreshClaimOwnerFence,
   waitForConversationUrlAfterSend,
 } from './state-light-fresh-conversation.ts';
-import { configuredProfileKey } from './storage-common.ts';
+import { atomicJson, configuredProfileKey, profileDirs } from './storage-common.ts';
 import {
   admitStateLightTurnObservation,
   finalizeStateLightPrimaryPublication,
@@ -69,6 +69,10 @@ import {
   ASSISTANT_TURN_ACTION_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   classifyProductWall,
+  classifyConversationProductWall,
+  heldPage429Diagnostic,
+  observeHeldPageConversation429,
+  type HeldPage429Witness,
   COMPOSER_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
   loadChromium,
@@ -126,6 +130,77 @@ import {
   type ObservationHeartbeatV1,
   type TurnScopedHeartbeatScheduler,
 } from './liveness-contract.ts';
+
+// #2617: the sole shared-Chrome cross-invocation admission value is an
+// actionable, finite epoch-ms cooldown (no turn slots or failure hold).
+const ACCOUNT_COOLDOWN_FILE = 'state-light-account-cooldown.v1.json';
+const ACCOUNT_COOLDOWN_GUARD = 'state-light-account-cooldown.v1.guard';
+const ACCOUNT_COOLDOWN_MS = 300_000;
+const ACCOUNT_COOLDOWN_ACTIONABLE_MS = ACCOUNT_COOLDOWN_MS + 1_000;
+
+export interface StateLightAccountCooldown {
+  readonly active: boolean;
+  readonly until?: number;
+  readonly diagnostic?: string;
+}
+
+export function readStateLightAccountCooldown(
+  profileKey: string, nowMs = Date.now(),
+): StateLightAccountCooldown {
+  try {
+    const path = join(profileDirs(profileKey).locks, ACCOUNT_COOLDOWN_FILE);
+    let raw: string;
+    try {
+      raw = readFileSync(path, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { active: false };
+      return { active: false, diagnostic: 'account_cooldown_unreadable' };
+    }
+    let record: unknown;
+    try { record = JSON.parse(raw); }
+    catch { return { active: false, diagnostic: 'account_cooldown_malformed' }; }
+    if (!record || typeof record !== 'object' || Array.isArray(record)
+      || Object.keys(record).length !== 1 || !Object.hasOwn(record, 'cooldown_until_ms')) {
+      return { active: false, diagnostic: 'account_cooldown_wrong_shape' };
+    }
+    const until = (record as { cooldown_until_ms?: unknown }).cooldown_until_ms;
+    if (typeof until !== 'number' || !Number.isSafeInteger(until) || until < 0) {
+      return { active: false, diagnostic: 'account_cooldown_invalid_deadline' };
+    }
+    if (until <= nowMs) return { active: false, diagnostic: 'account_cooldown_expired' };
+    if (until > nowMs + ACCOUNT_COOLDOWN_ACTIONABLE_MS) {
+      return { active: false, diagnostic: 'account_cooldown_far_future' };
+    }
+    return { active: true, until };
+  } catch {
+    // An inaccessible shared store never becomes a physical Send admission failure.
+    return { active: false, diagnostic: 'account_cooldown_store_unavailable' };
+  }
+}
+
+export function publishWitnessedStateLight429(
+  profileKey: string, nowMs = Date.now(),
+): StateLightAccountCooldown {
+  let guardFd: number | undefined;
+  let guardPath: string | undefined;
+  try {
+    const locks = profileDirs(profileKey).locks;
+    guardPath = join(locks, ACCOUNT_COOLDOWN_GUARD);
+    // Short writer-integrity guard only: no persistent owner, lease, wait or slot.
+    guardFd = openSync(guardPath, 'wx', 0o600);
+    const previous = readStateLightAccountCooldown(profileKey, nowMs);
+    const until = Math.max(nowMs + ACCOUNT_COOLDOWN_MS, previous.active ? previous.until! : 0);
+    atomicJson(join(locks, ACCOUNT_COOLDOWN_FILE), { cooldown_until_ms: until });
+    return { active: true, until };
+  } catch {
+    return { active: false, diagnostic: 'account_cooldown_write_unavailable' };
+  } finally {
+    if (guardFd !== undefined) {
+      try { closeSync(guardFd); } catch { /* the unavailability remains fail-open */ }
+      try { if (guardPath) unlinkSync(guardPath); } catch { /* diagnostic only */ }
+    }
+  }
+}
 
 export { stopOwnedGeneration };
 export type { StopOwnedGenerationOutcome };
@@ -1967,14 +2042,32 @@ export async function classifySendLandingEvidence(
 
 function recordProductWallAdvisory(
   profileKey: string,
-  diagnostic: ProductWallDiagnostic,
+  diagnostic: ProductWallDiagnostic<true>,
   invocationId: string,
 ): void {
-  if (diagnostic.wall_kind === 'none') return;
+  if (diagnostic.wall_kind === 'none'
+    || diagnostic.wall_kind === 'conversation_fetch_http_429'
+    || diagnostic.wall_kind === 'conversation_load_error'
+    || diagnostic.wall_kind === 'account_conversations_http_429') return;
   recordStateLightAdvisoryWall(
     profileKey, diagnostic.wall_kind, `${diagnostic.wall_kind}_detected`,
-    invocationId, undefined, undefined, diagnostic,
+    invocationId, undefined, undefined, {
+      wall_kind: diagnostic.wall_kind, matched_text: diagnostic.matched_text,
+      matched_selector: diagnostic.matched_selector,
+    },
   );
+}
+
+type StateLightObservedWall = ReturnType<typeof classifyProductWall> | ProductWallDiagnostic<true>;
+
+function classifyStateLightProductWall(
+  surface: Awaited<ReturnType<typeof productStatusText>>,
+): StateLightObservedWall {
+  const legacy = classifyProductWall(surface);
+  const conversation = classifyConversationProductWall(surface);
+  if (conversation.http_status === 429) return conversation;
+  if (legacy.state === 'recovery_required') return legacy;
+  return conversation.wall_kind === 'none' ? legacy : conversation;
 }
 
 async function readPostSendObservation(
@@ -1982,10 +2075,10 @@ async function readPostSendObservation(
   expectedMarker: string,
   baselineCount: number,
   deadlineMs: number,
-  observeProductWall?: (diagnostic: ReturnType<typeof classifyProductWall>) => void,
+  observeProductWall?: (diagnostic: StateLightObservedWall) => void,
 ): Promise<{
   readonly messages: PageMessage[];
-  readonly wall: ReturnType<typeof classifyProductWall>;
+  readonly wall: StateLightObservedWall;
   readonly pageTurnEvidence?: BrowserGptPageTurnEvidence;
   readonly ownedWindowCompletionReady: boolean;
   readonly transcriptIncomplete: boolean;
@@ -2004,11 +2097,11 @@ async function readPostSendObservation(
     false,
     deadlineMs,
   );
-  let wall: ReturnType<typeof classifyProductWall> = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
+  let wall: StateLightObservedWall = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
   try {
     const wallProbeMs = Math.min(POST_SEND_PRODUCT_WALL_PROBE_MS, deadlineMs - Date.now());
     if (wallProbeMs > 0) {
-      wall = classifyProductWall(await productStatusText(page, wallProbeMs));
+      wall = classifyStateLightProductWall(await productStatusText(page, wallProbeMs));
       observeProductWall?.(wall);
     }
   } catch (error) {
@@ -2421,6 +2514,7 @@ async function waitForComposer(
   observeProductWall?: (diagnostic: ReturnType<typeof classifyProductWall>) => void,
   detectAccountLoadError = false,
   observeComposer?: (state: 'absent' | 'disabled' | 'hidden' | 'not_editable' | 'ready' | 'unknown') => void,
+  observeConversationWall?: (diagnostic: ProductWallDiagnostic<true>) => void,
 ): Promise<{ state: 'ready' } | { state: TurnState; cause: string }> {
   // Preserve the legacy two-argument helper contract used by in-process tests.
   // Committed pre-send navigations explicitly opt into the whole invocation deadline.
@@ -2432,12 +2526,22 @@ async function waitForComposer(
     let remainingMs = readinessDeadline - Date.now();
     if (remainingMs <= 0) break;
     try {
-      const wall = classifyProductWall(
-        await productStatusText(page, Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs)),
-      );
-      observeProductWall?.(wall);
+      const surface = await productStatusText(page, Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs));
+      const wall = classifyStateLightProductWall(surface);
+      observeProductWall?.(classifyProductWall(surface));
+      if ('wall_kind' in wall && (wall.wall_kind === 'conversation_load_error'
+        || wall.wall_kind === 'conversation_fetch_http_429'
+        || wall.wall_kind === 'account_conversations_http_429')) observeConversationWall?.(wall);
+      const held429 = heldPage429Diagnostic(page);
+      if (held429) {
+        observeConversationWall?.(held429);
+        return { state: 'rate_limit', cause: held429.wall_kind };
+      }
       if (detectAccountLoadError && 'wall_kind' in wall && wall.wall_kind === 'account_load_error') {
         return { state: 'ui_contract_mismatch', cause: 'account_load_error' };
+      }
+      if ('wall_kind' in wall && wall.wall_kind === 'conversation_load_error') {
+        return { state: 'recovery_required', cause: 'conversation_load_error' };
       }
       if (wall.state === 'recovery_required') return { state: 'recovery_required', cause: wall.cause };
     } catch {
@@ -2448,7 +2552,14 @@ async function waitForComposer(
       // Preserve only witnessed transport failures; a slow/disabled composer is
       // not a network error. A later ready composer supersedes these probes.
       if (cause === 'network_changed' || observedFailure !== 'network_changed') observedFailure = cause;
-    })) return { state: 'ready' };
+    })) {
+      const late429 = heldPage429Diagnostic(page);
+      if (late429) {
+        observeConversationWall?.(late429);
+        return { state: 'rate_limit', cause: late429.wall_kind };
+      }
+      return { state: 'ready' };
+    }
     remainingMs = readinessDeadline - Date.now();
     if (remainingMs <= 0) break;
     await sleep(page, Math.min(INITIAL_POLL_MS, remainingMs));
@@ -2481,6 +2592,7 @@ async function mutateComposerOrCause(
     insertionDeadlineMs?: number;
     diagnostic?: ComposerMutationDiagnosticV1;
   },
+  beforeAction?: () => void,
 ): Promise<PreSendComposerFailureCause | null> {
   const composer = page.locator(COMPOSER_SELECTOR);
   const insertionStart = Date.now();
@@ -2517,13 +2629,18 @@ async function mutateComposerOrCause(
     try {
       let actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (actionBudgetMs <= 0) return exhausted('budget_before_click');
+      beforeAction?.();
       await composer.click({ timeout: actionBudgetMs });
       actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (actionBudgetMs <= 0) return exhausted('budget_before_fill');
+      beforeAction?.();
       await composer.fill(text, { timeout: actionBudgetMs });
       // If readiness recovered during the attempt, proceed to dispatch.
       if (await readComposerReadiness(page, insertionDeadlineMs)) return null;
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && (error.message === 'conversation_fetch_http_429'
+        || error.message === 'account_conversations_http_429'
+        || error.message === 'account_cooldown_active')) throw error;
       // The mutation was attempted; classify from the pre-attempt presence proof.
     }
     return composerAbsent ? 'composer_unavailable' : exhausted('readiness_before_click');
@@ -2532,6 +2649,7 @@ async function mutateComposerOrCause(
   try {
     let actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
     if (actionBudgetMs <= 0) return exhausted('budget_before_click');
+    beforeAction?.();
     await composer.click({ timeout: actionBudgetMs });
     if (Date.now() >= insertionDeadlineMs) return exhausted('after_click');
 
@@ -2542,10 +2660,14 @@ async function mutateComposerOrCause(
     }
     actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
     if (actionBudgetMs <= 0) return exhausted('budget_before_fill2');
+    beforeAction?.();
     await composer.fill(text, { timeout: actionBudgetMs });
     if (Date.now() >= insertionDeadlineMs) return 'composer_mutation_budget_exhausted';
     return null;
   } catch (error) {
+    if (error instanceof Error && (error.message === 'conversation_fetch_http_429'
+      || error.message === 'account_conversations_http_429'
+      || error.message === 'account_cooldown_active')) throw error;
     if (
       isPlaywrightTimeoutError(error)
       && await hasBlockingPageOverlay(page, invocationDeadlineMs)
@@ -2667,6 +2789,7 @@ async function navigateOwnedTurnPage(
   config: BrowserConfig,
   navigation: StateLightNavigationCounter,
   invocationDeadlineMs: number,
+  beforeGoto?: () => void,
 ): Promise<void> {
   const target = config.newChat
     ? projectConversationPrefix(config.projectUrl ?? '')
@@ -2674,6 +2797,7 @@ async function navigateOwnedTurnPage(
   if (!target) throw new Error('ui_contract_mismatch:target_required');
   const remainingMs = invocationDeadlineMs - Date.now();
   if (remainingMs <= 0) throw new BrowserOperationTimeoutError('navigation');
+  beforeGoto?.();
   navigation.recordGoto();
   await page.goto(target, {
     waitUntil: 'commit',
@@ -2906,16 +3030,28 @@ async function runTurn(
   heartbeatSchedulerReady?: (scheduler: TurnScopedHeartbeatScheduler) => void,
   freshCleanup?: FreshComposerCleanupContext,
 ): Promise<TurnRunOutcome> {
-  let diagnostic: ProductWallDiagnostic = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
+  let diagnostic: ProductWallDiagnostic<true> = { wall_kind: 'none', matched_text: 'none', matched_selector: 'none' };
   freshCleanup ??= {};
   try {
     const outcome = await runTurnCore(args, recoveryHooks, entryLivenessHeartbeat, heartbeatSchedulerReady, (value) => {
-      if (value.matched_text !== 'none') diagnostic = value;
+      if (value.wall_kind === 'account_load_error') diagnostic = value;
+      else if (value.wall_kind === 'conversation_fetch_http_429'
+        || value.wall_kind === 'account_conversations_http_429') {
+        if (diagnostic.wall_kind !== 'account_load_error') diagnostic = value;
+      } else if (diagnostic.http_status !== 429 && diagnostic.wall_kind !== 'account_load_error'
+        && (value.wall_kind !== 'none' || value.matched_text !== 'none')) diagnostic = value;
     }, freshCleanup);
+    // A named product-wall stop never grants authority to close the held Page.
+    if (outcome.page && typeof outcome.page === 'object'
+      && (diagnostic.http_status === 429 || diagnostic.wall_kind === 'conversation_load_error'
+        || outcome.result.cause === 'account_cooldown_active')) {
+      cleanupAuthorityUnprovenPages.add(outcome.page);
+    }
     return { ...outcome, result: { ...outcome.result, product_wall_diagnostic: diagnostic } };
   } finally {
     try {
       if (freshCleanup.page && !freshCleanup.sendAttempted
+        && diagnostic.http_status !== 429
         && isBlankProjectSurfaceUrl(String(freshCleanup.page.url()), freshCleanup.projectUrl ?? '')) {
         await clearFreshComposerDraft(freshCleanup.page);
       }
@@ -2930,7 +3066,7 @@ async function runTurnCore(
   recoveryHooks: StateLightRecoveryHooks,
   entryLivenessHeartbeat: boolean,
   heartbeatSchedulerReady: ((scheduler: TurnScopedHeartbeatScheduler) => void) | undefined,
-  onProductWallDiagnostic: (diagnostic: ProductWallDiagnostic) => void,
+  onProductWallDiagnostic: (diagnostic: ProductWallDiagnostic<true>) => void,
   freshCleanup?: FreshComposerCleanupContext,
 ): Promise<TurnRunOutcome> {
   rejectUnknownOptions(args, [
@@ -2994,6 +3130,8 @@ async function runTurnCore(
 
   let preSendComposerState = 'not_probed';
   let observedProductErrorText = '';
+  let held429Witness: HeldPage429Witness | undefined;
+  let held429Page: any;
   const preSendPageRoute = (): string => {
     try {
       const url = new URL(String(page.url()));
@@ -3008,14 +3146,62 @@ async function runTurnCore(
       `${cause};composer=${preSendComposerState};url=${preSendPageRoute()};product_error=${observedProductErrorText.slice(0, 160)}`,
       'return_local_error');
   };
-  const observeProductWall = (wall: ReturnType<typeof classifyProductWall>): void => {
-    if (!('wall_kind' in wall) || wall.matched_text === 'none') return;
-    observedProductErrorText = wall.matched_text.replace(/\s+/gu, ' ').slice(0, 160);
-    onProductWallDiagnostic(wall);
-    if (wall.wall_kind !== 'none') {
-      try { recordProductWallAdvisory(profileKey, wall, invocationId); } catch { /* advisory I/O is fail-open */ }
+  const observeProductWall = (wall: StateLightObservedWall): void => {
+    const witnessed = heldPage429Diagnostic(page);
+    const isAccountHeading = 'wall_kind' in wall && wall.wall_kind === 'account_load_error';
+    const hasConversationHeading = 'wall_kind' in wall
+      && (wall.wall_kind === 'conversation_load_error'
+        || wall.wall_kind === 'conversation_fetch_http_429')
+      && wall.matched_text !== 'none';
+    const value = witnessed && !isAccountHeading
+      ? { ...witnessed,
+        matched_text: hasConversationHeading ? wall.matched_text : witnessed.matched_text,
+        matched_selector: hasConversationHeading ? wall.matched_selector : witnessed.matched_selector }
+      : wall;
+    if (!('wall_kind' in value) || (value.matched_text === 'none' && value.wall_kind === 'none')) return;
+    if (value.matched_text !== 'none') {
+      observedProductErrorText = value.matched_text.replace(/\s+/gu, ' ').slice(0, 160);
+    }
+    onProductWallDiagnostic(value);
+    if (value.wall_kind !== 'none') {
+      try { recordProductWallAdvisory(profileKey, value, invocationId); } catch { /* advisory I/O is fail-open */ }
     }
   };
+  const attachHeld429 = (heldPage: any, ownedChatUrl?: string): void => {
+    held429Witness?.dispose();
+    held429Page = heldPage;
+    held429Witness = observeHeldPageConversation429(heldPage, ownedChatUrl, (observed) => {
+      const published = publishWitnessedStateLight429(profileKey);
+      if (published.diagnostic) {
+        incident('shared_account_cooldown_diagnostic', published.diagnostic, 'fail_open');
+      }
+      onProductWallDiagnostic({ ...observed, matched_text: 'none', matched_selector: 'none' });
+    });
+  };
+  const beforeBrowserAction = (): void => {
+    const owned429 = heldPage429Diagnostic(page);
+    if (owned429) {
+      onProductWallDiagnostic(owned429);
+      throw new Error(owned429.wall_kind);
+    }
+    const cooldown = readStateLightAccountCooldown(profileKey);
+    if (cooldown.diagnostic) {
+      incident('shared_account_cooldown_diagnostic', cooldown.diagnostic, 'fail_open');
+    }
+    if (cooldown.active) throw new Error('account_cooldown_active');
+  };
+  // Fresh preparation owns its internal goto. Intercept its existing counter hook
+  // immediately before that goto without modifying the excluded helper module.
+  const guardedFreshPreparationNavigation = new Proxy(navigation, {
+    get(target, property, receiver) {
+      if (property === 'recordGoto') return () => {
+        beforeBrowserAction();
+        target.recordGoto();
+        held429Witness?.beforeNavigation();
+      };
+      return Reflect.get(target, property, receiver);
+    },
+  });
 
   try {
     if (!invocationId) throw new Error('input_invalid:invocation_id_required');
@@ -3122,6 +3308,7 @@ async function runTurnCore(
     const selection = await selectConversationPage(browser, chromium, config, invocationBudget);
     browser = selection.browser;
     page = selection.page;
+    if (page) attachHeld429(page, !config.newChat ? config.chatUrl : undefined);
     if (page && typeof page === 'object') {
       // Existing tabs and URL-reselected CDP targets are not direct creation
       // handles; never infer cleanup authority from matching URLs.
@@ -3129,12 +3316,14 @@ async function runTurnCore(
     }
     if (!page) {
       page = await createDedicatedTurnPage(browser, invocationBudget);
+      attachHeld429(page, !config.newChat ? config.chatUrl : undefined);
       if (config.newChat && freshCleanup) {
         freshCleanup.page = page;
         freshCleanup.projectUrl = config.projectUrl;
       }
       try {
-        await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs);
+        // First owned-page load is not a shared cooldown admission gate.
+        await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs, () => { if (heldPage429Diagnostic(page)) beforeBrowserAction(); held429Witness?.beforeNavigation(); });
       } catch (error) {
         // One total pre-Send reopen: an initial failed committed navigation
         // consumes the first opening; retry only on the same created Page.
@@ -3144,7 +3333,7 @@ async function runTurnCore(
             && !(error instanceof Error && /timeout|net::ERR_|navigation|fetch/iu.test(error.message))) {
           throw error;
         }
-        await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs);
+        await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs, () => { beforeBrowserAction(); held429Witness?.beforeNavigation(); });
       }
     }
 
@@ -3222,7 +3411,9 @@ async function runTurnCore(
         : invocationDeadlineMs - RESOURCE_CLEANUP_BOUND_MS - 2_000;
       const availableMs = returnByMs - Date.now();
       if (availableMs <= 1_000) return accountErrorTerminal();
+      beforeBrowserAction(); // Shared cooldown and first witnessed 429 forbid a new reload.
       accountReloadAttempted = true; // Failure consumes the only allowance.
+      held429Witness?.beforeNavigation();
       try {
         await boundedBrowserRead(
           page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(25_000, availableMs - 500) }),
@@ -3285,6 +3476,7 @@ async function runTurnCore(
       let readiness = await waitForComposer(
         page, deadlineMs, true, observeProductWall, true,
         (state) => { preSendComposerState = state; },
+        observeProductWall,
       );
       while (readiness.state === 'ui_contract_mismatch' && readiness.cause === 'account_load_error') {
         const recovery = await checkAccountLoadError();
@@ -3292,6 +3484,7 @@ async function runTurnCore(
         readiness = await waitForComposer(
           page, deadlineMs, true, observeProductWall, true,
           (state) => { preSendComposerState = state; },
+          observeProductWall,
         );
       }
       return readiness;
@@ -3356,6 +3549,8 @@ async function runTurnCore(
 
     const markedPayload = wrapOwnedPromptPayload(marker, snapshot.text);
     const assertFreshOwner = (): void => {
+      // Preserve a positively witnessed first wall before diagnosing a redirected fresh URL.
+      beforeBrowserAction();
       if (Date.now() >= invocationDeadlineMs) {
         throw new Error('state_light_new_chat_owner_pre_dispatch_deadline_exhausted');
       }
@@ -3519,9 +3714,13 @@ async function runTurnCore(
         freshCleanup.markedPayload = markedPayload;
       }
       const insertionContext: { insertionDeadlineMs?: number; diagnostic?: ComposerMutationDiagnosticV1 } = {};
-      const mutationFailure = await mutateComposerOrCause(page, markedPayload, invocationDeadlineMs, insertionContext);
+      beforeBrowserAction();
+      const mutationFailure = await mutateComposerOrCause(page, markedPayload, invocationDeadlineMs, insertionContext, beforeBrowserAction);
       assertFreshOwner();
-      if (mutationFailure) return returnComposerMutationFailure(mutationFailure, insertionContext.diagnostic);
+      if (mutationFailure) {
+        if (held429Witness?.current()) beforeBrowserAction();
+        return returnComposerMutationFailure(mutationFailure, insertionContext.diagnostic);
+      }
       requireFreshSendReserve(FRESH_SEND_PREPARE_RESERVE_MS);
       if (!await readComposerReadiness(page, invocationDeadlineMs)) {
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
@@ -3570,6 +3769,7 @@ async function runTurnCore(
         };
       }
       const beforeClick = (): void => {
+        beforeBrowserAction();
         assertFreshOwner();
         if (Date.now() >= invocationDeadlineMs) throw new Error('state_light_new_chat_send_budget_unavailable');
         if (Date.now() >= readinessDeadlineMs) throw new Error('fresh_send_readiness_deadline_exhausted');
@@ -3645,14 +3845,22 @@ async function runTurnCore(
     const sendOwnedPrompt = async (): Promise<TurnRunOutcome | null> => {
       if (config.newChat) return await sendOwnedFreshPrompt();
       setHeartbeatPhase('composer_dispatch');
+      // Initial and reopened continuations share the incumbent complete-history guard.
+      const preInsertHistoryFailure = await verifyReopenedExistingPage();
+      if (preInsertHistoryFailure) return preInsertHistoryFailure;
+      beforeBrowserAction();
       const insertionContext: { insertionDeadlineMs?: number; diagnostic?: ComposerMutationDiagnosticV1 } = {};
       const mutationFailure = await mutateComposerOrCause(
         page,
         markedPayload,
         invocationDeadlineMs,
         insertionContext,
+        beforeBrowserAction,
       );
-      if (mutationFailure) return returnComposerMutationFailure(mutationFailure, insertionContext.diagnostic);
+      if (mutationFailure) {
+        if (held429Witness?.current()) beforeBrowserAction();
+        return returnComposerMutationFailure(mutationFailure, insertionContext.diagnostic);
+      }
       const insertionDeadlineMs = insertionContext.insertionDeadlineMs ?? invocationDeadlineMs;
       let remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
@@ -3677,7 +3885,7 @@ async function runTurnCore(
       await markPreSendAlerts(page, Math.min(MAX_LOCAL_READ_WAIT_MS, sendWaitMs));
       sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
-      if (reopenedExistingComposer) {
+      {
         const beforeDispatchFailure = await verifyReopenedExistingPage();
         if (beforeDispatchFailure) return beforeDispatchFailure;
         sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
@@ -3722,6 +3930,7 @@ async function runTurnCore(
           invocationDeadlineMs,
           preSendAlertsAlreadyMarked: true,
           onDispatch: () => {
+            beforeBrowserAction();
             transitionStateLightTurnObservation({
               profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
             });
@@ -3813,6 +4022,8 @@ async function runTurnCore(
           prepared: Awaited<ReturnType<typeof prepareStateLightFreshConversation>>,
         ): TurnRunOutcome | null => {
           if (prepared.state === 'ready') return null;
+          // A swallowed internal navigation refusal must retain its named first-wall/cooldown cause.
+          beforeBrowserAction();
           incident('invocation_blocker', prepared.cause, 'return_local_error');
           return {
             page,
@@ -3858,7 +4069,7 @@ async function runTurnCore(
           config,
           profileKey,
           invocationId,
-          navigation,
+          guardedFreshPreparationNavigation,
           invocationDeadlineMs,
           Date.now,
           observeProductWall,
@@ -3868,7 +4079,7 @@ async function runTurnCore(
           const recovery = await checkAccountLoadError();
           if (recovery && recovery !== 'recovered') return recovery;
           if (recovery === 'recovered') initialPrepare = await prepareStateLightFreshConversation(
-            page, config, profileKey, invocationId, navigation, invocationDeadlineMs,
+            page, config, profileKey, invocationId, guardedFreshPreparationNavigation, invocationDeadlineMs,
             Date.now, observeProductWall, 2,
           );
           if (initialPrepare.state === 'recovery_required') return accountErrorTerminal();
@@ -3896,10 +4107,10 @@ async function runTurnCore(
           const beforeReopen = await checkAccountLoadError();
           if (beforeReopen && beforeReopen !== 'recovered') return beforeReopen;
           if (beforeReopen !== 'recovered') {
-            await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs);
+            await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs, () => { beforeBrowserAction(); held429Witness?.beforeNavigation(); });
           }
           const reopened = await prepareStateLightFreshConversation(
-            page, config, profileKey, invocationId, navigation, invocationDeadlineMs,
+            page, config, profileKey, invocationId, guardedFreshPreparationNavigation, invocationDeadlineMs,
             Date.now, observeProductWall, 2,
           );
           const prepareFailure = returnFreshPrepareFailure(reopened);
@@ -3916,6 +4127,7 @@ async function runTurnCore(
         let sendAuthorized = true;
         let lastAttemptConversationUrl: string | undefined;
         for (let recovery = 0; recovery < STATE_LIGHT_FRESH_RECOVERY_ATTEMPTS && !claimed; recovery++) {
+          if (recovery > 0) beforeBrowserAction();
           // A dispatched action with unknown delivery is never a pre-Send
           // collision license for another fresh Send.
           if (recovery > 0 && sendAttempted) {
@@ -3973,7 +4185,7 @@ async function runTurnCore(
               config,
               profileKey,
               invocationId,
-              navigation,
+              guardedFreshPreparationNavigation,
               invocationDeadlineMs,
               Date.now,
               observeProductWall,
@@ -4192,6 +4404,9 @@ async function runTurnCore(
             }
             claimed = true;
             ownedConversationUrl = conversationUrl;
+            // The fresh Send positively owns this /c/<id> on the original Page too.
+            // Keep an earlier account-list first wall instead of replacing it.
+            if (!held429Witness?.current()) attachHeld429(page, conversationUrl);
             if (!deliveryProofPendingRecovery) emitCancellationReceipt(conversationUrl);
             break;
           }
@@ -4314,7 +4529,7 @@ async function runTurnCore(
             - (nothingToResumeBeforeReopen ? 0 : EXISTING_GENERATION_RESUME_WINDOW_MS)
             - insertionBudgetMs;
           try {
-            await navigateOwnedTurnPage(page, config, navigation, reopenDeadlineMs);
+            await navigateOwnedTurnPage(page, config, navigation, reopenDeadlineMs, () => { beforeBrowserAction(); held429Witness?.beforeNavigation(); });
           } catch (error) {
             if (browserOrPageDefinitelyLost(page, browser)) throw new Error('Target closed');
             const identity = readOwnedConversationIdentity(page, chatUrlTarget);
@@ -4435,6 +4650,11 @@ async function runTurnCore(
     }
 
     if (config.newChat && ownedConversationUrl && !browserOrPageDefinitelyLost(page, browser)) {
+      if (normalizeConversationUrl(String(page.url())) !== ownedConversationUrl) {
+        beforeBrowserAction();
+        attachHeld429(page, ownedConversationUrl);
+        held429Witness?.beforeNavigation();
+      }
       await navigateToProjectConversationIfNeeded(
         page,
         ownedConversationUrl,
@@ -4468,6 +4688,7 @@ async function runTurnCore(
     let freshMarkerlessReply = '';
     let streamRecoveryBannerReads = 0;
     let streamRecoveryBannerCause: string | undefined;
+    let witnessed429ReadOnlyPolls = 0;
     // Roleless recovery banners outlive the turn that raised them; one ends this
     // turn only after its own Stop was seen or the Stop grace since the send ran out.
     let ownedGenerationSeen = false;
@@ -4514,7 +4735,7 @@ async function runTurnCore(
           pollCount,
           navigation,
           incidents,
-          {},
+          { ...(sendAttempted ? { send_attempted: true } : {}) },
           journalWriteFailed,
         ),
       };
@@ -4535,6 +4756,15 @@ async function runTurnCore(
         ? Math.min(hardExhaustionDeadline, freshUnboundReturnByMs)
         : hardExhaustionDeadline;
       const recoveryAdapter: PostSendRecoveryAdapter = {
+      accountActionBlocker: () => {
+        const observed = held429Witness?.current();
+        if (observed) return observed.wall_kind;
+        const cooldown = readStateLightAccountCooldown(profileKey);
+        if (cooldown.diagnostic) {
+          incident('shared_account_cooldown_diagnostic', cooldown.diagnostic, 'fail_open');
+        }
+        return cooldown.active ? 'account_cooldown_active' : undefined;
+      },
       enumeratePages: async (activeBrowser) => {
         const contexts = (activeBrowser as any).contexts();
         if (!Array.isArray(contexts) || contexts.length !== 1) {
@@ -4608,10 +4838,14 @@ async function runTurnCore(
         });
       },
       createSuccessor: async (activeBrowser, immutableConversationUrl) => {
+        beforeBrowserAction();
         const recoveryBudget = createTurnOperationBudget(
           Math.max(0, recoveryDeadlineMs - Date.now()),
         );
         const successor = await createDedicatedTurnPage(activeBrowser, recoveryBudget);
+        attachHeld429(successor, immutableConversationUrl);
+        beforeBrowserAction();
+        held429Witness?.beforeNavigation();
         navigation.recordGoto();
         await successor.goto(immutableConversationUrl, {
           waitUntil: 'domcontentloaded',
@@ -4645,7 +4879,7 @@ async function runTurnCore(
         if (census.monotonicAmbiguity || matches.length > 1) {
           return unbound('owned_prompt_marker_ambiguous');
         }
-        if (!census.complete) return unbound('owned_conversation_recovery_census_failed');
+        if (!census.complete) return unbound(recoveryAdapter.accountActionBlocker?.() ?? 'owned_conversation_recovery_census_failed');
         if (matches.length === 0) return unbound('fresh_send_fetch_failed');
         const match = matches[0]!;
         if (!config.projectUrl || !projectConversationUrlMatchesProject(match.normalizedUrl, config.projectUrl)) {
@@ -4755,6 +4989,9 @@ async function runTurnCore(
         freshCleanup.ownedDeadLocalTimeoutMs = config.timeoutMs;
       }
       page = recovered.page;
+      if (held429Page !== page || (config.newChat && !held429Witness?.current())) {
+        attachHeld429(page, recovered.conversationUrl);
+      }
       if (!recovered.cleanupOwned && page && typeof page === 'object') {
         cleanupAuthorityUnprovenPages.add(page);
       }
@@ -4781,6 +5018,19 @@ async function runTurnCore(
     // must instead return within its pre-Send invocation budget, including
     // bounded cleanup; the 2 x timeout threshold is not a hard exit.
     while (true) {
+      const witnessed429 = held429Witness?.current();
+      if (witnessed429 && ++witnessed429ReadOnlyPolls > 3) {
+        incident('post_send_observation_error', witnessed429.wall_kind, 'retain_owned_page_no_resend');
+        return {
+          page, browser, cleanupAction: 'preserve',
+          result: compactResult(
+            'observation_uncertain', 'invocation', witnessed429.wall_kind,
+            invocationId, profileKey, sendCount, pollCount, navigation, incidents,
+            { ...(sendAttempted ? { send_attempted: true } : {}) },
+            journalWriteFailed,
+          ),
+        };
+      }
       if (config.newChat && !ownedConversationUrl
         && (sendCount >= 1 || deliveryProofPendingRecovery || zeroWitnessAccountRecovery)
         && Date.now() >= freshUnboundReturnByMs) {
@@ -4820,6 +5070,11 @@ async function runTurnCore(
       pollCount++;
       if (config.newChat && sendCount >= 1 && ownedConversationUrl) {
         recoveryState.immutableConversationUrl = ownedConversationUrl;
+        if (normalizeConversationUrl(String(page.url())) !== ownedConversationUrl) {
+          beforeBrowserAction();
+          attachHeld429(page, ownedConversationUrl);
+          held429Witness?.beforeNavigation();
+        }
         await navigateToProjectConversationIfNeeded(
           page,
           ownedConversationUrl,
@@ -4971,7 +5226,19 @@ async function runTurnCore(
           incident,
         );
       }
-      if (wall.state === 'recovery_required' && (
+      if ('wall_kind' in wall && wall.wall_kind === 'conversation_load_error' && !held429Witness?.current()) {
+        incident('post_send_observation_error', 'conversation_load_error', 'retain_owned_page_no_resend');
+        return {
+          page, browser, cleanupAction: 'preserve',
+          result: compactResult(
+            'observation_uncertain', 'invocation', 'conversation_load_error',
+            invocationId, profileKey, sendCount, pollCount, navigation, incidents,
+            { ...(sendAttempted ? { send_attempted: true } : {}) },
+            journalWriteFailed,
+          ),
+        };
+      }
+      if (wall.state === 'recovery_required' && !held429Witness?.current() && (
         recoveryBannerTrusted || (wall.cause !== 'stream_recovery_polling_timed_out' && wall.cause !== 'message_stream_error')
       )) {
         const cause = wall.cause;
@@ -5114,6 +5381,7 @@ async function runTurnCore(
             conversationUrl: observedConversationUrl,
           });
           ownedConversationUrl = observedConversationUrl;
+          if (!held429Witness?.current()) attachHeld429(page, observedConversationUrl);
           recoveryState.immutableConversationUrl = observedConversationUrl;
           emitCancellationReceipt(observedConversationUrl);
         }
@@ -5358,6 +5626,7 @@ async function runTurnCore(
       ) {
         markerlessFinishedReads += 1;
         if (markerlessFinishedReads >= MARKERLESS_RELOAD_SETTLE_READS) {
+          beforeBrowserAction();
           markerlessReloadUsed = true;
           incident(
             'post_send_observation_error',
@@ -5365,6 +5634,7 @@ async function runTurnCore(
             'reload_owned_conversation_no_resend',
           );
           try {
+            held429Witness?.beforeNavigation();
             navigation.recordGoto();
             await page.goto(durableConversationUrl, {
               waitUntil: 'domcontentloaded',
@@ -5547,7 +5817,9 @@ async function runTurnCore(
               page,
               hardExhaustionDeadline,
               continuationCarrier.domIndex,
-              continuationCarrier.continuationVisible === true,
+              continuationCarrier.continuationVisible === true
+                && !held429Witness?.current()
+                && !readStateLightAccountCooldown(profileKey).active,
             );
           }
         } catch (error) {
@@ -6004,18 +6276,24 @@ async function runTurnCore(
     const isInput = message.startsWith('input_invalid:');
     const isOutput = message.startsWith('output_conflict:');
     const isUi = message.startsWith('ui_contract_mismatch:');
+    const isAccountCooldown = message === 'account_cooldown_active';
+    const isNamed429 = message === 'conversation_fetch_http_429'
+      || message === 'account_conversations_http_429';
+    const isSharedBlocked = isNamed429 || isAccountCooldown;
     const state: TurnState = isInput
       ? 'input_invalid'
       : isOutput
         ? 'output_conflict'
-        : isUi || (!afterSend && /ERR_NETWORK_CHANGED/iu.test(message))
-          ? 'ui_contract_mismatch'
-          : 'driver_error';
+        : isSharedBlocked
+          ? (afterSend || sendAttempted ? 'observation_uncertain' : 'rate_limit')
+          : isUi || (!afterSend && /ERR_NETWORK_CHANGED/iu.test(message))
+            ? 'ui_contract_mismatch'
+            : 'driver_error';
     const retirementCleanupRequired = message === 'observation_mutation_retirement_cleanup_required';
     const holderTimeout = error instanceof StateLightSendSlotTimeoutError ? error : undefined;
     const lostAfterSend = afterSend && browserOrPageDefinitelyLost(page, browser);
     const observedNetworkChange = !afterSend && /ERR_NETWORK_CHANGED/iu.test(message);
-    const cause = observedNetworkChange ? 'network_changed' : retirementCleanupRequired
+    const cause = isSharedBlocked ? message : observedNetworkChange ? 'network_changed' : retirementCleanupRequired
       ? message
       : afterSend
         ? lostAfterSend
@@ -6035,17 +6313,20 @@ async function runTurnCore(
         cause,
         retirementCleanupRequired
           ? 'retry_cleanup_later_no_resend'
-          : afterSend
-            ? lostAfterSend
-              ? 'skip_lost_page_no_resend'
-              : 'retain_owned_page_no_resend'
-            : 'return_local_error',
+          : isSharedBlocked
+            ? 'retain_owned_page_no_resend'
+            : afterSend
+              ? lostAfterSend
+                ? 'skip_lost_page_no_resend'
+                : 'retain_owned_page_no_resend'
+              : 'return_local_error',
       );
     }
     return {
       ...(page ? { page } : {}),
       ...(browser ? { browser } : {}),
       ...(lostAfterSend ? { cleanupAction: 'skip' as const } : {}),
+      ...(isSharedBlocked && !lostAfterSend ? { cleanupAction: 'preserve' as const } : {}),
       ...(ownershipForfeited ? { ownershipForfeited: true, cleanupAction: 'preserve' as const } : {}),
       result: {
         ...compactResult(
@@ -6069,6 +6350,8 @@ async function runTurnCore(
         ...(retirementCleanupRequired ? { retirement_cleanup_required: true } : {}),
       },
     };
+  } finally {
+    held429Witness?.dispose();
   }
 }
 

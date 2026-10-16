@@ -83,6 +83,9 @@ export interface PostSendRecoveryAdapter {
   readonly createSuccessor: (browser: unknown, immutableConversationUrl: string) => Promise<unknown>;
   readonly sleep: (milliseconds: number) => Promise<void>;
   readonly now: () => number;
+  /** Existing shared cooldown or an independently witnessed held-page 429.
+   * This only protects a new recovery fetch/navigation; read-only harvest can win. */
+  readonly accountActionBlocker?: () => string | undefined;
 }
 
 export interface PostSendRecoveryInput {
@@ -256,6 +259,7 @@ export async function runPostSendRecovery(
   let currentPage = input.currentPage;
   let beginLossEpoch = true;
   let seenMonotonicAmbiguity = false;
+  let censusReads = 0;
   if (state.immutableConversationUrl) {
     state.immutableConversationUrl = adapter.normalizeConversationUrl(state.immutableConversationUrl);
   }
@@ -312,6 +316,12 @@ export async function runPostSendRecovery(
       continue;
     }
 
+    if (censusReads > 0) {
+      const blocker = adapter.accountActionBlocker?.();
+      if (blocker) return failure(browser, state, 'observation_uncertain', blocker,
+        'post_send_observation_error', observer);
+    }
+    censusReads++;
     const census = await takeRecoveryCensus(
       browser, marker, adapter, state.immutableConversationUrl, state.successorPage,
     );
@@ -404,6 +414,9 @@ export async function runPostSendRecovery(
     // The existing one-shot successor is a read-only observation of this URL.
     if (immutableUrl && !state.successorCreated && !deadlineReached
       && (!census.complete || census.pages.length === 0)) {
+      const blocker = adapter.accountActionBlocker?.();
+      if (blocker) return failure(browser, state, 'observation_uncertain', blocker,
+        'post_send_observation_error', observer, census.incompleteReason);
       state.successorCreated = true;
       try {
         const successor = await adapter.createSuccessor(browser, immutableUrl);
