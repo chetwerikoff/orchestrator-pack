@@ -4969,14 +4969,14 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
 
   it.each([
     ['positive send count', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
-      ...slot, terminalResult: { ...slot.terminalResult, send_count: 1 },
+      ...slot, terminalResult: { ...(slot.terminalResult as Record<string, unknown>), send_count: 1 },
     })],
     ['send attempted despite count zero', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
-      ...slot, terminalResult: { ...slot.terminalResult, send_attempted: true },
+      ...slot, terminalResult: { ...(slot.terminalResult as Record<string, unknown>), send_attempted: true },
     })],
     ['persisted dispatch phase', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
       ...slot, terminalResult: {
-        ...slot.terminalResult,
+        ...(slot.terminalResult as Record<string, unknown>),
         diagnostics: { persisted_observation: { phase: 'dispatching', send_count: 0 } },
       },
     })],
@@ -4992,7 +4992,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       ...slot, terminalClass: 'possible_delivery',
     })],
     ['contradictory source reconciliation', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
-      ...slot, terminalResult: { ...slot.terminalResult, source_comment_reconciliation: 'conflict' },
+      ...slot, terminalResult: { ...(slot.terminalResult as Record<string, unknown>), source_comment_reconciliation: 'conflict' },
     })],
   ] as const)('never starts an unsafe new run when original has %s', async (_name, mutate) => {
     const f = fixture({ mutate });
@@ -5055,7 +5055,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       ...slot,
       terminalClass: 'driver_error:connect_over_cdp_failed',
       terminalResult: {
-        ...slot.terminalResult, state: 'driver_error', cause: 'connect_over_cdp_failed',
+        ...(slot.terminalResult as Record<string, unknown>), state: 'driver_error', cause: 'connect_over_cdp_failed',
       },
     }) });
     const result = await f.reconcile();
