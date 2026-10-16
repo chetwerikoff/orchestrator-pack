@@ -3517,6 +3517,12 @@ function provenFirstAttemptZeroSendCensus(
  * Only the original, failed, non-consuming GPT round is eligible. A generic
  * 0/3 failure, missing source, or rate-limit label alone never admits a send.
  */
+function hasFailedRateLimitSource(run: PackReviewRunRecord): boolean {
+  return run.status === 'failed'
+    && run.failureReason?.startsWith('gpt_source_non_complete:') === true
+    && run.reviewRound?.sourceSlots.some((slot) => slot.terminalClass?.startsWith('rate_limit:')) === true;
+}
+
 function originalRateLimitZeroJudgment(
   run: PackReviewRunRecord,
   storeRoot: string,
@@ -6346,12 +6352,14 @@ export async function reconcileStalePackReviewRuns(
         || (!needsStaleStatus && packReviewRequiredStatusStaleReconciliationComplete(run)))
       && await verifyNoJudgmentStatusTarget()) {
       const current = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
-      if (originalRateLimitZeroJudgment(current, storeRoot)) {
-        rateLimitAction = await proveRateLimitOriginalZeroSend({
-          run: current, projectId, storeRoot, repoSlug,
-          sourceRepoRoot: input.sourceRepoRoot,
-          transport: input.fixtureGptSourceCommentTransport,
-        })
+      if (hasFailedRateLimitSource(current)) {
+        const proved = originalRateLimitZeroJudgment(current, storeRoot)
+          && await proveRateLimitOriginalZeroSend({
+            run: current, projectId, storeRoot, repoSlug,
+            sourceRepoRoot: input.sourceRepoRoot,
+            transport: input.fixtureGptSourceCommentTransport,
+          });
+        rateLimitAction = proved
           ? rateLimitFreshReviewNextAction(current, projectId)
           : rateLimitOriginalRecoveryAction(current);
       }
@@ -7865,11 +7873,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           return rejectIncumbent(priorSameRound, 'gpt_incumbent_identity_mismatch',
             'reconcile the exact repository, frozen Issue snapshot and round before any incumbent continuation');
         }
-        const failedRateLimitRound = priorSameRound.status === 'failed'
-          && priorSameRound.failureReason?.startsWith('gpt_source_non_complete:') === true
-          && priorSameRound.reviewRound?.sourceSlots.some(
-            (slot) => slot.terminalClass?.startsWith('rate_limit:'),
-          ) === true;
+        const failedRateLimitRound = hasFailedRateLimitSource(priorSameRound);
         if (failedRateLimitRound && !originalRateLimitZeroJudgment(priorSameRound, storeRoot)) {
           return rejectIncumbent(priorSameRound, 'gpt_rate_limit_original_zero_send_unproven',
             rateLimitOriginalRecoveryAction(priorSameRound));
