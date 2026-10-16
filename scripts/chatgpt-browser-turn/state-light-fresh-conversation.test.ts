@@ -1414,6 +1414,68 @@ describe('state-light fresh conversation collision recovery', () => {
     });
   });
 
+  it.each(['late-owned', 'permanently-null', 'foreign-project'] as const)(
+    'Issue #2636: attempted-zero fresh Send preserves original Page owner through delayed URL (%s)',
+    async (scenario) => {
+      const invocationId = randomUUID();
+      const prompt = 'D46-FRESH-DELAYED-OWNER';
+      const reply = 'D46-FRESH-COMPLETE';
+      const output = join(stateDir, invocationId + '-d46-fresh.txt');
+      const turn = makeLoserPage(prompt, reply);
+      let draft = '';
+      let sendAt = -1;
+      turn.composer.fill.mockImplementation(async (text: string) => { draft = text; });
+      // Reproduce the unproved five-second delivery window: Send issued,
+      // composer unchanged, transcript unreadable, and no usable own POST.
+      turn.composer.innerText.mockImplementation(async () => draft);
+      turn.composer.textContent.mockImplementation(async () => draft);
+      const originalClick = turn.sendButton.click.getMockImplementation()!;
+      turn.sendButton.click.mockImplementation(async () => {
+        await originalClick();
+        sendAt = mocks.nowMs;
+      });
+      const markerVisible = () => scenario === 'late-owned'
+        && sendAt >= 0 && mocks.nowMs - sendAt >= 36_000;
+      turn.page.url.mockImplementation(() => turn.getSends() === 0 || sendAt < 0
+        || mocks.nowMs - sendAt < 36_000 || scenario === 'permanently-null'
+        ? PROJECT_URL
+        : scenario === 'foreign-project' ? OTHER_PROJECT_CONVERSATION_URL : SHARED_CONV);
+      const originalLocator = turn.page.locator.getMockImplementation()!;
+      turn.page.locator.mockImplementation((selector: string) => {
+        if (turn.getSends() > 0
+          && (selector === MESSAGE_NODE_SELECTOR || selector === USER_MESSAGE_SELECTOR)
+          && !markerVisible()) return collectionLocator([]);
+        return originalLocator(selector);
+      });
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const result = await runNewChatTurn(turn.page, output, '180000', invocationId);
+      expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+      expect(turn.getSends()).toBe(1);
+      const observation = readStateLightTurnObservation('collision-profile', invocationId);
+      if (scenario === 'late-owned') {
+        expect(mocks.nowMs - sendAt).toBeGreaterThanOrEqual(36_000);
+        expect(result.result).toMatchObject({
+          state: 'ok', send_count: 1, conversation_id: SHARED_CONV,
+        });
+        expect(observation).toMatchObject({
+          phase: 'harvested', conversation_url: SHARED_CONV, send_count: 1,
+        });
+        expect(readFileSync(output, 'utf8')).toBe(reply);
+      } else {
+        expect(result.result.state).not.toBe('ok');
+        expect(result.result.send_count).toBe(0);
+        expect(result.result.send_attempted).toBe(true);
+        expect(result.result).not.toHaveProperty('conversation_id');
+        expect(observation).toMatchObject({
+          phase: 'dispatching', send_witness: 'none', conversation_url: null,
+        });
+        expect(existsSync(output)).toBe(false);
+        expect(deriveDelivery({ ...result.result,
+          resolved_send_count: result.result.send_count } as any, false)).toBe('POSSIBLY_DELIVERED');
+      }
+    },
+  );
+
   it('continues observing after fresh-conversation URL wait expiry without send_failed', async () => {
     const prompt = 'PROMPT-SOLO';
     const reply = 'SOLO-OK';
