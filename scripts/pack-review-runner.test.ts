@@ -4704,6 +4704,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     mutate?: (slot: PackReviewGptRoundRecord['sourceSlots'][number]) =>
       PackReviewGptRoundRecord['sourceSlots'][number];
     commentMode?: 'missing' | 'duplicate' | 'unavailable-actor' | 'unavailable-census';
+    historicalClaim?: boolean;
   } = {}) {
     const root = mkdtempSync(join(tmpdir(), 'opk-2629-rate-limit-'));
     roots.push(root);
@@ -4763,6 +4764,19 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       automaticBudgetDisposition: 'consume',
       resolvedReviewer: 'gpt', reviewRound: round,
     }).run;
+    let historicalClaimPath: string | undefined;
+    if (input.historicalClaim) {
+      const claim = acquireReviewStartClaim({
+        projectId, prNumber, headSha: HEAD,
+        surface: 'fixture-2629-historical-claim', startReason: 'fixture-first-attempt',
+        reviewRuns: listPackReviewRuns(options),
+      });
+      expect(claim.acquired, JSON.stringify(claim)).toBe(true);
+      const completed = completeAfterRunInvoke(claim, listPackReviewRuns(options));
+      expect(completed).toMatchObject({ ok: true, outcome: 'run_started' });
+      historicalClaimPath = String(completed.terminalPath);
+      expect(existsSync(historicalClaimPath)).toBe(true);
+    }
     updatePackReviewRun(original.id, {
       status: 'failed', latestRunStatus: 'failed',
       failureReason: 'gpt_source_non_complete:after_grace_zero_usable:0/3',
@@ -4877,7 +4891,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     return {
       options, original, originalSlots, profileKey, comments, publish,
       reconcile, start, setCooldown, statusWrites, reviews, freshStarts,
-      cooldownPath,
+      cooldownPath, historicalClaimPath,
     };
   }
 
@@ -4910,17 +4924,9 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
   );
 
   it('enters one original-SHA PR-led fresh run, preserves historic failed source IDs and terminal claim', async () => {
-    const f = fixture();
+    const f = fixture({ historicalClaim: true });
     f.setCooldown(Date.now() - 5_000);
-    const oldClaim = acquireReviewStartClaim({
-      projectId, prNumber, headSha: HEAD,
-      surface: 'fixture-2629-historical-claim', startReason: 'fixture-first-attempt',
-      reviewRuns: listPackReviewRuns(f.options),
-    });
-    expect(oldClaim.acquired, JSON.stringify(oldClaim)).toBe(true);
-    const completedClaim = completeAfterRunInvoke(oldClaim, listPackReviewRuns(f.options));
-    expect(completedClaim).toMatchObject({ ok: true, outcome: 'run_started' });
-    const historicalClaimPath = String(completedClaim.terminalPath);
+    const historicalClaimPath = f.historicalClaimPath!;
     expect(existsSync(historicalClaimPath)).toBe(true);
     const reconciled = await f.reconcile();
     expect(String(reconciled.results.find((row) => row.runId === f.original.id)?.nextAction))
