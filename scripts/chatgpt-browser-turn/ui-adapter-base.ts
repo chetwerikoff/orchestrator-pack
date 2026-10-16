@@ -1577,7 +1577,7 @@ export function observeHeldPageConversation429(
   let epoch = 0;
   let observed: HeldPage429Observation | undefined;
   let dispatchMarker: string | undefined;
-  let ownSubmissionIssued = false;
+  let ownSubmissionIssuedEpoch: number | undefined;
   const requestEpochs = new WeakMap<object, number>();
   const responseKind = (request: any): HeldPage429Kind | undefined => {
     try {
@@ -1606,13 +1606,13 @@ export function observeHeldPageConversation429(
     const kind = responseKind(request);
     if (!kind) return;
     requestEpochs.set(request, epoch);
-    if (kind !== 'rate_limit' || !dispatchMarker || ownSubmissionIssued) return;
+    if (kind !== 'rate_limit' || !dispatchMarker || ownSubmissionIssuedEpoch === epoch) return;
     try {
       // D45 accepts a leading marker for 429; D46 counts an issued request
       // only when that marker occurs once in its sole submitted user part.
       const body = JSON.parse(request.postData());
       const text = body.messages.find((message: any) => message?.author?.role === 'user')?.content?.parts?.[0];
-      if (typeof text === 'string' && text.split(dispatchMarker).length === 2) ownSubmissionIssued = true;
+      if (typeof text === 'string' && text.split(dispatchMarker).length === 2) ownSubmissionIssuedEpoch = epoch;
     } catch { /* Unreadable request data cannot prove issuance. */ }
   };
   const onResponse = (response: any): void => {
@@ -1632,7 +1632,7 @@ export function observeHeldPageConversation429(
   }
   const witness: HeldPage429Witness = {
     current: () => observed,
-    ownSubmissionIssued: () => ownSubmissionIssued,
+    ownSubmissionIssued: () => ownSubmissionIssuedEpoch === epoch,
     beforeNavigation: () => { epoch++; dispatchMarker = undefined; },
     markDispatch: (marker) => { dispatchMarker = isOwnedPromptMarker(marker) ? marker : undefined; },
     dispose: () => {
