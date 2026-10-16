@@ -3782,7 +3782,7 @@ async function runTurnCore(
         });
         sendAttempted = true;
         afterSend = true; // Dispatch was attempted even without positive delivery proof.
-        held429Witness?.markDispatch(marker);
+        held429Witness?.markDispatch(marker, markedPayload);
         if (freshCleanup) freshCleanup.sendAttempted = true;
       };
       // The composer can change during Send readiness polling. Do not send a
@@ -3938,7 +3938,7 @@ async function runTurnCore(
             });
             sendAttempted = true;
             afterSend = true; // Post-onDispatch exceptions must not become pre-Send failures.
-            held429Witness?.markDispatch(marker);
+            held429Witness?.markDispatch(marker, markedPayload);
           },
           ownSubmissionIssued: () => held429Witness?.ownSubmissionIssued() === true,
           onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_resend'),
