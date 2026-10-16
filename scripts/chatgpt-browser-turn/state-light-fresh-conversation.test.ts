@@ -877,10 +877,14 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(
       turn.page, join(stateDir, invocationId + '-page-identity.txt'), '90000', invocationId,
     );
+    // The Page changed after onDispatch, so preserve the post-dispatch
+    // failure classification and foreign-Page cleanup refusal, not a pre-Send error.
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch', send_count: 0, send_attempted: true,
-      cause: 'fresh_conversation_surface_unavailable', cleanup: 'skipped',
+      cause: 'helper_error_after_send_page_retained', cleanup: 'skipped',
     });
+    expect(outcome.result.incidents).toContain('helper_failure_after_send');
+    expect(outcome.result.incidents).not.toContain('helper_failure_before_send');
     expectPossibleEffect(outcome.result);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.page.close).not.toHaveBeenCalled();
