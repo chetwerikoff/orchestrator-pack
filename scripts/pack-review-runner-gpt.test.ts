@@ -6307,6 +6307,9 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       .toEqual(['terminal', 'invocation_started', 'invocation_started']);
     const result = await startPackReview({
       ...f.input, claimMode: 'acquire',
+      // The synthetic clock stays frozen while two fresh attempts are admitted.
+      // Only this fixture bypasses the production 30-second pacing timer.
+      fixtureGptAdmissionReadObservation: undefined,
       fixtureGptAttemptObserver: async () => ({
         state: 'replacement_eligible' as const,
         replacementEligible: true,
@@ -6675,6 +6678,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       const observations: Array<{ replacementEligible: boolean; state: string }> = [];
       const result = await startPackReview({
         ...f.input, claimMode: 'acquire',
+        fixtureGptAdmissionReadObservation: undefined,
         fixtureGptAttemptObserver: async (run) => {
           const observation = await observeGptPackReviewAttempt(run, Date.now(), {
             readObservation: () => source02Observation(mode === 'sent_unbound' ? 'sent_unbound' : 'sent_unharvested'),
