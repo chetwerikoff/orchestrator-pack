@@ -7865,7 +7865,16 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           return rejectIncumbent(priorSameRound, 'gpt_incumbent_identity_mismatch',
             'reconcile the exact repository, frozen Issue snapshot and round before any incumbent continuation');
         }
-        if (originalRateLimitZeroJudgment(priorSameRound, storeRoot)) {
+        const failedRateLimitRound = priorSameRound.status === 'failed'
+          && priorSameRound.failureReason?.startsWith('gpt_source_non_complete:') === true
+          && priorSameRound.reviewRound?.sourceSlots.some(
+            (slot) => slot.terminalClass?.startsWith('rate_limit:'),
+          ) === true;
+        if (failedRateLimitRound && !originalRateLimitZeroJudgment(priorSameRound, storeRoot)) {
+          return rejectIncumbent(priorSameRound, 'gpt_rate_limit_original_zero_send_unproven',
+            rateLimitOriginalRecoveryAction(priorSameRound));
+        }
+        if (failedRateLimitRound) {
           if (!ownsStartClaim()) {
             return rejectIncumbent(priorSameRound, 'gpt_incumbent_claim_not_owned',
               'acquire the exact current PR/head start claim before a fresh rate-limit review');
