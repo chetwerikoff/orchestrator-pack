@@ -14,6 +14,44 @@ const mocks = vi.hoisted(() => ({
   releaseBrowser: vi.fn(async () => undefined),
   verifyProfile: vi.fn(async () => ({ state: 'verified' })),
 }));
+// Unit fixtures exercise Send/recovery through a single invocation-visible
+// target. Protocol-level Chrome filtering is tested in own-target-attach.test.ts.
+vi.mock('./own-target-attach.ts', () => {
+  const owned = new WeakMap<object, { targetId: string; created: boolean; successorTargetIds: string[] }>();
+  return {
+    attachOwnTarget: vi.fn(async (chromium: any, options: any) => {
+      const browser = await chromium.connectOverCDP(options.cdp, { timeout: 30_000 });
+      const context = browser.contexts()[0];
+      if (!context || typeof context.newPage !== 'function') throw new Error('ui_contract_mismatch:context_count');
+      const existing = typeof context.pages === 'function' ? context.pages() : [];
+      let page: any;
+      let created = true;
+      if (!options.newChat && options.chatUrl) {
+        const matches = existing.filter((candidate: any) => {
+          try { return String(candidate.url()).replace(/[/]+$/u, '') === options.chatUrl.replace(/[/]+$/u, ''); }
+          catch { return false; }
+        });
+        if (matches.length > 1) throw new Error('ui_contract_mismatch:ambiguous_conversation_targets');
+        if (matches.length === 1) { page = matches[0]; created = false; }
+      }
+      if (!page) page = await context.newPage();
+      const visible = [page];
+      const realNewPage = context.newPage.bind(context);
+      context.newPage = vi.fn(async (...args: any[]) => {
+        const next = await realNewPage(...args);
+        if (next && !visible.includes(next)) visible.push(next);
+        return next;
+      });
+      context.pages = () => visible;
+      const record = { targetId: options.pinnedTargetId ?? 'fixture-owned-target', created,
+        successorTargetIds: [] as string[] };
+      owned.set(browser, record);
+      return { browser, page, ...record, attachAttempts: 1 };
+    }),
+    getOwnTargetInfo: vi.fn((browser: object) => owned.get(browser)),
+    countUninspectedRecoveryTargets: vi.fn(async () => 0),
+  };
+});
 vi.mock('./browser-session.ts', () => createBrowserSessionModuleMock(mocks));
 vi.mock('./coordination.ts', () => createCoordinationModuleMock());
 vi.mock('./input.ts', () => ({ readStableInput: vi.fn(() => stableTurnInput('PROMPT')) }));
