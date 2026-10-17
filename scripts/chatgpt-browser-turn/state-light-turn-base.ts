@@ -17,12 +17,12 @@ import { basename, dirname, join, resolve } from 'node:path';
 import {
   abandonLatePageHandle,
   boundedResourceCleanup,
-  createCdpPageTarget,
   releaseCdpBrowser,
   RESOURCE_CLEANUP_BOUND_MS,
   type ResourceCleanupOutcome,
 } from './browser-session.ts';
 import { destinationIdentity } from './coordination.ts';
+import { attachOwnTarget, countUninspectedRecoveryTargets, getOwnTargetInfo } from './own-target-attach.ts';
 import {
   turnExitCode,
   type ComposerMutationDiagnosticV1,
@@ -442,6 +442,7 @@ interface BrowserIncident {
 }
 
 export interface CompactTurnResult extends TurnResultV1 {
+  readonly attach_attempts?: number;
   readonly send_count: number;
   readonly poll_count: number;
   readonly goto_count: number;
@@ -2719,8 +2720,7 @@ type ConversationPageLookup = {
 };
 
 async function findOpenConversationPage(
-  browser: any,
-  config: BrowserConfig,
+  browser: any, config: BrowserConfig,
 ): Promise<ConversationPageLookup> {
   if (config.newChat || !config.chatUrl) return { contextUsable: false };
   const target = normalizeConversationUrl(config.chatUrl);
@@ -2728,25 +2728,13 @@ async function findOpenConversationPage(
   const contextUsable = contexts.length === 1 && typeof contexts[0]?.newPage === 'function';
   if (contexts.length !== 1 || typeof contexts[0].pages !== 'function') return { contextUsable };
   const candidates = (contexts[0].pages() as any[]).filter((candidate) => {
-    try {
-      return !candidate.isClosed?.() && ownedConversationIdentityMatches(String(candidate.url()), target);
-    } catch {
-      return false;
-    }
+    try { return !candidate.isClosed?.() && ownedConversationIdentityMatches(String(candidate.url()), target); }
+    catch { return false; }
   });
-  const page = candidates.at(-1);
-  if (!page) return { contextUsable };
-  try {
-    if (
-      await locatorCount(page.locator(RENDERED_STOP_BUTTON_SELECTOR), Date.now() + MAX_LOCAL_READ_WAIT_MS) > 0
-      && await locatorCount(page.locator(CONNECTION_RECOVERY_STATUS_SELECTOR), Date.now() + MAX_LOCAL_READ_WAIT_MS) === 0
-    ) {
-      return { contextUsable };
-    }
-  } catch {
-    return { contextUsable };
-  }
-  return { page, contextUsable };
+  if (candidates.length > 1) throw new Error('ui_contract_mismatch:ambiguous_conversation_targets');
+  // The filtered CDP connection already pins one target ID. Existing Stop,
+  // marker and exact-conversation checks still gate Send on that Page.
+  return { page: candidates[0], contextUsable };
 }
 
 async function selectConversationPage(
@@ -2754,37 +2742,45 @@ async function selectConversationPage(
   chromium: { connectOverCDP: (endpoint: string, options?: { timeout?: number }) => Promise<any> },
   config: BrowserConfig,
   operationBudget: TurnOperationBudget,
+  deadlineMs = Date.now() + operationBudget.clampOperationWaitMs(),
 ): Promise<{ browser: any; page: any | undefined }> {
-  let activeBrowser = browser;
-  let lookup = await findOpenConversationPage(activeBrowser, config);
-  let page = lookup.page;
-  if (page && typeof page === 'object') cleanupAuthorityUnprovenPages.add(page);
-  if (page || config.newChat || !config.chatUrl) return { browser: activeBrowser, page };
-  if (lookup.contextUsable) return { browser: activeBrowser, page };
+  const binding = getOwnTargetInfo(browser);
+  if (!binding) throw new Error('ui_contract_mismatch:own_target_attachment_required');
+  const contexts = browser.contexts();
+  if (binding.created) {
+    // Fresh/zero-match fallback target was allocated by this invocation before
+    // Playwright bootstrap, never adopted from a pre-existing matching URL.
+    if (contexts.length !== 1 || contexts[0].pages().length !== 1) {
+      throw new Error('ui_contract_mismatch:own_page_unavailable');
+    }
+    return { browser, page: contexts[0].pages()[0] };
+  }
+  let lookup = await findOpenConversationPage(browser, config);
+  if (lookup.page) {
+    if (typeof lookup.page === 'object') cleanupAuthorityUnprovenPages.add(lookup.page);
+    return { browser, page: lookup.page };
+  }
+  if (lookup.contextUsable) throw new Error('ui_contract_mismatch:own_target_identity_changed');
 
-  const openWaitMs = operationBudget.clampOperationWaitMs();
-  if (openWaitMs <= 0) throw new BrowserOperationTimeoutError('open_conversation_page');
-  await createCdpPageTarget(
-    config.cdp,
-    normalizeConversationUrl(config.chatUrl),
-    openWaitMs,
-  );
-
-  const releaseWaitMs = operationBudget.clampOperationWaitMs();
-  await releaseCdpBrowser(
-    activeBrowser,
-    Math.max(0, Math.min(RESOURCE_CLEANUP_BOUND_MS, releaseWaitMs)),
-  );
-
-  const reconnectWaitMs = operationBudget.clampOperationWaitMs();
-  if (reconnectWaitMs <= 0) throw new BrowserOperationTimeoutError('connect_over_cdp');
-  activeBrowser = await chromium.connectOverCDP(config.cdp, {
-    timeout: Math.min(30_000, reconnectWaitMs),
+  // A broken context may reconnect only to the same pinned ID, never another
+  // exact-URL tab; the full invocation budget still controls the reconnect.
+  await releaseCdpBrowser(browser, Math.min(RESOURCE_CLEANUP_BOUND_MS, operationBudget.clampOperationWaitMs()));
+  const attached = await attachOwnTarget(chromium, {
+    mode: 'own-target',
+    cdp: config.cdp,
+    deadlineMs,
+    cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
+    chatUrl: config.chatUrl,
+    newChat: false,
+    pinnedTargetId: binding.targetId,
   });
-  lookup = await findOpenConversationPage(activeBrowser, config);
-  page = lookup.page;
-  if (page && typeof page === 'object') cleanupAuthorityUnprovenPages.add(page);
-  return { browser: activeBrowser, page };
+  lookup = await findOpenConversationPage(attached.browser, config);
+  if (!lookup.page) {
+    await releaseCdpBrowser(attached.browser, RESOURCE_CLEANUP_BOUND_MS);
+    throw new Error('ui_contract_mismatch:own_target_identity_changed');
+  }
+  if (typeof lookup.page === 'object') cleanupAuthorityUnprovenPages.add(lookup.page);
+  return { browser: attached.browser, page: lookup.page };
 }
 
 async function navigateOwnedTurnPage(
@@ -3050,6 +3046,7 @@ async function runTurnCore(
   let browser: any;
   let page: any;
   let sendCount = 0;
+  let attachAttempts = 0;
   let pollCount = 0;
   const navigation = new StateLightNavigationCounter();
   let journalWriteFailed = false;
@@ -3268,18 +3265,26 @@ async function runTurnCore(
     const chromium = loadChromium();
     const connectWaitMs = invocationBudget.clampOperationWaitMs();
     if (connectWaitMs <= 0) throw new BrowserOperationTimeoutError('connect_over_cdp');
-    browser = await chromium.connectOverCDP(config.cdp, { timeout: Math.min(30_000, connectWaitMs) });
-    const selection = await selectConversationPage(browser, chromium, config, invocationBudget);
+    const initiallyAttached = await attachOwnTarget(chromium, {
+      mode: 'own-target',
+      cdp: config.cdp,
+      deadlineMs: invocationDeadlineMs,
+      cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
+      ...(config.chatUrl ? { chatUrl: config.chatUrl } : {}),
+      newChat: config.newChat,
+    });
+    attachAttempts = initiallyAttached.attachAttempts;
+    browser = initiallyAttached.browser;
+    const selection = await selectConversationPage(browser, chromium, config, invocationBudget, invocationDeadlineMs);
     browser = selection.browser;
     page = selection.page;
     if (page) attachHeld429(page, !config.newChat ? config.chatUrl : undefined);
-    if (page && typeof page === 'object') {
-      // Existing tabs and URL-reselected CDP targets are not direct creation
-      // handles; never infer cleanup authority from matching URLs.
+    if (page && typeof page === 'object' && !getOwnTargetInfo(browser)?.created) {
+      // An existing URL-selected tab never grants cleanup or Stop authority.
       cleanupAuthorityUnprovenPages.add(page);
     }
-    if (!page) {
-      page = await createDedicatedTurnPage(browser, invocationBudget);
+    if (!page || getOwnTargetInfo(browser)?.created) {
+      if (!page) page = await createDedicatedTurnPage(browser, invocationBudget);
       attachHeld429(page, !config.newChat ? config.chatUrl : undefined);
       if (config.newChat && freshCleanup) {
         freshCleanup.page = page;
@@ -3307,7 +3312,7 @@ async function runTurnCore(
     let ownedConversationUrl: string | undefined;
     // One invocation-local recovery cap, independent of terminal close authority.
     const originalHeldPage = page;
-    const createdFreshPage = config.newChat && !selection.page
+    const createdFreshPage = config.newChat && getOwnTargetInfo(browser)?.created === true
       && !cleanupAuthorityUnprovenPages.has(page);
     const originalExactChat = !config.newChat && config.chatUrl
       && readOwnedConversationIdentity(page, normalizeConversationUrl(config.chatUrl)).matched
@@ -4713,6 +4718,14 @@ async function runTurnCore(
         }
         return cooldown.active ? 'account_cooldown_active' : undefined;
       },
+      uninspectedPotentialPages: async (activeBrowser, immutableUrl) => {
+        const binding = getOwnTargetInfo(activeBrowser);
+        if (!binding) throw new Error('recovery_target_binding_unavailable');
+        return await countUninspectedRecoveryTargets(
+          config.cdp, [binding.targetId, ...binding.successorTargetIds],
+          immutableUrl, recoveryDeadlineMs,
+        );
+      },
       enumeratePages: async (activeBrowser) => {
         const contexts = (activeBrowser as any).contexts();
         if (!Array.isArray(contexts) || contexts.length !== 1) {
@@ -4780,10 +4793,20 @@ async function runTurnCore(
         }
       },
       reconnect: async () => {
-        const remainingMs = Math.max(1, recoveryDeadlineMs - Date.now());
-        return await chromium.connectOverCDP(config.cdp, {
-          timeout: Math.min(30_000, remainingMs),
+        const previous = getOwnTargetInfo(browser);
+        if (!previous) throw new Error('ui_contract_mismatch:recovery_target_unbound');
+        if (recoveryDeadlineMs <= Date.now()) throw new Error('browser_operation_timeout:recovery_deadline');
+        const observed = await attachOwnTarget(chromium, {
+          mode: 'own-target',
+          cdp: config.cdp,
+          deadlineMs: recoveryDeadlineMs,
+          cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
+          postSend: true,
+          pinnedTargetId: previous.targetId,
+          chatUrl: recoveryState.immutableConversationUrl,
+          newChat: false,
         });
+        return observed.browser;
       },
       createSuccessor: async (activeBrowser, immutableConversationUrl) => {
         beforeBrowserAction();
@@ -6275,6 +6298,10 @@ async function runTurnCore(
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const attemptsOnFailure = (error as { attachAttempts?: unknown } | null)?.attachAttempts;
+    if (typeof attemptsOnFailure === 'number' && Number.isSafeInteger(attemptsOnFailure)) {
+      attachAttempts += attemptsOnFailure;
+    }
     const isInput = message.startsWith('input_invalid:');
     const isOutput = message.startsWith('output_conflict:');
     const isUi = message.startsWith('ui_contract_mismatch:');
@@ -6341,6 +6368,7 @@ async function runTurnCore(
           pollCount, navigation, incidents,
           {
             ...(sendAttempted ? { send_attempted: true } : {}),
+            ...(!sendAttempted ? { attach_attempts: attachAttempts } : {}),
             ...(page && pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
             ...(holderTimeout ? {
               send_slot_holder_invocation_id: holderTimeout.send_slot_holder_invocation_id,
