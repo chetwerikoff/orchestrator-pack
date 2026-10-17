@@ -2264,13 +2264,17 @@ describe('state-light fresh conversation collision recovery', () => {
     readonly stop?: 'absent' | 'visible' | 'unknown';
     readonly incompletePoll?: number;
     readonly interruptPoll?: number;
+    readonly afterAlertRead?: (readNumber: number) => void;
   } = {}) {
     let gotoAtSend = -1;
+    let postSendUrl = options.localUrl ?? LOCAL_ID_CONVERSATION_URL;
+    let currentStop = options.stop ?? 'absent';
+    let renderedMessages: StateLightTestMessage[] = [];
     const pageFixture = makeLoserPage('PROMPT-LOCAL-2641', 'NEVER-REPLY', () => {
       gotoAtSend = pageFixture.page.goto.mock.calls.length;
     });
     pageFixture.page.url.mockImplementation(() =>
-      pageFixture.getSends() === 0 ? PROJECT_URL : options.localUrl ?? LOCAL_ID_CONVERSATION_URL);
+      pageFixture.getSends() === 0 ? PROJECT_URL : postSendUrl);
     const realLocator = pageFixture.page.locator.bind(pageFixture.page);
     const retry = vi.fn(async () => undefined);
     const stopClick = vi.fn(async () => undefined);
@@ -2279,6 +2283,7 @@ describe('state-light fresh conversation collision recovery', () => {
     let interruptionInjected = false;
     pageFixture.page.locator = vi.fn((selector: string) => {
       if (selector === MESSAGE_NODE_SELECTOR) {
+        if (pageFixture.getSends() > 0 && renderedMessages.length > 0) return collectionLocator(renderedMessages);
         return scalarLocator({
           count: vi.fn(async () => {
             if (pageFixture.getSends() > 0) {
@@ -2296,12 +2301,15 @@ describe('state-light fresh conversation collision recovery', () => {
           }),
         });
       }
-      if (selector === USER_MESSAGE_SELECTOR || selector === ASSISTANT_MESSAGE_SELECTOR) return collectionLocator([]);
+      if (selector === USER_MESSAGE_SELECTOR || selector === ASSISTANT_MESSAGE_SELECTOR) {
+        return collectionLocator(renderedMessages.filter((message) =>
+          message.role === (selector === USER_MESSAGE_SELECTOR ? 'user' : 'assistant')));
+      }
       if (selector === RENDERED_STOP_BUTTON_SELECTOR) {
         return scalarLocator({
-          count: vi.fn(async () => pageFixture.getSends() === 0 || options.stop === 'absent'
-            || options.stop === undefined ? 0 : options.stop === 'visible' ? 1 : Number.NaN),
-          isVisible: vi.fn(async () => options.stop === 'visible'),
+          count: vi.fn(async () => pageFixture.getSends() === 0 || currentStop === 'absent'
+            ? 0 : currentStop === 'visible' ? 1 : Number.NaN),
+          isVisible: vi.fn(async () => currentStop === 'visible'),
           click: stopClick,
         });
       }
@@ -2311,6 +2319,7 @@ describe('state-light fresh conversation collision recovery', () => {
             const alerts = options.alerts ?? [];
             const value = alerts[Math.min(alertReads, alerts.length - 1)];
             alertReads++;
+            options.afterAlertRead?.(alertReads);
             return value ? [value] : [];
           }),
           click: retry,
@@ -2324,6 +2333,9 @@ describe('state-light fresh conversation collision recovery', () => {
       gotoAtSend: () => gotoAtSend,
       alertReads: () => alertReads,
       observationReads: () => observationReads,
+      setPostSendUrl: (url: string) => { postSendUrl = url; },
+      setStop: (stop: 'absent' | 'visible' | 'unknown') => { currentStop = stop; },
+      setRenderedMessages: (messages: StateLightTestMessage[]) => { renderedMessages = messages; },
     };
   }
 
@@ -2415,6 +2427,100 @@ describe('state-light fresh conversation collision recovery', () => {
       expect(fixture.alertReads()).toBe(0);
       expect(mocks.nowMs - start).toBeLessThan(90_000);
       expect(fixture.page.close).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['durable route', 'visible Stop', 'rendered carrier'] as const)(
+    'rejects stale local alert idle evidence when %s appears during the second alert read (#2641 review)',
+    async (drift) => {
+      let fixture: ReturnType<typeof freshLocalPostSendFixture>;
+      fixture = freshLocalPostSendFixture({
+        alerts: ['Network error\nRetry', 'Network error\nRetry'],
+        afterAlertRead: (readNumber) => {
+          if (readNumber !== 2) return;
+          if (drift === 'durable route') fixture.setPostSendUrl(SHARED_CONV);
+          else if (drift === 'visible Stop') fixture.setStop('visible');
+          else fixture.setRenderedMessages([{ role: 'user', text: 'newly rendered carrier while alert was pending' }]);
+        },
+      });
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-LOCAL-2641'));
+      const outcome = await runNewChatTurn(fixture.page, join(stateDir, '2641-alert-drift-' + randomUUID() + '.txt'));
+      // This read raced with Page promotion, generation or carrier rendering.
+      // It cannot be the second trustworthy idle alert for the local turn.
+      expect(outcome.result).not.toMatchObject({ state: 'recovery_required', cause: 'product_network_error' });
+      expect(outcome.result).toMatchObject({ scope: 'invocation', send_count: 1 });
+      expect(fixture.alertReads()).toBe(2);
+      expect(fixture.getSends()).toBe(1);
+      expect(fixture.page.goto).toHaveBeenCalledTimes(fixture.gotoAtSend());
+      expect(fixture.retry).not.toHaveBeenCalled();
+      expect(fixture.stopClick).not.toHaveBeenCalled();
+      if (drift === 'visible Stop') expect(fixture.page.close).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { terminal: 'recovery_required', route: SHARED_CONV, label: 'durable route', retain: true },
+    { terminal: 'observation_uncertain', route: PROJECT_URL, label: 'project root', retain: true },
+    { terminal: 'recovery_required', route: null, label: 'unreadable URL', retain: true },
+    { terminal: 'driver_error', route: PROJECT_URL, label: 'unrelated result', retain: false },
+  ] as const)(
+    'keeps prior local Page retention authority through finalizer $label (#2641 review)',
+    async ({ terminal, route, retain }) => {
+      const fixture = makeLoserPage('PROMPT-LOCAL-2641', 'NEVER-REPLY');
+      fixture.page.url.mockReturnValue(LOCAL_ID_CONVERSATION_URL);
+      const invocationId = randomUUID();
+      // Simulate the exact seam after runTurnCore has positively authorized
+      // a counted local terminal, but before runStateLightTurn finalizes it.
+      const outcome = await runStateLightTurnWithStdoutCapture(
+        (args) => runStateLightTurn(args, {
+          runTurn: async () => {
+            expect(fixture.page.url()).toBe(LOCAL_ID_CONVERSATION_URL);
+            if (route === null) {
+              fixture.page.url.mockImplementation(() => { throw new Error('URL unreadable after local terminal'); });
+            } else {
+              fixture.page.url.mockReturnValue(route);
+            }
+            return {
+              page: fixture.page,
+              browser: { isConnected: vi.fn(() => true) },
+              cleanupAction: 'preserve' as const,
+              ...(retain ? { retainOwnedFreshLocalPage: true } : {}),
+              ownedFreshProjectUrl: PROJECT_URL,
+              result: {
+                schema: 'turn-result/v1' as const,
+                state: terminal,
+                scope: 'invocation' as const,
+                cause: terminal === 'recovery_required' ? 'product_network_error'
+                  : terminal === 'observation_uncertain' ? 'fresh_conversation_owner_unproven'
+                    : 'unrelated_error',
+                invocation_id: invocationId,
+                configured_profile_key: 'collision-profile',
+                send_count: 1,
+                poll_count: 2,
+                goto_count: 1,
+                new_chat_click_count: 0,
+                navigation_count: 1,
+                incidents: [],
+              },
+            };
+          },
+        }), [
+          ...STATE_LIGHT_TURN_BASE_ARGV,
+          '--invocation-id', invocationId,
+          '--output', join(stateDir, '2641-finalizer-' + randomUUID() + '.txt'),
+          '--new-chat',
+          '--project-url', PROJECT_URL,
+          '--timeout-ms', '90000',
+        ],
+      );
+      expect(outcome.result).toMatchObject({
+        state: terminal, scope: 'invocation', send_count: 1,
+        cleanup: retain ? 'skipped' : 'confirmed',
+      });
+      expect(outcome.result).not.toHaveProperty('conversation_id');
+      if (retain) expect(fixture.page.close).not.toHaveBeenCalled();
+      else expect(fixture.page.close).toHaveBeenCalledTimes(1);
+      expect(fixture.page.goto).not.toHaveBeenCalled();
     },
   );
 
