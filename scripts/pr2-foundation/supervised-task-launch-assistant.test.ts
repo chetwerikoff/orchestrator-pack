@@ -670,7 +670,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
         return readyStart('task-1');
       },
     });
-    expect(result.outcome).toBe('ready');
+    expect(result.outcome, result.outcome === 'continue' ? `stage=${result.stage}; cause=${result.observedCause}` : '').toBe('ready');
     expect(worktreeCommands).toEqual([[
       'orca', 'worktree', 'show', '--worktree', `path:${primary}`, '--json',
     ]]);
