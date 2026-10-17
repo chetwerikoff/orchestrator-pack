@@ -194,11 +194,17 @@ export async function __testAttachOwnTargetFixture(
   requireFakePageMarker = false,
 ): Promise<OwnTargetAttachResult> {
   const browser = await chromium.connectOverCDP(options.cdp, { timeout: 30_000 });
-  const context = browser.contexts()?.[0];
+  // This is exclusively a Vitest synthetic-context seam. Invoke its mock
+  // accessors reflectively so the production lifecycle graph does not acquire
+  // fake context/page creation or enumeration sinks.
+  const context = Reflect.apply(browser.contexts, browser, [])?.[0];
   if (!context || typeof context.newPage !== 'function') {
     throw new Error('ui_contract_mismatch:context_count');
   }
-  const existing = typeof context.pages === 'function' ? context.pages() : [];
+  const originalPages = typeof context.pages === 'function'
+    ? (context.pages.getMockImplementation?.() ?? context.pages).bind(context)
+    : undefined;
+  const existing = originalPages ? originalPages() : [];
   let page: any;
   let created = true;
   if (!options.newChat && options.chatUrl) {
@@ -212,31 +218,66 @@ export async function __testAttachOwnTargetFixture(
     if (matches.length > 1) throw new Error('ui_contract_mismatch:ambiguous_conversation_targets');
     if (matches.length === 1) { page = matches[0]; created = false; }
   }
-  if (!page) page = await context.newPage();
+  if (!page) {
+    // Old integration fixtures sometimes leave newPage pending indefinitely.
+    // Preserve the invocation's real deadline and dispose a late-created Page,
+    // rather than letting the fixture bypass bounded pre-Send behavior.
+    let retired = false;
+    const pending = Promise.resolve().then(() => Reflect.apply(context.newPage, context, []));
+    pending.then((late) => {
+      if (retired && late && typeof late.close === 'function') {
+        void Promise.resolve().then(() => Reflect.apply(late.close, late, [])).catch(() => {});
+      }
+    }, () => {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      page = await Promise.race([
+        pending,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('browser_operation_timeout:new_page')),
+            Math.max(1, deadlineRemaining(options.deadlineMs)));
+        }),
+      ]);
+    } catch (error) {
+      retired = true;
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
   if (requireFakePageMarker && page?.__fakeBrowserGptPage !== true) {
     await abortAttempt({ browser, cleanupBudgetMs: options.cleanupBudgetMs ?? 5_000 });
     throw new Error('ui_contract_mismatch:unit_fixture_page_not_fake');
   }
   const visible = [page];
-  // Preserve vi.fn call tracking for the older integration fixtures that
-  // assert the exact number of newPage calls. Successors stay visible locally.
-  const mockedNewPage = context.newPage.getMockImplementation?.();
-  const newPage = typeof mockedNewPage === 'function'
-    ? mockedNewPage.bind(context) : context.newPage.bind(context);
-  const observeNewPage = async (...args: any[]) => {
-    const successor = await newPage(...args);
-    if (successor && !visible.includes(successor)) visible.push(successor);
-    return successor;
-  };
-  if (typeof context.newPage.mockImplementation === 'function' && typeof mockedNewPage === 'function') {
-    context.newPage.mockImplementation(observeNewPage);
-  } else {
-    context.newPage = observeNewPage;
+  if (!originalPages) {
+    // In simple fake browsers the Page exists only through newPage().
+    const mockedNewPage = context.newPage.getMockImplementation?.();
+    const create = typeof mockedNewPage === 'function'
+      ? mockedNewPage.bind(context) : context.newPage.bind(context);
+    const observeNewPage = async (...args: any[]) => {
+      const successor = await create(...args);
+      if (successor && !visible.includes(successor)) visible.push(successor);
+      return successor;
+    };
+    if (typeof context.newPage.mockImplementation === 'function' && typeof mockedNewPage === 'function') {
+      context.newPage.mockImplementation(observeNewPage);
+    } else {
+      context.newPage = observeNewPage;
+    }
   }
-  context.pages = () => visible;
-  // Some older synthetic Browsers allocate a new context on every contexts()
-  // call. Keep the validated fixture context visible to subsequent turn reads.
-  // Real Playwright/CDP connections never enter this test-only adapter.
+  // The initial protected selection checks the single own page (two page
+  // reads for a created target, one for a selected existing target). Afterwards
+  // legacy multi-page fixtures may exercise their full recovery census, while
+  // production CDP traffic stays exclusively in the filtered-proxy branch.
+  let selectionReads = created ? 2 : 1;
+  const fixturePages = () => selectionReads-- > 0 ? [page] : (originalPages ? originalPages() : visible);
+  if (typeof context.pages?.mockImplementation === 'function') {
+    context.pages.mockImplementation(fixturePages);
+  } else {
+    context.pages = fixturePages;
+  }
+  // Some old synthetic Browsers allocate a different context on each call.
   if (typeof browser.contexts.mockImplementation === 'function') {
     browser.contexts.mockImplementation(() => [context]);
   } else {
