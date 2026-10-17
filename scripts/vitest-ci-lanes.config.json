@@ -35,6 +35,8 @@
     "plugins/token-chain-ledger/tests/writer.test.ts": "light",
     "scripts/bootstrap.test.ts": "light",
     "scripts/browser-gpt-page-probe.test.ts": "light",
+    "scripts/chatgpt-browser-turn/launch-chrome-flags.test.ts": "light",
+    "scripts/chatgpt-browser-turn/own-target-attach.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts": "light",
