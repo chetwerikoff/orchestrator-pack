@@ -124,7 +124,7 @@ import { classifyPageObservation, classifySendLandingEvidence, readPageObservati
 import { admitStateLightTurnObservation, readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { deriveDelivery } from '../flow-manager-long-running-child.ts';
 import { __testBrowserOrPageDefinitelyLost, __testComposerMutation, __testSendDelivery, deriveComposerInsertionBudgetMs, POST_SEND_OBSERVATION_POLL_MS, probePageLiveness } from './state-light-turn-base.ts';
-import { wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
+import { currentOwnedPromptMarker, wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
   EXPLICIT_CANCELLATION_AUTHORITY,
   isSupportedChatGptConversationUrl,
@@ -2431,7 +2431,7 @@ describe('state-light fresh conversation collision recovery', () => {
     },
   );
 
-  it.each(['durable route', 'visible Stop', 'rendered carrier'] as const)(
+  it.each(['durable route', 'visible Stop', 'rendered own marker'] as const)(
     'rejects stale local alert idle evidence when %s appears during the second alert read (#2641 review)',
     async (drift) => {
       let fixture: ReturnType<typeof freshLocalPostSendFixture>;
@@ -2441,7 +2441,11 @@ describe('state-light fresh conversation collision recovery', () => {
           if (readNumber !== 2) return;
           if (drift === 'durable route') fixture.setPostSendUrl(SHARED_CONV);
           else if (drift === 'visible Stop') fixture.setStop('visible');
-          else fixture.setRenderedMessages([{ role: 'user', text: 'newly rendered carrier while alert was pending' }]);
+          else {
+            const ownMarker = currentOwnedPromptMarker();
+            expect(ownMarker).toMatch(/^OPKTURNV1[0-9a-f]{32}$/u);
+            fixture.setRenderedMessages([{ role: 'user', text: `${ownMarker}\\n\\nPROMPT-LOCAL-2641` }]);
+          }
         },
       });
       mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-LOCAL-2641'));
