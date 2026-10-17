@@ -214,7 +214,7 @@ export async function __testAttachOwnTargetFixture(
   }
   if (!page) page = await context.newPage();
   if (requireFakePageMarker && page?.__fakeBrowserGptPage !== true) {
-    await browser.close?.();
+    await abortAttempt({ browser, cleanupBudgetMs: options.cleanupBudgetMs ?? 5_000 });
     throw new Error('ui_contract_mismatch:unit_fixture_page_not_fake');
   }
   const visible = [page];
