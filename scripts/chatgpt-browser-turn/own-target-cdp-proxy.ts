@@ -174,6 +174,7 @@ export class OwnTargetCdpProxy {
   private consumeFrame(chunk: Buffer): void {
     this.buffer = Buffer.concat([this.buffer, chunk]);
     while (this.buffer.length >= 2 && !this.disposed) {
+      const fin = (this.buffer[0]! & 0x80) !== 0;
       const opcode = this.buffer[0]! & 0x0f;
       const masked = (this.buffer[1]! & 0x80) !== 0;
       let length = this.buffer[1]! & 0x7f;
@@ -204,20 +205,16 @@ export class OwnTargetCdpProxy {
           this.fragmentedOpcode = 1;
         } else if (this.fragmentedOpcode !== 1) { void this.dispose(); return; }
         this.fragments.push(payload);
-        if ((this.buffer[0] ?? 0) === -1) { /* no-op; final bit read below */ }
-        // The FIN bit belongs to the frame header, not the remaining buffer.
-        // See the saved bit in the frame reader below.
         if (this.fragments.reduce((sum, part) => sum + part.length, 0) > MAX_FRAME_BYTES) {
           void this.dispose();
           return;
         }
-        // Ordinary Playwright CDP transport emits single-frame JSON messages.
-        // Continuations are handled by checking the FIN bit of this frame.
-        if ((chunk[0] ?? 0) === -1) { /* no-op */ }
-        const text = Buffer.concat(this.fragments).toString('utf8');
-        this.fragments = [];
-        this.fragmentedOpcode = 0;
-        void this.fromPlaywright(text);
+        if (fin) {
+          const text = Buffer.concat(this.fragments).toString('utf8');
+          this.fragments = [];
+          this.fragmentedOpcode = 0;
+          void this.fromPlaywright(text);
+        }
       } else { void this.dispose(); return; }
     }
   }
