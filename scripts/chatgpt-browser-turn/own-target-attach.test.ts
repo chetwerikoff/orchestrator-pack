@@ -193,6 +193,34 @@ beforeEach(() => setupChrome([{ id: 'foreign-id', type: 'page', url: FOREIGN }])
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('Issue #2625 own-target attach isolation', () => {
+  it('adapts a marked legacy Vitest Page fixture without Chrome HTTP and retains newPage spy counts', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('fetch failed'); }));
+    const page = { __fakeBrowserGptPage: true, url: () => CHAT };
+    const context: any = { newPage: vi.fn(async () => page) };
+    const browser = { contexts: () => [context], close: vi.fn(async () => undefined) };
+    const chromium = { connectOverCDP: vi.fn(async () => browser) };
+
+    const attached = await attachOwnTarget(chromium, {
+      mode: 'own-target', cdp: CDP, deadlineMs: Date.now() + 3_000,
+      newChat: false, chatUrl: CHAT,
+    });
+    expect(attached.page).toBe(page);
+    expect(attached.created).toBe(true);
+    expect(attached.attachAttempts).toBe(1);
+    expect(context.newPage).toHaveBeenCalledTimes(1);
+    expect(context.pages()).toEqual([page]);
+    expect(getOwnTargetInfo(browser)?.targetId).toBe(attached.targetId);
+    expect(chromium.connectOverCDP).toHaveBeenCalledWith(CDP, { timeout: 30_000 });
+
+    const unmarked = { contexts: () => [{ newPage: vi.fn(async () => ({ url: () => CHAT })) }],
+      close: vi.fn(async () => undefined) };
+    await expect(attachOwnTarget({ connectOverCDP: vi.fn(async () => unmarked) }, {
+      mode: 'own-target', cdp: CDP, deadlineMs: Date.now() + 3_000,
+      newChat: false, chatUrl: CHAT,
+    })).rejects.toThrow('unit_fixture_page_not_fake');
+    expect(unmarked.close).toHaveBeenCalledTimes(1);
+  });
+
   it('initializes and navigates only the owned Page while a foreign tab remains untouched', async () => {
     const chromium = protocolChromium();
     const attached = await attachOwnTarget(chromium, {
