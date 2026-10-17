@@ -3539,12 +3539,7 @@ function hasFailedRateLimitSource(run: PackReviewRunRecord): boolean {
           || slot.terminalClass?.startsWith('possible_delivery/') === true)));
 }
 
-/**
- * A posted partial round retains its original run ID: GitHub source comments
- * cannot be moved into a newly allocated run. Only proven missing/pre-send
- * slots may be relaunched. Possible delivery remains observation-only.
- * This proof is deliberately separate from older records' unchanged 0/3 proof.
- */
+/** Reject any pre-send observation containing a send witness or possible delivery. */
 function retryableZeroSendObservation(observation: Record<string, unknown>): boolean {
   return (observation.phase === 'prepared' || observation.phase === 'not_sent')
     && observation.transition_reason !== 'send_delivery_unproven'
@@ -3556,6 +3551,12 @@ function retryableZeroSendObservation(observation: Record<string, unknown>): boo
       || observation.delivery === 'not_sent' || observation.delivery === 'NOT_SENT');
 }
 
+/**
+ * A posted partial round retains its original run ID: GitHub source comments
+ * cannot be moved into a newly allocated run. Only proven missing/pre-send
+ * slots may be relaunched. Possible delivery remains observation-only.
+ * This proof is deliberately separate from older records' unchanged 0/3 proof.
+ */
 async function recoverablePostedRateLimitSlots(input: {
   run: PackReviewRunRecord;
   sourceRepoRoot: string;
@@ -3657,7 +3658,11 @@ async function recoverablePostedRateLimitSlots(input: {
     }
     try {
       const path = observationRecordPath(slot.launchProfileKey, slot.invocationId);
-      if (existsSync(path) && !retryableZeroSendObservation(
+      const observedCurrent = existsSync(path);
+      // Repeated retries need durable pre-send observations for every attempt.
+      // Preserve the original first-attempt rule when there is no history.
+      if (history.length > 0 && !observedCurrent) return null;
+      if (observedCurrent && !retryableZeroSendObservation(
         readStateLightTurnObservation(slot.launchProfileKey, slot.invocationId) as unknown as Record<string, unknown>,
       )) return null;
       // History retains only identity/ordinal/class, not old terminal payloads.
