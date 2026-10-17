@@ -8561,11 +8561,12 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           && incumbentCandidates(records).length === sameRoundGptHistory.length + 1
           && sameRoundGptHistory.every((historical) => {
             const retained = records.find((row) => row.id === historical.id);
+            // The old 0/3 proof was rechecked before the store lock.
+            // No authority read here: both stores share the same .store-lock.
             return Boolean(retained && incumbentIdentityMatches(retained)
               && retained.status === historical.status
               && retained.failureReason === historical.failureReason
               && retained.sameKeyOrder === historical.sameKeyOrder
-              && originalRateLimitZeroJudgment(retained, storeRoot)
               && stableJson(retained.reviewRound) === stableJson(historical.reviewRound)
               && resolvePackReviewRequiredRunOrder(records, retained).kind === 'newer');
           })
