@@ -716,7 +716,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     expect(profile.status).toBe('ok');
     if (profile.status !== 'ok') return;
     const bare = { ...profile.value, launchCommand: 'opencode --hostname 127.0.0.1 --agent build' };
-    expect(openCodeLaunchHasFleetBrowserDenies(bare)).toBe(false);
+    expect(openCodeLaunchHasFleetBrowserDenies({ command: bare.launchCommand, agentName: bare.agentName, inlineConfigJson: bare.inlineConfigJson })).toBe(false);
     let worktrees = 0;
     let spawns = 0;
     const result = await runSupervisedTaskLaunchAssistant({
