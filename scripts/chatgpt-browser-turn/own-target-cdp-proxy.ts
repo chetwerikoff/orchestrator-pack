@@ -358,9 +358,19 @@ export class OwnTargetCdpProxy {
       this.remote.addEventListener('close', () => resolve(), { once: true });
     });
     this.remote.close();
-    await Promise.race([
-      closed,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('cdp_proxy_cleanup_unconfirmed')), Math.max(1, budgetMs))),
-    ]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        closed,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('cdp_proxy_cleanup_unconfirmed')),
+            Math.max(1, budgetMs),
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 }
