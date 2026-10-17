@@ -472,6 +472,66 @@ describe('observable post-send exits (#2416)', () => {
 
 });
 
+describe('Issue #2641 counted unbound fresh Page manager terminal projection', () => {
+  it.each([
+    ['local-alert', 'recovery_required', 'product_network_error'],
+    ['silent-local', 'observation_uncertain', 'fresh_conversation_owner_unproven'],
+  ] as const)('forwards operator next_action and POSSIBLY_DELIVERED for %s (#2641 AC6)', async (scenario, state, cause) => {
+    const root = tempDir('opk-2641-local-');
+    const paths = launchPaths(root, scenario);
+    const nextAction =
+      'No durable ChatGPT conversation URL was bound for this invocation; delivery is POSSIBLY_DELIVERED. '
+      + 'Check expected GitHub effects first (Issue body revision, comment, commit, PR) and re-check up to 20 minutes '
+      + 'after the original Send, while also searching the project sidebar for the turn-marker chat and harvesting it if found. '
+      + 'Never click Retry or auto-resend. A new-invocation-ID manual send is allowed only if no GitHub effect and no marker chat '
+      + 'appeared by 20 minutes after Send, and only by an explicit operator/workflow decision acknowledging possibly duplicated side effects.';
+    const raw = {
+      ...makeTurnResult({
+        state, cause, scope: 'invocation', conversation_id: undefined,
+        witness: undefined, next_action: nextAction,
+        observation_uncertainty_diagnostics: {
+          cause, send_count: 1, owned_prompt_seen: false,
+        },
+      }),
+      send_count: 1,
+      ...(scenario === 'local-alert' ? { product_banner_text: 'Network error' } : {}),
+    };
+    const fixture = nodeFixture('process.stdout.write(JSON.stringify('
+      + JSON.stringify(raw) + ') + "\\n", () => process.exit(11));');
+    const code = await runFixtureLaunch(root, {
+      runIdentity: 'run-2641-' + scenario,
+      attemptIdentity: 'attempt-2641-' + scenario,
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    });
+    expect(code).toBe(1);
+    const envelope = readTerminalEnvelope(paths.envelope);
+    expect(envelope).toMatchObject({
+      schema: TERMINAL_SCHEMA,
+      lifecycle_outcome: 'incident',
+      incident: 'child_turn_state:' + state,
+      delivery: 'POSSIBLY_DELIVERED',
+      turn_result_state: state,
+      turn_result_cause: cause,
+      send_count: 1,
+      next_action: nextAction,
+      recovery_available: false,
+    });
+    expect(envelope).not.toHaveProperty('conversation_locator');
+    expect(envelope?.next_action).toContain('GitHub effects first');
+    expect(envelope?.next_action).toContain('20 minutes after the original Send');
+    expect(envelope?.next_action).toContain('project sidebar');
+    expect(envelope?.next_action).toContain('no GitHub effect and no marker chat');
+    expect(envelope?.next_action).toContain('explicit operator/workflow decision');
+    expect(envelope?.next_action).toContain('possibly duplicated');
+    expect(existsSync(paths.envelope)).toBe(true);
+  });
+});
+
 describe('flow-manager long-running child (#1164)', () => {
   it('projects only bounded holder diagnostics through the persisted terminal (#2487)', async () => {
     for (const [label, extras, expected] of [

@@ -14,7 +14,7 @@ import {
   type ExecutionRecoveryProductCause,
 } from './ui-adapter.ts';
 import { chatBindingWorktree, writeChatBinding } from './chat-bindings.ts';
-import { BROWSER_TURN_CANCELLATION_RECEIPT_SCHEMA } from './state-light-cancellation.ts';
+import { BROWSER_TURN_CANCELLATION_RECEIPT_SCHEMA, isSupportedChatGptConversationUrl } from './state-light-cancellation.ts';
 
 const DEFAULT_TIMEOUT_MS = 1_800_000;
 const EXECUTION_RECOVERY_CAUSES = new Set<ExecutionRecoveryProductCause>([
@@ -33,6 +33,8 @@ function projectExecutionRecoveryTerminal(value: unknown): unknown {
     && record.state === 'recovery_required'
     && typeof record.cause === 'string'
     && EXECUTION_RECOVERY_CAUSES.has(record.cause as ExecutionRecoveryProductCause)
+    && typeof record.conversation_id === 'string'
+    && isSupportedChatGptConversationUrl(record.conversation_id)
   ) {
     return { ...record, scope: 'conversation' };
   }

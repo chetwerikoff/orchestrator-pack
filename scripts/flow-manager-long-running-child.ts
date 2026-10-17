@@ -254,6 +254,7 @@ export interface TerminalEnvelope {
   readonly child_exit_diagnostic?: ChildExitDiagnostic;
   readonly turn_result_state?: string;
   readonly turn_result_cause?: string;
+  readonly next_action?: string;
   readonly send_count?: number;
   readonly observed_invocation_id?: string;
   readonly send_slot_holder_invocation_id?: string;
@@ -527,6 +528,7 @@ function parseTurnResult(line: string): ParsedTurnResult | null {
     };
 
     if (body.send_attempted === true) result.send_attempted = true;
+    if (typeof body.next_action === 'string') result.next_action = body.next_action;
     if (body.cause === 'state_light_new_chat_send_slot_timeout') {
       const validHolder = typeof body.send_slot_holder_invocation_id === 'string'
         && /^[A-Za-z0-9-]{1,128}$/u.test(body.send_slot_holder_invocation_id)
@@ -1091,6 +1093,7 @@ async function finalizeCandidatePath(
     child_exit_diagnostic: childExitDiagnostic,
     turn_result_state: candidate.state,
     turn_result_cause: candidate.cause,
+    ...(candidate.next_action ? { next_action: candidate.next_action } : {}),
     send_count: candidate.resolved_send_count,
     observed_invocation_id: candidate.invocation_id,
     ...projectedTurnDiagnostics,
@@ -1129,6 +1132,7 @@ async function finalizeCandidatePath(
       child_exit_diagnostic: childExitDiagnostic,
       turn_result_state: candidate.state,
       turn_result_cause: candidate.cause,
+      ...(candidate.next_action ? { next_action: candidate.next_action } : {}),
       send_count: candidate.resolved_send_count,
       observed_invocation_id: candidate.invocation_id,
       ...projectedTurnDiagnostics,
