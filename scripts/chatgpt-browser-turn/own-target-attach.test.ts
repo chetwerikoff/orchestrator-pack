@@ -221,6 +221,48 @@ describe('Issue #2625 own-target attach isolation', () => {
     expect(unmarked.close).toHaveBeenCalledTimes(1);
   });
 
+  it('preserves synthetic pre-Send page selection then restores the legacy recovery census', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('fetch failed'); }));
+    const owned = { __fakeBrowserGptPage: true, url: () => CHAT };
+    const unrelated = { url: () => FOREIGN };
+    const context = {
+      newPage: vi.fn(async () => owned),
+      pages: vi.fn(() => [owned, unrelated]),
+    };
+    const browser = { contexts: vi.fn(() => [context]), close: vi.fn(async () => undefined) };
+    const chromium = { connectOverCDP: vi.fn(async () => browser) };
+    const attached = await attachOwnTarget(chromium, {
+      mode: 'own-target', cdp: CDP, deadlineMs: Date.now() + 3_000, newChat: true,
+    });
+    expect(attached.page).toBe(owned);
+    expect(context.pages()).toEqual([owned]);
+    expect(context.pages()).toEqual([owned]);
+    expect(context.pages()).toEqual([owned, unrelated]);
+    expect(context.newPage).toHaveBeenCalledTimes(1);
+    expect(getOwnTargetInfo(browser)?.created).toBe(true);
+  });
+
+  it('bounds pending synthetic newPage and disposes a late-created page without touching foreign pages', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('fetch failed'); }));
+    let resolvePage!: (page: any) => void;
+    const pending = new Promise<any>((resolve) => { resolvePage = resolve; });
+    const foreign = { close: vi.fn(async () => undefined) };
+    const late = { close: vi.fn(async () => undefined), goto: vi.fn(async () => undefined) };
+    const context = { newPage: vi.fn(() => pending), pages: vi.fn(() => [foreign]) };
+    const browser = { contexts: vi.fn(() => [context]), close: vi.fn(async () => undefined) };
+    const chromium = { connectOverCDP: vi.fn(async () => browser) };
+    await expect(attachOwnTarget(chromium, {
+      mode: 'own-target', cdp: CDP, deadlineMs: Date.now() + 30,
+      newChat: true, cleanupBudgetMs: 2_000,
+    })).rejects.toThrow('browser_operation_timeout:new_page');
+    expect(context.newPage).toHaveBeenCalledTimes(1);
+    resolvePage(late);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(late.close).toHaveBeenCalledTimes(1);
+    expect(late.goto).not.toHaveBeenCalled();
+    expect(foreign.close).not.toHaveBeenCalled();
+  });
+
   it('initializes and navigates only the owned Page while a foreign tab remains untouched', async () => {
     const chromium = protocolChromium();
     const attached = await attachOwnTarget(chromium, {
