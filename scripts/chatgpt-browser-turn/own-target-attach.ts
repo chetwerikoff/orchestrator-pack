@@ -201,9 +201,12 @@ export async function __testAttachOwnTargetFixture(
   if (!context || typeof context.newPage !== 'function') {
     throw new Error('ui_contract_mismatch:context_count');
   }
-  const originalPages = typeof context.pages === 'function'
-    ? (context.pages.getMockImplementation?.() ?? context.pages).bind(context)
-    : undefined;
+  const mockedPages = context.pages?.getMockImplementation?.();
+  const originalPages = typeof mockedPages === 'function'
+    ? mockedPages.bind(context)
+    : typeof context.pages === 'function' && typeof context.pages.mockImplementation !== 'function'
+      ? context.pages.bind(context)
+      : undefined;
   const existing = originalPages ? originalPages() : [];
   let page: any;
   let created = true;
