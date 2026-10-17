@@ -3105,6 +3105,9 @@ async function runGptSourceBatch(options: {
     const markInvocationStarted = async (admissionStartedAt: number): Promise<boolean> => {
       const launchBinding = resolveLaunchBinding();
       const priorSlot = round.sourceSlots.find((slot) => slot.slotId === slotId);
+      // A recovered slot must not silently switch browser identities mid-history.
+      if (options.sameRoundEligibleSlotIds && priorSlot?.invocationId
+        && launchBinding?.launchProfileKey !== priorSlot.launchProfileKey) return false;
       const priorHistory: PackReviewSourceSlotAttemptHistory[] = priorSlot?.attemptHistory ?? [];
       const priorAttempt = priorSlot?.invocationId && priorSlot.attemptOrdinal !== undefined && priorSlot.terminalClass
         ? { invocationId: priorSlot.invocationId, attemptOrdinal: priorSlot.attemptOrdinal, terminalClass: priorSlot.terminalClass }
@@ -3542,6 +3545,17 @@ function hasFailedRateLimitSource(run: PackReviewRunRecord): boolean {
  * slots may be relaunched. Possible delivery remains observation-only.
  * This proof is deliberately separate from older records' unchanged 0/3 proof.
  */
+function retryableZeroSendObservation(observation: Record<string, unknown>): boolean {
+  return (observation.phase === 'prepared' || observation.phase === 'not_sent')
+    && observation.transition_reason !== 'send_delivery_unproven'
+    && (observation.send_count === undefined || observation.send_count === 0)
+    && (observation.send_attempted === undefined || observation.send_attempted === false)
+    && (observation.send_witness === undefined || observation.send_witness === 'none'
+      || (observation.send_witness === 'numeric_send_count' && observation.send_count === 0))
+    && (observation.delivery === undefined
+      || observation.delivery === 'not_sent' || observation.delivery === 'NOT_SENT');
+}
+
 async function recoverablePostedRateLimitSlots(input: {
   run: PackReviewRunRecord;
   sourceRepoRoot: string;
@@ -3603,25 +3617,63 @@ async function recoverablePostedRateLimitSlots(input: {
       // Absence of a GitHub comment is not proof that Send was never attempted.
       continue;
     }
+    const history = slot.attemptHistory ?? [];
+    if (!Array.isArray(history) || slot.attemptOrdinal !== history.length + 1
+      || history.some((attempt, index) => !attempt
+        || attempt.attemptOrdinal !== index + 1
+        || typeof attempt.invocationId !== 'string' || !attempt.invocationId
+        || typeof attempt.terminalClass !== 'string'
+        || !attempt.terminalClass.startsWith('rate_limit:')
+        || attempt.terminalClass.length === 'rate_limit:'.length)
+      || new Set([...history.map((attempt) => attempt.invocationId), slot.invocationId]).size
+        !== history.length + 1) return null;
     const terminal = slot.terminalResult as Record<string, unknown> | undefined;
     const cause = trim(terminal?.cause);
     if (!slot.terminalClass?.startsWith('rate_limit:') || !terminal
       || terminal.schema !== 'turn-result/v1' || terminal.state !== 'rate_limit'
       || slot.terminalClass !== 'rate_limit:' + cause || !cause
-      || slot.attemptOrdinal !== 1 || (slot.attemptHistory?.length ?? 0) !== 0
-      || !slot.launchProfileKey || terminal.invocation_id !== slot.invocationId
+      || !slot.launchProfileKey || slot.payload !== undefined
+      || terminal.invocation_id !== slot.invocationId
       || !['invocation', 'profile'].includes(String(terminal.scope))
-      || terminal.send_count !== 0 || terminal.send_attempted === true
+      || terminal.send_count !== 0
+      || (terminal.send_attempted !== undefined && terminal.send_attempted !== false)
       || terminalHasPossibleDelivery(terminal)
+      || (terminal.delivery !== undefined
+        && terminal.delivery !== 'not_sent' && terminal.delivery !== 'NOT_SENT')
+      || (terminal.source_comment_reconciliation !== undefined
+        && terminal.source_comment_reconciliation !== 'missing')
       || (trim(terminal.configured_profile_key ?? terminal.profile_key)
         && trim(terminal.configured_profile_key ?? terminal.profile_key) !== slot.launchProfileKey)) return null;
+    const diagnostics = terminal.diagnostics;
+    if (diagnostics !== undefined
+      && (!diagnostics || typeof diagnostics !== 'object' || Array.isArray(diagnostics))) return null;
+    const embedded = (diagnostics as { persisted_observation?: unknown } | undefined)?.persisted_observation;
+    if (embedded !== undefined) {
+      if (!embedded || typeof embedded !== 'object' || Array.isArray(embedded)) return null;
+      const observed = embedded as Record<string, unknown>;
+      if (!retryableZeroSendObservation(observed)
+        || (observed.invocation_id !== undefined && observed.invocation_id !== slot.invocationId)
+        || (observed.profile_key !== undefined && observed.profile_key !== slot.launchProfileKey)) return null;
+    }
     try {
       const path = observationRecordPath(slot.launchProfileKey, slot.invocationId);
-      if (existsSync(path)) {
-        const observation = readStateLightTurnObservation(slot.launchProfileKey, slot.invocationId);
-        if ((observation.phase !== 'prepared' && observation.phase !== 'not_sent')
-          || observation.transition_reason === 'send_delivery_unproven'
-          || (observation.send_count !== undefined && observation.send_count !== 0)) return null;
+      if (existsSync(path) && !retryableZeroSendObservation(
+        readStateLightTurnObservation(slot.launchProfileKey, slot.invocationId) as unknown as Record<string, unknown>,
+      )) return null;
+      // History retains only identity/ordinal/class, not old terminal payloads.
+      // Each prior attempt therefore needs its own persisted no-send observation
+      // and an exact actor-bound absence of a GitHub source comment.
+      for (const attempt of history) {
+        const observation = readStateLightTurnObservation(slot.launchProfileKey, attempt.invocationId);
+        if (!retryableZeroSendObservation(observation as unknown as Record<string, unknown>)) return null;
+        const priorResolution = await resolvePackGptSourceComment({
+          identity: gptSourceIdentity({
+            repoSlug: input.repoSlug, prNumber: run.prNumber, headSha: run.targetSha,
+            runId: run.id, slotId: slot.slotId, invocationId: attempt.invocationId,
+          }),
+          transport,
+        });
+        if (priorResolution.kind !== 'missing') return null;
       }
     } catch {
       return null;
