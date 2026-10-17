@@ -4925,7 +4925,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       if (value !== undefined) writeFileSync(cooldownPath, JSON.stringify({ cooldown_until_ms: value }));
     };
     return {
-      options, original, originalSlots, profileKey, comments, publish,
+      options, original, originalSlots, profileKey, comments, publish, commentTransport,
       reconcile, start, setCooldown, statusWrites, reviews, freshStarts,
       cooldownPath, historicalClaimPath,
     };
@@ -5335,6 +5335,92 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       status: 'failed', reviewRound: { sourceSlots: r2Slots },
     });
     expect(readFileSync(f.historicalClaimPath!, 'utf8')).toBe(claimBytes);
+  });
+
+  it('retries only missing sources from newer runner_disappeared_stale 1/3 while retaining older 0/3 history', async () => {
+    const f = fixture();
+    const oldSlots = getPackReviewRun(f.original.id, f.options)!.reviewRound!.sourceSlots;
+    const replacement = createPackReviewRun({
+      ...f.options, prNumber, headSha: HEAD,
+      trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      canonicalRepository: repository,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: f.original.reviewCycleId, logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      automaticBudgetDisposition: 'consume', resolvedReviewer: 'gpt',
+      reviewRound: f.original.reviewRound,
+      allowSameRoundReplacement: true,
+    });
+    expect(replacement.created).toBe(true);
+    const newer = replacement.run;
+    expect(newer.id).not.toBe(f.original.id);
+
+    const sourceOneId = '00002644-0000-4000-8000-000000000001';
+    const identity: PackGptSourceIdentity = {
+      repository, prNumber, headSha: HEAD, runId: newer.id,
+      slotId: 'source-01', invocationId: sourceOneId,
+    };
+    f.publish({ identity });
+    const posted = await resolvePackGptSourceComment({
+      identity, transport: f.commentTransport,
+    });
+    if (posted.kind !== 'credentialed') throw new Error('fixture source-01 was not credentialed');
+
+    const newerSlots = oldSlots.map((slot, index) => {
+      const invocationId = '00002644-0000-4000-8000-00000000000' + (index + 1);
+      if (index === 0) return {
+        ...slot, invocationId,
+        terminalClass: 'complete_clean',
+        terminalResult: {
+          schema: 'turn-result/v1', state: 'ok', scope: 'none',
+          cause: 'github_source_comment_credentialed', invocation_id: invocationId,
+          send_count: 1, source_comment_authority: 'credentialed_github',
+          source_comment_receipt: posted.receipt,
+        },
+        payload: posted.payload,
+      };
+      return {
+        ...slot, invocationId,
+        terminalClass: 'rate_limit:account_cooldown_active',
+        terminalResult: {
+          schema: 'turn-result/v1', state: 'rate_limit', cause: 'account_cooldown_active',
+          scope: 'invocation', invocation_id: invocationId,
+          send_count: 0, send_attempted: false,
+        },
+      };
+    });
+    updatePackReviewRun(newer.id, {
+      status: 'failed', latestRunStatus: 'failed',
+      failureReason: 'runner_disappeared_stale',
+      completedAtUtc: new Date().toISOString(),
+      runnerPid: 2147483647,
+      heartbeatAtUtc: '2026-01-01T00:00:00.000Z',
+      reviewRound: { ...f.original.reviewRound!, sourceSlots: newerSlots },
+    }, f.options);
+    const savedPartial = getPackReviewRun(newer.id, f.options)!.reviewRound!.sourceSlots[0]!;
+    const postedSourceOne = f.comments[0]!;
+    expect(listPackReviewRuns(f.options)).toHaveLength(2);
+    expect(getPackReviewRun(f.original.id, f.options)).toMatchObject({
+      status: 'failed', failureReason: 'gpt_source_non_complete:after_grace_zero_usable:0/3',
+    });
+
+    const result = await f.start();
+    expect(result.result, JSON.stringify(result.result)).toMatchObject({
+      created: true, reused: false, runId: newer.id,
+      headSha: HEAD, publicationVerified: true,
+    });
+    expect(f.freshStarts).toEqual(['source-02', 'source-03']);
+    expect(f.comments).toHaveLength(3);
+    expect(f.comments[0]).toEqual(postedSourceOne);
+    expect(f.comments.filter((comment) => comment.body.includes(sourceOneId))).toHaveLength(1);
+    expect(getPackReviewRun(newer.id, f.options)?.reviewRound?.sourceSlots[0])
+      .toEqual(savedPartial);
+    expect(f.reviews).toHaveLength(1);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })
+      ?.cycle?.consumedRoundOrdinals).toEqual([1]);
+    expect(listPackReviewRuns(f.options)).toHaveLength(2);
+    expect(getPackReviewRun(f.original.id, f.options)?.reviewRound?.sourceSlots)
+      .toEqual(oldSlots);
+    expect(getPackReviewRun(f.original.id, f.options)?.reviewVerdict).toBeUndefined();
   });
 
   it('keeps the existing recovery path on unrelated non-rate-limit terminal failures', async () => {
