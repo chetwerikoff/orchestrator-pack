@@ -623,6 +623,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     const input: LaunchInput = {
       ...launchInput('t2'),
       workClass: 'merge',
+      worktreeName: undefined, // merge uses only the registered primary selector
       primaryRoot: primary,
       worktreeSelector: `path:${primary}`,
       env: opencodeProfileEnv('manager'),
