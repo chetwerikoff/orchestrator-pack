@@ -2444,7 +2444,7 @@ describe('state-light fresh conversation collision recovery', () => {
           else {
             const ownMarker = currentOwnedPromptMarker();
             expect(ownMarker).toMatch(/^OPKTURNV1[0-9a-f]{32}$/u);
-            fixture.setRenderedMessages([{ role: 'user', text: `${ownMarker}\\n\\nPROMPT-LOCAL-2641` }]);
+            fixture.setRenderedMessages([{ role: 'user', text: `${ownMarker}\n\nPROMPT-LOCAL-2641` }]);
           }
         },
       });
