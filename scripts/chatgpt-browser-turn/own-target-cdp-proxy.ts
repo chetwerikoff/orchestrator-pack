@@ -87,7 +87,7 @@ export class OwnTargetCdpProxy {
     resolve: (value: CdpMessage) => void;
     reject: (error: Error) => void;
   }>();
-  private readonly createCommands = new Set<number>();
+  private readonly createCommands = new Map<number, string | undefined>();
   private nextInternalId = 1_000_000_000;
   private attaching = new Set<string>();
   private bootstrapEnabled = false;
@@ -172,8 +172,8 @@ export class OwnTargetCdpProxy {
     this.client.write(encodeFrame(Buffer.from(JSON.stringify(value), 'utf8')));
   }
 
-  private sendFailure(id: number, cause: string): void {
-    this.sendClient({ id, error: { code: -32000, message: cause } });
+  private sendFailure(id: number, cause: string, sessionId?: string): void {
+    this.sendClient({ id, ...(sessionId ? { sessionId } : {}), error: { code: -32000, message: cause } });
   }
 
   private consumeFrame(chunk: Buffer): void {
@@ -253,7 +253,7 @@ export class OwnTargetCdpProxy {
     if (typeof message.id !== 'number' || !message.method || this.disposed) return;
     const { id, method, params = {}, sessionId } = message;
     if (sessionId && !this.sessions.has(sessionId)) {
-      this.sendFailure(id, 'foreign_page_session_forbidden');
+      this.sendFailure(id, 'foreign_page_session_forbidden', sessionId);
       return;
     }
     if (method === 'Target.setAutoAttach') {
@@ -264,33 +264,33 @@ export class OwnTargetCdpProxy {
         if (this.bootstrapEnabled && !sessionId) {
           for (const targetId of this.allowedTargetIds) await this.attachOne(targetId);
         }
-        this.sendClient({ id, result: {} });
+        this.sendClient({ id, ...(sessionId ? { sessionId } : {}), result: {} });
       } catch {
-        this.sendFailure(id, 'own_target_attach_failed');
+        this.sendFailure(id, 'own_target_attach_failed', sessionId);
       }
       return;
     }
     if (method === 'Target.autoAttachRelated' || method === 'Target.setRemoteLocations'
       || method === 'Target.attachToBrowserTarget' || method === 'Browser.close'
       || method === 'Target.disposeBrowserContext') {
-      this.sendFailure(id, 'cross_target_attach_forbidden');
+      this.sendFailure(id, 'cross_target_attach_forbidden', sessionId);
       return;
     }
     if (typeof params.sessionId === 'string' && !this.sessions.has(params.sessionId)) {
-      this.sendFailure(id, 'foreign_page_session_forbidden');
+      this.sendFailure(id, 'foreign_page_session_forbidden', sessionId);
       return;
     }
     if (typeof params.targetId === 'string' && !this.allowedTargetIds.has(params.targetId)) {
-      this.sendFailure(id, 'foreign_target_forbidden');
+      this.sendFailure(id, 'foreign_target_forbidden', sessionId);
       return;
     }
     if (method === 'Target.closeTarget' && !this.createdTargetIds.has(String(params.targetId ?? ''))) {
-      this.sendFailure(id, 'existing_page_close_forbidden');
+      this.sendFailure(id, 'existing_page_close_forbidden', sessionId);
       return;
     }
-    if (method === 'Target.createTarget') this.createCommands.add(id);
+    if (method === 'Target.createTarget') this.createCommands.set(id, sessionId);
     if (this.remote.readyState !== WebSocket.OPEN) {
-      this.sendFailure(id, 'cdp_proxy_disconnected');
+      this.sendFailure(id, 'cdp_proxy_disconnected', sessionId);
       return;
     }
     this.remote.send(raw);
@@ -307,7 +307,10 @@ export class OwnTargetCdpProxy {
       pending.resolve(message);
       return;
     }
-    if (typeof message.id === 'number' && this.createCommands.delete(message.id)) {
+    const createSessionId = typeof message.id === 'number'
+      ? this.createCommands.get(message.id) : undefined;
+    if (typeof message.id === 'number' && this.createCommands.has(message.id)) {
+      this.createCommands.delete(message.id);
       const targetId = message.result?.targetId;
       if (typeof targetId === 'string' && !message.error) {
         this.allowedTargetIds.add(targetId);
@@ -315,7 +318,7 @@ export class OwnTargetCdpProxy {
         try {
           if (this.bootstrapEnabled) await this.attachOne(targetId);
         } catch {
-          this.sendFailure(message.id, 'own_target_attach_failed');
+          this.sendFailure(message.id, 'own_target_attach_failed', createSessionId);
           return;
         }
       }

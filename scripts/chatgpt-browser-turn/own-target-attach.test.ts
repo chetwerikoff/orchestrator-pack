@@ -567,6 +567,18 @@ it.skipIf(!requireRealCdp && (!liveChromium || !chromeExecutable))(
       expect(owned.browser.contexts()[0].pages()).toHaveLength(1);
       await owned.page.goto('data:text/html,<title>protected-own</title>');
       expect(await owned.page.title()).toBe('protected-own');
+      const workerMessage = await owned.page.evaluate(() => new Promise<string>((resolve, reject) => {
+        const source = 'self.postMessage("worker-ready")';
+        const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+        const worker = new Worker(url);
+        worker.addEventListener('message', (event) => {
+          URL.revokeObjectURL(url);
+          worker.terminate();
+          resolve(String(event.data));
+        }, { once: true });
+        worker.addEventListener('error', (event) => reject(new Error(event.message)), { once: true });
+      }));
+      expect(workerMessage).toBe('worker-ready');
 
       // Real BrowserContext.newPage() must remain available after bootstrap.
       const successor = await owned.browser.contexts()[0].newPage();
