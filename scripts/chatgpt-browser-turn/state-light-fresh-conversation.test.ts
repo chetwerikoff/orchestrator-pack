@@ -2276,14 +2276,21 @@ describe('state-light fresh conversation collision recovery', () => {
     const stopClick = vi.fn(async () => undefined);
     let observationReads = 0;
     let alertReads = 0;
+    let interruptionInjected = false;
     pageFixture.page.locator = vi.fn((selector: string) => {
       if (selector === MESSAGE_NODE_SELECTOR) {
         return scalarLocator({
           count: vi.fn(async () => {
             if (pageFixture.getSends() > 0) {
               observationReads++;
-              if (options.interruptPoll === observationReads) throw new Error('transcript read interrupted');
-              if (options.incompletePoll === observationReads) return -1;
+              // Inject exactly once after the first qualifying alert, not
+              // during the preliminary Send/landing observations.
+              if (alertReads === 1 && !interruptionInjected
+                && (options.interruptPoll !== undefined || options.incompletePoll !== undefined)) {
+                interruptionInjected = true;
+                if (options.interruptPoll !== undefined) throw new Error('transcript read interrupted');
+                return -1;
+              }
             }
             return 0;
           }),
