@@ -630,6 +630,37 @@ export function buildOpenCodeAgentOverlay(input: OpenCodeAgentOverlay): Executor
   };
 }
 
+/**
+ * Admit only the actual OpenCode spawn command carrying the pack's complete
+ * fleet deny overlay; checking the profile selection alone misses bare starts.
+ */
+export function openCodeLaunchHasFleetBrowserDenies(
+  invocation: Pick<ExecutorInvocationShape, 'command' | 'inlineConfigJson' | 'agentName'>,
+): boolean {
+  const { command, inlineConfigJson, agentName } = invocation;
+  if (!inlineConfigJson || !agentName) return false;
+  const assignment = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfigJson)} `;
+  if (!command.startsWith(assignment)) return false;
+  const rest = command.slice(assignment.length);
+  if (rest.includes('OPENCODE_CONFIG_CONTENT=')) return false;
+  const executable = `opencode --hostname 127.0.0.1 --port ${openCodeControlPort(agentName)} --agent ${quote(agentName)}`;
+  const statePrefix = rest.endsWith(` ${executable}`) ? rest.slice(0, -(executable.length + 1)) : '';
+  if (rest !== executable && !/^XDG_STATE_HOME='(?:[^']|'\\'')*'$/u.test(statePrefix)) return false;
+
+  try {
+    const config: unknown = JSON.parse(inlineConfigJson);
+    if (!record(config) || !record(config.agent)) return false;
+    const selected = config.agent[agentName];
+    const general = config.agent.general;
+    const explore = config.agent.explore;
+    if (!record(selected) || !record(general) || !record(explore)) return false;
+    return [config.permission, selected.permission, general.permission, explore.permission]
+      .every(openCodeFleetBrowserDenyRulesAreTerminal);
+  } catch {
+    return false;
+  }
+}
+
 export function buildProviderInvocation(profile: SemanticExecutorProfile): ProviderInvocationShape | null {
   if (profile.family !== 'cursor') return null;
   const descriptor = EXECUTOR_FAMILY_DESCRIPTORS.cursor;
