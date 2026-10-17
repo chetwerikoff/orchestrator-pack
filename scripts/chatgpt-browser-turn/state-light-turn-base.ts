@@ -5632,6 +5632,34 @@ async function runTurnCore(
             // Unreadable/failed polling is an interruption, not a streak member.
           }
         }
+        // Alert extraction itself awaits the live DOM. The held local Page may
+        // gain a durable route, a rendered marker/reply, or a new Stop during
+        // that read; the pre-read idle proof must not settle a stale poll.
+        if (localBanner && bannerCause) {
+          let stillLocalIdle = false;
+          try {
+            if (ownedFreshLocalPostSendPage()) {
+              const currentTranscript = await readPageObservation(
+                page, marker, baselineCount, false,
+                Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
+              );
+              stillLocalIdle = !currentTranscript.transcriptIncomplete
+                && currentTranscript.messages.length === 0
+                && currentTranscript.pageTurnEvidence?.generationInProgress !== true
+                && ownedFreshLocalPostSendPage()
+                && await readFreshStopVisible(
+                  page, Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
+                ) === false
+                && ownedFreshLocalPostSendPage();
+            }
+          } catch (error) {
+            if (isPostSendTargetCrash(error)) throw error;
+          }
+          if (!stillLocalIdle) {
+            bannerCause = undefined;
+            bannerText = undefined;
+          }
+        }
         if (streamRecoveryBannerRoute !== bannerRoute) {
           streamRecoveryBannerReads = 0;
           streamRecoveryBannerCause = undefined;
@@ -6534,11 +6562,10 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   if (pageAction === 'close' && outcome.retainOwnedFreshLocalPage
     && outcome.ownedFreshProjectUrl && outcome.result.send_count >= 1
     && !outcome.result.conversation_id) {
-    try {
-      if (matchingFreshProjectLocalUrl(String(outcome.page.url()), outcome.ownedFreshProjectUrl)) {
-        pageAction = 'preserve';
-      }
-    } catch { /* Lost URL evidence never grants an exception. */ }
+    // The already-verified local terminal grants retention for this exact
+    // positively owned Page. Route promotion or an unreadable URL after that
+    // terminal cannot revoke retention and authorize a destructive close.
+    pageAction = 'preserve';
   }
   if (pageAction === 'close' && outcome.result.send_count === 0
     && outcome.result.send_attempted !== true && outcome.ownedFreshProjectUrl) {
