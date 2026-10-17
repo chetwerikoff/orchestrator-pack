@@ -23,6 +23,7 @@ import {
   runOpenCodePrimaryProbe,
   runSupervisedTaskLaunchAssistant,
   LAUNCH_STARTUP_OBSERVATION_WINDOW_MS,
+  CANONICAL_MERGE_LAUNCH_COMMAND,
   repoCanonicalKey,
   type DispatchObservation,
   type EdgeResult,
@@ -38,6 +39,7 @@ import {
   catalogIdentityForProfile,
   openCodeAgentSemantics,
   openCodeFleetBrowserDenyRulesAreTerminal,
+  openCodeLaunchHasFleetBrowserDenies,
   EXECUTOR_FAMILY_DESCRIPTORS,
   profileNamesForTask,
   profileNamesForSmoke,
@@ -613,6 +615,188 @@ function opencodeProbeResult(args: readonly string[], variant = true): { ok: boo
   if (args[0] === process.execPath) return { ok: true, stdout: '', stderr: '' };
   return { ok: false, stdout: '', stderr: '' };
 }
+
+describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', () => {
+  const primary = '/tmp/issue-2646-selected-primary';
+
+  it('launches the existing merge Task only on primary with one denied OpenCode config, no new worktree', async () => {
+    const input: LaunchInput = {
+      ...launchInput('t2'),
+      workClass: 'merge',
+      primaryRoot: primary,
+      worktreeSelector: `path:${primary}`,
+      env: opencodeProfileEnv('manager'),
+    };
+    const worktreeCommands: string[][] = [];
+    const spawned: Array<{ title: string; command: string; workspace: string }> = [];
+    const nativeStarts: string[][] = [];
+    const ownedWorker: RuntimeWorker = { ...worker, workspacePath: primary };
+    const adapter: RuntimeAdapter = {
+      ...runtimeAdapter({ worker: ownedWorker }),
+      spawnWorker: ({ title, command, workspace }) => {
+        spawned.push({ title, command, workspace });
+        return { status: 'ok', value: ownedWorker };
+      },
+    };
+    const result = await runSupervisedTaskLaunchAssistant(input, {
+      ...deps({ adapter }),
+      resolveProfile: (workClass, env, startMode) => resolveLiveExecutorProfile(
+        workClass, env, startMode, async (args) => opencodeProbeResult(args),
+      ),
+      prepareWorktree: (request) => prepareWorktreeWithOrca(request, async (args) => {
+        worktreeCommands.push([...args]);
+        return { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::primary', path: primary } }), stderr: '' };
+      }),
+      finalizeProfile: async (profile) => {
+        const overlay = buildOpenCodeAgentOverlay({
+          agentName: 'pack-opk-merge-2646',
+          baseline: {
+            name: 'build', mode: 'primary',
+            permission: [
+              { permission: 'bash', pattern: '*', action: 'allow' },
+              { permission: 'skill', pattern: '*', action: 'allow' },
+            ],
+          },
+          model: 'fixture-opencode-model', effort: 'fixture-opencode-effort',
+          stateRoot: '/tmp/issue-2646-isolated-state',
+        });
+        return { status: 'ok', value: {
+          ...profile, launchCommand: overlay.command,
+          agentName: overlay.agentName, inlineConfigJson: overlay.inlineConfigJson,
+        } };
+      },
+      runSupervisedStart: async (start) => {
+        nativeStarts.push([...start.orcaArgs]);
+        return readyStart('task-1');
+      },
+    });
+    expect(result.outcome, result.outcome === 'continue' ? `stage=${result.stage}; cause=${result.observedCause}` : '').toBe('ready');
+    expect(worktreeCommands).toEqual([[
+      'orca', 'worktree', 'show', '--worktree', `path:${primary}`, '--json',
+    ]]);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]).toMatchObject({ title: 'opk-merge-task-1', workspace: primary });
+    expect(nativeStarts).toEqual([[
+      '--task', 'task-1', '--terminal', 'terminal-fresh', '--worktree', 'id:repo::primary',
+    ]]);
+    expect(nativeStarts[0]).not.toContain('--agent');
+
+    // Regression for the reported /proc/<pid>/environ count 0: the actual
+    // spawn command must contain exactly one full OPENCODE_CONFIG_CONTENT.
+    const command = spawned[0]!.command;
+    expect(command.match(/OPENCODE_CONFIG_CONTENT=/gu)).toHaveLength(1);
+    const inline = /^OPENCODE_CONFIG_CONTENT='([^']+)' XDG_STATE_HOME='[^']+' opencode --hostname 127\.0\.0\.1 --port \d+ --agent '([^']+)'$/u.exec(command);
+    expect(inline).not.toBeNull();
+    const config = JSON.parse(inline![1]!) as {
+      permission: { bash: Record<string, string>; skill: Record<string, string> };
+      agent: Record<string, { permission: unknown }>;
+    };
+    for (const permission of [
+      config.permission,
+      config.agent[inline![2]!]!.permission,
+      config.agent.general!.permission,
+      config.agent.explore!.permission,
+    ]) {
+      expect(openCodeFleetBrowserDenyRulesAreTerminal(permission)).toBe(true);
+      const overlay = permission as typeof config.permission;
+      expect(overlay.bash.bsk).toBe('deny');
+      expect(overlay.bash['bsk *']).toBe('deny');
+      expect(overlay.skill['browser-skill']).toBe('deny');
+    }
+    if (result.outcome === 'ready') {
+      expect(result.resources).toMatchObject({
+        taskId: 'task-1', worktreePath: primary, worktreeId: 'repo::primary',
+      });
+    }
+  });
+
+  it('refuses a bare OpenCode spawn even when stale metadata claims an overlay', async () => {
+    const profile = await resolveLiveExecutorProfile('merge', opencodeProfileEnv('manager'),
+      'exact_terminal_worktree', async (args) => opencodeProbeResult(args));
+    expect(profile.status).toBe('ok');
+    if (profile.status !== 'ok') return;
+    const bare = { ...profile.value, launchCommand: 'opencode --hostname 127.0.0.1 --agent build' };
+    expect(openCodeLaunchHasFleetBrowserDenies({ command: bare.launchCommand, agentName: bare.agentName, inlineConfigJson: bare.inlineConfigJson })).toBe(false);
+    let worktrees = 0;
+    let spawns = 0;
+    const result = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('t2'), workClass: 'merge', primaryRoot: primary,
+      worktreeSelector: `path:${primary}`, env: opencodeProfileEnv('manager'),
+    }, {
+      ...deps({ adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }) }),
+      resolveProfile: () => ({ status: 'ok', value: bare }),
+      prepareWorktree: async () => { worktrees += 1; throw new Error('must not prepare a worktree'); },
+    });
+    expect(result).toMatchObject({
+      outcome: 'continue', stage: 'executor_profile',
+      observedCause: 'opencode_launch_overlay_required',
+      nextAction: { command: CANONICAL_MERGE_LAUNCH_COMMAND },
+    });
+    expect(worktrees).toBe(0);
+    expect(spawns).toBe(0);
+  });
+
+  it('refuses an overlay stripped during finalization before spawning a terminal', async () => {
+    const profile = await resolveLiveExecutorProfile('merge', opencodeProfileEnv('manager'),
+      'exact_terminal_worktree', async (args) => opencodeProbeResult(args));
+    if (profile.status !== 'ok') throw new Error('fixture OpenCode profile must resolve');
+    let spawns = 0;
+    let starts = 0;
+    const result = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('t2'), workClass: 'merge', primaryRoot: primary,
+      worktreeSelector: `path:${primary}`, env: opencodeProfileEnv('manager'),
+    }, {
+      ...deps({ adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; }, worker: { ...worker, workspacePath: primary } }),
+        onSupervised: () => { starts += 1; } }),
+      resolveProfile: () => profile,
+      prepareWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::primary', selector: 'id:repo::primary', path: primary, setupWitness: 'proven_reuse',
+      } }),
+      finalizeProfile: async (resolved) => ({ status: 'ok', value: {
+        ...resolved, launchCommand: 'opencode --agent build',
+      } }),
+    });
+    expect(result).toMatchObject({
+      outcome: 'continue', stage: 'terminal_prepare',
+      observedCause: 'opencode_launch_overlay_required',
+      nextAction: { command: CANONICAL_MERGE_LAUNCH_COMMAND },
+    });
+    expect(spawns).toBe(0);
+    expect(starts).toBe(0);
+  });
+
+  it('selects primary from the project card, never accepts worktree creation arguments', () => {
+    const select = () => ({
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: primary, defaultBranch: 'main',
+    } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>);
+    const base = ['--project', 'orchestrator-pack', '--work-class', 'merge', '--task', 'task-1'];
+    expect(parseLaunchAssistantCli(base, process.env, select)).toMatchObject({
+      workClass: 'merge', taskId: 'task-1', primaryRoot: primary,
+      worktreeSelector: `path:${primary}`,
+    });
+    for (const forbidden of [['--worktree', 'id:other'], ['--worktree-name', 'new'],
+      ['--run', 'run-1'], ['--manager-brief', 'brief']]) {
+      expect(() => parseLaunchAssistantCli([...base, ...forbidden], process.env, select)).toThrow();
+    }
+    expect(() => parseLaunchAssistantCli(base.slice(0, -2), process.env, select)).toThrow();
+  });
+
+  it('rejects an unproven/mismatched primary worktree without creating or refreshing', async () => {
+    const seen: string[][] = [];
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
+      worktreeSelector: `path:${primary}`, primaryReuseRoot: primary,
+    }, async (args) => {
+      seen.push([...args]);
+      return { ok: true, stdout: okEnvelope({ worktree: {
+        id: 'repo::other', path: '/tmp/unrelated-worktree',
+      } }), stderr: '' };
+    });
+    expect(result).toMatchObject({ status: 'continue', cause: 'merge_primary_checkout_unproven' });
+    expect(seen).toEqual([['orca', 'worktree', 'show', '--worktree', `path:${primary}`, '--json']]);
+  });
+});
 
 describe('supervised Task launch assistant', () => {
   it('uses exactly one provider worker-start composition without low-level worktree or RuntimeAdapter spawn', async () => {

@@ -25,6 +25,7 @@ import {
   openCodeAgentConfigFromInfo,
   openCodeAgentSemantics,
   openCodeFleetBrowserDenyRulesAreTerminal,
+  openCodeLaunchHasFleetBrowserDenies,
   withOpenCodeFleetBrowserDenies,
   openCodeConfigPaths,
   openCodeEdgeCapabilities,
@@ -38,7 +39,8 @@ import { runSupervisedWorkerStart, type SupervisedWorkerStartResult, type Worker
 
 export const LAUNCH_ASSISTANT_SCHEMA = 'supervised-task-launch-assistant/v1' as const;
 export const LAUNCH_STARTUP_OBSERVATION_WINDOW_MS = 30_000;
-export const LAUNCH_WORK_CLASSES = ['manager', 't1', 't2', 't3'] as const;
+export const LAUNCH_WORK_CLASSES = ['manager', 't1', 't2', 't3', 'merge'] as const;
+export const CANONICAL_MERGE_LAUNCH_COMMAND = 'node --experimental-strip-types scripts/pr2-foundation/supervised-task-launch-assistant.ts --project "$PROJECT_ID" --work-class merge --task "$TASK_ID"';
 export type LaunchWorkClass = (typeof LAUNCH_WORK_CLASSES)[number];
 export type LaunchStage = 'command_preflight' | 'repository_preflight' | 'executor_profile'
   | 'manager_run' | 'manager_task' | 'dispatch_admission_early' | 'worktree_prepare'
@@ -126,6 +128,8 @@ export interface ExecutorProfile {
   readonly family: ExecutorFamily;
   readonly route: ExecutorRoute;
   readonly launchCommand: string;
+  readonly agentName?: string;
+  readonly inlineConfigJson?: string;
   readonly providerArgs?: readonly string[];
   readonly names: readonly [string, string, string];
 }
@@ -148,6 +152,8 @@ export interface WorktreePreparationRequest {
   readonly defaultBranch?: string;
   readonly providerTopLevel?: boolean;
   readonly managerRefresh?: boolean;
+  /** Existing primary checkout only; merge never creates or refreshes a worktree. */
+  readonly primaryReuseRoot?: string;
   /** Only populated after native Run/Task membership was proven for an existing manager. */
   readonly managerTaskRunId?: string;
 }
@@ -420,7 +426,7 @@ function profileResolutionEdge(
   workClass: LaunchWorkClass,
   env: Readonly<NodeJS.ProcessEnv>,
 ): EdgeResult<SemanticExecutorProfile> {
-  const names = profileNamesForTask(workClass);
+  const names = profileNamesForTask(workClass === 'merge' ? 'manager' : workClass);
   const resolved = resolveSemanticExecutorProfile({ surface: 'task', names, env });
   if (resolved.ok) return { status: 'ok', value: resolved.profile };
   const variableKey = resolved.code === 'executor_profile_missing' ? 'missingVariables'
@@ -456,6 +462,8 @@ function admittedProfile(
       family: semantic.family,
       route,
       launchCommand: invocation.command,
+      ...(invocation.agentName ? { agentName: invocation.agentName } : {}),
+      ...(invocation.inlineConfigJson ? { inlineConfigJson: invocation.inlineConfigJson } : {}),
       ...(provider ? { providerArgs: provider.argv } : {}),
       names: semantic.names,
     },
@@ -488,6 +496,23 @@ export function resolveExecutorProfile(
     nextAction: { kind: 'repair_executor_profile', note: 'select an executor route whose model and effort channels are proven' },
   };
   return admittedProfile(semanticEdge.value, verdict.route);
+}
+
+function openCodeLaunchRefusal(): {
+  readonly cause: string;
+  readonly actor: LaunchActor;
+  readonly evidence: Readonly<Record<string, unknown>>;
+  readonly nextAction: NextAction;
+} {
+  return {
+    cause: 'opencode_launch_overlay_required', actor: 'orchestrator',
+    evidence: { executorFamily: 'opencode', requiredEnvironment: 'OPENCODE_CONFIG_CONTENT' },
+    nextAction: {
+      kind: 'repair_executor_profile',
+      command: CANONICAL_MERGE_LAUNCH_COMMAND,
+      note: `Use the pack's canonical merge launch command: ${CANONICAL_MERGE_LAUNCH_COMMAND}`,
+    },
+  };
 }
 
 function initialResources(input: LaunchInput): LaunchResources {
@@ -583,6 +608,14 @@ export async function runSupervisedTaskLaunchAssistant(
     deps.resolveProfile(input.workClass, input.env ?? process.env, input.startMode));
   if (profileEdge.status !== 'ok') return continued(input, 'executor_profile', profileEdge, resources, startedAtMs, timings, deps.now);
   let profile = profileEdge.value;
+  if (input.workClass === 'merge'
+    && (profile.family !== 'opencode' || profile.route !== 'exact_terminal_worktree'
+      || !input.primaryRoot || input.worktreeSelector !== `path:${input.primaryRoot}`)) {
+    return continued(input, 'executor_profile', openCodeLaunchRefusal(), resources, startedAtMs, timings, deps.now);
+  }
+  if (profile.family === 'opencode' && !openCodeLaunchHasFleetBrowserDenies({ command: profile.launchCommand, agentName: profile.agentName, inlineConfigJson: profile.inlineConfigJson })) {
+    return continued(input, 'executor_profile', openCodeLaunchRefusal(), resources, startedAtMs, timings, deps.now);
+  }
 
   let taskId = input.taskId?.trim() ?? '';
   if (input.workClass === 'manager') {
@@ -663,9 +696,17 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(input.defaultBranch ? { defaultBranch: input.defaultBranch } : {}),
     ...(providerMode ? { providerTopLevel: true } : {}),
     ...(input.workClass === 'manager' ? { managerRefresh: true } : {}),
+    ...(input.workClass === 'merge' ? { primaryReuseRoot: input.primaryRoot } : {}),
     ...(input.workClass === 'manager' && input.taskId?.trim() ? { managerTaskRunId: input.runId?.trim() } : {}),
   }));
   if (prepared.status !== 'ok') return continued(input, 'worktree_prepare', prepared, resources, startedAtMs, timings, deps.now);
+  if (input.workClass === 'merge' && (!prepared.value.path || resolve(prepared.value.path) !== resolve(input.primaryRoot!))) {
+    return continued(input, 'worktree_prepare', {
+      cause: 'merge_primary_checkout_mismatch', actor: 'orchestrator', evidence: {},
+      nextAction: { kind: 'reconcile_worktree_setup', command: CANONICAL_MERGE_LAUNCH_COMMAND,
+        note: 'Use the canonical merge launch with the selected project primary checkout; never create a merge worktree' },
+    }, resources, startedAtMs, timings, deps.now);
+  }
   resources = {
     ...resources,
     ...(prepared.value.id ? { worktreeId: prepared.value.id } : {}),
@@ -682,6 +723,11 @@ export async function runSupervisedTaskLaunchAssistant(
     if (finalized.status !== 'ok') return continued(input, 'worktree_prepare', finalized, resources, startedAtMs, timings, deps.now);
     resources = { ...resources };
     profile = finalized.value;
+  }
+  // The post-probe command is the actual spawn command; never trust the pre-probe
+  // profile if a finalized OpenCode command silently dropped its deny overlay.
+  if (profile.family === 'opencode' && !openCodeLaunchHasFleetBrowserDenies({ command: profile.launchCommand, agentName: profile.agentName, inlineConfigJson: profile.inlineConfigJson })) {
+    return continued(input, 'terminal_prepare', openCodeLaunchRefusal(), resources, startedAtMs, timings, deps.now);
   }
 
   let terminal: RuntimeWorker | undefined;
@@ -1019,7 +1065,7 @@ export async function finalizeOpenCodeExecutorProfile(
   }
   const paths = await execute(['opencode', 'debug', 'paths'], 15_000, isolatedEnv, worktreePath);
   if (!paths.ok || !paths.stdout.includes(stateRoot)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
-  return { status: 'ok', value: { ...profile, launchCommand: overlay.command }, evidence: { executorFamily: 'opencode', route: profile.route, exactContext: true } };
+  return { status: 'ok', value: { ...profile, launchCommand: overlay.command, agentName: overlay.agentName, inlineConfigJson: overlay.inlineConfigJson }, evidence: { executorFamily: 'opencode', route: profile.route, exactContext: true } };
 }
 
 export async function resolveLiveExecutorProfile(
@@ -1556,6 +1602,29 @@ export async function prepareWorktreeWithOrca(
     nextAction: { kind: 'reconcile_worktree_setup', note: 'provide exactly one --worktree or --worktree-name' },
   };
 
+  if (request.primaryReuseRoot) {
+    if (!isAbsolute(request.primaryReuseRoot) || request.managerRefresh || request.providerTopLevel
+      || request.worktreeSelector !== `path:${request.primaryReuseRoot}` || request.worktreeName) {
+      return worktreeContinue('merge_primary_checkout_selector_invalid', {},
+        'Use the canonical merge launch on the selected primary checkout, never a new worktree');
+    }
+    const shown = resultRecord(envelope(await execute([
+      'orca', 'worktree', 'show', '--worktree', request.worktreeSelector, '--json',
+    ])));
+    const worktree = shown && record(shown.worktree) ? shown.worktree : null;
+    const id = text(worktree?.id);
+    const path = text(worktree?.path);
+    if (!id || !isAbsolute(path) || resolve(path) !== resolve(request.primaryReuseRoot)) {
+      return worktreeContinue('merge_primary_checkout_unproven', {},
+        'Reconcile the selected primary checkout with the Orca worktree identity before launching the merge agent');
+    }
+    return {
+      status: 'ok',
+      value: { id, selector: `id:${id}`, path, setupWitness: 'proven_reuse' },
+      evidence: { worktreeId: id, worktreePath: path },
+    };
+  }
+
   if (request.worktreeSelector) {
     const shown = resultRecord(envelope(await execute([
       'orca', 'worktree', 'show', '--worktree', request.worktreeSelector, '--json',
@@ -1815,7 +1884,7 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       'orca', 'orchestration', 'dispatch-show', '--task', taskId, '--json',
     ], cwd, env))),
     prepareWorktree: async (request) => prepareWorktreeWithOrca(
-      request,
+      input.workClass === 'merge' ? { ...request, primaryReuseRoot: target.primaryRoot } : request,
       (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),
     ),
     finalizeProfile: (profile, worktreePath) => finalizeOpenCodeExecutorProfile(profile, worktreePath,
@@ -2016,7 +2085,7 @@ export function parseLaunchAssistantCli(
 ): LaunchInput {
   const options = launchCliOptions(argv);
   const workClass = (options.get('--work-class') ?? '').trim();
-  if (!LAUNCH_WORK_CLASSES.includes(workClass as LaunchWorkClass)) throw new Error('--work-class must be exactly manager|t1|t2|t3');
+  if (!LAUNCH_WORK_CLASSES.includes(workClass as LaunchWorkClass)) throw new Error('--work-class must be exactly manager|t1|t2|t3|merge');
   const target = resolveTarget({ projectId: (options.get('--project') ?? '').trim(), env });
   const explicitRepository = (options.get('--repository') ?? '').trim().toLowerCase();
   if (explicitRepository && !/^[^/\s]+\/[^/\s]+$/u.test(explicitRepository)) throw new Error('--repository must be owner/repo');
@@ -2047,7 +2116,13 @@ export function parseLaunchAssistantCli(
   const hasWorktreeSelector = Boolean(worktreeSelector);
   const hasWorktreeName = Boolean(worktreeName);
 
-  if (hasWorktreeSelector === hasWorktreeName) throw new Error('provide exactly one --worktree or --worktree-name');
+  if (workClass === 'merge') {
+    if (!hasTask || runId || hasManagerBrief || hasWorktreeSelector || hasWorktreeName) {
+      throw new Error('merge requires --task and uses the selected primary checkout; --worktree, --worktree-name, --run and --manager-brief are forbidden');
+    }
+  } else if (hasWorktreeSelector === hasWorktreeName) {
+    throw new Error('provide exactly one --worktree or --worktree-name');
+  }
   if (workClass === 'manager') {
     if (!runId) throw new Error('manager requires --run');
     if (hasTask === hasManagerBrief) throw new Error('manager requires exactly one --task or --manager-brief');
@@ -2067,7 +2142,8 @@ export function parseLaunchAssistantCli(
     ...(runId ? { runId } : {}),
     ...(taskId ? { taskId } : {}),
     ...(managerBrief !== undefined ? { managerBrief } : {}),
-    ...(worktreeSelector ? { worktreeSelector } : {}),
+    ...(workClass === 'merge' ? { worktreeSelector: `path:${target.primaryRoot}` }
+      : worktreeSelector ? { worktreeSelector } : {}),
     ...(worktreeName ? { worktreeName } : {}),
     baseBranch,
     defaultBranch: target.defaultBranch,
