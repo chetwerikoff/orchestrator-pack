@@ -5416,6 +5416,23 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       status: 'failed', failureReason: 'gpt_source_non_complete:after_grace_zero_usable:0/3',
     });
 
+    const reconciled = await f.reconcile({ immediate: true });
+    const retry = reconciled.results.find((row) =>
+      row.runId === newer.id && typeof row.nextAction === 'string'
+      && row.nextAction.includes(exactCommand));
+    expect(retry).toMatchObject({
+      terminalized: false, statusReconciled: false,
+      nextAction: 'retry only the missing sources in the original run now: ' + exactCommand,
+    });
+    // Reconciliation only provides the executable same-run action. It must
+    // not resend source-01 or rewrite either original source census.
+    expect(f.freshStarts).toEqual([]);
+    expect(f.comments).toEqual([postedSourceOne]);
+    expect(getPackReviewRun(newer.id, f.options)?.reviewRound?.sourceSlots[0])
+      .toEqual(savedPartial);
+    expect(getPackReviewRun(f.original.id, f.options)?.reviewRound?.sourceSlots)
+      .toEqual(oldSlots);
+
     const result = await f.start();
     expect(result.result, JSON.stringify(result.result)).toMatchObject({
       created: true, reused: false, runId: newer.id,
