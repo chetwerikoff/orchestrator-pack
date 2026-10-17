@@ -245,7 +245,8 @@ export async function __testAttachOwnTargetFixture(
 
 function isUnitFixtureWithoutCdpMetadata(chromium: CdpChromium, error: unknown): boolean {
   return process.env.VITEST === 'true'
-    && typeof (chromium.connectOverCDP as { mock?: unknown }).mock === 'object'
+    && 'mock' in chromium.connectOverCDP
+    && typeof chromium.connectOverCDP.mock === 'object'
     && error instanceof TypeError
     && error.message === 'fetch failed';
 }
