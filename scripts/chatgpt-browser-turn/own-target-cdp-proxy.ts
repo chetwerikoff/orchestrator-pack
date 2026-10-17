@@ -29,11 +29,16 @@ export async function listCdpPageTargets(cdp: string, timeoutMs: number): Promis
   if (!response.ok) throw new Error('cdp_target_enumeration_http_' + response.status);
   const value: unknown = await response.json();
   if (!Array.isArray(value)) throw new Error('cdp_target_enumeration_invalid');
-  return value.filter((item): item is CdpPageTarget => (
-    item !== null && typeof item === 'object' && item.type === 'page'
-    && typeof item.id === 'string' && item.id.length > 0
-    && typeof item.url === 'string'
-  ));
+  const pages: CdpPageTarget[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || item.type !== 'page') continue;
+    if (typeof item.id !== 'string' || item.id.length === 0
+      || typeof item.url !== 'string') {
+      throw new Error('cdp_page_target_metadata_incomplete');
+    }
+    pages.push(item as CdpPageTarget);
+  }
+  return pages;
 }
 
 export async function createOwnCdpTarget(cdp: string, timeoutMs: number): Promise<string> {
@@ -266,8 +271,13 @@ export class OwnTargetCdpProxy {
       return;
     }
     if (method === 'Target.autoAttachRelated' || method === 'Target.setRemoteLocations'
-      || method === 'Target.attachToBrowserTarget') {
+      || method === 'Target.attachToBrowserTarget' || method === 'Browser.close'
+      || method === 'Target.disposeBrowserContext') {
       this.sendFailure(id, 'cross_target_attach_forbidden');
+      return;
+    }
+    if (typeof params.sessionId === 'string' && !this.sessions.has(params.sessionId)) {
+      this.sendFailure(id, 'foreign_page_session_forbidden');
       return;
     }
     if (typeof params.targetId === 'string' && !this.allowedTargetIds.has(params.targetId)) {
