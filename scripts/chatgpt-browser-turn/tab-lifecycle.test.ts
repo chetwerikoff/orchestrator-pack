@@ -500,6 +500,9 @@ describe('Issue #1238 mechanically derived production graph', () => {
         if (kind === 'pages' && /^(?:ctx|context|contexts\[0\])$|contexts\[0\] as/.test(receiver)) return 'context-pages';
         if (kind === 'newPage' && /^(?:ctx|context|contexts\[0\])$|contexts\[0\] as/.test(receiver)) return 'context-new-page';
         if (kind === 'close' && /browser as/.test(receiver)) return 'browser-release';
+        if (kind === 'close' && receiver === 'input.browser') return 'failed-attempt-browser-release';
+        if (kind === 'close' && receiver === 'late') return 'late-connect-browser-release';
+        if (kind === 'close' && /^(?:remote|this\.remote|server|this\.server)$/.test(receiver)) return 'own-target-proxy-disposal';
         if (kind === 'close' && /(?:page|opened\.page|outcome\.page|state\.page|secondaryPage)/.test(receiver)) return 'owned-page-close';
         return 'unknown';
       };
@@ -538,6 +541,11 @@ describe('Issue #1238 mechanically derived production graph', () => {
       'runStateLightSession',
       'runCli',
       'cancelOwnedGenerationFromReceipt',
+      // The invocation-local CDP transport is instantiated via a static class
+      // method and retired via a dynamically wrapped browser.close callback;
+      // both are reachable despite this graph's identifier-only call edges.
+      'open',
+      'dispose',
     ]);
     let expanded = true;
     while (expanded) {
@@ -561,6 +569,14 @@ describe('Issue #1238 mechanically derived production graph', () => {
     expect(unknownSinks).toEqual([]);
     expect(sinkInventory).toEqual([
       'close:browser-release:(browser as { close: () => Promise<void> }):releaseCdpBrowser',
+      'close:failed-attempt-browser-release:input.browser:abortAttempt',
+      'close:late-connect-browser-release:late:attachOwnTarget',
+      'close:own-target-proxy-disposal:remote:open',
+      'close:own-target-proxy-disposal:remote:open',
+      'close:own-target-proxy-disposal:remote:open',
+      'close:own-target-proxy-disposal:server:open',
+      'close:own-target-proxy-disposal:this.remote:dispose',
+      'close:own-target-proxy-disposal:this.server:dispose',
       'close:owned-page-close:(opened.page as { close: () => Promise<void> }):closeOwnedTurnPage',
       'close:owned-page-close:(page as { close: () => Promise<void> }):abandonLatePageHandle',
       'close:owned-page-close:opened.page:runGateBCharacterizationCommand',
@@ -573,16 +589,19 @@ describe('Issue #1238 mechanically derived production graph', () => {
       'contexts:browser-contexts:browser:openGateBCharacterizationPage',
       'contexts:browser-contexts:browser:createDedicatedTurnPage',
       'contexts:browser-contexts:browser:openTurnPage',
+      'contexts:browser-contexts:browser:onlyAllowedPage',
+      'contexts:browser-contexts:browser:selectConversationPage',
       'contexts:browser-contexts:(browser as { contexts: () => unknown[] }):probeProfileReady',
-      'contexts:browser-contexts:state.browser:setupOwnedPage',
       'newPage:context-new-page:contexts[0]:createDedicatedTurnPage',
-      'newPage:context-new-page:contexts[0]:setupOwnedPage',
       'newPage:context-new-page:context:runGateBCharacterization',
       'newPage:context-new-page:ctx:adoptNewPageWithBudget',
       'newPage:context-new-page:ctx:openGateBCharacterizationPage',
       'pages:context-pages:(contexts[0] as { pages: () => unknown[] }):probeProfileReady',
       'pages:context-pages:context:attachGateBWebSocketObservers',
       'pages:context-pages:contexts[0]:findOpenConversationPage',
+      'pages:context-pages:contexts[0]:onlyAllowedPage',
+      'pages:context-pages:contexts[0]:selectConversationPage',
+      'pages:context-pages:contexts[0]:selectConversationPage',
       'pages:context-pages:context:attachPlaywrightContextCdpObservers',
       'pages:context-pages:contexts[0]:recoverCurrentObservation',
       'pages:context-pages:context:runGateBCharacterization',
