@@ -191,6 +191,7 @@ async function abortAttempt(input: {
 export async function __testAttachOwnTargetFixture(
   chromium: CdpChromium,
   options: OwnTargetAttachOptions,
+  requireFakePageMarker = false,
 ): Promise<OwnTargetAttachResult> {
   const browser = await chromium.connectOverCDP(options.cdp, { timeout: 30_000 });
   const context = browser.contexts()?.[0];
@@ -212,13 +213,26 @@ export async function __testAttachOwnTargetFixture(
     if (matches.length === 1) { page = matches[0]; created = false; }
   }
   if (!page) page = await context.newPage();
+  if (requireFakePageMarker && page?.__fakeBrowserGptPage !== true) {
+    await browser.close?.();
+    throw new Error('ui_contract_mismatch:unit_fixture_page_not_fake');
+  }
   const visible = [page];
-  const newPage = context.newPage.bind(context);
-  context.newPage = async (...args: any[]) => {
+  // Preserve vi.fn call tracking for the older integration fixtures that
+  // assert the exact number of newPage calls. Successors stay visible locally.
+  const mockedNewPage = context.newPage.getMockImplementation?.();
+  const newPage = typeof mockedNewPage === 'function'
+    ? mockedNewPage.bind(context) : context.newPage.bind(context);
+  const observeNewPage = async (...args: any[]) => {
     const successor = await newPage(...args);
     if (successor && !visible.includes(successor)) visible.push(successor);
     return successor;
   };
+  if (typeof context.newPage.mockImplementation === 'function' && typeof mockedNewPage === 'function') {
+    context.newPage.mockImplementation(observeNewPage);
+  } else {
+    context.newPage = observeNewPage;
+  }
   context.pages = () => visible;
   const record = {
     targetId: options.pinnedTargetId ?? 'fixture-own-target',
@@ -248,7 +262,7 @@ export async function attachOwnTarget(
     // This route is limited to mocked transports under the test runner; real
     // CDP enumeration failures still fail closed without unfiltered attach.
     if (isUnitFixtureWithoutCdpMetadata(chromium, error)) {
-      return __testAttachOwnTargetFixture(chromium, options);
+      return __testAttachOwnTargetFixture(chromium, options, true);
     }
     throw asAttemptError(error, 0);
   }
