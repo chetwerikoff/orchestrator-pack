@@ -5173,12 +5173,22 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       repository, prNumber, headSha: HEAD, runId: f.original.id,
       slotId: last.slotId, invocationId: last.invocationId!,
     } });
-    const reconciled = await f.reconcile();
-    expect(String(reconciled.results.find((row) => row.runId === f.original.id && typeof row.nextAction === 'string')?.nextAction))
-      .not.toContain(exactCommand);
+    const posted = f.comments[0]!;
+    expect(posted.body).toContain(`slot=${last.slotId} invocation=${last.invocationId}`);
+    // A comment contradicting the persisted zero-send rate_limit terminal
+    // cannot become a safe 1/3 source merely by reconciliation hydration.
+    // Repeating reconcile must not launder that original 0/3 into a retry.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const reconciled = await f.reconcile();
+      expect(reconciled.results.filter((row) => row.runId === f.original.id)
+        .every((row) => !String(row.nextAction ?? '').includes(exactCommand))).toBe(true);
+      expect(f.comments).toEqual([posted]);
+      expect(f.freshStarts).toEqual([]);
+    }
     const next = await f.start();
     expect(next.result.created).not.toBe(true);
     expect(f.freshStarts).toEqual([]);
+    expect(f.comments).toEqual([posted]);
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
   });
 
