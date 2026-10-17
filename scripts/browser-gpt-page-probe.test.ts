@@ -2803,52 +2803,65 @@ test('the probe keeps browser-control and polling authority closed while harvest
   assert.equal(source.includes("workflow_authority: 'none'"), true);
 });
 
-test('state-light terminal result propagates execute-Issue product recovery as conversation-scoped', async () => {
+test('state-light public output preserves invocation scope without durable locator (#2641 AC7)', async () => {
   const { runStateLightTurn } = await import('./chatgpt-browser-turn/state-light-turn.ts');
+  const durableUrl = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test/c/11111111-1111-4111-8111-111111111111';
+  const localUrl = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test/c/local-chatgpt%3A11111111-1111-4111-8111-111111111111';
 
   for (const cause of [
     'message_delivery_timed_out',
     'product_network_error',
     'stream_recovery_polling_timed_out',
+    'product_error_banner',
   ] as const) {
-    const writes: string[] = [];
-    const originalWrite = process.stdout.write;
-    process.stdout.write = ((chunk: string | Uint8Array) => {
-      writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
-      return true;
-    }) as typeof process.stdout.write;
-    try {
-      const exitCode = await runStateLightTurn(['--profile', 'fixture'], {
-        runTurn: async () => ({
-          result: {
-            schema: 'turn-result/v1',
-            state: 'recovery_required',
-            scope: 'invocation',
-            cause,
-            invocation_id: '19371937-1937-4937-8937-193719371937',
-            configured_profile_key: 'profile-1937-fixture',
-            send_count: 1,
-            poll_count: 0,
-            goto_count: 0,
-            new_chat_click_count: 0,
-            navigation_count: 0,
-            incidents: [],
-          },
-        }),
-      });
-      assert.notEqual(exitCode, 0);
-      const emitted = writes
-        .flatMap((chunk) => chunk.split(/\r?\n/u))
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line) => JSON.parse(line))
-        .find((row) => row.schema === 'turn-result/v1');
-      assert.deepEqual(
-        { state: emitted?.state, scope: emitted?.scope, cause: emitted?.cause },
-        { state: 'recovery_required', scope: 'conversation', cause },
-      );
-    } finally {
-      process.stdout.write = originalWrite;
+    for (const [kind, conversationId, expectedScope] of [
+      ['unbound', undefined, 'invocation'],
+      ['local-only', localUrl, 'invocation'],
+      ['durable', durableUrl, 'conversation'],
+    ] as const) {
+      const writes: string[] = [];
+      const originalWrite = process.stdout.write;
+      process.stdout.write = ((chunk: string | Uint8Array) => {
+        writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+        return true;
+      }) as typeof process.stdout.write;
+      try {
+        const exitCode = await runStateLightTurn(['--profile', 'fixture'], {
+          runTurn: async () => ({
+            result: {
+              schema: 'turn-result/v1',
+              state: 'recovery_required',
+              scope: 'invocation',
+              cause,
+              invocation_id: '19371937-1937-4937-8937-193719371937',
+              configured_profile_key: 'profile-1937-fixture',
+              send_count: 1,
+              poll_count: 0,
+              goto_count: 0,
+              new_chat_click_count: 0,
+              navigation_count: 0,
+              incidents: [],
+              ...(conversationId ? { conversation_id: conversationId } : {}),
+            },
+          }),
+        });
+        assert.notEqual(exitCode, 0);
+        const emitted = writes
+          .flatMap((chunk) => chunk.split(/\r?\n/u))
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+          .find((row) => row.schema === 'turn-result/v1');
+        assert.deepEqual(
+          { state: emitted?.state, scope: emitted?.scope, cause: emitted?.cause },
+          { state: 'recovery_required', scope: expectedScope, cause },
+          kind,
+        );
+        if (!conversationId) assert.equal(emitted?.conversation_id, undefined);
+        if (kind === 'durable') assert.equal(emitted?.conversation_id, durableUrl);
+      } finally {
+        process.stdout.write = originalWrite;
+      }
     }
   }
 });

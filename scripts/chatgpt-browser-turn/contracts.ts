@@ -123,6 +123,8 @@ export interface TurnResultV1 {
   conversation_id?: string;
   /** Heading of the product alert behind a conversation-scoped recovery result. */
   product_banner_text?: string;
+  /** Optional operator guidance for a counted, unbound fresh Send; never executable authority. */
+  next_action?: string;
   provisional_id?: string;
   incident_id?: string;
   generation?: number;

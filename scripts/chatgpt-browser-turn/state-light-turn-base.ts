@@ -138,6 +138,30 @@ const ACCOUNT_COOLDOWN_GUARD = 'state-light-account-cooldown.v1.guard';
 const ACCOUNT_COOLDOWN_MS = 300_000;
 const ACCOUNT_COOLDOWN_ACTIONABLE_MS = ACCOUNT_COOLDOWN_MS + 1_000;
 
+const FRESH_LOCAL_POSSIBLY_DELIVERED_NEXT_ACTION =
+  'No durable ChatGPT conversation URL was bound for this invocation; delivery is POSSIBLY_DELIVERED. '
+  + 'Check expected GitHub effects first (Issue body revision, comment, commit, PR) and re-check up to 20 minutes '
+  + 'after the original Send, while also searching the project sidebar for the turn-marker chat and harvesting it if found. '
+  + 'Never click Retry or auto-resend. A new-invocation-ID manual send is allowed only if no GitHub effect and no marker chat '
+  + 'appeared by 20 minutes after Send, and only by an explicit operator/workflow decision acknowledging possibly duplicated side effects.';
+
+// A local-chatgpt id is never a durable conversation locator. Match both the
+// current project identity and exact route; the root /c/local-chatgpt route
+// and a foreign project's tab cannot authorize the local-only behavior.
+function matchingFreshProjectLocalUrl(observedUrl: string, projectUrl: string): boolean {
+  try {
+    const url = new URL(observedUrl);
+    const route = /^\/g\/(g-p-[^/]+)\/c\/local-chatgpt(?::|%3A)[a-z0-9-]+$/iu.exec(url.pathname);
+    return url.origin === 'https://chatgpt.com'
+      && !url.username && !url.password && !url.search && !url.hash
+      && Boolean(route && projectSurfaceUrlsEquivalent(
+        url.origin + '/g/' + route[1] + '/project', projectUrl,
+      ));
+  } catch {
+    return false;
+  }
+}
+
 export interface StateLightAccountCooldown {
   readonly active: boolean;
   readonly until?: number;
@@ -460,6 +484,8 @@ export interface TurnRunOutcome {
   /** Process-local publication fact; not part of turn-result/v1. */
   readonly publicationState?: StateLightPublicationResult['state'];
   readonly cleanupAction?: PageCleanupAction;
+  /** Process-local authority for the two still-owned counted fresh/local terminals. */
+  readonly retainOwnedFreshLocalPage?: boolean;
   /** Exact owned page observation; never cancellation authority by itself. */
   readonly stopAuthorityPage?: any;
   readonly ownedConversationUrl?: string;
@@ -4572,6 +4598,17 @@ async function runTurnCore(
     const targetChatUrl = config.newChat
       ? undefined
       : normalizeConversationUrl(config.chatUrl ?? '');
+    const ownedFreshLocalPostSendPage = (): boolean => {
+      if (!config.newChat || !createdFreshPage || page !== originalHeldPage
+        || ownershipForfeited || cleanupAuthorityUnprovenPages.has(page)
+        || browserOrPageDefinitelyLost(page, browser) || sendCount < 1
+        || targetChatUrl || ownedConversationUrl || !config.projectUrl) return false;
+      try {
+        return matchingFreshProjectLocalUrl(String(page.url()), config.projectUrl);
+      } catch {
+        return false;
+      }
+    };
     const beforePostDispatch = await checkAccountLoadError();
     if (beforePostDispatch && beforePostDispatch !== 'recovered') return beforePostDispatch;
     if (targetChatUrl && !browserOrPageDefinitelyLost(page, browser)) {
@@ -4629,6 +4666,10 @@ async function runTurnCore(
     let freshMarkerlessReply = '';
     let streamRecoveryBannerReads = 0;
     let streamRecoveryBannerCause: string | undefined;
+    let streamRecoveryBannerRoute: 'local' | 'durable' | undefined;
+    let streamRecoveryBannerFirstHeading: string | undefined;
+    let streamRecoveryBannerLastIteration = -1;
+    let bannerPollIteration = 0;
     let witnessed429ReadOnlyPolls = 0;
     // Roleless recovery banners outlive the turn that raised them; one ends this
     // turn only after its own Stop was seen or the Stop grace since the send ran out.
@@ -4984,6 +5025,7 @@ async function runTurnCore(
     // must instead return within its pre-Send invocation budget, including
     // bounded cleanup; the 2 x timeout threshold is not a hard exit.
     while (true) {
+      bannerPollIteration += 1;
       // A late observed own request is still the original physical Send.
       const zeroCountCutoffMs = config.newChat && !ownedConversationUrl
         ? freshUnboundReturnByMs : invocationDeadlineMs;
@@ -5036,11 +5078,13 @@ async function runTurnCore(
       if (config.newChat && !ownedConversationUrl
         && (sendCount >= 1 || deliveryProofPendingRecovery || zeroWitnessAccountRecovery || sendAttempted)
         && Date.now() >= freshUnboundReturnByMs) {
+        const retainLocal = ownedFreshLocalPostSendPage();
         incident('post_send_observation_error', 'fresh_conversation_owner_unproven', 'retain_page_no_resend');
         return {
           page,
           browser,
           cleanupAction: 'preserve',
+          ...(retainLocal ? { retainOwnedFreshLocalPage: true } : {}),
           result: compactResult(
             'observation_uncertain',
             'invocation',
@@ -5051,7 +5095,8 @@ async function runTurnCore(
             pollCount,
             navigation,
             incidents,
-            { ...(sendAttempted ? { send_attempted: true } : {}) },
+            { ...(sendAttempted ? { send_attempted: true } : {}),
+              ...(retainLocal ? { next_action: FRESH_LOCAL_POSSIBLY_DELIVERED_NEXT_ACTION } : {}) },
             journalWriteFailed,
           ),
         };
@@ -5144,6 +5189,10 @@ async function runTurnCore(
         }
         const symptom = error instanceof Error ? error.message : String(error);
         incident('post_send_observation_error', symptom, 'continue_polling_owned_page');
+        streamRecoveryBannerReads = 0;
+        streamRecoveryBannerCause = undefined;
+        streamRecoveryBannerRoute = undefined;
+        streamRecoveryBannerFirstHeading = undefined;
         stableReads = 0;
         lastReadyReply = '';
         lastReadyObservedText = '';
@@ -5242,7 +5291,10 @@ async function runTurnCore(
           ),
         };
       }
-      if (wall.state === 'recovery_required' && !held429Witness?.current() && (
+      if (wall.state === 'recovery_required' && !held429Witness?.current()
+        // Only the unrendered-owner local alert is handled by the new adjacent
+        // poll gate. A visible owned marker retains the pre-existing wall route.
+        && (hasOwnedUserMessage(messages, marker) || !ownedFreshLocalPostSendPage()) && (
         recoveryBannerTrusted || (wall.cause !== 'stream_recovery_polling_timed_out' && wall.cause !== 'message_stream_error')
       )) {
         const cause = wall.cause;
@@ -5265,6 +5317,10 @@ async function runTurnCore(
       }
 
       if (transcriptIncomplete) {
+        streamRecoveryBannerReads = 0;
+        streamRecoveryBannerCause = undefined;
+        streamRecoveryBannerRoute = undefined;
+        streamRecoveryBannerFirstHeading = undefined;
         stableReads = 0;
         lastReadyReply = '';
         lastReadyObservedText = '';
@@ -5532,45 +5588,110 @@ async function runTurnCore(
         lastMarkerlessSnapshotSignature = '';
       }
 
-      // Issue #2226/#2235: ChatGPT can stop an unrendered-owner turn with a
-      // roleless alert; any post-send alert counts, unknown texts as
-      // product_error_banner. The marker-based execution recovery classifier cannot
-      // prove ownership then, and a reload would hide the alert while the turn
-      // stays dead. Return the reserved conversation-scoped recovery cause for
-      // this invocation's own bound conversation instead, without reload or resend.
-      if (!markerVisible && durableConversationUrl && sendCount >= 1 && recoveryBannerTrusted && pageTurnEvidence?.generationInProgress !== true) {
+      // Keep the established durable Stop/grace behavior. A positively created,
+      // still-held fresh project-local Page has no durable locator, so only two
+      // adjacent complete idle observations on that exact Page may settle it.
+      const localBanner = !markerVisible && ownedFreshLocalPostSendPage();
+      // Pin the exact initial local route, not just its project/pattern: a
+      // different local-chatgpt id on the same held Page breaks the streak.
+      let localBannerUrl: string | undefined;
+      try { if (localBanner) localBannerUrl = String(page.url()); } catch { /* Not eligible. */ }
+      const sameLocalRoute = (): boolean => {
+        if (!localBannerUrl || !ownedFreshLocalPostSendPage()) return false;
+        try { return String(page.url()) === localBannerUrl; } catch { return false; }
+      };
+      const durableBanner = !markerVisible && Boolean(durableConversationUrl)
+        && sendCount >= 1 && recoveryBannerTrusted
+        && pageTurnEvidence?.generationInProgress !== true;
+      if (localBanner || durableBanner) {
+        const bannerRoute = localBanner ? 'local' : 'durable';
+        // Zero rendered messages may leave pageTurnEvidence undefined. A
+        // latched earlier Stop is not current negative generation evidence.
+        const currentLocalIdle = !localBanner || (
+          pageTurnEvidence?.generationInProgress !== true
+          && await readFreshStopVisible(
+            page, Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
+          ) === false
+          && sameLocalRoute()
+        );
         let bannerCause: string | undefined;
         let bannerText: string | undefined;
-        try {
-          const alertTexts = await boundedBrowserRead(
-            page.locator(UNMARKED_ALERT_SELECTOR).allInnerTexts(),
-            Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, hardExhaustionDeadline - Date.now())),
-            'stream_recovery_banner_read_timeout',
-          ) as string[];
-          const texts = (Array.isArray(alertTexts) ? alertTexts : []).map(String);
-          const causes = new Set(
-            texts
-              .map((text) => unrenderedOwnerAlertCause(text))
-              .filter((cause): cause is NonNullable<typeof cause> => cause !== undefined),
-          );
-          bannerCause = causes.size === 1 ? [...causes][0] : causes.size > 1 ? 'product_error_banner' : undefined;
-          bannerText = texts.map(alertHeading).find(Boolean)?.slice(0, 160);
-        } catch (error) {
-          if (isPostSendTargetCrash(error)) throw error;
+        if (currentLocalIdle) {
+          try {
+            const alertTexts = await boundedBrowserRead(
+              page.locator(UNMARKED_ALERT_SELECTOR).allInnerTexts(),
+              Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, hardExhaustionDeadline - Date.now())),
+              'stream_recovery_banner_read_timeout',
+            ) as string[];
+            const texts = (Array.isArray(alertTexts) ? alertTexts : []).map(String);
+            const causes = new Set(
+              texts
+                .map((text) => unrenderedOwnerAlertCause(text))
+                .filter((cause): cause is NonNullable<typeof cause> => cause !== undefined),
+            );
+            // Multiple/conflicting local alerts cannot be an adjacent trustworthy
+            // observation. Keep the incumbent durable multi-alert fallback.
+            bannerCause = localBanner
+              ? texts.length === 1 && causes.size === 1 ? [...causes][0] : undefined
+              : causes.size === 1 ? [...causes][0] : causes.size > 1 ? 'product_error_banner' : undefined;
+            bannerText = texts.map(alertHeading).find(Boolean)?.slice(0, 160);
+          } catch (error) {
+            if (isPostSendTargetCrash(error)) throw error;
+            // Unreadable/failed polling is an interruption, not a streak member.
+          }
         }
+        // Alert extraction itself awaits the live DOM. The held local Page may
+        // gain a durable route, a rendered marker/reply, or a new Stop during
+        // that read; the pre-read idle proof must not settle a stale poll.
+        if (localBanner && bannerCause) {
+          let stillLocalIdle = false;
+          try {
+            if (sameLocalRoute()) {
+              const currentTranscript = await readPageObservation(
+                page, marker, baselineCount, false,
+                Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
+              );
+              stillLocalIdle = !currentTranscript.transcriptIncomplete
+                && currentTranscript.messages.length === 0
+                && currentTranscript.pageTurnEvidence?.generationInProgress !== true
+                && sameLocalRoute()
+                && await readFreshStopVisible(
+                  page, Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
+                ) === false
+                && sameLocalRoute();
+            }
+          } catch (error) {
+            if (isPostSendTargetCrash(error)) throw error;
+          }
+          if (!stillLocalIdle) {
+            bannerCause = undefined;
+            bannerText = undefined;
+          }
+        }
+        if (streamRecoveryBannerRoute !== bannerRoute) {
+          streamRecoveryBannerReads = 0;
+          streamRecoveryBannerCause = undefined;
+          streamRecoveryBannerFirstHeading = undefined;
+        }
+        const adjacentLocalPoll = bannerPollIteration === streamRecoveryBannerLastIteration + 1;
         streamRecoveryBannerReads = bannerCause && bannerCause === streamRecoveryBannerCause
+          && (!localBanner || adjacentLocalPoll)
           ? streamRecoveryBannerReads + 1
           : bannerCause ? 1 : 0;
+        if (streamRecoveryBannerReads === 1) streamRecoveryBannerFirstHeading = bannerText;
         streamRecoveryBannerCause = bannerCause;
+        streamRecoveryBannerRoute = bannerCause ? bannerRoute : undefined;
+        streamRecoveryBannerLastIteration = bannerCause ? bannerPollIteration : -1;
         if (bannerCause && streamRecoveryBannerReads >= 2) {
           incident('invocation_blocker', bannerCause, 'retain_owned_page_no_resend');
           return {
             page,
             browser,
             cleanupAction: 'preserve',
+            ...(localBanner ? { retainOwnedFreshLocalPage: true } : {}),
             result: compactResult(
               'recovery_required',
-              'conversation',
+              localBanner ? 'invocation' : 'conversation',
               bannerCause,
               invocationId,
               profileKey,
@@ -5578,7 +5699,13 @@ async function runTurnCore(
               pollCount,
               navigation,
               incidents,
-              { conversation_id: durableConversationUrl, ...(bannerText ? { product_banner_text: bannerText } : {}) },
+              {
+                ...(localBanner
+                  ? { next_action: FRESH_LOCAL_POSSIBLY_DELIVERED_NEXT_ACTION }
+                  : { conversation_id: durableConversationUrl }),
+                ...((localBanner ? streamRecoveryBannerFirstHeading : bannerText)
+                  ? { product_banner_text: localBanner ? streamRecoveryBannerFirstHeading : bannerText } : {}),
+              },
               journalWriteFailed,
             ),
           };
@@ -5586,6 +5713,9 @@ async function runTurnCore(
       } else {
         streamRecoveryBannerReads = 0;
         streamRecoveryBannerCause = undefined;
+        streamRecoveryBannerRoute = undefined;
+        streamRecoveryBannerFirstHeading = undefined;
+        streamRecoveryBannerLastIteration = -1;
       }
 
       // A fresh conversation this invocation created and still owns cannot hold
@@ -6435,6 +6565,16 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   let pageAction: PageCleanupAction = cleanupAuthorityProven && !pageLost && outcome.ownershipForfeited !== true
     ? 'close'
     : 'skip';
+  // Only the exact flagged still-owned fresh/local terminal escapes #2510
+  // positive-owned Page close. The public cleanupAction alone grants nothing.
+  if (pageAction === 'close' && outcome.retainOwnedFreshLocalPage
+    && outcome.ownedFreshProjectUrl && outcome.result.send_count >= 1
+    && !outcome.result.conversation_id) {
+    // The already-verified local terminal grants retention for this exact
+    // positively owned Page. Route promotion or an unreadable URL after that
+    // terminal cannot revoke retention and authorize a destructive close.
+    pageAction = 'preserve';
+  }
   if (pageAction === 'close' && outcome.result.send_count === 0
     && outcome.result.send_attempted !== true && outcome.ownedFreshProjectUrl) {
     // The slot was already owner-released. For this proven-created tab, check
