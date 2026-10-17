@@ -3555,6 +3555,10 @@ async function recoverablePostedRateLimitSlots(input: {
     || new Set(round.sourceSlots.map((slot) => slot.slotId)).size !== 3
     || round.settledSourceCount !== undefined || gptUsableSourceCount(round) === 0
     || hasPersistedPackReviewVerdict(run) || !hasCredentialedGptSourceAuthority(run)) return null;
+  // A judged 0/3 zero-send original with a subsequently hydrated source
+  // comment has conflicting invocation evidence; it is not a retryable 1/3.
+  if (run.failureReason?.startsWith('gpt_source_non_complete:')
+    && run.failureReason.endsWith(':0/3')) return null;
   if (process.env.OPK_VITEST_HARNESS === '1' && !input.transport) return null;
   const transport = input.transport ?? createPackGptSourceCommentTransport({
     repoRoot: input.sourceRepoRoot, repoSlug: input.repoSlug, prNumber: run.prNumber,
@@ -6132,6 +6136,10 @@ export async function reconcileStalePackReviewRuns(
       if (needsGptSourceRecovery && !stillZeroJudgment && !failedPartialStatusNeedsRepair) {
         let partialRateLimitAction: string | undefined;
         if (recoveredSnapshot.status === 'failed'
+          // Only original persisted complete comments qualify. A new comment
+          // hydrated from a zero-send terminal cannot create retry authority.
+          && recovery.hydratedSourceCount === 0
+          && gptUsableSourceCount(run.reviewRound) > 0
           && recoveryCoverage?.kind === 'partial'
           && hasFailedRateLimitSource(recoveredSnapshot)) {
           const missing = await recoverablePostedRateLimitSlots({
