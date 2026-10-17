@@ -2463,6 +2463,35 @@ describe('state-light fresh conversation collision recovery', () => {
     },
   );
 
+  it('resets the local alert streak when its exact chat ID changes during the second read (#2641 review)', async () => {
+    let fixture: ReturnType<typeof freshLocalPostSendFixture>;
+    fixture = freshLocalPostSendFixture({
+      alerts: Array(4).fill('Network error\nRetry'),
+      afterAlertRead: (readNumber) => {
+        if (readNumber === 2) {
+          fixture.setPostSendUrl(LOCAL_ID_CONVERSATION_URL.replace(
+            '11111111-1111-4111-8111-111111111111',
+            '44444444-4444-4444-8444-444444444444',
+          ));
+        }
+      },
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-LOCAL-2641'));
+    const outcome = await runNewChatTurn(fixture.page, join(stateDir, '2641-id-drift-' + randomUUID() + '.txt'));
+    expect(outcome.result).toMatchObject({
+      state: 'recovery_required', scope: 'invocation', cause: 'product_network_error',
+      send_count: 1,
+    });
+    // Read #2 was invalidated by route drift. Only two further intact
+    // observations on the new route can complete the streak.
+    expect(fixture.alertReads()).toBe(4);
+    expect(fixture.getSends()).toBe(1);
+    expect(fixture.page.goto).toHaveBeenCalledTimes(fixture.gotoAtSend());
+    expect(fixture.page.close).not.toHaveBeenCalled();
+    expect(fixture.stopClick).not.toHaveBeenCalled();
+    expect(fixture.retry).not.toHaveBeenCalled();
+  });
+
   it.each([
     { terminal: 'recovery_required', route: SHARED_CONV, label: 'durable route', retain: true },
     { terminal: 'observation_uncertain', route: PROJECT_URL, label: 'project root', retain: true },
