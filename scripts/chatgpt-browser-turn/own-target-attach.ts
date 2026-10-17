@@ -234,6 +234,14 @@ export async function __testAttachOwnTargetFixture(
     context.newPage = observeNewPage;
   }
   context.pages = () => visible;
+  // Some older synthetic Browsers allocate a new context on every contexts()
+  // call. Keep the validated fixture context visible to subsequent turn reads.
+  // Real Playwright/CDP connections never enter this test-only adapter.
+  if (typeof browser.contexts.mockImplementation === 'function') {
+    browser.contexts.mockImplementation(() => [context]);
+  } else {
+    browser.contexts = () => [context];
+  }
   const record = {
     targetId: options.pinnedTargetId ?? 'fixture-own-target',
     created,
@@ -246,7 +254,7 @@ export async function __testAttachOwnTargetFixture(
 function isUnitFixtureWithoutCdpMetadata(chromium: CdpChromium, error: unknown): boolean {
   return process.env.VITEST === 'true'
     && 'mock' in chromium.connectOverCDP
-    && typeof chromium.connectOverCDP.mock === 'object'
+    && typeof Reflect.get(chromium.connectOverCDP, 'mock') === 'object'
     && error instanceof TypeError
     && error.message === 'fetch failed';
 }
