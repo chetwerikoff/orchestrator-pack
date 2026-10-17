@@ -5474,9 +5474,12 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       };
     });
     if (violation === 'historical_posted_comment') {
+      const sourceTwo = newerSlots[1] as PackReviewGptRoundRecord['sourceSlots'][number];
+      const prior = sourceTwo.attemptHistory?.[0];
+      if (!prior) throw new Error('fixture source-02 history missing');
       f.publish({ identity: {
         repository, prNumber, headSha: HEAD, runId: newer.id, slotId: 'source-02',
-        invocationId: newerSlots[1]!.attemptHistory![0]!.invocationId,
+        invocationId: prior.invocationId,
       } });
     }
     updatePackReviewRun(newer.id, {
