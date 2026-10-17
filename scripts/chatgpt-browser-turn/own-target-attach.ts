@@ -181,7 +181,9 @@ export async function attachOwnTarget(
   options: OwnTargetAttachOptions,
 ): Promise<OwnTargetAttachResult> {
   // All target discovery/allocation occurs before Playwright bootstrap.
-  const selected = await selectTarget(options);
+  let selected: PinnedTarget;
+  try { selected = await selectTarget(options); }
+  catch (error) { throw asAttemptError(error, 0); }
   const maxAttempts = options.postSend ? 1 : 3;
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -200,13 +202,20 @@ export async function attachOwnTarget(
       connect.then((late) => {
         if (retire) void Promise.resolve().then(() => late.close()).catch(() => {});
       }, () => {});
-      browser = await Promise.race([
-        connect,
-        new Promise<never>((_, reject) => setTimeout(
-          () => reject(new Error('browser_operation_timeout:connect_over_cdp')),
-          Math.max(1, waitMs(options.deadlineMs)),
-        )),
-      ]);
+      let connectTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        browser = await Promise.race([
+          connect,
+          new Promise<never>((_, reject) => {
+            connectTimer = setTimeout(
+              () => reject(new Error('browser_operation_timeout:connect_over_cdp')),
+              Math.max(1, waitMs(options.deadlineMs)),
+            );
+          }),
+        ]);
+      } finally {
+        if (connectTimer) clearTimeout(connectTimer);
+      }
       const page = onlyAllowedPage(browser);
       const actual = String(page.url());
       if (selected.initialUrl && options.chatUrl
