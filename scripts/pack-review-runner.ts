@@ -6146,9 +6146,9 @@ export async function reconcileStalePackReviewRuns(
               if (current && head === run.targetSha.toLowerCase()
                 && authority?.currentHeadSha.toLowerCase() === head
                 && authority.cycle?.cycleId === run.reviewCycleId
-                && authority.cycle.state === 'open'
-                && authority.cycle.reviewStageComplete !== true
-                && !authority.cycle.consumedRoundOrdinals?.includes(run.logicalRoundOrdinal ?? 0)
+                && authority.cycle?.state === 'open'
+                && authority.cycle?.reviewStageComplete !== true
+                && !authority.cycle?.consumedRoundOrdinals?.includes(run.logicalRoundOrdinal ?? 0)
                 && !authority.terminal
                 && current.status === recoveredSnapshot.status
                 && current.failureReason === recoveredSnapshot.failureReason
