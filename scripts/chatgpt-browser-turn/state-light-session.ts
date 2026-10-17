@@ -10,6 +10,7 @@ import {
 import { basename, dirname, join, resolve } from 'node:path';
 import type { Writable } from 'node:stream';
 import { destinationIdentity } from './coordination.ts';
+import { attachOwnTarget } from './own-target-attach.ts';
 import {
   boundedResourceCleanup,
   releaseCdpBrowser,
@@ -138,6 +139,7 @@ export interface SessionResultV1 {
   readonly state: TurnState;
   readonly scope: FailureScope;
   readonly cause: string;
+  readonly attach_attempts?: number;
   readonly exit_code: number;
   readonly cleanup: ResourceCleanupOutcome;
   readonly owned_tab_count: 0 | 1;
@@ -192,6 +194,7 @@ interface SessionExecutionState {
   releaseFreshSlot?: () => void;
   browser?: any;
   page?: any;
+  attachAttempts?: number;
   conversationId?: string;
   decisiveOrdinal?: number;
   stopped: boolean;
@@ -239,6 +242,7 @@ export interface StateLightSessionDependencies {
   ) => Promise<ProfileVerification>;
   readonly prepareFresh: typeof prepareStateLightFreshConversation;
   readonly loadChromium: typeof loadChromium;
+  readonly attachOwnTarget: typeof attachOwnTarget;
   readonly marker: typeof generateOwnedPromptMarker;
   readonly wrapPayload: typeof wrapOwnedPromptPayload;
   readonly waitForComposer: typeof __testComposerMutation.waitForComposer;
@@ -269,6 +273,7 @@ const defaultDependencies: StateLightSessionDependencies = {
   verifyProfile,
   prepareFresh: prepareStateLightFreshConversation,
   loadChromium,
+  attachOwnTarget,
   marker: generateOwnedPromptMarker,
   wrapPayload: wrapOwnedPromptPayload,
   waitForComposer: __testComposerMutation.waitForComposer,
@@ -1157,13 +1162,20 @@ async function setupOwnedPage(
 
   try {
     const chromium = deps.loadChromium();
-    state.browser = await chromium.connectOverCDP(state.config.browser.cdp, {
-      timeout: Math.min(30_000, Math.max(1, remainingMs(state, deps))),
+    // Session historically uses a dedicated Page even for an existing chat.
+    // Allocate that invocation-owned target before Playwright bootstrap; this
+    // never imports a same-URL page belonging to another active session.
+    const attached = await deps.attachOwnTarget(chromium, {
+      mode: 'own-target',
+      cdp: state.config.browser.cdp,
+      deadlineMs: state.wholeSessionDeadline,
+      cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
+      newChat: true,
     });
+    state.browser = attached.browser;
+    state.page = attached.page;
+    state.attachAttempts = attached.attachAttempts;
     if (!deadlineOpen(state, deps)) throw new Error('whole_session_deadline_exhausted');
-    const contexts = state.browser.contexts();
-    if (contexts.length !== 1) throw new Error('ui_contract_mismatch:context_count');
-    state.page = await contexts[0].newPage();
     if (!deadlineOpen(state, deps)) throw new Error('whole_session_deadline_exhausted');
     const target = state.config.browser.newChat
       ? projectConversationPrefix(state.config.browser.projectUrl ?? '')
@@ -1202,6 +1214,8 @@ async function setupOwnedPage(
     }
     return null;
   } catch (error) {
+    const attempts = (error as { attachAttempts?: unknown } | null)?.attachAttempts;
+    if (typeof attempts === 'number' && Number.isSafeInteger(attempts)) state.attachAttempts = attempts;
     if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
     return classifySetupError(error);
   }
@@ -1332,6 +1346,7 @@ function buildSessionResult(
     state: aggregateTuple.state,
     scope: aggregateTuple.scope,
     cause: aggregateTuple.cause,
+    ...(state.attachAttempts !== undefined ? { attach_attempts: state.attachAttempts } : {}),
     exit_code: turnExitCode(aggregateTuple.state),
     cleanup,
     owned_tab_count: state.page ? 1 : 0,
