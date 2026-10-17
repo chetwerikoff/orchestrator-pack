@@ -1,5 +1,5 @@
 // @vitest-ci-lane light
-import { spawn } from 'node:child_process';
+import { runProcess } from '../kernel/subprocess.ts';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -456,13 +456,20 @@ it.skipIf(!requireRealCdp && (!liveChromium || !chromeExecutable))(
 
     // A fresh isolated process avoids touching the shared automation profile.
     const profile = mkdtempSync(join(tmpdir(), 'opk-real-cdp-'));
-    const chrome = spawn(chromeExecutable, [
-      '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
-      '--no-first-run', '--no-default-browser-check',
-      '--remote-allow-origins=*', '--remote-debugging-port=0',
-      '--user-data-dir=' + profile, 'about:blank',
-    ], { stdio: 'ignore' });
-    chrome.on('error', () => {});
+    const chromeAbort = new AbortController();
+    let chromeTerminated = false;
+    const chromeRun = runProcess({
+      command: chromeExecutable,
+      args: [
+        '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
+        '--no-first-run', '--no-default-browser-check',
+        '--remote-allow-origins=*', '--remote-debugging-port=0',
+        '--user-data-dir=' + profile, 'about:blank',
+      ],
+      signal: chromeAbort.signal,
+      timeoutMs: 35_000,
+      allowEmptyStdout: true,
+    }).then((result) => { chromeTerminated = true; return result; });
     let independent: any;
     let owned: Awaited<ReturnType<typeof attachOwnTarget>> | undefined;
     let reconnected: Awaited<ReturnType<typeof attachOwnTarget>> | undefined;
@@ -474,7 +481,7 @@ it.skipIf(!requireRealCdp && (!liveChromium || !chromeExecutable))(
           const candidate = Number(readFileSync(activePortFile, 'utf8').split(/\r?\n/u)[0]);
           if (Number.isInteger(candidate) && candidate > 0) { port = candidate; break; }
         }
-        if (chrome.exitCode !== null) break;
+        if (chromeTerminated) break;
         await new Promise<void>((resolve) => setTimeout(resolve, 100));
       }
       if (!port) throw new Error('headless Chrome did not expose a CDP port');
@@ -603,12 +610,8 @@ it.skipIf(!requireRealCdp && (!liveChromium || !chromeExecutable))(
       await owned?.browser.close().catch(() => {});
       await independent?.close().catch(() => {});
       vi.unstubAllGlobals();
-      if (chrome.exitCode === null) {
-        const exited = new Promise<void>((resolve) => chrome.once('exit', () => resolve()));
-        chrome.kill('SIGTERM');
-        await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 2_000))]);
-        if (chrome.exitCode === null) chrome.kill('SIGKILL');
-      }
+      chromeAbort.abort();
+      await chromeRun;
       rmSync(profile, { recursive: true, force: true });
     }
   },
