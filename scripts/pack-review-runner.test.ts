@@ -5347,7 +5347,14 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
       reviewCycleId: f.original.reviewCycleId, logicalRoundOrdinal: 1, logicalRoundCap: 1,
       automaticBudgetDisposition: 'consume', resolvedReviewer: 'gpt',
-      reviewRound: f.original.reviewRound,
+      // A new run freezes its own planned slots, never the older 0/3
+      // invocation identities. Source evidence is populated below.
+      reviewRound: {
+        ...f.original.reviewRound!,
+        sourceSlots: oldSlots.map(({ slotId, ordinal }) => ({
+          slotId, ordinal, lifecycle: 'planned' as const,
+        })),
+      },
       allowSameRoundReplacement: true,
     });
     expect(replacement.created).toBe(true);
@@ -5365,10 +5372,16 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     });
     if (posted.kind !== 'credentialed') throw new Error('fixture source-01 was not credentialed');
 
-    const newerSlots = oldSlots.map((slot, index) => {
+    const newerSlots = newer.reviewRound!.sourceSlots.map((slot, index) => {
       const invocationId = '00002644-0000-4000-8000-00000000000' + (index + 1);
+      const admitted = {
+        ...slot, lifecycle: 'terminal' as const, invocationId, attemptOrdinal: 1,
+        admissionStartedAtUtc: '2026-01-01T00:00:00.000Z',
+        launchProfileKey: f.profileKey,
+        launchCdpUrl: process.env.PACK_GPT_BROWSER_CDP,
+      };
       if (index === 0) return {
-        ...slot, invocationId,
+        ...admitted,
         terminalClass: 'complete_clean',
         terminalResult: {
           schema: 'turn-result/v1', state: 'ok', scope: 'none',
@@ -5379,7 +5392,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
         payload: posted.payload,
       };
       return {
-        ...slot, invocationId,
+        ...admitted,
         terminalClass: 'rate_limit:account_cooldown_active',
         terminalResult: {
           schema: 'turn-result/v1', state: 'rate_limit', cause: 'account_cooldown_active',
@@ -5394,7 +5407,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       completedAtUtc: new Date().toISOString(),
       runnerPid: 2147483647,
       heartbeatAtUtc: '2026-01-01T00:00:00.000Z',
-      reviewRound: { ...f.original.reviewRound!, sourceSlots: newerSlots },
+      reviewRound: { ...newer.reviewRound!, sourceSlots: newerSlots },
     }, f.options);
     const savedPartial = getPackReviewRun(newer.id, f.options)!.reviewRound!.sourceSlots[0]!;
     const postedSourceOne = f.comments[0]!;
