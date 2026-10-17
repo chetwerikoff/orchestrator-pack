@@ -5292,7 +5292,9 @@ async function runTurnCore(
         };
       }
       if (wall.state === 'recovery_required' && !held429Witness?.current()
-        && !ownedFreshLocalPostSendPage() && (
+        // Only the unrendered-owner local alert is handled by the new adjacent
+        // poll gate. A visible owned marker retains the pre-existing wall route.
+        && (hasOwnedUserMessage(messages, marker) || !ownedFreshLocalPostSendPage()) && (
         recoveryBannerTrusted || (wall.cause !== 'stream_recovery_polling_timed_out' && wall.cause !== 'message_stream_error')
       )) {
         const cause = wall.cause;
