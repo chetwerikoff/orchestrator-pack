@@ -82,7 +82,7 @@ vi.mock('./own-target-attach.ts', () => {
       let created = true;
       if (!options.newChat && options.chatUrl) {
         const matches = preexisting.filter((candidate: any) => {
-          try { return String(candidate.url()).replace(/\\/+$/u, '') === options.chatUrl.replace(/\\/+$/u, ''); }
+          try { return String(candidate.url()).replace(/[/]+$/u, '') === options.chatUrl.replace(/[/]+$/u, ''); }
           catch { return false; }
         });
         if (matches.length > 1) throw new Error('ui_contract_mismatch:ambiguous_conversation_targets');
