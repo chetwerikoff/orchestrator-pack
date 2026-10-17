@@ -109,7 +109,8 @@ export async function connectCdpBrowser(
   chromium: { connectOverCDP: (endpoint: string, options?: { timeout?: number }) => Promise<unknown> },
   cdp: string,
 ): Promise<unknown> {
-  return chromium.connectOverCDP(cdp, { timeout: CDP_CONNECT_TIMEOUT_MS });
+  const { connectWithLegacyRetry } = await import('./own-target-attach.ts');
+  return connectWithLegacyRetry(chromium, cdp, CDP_CONNECT_TIMEOUT_MS);
 }
 
 export async function trimExcessCdpPageTargets(

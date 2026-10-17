@@ -14,6 +14,17 @@ const mocks = vi.hoisted(() => ({
   releaseBrowser: vi.fn(async () => undefined),
   verifyProfile: vi.fn(async () => ({ state: 'verified' })),
 }));
+// Unit fixtures exercise Send/recovery through a single invocation-visible
+// target. Protocol-level Chrome filtering is tested in own-target-attach.test.ts.
+vi.mock('./own-target-attach.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./own-target-attach.ts')>();
+  return {
+    ...actual,
+    attachOwnTarget: vi.fn(actual.__testAttachOwnTargetFixture),
+    countUninspectedRecoveryTargets: vi.fn(async () => 0),
+  };
+});
+
 vi.mock('./browser-session.ts', () => createBrowserSessionModuleMock(mocks));
 vi.mock('./coordination.ts', () => createCoordinationModuleMock());
 vi.mock('./input.ts', () => ({ readStableInput: vi.fn(() => stableTurnInput('PROMPT')) }));

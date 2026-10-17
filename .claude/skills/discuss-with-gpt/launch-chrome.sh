@@ -63,11 +63,12 @@ if [[ "$CHROME" == /mnt/* ]]; then
   fi
   CHROME_WIN="$(wslpath -w "$CHROME")"
   "$PS" -NoProfile -Command \
-    "Start-Process -FilePath '$CHROME_WIN' -ArgumentList '--remote-debugging-port=9222','--remote-allow-origins=*','--user-data-dir=$PROFILE','$URL'" \
+    "Start-Process -FilePath '$CHROME_WIN' -ArgumentList '--remote-debugging-port=9222','--remote-allow-origins=*','--disable-background-timer-throttling','--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows','--user-data-dir=$PROFILE','$URL'" \
     >/dev/null 2>&1
 else
   # Native (non-WSL) Chrome: background it directly.
   "$CHROME" --remote-debugging-port=9222 --remote-allow-origins=* \
+    --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows \
     --user-data-dir="$PROFILE" "$URL" \
     </dev/null >/dev/null 2>&1 &
   disown || true

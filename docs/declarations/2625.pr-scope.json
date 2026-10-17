@@ -1,0 +1,47 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2625,
+  "declared_paths": [
+    ".claude/skills/discuss-with-gpt/launch-chrome.sh",
+    "scripts/chatgpt-browser-turn/browser-session.ts",
+    "scripts/chatgpt-browser-turn/launch-chrome-flags.test.ts",
+    "scripts/chatgpt-browser-turn/own-target-attach.test.ts",
+    "scripts/chatgpt-browser-turn/own-target-attach.ts",
+    "scripts/chatgpt-browser-turn/own-target-cdp-proxy.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-session.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-session.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-recovery.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/lib/pack-gpt-reviewer.ts",
+    "scripts/pack-gpt-browser-path.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/discuss-with-gpt/launch-chrome.sh",
+    "scripts/chatgpt-browser-turn/browser-session.ts",
+    "scripts/chatgpt-browser-turn/launch-chrome-flags.test.ts",
+    "scripts/chatgpt-browser-turn/own-target-attach.test.ts",
+    "scripts/chatgpt-browser-turn/own-target-attach.ts",
+    "scripts/chatgpt-browser-turn/own-target-cdp-proxy.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-session.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-session.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-recovery.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/lib/pack-gpt-reviewer.ts",
+    "scripts/pack-gpt-browser-path.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "95d41423dd53264edb9b3acb68f1c9d3499fabab"
+}

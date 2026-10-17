@@ -196,6 +196,13 @@ function makeHarness(
     }),
     prepareFresh: async () => ({ state: 'ready' }),
     loadChromium: () => ({ connectOverCDP: async () => browser }),
+    attachOwnTarget: async () => ({
+      browser,
+      page: await browser.contexts()[0]!.newPage(),
+      targetId: 'session-harness-created-target',
+      created: true,
+      attachAttempts: 1,
+    }),
     marker: () => markers[markerIndex++]!,
     wrapPayload: (marker, text) => `${marker}\n\n${text}`,
     waitForComposer: async () => ({ state: 'ready' }),

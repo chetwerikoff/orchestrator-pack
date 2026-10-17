@@ -9,7 +9,6 @@ import {
   __testConversationPageSelection,
   __testFinalizeTurn,
   __testPublishStateLightReply,
-  __testSendDelivery,
   type CompactTurnResult,
   recordChatBindings,
   runStateLightTurn,
@@ -21,7 +20,6 @@ import { configuredProfileKey } from './storage-common.ts';
 import { admitStateLightTurnObservation, transitionStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { TURN_STATES } from './contracts.ts';
 import { COMPOSER_SELECTOR, loadChromium, SEND_BUTTON_SELECTOR } from './ui-adapter.ts';
-import { fakeTurnPage } from './fixtures/fake-turn-page.ts';
 import {
   buildBrowserTurnCancellationReceipt,
   cancelOwnedGenerationFromReceipt,
@@ -136,7 +134,7 @@ async function observeFinalizer(testCase: FinalizerCase) {
   return { result, pageCloseCalls, browserCloseCalls, foreignTargetOpen };
 }
 
-describe('Issue #2353 continuation tab bootstrap', () => {
+describe('Issue #2625 protected continuation tab bootstrap', () => {
   const chatUrl = 'https://chatgpt.com/c/123e4567-e89b-12d3-a456-426614172353';
   const config = {
     cdp: 'http://127.0.0.1:9222',
@@ -147,91 +145,31 @@ describe('Issue #2353 continuation tab bootstrap', () => {
   } as const;
   const operationBudget = { clampOperationWaitMs: () => 1_000 } as any;
 
-  it('opens a missing conversation target and the selected page can send', async () => {
-    const turnPage = fakeTurnPage();
-    turnPage.page.url = () => chatUrl;
+  it('refuses an unbound Browser even if the context is unusable, rather than opening any unfiltered target', async () => {
     const initialBrowser = {
       contexts: () => [],
       close: vi.fn(async () => undefined),
     };
-    const reconnectedBrowser = {
-      contexts: () => [{ pages: () => [turnPage.page] }],
-      close: vi.fn(async () => undefined),
-    };
-    const chromium = {
-      connectOverCDP: vi.fn(async () => reconnectedBrowser),
-    };
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-      expect(String(input)).toBe(`http://127.0.0.1:9222/json/new?${encodeURIComponent(chatUrl)}`);
-      expect(init?.method).toBe('PUT');
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ id: 'issue-2353-page', type: 'page', url: chatUrl }),
-      } as Response;
-    });
-
-    try {
-      const selected = await __testConversationPageSelection.selectConversationPage(
-        initialBrowser,
-        chromium,
-        config,
-        operationBudget,
-      );
-      expect(selected.page).toBe(turnPage.page);
-      expect(selected.browser).toBe(reconnectedBrowser);
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(initialBrowser.close).toHaveBeenCalledTimes(1);
-      expect(chromium.connectOverCDP).toHaveBeenCalledTimes(1);
-
-      const delivery = await __testSendDelivery.dispatchStateLightSendAndObserveDelivery({
-        page: selected.page,
-        browser: selected.browser,
-        composer: selected.page.locator(COMPOSER_SELECTOR),
-        sendButton: selected.page.locator(SEND_BUTTON_SELECTOR),
-        hasSendButton: true,
-        marker: 'issue-2353-owned-prompt',
-        baselineUserNodeCount: 0,
-        sendWaitMs: 1_000,
-        invocationDeadlineMs: Date.now() + 5_000,
-        deliveryProofWaitMs: 1_000,
-      });
-      expect(delivery.sendCount).toBe(1);
-      expect(turnPage.getSendClicks()).toBe(1);
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
-
-  it('reuses an already-open matching conversation without opening a second target', async () => {
-    const turnPage = fakeTurnPage();
-    turnPage.page.url = () => chatUrl;
-    const initialBrowser = {
-      contexts: () => [{ pages: () => [turnPage.page] }],
-      close: vi.fn(async () => undefined),
-    };
-    const chromium = {
-      connectOverCDP: vi.fn(async () => {
-        throw new Error('unexpected reconnect');
-      }),
-    };
+    const chromium = { connectOverCDP: vi.fn() };
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
-
     try {
-      const selected = await __testConversationPageSelection.selectConversationPage(
-        initialBrowser,
-        chromium,
-        config,
-        operationBudget,
-      );
-      expect(selected.page).toBe(turnPage.page);
-      expect(selected.browser).toBe(initialBrowser);
-      expect(fetchSpy).not.toHaveBeenCalled();
+      await expect(__testConversationPageSelection.selectConversationPage(
+        initialBrowser, chromium, config, operationBudget,
+      )).rejects.toThrow('own_target_attachment_required');
       expect(initialBrowser.close).not.toHaveBeenCalled();
       expect(chromium.connectOverCDP).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally { fetchSpy.mockRestore(); }
+  });
+
+  it('refuses URL equality as a substitute for a pinned target ID', async () => {
+    const page = { url: () => chatUrl, isClosed: () => false };
+    const unboundBrowser = { contexts: () => [{ pages: () => [page] }] };
+    const chromium = { connectOverCDP: vi.fn() };
+    await expect(__testConversationPageSelection.selectConversationPage(
+      unboundBrowser, chromium, config, operationBudget,
+    )).rejects.toThrow('own_target_attachment_required');
+    expect(chromium.connectOverCDP).not.toHaveBeenCalled();
   });
 });
 
@@ -562,6 +500,9 @@ describe('Issue #1238 mechanically derived production graph', () => {
         if (kind === 'pages' && /^(?:ctx|context|contexts\[0\])$|contexts\[0\] as/.test(receiver)) return 'context-pages';
         if (kind === 'newPage' && /^(?:ctx|context|contexts\[0\])$|contexts\[0\] as/.test(receiver)) return 'context-new-page';
         if (kind === 'close' && /browser as/.test(receiver)) return 'browser-release';
+        if (kind === 'close' && receiver === 'input.browser') return 'failed-attempt-browser-release';
+        if (kind === 'close' && receiver === 'late') return 'late-connect-browser-release';
+        if (kind === 'close' && /^(?:remote|this\.remote|server|this\.server)$/.test(receiver)) return 'own-target-proxy-disposal';
         if (kind === 'close' && /(?:page|opened\.page|outcome\.page|state\.page|secondaryPage)/.test(receiver)) return 'owned-page-close';
         return 'unknown';
       };
@@ -600,6 +541,11 @@ describe('Issue #1238 mechanically derived production graph', () => {
       'runStateLightSession',
       'runCli',
       'cancelOwnedGenerationFromReceipt',
+      // The invocation-local CDP transport is instantiated via a static class
+      // method and retired via a dynamically wrapped browser.close callback;
+      // both are reachable despite this graph's identifier-only call edges.
+      'open',
+      'dispose',
     ]);
     let expanded = true;
     while (expanded) {
@@ -623,6 +569,14 @@ describe('Issue #1238 mechanically derived production graph', () => {
     expect(unknownSinks).toEqual([]);
     expect(sinkInventory).toEqual([
       'close:browser-release:(browser as { close: () => Promise<void> }):releaseCdpBrowser',
+      'close:failed-attempt-browser-release:input.browser:abortAttempt',
+      'close:late-connect-browser-release:late:attachOwnTarget',
+      'close:own-target-proxy-disposal:remote:open',
+      'close:own-target-proxy-disposal:remote:open',
+      'close:own-target-proxy-disposal:remote:open',
+      'close:own-target-proxy-disposal:server:open',
+      'close:own-target-proxy-disposal:this.remote:dispose',
+      'close:own-target-proxy-disposal:this.server:dispose',
       'close:owned-page-close:(opened.page as { close: () => Promise<void> }):closeOwnedTurnPage',
       'close:owned-page-close:(page as { close: () => Promise<void> }):abandonLatePageHandle',
       'close:owned-page-close:opened.page:runGateBCharacterizationCommand',
@@ -635,16 +589,19 @@ describe('Issue #1238 mechanically derived production graph', () => {
       'contexts:browser-contexts:browser:openGateBCharacterizationPage',
       'contexts:browser-contexts:browser:createDedicatedTurnPage',
       'contexts:browser-contexts:browser:openTurnPage',
+      'contexts:browser-contexts:browser:onlyAllowedPage',
+      'contexts:browser-contexts:browser:selectConversationPage',
       'contexts:browser-contexts:(browser as { contexts: () => unknown[] }):probeProfileReady',
-      'contexts:browser-contexts:state.browser:setupOwnedPage',
       'newPage:context-new-page:contexts[0]:createDedicatedTurnPage',
-      'newPage:context-new-page:contexts[0]:setupOwnedPage',
       'newPage:context-new-page:context:runGateBCharacterization',
       'newPage:context-new-page:ctx:adoptNewPageWithBudget',
       'newPage:context-new-page:ctx:openGateBCharacterizationPage',
       'pages:context-pages:(contexts[0] as { pages: () => unknown[] }):probeProfileReady',
       'pages:context-pages:context:attachGateBWebSocketObservers',
       'pages:context-pages:contexts[0]:findOpenConversationPage',
+      'pages:context-pages:contexts[0]:onlyAllowedPage',
+      'pages:context-pages:contexts[0]:selectConversationPage',
+      'pages:context-pages:contexts[0]:selectConversationPage',
       'pages:context-pages:context:attachPlaywrightContextCdpObservers',
       'pages:context-pages:contexts[0]:recoverCurrentObservation',
       'pages:context-pages:context:runGateBCharacterization',
@@ -945,14 +902,7 @@ describe('Issue #1377 production runStateLightTurn recovery integration', () => 
 
   // Model recovered/reused pages through the real cleanup-unproven selector.
   async function markAlreadyOpenPageUnowned(page: ReturnType<typeof trackedPage>['page']) {
-    const browser = { contexts: () => [{ newPage: () => undefined, pages: () => [page] }] };
-    const selected = await __testConversationPageSelection.selectConversationPage(
-      browser, { connectOverCDP: vi.fn() },
-      { cdp: 'http://127.0.0.1:9222', profile: 'fixture', chatUrl: ownedUrl,
-        newChat: false, timeoutMs: 5_000 },
-      { clampOperationWaitMs: () => 5_000 } as any,
-    );
-    expect(selected.page).toBe(page);
+    __testConversationPageSelection.markSelectedPageUnowned(page);
   }
 
   it('recovers an exact owned page after page loss without resend, foreign Stop, or close', async () => {

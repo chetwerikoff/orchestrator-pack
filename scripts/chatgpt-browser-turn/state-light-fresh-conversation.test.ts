@@ -67,6 +67,18 @@ vi.mock('node:fs', async (importOriginal) => {
   };
 });
 
+// Production CDP selection is exercised at protocol level in own-target-attach.test.ts.
+// Existing turn/unit fixtures inject their Page *through* the new filtered attach
+// contract, so these tests continue to test Send/observation, not Chrome HTTP.
+vi.mock('./own-target-attach.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./own-target-attach.ts')>();
+  return {
+    ...actual,
+    attachOwnTarget: vi.fn(actual.__testAttachOwnTargetFixture),
+    countUninspectedRecoveryTargets: vi.fn(async () => 0),
+  };
+});
+
 vi.mock('./browser-session.ts', () => {
   const session = createBrowserSessionModuleMock(mocks);
   return Object.assign(session, {

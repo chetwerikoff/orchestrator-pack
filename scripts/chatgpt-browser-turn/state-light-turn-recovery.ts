@@ -70,6 +70,8 @@ export interface RecoveryObserverEvent {
 
 export interface PostSendRecoveryAdapter {
   readonly enumeratePages: (browser: unknown) => Promise<readonly unknown[]>;
+  /** CDP metadata-only count of relevant targets filtered out of own-target Playwright. */
+  readonly uninspectedPotentialPages?: (browser: unknown, immutableConversationUrl?: string) => Promise<number>;
   readonly pageUrl: (page: unknown) => string;
   readonly normalizeConversationUrl: (value: string) => string;
   readonly isSupportedConversationUrl: (value: string) => boolean;
@@ -215,9 +217,24 @@ export async function takeRecoveryCensus(
     }
   }
 
+  // A filtered BrowserContext is not a complete Chrome target census.
+  // Account for hidden same-chat or unbound-fresh candidates using only
+  // browser-level target metadata; never initialize their Page sessions.
+  if (adapter.uninspectedPotentialPages) {
+    try {
+      const hidden = await adapter.uninspectedPotentialPages(browser, immutableConversationUrl);
+      if (!Number.isSafeInteger(hidden) || hidden < 0 || hidden > 0) {
+        complete = false;
+        incompleteReason ??= 'enumeration_failed';
+      }
+    } catch {
+      complete = false;
+      incompleteReason ??= 'enumeration_failed';
+    }
+  }
   const monotonicAmbiguity = snapshots.some((page) => (
     page.matchingUserCarrierCount > 1 || page.exactMarkerTokenCount > 1
-  )) || (!immutableConversationUrl && snapshots.filter((page) => page.eligible).length > 1);
+  )) || snapshots.filter((page) => page.eligible).length > 1;
   return { complete, monotonicAmbiguity, ownedIdentityMismatch, pages: snapshots, ...(incompleteReason ? { incompleteReason } : {}) };
 }
 
@@ -337,15 +354,8 @@ export async function runPostSendRecovery(
     const authoritativeSuccessor = successorSnapshot && !successorSnapshot.incomplete && successorSnapshot.eligible
       ? successorSnapshot
       : undefined;
-    const toleratedSameConversationDuplicate = Boolean(
-      authoritativeSuccessor
-      && eligible.every((candidate) => candidate === authoritativeSuccessor || (
-        candidate.normalizedUrl === state.immutableConversationUrl
-        && candidate.matchingUserCarrierCount === 1
-        && candidate.exactMarkerTokenCount === 1
-      ))
-    );
-    const conflictingEligibleViews = (eligible.length > 1 && !toleratedSameConversationDuplicate)
+    // Duplicate matching carriers on distinct tabs are not unique ownership.
+    const conflictingEligibleViews = eligible.length > 1
       || Boolean(state.immutableConversationUrl && eligible.length > 0
         && census.pages.some((candidate) => candidate.page !== state.successorPage
           && !candidate.incomplete && !candidate.eligible));
@@ -369,7 +379,11 @@ export async function runPostSendRecovery(
       );
     }
 
-    const accepted = authoritativeSuccessor ?? (census.complete && eligible.length === 1 ? eligible[0] : undefined);
+    // An authoritative successor is still insufficient if a hidden or
+    // unreadable same-conversation target could contain an additional marker.
+    const accepted = census.complete
+      ? (authoritativeSuccessor ?? (eligible.length === 1 ? eligible[0] : undefined))
+      : undefined;
     if (accepted) {
       const match = accepted;
       if (state.immutableConversationUrl && match.normalizedUrl !== state.immutableConversationUrl) {
