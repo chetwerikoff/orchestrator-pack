@@ -498,9 +498,14 @@ export function resolveExecutorProfile(
   return admittedProfile(semanticEdge.value, verdict.route);
 }
 
-function openCodeLaunchRefusal(): EdgeResult<ExecutorProfile> {
+function openCodeLaunchRefusal(): {
+  readonly cause: string;
+  readonly actor: LaunchActor;
+  readonly evidence: Readonly<Record<string, unknown>>;
+  readonly nextAction: NextAction;
+} {
   return {
-    status: 'continue', cause: 'opencode_launch_overlay_required', actor: 'orchestrator',
+    cause: 'opencode_launch_overlay_required', actor: 'orchestrator',
     evidence: { executorFamily: 'opencode', requiredEnvironment: 'OPENCODE_CONFIG_CONTENT' },
     nextAction: {
       kind: 'repair_executor_profile',
@@ -608,7 +613,7 @@ export async function runSupervisedTaskLaunchAssistant(
       || !input.primaryRoot || input.worktreeSelector !== `path:${input.primaryRoot}`)) {
     return continued(input, 'executor_profile', openCodeLaunchRefusal(), resources, startedAtMs, timings, deps.now);
   }
-  if (profile.family === 'opencode' && !openCodeLaunchHasFleetBrowserDenies(profile)) {
+  if (profile.family === 'opencode' && !openCodeLaunchHasFleetBrowserDenies({ command: profile.launchCommand, agentName: profile.agentName, inlineConfigJson: profile.inlineConfigJson })) {
     return continued(input, 'executor_profile', openCodeLaunchRefusal(), resources, startedAtMs, timings, deps.now);
   }
 
@@ -721,7 +726,7 @@ export async function runSupervisedTaskLaunchAssistant(
   }
   // The post-probe command is the actual spawn command; never trust the pre-probe
   // profile if a finalized OpenCode command silently dropped its deny overlay.
-  if (profile.family === 'opencode' && !openCodeLaunchHasFleetBrowserDenies(profile)) {
+  if (profile.family === 'opencode' && !openCodeLaunchHasFleetBrowserDenies({ command: profile.launchCommand, agentName: profile.agentName, inlineConfigJson: profile.inlineConfigJson })) {
     return continued(input, 'terminal_prepare', openCodeLaunchRefusal(), resources, startedAtMs, timings, deps.now);
   }
 
