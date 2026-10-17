@@ -1,4 +1,9 @@
 // @vitest-ci-lane light
+import { spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadChromium } from './ui-adapter-base.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { connectCdpBrowser } from './browser-session.ts';
 import { attachOwnTarget, countUninspectedRecoveryTargets, getOwnTargetInfo } from './own-target-attach.ts';
@@ -422,3 +427,190 @@ describe('Issue #2625 own-target attach isolation', () => {
     expect(FakeChromeSocket.sockets).toHaveLength(0);
   });
 });
+
+
+// Real-client regression for AC3. Unlike protocolChromium(), this launches a
+// separate Chrome and uses the installed playwright-core Chromium client.
+// The pack intentionally does not package operator-local playwright-core or
+// Chrome: require the test explicitly in that environment by setting
+// OPK_REQUIRE_REAL_CDP_TEST=1 (absence then fails, never silently skips).
+const liveChromium = (() => {
+  try { return loadChromium(); } catch { return undefined; }
+})();
+const chromeExecutable = [
+  process.env.OPK_TEST_CHROME_BIN,
+  process.env.CHROME_BIN,
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+].find((candidate) => Boolean(candidate && existsSync(candidate)));
+const requireRealCdp = process.env.OPK_REQUIRE_REAL_CDP_TEST === '1';
+
+it.skipIf(!requireRealCdp && (!liveChromium || !chromeExecutable))(
+  'uses real Playwright against the proxy while an independent client runs foreign JavaScript',
+  async () => {
+    if (!liveChromium || !chromeExecutable) {
+      throw new Error('real CDP regression requires installed playwright-core and Chrome');
+    }
+
+    // A fresh isolated process avoids touching the shared automation profile.
+    const profile = mkdtempSync(join(tmpdir(), 'opk-real-cdp-'));
+    const chrome = spawn(chromeExecutable, [
+      '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
+      '--no-first-run', '--no-default-browser-check',
+      '--remote-allow-origins=*', '--remote-debugging-port=0',
+      '--user-data-dir=' + profile, 'about:blank',
+    ], { stdio: 'ignore' });
+    chrome.on('error', () => {});
+    let independent: any;
+    let owned: Awaited<ReturnType<typeof attachOwnTarget>> | undefined;
+    let reconnected: Awaited<ReturnType<typeof attachOwnTarget>> | undefined;
+    try {
+      const activePortFile = join(profile, 'DevToolsActivePort');
+      let port = 0;
+      for (let i = 0; i < 80; i++) {
+        if (existsSync(activePortFile)) {
+          const candidate = Number(readFileSync(activePortFile, 'utf8').split(/\r?\n/u)[0]);
+          if (Number.isInteger(candidate) && candidate > 0) { port = candidate; break; }
+        }
+        if (chrome.exitCode !== null) break;
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      }
+      if (!port) throw new Error('headless Chrome did not expose a CDP port');
+      const endpoint = 'http://127.0.0.1:' + port;
+
+      vi.unstubAllGlobals();
+      independent = await liveChromium.connectOverCDP(endpoint, { timeout: 8_000 });
+      const independentContext = independent.contexts()[0];
+      const foreignBefore = await independentContext.newPage();
+      await foreignBefore.goto('data:text/html,<title>foreign-before</title>');
+      const targetIdOf = async (page: any): Promise<string> => {
+        const session = await independentContext.newCDPSession(page);
+        try {
+          const result = await session.send('Target.getTargetInfo');
+          return result.targetInfo.targetId as string;
+        } finally {
+          await session.detach();
+        }
+      };
+
+      // Include Chrome's pre-existing blank page as foreign, too.
+      const beforeTargets = await (await fetch(endpoint + '/json/list')).json() as
+        Array<{ id: string; type: string }>;
+      const foreignIds = new Set(beforeTargets.filter((target) => target.type === 'page')
+        .map((target) => target.id));
+      const foreignBeforeId = await targetIdOf(foreignBefore);
+      expect(foreignIds.has(foreignBeforeId)).toBe(true);
+
+      type Command = {
+        method?: string;
+        sessionId?: string;
+        params?: Record<string, any>;
+      };
+      const forwarded: Command[] = [];
+      const withheld: Command[] = [];
+      const sessionTarget = new Map<string, string>();
+      const neverReply = new Set(['Page.enable', 'Page.getFrameTree', 'Runtime.enable']);
+      class ObservedBackendWebSocket extends NativeWebSocket {
+        constructor(url: string | URL, protocols?: string | string[]) {
+          super(url, protocols);
+          this.addEventListener('message', (event) => {
+            const message = JSON.parse(String(event.data)) as {
+              method?: string;
+              params?: { sessionId?: string; targetInfo?: { targetId?: string } };
+            };
+            if (message.method === 'Target.attachedToTarget'
+              && message.params?.sessionId && message.params.targetInfo?.targetId) {
+              sessionTarget.set(message.params.sessionId, message.params.targetInfo.targetId);
+            }
+          });
+        }
+
+        override send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
+          const command = JSON.parse(String(data)) as Command;
+          forwarded.push(command);
+          // An attempted foreign session initialization would never answer:
+          // Playwright must not need or issue one for a protected own-page attach.
+          if (command.sessionId
+            && foreignIds.has(sessionTarget.get(command.sessionId) ?? '')
+            && neverReply.has(command.method ?? '')) {
+            withheld.push(command);
+            return;
+          }
+          super.send(data);
+        }
+      }
+      vi.stubGlobal('WebSocket', ObservedBackendWebSocket);
+
+      owned = await attachOwnTarget(liveChromium, {
+        mode: 'own-target', cdp: endpoint, deadlineMs: Date.now() + 12_000,
+        cleanupBudgetMs: 2_000, newChat: true,
+      });
+      expect(owned.attachAttempts).toBe(1);
+      expect(owned.created).toBe(true);
+      expect(owned.browser.contexts()).toHaveLength(1);
+      expect(owned.browser.contexts()[0].pages()).toHaveLength(1);
+      await owned.page.goto('data:text/html,<title>protected-own</title>');
+      expect(await owned.page.title()).toBe('protected-own');
+
+      // Real BrowserContext.newPage() must remain available after bootstrap.
+      const successor = await owned.browser.contexts()[0].newPage();
+      await successor.goto('data:text/html,<title>protected-successor</title>');
+      expect(await successor.title()).toBe('protected-successor');
+      expect(getOwnTargetInfo(owned.browser)?.successorTargetIds).toHaveLength(1);
+      await successor.close();
+
+      // This page is created by a different, independently connected client
+      // AFTER the protected connection is live. Its JS must execute normally.
+      const foreignDuring = await independentContext.newPage();
+      const foreignDuringId = await targetIdOf(foreignDuring);
+      foreignIds.add(foreignDuringId);
+      await foreignDuring.goto('data:text/html,<title>foreign-during</title>');
+      expect(await foreignDuring.evaluate('globalThis.__opkForeignExecuted = 4242')).toBe(4242);
+      expect(await foreignDuring.evaluate('globalThis.__opkForeignExecuted')).toBe(4242);
+      expect(await foreignBefore.title()).toBe('foreign-before');
+      expect(foreignDuring.isClosed()).toBe(false);
+
+      const pinned = owned.targetId;
+      await owned.browser.close();
+      owned = undefined;
+      reconnected = await attachOwnTarget(liveChromium, {
+        mode: 'own-target', cdp: endpoint, deadlineMs: Date.now() + 12_000,
+        cleanupBudgetMs: 2_000, newChat: false, pinnedTargetId: pinned,
+        postSend: true,
+      });
+      expect(reconnected.targetId).toBe(pinned);
+      expect(await reconnected.page.title()).toBe('protected-own');
+      expect(await foreignDuring.evaluate('globalThis.__opkForeignExecuted')).toBe(4242);
+
+      expect(withheld).toEqual([]);
+      // The real client may request browser-level metadata, but the protected
+      // proxy must never auto-attach, detach, or send page commands to foreign IDs.
+      expect(forwarded.filter((command) => command.method === 'Target.setAutoAttach')).toEqual([]);
+      expect(forwarded.filter((command) => command.method === 'Target.attachToTarget'
+        && foreignIds.has(String(command.params?.targetId ?? '')))).toEqual([]);
+      expect(forwarded.filter((command) => command.sessionId
+        && foreignIds.has(sessionTarget.get(command.sessionId) ?? ''))).toEqual([]);
+      expect(forwarded.filter((command) => command.method === 'Target.detachFromTarget'
+        && foreignIds.has(sessionTarget.get(String(command.params?.sessionId ?? '')) ?? ''))).toEqual([]);
+      expect(forwarded.filter((command) => command.method === 'Target.closeTarget'
+        && foreignIds.has(String(command.params?.targetId ?? '')))).toEqual([]);
+      expect(await foreignBefore.title()).toBe('foreign-before');
+      expect(await foreignDuring.title()).toBe('foreign-during');
+    } finally {
+      await reconnected?.browser.close().catch(() => {});
+      await owned?.browser.close().catch(() => {});
+      await independent?.close().catch(() => {});
+      vi.unstubAllGlobals();
+      if (chrome.exitCode === null) {
+        const exited = new Promise<void>((resolve) => chrome.once('exit', () => resolve()));
+        chrome.kill('SIGTERM');
+        await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 2_000))]);
+        if (chrome.exitCode === null) chrome.kill('SIGKILL');
+      }
+      rmSync(profile, { recursive: true, force: true });
+    }
+  },
+  35_000,
+);
