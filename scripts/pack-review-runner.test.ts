@@ -5356,10 +5356,12 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     ['historical possible delivery witness', 2, 'historical_owned_marker', false],
     ['historical dispatching phase', 2, 'historical_dispatching', false],
     ['historical changed profile key', 2, 'historical_rotated_profile', false],
+    ['historical credentialed comment', 2, 'historical_posted_comment', false],
     ['historical non-rate-limit terminal', 2, 'historical_other_class', false],
     ['missing historical observation', 2, 'historical_observation_absent', false],
     ['current attempted send', 2, 'current_send_attempted', false],
     ['current possible delivery', 2, 'current_possible_delivery', false],
+    ['missing current pre-send observation', 2, 'current_observation_absent', false],
   ] as const)('retries only missing sources from newer 1/3 after %s', async (_case, attemptCount, violation, shouldRetry) => {
     const f = fixture();
     const oldSlots = getPackReviewRun(f.original.id, f.options)!.reviewRound!.sourceSlots;
@@ -5453,7 +5455,9 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       });
       const currentProfile = unsafe && violation === 'historical_rotated_profile'
         ? f.profileKey + '-rotated' : f.profileKey;
-      writeObservation(invocationId, 'not_sent', {}, currentProfile);
+      if (!(unsafe && violation === 'current_observation_absent')) {
+        writeObservation(invocationId, 'not_sent', {}, currentProfile);
+      }
       return {
         ...admitted,
         attemptOrdinal: attemptCount,
@@ -5469,6 +5473,12 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
         },
       };
     });
+    if (violation === 'historical_posted_comment') {
+      f.publish({ identity: {
+        repository, prNumber, headSha: HEAD, runId: newer.id, slotId: 'source-02',
+        invocationId: newerSlots[1]!.attemptHistory![0]!.invocationId,
+      } });
+    }
     updatePackReviewRun(newer.id, {
       status: 'failed', latestRunStatus: 'failed',
       failureReason: 'runner_disappeared_stale',
@@ -5479,6 +5489,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     }, f.options);
     const savedPartial = getPackReviewRun(newer.id, f.options)!.reviewRound!.sourceSlots[0]!;
     const postedSourceOne = f.comments[0]!;
+    const commentsBefore = [...f.comments];
     expect(listPackReviewRuns(f.options)).toHaveLength(2);
     expect(getPackReviewRun(f.original.id, f.options)).toMatchObject({
       status: 'failed', failureReason: 'gpt_source_non_complete:after_grace_zero_usable:0/3',
@@ -5499,7 +5510,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     // Reconciliation only provides the executable same-run action. It must
     // not resend source-01 or rewrite either original source census.
     expect(f.freshStarts).toEqual([]);
-    expect(f.comments).toEqual([postedSourceOne]);
+    expect(f.comments).toEqual(commentsBefore);
     expect(getPackReviewRun(newer.id, f.options)?.reviewRound?.sourceSlots[0])
       .toEqual(savedPartial);
     expect(getPackReviewRun(f.original.id, f.options)?.reviewRound?.sourceSlots)
@@ -5511,7 +5522,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
         created: false, runnerReason: 'gpt_rate_limit_partial_sources_unverified',
       });
       expect(f.freshStarts).toEqual([]);
-      expect(f.comments).toEqual([postedSourceOne]);
+      expect(f.comments).toEqual(commentsBefore);
       expect(f.reviews).toHaveLength(0);
       expect(getPackReviewRun(newer.id, f.options)?.reviewRound?.sourceSlots[0])
         .toEqual(savedPartial);
