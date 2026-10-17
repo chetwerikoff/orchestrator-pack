@@ -6598,7 +6598,12 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
 export const __testFinalizeTurn = finalizeTurn;
 export const __testBrowserOrPageDefinitelyLost = browserOrPageDefinitelyLost;
 export const __testWaitForExistingGeneration = waitForExistingGeneration;
-export const __testConversationPageSelection = { selectConversationPage };
+export const __testConversationPageSelection = {
+  selectConversationPage,
+  // Only a test affordance: mark an already-supplied Page as pre-existing so
+  // cleanup tests can assert the no-close boundary without importing it by CDP.
+  markSelectedPageUnowned(page: object): void { cleanupAuthorityUnprovenPages.add(page); },
+};
 
 export const __testComposerMutation = {
   remainingComposerMutationMs,
