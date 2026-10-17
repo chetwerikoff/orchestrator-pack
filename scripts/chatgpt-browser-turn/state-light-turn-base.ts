@@ -5592,6 +5592,14 @@ async function runTurnCore(
       // still-held fresh project-local Page has no durable locator, so only two
       // adjacent complete idle observations on that exact Page may settle it.
       const localBanner = !markerVisible && ownedFreshLocalPostSendPage();
+      // Pin the exact initial local route, not just its project/pattern: a
+      // different local-chatgpt id on the same held Page breaks the streak.
+      let localBannerUrl: string | undefined;
+      try { if (localBanner) localBannerUrl = String(page.url()); } catch { /* Not eligible. */ }
+      const sameLocalRoute = (): boolean => {
+        if (!localBannerUrl || !ownedFreshLocalPostSendPage()) return false;
+        try { return String(page.url()) === localBannerUrl; } catch { return false; }
+      };
       const durableBanner = !markerVisible && Boolean(durableConversationUrl)
         && sendCount >= 1 && recoveryBannerTrusted
         && pageTurnEvidence?.generationInProgress !== true;
@@ -5604,7 +5612,7 @@ async function runTurnCore(
           && await readFreshStopVisible(
             page, Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
           ) === false
-          && ownedFreshLocalPostSendPage()
+          && sameLocalRoute()
         );
         let bannerCause: string | undefined;
         let bannerText: string | undefined;
@@ -5638,7 +5646,7 @@ async function runTurnCore(
         if (localBanner && bannerCause) {
           let stillLocalIdle = false;
           try {
-            if (ownedFreshLocalPostSendPage()) {
+            if (sameLocalRoute()) {
               const currentTranscript = await readPageObservation(
                 page, marker, baselineCount, false,
                 Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
@@ -5646,11 +5654,11 @@ async function runTurnCore(
               stillLocalIdle = !currentTranscript.transcriptIncomplete
                 && currentTranscript.messages.length === 0
                 && currentTranscript.pageTurnEvidence?.generationInProgress !== true
-                && ownedFreshLocalPostSendPage()
+                && sameLocalRoute()
                 && await readFreshStopVisible(
                   page, Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
                 ) === false
-                && ownedFreshLocalPostSendPage();
+                && sameLocalRoute();
             }
           } catch (error) {
             if (isPostSendTargetCrash(error)) throw error;
