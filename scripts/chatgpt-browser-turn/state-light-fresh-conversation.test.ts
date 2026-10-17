@@ -2256,8 +2256,9 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(fixture.local.page.close).not.toHaveBeenCalled();
   });
 
-  // #2641: All observations below are from the invocation-created Page,
-  // after exactly one physical Send. A local URL never becomes a locator.
+  // #2641: Fresh-local fixtures observe one physical Send on the created
+  // Page. The finalizer seam tests below inject an already-counted outcome
+  // (not a new dispatch) to model route drift after terminal authorization.
   function freshLocalPostSendFixture(options: {
     readonly alerts?: readonly (string | null)[];
     readonly localUrl?: string;
