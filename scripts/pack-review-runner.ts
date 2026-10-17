@@ -6130,6 +6130,39 @@ export async function reconcileStalePackReviewRuns(
         }
       }
       if (needsGptSourceRecovery && !stillZeroJudgment && !failedPartialStatusNeedsRepair) {
+        let partialRateLimitAction: string | undefined;
+        if (recoveredSnapshot.status === 'failed'
+          && recoveryCoverage?.kind === 'partial'
+          && hasFailedRateLimitSource(recoveredSnapshot)) {
+          const missing = await recoverablePostedRateLimitSlots({
+            run: recoveredSnapshot, repoSlug, sourceRepoRoot: input.sourceRepoRoot,
+            transport: input.fixtureGptSourceCommentTransport,
+          });
+          if (missing) {
+            try {
+              const head = await readCheckedReviewPrHead(input, repoSlug, run.prNumber, run.targetSha);
+              const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
+              const current = getPackReviewRun(run.id, { projectId, storeRoot });
+              if (current && head === run.targetSha.toLowerCase()
+                && authority?.currentHeadSha.toLowerCase() === head
+                && authority.cycle?.cycleId === run.reviewCycleId
+                && authority.cycle.state === 'open'
+                && authority.cycle.reviewStageComplete !== true
+                && !authority.cycle.consumedRoundOrdinals?.includes(run.logicalRoundOrdinal ?? 0)
+                && !authority.terminal
+                && current.status === recoveredSnapshot.status
+                && current.failureReason === recoveredSnapshot.failureReason
+                && stableJson(current.reviewRound) === stableJson(recoveredSnapshot.reviewRound)
+                && resolvePackReviewRequiredRunOrder(await readBoundRecords(), current).kind === 'none') {
+                // This is only an action hint. PR-led admission still proves
+                // the older 0/3 zero-send history before launching missing slots.
+                partialRateLimitAction = rateLimitFreshReviewNextAction(current, projectId, true);
+              }
+            } catch {
+              // Unverified current-head authority cannot authorize a retry hint.
+            }
+          }
+        }
         results.push({
           runId: run.id,
           terminalized: false,
@@ -6138,7 +6171,8 @@ export async function reconcileStalePackReviewRuns(
           usableSourceCount: recovery.usableSourceCount,
           graceExpired: recovery.graceExpired,
           reason: recovery.reason,
-          nextAction: recovery.nextAction ?? 'rerun scoped reconcile after the source comments are available',
+          nextAction: partialRateLimitAction
+            ?? recovery.nextAction ?? 'rerun scoped reconcile after the source comments are available',
         });
         continue;
       }
