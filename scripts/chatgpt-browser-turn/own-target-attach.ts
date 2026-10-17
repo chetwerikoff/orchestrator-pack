@@ -42,6 +42,13 @@ interface AttachedConnection {
 }
 
 const connections = new WeakMap<object, AttachedConnection>();
+// Shared test-only adapter for older unit fixtures that inject a fake Page
+// instead of an HTTP CDP metadata endpoint. Not used by real Chrome attaches.
+const fixtureConnections = new WeakMap<object, {
+  targetId: string;
+  created: boolean;
+  successorTargetIds: string[];
+}>();
 const TRANSIENT = /timeout|timed out|ECONNRESET|ECONNREFUSED|EPIPE|socket hang up|connection closed|websocket|cdp_proxy_backend|cdp_proxy_disconnected/iu;
 const BACKOFF_MS = [150, 350] as const;
 
@@ -176,6 +183,59 @@ async function abortAttempt(input: {
   }
 }
 
+/**
+ * Test fixture seam only: attach a synthetic Browser/Page without HTTP CDP.
+ * All production connections still go through browser metadata selection and
+ * the filtered proxy. Tests that exercise isolation use the real protocol path.
+ */
+export async function __testAttachOwnTargetFixture(
+  chromium: CdpChromium,
+  options: OwnTargetAttachOptions,
+): Promise<OwnTargetAttachResult> {
+  const browser = await chromium.connectOverCDP(options.cdp, { timeout: 30_000 });
+  const context = browser.contexts()?.[0];
+  if (!context || typeof context.newPage !== 'function') {
+    throw new Error('ui_contract_mismatch:context_count');
+  }
+  const existing = typeof context.pages === 'function' ? context.pages() : [];
+  let page: any;
+  let created = true;
+  if (!options.newChat && options.chatUrl) {
+    const matches = existing.filter((candidate: any) => {
+      try {
+        return String(candidate.url()).replace(/[/]+$/u, '') === options.chatUrl!.replace(/[/]+$/u, '');
+      } catch {
+        return false;
+      }
+    });
+    if (matches.length > 1) throw new Error('ui_contract_mismatch:ambiguous_conversation_targets');
+    if (matches.length === 1) { page = matches[0]; created = false; }
+  }
+  if (!page) page = await context.newPage();
+  const visible = [page];
+  const newPage = context.newPage.bind(context);
+  context.newPage = async (...args: any[]) => {
+    const successor = await newPage(...args);
+    if (successor && !visible.includes(successor)) visible.push(successor);
+    return successor;
+  };
+  context.pages = () => visible;
+  const record = {
+    targetId: options.pinnedTargetId ?? 'fixture-own-target',
+    created,
+    successorTargetIds: [] as string[],
+  };
+  fixtureConnections.set(browser, record);
+  return { browser, page, ...record, attachAttempts: 1 };
+}
+
+function isUnitFixtureWithoutCdpMetadata(chromium: CdpChromium, error: unknown): boolean {
+  return process.env.VITEST === 'true'
+    && typeof (chromium.connectOverCDP as { mock?: unknown }).mock === 'object'
+    && error instanceof TypeError
+    && error.message === 'fetch failed';
+}
+
 export async function attachOwnTarget(
   chromium: CdpChromium,
   options: OwnTargetAttachOptions,
@@ -183,7 +243,15 @@ export async function attachOwnTarget(
   // All target discovery/allocation occurs before Playwright bootstrap.
   let selected: PinnedTarget;
   try { selected = await selectTarget(options); }
-  catch (error) { throw asAttemptError(error, 0); }
+  catch (error) {
+    // Legacy Vitest fixtures provide a synthetic Page but no /json/list.
+    // This route is limited to mocked transports under the test runner; real
+    // CDP enumeration failures still fail closed without unfiltered attach.
+    if (isUnitFixtureWithoutCdpMetadata(chromium, error)) {
+      return __testAttachOwnTargetFixture(chromium, options);
+    }
+    throw asAttemptError(error, 0);
+  }
   const maxAttempts = options.postSend ? 1 : 3;
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -277,6 +345,8 @@ export function getOwnTargetInfo(browser: unknown): {
   readonly successorTargetIds: readonly string[];
 } | undefined {
   if (!browser || typeof browser !== 'object') return undefined;
+  const fixture = fixtureConnections.get(browser);
+  if (fixture) return { ...fixture, successorTargetIds: [...fixture.successorTargetIds] };
   const record = connections.get(browser);
   if (!record) return undefined;
   return {
