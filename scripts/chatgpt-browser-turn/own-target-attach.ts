@@ -197,7 +197,7 @@ export async function __testAttachOwnTargetFixture(
   // This is exclusively a Vitest synthetic-context seam. Invoke its mock
   // accessors reflectively so the production lifecycle graph does not acquire
   // fake context/page creation or enumeration sinks.
-  const context = Reflect.apply(browser.contexts, browser, [])?.[0];
+  const context = (Reflect.apply(browser.contexts, browser, []) as any[])?.[0];
   if (!context || typeof context.newPage !== 'function') {
     throw new Error('ui_contract_mismatch:context_count');
   }
@@ -226,7 +226,7 @@ export async function __testAttachOwnTargetFixture(
     // Preserve the invocation's real deadline and dispose a late-created Page,
     // rather than letting the fixture bypass bounded pre-Send behavior.
     let retired = false;
-    const pending = Promise.resolve().then(() => Reflect.apply(context.newPage, context, []));
+    const pending = Promise.resolve().then(() => Reflect.apply(context.newPage, context, []) as any);
     pending.then((late) => {
       if (retired && late && typeof late.close === 'function') {
         void Promise.resolve().then(() => Reflect.apply(late.close, late, [])).catch(() => {});
