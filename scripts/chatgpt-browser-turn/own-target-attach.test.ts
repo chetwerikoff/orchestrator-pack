@@ -1,9 +1,9 @@
 // @vitest-ci-lane light
 import { runProcess } from '../kernel/subprocess.ts';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadChromium } from './ui-adapter-base.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { connectCdpBrowser } from './browser-session.ts';
 import { attachOwnTarget, countUninspectedRecoveryTargets, getOwnTargetInfo } from './own-target-attach.ts';
@@ -435,7 +435,14 @@ describe('Issue #2625 own-target attach isolation', () => {
 // Chrome: require the test explicitly in that environment by setting
 // OPK_REQUIRE_REAL_CDP_TEST=1 (absence then fails, never silently skips).
 const liveChromium = (() => {
-  try { return loadChromium(); } catch { return undefined; }
+  const require = createRequire(import.meta.url);
+  for (const location of [
+    join(homedir(), '.local/share/discuss-with-gpt/node_modules/playwright-core'),
+    'playwright-core',
+  ]) {
+    try { return require(location).chromium; } catch { /* not installed here */ }
+  }
+  return undefined;
 })();
 const chromeExecutable = [
   process.env.OPK_TEST_CHROME_BIN,
