@@ -1019,10 +1019,16 @@ describe('production attempted-send result and durable envelope', () => {
       expect(result.send_count).toBe(witnessed ? 1 : 0);
       expect(observation.phase).toBe(preDispatch ? 'not_sent' : witnessed ? 'sent_unharvested' : 'dispatching');
       if (!preDispatch) {
-        // This fixture is a newly-created owned tab, unlike the reused-page
-        // negative controls above. Possible delivery still closes that tab.
-        expect(page.close).toHaveBeenCalledTimes(1);
-        expect(result.cleanup).toBe('confirmed');
+        // A positively witnessed Send follows the existing close path. An
+        // attempted zero-count Send is still possibly delivered, even when
+        // the Page was originally created by this invocation: retain its draft.
+        if (witnessed) {
+          expect(page.close).toHaveBeenCalledTimes(1);
+          expect(result.cleanup).toBe('confirmed');
+        } else {
+          expect(page.close).not.toHaveBeenCalled();
+          expect(result.cleanup).not.toBe('confirmed');
+        }
         if (!witnessed) {
           expect(result.send_attempted).toBe(true);
           expect(observation.send_count).toBeUndefined();
