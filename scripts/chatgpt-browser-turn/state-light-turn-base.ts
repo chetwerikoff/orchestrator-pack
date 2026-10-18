@@ -2625,12 +2625,13 @@ async function observeExistingServerCheckedRecovery(input: {
     // The browser performs precisely one explicit same-origin GET from the
     // held Page. A returned status/body alone is NEVER authority for recovery.
     await boundedBrowserRead(
-      Promise.resolve(input.page.evaluate(async (uuid: string) => {
-        const response = await fetch('/backend-api/conversations/' + uuid, {
+      Promise.resolve(input.page.evaluate(async (details: { uuid: string; marker: string }) => {
+        const response = await fetch('/backend-api/conversations/' + details.uuid, {
           credentials: 'same-origin',
+          headers: { 'x-opk-recovery-invocation': details.marker },
         });
         await response.arrayBuffer();
-      }, expectedUuid)),
+      }, { uuid: expectedUuid, marker: input.marker })),
       waitMs, 'recovery_owned_conversation_get_timeout',
     );
   } catch { return 'unproven'; }
@@ -2645,7 +2646,8 @@ async function observeExistingServerCheckedRecovery(input: {
     const summary = witness.latestSuccessfulGet();
     if (summary?.requestSequence === expectedSequence && summary.uuid === expectedUuid && summary.complete) {
       if (summary.markerPresent) return 'server_marker_present';
-      return positive() ? 'unproven' : 'marker_absent_complete';
+      return summary.explicitRecoveryProbe && !positive()
+        ? 'marker_absent_complete' : 'unproven';
     }
     await sleep(input.page, Math.min(INITIAL_POLL_MS, resultDeadline - Date.now()));
   }
