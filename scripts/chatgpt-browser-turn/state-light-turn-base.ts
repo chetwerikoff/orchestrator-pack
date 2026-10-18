@@ -3948,12 +3948,14 @@ async function runTurnCore(
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
-      // A pre-existing generic fetch banner is not evidence from our Send.
-      // Both baseline reads must positively establish absence before click.
+      // A pre-existing recovery alert is not evidence from this Send. Read
+      // the incumbent unmarked-alert surface before markPreSendAlerts tags old
+      // alerts; an unreadable baseline cannot authorize an early diagnostic.
+      // Do not consume the separate Failed-to-fetch locator's post-Send read.
       try {
         const alertDeadline = Math.min(invocationDeadlineMs, Date.now() + MAX_LOCAL_READ_WAIT_MS);
         freshPreSendFetchAlertAbsent =
-          await locatorCount(page.getByText('Failed to fetch', { exact: true }), alertDeadline) === 0
+          await locatorCount(page.locator(UNMARKED_ALERT_SELECTOR), alertDeadline) === 0
           && await locatorCount(page.getByRole('button', { name: 'Retry', exact: true }), alertDeadline) === 0;
       } catch { freshPreSendFetchAlertAbsent = false; }
       await markPreSendAlerts(page, Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now()));
@@ -5376,6 +5378,12 @@ async function runTurnCore(
         && page === originalHeldPage && !ownershipForfeited
         && !cleanupAuthorityUnprovenPages.has(page) && config.projectUrl
         && !held429Witness?.ownSubmissionIssued()
+        // An alert marked before dispatch, or no live unmarked alert, cannot
+        // establish a new F4 symptom. Missing alert provenance fails closed.
+        && await locatorCount(
+          page.locator(UNMARKED_ALERT_SELECTOR),
+          Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
+        ) > 0
         && await ownedLocalFetchFailureVisibleOnPage(
           page, config.projectUrl,
           Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
@@ -5388,18 +5396,12 @@ async function runTurnCore(
           Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
         )
         && !held429Witness?.ownSubmissionIssued()) {
-        // A newly appearing owned/local Failed to fetch with Retry after the
-        // attempted Send is a prompt uncertainty, NOT proof of non-delivery.
-        incident('post_send_observation_error', 'fresh_send_local_fetch_failure_after_attempt',
-          'retain_created_page_no_retry');
-        return {
-          page, browser, cleanupAction: 'preserve',
-          result: compactResult(
-            'observation_uncertain', 'invocation', 'fresh_send_local_fetch_failure_after_attempt',
-            invocationId, profileKey, 0, pollCount, navigation, incidents,
-            { send_attempted: true }, journalWriteFailed,
-          ),
-        };
+        // Do not terminate before the incumbent read-only census can find an
+        // already-delivered unique owned marker on another existing Page.
+        // Otherwise it returns the existing uncertain fresh_send_fetch_failed.
+        const terminal = await recoverCurrentObservation(true);
+        if (terminal) return terminal;
+        continue;
       }
       // Count-gated 2x post-Send exits do not bound an unproved attempt.
       // The original absolute deadline does, without inventing a zero-Send release.
