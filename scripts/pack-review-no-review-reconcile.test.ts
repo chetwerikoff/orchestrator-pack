@@ -178,7 +178,9 @@ describe('pack-review no-review reconciliation', () => {
     const result = await reconcilePackReviewNoReview(INPUT, deps({
       listRuns: () => [pending], readObservation: () => observation,
     }));
-    expect(result).toMatchObject({ disposition: 'slot-closed', reason: cause });
+    expect(result.evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'slot-closure', state: 'slot-closed', reason: cause }),
+    ]));
   });
 
   it.each([
