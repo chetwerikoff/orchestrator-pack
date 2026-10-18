@@ -9,7 +9,11 @@ import { runProcess } from '../kernel/subprocess.ts';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
 import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
-import type { SupervisedWorkerStartResult } from './supervised-worker-start.ts';
+import { runSupervisedWorkerStart, type SupervisedWorkerStartResult } from './supervised-worker-start.ts';
+import {
+  currentWorkerAssignment, publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath,
+  type DelegatedIntegrationMarker, type WorkerAssignment,
+} from '../lib/worker-assignment-store.ts';
 import {
   createManagerTaskWithOrca,
   createProductionLaunchDependencies,
@@ -328,6 +332,7 @@ function deps(input: {
   onManagerCreate?: (brief: string) => void;
   supervised?: SupervisedWorkerStartResult;
   onSupervised?: () => void;
+  currentAssignment?: WorkerAssignment | null;
   clock?: number[];
 } = {}): LaunchDependencies {
   const dispatch = [...(input.dispatch ?? [{ kind: 'absent' }, { kind: 'absent' }])];
@@ -349,6 +354,7 @@ function deps(input: {
       return input.managerCreate ?? ({ status: 'ok', value: { taskId: 'task-created', status: 'ready' } });
     },
     observeDispatch: async () => { input.onDispatch?.(); return { status: 'ok', value: dispatch.shift() ?? { kind: 'absent' } }; },
+    readCurrentAssignment: () => input.currentAssignment ?? null,
     prepareWorktree: async () => { input.onWorktree?.(); return { status: 'ok', value: {
       id: 'repo::exact-worktree', selector: 'id:repo::exact-worktree', path: '/tmp/exact-worktree', setupWitness: 'same_invocation_complete',
     } }; },
@@ -618,16 +624,33 @@ function opencodeProbeResult(args: readonly string[], variant = true): { ok: boo
 
 describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', () => {
   const primary = '/tmp/issue-2646-selected-primary';
+  const delegated: DelegatedIntegrationMarker = {
+    prNumber: 2647, expectedHeadSha: 'a'.repeat(40),
+    predecessorAssignmentId: 'assignment-predecessor-2646', predecessorGeneration: 1,
+  };
+  const predecessor: WorkerAssignment = {
+    schema: 'orchestrator-pack/worker-assignment/v1',
+    projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+    issueNumber: 2646, taskId: 'task-1',
+    assignmentId: delegated.predecessorAssignmentId, generation: delegated.predecessorGeneration,
+    kind: 'local', provider: 'orca', bindingKey: 'dispatch-predecessor',
+    createdAtUtc: '2026-10-18T00:00:00.000Z', role: 'worker',
+  };
+  const mergeInput = (overrides: Partial<LaunchInput> = {}): LaunchInput => ({
+    ...launchInput('t2'), workClass: 'merge', issueNumber: 2646,
+    worktreeName: undefined, primaryRoot: primary, worktreeSelector: `path:${primary}`,
+    delegatedIntegration: delegated, env: opencodeProfileEnv('manager'), ...overrides,
+  });
+  const mergeReadyStart = (taskId: string): SupervisedWorkerStartResult => {
+    const result = readyStart(taskId);
+    if (!result.assignment) throw new Error('missing test assignment');
+    return { ...result, assignment: {
+      ...result.assignment, issueNumber: 2646, role: 'worker', delegatedIntegration: delegated,
+    } };
+  };
 
   it('launches the existing merge Task only on primary with one denied OpenCode config, no new worktree', async () => {
-    const input: LaunchInput = {
-      ...launchInput('t2'),
-      workClass: 'merge',
-      worktreeName: undefined, // merge uses only the registered primary selector
-      primaryRoot: primary,
-      worktreeSelector: `path:${primary}`,
-      env: opencodeProfileEnv('manager'),
-    };
+    const input = mergeInput();
     const worktreeCommands: string[][] = [];
     const spawned: Array<{ title: string; command: string; workspace: string }> = [];
     const nativeStarts: string[][] = [];
@@ -640,7 +663,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
       },
     };
     const result = await runSupervisedTaskLaunchAssistant(input, {
-      ...deps({ adapter }),
+      ...deps({ adapter, currentAssignment: predecessor }),
       resolveProfile: (workClass, env, startMode) => resolveLiveExecutorProfile(
         workClass, env, startMode, async (args) => opencodeProbeResult(args),
       ),
@@ -668,7 +691,9 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
       },
       runSupervisedStart: async (start) => {
         nativeStarts.push([...start.orcaArgs]);
-        return readyStart('task-1');
+        expect(start.delegatedIntegration).toEqual(delegated);
+        expect(start.issueNumber).toBe(2646);
+        return mergeReadyStart('task-1');
       },
     });
     expect(result.outcome, result.outcome === 'continue' ? `stage=${result.stage}; cause=${result.observedCause}` : '').toBe('ready');
@@ -756,10 +781,9 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
       throw new Error(`unexpected OpenCode URL: ${request.url}`);
     };
     const launch = (adapter: OrcaTaskRuntimeAdapter) => runSupervisedTaskLaunchAssistant({
-      ...launchInput('t2'), workClass: 'merge', worktreeName: undefined,
-      primaryRoot: primary, worktreeSelector: 'path:' + primary, env,
+      ...mergeInput({ env }),
     }, {
-      ...deps({ adapter }),
+      ...deps({ adapter, currentAssignment: predecessor }),
       resolveProfile: (workClass, profileEnv, startMode) => resolveLiveExecutorProfile(
         workClass, profileEnv, startMode, async (args) => opencodeProbeResult(args),
       ),
@@ -815,6 +839,220 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     }
   });
 
+
+  it('replaces the exact live predecessor and publishes an Issue-scoped delegated worker assignment on the same Task', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'opk-2646-delegated-handoff-'));
+    const env = { ...opencodeProfileEnv('manager'), OPK_BASE_DIR: base };
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    try {
+      const published = await publishCurrentWorkerAssignment({
+        file, projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+        issueNumber: 2646, taskId: 'task-1', kind: 'local', provider: 'orca',
+        bindingKey: 'dispatch-predecessor', role: 'worker',
+      });
+      if (!published.ok) throw new Error(published.reason);
+      const marker = {
+        ...delegated,
+        predecessorAssignmentId: published.assignment.assignmentId,
+        predecessorGeneration: published.assignment.generation,
+      };
+      const oldWorker: RuntimeWorker = {
+        ...worker, identity: { runtime: 'orca', id: 'term-implementation', generation: 'generation-implementation' },
+        workspacePath: primary,
+      };
+      const mergeWorker: RuntimeWorker = {
+        ...worker, identity: { runtime: 'orca', id: 'term-merge', generation: 'generation-merge' },
+        workspacePath: primary,
+      };
+      let oldLive = true;
+      let stopCount = 0;
+      let starts = 0;
+      const adapter: RuntimeAdapter = {
+        ...runtimeAdapter({ worker: mergeWorker }),
+        resolveAssignmentWorker: ({ bindingKey }) => {
+          expect(bindingKey).toBe('dispatch-predecessor');
+          return { status: 'ok', value: oldLive ? { kind: 'resolved', worker: oldWorker } : { kind: 'gone' } };
+        },
+        findWorker: ({ id }) => ({ status: 'ok', value:
+          id === oldWorker.identity.id ? (oldLive ? oldWorker : null) : id === mergeWorker.identity.id ? mergeWorker : null }),
+        stopWorker: (identity) => {
+          expect(identity).toEqual(oldWorker.identity);
+          oldLive = false;
+          stopCount += 1;
+          return { status: 'ok', value: { stopped: true } };
+        },
+        liveness: ({ worker: identity }) => ({ status: 'idle', worker: identity }),
+      };
+      const result = await runSupervisedTaskLaunchAssistant(mergeInput({ env, delegatedIntegration: marker }), {
+        ...deps({ adapter, dispatch: [
+          { kind: 'present', dispatchId: 'dispatch-predecessor' },
+          { kind: 'present', dispatchId: 'dispatch-predecessor' },
+        ] }),
+        readCurrentAssignment: (issueNumber) => currentWorkerAssignment(file, issueNumber),
+        resolveProfile: (workClass, inherited, startMode) => resolveLiveExecutorProfile(
+          workClass, inherited, startMode, async (args) => opencodeProbeResult(args),
+        ),
+        prepareWorktree: async () => ({ status: 'ok', value: {
+          id: 'repo::primary', selector: 'id:repo::primary', path: primary,
+          setupWitness: 'proven_reuse',
+        } }),
+        runSupervisedStart: (start) => {
+          expect(start.delegatedIntegration).toEqual(marker);
+          expect(start.issueNumber).toBe(2646);
+          return runSupervisedWorkerStart({
+            ...start,
+            inspect: async (argv) => {
+              if (argv[0] === 'terminal' && argv[1] === 'show') {
+                return { ok: true, stdout: okEnvelope({ terminal: {
+                  handle: 'term-merge', worktreeId: 'repo::primary', incarnationId: 'generation-merge',
+                } }) };
+              }
+              if (argv[0] === 'worktree' && argv[1] === 'show') {
+                return { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::primary', path: primary } }) };
+              }
+              throw new Error('unexpected native inspection');
+            },
+            execute: async () => {
+              expect(oldLive).toBe(false);
+              starts += 1;
+              return { ok: true, stdout: okEnvelope({
+                taskId: 'task-1', dispatchId: 'dispatch-merge', state: 'ready',
+                effects: [
+                  { kind: 'worktree', action: 'reused', id: 'repo::primary' },
+                  { kind: 'terminal', role: 'agent', action: 'reused', id: 'term-merge' },
+                  { kind: 'dispatch_input', role: 'agent', id: 'term-merge', state: 'accepted' },
+                ],
+              }) };
+            },
+          });
+        },
+      });
+      expect(result).toMatchObject({ outcome: 'ready', resources: {
+        issueNumber: 2646, taskId: 'task-1', dispatchId: 'dispatch-merge',
+        worktreePath: primary,
+      } });
+      expect(stopCount).toBe(1);
+      expect(starts).toBe(1);
+      const current = currentWorkerAssignment(file, 2646);
+      expect(current).toMatchObject({
+        issueNumber: 2646, taskId: 'task-1', bindingKey: 'dispatch-merge',
+        generation: published.assignment.generation + 1, delegatedIntegration: marker,
+      });
+      expect(current?.assignmentId).not.toBe(published.assignment.assignmentId);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('requires the delegated marker and exact predecessor Dispatch before any merge terminal effect', async () => {
+    let spawns = 0;
+    let worktrees = 0;
+    const adapter = runtimeAdapter({ onSpawn: () => { spawns += 1; } });
+    const baseDeps = {
+      ...deps({ adapter, onWorktree: () => { worktrees += 1; } }),
+      resolveProfile: (workClass: LaunchInput['workClass'], env: Readonly<NodeJS.ProcessEnv>, startMode?: LaunchInput['startMode']) =>
+        resolveLiveExecutorProfile(workClass, env, startMode, async (args) => opencodeProbeResult(args)),
+    };
+    const missing = await runSupervisedTaskLaunchAssistant(mergeInput({ delegatedIntegration: undefined }), baseDeps);
+    expect(missing).toMatchObject({
+      outcome: 'continue', stage: 'executor_profile', observedCause: 'merge_delegated_integration_required',
+    });
+    const missingPredecessor = await runSupervisedTaskLaunchAssistant(mergeInput(), baseDeps);
+    expect(missingPredecessor).toMatchObject({
+      outcome: 'continue', stage: 'dispatch_admission_early',
+      observedCause: 'merge_delegated_predecessor_mismatch',
+    });
+    const wrongPredecessor = await runSupervisedTaskLaunchAssistant(mergeInput({
+      delegatedIntegration: { ...delegated, predecessorAssignmentId: 'other-assignment' },
+    }), { ...baseDeps, readCurrentAssignment: () => predecessor });
+    expect(wrongPredecessor).toMatchObject({
+      outcome: 'continue', stage: 'dispatch_admission_early',
+      observedCause: 'merge_delegated_predecessor_mismatch',
+    });
+    const foreignDispatch = await runSupervisedTaskLaunchAssistant(mergeInput(), {
+      ...baseDeps, readCurrentAssignment: () => predecessor,
+      observeDispatch: async () => ({ status: 'ok', value: { kind: 'present', dispatchId: 'dispatch-foreign' } }),
+    });
+    expect(foreignDispatch).toMatchObject({
+      outcome: 'continue', stage: 'dispatch_admission_early',
+      observedCause: 'fresh_dispatch_not_absent',
+    });
+    expect(spawns).toBe(0);
+    expect(worktrees).toBe(0);
+  });
+
+  it('preserves the exact delegated marker in a bounded supervised-start retry command', async () => {
+    const result = await runSupervisedTaskLaunchAssistant(mergeInput(), {
+      ...deps({
+        adapter: runtimeAdapter({ worker: { ...worker, workspacePath: primary } }),
+        currentAssignment: predecessor,
+        supervised: { ok: false, reason: 'supervised_start_envelope_error', recovery: { requestId: 'req-merge' } },
+      }),
+      resolveProfile: (workClass, env, startMode) => resolveLiveExecutorProfile(
+        workClass, env, startMode, async (args) => opencodeProbeResult(args),
+      ),
+      prepareWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::primary', selector: 'id:repo::primary', path: primary, setupWitness: 'proven_reuse',
+      } }),
+    });
+    expect(result).toMatchObject({ outcome: 'continue', stage: 'supervised_start',
+      nextAction: { kind: 'retry_supervised_start', requestId: 'req-merge' } });
+    if (result.outcome === 'continue') {
+      expect(result.nextAction.command).toContain('--issue-number 2646');
+      expect(result.nextAction.command).toContain("--delegated-integration '" + JSON.stringify(delegated) + "'");
+      expect(result.nextAction.command).toContain('--retry-request');
+    }
+  });
+
+  it.each(['manager', 't1', 't2', 't3'] as const)(
+    'keeps the %s OpenCode launch class instead of suggesting merge after an overlay refusal', async (workClass) => {
+      const profile = await resolveLiveExecutorProfile(workClass, opencodeProfileEnv(workClass),
+        'exact_terminal_worktree', async (args) => opencodeProbeResult(args));
+      if (profile.status !== 'ok') throw new Error('OpenCode test profile must resolve');
+      const result = await runSupervisedTaskLaunchAssistant({
+        ...launchInput(workClass), env: opencodeProfileEnv(workClass),
+      }, {
+        ...deps(),
+        resolveProfile: () => ({ status: 'ok', value: {
+          ...profile.value, launchCommand: 'opencode --agent build',
+        } }),
+      });
+      expect(result).toMatchObject({ outcome: 'continue', stage: 'executor_profile',
+        observedCause: 'opencode_launch_overlay_required' });
+      if (result.outcome === 'continue') {
+        expect(result.nextAction.command).toBeUndefined();
+        expect(result.nextAction.note).toContain('--work-class ' + workClass);
+        expect(result.nextAction.note).toContain('OPENCODE_CONFIG_CONTENT');
+      }
+    },
+  );
+
+
+  it.each(['manager', 't2'] as const)(
+    'retains the %s launch class when finalization strips the OpenCode deny overlay', async (workClass) => {
+      const profile = await resolveLiveExecutorProfile(workClass, opencodeProfileEnv(workClass),
+        'exact_terminal_worktree', async (args) => opencodeProbeResult(args));
+      if (profile.status !== 'ok') throw new Error('OpenCode test profile must resolve');
+      let spawns = 0;
+      const result = await runSupervisedTaskLaunchAssistant({
+        ...launchInput(workClass), env: opencodeProfileEnv(workClass),
+      }, {
+        ...deps({ adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }) }),
+        resolveProfile: () => profile,
+        finalizeProfile: async (resolved) => ({ status: 'ok', value: {
+          ...resolved, launchCommand: 'opencode --agent build',
+        } }),
+      });
+      expect(result).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare',
+        observedCause: 'opencode_launch_overlay_required' });
+      if (result.outcome === 'continue') {
+        expect(result.nextAction.command).toBeUndefined();
+        expect(result.nextAction.note).toContain('--work-class ' + workClass);
+      }
+      expect(spawns).toBe(0);
+    },
+  );
+
   it('refuses a bare OpenCode spawn even when stale metadata claims an overlay', async () => {
     const profile = await resolveLiveExecutorProfile('merge', opencodeProfileEnv('manager'),
       'exact_terminal_worktree', async (args) => opencodeProbeResult(args));
@@ -824,10 +1062,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     expect(openCodeLaunchHasFleetBrowserDenies({ command: bare.launchCommand, agentName: bare.agentName, inlineConfigJson: bare.inlineConfigJson })).toBe(false);
     let worktrees = 0;
     let spawns = 0;
-    const result = await runSupervisedTaskLaunchAssistant({
-      ...launchInput('t2'), workClass: 'merge', primaryRoot: primary,
-      worktreeSelector: `path:${primary}`, env: opencodeProfileEnv('manager'),
-    }, {
+    const result = await runSupervisedTaskLaunchAssistant(mergeInput(), {
       ...deps({ adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }) }),
       resolveProfile: () => ({ status: 'ok', value: bare }),
       prepareWorktree: async () => { worktrees += 1; throw new Error('must not prepare a worktree'); },
@@ -847,12 +1082,9 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     if (profile.status !== 'ok') throw new Error('fixture OpenCode profile must resolve');
     let spawns = 0;
     let starts = 0;
-    const result = await runSupervisedTaskLaunchAssistant({
-      ...launchInput('t2'), workClass: 'merge', primaryRoot: primary,
-      worktreeSelector: `path:${primary}`, env: opencodeProfileEnv('manager'),
-    }, {
+    const result = await runSupervisedTaskLaunchAssistant(mergeInput(), {
       ...deps({ adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; }, worker: { ...worker, workspacePath: primary } }),
-        onSupervised: () => { starts += 1; } }),
+        currentAssignment: predecessor, onSupervised: () => { starts += 1; } }),
       resolveProfile: () => profile,
       prepareWorktree: async () => ({ status: 'ok', value: {
         id: 'repo::primary', selector: 'id:repo::primary', path: primary, setupWitness: 'proven_reuse',
@@ -875,16 +1107,22 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
       projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
       primaryRoot: primary, defaultBranch: 'main',
     } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>);
-    const base = ['--project', 'orchestrator-pack', '--work-class', 'merge', '--task', 'task-1'];
+    const base = [
+      '--project', 'orchestrator-pack', '--work-class', 'merge', '--task', 'task-1',
+      '--issue-number', '2646', '--delegated-integration', JSON.stringify(delegated),
+    ];
     expect(parseLaunchAssistantCli(base, process.env, select)).toMatchObject({
       workClass: 'merge', taskId: 'task-1', primaryRoot: primary,
-      worktreeSelector: `path:${primary}`,
+      issueNumber: 2646, delegatedIntegration: delegated, worktreeSelector: `path:${primary}`,
     });
     for (const forbidden of [['--worktree', 'id:other'], ['--worktree-name', 'new'],
       ['--run', 'run-1'], ['--manager-brief', 'brief']]) {
       expect(() => parseLaunchAssistantCli([...base, ...forbidden], process.env, select)).toThrow();
     }
     expect(() => parseLaunchAssistantCli(base.slice(0, -2), process.env, select)).toThrow();
+    expect(() => parseLaunchAssistantCli(base.filter((_, index) => index !== 6 && index !== 7), process.env, select)).toThrow();
+    expect(() => parseLaunchAssistantCli([...base.slice(0, -1), '{}'], process.env, select)).toThrow();
+    expect(() => parseLaunchAssistantCli([...base.slice(0, -1), 'not-json'], process.env, select)).toThrow();
   });
 
   it('rejects an unproven/mismatched primary worktree without creating or refreshing', async () => {
