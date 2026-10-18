@@ -1570,9 +1570,13 @@ export interface HeldPageSuccessfulConversationGet {
 function completeConversationMarkerStatus(payload: unknown, marker: string): boolean | undefined {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
   const data = payload as Record<string, unknown>;
-  if (['has_more', 'has_more_before', 'has_more_after', 'next_cursor',
-    'next_page', 'cursor', 'num_turns', 'is_truncated', 'truncated', 'offset', 'limit']
-    .some((key) => Object.hasOwn(data, key))) return undefined;
+  // A successful status and a connected mapping do not alone establish full
+  // history; demand an explicit non-paginated server guarantee. Otherwise the
+  // result may only be used as uncertainty, never marker-negative authority.
+  if (data.has_more !== false || data.is_truncated === true
+    || ['has_more_before', 'has_more_after', 'next_cursor', 'next_page',
+      'cursor', 'num_turns', 'truncated', 'offset', 'limit']
+      .some((key) => Object.hasOwn(data, key))) return undefined;
   const mapping = data.mapping;
   const current = data.current_node;
   if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)
@@ -1697,6 +1701,10 @@ export function observeHeldPageConversation429(
       }
       if (kind !== 'conversation_fetch_http_429' || status !== 200
         || !dispatchMarker || !dispatchText) return;
+      // A num_turns-limited or cursored request cannot prove that this
+      // invocation is absent from the complete relevant conversation history.
+      const requestedUrl = new URL(String(request.url()));
+      if (requestedUrl.search || requestedUrl.hash) return;
       const requestSequence = ownedGetSequences.get(request);
       if (!requestSequence) return;
       const responseEpoch = epoch;
