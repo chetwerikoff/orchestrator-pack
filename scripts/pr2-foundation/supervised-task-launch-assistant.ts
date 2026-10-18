@@ -14,6 +14,10 @@ import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter, RuntimeWorker, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
 import { overlayExecutorProfileEnv } from '../executor-profile-store.ts';
 import {
+  currentWorkerAssignment, parseDelegatedIntegrationMarker, resolveWorkerAssignmentStorePath,
+  sameDelegatedIntegrationMarker, type DelegatedIntegrationMarker, type WorkerAssignment,
+} from '../lib/worker-assignment-store.ts';
+import {
   buildExecutorCommand,
   buildProviderInvocation,
   CURSOR_TASK_ROUTE_CAPABILITIES,
@@ -25,6 +29,7 @@ import {
   openCodeAgentConfigFromInfo,
   openCodeAgentSemantics,
   openCodeFleetBrowserDenyRulesAreTerminal,
+  openCodeLaunchHasFleetBrowserDenies,
   withOpenCodeFleetBrowserDenies,
   openCodeConfigPaths,
   openCodeEdgeCapabilities,
@@ -38,7 +43,8 @@ import { runSupervisedWorkerStart, type SupervisedWorkerStartResult, type Worker
 
 export const LAUNCH_ASSISTANT_SCHEMA = 'supervised-task-launch-assistant/v1' as const;
 export const LAUNCH_STARTUP_OBSERVATION_WINDOW_MS = 30_000;
-export const LAUNCH_WORK_CLASSES = ['manager', 't1', 't2', 't3'] as const;
+export const LAUNCH_WORK_CLASSES = ['manager', 't1', 't2', 't3', 'merge'] as const;
+export const CANONICAL_MERGE_LAUNCH_COMMAND = 'node --experimental-strip-types scripts/pr2-foundation/supervised-task-launch-assistant.ts --project "$PROJECT_ID" --work-class merge --task "$TASK_ID" --issue-number "$ISSUE_NUMBER" --delegated-integration "$DELEGATED_INTEGRATION_JSON"';
 export type LaunchWorkClass = (typeof LAUNCH_WORK_CLASSES)[number];
 export type LaunchStage = 'command_preflight' | 'repository_preflight' | 'executor_profile'
   | 'manager_run' | 'manager_task' | 'dispatch_admission_early' | 'worktree_prepare'
@@ -126,6 +132,8 @@ export interface ExecutorProfile {
   readonly family: ExecutorFamily;
   readonly route: ExecutorRoute;
   readonly launchCommand: string;
+  readonly agentName?: string;
+  readonly inlineConfigJson?: string;
   readonly providerArgs?: readonly string[];
   readonly names: readonly [string, string, string];
 }
@@ -148,6 +156,8 @@ export interface WorktreePreparationRequest {
   readonly defaultBranch?: string;
   readonly providerTopLevel?: boolean;
   readonly managerRefresh?: boolean;
+  /** Existing primary checkout only; merge never creates or refreshes a worktree. */
+  readonly primaryReuseRoot?: string;
   /** Only populated after native Run/Task membership was proven for an existing manager. */
   readonly managerTaskRunId?: string;
 }
@@ -163,6 +173,7 @@ export interface LaunchInput {
   readonly workClass: LaunchWorkClass;
   readonly primaryRoot?: string;
   readonly issueNumber?: number;
+  readonly delegatedIntegration?: DelegatedIntegrationMarker;
   readonly runId?: string;
   readonly taskId?: string;
   readonly managerBrief?: string;
@@ -189,6 +200,7 @@ export interface LaunchDependencies {
   readonly readIssueTitle: (repository: string, issueNumber: number) => Promise<EdgeResult<string>>;
   readonly createManagerTask: (runId: string, brief: string) => Promise<EdgeResult<{ readonly taskId: string; readonly status: string }>>;
   readonly observeDispatch: (taskId: string) => Promise<EdgeResult<DispatchObservation>>;
+  readonly readCurrentAssignment: (issueNumber: number) => WorkerAssignment | null;
   readonly prepareWorktree: (input: WorktreePreparationRequest) => Promise<EdgeResult<PreparedWorktree>>;
   readonly finalizeProfile?: (profile: ExecutorProfile, worktreePath: string) => Promise<EdgeResult<ExecutorProfile>>;
   readonly adapter: RuntimeAdapter;
@@ -420,7 +432,7 @@ function profileResolutionEdge(
   workClass: LaunchWorkClass,
   env: Readonly<NodeJS.ProcessEnv>,
 ): EdgeResult<SemanticExecutorProfile> {
-  const names = profileNamesForTask(workClass);
+  const names = profileNamesForTask(workClass === 'merge' ? 'manager' : workClass);
   const resolved = resolveSemanticExecutorProfile({ surface: 'task', names, env });
   if (resolved.ok) return { status: 'ok', value: resolved.profile };
   const variableKey = resolved.code === 'executor_profile_missing' ? 'missingVariables'
@@ -456,6 +468,8 @@ function admittedProfile(
       family: semantic.family,
       route,
       launchCommand: invocation.command,
+      ...(invocation.agentName ? { agentName: invocation.agentName } : {}),
+      ...(invocation.inlineConfigJson ? { inlineConfigJson: invocation.inlineConfigJson } : {}),
       ...(provider ? { providerArgs: provider.argv } : {}),
       names: semantic.names,
     },
@@ -488,6 +502,63 @@ export function resolveExecutorProfile(
     nextAction: { kind: 'repair_executor_profile', note: 'select an executor route whose model and effort channels are proven' },
   };
   return admittedProfile(semanticEdge.value, verdict.route);
+}
+
+function openCodeLaunchRefusal(workClass: LaunchWorkClass): {
+  readonly cause: string;
+  readonly actor: LaunchActor;
+  readonly evidence: Readonly<Record<string, unknown>>;
+  readonly nextAction: NextAction;
+} {
+  return {
+    cause: 'opencode_launch_overlay_required', actor: 'orchestrator',
+    evidence: { executorFamily: 'opencode', requiredEnvironment: 'OPENCODE_CONFIG_CONTENT' },
+    nextAction: workClass === 'merge' ? {
+      kind: 'repair_executor_profile',
+      command: CANONICAL_MERGE_LAUNCH_COMMAND,
+      note: `Use the pack's canonical merge launch command: ${CANONICAL_MERGE_LAUNCH_COMMAND}`,
+    } : {
+      kind: 'repair_executor_profile',
+      note: `Restore the OPENCODE_CONFIG_CONTENT browser-deny overlay and rerun scripts/pr2-foundation/supervised-task-launch-assistant.ts with --work-class ${workClass}, retaining the original --run/--task and worktree arguments; do not switch to --work-class merge`,
+    },
+  };
+}
+
+
+/** Only the exact numbered implementation assignment may enter a delegated merge handoff. */
+function matchesMergePredecessor(
+  assignment: WorkerAssignment | null,
+  input: LaunchInput,
+  taskId: string,
+  marker: DelegatedIntegrationMarker,
+): assignment is WorkerAssignment {
+  return Boolean(assignment
+    && assignment.issueNumber === input.issueNumber
+    && assignment.repository === input.repository.trim().toLowerCase()
+    && assignment.taskId === taskId
+    && assignment.kind === 'local' && assignment.provider === 'orca' && assignment.role === 'worker'
+    && !assignment.delegatedIntegration
+    && assignment.assignmentId === marker.predecessorAssignmentId
+    && assignment.generation === marker.predecessorGeneration
+    && assignment.bindingKey);
+}
+
+function mergeContextRequired(): Extract<EdgeResult<never>, { readonly status: 'continue' }> {
+  return {
+    status: 'continue', cause: 'merge_delegated_integration_required', actor: 'orchestrator',
+    evidence: { requiredArguments: ['--issue-number', '--delegated-integration'] },
+    nextAction: { kind: 'reconcile_manager_task', command: CANONICAL_MERGE_LAUNCH_COMMAND,
+      note: 'Supply the current Issue and exact existing PR/head/predecessor marker for the implementation assignment' },
+  };
+}
+
+function mergePredecessorMismatch(): Extract<EdgeResult<never>, { readonly status: 'continue' }> {
+  return {
+    status: 'continue', cause: 'merge_delegated_predecessor_mismatch', actor: 'orchestrator',
+    evidence: {},
+    nextAction: { kind: 'reconcile_manager_task',
+      note: 'Reconcile the exact current numbered implementation assignment and its PR/head/predecessor marker before launching merge' },
+  };
 }
 
 function initialResources(input: LaunchInput): LaunchResources {
@@ -572,6 +643,20 @@ export async function runSupervisedTaskLaunchAssistant(
   const startedAtMs = deps.now();
   const timings: StageTiming[] = [];
   let resources = initialResources(input);
+  const delegatedIntegration = input.workClass === 'merge'
+    ? parseDelegatedIntegrationMarker(input.delegatedIntegration)
+    : null;
+  if (input.workClass === 'merge'
+    && (!delegatedIntegration || !Number.isSafeInteger(input.issueNumber) || Number(input.issueNumber) <= 0)) {
+    return continued(input, 'executor_profile', mergeContextRequired(), resources, startedAtMs, timings, deps.now);
+  }
+  if (input.workClass !== 'merge' && input.delegatedIntegration !== undefined) {
+    return continued(input, 'executor_profile', {
+      cause: 'delegated_integration_merge_only', actor: 'orchestrator', evidence: {},
+      nextAction: { kind: 'repair_executor_profile',
+        note: `Remove --delegated-integration and rerun the existing --work-class ${input.workClass} launch` },
+    }, resources, startedAtMs, timings, deps.now);
+  }
 
   const command = await checkpoint('command_preflight', timings, deps.now, deps.commandPreflight);
   if (command.status !== 'ok') return continued(input, 'command_preflight', command, resources, startedAtMs, timings, deps.now);
@@ -583,6 +668,14 @@ export async function runSupervisedTaskLaunchAssistant(
     deps.resolveProfile(input.workClass, input.env ?? process.env, input.startMode));
   if (profileEdge.status !== 'ok') return continued(input, 'executor_profile', profileEdge, resources, startedAtMs, timings, deps.now);
   let profile = profileEdge.value;
+  if (input.workClass === 'merge'
+    && (profile.family !== 'opencode' || profile.route !== 'exact_terminal_worktree'
+      || !input.primaryRoot || input.worktreeSelector !== `path:${input.primaryRoot}`)) {
+    return continued(input, 'executor_profile', openCodeLaunchRefusal(input.workClass), resources, startedAtMs, timings, deps.now);
+  }
+  if (profile.family === 'opencode' && !openCodeLaunchHasFleetBrowserDenies({ command: profile.launchCommand, agentName: profile.agentName, inlineConfigJson: profile.inlineConfigJson })) {
+    return continued(input, 'executor_profile', openCodeLaunchRefusal(input.workClass), resources, startedAtMs, timings, deps.now);
+  }
 
   let taskId = input.taskId?.trim() ?? '';
   if (input.workClass === 'manager') {
@@ -644,13 +737,20 @@ export async function runSupervisedTaskLaunchAssistant(
     }, resources, startedAtMs, timings, deps.now);
   }
   resources = { ...resources, taskId };
+  const predecessor = delegatedIntegration ? deps.readCurrentAssignment(input.issueNumber!) : null;
+  if (delegatedIntegration && !matchesMergePredecessor(predecessor, input, taskId, delegatedIntegration)) {
+    return continued(input, 'dispatch_admission_early', mergePredecessorMismatch(), resources, startedAtMs, timings, deps.now);
+  }
 
   const early = await checkpoint('dispatch_admission_early', timings, deps.now, () => deps.observeDispatch(taskId));
   if (early.status !== 'ok') return continued(input, 'dispatch_admission_early', early, resources, startedAtMs, timings, deps.now);
-  if (early.value.kind !== 'absent') return continued(input, 'dispatch_admission_early', {
-    cause: 'fresh_dispatch_not_absent', actor: 'orchestrator', evidence: { dispatchState: 'present' },
-    nextAction: { kind: 'reconcile_dispatch', note: 'reconcile the existing Dispatch; create no new worktree terminal/start' },
-  }, { ...resources, ...(early.value.dispatchId ? { dispatchId: early.value.dispatchId } : {}) }, startedAtMs, timings, deps.now);
+  if (early.value.kind === 'present'
+    && (!delegatedIntegration || early.value.dispatchId !== predecessor?.bindingKey)) {
+    return continued(input, 'dispatch_admission_early', {
+      cause: 'fresh_dispatch_not_absent', actor: 'orchestrator', evidence: { dispatchState: 'present' },
+      nextAction: { kind: 'reconcile_dispatch', note: 'reconcile the existing Dispatch; create no new worktree terminal/start' },
+    }, { ...resources, ...(early.value.dispatchId ? { dispatchId: early.value.dispatchId } : {}) }, startedAtMs, timings, deps.now);
+  }
 
   const providerMode = profile.route === 'provider_new_top_level';
   const prepared = await checkpoint('worktree_prepare', timings, deps.now, () => deps.prepareWorktree({
@@ -663,9 +763,17 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(input.defaultBranch ? { defaultBranch: input.defaultBranch } : {}),
     ...(providerMode ? { providerTopLevel: true } : {}),
     ...(input.workClass === 'manager' ? { managerRefresh: true } : {}),
+    ...(input.workClass === 'merge' ? { primaryReuseRoot: input.primaryRoot } : {}),
     ...(input.workClass === 'manager' && input.taskId?.trim() ? { managerTaskRunId: input.runId?.trim() } : {}),
   }));
   if (prepared.status !== 'ok') return continued(input, 'worktree_prepare', prepared, resources, startedAtMs, timings, deps.now);
+  if (input.workClass === 'merge' && (!prepared.value.path || resolve(prepared.value.path) !== resolve(input.primaryRoot!))) {
+    return continued(input, 'worktree_prepare', {
+      cause: 'merge_primary_checkout_mismatch', actor: 'orchestrator', evidence: {},
+      nextAction: { kind: 'reconcile_worktree_setup', command: CANONICAL_MERGE_LAUNCH_COMMAND,
+        note: 'Use the canonical merge launch with the selected project primary checkout; never create a merge worktree' },
+    }, resources, startedAtMs, timings, deps.now);
+  }
   resources = {
     ...resources,
     ...(prepared.value.id ? { worktreeId: prepared.value.id } : {}),
@@ -683,6 +791,11 @@ export async function runSupervisedTaskLaunchAssistant(
     resources = { ...resources };
     profile = finalized.value;
   }
+  // The post-probe command is the actual spawn command; never trust the pre-probe
+  // profile if a finalized OpenCode command silently dropped its deny overlay.
+  if (profile.family === 'opencode' && !openCodeLaunchHasFleetBrowserDenies({ command: profile.launchCommand, agentName: profile.agentName, inlineConfigJson: profile.inlineConfigJson })) {
+    return continued(input, 'terminal_prepare', openCodeLaunchRefusal(input.workClass), resources, startedAtMs, timings, deps.now);
+  }
 
   let terminal: RuntimeWorker | undefined;
   if (providerMode) {
@@ -699,7 +812,7 @@ export async function runSupervisedTaskLaunchAssistant(
     let terminalCause = '';
     let liveness: ReturnType<RuntimeAdapter['liveness']> | null = null;
     const spawn = deps.adapter.spawnWorker({
-      title: `opk-${input.workClass}-${taskId}`,
+      title: `opk-${input.workClass === 'merge' ? 't2-merge' : input.workClass}-${taskId}`,
       command: profile.launchCommand,
       workspace: prepared.value.path,
     });
@@ -734,18 +847,27 @@ export async function runSupervisedTaskLaunchAssistant(
     }, resources, startedAtMs, timings, deps.now);
   }
 
+  const finalPredecessor = delegatedIntegration ? deps.readCurrentAssignment(input.issueNumber!) : null;
+  if (delegatedIntegration && (!matchesMergePredecessor(finalPredecessor, input, taskId, delegatedIntegration)
+    || finalPredecessor?.bindingKey !== predecessor?.bindingKey)) {
+    return continued(input, 'dispatch_admission_final', mergePredecessorMismatch(), resources, startedAtMs, timings, deps.now);
+  }
   const final = await checkpoint('dispatch_admission_final', timings, deps.now, () => deps.observeDispatch(taskId));
   if (final.status !== 'ok') return continued(input, 'dispatch_admission_final', final, resources, startedAtMs, timings, deps.now);
-  if (final.value.kind !== 'absent') return continued(input, 'dispatch_admission_final', {
-    cause: 'fresh_dispatch_not_absent', actor: 'orchestrator', evidence: { dispatchState: 'present' },
-    nextAction: { kind: 'reconcile_dispatch', note: 'reconcile the competing Dispatch; do not call worker-start on this terminal' },
-  }, { ...resources, ...(final.value.dispatchId ? { dispatchId: final.value.dispatchId } : {}) }, startedAtMs, timings, deps.now);
+  if (final.value.kind === 'present'
+    && (!delegatedIntegration || final.value.dispatchId !== finalPredecessor?.bindingKey)) {
+    return continued(input, 'dispatch_admission_final', {
+      cause: 'fresh_dispatch_not_absent', actor: 'orchestrator', evidence: { dispatchState: 'present' },
+      nextAction: { kind: 'reconcile_dispatch', note: 'reconcile the competing Dispatch; do not call worker-start on this terminal' },
+    }, { ...resources, ...(final.value.dispatchId ? { dispatchId: final.value.dispatchId } : {}) }, startedAtMs, timings, deps.now);
+  }
 
   const startAt = deps.now();
   const supervised = await deps.runSupervisedStart({
     repository: resources.repository,
     ...(input.projectId ? { projectId: input.projectId } : {}),
     ...(input.issueNumber ? { issueNumber: input.issueNumber } : {}),
+    ...(delegatedIntegration ? { delegatedIntegration } : {}),
     ...(input.env ? { env: { ...input.env } } : {}),
     cwd: input.cwd,
     ...(providerMode ? {} : { adapter: deps.adapter }),
@@ -768,13 +890,23 @@ export async function runSupervisedTaskLaunchAssistant(
     outcome: supervised.ok ? 'passed' : 'continued',
   });
 
-  if (!supervised.ok || supervised.reason !== 'ready_and_assignment_bound' || !supervised.assignment) {
+  const validDelegatedAssignment = !delegatedIntegration || !supervised.ok
+    || supervised.reason !== 'ready_and_assignment_bound' || Boolean(
+    supervised.assignment?.issueNumber === input.issueNumber
+    && supervised.assignment?.repository === resources.repository
+    && supervised.assignment?.taskId === taskId
+    && supervised.assignment?.role === 'worker'
+    && sameDelegatedIntegrationMarker(supervised.assignment?.delegatedIntegration, delegatedIntegration)
+  );
+  if (!supervised.ok || supervised.reason !== 'ready_and_assignment_bound' || !supervised.assignment || !validDelegatedAssignment) {
+    const startReason = !validDelegatedAssignment ? 'merge_delegated_assignment_unverified' : supervised.reason;
     const requestId = supervised.recovery?.requestId;
     const receiptDispatchId = text(supervised.receipt?.dispatchId);
     const safeDispatchId = receiptDispatchId || supervised.recovery?.dispatchId;
     const retry = requestId ? [
       'node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/pr2-foundation/supervised-worker-start.ts --',
       ...(input.issueNumber ? ['--issue-number', String(input.issueNumber)] : []),
+      ...(delegatedIntegration ? ['--delegated-integration', quote(JSON.stringify(delegatedIntegration))] : []),
       ...(input.projectId ? ['--project', quote(input.projectId)] : []), '--repository', quote(resources.repository), '--role', input.workClass === 'manager' ? 'orchestrator' : 'worker',
       ...(providerMode ? ['--mode', 'provider_new_top_level'] : []), '--', '--task', quote(taskId),
       ...(providerMode
@@ -786,7 +918,7 @@ export async function runSupervisedTaskLaunchAssistant(
       '--retry-request', quote(requestId),
     ].join(' ') : undefined;
     return continued(input, 'supervised_start', {
-      cause: supervised.reason,
+      cause: startReason,
       actor: 'provider',
       evidence: {
         ...(supervised.errorCode ? { errorCode: supervised.errorCode } : {}),
@@ -1019,7 +1151,7 @@ export async function finalizeOpenCodeExecutorProfile(
   }
   const paths = await execute(['opencode', 'debug', 'paths'], 15_000, isolatedEnv, worktreePath);
   if (!paths.ok || !paths.stdout.includes(stateRoot)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
-  return { status: 'ok', value: { ...profile, launchCommand: overlay.command }, evidence: { executorFamily: 'opencode', route: profile.route, exactContext: true } };
+  return { status: 'ok', value: { ...profile, launchCommand: overlay.command, agentName: overlay.agentName, inlineConfigJson: overlay.inlineConfigJson }, evidence: { executorFamily: 'opencode', route: profile.route, exactContext: true } };
 }
 
 export async function resolveLiveExecutorProfile(
@@ -1556,6 +1688,29 @@ export async function prepareWorktreeWithOrca(
     nextAction: { kind: 'reconcile_worktree_setup', note: 'provide exactly one --worktree or --worktree-name' },
   };
 
+  if (request.primaryReuseRoot) {
+    if (!isAbsolute(request.primaryReuseRoot) || request.managerRefresh || request.providerTopLevel
+      || request.worktreeSelector !== `path:${request.primaryReuseRoot}` || request.worktreeName) {
+      return worktreeContinue('merge_primary_checkout_selector_invalid', {},
+        'Use the canonical merge launch on the selected primary checkout, never a new worktree');
+    }
+    const shown = resultRecord(envelope(await execute([
+      'orca', 'worktree', 'show', '--worktree', request.worktreeSelector, '--json',
+    ])));
+    const worktree = shown && record(shown.worktree) ? shown.worktree : null;
+    const id = text(worktree?.id);
+    const path = text(worktree?.path);
+    if (!id || !isAbsolute(path) || resolve(path) !== resolve(request.primaryReuseRoot)) {
+      return worktreeContinue('merge_primary_checkout_unproven', {},
+        'Reconcile the selected primary checkout with the Orca worktree identity before launching the merge agent');
+    }
+    return {
+      status: 'ok',
+      value: { id, selector: `id:${id}`, path, setupWitness: 'proven_reuse' },
+      evidence: { worktreeId: id, worktreePath: path },
+    };
+  }
+
   if (request.worktreeSelector) {
     const shown = resultRecord(envelope(await execute([
       'orca', 'worktree', 'show', '--worktree', request.worktreeSelector, '--json',
@@ -1811,11 +1966,13 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       brief,
       (args, timeoutMs) => child(args, cwd, env, timeoutMs),
     ),
+    readCurrentAssignment: (issueNumber) =>
+      currentWorkerAssignment(resolveWorkerAssignmentStorePath(target.projectId, env), issueNumber),
     observeDispatch: async (taskId) => dispatchEdge(envelope(await child([
       'orca', 'orchestration', 'dispatch-show', '--task', taskId, '--json',
     ], cwd, env))),
     prepareWorktree: async (request) => prepareWorktreeWithOrca(
-      request,
+      input.workClass === 'merge' ? { ...request, primaryReuseRoot: target.primaryRoot } : request,
       (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),
     ),
     finalizeProfile: (profile, worktreePath) => finalizeOpenCodeExecutorProfile(profile, worktreePath,
@@ -1988,6 +2145,7 @@ const LAUNCH_CLI_OPTIONS = new Set([
   '--repository',
   '--work-class',
   '--issue-number',
+  '--delegated-integration',
   '--run',
   '--task',
   '--manager-brief',
@@ -2016,7 +2174,7 @@ export function parseLaunchAssistantCli(
 ): LaunchInput {
   const options = launchCliOptions(argv);
   const workClass = (options.get('--work-class') ?? '').trim();
-  if (!LAUNCH_WORK_CLASSES.includes(workClass as LaunchWorkClass)) throw new Error('--work-class must be exactly manager|t1|t2|t3');
+  if (!LAUNCH_WORK_CLASSES.includes(workClass as LaunchWorkClass)) throw new Error('--work-class must be exactly manager|t1|t2|t3|merge');
   const target = resolveTarget({ projectId: (options.get('--project') ?? '').trim(), env });
   const explicitRepository = (options.get('--repository') ?? '').trim().toLowerCase();
   if (explicitRepository && !/^[^/\s]+\/[^/\s]+$/u.test(explicitRepository)) throw new Error('--repository must be owner/repo');
@@ -2030,6 +2188,15 @@ export function parseLaunchAssistantCli(
     if (!/^[1-9]\d*$/u.test(issueText)) throw new Error('--issue-number must be a positive integer');
     issueNumber = Number(issueText);
     if (!Number.isSafeInteger(issueNumber)) throw new Error('--issue-number must be a safe positive integer');
+  }
+  const delegatedRaw = options.get('--delegated-integration');
+  let delegatedIntegration: DelegatedIntegrationMarker | undefined;
+  if (delegatedRaw !== undefined) {
+    let decoded: unknown;
+    try { decoded = JSON.parse(delegatedRaw); }
+    catch { throw new Error('--delegated-integration must be valid JSON'); }
+    delegatedIntegration = parseDelegatedIntegrationMarker(decoded) ?? undefined;
+    if (!delegatedIntegration) throw new Error('--delegated-integration requires exactly the PR number, head SHA, predecessor assignment ID and generation');
   }
   const runId = (options.get('--run') ?? '').trim();
   const taskId = (options.get('--task') ?? '').trim();
@@ -2047,7 +2214,15 @@ export function parseLaunchAssistantCli(
   const hasWorktreeSelector = Boolean(worktreeSelector);
   const hasWorktreeName = Boolean(worktreeName);
 
-  if (hasWorktreeSelector === hasWorktreeName) throw new Error('provide exactly one --worktree or --worktree-name');
+  if (workClass === 'merge') {
+    if (!hasTask || !issueNumber || !delegatedIntegration || runId || hasManagerBrief || hasWorktreeSelector || hasWorktreeName) {
+      throw new Error('merge requires --task, --issue-number and --delegated-integration on the selected primary checkout; --worktree, --worktree-name, --run and --manager-brief are forbidden');
+    }
+  } else if (delegatedRaw !== undefined) {
+    throw new Error('--delegated-integration is merge-only');
+  } else if (hasWorktreeSelector === hasWorktreeName) {
+    throw new Error('provide exactly one --worktree or --worktree-name');
+  }
   if (workClass === 'manager') {
     if (!runId) throw new Error('manager requires --run');
     if (hasTask === hasManagerBrief) throw new Error('manager requires exactly one --task or --manager-brief');
@@ -2064,10 +2239,12 @@ export function parseLaunchAssistantCli(
     primaryRoot: target.primaryRoot,
     workClass: workClass as LaunchWorkClass,
     ...(issueNumber ? { issueNumber } : {}),
+    ...(delegatedIntegration ? { delegatedIntegration } : {}),
     ...(runId ? { runId } : {}),
     ...(taskId ? { taskId } : {}),
     ...(managerBrief !== undefined ? { managerBrief } : {}),
-    ...(worktreeSelector ? { worktreeSelector } : {}),
+    ...(workClass === 'merge' ? { worktreeSelector: `path:${target.primaryRoot}` }
+      : worktreeSelector ? { worktreeSelector } : {}),
     ...(worktreeName ? { worktreeName } : {}),
     baseBranch,
     defaultBranch: target.defaultBranch,
