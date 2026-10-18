@@ -3117,6 +3117,33 @@ function renderedPayloadMatches(actual: string | undefined, expected: string): b
   return actual !== undefined && actual.replace(/\s+/gu, '') === expected.replace(/\s+/gu, '');
 }
 
+/** Compare and clear in one browser-side task, never a stale read followed
+ * by a separate fill. An unknown ProseMirror representation is not authority
+ * to destroy a shared or foreign draft. */
+async function conditionalClearOwnedComposerDraft(
+  page: any,
+  exactPayload: string,
+  deadlineMs: number,
+): Promise<boolean> {
+  const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+  if (!exactPayload || waitMs <= 0) return false;
+  const composer = page?.locator?.(COMPOSER_SELECTOR);
+  if (typeof composer?.evaluate !== 'function') return false;
+  try {
+    return await boundedBrowserRead(
+      Promise.resolve(composer.evaluate((element: HTMLElement, expected: string) => {
+        if (!element.isConnected || !element.isContentEditable
+          || element.textContent !== expected || element.innerText !== expected) return false;
+        element.textContent = '';
+        return element.textContent === '' && element.innerText === '';
+      }, exactPayload)),
+      waitMs, 'conditional_owned_composer_clear_timeout',
+    ) === true;
+  } catch {
+    return false;
+  }
+}
+
 async function clearFreshComposerDraft(page: any): Promise<void> {
   try {
     await boundedBrowserRead(page.locator(COMPOSER_SELECTOR).fill('', { timeout: MAX_LOCAL_READ_WAIT_MS }),
@@ -3155,7 +3182,15 @@ async function runTurn(
       if (freshCleanup.page && !freshCleanup.sendAttempted
         && diagnostic.http_status !== 429
         && isBlankProjectSurfaceUrl(String(freshCleanup.page.url()), freshCleanup.projectUrl ?? '')) {
-        await clearFreshComposerDraft(freshCleanup.page);
+        if (!cleanupAuthorityUnprovenPages.has(freshCleanup.page)
+          && typeof freshCleanup.markedPayload === 'string'
+          && freshCleanup.markedPayload.length > 0
+          && await readFreshStopVisible(freshCleanup.page, Date.now() + MAX_LOCAL_READ_WAIT_MS) === false
+          && isBlankProjectSurfaceUrl(String(freshCleanup.page.url()), freshCleanup.projectUrl ?? '')) {
+          await conditionalClearOwnedComposerDraft(
+            freshCleanup.page, freshCleanup.markedPayload, Date.now() + MAX_LOCAL_READ_WAIT_MS,
+          );
+        }
       }
     } catch {
       // A lost page must not hide the original pre-send result.
@@ -3669,6 +3704,74 @@ async function runTurnCore(
     };
 
     const markedPayload = wrapOwnedPromptPayload(marker, snapshot.text);
+    /** A positive disabled-before-click log for EVERY action is necessary but
+     * not sufficient. Destroy only the original invocation-created exact draft
+     * and close its tab while the incumbent POST witness is still attached.
+     */
+    const finalizeAffirmativeNoDispatch = async (): Promise<TurnRunOutcome | null> => {
+      const stillOwned = (): boolean => {
+        if (ownershipForfeited || page !== originalHeldPage
+          || cleanupAuthorityUnprovenPages.has(page)
+          || browserOrPageDefinitelyLost(page, browser)
+          || getOwnTargetInfo(browser)?.created !== true
+          || held429Witness?.ownSubmissionIssued() === true
+          || held429Witness?.latestSuccessfulGet()?.markerPresent === true
+          || held429Witness?.current()) return false;
+        try {
+          return config.newChat
+            ? Boolean(config.projectUrl && isBlankProjectSurfaceUrl(String(page.url()), config.projectUrl))
+            : Boolean(originalExactChat
+              && readOwnedConversationIdentity(page, originalExactChat).matched);
+        } catch { return false; }
+      };
+      const uncontradicted = async (): Promise<boolean> => {
+        if (!stillOwned() || Date.now() + 2 * MAX_LOCAL_READ_WAIT_MS >= invocationDeadlineMs
+          || await readFreshStopVisible(page, invocationDeadlineMs) !== false) return false;
+        try {
+          const observed = await readPageObservation(page, undefined, undefined, true, invocationDeadlineMs);
+          const expected = baselineSnapshot?.carriers;
+          if (!expected || observed.transcriptIncomplete || !observed.snapshot?.complete
+            || observed.pageTurnEvidence?.generationInProgress !== false
+            || observed.pageTurnEvidence?.continueGeneratingVisible === true
+            || observed.snapshot.carriers.length !== expected.length) return false;
+          for (let index = 0; index < expected.length; index++) {
+            const baseline = expected[index]!;
+            const now = observed.snapshot.carriers[index]!;
+            if (!baseline.fingerprint || baseline.fingerprint !== now.fingerprint
+              || baseline.role !== now.role || baseline.key !== now.key
+              || now.text.includes(marker)) return false;
+          }
+          return stillOwned() && await readFreshStopVisible(page, invocationDeadlineMs) === false;
+        } catch { return false; }
+      };
+      if (!await uncontradicted()
+        || await readLosslessOwnedComposer(page.locator(COMPOSER_SELECTOR), invocationDeadlineMs) !== markedPayload
+        || !await uncontradicted()) return null;
+      if (!await conditionalClearOwnedComposerDraft(page, markedPayload, invocationDeadlineMs)) return null;
+      if (!await uncontradicted()
+        || await readLosslessOwnedComposer(page.locator(COMPOSER_SELECTOR), invocationDeadlineMs) !== ''
+        || !stillOwned()) return null;
+      const close = await boundedResourceCleanup(() => page.close(), RESOURCE_CLEANUP_BOUND_MS);
+      // Closing has to be positively observed; a timed-out close is not finalization.
+      if (close !== 'confirmed' || typeof page.isClosed !== 'function' || page.isClosed() !== true
+        || held429Witness?.ownSubmissionIssued() || held429Witness?.latestSuccessfulGet()?.markerPresent) return null;
+      transitionStateLightTurnObservation({
+        profileKey, invocationId, phase: 'not_sent',
+        reason: 'affirmative_pre_actionability_no_dispatch',
+        sendCount: 0, sendWitness: 'none',
+      });
+      incident('send_observation_affirmative', 'affirmative_pre_actionability_no_dispatch',
+        'exact_owned_composer_cleared_and_created_tab_closed');
+      return {
+        page, browser, cleanupAction: 'skip',
+        result: compactResult(
+          'send_failed', 'invocation', 'affirmative_pre_actionability_no_dispatch',
+          invocationId, profileKey, 0, pollCount, navigation, incidents,
+          { send_attempted: true }, journalWriteFailed,
+        ),
+      };
+    };
+
     const assertFreshOwner = (): void => {
       // Preserve a positively witnessed first wall before diagnosing a redirected fresh URL.
       beforeBrowserAction();
@@ -4090,6 +4193,11 @@ async function runTurnCore(
           const remaining = Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now());
           if (remaining > 0) delivery = await dispatchExisting(remaining);
         }
+      }
+      if (delivery.sendCount === 0 && delivery.preDispatchTimeoutProven === true
+        && !held429Witness?.ownSubmissionIssued() && !repeated) {
+        const affirmative = await finalizeAffirmativeNoDispatch();
+        if (affirmative) return affirmative;
       }
       if (delivery.sendCount === 0) {
         if (browserOrPageDefinitelyLost(page, browser)) {
@@ -6790,11 +6898,16 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
         // Preserve the tab if owner, Stop, content or clearing is uncertain.
       }
     }
-    if (!cleared) {
-      // An unsent draft is expendable on this invocation-owned failed tab.
-      // Unconfirmed composer clearing must not veto close when the existing
-      // blank-project URL and absence of Stop can still be proven.
-      try { cleared = await safeComposerBoundary(); } catch { /* Fail closed on uncertain Stop or URL. */ }
+    if (!cleared && observedNotSent) {
+      // A blank verified composer needs no destructive cleanup. A changed or
+      // unreadable composer cannot authorize closing a shared-draft Page.
+      try {
+        cleared = await safeComposerBoundary()
+          && await readLosslessOwnedComposer(
+            outcome.page.locator(COMPOSER_SELECTOR), Date.now() + MAX_LOCAL_READ_WAIT_MS,
+          ) === ''
+          && await safeComposerBoundary();
+      } catch { /* Fail closed on uncertain text, Stop or URL. */ }
     }
     if (!cleared) {
       pageAction = 'preserve';
