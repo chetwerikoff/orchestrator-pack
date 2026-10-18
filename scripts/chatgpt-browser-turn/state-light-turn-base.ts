@@ -3506,6 +3506,7 @@ async function runTurnCore(
     let accountReloadAttempted = false;
     let zeroWitnessAccountRecovery = false;
     let markerDerivedSend = false;
+    let freshPreSendFetchAlertAbsent = false;
 
     const accountErrorTerminal = (): TurnRunOutcome => {
       incident('invocation_blocker', 'account_load_error', 'retain_page_no_resend');
@@ -3947,6 +3948,14 @@ async function runTurnCore(
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
+      // A pre-existing generic fetch banner is not evidence from our Send.
+      // Both baseline reads must positively establish absence before click.
+      try {
+        const alertDeadline = Math.min(invocationDeadlineMs, Date.now() + MAX_LOCAL_READ_WAIT_MS);
+        freshPreSendFetchAlertAbsent =
+          await locatorCount(page.getByText('Failed to fetch', { exact: true }), alertDeadline) === 0
+          && await locatorCount(page.getByRole('button', { name: 'Retry', exact: true }), alertDeadline) === 0;
+      } catch { freshPreSendFetchAlertAbsent = false; }
       await markPreSendAlerts(page, Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now()));
       requireFreshSendReserve(0);
       if (await readFreshStopVisible(page, invocationDeadlineMs) !== false) {
@@ -5349,6 +5358,28 @@ async function runTurnCore(
             invocationId, profileKey, sendCount, pollCount, navigation, incidents,
             { ...(sendAttempted ? { send_attempted: true } : {}) },
             journalWriteFailed,
+          ),
+        };
+      }
+      if (config.newChat && sendAttempted && sendCount === 0 && !ownedConversationUrl
+        && freshPreSendFetchAlertAbsent && createdFreshPage
+        && page === originalHeldPage && !ownershipForfeited
+        && !cleanupAuthorityUnprovenPages.has(page) && config.projectUrl
+        && !held429Witness?.ownSubmissionIssued()
+        && await ownedLocalFetchFailureVisibleOnPage(
+          page, config.projectUrl,
+          Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
+        )) {
+        // A newly appearing owned/local Failed to fetch with Retry after the
+        // attempted Send is a prompt uncertainty, NOT proof of non-delivery.
+        incident('post_send_observation_error', 'fresh_send_local_fetch_failure_after_attempt',
+          'retain_created_page_no_retry');
+        return {
+          page, browser, cleanupAction: 'preserve',
+          result: compactResult(
+            'observation_uncertain', 'invocation', 'fresh_send_local_fetch_failure_after_attempt',
+            invocationId, profileKey, 0, pollCount, navigation, incidents,
+            { send_attempted: true }, journalWriteFailed,
           ),
         };
       }
@@ -6863,6 +6894,10 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   let pageAction: PageCleanupAction = cleanupAuthorityProven && !pageLost && outcome.ownershipForfeited !== true
     ? 'close'
     : 'skip';
+  // An ambiguous attempted Send with zero count is still possibly delivered.
+  // Never close its Page merely because the invocation originally created it.
+  if (pageAction === 'close' && outcome.result.send_attempted === true
+    && outcome.result.send_count === 0) pageAction = 'preserve';
   // Only the exact flagged still-owned fresh/local terminal escapes #2510
   // positive-owned Page close. The public cleanupAction alone grants nothing.
   if (pageAction === 'close' && outcome.retainOwnedFreshLocalPage
