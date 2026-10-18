@@ -639,17 +639,11 @@ function conversationLocatorFields(
   };
 }
 
-export function deriveDelivery(
-  result: ParsedTurnResult | null,
-  childStartFailed: boolean,
-  affirmedNeverDispatched = false,
-): DeliveryState {
+export function deriveDelivery(result: ParsedTurnResult | null, childStartFailed: boolean): DeliveryState {
   if (childStartFailed) return 'not-sent';
   if (!result) return 'not-sent';
   const sendCount = result.resolved_send_count;
-  if (sendCount === 0 && result.send_attempted === true) {
-    return affirmedNeverDispatched ? 'not-sent' : 'POSSIBLY_DELIVERED';
-  }
+  if (sendCount === 0 && result.send_attempted === true) return 'POSSIBLY_DELIVERED';
   if (result.state === 'output_conflict') {
     return sendCount === 0 ? 'not-sent' : 'POSSIBLY_DELIVERED';
   }
@@ -1102,6 +1096,8 @@ async function finalizeCandidatePath(
   // evidence, not a lifecycle outcome.
   const resolvedExitCode: number | null = exited ? (completion.result?.exitCode ?? childExitCode) : null;
   const childExitDiagnostic: ChildExitDiagnostic = exited ? 'exited_within_grace' : 'retained_after_result';
+  const candidateObservation = finalObservationProjection(config, heartbeatDiagnostics, candidate);
+  const provenNoDispatch = affirmativelyNotDispatched(candidate, candidateObservation);
   const projectedTurnDiagnostics = {
     ...(candidate.cause === 'state_light_new_chat_send_slot_timeout' ? {
       send_slot_holder_invocation_id: candidate.send_slot_holder_invocation_id ?? 'unknown',
@@ -1119,7 +1115,7 @@ async function finalizeCandidatePath(
     terminal_at: nowIso(),
     lifecycle_outcome: 'incident',
     incident,
-    delivery: deriveDelivery(candidate, false),
+    delivery: provenNoDispatch ? 'not-sent' : deriveDelivery(candidate, false),
     child_exit_code: resolvedExitCode,
     child_exit_diagnostic: childExitDiagnostic,
     turn_result_state: candidate.state,
@@ -1140,9 +1136,8 @@ async function finalizeCandidatePath(
     return 1;
   }
   if (candidate.state === 'ok') {
-    const observed = finalObservationProjection(config, heartbeatDiagnostics, candidate);
-    const provenNoDispatch = affirmativelyNotDispatched(candidate, observed);
-    const resultDelivery = deriveDelivery(candidate, false, provenNoDispatch);
+    const observed = candidateObservation;
+    const resultDelivery = provenNoDispatch ? 'not-sent' : deriveDelivery(candidate, false);
     const observedDelivery = provenNoDispatch ? 'not-sent' : observed?.delivery;
     // A weaker pre-dispatch observation cannot demote a result's possible send or landing.
     const delivery = resultDelivery === 'landed' || observedDelivery === 'landed' ? 'landed'
