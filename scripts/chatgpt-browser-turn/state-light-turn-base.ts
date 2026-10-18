@@ -5379,7 +5379,15 @@ async function runTurnCore(
         && await ownedLocalFetchFailureVisibleOnPage(
           page, config.projectUrl,
           Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
-        )) {
+        )
+        // A transient alert can disappear as an accepted send commits.
+        // A second fresh read at the same exact Page/route is required.
+        && !held429Witness?.ownSubmissionIssued()
+        && await ownedLocalFetchFailureVisibleOnPage(
+          page, config.projectUrl,
+          Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
+        )
+        && !held429Witness?.ownSubmissionIssued()) {
         // A newly appearing owned/local Failed to fetch with Retry after the
         // attempted Send is a prompt uncertainty, NOT proof of non-delivery.
         incident('post_send_observation_error', 'fresh_send_local_fetch_failure_after_attempt',
