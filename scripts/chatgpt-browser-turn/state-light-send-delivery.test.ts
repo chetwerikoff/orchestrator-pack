@@ -2244,7 +2244,7 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
     const fixture = freshPage(profile, invocationId, { redirectOnOpen: true });
     publishWitnessedStateLight429(configuredProfileKey(profile, cdp), clock.now);
     const { result } = await runFresh(profile, invocationId, fixture.page);
-    expect(fixture.page.goto).toHaveBeenCalledTimes(1);
+    expect(fixture.page.goto).not.toHaveBeenCalled();
     expect(fixture.send.click).not.toHaveBeenCalled();
     expect(result).toMatchObject({ state: 'rate_limit', cause: 'account_cooldown_active', send_count: 0 });
   });
@@ -2447,5 +2447,81 @@ process.stdout.write(JSON.stringify(readStateLightAccountCooldown(${JSON.stringi
       http_status: 429, status_source: 'owned_page_response',
     });
     expect(readStateLightAccountCooldown(configuredProfileKey(profile, cdp), clock.now).active).toBe(true);
+  });
+});
+
+
+describe('Issue #2651 lossless composer and one-operation owned-draft clearing', () => {
+  function editorFixture(initial: string, editable = true) {
+    let content = initial;
+    const element = {
+      isConnected: true, isContentEditable: editable,
+      get textContent() { return content; },
+      set textContent(value: string) { content = value; },
+      get innerText() { return content; },
+    };
+    const evaluate = vi.fn(async (callback: (element: unknown, payload?: string) => unknown, payload?: string) =>
+      callback(element, payload));
+    const page = { locator: () => ({ evaluate }) };
+    return { page, evaluate, current: () => content, mutate: (value: string) => { content = value; } };
+  }
+
+  it('compares every code point and clears only that exact content inside one browser operation', async () => {
+    const payload = MARKED_PROMPT + ' \n\n line 2 \t';
+    const editor = editorFixture(payload);
+    expect(await __testSendDelivery.readLosslessOwnedComposer(
+      editor.page.locator(), Date.now() + 2000,
+    )).toBe(payload);
+    expect(await __testSendDelivery.conditionalClearOwnedComposerDraft(
+      editor.page, payload, Date.now() + 2000,
+    )).toBe(true);
+    expect(editor.current()).toBe('');
+    expect(editor.evaluate).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['foreign-draft', 'changed-whitespace', 'non-editable'] as const)(
+    'never clears %s when invocation ownership is not exact', async (mode) => {
+      const payload = MARKED_PROMPT + '   ';
+      const editor = editorFixture(mode === 'foreign-draft' ? 'foreign text'
+        : mode === 'changed-whitespace' ? MARKED_PROMPT + '  ' : payload,
+      mode !== 'non-editable');
+      const before = editor.current();
+      expect(await __testSendDelivery.conditionalClearOwnedComposerDraft(
+        editor.page, payload, Date.now() + 2000,
+      )).toBe(false);
+      expect(editor.current()).toBe(before);
+    },
+  );
+
+  it('requires two agreeing lossless DOM representations, not normalized visual text', async () => {
+    const editor = editorFixture(MARKED_PROMPT);
+    const inconsistent = { locator: () => ({
+      evaluate: async (callback: (element: unknown) => unknown) =>
+        callback({ textContent: MARKED_PROMPT, innerText: MARKED_PROMPT.replace('\n\n', '\n') }),
+    }) };
+    expect(await __testSendDelivery.readLosslessOwnedComposer(
+      inconsistent.locator(), Date.now() + 2000,
+    )).toBeUndefined();
+    editor.mutate(MARKED_PROMPT.replace('\n\n', ' '));
+    expect(await __testSendDelivery.readLosslessOwnedComposer(
+      editor.page.locator(), Date.now() + 2000,
+    )).not.toBe(MARKED_PROMPT);
+  });
+
+  it('never performs a server check without an exact held owned URL and complete baseline', async () => {
+    const get = vi.fn();
+    const page = {
+      url: () => 'https://chatgpt.com/c/00000000-0000-4000-8000-000000000000',
+      evaluate: get,
+    };
+    const result = await __testSendDelivery.observeExistingServerCheckedRecovery({
+      page, browser: {}, composer: {},
+      targetChatUrl: 'https://chatgpt.com/c/11111111-1111-4111-8111-111111111111',
+      markedPayload: MARKED_PROMPT, marker: MARKER,
+      heldWitness: undefined,
+      deadlineMs: Date.now() + 36000,
+    });
+    expect(result).toBe('unproven');
+    expect(get).not.toHaveBeenCalled();
   });
 });
