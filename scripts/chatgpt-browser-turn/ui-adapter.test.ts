@@ -405,8 +405,8 @@ function held429PageFixture() {
       nth: () => ({ innerText: async () => heading }),
     }),
   };
-  const request = (url: string, method = 'GET', body?: string) => ({
-    url: () => url, method: () => method, postData: () => body,
+  const request = (url: string, method = 'GET', body?: string, headers: Record<string, string> = {}) => ({
+    url: () => url, method: () => method, postData: () => body, headers: () => headers,
   });
   const dispatch = (req: ReturnType<typeof request>, status: number) => {
     page.emit('request', req);
@@ -644,6 +644,114 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
       wall_kind: 'conversation_fetch_http_429', matched_text: 'Could not load this ChatGPT conversation',
       http_status: 429, status_source: 'owned_page_response',
     });
+    witness.dispose();
+  });
+});
+
+
+describe('Issue #2651 exact-owned complete GET evidence on incumbent held Page', () => {
+  const marker = 'OPKTURNV1' + 'af'.repeat(16);
+  const exactUrl = FETCH_2617.split('?')[0]!;
+  const history = (message: string, hasMore: boolean | undefined = false) => ({
+    has_more: hasMore,
+    current_node: 'user-one',
+    mapping: {
+      root: { parent: null, message: null },
+      'user-one': { parent: 'root', message: {
+        author: { role: 'user' }, content: { parts: [message] },
+      } },
+    },
+  });
+  async function emitFinished(
+    fixture: ReturnType<typeof held429PageFixture>,
+    request: ReturnType<ReturnType<typeof held429PageFixture>['request']>,
+    body: unknown,
+    status = 200,
+    finished: () => Promise<unknown> = async () => null,
+  ) {
+    fixture.page.emit('request', request);
+    fixture.page.emit('response', {
+      request: () => request, status: () => status,
+      finished, json: async () => body,
+    });
+    await vi.waitFor(() => {
+      // Flush callback microtasks without sleeping for a real network request.
+      expect(finished).toBeDefined();
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it('keeps only invocation-local minimal completed exact-GET marker-negative metadata', async () => {
+    const fixture = held429PageFixture();
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617);
+    witness.markDispatch(marker, marker + '\n\nPrompt');
+    expect(witness.latestSuccessfulGet()).toBeUndefined();
+    const get = fixture.request(exactUrl, 'GET', undefined, { 'x-opk-recovery-invocation': marker });
+    await emitFinished(fixture, get, history('unrelated older turn'));
+    expect(witness.ownedGetRequestSequence()).toBe(1);
+    expect(witness.latestSuccessfulGet()).toEqual({
+      requestSequence: 1, epoch: 0, uuid: '26172617-2617-4617-8617-261726172617',
+      complete: true, markerPresent: false, explicitRecoveryProbe: true,
+    });
+    expect(JSON.stringify(witness.latestSuccessfulGet())).not.toContain('unrelated older turn');
+    await emitFinished(fixture, fixture.request(exactUrl), history('later ' + marker));
+    expect(witness.latestSuccessfulGet()).toMatchObject({ markerPresent: true, explicitRecoveryProbe: false, requestSequence: 2 });
+    witness.beforeNavigation();
+    expect(witness.latestSuccessfulGet()).toBeUndefined();
+    witness.dispose();
+  });
+
+  it.each([
+    ['paginated', history('other prompt', true), exactUrl],
+    ['absent completeness', history('other prompt', undefined), exactUrl],
+    ['limited request', history('other prompt'), FETCH_2617],
+    ['malformed', { has_more: false, current_node: 'x', mapping: {} }, exactUrl],
+    ['partial parent', { ...history('other prompt'), mapping: {
+      'user-one': { parent: 'not-returned', message: {
+        author: { role: 'user' }, content: { parts: ['other prompt'] },
+      } },
+    } }, exactUrl],
+  ])('refuses %s history as negative recovery proof', async (_caseName, responseBody, url) => {
+    const fixture = held429PageFixture();
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617);
+    witness.markDispatch(marker, marker + '\n\nPrompt');
+    const get = fixture.request(url, 'GET', undefined, { 'x-opk-recovery-invocation': marker });
+    await emitFinished(fixture, get, responseBody);
+    expect(witness.latestSuccessfulGet()).toBeUndefined();
+    witness.dispose();
+  });
+
+  it('does not publish unfinished, failed, stale-epoch or foreign response as completed GET', async () => {
+    const fixture = held429PageFixture();
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617);
+    witness.markDispatch(marker, marker + '\n\nPrompt');
+    const pending = fixture.request(exactUrl, 'GET', undefined, { 'x-opk-recovery-invocation': marker });
+    let finish!: (value: unknown) => void;
+    fixture.page.emit('request', pending);
+    fixture.page.emit('response', {
+      request: () => pending, status: () => 200,
+      finished: () => new Promise((resolve) => { finish = resolve; }),
+      json: async () => history('other prompt'),
+    });
+    expect(witness.latestSuccessfulGet()).toBeUndefined();
+    witness.beforeNavigation();
+    finish(null);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(witness.latestSuccessfulGet()).toBeUndefined();
+    witness.markDispatch(marker, marker + '\n\nPrompt');
+    const error = fixture.request(exactUrl, 'GET', undefined, { 'x-opk-recovery-invocation': marker });
+    await emitFinished(fixture, error, history('other prompt'), 200, async () => new Error('network lost'));
+    expect(witness.latestSuccessfulGet()).toBeUndefined();
+    const wrong = fixture.request('https://chatgpt.com/backend-api/conversations/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    await emitFinished(fixture, wrong, history('other prompt'));
+    expect(witness.latestSuccessfulGet()).toBeUndefined();
+    const own429 = fixture.request(exactUrl);
+    await emitFinished(fixture, own429, history('other prompt'), 429);
+    expect(witness.current()).toMatchObject({ wall_kind: 'conversation_fetch_http_429', http_status: 429 });
+    expect(witness.latestSuccessfulGet()).toBeUndefined();
     witness.dispose();
   });
 });
