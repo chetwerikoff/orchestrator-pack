@@ -3,7 +3,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mapGptReplyToReviewPayload } from './lib/pack-gpt-reviewer.ts';
 import { runPackGptReviewCommand } from './pack-gpt-review.ts';
@@ -5347,7 +5347,22 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     expect(readFileSync(f.historicalClaimPath!, 'utf8')).toBe(claimBytes);
   });
 
-  it('retries only missing sources from newer runner_disappeared_stale 1/3 while retaining older 0/3 history', async () => {
+  it.each([
+    ['first zero-send attempt', 1, 'none', true],
+    ['two consecutive zero-send attempts', 2, 'none', true],
+    ['three consecutive zero-send attempts', 3, 'none', true],
+    ['historical attempted send', 2, 'historical_send_attempted', false],
+    ['historical positive send count', 2, 'historical_send_count', false],
+    ['historical possible delivery witness', 2, 'historical_owned_marker', false],
+    ['historical dispatching phase', 2, 'historical_dispatching', false],
+    ['historical changed profile key', 2, 'historical_rotated_profile', false],
+    ['historical credentialed comment', 2, 'historical_posted_comment', false],
+    ['historical non-rate-limit terminal', 2, 'historical_other_class', false],
+    ['missing historical observation', 2, 'historical_observation_absent', false],
+    ['current attempted send', 2, 'current_send_attempted', false],
+    ['current possible delivery', 2, 'current_possible_delivery', false],
+    ['missing current pre-send observation', 2, 'current_observation_absent', false],
+  ] as const)('retries only missing sources from newer 1/3 after %s', async (_case, attemptCount, violation, shouldRetry) => {
     const f = fixture();
     const oldSlots = getPackReviewRun(f.original.id, f.options)!.reviewRound!.sourceSlots;
     const replacement = createPackReviewRun({
@@ -5382,6 +5397,24 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     });
     if (posted.kind !== 'credentialed') throw new Error('fixture source-01 was not credentialed');
 
+    const writeObservation = (
+      invocationId: string,
+      phase: 'prepared' | 'not_sent',
+      overrides: Record<string, unknown> = {},
+      profileKey = f.profileKey,
+    ) => {
+      const path = observationRecordPath(profileKey, invocationId);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify({
+        schema: 'state-light-turn-observation/v1', version: 1,
+        invocation_id: invocationId, profile_key: profileKey,
+        marker: 'fixture-marker-' + invocationId, phase,
+        send_count: 0, send_witness: 'none', conversation_url: null,
+        transitioned_at: '2026-01-01T00:00:00.000Z', transition_reason: 'admitted_before_send',
+        ...overrides,
+      }));
+    };
+
     const newerSlots = newer.reviewRound!.sourceSlots.map((slot, index) => {
       const invocationId = '00002644-0000-4000-8000-00000000000' + (index + 1);
       const admitted = {
@@ -5401,16 +5434,54 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
         },
         payload: posted.payload,
       };
+      const unsafe = index === 1;
+      const attemptHistory = Array.from({ length: attemptCount - 1 }, (_, previousIndex) => {
+        const previousId = '00002648-0000-4000-8000-0000000000' + (index + 1) + (previousIndex + 1);
+        const firstUnsafe = unsafe && previousIndex === 0;
+        if (!(firstUnsafe && violation === 'historical_observation_absent')) {
+          writeObservation(previousId, 'prepared', {
+            ...(firstUnsafe && violation === 'historical_send_attempted' ? { send_attempted: true } : {}),
+            ...(firstUnsafe && violation === 'historical_send_count' ? { send_count: 1 } : {}),
+            ...(firstUnsafe && violation === 'historical_owned_marker' ? { send_witness: 'owned_marker' } : {}),
+            ...(firstUnsafe && violation === 'historical_dispatching' ? { phase: 'dispatching' } : {}),
+          });
+        }
+        return {
+          invocationId: previousId, attemptOrdinal: previousIndex + 1,
+          terminalClass: firstUnsafe && violation === 'historical_other_class'
+            ? 'driver_error:connect_over_cdp_failed'
+            : 'rate_limit:account_cooldown_active',
+        };
+      });
+      const currentProfile = unsafe && violation === 'historical_rotated_profile'
+        ? f.profileKey + '-rotated' : f.profileKey;
+      if (!(unsafe && violation === 'current_observation_absent')) {
+        writeObservation(invocationId, 'not_sent', {}, currentProfile);
+      }
       return {
         ...admitted,
+        attemptOrdinal: attemptCount,
+        launchProfileKey: currentProfile,
+        ...(attemptHistory.length > 0 ? { attemptHistory } : {}),
         terminalClass: 'rate_limit:account_cooldown_active',
         terminalResult: {
           schema: 'turn-result/v1', state: 'rate_limit', cause: 'account_cooldown_active',
           scope: 'invocation', invocation_id: invocationId,
-          send_count: 0, send_attempted: false,
+          send_count: 0, send_attempted: unsafe && violation === 'current_send_attempted',
+          ...(unsafe && violation === 'current_possible_delivery'
+            ? { diagnostics: { persisted_observation: { phase: 'dispatching', send_count: 0 } } } : {}),
         },
       };
     });
+    if (violation === 'historical_posted_comment') {
+      const sourceTwo = newerSlots[1] as PackReviewGptRoundRecord['sourceSlots'][number];
+      const prior = sourceTwo.attemptHistory?.[0];
+      if (!prior) throw new Error('fixture source-02 history missing');
+      f.publish({ identity: {
+        repository, prNumber, headSha: HEAD, runId: newer.id, slotId: 'source-02',
+        invocationId: prior.invocationId,
+      } });
+    }
     updatePackReviewRun(newer.id, {
       status: 'failed', latestRunStatus: 'failed',
       failureReason: 'runner_disappeared_stale',
@@ -5421,6 +5492,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     }, f.options);
     const savedPartial = getPackReviewRun(newer.id, f.options)!.reviewRound!.sourceSlots[0]!;
     const postedSourceOne = f.comments[0]!;
+    const commentsBefore = [...f.comments];
     expect(listPackReviewRuns(f.options)).toHaveLength(2);
     expect(getPackReviewRun(f.original.id, f.options)).toMatchObject({
       status: 'failed', failureReason: 'gpt_source_non_complete:after_grace_zero_usable:0/3',
@@ -5430,20 +5502,36 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     const retry = reconciled.results.find((row) =>
       row.runId === newer.id && typeof row.nextAction === 'string'
       && row.nextAction.includes(exactCommand));
-    expect(retry).toMatchObject({
-      terminalized: false, statusReconciled: false,
-      nextAction: 'retry only the missing sources in the original run now: ' + exactCommand,
-    });
+    if (shouldRetry) {
+      expect(retry).toMatchObject({
+        terminalized: false, statusReconciled: false,
+        nextAction: 'retry only the missing sources in the original run now: ' + exactCommand,
+      });
+    } else {
+      expect(retry).toBeUndefined();
+    }
     // Reconciliation only provides the executable same-run action. It must
     // not resend source-01 or rewrite either original source census.
     expect(f.freshStarts).toEqual([]);
-    expect(f.comments).toEqual([postedSourceOne]);
+    expect(f.comments).toEqual(commentsBefore);
     expect(getPackReviewRun(newer.id, f.options)?.reviewRound?.sourceSlots[0])
       .toEqual(savedPartial);
     expect(getPackReviewRun(f.original.id, f.options)?.reviewRound?.sourceSlots)
       .toEqual(oldSlots);
 
     const result = await f.start();
+    if (!shouldRetry) {
+      expect(result.result).toMatchObject({
+        created: false, runnerReason: 'gpt_rate_limit_partial_sources_unverified',
+      });
+      expect(f.freshStarts).toEqual([]);
+      expect(f.comments).toEqual(commentsBefore);
+      expect(f.reviews).toHaveLength(0);
+      expect(getPackReviewRun(newer.id, f.options)?.reviewRound?.sourceSlots[0])
+        .toEqual(savedPartial);
+      expect(listPackReviewRuns(f.options)).toHaveLength(2);
+      return;
+    }
     expect(result.result, JSON.stringify(result.result)).toMatchObject({
       created: true, reused: false, runId: newer.id,
       headSha: HEAD, publicationVerified: true,
