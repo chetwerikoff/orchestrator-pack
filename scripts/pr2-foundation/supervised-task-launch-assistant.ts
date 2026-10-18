@@ -745,7 +745,7 @@ export async function runSupervisedTaskLaunchAssistant(
     let terminalCause = '';
     let liveness: ReturnType<RuntimeAdapter['liveness']> | null = null;
     const spawn = deps.adapter.spawnWorker({
-      title: `opk-${input.workClass}-${taskId}`,
+      title: `opk-${input.workClass === 'merge' ? 't2-merge' : input.workClass}-${taskId}`,
       command: profile.launchCommand,
       workspace: prepared.value.path,
     });

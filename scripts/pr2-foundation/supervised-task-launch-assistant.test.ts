@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -676,7 +676,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
       'orca', 'worktree', 'show', '--worktree', `path:${primary}`, '--json',
     ]]);
     expect(spawned).toHaveLength(1);
-    expect(spawned[0]).toMatchObject({ title: 'opk-merge-task-1', workspace: primary });
+    expect(spawned[0]).toMatchObject({ title: 'opk-t2-merge-task-1', workspace: primary });
     expect(nativeStarts).toEqual([[
       '--task', 'task-1', '--terminal', 'terminal-fresh', '--worktree', 'id:repo::primary',
     ]]);
@@ -708,6 +708,101 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
       expect(result.resources).toMatchObject({
         taskId: 'task-1', worktreePath: primary, worktreeId: 'repo::primary',
       });
+    }
+  });
+
+  it('persists merge OpenCode ownership and reuses the terminal on a pre-Dispatch retry', async () => {
+    const stateRoot = mkdtempSync(join(tmpdir(), 'opk-2646-merge-terminal-'));
+    const env = { ...opencodeProfileEnv('manager'), OPK_WAKE_SUPERVISOR_STATE_DIR: stateRoot };
+    const title = 'opk-t2-merge-task-1';
+    const handle = 'terminal-merge-task-1';
+    const generation = 'generation-merge-task-1';
+    let creates = 0;
+    let createdCommand = '';
+    const terminal = () => ({
+      handle, incarnationId: generation, worktreePath: primary,
+      title, command: createdCommand, status: 'running' as const,
+    });
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = String(args[0] ?? '') + ' ' + String(args[1] ?? '');
+      switch (operation) {
+        case 'terminal list':
+          return { ok: true, result: {
+            totalCount: creates ? 1 : 0, truncated: false, terminals: creates ? [terminal()] : [],
+          } };
+        case 'terminal create':
+          expect(args[args.indexOf('--title') + 1]).toBe(title);
+          expect(args[args.indexOf('--worktree') + 1]).toBe(primary);
+          creates += 1;
+          createdCommand = String(args[args.indexOf('--command') + 1] ?? '');
+          return { ok: true, result: { terminal: terminal() } };
+        case 'terminal show':
+          return { ok: true, result: { terminal: terminal() } };
+        case 'terminal wait':
+          return { ok: true, result: { wait: { status: 'running', satisfied: false } } };
+        default:
+          return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+      }
+    });
+    const healthUrls: string[] = [];
+    const openCodeHttpRequest = (request: { readonly url: string }) => {
+      healthUrls.push(request.url);
+      return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
+    };
+    const launch = (adapter: OrcaTaskRuntimeAdapter) => runSupervisedTaskLaunchAssistant({
+      ...launchInput('t2'), workClass: 'merge', worktreeName: undefined,
+      primaryRoot: primary, worktreeSelector: 'path:' + primary, env,
+    }, {
+      ...deps({ adapter }),
+      resolveProfile: (workClass, profileEnv, startMode) => resolveLiveExecutorProfile(
+        workClass, profileEnv, startMode, async (args) => opencodeProbeResult(args),
+      ),
+      prepareWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::primary', selector: 'id:repo::primary',
+        path: primary, setupWitness: 'proven_reuse',
+      } }),
+      finalizeProfile: async (profile) => ({ status: 'ok', value: profile }),
+      runSupervisedStart: async () => { throw new Error('busy merge terminal must not create a Dispatch'); },
+    });
+
+    try {
+      const first = await launch(new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env, openCodeHttpRequest }));
+      expect(first).toMatchObject({
+        outcome: 'continue', stage: 'terminal_prepare', observedCause: 'terminal_liveness_busy',
+      });
+      expect(creates).toBe(1);
+      expect(createdCommand.match(/OPENCODE_CONFIG_CONTENT=/gu)).toHaveLength(1);
+      const owned = first.resources.terminal;
+      expect(owned).toMatchObject({ runtime: 'orca', id: handle, generation });
+      if (!owned) throw new Error('first launch must return the owned terminal');
+
+      const recordPath = join(stateRoot, 'launch-task-terminals',
+        createHash('sha256').update(title).digest('hex') + '.json');
+      const record = JSON.parse(readFileSync(recordPath, 'utf8')) as {
+        title: string; workspacePath: string; identity: RuntimeWorker['identity'];
+        openCodeControl: { url: string; agent: string };
+      };
+      const port = /--port ([1-9]\d*)/u.exec(createdCommand)?.[1];
+      expect(port).toBeTruthy();
+      expect(record).toMatchObject({
+        title, workspacePath: primary, identity: owned,
+        openCodeControl: { url: 'http://127.0.0.1:' + port, agent: expect.any(String) },
+      });
+
+      const afterRestart = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env, openCodeHttpRequest });
+      expect(afterRestart.composerControl?.(owned)?.kind).toBe('opencode-http');
+      expect(afterRestart.openCodeHealth(owned)).toMatchObject({
+        status: 'ok', value: { healthy: true, version: '1.18.25' },
+      });
+      expect(healthUrls).toEqual([record.openCodeControl.url + '/global/health']);
+      const retried = await launch(afterRestart);
+      expect(retried).toMatchObject({
+        outcome: 'continue', stage: 'terminal_prepare', observedCause: 'terminal_liveness_busy',
+        resources: { terminal: owned },
+      });
+      expect(creates).toBe(1);
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
     }
   });
 
