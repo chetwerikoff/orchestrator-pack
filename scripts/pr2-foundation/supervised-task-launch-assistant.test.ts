@@ -744,10 +744,16 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
           return { ok: false, error: { code: 'unexpected_operation', message: operation } };
       }
     });
-    const healthUrls: string[] = [];
+    const requestedUrls: string[] = [];
     const openCodeHttpRequest = (request: { readonly url: string }) => {
-      healthUrls.push(request.url);
-      return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
+      requestedUrls.push(request.url);
+      if (request.url.endsWith('/global/health')) {
+        return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.25' }) };
+      }
+      if (request.url.endsWith(`/session?directory=${encodeURIComponent(primary)}`)) {
+        return { status: 200, body: JSON.stringify([{ id: 'ses-merge-task-1', directory: primary }]) };
+      }
+      throw new Error(`unexpected OpenCode URL: ${request.url}`);
     };
     const launch = (adapter: OrcaTaskRuntimeAdapter) => runSupervisedTaskLaunchAssistant({
       ...launchInput('t2'), workClass: 'merge', worktreeName: undefined,
@@ -794,7 +800,10 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
       expect(afterRestart.openCodeHealth(owned)).toMatchObject({
         status: 'ok', value: { healthy: true, version: '1.18.25' },
       });
-      expect(healthUrls).toEqual([record.openCodeControl.url + '/global/health']);
+      expect(requestedUrls).toEqual([
+        `${record.openCodeControl.url}/global/health`,
+        `${record.openCodeControl.url}/session?directory=${encodeURIComponent(primary)}`,
+      ]);
       const retried = await launch(afterRestart);
       expect(retried).toMatchObject({
         outcome: 'continue', stage: 'terminal_prepare', observedCause: 'terminal_liveness_busy',
