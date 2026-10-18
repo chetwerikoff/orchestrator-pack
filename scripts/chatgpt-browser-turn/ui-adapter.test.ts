@@ -705,7 +705,7 @@ describe('Issue #2651 exact-owned complete GET evidence on incumbent held Page',
 
   it.each([
     ['paginated', history('other prompt', true), exactUrl],
-    ['absent completeness', history('other prompt', undefined), exactUrl],
+    ['absent completeness', { ...history('other prompt'), has_more: undefined }, exactUrl],
     ['limited request', history('other prompt'), FETCH_2617],
     ['malformed', { has_more: false, current_node: 'x', mapping: {} }, exactUrl],
     ['partial parent', { ...history('other prompt'), mapping: {
