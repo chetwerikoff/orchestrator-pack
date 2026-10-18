@@ -7067,6 +7067,9 @@ export const __testSendDelivery = {
   dispatchStateLightSendAndObserveDelivery,
   affirmativePreActionabilityTimeout,
   waitForFreshSendButton,
+  readLosslessOwnedComposer,
+  conditionalClearOwnedComposerDraft,
+  observeExistingServerCheckedRecovery,
 };
 
 export type StateLightTurnDependencies = {
