@@ -4150,6 +4150,7 @@ async function runTurnCore(
           };
         }
       }
+      let recoveryReclickArmed = false;
       const dispatchExisting = async (clickWaitMs: number) =>
         await dispatchStateLightSendAndObserveDelivery({
           page,
@@ -4164,6 +4165,12 @@ async function runTurnCore(
           preSendAlertsAlreadyMarked: true,
           onDispatch: () => {
             beforeBrowserAction();
+            if (recoveryReclickArmed && (
+              held429Witness?.ownSubmissionIssued()
+              || held429Witness?.latestSuccessfulGet()?.markerPresent === true
+              || !originalExactChat
+              || !readOwnedConversationIdentity(page, originalExactChat).matched
+            )) throw new Error('server_checked_reclick_guard_lost');
             transitionStateLightTurnObservation({
               profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
             });
@@ -4210,7 +4217,10 @@ async function runTurnCore(
           // physical re-click. It never certifies that the original did not Send.
           repeated = true;
           const remaining = Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now());
-          if (remaining > 0) delivery = await dispatchExisting(remaining);
+          if (remaining > 0) {
+            recoveryReclickArmed = true;
+            delivery = await dispatchExisting(remaining);
+          }
         }
       }
       if (delivery.sendCount === 0 && delivery.preDispatchTimeoutProven === true
