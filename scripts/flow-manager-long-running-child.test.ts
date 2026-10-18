@@ -2619,6 +2619,7 @@ describe('Issue #2524: final persisted no-result terminal projection', () => {
     phase?: Phase;
     sendCount?: number;
     reason?: string;
+    sendWitness?: 'none' | 'numeric_send_count';
     reply?: string;
     targetChange?: TargetChange;
     heartbeat?: boolean;
@@ -2641,7 +2642,7 @@ describe('Issue #2524: final persisted no-result terminal projection', () => {
         profileKey, invocationId, marker: 'OPKTURNV1a97e3f70e9c07fa75c0f03840c0528a2',
       });
       const counted = input.sendCount === undefined
-        ? {} : { sendCount: input.sendCount, sendWitness: 'numeric_send_count' as const };
+        ? {} : { sendCount: input.sendCount, sendWitness: input.sendWitness ?? 'numeric_send_count' as const };
       if (input.phase === 'prepared') {
         if (input.sendCount !== undefined) {
           transitionStateLightTurnObservation({
@@ -2968,6 +2969,36 @@ describe('Issue #2524: final persisted no-result terminal projection', () => {
       });
     },
   );
+
+  it('classifies only matching durable and terminal affirmative attempted no-dispatch as not-sent', async () => {
+    const cause = 'affirmative_pre_actionability_no_dispatch';
+    const attempted = (profileKey: string, invocationId: string): TurnResultV1 =>
+      matchingSuccess(profileKey, invocationId, {
+        state: 'send_failed', scope: 'invocation', cause,
+        send_attempted: true, conversation_id: undefined, witness: undefined,
+        observation_uncertainty_diagnostics: {
+          cause, send_count: 0, owned_prompt_seen: false,
+        },
+      });
+    const affirmative = await savedTerminal({
+      phase: 'not_sent', reason: cause, sendCount: 0,
+      sendWitness: 'none', childResult: attempted,
+    });
+    expect(affirmative.envelope).toMatchObject({
+      lifecycle_outcome: 'incident', delivery: 'not-sent', send_count: 0,
+      turn_result_state: 'send_failed', turn_result_cause: cause,
+    });
+    for (const variant of [
+      { phase: 'not_sent' as const, reason: 'send_delivery_unproven', sendCount: 0, sendWitness: 'none' as const },
+      { phase: 'not_sent' as const, reason: cause, sendCount: 0, sendWitness: 'numeric_send_count' as const },
+      { phase: 'dispatching' as const, reason: cause, sendCount: 0, sendWitness: 'none' as const },
+    ]) {
+      const observed = await savedTerminal({ ...variant, childResult: attempted });
+      expect(observed.envelope.delivery).toBe('POSSIBLY_DELIVERED');
+    }
+    const noObservation = await savedTerminal({ childResult: attempted });
+    expect(noObservation.envelope.delivery).toBe('POSSIBLY_DELIVERED');
+  });
 
   it('preserves an attempted zero-count result against a prepared zero observation', async () => {
     const { envelope } = await savedTerminal({
