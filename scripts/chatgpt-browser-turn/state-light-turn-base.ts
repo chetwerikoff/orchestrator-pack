@@ -4013,6 +4013,8 @@ async function runTurnCore(
         onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_blind_resend'),
       });
       let delivery = await sendAction();
+      const firstActionAffirmative = delivery.preDispatchTimeoutProven === true && delivery.sendCount === 0;
+      let freshRepeated = false;
       if (delivery.sendCount === 0
         && delivery.witness === 'unproven'
         && delivery.preDispatchTimeoutProven === true
@@ -4024,7 +4026,14 @@ async function runTurnCore(
         // Positive Playwright actionability proof and all independent current
         // DOM/owner checks are required; no third attempt after this second call.
         assertFreshOwner();
+        freshRepeated = true;
         delivery = await sendAction();
+      }
+      if (delivery.sendCount === 0 && delivery.preDispatchTimeoutProven === true
+        && (!freshRepeated || firstActionAffirmative)
+        && !held429Witness?.ownSubmissionIssued()) {
+        const affirmed = await finalizeAffirmativeNoDispatch();
+        if (affirmed) return affirmed;
       }
       if (delivery.sendCount === 0) {
         if (browserOrPageDefinitelyLost(page, browser)) {
@@ -4157,6 +4166,7 @@ async function runTurnCore(
           onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_resend'),
         });
       let delivery = await dispatchExisting(sendWaitMs);
+      const firstActionAffirmative = delivery.sendCount === 0 && delivery.preDispatchTimeoutProven === true;
       let repeated = false;
       if (hasSendButton && delivery.sendCount === 0 && delivery.witness === 'unproven'
         && delivery.preDispatchTimeoutProven === true
@@ -4195,7 +4205,8 @@ async function runTurnCore(
         }
       }
       if (delivery.sendCount === 0 && delivery.preDispatchTimeoutProven === true
-        && !held429Witness?.ownSubmissionIssued() && !repeated) {
+        && !held429Witness?.ownSubmissionIssued()
+        && (!repeated || firstActionAffirmative)) {
         const affirmative = await finalizeAffirmativeNoDispatch();
         if (affirmative) return affirmative;
       }
