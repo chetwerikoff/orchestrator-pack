@@ -1562,6 +1562,8 @@ export interface HeldPageSuccessfulConversationGet {
   readonly uuid: string;
   readonly complete: true;
   readonly markerPresent: boolean;
+  /** True only when the held request carried this invocation's explicit probe. */
+  readonly explicitRecoveryProbe: boolean;
 }
 
 /** A complete current branch requires a connected ancestry through the root
@@ -1710,6 +1712,11 @@ export function observeHeldPageConversation429(
       const responseEpoch = epoch;
       const marker = dispatchMarker;
       const uuid = targetUuid;
+      let explicitRecoveryProbe = false;
+      try {
+        const headers = request.headers?.() as Record<string, string> | undefined;
+        explicitRecoveryProbe = headers?.['x-opk-recovery-invocation'] === marker;
+      } catch { /* Header attribution unavailable; marker-negative GET cannot authorize recovery. */ }
       // Response events announce headers, not completed content. Await the
       // incumbent response's finish and parse transiently; retain only booleans.
       void (async () => {
@@ -1723,7 +1730,7 @@ export function observeHeldPageConversation429(
             || dispatchMarker !== marker) return;
           if (!latestSuccessfulGet || latestSuccessfulGet.requestSequence < requestSequence) {
             latestSuccessfulGet = {
-              requestSequence, epoch, uuid, complete: true, markerPresent,
+              requestSequence, epoch, uuid, complete: true, markerPresent, explicitRecoveryProbe,
             };
           }
         } catch { /* Unfinished, failed, unreadable, or partial GET stays unknown. */ }
