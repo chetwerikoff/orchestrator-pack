@@ -3752,7 +3752,7 @@ async function runTurnCore(
       if (!await uncontradicted()
         || await readLosslessOwnedComposer(page.locator(COMPOSER_SELECTOR), invocationDeadlineMs) !== ''
         || !stillOwned()) return null;
-      const close = await boundedResourceCleanup(() => page.close(), RESOURCE_CLEANUP_BOUND_MS);
+      const close = await abandonLatePageHandle(page, RESOURCE_CLEANUP_BOUND_MS);
       // Closing has to be positively observed; a timed-out close is not finalization.
       if (close !== 'confirmed' || typeof page.isClosed !== 'function' || page.isClosed() !== true
         || held429Witness?.ownSubmissionIssued() || held429Witness?.latestSuccessfulGet()?.markerPresent) return null;
