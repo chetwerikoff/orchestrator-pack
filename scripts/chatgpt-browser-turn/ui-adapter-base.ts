@@ -1554,10 +1554,68 @@ export interface HeldPage429Observation {
   readonly http_status: 429;
   readonly status_source: 'owned_page_response';
 }
+/** Only a finished, parsed, complete exact-owned GET may supply this summary.
+ * No user message or response content is retained by the held-Page witness. */
+export interface HeldPageSuccessfulConversationGet {
+  readonly requestSequence: number;
+  readonly epoch: number;
+  readonly uuid: string;
+  readonly complete: true;
+  readonly markerPresent: boolean;
+}
+
+/** A complete current branch requires a connected ancestry through the root
+ * and parseable user payloads on every returned mapping node. Any partial
+ * lineage, pagination, or unfamiliar user carrier is unknown, not negative. */
+function completeConversationMarkerStatus(payload: unknown, marker: string): boolean | undefined {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  const data = payload as Record<string, unknown>;
+  if (['has_more', 'has_more_before', 'has_more_after', 'next_cursor',
+    'next_page', 'cursor', 'num_turns', 'is_truncated', 'truncated', 'offset', 'limit']
+    .some((key) => Object.hasOwn(data, key))) return undefined;
+  const mapping = data.mapping;
+  const current = data.current_node;
+  if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)
+    || typeof current !== 'string' || !current) return undefined;
+  const nodes = mapping as Record<string, unknown>;
+  if (!Object.hasOwn(nodes, current)) return undefined;
+  let markerPresent = false;
+  for (const [key, raw] of Object.entries(nodes)) {
+    if (!key || !raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+    const node = raw as Record<string, unknown>;
+    if (node.parent !== null && (typeof node.parent !== 'string'
+      || !Object.hasOwn(nodes, node.parent))) return undefined;
+    if (node.message === null) continue;
+    if (!node.message || typeof node.message !== 'object'
+      || Array.isArray(node.message)) return undefined;
+    const message = node.message as Record<string, unknown>;
+    const author = message.author as Record<string, unknown> | undefined;
+    if (author?.role !== 'user') continue;
+    const content = message.content as Record<string, unknown> | undefined;
+    if (!content || !Array.isArray(content.parts)
+      || !content.parts.every((part: unknown) => typeof part === 'string')) return undefined;
+    if ((content.parts as string[]).some((part) => part.includes(marker))) markerPresent = true;
+  }
+  const seen = new Set<string>();
+  let at: string | null = current;
+  while (at !== null) {
+    if (seen.has(at)) return undefined;
+    seen.add(at);
+    const node = nodes[at] as Record<string, unknown> | undefined;
+    if (!node || (node.parent !== null && typeof node.parent !== 'string')) return undefined;
+    at = node.parent as string | null;
+  }
+  return markerPresent;
+}
+
 export interface HeldPage429Witness {
   readonly current: () => HeldPage429Observation | undefined;
   /** Invocation-local positive issuance; never reply/acceptance authority. */
   readonly ownSubmissionIssued: () => boolean;
+  /** Monotonic count of exact-owned held-Page GET requests in this witness. */
+  readonly ownedGetRequestSequence: () => number;
+  /** Latest completed current-epoch GET for the marked invocation only. */
+  readonly latestSuccessfulGet: () => HeldPageSuccessfulConversationGet | undefined;
   readonly beforeNavigation: () => void;
   readonly markDispatch: (marker: string, exactSubmittedText?: string) => void;
   readonly dispose: () => void;
@@ -1580,6 +1638,9 @@ export function observeHeldPageConversation429(
   let dispatchText: string | undefined;
   let ownSubmissionIssuedEpoch: number | undefined;
   const requestEpochs = new WeakMap<object, number>();
+  const ownedGetSequences = new WeakMap<object, number>();
+  let ownedGetRequestSequence = 0;
+  let latestSuccessfulGet: HeldPageSuccessfulConversationGet | undefined;
   const responseKind = (request: any): HeldPage429Kind | undefined => {
     try {
       const url = new URL(String(request.url()));
@@ -1607,6 +1668,10 @@ export function observeHeldPageConversation429(
     const kind = responseKind(request);
     if (!kind) return;
     requestEpochs.set(request, epoch);
+    if (kind === 'conversation_fetch_http_429') {
+      ownedGetRequestSequence++;
+      ownedGetSequences.set(request, ownedGetRequestSequence);
+    }
     if (kind !== 'rate_limit' || !dispatchMarker || !dispatchText || ownSubmissionIssuedEpoch === epoch) return;
     try {
       // D45 accepts a leading marker for 429; D46 counts an issued request
@@ -1619,15 +1684,43 @@ export function observeHeldPageConversation429(
     } catch { /* Unreadable request data cannot prove issuance. */ }
   };
   const onResponse = (response: any): void => {
-    if (observed) return; // The first active-epoch 429 is sticky, even if a 200 follows.
     try {
       const request = response.request();
-      if (!request || requestEpochs.get(request) !== epoch || response.status() !== 429) return;
+      if (!request || requestEpochs.get(request) !== epoch) return;
       const kind = responseKind(request);
       if (!kind) return;
-      observed = { wall_kind: kind, http_status: 429, status_source: 'owned_page_response' };
-      onFirst429?.(observed);
-    } catch { /* Missing request/status evidence is not a 429. */ }
+      const status = response.status();
+      if (status === 429 && !observed) {
+        // Preserve D45's first-429 sticky publication exactly.
+        observed = { wall_kind: kind, http_status: 429, status_source: 'owned_page_response' };
+        onFirst429?.(observed);
+      }
+      if (kind !== 'conversation_fetch_http_429' || status !== 200
+        || !dispatchMarker || !dispatchText) return;
+      const requestSequence = ownedGetSequences.get(request);
+      if (!requestSequence) return;
+      const responseEpoch = epoch;
+      const marker = dispatchMarker;
+      const uuid = targetUuid;
+      // Response events announce headers, not completed content. Await the
+      // incumbent response's finish and parse transiently; retain only booleans.
+      void (async () => {
+        try {
+          if (typeof response.finished !== 'function' || typeof response.json !== 'function') return;
+          const finished = await response.finished();
+          if (finished !== null && finished !== undefined) return;
+          const markerPresent = completeConversationMarkerStatus(await response.json(), marker);
+          if (markerPresent === undefined || !uuid
+            || responseEpoch !== epoch || requestEpochs.get(request) !== epoch
+            || dispatchMarker !== marker) return;
+          if (!latestSuccessfulGet || latestSuccessfulGet.requestSequence < requestSequence) {
+            latestSuccessfulGet = {
+              requestSequence, epoch, uuid, complete: true, markerPresent,
+            };
+          }
+        } catch { /* Unfinished, failed, unreadable, or partial GET stays unknown. */ }
+      })();
+    } catch { /* Missing request/status evidence is not a 429 or a completed GET. */ }
   };
   if (typeof page?.on === 'function') {
     page.on('request', onRequest);
@@ -1636,8 +1729,11 @@ export function observeHeldPageConversation429(
   const witness: HeldPage429Witness = {
     current: () => observed,
     ownSubmissionIssued: () => ownSubmissionIssuedEpoch === epoch,
-    beforeNavigation: () => { epoch++; dispatchMarker = undefined; dispatchText = undefined; },
+    ownedGetRequestSequence: () => ownedGetRequestSequence,
+    latestSuccessfulGet: () => latestSuccessfulGet?.epoch === epoch ? latestSuccessfulGet : undefined,
+    beforeNavigation: () => { epoch++; dispatchMarker = undefined; dispatchText = undefined; latestSuccessfulGet = undefined; },
     markDispatch: (marker, exactSubmittedText) => {
+      latestSuccessfulGet = undefined;
       dispatchMarker = isOwnedPromptMarker(marker) ? marker : undefined;
       dispatchText = dispatchMarker && typeof exactSubmittedText === 'string'
         && exactSubmittedText.startsWith(dispatchMarker + '\n\n') ? exactSubmittedText : undefined;
