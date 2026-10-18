@@ -3285,6 +3285,15 @@ async function runTurnCore(
       };
     }
 
+    // Refuse a new Send against the shared account cooldown before attachOwnTarget:
+    // target allocation (including CDP creation) happens before page selection.
+    // Refusal is read-only and cannot extend the existing cooldown deadline.
+    const admissionCooldown = readStateLightAccountCooldown(profileKey);
+    if (admissionCooldown.diagnostic) {
+      incident('shared_account_cooldown_diagnostic', admissionCooldown.diagnostic, 'fail_open');
+    }
+    if (admissionCooldown.active) throw new Error('account_cooldown_active');
+
     // Distinct invocation-owned Pages do not share a profile-wide composer lock.
     // Exact destination claims and the selected Page's own Stop/marker guards
     // continue to prohibit attaching to another invocation.
