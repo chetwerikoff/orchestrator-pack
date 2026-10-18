@@ -153,18 +153,49 @@ function observationProvesPreDispatch(observation: ReturnType<typeof readStateLi
     && !(typeof observation.send_count === 'number' && observation.send_count > 0);
 }
 
+/** Only this exact affirmative attempt/result/observation conjunction may
+ * override the generic possible-delivery classification. Historical
+ * attempted-zero and arbitrary not_sent records remain ambiguous. */
+function affirmativeAttemptNeverDispatched(
+  slot: PackReviewSourceSlotRecord,
+  observation: ReturnType<typeof readStateLightTurnObservation> | undefined,
+): boolean {
+  if (!observation || slot.lifecycle !== 'terminal' || !slot.invocationId) return false;
+  const terminal = terminalRecord(slot);
+  const binding = profileAndCdp(slot);
+  if (binding.kind !== 'bound' || observation.profile_key !== binding.profileKey
+    || observation.invocation_id !== slot.invocationId) return false;
+  return terminal.send_attempted === true
+    && terminal.cause === 'affirmative_pre_actionability_no_dispatch'
+    && terminal.invocation_id === slot.invocationId
+    && (terminal.observed_invocation_id === undefined
+      || terminal.observed_invocation_id === slot.invocationId)
+    && (terminal.configured_profile_key === undefined
+      || terminal.configured_profile_key === binding.profileKey)
+    && terminal.send_count === 0
+    && terminal.delivery !== 'landed'
+    && terminal.witness === undefined
+    && observation.phase === 'not_sent'
+    && observation.transition_reason === 'affirmative_pre_actionability_no_dispatch'
+    && observation.send_count === 0
+    && observation.send_witness === 'none'
+    && !observation.primary;
+}
+
 export function authoritativePreSend(
   slot: PackReviewSourceSlotRecord,
   observation?: ReturnType<typeof readStateLightTurnObservation>,
 ): boolean {
   if (slot.lifecycle !== 'terminal') return false;
   const terminal = terminalRecord(slot);
+  if (affirmativeAttemptNeverDispatched(slot, observation)) return true;
   if (terminalHasPossibleDelivery(terminal)) return false;
   if (observation) {
     const binding = profileAndCdp(slot);
     if (binding.kind !== 'bound' || observation.profile_key !== binding.profileKey
       || observation.invocation_id !== slot.invocationId) return false;
-    if (!observationProvesPreDispatch(observation)) return false;
+    if (!observationProvesPreDispatch(observation)
+      || (observation.phase === 'not_sent' && observation.transition_reason !== 'terminal_pre_send')) return false;
   }
   if (terminal.send_count === 0 && observation) return true;
   if (terminal.state === 'not_sent') return true;
@@ -351,8 +382,16 @@ async function reconcilePossibleDelivery(
       },
     };
   }
+  if (affirmativeAttemptNeverDispatched(slot, observation)) {
+    return {
+      disposition: 'slot-closed',
+      reason: 'affirmative_pre_actionability_no_dispatch',
+      evidence: { ...slotFact(slot), observationPhase: observation.phase },
+    };
+  }
   if (observationProvesPreDispatch(observation)) {
-    if (terminalHasPossibleDelivery(terminalRecord(slot))) {
+    if (terminalHasPossibleDelivery(terminalRecord(slot))
+      || (observation.phase === 'not_sent' && observation.transition_reason !== 'terminal_pre_send')) {
       return {
         disposition: 'contradiction', reason: 'attempted_send_contradicts_pre_send_observation',
         evidence: { ...slotFact(slot), observationPhase: observation.phase },
