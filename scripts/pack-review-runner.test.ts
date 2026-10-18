@@ -5349,6 +5349,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
 
   it.each([
     ['first zero-send attempt', 1, 'none', true],
+    ['persisted source-01 with an optional undefined mapped field', 1, 'optional_undefined_finding', true],
     ['two consecutive zero-send attempts', 2, 'none', true],
     ['three consecutive zero-send attempts', 3, 'none', true],
     ['historical attempted send', 2, 'historical_send_attempted', false],
@@ -5392,10 +5393,24 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       slotId: 'source-01', invocationId: sourceOneId,
     };
     f.publish({ identity });
+    if (violation === 'optional_undefined_finding') {
+      // A finding without a path maps to { filePath: undefined }; JSON store
+      // persistence omits that property, while re-credentialing maps it again.
+      f.comments[f.comments.length - 1]!.body = formatPackGptSourceCommentEnvelope(
+        identity,
+        JSON.stringify({ findings: [{
+          type: 'quality', code: 'quality:2653-optional-path', severity: 'blocking',
+          summary: 'source-01 finding with no optional path', source: 'gpt-browser',
+        }] }),
+      );
+    }
     const posted = await resolvePackGptSourceComment({
       identity, transport: f.commentTransport,
     });
     if (posted.kind !== 'credentialed') throw new Error('fixture source-01 was not credentialed');
+    if (violation === 'optional_undefined_finding') {
+      expect(posted.payload.findings[0]).toHaveProperty('filePath', undefined);
+    }
 
     const writeObservation = (
       invocationId: string,
@@ -5491,6 +5506,10 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       reviewRound: { ...newer.reviewRound!, sourceSlots: newerSlots },
     }, f.options);
     const savedPartial = getPackReviewRun(newer.id, f.options)!.reviewRound!.sourceSlots[0]!;
+    if (violation === 'optional_undefined_finding') {
+      // The run store JSON round trip keeps every completed slot, not undefined keys.
+      expect(savedPartial.payload?.findings[0]).not.toHaveProperty('filePath');
+    }
     const postedSourceOne = f.comments[0]!;
     const commentsBefore = [...f.comments];
     expect(listPackReviewRuns(f.options)).toHaveLength(2);
