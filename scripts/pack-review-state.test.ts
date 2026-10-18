@@ -24,6 +24,8 @@ import {
   reopenPackReviewAuthorityForExplicitExtraReview,
   retainPersistedOpenCycle,
   selectPackReviewGptSourceCardinality,
+  sha256,
+  stableJson,
   selectPackReviewEvidence,
   settleLogicalPackReviewFindingsByStrictDescendant,
   stagePackReviewImmutableRecord,
@@ -60,6 +62,37 @@ const findingsTerminal = (runId: string, targetSha: string) => ({
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe('Issue #2653 stableJson JSON-persistence parity', () => {
+  it('omits unsupported object fields and encodes unsupported array entries as null', () => {
+    const mapped = {
+      verdict: 'findings',
+      findings: [{ title: 'optional file path', filePath: undefined }],
+      optional: undefined,
+      ignoredFunction: () => 'not JSON',
+      ignoredSymbol: Symbol('not JSON'),
+      array: [undefined, () => 'not JSON', Symbol('not JSON'), NaN, Infinity],
+    };
+    const persisted = JSON.parse(JSON.stringify(mapped)) as Record<string, unknown>;
+
+    const actual = stableJson(mapped);
+    expect(actual).toBe(stableJson(persisted));
+    expect(JSON.parse(actual)).toEqual(persisted);
+    expect(JSON.parse(actual)).toMatchObject({ array: [null, null, null, null, null] });
+    expect(actual).not.toContain('undefined');
+    expect(actual).not.toContain('ignoredFunction');
+    expect(actual).not.toContain('ignoredSymbol');
+    expect((persisted.findings as Array<Record<string, unknown>>)[0]).not.toHaveProperty('filePath');
+  });
+
+  it('keeps the historic sorted bytes and hashes of persisted JSON, including integer-like keys', () => {
+    const persisted = JSON.parse('{"value":null,"records":{"2":"two","10":"ten"},"empty":[]}');
+    const previouslyPersistedStable = '{"empty":[],"records":{"10":"ten","2":"two"},"value":null}';
+
+    expect(stableJson(persisted)).toBe(previouslyPersistedStable);
+    expect(sha256(stableJson(persisted))).toBe(sha256(previouslyPersistedStable));
+  });
 });
 
 describe('Issue #2565 completed findings logical reset', () => {
