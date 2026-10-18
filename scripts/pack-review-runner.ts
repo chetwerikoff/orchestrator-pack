@@ -3105,9 +3105,10 @@ async function runGptSourceBatch(options: {
     const markInvocationStarted = async (admissionStartedAt: number): Promise<boolean> => {
       const launchBinding = resolveLaunchBinding();
       const priorSlot = round.sourceSlots.find((slot) => slot.slotId === slotId);
-      // A recovered slot must not silently switch browser identities mid-history.
-      if (options.sameRoundEligibleSlotIds && priorSlot?.invocationId
-        && launchBinding?.launchProfileKey !== priorSlot.launchProfileKey) return false;
+      // Zero-send rate-limit retries must keep their browser identity. Other
+      // observer-authorized orphan replacements follow their own eligibility.
+      if (options.sameRoundEligibleSlotIds && priorSlot?.terminalClass?.startsWith('rate_limit:')
+        && priorSlot.invocationId && launchBinding?.launchProfileKey !== priorSlot.launchProfileKey) return false;
       const priorHistory: PackReviewSourceSlotAttemptHistory[] = priorSlot?.attemptHistory ?? [];
       const priorAttempt = priorSlot?.invocationId && priorSlot.attemptOrdinal !== undefined && priorSlot.terminalClass
         ? { invocationId: priorSlot.invocationId, attemptOrdinal: priorSlot.attemptOrdinal, terminalClass: priorSlot.terminalClass }
