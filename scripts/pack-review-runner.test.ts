@@ -5400,7 +5400,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
         identity,
         JSON.stringify({ findings: [{
           type: 'quality', code: 'quality:2653-optional-path', severity: 'blocking',
-          summary: 'source-01 finding with no optional path', source: 'gpt-browser',
+          summary: 'source-01 finding with no optional path', path: null, source: 'gpt-browser',
         }] }),
       );
     }
