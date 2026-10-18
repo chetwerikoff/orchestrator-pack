@@ -5380,10 +5380,17 @@ async function runTurnCore(
         && !held429Witness?.ownSubmissionIssued()
         // An alert marked before dispatch, or no live unmarked alert, cannot
         // establish a new F4 symptom. Missing alert provenance fails closed.
-        && await locatorCount(
-          page.locator(UNMARKED_ALERT_SELECTOR),
-          Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
-        ) > 0
+        && await (async () => {
+          try {
+            return await locatorCount(
+              page.locator(UNMARKED_ALERT_SELECTOR),
+              Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
+            ) > 0;
+          } catch {
+            // A missing/foreign/failed alert read cannot establish F4 freshness.
+            return false;
+          }
+        })()
         && await ownedLocalFetchFailureVisibleOnPage(
           page, config.projectUrl,
           Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
