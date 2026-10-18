@@ -2242,7 +2242,7 @@ async function readComposerReadiness(
   }
 }
 
-type StateLightSendDeliveryWitness = 'owned_user_node' | 'composer_cleared' | 'owned_stop' | 'own_submission_issued' | 'unproven';
+type StateLightSendDeliveryWitness = 'owned_user_node' | 'composer_cleared' | 'owned_stop' | 'own_submission_issued' | 'owned_server_user_marker' | 'unproven';
 
 async function readComposerTextForSendDelivery(
   composer: any,
@@ -2488,6 +2488,30 @@ async function freshRetryDomGuards(input: {
 // A disabled-before-click action log is necessary but not sufficient to retry
 // an existing-chat Send: the retained visible history must still be comparable.
 // This is an ephemeral DOM continuity check, never backend non-delivery proof.
+// Unlike editor-normalizing readers, both DOM views must independently
+// reproduce every code point of the invocation payload. ProseMirror/other
+// editors whose DOM cannot expose the exact newlines must fail closed.
+async function readLosslessOwnedComposer(
+  composer: any,
+  deadlineMs: number,
+): Promise<string | undefined> {
+  const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+  if (waitMs <= 0 || typeof composer?.evaluate !== 'function') return undefined;
+  try {
+    const result = await boundedBrowserRead(
+      Promise.resolve(composer.evaluate((element: HTMLElement) => ({
+        content: element.textContent,
+        visible: element.innerText,
+      }))),
+      waitMs, 'recovery_lossless_composer_timeout',
+    ) as { content?: unknown; visible?: unknown };
+    return typeof result.content === 'string' && result.content === result.visible
+      ? result.content : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function existingRetryDomGuards(input: {
   page: any;
   browser: any;
@@ -2536,6 +2560,96 @@ async function existingRetryDomGuards(input: {
   } catch {
     return false;
   }
+}
+
+const SERVER_CHECKED_SEND_SETTLE_MS = 30_000;
+
+/** Only an existing exactly owned held Page may spend the one recovery click.
+ * This uses the D45 observer for both the explicit request and the completed
+ * response; no transport or listener is added and all failed reads stay unknown.
+ */
+async function observeExistingServerCheckedRecovery(input: {
+  page: any;
+  browser: any;
+  composer: any;
+  targetChatUrl: string;
+  markedPayload: string;
+  marker: string;
+  baselineSnapshot?: AtomicTranscriptSnapshot;
+  heldWitness?: HeldPage429Witness;
+  deadlineMs: number;
+}): Promise<'server_marker_present' | 'marker_absent_complete' | 'unproven'> {
+  const witness = input.heldWitness;
+  const expectedUuid = conversationUuidFromUrl(input.targetChatUrl);
+  if (!witness || !expectedUuid || !input.baselineSnapshot?.complete) return 'unproven';
+  const identity = () => !browserOrPageDefinitelyLost(input.page, input.browser)
+    && normalizeConversationUrl(String(input.page.url())) === input.targetChatUrl
+    && readOwnedConversationIdentity(input.page, input.targetChatUrl).matched
+    && Date.now() < input.deadlineMs;
+  const positive = () => witness.ownSubmissionIssued() || witness.latestSuccessfulGet()?.markerPresent === true;
+  if (!identity() || positive()) {
+    return witness.latestSuccessfulGet()?.markerPresent ? 'server_marker_present' : 'unproven';
+  }
+  // Reserve a bounded same-Page GET and possible action in the original budget.
+  const settleStart = Date.now();
+  const settleUntil = settleStart + SERVER_CHECKED_SEND_SETTLE_MS;
+  if (settleUntil + 3 * MAX_LOCAL_READ_WAIT_MS >= input.deadlineMs) return 'unproven';
+  while (Date.now() < settleUntil) {
+    if (!identity() || positive()
+      || await readLosslessOwnedComposer(input.composer, input.deadlineMs) !== input.markedPayload
+      || !await existingRetryDomGuards({
+        page: input.page, browser: input.browser, composer: input.composer,
+        targetChatUrl: input.targetChatUrl, markedPayload: input.markedPayload,
+        marker: input.marker, baselineSnapshot: input.baselineSnapshot,
+        deadlineMs: input.deadlineMs,
+      })) return witness.latestSuccessfulGet()?.markerPresent ? 'server_marker_present' : 'unproven';
+    // Every observation remains on the same held Page. An interrupted poll,
+    // incompletely rendered transcript or generation vetoes the settle.
+    if (!identity()) return 'unproven';
+    const waitMs = Math.min(INITIAL_POLL_MS, settleUntil - Date.now());
+    if (waitMs > 0) await sleep(input.page, waitMs);
+  }
+  if (!identity() || positive() || Date.now() >= input.deadlineMs - 2 * MAX_LOCAL_READ_WAIT_MS
+    || await readLosslessOwnedComposer(input.composer, input.deadlineMs) !== input.markedPayload
+    || !await existingRetryDomGuards({
+      page: input.page, browser: input.browser, composer: input.composer,
+      targetChatUrl: input.targetChatUrl, markedPayload: input.markedPayload,
+      marker: input.marker, baselineSnapshot: input.baselineSnapshot, deadlineMs: input.deadlineMs,
+    })) return witness.latestSuccessfulGet()?.markerPresent ? 'server_marker_present' : 'unproven';
+  const beforeSequence = witness.ownedGetRequestSequence();
+  const getDeadline = Math.min(input.deadlineMs - MAX_LOCAL_READ_WAIT_MS,
+    Date.now() + MAX_LOCAL_READ_WAIT_MS);
+  try {
+    const waitMs = getDeadline - Date.now();
+    if (waitMs <= 0) return 'unproven';
+    // The browser performs precisely one explicit same-origin GET from the
+    // held Page. A returned status/body alone is NEVER authority for recovery.
+    await boundedBrowserRead(
+      Promise.resolve(input.page.evaluate(async (uuid: string) => {
+        const response = await fetch('/backend-api/conversations/' + uuid, {
+          credentials: 'same-origin',
+        });
+        await response.arrayBuffer();
+      }, expectedUuid)),
+      waitMs, 'recovery_owned_conversation_get_timeout',
+    );
+  } catch { return 'unproven'; }
+  if (!identity() || positive() || witness.ownedGetRequestSequence() !== beforeSequence + 1) {
+    return witness.latestSuccessfulGet()?.markerPresent ? 'server_marker_present' : 'unproven';
+  }
+  const expectedSequence = beforeSequence + 1;
+  // The existing response callback finishes its body asynchronously. Wait
+  // within the remaining original deadline; never initiate another GET.
+  const resultDeadline = Math.min(input.deadlineMs - MAX_LOCAL_READ_WAIT_MS, Date.now() + MAX_LOCAL_READ_WAIT_MS);
+  while (identity() && Date.now() < resultDeadline) {
+    const summary = witness.latestSuccessfulGet();
+    if (summary?.requestSequence === expectedSequence && summary.uuid === expectedUuid && summary.complete) {
+      if (summary.markerPresent) return 'server_marker_present';
+      return positive() ? 'unproven' : 'marker_absent_complete';
+    }
+    await sleep(input.page, Math.min(INITIAL_POLL_MS, resultDeadline - Date.now()));
+  }
+  return 'unproven';
 }
 
 async function waitForComposer(
@@ -3938,6 +4052,7 @@ async function runTurnCore(
           onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_resend'),
         });
       let delivery = await dispatchExisting(sendWaitMs);
+      let repeated = false;
       if (hasSendButton && delivery.sendCount === 0 && delivery.witness === 'unproven'
         && delivery.preDispatchTimeoutProven === true
         && await existingRetryDomGuards({
@@ -3947,7 +4062,32 @@ async function runTurnCore(
         // Only the first click's actual positive non-dispatch action result grants
         // this one optional repeat; an uncertain first action or Enter never does.
         const repeatWaitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now());
-        if (repeatWaitMs > 0) delivery = await dispatchExisting(repeatWaitMs);
+        if (repeatWaitMs > 0) {
+          repeated = true;
+          delivery = await dispatchExisting(repeatWaitMs);
+        }
+      }
+      if (!repeated && hasSendButton && delivery.sendCount === 0
+        && delivery.witness === 'unproven' && originalExactChat) {
+        const state = await observeExistingServerCheckedRecovery({
+          page, browser, composer, targetChatUrl: originalExactChat,
+          markedPayload, marker, baselineSnapshot,
+          heldWitness: held429Witness, deadlineMs: invocationDeadlineMs,
+        });
+        if (state === 'server_marker_present') {
+          delivery = { ...delivery, sendCount: 1, witness: 'owned_server_user_marker' };
+        } else if (state === 'marker_absent_complete' && !held429Witness?.ownSubmissionIssued()
+          && await readLosslessOwnedComposer(composer, invocationDeadlineMs) === markedPayload
+          && await existingRetryDomGuards({
+            page, browser, composer, targetChatUrl: originalExactChat,
+            markedPayload, marker, baselineSnapshot, deadlineMs: invocationDeadlineMs,
+          })) {
+          // A complete server-negative snapshot only permits the one guarded
+          // physical re-click. It never certifies that the original did not Send.
+          repeated = true;
+          const remaining = Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now());
+          if (remaining > 0) delivery = await dispatchExisting(remaining);
+        }
       }
       if (delivery.sendCount === 0) {
         if (browserOrPageDefinitelyLost(page, browser)) {
