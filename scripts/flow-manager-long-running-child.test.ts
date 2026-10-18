@@ -2815,10 +2815,21 @@ describe('Issue #2524: final persisted no-result terminal projection', () => {
   );
 
   it.each([
-    ['prepared', undefined], ['prepared', 0], ['not_sent', 0],
-  ] as const)('recognizes proven pre-dispatch %s (count %s) as not-sent', async (phase, sendCount) => {
-    const { envelope } = await savedTerminal({ phase, sendCount });
+    ['prepared', undefined, undefined],
+    ['prepared', 0, undefined],
+    ['not_sent', 0, 'terminal_pre_send'],
+  ] as const)('recognizes proven pre-dispatch %s (count %s) as not-sent', async (phase, sendCount, reason) => {
+    const { envelope } = await savedTerminal({ phase, sendCount, reason });
     expect(envelope).toMatchObject({ lifecycle_outcome: 'incident', delivery: 'not-sent' });
+  });
+
+  it('does not treat an arbitrary legacy not_sent reason as evidence of no dispatch', async () => {
+    const { envelope } = await savedTerminal({
+      phase: 'not_sent', reason: 'fixture_pre_dispatch', sendCount: 0,
+    });
+    expect(envelope).toMatchObject({
+      lifecycle_outcome: 'incident', delivery: 'POSSIBLY_DELIVERED',
+    });
   });
 
   it('allows harvested committed primary with an absent send count to establish delivery', async () => {
