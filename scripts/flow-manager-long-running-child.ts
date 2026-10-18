@@ -639,11 +639,17 @@ function conversationLocatorFields(
   };
 }
 
-export function deriveDelivery(result: ParsedTurnResult | null, childStartFailed: boolean): DeliveryState {
+export function deriveDelivery(
+  result: ParsedTurnResult | null,
+  childStartFailed: boolean,
+  affirmedNeverDispatched = false,
+): DeliveryState {
   if (childStartFailed) return 'not-sent';
   if (!result) return 'not-sent';
   const sendCount = result.resolved_send_count;
-  if (sendCount === 0 && result.send_attempted === true) return 'POSSIBLY_DELIVERED';
+  if (sendCount === 0 && result.send_attempted === true) {
+    return affirmedNeverDispatched ? 'not-sent' : 'POSSIBLY_DELIVERED';
+  }
   if (result.state === 'output_conflict') {
     return sendCount === 0 ? 'not-sent' : 'POSSIBLY_DELIVERED';
   }
@@ -831,7 +837,7 @@ interface FinalObservationProjection {
 function finalObservationProjection(
   config: LaunchConfig,
   heartbeatDiagnostics?: Record<string, unknown>,
-  candidate?: Pick<ParsedTurnResult, 'invocation_id' | 'configured_profile_key'>,
+  candidate?: Pick<ParsedTurnResult, 'invocation_id' | 'configured_profile_key' | 'send_attempted'>,
 ): FinalObservationProjection | null {
   const invocationId = childOption(config, '--invocation-id');
   const profile = childOption(config, '--profile');
@@ -852,8 +858,9 @@ function finalObservationProjection(
   )) return null;
 
   const harvestedPrimary = record.phase === 'harvested' && Boolean(record.primary);
-  const preDispatch = (record.phase === 'prepared' || record.phase === 'not_sent')
-    && record.transition_reason !== 'send_delivery_unproven'
+  const preDispatch = candidate?.send_attempted !== true
+    && (record.phase === 'prepared'
+      || (record.phase === 'not_sent' && record.transition_reason === 'terminal_pre_send'))
     && (record.send_count === undefined || record.send_count === 0);
 
   let replyDiagnostics = heartbeatDiagnostics;
@@ -888,6 +895,30 @@ function finalObservationProjection(
     delivery: harvestedPrimary ? 'landed' : preDispatch ? 'not-sent' : 'POSSIBLY_DELIVERED',
     ...(replyDiagnostics ? { replyDiagnostics } : {}),
   };
+}
+
+/** An attempted Send may be declared never-dispatched only with the
+ * affirmative pre-actionability cause in BOTH the exact matching terminal
+ * result and durable observation. Neither a zero-count attempt nor historical
+ * not_sent phases are a sufficient negative witness. */
+function affirmativelyNotDispatched(
+  candidate: ParsedTurnResult,
+  observed: FinalObservationProjection | null,
+): boolean {
+  const record = observed?.record;
+  return candidate.send_attempted === true
+    && candidate.cause === 'affirmative_pre_actionability_no_dispatch'
+    && candidate.resolved_send_count === 0
+    && !candidate.witness
+    && candidate.observation_uncertainty_diagnostics?.owned_prompt_seen !== true
+    && Boolean(record
+      && record.invocation_id === candidate.invocation_id
+      && record.profile_key === candidate.configured_profile_key
+      && record.phase === 'not_sent'
+      && record.transition_reason === 'affirmative_pre_actionability_no_dispatch'
+      && record.send_count === 0
+      && record.send_witness === 'none'
+      && !record.primary);
 }
 
 async function persistedTerminalEvidence(
@@ -1110,8 +1141,9 @@ async function finalizeCandidatePath(
   }
   if (candidate.state === 'ok') {
     const observed = finalObservationProjection(config, heartbeatDiagnostics, candidate);
-    const resultDelivery = deriveDelivery(candidate, false);
-    const observedDelivery = observed?.delivery;
+    const provenNoDispatch = affirmativelyNotDispatched(candidate, observed);
+    const resultDelivery = deriveDelivery(candidate, false, provenNoDispatch);
+    const observedDelivery = provenNoDispatch ? 'not-sent' : observed?.delivery;
     // A weaker pre-dispatch observation cannot demote a result's possible send or landing.
     const delivery = resultDelivery === 'landed' || observedDelivery === 'landed' ? 'landed'
       : resultDelivery === 'POSSIBLY_DELIVERED' || observedDelivery === 'POSSIBLY_DELIVERED'
