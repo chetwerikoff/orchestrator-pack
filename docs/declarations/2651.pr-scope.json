@@ -1,0 +1,34 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2651,
+  "declared_paths": [
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter-base.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.test.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/pack-review-no-review-reconcile.test.ts",
+    "scripts/pack-review-no-review-reconcile.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-observation.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-recovery.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter-base.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.test.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/pack-review-no-review-reconcile.test.ts",
+    "scripts/pack-review-no-review-reconcile.ts"
+  ],
+  "source_revision": "ebf010bea550dcc07346e29b89149cc85ad35d14"
+}
