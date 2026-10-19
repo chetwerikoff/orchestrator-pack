@@ -822,7 +822,9 @@ describe('state-light fresh conversation collision recovery', () => {
       state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
     });
     expect(repurposed).toBe(true);
-    expect(turn.getComposerText()).toContain(prompt);
+    // Clearing while still owned is permitted. Navigation thereafter never
+    // grants authority to close the now-foreign Page or fill its composer.
+    expect(turn.page.url()).toBe(OTHER_PROJECT_CONVERSATION_URL);
     expect(turn.composer.fill).not.toHaveBeenCalledWith('', expect.anything());
     expect(turn.page.close).not.toHaveBeenCalled();
     expect(outcome.result.incidents).toContain('owned_composer_cleanup_unavailable');
@@ -949,9 +951,8 @@ describe('state-light fresh conversation collision recovery', () => {
       expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
       expect(turn.getSends()).toBe(0);
       expect(turn.page.close).not.toHaveBeenCalled();
-      expect(turn.getComposerText()).toBe(
-        scenario === 'marker_changed' ? 'FOREIGN EDITED DRAFT' : expect.stringContaining(prompt),
-      );
+      if (scenario === 'marker_changed') expect(turn.getComposerText()).toBe('FOREIGN EDITED DRAFT');
+      else expect(turn.getComposerText()).toContain(prompt);
       expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
     },
   );
