@@ -637,8 +637,8 @@ export interface OpenPullHead {
 
 /** A bare Refs #N is not a closing target; conflicting closers bind nobody. */
 export function uniqueClosingIssue(body: string): number | undefined {
-  const visible = body.replace(/<!--[\\s\\S]*?-->/gu, '').replace(/^`{3}[^\\n]*[\\s\\S]*?^`{3}\\s*$/gmu, '');
-  const closing = [...visible.matchAll(/\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#([1-9]\\d*)\\b/giu)]
+  const visible = body.replace(/<!--[\s\S]*?-->/gu, '').replace(/^`{3}[^\n]*[\s\S]*?^`{3}\s*$/gmu, '');
+  const closing = [...visible.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#([1-9]\d*)\b/giu)]
     .map((row) => Number(row[1]));
   const targets = [...new Set(closing)].filter(Number.isSafeInteger);
   return targets.length === 1 ? targets[0] : undefined;
@@ -933,7 +933,7 @@ function publishedGithubRows(repository: string, endpoint: string): readonly Rec
   });
   if (!response.ok) return null;
   const rows: Record<string, unknown>[] = [];
-  for (const line of response.stdout.split(/\\r?\\n/u).filter(Boolean)) {
+  for (const line of response.stdout.split(/\r?\n/u).filter(Boolean)) {
     try {
       const value: unknown = JSON.parse(line);
       if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -1025,7 +1025,7 @@ function boundIssueManager(
   const pane = observations.filter((row) => row.handle === native.handle
     && row.incarnationId === native.incarnationId && row.worktreePath === native.worktreePath
     && row.branch === native.branch && row.state === 'PARKED' && Boolean(row.wait)
-    && /^PARKED on\\s+\\S/iu.test(row.wait ?? ''));
+    && /^PARKED on\s+\S/iu.test(row.wait ?? ''));
   return current.length === 1 && pane.length === 1 ? { pane: pane[0]!, assignment } : undefined;
 }
 
