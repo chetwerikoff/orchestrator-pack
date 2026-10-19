@@ -1618,19 +1618,21 @@ describe('state-light fresh conversation collision recovery', () => {
   }
 
   it.each([
-    { boundary: 'before', offset: -1, admitted: true },
-    { boundary: 'after', offset: 1, admitted: false },
-  ])('AC2 claim-time cutoff $boundary the bounded original Page user-marker read', async ({ boundary, offset, admitted }) => {
+    { site: 'early', urlDelayMs: 1_200, boundary: 'before', offset: -1, admitted: true },
+    { site: 'early', urlDelayMs: 1_200, boundary: 'after', offset: 1, admitted: false },
+    { site: 'post', urlDelayMs: 43_000, boundary: 'before', offset: -1, admitted: true },
+    { site: 'post', urlDelayMs: 43_000, boundary: 'after', offset: 1, admitted: false },
+  ])('AC2 claim-time cutoff $boundary the bounded $site original Page census', async ({ site, urlDelayMs, boundary, offset, admitted }) => {
     const invocationId = randomUUID();
-    const prompt = 'ISSUE-2660-CLAIM-TIME-' + boundary;
+    const prompt = 'ISSUE-2660-CLAIM-TIME-' + site + '-' + boundary;
     const output = join(stateDir, invocationId + '-claim-race.txt');
     const cutoff = mocks.nowMs + 180_000 - 5_000 - 15_000 - 2_000;
-    const { turn } = countedOwnPostWithLateFreshUrl(prompt, 'CLAIM-TIME-ANSWER', 43_000, true);
+    const { turn } = countedOwnPostWithLateFreshUrl(prompt, 'CLAIM-TIME-ANSWER', urlDelayMs, true);
     const originalLocator = turn.page.locator.getMockImplementation()!;
     let clockChangedInRead = false;
     turn.page.locator.mockImplementation((selector: string) => {
       const locator = originalLocator(selector);
-      if (selector !== USER_MESSAGE_SELECTOR || turn.getSends() < 1) return locator;
+      if ((selector !== USER_MESSAGE_SELECTOR && selector !== MESSAGE_NODE_SELECTOR) || turn.getSends() < 1) return locator;
       const originalNth = locator.nth.bind(locator);
       locator.nth = vi.fn((index: number) => {
         const row = originalNth(index);
