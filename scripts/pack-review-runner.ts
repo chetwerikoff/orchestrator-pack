@@ -5955,7 +5955,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   };
 
   if (logicalAccounting) {
-    const reviewedHeadSha = authority.terminal.targetSha;
+    const reviewedHeadSha = priorRun.targetSha;
     if (authority.currentHeadSha === reviewedHeadSha) {
       try {
         const proof = await resolveSameHeadIssueResolution(input, options, authority, priorRun);
