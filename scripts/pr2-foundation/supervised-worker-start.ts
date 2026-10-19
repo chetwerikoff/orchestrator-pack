@@ -20,6 +20,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import {
   admitCurrentWorkerAssignmentReplacement,
   resolveCurrentWorkerAssignmentTarget,
+  type TerminalGoneAssignmentEvidence,
 } from '../lib/worker-assignment-runtime.ts';
 import { withCurrentWorkerAssignmentFence } from '../lib/worker-assignment-store.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
@@ -348,6 +349,55 @@ function parsePlacementEnvelope(execution: ChildResult): Record<string, unknown>
 }
 
 
+/**
+ * Native Orca evidence complements an adapter-unresolved post-reboot worker;
+ * it does not turn a failed adapter call or an old terminal handle into absence.
+ * Both queries are exact and run inside the assignment admission fence.
+ */
+async function readTerminalGoneDispatch(
+  expected: WorkerAssignmentRecord,
+  inspect: (args: readonly string[]) => Promise<ChildResult>,
+): Promise<TerminalGoneAssignmentEvidence | null> {
+  if (expected.kind !== 'local' || expected.provider !== 'orca') return null;
+  const selected = parsePlacementEnvelope(await inspect([
+    'orchestration', 'dispatch-show', '--task', expected.taskId, '--json',
+  ]));
+  const nativeDispatch = isRecord(selected?.dispatch) ? selected.dispatch : null;
+  const status = providerText(nativeDispatch?.status).toLowerCase();
+  if (providerText(nativeDispatch?.id) !== expected.bindingKey
+    || !['failed', 'abandoned', 'cancelled', 'done'].includes(status)) return null;
+
+  const shown = parsePlacementEnvelope(await inspect([
+    'orchestration', 'worker-show', '--dispatch', expected.bindingKey, '--json',
+  ]));
+  const dispatch = isRecord(shown?.dispatch) ? shown.dispatch : null;
+  const worker = isRecord(shown?.worker) ? shown.worker : null;
+  const observation = isRecord(shown?.observation) ? shown.observation : null;
+  const resource = isRecord(shown?.terminalResource) ? shown.terminalResource : null;
+  const priorTerminalId = providerText(worker?.agent_terminal_handle);
+  if (providerText(dispatch?.id) !== expected.bindingKey
+    || providerText(dispatch?.status).toLowerCase() !== status
+    || observation?.exactWorker !== false
+    || !['missing', 'terminal_missing'].includes(providerText(observation?.status).toLowerCase())
+    || providerText(worker?.state).toLowerCase() !== 'abandoned'
+    || providerText(worker?.stage).toLowerCase() !== 'terminal_missing'
+    || shown?.terminal !== null
+    || !priorTerminalId
+    || (resource !== null && (
+      providerText(resource.originDispatchId) !== expected.bindingKey
+      || providerText(resource.ownerDispatchId) !== expected.bindingKey
+      || (providerText(resource.terminalHandle) && providerText(resource.terminalHandle) !== priorTerminalId)
+    ))) return null;
+
+  return {
+    taskId: expected.taskId,
+    dispatchId: expected.bindingKey,
+    dispatchState: status as TerminalGoneAssignmentEvidence['dispatchState'],
+    priorTerminalId,
+    workerAbsent: true,
+  };
+}
+
 async function resolveCanonicalTerminalHandle(
   selector: string,
   inspect: (args: readonly string[]) => Promise<ChildResult>,
@@ -566,6 +616,9 @@ export async function runSupervisedWorkerStart(input: {
       file,
       expected: expectedCurrent,
       adapter,
+      ...(mode === 'exact_terminal_worktree'
+        ? { proveTerminalGone: (expected: WorkerAssignmentRecord) => readTerminalGoneDispatch(expected, inspect) }
+        : {}),
       ...(admittedTerminalId
         ? { requestedTerminalId: admittedTerminalId, env: input.env ?? process.env }
         : {}),
