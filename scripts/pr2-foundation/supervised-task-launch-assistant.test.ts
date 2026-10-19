@@ -3661,3 +3661,106 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
   });
 
 });
+
+describe('Issue #2655 worker existing-worktree relaunch', () => {
+  const bound = (): WorkerAssignment => ({
+    ...readyStart('task_original').assignment,
+    issueNumber: 1479, taskId: 'task_original', bindingKey: 'ctx_3761867313e2',
+  } as WorkerAssignment);
+
+  it('preserves the exact 14-line diff and untracked bytes on a fresh Task in the old worker worktree', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2655-worker-reboot-'));
+    const testFile = join(root, 'tests', 'test_database_guard.py');
+    const untracked = join(root, 'migration-backup.diff');
+    try {
+      mkdirSync(join(root, 'tests'), { recursive: true });
+      writeFileSync(testFile, Array.from({ length: 14 }, (_line, n) => `# edit ${n + 1}\n`).join(''));
+      writeFileSync(untracked, 'untracked work preserved\n');
+      const before = readFileSync(testFile);
+      const beforeUntracked = readFileSync(untracked);
+      const fixture = managerReuseFixture({
+        worktreeId: 'repo::existing', worktreePath: root,
+        status: ' M tests/test_database_guard.py\n?? migration-backup.diff\n',
+      });
+      const inspected: string[][] = [];
+      const execute: typeof fixture.execute = async (argv, timeout, env, cwd) => {
+        if (argv[0] === 'orca' && argv[1] === 'orchestration') {
+          inspected.push([...argv]);
+          if (argv[2] === 'dispatch-show') {
+            return { ok: true, stdout: okEnvelope({
+              dispatch: { id: 'ctx_3761867313e2', status: 'failed' },
+            }) };
+          }
+          if (argv[2] === 'worker-show') {
+            return { ok: true, stdout: okEnvelope({
+              dispatch: { status: 'failed' },
+              worker: { worktree_id: 'repo::existing', state: 'abandoned', stage: 'terminal_missing' },
+              terminal: null, observation: { exactWorker: false, status: 'missing' },
+            }) };
+          }
+        }
+        return fixture.execute(argv, timeout, env, cwd);
+      };
+      let started = 0;
+      const outcome = await runSupervisedTaskLaunchAssistant({
+        ...launchInput('t2'),
+        taskId: 'task_6af384b00044', worktreeName: undefined, worktreeSelector: 'id:repo::existing',
+      }, {
+        ...deps({
+          currentAssignment: bound(),
+          adapter: runtimeAdapter({ worker: { ...worker, workspacePath: root } }),
+          onSupervised: () => { started += 1; },
+        }),
+        prepareWorktree: (request) => prepareWorktreeWithOrca(request, execute),
+      });
+      expect(outcome).toMatchObject({
+        outcome: 'ready', resources: { taskId: 'task_6af384b00044', worktreePath: root },
+      });
+      expect(started).toBe(1);
+      expect(inspected.map((call) => call.slice(0, 3))).toEqual([
+        ['orca', 'orchestration', 'dispatch-show'], ['orca', 'orchestration', 'worker-show'],
+      ]);
+      expect(readFileSync(testFile)).toEqual(before);
+      expect(readFileSync(untracked)).toEqual(beforeUntracked);
+      expect(fixture.mergeTransitions()).toBe(0);
+      expect(fixture.head()).toBe('1'.repeat(40));
+      expect(fixture.calls.some((argv) =>
+        argv[0] === 'git' && ['merge', 'reset', 'stash', 'rebase'].includes(argv[1]!))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['foreign owner', 'live worker', 'unverified worktree'] as const)(
+    'rejects %s before worker effects', async (scenario) => {
+      const fixture = managerReuseFixture({ status: ' M tests/test_database_guard.py\n' });
+      const execute: typeof fixture.execute = async (argv, timeout, env, cwd) => {
+        if (argv[0] === 'orca' && argv[1] === 'orchestration') {
+          if (argv[2] === 'dispatch-show') {
+            return { ok: true, stdout: okEnvelope({
+              dispatch: { id: 'ctx_3761867313e2', status: scenario === 'live worker' ? 'dispatched' : 'failed' },
+            }) };
+          }
+          return { ok: true, stdout: okEnvelope({
+            dispatch: { status: 'failed' },
+            worker: {
+              worktree_id: scenario === 'foreign owner' ? 'repo::foreign'
+                : scenario === 'unverified worktree' ? null : 'repo::existing',
+              state: 'abandoned', stage: 'terminal_missing',
+            },
+            terminal: null, observation: { exactWorker: false, status: 'missing' },
+          }) };
+        }
+        return fixture.execute(argv, timeout, env, cwd);
+      };
+      const response = await prepareWorktreeWithOrca({
+        repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1479,
+        taskId: 'task_new', worktreeSelector: 'id:repo::existing',
+        baseBranch: 'origin/main', defaultBranch: 'main',
+        reuseAssignment: bound(),
+      }, execute);
+      expect(response).toMatchObject({ status: 'continue', cause: 'worktree_reuse_ownership_unproven' });
+      expect(fixture.mergeTransitions()).toBe(0);
+    },
+  );
+});
