@@ -3752,3 +3752,135 @@ describe('Issue #2655 worker existing-worktree relaunch', () => {
     },
   );
 });
+
+describe('Issue #2655 real parsed Cursor reboot route', () => {
+  const target = () => ({
+    projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+    primaryRoot: '/tmp/primary', defaultBranch: 'main',
+  } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>);
+
+  it('chooses exact mode for worker and manager --worktree and refuses conflicting provider route', () => {
+    for (const workClass of ['t2', 'manager'] as const) {
+      const argv = [
+        '--project', 'orchestrator-pack', '--work-class', workClass,
+        '--issue-number', '2655',
+        ...(workClass === 'manager' ? ['--run', 'run-1'] : []),
+        '--task', 'task_new', '--worktree', 'id:repo::existing',
+      ];
+      expect(parseLaunchAssistantCli(argv, profileEnv(), target).startMode)
+        .toBe('exact_terminal_worktree');
+      expect(() => parseLaunchAssistantCli([...argv, '--start-mode', 'provider_new_top_level'],
+        profileEnv(), target)).toThrow(/exact_terminal_worktree/u);
+    }
+  });
+
+  it('launches actual supervised start from parsed CLI and native absent Dispatch while preserving dirty bytes', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2655-real-cli-'));
+    const edited = join(root, 'tests', 'test_database_guard.py');
+    const untracked = join(root, 'local.patch');
+    try {
+      mkdirSync(join(root, 'tests'), { recursive: true });
+      writeFileSync(edited, Array.from({ length: 14 }, (_line, index) =>
+        '# kept change ' + (index + 1) + '\n').join(''));
+      writeFileSync(untracked, 'uncommitted bytes stay here\n');
+      const before = readFileSync(edited);
+      const beforeUntracked = readFileSync(untracked);
+      const env = profileEnv({ OPK_BASE_DIR: root });
+      const input = {
+        ...parseLaunchAssistantCli([
+          '--project', 'orchestrator-pack', '--work-class', 't2', '--issue-number', '2655',
+          '--task', 'task_6af384b00044', '--worktree', 'id:repo::existing',
+        ], env, target), env,
+      };
+      const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+      const prev = await publishCurrentWorkerAssignment({
+        file, projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+        issueNumber: 2655, taskId: 'task_old', kind: 'local', provider: 'orca',
+        bindingKey: 'ctx_3761867313e2', role: 'worker',
+      });
+      if (!prev.ok) throw new Error(prev.reason);
+      const fixture = managerReuseFixture({
+        worktreePath: root, status: ' M tests/test_database_guard.py\n?? local.patch\n',
+      });
+      const nativeCalls: string[][] = [];
+      const oldShow = {
+        dispatch: { status: 'failed', last_heartbeat_at: null },
+        worker: { state: 'abandoned', stage: 'terminal_missing', worktree_id: 'repo::existing' },
+        terminal: null, observation: { exactWorker: false, status: 'missing' },
+      };
+      const inspect = async (argv: readonly string[]) => {
+        nativeCalls.push([...argv]);
+        if (argv[0] === 'orchestration' && argv[1] === 'dispatch-show') return {
+          ok: true, stdout: okEnvelope({ dispatch: { id: 'ctx_3761867313e2', status: 'failed' } }),
+        };
+        if (argv[0] === 'orchestration' && argv[1] === 'worker-show') return {
+          ok: true, stdout: okEnvelope(oldShow),
+        };
+        if (argv[0] === 'terminal' && argv[1] === 'show') return {
+          ok: true, stdout: okEnvelope({ terminal: { handle: 'term-new', worktreeId: 'repo::existing' } }),
+        };
+        if (argv[0] === 'worktree' && argv[1] === 'show') return {
+          ok: true, stdout: okEnvelope({ worktree: { id: 'repo::existing', path: root } }),
+        };
+        return { ok: false, stdout: '', stderr: 'unexpected native read' };
+      };
+      const execute = async (argv: readonly string[], timeout?: number,
+        extraEnv?: Readonly<NodeJS.ProcessEnv>, cwd?: string) =>
+        argv[0] === 'orca' && argv[1] === 'orchestration'
+          ? inspect(argv.slice(1)) : fixture.execute(argv, timeout, extraEnv, cwd);
+      const live = { ...worker, identity: {
+        runtime: 'orca', id: 'term-new', generation: 'pty-new',
+      }, workspacePath: root };
+      const adapter = runtimeAdapter({ worker: live });
+      Object.defineProperty(adapter, 'resolveAssignmentWorker', {
+        value: vi.fn(() => ({
+          status: 'failed', operation: 'resolve_assignment_worker', reason: 'assignment_target_unresolved',
+        })),
+      });
+      Object.defineProperty(adapter, 'observeAssignmentLifecycle', {
+        value: vi.fn(() => ({
+          status: 'failed', operation: 'resolve_assignment_worker', reason: 'assignment_target_unresolved',
+        })),
+      });
+      const selectedModes: string[] = [];
+      let realStarts = 0;
+      const outcome = await runSupervisedTaskLaunchAssistant(input, {
+        ...deps({ adapter, currentAssignment: prev.assignment }),
+        resolveProfile: (workClass, inherited, mode) => {
+          selectedModes.push(mode ?? 'default');
+          return resolveLiveExecutorProfile(workClass, inherited, mode, async (argv) => ({
+            ok: true, stdout: argv[0] === 'cursor-agent' ? 'model-medium\n' : '',
+          }));
+        },
+        prepareWorktree: (request) => prepareWorktreeWithOrca(request, execute),
+        runSupervisedStart: (start) => runSupervisedWorkerStart({
+          ...start, inspect, execute: async () => {
+            realStarts += 1;
+            return { ok: true, stdout: okEnvelope({
+              taskId: 'task_6af384b00044', dispatchId: 'dispatch-new', state: 'ready',
+              effects: [
+                { kind: 'worktree', action: 'reused', id: 'repo::existing' },
+                { kind: 'setup', action: 'not_applicable', state: 'not_applicable' },
+                { kind: 'terminal', role: 'agent', action: 'reused', id: 'term-new' },
+                { kind: 'dispatch_input', role: 'agent', id: 'term-new', state: 'accepted' },
+              ],
+            }) };
+          },
+        }),
+      });
+      expect(outcome).toMatchObject({ outcome: 'ready', resources: {
+        taskId: 'task_6af384b00044', dispatchId: 'dispatch-new', worktreePath: root,
+      } });
+      expect(selectedModes).toEqual(['exact_terminal_worktree']);
+      expect(realStarts).toBe(1);
+      expect(currentWorkerAssignment(file, 2655)).toMatchObject({
+        bindingKey: 'dispatch-new', generation: prev.assignment.generation + 1,
+      });
+      expect(nativeCalls.some((argv) =>
+        argv[0] === 'orchestration' && argv[1] === 'worker-show')).toBe(true);
+      expect(readFileSync(edited)).toEqual(before);
+      expect(readFileSync(untracked)).toEqual(beforeUntracked);
+      expect(fixture.mergeTransitions()).toBe(0);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
