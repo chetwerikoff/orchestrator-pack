@@ -337,27 +337,116 @@ describe('owned marker primitive', () => {
 });
 
 describe('DOM observation boundary', () => {
+  // Small rendered-DOM mock: synthetic UI nodes expose only the browser
+  // primitives consumed by the actual evaluateAll callbacks, no Markdown source.
+  type RichBlock = { prose: string; tag?: string } | {
+    code: string; label?: string; extraLabel?: string; nested?: boolean;
+    hidden?: boolean; copyControl?: boolean;
+  };
+  function richNode(
+    tagName: string, innerText = '', attrs: Record<string, string> = {}, shown = true,
+  ): any {
+    const children: any[] = [];
+    const node: any = {
+      tagName, innerText, textContent: innerText, children, childNodes: [] as any[],
+      parentElement: null, attributes: attrs, shown,
+      ownerDocument: {
+        defaultView: {
+          getComputedStyle: (element: any) => ({
+            display: element.shown ? 'block' : 'none', visibility: 'visible',
+          }),
+        },
+      },
+      getClientRects: () => shown ? [{}] : [],
+      getBoundingClientRect: () => ({ height: shown ? 1 : 0 }),
+      getAttribute: (name: string) => attrs[name] ?? null,
+      hasAttribute: (name: string) => Object.hasOwn(attrs, name),
+      append(child: any) {
+        child.parentElement = node;
+        children.push(child);
+        node.childNodes.push(child);
+        return node;
+      },
+      querySelectorAll(selector: string): any[] {
+        const match = (candidate: any) => {
+          if (selector === '.markdown') return candidate.getAttribute('class') === 'markdown';
+          if (selector === 'pre') return candidate.tagName === 'PRE';
+          if (selector === 'code') return candidate.tagName === 'CODE';
+          if (selector === 'pre code') return candidate.tagName === 'CODE' && candidate.parentElement?.tagName === 'PRE';
+          if (selector.includes('button') || selector.includes('inert') || selector.includes('aria-hidden')) {
+            return candidate.tagName === 'BUTTON' || candidate.getAttribute('role') === 'button'
+              || candidate.hasAttribute('inert') || candidate.getAttribute('aria-hidden') === 'true';
+          }
+          return false;
+        };
+        const walk = (parent: any): any[] => parent.children.flatMap((child: any) =>
+          [...(match(child) ? [child] : []), ...walk(child)]);
+        return walk(node);
+      },
+      querySelector(selector: string): any { return node.querySelectorAll(selector)[0] ?? null; },
+    };
+    return node;
+  }
+
+  function richAssistantNode(outerText: string, blocks: RichBlock[], key = 'assistant-rich-12345678') {
+    const outer = richNode('ARTICLE', outerText);
+    const root = richNode('DIV', '', { class: 'markdown' });
+    outer.append(root);
+    for (const block of blocks) {
+      if ('prose' in block) {
+        root.append(richNode((block.tag ?? 'P').toUpperCase(), block.prose));
+        continue;
+      }
+      const container = richNode(block.nested ? 'BLOCKQUOTE' : 'DIV');
+      if (block.label) container.append(richNode('SPAN', block.label));
+      if (block.extraLabel) container.append(richNode('SPAN', block.extraLabel));
+      if (block.copyControl) container.append(richNode('BUTTON', 'Copy'));
+      const pre = richNode('PRE', '', {}, !block.hidden);
+      pre.append(richNode('CODE', block.code, {}, !block.hidden));
+      container.append(pre);
+      root.append(container);
+    }
+    Object.assign(outer, {
+      getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR
+        ? 'assistant-message' : name === 'data-message-id' ? key : null,
+      closest: () => ({ querySelector: (selector: string) =>
+        selector === ASSISTANT_TURN_ACTION_SELECTOR ? {} : null }),
+    });
+    // Give content root and descendants the same ownerDocument as outer.
+    const doc = outer.ownerDocument;
+    const propagate = (node: any) => { node.ownerDocument = doc; for (const child of node.children) propagate(child); };
+    propagate(outer);
+    return outer;
+  }
+
   async function readAtomicEvidence(
     messages: Array<{ role: 'user' | 'assistant'; text: string; code?: { visible: string; domTextContent: string }; domTextContent?: string }>,
     generationQuery: () => unknown,
   ) {
-    const elements = messages.map((message, index) => ({
-      getAttribute: (name: string) => {
-        if (name === MESSAGE_AUTHOR_ROLE_ATTR) return message.role === 'user' ? 'user-message' : 'assistant-message';
-        if (name === 'data-message-id') return `${message.role}-${index}-12345678`;
-        return null;
-      },
-      closest: () => ({ querySelector: (selector: string) => message.code && selector === ASSISTANT_TURN_ACTION_SELECTOR ? {} : null }),
-      querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
-        ? { getAttribute: () => message.role === 'user' ? 'user-message' : 'assistant-message' }
-        : null,
-      querySelectorAll: (selector: string) => selector === 'pre code' && message.role === 'assistant' && message.code
-        ? [{ innerText: message.code.visible, textContent: message.code.domTextContent, getBoundingClientRect: () => ({ height: 1 }) }]
-        : [],
-      getBoundingClientRect: () => ({ height: 1 }),
-      innerText: message.text,
-      textContent: message.domTextContent,
-    }));
+    const elements = messages.map((message, index) => {
+      if (message.role === 'assistant' && message.code) {
+        return richAssistantNode(message.text, [
+          { prose: 'Before' },
+          { code: message.code.visible, copyControl: true },
+          { prose: 'Following  prose\nEXECUTION_STATUS: complete' },
+        ], `assistant-${index}-12345678`);
+      }
+      return {
+        getAttribute: (name: string) => {
+          if (name === MESSAGE_AUTHOR_ROLE_ATTR) return message.role === 'user' ? 'user-message' : 'assistant-message';
+          if (name === 'data-message-id') return `${message.role}-${index}-12345678`;
+          return null;
+        },
+        closest: () => ({ querySelector: (selector: string) => message.code && selector === ASSISTANT_TURN_ACTION_SELECTOR ? {} : null }),
+        querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+          ? { getAttribute: () => message.role === 'user' ? 'user-message' : 'assistant-message' }
+          : null,
+        querySelectorAll: () => [],
+        getBoundingClientRect: () => ({ height: 1 }),
+        innerText: message.text,
+        textContent: message.domTextContent,
+      };
+    });
     const querySelectorAll = vi.fn((selector: string) => {
       if (selector !== '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]') return [];
       const match = generationQuery();
@@ -539,7 +628,7 @@ describe('DOM observation boundary', () => {
     // Fixture-only evidence. AC1 remains unverified: two tabs, zero assistant code blocks.
     const footer = '\n\nFollowing  prose\nEXECUTION_STATUS: complete';
     const partialOuter = 'Before\n\n' + parentPrefix2590 + footer;
-    const expected = 'Before\n\n' + expectedCode + footer;
+    const expected = 'Before\n\n```\n' + expectedCode + (expectedCode.endsWith('\n') ? '' : '\n') + '```' + footer;
     const { result, page } = await readAtomicEvidence([
       { role: 'user', text: markedPrompt },
       { role: 'assistant', text: partialOuter, code: { visible, domTextContent }, domTextContent: 'SCREEN-READER-ONLY' },
