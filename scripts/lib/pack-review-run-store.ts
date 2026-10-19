@@ -922,6 +922,9 @@ function mergeFrozenGptSlot(
   const incomingAttempt = incoming.attemptOrdinal;
   const existingComplete = existing.lifecycle === 'terminal'
     && COMPLETE_GPT_TERMINAL_CLASSES.has(existing.terminalClass ?? '');
+  // A published complete source slot is first-writer immutable. A duplicate,
+  // delayed or conflicting result from another attempt cannot poison that run.
+  if (existingComplete) return existing;
   const legalAttemptIdentityRotation = !existingComplete
     && incomingAttempt !== undefined
     && incomingAttempt > (existingAttempt ?? 0)
@@ -1037,11 +1040,10 @@ function mergeFrozenGptRound(
   path: string,
 ): PackReviewGptRoundRecord {
   assertFrozenGptRoundIdentity(existing, incoming, path);
-  if (existing.settledSourceCount !== undefined
-      && incoming.settledSourceCount !== undefined
-      && existing.settledSourceCount !== incoming.settledSourceCount) {
-    throw new Error(`corrupt pack review run record at ${path}: settledSourceCount cannot change once settled`);
-  }
+  // The first settled source quorum is immutable. Late third comments, retries
+  // and stale whole-round updates cannot rewrite a frozen 2/3 into 3/3 or alter
+  // its already committed aggregate. Preserve the exact original round bytes.
+  if (existing.settledSourceCount !== undefined) return existing;
   const settledSourceCount = existing.settledSourceCount ?? incoming.settledSourceCount;
   return {
     ...existing,
@@ -2078,9 +2080,16 @@ function buildUpdatedPackReviewRun(
     if (olderSnapshot || submittedDowngrade || obsoleteVerdictStatus) continue;
     mergedDeliveryOutcomes[channel] = incoming;
   }
+  const verdictAlreadyCommitted = hasPersistedPackReviewVerdict(existing);
   const candidate: Record<string, unknown> = {
     ...existing,
     ...fields,
+    ...(verdictAlreadyCommitted ? {
+      reviewVerdict: existing.reviewVerdict,
+      findingCount: existing.findingCount,
+      findings: existing.findings,
+      journalOutcome: existing.journalOutcome,
+    } : {}),
     ...(staleNoJudgmentTerminal ? {
       status: existing.status,
       latestRunStatus: existing.latestRunStatus,
