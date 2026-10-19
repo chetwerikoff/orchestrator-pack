@@ -698,10 +698,12 @@ export function beginPackReviewBodyAmendmentContinuation(input: {
           || !['closed', 'at_cap_open_findings', 'at_cap_continuation_required'].includes(previous.state)
           || cycleConsumedCount(previous) !== previous.frozenCap
           || !current.terminal
-          || (current.terminal.reviewVerdict !== 'findings' && !previous.amendmentOrigin)
+          || (current.terminal.reviewVerdict !== 'findings'
+            && !(current.terminal.reviewVerdict === 'clean'
+              && previous.reviewStageComplete === true))
           || current.terminal.runId !== input.priorTerminalRunId) {
         throw new PackReviewAuthorityError('amendment_authority_unverified',
-          'exact final-cap findings terminal/head/cycle not eligible');
+          'exact final-cap terminal/head/cycle not eligible');
       }
       const old = previous.amendmentOrigin;
       if (old && (old.closingIssueNumber !== input.closingIssueNumber
