@@ -5715,7 +5715,10 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       created: false, reused: true, runnerReason: 'gpt_incumbent_owner_not_dead',
       runId: f.original.id,
     });
-    expect(String(incumbent.result.nextAction)).toContain('observe the original runner PID and stale grace');
+    expect(incumbent.result.nextAction).toBe(
+      `node --experimental-strip-types scripts/pack-review-runner.ts list --project-id ${projectId}`,
+    );
+    expect(String(incumbent.result.detail)).toContain('observe the original runner PID and stale grace');
     expect(f.freshStarts).toEqual([]);
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
   });
