@@ -5535,20 +5535,13 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   const currentHead = await readCheckedReviewPrHead(
     input, options.repoSlug, prNumber, authority.currentHeadSha,
   );
-  if ((logicalFinalFindings || completedFinalFindings)
+  // An unverified descendant cannot consume the original terminal authority.
+  // Treat the observed head as a candidate until the immutable Issue body (or
+  // exact §11 exception) is verified. Preserve the old terminal on refusal.
+  const unobservedDescendant = (logicalFinalFindings || completedFinalFindings)
+    && currentHead.toLowerCase() !== authority.currentHeadSha.toLowerCase();
+  if (!unobservedDescendant
       && currentHead.toLowerCase() !== authority.currentHeadSha.toLowerCase()) {
-    try {
-      authority = observePackReviewHead({
-        prNumber,
-        expectedTransitionSeq: authority.transitionSeq,
-        headSha: currentHead,
-        options: { storeRoot: options.storeRoot },
-      });
-    } catch {
-      authority = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot }) ?? authority;
-    }
-  }
-  if (currentHead.toLowerCase() !== authority.currentHeadSha.toLowerCase()) {
     return {
       prNumber,
       finalCapSettlement: true,
@@ -5575,11 +5568,11 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   // existing refusal ahead of body-validation errors and status publication.
   if (logicalFinalFindings && authority.cycle?.frozenTier !== 'T1'
       && authority.terminal
-      && authority.currentHeadSha !== authority.terminal.targetSha) {
+      && currentHead !== authority.terminal.targetSha) {
     const strict = await resolvePackReviewStrictDescendant({
       repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
       reviewedHeadSha: authority.terminal.targetSha,
-      currentHeadSha: authority.currentHeadSha,
+      currentHeadSha: currentHead,
       fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
     });
     if (!strict) {
@@ -5594,7 +5587,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   let verifiedFinalIssue: { issueNumber: number; digest: string } | undefined;
   let verifiedScopeOnlyIncident: { reviewedBody: string; issueNumber: number } | undefined;
   if (logicalAccounting && authority.cycle?.frozenTier !== 'T1'
-      && authority.currentHeadSha !== authority.terminal.targetSha) {
+      && currentHead !== authority.terminal.targetSha) {
     try {
       const cycle = authority.cycle;
       const terminal = authority.terminal;
@@ -5626,7 +5619,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           ? { body: input.fixturePrBody, headSha: trim(input.fixtureCurrentPrHeadSha).toLowerCase() }
           : undefined)
         : await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, prNumber);
-      if (!livePr || livePr.headSha !== authority.currentHeadSha.toLowerCase()) {
+      if (!livePr || livePr.headSha !== currentHead.toLowerCase()) {
         throw new Error('current selected PR head or closing Issue binding unavailable');
       }
       const issueNumber = extractClosingIssueNumber(livePr.body);
@@ -5759,7 +5752,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         const reviewedBody = readFileSync(frozen.snapshotPath!, 'utf8');
         const eligible = await verify2655ScopeOnlyFixSettlement(input, {
           projectId: options.projectId, repoSlug: options.repoSlug, prNumber, issueNumber,
-          reviewedHeadSha: terminal.targetSha, currentHeadSha: authority.currentHeadSha,
+          reviewedHeadSha: terminal.targetSha, currentHeadSha: currentHead,
           reviewedBody, currentBody: liveIssue.body, priorRun,
         });
         if (eligible) {
@@ -5773,9 +5766,9 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         // exact-head observation, never let an old public green survive it.
         try {
           const projectionHead = await readCheckedReviewPrHead(
-            input, options.repoSlug, prNumber, authority.currentHeadSha,
+            input, options.repoSlug, prNumber, currentHead,
           );
-          if (projectionHead !== authority.currentHeadSha.toLowerCase()) {
+          if (projectionHead !== currentHead.toLowerCase()) {
             throw new Error('final-cap mismatch PR head changed before status');
           }
           let status = await readFinalCapRequiredStatus(
@@ -5814,6 +5807,26 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
         settled: false, reason: 'final_cap_review_binding_unverified', detail: describeError(error),
         nextAction: 'restore the existing exact terminal/Issue/snapshot binding or obtain a newly reviewed current Issue body; do not publish final-cap success',
+      };
+    }
+  }
+
+  // Observe H2 only after proving the original terminal and current Issue
+  // binding. A refusal above retains B0/B1 quorum and historical evidence.
+  if (unobservedDescendant) {
+    try {
+      authority = observePackReviewHead({
+        prNumber, expectedTransitionSeq: authority.transitionSeq,
+        headSha: currentHead, options: { storeRoot: options.storeRoot },
+      });
+    } catch {
+      authority = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot }) ?? authority;
+    }
+    if (currentHead.toLowerCase() !== authority.currentHeadSha.toLowerCase()) {
+      return {
+        prNumber, finalCapSettlement: true, settled: false,
+        reason: 'final_cap_settlement_head_not_observed',
+        nextAction: 'observe the current PR head, then rerun scoped reconcile',
       };
     }
   }
