@@ -754,4 +754,63 @@ describe('Issue #2651 exact-owned complete GET evidence on incumbent held Page',
     expect(witness.latestSuccessfulGet()).toBeUndefined();
     witness.dispose();
   });
+
+  it('keeps a completed marker-positive GET sticky after out-of-order finishes and later negatives', async () => {
+    const fixture = held429PageFixture();
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617);
+    witness.markDispatch(marker, marker + '\n\nPrompt');
+    const older = fixture.request(exactUrl);
+    let finishPositive!: (value: unknown) => void;
+    fixture.page.emit('request', older);
+    fixture.page.emit('response', {
+      request: () => older, status: () => 200,
+      finished: () => new Promise((resolve) => { finishPositive = resolve; }),
+      json: async () => history('server-visible ' + marker),
+    });
+    await emitFinished(fixture, fixture.request(exactUrl), history('unrelated'));
+    expect(witness.latestSuccessfulGet()).toMatchObject({ requestSequence: 2, markerPresent: false });
+    expect(witness.serverMarkerPresent()).toBe(false);
+    finishPositive(null);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(witness.latestSuccessfulGet()).toMatchObject({ requestSequence: 2, markerPresent: false });
+    expect(witness.serverMarkerPresent()).toBe(true);
+    await emitFinished(fixture, fixture.request(exactUrl), history('still unrelated'));
+    expect(witness.latestSuccessfulGet()).toMatchObject({ requestSequence: 3, markerPresent: false });
+    expect(witness.serverMarkerPresent()).toBe(true);
+    witness.markDispatch(marker, marker + '\n\nPrompt');
+    expect(witness.serverMarkerPresent()).toBe(true);
+    witness.beforeNavigation();
+    expect(witness.serverMarkerPresent()).toBe(false);
+    witness.markDispatch(marker, marker + '\n\nPrompt');
+    await emitFinished(fixture, fixture.request(exactUrl), history(marker));
+    expect(witness.serverMarkerPresent()).toBe(true);
+    const other = 'OPKTURNV1' + 'cd'.repeat(16);
+    witness.markDispatch(other, other + '\n\nPrompt');
+    expect(witness.serverMarkerPresent()).toBe(false);
+    witness.dispose();
+  });
+
+  it.each([
+    'missing-role', 'renamed-human-role', 'unknown-role', 'unfamiliar-user-content',
+    'malformed-user-parts', 'missing-user-content',
+  ] as const)('rejects server-message carrier %s as incomplete history', async (mode) => {
+    const fixture = held429PageFixture();
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617);
+    witness.markDispatch(marker, marker + '\n\nPrompt');
+    const body: any = history('server marker ' + marker);
+    const message = body.mapping['user-one'].message;
+    if (mode === 'missing-role') delete message.author.role;
+    if (mode === 'renamed-human-role') message.author.role = 'human';
+    if (mode === 'unknown-role') message.author = { role: 'unknown_future_role' };
+    if (mode === 'unfamiliar-user-content') message.content.content_type = 'opaque_image';
+    if (mode === 'malformed-user-parts') message.content.parts = [{ text: marker }];
+    if (mode === 'missing-user-content') delete message.content;
+    await emitFinished(fixture, fixture.request(exactUrl), body);
+    expect(witness.latestSuccessfulGet()).toBeUndefined();
+    expect(witness.serverMarkerPresent()).toBe(false);
+    witness.dispose();
+  });
+
 });
