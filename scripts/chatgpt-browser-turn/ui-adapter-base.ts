@@ -1595,12 +1595,21 @@ function completeConversationMarkerStatus(payload: unknown, marker: string): boo
     if (!node.message || typeof node.message !== 'object'
       || Array.isArray(node.message)) return undefined;
     const message = node.message as Record<string, unknown>;
-    const author = message.author as Record<string, unknown> | undefined;
-    if (author?.role !== 'user') continue;
-    const content = message.content as Record<string, unknown> | undefined;
-    if (!content || !Array.isArray(content.parts)
-      || !content.parts.every((part: unknown) => typeof part === 'string')) return undefined;
-    if ((content.parts as string[]).some((part) => part.includes(marker))) markerPresent = true;
+    const author = message.author;
+    if (!author || typeof author !== 'object' || Array.isArray(author)) return undefined;
+    const role = (author as Record<string, unknown>).role;
+    // Unknown roles may be renamed user carriers. Skipping them would turn a
+    // server-visible send into a false marker-negative recovery permission.
+    if (role !== 'user' && role !== 'assistant' && role !== 'system'
+      && role !== 'tool' && role !== 'developer') return undefined;
+    if (role !== 'user') continue;
+    const content = message.content;
+    if (!content || typeof content !== 'object' || Array.isArray(content)) return undefined;
+    const carrier = content as Record<string, unknown>;
+    if ((Object.hasOwn(carrier, 'content_type') && carrier.content_type !== 'text')
+      || !Array.isArray(carrier.parts)
+      || !carrier.parts.every((part: unknown) => typeof part === 'string')) return undefined;
+    if ((carrier.parts as string[]).some((part) => part.includes(marker))) markerPresent = true;
   }
   const seen = new Set<string>();
   let at: string | null = current;
@@ -1622,6 +1631,8 @@ export interface HeldPage429Witness {
   readonly ownedGetRequestSequence: () => number;
   /** Latest completed current-epoch GET for the marked invocation only. */
   readonly latestSuccessfulGet: () => HeldPageSuccessfulConversationGet | undefined;
+  /** Sticky current-epoch server-visible user marker, independent of GET order. */
+  readonly serverMarkerPresent: () => boolean;
   readonly beforeNavigation: () => void;
   readonly markDispatch: (marker: string, exactSubmittedText?: string) => void;
   readonly dispose: () => void;
@@ -1647,6 +1658,8 @@ export function observeHeldPageConversation429(
   const ownedGetSequences = new WeakMap<object, number>();
   let ownedGetRequestSequence = 0;
   let latestSuccessfulGet: HeldPageSuccessfulConversationGet | undefined;
+  let serverMarkerPresentEpoch: number | undefined;
+  let serverMarker: string | undefined;
   const responseKind = (request: any): HeldPage429Kind | undefined => {
     try {
       const url = new URL(String(request.url()));
@@ -1728,6 +1741,12 @@ export function observeHeldPageConversation429(
           if (markerPresent === undefined || !uuid
             || responseEpoch !== epoch || requestEpochs.get(request) !== epoch
             || dispatchMarker !== marker) return;
+          // Every completed positive is authoritative in this owned epoch,
+          // including an older request finishing after a newer negative one.
+          if (markerPresent) {
+            serverMarkerPresentEpoch = epoch;
+            serverMarker = marker;
+          }
           if (!latestSuccessfulGet || latestSuccessfulGet.requestSequence < requestSequence) {
             latestSuccessfulGet = {
               requestSequence, epoch, uuid, complete: true, markerPresent, explicitRecoveryProbe,
@@ -1746,10 +1765,26 @@ export function observeHeldPageConversation429(
     ownSubmissionIssued: () => ownSubmissionIssuedEpoch === epoch,
     ownedGetRequestSequence: () => ownedGetRequestSequence,
     latestSuccessfulGet: () => latestSuccessfulGet?.epoch === epoch ? latestSuccessfulGet : undefined,
-    beforeNavigation: () => { epoch++; dispatchMarker = undefined; dispatchText = undefined; latestSuccessfulGet = undefined; },
-    markDispatch: (marker, exactSubmittedText) => {
+    serverMarkerPresent: () => serverMarkerPresentEpoch === epoch && Boolean(dispatchMarker)
+      && serverMarker === dispatchMarker,
+    beforeNavigation: () => {
+      epoch++;
+      dispatchMarker = undefined;
+      dispatchText = undefined;
       latestSuccessfulGet = undefined;
-      dispatchMarker = isOwnedPromptMarker(marker) ? marker : undefined;
+      serverMarkerPresentEpoch = undefined;
+      serverMarker = undefined;
+    },
+    markDispatch: (marker, exactSubmittedText) => {
+      const nextMarker = isOwnedPromptMarker(marker) ? marker : undefined;
+      // Re-clicking the SAME invocation cannot clear its sticky server positive.
+      // A different invocation marker is a real ownership change.
+      if (dispatchMarker !== nextMarker) {
+        serverMarkerPresentEpoch = undefined;
+        serverMarker = undefined;
+      }
+      latestSuccessfulGet = undefined;
+      dispatchMarker = nextMarker;
       dispatchText = dispatchMarker && typeof exactSubmittedText === 'string'
         && exactSubmittedText.startsWith(dispatchMarker + '\n\n') ? exactSubmittedText : undefined;
     },
