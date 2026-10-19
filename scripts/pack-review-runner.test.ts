@@ -1601,7 +1601,7 @@ describe('Issue #1887 immediate final-cap descendant reconciliation', () => {
 describe('Issue #2565 strict-descendant final-cap body binding', () => {
   const repository = 'chetwerikoff/orchestrator-pack';
   const originalBody = '<!-- source-revision: r01 -->\n```complexity-tier\ntier: T2\n```\nBinding r01\n';
-  function fixture(reviewer: 'codex' | 'gpt' = 'codex', reviewedBody = originalBody) {
+  function fixture(reviewer: 'codex' | 'gpt' = 'codex', reviewedBody = originalBody, credentialed = false) {
     const root = mkdtempSync(join(tmpdir(), 'pack-review-2565-'));
     roots.push(root);
     const storeRoot = join(root, 'store');
@@ -1632,6 +1632,15 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     setPackReviewRunTerminal(run.id, 'changes_requested', {
       reviewVerdict: 'findings', findingCount: 1, findings,
       automaticBudgetDisposition: 'consume',
+      ...(credentialed ? {
+        journalOutcome: { state: 'persisted' as const,
+          recordedAtUtc: '2026-10-19T00:00:00.000Z',
+          reason: 'verdict_persisted', idempotencyKey: `verdict:${run.id}:${reviewed}`,
+          attempts: 1 },
+        deliveryOutcomes: { githubComment: { state: 'succeeded' as const,
+          recordedAtUtc: '2026-10-19T00:00:00.000Z',
+          reason: 'comment_published', idempotencyKey: `github-comment:${run.id}` } },
+      } : {}),
     }, options);
     if (reviewer === 'gpt') {
       updatePackReviewRun(run.id, { reviewRound: {
@@ -1837,14 +1846,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
       const B0 = '<!-- source-revision: r01 -->\\n```complexity-tier\\ntier: T2\\n```\\n## Acceptance criteria\\n- old required behavior\\n\\n## Verification\\n- stable\\n'.replaceAll('\\n', '\n');
       const B1 = B0.replace('old required behavior', 'amended required behavior');
       const B2 = B0.replace('old required behavior', 'further required behavior');
-      const f = fixture(reviewer, B0);
-      const now = '2026-10-19T00:00:00.000Z';
-      updatePackReviewRun(f.run.id, {
-        journalOutcome: { state: 'persisted', recordedAtUtc: now, reason: 'verdict_persisted',
-          idempotencyKey: `verdict:${f.run.id}:${f.reviewed}`, attempts: 1 },
-        deliveryOutcomes: { githubComment: { state: 'succeeded', recordedAtUtc: now,
-          reason: 'comment_published', idempotencyKey: `github-comment:${f.run.id}` } },
-      }, f.options);
+      const f = fixture(reviewer, B0, true);
       const original = resolveBoundIssueSnapshot({
         projectId: f.projectId, prNumber: f.prNumber,
         prHeadSha: f.reviewed, issueNumber: f.issueNumber,
@@ -1898,16 +1900,8 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
   it('Issue #2659: failed same-head pending write never admits an amended reviewer', async () => {
     const B0 = '<!-- source-revision: r01 -->\n```complexity-tier\ntier: T2\n```\n## Acceptance criteria\n- original\n';
     const B1 = B0.replace('- original', '- amended');
-    const f = fixture('codex', B0);
+    const f = fixture('codex', B0, true);
     const before = readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot });
-    updatePackReviewRun(f.run.id, {
-      journalOutcome: { state: 'persisted', recordedAtUtc: '2026-10-19T00:00:00.000Z',
-        reason: 'verdict_persisted', idempotencyKey: `verdict:${f.run.id}:${f.reviewed}`,
-        attempts: 1 },
-      deliveryOutcomes: { githubComment: { state: 'succeeded',
-        recordedAtUtc: '2026-10-19T00:00:00.000Z', reason: 'published',
-        idempotencyKey: `github-comment:${f.run.id}` } },
-    }, f.options);
     const refused = await maybeAdmitPackReviewBodyAmendment({
       ...f.request(B1), fixtureCurrentPrHeadSha: f.reviewed,
       fixtureRequiredStatusWriter: async () => { throw new Error('pending rejected'); },
