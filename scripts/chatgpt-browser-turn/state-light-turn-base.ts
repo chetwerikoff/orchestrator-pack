@@ -4180,6 +4180,13 @@ async function runTurnCore(
           preSendAlertsAlreadyMarked: true,
           onDispatch: () => {
             beforeBrowserAction();
+            // An own POST or completed server-marker witness may arrive after
+            // the last DOM guard. Neither retry path may cross into a second
+            // physical click once a positive for this invocation is known.
+            if (sendAttempted && (held429Witness?.ownSubmissionIssued()
+              || held429Witness?.serverMarkerPresent() === true)) {
+              throw new Error('server_checked_reclick_guard_lost');
+            }
             if (recoveryReclickArmed && (
               held429Witness?.ownSubmissionIssued()
               || held429Witness?.serverMarkerPresent() === true
