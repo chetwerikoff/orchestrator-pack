@@ -292,32 +292,6 @@ function readyStart(taskId: string): SupervisedWorkerStartResult {
   } as unknown as SupervisedWorkerStartResult;
 }
 
-function providerReadyStart(taskId: string): SupervisedWorkerStartResult {
-  const result = readyStart(taskId);
-  return {
-    ...result,
-    receipt: {
-      taskId,
-      dispatchId: 'dispatch-1',
-      state: 'ready',
-      worktree: { id: 'orca-repo-1::/tmp/created-worktree', path: '/tmp/created-worktree' },
-      terminal: { handle: 'term-provider' },
-      setup: { requested: 'run', effective: 'run', state: 'running' },
-      launch: {
-        requested: { agent: 'cursor', model: 'model-medium' },
-        effective: { agent: 'cursor', model: 'model-medium' },
-      },
-      providerSentinel: 'RAW_RECEIPT_SENTINEL',
-      effects: [
-        { kind: 'worktree', action: 'created_top_level', id: 'orca-repo-1::/tmp/created-worktree' },
-        { kind: 'setup', action: 'running', state: 'running' },
-        { kind: 'terminal', role: 'agent', action: 'reused_agent_terminal', id: 'term-provider' },
-        { kind: 'dispatch_input', role: 'agent', id: 'term-provider', state: 'accepted' },
-      ],
-    },
-  } as unknown as SupervisedWorkerStartResult;
-}
-
 function deps(input: {
   adapter?: RuntimeAdapter;
   dispatch?: DispatchObservation[];
@@ -1146,35 +1120,28 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
 });
 
 describe('supervised Task launch assistant', () => {
-  it('uses exactly one provider worker-start composition without low-level worktree or RuntimeAdapter spawn', async () => {
-    const calls: string[][] = [];
+  it('refuses an explicit atomic provider fresh start before any unverified setup or worker effect', async () => {
+    let preparations = 0;
     let spawns = 0;
+    let starts = 0;
     const result = await runSupervisedTaskLaunchAssistant({
-      ...launchInput('t2'), startMode: 'provider_new_top_level', baseBranch: 'feature/base',
+      ...launchInput('t2'), startMode: 'provider_new_top_level',
     }, {
-      ...deps({ adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }) }),
-      prepareWorktree: async () => ({ status: 'ok', value: {
-        selector: 'new-top-level', repositorySelector: 'id:orca-repo-1', setupWitness: 'provider_top_level',
-      } }),
-      runSupervisedStart: async (start) => {
-        calls.push([...start.orcaArgs]);
-        return providerReadyStart('task-1');
-      },
+      ...deps({
+        adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }),
+        onSupervised: () => { starts += 1; },
+      }),
+      prepareWorktree: async () => { preparations += 1; return {
+        status: 'ok', value: { selector: 'new-top-level', setupWitness: 'provider_top_level' },
+      }; },
     });
-    expect(result.outcome).toBe('ready');
+    expect(result).toMatchObject({
+      outcome: 'continue', stage: 'executor_profile',
+      observedCause: 'fresh_provider_clean_witness_unavailable',
+    });
+    expect(preparations).toBe(0);
     expect(spawns).toBe(0);
-    expect(calls).toEqual([[
-      '--task', 'task-1', '--worktree', 'new-top-level', '--repo', 'id:orca-repo-1', '--name', 'issue-1479', '--base-branch', 'feature/base',
-      '--agent', 'cursor', '--model', 'model-medium', '--setup', 'run', '--json',
-    ]]);
-    if (result.outcome === 'ready') {
-      expect(result.resources.providerAgentTerminalId).toBe('term-provider');
-      expect(result.resources.terminal).toBeUndefined();
-      const serialized = JSON.stringify(result);
-      expect(serialized).not.toContain('RAW_RECEIPT_SENTINEL');
-      expect(serialized).not.toContain('model-medium');
-      expect(result.supervisedStart).toEqual({ ok: true, reason: 'ready_and_assignment_bound', assignmentBound: true });
-    }
+    expect(starts).toBe(0);
   });
 
   it.each(['manager', 't1', 't2', 't3'] as const)('reaches ready only through supervised-start for %s', async (workClass) => {
@@ -2588,46 +2555,7 @@ The words Firefighter universal appear here only as prose.`;
     }
   });
 
-  it('preserves provider base branch on retry action', async () => {
-    const result = await runSupervisedTaskLaunchAssistant({
-      ...launchInput('t2'), startMode: 'provider_new_top_level', baseBranch: 'feature/base',
-    }, deps({ supervised: {
-      ok: false, reason: 'supervised_start_envelope_error', recovery: { requestId: 'request-base' },
-    } }));
-    expect(result).toMatchObject({ outcome: 'continue', nextAction: { kind: 'retry_supervised_start' } });
-    if (result.outcome === 'continue') {
-      expect(result.nextAction.command).toContain('--base-branch');
-      expect(result.nextAction.command).toContain("'feature/base'");
-      expect(result.nextAction.command).toContain("--agent 'cursor'");
-      expect(result.nextAction.command).toContain("--model 'model-medium'");
-      expect(result.nextAction.command).not.toContain('--effort');
-    }
-  });
 
-  it('builds worker-start provider recovery only from attempt-bound profile and request identity', async () => {
-    const recoveryCommand = 'PROVIDER_RECOVERY_SENTINEL';
-    const result = await runSupervisedTaskLaunchAssistant({
-      ...launchInput(), startMode: 'provider_new_top_level',
-    }, deps({ supervised: {
-      ok: false, reason: 'supervised_start_envelope_error', errorCode: 'runtime_timeout',
-      recovery: { requestId: 'request-7', dispatchId: 'dispatch-accepted', recoveryCommand },
-    } }));
-    expect(result).toMatchObject({
-      outcome: 'continue',
-      stage: 'supervised_start',
-      resources: { dispatchId: 'dispatch-accepted' },
-      evidence: { requestId: 'request-7', dispatchId: 'dispatch-accepted' },
-      nextAction: { kind: 'retry_supervised_start', requestId: 'request-7' },
-    });
-    if (result.outcome === 'continue') {
-      expect(result.nextAction.command).toContain('--retry-request');
-      expect(result.nextAction.command).toContain('request-7');
-      expect(result.nextAction.command).toContain("--agent 'cursor'");
-      expect(result.nextAction.command).toContain("--model 'model-medium'");
-      expect(JSON.stringify(result)).not.toContain(recoveryCommand);
-      expect(result.timings.at(-1)).toMatchObject({ stage: 'supervised_start', outcome: 'continued' });
-    }
-  });
 
   it('uses the registered local fork origin, not upstream Orca identity, for both fresh effect boundaries', async () => {
     const repo = {
@@ -3518,6 +3446,7 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
   });
   const owned = (): WorkerAssignment => ({
     ...readyStart('task-1').assignment,
+    role: 'worker',
     bindingKey: 'ctx_3761867313e2',
   } as WorkerAssignment);
 
@@ -3570,6 +3499,7 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
     const fixture = managerReuseFixture({ noPr: true, status: ' M tests/test_database_guard.py\n' });
     const expected = {
       ...readyStart('task_old').assignment,
+      role: 'orchestrator',
       issueNumber: 2430, taskId: 'task_old', bindingKey: 'ctx_2055f1bb0511',
     } as WorkerAssignment;
     const execute: typeof fixture.execute = async (argv, timeout, env, cwd) => {
@@ -3608,7 +3538,7 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
     expect(fixture.head()).toBe('1'.repeat(40));
   });
 
-  it('launches a manager from the same exact dirty PR with a byte-identical 14-line test diff', async () => {
+  it('does not launch a foreign manager from an unbound dirty PR with a byte-identical 14-line test diff', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-2655-dirty-worktree-'));
     const testFile = join(root, 'tests', 'test_database_guard.py');
     const untracked = join(root, 'migration-backup.diff');
@@ -3634,9 +3564,9 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
         prepareWorktree: (request) => prepareWorktreeWithOrca(request, fixture.execute),
       });
       expect(result).toMatchObject({
-        outcome: 'ready', resources: { taskId: 'task-1', worktreePath: root },
+        outcome: 'continue', stage: 'worktree_prepare', observedCause: 'worktree_reuse_ownership_unproven',
       });
-      expect(starts).toBe(1);
+      expect(starts).toBe(0);
       expect(readFileSync(testFile)).toEqual(beforeTest);
       expect(readFileSync(untracked)).toEqual(beforeUntracked);
       expect(fixture.head()).toBe('1'.repeat(40));
@@ -3650,7 +3580,7 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
     }
   });
 
-  it('preserves every dirty own-PR worktree byte while allowing exact manager Task reuse', async () => {
+  it('rejects a dirty PR-only checkout without native Task ownership', async () => {
     const dirty = ' M tests/test_database_guard.py\n?? migration-backup.diff\n';
     const fixture = managerReuseFixture({ status: dirty });
     const outcome = await prepareWorktreeWithOrca({
@@ -3658,9 +3588,7 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
       managerRefresh: true, managerTaskRunId: 'run-1', issueNumber: 2430,
       worktreeSelector: 'id:repo::existing', defaultBranch: 'main',
     }, fixture.execute);
-    expect(outcome).toMatchObject({
-      status: 'ok', evidence: { prNumber: 42, refresh: 'dirty_pr_head_preserved', head: '1'.repeat(40) },
-    });
+    expect(outcome).toMatchObject({ status: 'continue', cause: 'worktree_reuse_ownership_unproven' });
     expect(fixture.head()).toBe('1'.repeat(40));
     expect(fixture.mergeTransitions()).toBe(0);
     expect(fixture.calls.filter((argv) => argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toHaveLength(2);
@@ -3724,6 +3652,7 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
 describe('Issue #2655 worker existing-worktree relaunch', () => {
   const bound = (): WorkerAssignment => ({
     ...readyStart('task_original').assignment,
+    role: 'worker',
     issueNumber: 1479, taskId: 'task_original', bindingKey: 'ctx_3761867313e2',
   } as WorkerAssignment);
 
