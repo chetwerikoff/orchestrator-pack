@@ -340,6 +340,8 @@ export interface ReconcileStalePackReviewRunsInput {
   fixtureReadCurrentPrHead?: () => string | Promise<string>;
   fixturePrState?: string;
   fixturePrMerged?: boolean;
+  /** Offline pre-merge terminal ordering witness; never synthetic merge permission. */
+  fixturePrMergedAt?: string;
   fixturePrBody?: string;
   fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
   fixtureBeforeGptRoundFreeze?: (event: {
@@ -4882,6 +4884,136 @@ async function observePackReviewVerdictDelivery(options: {
   return { verified: true, reason: 'completed', requiredStatusState };
 }
 
+
+/**
+ * Restore only an already-committed, pre-merge canonical terminal's required
+ * status on its original historical PR head. Closing/merged metadata is read
+ * only. This path never resolves the merge SHA, opens a review, or changes cap.
+ */
+async function reconcileMergedPackReviewTerminalStatus(
+  input: ReconcileStalePackReviewRunsInput,
+  options: { projectId: string; storeRoot: string; repoSlug: string },
+): Promise<Record<string, unknown> | null> {
+  if (!input.prNumber) return null;
+  const prNumber = input.prNumber;
+  type MergedPr = { headSha: string; state: string; merged: boolean; mergedAt: string;
+    body: string };
+  const readPr = async (): Promise<MergedPr | null> => {
+    if (process.env.OPK_VITEST_HARNESS === '1') {
+      if (input.fixturePrMerged !== true) return null;
+      return { headSha: trim(input.fixtureCurrentPrHeadSha).toLowerCase(),
+        state: trim(input.fixturePrState).toLowerCase(),
+        merged: true, mergedAt: trim(input.fixturePrMergedAt),
+        body: input.fixturePrBody ?? '' };
+    }
+    const output = await requireProcess(await runProcess({
+      command: resolveTrackedGhWrapper(),
+      args: ['api', `repos/${options.repoSlug}/pulls/${prNumber}`],
+      cwd: input.sourceRepoRoot,
+      inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 30_000,
+    }), 'gh api merged PR metadata');
+    const value = JSON.parse(output) as {
+      head?: { sha?: unknown }; state?: unknown; merged?: unknown;
+      merged_at?: unknown; body?: unknown;
+    };
+    if (value.state === 'open' && value.merged !== true) return null;
+    return { headSha: trim(value.head?.sha).toLowerCase(),
+      state: trim(value.state).toLowerCase(), merged: value.merged === true,
+      mergedAt: trim(value.merged_at), body: typeof value.body === 'string' ? value.body : '' };
+  };
+  let inspected: MergedPr | null;
+  try { inspected = await readPr(); }
+  catch { return null; } // Do not convert an unavailable PR read into merge authority.
+  if (!inspected) return null;
+  const failure = (reason: string) => ({
+    prNumber, headSha: inspected!.headSha, mergedTerminalStatusRecovery: true,
+    statusReconciled: false, settled: false, reason,
+    nextAction: 'verify the original pre-merge terminal, closed PR metadata and historical-head required status; never start a merged-PR review',
+  });
+  if (inspected.state !== 'closed' || !inspected.merged
+      || !/^[a-f0-9]{40}$/.test(inspected.headSha)
+      || !Number.isFinite(Date.parse(inspected.mergedAt))) {
+    return failure('merged_pr_metadata_unverified');
+  }
+  const authority = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot });
+  const terminal = authority?.terminal;
+  const run = terminal?.runId ? getPackReviewRun(terminal.runId, {
+    projectId: options.projectId, storeRoot: options.storeRoot,
+  }) : null;
+  const issueNumber = extractClosingIssueNumber(inspected.body);
+  if (!terminal || !run || !issueNumber
+      || !authority?.cycle || run.id !== terminal.runId
+      || !hasPersistedPackReviewVerdict(run) || !run.completedAtUtc
+      || !Number.isFinite(Date.parse(run.completedAtUtc))
+      || Date.parse(run.completedAtUtc) >= Date.parse(inspected.mergedAt)
+      || run.createdAt && Date.parse(run.createdAt) >= Date.parse(inspected.mergedAt)
+      || run.projectId !== options.projectId || run.prNumber !== prNumber
+      || run.canonicalRepository?.toLowerCase() !== options.repoSlug.toLowerCase()
+      || run.targetSha !== inspected.headSha || run.headSha !== inspected.headSha
+      || terminal.targetSha !== inspected.headSha
+      || authority.currentHeadSha.toLowerCase() !== inspected.headSha
+      || run.reviewCycleId !== authority.cycle.cycleId
+      || (run.reviewRound && run.reviewRound.issueNumber !== issueNumber)) {
+    return failure('merged_pr_terminal_identity_unverified');
+  }
+  const matches = listPackReviewImmutableRecords('terminal', { storeRoot: options.storeRoot })
+    .filter((entry) => entry.digest === terminal.digest
+      && (entry.value as PackReviewTerminalV2 | undefined)?.runId === run.id
+      && (entry.value as PackReviewTerminalV2 | undefined)?.targetSha === inspected.headSha);
+  if (matches.length !== 1) return failure('merged_pr_terminal_not_immutable');
+  const snapshot = resolveBoundIssueSnapshot({
+    projectId: options.projectId, prNumber, prHeadSha: inspected.headSha,
+    issueNumber, snapshotDigest: run.boundIssueSnapshotDigest
+      ?? run.reviewRound?.boundIssueSnapshotDigest,
+    storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+  });
+  if (snapshot.status !== 'found' || !snapshot.metadata
+      || snapshot.metadata.capturePhase !== 'review-preflight'
+      || !Number.isFinite(Date.parse(snapshot.metadata.capturedAt))
+      || Date.parse(snapshot.metadata.capturedAt) > Date.parse(run.createdAt)) {
+    return failure('merged_pr_original_issue_snapshot_unverified');
+  }
+  const original = inspected;
+  const stillBound = async () => {
+    try {
+      const live = await readPr();
+      const latest = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot });
+      const record = getPackReviewRun(run.id, {
+        projectId: options.projectId, storeRoot: options.storeRoot,
+      });
+      return Boolean(live && live.state === original.state && live.merged
+        && live.mergedAt === original.mergedAt && live.headSha === original.headSha
+        && extractClosingIssueNumber(live.body) === issueNumber
+        && latest?.terminal?.runId === terminal.runId
+        && latest.terminal.targetSha === original.headSha
+        && latest.currentHeadSha.toLowerCase() === original.headSha
+        && latest.cycle?.cycleId === run.reviewCycleId
+        && record && record.targetSha === original.headSha
+        && hasPersistedPackReviewVerdict(record));
+    } catch { return false; }
+  };
+  if (!(await stillBound())) return failure('merged_pr_identity_changed_before_status');
+  const publication = await observePackReviewVerdictDelivery({
+    input, projectId: options.projectId, storeRoot: options.storeRoot,
+    runId: run.id, prNumber, headSha: original.headSha,
+    repoSlug: options.repoSlug, sourceRepoRoot: input.sourceRepoRoot,
+    readHead: async () => (await stillBound()) ? original.headSha : '',
+    writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) =>
+      publishPackReviewRequiredStatus({
+        repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+        headSha: original.headSha, request,
+      })),
+    resumeFailedStatus: true,
+  });
+  if (!publication.verified || !(await stillBound())) {
+    return { ...failure('merged_pr_status_not_verified'), detail: publication.reason };
+  }
+  return { prNumber, headSha: original.headSha, mergedTerminalStatusRecovery: true,
+    runId: run.id, statusReconciled: true, settled: true,
+    requiredStatusState: publication.requiredStatusState,
+    reason: 'merged_pr_historical_terminal_status_restored' };
+}
+
 /** Read exactly one behavior-criteria section, never infer a semantic change
  * from a revision marker, allowed-roots edit, prose or comments alone. */
 function reviewBehaviorCriteria(body: string): string | null {
@@ -6913,8 +7045,15 @@ export async function reconcileStalePackReviewRuns(
   }
 
   if (input.immediate && input.prNumber) {
-    const settlement = await reconcileFinalCapSettlement(input, { projectId, storeRoot, repoSlug });
-    if (settlement) results.push(settlement);
+    const mergedStatus = await reconcileMergedPackReviewTerminalStatus(
+      input, { projectId, storeRoot, repoSlug },
+    );
+    if (mergedStatus) {
+      results.push(mergedStatus);
+    } else {
+      const settlement = await reconcileFinalCapSettlement(input, { projectId, storeRoot, repoSlug });
+      if (settlement) results.push(settlement);
+    }
   }
 
   // A scoped reconcile is also a status-repair entrypoint when a previously
