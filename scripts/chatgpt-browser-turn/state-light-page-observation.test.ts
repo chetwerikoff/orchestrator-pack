@@ -969,6 +969,107 @@ describe('issue 1168 source tooling', () => {
   });
 });
 
+describe('Issue #2660 AC12 bounded pre-Send Page cleanup authority', () => {
+  it('closes only the proven Page after not_sent observation; preserves selected, forfeited and possibly-sent Pages', async () => {
+    const { randomUUID } = await import('node:crypto');
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { __testFinalizeTurn, __testConversationPageSelection } = await import('./state-light-turn.ts');
+    const { admitStateLightTurnObservation, transitionStateLightTurnObservation } =
+      await import('./state-light-turn-observation.ts');
+    const stateDir = mkdtempSync(join(tmpdir(), 'opk-2660-ac12-'));
+    const priorDir = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = stateDir;
+    const exact = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test/c/11111111-1111-4111-8111-111111111111';
+    const profileKey = 'ac12-fetch-429';
+    const makeOutcome = (page: any, invocationId: string, sendAttempted = false) => ({
+      page,
+      ownedPreSendFetch429Page: page,
+      ownedPreSendFetch429Url: exact,
+      result: {
+        schema: 'turn-result/v1' as const,
+        state: 'rate_limit' as const,
+        scope: 'invocation' as const,
+        cause: 'conversation_fetch_http_429',
+        invocation_id: invocationId,
+        configured_profile_key: profileKey,
+        send_count: 0,
+        poll_count: 0,
+        goto_count: 1,
+        new_chat_click_count: 0,
+        navigation_count: 1,
+        incidents: [],
+        ...(sendAttempted ? { send_attempted: true } : {}),
+      },
+    });
+    const prepare = (invocationId: string) => {
+      admitStateLightTurnObservation({ profileKey, invocationId, marker: 'OPKTURNV1' + '12'.repeat(16) });
+      transitionStateLightTurnObservation({
+        profileKey, invocationId, phase: 'prepared', reason: 'existing_conversation_bound_before_send',
+        conversationUrl: exact,
+      });
+    };
+    const page = () => ({
+      url: () => exact,
+      isClosed: () => false,
+      close: vi.fn(async () => undefined),
+    });
+    try {
+      const owned = page();
+      const ownedInvocation = randomUUID();
+      prepare(ownedInvocation);
+      const closed = await __testFinalizeTurn(makeOutcome(owned, ownedInvocation));
+      expect(closed).toMatchObject({ state: 'rate_limit', cause: 'conversation_fetch_http_429', send_count: 0, cleanup: 'confirmed' });
+      expect(owned.close).toHaveBeenCalledOnce();
+
+      const selected = page();
+      const selectedInvocation = randomUUID();
+      prepare(selectedInvocation);
+      __testConversationPageSelection.markSelectedPageUnowned(selected);
+      const retained = await __testFinalizeTurn(makeOutcome(selected, selectedInvocation));
+      expect(retained.cleanup).toBe('skipped');
+      expect(selected.close).not.toHaveBeenCalled();
+
+      const forfeited = page();
+      const forfeitedInvocation = randomUUID();
+      prepare(forfeitedInvocation);
+      const notOwned = await __testFinalizeTurn({ ...makeOutcome(forfeited, forfeitedInvocation), ownershipForfeited: true });
+      expect(notOwned.cleanup).toBe('skipped');
+      expect(forfeited.close).not.toHaveBeenCalled();
+
+      const attempted = page();
+      const attemptedInvocation = randomUUID();
+      prepare(attemptedInvocation);
+      const maybeSent = await __testFinalizeTurn(makeOutcome(attempted, attemptedInvocation, true));
+      expect(maybeSent.cleanup).toBe('skipped');
+      expect(attempted.close).not.toHaveBeenCalled();
+
+      const redirected = page();
+      const redirectedInvocation = randomUUID();
+      prepare(redirectedInvocation);
+      const foreign = await __testFinalizeTurn({
+        ...makeOutcome(redirected, redirectedInvocation),
+        ownedPreSendFetch429Url: 'https://chatgpt.com/c/22222222-2222-4222-8222-222222222222',
+      });
+      expect(foreign.cleanup).toBe('skipped');
+      expect(redirected.close).not.toHaveBeenCalled();
+
+      const failedClose = page();
+      failedClose.close.mockRejectedValue(new Error('close failed'));
+      const failedInvocation = randomUUID();
+      prepare(failedInvocation);
+      const failed = await __testFinalizeTurn(makeOutcome(failedClose, failedInvocation));
+      expect(failed.cleanup).not.toBe('confirmed');
+      expect(failed.incidents).toContain('owned_tab_cleanup_failed');
+    } finally {
+      if (priorDir === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+      else process.env.CHATGPT_BROWSER_TURN_STATE_DIR = priorDir;
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('Issue #1430 retirement cleanup visibility', () => {
   it('keeps committed primary success while surfacing mutation-retirement cleanup failure', async () => {
     const { randomUUID } = await import('node:crypto');
