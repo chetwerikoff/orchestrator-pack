@@ -25,7 +25,16 @@ vi.mock('./own-target-attach.ts', async (importOriginal) => {
   };
 });
 
-vi.mock('./browser-session.ts', () => createBrowserSessionModuleMock(mocks));
+vi.mock('./browser-session.ts', () => ({
+  ...createBrowserSessionModuleMock(mocks),
+  // This suite previously never exercised affirmative created-Page closure;
+  // model the incumbent bounded close as well as the browser session helpers.
+  abandonLatePageHandle: vi.fn(async (page: { close: () => Promise<void> }) => {
+    if (mocks.cleanupOutcome !== 'confirmed') return 'unconfirmed';
+    await page.close();
+    return 'confirmed';
+  }),
+}));
 vi.mock('./coordination.ts', () => createCoordinationModuleMock());
 vi.mock('./input.ts', () => ({ readStableInput: vi.fn(() => stableTurnInput('PROMPT')) }));
 vi.mock('./ui-adapter.ts', async (original) => buildUiAdapterTestMock(
