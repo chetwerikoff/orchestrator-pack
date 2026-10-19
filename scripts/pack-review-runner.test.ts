@@ -347,13 +347,49 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
     expect(cdpReads).toBe(0);
   });
 
+  it('allows replacement only for an attempted action with exact affirmative no-dispatch evidence', async () => {
+    const cause = 'affirmative_pre_actionability_no_dispatch';
+    const run = gptRun('2026-08-30T00:00:00.000Z');
+    const slot = run.reviewRound!.sourceSlots[0]!;
+    slot.lifecycle = 'terminal';
+    slot.terminalClass = 'send_failed:affirmative_pre_actionability_no_dispatch';
+    slot.terminalResult = {
+      state: 'send_failed', cause, send_attempted: true, send_count: 0,
+      invocation_id: slot.invocationId, configured_profile_key: 'profile-01',
+    };
+    const readObservation = vi.fn(() => ({
+      schema: 'state-light-turn-observation/v1' as const, version: 1 as const,
+      invocation_id: slot.invocationId, profile_key: 'profile-01',
+      marker: `OPKTURNV1${'a'.repeat(32)}`,
+      phase: 'not_sent' as const, transition_reason: cause,
+      send_count: 0, send_witness: 'none' as const, conversation_url: null,
+      transitioned_at: '2026-08-30T00:00:00.000Z',
+    }));
+    const listTargets = vi.fn(async () => {
+      throw new Error('affirmative_pre_dispatch_never_needs_cdp_observation');
+    });
+    const observed = await observeGptPackReviewAttempt(run, Date.parse('2026-08-30T00:01:00.000Z'), {
+      ...gptObservationDeps({ markerPresent: false, generating: false }),
+      readObservation: readObservation as never, listTargets: listTargets as never,
+    });
+    expect(observed).toMatchObject({
+      state: 'replacement_eligible', replacementEligible: true,
+      replacementEligibleSlotIds: ['slot-01'],
+    });
+    expect(readObservation).toHaveBeenCalledWith('profile-01', 'invocation-01');
+    expect(listTargets).not.toHaveBeenCalled();
+  });
+
   it.each(['dispatching', 'unreadable', 'unbound', 'wrong_identity', 'not_sent'] as const)(
     'requires affirmative exact pre-dispatch evidence for legacy zero-count terminals: %s', async (mode) => {
       const run = gptRun('2026-08-30T00:00:00.000Z');
       const slot = run.reviewRound!.sourceSlots[0]!;
       slot.lifecycle = 'terminal';
       slot.terminalClass = 'driver_error:locator_timeout';
-      slot.terminalResult = { state: 'driver_error', cause: 'locator_timeout', send_count: 0 };
+      slot.terminalResult = {
+        state: 'driver_error', cause: 'locator_timeout', send_count: 0,
+        ...(mode === 'not_sent' ? { send_attempted: true } : {}),
+      };
       if (mode === 'unbound') delete slot.launchProfileKey;
       const deps = gptObservationDeps({ markerPresent: true, generating: true });
       const readObservation = vi.fn(() => {
@@ -370,10 +406,12 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
         ...deps, readObservation: readObservation as never,
       });
       expect(observed).toMatchObject({
-        state: mode === 'not_sent' ? 'replacement_eligible' : mode === 'dispatching' ? 'generating' : 'observation_unavailable',
-        replacementEligible: mode === 'not_sent',
+        state: mode === 'not_sent' || mode === 'dispatching' ? 'generating' : 'observation_unavailable',
+        replacementEligible: false,
       });
-      expect(observed?.replacementEligibleSlotIds).toEqual(mode === 'not_sent' ? ['slot-01'] : []);
+      // The historical attempted-zero not_sent/locator_timeout/fixture record
+      // cannot acquire affirmative no-dispatch authority by its phase alone.
+      expect(observed?.replacementEligibleSlotIds).toEqual([]);
       if (mode !== 'unbound') expect(readObservation).toHaveBeenCalledWith('profile-01', 'invocation-01');
     },
   );
