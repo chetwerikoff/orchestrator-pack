@@ -1589,3 +1589,28 @@ describe('Issue #2659 H1/B0 and H1/B1 digest-qualified snapshots', () => {
     expect(paths.snapshotPath).toBe(b1.snapshotPath);
   });
 });
+
+describe('Issue #2659 shared run-store and authority lock regression', () => {
+  it('updates a run with missing and existing authority without reacquiring its held .store-lock', () => {
+    const config = options();
+    const storeOptions = { projectId: 'orchestrator-pack', storeRoot: config.storeRoot };
+    const prNumber = 26591;
+    const headSha = sha('a');
+    const run = createPackReviewRun({
+      ...storeOptions, prNumber, headSha,
+      trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+    }).run;
+
+    // Both paths require the normal validated authority lookup, but the
+    // run-store writer already owns the shared non-reentrant directory lock.
+    expect(updatePackReviewRun(run.id, { status: 'preparing' }, storeOptions).status).toBe('preparing');
+    const authority = initializePackReviewAuthority({
+      prNumber, headSha, tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: config,
+    });
+    expect(authority.currentHeadSha).toBe(headSha);
+    expect(updatePackReviewRun(run.id, { status: 'running' }, storeOptions).status).toBe('running');
+    expect(readPackReviewAuthority(prNumber, config)?.transitionSeq).toBe(authority.transitionSeq);
+    expect(getPackReviewRun(run.id, storeOptions)?.status).toBe('running');
+  });
+});
