@@ -3124,19 +3124,29 @@ async function conditionalClearOwnedComposerDraft(
   page: any,
   exactPayload: string,
   deadlineMs: number,
+  expectedPageUrl?: string,
 ): Promise<boolean> {
   const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
   if (!exactPayload || waitMs <= 0) return false;
   const composer = page?.locator?.(COMPOSER_SELECTOR);
   if (typeof composer?.evaluate !== 'function') return false;
+  // A Page can navigate after the pre-clear owner read. Compare its current
+  // browser-side URL and every payload code point in the SAME modifying task.
+  // Direct helper callers without a proved Page route retain the exact-payload
+  // comparison only and do not gain finalization/close authority.
+  const guard: string | { payload: string; pageUrl: string } = expectedPageUrl
+    ? { payload: exactPayload, pageUrl: expectedPageUrl } : exactPayload;
   try {
     return await boundedBrowserRead(
-      Promise.resolve(composer.evaluate((element: HTMLElement, expected: string) => {
+      Promise.resolve(composer.evaluate((element: HTMLElement, guarded: typeof guard) => {
+        const expected = typeof guarded === 'string' ? guarded : guarded.payload;
+        if (typeof guarded !== 'string'
+          && element.ownerDocument?.defaultView?.location?.href !== guarded.pageUrl) return false;
         if (!element.isConnected || !element.isContentEditable
           || element.textContent !== expected || element.innerText !== expected) return false;
         element.textContent = '';
         return element.textContent === '' && element.innerText === '';
-      }, exactPayload)),
+      }, guard)),
       waitMs, 'conditional_owned_composer_clear_timeout',
     ) === true;
   } catch {
@@ -3189,6 +3199,7 @@ async function runTurn(
           && isBlankProjectSurfaceUrl(String(freshCleanup.page.url()), freshCleanup.projectUrl ?? '')) {
           await conditionalClearOwnedComposerDraft(
             freshCleanup.page, freshCleanup.markedPayload, Date.now() + MAX_LOCAL_READ_WAIT_MS,
+            String(freshCleanup.page.url()),
           );
         }
       }
@@ -3748,7 +3759,9 @@ async function runTurnCore(
       if (!await uncontradicted()
         || await readLosslessOwnedComposer(page.locator(COMPOSER_SELECTOR), invocationDeadlineMs) !== markedPayload
         || !await uncontradicted()) return null;
-      if (!await conditionalClearOwnedComposerDraft(page, markedPayload, invocationDeadlineMs)) return null;
+      if (!await conditionalClearOwnedComposerDraft(
+        page, markedPayload, invocationDeadlineMs, String(page.url()),
+      )) return null;
       if (!await uncontradicted()
         || await readLosslessOwnedComposer(page.locator(COMPOSER_SELECTOR), invocationDeadlineMs) !== ''
         || !stillOwned()) return null;
