@@ -137,6 +137,52 @@ describe('pack-review no-review reconciliation', () => {
     expect(authoritativePreSend(slot(1, { lifecycle: 'planned', terminalResult: { send_count: 0 } }))).toBe(false);
   });
 
+  it('requires the same affirmative no-dispatch cause in an exact bound attempt and durable record', async () => {
+    const invocationId = '11111111-1111-4111-8111-111111111111';
+    const profileKey = 'own-profile';
+    const cause = 'affirmative_pre_actionability_no_dispatch';
+    const terminalResult = {
+      invocation_id: invocationId, configured_profile_key: profileKey,
+      state: 'send_failed', cause, send_attempted: true, send_count: 0,
+    };
+    const ownSlot = slot(1, {
+      lifecycle: 'terminal', invocationId, launchProfileKey: profileKey,
+      launchCdpUrl: 'http://127.0.0.1:9222', terminalResult,
+    });
+    const observation = {
+      schema: 'state-light-turn-observation/v1' as const, version: 1 as const,
+      profile_key: profileKey, invocation_id: invocationId,
+      marker: 'OPKTURNV1' + 'ab'.repeat(16),
+      phase: 'not_sent' as const, transition_reason: cause,
+      send_count: 0, send_witness: 'none' as const, conversation_url: null,
+      transitioned_at: NOW.toISOString(),
+    };
+    expect(authoritativePreSend(ownSlot, observation)).toBe(true);
+    for (const mutation of [
+      { record: { ...observation, transition_reason: 'send_delivery_unproven' } },
+      { record: { ...observation, phase: 'dispatching' as const } },
+      { record: { ...observation, send_witness: 'owned_marker' as const } },
+      { record: { ...observation, send_count: 1 } },
+      { record: { ...observation, invocation_id: 'other' } },
+      { record: { ...observation, profile_key: 'foreign-profile' } },
+      { result: { ...terminalResult, cause: 'fresh_send_fetch_failed' } },
+      { result: { ...terminalResult, send_count: 1 } },
+      { result: { ...terminalResult, invocation_id: 'other' } },
+      { result: { ...terminalResult, send_attempted: false } },
+    ]) {
+      const candidate = mutation.result
+        ? slot(1, { ...ownSlot, terminalResult: mutation.result }) : ownSlot;
+      expect(authoritativePreSend(candidate, mutation.record ?? observation)).toBe(false);
+    }
+    const pending = run(round([ownSlot, slot(2), slot(3)]));
+    const result = await reconcilePackReviewNoReview(INPUT, deps({
+      listRuns: () => [pending], readObservation: () => observation,
+    }));
+    expect(result.evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'slot-closure', state: 'slot-closed', reason: cause }),
+    ]));
+  });
+
   it.each([
     { send_count: 0, send_attempted: true },
     { send_count: 0, delivery: 'POSSIBLY_DELIVERED' },

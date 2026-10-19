@@ -2242,7 +2242,7 @@ async function readComposerReadiness(
   }
 }
 
-type StateLightSendDeliveryWitness = 'owned_user_node' | 'composer_cleared' | 'owned_stop' | 'own_submission_issued' | 'unproven';
+type StateLightSendDeliveryWitness = 'owned_user_node' | 'composer_cleared' | 'owned_stop' | 'own_submission_issued' | 'owned_server_user_marker' | 'unproven';
 
 async function readComposerTextForSendDelivery(
   composer: any,
@@ -2488,6 +2488,30 @@ async function freshRetryDomGuards(input: {
 // A disabled-before-click action log is necessary but not sufficient to retry
 // an existing-chat Send: the retained visible history must still be comparable.
 // This is an ephemeral DOM continuity check, never backend non-delivery proof.
+// Unlike editor-normalizing readers, both DOM views must independently
+// reproduce every code point of the invocation payload. ProseMirror/other
+// editors whose DOM cannot expose the exact newlines must fail closed.
+async function readLosslessOwnedComposer(
+  composer: any,
+  deadlineMs: number,
+): Promise<string | undefined> {
+  const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+  if (waitMs <= 0 || typeof composer?.evaluate !== 'function') return undefined;
+  try {
+    const result = await boundedBrowserRead(
+      Promise.resolve(composer.evaluate((element: HTMLElement) => ({
+        content: element.textContent,
+        visible: element.innerText,
+      }))),
+      waitMs, 'recovery_lossless_composer_timeout',
+    ) as { content?: unknown; visible?: unknown };
+    return typeof result.content === 'string' && result.content === result.visible
+      ? result.content : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function existingRetryDomGuards(input: {
   page: any;
   browser: any;
@@ -2529,13 +2553,118 @@ async function existingRetryDomGuards(input: {
       if (before.role !== after.role || before.fingerprint !== after.fingerprint
         || before.key !== after.key) return false;
     }
-    if (current.slice(baseline.carriers.length).some((carrier) => carrier.role === 'user')) return false;
+    // Any new turn carrier, including a completed assistant reply with no Stop,
+    // contradicts the immutable pre-Send baseline during negative recovery.
+    if (current.length !== baseline.carriers.length) return false;
     // The final Stop/liveness/URL check follows the transcript read so a late
     // generation or redirect cannot turn a stale census into a second click.
     return await readFreshStopVisible(input.page, input.deadlineMs) === false && samePage();
   } catch {
     return false;
   }
+}
+
+const SERVER_CHECKED_SEND_SETTLE_MS = 30_000;
+// A skipped poll cannot certify a continuous idle interval; fail closed under
+// event-loop stalls or slow DOM reads without extending the settle/deadline.
+const SERVER_CHECKED_MAX_SAMPLE_GAP_MS = INITIAL_POLL_MS * 3;
+
+/** Only an existing exactly owned held Page may spend the one recovery click.
+ * This uses the D45 observer for both the explicit request and the completed
+ * response; no transport or listener is added and all failed reads stay unknown.
+ */
+async function observeExistingServerCheckedRecovery(input: {
+  page: any;
+  browser: any;
+  composer: any;
+  targetChatUrl: string;
+  markedPayload: string;
+  marker: string;
+  baselineSnapshot?: AtomicTranscriptSnapshot;
+  heldWitness?: HeldPage429Witness;
+  deadlineMs: number;
+}): Promise<'server_marker_present' | 'marker_absent_complete' | 'unproven'> {
+  const witness = input.heldWitness;
+  const expectedUuid = conversationUuidFromUrl(input.targetChatUrl);
+  if (!witness || !expectedUuid || !input.baselineSnapshot?.complete) return 'unproven';
+  const identity = () => !browserOrPageDefinitelyLost(input.page, input.browser)
+    && getOwnTargetInfo(input.browser)?.created === true
+    && !cleanupAuthorityUnprovenPages.has(input.page)
+    && normalizeConversationUrl(String(input.page.url())) === input.targetChatUrl
+    && readOwnedConversationIdentity(input.page, input.targetChatUrl).matched
+    && Date.now() < input.deadlineMs;
+  const positive = () => witness.ownSubmissionIssued() || witness.serverMarkerPresent() === true;
+  if (!identity() || positive()) {
+    return witness.serverMarkerPresent() ? 'server_marker_present' : 'unproven';
+  }
+  // Reserve a bounded same-Page GET and possible action in the original budget.
+  const settleStart = Date.now();
+  const settleUntil = settleStart + SERVER_CHECKED_SEND_SETTLE_MS;
+  if (settleUntil + 3 * MAX_LOCAL_READ_WAIT_MS >= input.deadlineMs) return 'unproven';
+  let lastSampleAt = settleStart;
+  while (Date.now() < settleUntil) {
+    if (!identity() || positive()
+      || await readLosslessOwnedComposer(input.composer, input.deadlineMs) !== input.markedPayload
+      || !await existingRetryDomGuards({
+        page: input.page, browser: input.browser, composer: input.composer,
+        targetChatUrl: input.targetChatUrl, markedPayload: input.markedPayload,
+        marker: input.marker, baselineSnapshot: input.baselineSnapshot,
+        deadlineMs: input.deadlineMs,
+      })) return witness.serverMarkerPresent() ? 'server_marker_present' : 'unproven';
+    // A slow read or stalled event loop could hide a transient Stop/generation.
+    // Every sample must follow its predecessor within the bounded poll gap.
+    const sampledAt = Date.now();
+    if (sampledAt - lastSampleAt > SERVER_CHECKED_MAX_SAMPLE_GAP_MS) return 'unproven';
+    lastSampleAt = sampledAt;
+    if (!identity()) return 'unproven';
+    const waitMs = Math.min(INITIAL_POLL_MS, settleUntil - Date.now());
+    if (waitMs > 0) await sleep(input.page, waitMs);
+    if (Date.now() - lastSampleAt > SERVER_CHECKED_MAX_SAMPLE_GAP_MS) return 'unproven';
+  }
+  if (Date.now() - lastSampleAt > SERVER_CHECKED_MAX_SAMPLE_GAP_MS
+    || !identity() || positive() || Date.now() >= input.deadlineMs - 2 * MAX_LOCAL_READ_WAIT_MS
+    || await readLosslessOwnedComposer(input.composer, input.deadlineMs) !== input.markedPayload
+    || !await existingRetryDomGuards({
+      page: input.page, browser: input.browser, composer: input.composer,
+      targetChatUrl: input.targetChatUrl, markedPayload: input.markedPayload,
+      marker: input.marker, baselineSnapshot: input.baselineSnapshot, deadlineMs: input.deadlineMs,
+    })) return witness.serverMarkerPresent() ? 'server_marker_present' : 'unproven';
+  const beforeSequence = witness.ownedGetRequestSequence();
+  const getDeadline = Math.min(input.deadlineMs - MAX_LOCAL_READ_WAIT_MS,
+    Date.now() + MAX_LOCAL_READ_WAIT_MS);
+  try {
+    const waitMs = getDeadline - Date.now();
+    if (waitMs <= 0) return 'unproven';
+    // The browser performs precisely one explicit same-origin GET from the
+    // held Page. A returned status/body alone is NEVER authority for recovery.
+    await boundedBrowserRead(
+      Promise.resolve(input.page.evaluate(async (details: { uuid: string; marker: string }) => {
+        const response = await fetch('/backend-api/conversations/' + details.uuid, {
+          credentials: 'same-origin',
+          headers: { 'x-opk-recovery-invocation': details.marker },
+        });
+        await response.arrayBuffer();
+      }, { uuid: expectedUuid, marker: input.marker })),
+      waitMs, 'recovery_owned_conversation_get_timeout',
+    );
+  } catch { return 'unproven'; }
+  if (!identity() || positive() || witness.ownedGetRequestSequence() !== beforeSequence + 1) {
+    return witness.serverMarkerPresent() ? 'server_marker_present' : 'unproven';
+  }
+  const expectedSequence = beforeSequence + 1;
+  // The existing response callback finishes its body asynchronously. Wait
+  // within the remaining original deadline; never initiate another GET.
+  const resultDeadline = Math.min(input.deadlineMs - MAX_LOCAL_READ_WAIT_MS, Date.now() + MAX_LOCAL_READ_WAIT_MS);
+  while (identity() && Date.now() < resultDeadline) {
+    const summary = witness.latestSuccessfulGet();
+    if (summary?.requestSequence === expectedSequence && summary.uuid === expectedUuid && summary.complete) {
+      if (summary.markerPresent) return 'server_marker_present';
+      return summary.explicitRecoveryProbe && !positive()
+        ? 'marker_absent_complete' : 'unproven';
+    }
+    await sleep(input.page, Math.min(INITIAL_POLL_MS, resultDeadline - Date.now()));
+  }
+  return 'unproven';
 }
 
 async function waitForComposer(
@@ -3001,6 +3130,43 @@ function renderedPayloadMatches(actual: string | undefined, expected: string): b
   return actual !== undefined && actual.replace(/\s+/gu, '') === expected.replace(/\s+/gu, '');
 }
 
+/** Compare and clear in one browser-side task, never a stale read followed
+ * by a separate fill. An unknown ProseMirror representation is not authority
+ * to destroy a shared or foreign draft. */
+async function conditionalClearOwnedComposerDraft(
+  page: any,
+  exactPayload: string,
+  deadlineMs: number,
+  expectedPageUrl?: string,
+): Promise<boolean> {
+  const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+  if (!exactPayload || waitMs <= 0) return false;
+  const composer = page?.locator?.(COMPOSER_SELECTOR);
+  if (typeof composer?.evaluate !== 'function') return false;
+  // A Page can navigate after the pre-clear owner read. Compare its current
+  // browser-side URL and every payload code point in the SAME modifying task.
+  // Direct helper callers without a proved Page route retain the exact-payload
+  // comparison only and do not gain finalization/close authority.
+  const guard: string | { payload: string; pageUrl: string } = expectedPageUrl
+    ? { payload: exactPayload, pageUrl: expectedPageUrl } : exactPayload;
+  try {
+    return await boundedBrowserRead(
+      Promise.resolve(composer.evaluate((element: HTMLElement, guarded: typeof guard) => {
+        const expected = typeof guarded === 'string' ? guarded : guarded.payload;
+        if (typeof guarded !== 'string'
+          && element.ownerDocument?.defaultView?.location?.href !== guarded.pageUrl) return false;
+        if (!element.isConnected || !element.isContentEditable
+          || element.textContent !== expected || element.innerText !== expected) return false;
+        element.textContent = '';
+        return element.textContent === '' && element.innerText === '';
+      }, guard)),
+      waitMs, 'conditional_owned_composer_clear_timeout',
+    ) === true;
+  } catch {
+    return false;
+  }
+}
+
 async function clearFreshComposerDraft(page: any): Promise<void> {
   try {
     await boundedBrowserRead(page.locator(COMPOSER_SELECTOR).fill('', { timeout: MAX_LOCAL_READ_WAIT_MS }),
@@ -3039,7 +3205,16 @@ async function runTurn(
       if (freshCleanup.page && !freshCleanup.sendAttempted
         && diagnostic.http_status !== 429
         && isBlankProjectSurfaceUrl(String(freshCleanup.page.url()), freshCleanup.projectUrl ?? '')) {
-        await clearFreshComposerDraft(freshCleanup.page);
+        if (!cleanupAuthorityUnprovenPages.has(freshCleanup.page)
+          && typeof freshCleanup.markedPayload === 'string'
+          && freshCleanup.markedPayload.length > 0
+          && await readFreshStopVisible(freshCleanup.page, Date.now() + MAX_LOCAL_READ_WAIT_MS) === false
+          && isBlankProjectSurfaceUrl(String(freshCleanup.page.url()), freshCleanup.projectUrl ?? '')) {
+          await conditionalClearOwnedComposerDraft(
+            freshCleanup.page, freshCleanup.markedPayload, Date.now() + MAX_LOCAL_READ_WAIT_MS,
+            String(freshCleanup.page.url()),
+          );
+        }
       }
     } catch {
       // A lost page must not hide the original pre-send result.
@@ -3285,6 +3460,15 @@ async function runTurnCore(
       };
     }
 
+    // Refuse a new Send against the shared account cooldown before attachOwnTarget:
+    // target allocation (including CDP creation) happens before page selection.
+    // Refusal is read-only and cannot extend the existing cooldown deadline.
+    const admissionCooldown = readStateLightAccountCooldown(profileKey);
+    if (admissionCooldown.diagnostic) {
+      incident('shared_account_cooldown_diagnostic', admissionCooldown.diagnostic, 'fail_open');
+    }
+    if (admissionCooldown.active) throw new Error('account_cooldown_active');
+
     // Distinct invocation-owned Pages do not share a profile-wide composer lock.
     // Exact destination claims and the selected Page's own Stop/marker guards
     // continue to prohibit attaching to another invocation.
@@ -3346,6 +3530,7 @@ async function runTurnCore(
     let accountReloadAttempted = false;
     let zeroWitnessAccountRecovery = false;
     let markerDerivedSend = false;
+    let freshPreSendFetchAlertAbsent = false;
 
     const accountErrorTerminal = (): TurnRunOutcome => {
       incident('invocation_blocker', 'account_load_error', 'retain_page_no_resend');
@@ -3544,6 +3729,81 @@ async function runTurnCore(
     };
 
     const markedPayload = wrapOwnedPromptPayload(marker, snapshot.text);
+    /** A positive disabled-before-click log for EVERY action is necessary but
+     * not sufficient. Destroy only the original invocation-created exact draft
+     * and close its tab while the incumbent POST witness is still attached.
+     */
+    const finalizeAffirmativeNoDispatch = async (): Promise<TurnRunOutcome | null> => {
+      const stillOwned = (): boolean => {
+        if (ownershipForfeited || page !== originalHeldPage
+          || cleanupAuthorityUnprovenPages.has(page)
+          || browserOrPageDefinitelyLost(page, browser)
+          || getOwnTargetInfo(browser)?.created !== true
+          || held429Witness?.ownSubmissionIssued() === true
+          || held429Witness?.serverMarkerPresent() === true
+          || held429Witness?.current()) return false;
+        try {
+          return config.newChat
+            ? Boolean(config.projectUrl && isBlankProjectSurfaceUrl(String(page.url()), config.projectUrl))
+            : Boolean(originalExactChat
+              && readOwnedConversationIdentity(page, originalExactChat).matched);
+        } catch { return false; }
+      };
+      const uncontradicted = async (): Promise<boolean> => {
+        if (!stillOwned() || Date.now() + 2 * MAX_LOCAL_READ_WAIT_MS >= invocationDeadlineMs
+          || await readFreshStopVisible(page, invocationDeadlineMs) !== false) return false;
+        try {
+          const observed = await readPageObservation(page, undefined, undefined, true, invocationDeadlineMs);
+          const expected = baselineSnapshot?.carriers;
+          if (!expected || observed.transcriptIncomplete || !observed.snapshot?.complete
+            || observed.pageTurnEvidence?.generationInProgress !== false
+            || observed.pageTurnEvidence?.continueGeneratingVisible === true
+            || observed.snapshot.carriers.length !== expected.length) return false;
+          for (let index = 0; index < expected.length; index++) {
+            const baseline = expected[index]!;
+            const now = observed.snapshot.carriers[index]!;
+            if (!baseline.fingerprint || baseline.fingerprint !== now.fingerprint
+              || baseline.role !== now.role || baseline.key !== now.key
+              || now.text.includes(marker)) return false;
+          }
+          return stillOwned() && await readFreshStopVisible(page, invocationDeadlineMs) === false;
+        } catch { return false; }
+      };
+      if (!await uncontradicted()
+        || await readLosslessOwnedComposer(page.locator(COMPOSER_SELECTOR), invocationDeadlineMs) !== markedPayload
+        || !await uncontradicted()) return null;
+      if (!await conditionalClearOwnedComposerDraft(
+        page, markedPayload, invocationDeadlineMs, String(page.url()),
+      )) return null;
+      if (!await uncontradicted()
+        || await readLosslessOwnedComposer(page.locator(COMPOSER_SELECTOR), invocationDeadlineMs) !== ''
+        // The blank read can itself await while Stop, transcript or a foreign
+        // shared draft changes. Revalidate every guard after that await and
+        // finish with another lossless blank check immediately before close.
+        || !await uncontradicted()
+        || await readLosslessOwnedComposer(page.locator(COMPOSER_SELECTOR), invocationDeadlineMs) !== ''
+        || !stillOwned()) return null;
+      const close = await abandonLatePageHandle(page, RESOURCE_CLEANUP_BOUND_MS);
+      // Closing has to be positively observed; a timed-out close is not finalization.
+      if (close !== 'confirmed' || typeof page.isClosed !== 'function' || page.isClosed() !== true
+        || held429Witness?.ownSubmissionIssued() || held429Witness?.serverMarkerPresent()) return null;
+      transitionStateLightTurnObservation({
+        profileKey, invocationId, phase: 'not_sent',
+        reason: 'affirmative_pre_actionability_no_dispatch',
+        sendCount: 0, sendWitness: 'none',
+      });
+      incident('send_observation_affirmative', 'affirmative_pre_actionability_no_dispatch',
+        'exact_owned_composer_cleared_and_created_tab_closed');
+      return {
+        page, browser, cleanupAction: 'skip',
+        result: compactResult(
+          'send_failed', 'invocation', 'affirmative_pre_actionability_no_dispatch',
+          invocationId, profileKey, 0, pollCount, navigation, incidents,
+          { send_attempted: true }, journalWriteFailed,
+        ),
+      };
+    };
+
     const assertFreshOwner = (): void => {
       // Preserve a positively witnessed first wall before diagnosing a redirected fresh URL.
       beforeBrowserAction();
@@ -3719,6 +3979,16 @@ async function runTurnCore(
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
+      // A pre-existing recovery alert is not evidence from this Send. Read
+      // the incumbent unmarked-alert surface before markPreSendAlerts tags old
+      // alerts; an unreadable baseline cannot authorize an early diagnostic.
+      // Do not consume the separate Failed-to-fetch locator's post-Send read.
+      try {
+        const alertDeadline = Math.min(invocationDeadlineMs, Date.now() + MAX_LOCAL_READ_WAIT_MS);
+        freshPreSendFetchAlertAbsent =
+          await locatorCount(page.locator(UNMARKED_ALERT_SELECTOR), alertDeadline) === 0
+          && await locatorCount(page.getByRole('button', { name: 'Retry', exact: true }), alertDeadline) === 0;
+      } catch { freshPreSendFetchAlertAbsent = false; }
       await markPreSendAlerts(page, Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now()));
       requireFreshSendReserve(0);
       if (await readFreshStopVisible(page, invocationDeadlineMs) !== false) {
@@ -3785,6 +4055,8 @@ async function runTurnCore(
         onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_blind_resend'),
       });
       let delivery = await sendAction();
+      const firstActionAffirmative = delivery.preDispatchTimeoutProven === true && delivery.sendCount === 0;
+      let freshRepeated = false;
       if (delivery.sendCount === 0
         && delivery.witness === 'unproven'
         && delivery.preDispatchTimeoutProven === true
@@ -3796,7 +4068,14 @@ async function runTurnCore(
         // Positive Playwright actionability proof and all independent current
         // DOM/owner checks are required; no third attempt after this second call.
         assertFreshOwner();
+        freshRepeated = true;
         delivery = await sendAction();
+      }
+      if (delivery.sendCount === 0 && delivery.preDispatchTimeoutProven === true
+        && (!freshRepeated || firstActionAffirmative)
+        && !held429Witness?.ownSubmissionIssued()) {
+        const affirmed = await finalizeAffirmativeNoDispatch();
+        if (affirmed) return affirmed;
       }
       if (delivery.sendCount === 0) {
         if (browserOrPageDefinitelyLost(page, browser)) {
@@ -3904,6 +4183,7 @@ async function runTurnCore(
           };
         }
       }
+      let recoveryReclickArmed = false;
       const dispatchExisting = async (clickWaitMs: number) =>
         await dispatchStateLightSendAndObserveDelivery({
           page,
@@ -3918,6 +4198,23 @@ async function runTurnCore(
           preSendAlertsAlreadyMarked: true,
           onDispatch: () => {
             beforeBrowserAction();
+            // An own POST or completed server-marker witness may arrive after
+            // the last DOM guard. Neither retry path may cross into a second
+            // physical click once a positive for this invocation is known.
+            if (sendAttempted && (held429Witness?.ownSubmissionIssued()
+              || held429Witness?.serverMarkerPresent() === true)) {
+              throw new Error('server_checked_reclick_guard_lost');
+            }
+            if (recoveryReclickArmed && (
+              held429Witness?.ownSubmissionIssued()
+              || held429Witness?.serverMarkerPresent() === true
+              || !originalExactChat
+              || page !== originalHeldPage
+              || getOwnTargetInfo(browser)?.created !== true
+              || cleanupAuthorityUnprovenPages.has(page)
+              || browserOrPageDefinitelyLost(page, browser)
+              || !readOwnedConversationIdentity(page, originalExactChat).matched
+            )) throw new Error('server_checked_reclick_guard_lost');
             transitionStateLightTurnObservation({
               profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
             });
@@ -3929,6 +4226,8 @@ async function runTurnCore(
           onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_resend'),
         });
       let delivery = await dispatchExisting(sendWaitMs);
+      const firstActionAffirmative = delivery.sendCount === 0 && delivery.preDispatchTimeoutProven === true;
+      let repeated = false;
       if (hasSendButton && delivery.sendCount === 0 && delivery.witness === 'unproven'
         && delivery.preDispatchTimeoutProven === true
         && await existingRetryDomGuards({
@@ -3938,7 +4237,52 @@ async function runTurnCore(
         // Only the first click's actual positive non-dispatch action result grants
         // this one optional repeat; an uncertain first action or Enter never does.
         const repeatWaitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now());
-        if (repeatWaitMs > 0) delivery = await dispatchExisting(repeatWaitMs);
+        if (repeatWaitMs > 0) {
+          repeated = true;
+          delivery = await dispatchExisting(repeatWaitMs);
+        }
+      }
+      if (!repeated && hasSendButton && delivery.sendCount === 0
+        && delivery.witness === 'unproven' && originalExactChat
+        && page === originalHeldPage && getOwnTargetInfo(browser)?.created === true
+        && !cleanupAuthorityUnprovenPages.has(page)) {
+        const state = await observeExistingServerCheckedRecovery({
+          page, browser, composer, targetChatUrl: originalExactChat,
+          markedPayload, marker, baselineSnapshot,
+          heldWitness: held429Witness, deadlineMs: invocationDeadlineMs,
+        });
+        if (state === 'server_marker_present') {
+          delivery = { ...delivery, sendCount: 1, witness: 'owned_server_user_marker' };
+        } else if (state === 'marker_absent_complete' && !held429Witness?.ownSubmissionIssued()
+          && await readLosslessOwnedComposer(composer, invocationDeadlineMs) === markedPayload
+          && await existingRetryDomGuards({
+            page, browser, composer, targetChatUrl: originalExactChat,
+            markedPayload, marker, baselineSnapshot, deadlineMs: invocationDeadlineMs,
+          })
+          // The normalized guard above contains awaits. Its equality does not
+          // protect a whitespace-only edit made while that guard was running.
+          && await readFreshStopVisible(page, invocationDeadlineMs) === false
+          && await readLosslessOwnedComposer(composer, invocationDeadlineMs) === markedPayload
+          && page === originalHeldPage && getOwnTargetInfo(browser)?.created === true
+          && !cleanupAuthorityUnprovenPages.has(page)
+          && !held429Witness?.ownSubmissionIssued()
+          && !held429Witness?.serverMarkerPresent()
+          && readOwnedConversationIdentity(page, originalExactChat).matched) {
+          // A complete server-negative snapshot only permits the one guarded
+          // physical re-click. It never certifies that the original did not Send.
+          repeated = true;
+          const remaining = Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now());
+          if (remaining > 0) {
+            recoveryReclickArmed = true;
+            delivery = await dispatchExisting(remaining);
+          }
+        }
+      }
+      if (delivery.sendCount === 0 && delivery.preDispatchTimeoutProven === true
+        && !held429Witness?.ownSubmissionIssued()
+        && (!repeated || firstActionAffirmative)) {
+        const affirmative = await finalizeAffirmativeNoDispatch();
+        if (affirmative) return affirmative;
       }
       if (delivery.sendCount === 0) {
         if (browserOrPageDefinitelyLost(page, browser)) {
@@ -5052,6 +5396,24 @@ async function runTurnCore(
       // A late observed own request is still the original physical Send.
       const zeroCountCutoffMs = config.newChat && !ownedConversationUrl
         ? freshUnboundReturnByMs : invocationDeadlineMs;
+      // A finished exact-owned server GET with this invocation's user marker
+      // proves delivery even after an ambiguous second action. Its sticky
+      // current-epoch witness outranks a later GET that lacks the marker.
+      // Bind this only to the unchanged original held Page and owned URL.
+      if (!config.newChat && sendAttempted && sendCount === 0
+        && targetChatUrl && held429Page === page
+        && readOwnedConversationIdentity(page, targetChatUrl).matched
+        && held429Witness?.serverMarkerPresent() === true) {
+        sendCount = 1;
+        markerDerivedSend = true;
+        ownedPromptEverSeen = true;
+        transitionStateLightTurnObservation({
+          profileKey, invocationId, phase: 'sent_unharvested',
+          reason: 'owned_server_user_marker', sendCount, sendWitness: 'owned_marker',
+          conversationUrl: targetChatUrl,
+        });
+        emitCancellationReceipt(targetChatUrl);
+      }
       if (sendAttempted && sendCount === 0 && Date.now() < zeroCountCutoffMs
         && held429Witness?.ownSubmissionIssued()) {
         sendCount = 1;
@@ -5081,6 +5443,43 @@ async function runTurnCore(
             journalWriteFailed,
           ),
         };
+      }
+      if (config.newChat && sendAttempted && sendCount === 0 && !ownedConversationUrl
+        && freshPreSendFetchAlertAbsent && createdFreshPage
+        && page === originalHeldPage && !ownershipForfeited
+        && !cleanupAuthorityUnprovenPages.has(page) && config.projectUrl
+        && !held429Witness?.ownSubmissionIssued()
+        // An alert marked before dispatch, or no live unmarked alert, cannot
+        // establish a new F4 symptom. Missing alert provenance fails closed.
+        && await (async () => {
+          try {
+            return await locatorCount(
+              page.locator(UNMARKED_ALERT_SELECTOR),
+              Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
+            ) > 0;
+          } catch {
+            // A missing/foreign/failed alert read cannot establish F4 freshness.
+            return false;
+          }
+        })()
+        && await ownedLocalFetchFailureVisibleOnPage(
+          page, config.projectUrl,
+          Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
+        )
+        // A transient alert can disappear as an accepted send commits.
+        // A second fresh read at the same exact Page/route is required.
+        && !held429Witness?.ownSubmissionIssued()
+        && await ownedLocalFetchFailureVisibleOnPage(
+          page, config.projectUrl,
+          Math.min(freshUnboundReturnByMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
+        )
+        && !held429Witness?.ownSubmissionIssued()) {
+        // Do not terminate before the incumbent read-only census can find an
+        // already-delivered unique owned marker on another existing Page.
+        // Otherwise it returns the existing uncertain fresh_send_fetch_failed.
+        const terminal = await recoverCurrentObservation(true);
+        if (terminal) return terminal;
+        continue;
       }
       // Count-gated 2x post-Send exits do not bound an unproved attempt.
       // The original absolute deadline does, without inventing a zero-Send release.
@@ -6593,6 +6992,10 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   let pageAction: PageCleanupAction = cleanupAuthorityProven && !pageLost && outcome.ownershipForfeited !== true
     ? 'close'
     : 'skip';
+  // An ambiguous attempted Send with zero count is still possibly delivered.
+  // Never close its Page merely because the invocation originally created it.
+  if (pageAction === 'close' && outcome.result.send_attempted === true
+    && outcome.result.send_count === 0) pageAction = 'preserve';
   // Only the exact flagged still-owned fresh/local terminal escapes #2510
   // positive-owned Page close. The public cleanupAction alone grants nothing.
   if (pageAction === 'close' && outcome.retainOwnedFreshLocalPage
@@ -6639,11 +7042,16 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
         // Preserve the tab if owner, Stop, content or clearing is uncertain.
       }
     }
-    if (!cleared) {
-      // An unsent draft is expendable on this invocation-owned failed tab.
-      // Unconfirmed composer clearing must not veto close when the existing
-      // blank-project URL and absence of Stop can still be proven.
-      try { cleared = await safeComposerBoundary(); } catch { /* Fail closed on uncertain Stop or URL. */ }
+    if (!cleared && observedNotSent) {
+      // A blank verified composer needs no destructive cleanup. A changed or
+      // unreadable composer cannot authorize closing a shared-draft Page.
+      try {
+        cleared = await safeComposerBoundary()
+          && await readLosslessOwnedComposer(
+            outcome.page.locator(COMPOSER_SELECTOR), Date.now() + MAX_LOCAL_READ_WAIT_MS,
+          ) === ''
+          && await safeComposerBoundary();
+      } catch { /* Fail closed on uncertain text, Stop or URL. */ }
     }
     if (!cleared) {
       pageAction = 'preserve';
@@ -6757,6 +7165,9 @@ export const __testSendDelivery = {
   dispatchStateLightSendAndObserveDelivery,
   affirmativePreActionabilityTimeout,
   waitForFreshSendButton,
+  readLosslessOwnedComposer,
+  conditionalClearOwnedComposerDraft,
+  observeExistingServerCheckedRecovery,
 };
 
 export type StateLightTurnDependencies = {

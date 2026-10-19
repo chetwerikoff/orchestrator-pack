@@ -831,7 +831,7 @@ interface FinalObservationProjection {
 function finalObservationProjection(
   config: LaunchConfig,
   heartbeatDiagnostics?: Record<string, unknown>,
-  candidate?: Pick<ParsedTurnResult, 'invocation_id' | 'configured_profile_key'>,
+  candidate?: Pick<ParsedTurnResult, 'invocation_id' | 'configured_profile_key' | 'send_attempted'>,
 ): FinalObservationProjection | null {
   const invocationId = childOption(config, '--invocation-id');
   const profile = childOption(config, '--profile');
@@ -852,8 +852,9 @@ function finalObservationProjection(
   )) return null;
 
   const harvestedPrimary = record.phase === 'harvested' && Boolean(record.primary);
-  const preDispatch = (record.phase === 'prepared' || record.phase === 'not_sent')
-    && record.transition_reason !== 'send_delivery_unproven'
+  const preDispatch = candidate?.send_attempted !== true
+    && (record.phase === 'prepared'
+      || (record.phase === 'not_sent' && record.transition_reason === 'terminal_pre_send'))
     && (record.send_count === undefined || record.send_count === 0);
 
   let replyDiagnostics = heartbeatDiagnostics;
@@ -888,6 +889,30 @@ function finalObservationProjection(
     delivery: harvestedPrimary ? 'landed' : preDispatch ? 'not-sent' : 'POSSIBLY_DELIVERED',
     ...(replyDiagnostics ? { replyDiagnostics } : {}),
   };
+}
+
+/** An attempted Send may be declared never-dispatched only with the
+ * affirmative pre-actionability cause in BOTH the exact matching terminal
+ * result and durable observation. Neither a zero-count attempt nor historical
+ * not_sent phases are a sufficient negative witness. */
+function affirmativelyNotDispatched(
+  candidate: ParsedTurnResult,
+  observed: FinalObservationProjection | null,
+): boolean {
+  const record = observed?.record;
+  return candidate.send_attempted === true
+    && candidate.cause === 'affirmative_pre_actionability_no_dispatch'
+    && candidate.resolved_send_count === 0
+    && !candidate.witness
+    && candidate.observation_uncertainty_diagnostics?.owned_prompt_seen !== true
+    && Boolean(record
+      && record.invocation_id === candidate.invocation_id
+      && record.profile_key === candidate.configured_profile_key
+      && record.phase === 'not_sent'
+      && record.transition_reason === 'affirmative_pre_actionability_no_dispatch'
+      && record.send_count === 0
+      && record.send_witness === 'none'
+      && !record.primary);
 }
 
 async function persistedTerminalEvidence(
@@ -1071,6 +1096,8 @@ async function finalizeCandidatePath(
   // evidence, not a lifecycle outcome.
   const resolvedExitCode: number | null = exited ? (completion.result?.exitCode ?? childExitCode) : null;
   const childExitDiagnostic: ChildExitDiagnostic = exited ? 'exited_within_grace' : 'retained_after_result';
+  const candidateObservation = finalObservationProjection(config, heartbeatDiagnostics, candidate);
+  const provenNoDispatch = affirmativelyNotDispatched(candidate, candidateObservation);
   const projectedTurnDiagnostics = {
     ...(candidate.cause === 'state_light_new_chat_send_slot_timeout' ? {
       send_slot_holder_invocation_id: candidate.send_slot_holder_invocation_id ?? 'unknown',
@@ -1088,7 +1115,7 @@ async function finalizeCandidatePath(
     terminal_at: nowIso(),
     lifecycle_outcome: 'incident',
     incident,
-    delivery: deriveDelivery(candidate, false),
+    delivery: provenNoDispatch ? 'not-sent' : deriveDelivery(candidate, false),
     child_exit_code: resolvedExitCode,
     child_exit_diagnostic: childExitDiagnostic,
     turn_result_state: candidate.state,
@@ -1109,9 +1136,9 @@ async function finalizeCandidatePath(
     return 1;
   }
   if (candidate.state === 'ok') {
-    const observed = finalObservationProjection(config, heartbeatDiagnostics, candidate);
-    const resultDelivery = deriveDelivery(candidate, false);
-    const observedDelivery = observed?.delivery;
+    const observed = candidateObservation;
+    const resultDelivery = provenNoDispatch ? 'not-sent' : deriveDelivery(candidate, false);
+    const observedDelivery = provenNoDispatch ? 'not-sent' : observed?.delivery;
     // A weaker pre-dispatch observation cannot demote a result's possible send or landing.
     const delivery = resultDelivery === 'landed' || observedDelivery === 'landed' ? 'landed'
       : resultDelivery === 'POSSIBLY_DELIVERED' || observedDelivery === 'POSSIBLY_DELIVERED'
