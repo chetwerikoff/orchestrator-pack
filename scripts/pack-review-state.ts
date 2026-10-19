@@ -292,14 +292,24 @@ function validateSmokeOrderingOwnerFields(
 }
 
 export function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value as Record<string, unknown>)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value);
+  // First apply JSON persistence semantics (toJSON, omitted object fields,
+  // null array entries, and non-finite numbers). Only then sort object keys.
+  // Sorting manually preserves the established lexical ordering of numeric
+  // string keys used by hashes of already persisted JSON.
+  const persisted = JSON.stringify(value);
+  if (persisted === undefined) return persisted;
+  const encode = (jsonValue: unknown): string => {
+    if (Array.isArray(jsonValue)) return `[${jsonValue.map(encode).join(',')}]`;
+    if (jsonValue && typeof jsonValue === 'object') {
+      const record = jsonValue as Record<string, unknown>;
+      return `{${Object.keys(record)
+        .sort()
+        .map((key) => `${JSON.stringify(key)}:${encode(record[key])}`)
+        .join(',')}}`;
+    }
+    return JSON.stringify(jsonValue);
+  };
+  return encode(JSON.parse(persisted) as unknown);
 }
 
 export function sha256(value: string | Uint8Array): string {
