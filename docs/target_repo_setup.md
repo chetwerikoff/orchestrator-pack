@@ -240,10 +240,15 @@ orca orchestration task-list --run "$RUN_ID" --json
 orca orchestration dispatch-show --task "$TASK_ID" --json
 ```
 
-When `dispatch-show.dispatch` is **present**, do not launch a new Dispatch:
-the existing coordinator must reconcile/continue that same Dispatch. If it
-is absent, the current supervised launch assistant can restore a clean
-non-ancestor manager worktree only with an explicit **same-task Issue**:
+When `dispatch-show.dispatch` is **present and live or unknown**, do not
+launch another Dispatch: the existing coordinator must reconcile/continue it.
+A **failed/abandoned/cancelled/done** Dispatch on the same exact Task may pass
+the launch assistant's early and final observations only when it matches the
+current local assignment. Supervised-start still requires affirmative native
+no-worker evidence, an exact Task/Dispatch match, and a different new terminal;
+an adapter-unresolved result alone is not permission to replace. An absent
+Dispatch also follows the ordinary start path. Restore the same Task with an
+explicit **same-task Issue**:
 
 ```bash
 node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" \
@@ -253,19 +258,64 @@ node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts"
   --base-branch "origin/$DEFAULT_BRANCH"
 ```
 
-The assistant verifies that the worktree is clean and uniquely owned by its
-local branch, then fetches only the default **remote-tracking** ref. For an
-otherwise non-ancestor HEAD it requires exactly one currently **open PR whose
-live body closes that Issue** with `Closes/Fixes/Resolves #N`; the PR must be
-in the selected repository, have that same repository as head (not a fork),
-base `$DEFAULT_BRANCH`, head branch equal to the observed local branch and
-full head SHA equal to the observed local HEAD. It rechecks branch/HEAD/clean
-status and PR before launching. Missing, ambiguous, closed, foreign, dirty,
-unpublished or changed evidence refuses without reset, rebase, merge or
-fast-forward of the manager branch. A fresh manager created from the default
-branch continues through the existing separate `--manager-brief --worktree-name`
-path. The early/final Task Dispatch absence checks are both required for a new
-start, even when the worktree and terminal were already prepared.
+The assistant proves the selected worktree's Git root, origin, unique local
+branch and exact native Run/Task membership. For a **dirty** existing checkout
+it preserves every tracked/untracked byte and never refreshes/merges that tree.
+Dirty reuse requires **native proof** that the exact current Issue-bound
+orchestrator-role old Dispatch is terminal, its worker is gone, and its
+producer worktree ID equals the selected worktree (rechecking Run/Task
+membership). An Issue-closing PR is insufficient to prove who owns dirty
+bytes. For a **clean** non-ancestor worktree, the existing unique open
+Issue-closing PR/branch/HEAD check still applies. The dirty path rechecks
+unchanged branch, HEAD and full porcelain status before launch, and never
+refreshes or merges the worktree.
+Unproven/foreign/changed worktrees refuse without reset, stash, rebase, merge,
+or deletion. A fresh manager worktree still takes the separate
+`--manager-brief --worktree-name` path; dirty reuse does not turn fresh setup
+into permission to overwrite a working tree. Both early/final Task Dispatch
+checks remain mandatory, even when terminal/worktree preparation already passed.
+
+### Restore an existing worker on its own dirty worktree
+
+An already-bound T1/T2/T3 worker can relaunch on its existing worktree, including
+a worktree with uncommitted tracked and untracked changes. Use the selected
+project card, the same positive Issue, an existing/fresh native Task, and the
+**exact existing** worktree selector, not a guessed local path. For a fresh
+continuation Task, the predecessor assignment may belong to the old Task.
+The assistant proves that the existing Issue assignment's old Dispatch is
+terminal and the native worker is gone, and that the old producer's
+`worktree_id` (or exact-owned terminal-resource worktree ID) equals the Orca
+worktree selected by the caller. It also checks the Git root, matching origin,
+unique non-default local branch, and unchanged HEAD/porcelain status before
+starting a new terminal. It never fetches/fast-forwards, resets, stashes or
+cleans that dirty worktree.
+
+```bash
+node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" \
+  --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/pr2-foundation/supervised-task-launch-assistant.ts" -- \
+  --project "$PROJECT_ID" --work-class "$WORK_CLASS" --issue-number "$ISSUE_NUMBER" \
+  --task "$TASK_ID" --worktree "$WORKTREE_SELECTOR" \
+  --base-branch "origin/$DEFAULT_BRANCH"
+```
+
+The documented `--worktree` CLI selects the admitted
+`exact_terminal_worktree` route (also for a manager); it cannot send an
+existing worktree into the fresh provider creation request. The normal
+`--worktree-name` Cursor launch uses the existing split Orca worktree
+create/setup and verifies an entirely clean tree **before** new terminal
+spawn and Dispatch. Atomic `provider_new_top_level` startup cannot prove
+that fact before agent input, so an explicit
+`--start-mode provider_new_top_level` request refuses until the native
+provider supplies a true pre-dispatch cleanliness witness. Neither refusal
+nor split setup modifies an already-dirty checkout.
+
+`WORK_CLASS` is the exact existing `t1`, `t2` or `t3` execution class.
+An unknown/active old worker, mismatched Task/Dispatch/worktree, missing
+ownership evidence, or changed Git checkout still refuses without a guessed
+replacement. The supervised-start boundary rechecks old-worker absence under
+the current assignment fence; native circuit-break/active-start safeguards
+remain in force. New worktrees via `--worktree-name` require a clean tree after
+their setup receipt and never borrow dirty-reuse authorization.
 
 ### Coordinator Run binding is independent of worker-start
 

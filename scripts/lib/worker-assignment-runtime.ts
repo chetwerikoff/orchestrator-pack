@@ -99,6 +99,18 @@ export type WorkerAssignmentTargetResolution =
   | { readonly status: 'remote_not_applicable'; readonly assignment: WorkerAssignmentRecord }
   | { readonly status: 'assignment_stale' | 'assignment_untrusted' | 'runtime_unavailable' | 'target_unresolved' };
 
+/** Positive, exact current-Dispatch evidence from the existing native read surface. */
+export interface TerminalGoneAssignmentEvidence {
+  readonly taskId: string;
+  readonly dispatchId: string;
+  readonly dispatchState: 'failed' | 'abandoned' | 'cancelled' | 'done' | 'completed';
+  /** Present only when the native producer retains a corroborated old handle. */
+  readonly priorTerminalId?: string;
+  /** Exact Orca worktree ownership witness, when the native observation provides it. */
+  readonly worktreeId?: string;
+  readonly workerAbsent: true;
+}
+
 export type WorkerAssignmentReplacementAdmission =
   | { readonly status: 'replaceable'; readonly expected: WorkerAssignmentRecord }
   | {
@@ -281,8 +293,10 @@ export async function admitCurrentWorkerAssignmentReplacement(input: {
   readonly observationWindowMs?: number;
   readonly requestedTerminalId?: string;
   readonly env?: NodeJS.ProcessEnv;
+  /** Only a read-only producer witness; queried under the exact assignment fence. */
+  readonly proveTerminalGone?: (expected: WorkerAssignmentRecord) => Promise<TerminalGoneAssignmentEvidence | null>;
 }): Promise<WorkerAssignmentReplacementAdmission> {
-  const fenced = await withCurrentWorkerAssignmentFence(input.file, input.expected, () => {
+  const fenced = await withCurrentWorkerAssignmentFence(input.file, input.expected, async () => {
     if (input.expected.kind !== 'local') {
       return { status: 'replaceable', expected: input.expected } as const;
     }
@@ -344,6 +358,30 @@ export async function admitCurrentWorkerAssignmentReplacement(input: {
         && hasRecordedDispatchTerminalMail(input.expected.bindingKey, { env: input.env })
       ) {
         return { status: 'replaceable', expected: input.expected } as const;
+      }
+    }
+    if (target.status === 'target_unresolved'
+      && input.expected.provider === input.adapter.id
+      && input.proveTerminalGone) {
+      // Adapter failure alone is never gone evidence. A second adapter lifecycle
+      // observation must not contradict the separately bound native absence.
+      const lifecycle = observeCurrentWorkerAssignmentLifecycle({
+        file: input.file, expected: input.expected, adapter: input.adapter, timeoutMs: input.timeoutMs,
+      });
+      if (lifecycle.status === 'target_unresolved' || lifecycle.status === 'gone') {
+        const evidence = await input.proveTerminalGone(input.expected);
+        if (evidence?.workerAbsent === true
+          && evidence.taskId === input.expected.taskId
+          && evidence.dispatchId === input.expected.bindingKey
+          && ['failed', 'abandoned', 'cancelled', 'done', 'completed'].includes(evidence.dispatchState)
+          && (evidence.priorTerminalId === undefined
+            || (typeof evidence.priorTerminalId === 'string' && Boolean(evidence.priorTerminalId.trim())))) {
+          if (requestedTerminalId && evidence.priorTerminalId
+            && sameTerminalHandle(requestedTerminalId, evidence.priorTerminalId)) {
+            return { status: 'target_unresolved', reason: 'terminal_reuse_unauthorized' } as const;
+          }
+          return { status: 'replaceable', expected: input.expected } as const;
+        }
       }
     }
     return { status: target.status } as const;

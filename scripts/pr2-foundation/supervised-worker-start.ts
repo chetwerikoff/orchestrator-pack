@@ -20,6 +20,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import {
   admitCurrentWorkerAssignmentReplacement,
   resolveCurrentWorkerAssignmentTarget,
+  type TerminalGoneAssignmentEvidence,
 } from '../lib/worker-assignment-runtime.ts';
 import { withCurrentWorkerAssignmentFence } from '../lib/worker-assignment-store.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
@@ -348,6 +349,65 @@ function parsePlacementEnvelope(execution: ChildResult): Record<string, unknown>
 }
 
 
+/**
+ * Native Orca evidence complements an adapter-unresolved post-reboot worker;
+ * it does not turn a failed adapter call or an old terminal handle into absence.
+ * Both queries are exact. Replacement rechecks them under the assignment
+ * fence; pre-start worktree reuse treats the same read as provisional evidence.
+ */
+export async function readTerminalGoneDispatch(
+  expected: WorkerAssignmentRecord,
+  inspect: (args: readonly string[]) => Promise<ChildResult>,
+): Promise<TerminalGoneAssignmentEvidence | null> {
+  if (expected.kind !== 'local' || expected.provider !== 'orca') return null;
+  const selected = parsePlacementEnvelope(await inspect([
+    'orchestration', 'dispatch-show', '--task', expected.taskId, '--json',
+  ]));
+  const nativeDispatch = isRecord(selected?.dispatch) ? selected.dispatch : null;
+  const status = providerText(nativeDispatch?.status).toLowerCase();
+  if (providerText(nativeDispatch?.id) !== expected.bindingKey
+    || !['failed', 'abandoned', 'cancelled', 'done', 'completed'].includes(status)) return null;
+
+  const shown = parsePlacementEnvelope(await inspect([
+    'orchestration', 'worker-show', '--dispatch', expected.bindingKey, '--json',
+  ]));
+  const dispatch = isRecord(shown?.dispatch) ? shown.dispatch : null;
+  const worker = isRecord(shown?.worker) ? shown.worker : null;
+  const observation = isRecord(shown?.observation) ? shown.observation : null;
+  const resource = isRecord(shown?.terminalResource) ? shown.terminalResource : null;
+  // worker-show is selected by an exact --dispatch argument; some supported
+  // producer envelopes omit dispatch.id. A contradictory id must still refuse.
+  const observedId = providerText(dispatch?.id);
+  const workerTerminalId = providerText(worker?.agent_terminal_handle);
+  const resourceTerminalId = providerText(resource?.terminalHandle);
+  const workerWorktreeId = providerText(worker?.worktree_id);
+  const resourceWorktreeId = providerText(resource?.worktreeId);
+  if ((observedId && observedId !== expected.bindingKey)
+    || providerText(dispatch?.status).toLowerCase() !== status
+    || observation?.exactWorker !== false
+    || !['missing', 'terminal_missing'].includes(providerText(observation?.status).toLowerCase())
+    || shown?.terminal !== null
+    || (shown?.worker !== null && shown?.worker !== undefined && !isRecord(shown.worker))
+    || (shown?.terminalResource !== null && shown?.terminalResource !== undefined && !isRecord(shown.terminalResource))
+    || (workerTerminalId && resourceTerminalId && workerTerminalId !== resourceTerminalId)
+    || (workerWorktreeId && resourceWorktreeId && workerWorktreeId !== resourceWorktreeId)
+    || (resource !== null && (
+      providerText(resource.originDispatchId) !== expected.bindingKey
+      || providerText(resource.ownerDispatchId) !== expected.bindingKey
+    ))) return null;
+
+  const priorTerminalId = workerTerminalId || resourceTerminalId;
+  const worktreeId = workerWorktreeId || resourceWorktreeId;
+  return {
+    taskId: expected.taskId,
+    dispatchId: expected.bindingKey,
+    dispatchState: status as TerminalGoneAssignmentEvidence['dispatchState'],
+    ...(priorTerminalId ? { priorTerminalId } : {}),
+    ...(worktreeId ? { worktreeId } : {}),
+    workerAbsent: true,
+  };
+}
+
 async function resolveCanonicalTerminalHandle(
   selector: string,
   inspect: (args: readonly string[]) => Promise<ChildResult>,
@@ -481,6 +541,13 @@ export async function runSupervisedWorkerStart(input: {
       || providerOption(args, '--setup') !== 'run')) {
     return { ok: false, reason: 'supervised_start_provider_request_invalid' };
   }
+  // Atomic provider worker-start can accept dispatch input while setup is still
+  // running. There is no authoritative pre-input clean status on that route.
+  // Split worktree setup, native setup completion, Git clean read, then use
+  // exact_terminal_worktree instead; refuse before worker-start effects here.
+  if (mode === 'provider_new_top_level') {
+    return { ok: false, reason: 'supervised_start_provider_clean_witness_unavailable' };
+  }
 
   const file = resolveWorkerAssignmentStorePath(input.projectId, input.env ?? process.env);
   if (existsSync(file)) {
@@ -566,6 +633,9 @@ export async function runSupervisedWorkerStart(input: {
       file,
       expected: expectedCurrent,
       adapter,
+      ...(mode === 'exact_terminal_worktree'
+        ? { proveTerminalGone: (expected: WorkerAssignmentRecord) => readTerminalGoneDispatch(expected, inspect) }
+        : {}),
       ...(admittedTerminalId
         ? { requestedTerminalId: admittedTerminalId, env: input.env ?? process.env }
         : {}),
