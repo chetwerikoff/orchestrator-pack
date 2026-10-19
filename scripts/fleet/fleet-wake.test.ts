@@ -2614,3 +2614,193 @@ describe('Issue #2575 process-local startup wake', () => {
     expect([...observed.store.eventStatus.entries()]).toEqual([...baselineStore.eventStatus.entries()]);
   });
 });
+
+
+describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', () => {
+  const repository = 'example/repo';
+  const issue = 2661;
+  const manager: FleetTerminal = {
+    handle: 'synthetic_mgr334_owner_pane', title: 'OpenCode manager',
+    worktreePath: workerBase + '/mgr2661', branch: 'refs/heads/issue-2661',
+    incarnationId: 'incarnation-2661', status: 'running', agentIdentity: 'opencode',
+  };
+  const assignment: WorkerAssignmentRecord = {
+    schema: 'orchestrator-pack/worker-assignment/v1', projectId: 'orchestrator-pack',
+    repository, issueNumber: issue, taskId: 'task-2661', assignmentId: 'assignment-2661',
+    generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-2661',
+    role: 'orchestrator', createdAtUtc: '2026-10-19T08:00:00.000Z',
+  };
+  const githubFact = (id: string): PublishedIssueFact => ({
+    issueNumber: issue, kind: 'issue-comment', id,
+  });
+  const event: TerminalEnvelopeEvent = {
+    path: '/tmp/opencode/synthetic_mgr334_terminal.json',
+    invocationId: 'inv-mgr334', observedInvocationId: 'inv-mgr334',
+    runIdentity: 'run-mgr334', attemptIdentity: 'attempt-mgr334',
+    handoffReceiptPath: '/tmp/opencode/synthetic_mgr334_handoff.json',
+    lifecycleOutcome: 'incident', turnResultState: 'rate_limit',
+    cwd: '/tmp/opencode/foreign-child', terminalHandle: 'foreign-stale-handle',
+  };
+  const receipt: HandoffReceipt = {
+    schema: HANDOFF_SCHEMA, run_identity: 'run-mgr334', attempt_identity: 'attempt-mgr334',
+    launcher_started_at: '2026-10-19T08:00:00Z',
+    handoff_committed_at: '2026-10-19T08:00:01Z',
+    completion_mode: COMPLETION_MODE, invocation_id: 'inv-mgr334',
+    owner_task_id: assignment.taskId, owner_dispatch_id: assignment.bindingKey,
+    launching_terminal_handle: manager.handle,
+  };
+  const executorFor = (
+    screens: Readonly<Record<string, string>>,
+    roster: readonly FleetTerminal[] = [manager],
+    native: FleetTerminal = manager,
+    witnessStatus: 'live' | 'gone' | 'unknown' = 'live',
+    failSubmit = false,
+  ): OrcaExecutor => {
+    const terminalExec = fakeOrca(screens, [], roster);
+    return (args) => {
+      if (args[0] === 'orchestration' && args[1] === 'worker-show') {
+        return commandResult(JSON.stringify({ ok: true, result: {
+          dispatch: { id: assignment.bindingKey, taskId: assignment.taskId, status: 'dispatched' },
+          terminal: native,
+          observation: { status: witnessStatus, exactWorker: true },
+        } }));
+      }
+      if (failSubmit && args[0] === 'terminal' && args[1] === 'send'
+        && !args.includes('--text')) return commandResult('', false);
+      return terminalExec(args);
+    };
+  };
+  const invoke = (overrides: Partial<Parameters<typeof tick>[0]> = {}) => tick({
+    screens: { [manager.handle]: 'PARKED on GPT turn inv-mgr334' },
+    terminals: [manager], executor: executorFor({ [manager.handle]: 'PARKED on GPT turn inv-mgr334' }),
+    config: config({ selectedRepository: repository }), store: new MemoryWakeStore(),
+    readCurrentAssignments: () => [assignment],
+    listPublishedIssueFacts: () => [githubFact('comment-1'), githubFact('comment-2')],
+    listOpenPulls: () => [], listTerminalEnvelopes: () => [],
+    ...overrides,
+  });
+  const texts = (calls: readonly string[][], handle = manager.handle) =>
+    sendsTo(calls, handle).filter((row) => row.includes('--text'));
+
+  it('accepts exactly one unique closer while ignoring Refs and conflicting targets', () => {
+    expect(uniqueClosingIssue('Refs #2662; Closes #2661')).toBe(2661);
+    expect(uniqueClosingIssue('Refs #2661; Fixes #2662')).toBe(2662);
+    expect(uniqueClosingIssue('Refs #2661')).toBeUndefined();
+    expect(uniqueClosingIssue('Closes #2661; Fixes #2662')).toBeUndefined();
+    expect(uniqueClosingIssue('<!-- Closes #2661 --> Refs #2662')).toBeUndefined();
+    expect(uniqueClosingIssue('Closes #2661; Closes #2661')).toBe(2661);
+  });
+
+  it('coalesces two published Issue facts, then admits only the distinct third fact on a later tick without a coordinator', async () => {
+    const store = new MemoryWakeStore();
+    const common = { store };
+    const first = await invoke(common);
+    expect(texts(first.calls)).toHaveLength(1);
+    expect(first.result).toMatchObject({
+      state: 'no_orchestrator', paneWakeAttempts: 1,
+      paneWakeConfirmed: 1, paneWakeNotConfirmed: 0,
+    });
+    const second = await invoke(common);
+    expect(texts(second.calls)).toHaveLength(0);
+    expect(second.result).toMatchObject({ paneWakeAttempts: 0, paneWakeConfirmed: 0 });
+    const changed = await invoke({ ...common,
+      listPublishedIssueFacts: () => [githubFact('comment-1'), githubFact('comment-2'), githubFact('comment-3')],
+    });
+    expect(texts(changed.calls)).toHaveLength(1);
+    expect(changed.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 1 });
+    expect(sendsTo(changed.calls, 'foreign-stale-handle')).toHaveLength(0);
+  });
+
+  it('rejects other Issue, duplicate assignment and mismatched native incarnation even if titles look related', async () => {
+    const foreignFact = await invoke({ listPublishedIssueFacts: () => [githubFact('other') && {
+      issueNumber: 2662, kind: 'issue-comment', id: 'other',
+    }] });
+    expect(texts(foreignFact.calls)).toHaveLength(0);
+    const duplicate = await invoke({ readCurrentAssignments: () =>
+      [assignment, { ...assignment, assignmentId: 'other-assignment' }] });
+    expect(texts(duplicate.calls)).toHaveLength(0);
+    const wrongIncarnation = { ...manager, incarnationId: 'stale-incarnation' };
+    const stale = await invoke({ executor: executorFor({
+      [manager.handle]: 'PARKED on GPT turn inv-mgr334',
+    }, [manager], wrongIncarnation) });
+    expect(texts(stale.calls)).toHaveLength(0);
+    const noAssignments = await invoke({ readCurrentAssignments: () => null });
+    expect(texts(noAssignments.calls)).toHaveLength(0);
+  });
+
+  it.each(['done', 'PARKED on GPT turn inv-mgr334'])(
+    'wakes only the original receipt-bound launching pane for a non-ok envelope: %s',
+    async (screen) => {
+      const first = await invoke({
+        screens: { [manager.handle]: screen }, executor: executorFor({ [manager.handle]: screen }),
+        listPublishedIssueFacts: () => [], listTerminalEnvelopes: () => [event],
+        readOriginalHandoffReceipt: () => receipt,
+      });
+      expect(texts(first.calls)).toHaveLength(1);
+      expect(texts(first.calls)[0]).toContain('synthetic_mgr334_terminal.json');
+      expect(sendsTo(first.calls, 'foreign-stale-handle')).toHaveLength(0);
+      expect(first.result).toMatchObject({
+        state: 'no_orchestrator', paneWakeAttempts: 1, paneWakeConfirmed: 1,
+      });
+    },
+  );
+
+  it('rejects a successful envelope, foreign invocation, mismatched handoff and unknown/gone owner without send', async () => {
+    for (const [variant, observed] of [
+      [{ ...event, lifecycleOutcome: 'success' as const, turnResultState: 'ok' }, receipt],
+      [event, { ...receipt, invocation_id: 'foreign-invocation' }],
+      [{ ...event, attemptIdentity: 'other-attempt' }, receipt],
+      [event, { ...receipt, launching_terminal_handle: 'foreign-stale-handle' }],
+      [{ ...event, handoffReceiptPath: undefined }, receipt],
+    ] as const) {
+      const checked = await invoke({
+        listPublishedIssueFacts: () => [], listTerminalEnvelopes: () => [variant],
+        readOriginalHandoffReceipt: () => observed,
+      });
+      expect(texts(checked.calls)).toHaveLength(0);
+    }
+    for (const witness of ['gone', 'unknown'] as const) {
+      const checked = await invoke({
+        listPublishedIssueFacts: () => [], listTerminalEnvelopes: () => [event],
+        readOriginalHandoffReceipt: () => receipt,
+        executor: executorFor({ [manager.handle]: 'done' }, [manager], manager, witness),
+      });
+      expect(texts(checked.calls)).toHaveLength(0);
+    }
+  });
+
+  it('persists attempted_unverified before text; failed premark suppresses delivery and failed upgrade prevents blind resend', async () => {
+    const store = new MemoryWakeStore();
+    const marker = vi.spyOn(store, 'markParkedWakeEvent').mockImplementationOnce(() => {
+      throw new Error('synthetic pre-effect refusal');
+    });
+    const withheld = await invoke({ store });
+    expect(texts(withheld.calls)).toHaveLength(0);
+    expect(withheld.result).toMatchObject({ paneWakeAttempts: 0 });
+    marker.mockRestore();
+
+    const secondStore = new MemoryWakeStore();
+    const originalMark = secondStore.markParkedWakeEvent.bind(secondStore);
+    const failedUpgrade = vi.spyOn(secondStore, 'markParkedWakeEvent').mockImplementation((key, status = 'sent') => {
+      if (status === 'sent') throw new Error('synthetic post-send disk refusal');
+      originalMark(key, status);
+    });
+    const first = await invoke({ store: secondStore });
+    expect(texts(first.calls)).toHaveLength(1);
+    expect(first.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 0, paneWakeNotConfirmed: 1 });
+    const marks = [...secondStore.parkedWakeEvents].filter((key) => key.startsWith('issue:'));
+    expect(marks).toHaveLength(1);
+    expect(secondStore.readParkedWakeEventStatus(marks[0]!)).toBe('attempted_unverified');
+    failedUpgrade.mockRestore();
+    const retry = await invoke({ store: secondStore });
+    expect(texts(retry.calls)).toHaveLength(0);
+
+    const uncertainStore = new MemoryWakeStore();
+    const uncertain = await invoke({ store: uncertainStore, executor: executorFor({
+      [manager.handle]: 'PARKED on GPT turn inv-mgr334',
+    }, [manager], manager, 'live', true) });
+    expect(texts(uncertain.calls)).toHaveLength(1);
+    expect(uncertain.result).toMatchObject({ paneWakeAttempts: 1, paneWakeNotConfirmed: 1 });
+    expect(texts((await invoke({ store: uncertainStore })).calls)).toHaveLength(0);
+  });
+});
