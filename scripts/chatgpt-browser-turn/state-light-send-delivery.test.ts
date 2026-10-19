@@ -2242,6 +2242,47 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
     ]);
   }
 
+  it('refuses two distinct active-cooldown invocations before any CDP target or Page allocation', async () => {
+    clock.now = 100_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const profile = join(root, 'profile');
+    const key = configuredProfileKey(profile, cdp);
+    const path = join(profileDirs(key).locks, 'state-light-account-cooldown.v1.json');
+    publishWitnessedStateLight429(key, clock.now);
+    const exactExpiry = JSON.parse(readFileSync(path, 'utf8')).cooldown_until_ms as number;
+    expect(exactExpiry).toBe(400_000);
+
+    const ownAttach = await import('./own-target-attach.ts');
+    const ui = await import('./ui-adapter.ts');
+    const targetTransport = await import('./own-target-cdp-proxy.ts');
+    const attach = vi.mocked(ownAttach.attachOwnTarget);
+    const loadChrome = vi.mocked(ui.loadChromium);
+    const allocate = vi.spyOn(targetTransport, 'createOwnCdpTarget');
+    attach.mockClear();
+    loadChrome.mockClear();
+    // No preallocated fixture Page is enqueued for either invocation:
+    // any CDP transport attempt would be an unexpected missing fixture.
+    expect(mocks.browserQueue).toHaveLength(0);
+    for (const [index, invocationId] of [randomUUID(), randomUUID()].entries()) {
+      clock.now += index + 1;
+      const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        '--profile', profile, '--cdp', cdp, '--input', join(root, 'input'),
+        '--output', join(root, 'refusal-' + index), '--new-chat', '--project-url', projectUrl,
+        '--invocation-id', invocationId, '--timeout-ms', '90000',
+      ]);
+      expect(result).toMatchObject({
+        state: 'rate_limit', cause: 'account_cooldown_active', send_count: 0,
+      });
+      expect(result.send_attempted).not.toBe(true);
+      expect(JSON.parse(readFileSync(path, 'utf8')).cooldown_until_ms).toBe(exactExpiry);
+    }
+    expect(attach).not.toHaveBeenCalled();
+    expect(loadChrome).not.toHaveBeenCalled();
+    expect(allocate).not.toHaveBeenCalled();
+    expect(mocks.browserQueue).toHaveLength(0);
+    expect(JSON.parse(readFileSync(path, 'utf8')).cooldown_until_ms).toBe(exactExpiry);
+  });
+
   it('honors a valid earlier shared cooldown before a second fresh navigation', async () => {
     clock.now = 100_000;
     vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
