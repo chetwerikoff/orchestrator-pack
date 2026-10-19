@@ -617,10 +617,18 @@ describe('real Orca assignment target resolution', () => {
 });
 
 describe('Issue #2655 exact reboot evidence with adapter-unresolved assignment', () => {
+  const orcaRuntimeWith = (resolution: ReturnType<NonNullable<RuntimeAdapter['resolveAssignmentWorker']>>) => {
+    const runtime = runtimeWith(resolution);
+    // The mock must carry the exact provider identity, not the generic
+    // DeterministicRuntimeAdapter's 'test' id.
+    Object.defineProperty(runtime.adapter, 'id', { configurable: true, value: 'orca' });
+    return runtime;
+  };
+
   it('admits an exact terminal/gone predecessor without a terminal-mail ledger', async () => {
     const file = assignmentFile();
     const expected = await publish(file, { bindingKey: 'ctx_3761867313e2', taskId: 'task_6af384b00044' });
-    const { adapter } = runtimeWith({
+    const { adapter } = orcaRuntimeWith({
       status: 'failed', operation: 'resolve_assignment_worker', reason: 'assignment_target_unresolved',
     });
     Object.defineProperty(adapter, 'observeAssignmentLifecycle', {
@@ -650,7 +658,7 @@ describe('Issue #2655 exact reboot evidence with adapter-unresolved assignment',
   ])('rejects $name as replacement evidence', async ({ dispatchId, taskId, state, prior }) => {
     const file = assignmentFile();
     const expected = await publish(file, { bindingKey: 'ctx_3761867313e2', taskId: 'task_6af384b00044' });
-    const { adapter } = runtimeWith({
+    const { adapter } = orcaRuntimeWith({
       status: 'failed', operation: 'resolve_assignment_worker', reason: 'assignment_target_unresolved',
     });
     const result = await admitCurrentWorkerAssignmentReplacement({
@@ -665,7 +673,7 @@ describe('Issue #2655 exact reboot evidence with adapter-unresolved assignment',
   it('never substitutes a terminal witness for a live adapter worker or unknown lifecycle', async () => {
     const file = assignmentFile();
     const expected = await publish(file, { bindingKey: 'ctx_3761867313e2' });
-    const active = runtimeWith({ status: 'ok', value: { kind: 'gone' } });
+    const active = orcaRuntimeWith({ status: 'ok', value: { kind: 'gone' } });
     Object.defineProperty(active.adapter, 'resolveAssignmentWorker', {
       configurable: true,
       value: vi.fn(() => ({ status: 'ok', value: { kind: 'resolved', worker: active.worker } })),
@@ -679,7 +687,7 @@ describe('Issue #2655 exact reboot evidence with adapter-unresolved assignment',
     })).status).toBe('skipped_live');
     expect(witness).not.toHaveBeenCalled();
 
-    const unresolved = runtimeWith({
+    const unresolved = orcaRuntimeWith({
       status: 'failed', operation: 'resolve_assignment_worker', reason: 'assignment_target_unresolved',
     });
     Object.defineProperty(unresolved.adapter, 'observeAssignmentLifecycle', {
