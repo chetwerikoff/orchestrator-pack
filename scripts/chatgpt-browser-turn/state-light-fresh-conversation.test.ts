@@ -252,6 +252,28 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void, owned
     fill: vi.fn(async (value: string) => { composerText = value; }),
     innerText: vi.fn(async () => (sent ? '' : composerText)),
     textContent: vi.fn(async () => (sent ? '' : composerText)),
+    // Browser-side callbacks execute against one live editable element. Do
+    // not fake an always-true evaluate: atomic compare/clear and URL guards
+    // must actually inspect the same state they can modify.
+    evaluate: vi.fn(async (
+      callback: (element: unknown, arg?: unknown) => unknown,
+      arg?: unknown,
+      options?: { timeout?: number },
+    ) => {
+      // The older readiness test adapter intentionally models a presence-only
+      // locator. Its three-argument evaluate must keep the original fallback;
+      // only the new lossless/atomic calls use the browser-element model below.
+      if (options?.timeout !== undefined) return true;
+      const element = {
+        isConnected: true,
+        isContentEditable: true,
+        ownerDocument: { defaultView: { location: { get href() { return String(page.url()); } } } },
+        get textContent() { return sent ? '' : composerText; },
+        set textContent(value: string) { composerText = value; },
+        get innerText() { return sent ? '' : composerText; },
+      };
+      return callback(element, arg);
+    }),
     press: vi.fn(async () => {
       sends++;
       sent = true;
@@ -315,7 +337,8 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void, owned
     }),
   };
 
-  return { page, composer, sendButton, getSends: () => sends, getObservationReads: () => observationIndex };
+  return { page, composer, sendButton, getSends: () => sends,
+    getComposerText: () => sent ? '' : composerText, getObservationReads: () => observationIndex };
 }
 
 async function runNewChatTurn(
@@ -493,7 +516,10 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(acquire).not.toHaveBeenCalledWith(
       'collision-profile', 'fresh-send-composer', 0, { maxHoldMs: 15_000 },
     );
-    if (timeout === '61000') expect(turn.composer.fill).toHaveBeenLastCalledWith('', { timeout: 5_000 });
+    if (timeout === '61000') {
+      expect(turn.getComposerText()).toBe('');
+      expect(turn.composer.fill).not.toHaveBeenCalledWith('', expect.anything());
+    }
     expect(turn.page.bringToFront).not.toHaveBeenCalled();
   });
 
@@ -597,7 +623,9 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(turn.getSends()).toBe(0);
     expect(turn.sendButton.click).not.toHaveBeenCalled();
-    expect(turn.composer.fill).toHaveBeenLastCalledWith('', expect.objectContaining({ timeout: expect.any(Number) }));
+    expect(turn.composer.evaluate).toHaveBeenCalled();
+    expect(turn.getComposerText()).toBe('');
+    expect(turn.composer.fill).not.toHaveBeenCalledWith('', expect.anything());
     expect(turn.page.close).toHaveBeenCalledTimes(1);
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
   });
@@ -619,8 +647,10 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(turn.getSends()).toBe(0);
     expect(turn.sendButton.click).not.toHaveBeenCalled();
-    expect(turn.page.close).toHaveBeenCalledTimes(1);
-    expect(turn.composer.fill).toHaveBeenLastCalledWith('', { timeout: 5_000 });
+    // An edited shared draft is neither ours to clear nor ours to close.
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(turn.getComposerText()).toBe('SYNTHETIC-FOREIGN-COMPOSER-EDIT');
+    expect(turn.composer.fill).not.toHaveBeenCalledWith('', expect.anything());
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
   });
 
@@ -655,6 +685,7 @@ describe('state-light fresh conversation collision recovery', () => {
       state: 'driver_error', cause: 'state_light_new_chat_send_budget_unavailable', send_count: 0,
     });
     expect(turn.sendButton.click).not.toHaveBeenCalled();
+    expect(turn.getComposerText()).toBe('');
     expect(turn.page.close).toHaveBeenCalledTimes(1);
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
   });
@@ -670,65 +701,106 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({
       state: 'driver_error', cause: 'state_light_new_chat_send_budget_unavailable', send_count: 0,
     });
-    expect(turn.composer.fill).toHaveBeenLastCalledWith('', { timeout: 5_000 });
+    expect(turn.getComposerText()).toBe('');
+    expect(turn.composer.fill).not.toHaveBeenCalledWith('', expect.anything());
     expect(turn.sendButton.click).not.toHaveBeenCalled();
     expect(turn.page.close).toHaveBeenCalledTimes(1);
     expect(outcome.result.incidents).not.toContain('owned_composer_cleanup_unavailable');
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
   });
 
-  it('closes an owned pre-Send failure when composer clear and readback fail', async () => {
+  it('preserves a never-clicked draft when atomic compare-and-clear cannot be verified', async () => {
     const invocationId = randomUUID();
     const prompt = 'PROMPT-FAILED-COMPOSER-CLEAR';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'NOT-SENT');
     turn.sendButton.isEnabled.mockResolvedValue(false);
-    const originalFill = turn.composer.fill.getMockImplementation()!;
-    const originalInnerText = turn.composer.innerText.getMockImplementation()!;
-    const originalTextContent = turn.composer.textContent.getMockImplementation()!;
-    let failedClear = false;
-    let failedReadback = 0;
-    turn.composer.fill.mockImplementation(async (value: string, options?: unknown) => {
-      if (value === '') {
-        failedClear = true;
-        throw new Error('synthetic composer clearing failure');
-      }
-      return originalFill(value, options);
-    });
-    turn.composer.innerText.mockImplementation(async () => {
-      if (failedClear) {
-        failedReadback++;
-        throw new Error('synthetic composer readback failure');
-      }
-      return originalInnerText();
-    });
-    turn.composer.textContent.mockImplementation(async () => {
-      if (failedClear) {
-        failedReadback++;
-        throw new Error('synthetic composer readback failure');
-      }
-      return originalTextContent();
+    const evaluate = turn.composer.evaluate.getMockImplementation()!;
+    turn.composer.evaluate.mockImplementation(async (
+      callback: (element: unknown, arg?: unknown) => unknown,
+      arg?: unknown,
+      options?: { timeout?: number },
+    ) => {
+      if (options?.timeout !== undefined) return evaluate(callback, arg, options);
+      throw new Error('synthetic atomic composer evaluation failure');
     });
 
     const outcome = await runNewChatTurn(
       turn.page, join(stateDir, 'failed-composer-clear-2510.txt'), '90000', invocationId,
     );
-    expect(failedClear).toBe(true);
-    expect(failedReadback).toBeGreaterThan(0);
     expect(outcome.result).toMatchObject({
-      state: 'send_failed', cause: 'fresh_send_button_never_enabled',
-      send_count: 0, cleanup: 'confirmed',
+      state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
     });
+    expect(turn.composer.evaluate).toHaveBeenCalled();
+    expect(turn.composer.fill).not.toHaveBeenCalledWith('', expect.anything());
+    expect(turn.getComposerText()).toContain(prompt);
+    expect(outcome.result.cleanup).not.toBe('confirmed');
+    expect(outcome.result.incidents).toContain('owned_composer_cleanup_unavailable');
     expect(outcome.result.send_attempted).not.toBe(true);
     expect(turn.getSends()).toBe(0);
     expect(turn.sendButton.click).not.toHaveBeenCalled();
-    expect(turn.page.close).toHaveBeenCalledTimes(1);
+    expect(turn.page.close).not.toHaveBeenCalled();
     expect(deriveDelivery({
       ...outcome.result,
       resolved_send_count: outcome.result.send_count,
     }, false)).toBe('not-sent');
     expect(outcome.code).not.toBe(0);
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
+  });
+
+  it('preserves an edited shared draft when atomic comparison sees a concurrent mutation', async () => {
+    const prompt = 'PROMPT-ATOMIC-COMPARE-EDIT';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    turn.sendButton.isEnabled.mockResolvedValue(false);
+    const evaluate = turn.composer.evaluate.getMockImplementation()!;
+    let changed = false;
+    turn.composer.evaluate.mockImplementation(async (
+      callback: (element: unknown, arg?: unknown) => unknown,
+      arg?: unknown,
+      options?: { timeout?: number },
+    ) => {
+      const payload = typeof arg === 'string' ? arg : (arg as { payload?: string } | undefined)?.payload;
+      if (!changed && typeof payload === 'string' && payload.includes(prompt)) {
+        changed = true;
+        await turn.composer.fill('FOREIGN-EDIT-BEFORE-ATOMIC-COMPARE');
+      }
+      return evaluate(callback, arg, options);
+    });
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'atomic-shared-edit-2651.txt'));
+    expect(changed).toBe(true);
+    expect(outcome.result.send_count).toBe(0);
+    expect(outcome.result.cleanup).not.toBe('confirmed');
+    expect(turn.getComposerText()).toBe('FOREIGN-EDIT-BEFORE-ATOMIC-COMPARE');
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
+  });
+
+  it('does not clear a Page navigating during the single atomic compare-and-clear', async () => {
+    const prompt = 'PROMPT-ATOMIC-NAVIGATION';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    turn.sendButton.isEnabled.mockResolvedValue(false);
+    const originalUrl = turn.page.url.getMockImplementation()!;
+    let navigated = false;
+    turn.page.url.mockImplementation(() => navigated ? OTHER_PROJECT_CONVERSATION_URL : originalUrl());
+    const evaluate = turn.composer.evaluate.getMockImplementation()!;
+    turn.composer.evaluate.mockImplementation(async (
+      callback: (element: unknown, arg?: unknown) => unknown,
+      arg?: unknown,
+      options?: { timeout?: number },
+    ) => {
+      const payload = typeof arg === 'string' ? arg : (arg as { payload?: string } | undefined)?.payload;
+      if (!navigated && typeof payload === 'string' && payload.includes(prompt)) navigated = true;
+      return evaluate(callback, arg, options);
+    });
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'atomic-navigation-2651.txt'));
+    expect(navigated).toBe(true);
+    expect(outcome.result.send_count).toBe(0);
+    expect(outcome.result.cleanup).not.toBe('confirmed');
+    expect(turn.getComposerText()).toContain(prompt);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(turn.sendButton.click).not.toHaveBeenCalled();
   });
 
   it('preserves a formerly owned tab that navigates during terminal composer cleanup (#2487)', async () => {
@@ -750,7 +822,10 @@ describe('state-light fresh conversation collision recovery', () => {
       state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
     });
     expect(repurposed).toBe(true);
-    expect(turn.composer.fill).toHaveBeenLastCalledWith('', { timeout: 5_000 });
+    // Clearing while still owned is permitted. Navigation thereafter never
+    // grants authority to close the now-foreign Page or fill its composer.
+    expect(turn.page.url()).toBe(OTHER_PROJECT_CONVERSATION_URL);
+    expect(turn.composer.fill).not.toHaveBeenCalledWith('', expect.anything());
     expect(turn.page.close).not.toHaveBeenCalled();
     expect(outcome.result.incidents).toContain('owned_composer_cleanup_unavailable');
   });
@@ -783,10 +858,12 @@ describe('state-light fresh conversation collision recovery', () => {
       name: 'TimeoutError',
     }));
     const outcome = await runNewChatTurn(turn.page, '/tmp/retry-unproven-2487.txt', '90000', invocationId);
-    expect(outcome.result).toMatchObject({ state: 'observation_uncertain', send_count: 0, send_attempted: true, cleanup: 'confirmed' });
+    expect(outcome.result).toMatchObject({ state: 'observation_uncertain', send_count: 0, send_attempted: true });
+    expect(outcome.result.cleanup).not.toBe('confirmed');
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.composer.fill).not.toHaveBeenLastCalledWith('');
-    expect(turn.page.close).toHaveBeenCalledTimes(1);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(turn.getComposerText()).toContain(prompt);
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
   });
 
@@ -833,7 +910,8 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.getSends()).toBe(0);
     expect(turn.composer.fill).not.toHaveBeenLastCalledWith('', expect.anything());
-    expect(turn.page.close).toHaveBeenCalledTimes(1);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(turn.getComposerText()).toContain(prompt);
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
   });
 
@@ -872,7 +950,9 @@ describe('state-light fresh conversation collision recovery', () => {
       expectPossibleEffect(outcome.result);
       expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
       expect(turn.getSends()).toBe(0);
-      expect(turn.page.close).toHaveBeenCalledTimes(1);
+      expect(turn.page.close).not.toHaveBeenCalled();
+      if (scenario === 'marker_changed') expect(turn.getComposerText()).toBe('FOREIGN EDITED DRAFT');
+      else expect(turn.getComposerText()).toContain(prompt);
       expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
     },
   );
@@ -981,7 +1061,8 @@ describe('state-light fresh conversation collision recovery', () => {
     expectPossibleEffect(outcome.result);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
     expect(turn.getSends()).toBe(0);
-    expect(turn.page.close).toHaveBeenCalledTimes(1);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(turn.getComposerText()).toContain(prompt);
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('dispatching');
   });
 
