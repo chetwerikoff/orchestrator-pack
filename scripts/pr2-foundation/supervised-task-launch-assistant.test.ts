@@ -397,6 +397,7 @@ function freshRepoFixture(input: {
   failOrigin?: boolean;
   setupState?: 'not_configured' | 'running' | 'absent';
   waitExitCode?: number;
+  freshStatus?: string;
 } = {}) {
   const calls: Array<{ argv: string[]; cwd: string | undefined }> = [];
   const execute = async (
@@ -419,6 +420,9 @@ function freshRepoFixture(input: {
         stdout: (input.originByPath?.[cwd ?? ''] ?? 'git@github.com:chetwerikoff/orchestrator-pack.git') + '\n',
         stderr: '',
       };
+    }
+    if (command === 'git status --porcelain=v1 --untracked-files=all') {
+      return { ok: true, stdout: input.freshStatus ?? '', stderr: '' };
     }
     if (args[0] === 'orca' && args[1] === 'worktree' && args[2] === 'create') {
       const receipt = input.setupState === 'absent' ? {} : {
@@ -2815,7 +2819,7 @@ The words Firefighter universal appear here only as prose.`;
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
     }, fixture.execute);
     expect(result).toMatchObject({ status: 'ok', value: { id: 'repo::wt', setupWitness: 'same_invocation_complete' } });
-    expect(fixture.calls.map((call) => call.argv[0])).toEqual(['orca', 'git', 'git', 'orca']);
+    expect(fixture.calls.map((call) => call.argv[0])).toEqual(['orca', 'git', 'git', 'orca', 'git']);
   });
 
   it('accepts a fresh worktree with no setup receipt', async () => {
@@ -2831,6 +2835,19 @@ The words Firefighter universal appear here only as prose.`;
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
       '--issue', '1479', '--setup', 'run', '--json',
     ]);
+  });
+
+  it('refuses dirty newly created worker worktree without reset or stash', async () => {
+    const fixture = freshRepoFixture({ freshStatus: ' M tests/test_database_guard.py\n' });
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task_98269fb5e0c2',
+      worktreeName: 'issue-2653', issueNumber: 2653,
+    }, fixture.execute);
+    expect(result).toMatchObject({ status: 'continue', cause: 'worktree_fresh_dirty' });
+    expect(fixture.calls.some((call) => call.argv.join(' ') ===
+      'git status --porcelain=v1 --untracked-files=all')).toBe(true);
+    expect(fixture.calls.some((call) =>
+      call.argv[0] === 'git' && ['reset', 'stash', 'merge', 'clean'].includes(call.argv[1]!))).toBe(false);
   });
 
   it('waits for the exact fresh setup terminal to exit successfully', async () => {
@@ -2860,7 +2877,7 @@ The words Firefighter universal appear here only as prose.`;
     const result = await prepareWorktreeWithOrca({
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeSelector: 'id:repo::existing',
     }, async () => ({ ok: true, stdout: okEnvelope({ worktree: { id: 'repo::existing', path: '/tmp/existing', head: 'abc' } }) }));
-    expect(result).toMatchObject({ status: 'continue', cause: 'worktree_reuse_readiness_unproven', evidence: { worktreeId: 'repo::existing' } });
+    expect(result).toMatchObject({ status: 'continue', cause: 'worktree_reuse_ownership_unproven', evidence: { worktreeId: 'repo::existing' } });
   });
 
   it('refreshes a bound clean manager worktree before returning proven reuse', async () => {
