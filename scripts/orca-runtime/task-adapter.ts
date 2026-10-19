@@ -36,6 +36,12 @@ import {
   resolveDispatchTerminalMailLedgerPath,
   resolveWakeSupervisorStateRoot,
 } from '../pr2-foundation/wake-supervisor-state-root.ts';
+import {
+  currentWorkerAssignment,
+  resolveWorkerAssignmentStorePath,
+  sameWorkerAssignmentIdentity,
+  type WorkerAssignment,
+} from '../lib/worker-assignment-store.ts';
 
 function usesNativePtyFallback(generation: string): boolean {
   return generation.includes('@@');
@@ -749,11 +755,79 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     };
   }
 
+  /** Only for the exact current same-Task assignment, with a fresh native gone read. */
+  #canReplaceGoneLaunchTerminal(
+    input: {
+      readonly title: string;
+      readonly workspace?: 'active' | string;
+      readonly terminalGoneRecovery?: Readonly<{ assignment: WorkerAssignment; worktreeId: string }>;
+    },
+    ownership: LaunchTaskTerminalOwnership,
+    options: RuntimeCallOptions,
+  ): boolean {
+    const recovery = input.terminalGoneRecovery;
+    const expected = recovery?.assignment;
+    if (!expected || !Number.isInteger(expected.issueNumber) || expected.issueNumber <= 0
+      || expected.kind !== 'local' || expected.provider !== this.id
+      || expected.taskId.length === 0 || expected.bindingKey.length === 0
+      || !input.title.endsWith(`-${expected.taskId}`)
+      || (input.title.startsWith('opk-manager-') !== (expected.role === 'orchestrator'))
+      || !input.workspace || input.workspace === 'active'
+      || resolve(input.workspace) !== resolve(ownership.workspacePath)
+      || ownership.identity.runtime !== this.id || !recovery.worktreeId) return false;
+
+    const current = currentWorkerAssignment(
+      resolveWorkerAssignmentStorePath(expected.projectId, this.#options.env ?? process.env),
+      expected.issueNumber,
+    );
+    if (!sameWorkerAssignmentIdentity(current, expected)
+      || current?.issueNumber !== expected.issueNumber || current?.role !== expected.role) return false;
+
+    // A stale title record proves prior ownership only. Replacement requires
+    // current native Task/Dispatch status and affirmative no-worker evidence.
+    const selected = this.#run<unknown>(
+      ['orchestration', 'dispatch-show', '--task', expected.taskId], options,
+    );
+    if (!selected.ok || !isRecord(selected.result) || !isRecord(selected.result.dispatch)) return false;
+    const nativeDispatch = selected.result.dispatch;
+    const state = String(nativeDispatch.status ?? '').trim().toLowerCase();
+    if (String(nativeDispatch.id ?? '').trim() !== expected.bindingKey
+      || !['failed', 'abandoned', 'cancelled', 'done', 'completed'].includes(state)) return false;
+    const shown = this.#run<unknown>(
+      ['orchestration', 'worker-show', '--dispatch', expected.bindingKey], options,
+    );
+    if (!shown.ok || !isRecord(shown.result)) return false;
+    const parsed = parseOrcaWorkerShowResult(shown.result);
+    const reported = isRecord(shown.result.dispatch) ? shown.result.dispatch : null;
+    const worker = isRecord(shown.result.worker) ? shown.result.worker : null;
+    if (!parsed || !reported || !worker
+      || (typeof reported.id === 'string' && reported.id.trim() !== expected.bindingKey)
+      || String(reported.status ?? '').trim().toLowerCase() !== state
+      || parsed.observation?.exactWorker !== false
+      || !['missing', 'terminal_missing'].includes(parsed.observation?.status?.trim().toLowerCase() ?? '')
+      || shown.result.terminal !== null) return false;
+    const resource = parsed.terminalResource;
+    if (resource && (String(resource.originDispatchId ?? '').trim() !== expected.bindingKey
+      || String(resource.ownerDispatchId ?? '').trim() !== expected.bindingKey)) return false;
+    const workerHandle = String(worker.agent_terminal_handle ?? '').trim();
+    const resourceHandle = String(resource?.terminalHandle ?? '').trim();
+    const workerWorktree = String(worker.worktree_id ?? '').trim();
+    const resourceWorktree = String(resource?.worktreeId ?? '').trim();
+    if ((workerHandle && workerHandle !== ownership.identity.id)
+      || (resourceHandle && resourceHandle !== ownership.identity.id)
+      || (workerHandle && resourceHandle && workerHandle !== resourceHandle)
+      || (workerWorktree && workerWorktree !== recovery.worktreeId)
+      || (resourceWorktree && resourceWorktree !== recovery.worktreeId)
+      || (!workerWorktree && !resourceWorktree)) return false;
+    return true;
+  }
+
   override spawnWorker(
     input: {
       readonly title: string;
       readonly command: string;
       readonly workspace?: 'active' | string;
+      readonly terminalGoneRecovery?: Readonly<{ assignment: WorkerAssignment; worktreeId: string }>;
     },
     options: RuntimeCallOptions = {},
   ): RuntimeResult<RuntimeWorker> {
@@ -775,28 +849,46 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
           return runtimeFailure('spawn_worker', 'launch_task_terminal_title_mismatch');
         }
         const current = super.findWorker(ownership.identity, options);
-        if (current.status !== 'ok') return current;
-        if (!current.value
-          || !sameRuntimeWorker(current.value.identity, ownership.identity)
-          || current.value.title !== ownership.title
-          || current.value.workspacePath !== ownership.workspacePath) {
-          return runtimeFailure('spawn_worker', 'launch_task_terminal_identity_unproven');
-        }
-        if (input.workspace && input.workspace !== 'active'
-          && resolve(input.workspace) !== resolve(ownership.workspacePath)) {
-          return runtimeFailure('spawn_worker', 'launch_task_terminal_workspace_mismatch');
-        }
-        if (!input.workspace || input.workspace === 'active') {
-          const readiness = super.readiness(options);
-          if (readiness.status !== 'ok') return readiness;
-          if (readiness.value.workspacePath !== ownership.workspacePath) {
+        if (current.status !== 'ok' || !current.value) {
+          // Fail closed on an unknown terminal-show failure or a reused handle.
+          // Only an explicit native not-found and a separately correlated
+          // same-Dispatch gone witness may permit replacing this stale title.
+          const show = this.#run<unknown>(
+            ['terminal', 'show', '--terminal', ownership.identity.id], options,
+          );
+          if (show.ok || !['not_found', 'terminal_not_found', 'terminal_missing']
+            .includes(String(show.error?.code ?? '').trim().toLowerCase())) {
+            return runtimeFailure('spawn_worker', 'launch_task_terminal_identity_unproven');
+          }
+          if (!this.#canReplaceGoneLaunchTerminal(input, ownership, options)) {
+            return current.status !== 'ok'
+              ? current
+              : runtimeFailure('spawn_worker', 'launch_task_terminal_identity_unproven');
+          }
+          // Fall through to the existing title-inventory uniqueness check and
+          // persist a new live owner under the same durable title key.
+        } else {
+          if (!sameRuntimeWorker(current.value.identity, ownership.identity)
+            || current.value.title !== ownership.title
+            || current.value.workspacePath !== ownership.workspacePath) {
+            return runtimeFailure('spawn_worker', 'launch_task_terminal_identity_unproven');
+          }
+          if (input.workspace && input.workspace !== 'active'
+            && resolve(input.workspace) !== resolve(ownership.workspacePath)) {
             return runtimeFailure('spawn_worker', 'launch_task_terminal_workspace_mismatch');
           }
+          if (!input.workspace || input.workspace === 'active') {
+            const readiness = super.readiness(options);
+            if (readiness.status !== 'ok') return readiness;
+            if (readiness.value.workspacePath !== ownership.workspacePath) {
+              return runtimeFailure('spawn_worker', 'launch_task_terminal_workspace_mismatch');
+            }
+          }
+          this.#assignmentOwned.set(current.value.identity.id, current.value.identity);
+          this.#ownedForStop.set(current.value.identity.id, current.value.identity);
+          this.#stopWorkspace.set(current.value.identity.id, input.workspace ?? ownership.workspacePath);
+          return { status: 'ok', value: { ...current.value, provenance: 'internal' } };
         }
-        this.#assignmentOwned.set(current.value.identity.id, current.value.identity);
-        this.#ownedForStop.set(current.value.identity.id, current.value.identity);
-        this.#stopWorkspace.set(current.value.identity.id, input.workspace ?? ownership.workspacePath);
-        return { status: 'ok', value: { ...current.value, provenance: 'internal' } };
       }
       const existingWorkers = super.listWorkers({ workspace: input.workspace ?? 'active' }, options);
       if (existingWorkers.status !== 'ok') return existingWorkers;

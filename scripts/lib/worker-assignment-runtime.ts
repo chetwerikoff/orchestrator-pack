@@ -103,7 +103,7 @@ export type WorkerAssignmentTargetResolution =
 export interface TerminalGoneAssignmentEvidence {
   readonly taskId: string;
   readonly dispatchId: string;
-  readonly dispatchState: 'failed' | 'abandoned' | 'cancelled' | 'done';
+  readonly dispatchState: 'failed' | 'abandoned' | 'cancelled' | 'done' | 'completed';
   /** Present only when the native producer retains a corroborated old handle. */
   readonly priorTerminalId?: string;
   /** Exact Orca worktree ownership witness, when the native observation provides it. */
@@ -373,7 +373,7 @@ export async function admitCurrentWorkerAssignmentReplacement(input: {
         if (evidence?.workerAbsent === true
           && evidence.taskId === input.expected.taskId
           && evidence.dispatchId === input.expected.bindingKey
-          && ['failed', 'abandoned', 'cancelled', 'done'].includes(evidence.dispatchState)
+          && ['failed', 'abandoned', 'cancelled', 'done', 'completed'].includes(evidence.dispatchState)
           && (evidence.priorTerminalId === undefined
             || (typeof evidence.priorTerminalId === 'string' && Boolean(evidence.priorTerminalId.trim())))) {
           if (requestedTerminalId && evidence.priorTerminalId

@@ -40,6 +40,7 @@ import {
   type SemanticExecutorProfile,
 } from '../executor-profile-policy.ts';
 import { runSupervisedWorkerStart, readTerminalGoneDispatch, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
+import type { TerminalGoneAssignmentEvidence } from '../lib/worker-assignment-runtime.ts';
 
 export const LAUNCH_ASSISTANT_SCHEMA = 'supervised-task-launch-assistant/v1' as const;
 export const LAUNCH_STARTUP_OBSERVATION_WINDOW_MS = 30_000;
@@ -180,7 +181,7 @@ function sameTaskTerminalDispatch(
       && assignment.taskId === taskId
       && assignment.kind === 'local'
       && assignment.provider === adapterId
-      && ['failed', 'abandoned', 'cancelled', 'done'].includes(observed.status ?? ''));
+      && ['failed', 'abandoned', 'cancelled', 'done', 'completed'].includes(observed.status ?? ''));
 }
 
 export type ManagerBriefTemplateName = 'manager-preamble.md' | 'ff-prompt-universal.md';
@@ -219,6 +220,8 @@ export interface LaunchDependencies {
   readonly createManagerTask: (runId: string, brief: string) => Promise<EdgeResult<{ readonly taskId: string; readonly status: string }>>;
   readonly observeDispatch: (taskId: string) => Promise<EdgeResult<DispatchObservation>>;
   readonly readCurrentAssignment: (issueNumber: number) => WorkerAssignment | null;
+  /** Native exact-Dispatch/worker-absent witness, not an assignment/store guess. */
+  readonly proveTerminalGone?: (assignment: WorkerAssignment) => Promise<TerminalGoneAssignmentEvidence | null>;
   readonly prepareWorktree: (input: WorktreePreparationRequest) => Promise<EdgeResult<PreparedWorktree>>;
   readonly finalizeProfile?: (profile: ExecutorProfile, worktreePath: string) => Promise<EdgeResult<ExecutorProfile>>;
   readonly adapter: RuntimeAdapter;
@@ -791,8 +794,14 @@ export async function runSupervisedTaskLaunchAssistant(
   const early = await checkpoint('dispatch_admission_early', timings, deps.now, () => deps.observeDispatch(taskId));
   if (early.status !== 'ok') return continued(input, 'dispatch_admission_early', early, resources, startedAtMs, timings, deps.now);
   const earlyCurrent = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
-  const earlyTerminal = sameTaskTerminalDispatch(early.value, earlyCurrent, taskId, deps.adapter.id)
+  const earlyCandidate = sameTaskTerminalDispatch(early.value, earlyCurrent, taskId, deps.adapter.id)
     && earlyCurrent?.role === (input.workClass === 'manager' ? 'orchestrator' : 'worker');
+  const earlyGone = earlyCandidate && earlyCurrent && deps.proveTerminalGone
+    ? await deps.proveTerminalGone(earlyCurrent) : null;
+  const earlyTerminal = Boolean(earlyGone && earlyCurrent
+    && earlyGone.workerAbsent && earlyGone.taskId === taskId
+    && earlyGone.dispatchId === earlyCurrent.bindingKey
+    && earlyGone.dispatchState === early.value.status);
   if (early.value.kind === 'present'
     && !earlyTerminal
     && (!delegatedIntegration || early.value.dispatchId !== predecessor?.bindingKey)) {
@@ -867,6 +876,12 @@ export async function runSupervisedTaskLaunchAssistant(
       title: `opk-${input.workClass === 'merge' ? 't2-merge' : input.workClass}-${taskId}`,
       command: profile.launchCommand,
       workspace: prepared.value.path,
+      // Extra adapter-consumed input on the existing runtime-neutral spawn path.
+      // The production Orca adapter rechecks the current fence and native proof
+      // before replacing an absent terminal's durable title ownership.
+      ...(earlyTerminal && earlyCurrent && earlyGone?.worktreeId === prepared.value.id
+        ? { terminalGoneRecovery: { assignment: earlyCurrent, worktreeId: prepared.value.id } }
+        : {}),
     });
     const spawnNativeError = spawn.status !== 'ok' ? nativeRuntimeError(spawn) : null;
     if (spawn.status !== 'ok') terminalCause = `terminal_spawn_${spawn.status}`;
@@ -2235,6 +2250,8 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
     ),
     readCurrentAssignment: (issueNumber) =>
       currentWorkerAssignment(resolveWorkerAssignmentStorePath(target.projectId, env), issueNumber),
+    proveTerminalGone: (assignment) => readTerminalGoneDispatch(assignment,
+      (args) => child(['orca', ...args], cwd, env)),
     observeDispatch: async (taskId) => dispatchEdge(envelope(await child([
       'orca', 'orchestration', 'dispatch-show', '--task', taskId, '--json',
     ], cwd, env))),

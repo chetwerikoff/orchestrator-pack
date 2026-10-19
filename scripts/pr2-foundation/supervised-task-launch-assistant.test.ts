@@ -307,6 +307,7 @@ function deps(input: {
   supervised?: SupervisedWorkerStartResult;
   onSupervised?: () => void;
   currentAssignment?: WorkerAssignment | null;
+  proveTerminalGone?: LaunchDependencies['proveTerminalGone'];
   clock?: number[];
 } = {}): LaunchDependencies {
   const dispatch = [...(input.dispatch ?? [{ kind: 'absent' }, { kind: 'absent' }])];
@@ -329,6 +330,7 @@ function deps(input: {
     },
     observeDispatch: async () => { input.onDispatch?.(); return { status: 'ok', value: dispatch.shift() ?? { kind: 'absent' } }; },
     readCurrentAssignment: () => input.currentAssignment ?? null,
+    ...(input.proveTerminalGone ? { proveTerminalGone: input.proveTerminalGone } : {}),
     prepareWorktree: async () => { input.onWorktree?.(); return { status: 'ok', value: {
       id: 'repo::exact-worktree', selector: 'id:repo::exact-worktree', path: '/tmp/exact-worktree', setupWitness: 'same_invocation_complete',
     } }; },
@@ -3441,6 +3443,12 @@ describe('machine-local executor profile store', () => {
 });
 
 describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => {
+  const nativeGone = (state: 'failed' | 'abandoned' | 'cancelled' | 'done' | 'completed') =>
+    async (assignment: WorkerAssignment) => ({
+      taskId: assignment.taskId, dispatchId: assignment.bindingKey,
+      dispatchState: state, workerAbsent: true as const, worktreeId: 'repo::exact-worktree',
+    });
+
   const terminal = (status: string): DispatchObservation => ({
     kind: 'present', dispatchId: 'ctx_3761867313e2', status,
   });
@@ -3450,11 +3458,12 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
     bindingKey: 'ctx_3761867313e2',
   } as WorkerAssignment);
 
-  it.each(['failed', 'abandoned', 'cancelled', 'done'])(
+  it.each(['failed', 'abandoned', 'cancelled', 'done', 'completed'] as const)(
     'allows the exact %s current Dispatch at both new-start observations', async (status) => {
       let starts = 0;
       const launched = await runSupervisedTaskLaunchAssistant(launchInput('t2'), deps({
         currentAssignment: owned(), dispatch: [terminal(status), terminal(status)],
+        proveTerminalGone: nativeGone(status),
         onSupervised: () => { starts += 1; },
       }));
       expect(launched).toMatchObject({
@@ -3483,10 +3492,42 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
     expect(starts).toBe(0);
   });
 
+  it.each(['missing', 'foreign', 'stale-state'] as const)(
+    'refuses %s terminal-gone proof before worktree or new terminal effects', async (caseName) => {
+      let prepares = 0; let spawns = 0; let starts = 0;
+      const old = owned();
+      const actual = nativeGone('completed');
+      const proof: NonNullable<LaunchDependencies['proveTerminalGone']> = async (assignment) => {
+        if (caseName === 'missing') return null;
+        const witness = await actual(assignment);
+        return caseName === 'foreign'
+          ? { ...witness, dispatchId: 'ctx_foreign' }
+          : { ...witness, dispatchState: 'failed' };
+      };
+      const launched = await runSupervisedTaskLaunchAssistant(launchInput('t2'), {
+        ...deps({
+          currentAssignment: old,
+          dispatch: [terminal('completed'), terminal('completed')],
+          adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }),
+          onWorktree: () => { prepares += 1; },
+          onSupervised: () => { starts += 1; },
+          proveTerminalGone: proof,
+        }),
+      });
+      expect(launched).toMatchObject({
+        outcome: 'continue', stage: 'dispatch_admission_early', observedCause: 'fresh_dispatch_not_absent',
+      });
+      expect(prepares).toBe(0);
+      expect(spawns).toBe(0);
+      expect(starts).toBe(0);
+    },
+  );
+
   it('refuses a Dispatch that becomes live or changes after terminal early witness', async () => {
     let starts = 0;
     const launched = await runSupervisedTaskLaunchAssistant(launchInput('t2'), deps({
       currentAssignment: owned(), dispatch: [terminal('failed'), terminal('dispatched')],
+      proveTerminalGone: nativeGone('failed'),
       onSupervised: () => { starts += 1; },
     }));
     expect(launched).toMatchObject({

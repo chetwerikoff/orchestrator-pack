@@ -1,4 +1,6 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -133,22 +135,19 @@ describe('supervised worker start exact assignment admission',()=>{
     expect(calls).toBe(0);
   });
 
-  it('permits provider replacement of a different-task local assignment after exact gone admission',async()=>{
+  it('replaces a different-task local assignment on the safe exact-terminal route',async()=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
     const file=resolveWorkerAssignmentStorePath('orchestrator-pack',env);
     const old=await publishCurrentWorkerAssignment({file,repository:'chetwerikoff/orchestrator-pack',issueNumber:1416,
       taskId:'task_old',kind:'local',provider:'orca',bindingKey:'dispatch_old',role:'worker'});
     if(!old.ok)throw new Error(old.reason);
-    const result=await runSupervisedWorkerStart({mode:'provider_new_top_level',role:'worker',issueNumber:1416,
+    const result=await runSupervisedWorkerStart({mode:'exact_terminal_worktree',role:'worker',issueNumber:1416,
       repository:'chetwerikoff/orchestrator-pack',env,adapter:adapter({kind:'gone'}),
-      orcaArgs:['--task','task_new','--worktree','new-top-level','--repo','id:repo-1','--name','new-worktree',
-        '--agent','cursor','--model','model-medium','--setup','run'],
+      orcaArgs:args('task_new'),inspect:inspectPlacement(),
       execute:async()=>({ok:true,stdout:envelope({taskId:'task_new',dispatchId:'dispatch_new',state:'ready',
         worktree:{id:'repo-1::/tmp/new-worktree',path:'/tmp/new-worktree'},terminal:{handle:'term-provider',runtime:'orca',generation:'generation-1'},
         setup:{requested:'run',effective:'run',state:'running'},launch:{requested:{agent:'cursor',model:'model-medium'},effective:{agent:'cursor',model:'model-medium'}},
-        effects:[{kind:'worktree',action:'created_top_level',id:'repo-1::/tmp/new-worktree'},
-          {kind:'terminal',role:'agent',action:'reused_agent_terminal',id:'term-provider'},
-          {kind:'dispatch_input',role:'agent',id:'term-provider',state:'accepted'}]})}),
+        effects:producerEffects()})}),
     });
     expect(result).toMatchObject({ok:true,reason:'ready_and_assignment_bound',assignment:{taskId:'task_new',bindingKey:'dispatch_new',generation:2}});
     expect(currentWorkerAssignment(file,1416)?.taskId).toBe('task_new');
@@ -167,16 +166,13 @@ describe('supervised worker start exact assignment admission',()=>{
       predecessorGeneration:implementation.assignment.generation,
     };
     let calls=0;
-    const result=await runSupervisedWorkerStart({mode:'provider_new_top_level',role:'worker',issueNumber:1416,
+    const result=await runSupervisedWorkerStart({mode:'exact_terminal_worktree',role:'worker',issueNumber:1416,
       repository:'chetwerikoff/orchestrator-pack',env,adapter:adapter({kind:'gone'}),delegatedIntegration,
-      orcaArgs:['--task','task_1','--worktree','new-top-level','--repo','id:repo-1','--name','integration-worktree',
-        '--agent','cursor','--model','model-medium','--setup','run'],
+      orcaArgs:args('task_1'),inspect:inspectPlacement(),
       execute:async()=>{calls+=1;return{ok:true,stdout:envelope({taskId:'task_1',dispatchId:'dispatch_integration',state:'ready',
         worktree:{id:'repo-1::/tmp/new-worktree',path:'/tmp/new-worktree'},terminal:{handle:'term-provider',runtime:'orca',generation:'generation-1'},
         setup:{requested:'run',effective:'run',state:'running'},launch:{requested:{agent:'cursor',model:'model-medium'},effective:{agent:'cursor',model:'model-medium'}},
-        effects:[{kind:'worktree',action:'created_top_level',id:'repo-1::/tmp/new-worktree'},
-          {kind:'terminal',role:'agent',action:'reused_agent_terminal',id:'term-provider'},
-          {kind:'dispatch_input',role:'agent',id:'term-provider',state:'accepted'}]})}},
+        effects:producerEffects()})}},
     });
     expect(result).toMatchObject({ok:true,reason:'ready_and_assignment_bound',assignment:{
       taskId:'task_1',bindingKey:'dispatch_integration',generation:2,delegatedIntegration,
@@ -211,19 +207,16 @@ describe('supervised worker start exact assignment admission',()=>{
       findWorker:()=>({status:'ok',value:predecessorPresent}),
     };
     let launches=0;
-    const result=await runSupervisedWorkerStart({mode:'provider_new_top_level',role:'worker',issueNumber:1416,
+    const result=await runSupervisedWorkerStart({mode:'exact_terminal_worktree',role:'worker',issueNumber:1416,
       repository:'chetwerikoff/orchestrator-pack',env,adapter:liveAdapterWithReadback,delegatedIntegration,
-      orcaArgs:['--task','task_1','--worktree','new-top-level','--repo','id:repo-1','--name','integration-worktree',
-        '--agent','cursor','--model','model-medium','--setup','run'],
+      orcaArgs:args('task_1'),inspect:inspectPlacement(),
       execute:async()=>{
         launches+=1;
         expect(predecessorPresent).toBeNull();
         return {ok:true,stdout:envelope({taskId:'task_1',dispatchId:'dispatch_integration',state:'ready',
           worktree:{id:'repo-1::/tmp/new-worktree',path:'/tmp/new-worktree'},terminal:{handle:'term-provider',runtime:'orca',generation:'generation-1'},
           setup:{requested:'run',effective:'run',state:'running'},launch:{requested:{agent:'cursor',model:'model-medium'},effective:{agent:'cursor',model:'model-medium'}},
-          effects:[{kind:'worktree',action:'created_top_level',id:'repo-1::/tmp/new-worktree'},
-            {kind:'terminal',role:'agent',action:'reused_agent_terminal',id:'term-provider'},
-            {kind:'dispatch_input',role:'agent',state:'accepted',id:'term-provider'}]})};
+          effects:producerEffects()})};
       },
     });
     expect(result).toMatchObject({ok:true,reason:'ready_and_assignment_bound',assignment:{delegatedIntegration}});
@@ -250,10 +243,9 @@ describe('supervised worker start exact assignment admission',()=>{
       delegatedIntegration});
     if(!integration.ok)throw new Error(integration.reason);
     let calls=0;
-    const result=await runSupervisedWorkerStart({mode:'provider_new_top_level',role:'worker',issueNumber:1416,
+    const result=await runSupervisedWorkerStart({mode:'exact_terminal_worktree',role:'worker',issueNumber:1416,
       repository:'chetwerikoff/orchestrator-pack',env,adapter:adapter({kind:'resolved',worker},'idle'),delegatedIntegration,
-      orcaArgs:['--task','task_1','--worktree','new-top-level','--repo','id:repo-1','--name','integration-worktree',
-        '--agent','cursor','--model','model-medium','--setup','run'],
+      orcaArgs:args('task_1'),inspect:inspectPlacement(),
       execute:async()=>{calls+=1;return{ok:false,stdout:''}},
     });
     expect(result).toEqual({
@@ -321,31 +313,19 @@ describe('supervised worker start exact assignment admission',()=>{
       predecessorGeneration: firstImplementation.assignment.generation,
     };
     let launchCount = 0;
-    const providerArgs = (taskId: string, name: string) => [
-      '--task', taskId, '--worktree', 'new-top-level', '--repo', 'id:repo-1', '--name', name,
-      '--agent', 'cursor', '--model', 'model-medium', '--setup', 'run',
-    ];
-    const executeStart = (taskId: string, dispatchId: string, name: string) => async () => {
+    const providerArgs = (taskId: string, _name: string) => args(taskId);
+    const executeStart = (taskId: string, dispatchId: string, _name: string) => async () => {
       launchCount += 1;
       revalidationEvents.push(`started:${dispatchId}`);
       return { ok: true, stdout: envelope({
-        taskId, dispatchId, state: 'ready',
-        worktree: { id: `repo-1::/tmp/${name}`, path: `/tmp/${name}` },
-        terminal: { handle: `term-${name}`, runtime: 'orca', generation: `generation-${launchCount}` },
-        setup: { requested: 'run', effective: 'run', state: 'running' },
-        launch: { requested: { agent: 'cursor', model: 'model-medium' }, effective: { agent: 'cursor', model: 'model-medium' } },
-        effects: [
-          { kind: 'worktree', action: 'created_top_level', id: `repo-1::/tmp/${name}` },
-          { kind: 'terminal', role: 'agent', action: 'reused_agent_terminal', id: `term-${name}` },
-          { kind: 'dispatch_input', role: 'agent', action: 'accepted', state: 'accepted', id: `term-${name}` },
-        ],
+        taskId, dispatchId, state: 'ready', effects: producerEffects(),
       }) };
     };
 
     const firstStart = await runSupervisedWorkerStart({
-      mode: 'provider_new_top_level', role: 'worker', issueNumber, repository, env,
+      mode: 'exact_terminal_worktree', role: 'worker', issueNumber, repository, env,
       adapter: adapter({ kind: 'gone' }), delegatedIntegration: firstMarker,
-      orcaArgs: providerArgs('task_926_first', 'integration-first'),
+      inspect: inspectPlacement(), orcaArgs: providerArgs('task_926_first', 'integration-first'),
       execute: executeStart('task_926_first', 'dispatch_926_integration_first', 'integration-first'),
     });
     expect(firstStart).toMatchObject({ ok: true, reason: 'ready_and_assignment_bound', assignment: { delegatedIntegration: firstMarker } });
@@ -356,18 +336,18 @@ describe('supervised worker start exact assignment admission',()=>{
     const activeAdapter = adapter({ kind: 'resolved', worker }, 'idle');
     let duplicateStarts = 0;
     const sameActiveAttempt = await runSupervisedWorkerStart({
-      mode: 'provider_new_top_level', role: 'worker', issueNumber, repository, env,
+      mode: 'exact_terminal_worktree', role: 'worker', issueNumber, repository, env,
       adapter: activeAdapter, delegatedIntegration: firstMarker,
-      orcaArgs: providerArgs('task_926_first', 'integration-first'),
+      inspect: inspectPlacement(), orcaArgs: providerArgs('task_926_first', 'integration-first'),
       execute: async () => { duplicateStarts += 1; return { ok: false, stdout: '' }; },
     });
     expect(sameActiveAttempt).toMatchObject({ ok: true, reason: 'delegated_integration_assignment_reused' });
     expect(duplicateStarts).toBe(0);
     const competingMarker = { ...firstMarker, expectedHeadSha: 'd'.repeat(40) };
     const competingStart = await runSupervisedWorkerStart({
-      mode: 'provider_new_top_level', role: 'worker', issueNumber, repository, env,
+      mode: 'exact_terminal_worktree', role: 'worker', issueNumber, repository, env,
       adapter: activeAdapter, delegatedIntegration: competingMarker,
-      orcaArgs: providerArgs('task_926_first', 'integration-competing'),
+      inspect: inspectPlacement(), orcaArgs: providerArgs('task_926_first', 'integration-competing'),
       execute: async () => { duplicateStarts += 1; return { ok: false, stdout: '' }; },
     });
     expect(competingStart).toEqual({ ok: false, reason: 'delegated_integration_predecessor_mismatch' });
@@ -392,9 +372,9 @@ describe('supervised worker start exact assignment admission',()=>{
       predecessorGeneration: nextImplementation.assignment.generation,
     };
     const nextStart = await runSupervisedWorkerStart({
-      mode: 'provider_new_top_level', role: 'worker', issueNumber, repository, env,
+      mode: 'exact_terminal_worktree', role: 'worker', issueNumber, repository, env,
       adapter: adapter({ kind: 'gone' }), delegatedIntegration: nextMarker,
-      orcaArgs: providerArgs('task_926_next', 'integration-next'),
+      inspect: inspectPlacement(), orcaArgs: providerArgs('task_926_next', 'integration-next'),
       execute: executeStart('task_926_next', 'dispatch_926_integration_next', 'integration-next'),
     });
     expect(nextStart).toMatchObject({ ok: true, reason: 'ready_and_assignment_bound', assignment: { delegatedIntegration: nextMarker } });
@@ -1063,27 +1043,68 @@ describe('supervised worker start exact assignment admission',()=>{
     expect(calls).toBe(0);
   });
 
-  it('accepts provider new-top-level ready receipt with setup running and publishes one assignment', async()=>{
-    const base=root(); const env={...process.env,OPK_BASE_DIR:base}; let calls=0;
-    const result=await runSupervisedWorkerStart({mode:'provider_new_top_level',role:'worker',repository:'chetwerikoff/orchestrator-pack',env,
-      orcaArgs:['--task','task_1','--worktree','new-top-level','--repo','id:repo-1','--name','new-worktree','--agent','cursor','--model','model[context=fixture-context,reasoning=medium,fast=false]','--setup','run'],
-      execute:async(args)=>{ calls+=1; expect(args).toContain('--json'); return {ok:true,stdout:envelope({
-        taskId:'task_1',dispatchId:'dispatch_provider',state:'ready',
-        worktree:{id:'repo-1::/tmp/new-worktree',path:'/tmp/new-worktree'},
-        terminal:{handle:'term-provider',runtime:'orca',generation:'generation-1'},
-        setup:{requested:'run',effective:'run',state:'running'},
-        launch:{requested:{agent:'cursor',model:'model[context=fixture-context,reasoning=medium,fast=false]'},effective:{agent:'cursor',model:'model[context=fixture-context,reasoning=medium,fast=false]'}},
-        effects:[
-          {kind:'worktree',action:'created_top_level',id:'repo-1::/tmp/new-worktree'},
-          {kind:'setup',action:'running',state:'running'},
-          {kind:'terminal',role:'agent',action:'reused_agent_terminal',id:'term-provider'},
-          {kind:'dispatch_input',role:'agent',id:'term-provider',state:'accepted'},
-        ],
-      })}; },
+  it('refuses direct provider_new_top_level CLI before any native worker/setup effect', () => {
+    const base = root();
+    const primary = path.join(base, 'primary');
+    const config = path.join(base, 'xdg', 'orchestrator-pack', 'projects');
+    const fakeBin = path.join(base, 'bin');
+    const markerFile = path.join(base, 'orca-called');
+    mkdirSync(primary, { recursive: true });
+    mkdirSync(config, { recursive: true });
+    mkdirSync(fakeBin, { recursive: true });
+    const init = spawnSync('git', ['init', '-q', primary], { encoding: 'utf8' });
+    expect(init.status).toBe(0);
+    const remote = spawnSync('git', ['-C', primary, 'remote', 'add', 'origin',
+      'https://github.com/chetwerikoff/orchestrator-pack.git'], { encoding: 'utf8' });
+    expect(remote.status).toBe(0);
+    writeFileSync(path.join(config, 'orchestrator-pack.json'), JSON.stringify({
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: primary, defaultBranch: 'main',
+      orcaWorkspacePattern: '^opk-.*$', orchestratorTitlePattern: '^opk-manager-.*$',
+      browserGpt: { projectUrl: 'https://chatgpt.com/g/g-test' },
+    }));
+    const fakeOrca = path.join(fakeBin, 'orca');
+    writeFileSync(fakeOrca, '#!/bin/sh\nprintf effect >> "$OPK_ORCA_EFFECT_MARKER"\nexit 42\n');
+    chmodSync(fakeOrca, 0o755);
+    const env = {
+      ...process.env, OPK_BASE_DIR: base, XDG_CONFIG_HOME: path.join(base, 'xdg'),
+      OPK_PROJECT_ID: 'orchestrator-pack', OPK_ORCA_EFFECT_MARKER: markerFile,
+      PATH: fakeBin + ':' + (process.env.PATH ?? ''),
+    };
+    const run = spawnSync(process.execPath, ['--experimental-strip-types',
+      fileURLToPath(new URL('./supervised-worker-start.ts', import.meta.url)),
+      '--project', 'orchestrator-pack', '--repository', 'chetwerikoff/orchestrator-pack',
+      '--role', 'worker', '--mode', 'provider_new_top_level', '--',
+      '--task', 'task_1', '--worktree', 'new-top-level', '--repo', 'id:repo-1',
+      '--name', 'unsafe-hook-output', '--agent', 'cursor', '--model', 'model-medium',
+      '--setup', 'run',
+    ], { env, encoding: 'utf8', timeout: 15_000 });
+    expect(run.status).toBe(1);
+    expect(run.stdout).toContain('"reason":"supervised_start_provider_clean_witness_unavailable"');
+    expect(existsSync(markerFile)).toBe(false);
+    expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack', env), 1416)).toBeNull();
+  });
+
+  it('refuses direct atomic provider start before any setup or worker effect', async () => {
+    const base = root(); const env = { ...process.env, OPK_BASE_DIR: base };
+    let starts = 0; let inspects = 0;
+    const result = await runSupervisedWorkerStart({
+      mode: 'provider_new_top_level', role: 'worker', issueNumber: 1416,
+      repository: 'chetwerikoff/orchestrator-pack', env,
+      orcaArgs: ['--task', 'task_1', '--worktree', 'new-top-level',
+        '--repo', 'id:repo-1', '--name', 'new-worktree',
+        '--agent', 'cursor', '--model', 'model-medium', '--setup', 'run'],
+      inspect: async () => { inspects += 1; return { ok: false, stdout: '' }; },
+      execute: async () => { starts += 1; return { ok: true, stdout: envelope({
+        taskId: 'task_1', dispatchId: 'dispatch_provider', state: 'ready',
+        setup: { requested: 'run', state: 'running' },
+        effects: [{ kind: 'dispatch_input', role: 'agent', state: 'accepted' }],
+      }) }; },
     });
-    expect(result).toMatchObject({ok:true,reason:'ready_and_assignment_bound',receipt:{setup:{state:'running'}},assignment:{taskId:'task_1',bindingKey:'dispatch_provider'}});
-    expect(calls).toBe(1);
-    expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack',env),1416)).toBeNull();
+    expect(result).toEqual({ ok: false, reason: 'supervised_start_provider_clean_witness_unavailable' });
+    expect(starts).toBe(0);
+    expect(inspects).toBe(0);
+    expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack', env), 1416)).toBeNull();
   });
 
   it.each([
@@ -1093,18 +1114,20 @@ describe('supervised worker start exact assignment admission',()=>{
       {kind:'worktree',action:'created_top_level',id:'repo-1::/tmp/new-worktree'},
       {kind:'terminal',role:'agent',action:'reused_agent_terminal',id:'term-provider'},
     ] }],
-  ] as const)('rejects provider receipt evidence before assignment publication: %s', async(_label,override)=>{
+  ] as const)('refuses atomic provider receipt %s before start', async(_label,override)=>{
     const base=root(); const env={...process.env,OPK_BASE_DIR:base};
+    let starts=0;
     const result=await runSupervisedWorkerStart({mode:'provider_new_top_level',role:'worker',repository:'chetwerikoff/orchestrator-pack',env,
       orcaArgs:['--task','task_1','--worktree','new-top-level','--repo','id:repo-1','--name','new-worktree','--agent','cursor','--model','model-medium','--setup','run'],
-      execute:async()=>({ok:true,stdout:envelope({taskId:'task_1',dispatchId:'dispatch_provider',state:'ready',
+      execute:async()=>{starts+=1;return {ok:true,stdout:envelope({taskId:'task_1',dispatchId:'dispatch_provider',state:'ready',
         worktree:{id:'repo-1::/tmp/new-worktree',path:'/tmp/new-worktree'},terminal:{handle:'term-provider',runtime:'orca',generation:'generation-1'},
         setup:{requested:'run',effective:'run',state:'running'},launch:{requested:{agent:'cursor',model:'model-medium'},effective:{agent:'cursor',model:'model-medium'}},
         effects:[{kind:'worktree',action:'created_top_level',id:'repo-1::/tmp/new-worktree'},
           {kind:'terminal',role:'agent',action:'reused_agent_terminal',id:'term-provider'},
-          {kind:'dispatch_input',role:'agent',id:'term-provider',state:'accepted'}],...override})}),
+          {kind:'dispatch_input',role:'agent',id:'term-provider',state:'accepted'}],...override})};},
     });
-    expect(result.ok).toBe(false);
+    expect(result).toEqual({ok:false,reason:'supervised_start_provider_clean_witness_unavailable'});
+    expect(starts).toBe(0);
     expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack',env),1416)).toBeNull();
   });
 
@@ -1121,7 +1144,7 @@ describe('supervised worker start exact assignment admission',()=>{
 });
 
 describe('Issue #2655 reboot terminal retirement at supervised start', () => {
-  it.each(['failed', 'abandoned', 'cancelled', 'done'] as const)(
+  it.each(['failed', 'abandoned', 'cancelled', 'done', 'completed'] as const)(
     'starts from native %s and confirmed no-process with adapter resolve not-ok',
     async (state) => {
       const base = root();
@@ -1137,10 +1160,10 @@ describe('Issue #2655 reboot terminal retirement at supervised start', () => {
         // Native worker-show is exact by --dispatch and need not repeat dispatch.id.
         dispatch: { status: state, last_heartbeat_at: null },
         worker: {
-          agent_terminal_handle: state === 'done' ? null : canonicalTerminal,
+          agent_terminal_handle: ['done', 'completed'].includes(state) ? null : canonicalTerminal,
           worktree_id: canonicalWorktree,
-          state: state === 'done' ? 'succeeded' : 'abandoned',
-          stage: state === 'done' ? 'terminal' : 'terminal_missing',
+          state: ['done', 'completed'].includes(state) ? 'succeeded' : 'abandoned',
+          stage: ['done', 'completed'].includes(state) ? 'terminal' : 'terminal_missing',
         },
         terminal: null, observation: { exactWorker: false, status: 'missing' },
       };

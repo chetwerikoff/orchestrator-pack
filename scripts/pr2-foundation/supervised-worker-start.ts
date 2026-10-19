@@ -366,7 +366,7 @@ export async function readTerminalGoneDispatch(
   const nativeDispatch = isRecord(selected?.dispatch) ? selected.dispatch : null;
   const status = providerText(nativeDispatch?.status).toLowerCase();
   if (providerText(nativeDispatch?.id) !== expected.bindingKey
-    || !['failed', 'abandoned', 'cancelled', 'done'].includes(status)) return null;
+    || !['failed', 'abandoned', 'cancelled', 'done', 'completed'].includes(status)) return null;
 
   const shown = parsePlacementEnvelope(await inspect([
     'orchestration', 'worker-show', '--dispatch', expected.bindingKey, '--json',
@@ -540,6 +540,13 @@ export async function runSupervisedWorkerStart(input: {
       || args.includes('--effort')
       || providerOption(args, '--setup') !== 'run')) {
     return { ok: false, reason: 'supervised_start_provider_request_invalid' };
+  }
+  // Atomic provider worker-start can accept dispatch input while setup is still
+  // running. There is no authoritative pre-input clean status on that route.
+  // Split worktree setup, native setup completion, Git clean read, then use
+  // exact_terminal_worktree instead; refuse before worker-start effects here.
+  if (mode === 'provider_new_top_level') {
+    return { ok: false, reason: 'supervised_start_provider_clean_witness_unavailable' };
   }
 
   const file = resolveWorkerAssignmentStorePath(input.projectId, input.env ?? process.env);
