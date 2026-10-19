@@ -1122,7 +1122,7 @@ describe('supervised worker start exact assignment admission',()=>{
 
 describe('Issue #2655 reboot terminal retirement at supervised start', () => {
   it.each(['failed', 'abandoned', 'cancelled', 'done'] as const)(
-    'starts from native %s and abandoned/terminal_missing with adapter resolve not-ok',
+    'starts from native %s and confirmed no-process with adapter resolve not-ok',
     async (state) => {
       const base = root();
       const env = { ...process.env, OPK_BASE_DIR: base };
@@ -1134,8 +1134,14 @@ describe('Issue #2655 reboot terminal retirement at supervised start', () => {
       });
       if (!previous.ok) throw new Error(previous.reason);
       const shown = {
-        dispatch: { id: 'ctx_3761867313e2', status: state, last_heartbeat_at: null },
-        worker: { agent_terminal_handle: canonicalTerminal, state: 'abandoned', stage: 'terminal_missing' },
+        // Native worker-show is exact by --dispatch and need not repeat dispatch.id.
+        dispatch: { status: state, last_heartbeat_at: null },
+        worker: {
+          agent_terminal_handle: state === 'done' ? null : canonicalTerminal,
+          worktree_id: canonicalWorktree,
+          state: state === 'done' ? 'succeeded' : 'abandoned',
+          stage: state === 'done' ? 'terminal' : 'terminal_missing',
+        },
         terminal: null, observation: { exactWorker: false, status: 'missing' },
       };
       const adapter = new OrcaTaskRuntimeAdapter({
