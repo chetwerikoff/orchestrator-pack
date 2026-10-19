@@ -1241,6 +1241,7 @@ describe('Issue #2659 aggregate quorum identity after a late third credentialed 
       ...late.sourceSlots[2]!, lifecycle: 'terminal', terminalClass: 'complete_clean',
       invocationId: 'late-invocation', attemptOrdinal: 1,
       terminalResult: { schema: 'turn-result/v1', state: 'ok',
+        scope: 'invocation', invocation_id: 'late-invocation',
         cause: 'github_source_comment_credentialed', send_count: 1 },
       payload: { verdict: 'clean', findingCount: 0, findings: [] },
     };
