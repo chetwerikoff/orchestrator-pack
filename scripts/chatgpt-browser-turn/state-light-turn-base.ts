@@ -818,29 +818,49 @@ export async function revalidateKeyedHarvest(
             // Language comes exclusively from unique visible non-control
             // text outside CODE in this one header-and-pre wrapper.
             const labels: string[] = [];
+            let invalidLabel = false;
+            let sawPre = false;
             const visitLabel = (node: Element): void => {
               if (node === code) return;
+              // Prose is not a language label: allow only inline header labels
+              // outside PRE, or visible language text within this same PRE.
+              if (node !== child && node !== pre && !/^(?:SPAN|LABEL|DIV|HEADER)$/u.test(node.tagName)) {
+                invalidLabel = true;
+                return;
+              }
+              if (node === pre) sawPre = true;
               const children = Array.from(node.childNodes);
               if (children.length === 0 && node !== child) {
                 const leaf = (node as HTMLElement).innerText?.trim();
-                if (leaf) labels.push(leaf);
+                if (leaf) {
+                  if (node === pre || node.tagName === 'SPAN' || node.tagName === 'LABEL') labels.push(leaf);
+                  else invalidLabel = true;
+                }
                 return;
               }
               for (const item of children) {
                 if (item.nodeType === 3) {
                   const label = item.textContent?.trim();
-                  if (label) labels.push(label);
+                  if (label) {
+                    if (node === pre || node.tagName === 'SPAN' || node.tagName === 'LABEL') labels.push(label);
+                    else invalidLabel = true;
+                  }
                 } else if (item.nodeType === 1) {
                   const element = item as Element;
                   if (element === code || element.tagName === 'BUTTON'
                     || element.getAttribute('role') === 'button'
                     || element.getAttribute('aria-hidden') === 'true'
                     || element.hasAttribute('inert') || !visible(element)) continue;
+                  if (node === child && child !== pre && sawPre && element !== pre) {
+                    invalidLabel = true;
+                    continue;
+                  }
                   visitLabel(element);
                 }
               }
             };
             visitLabel(child);
+            if (invalidLabel) return unsupported();
             if (labels.length > 1 || labels.some((label) => !/^[A-Za-z][A-Za-z0-9_+#.-]{0,31}$/u.test(label))) {
               return unsupported();
             }
@@ -1944,29 +1964,49 @@ export async function readPageObservation(
               // Language comes exclusively from unique visible non-control
               // text outside CODE in this one header-and-pre wrapper.
               const labels: string[] = [];
+              let invalidLabel = false;
+              let sawPre = false;
               const visitLabel = (node: Element): void => {
                 if (node === code) return;
+                // Prose is not a language label: allow only inline header labels
+                // outside PRE, or visible language text within this same PRE.
+                if (node !== child && node !== pre && !/^(?:SPAN|LABEL|DIV|HEADER)$/u.test(node.tagName)) {
+                  invalidLabel = true;
+                  return;
+                }
+                if (node === pre) sawPre = true;
                 const children = Array.from(node.childNodes);
                 if (children.length === 0 && node !== child) {
                   const leaf = (node as HTMLElement).innerText?.trim();
-                  if (leaf) labels.push(leaf);
+                  if (leaf) {
+                    if (node === pre || node.tagName === 'SPAN' || node.tagName === 'LABEL') labels.push(leaf);
+                    else invalidLabel = true;
+                  }
                   return;
                 }
                 for (const item of children) {
                   if (item.nodeType === 3) {
                     const label = item.textContent?.trim();
-                    if (label) labels.push(label);
+                    if (label) {
+                      if (node === pre || node.tagName === 'SPAN' || node.tagName === 'LABEL') labels.push(label);
+                      else invalidLabel = true;
+                    }
                   } else if (item.nodeType === 1) {
                     const element = item as Element;
                     if (element === code || element.tagName === 'BUTTON'
                       || element.getAttribute('role') === 'button'
                       || element.getAttribute('aria-hidden') === 'true'
                       || element.hasAttribute('inert') || !visible(element)) continue;
+                    if (node === child && child !== pre && sawPre && element !== pre) {
+                      invalidLabel = true;
+                      continue;
+                    }
                     visitLabel(element);
                   }
                 }
               };
               visitLabel(child);
+              if (invalidLabel) return unsupported();
               if (labels.length > 1 || labels.some((label) => !/^[A-Za-z][A-Za-z0-9_+#.-]{0,31}$/u.test(label))) {
                 return unsupported();
               }

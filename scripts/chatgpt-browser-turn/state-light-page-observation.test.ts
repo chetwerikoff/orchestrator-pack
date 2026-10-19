@@ -341,7 +341,7 @@ describe('DOM observation boundary', () => {
   // primitives consumed by the actual evaluateAll callbacks, no Markdown source.
   type RichBlock = { prose: string; tag?: string } | {
     code: string; label?: string; extraLabel?: string; nested?: boolean;
-    hidden?: boolean; copyControl?: boolean;
+    hidden?: boolean; copyControl?: boolean; interleavedProse?: string;
   };
   function richNode(
     tagName: string, innerText = '', attrs: Record<string, string> = {}, shown = true,
@@ -401,6 +401,7 @@ describe('DOM observation boundary', () => {
       if (block.label) container.append(richNode('SPAN', block.label));
       if (block.extraLabel) container.append(richNode('SPAN', block.extraLabel));
       if (block.copyControl) container.append(richNode('BUTTON', 'Copy'));
+      if (block.interleavedProse) container.append(richNode('P', block.interleavedProse));
       const pre = richNode('PRE', '', {}, !block.hidden);
       pre.append(richNode('CODE', block.code, {}, !block.hidden));
       container.append(pre);
@@ -742,6 +743,23 @@ describe('DOM observation boundary', () => {
     expect((await readPageObservation(invalid.page, marker, 0)).transcriptIncomplete).toBe(true);
     const ambiguous = richPage([{ code: 'x', label: 'diff', extraLabel: 'javascript' }]);
     expect((await readPageObservation(ambiguous.page, marker, 0)).transcriptIncomplete).toBe(true);
+  });
+
+
+  it('rejects interleaved visible prose in a code wrapper at observation and keyed revalidation', async () => {
+    const code = 'diff --git a/a b/a\n';
+    const fixture = richPage([{ code, interleavedProse: 'FAIL' }]);
+    const observation = await readPageObservation(fixture.page, marker, 0);
+    expect(observation.transcriptIncomplete).toBe(true);
+    expect(observation.snapshot?.complete).toBe(false);
+    const base = { complete: true, carriers: [] } as const;
+    const userKey = observation.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    expect(keyedHarvestCandidate(observation.snapshot!, base, userKey).state).not.toBe('ready');
+    await expect(revalidateKeyedHarvest(fixture.page, base, userKey, {
+      reply: '```FAIL\n' + code + '```',
+      assistantKey: 'data-message-id:assistant-rich-12345678',
+      snapshotSignature: atomicSnapshotSignature(observation.snapshot!),
+    })).resolves.toEqual({ state: 'continuity-unproven' });
   });
 
   it('rejects unchanged keyed bytes when Continue generating appears page-wide only at revalidation', async () => {

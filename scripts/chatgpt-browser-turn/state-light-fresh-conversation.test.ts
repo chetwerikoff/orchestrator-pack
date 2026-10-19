@@ -1953,7 +1953,7 @@ describe('state-light fresh conversation collision recovery', () => {
       userMarkerlessFromRead?: number;
       assistantCarrierKeysByRead?: readonly string[];
       neverMarkerProof?: boolean;
-      assistantCode?: { visible: string; domTextContent: string; secondVisible?: string; firstLanguage?: string; secondLanguage?: string };
+      assistantCode?: { visible: string; domTextContent: string; secondVisible?: string; firstLanguage?: string; secondLanguage?: string; interleavedProse?: string };
     } = {},
   ) {
     const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0, composerText: '' };
@@ -2118,6 +2118,9 @@ describe('state-light fresh conversation collision recovery', () => {
               const root = attach(outer, node('DIV', '', { class: 'markdown' }));
               attach(root, node('P', 'Before'));
               const wrapper = attach(root, node('DIV', ''));
+              if (observationOverrides.assistantCode.interleavedProse) {
+                attach(wrapper, node('P', observationOverrides.assistantCode.interleavedProse));
+              }
               if (observationOverrides.assistantCode.firstLanguage) {
                 attach(wrapper, node('SPAN', observationOverrides.assistantCode.firstLanguage));
               }
@@ -3153,6 +3156,25 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(readFileSync(output)).toEqual(bytes);
     expect(state.reads).toBeGreaterThanOrEqual(5);
+  });
+
+
+  it('Issue #2660 does not publish a code fence that swallows adjacent FAIL prose', async () => {
+    const prompt = 'ISSUE-2660-MIXED-PROSE-NEGATIVE';
+    const code = 'diff --git a/a b/a\n';
+    const outer = 'MISLEADING MIXED WRAPPER';
+    const output = join(stateDir, 'issue-2660-mixed-prose-must-not-publish.txt');
+    const { page } = unrenderedOwnedMessagePage(
+      prompt, outer, false, false, false, [outer], [],
+      { includeOwnedUser: true, assistantCode: {
+        visible: code, domTextContent: code, interleavedProse: 'FAIL',
+      } },
+    );
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output, '90000');
+    expect(outcome.result.state).not.toBe('ok');
+    expect(outcome.result.send_count).toBe(1);
+    expect(existsSync(output)).toBe(false);
   });
 
   it('rejects a changed middle indentation on the fresh precommit read', async () => {
