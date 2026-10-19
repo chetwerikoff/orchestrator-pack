@@ -1604,14 +1604,15 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
   function fixture(
     reviewer: 'codex' | 'gpt' = 'codex', reviewedBody = originalBody, credentialed = false,
     legacyBody?: string, terminalVerdict: 'findings' | 'clean' = 'findings',
+    incident?: { prNumber: number; issueNumber: number; settledSourceCount: 2 },
   ) {
     const root = mkdtempSync(join(tmpdir(), 'pack-review-2565-'));
     roots.push(root);
     const storeRoot = join(root, 'store');
     setupHarness(storeRoot);
     const projectId = 'orchestrator-pack';
-    const prNumber = 25651;
-    const issueNumber = 2565;
+    const prNumber = incident?.prNumber ?? 25651;
+    const issueNumber = incident?.issueNumber ?? 2565;
     const reviewed = '4'.repeat(40);
     const current = '5'.repeat(40);
     const options = { projectId, storeRoot };
@@ -1663,6 +1664,14 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
         sourceSlots: [1, 2, 3].map((ordinal) => {
           const slotId = `source-${String(ordinal).padStart(2, '0')}`;
           const invocationId = `fixture-2565-${ordinal}`;
+          if (incident?.settledSourceCount === 2 && ordinal === 3) {
+            return { slotId, ordinal, invocationId, lifecycle: 'terminal' as const,
+              terminalClass: 'driver_error:original_source_incomplete',
+              attemptOrdinal: 1,
+              terminalResult: { schema: 'turn-result/v1', state: 'driver_error',
+                cause: 'original_source_not_complete', scope: 'none', send_count: 1,
+                invocation_id: invocationId } };
+          }
           return {
             slotId, ordinal, invocationId, lifecycle: 'terminal' as const,
             terminalClass: ordinal === 1 ? 'complete_findings' : 'complete_clean',
@@ -1682,7 +1691,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
             },
           };
         }),
-        settledSourceCount: 3,
+        settledSourceCount: incident?.settledSourceCount ?? 3,
       } }, options);
     }
     authority = commitPackReviewTerminal({
@@ -1969,6 +1978,84 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     expect(persisted[1]?.boundIssueSnapshotDigest).toBe(computeBoundIssueSnapshotHash(B1));
     expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
       .toMatchObject({ consumedRoundOrdinals: [1] });
+  });
+
+
+  it.each([
+    'approved' as const, 'missing-architect' as const, 'wrong-architect-head' as const,
+    'wrong-diff-approval' as const, 'ci-not-green' as const,
+    'additional-body-byte' as const, 'wrong-pr' as const, 'wrong-issue' as const,
+    'wrong-descendant' as const,
+  ])('Issue #2659 §11: #2655/#2656 exact scope-only fix %s preserves 2/3 and exact-head status', async (variation) => {
+    const B0 = [
+      '<!-- source-revision: r02 -->', '```complexity-tier', 'tier: T2', '```',
+      '```allowed-roots', 'scripts/pack-review-runner.ts', '```',
+      '## Acceptance criteria', '- original behavior', '',
+    ].join('\n');
+    const B1 = B0.replace('scripts/pack-review-runner.ts\n',
+      'scripts/pack-review-runner.ts\nscripts/orca-runtime/task-adapter.ts\nscripts/orca-runtime/task-adapter.test.ts\n');
+    const incident = { prNumber: variation === 'wrong-pr' ? 2657 : 2656,
+      issueNumber: variation === 'wrong-issue' ? 2654 : 2655,
+      settledSourceCount: 2 as const };
+    const f = fixture('gpt', B0, true, undefined, 'findings', incident);
+    const currentBody = variation === 'additional-body-byte' ? B1 + 'extra byte' : B1;
+    const paths = [
+      { filename: 'scripts/orca-runtime/task-adapter.ts', sha: 'a'.repeat(40),
+        status: 'modified', patch: '@@ -1,2 +1,3 @@\n+ same-task replacement' },
+      { filename: 'scripts/orca-runtime/task-adapter.test.ts', sha: 'b'.repeat(40),
+        status: 'modified', patch: '@@ -1,2 +1,3 @@\n+ same-task negative' },
+    ];
+    const digest = createHash('sha256').update(stableJson(paths.map((path) => ({
+      filename: path.filename, sha: path.sha, status: path.status,
+      patch: path.patch, previous_filename: null,
+    })).sort((a, b) => String(a.filename).localeCompare(String(b.filename))))).digest('hex');
+    const architectComment = {
+      user: { login: 'chetwerikoff' },
+      body: `ARCH architect: Issue #2655 PR #2656 head ${variation === 'wrong-architect-head'
+        ? 'f'.repeat(40) : f.current} exact diff ${variation === 'wrong-diff-approval'
+        ? '0'.repeat(64) : digest}. all three published findings resolved:
+provider start fresh-worktree cleanliness; native completed Dispatch at both existing consumers;
+stale same-Task terminal ownership; no unrelated changes.`,
+    };
+    const fakeEvidence = (async (request: { args: string[] }) => {
+      const endpoint = request.args[1] ?? '';
+      const data = endpoint.includes('/files?')
+        ? (endpoint.endsWith('page=1') ? paths : [])
+        : endpoint.includes('/issues/2656/comments')
+          ? variation === 'missing-architect' ? [] : [architectComment]
+          : endpoint.endsWith('/pulls/2656')
+            ? { number: 2656, state: 'open', merged: false, merged_at: null,
+                head: { sha: f.current }, base: { ref: 'main' }, changed_files: paths.length }
+            : null;
+      return { outcome: 'exit' as const, ok: true, exitCode: 0,
+        stdout: JSON.stringify(data), stderr: '' };
+    }) as unknown as typeof runProcess;
+    const before = readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot });
+    const start = {
+      ...f.request(currentBody), baseRef: 'main',
+      fixtureCurrentPrHeadSha: variation === 'wrong-descendant' ? f.reviewed : f.current,
+      fixtureReviewCompareStatus: variation === 'wrong-descendant' ? 'identical' : 'ahead',
+      fixtureRequiredCiPolicy: { contexts: ['CI'], checks: [] },
+      fixtureRequiredCiChecks: [{ name: 'CI', state: variation === 'ci-not-green' ? 'FAILURE' : 'SUCCESS' }],
+      fixtureIncidentGithubRunner: fakeEvidence,
+    };
+    const result = await reconcileStalePackReviewRuns(start);
+    const completed = result.results.some((entry) =>
+      entry.settled === true && entry.reason === 'final_cap_descendant_settled');
+    if (variation === 'approved') {
+      expect(completed).toBe(true);
+      expect(f.getStatus()).toBe('success');
+    } else {
+      expect(completed).toBe(false);
+      expect(f.getStatus()).not.toBe('success');
+      expect(f.statusWrites).not.toContain('success');
+    }
+    const after = readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot });
+    expect(after?.terminal?.runId).toBe(before?.terminal?.runId);
+    expect(after?.terminal?.digest).toBe(before?.terminal?.digest);
+    const original = getPackReviewRun(f.run.id, { projectId: f.projectId, storeRoot: f.storeRoot });
+    expect(original?.reviewRound?.settledSourceCount).toBe(2);
+    expect(listPackReviewRuns({ projectId: f.projectId, storeRoot: f.storeRoot })).toHaveLength(1);
   });
 
   it('does not claim to detect a comment-only amendment when Issue body is identical', async () => {
