@@ -810,51 +810,6 @@ function orcaReceipt(executor: OrcaExecutor, args: string[]): Record<string, unk
   }
 }
 
-function supervisedOwnerForPull(
-  pull: OpenPullHead,
-  panes: readonly FleetPaneObservation[],
-  executor: OrcaExecutor,
-): FleetPaneObservation | undefined {
-  if (!pull.issue) return undefined;
-  const runs = orcaReceipt(executor, ['orchestration', 'run-list', '--json'])?.runs;
-  if (!Array.isArray(runs)) return undefined;
-  const candidates: Array<{ taskId: string }> = [];
-  for (const value of runs) {
-    if (!value || typeof value !== 'object') continue;
-    const run = value as { id?: unknown; objective?: unknown };
-    if (typeof run.id !== 'string' || typeof run.objective !== 'string') continue;
-    if (!new RegExp(`(?:#${pull.issue}\\b|issues/${pull.issue}\\b)`, 'iu').test(run.objective)) continue;
-    const tasks = orcaReceipt(executor, ['orchestration', 'task-list', '--run', run.id, '--json'])?.tasks;
-    if (!Array.isArray(tasks)) continue;
-    for (const taskValue of tasks) {
-      if (!taskValue || typeof taskValue !== 'object') continue;
-      const task = taskValue as { id?: unknown; spec?: unknown; status?: unknown };
-      if (typeof task.id !== 'string' || typeof task.spec !== 'string' || task.status !== 'dispatched') continue;
-      if (new RegExp(`(?:#${pull.issue}\\b|issues/${pull.issue}\\b)`, 'iu').test(task.spec)) {
-        candidates.push({ taskId: task.id });
-      }
-    }
-  }
-  const owners: FleetPaneObservation[] = [];
-  for (const candidate of candidates) {
-    const dispatch = orcaReceipt(executor, ['orchestration', 'dispatch-show', '--task', candidate.taskId, '--json'])?.dispatch as
-      { id?: unknown; status?: unknown; assignee_handle?: unknown } | undefined;
-    if (dispatch?.status !== 'dispatched' || typeof dispatch.id !== 'string') continue;
-    const worker = orcaReceipt(executor, ['orchestration', 'worker-show', '--dispatch', dispatch.id, '--json']);
-    if (!worker) continue;
-    const workerDispatch = worker.dispatch as { taskId?: unknown; status?: unknown } | undefined;
-    const terminal = worker.terminal as { handle?: unknown; worktreePath?: unknown; branch?: unknown } | undefined;
-    const observation = worker.observation as { status?: unknown; exactWorker?: unknown } | undefined;
-    if (workerDispatch?.taskId !== candidate.taskId || workerDispatch.status !== 'dispatched'
-      || observation?.status !== 'live' || observation.exactWorker !== true
-      || typeof terminal?.handle !== 'string' || terminal.handle !== dispatch.assignee_handle) continue;
-    const pane = panes.find((item) => item.handle === terminal.handle
-      && item.worktreePath === terminal.worktreePath && item.branch === terminal.branch);
-    if (pane) owners.push(pane);
-  }
-  return owners.length === 1 ? owners[0] : undefined;
-}
-
 const REMINDER_INTERVAL_MS = 30 * 60 * 1_000;
 const SHA40 = /^[0-9a-f]{40}$/u;
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -1407,6 +1362,47 @@ async function wakeNamedParkedProducers(
   store.pruneParkedEpochs?.(observed);
 }
 
+
+/** A witnessed missing manager with an active Dispatch needs coordinator recovery, not pane Wake. */
+async function alarmGoneIssueOwners(
+  options: FleetAlarmTickOptions,
+  coordinator: FleetTerminal | undefined,
+  terminals: readonly FleetTerminal[],
+  executor: OrcaExecutor,
+  store: FleetWakeStateStore,
+  sleepMs: (milliseconds: number) => void | Promise<void>,
+  log: (line: string) => void,
+  counts: PaneWakeCounts,
+): Promise<void> {
+  if (!coordinator) return;
+  const repository = namedRepository(options.config);
+  if (!repository) return;
+  const assignments = (options.readCurrentAssignments
+    ?? (() => listCurrentWorkerAssignmentRecords(resolveWorkerAssignmentStorePath(options.config.projectId))))();
+  if (!assignments) return;
+  for (const assignment of assignments) {
+    if (assignment.projectId !== options.config.projectId || assignment.repository !== repository
+      || assignment.role !== 'orchestrator' || assignment.kind !== 'local'
+      || assignment.provider !== 'orca' || !assignment.issueNumber
+      || !assignment.assignmentId || !assignment.bindingKey || !assignment.taskId) continue;
+    const witness = orcaReceipt(executor, ['orchestration', 'worker-show', '--dispatch', assignment.bindingKey, '--json']);
+    const dispatch = witness?.dispatch as { id?: unknown; taskId?: unknown; status?: unknown } | undefined;
+    const terminal = witness?.terminal as { handle?: unknown; incarnationId?: unknown } | undefined;
+    const observed = witness?.observation as { status?: unknown; exactWorker?: unknown } | undefined;
+    if (dispatch?.id !== assignment.bindingKey || dispatch.taskId !== assignment.taskId
+      || dispatch.status !== 'dispatched' || observed?.exactWorker !== true
+      || observed.status !== 'gone'
+      || typeof terminal?.handle !== 'string' || typeof terminal.incarnationId !== 'string'
+      || terminals.some((row) => row.handle === terminal.handle && row.incarnationId === terminal.incarnationId
+        && row.status?.toLowerCase() !== 'exited')) continue;
+    const key = `gone-issue:${assignment.issueNumber}:${assignment.assignmentId}:${assignment.generation}:${assignment.bindingKey}`;
+    const message = `Wake: Issue #${assignment.issueNumber} assigned manager is positively gone while Dispatch is active - recovery needed, reconcile without replacement guess`;
+    await sendMarkedUnitMessage(store, key, coordinator.handle, message, executor, sleepMs, log, counts,
+      () => { try { return listFleetTerminals(executor).filter((row) => terminalsIdentity(row) === terminalsIdentity(coordinator)).length === 1; }
+        catch { return false; } });
+  }
+}
+
 /**
  * Wakes idle panes for their own completed events and wakes the coordinator
  * for parked FLEET units or unread Run mail. The event marks suppress repeat wakes.
@@ -1754,6 +1750,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     await wakeNamedParkedProducers(tickOptions, observations, terminals, store, executor, sleepMs, log, bareShellHandles, wakeCounts);
     await wakeOriginalTerminalFailures(tickOptions, observations, terminals, executor, store, sleepMs, log, bareShellHandles, wakeCounts);
     await wakeAssignedIssueManagers(tickOptions, observations, terminals, executor, store, sleepMs, log, bareShellHandles, wakeCounts);
+    await alarmGoneIssueOwners(tickOptions, coordinator, terminals, executor, store, sleepMs, log, wakeCounts);
     const eligibleUnreadRunMessages = await wakePanesOnEvents(tickOptions, coordinator, observations, executor, store, log, sleepMs, bareShellHandles, wakeCounts);
     if (!coordinator) {
       // Coordinator-only STOPPED/POLLING/PERMISSION/Run-mail alarms are withheld,
