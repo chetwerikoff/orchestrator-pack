@@ -6139,6 +6139,157 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
 });
 
 
+describe('Issue #2659 ARCH23:01 old cooldown history versus a newer partial source', () => {
+  it('resumes only the newer 1/3 run while the terminal 0/3 cooldown consumes no round', async () => {
+    const projectId = 'orchestrator-pack';
+    const repository = 'chetwerikoff/orchestrator-pack';
+    const prNumber = 265915;
+    const issueBody = ['```complexity-tier', 'tier: T2', '```'].join('\n');
+    const storeRoot = tempRoot('opk-2659-cooldown-history-');
+    harnessEnv(storeRoot, path.join(storeRoot, 'review.json'));
+    selectProjectCard(storeRoot);
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(new Date('2026-10-12T00:00:00.000Z'));
+    const options = { projectId, storeRoot };
+    const authority = initializePackReviewAuthority({
+      prNumber, headSha: HEAD_A, tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: { storeRoot },
+    });
+    const digest = computeBoundIssueSnapshotHash(issueBody);
+    const oldRound = plannedStoredGptRound();
+    Object.assign(oldRound, {
+      tier: 'T2', accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      issueNumber: prNumber, boundIssueSnapshotDigest: digest,
+    });
+    oldRound.sourceSlots = oldRound.sourceSlots.map((slot) => {
+      const invocationId = 'cooldown-original-' + slot.ordinal;
+      return {
+        ...slot, lifecycle: 'terminal' as const, invocationId, attemptOrdinal: 1,
+        launchProfileKey: 'profile-' + 'a'.repeat(32),
+        terminalClass: 'rate_limit:account_cooldown_active',
+        terminalResult: storedTerminalTurnResult(invocationId, {
+          state: 'rate_limit', cause: 'account_cooldown_active', scope: 'invocation',
+          send_count: 0, send_attempted: false,
+        }),
+      };
+    });
+    const original = createPackReviewRun({
+      ...options, prNumber, headSha: HEAD_A,
+      canonicalRepository: repository, trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: authority.cycle!.cycleId, logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      automaticBudgetDisposition: 'consume', resolvedReviewer: 'gpt', reviewRound: oldRound,
+    }).run;
+    setPackReviewRunTerminal(original.id, 'failed', {
+      failureReason: 'gpt_source_non_complete:account_cooldown_active:0/3',
+    }, options);
+    const frozenZero = getPackReviewRun(original.id, options)!;
+    expect(derivePackReviewNoJudgmentBudgetOutcome(frozenZero, [])).toBe('non_consuming_no_judgment');
+    expect(readPackReviewAuthority(prNumber, { storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([]);
+
+    const partialRound = plannedStoredGptRound();
+    Object.assign(partialRound, {
+      tier: 'T2', accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      issueNumber: prNumber, boundIssueSnapshotDigest: digest,
+    });
+    const successor = createPackReviewRun({
+      ...options, prNumber, headSha: HEAD_A,
+      canonicalRepository: repository, trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: authority.cycle!.cycleId, logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      automaticBudgetDisposition: 'consume', resolvedReviewer: 'gpt',
+      allowSameRoundReplacement: true, reviewRound: partialRound,
+    }).run;
+    const comments: PackGptSourceGithubComment[] = [];
+    const makeComment = (slotId: string, invocationId: string, id: number): PackGptSourceGithubComment => ({
+      id,
+      body: formatPackGptSourceCommentEnvelope({
+        repository, prNumber, headSha: HEAD_A, runId: successor.id, slotId, invocationId,
+      }, 'NO_FINDINGS'),
+      actorLogin: 'browser-gpt-bot',
+      createdAt: '2026-10-12T00:01:00.000Z', updatedAt: '2026-10-12T00:01:00.000Z',
+      url: 'https://github.com/' + repository + '/pull/' + prNumber + '#issuecomment-' + id,
+      issueUrl: 'https://api.github.com/repos/' + repository + '/issues/' + prNumber,
+    });
+    const sourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async () => [...comments],
+      getComment: async (id) => {
+        const comment = comments.find((item) => item.id === id);
+        if (!comment) throw new Error('original source comment missing');
+        return comment;
+      },
+    };
+    const firstInvocation = 'newer-partial-01';
+    comments.push(makeComment('source-01', firstInvocation, 265915001));
+    const credential = await resolvePackGptSourceComment({
+      identity: { repository, prNumber, headSha: HEAD_A, runId: successor.id,
+        slotId: 'source-01', invocationId: firstInvocation },
+      transport: sourceTransport,
+    });
+    expect(credential.kind).toBe('credentialed');
+    if (credential.kind !== 'credentialed') throw new Error('source-01 must be credentialed');
+    partialRound.sourceSlots[0] = {
+      slotId: 'source-01', ordinal: 1, lifecycle: 'terminal',
+      invocationId: firstInvocation, attemptOrdinal: 1,
+      terminalClass: 'complete_clean',
+      terminalResult: storedTerminalTurnResult(firstInvocation, {
+        source_comment_authority: 'credentialed_github',
+        source_comment_receipt: credential.receipt,
+      }),
+      payload: credential.payload,
+    };
+    updatePackReviewRun(successor.id, {
+      reviewRound: partialRound, status: 'preparing', latestRunStatus: 'preparing',
+      runnerPid: 2147483647,
+    }, options);
+    vi.setSystemTime(new Date('2026-10-12T00:20:00.000Z'));
+
+    const launches: string[] = [];
+    const attempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+    const result = await startPackReview({
+      ...options, sourceRepoRoot: repoRoot, prNumber, headSha: HEAD_A,
+      claimMode: 'acquire', tier: 'T2',
+      fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
+      fixturePrState: 'OPEN', fixturePrBody: 'Closes #' + prNumber,
+      fixturePostReviewPrBody: 'Closes #' + prNumber,
+      fixtureRepoSlug: repository, fixtureIssueNumber: prNumber,
+      fixtureIssueTitle: '[T2] Same-head cooldown recovery', fixtureIssueBody: issueBody,
+      fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureGptAttemptObserver: async () => ({
+        state: 'continuation_eligible' as const, replacementEligible: false,
+        initialLaunchSlotIds: ['source-02', 'source-03'],
+      }),
+      fixtureReviewBySourceSlot: attempts,
+      fixtureAfterGptInvocationBound: ({ slotId, invocationId }) => {
+        launches.push(slotId);
+        attempts[slotId] = [{ stdout: successfulCleanReviewPayload(invocationId), exitCode: 0 }];
+      },
+      fixtureBeforeGptSourceCommentCensus: ({ slotId, invocationId }) => {
+        if (slotId !== 'source-01') {
+          comments.push(makeComment(slotId, invocationId, slotId === 'source-02' ? 265915002 : 265915003));
+        }
+      },
+      fixtureRequiredStatusWriter: async () => {},
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      ok: true, runId: successor.id, created: true,
+      coverage: { kind: 'complete', completedSourceCount: 3, cardinality: 3 },
+    });
+    expect(launches.slice().sort()).toEqual(['source-02', 'source-03']);
+    expect(getPackReviewRun(successor.id, options)?.reviewRound?.sourceSlots[0]?.invocationId)
+      .toBe(firstInvocation);
+    expect(getPackReviewRun(original.id, options)?.reviewRound).toEqual(frozenZero.reviewRound);
+    expect(getPackReviewRun(original.id, options)?.reviewVerdict).toBeUndefined();
+    expect(readPackReviewAuthority(prNumber, { storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([1]);
+  });
+});
+
 describe('Issue #2532 dead partial GPT incumbent through public start', () => {
   const projectId = 'orchestrator-pack';
   const repository = 'chetwerikoff/orchestrator-pack';
