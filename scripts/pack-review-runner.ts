@@ -4956,9 +4956,43 @@ export async function maybeAdmitPackReviewBodyAmendment(
     return failure('amendment_live_issue_unavailable', describeError(error));
   }
   const nextDigest = computeBoundIssueSnapshotHash(currentIssue.body);
+  // A full-body mismatch observed on this exact PR head must never leave a
+  // prior success as the runner's asserted current authority. A non-behavior
+  // mismatch has no new-review admission; deassert and read back only.
+  const confirmUnreviewedBodyNonSuccess = async (reason: string) => {
+    try {
+      const head = await readCheckedReviewPrHead(input, options.repoSlug, prNumber, livePr.headSha);
+      if (head !== livePr.headSha
+          || extractClosingIssueNumber(livePr.body) !== issueNumber
+          || computeBoundIssueSnapshotHash(currentIssue.body) !== nextDigest) {
+        return failure('amendment_mismatch_current_binding_unverified');
+      }
+      let observed = await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha);
+      if (observed !== 'pending' && observed !== 'error') {
+        const writer = input.fixtureRequiredStatusWriter
+          ?? ((request: Parameters<PackReviewRequiredStatusWriter>[0]) => publishPackReviewRequiredStatus({
+            repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+            headSha: livePr.headSha, request,
+          }));
+        await writer({
+          state: 'error',
+          context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+          description: 'Linked Issue body differs from the reviewed immutable source.',
+          idempotencyKey: `unreviewed-issue-body:${prNumber}:${livePr.headSha}:${nextDigest}`,
+        });
+        observed = await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha);
+      }
+      if (observed !== 'pending' && observed !== 'error') {
+        return failure('amendment_mismatch_non_success_unverified');
+      }
+      return failure(reason);
+    } catch (error) {
+      return failure('amendment_mismatch_non_success_unverified', describeError(error));
+    }
+  };
   if (cycle.amendmentOrigin && !isFinalTerminal) {
     return nextDigest === cycle.amendmentOrigin.amendedBodyDigest
-      ? null : failure('amendment_prior_round_not_terminal');
+      ? null : confirmUnreviewedBodyNonSuccess('amendment_prior_round_not_terminal');
   }
   if (!isFinalTerminal || !authority.terminal) return null;
   const terminal = authority.terminal;
@@ -4998,15 +5032,16 @@ export async function maybeAdmitPackReviewBodyAmendment(
   const oldBody = readFileSync(frozen.snapshotPath, 'utf8');
   if (nextDigest === frozen.snapshotHash) return null;
   if (cycle.amendmentOrigin?.previouslyAdmittedBodyDigests.includes(nextDigest)) {
-    return failure('amendment_digest_replayed');
+    return confirmUnreviewedBodyNonSuccess('amendment_digest_replayed');
   }
   const oldCriteria = reviewBehaviorCriteria(oldBody);
   const newCriteria = reviewBehaviorCriteria(currentIssue.body);
   if (!oldCriteria || !newCriteria || oldCriteria === newCriteria) {
-    // A changed body is not proof of amended behavior. In particular a bad
-    // subsequent tier fence must not invalidate the already-frozen snapshot.
-    // The historic same-head/descendant path remains the authority here.
-    return null;
+    // Only a genuine behavior-criteria change admits a new review. A full
+    // mismatch elsewhere must still deassert success, except for the separately
+    // proven prior same-head Issue-only resolution / §11 incident settlement.
+    if (cycle.settlementKind === 'same_head_issue_resolution') return null;
+    return confirmUnreviewedBodyNonSuccess('amendment_unverified_body_mismatch');
   }
   let liveTier: PackReviewTier;
   try { liveTier = parseAuthoritativeTier(currentIssue.body, currentIssue.title); }
@@ -8075,6 +8110,46 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         && !incumbentGptDeliveryResume
         && !explicitReviewer) {
       const cycleId = authority.cycle.cycleId;
+      const verifyStageCompleteIssue = async (): Promise<boolean> => {
+        try {
+          if (!authority.terminal?.runId || !target.issueNumber
+              || authoritative.issueNumber !== target.issueNumber) return false;
+          const original = getPackReviewRun(authority.terminal.runId, { projectId, storeRoot });
+          if (!original || original.projectId !== projectId
+              || original.prNumber !== target.prNumber
+              || original.canonicalRepository?.toLowerCase() !== target.repoSlug.toLowerCase()
+              || original.reviewCycleId !== cycleId
+              || original.targetSha !== authority.terminal.targetSha
+              || !hasPersistedPackReviewVerdict(original)) return false;
+          const bound = original.boundIssueSnapshotDigest
+            ?? original.reviewRound?.boundIssueSnapshotDigest
+            ?? authoritative.snapshotDigest;
+          if (!bound || bound !== authoritative.snapshotDigest) return false;
+          const body = process.env.OPK_VITEST_HARNESS === '1'
+            ? input.fixtureIssueBody
+            : (await resolveCurrentIssueFields(
+              target.sourceRepoRoot, target.repoSlug, target.issueNumber,
+            )).body;
+          if (body === undefined) return false;
+          if (computeBoundIssueSnapshotHash(body) === bound) return true;
+          if (authority.cycle?.settlementKind !== 'same_head_issue_resolution'
+              || authority.terminal.reviewVerdict !== 'findings') return false;
+          // Only the existing, evidence-checked #2428 Issue-only settlement
+          // may bind an authorized post-review body without a replacement run.
+          const accepted = await reconcileFinalCapSettlement({
+            projectId, storeRoot, prNumber: target.prNumber,
+            repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+            immediate: true,
+            fixtureCurrentPrHeadSha: input.fixtureCurrentPrHeadSha,
+            fixturePrBody: input.fixturePrBody, fixturePrState: input.fixturePrState,
+            fixtureIssueNumber: input.fixtureIssueNumber,
+            fixtureIssueBody: input.fixtureIssueBody, fixtureIssueTitle: input.fixtureIssueTitle,
+            fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+            fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
+          }, { projectId, storeRoot, repoSlug: target.repoSlug });
+          return accepted?.settled === true;
+        } catch { return false; }
+      };
       const verifyStageCompleteHead = async () => {
         const head = await readProjectionHead();
         const latest = readPackReviewAuthority(target.prNumber, authorityOptions);
@@ -8102,6 +8177,35 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         headSha: target.headSha,
         request,
       }));
+      const refuseUnreviewedStage = async (phase: string) => {
+        try {
+          if (!(await verifyStageCompleteHead())) return unresolved(`${phase}:head_changed`);
+          await writeRequiredStatus({
+            state: 'error', context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+            description: 'Completed review has no verified current linked Issue-body binding.',
+            idempotencyKey: `required-status:${target.headSha}:unreviewed-issue:${cycleId}`,
+          });
+          const state = await readFinalCapRequiredStatus({
+            sourceRepoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+            fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+          }, target.repoSlug, target.headSha);
+          if (state !== 'error' || !(await verifyStageCompleteHead())) {
+            return unresolved(`${phase}:error_status_unverified`);
+          }
+          await releaseEarlyClaim('stage_complete_issue_body_unverified');
+          return { ok: false, created: false, reused: true,
+            reason: 'stage_complete_issue_body_unverified',
+            requiredStatusState: 'error', cycleId,
+            prNumber: target.prNumber, headSha: target.headSha,
+            nextAction: 'verify the current closing Issue against its original immutable review binding before any success',
+            httpStatus: 409 };
+        } catch (error) {
+          return unresolved(`${phase}:non_success_publication_failed:${describeError(error)}`);
+        }
+      };
+      if (!(await verifyStageCompleteIssue())) {
+        return refuseUnreviewedStage('before_status');
+      }
       try {
         await writeRequiredStatus({
           state: 'success',
@@ -8129,6 +8233,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       }
       if (observedStageCompleteStatus !== 'success' || !(await verifyStageCompleteHead())) {
         return unresolved('stage_complete_success_status_not_observed_on_current_head');
+      }
+      if (!(await verifyStageCompleteIssue())) {
+        return refuseUnreviewedStage('after_status');
       }
       const stageCompleteReason = authority.terminal?.targetSha === target.headSha
         ? 'terminal_run_exists'
