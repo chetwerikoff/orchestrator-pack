@@ -1953,6 +1953,61 @@ describe('state-light fresh conversation collision recovery', () => {
                 },
               }),
             }));
+          // Mirror only the rendered DOM primitives used by both production
+          // evaluateAll callbacks. The outer parent text intentionally differs
+          // from the visible complete code child (#2590 and #2660).
+          if (observationOverrides.assistantCode) {
+            for (let i = 0; i < elements.length; i++) {
+              if (active[i]?.role !== 'assistant') continue;
+              const outer = elements[i] as any;
+              const doc = { defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible' }) } };
+              const node = (tagName: string, innerText: string, attrs: Record<string, string> = {}) => {
+                const value: any = {
+                  tagName, innerText, children: [] as any[], childNodes: [] as any[], parentElement: null,
+                  ownerDocument: doc,
+                  getClientRects: () => [{}], getBoundingClientRect: () => ({ height: 1 }),
+                  getAttribute: (name: string) => attrs[name] ?? null,
+                  hasAttribute: (name: string) => Object.hasOwn(attrs, name),
+                  querySelectorAll(selector: string): any[] {
+                    const matches = (child: any) => selector === 'pre' ? child.tagName === 'PRE'
+                      : selector === 'code' ? child.tagName === 'CODE'
+                        : selector === '.markdown' ? child.getAttribute('class') === 'markdown'
+                          : selector === 'pre code' ? child.tagName === 'CODE' && child.parentElement?.tagName === 'PRE'
+                            : false;
+                    const descendants = (parent: any): any[] => parent.children.flatMap((child: any) =>
+                      [...(matches(child) ? [child] : []), ...descendants(child)]);
+                    return descendants(value);
+                  },
+                  querySelector(selector: string): any { return value.querySelectorAll(selector)[0] ?? null; },
+                };
+                return value;
+              };
+              const attach = (parent: any, child: any) => {
+                child.parentElement = parent;
+                parent.children.push(child);
+                parent.childNodes.push(child);
+                return child;
+              };
+              outer.tagName = 'ARTICLE';
+              outer.parentElement = null;
+              outer.children = [];
+              outer.childNodes = [];
+              outer.ownerDocument = doc;
+              outer.getClientRects = () => [{}];
+              const root = attach(outer, node('DIV', '', { class: 'markdown' }));
+              attach(root, node('P', 'Before'));
+              const wrapper = attach(root, node('DIV', ''));
+              const pre = attach(wrapper, node('PRE', ''));
+              attach(pre, node('CODE', observationOverrides.assistantCode.visible));
+              attach(root, node('P', 'Following  prose\nEXECUTION_STATUS: complete'));
+              const originalQuerySelector = outer.querySelector;
+              outer.querySelector = (selector: string) => selector === '.markdown'
+                ? root : originalQuerySelector(selector);
+              outer.querySelectorAll = (selector: string) => selector === '.markdown'
+                ? [root] : selector === 'pre' ? [pre] : selector === 'pre code'
+                  ? pre.querySelectorAll('code') : [];
+            }
+          }
             const previousDocument = (globalThis as { document?: unknown }).document;
             (globalThis as { document?: unknown }).document = {
               querySelectorAll: (query: string) => (query.includes('stop-button') && generating) || ((query.includes('continue-generating') || query.includes('continue_generating')) && continuationVisible) ? [{}] : [],
@@ -2902,7 +2957,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const prompt = 'PROMPT-2590-' + caseName;
     const footer = '\n\nFollowing  prose\nEXECUTION_STATUS: complete';
     const outer = 'Before\n\n' + parentPrefix + footer;
-    const expected = 'Before\n\n' + expectedCode + footer;
+    const expected = 'Before\n\n```\n' + expectedCode + (expectedCode.endsWith('\n') ? '' : '\n') + '```' + footer;
     const output = join(stateDir, 'long-code-2590-' + caseName + '.txt');
     const { page, state } = unrenderedOwnedMessagePage(
       prompt, outer, false, false, false, [outer], [],
