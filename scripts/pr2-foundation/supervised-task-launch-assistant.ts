@@ -2741,7 +2741,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
   if (argv[0] === 'resume') {
     if (argv.length !== 2) throw new Error('resume requires exactly one existing OpenCode session ID');
     const resumed = await runProductionExistingOpenCodeResume(argv[1]!);
-    process.stdout.write(`${JSON.stringify(resumed)}\\n`);
+    process.stdout.write(`${JSON.stringify(resumed)}\n`);
     process.exitCode = resumed.outcome === 'catalog_observed_unverified' ? 0 : 1;
     return;
   }
