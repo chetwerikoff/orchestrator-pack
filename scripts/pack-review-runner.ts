@@ -4883,7 +4883,8 @@ export async function maybeAdmitPackReviewBodyAmendment(
   const prNumber = input.prNumber;
   const authority = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot });
   const cycle = authority?.cycle;
-  if (!authority || !cycle || cycle.capMapVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) return null;
+  if (!authority || !cycle || cycle.frozenTier === 'T1'
+      || cycle.capMapVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) return null;
   const isFinalTerminal = cycle.consumedRoundOrdinals?.length === cycle.frozenCap
     && cycle.consumedRoundOrdinals.at(-1) === cycle.frozenCap
     && Boolean(authority.terminal?.runId)
@@ -4919,7 +4920,9 @@ export async function maybeAdmitPackReviewBodyAmendment(
     if (process.env.OPK_VITEST_HARNESS === '1') {
       if (input.fixtureIssueNumber !== issueNumber
           || input.fixtureIssueTitle === undefined || input.fixtureIssueBody === undefined) {
-        return failure('amendment_issue_fixture_unverified');
+        // Incomplete legacy fixtures cannot prove an amended Issue; the existing
+        // final-cap binding guard remains the sole authority for that route.
+        return null;
       }
       currentIssue = { title: input.fixtureIssueTitle, body: input.fixtureIssueBody };
     } else {
