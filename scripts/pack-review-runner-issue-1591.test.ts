@@ -1236,6 +1236,7 @@ describe('Issue #2659 aggregate quorum identity after a late third credentialed 
     const original = getPackReviewRun(created.id, options)!;
     const late = structuredClone(original.reviewRound!);
     late.sourceSlots[0]!.terminalClass = 'complete_clean';
+    late.sourceSlots[0]!.payload = { verdict: 'clean', findingCount: 0, findings: [] };
     late.sourceSlots[2] = {
       ...late.sourceSlots[2]!, lifecycle: 'terminal', terminalClass: 'complete_clean',
       invocationId: 'late-invocation', attemptOrdinal: 1,
