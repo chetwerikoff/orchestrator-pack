@@ -38,6 +38,7 @@ import {
   COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR, MESSAGE_NODE_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE, RENDERED_CONVERSATION_TURN_SECTION_SELECTOR,
   USER_MESSAGE_SELECTOR, ASSISTANT_MESSAGE_SELECTOR, ASSISTANT_TURN_ANCESTOR_XPATH,
+  RENDERED_STOP_BUTTON_SELECTOR,
 } from './product-page-selectors.ts';
 import { publishWitnessedStateLight429, readStateLightAccountCooldown, __testComposerMutation, __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
@@ -2579,7 +2580,9 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
   const uuid = '26512651-2651-4651-8651-265126512651';
   const chatUrl = 'https://chatgpt.com/c/' + uuid;
   type Case = 'negative' | 'positive' | 'incomplete' | 'paginated' | 'get429'
-    | 'changed-composer' | 'pre-actionability-budget' | 'late-positive';
+    | 'changed-composer' | 'pre-actionability-budget' | 'late-positive'
+    | 'overslept-poll' | 'reused-page' | 'late-assistant' | 'post-guard-whitespace'
+    | 'affirmative-finalized' | 'affirmative-late-stop' | 'affirmative-late-draft';
   let root: string;
 
   beforeEach(() => {
@@ -2603,6 +2606,14 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     let firstClickAt = -1;
     let explicitGetAt = -1;
     let injectedNaturalPositive = false;
+    let oversleptPoll = false;
+    let sawRecoveryLosslessRead = false;
+    let sawTransientGenerationDuringStall = false;
+    let appendedLateAssistant = false;
+    let injectedWhitespaceMutation = false;
+    let injectedAfterClear = false;
+    let stopVisible = false;
+    let closed = false;
     const pageEvents = new EventEmitter();
     const calls: Array<{ url: string; header?: string }> = [];
     const prior = [
@@ -2617,7 +2628,9 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
           completionReady: message.role === 'assistant', continuationVisible: false,
         })),
         pageTurnEvidence: {
-          generationInProgress: false, observedAssistantNodes: 1, continueGeneratingVisible: false,
+          generationInProgress: false,
+          observedAssistantNodes: prior.filter((item) => item.role === 'assistant').length,
+          continueGeneratingVisible: false,
         },
       })),
     });
@@ -2625,15 +2638,39 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       count: vi.fn(async () => 1),
       click: vi.fn(async () => undefined),
       fill: vi.fn(async (value: string) => { draft = value; }),
-      innerText: vi.fn(async () => draft),
+      innerText: vi.fn(async () => {
+        // The final normalized guard runs after the successful GET, after the
+        // preceding lossless read. Mutation here must veto a second click.
+        if (kind === 'post-guard-whitespace' && calls.length === 1
+          && clickCount === 1 && !injectedWhitespaceMutation) {
+          injectedWhitespaceMutation = true;
+          draft = draft.replace('\n\n', '\n');
+        }
+        return draft;
+      }),
       textContent: vi.fn(async () => draft),
-      evaluate: vi.fn(async (callback: (element: unknown) => unknown, _args?: unknown, options?: { timeout?: number }) => {
+      evaluate: vi.fn(async (callback: (element: unknown, arg?: unknown) => unknown, args?: unknown, options?: { timeout?: number }) => {
         if (options?.timeout !== undefined) return true; // Older readiness adapter.
         const element = {
-          get textContent() { return draft; }, get innerText() { return draft; },
+          get textContent() { return draft; },
+          set textContent(value: string) { draft = value; },
+          get innerText() { return draft; },
+          ownerDocument: { defaultView: { location: { get href() { return chatUrl; } } } },
           isConnected: true, isContentEditable: true,
         };
-        return callback(element);
+        const value = callback(element, args);
+        if (clickCount === 1 && args === undefined && kind === 'overslept-poll') {
+          sawRecoveryLosslessRead = true;
+        }
+        // Post-clear census has already passed. Simulate an external change
+        // during the first awaited blank-composer read before Page.close().
+        if ((kind === 'affirmative-late-stop' || kind === 'affirmative-late-draft')
+          && clickCount === 2 && args === undefined && draft === '' && !injectedAfterClear) {
+          injectedAfterClear = true;
+          if (kind === 'affirmative-late-stop') stopVisible = true;
+          else draft = 'FOREIGN SHARED DRAFT AFTER CLEAR';
+        }
+        return value;
       }),
     });
     const history = (text: string) => ({
@@ -2664,7 +2701,9 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       click: vi.fn(async () => {
         clickCount++;
         if (firstClickAt < 0) firstClickAt = now;
-        if (kind === 'pre-actionability-budget' && clickCount === 1) {
+        if ((kind === 'pre-actionability-budget' && clickCount === 1)
+          || kind === 'affirmative-finalized'
+          || kind === 'affirmative-late-stop' || kind === 'affirmative-late-draft') {
           const error = Object.assign(new Error([
             'locator.click: Timeout 5000ms exceeded', 'Call log:',
             '  - waiting for element to be visible, enabled and stable',
@@ -2698,10 +2737,21 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     });
     const page = Object.assign(pageEvents, {
       __fakeBrowserGptPage: true,
-      url: vi.fn(() => chatUrl), isClosed: vi.fn(() => false),
-      goto: vi.fn(async () => undefined), close: vi.fn(async () => undefined),
+      url: vi.fn(() => chatUrl), isClosed: vi.fn(() => closed),
+      goto: vi.fn(async () => undefined), close: vi.fn(async () => { closed = true; }),
       waitForTimeout: vi.fn(async (ms: number) => {
-        now += ms;
+        if (kind === 'overslept-poll' && sawRecoveryLosslessRead && !oversleptPoll) {
+          // The event loop misses generation and its completion while asleep.
+          // A quiet final DOM/negative GET must not turn this into an idle settle.
+          oversleptPoll = true;
+          sawTransientGenerationDuringStall = true;
+          now += ms + 30_500;
+        } else now += ms;
+        if (kind === 'late-assistant' && clickCount === 1 && !appendedLateAssistant
+          && now >= firstClickAt + 10_000) {
+          appendedLateAssistant = true;
+          prior.push({ role: 'assistant', text: 'new completed answer during settle', finalActionInTurnContainer: true });
+        }
         if (kind === 'changed-composer' && clickCount === 1 && now >= firstClickAt + 10_000) {
           draft += ' ';
         }
@@ -2718,6 +2768,10 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       locator: vi.fn((selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (selector === RENDERED_STOP_BUTTON_SELECTOR) return scalarLocator({
+          count: vi.fn(async () => stopVisible ? 1 : 0),
+          isVisible: vi.fn(async () => stopVisible),
+        });
         if (selector === MESSAGE_NODE_SELECTOR) return historic;
         if (selector === USER_MESSAGE_SELECTOR) return collectionLocator([prior[0]!]);
         if (selector === ASSISTANT_MESSAGE_SELECTOR) return collectionLocator([prior[1]!]);
@@ -2731,7 +2785,9 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       }),
     });
     const harness = enqueueBrowserForTurn(mocks, page);
-    Object.assign(harness.context, { pages: () => [page] });
+    // Default to an invocation-created target; a URL-matched existing target
+    // is a separate created:false negative-control case, not retry authority.
+    if (kind === 'reused-page') Object.assign(harness.context, { pages: () => [page] });
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
     try {
       const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
@@ -2742,7 +2798,9 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       return {
         ...outcome, click: sendButton.click, evaluate, calls, firstClickAt,
         explicitGetAt, getClock: () => now, getDraft: () => draft,
-        injectedNaturalPositive,
+        injectedNaturalPositive, oversleptPoll, sawTransientGenerationDuringStall,
+        appendedLateAssistant, injectedWhitespaceMutation, injectedAfterClear,
+        close: page.close,
         observation: readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId),
       };
     } finally {
@@ -2754,6 +2812,8 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     ['negative', 2, 1], ['positive', 1, 1], ['incomplete', 1, 1],
     ['paginated', 1, 1], ['get429', 1, 1], ['changed-composer', 1, 0],
     ['pre-actionability-budget', 2, 0], ['late-positive', 2, 1],
+    ['overslept-poll', 1, 0], ['reused-page', 1, 0],
+    ['late-assistant', 1, 0], ['post-guard-whitespace', 1, 1],
   ] as const)('guards full held-Page GET and one shared repeat: %s', async (kind, clicks, explicitGets) => {
     const t = await connectedTurn(kind);
     expect(t.click).toHaveBeenCalledTimes(clicks);
@@ -2781,5 +2841,42 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       expect(t.observation).toMatchObject({ phase: 'sent_unharvested', send_count: 1 });
     }
     if (kind === 'late-positive') expect(t.injectedNaturalPositive).toBe(true);
+    if (kind === 'overslept-poll') {
+      expect(t.oversleptPoll).toBe(true);
+      expect(t.sawTransientGenerationDuringStall).toBe(true);
+    }
+    if (kind === 'late-assistant') expect(t.appendedLateAssistant).toBe(true);
+    if (kind === 'post-guard-whitespace') expect(t.injectedWhitespaceMutation).toBe(true);
+    if (kind === 'reused-page' || kind === 'late-assistant'
+      || kind === 'overslept-poll' || kind === 'post-guard-whitespace') {
+      expect(t.close).not.toHaveBeenCalled();
+      expect(t.observation.phase).not.toBe('not_sent');
+    }
   });
+
+  it('finalizes affirmative all-action non-dispatch only on a created owned blank Page', async () => {
+    const t = await connectedTurn('affirmative-finalized');
+    expect(t.click).toHaveBeenCalledTimes(2);
+    expect(t.calls).toHaveLength(0);
+    expect(t.close).toHaveBeenCalledTimes(1);
+    expect(t.getDraft()).toBe('');
+    expect(t.result).toMatchObject({
+      state: 'send_failed', cause: 'affirmative_pre_actionability_no_dispatch',
+      send_count: 0, send_attempted: true,
+    });
+    expect(t.observation).toMatchObject({ phase: 'not_sent', send_count: 0,
+      transition_reason: 'affirmative_pre_actionability_no_dispatch' });
+  });
+
+  it.each(['affirmative-late-stop', 'affirmative-late-draft'] as const)(
+    'preserves a created Page when %s appears after post-clear census but before close', async (kind) => {
+      const t = await connectedTurn(kind);
+      expect(t.injectedAfterClear).toBe(true);
+      expect(t.click).toHaveBeenCalledTimes(2);
+      expect(t.close).not.toHaveBeenCalled();
+      expect(t.observation.phase).toBe('dispatching');
+      expect(t.result).toMatchObject({ state: 'observation_uncertain', send_attempted: true, send_count: 0 });
+      if (kind === 'affirmative-late-draft') expect(t.getDraft()).toBe('FOREIGN SHARED DRAFT AFTER CLEAR');
+    },
+  );
 });
