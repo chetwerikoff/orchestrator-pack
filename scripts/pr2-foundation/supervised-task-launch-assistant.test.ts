@@ -4014,7 +4014,7 @@ describe('Issue #2655 r02 fresh PR remote head', () => {
         return { ok: true, stdout: JSON.stringify({
           ...source,
           number: Number(argv[3]),
-          ...(options.changed && reads > 2 ? { headRefOid: 'b'.repeat(40) } : {}),
+          ...(options.changed && reads > 1 ? { headRefOid: 'b'.repeat(40) } : {}),
         }) };
       }
       if (cmd === 'git fetch --no-tags origin refs/heads/' + branch +
@@ -4053,10 +4053,11 @@ describe('Issue #2655 r02 fresh PR remote head', () => {
       '--manager-brief', 'continue Issue #2655', '--issue-number', '2655',
       '--worktree-name', 'fresh-2655', '--base-branch', 'origin/' + branch,
     ];
-    expect(parseLaunchAssistantCli(argv, profileEnv(), project)).toMatchObject({
-      issueNumber: 2655, baseBranch: 'origin/' + branch,
-      worktreeName: 'fresh-2655', startMode: undefined,
+    const input = parseLaunchAssistantCli(argv, profileEnv(), project);
+    expect(input).toMatchObject({
+      issueNumber: 2655, baseBranch: 'origin/' + branch, worktreeName: 'fresh-2655',
     });
+    expect(input.startMode).toBeUndefined();
     expect(() => parseLaunchAssistantCli(argv.filter((arg, n) =>
       arg !== '--issue-number' && argv[n - 1] !== '--issue-number'),
       profileEnv(), project)).toThrow(/--issue-number/u);
@@ -4185,7 +4186,11 @@ describe('Issue #2655 r02 AppliedIn #118 same Task terminal identity retry', () 
         worktreeSelector: 'id:' + worktreeId, defaultBranch: 'main',
         baseBranch: 'origin/main', env,
       }, {
-        ...deps({ adapter }),
+        ...deps({
+          adapter,
+          managerRun: { status: 'ok', value: { runId } },
+          managerMembership: { status: 'ok', value: { taskId } },
+        }),
         resolveProfile: (workClass, inherited, mode) => resolveLiveExecutorProfile(
           workClass, inherited, mode, async (args) => opencodeProbeResult(args),
         ),
