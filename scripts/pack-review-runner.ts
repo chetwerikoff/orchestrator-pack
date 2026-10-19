@@ -9094,7 +9094,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
            worktree = allocatedTarget;
            // Persist exact ownership before `git worktree add`: even a post-add
            // exception must leave the owned checkout eligible for outer finally.
-           updatePackReviewRun(run.id, { reviewTargetRoot: allocatedTarget }, { projectId, storeRoot });
+           updatePackReviewRun(run!.id, { reviewTargetRoot: allocatedTarget }, { projectId, storeRoot });
          },
         input.fixtureAfterReviewWorktreeAdd,
       );
