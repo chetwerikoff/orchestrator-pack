@@ -2553,7 +2553,9 @@ async function existingRetryDomGuards(input: {
       if (before.role !== after.role || before.fingerprint !== after.fingerprint
         || before.key !== after.key) return false;
     }
-    if (current.slice(baseline.carriers.length).some((carrier) => carrier.role === 'user')) return false;
+    // Any new turn carrier, including a completed assistant reply with no Stop,
+    // contradicts the immutable pre-Send baseline during negative recovery.
+    if (current.length !== baseline.carriers.length) return false;
     // The final Stop/liveness/URL check follows the transcript read so a late
     // generation or redirect cannot turn a stale census into a second click.
     return await readFreshStopVisible(input.page, input.deadlineMs) === false && samePage();
@@ -2563,6 +2565,9 @@ async function existingRetryDomGuards(input: {
 }
 
 const SERVER_CHECKED_SEND_SETTLE_MS = 30_000;
+// A skipped poll cannot certify a continuous idle interval; fail closed under
+// event-loop stalls or slow DOM reads without extending the settle/deadline.
+const SERVER_CHECKED_MAX_SAMPLE_GAP_MS = INITIAL_POLL_MS * 3;
 
 /** Only an existing exactly owned held Page may spend the one recovery click.
  * This uses the D45 observer for both the explicit request and the completed
@@ -2583,6 +2588,8 @@ async function observeExistingServerCheckedRecovery(input: {
   const expectedUuid = conversationUuidFromUrl(input.targetChatUrl);
   if (!witness || !expectedUuid || !input.baselineSnapshot?.complete) return 'unproven';
   const identity = () => !browserOrPageDefinitelyLost(input.page, input.browser)
+    && getOwnTargetInfo(input.browser)?.created === true
+    && !cleanupAuthorityUnprovenPages.has(input.page)
     && normalizeConversationUrl(String(input.page.url())) === input.targetChatUrl
     && readOwnedConversationIdentity(input.page, input.targetChatUrl).matched
     && Date.now() < input.deadlineMs;
@@ -2594,6 +2601,7 @@ async function observeExistingServerCheckedRecovery(input: {
   const settleStart = Date.now();
   const settleUntil = settleStart + SERVER_CHECKED_SEND_SETTLE_MS;
   if (settleUntil + 3 * MAX_LOCAL_READ_WAIT_MS >= input.deadlineMs) return 'unproven';
+  let lastSampleAt = settleStart;
   while (Date.now() < settleUntil) {
     if (!identity() || positive()
       || await readLosslessOwnedComposer(input.composer, input.deadlineMs) !== input.markedPayload
@@ -2603,13 +2611,18 @@ async function observeExistingServerCheckedRecovery(input: {
         marker: input.marker, baselineSnapshot: input.baselineSnapshot,
         deadlineMs: input.deadlineMs,
       })) return witness.serverMarkerPresent() ? 'server_marker_present' : 'unproven';
-    // Every observation remains on the same held Page. An interrupted poll,
-    // incompletely rendered transcript or generation vetoes the settle.
+    // A slow read or stalled event loop could hide a transient Stop/generation.
+    // Every sample must follow its predecessor within the bounded poll gap.
+    const sampledAt = Date.now();
+    if (sampledAt - lastSampleAt > SERVER_CHECKED_MAX_SAMPLE_GAP_MS) return 'unproven';
+    lastSampleAt = sampledAt;
     if (!identity()) return 'unproven';
     const waitMs = Math.min(INITIAL_POLL_MS, settleUntil - Date.now());
     if (waitMs > 0) await sleep(input.page, waitMs);
+    if (Date.now() - lastSampleAt > SERVER_CHECKED_MAX_SAMPLE_GAP_MS) return 'unproven';
   }
-  if (!identity() || positive() || Date.now() >= input.deadlineMs - 2 * MAX_LOCAL_READ_WAIT_MS
+  if (Date.now() - lastSampleAt > SERVER_CHECKED_MAX_SAMPLE_GAP_MS
+    || !identity() || positive() || Date.now() >= input.deadlineMs - 2 * MAX_LOCAL_READ_WAIT_MS
     || await readLosslessOwnedComposer(input.composer, input.deadlineMs) !== input.markedPayload
     || !await existingRetryDomGuards({
       page: input.page, browser: input.browser, composer: input.composer,
@@ -3764,6 +3777,11 @@ async function runTurnCore(
       )) return null;
       if (!await uncontradicted()
         || await readLosslessOwnedComposer(page.locator(COMPOSER_SELECTOR), invocationDeadlineMs) !== ''
+        // The blank read can itself await while Stop, transcript or a foreign
+        // shared draft changes. Revalidate every guard after that await and
+        // finish with another lossless blank check immediately before close.
+        || !await uncontradicted()
+        || await readLosslessOwnedComposer(page.locator(COMPOSER_SELECTOR), invocationDeadlineMs) !== ''
         || !stillOwned()) return null;
       const close = await abandonLatePageHandle(page, RESOURCE_CLEANUP_BOUND_MS);
       // Closing has to be positively observed; a timed-out close is not finalization.
@@ -4191,6 +4209,10 @@ async function runTurnCore(
               held429Witness?.ownSubmissionIssued()
               || held429Witness?.serverMarkerPresent() === true
               || !originalExactChat
+              || page !== originalHeldPage
+              || getOwnTargetInfo(browser)?.created !== true
+              || cleanupAuthorityUnprovenPages.has(page)
+              || browserOrPageDefinitelyLost(page, browser)
               || !readOwnedConversationIdentity(page, originalExactChat).matched
             )) throw new Error('server_checked_reclick_guard_lost');
             transitionStateLightTurnObservation({
@@ -4221,7 +4243,9 @@ async function runTurnCore(
         }
       }
       if (!repeated && hasSendButton && delivery.sendCount === 0
-        && delivery.witness === 'unproven' && originalExactChat) {
+        && delivery.witness === 'unproven' && originalExactChat
+        && page === originalHeldPage && getOwnTargetInfo(browser)?.created === true
+        && !cleanupAuthorityUnprovenPages.has(page)) {
         const state = await observeExistingServerCheckedRecovery({
           page, browser, composer, targetChatUrl: originalExactChat,
           markedPayload, marker, baselineSnapshot,
@@ -4234,7 +4258,16 @@ async function runTurnCore(
           && await existingRetryDomGuards({
             page, browser, composer, targetChatUrl: originalExactChat,
             markedPayload, marker, baselineSnapshot, deadlineMs: invocationDeadlineMs,
-          })) {
+          })
+          // The normalized guard above contains awaits. Its equality does not
+          // protect a whitespace-only edit made while that guard was running.
+          && await readFreshStopVisible(page, invocationDeadlineMs) === false
+          && await readLosslessOwnedComposer(composer, invocationDeadlineMs) === markedPayload
+          && page === originalHeldPage && getOwnTargetInfo(browser)?.created === true
+          && !cleanupAuthorityUnprovenPages.has(page)
+          && !held429Witness?.ownSubmissionIssued()
+          && !held429Witness?.serverMarkerPresent()
+          && readOwnedConversationIdentity(page, originalExactChat).matched) {
           // A complete server-negative snapshot only permits the one guarded
           // physical re-click. It never certifies that the original did not Send.
           repeated = true;
