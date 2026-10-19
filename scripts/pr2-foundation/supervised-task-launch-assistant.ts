@@ -786,8 +786,7 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(input.workClass === 'manager' ? { managerRefresh: true } : {}),
     ...(input.workClass === 'merge' ? { primaryReuseRoot: input.primaryRoot } : {}),
     ...(input.workClass === 'manager' && input.taskId?.trim() ? { managerTaskRunId: input.runId?.trim() } : {}),
-    ...(input.workClass !== 'manager' && input.workClass !== 'merge'
-      && input.worktreeSelector && earlyCurrent
+    ...(input.workClass !== 'merge' && input.worktreeSelector && earlyCurrent
       ? { reuseAssignment: earlyCurrent } : {}),
   }));
   if (prepared.status !== 'ok') return continued(input, 'worktree_prepare', prepared, resources, startedAtMs, timings, deps.now);
@@ -1666,6 +1665,10 @@ async function refreshManagerWorktree(
         { worktreeId: id, branch: identity.value.branch, head, originMain },
         'preserve dirty bytes; only the exact existing Task and Issue-closing PR may resume here');
     }
+    if (request.reuseAssignment) {
+      const nativeReuse = await reuseTerminalOwnedWorktree(request, id, path, execute);
+      if (nativeReuse.status === 'ok') return nativeReuse;
+    }
     return resumeManagerAtOpenPrHead(
       request, id, path, identity.value.branch, head, originMain, execute, dirtyStatus,
     );
@@ -1726,7 +1729,7 @@ async function refreshManagerWorktree(
  * native terminal/gone predecessor before spawning, and never mutate the tree.
  * The supervised-start decision repeats this witness inside its assignment fence.
  */
-async function reuseOwnedWorkerWorktree(
+async function reuseTerminalOwnedWorktree(
   request: WorktreePreparationRequest,
   id: string,
   path: string,
@@ -1740,6 +1743,18 @@ async function reuseOwnedWorkerWorktree(
     || expected.issueNumber !== request.issueNumber
     || expected.repository !== request.repository.trim().toLowerCase()) {
     return refusal('worktree_reuse_ownership_unproven');
+  }
+  if (request.managerRefresh) {
+    if (!request.managerTaskRunId) return refusal('manager_pr_resume_task_unproven');
+    const member = resultRecord(envelope(await execute([
+      'orca', 'orchestration', 'task-list', '--run', request.managerTaskRunId, '--json',
+    ], undefined, undefined, path)));
+    const selectedRun = member && record(member.run) ? text(member.run.id) : text(member?.runId);
+    const tasks = Array.isArray(member?.tasks) ? member.tasks : [];
+    if (!member || (selectedRun && selectedRun !== request.managerTaskRunId)
+      || tasks.filter((task) => record(task) && text(task.id) === request.taskId).length !== 1) {
+      return refusal('manager_pr_resume_task_unproven');
+    }
   }
   const identity = await observeManagerWorktreeIdentity(request, id, path, execute);
   if (identity.status !== 'ok') return identity;
@@ -1822,7 +1837,7 @@ export async function prepareWorktreeWithOrca(
     const path = text(worktree?.path);
     if (!id || !path) return worktreeContinue('worktree_prepare_failed_or_unknown');
     if (!request.managerRefresh) {
-      return reuseOwnedWorkerWorktree(request, id, path, execute);
+      return reuseTerminalOwnedWorktree(request, id, path, execute);
     }
     return refreshManagerWorktree(request, id, path, execute);
   }
