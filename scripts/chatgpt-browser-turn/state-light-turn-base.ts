@@ -1876,7 +1876,6 @@ export async function readPageObservation(
           turnSelector: string;
           inProgressSelector: string;
           actionSelector: string;
-        continuationSelector: string;
         }) => {
           const elements = allElements.filter((element) => element.getBoundingClientRect().height > 0);
           const valid = (value: string | null): value is string => Boolean(value && value.length >= 8);
@@ -2066,7 +2065,6 @@ export async function readPageObservation(
           turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
           inProgressSelector: ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
           actionSelector: ASSISTANT_TURN_ACTION_SELECTOR,
-        continuationSelector: CONTINUE_GENERATING_SELECTOR,
         }),
         snapshotWaitMs,
         'atomic_transcript_snapshot_timeout',
@@ -3664,7 +3662,15 @@ async function runTurnCore(
       cleanupAuthorityUnprovenPages.add(page);
     }
     if (!page || getOwnTargetInfo(browser)?.created) {
-      if (!page) page = await createDedicatedTurnPage(browser, invocationBudget);
+      if (!page) {
+        page = await createDedicatedTurnPage(browser, invocationBudget);
+        // Explicit newPage resolution also proves creation, even when the
+        // original attach target did not carry a created Page.
+        if (!config.newChat && config.chatUrl && !cleanupAuthorityUnprovenPages.has(page)) {
+          invocationCreatedExistingChatPage = page;
+          invocationCreatedExistingChatUrl = normalizeConversationUrl(config.chatUrl);
+        }
+      }
       attachHeld429(page, !config.newChat ? config.chatUrl : undefined);
       if (config.newChat && freshCleanup) {
         freshCleanup.page = page;
