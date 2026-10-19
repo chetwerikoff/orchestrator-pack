@@ -1953,7 +1953,7 @@ describe('state-light fresh conversation collision recovery', () => {
       userMarkerlessFromRead?: number;
       assistantCarrierKeysByRead?: readonly string[];
       neverMarkerProof?: boolean;
-      assistantCode?: { visible: string; domTextContent: string };
+      assistantCode?: { visible: string; domTextContent: string; secondVisible?: string; firstLanguage?: string; secondLanguage?: string };
     } = {},
   ) {
     const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0, composerText: '' };
@@ -2118,15 +2118,31 @@ describe('state-light fresh conversation collision recovery', () => {
               const root = attach(outer, node('DIV', '', { class: 'markdown' }));
               attach(root, node('P', 'Before'));
               const wrapper = attach(root, node('DIV', ''));
+              if (observationOverrides.assistantCode.firstLanguage) {
+                attach(wrapper, node('SPAN', observationOverrides.assistantCode.firstLanguage));
+              }
               const pre = attach(wrapper, node('PRE', ''));
               attach(pre, node('CODE', observationOverrides.assistantCode.visible));
-              attach(root, node('P', 'Following  prose\nEXECUTION_STATUS: complete'));
+              const second = observationOverrides.assistantCode.secondVisible;
+              const secondPre = second === undefined ? undefined : (() => {
+                attach(root, node('UL', 'Between diff blocks'));
+                const sibling = attach(root, node('DIV', ''));
+                if (observationOverrides.assistantCode?.secondLanguage) {
+                  attach(sibling, node('SPAN', observationOverrides.assistantCode.secondLanguage));
+                }
+                const next = attach(sibling, node('PRE', ''));
+                attach(next, node('CODE', second));
+                return next;
+              })();
+              attach(root, node('P', secondPre ? 'After diff blocks\nEXECUTION_STATUS: complete'
+                : 'Following  prose\nEXECUTION_STATUS: complete'));
               const originalQuerySelector = outer.querySelector;
               outer.querySelector = (selector: string) => selector === '.markdown'
                 ? root : originalQuerySelector(selector);
               outer.querySelectorAll = (selector: string) => selector === '.markdown'
-                ? [root] : selector === 'pre' ? [pre] : selector === 'pre code'
-                  ? pre.querySelectorAll('code') : [];
+                ? [root] : selector === 'pre' ? [pre, ...(secondPre ? [secondPre] : [])]
+                  : selector === 'pre code' ? [pre, ...(secondPre ? [secondPre] : [])]
+                    .flatMap((item) => item.querySelectorAll('code')) : [];
             }
           }
             const previousDocument = (globalThis as { document?: unknown }).document;
@@ -3096,6 +3112,46 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(readFileSync(output)).toEqual(expectedBytes);
     expect(readFileSync(output, 'utf8')).not.toContain('HIDDEN-DESCENDANT');
+    expect(state.reads).toBeGreaterThanOrEqual(5);
+  });
+
+  it('Issue #2660 B8 publishes exact two fenced diffs with text before, between, after', async () => {
+    const diffOne = 'diff --git a/alpha b/alpha\n--- a/alpha\n+++ b/alpha\n@@ -1 +1 @@\n old\n-foo\n+bar\n';
+    const diffTwo = 'diff --git a/beta b/beta\n--- a/beta\n+++ b/beta\n@@ -2 +2 @@\n  nested  spaces\n\t+tab\n\n```';
+    const expected = [
+      'Before',
+      '```diff\n' + diffOne + '```',
+      'Between diff blocks',
+      '````diff\n' + diffTwo + '\n````',
+      'After diff blocks\nEXECUTION_STATUS: complete',
+    ].join('\n\n');
+    const outer = 'MISLEADING OUTER FIRST DIFF LINE; Copy control; NOT COMPLETE';
+    const output = join(stateDir, 'issue-2660-two-diff-primary.txt');
+    const prompt = 'ISSUE-2660-TWO-DIFF-PRIMARY';
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt, outer, false, false, false, [outer], [],
+      {
+        includeOwnedUser: true,
+        assistantCode: {
+          visible: diffOne,
+          domTextContent: diffOne + 'HIDDEN',
+          firstLanguage: 'diff',
+          secondVisible: diffTwo,
+          secondLanguage: 'diff',
+        },
+      },
+    );
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+    const bytes = Buffer.from(expected, 'utf8');
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'ok', cause: 'completed_page_only', send_count: 1,
+      output: {
+        byte_length: bytes.byteLength,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+      },
+    });
+    expect(readFileSync(output)).toEqual(bytes);
     expect(state.reads).toBeGreaterThanOrEqual(5);
   });
 
