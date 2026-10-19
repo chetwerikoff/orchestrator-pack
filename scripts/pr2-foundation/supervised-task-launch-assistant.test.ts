@@ -3884,3 +3884,75 @@ describe('Issue #2655 real parsed Cursor reboot route', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
+
+describe('Issue #2655 provider safety and same-unit dirty ownership', () => {
+  it('uses the split setup for fresh default Cursor mode and rejects a dirty setup hook before input', async () => {
+    const env = profileEnv();
+    const selected = resolveExecutorProfile('t2', env);
+    expect(selected).toMatchObject({ status: 'ok',
+      value: { family: 'cursor', route: 'provider_new_top_level' } });
+    const cli = parseLaunchAssistantCli([
+      '--project', 'orchestrator-pack', '--work-class', 't2',
+      '--issue-number', '2655', '--task', 'task-new', '--worktree-name', 'issue-2655',
+    ], env, () => ({
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: '/tmp/primary', defaultBranch: 'main',
+    } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>));
+    expect(cli.startMode).toBeUndefined();
+    const fixture = freshRepoFixture({
+      setupState: 'running',
+      freshStatus: ' M tests/test_database_guard.py\n?? setup-hook.txt\n',
+    });
+    let spawns = 0;
+    let starts = 0;
+    const result = await runSupervisedTaskLaunchAssistant({ ...cli, env }, {
+      ...deps({
+        adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }),
+        onSupervised: () => { starts += 1; },
+      }),
+      prepareWorktree: (request) => prepareWorktreeWithOrca(request, fixture.execute),
+    });
+    expect(result).toMatchObject({ outcome: 'continue',
+      stage: 'worktree_prepare', observedCause: 'worktree_fresh_dirty' });
+    expect(fixture.calls.some((call) =>
+      call.argv[0] === 'orca' && call.argv[1] === 'worktree' && call.argv[2] === 'create')).toBe(true);
+    expect(fixture.calls.some((call) =>
+      call.argv[0] === 'orca' && call.argv[1] === 'terminal' && call.argv[2] === 'wait')).toBe(true);
+    expect(fixture.calls.some((call) =>
+      call.argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toBe(true);
+    expect(spawns).toBe(0);
+    expect(starts).toBe(0);
+  });
+
+  it.each(['manager onto worker', 'worker onto manager'] as const)(
+    'rejects %s on a matching Issue and dirty worktree', async (name) => {
+      const isManager = name === 'manager onto worker';
+      const fixture = managerReuseFixture({ status: ' M tests/test_database_guard.py\n' });
+      const previous = {
+        ...readyStart('task_old').assignment, taskId: 'task_old', issueNumber: 2655,
+        role: isManager ? 'worker' : 'orchestrator',
+        bindingKey: 'ctx_3761867313e2',
+      } as WorkerAssignment;
+      const result = await prepareWorktreeWithOrca({
+        repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2655,
+        taskId: 'task-1', worktreeSelector: 'id:repo::existing',
+        managerRefresh: isManager, ...(isManager ? { managerTaskRunId: 'run-1' } : {}),
+        defaultBranch: 'main', reuseAssignment: previous,
+      }, fixture.execute);
+      expect(result).toMatchObject({ status: 'continue', cause: 'worktree_reuse_ownership_unproven' });
+      expect(fixture.calls.some((argv) =>
+        argv[0] === 'git' && ['merge', 'reset', 'stash', 'clean'].includes(argv[1]!))).toBe(false);
+    },
+  );
+
+  it('refuses a foreign manager Task whose Issue-closing PR happens to name its dirty branch', async () => {
+    const fixture = managerReuseFixture({ status: ' M tests/test_database_guard.py\n' });
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2430,
+      taskId: 'task-1', worktreeSelector: 'id:repo::existing',
+      managerRefresh: true, managerTaskRunId: 'run-1', defaultBranch: 'main',
+    }, fixture.execute);
+    expect(result).toMatchObject({ status: 'continue', cause: 'worktree_reuse_ownership_unproven' });
+    expect(fixture.calls.some((argv) => argv[0] === 'gh')).toBe(false);
+  });
+});
