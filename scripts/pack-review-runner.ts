@@ -4977,17 +4977,18 @@ export async function maybeAdmitPackReviewBodyAmendment(
   if (cycle.amendmentOrigin?.previouslyAdmittedBodyDigests.includes(nextDigest)) {
     return failure('amendment_digest_replayed');
   }
+  const oldCriteria = reviewBehaviorCriteria(oldBody);
+  const newCriteria = reviewBehaviorCriteria(currentIssue.body);
+  if (!oldCriteria || !newCriteria || oldCriteria === newCriteria) {
+    // A changed body is not proof of amended behavior. In particular a bad
+    // subsequent tier fence must not invalidate the already-frozen snapshot.
+    // The historic same-head/descendant path remains the authority here.
+    return null;
+  }
   let liveTier: PackReviewTier;
   try { liveTier = parseAuthoritativeTier(currentIssue.body, currentIssue.title); }
   catch (error) { return failure('amendment_tier_invalid', describeError(error)); }
   if (liveTier !== cycle.frozenTier) return null; // Existing upward-tier reconciliation owns that distinct case.
-  const oldCriteria = reviewBehaviorCriteria(oldBody);
-  const newCriteria = reviewBehaviorCriteria(currentIssue.body);
-  if (!oldCriteria || !newCriteria || oldCriteria === newCriteria) {
-    // Scope-only edits, dispositions and metadata do not consume an amended
-    // behavior round. The historic same-head/descendant path decides them.
-    return null;
-  }
   const originalImmutable = listPackReviewImmutableRecords('terminal', { storeRoot: options.storeRoot })
     .filter((entry) => entry.digest === terminal.digest
       && (entry.value as PackReviewTerminalV2 | undefined)?.runId === priorRun.id
@@ -8343,7 +8344,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       return {
         ok: false, created: false, reused: true, reason,
         replacementEligible: false,
-        nextAction: `${command} # ${nextAction}`,
+        nextAction: command,
+        detail: nextAction,
         reviewer,
         prNumber: target.prNumber, headSha: target.headSha,
         runId: candidate.id, status: candidate.status,

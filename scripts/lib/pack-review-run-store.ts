@@ -1948,7 +1948,18 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       && (disposition !== 'non_consuming_explicit'
         || record.resolvedReviewer === input.resolvedReviewer)
       && (!input.boundIssueSnapshotDigest
-        || record.boundIssueSnapshotDigest === input.boundIssueSnapshotDigest);
+        || record.boundIssueSnapshotDigest === input.boundIssueSnapshotDigest
+        // Native runs created before digest persistence may be replaced only
+        // after the caller has proven the same-round replacement ceiling.
+        // Never treat a different populated digest or a GPT round as an alias.
+        || (input.allowSameRoundReplacement === true
+          && record.boundIssueSnapshotDigest === undefined
+          && record.reviewRound === undefined
+          && input.reviewRound === undefined
+          && input.reviewCycleId !== undefined
+          && record.reviewCycleId === input.reviewCycleId
+          && input.logicalRoundOrdinal !== undefined
+          && record.logicalRoundOrdinal === input.logicalRoundOrdinal));
     const active = boundRecords.filter((record) => matchesTargetIdentity(record)
       && PACK_REVIEW_ACTIVE_STATUSES.has(record.status)
       && !isPackReviewRunStale(record));

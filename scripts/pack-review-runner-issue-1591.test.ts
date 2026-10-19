@@ -1227,7 +1227,8 @@ describe('Issue #2659 aggregate quorum identity after a late third credentialed 
     }).run;
     setPackReviewRunTerminal(created.id, 'changes_requested', {
       reviewVerdict: 'findings', findingCount: 1,
-      findings: [{ severity: 'blocking', title: 'original retained finding' }],
+      findings: [{ severity: 'blocking', title: 'original retained finding',
+        sourceSlotId: 'source-01' }],
       journalOutcome: { state: 'persisted', recordedAtUtc: stamp,
         reason: 'verdict_persisted',
         idempotencyKey: `verdict:${created.id}:${HEAD_A}`, attempts: 1 },
