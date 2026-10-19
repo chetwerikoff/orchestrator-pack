@@ -1158,17 +1158,39 @@ function outstandingPackReviewCycle(run: PackReviewRunRecord, storeRoot: string)
 
 function currentCycleRequiredStatusWriter(
   run: PackReviewRunRecord, storeRoot: string, writer: PackReviewRequiredStatusWriter,
+  fixtureCurrentIssueBody?: string,
 ): PackReviewRequiredStatusWriter {
   return async (request) => {
-    if (request.context === PACK_REVIEW_REQUIRED_STATUS_CONTEXT
-        && request.state === 'success'
-        && outstandingPackReviewCycle(run, storeRoot)) {
-      await writer({ ...request, state: 'pending',
-        description: 'Pack review has an outstanding required logical round.',
-        idempotencyKey: `${request.idempotencyKey}:current-cycle-pending` });
-    } else {
-      await writer(request);
+    if (request.context === PACK_REVIEW_REQUIRED_STATUS_CONTEXT && request.state === 'success') {
+      if (outstandingPackReviewCycle(run, storeRoot)) {
+        await writer({ ...request, state: 'pending',
+          description: 'Pack review has an outstanding required logical round.',
+          idempotencyKey: `${request.idempotencyKey}:current-cycle-pending` });
+        return;
+      }
+      const authority = readPackReviewAuthority(run.prNumber, { storeRoot });
+      const continuation = authority?.cycle?.amendmentOrigin;
+      if (continuation && authority?.terminal?.runId === run.id) {
+        const boundDigest = run.boundIssueSnapshotDigest ?? run.reviewRound?.boundIssueSnapshotDigest;
+        let liveBody: string | undefined;
+        try {
+          liveBody = process.env.OPK_VITEST_HARNESS === '1'
+            ? fixtureCurrentIssueBody
+            : run.canonicalRepository
+              ? (await resolveCurrentIssueFields(
+                run.sourceRepoRoot, run.canonicalRepository, continuation.closingIssueNumber,
+              )).body
+              : undefined;
+        } catch { /* An unavailable body cannot prove B1 success. */ }
+        if (!boundDigest || !liveBody || computeBoundIssueSnapshotHash(liveBody) !== boundDigest) {
+          await writer({ ...request, state: 'pending',
+            description: 'A newer linked Issue body has not been reviewed.',
+            idempotencyKey: `${request.idempotencyKey}:later-issue-body-pending` });
+          return;
+        }
+      }
     }
+    await writer(request);
   };
 }
 
@@ -4845,6 +4867,7 @@ async function observePackReviewVerdictDelivery(options: {
         run, projectId: options.projectId, storeRoot: options.storeRoot,
         writeRequiredStatus: currentCycleRequiredStatusWriter(
           run, options.storeRoot, options.writeRequiredStatus,
+          options.input.fixtureIssueBody,
         ), forceRepublish: true,
       });
       if (restored?.state !== 'succeeded') return unresolved('status_not_published:restore_failed');
@@ -5274,9 +5297,33 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       if (!issueNumber || (reviewedIssue && reviewedIssue !== issueNumber)) {
         throw new Error('reviewed Issue differs from the actual current PR-closing Issue');
       }
+      // The terminal's immutable Issue digest disambiguates B0/B1 on H1.
+      // A historical native terminal without a digest can use only the
+      // validated pre-run original legacy snapshot, never a newer alias.
+      let originalBodyDigest = priorRun.boundIssueSnapshotDigest
+        ?? priorRun.reviewRound?.boundIssueSnapshotDigest
+        ?? cycle.amendmentOrigin?.amendedBodyDigest;
+      if (!originalBodyDigest && !priorRun.reviewRound) {
+        const legacy = boundIssueSnapshotArtifactPaths({
+          projectId: options.projectId, prNumber, prHeadSha: terminal.targetSha,
+          issueNumber, storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+        });
+        if (existsSync(legacy.metadataPath)) {
+          const metadata = JSON.parse(readFileSync(legacy.metadataPath, 'utf8')) as {
+            snapshotHash?: unknown; capturedAt?: unknown;
+          };
+          if (typeof metadata.snapshotHash === 'string'
+              && /^sha256:[0-9a-f]{64}$/.test(metadata.snapshotHash)
+              && typeof metadata.capturedAt === 'string'
+              && Date.parse(metadata.capturedAt) <= Date.parse(priorRun.createdAt)) {
+            originalBodyDigest = metadata.snapshotHash;
+          }
+        }
+      }
       const frozen = resolveBoundIssueSnapshot({
         projectId: options.projectId, prNumber, prHeadSha: terminal.targetSha,
-        issueNumber, storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+        issueNumber, snapshotDigest: originalBodyDigest,
+        storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
       });
       if (frozen.status !== 'found' || !frozen.snapshotHash
           || frozen.metadata?.capturePhase !== 'review-preflight'
@@ -5311,15 +5358,24 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           projectId: options.projectId, prNumber, prHeadSha: terminal.targetSha,
           issueNumber, storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
         });
-        const originalIssues = readdirSync(snapshotPaths.artifactDir)
-          .filter((name) => /^issue-\d+\.meta\.json$/.test(name))
+        const originalIssues = [...new Set(readdirSync(snapshotPaths.artifactDir)
+          .filter((name) => /^issue-\d+(?:-[a-f0-9]{64})?\.meta\.json$/.test(name))
           .flatMap((name) => {
-            const number = Number(/^issue-(\d+)\.meta\.json$/.exec(name)![1]);
+            const number = Number(/^issue-(\d+)(?:-[a-f0-9]{64})?\.meta\.json$/.exec(name)![1]);
+            const stored = JSON.parse(readFileSync(join(snapshotPaths.artifactDir, name), 'utf8')) as {
+              snapshotHash?: unknown;
+            };
+            if (typeof stored.snapshotHash !== 'string'
+                || !/^sha256:[0-9a-f]{64}$/.test(stored.snapshotHash)) {
+              throw new Error('native preflight snapshot digest is missing');
+            }
             const candidate = resolveBoundIssueSnapshot({
               projectId: options.projectId, prNumber, prHeadSha: terminal.targetSha,
-              issueNumber: number, storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+              issueNumber: number, snapshotDigest: stored.snapshotHash,
+              storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
             });
             if (candidate.status !== 'found' || !candidate.metadata
+                || candidate.metadataPath !== join(snapshotPaths.artifactDir, name)
                 || candidate.metadata.capturePhase !== 'review-preflight'
                 || candidate.metadata.projectId !== options.projectId
                 || candidate.metadata.prNumber !== prNumber
@@ -5329,7 +5385,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
               throw new Error('native same-head Issue snapshot identity is ambiguous or corrupt');
             }
             return Date.parse(candidate.metadata.capturedAt) <= runCreatedAt ? [number] : [];
-          });
+          }))];
         if (originalIssues.length !== 1 || originalIssues[0] !== issueNumber) {
           throw new Error('native terminal original pre-run closing Issue binding is missing or ambiguous');
         }
@@ -9925,6 +9981,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
           headSha: target.headSha, request,
         })),
+        input.fixtureIssueBody,
       ),
       notifyWorker: async (request) => {
         const deliver = input.fixtureWorkerNotifier ?? ((value) => sendPackReviewWorkerNotification({
