@@ -3549,26 +3549,46 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
     expect(starts).toBe(0);
   });
 
-  it('launches a manager from the same exact dirty PR without modifying its worktree', async () => {
-    const dirty = ' M tests/test_database_guard.py\n?? migration-backup.diff\n';
-    const fixture = managerReuseFixture({
-      worktreeId: 'manager-worktree', worktreePath: '/tmp/exact-worktree',
-      status: dirty,
-    });
-    let starts = 0;
-    const result = await runSupervisedTaskLaunchAssistant({
-      ...launchInput('manager'), issueNumber: 2430, defaultBranch: 'main',
-    }, {
-      ...deps({ onSupervised: () => { starts += 1; } }),
-      prepareWorktree: (request) => prepareWorktreeWithOrca(request, fixture.execute),
-    });
-    expect(result).toMatchObject({
-      outcome: 'ready', resources: { taskId: 'task-1', worktreePath: '/tmp/exact-worktree' },
-    });
-    expect(starts).toBe(1);
-    expect(fixture.head()).toBe('1'.repeat(40));
-    expect(fixture.mergeTransitions()).toBe(0);
-    expect(fixture.calls.filter((argv) => argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toHaveLength(2);
+  it('launches a manager from the same exact dirty PR with a byte-identical 14-line test diff', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2655-dirty-worktree-'));
+    const testFile = join(root, 'tests', 'test_database_guard.py');
+    const untracked = join(root, 'migration-backup.diff');
+    try {
+      mkdirSync(join(root, 'tests'), { recursive: true });
+      writeFileSync(testFile, Array.from({ length: 14 }, (_value, index) =>
+        `# preserved reboot change ${index + 1}\n`).join(''));
+      writeFileSync(untracked, 'diff --git a/old b/new\n+do not delete\n');
+      const beforeTest = readFileSync(testFile);
+      const beforeUntracked = readFileSync(untracked);
+      const dirty = ' M tests/test_database_guard.py\n?? migration-backup.diff\n';
+      const fixture = managerReuseFixture({
+        worktreeId: 'manager-worktree', worktreePath: root, status: dirty,
+      });
+      let starts = 0;
+      const result = await runSupervisedTaskLaunchAssistant({
+        ...launchInput('manager'), issueNumber: 2430, defaultBranch: 'main',
+      }, {
+        ...deps({
+          adapter: runtimeAdapter({ worker: { ...worker, workspacePath: root } }),
+          onSupervised: () => { starts += 1; },
+        }),
+        prepareWorktree: (request) => prepareWorktreeWithOrca(request, fixture.execute),
+      });
+      expect(result).toMatchObject({
+        outcome: 'ready', resources: { taskId: 'task-1', worktreePath: root },
+      });
+      expect(starts).toBe(1);
+      expect(readFileSync(testFile)).toEqual(beforeTest);
+      expect(readFileSync(untracked)).toEqual(beforeUntracked);
+      expect(fixture.head()).toBe('1'.repeat(40));
+      expect(fixture.mergeTransitions()).toBe(0);
+      expect(fixture.calls.filter((argv) =>
+        argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toHaveLength(2);
+      expect(fixture.calls.some((argv) =>
+        argv[0] === 'git' && ['merge', 'reset', 'stash', 'rebase'].includes(argv[1]!))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('preserves every dirty own-PR worktree byte while allowing exact manager Task reuse', async () => {
