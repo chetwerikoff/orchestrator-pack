@@ -3491,3 +3491,95 @@ describe('machine-local executor profile store', () => {
     expect(overlayExecutorProfileEnv(env, { storePath: '/operator/missing/executor-profiles.env', readFile: missing })).toBe(env);
   });
 });
+
+describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => {
+  const terminal = (status: string): DispatchObservation => ({
+    kind: 'present', dispatchId: 'ctx_3761867313e2', status,
+  });
+  const owned = (): WorkerAssignment => ({
+    ...readyStart('task-1').assignment,
+    bindingKey: 'ctx_3761867313e2',
+  } as WorkerAssignment);
+
+  it.each(['failed', 'abandoned', 'cancelled', 'done'])(
+    'allows the exact %s current Dispatch at both new-start observations', async (status) => {
+      let starts = 0;
+      const launched = await runSupervisedTaskLaunchAssistant(launchInput('t2'), deps({
+        currentAssignment: owned(), dispatch: [terminal(status), terminal(status)],
+        onSupervised: () => { starts += 1; },
+      }));
+      expect(launched).toMatchObject({
+        outcome: 'ready', resources: { taskId: 'task-1', dispatchId: 'dispatch-1' },
+      });
+      expect(starts).toBe(1);
+    },
+  );
+
+  it.each([
+    { name: 'still-dispatched', early: terminal('dispatched'), final: terminal('dispatched') },
+    { name: 'foreign Dispatch', early: { kind: 'present', dispatchId: 'foreign', status: 'failed' }, final: terminal('failed') },
+    { name: 'unknown status', early: { kind: 'present', dispatchId: 'ctx_3761867313e2' }, final: terminal('failed') },
+  ] as const)('refuses $name without starting an additional worker', async ({ early, final }) => {
+    let spawns = 0;
+    let starts = 0;
+    const launched = await runSupervisedTaskLaunchAssistant(launchInput('t2'), deps({
+      currentAssignment: owned(), dispatch: [early, final],
+      adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }),
+      onSupervised: () => { starts += 1; },
+    }));
+    expect(launched).toMatchObject({
+      outcome: 'continue', stage: 'dispatch_admission_early', observedCause: 'fresh_dispatch_not_absent',
+    });
+    expect(spawns).toBe(0);
+    expect(starts).toBe(0);
+  });
+
+  it('refuses a Dispatch that becomes live or changes after terminal early witness', async () => {
+    let starts = 0;
+    const launched = await runSupervisedTaskLaunchAssistant(launchInput('t2'), deps({
+      currentAssignment: owned(), dispatch: [terminal('failed'), terminal('dispatched')],
+      onSupervised: () => { starts += 1; },
+    }));
+    expect(launched).toMatchObject({
+      outcome: 'continue', stage: 'dispatch_admission_final', observedCause: 'fresh_dispatch_not_absent',
+    });
+    expect(starts).toBe(0);
+  });
+
+  it('preserves every dirty own-PR worktree byte while allowing exact manager Task reuse', async () => {
+    const dirty = ' M tests/test_database_guard.py\n?? migration-backup.diff\n';
+    const fixture = managerReuseFixture({ status: dirty });
+    const outcome = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
+      managerRefresh: true, managerTaskRunId: 'run-1', issueNumber: 2430,
+      worktreeSelector: 'id:repo::existing', defaultBranch: 'main',
+    }, fixture.execute);
+    expect(outcome).toMatchObject({
+      status: 'ok', evidence: { prNumber: 42, refresh: 'dirty_pr_head_preserved', head: '1'.repeat(40) },
+    });
+    expect(fixture.head()).toBe('1'.repeat(40));
+    expect(fixture.mergeTransitions()).toBe(0);
+    expect(fixture.calls.filter((argv) => argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toHaveLength(2);
+    expect(fixture.calls.some((argv) => argv[0] === 'git' && ['merge', 'reset', 'rebase'].includes(argv[1]!))).toBe(false);
+  });
+
+  it('refuses a dirty foreign PR and a dirty manager with no exact Run/Task authorization', async () => {
+    for (const options of [{ prOverrides: { headRefOid: '9'.repeat(40) } }, { noPr: true }]) {
+      const fixture = managerReuseFixture({ status: ' M tests/test_database_guard.py\n', ...options });
+      const outcome = await prepareWorktreeWithOrca({
+        repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
+        managerRefresh: true, managerTaskRunId: 'run-1', issueNumber: 2430,
+        worktreeSelector: 'id:repo::existing', defaultBranch: 'main',
+      }, fixture.execute);
+      expect(outcome.status).toBe('continue');
+      expect(fixture.mergeTransitions()).toBe(0);
+    }
+    const fixture = managerReuseFixture({ status: ' M tests/test_database_guard.py\n' });
+    const outcome = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
+      managerRefresh: true, worktreeSelector: 'id:repo::existing',
+    }, fixture.execute);
+    expect(outcome).toMatchObject({ status: 'continue', cause: 'manager_worktree_dirty' });
+    expect(fixture.mergeTransitions()).toBe(0);
+  });
+});
