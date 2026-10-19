@@ -2637,7 +2637,9 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       }),
     });
     const history = (text: string) => ({
-      has_more: kind === 'paginated',
+      // Missing completeness evidence is distinct from an explicitly
+      // paginated history; neither permits a marker-negative re-click.
+      has_more: kind === 'paginated' ? true : kind === 'incomplete' ? undefined : false,
       current_node: 'user-one',
       mapping: {
         root: { parent: null, message: null },
