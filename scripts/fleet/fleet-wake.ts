@@ -619,6 +619,15 @@ export interface OpenPullHead {
   readonly issue?: number;
 }
 
+/** A bare Refs #N is not a closing target; conflicting closers bind nobody. */
+export function uniqueClosingIssue(body: string): number | undefined {
+  const visible = body.replace(/<!--[\\s\\S]*?-->/gu, '').replace(/^`{3}[^\\n]*[\\s\\S]*?^`{3}\\s*$/gmu, '');
+  const closing = [...visible.matchAll(/\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#([1-9]\\d*)\\b/giu)]
+    .map((row) => Number(row[1]));
+  const targets = [...new Set(closing)].filter(Number.isSafeInteger);
+  return targets.length === 1 ? targets[0] : undefined;
+}
+
 export function listOpenPullHeads(repository: string): OpenPullHead[] {
   const result = runProcessSync({
     command: fileURLToPath(new URL('../gh', import.meta.url)),
@@ -636,9 +645,8 @@ export function listOpenPullHeads(repository: string): OpenPullHead[] {
     try {
       const pull = JSON.parse(line) as { number?: unknown; ref?: unknown; sha?: unknown; body?: unknown };
       if (typeof pull.number !== 'number' || typeof pull.ref !== 'string' || typeof pull.sha !== 'string') continue;
-      const issue = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?)\s+#(\d+)\b/iu
-        .exec(typeof pull.body === 'string' ? pull.body : '')?.[1];
-      pulls.push({ number: pull.number, ref: pull.ref, sha: pull.sha, ...(issue ? { issue: Number(issue) } : {}) });
+      const issue = uniqueClosingIssue(typeof pull.body === 'string' ? pull.body : '');
+      pulls.push({ number: pull.number, ref: pull.ref, sha: pull.sha, ...(issue ? { issue } : {}) });
     } catch {
       // Skip a malformed row.
     }
@@ -1049,20 +1057,37 @@ function safeUnitReminderText(producer: string): string | undefined {
   return /^[A-Za-z0-9 _./:%#=+-]+$/u.test(message) ? message : undefined;
 }
 
+interface PaneWakeCounts {
+  attempts: number;
+  confirmed: number;
+}
+
 async function sendMarkedUnitMessage(
   store: FleetWakeStateStore, key: string, handle: string, message: string,
   executor: OrcaExecutor, sleepMs: (milliseconds: number) => void | Promise<void>,
   log: (line: string) => void,
+  counts?: PaneWakeCounts,
+  stillSelected?: () => boolean,
 ): Promise<boolean> {
   if (store.hasParkedWakeEvent(key)) return false;
+  // Durable reservation must precede both text and Enter effects. A failed
+  // upgrade must not authorize a second attempt at this same fact.
+  try { store.markParkedWakeEvent(key, 'attempted_unverified'); }
+  catch { log('unit wake pre-effect mark unwritable; send withheld: ' + key); return false; }
+  if (stillSelected && !stillSelected()) {
+    log('unit wake selected owner changed; send withheld: ' + key);
+    return false;
+  }
+  if (counts) counts.attempts += 1;
   let delivered = false;
   try {
     delivered = sendCoordinator(executor, handle, message)
-      && (await sleepMs(4_000), submitCoordinator(executor, handle));
-  } catch { /* A later tick may independently observe the same event. */ }
-  if (!delivered) { log('unit wake send failed: ' + key); return false; }
-  try { store.markParkedWakeEvent(key); }
-  catch { log('unit wake sent; sent marker unwritable: ' + key); }
+      && (await sleepMs(4_000), (!stillSelected || stillSelected()) && submitCoordinator(executor, handle));
+  } catch { /* Keep attempted_unverified across ticks; delivery is ambiguous. */ }
+  if (!delivered) { log('unit wake delivery unverified: ' + key); return false; }
+  try { store.markParkedWakeEvent(key, 'sent'); }
+  catch { log('unit wake delivered but final mark unverified: ' + key); return false; }
+  if (counts) counts.confirmed += 1;
   log('sent re-check to ' + handle + ': ' + key);
   return true;
 }
