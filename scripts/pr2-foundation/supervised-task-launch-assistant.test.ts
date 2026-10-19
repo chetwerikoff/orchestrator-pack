@@ -3607,4 +3607,37 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
     expect(outcome).toMatchObject({ status: 'continue', cause: 'manager_worktree_dirty' });
     expect(fixture.mergeTransitions()).toBe(0);
   });
+  it('refuses fresh dirty manager worktree after setup without erasing test changes', async () => {
+    const root = '/tmp/fresh-manager';
+    const dirty = ' M tests/test_database_guard.py\n';
+    const commands: string[][] = [];
+    const outcome = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack',
+      taskId: 'task-1', issueNumber: 2655,
+      worktreeName: 'fresh-manager', baseBranch: 'origin/main', managerRefresh: true,
+    }, async (argv, _timeout, _env, cwd) => {
+      commands.push([...argv]);
+      const joined = argv.join(' ');
+      if (joined === 'orca repo list --json')
+        return { ok: true, stdout: repoListEnvelope([registeredOrcaRepo('orca-repo-1', '/tmp/primary')]) };
+      if (joined === 'git rev-parse --show-toplevel')
+        return { ok: true, stdout: (cwd ?? '') + '\n' };
+      if (joined === 'git remote get-url origin')
+        return { ok: true, stdout: 'git@github.com:chetwerikoff/orchestrator-pack.git\n' };
+      if (joined.startsWith('orca worktree create '))
+        return { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::fresh-manager', path: root } }) };
+      if (joined === 'git worktree list --porcelain')
+        return { ok: true, stdout: [
+          'worktree /tmp/primary', `HEAD ${'2'.repeat(40)}`, 'branch refs/heads/main', '',
+          `worktree ${root}`, `HEAD ${'2'.repeat(40)}`, 'branch refs/heads/fresh-manager', '',
+        ].join('\n') };
+      if (joined === 'git status --porcelain=v1 --untracked-files=all')
+        return { ok: true, stdout: dirty };
+      return { ok: false, stdout: '', stderr: 'unexpected ' + joined };
+    });
+    expect(outcome).toMatchObject({ status: 'continue', cause: 'manager_worktree_dirty' });
+    expect(commands.some((argv) => argv[0] === 'git' && ['merge', 'reset', 'rebase', 'stash'].includes(argv[1]!))).toBe(false);
+    expect(commands.some((argv) => argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toBe(true);
+  });
+
 });
