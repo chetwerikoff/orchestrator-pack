@@ -6651,7 +6651,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       const result = await startPackReview({ ...f.input, claimMode: 'acquire' });
       expect(result.reason).toBe('gpt_incumbent_owner_not_dead');
       expect(result.ok).toBe(false);
-      expect(result.nextAction).toMatch(/^node --experimental-strip-types scripts\/pack-review-runner\.ts reconcile /);
+      expect(result.nextAction).toMatch(/^node --experimental-strip-types scripts\/pack-review-runner\.ts list --project-id orchestrator-pack$/);
       expect(getPackReviewRun(f.runId, f.options)?.runnerPid).toBe(before.runnerPid);
       expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots).toEqual(before.reviewRound?.sourceSlots);
       expect(f.launches).toEqual([]);
