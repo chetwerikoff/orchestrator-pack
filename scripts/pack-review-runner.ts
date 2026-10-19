@@ -5020,7 +5020,7 @@ async function reconcileMergedPackReviewTerminalStatus(
 /** Exact byte removal only inside one existing allowed-roots block on each body.
  * Revision markers, whitespace and line endings are part of the comparison. */
 function exact2655ScopeOnlyLineDelta(reviewedBody: string, currentBody: string): boolean {
-  const fences = /^\`\`\`allowed-roots\r?\n([\s\S]*?)^\`\`\`(?:\r?\n|$)/gm;
+  const fences = /^```allowed-roots\r?\n([\s\S]*?)^```(?:\r?\n|$)/gm;
   const original = [...reviewedBody.matchAll(fences)];
   const updated = [...currentBody.matchAll(fences)];
   if (original.length !== 1 || updated.length !== 1) return false;
@@ -5745,6 +5745,39 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         }
       }
       if (digest !== expectedDigest) {
+        // This path also owns legacy/incomplete-terminal mismatch refusals,
+        // for which amendment admission may have returned null. At the first
+        // exact-head observation, never let an old public green survive it.
+        try {
+          const projectionHead = await readCheckedReviewPrHead(
+            input, options.repoSlug, prNumber, authority.currentHeadSha,
+          );
+          if (projectionHead !== authority.currentHeadSha.toLowerCase()) {
+            throw new Error('final-cap mismatch PR head changed before status');
+          }
+          let status = await readFinalCapRequiredStatus(
+            input, options.repoSlug, projectionHead,
+          );
+          if (status !== 'pending' && status !== 'error') {
+            await (input.fixtureRequiredStatusWriter ?? ((value) => publishPackReviewRequiredStatus({
+              repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+              headSha: projectionHead, request: value,
+            })))({
+              state: 'error', context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+              description: 'The linked Issue body is not verified by this final-cap terminal.',
+              idempotencyKey: `final-cap:${priorRun.id}:${projectionHead}:unreviewed-issue`,
+            });
+            status = await readFinalCapRequiredStatus(input, options.repoSlug, projectionHead);
+          }
+          if (status !== 'pending' && status !== 'error') {
+            throw new Error('final-cap mismatch non-success not observed');
+          }
+        } catch (error) {
+          return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
+            settled: false, reason: 'final_cap_issue_body_non_success_unverified',
+            detail: describeError(error), reviewedIssueNumber: issueNumber,
+            nextAction: 'repair and read back the exact-head non-success status; do not admit a reviewer or reuse prior green' };
+        }
         return {
           prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
           settled: false, reason: 'final_cap_issue_body_amended',
