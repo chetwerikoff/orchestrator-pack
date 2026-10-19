@@ -51,6 +51,7 @@ import {
   type ProjectChat,
 } from './chat-error-banners.ts';
 import { readChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
+import { listCurrentWorkerAssignmentRecords, resolveWorkerAssignmentStorePath, type WorkerAssignmentRecord } from '../lib/worker-assignment-store.ts';
 import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath } from '../flow-manager-long-running-child.ts';
 
 export interface FleetWakeConfig {
@@ -275,6 +276,9 @@ export interface RunMailWakeEvent {
 }
 
 export interface FleetAlarmTickOptions {
+  /** Existing-suite fixture injection; production uses the incumbent assignment store. */
+  readonly readCurrentAssignments?: () => readonly WorkerAssignmentRecord[] | null;
+  readonly listPublishedIssueFacts?: (repository: string, issue: number, pulls: readonly OpenPullHead[]) => readonly PublishedIssueFact[];
   readonly config: FleetWakeConfig;
   readonly executor?: OrcaExecutor;
   readonly store?: FleetWakeStateStore;
@@ -302,7 +306,7 @@ export type FleetAlarmTickResult =
   | { readonly state: 'sent'; readonly coordinator: string; readonly coordinatorState: 'idle' | 'busy'; readonly count: number; readonly signature: string }
   | { readonly state: 'nothing_stopped' }
   | { readonly state: 'same_stopped_set'; readonly coordinator: string; readonly signature: string }
-  | { readonly state: 'no_orchestrator' }
+  | { readonly state: 'no_orchestrator'; readonly paneWakeAttempts: number; readonly paneWakeConfirmed: number; readonly paneWakeNotConfirmed: number }
   | { readonly state: 'unreadable'; readonly handle: string }
   | { readonly state: 'send_failed'; readonly coordinator: string };
 
@@ -945,6 +949,167 @@ function readPackReviewStatus(repository: string, sha: string): PackReviewStageF
 // Conflicting optional ChatGPT scope cannot authorize a GitHub lookup.
 function namedRepository(config: FleetWakeConfig): string | undefined {
   return config.selectedRepository ?? config.chatScope?.repository;
+}
+
+
+/** Only selected-repository, current Issue/Dispatch/native terminal can authorize this route. */
+export interface PublishedIssueFact {
+  readonly id: string;
+  readonly kind: 'issue-comment' | 'pull-head' | 'pull-review' | 'head-ci' | 'pack-review';
+}
+
+function publishedGithubRows(repository: string, endpoint: string): readonly Record<string, unknown>[] | null {
+  const response = runProcessSync({
+    command: fileURLToPath(new URL('../gh', import.meta.url)),
+    args: ['api', 'repos/' + repository + '/' + endpoint, '--paginate', '--jq', '.[] | @json'],
+    timeoutMs: 15_000, inheritParentEnv: true,
+  });
+  if (!response.ok) return null;
+  const rows: Record<string, unknown>[] = [];
+  for (const line of response.stdout.split(/\\r?\\n/u).filter(Boolean)) {
+    try {
+      const value: unknown = JSON.parse(line);
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+      rows.push(value as Record<string, unknown>);
+    } catch { return null; }
+  }
+  return rows;
+}
+
+/** No ownership inferred from a PR title, Run objective, Task prose or Refs #N. */
+function publishedIssueFacts(
+  repository: string,
+  issue: number,
+  pulls: readonly OpenPullHead[],
+  options: FleetAlarmTickOptions,
+): readonly PublishedIssueFact[] {
+  const comments = publishedGithubRows(repository, `issues/${issue}/comments?per_page=100`);
+  const facts: PublishedIssueFact[] = [];
+  if (comments) {
+    for (const comment of comments) {
+      if (Number.isSafeInteger(comment.id) && typeof comment.updated_at === 'string') {
+        facts.push({ kind: 'issue-comment', id: `comment:${comment.id}:${comment.updated_at}` });
+      }
+    }
+  }
+  for (const pull of pulls) {
+    if (pull.issue !== issue || !SHA40.test(pull.sha)) continue;
+    const read = (options.readNamedPull ?? readNativePull)(repository, pull.number);
+    if (!read || read.number !== pull.number || read.state !== 'open'
+      || read.merged || read.headSha !== pull.sha) continue;
+    facts.push({ kind: 'pull-head', id: `pr:${pull.number}:${pull.sha}` });
+    const ciAt = (options.checkRunsFinishedAt ?? checkRunsFinishedAt)(repository, pull.sha);
+    if (ciAt !== undefined && Number.isFinite(ciAt)) facts.push({
+      kind: 'head-ci', id: `ci:${pull.number}:${pull.sha}:${ciAt}`,
+    });
+    const stage = (options.readPackReviewStage ?? readPackReviewStatus)(repository, pull.sha);
+    if (stage && ['success', 'failure'].includes(stage.state)) facts.push({
+      kind: 'pack-review', id: `stage:${pull.number}:${pull.sha}:${stage.state}:${stage.description}`,
+    });
+    const reviews = publishedGithubRows(repository, `pulls/${pull.number}/reviews?per_page=100`);
+    if (!reviews) continue;
+    for (const review of reviews) {
+      if (Number.isSafeInteger(review.id) && review.commit_id === pull.sha
+        && typeof review.state === 'string' && review.state !== 'PENDING'
+        && typeof review.submitted_at === 'string') facts.push({
+        kind: 'pull-review', id: `review:${pull.number}:${pull.sha}:${review.id}:${review.state}`,
+      });
+    }
+  }
+  return facts.slice(-200);
+}
+
+interface BoundIssueManager {
+  readonly pane: FleetPaneObservation;
+  readonly assignment: WorkerAssignmentRecord;
+}
+
+function boundIssueManager(
+  repository: string,
+  projectId: string,
+  issue: number,
+  observations: readonly FleetPaneObservation[],
+  terminals: readonly FleetTerminal[],
+  executor: OrcaExecutor,
+  assignments: readonly WorkerAssignmentRecord[] | null,
+): BoundIssueManager | undefined {
+  if (!assignments || !Number.isSafeInteger(issue) || issue <= 0) return undefined;
+  const matches = assignments.filter((row) => row.projectId === projectId
+    && row.repository.toLowerCase() === repository.toLowerCase()
+    && row.issueNumber === issue && row.role === 'orchestrator'
+    && row.kind === 'local' && row.provider === 'orca'
+    && row.taskId && row.bindingKey && row.assignmentId
+    && Number.isSafeInteger(row.generation) && row.generation > 0);
+  if (matches.length !== 1) return undefined;
+  const assignment = matches[0]!;
+  const witness = orcaReceipt(executor, ['orchestration', 'worker-show', '--dispatch', assignment.bindingKey, '--json']);
+  const dispatch = witness?.dispatch as { id?: unknown; taskId?: unknown; status?: unknown } | undefined;
+  const native = witness?.terminal as {
+    handle?: unknown; worktreePath?: unknown; branch?: unknown; incarnationId?: unknown;
+  } | undefined;
+  const status = witness?.observation as { status?: unknown; exactWorker?: unknown } | undefined;
+  if (dispatch?.id !== assignment.bindingKey || dispatch.taskId !== assignment.taskId
+    || dispatch.status !== 'dispatched' || status?.status !== 'live' || status.exactWorker !== true
+    || typeof native?.handle !== 'string' || typeof native.incarnationId !== 'string'
+    || typeof native.worktreePath !== 'string' || typeof native.branch !== 'string') return undefined;
+  const current = terminals.filter((row) => row.handle === native.handle
+    && row.incarnationId === native.incarnationId && row.worktreePath === native.worktreePath
+    && row.branch === native.branch && row.status?.toLowerCase() !== 'exited');
+  const pane = observations.filter((row) => row.handle === native.handle
+    && row.incarnationId === native.incarnationId && row.worktreePath === native.worktreePath
+    && row.branch === native.branch && row.state === 'PARKED' && Boolean(row.wait)
+    && /^PARKED on\\s+\\S/iu.test(row.wait ?? ''));
+  return current.length === 1 && pane.length === 1 ? { pane: pane[0]!, assignment } : undefined;
+}
+
+/** Multiple landed facts for the same manager collapse to one re-check per tick. */
+async function wakeAssignedIssueManagers(
+  options: FleetAlarmTickOptions,
+  observations: readonly FleetPaneObservation[],
+  terminals: readonly FleetTerminal[],
+  executor: OrcaExecutor,
+  store: FleetWakeStateStore,
+  sleepMs: (milliseconds: number) => void | Promise<void>,
+  log: (line: string) => void,
+  bareShellHandles: ReadonlySet<string>,
+  counts: PaneWakeCounts,
+): Promise<void> {
+  const repository = namedRepository(options.config);
+  if (!repository) return;
+  const assignmentsFrom = options.readCurrentAssignments
+    ?? (() => listCurrentWorkerAssignmentRecords(resolveWorkerAssignmentStorePath(options.config.projectId)));
+  const assignments = assignmentsFrom();
+  if (!assignments) { log('Issue-directed Wake withheld: assignment census unavailable'); return; }
+  const numbered = [...new Set(assignments.filter((row) => row.projectId === options.config.projectId
+    && row.repository === repository && row.role === 'orchestrator' && row.issueNumber)
+    .map((row) => row.issueNumber!))];
+  if (numbered.length === 0) return;
+  const pulls = (options.listOpenPulls ?? listOpenPullHeads)(repository);
+  for (const issue of numbered) {
+    const bound = boundIssueManager(repository, options.config.projectId, issue, observations, terminals, executor, assignments);
+    if (!bound || bareShellHandles.has(bound.pane.handle)) continue;
+    const facts = (options.listPublishedIssueFacts ?? ((repo, number, names) =>
+      publishedIssueFacts(repo, number, names, options)))(repository, issue, pulls);
+    const keys = [...new Set(facts.map((fact) => `${fact.kind}:${fact.id}`))].sort();
+    if (keys.length === 0) continue;
+    const digest = createHash('sha256').update(JSON.stringify(keys)).digest('hex');
+    const key = `issue:${issue}:${bound.pane.handle}:${bound.pane.incarnationId}:${bound.assignment.assignmentId}:${bound.assignment.generation}:${digest}`;
+    if (store.hasParkedWakeEvent(key)) continue;
+    const freshOwner = (): boolean => {
+      try {
+        const current = listFleetTerminals(executor);
+        const active = boundIssueManager(repository, options.config.projectId, issue, observations,
+          current, executor, assignmentsFrom());
+        return Boolean(active && active.pane.handle === bound.pane.handle
+          && active.pane.incarnationId === bound.pane.incarnationId
+          && active.assignment.assignmentId === bound.assignment.assignmentId
+          && active.assignment.generation === bound.assignment.generation
+          && active.assignment.bindingKey === bound.assignment.bindingKey);
+      } catch { return false; }
+    };
+    const message = `Wake: Issue #${issue} published GitHub facts changed (${keys.length}) - re-check exact Issue, current PR/head and reviews; do not infer completion`;
+    await sendMarkedUnitMessage(store, key, bound.pane.handle, message, executor, sleepMs, log, counts, freshOwner);
+  }
 }
 
 // A park names an event, not a Task owner. Consumer lookups only observe
