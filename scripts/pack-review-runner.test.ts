@@ -1929,6 +1929,48 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
       .toBe(f.run.id);
   });
 
+
+  it('Issue #2659: B1 terminal cannot publish success if B2 arrives after native invocation', async () => {
+    const B0 = '<!-- source-revision: r01 -->\n```complexity-tier\ntier: T2\n```\n## Acceptance criteria\n- original behavior\n';
+    const B1 = B0.replace('original behavior', 'first amended behavior');
+    const B2 = B0.replace('original behavior', 'second amended behavior');
+    const f = fixture('codex', B0, true);
+    f.setStatus('success');
+    const amended = {
+      ...f.request(B1), fixtureCurrentPrHeadSha: f.reviewed,
+    };
+    const admitted = await maybeAdmitPackReviewBodyAmendment(amended, {
+      projectId: f.projectId, storeRoot: f.storeRoot, repoSlug: f.repository,
+    });
+    expect(admitted).toMatchObject({ amendmentAdmission: true, reason: 'body_amendment_admitted' });
+    expect(f.getStatus()).toBe('pending');
+    const startInput = {
+      ...amended, headSha: f.reviewed, immediate: undefined,
+      claimMode: 'preacquired' as const, surface: 'pack-gpt-review' as const,
+      reviewerOverride: 'codex' as const,
+      fixturePostReviewHeadSha: f.reviewed,
+      fixturePostReviewPrBody: `Closes #${f.issueNumber}`,
+      fixtureReviewStdout: JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }),
+      fixtureGithubReviewId: 26590019,
+      fixtureRequiredCiPolicy: { contexts: ['CI'], checks: [] },
+      fixtureRequiredCiChecks: [{ name: 'CI', state: 'SUCCESS' }],
+      fixtureRequiredCiHeadAfterGate: f.reviewed,
+      fixtureAfterNativeInitialArmed: async () => { startInput.fixtureIssueBody = B2; },
+    };
+    const outcome = await startPackReview(startInput);
+    expect(outcome).toMatchObject({
+      ok: false, created: true, reason: 'amendment_status_unverified',
+      publicationVerified: false,
+    });
+    expect(f.statusWrites).not.toContain('success');
+    expect(f.getStatus()).toBe('pending');
+    const persisted = listPackReviewRuns({ projectId: f.projectId, storeRoot: f.storeRoot });
+    expect(persisted).toHaveLength(2);
+    expect(persisted[1]?.boundIssueSnapshotDigest).toBe(computeBoundIssueSnapshotHash(B1));
+    expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
+      .toMatchObject({ consumedRoundOrdinals: [1] });
+  });
+
   it('does not claim to detect a comment-only amendment when Issue body is identical', async () => {
     const f = fixture();
     // Comment text never enters computeBoundIssueSnapshotHash; only a folded body would differ.
