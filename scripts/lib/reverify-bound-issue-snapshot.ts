@@ -338,7 +338,7 @@ export function resolveBoundIssueSnapshot(input: {
     ? {
         artifactDir: legacy.artifactDir,
         metadataPath: join(legacy.artifactDir, qualified[0]!),
-        snapshotPath: join(legacy.artifactDir, qualified[0]!.replace(/\\.meta\\.json$/, '.md')),
+        snapshotPath: join(legacy.artifactDir, qualified[0]!.replace(/\.meta\.json$/, '.md')),
       }
     : boundIssueSnapshotArtifactPaths(input);
 
