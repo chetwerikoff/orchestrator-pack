@@ -485,6 +485,9 @@ export interface TurnRunOutcome {
   /** Process-local publication fact; not part of turn-result/v1. */
   readonly publicationState?: StateLightPublicationResult['state'];
   readonly cleanupAction?: PageCleanupAction;
+  /** Positive original Page and exact URL for a no-dispatch existing-chat fetch-429 close. */
+  readonly ownedPreSendFetch429Page?: any;
+  readonly ownedPreSendFetch429Url?: string;
   /** Process-local authority for the two still-owned counted fresh/local terminals. */
   readonly retainOwnedFreshLocalPage?: boolean;
   /** Exact owned page observation; never cancellation authority by itself. */
@@ -3193,8 +3196,14 @@ async function runTurn(
       } else if (diagnostic.http_status !== 429 && diagnostic.wall_kind !== 'account_load_error'
         && (value.wall_kind !== 'none' || value.matched_text !== 'none')) diagnostic = value;
     }, freshCleanup);
-    // A named product-wall stop never grants authority to close the held Page.
-    if (outcome.page && typeof outcome.page === 'object'
+    // A named wall cannot close any selected, recovered or unproven Page.
+    // AC12 exempts only the positively invocation-created pre-Send fetch-429
+    // original; finalizeTurn still requires a durable not_sent observation.
+    const ownNotSentFetch429 = outcome.ownedPreSendFetch429Page === outcome.page
+      && outcome.result.state === 'rate_limit'
+      && outcome.result.cause === 'conversation_fetch_http_429'
+      && outcome.result.send_count === 0 && outcome.result.send_attempted !== true;
+    if (outcome.page && typeof outcome.page === 'object' && !ownNotSentFetch429
       && (diagnostic.http_status === 429 || diagnostic.wall_kind === 'conversation_load_error'
         || outcome.result.cause === 'account_cooldown_active')) {
       cleanupAuthorityUnprovenPages.add(outcome.page);
@@ -3257,6 +3266,8 @@ async function runTurnCore(
   let ownedStopDeliveryObserved = false;
   let deliveryProofPendingRecovery = false;
   let ownershipForfeited = false;
+  let invocationCreatedExistingChatPage: any;
+  let invocationCreatedExistingChatUrl: string | undefined;
   let cancellationReceiptEmitted = false;
   let heartbeatScheduler: TurnScopedHeartbeatScheduler | undefined;
   let heartbeatPhase: BrowserTurnLivenessPhase = 'admitted_pre_send';
@@ -3488,6 +3499,14 @@ async function runTurnCore(
     const selection = await selectConversationPage(browser, chromium, config, invocationBudget, invocationDeadlineMs);
     browser = selection.browser;
     page = selection.page;
+    // Created is attachOwnTarget's affirmative target provenance, not a URL
+    // match or a cleanupAction hint. Capture only the original existing-chat Page.
+    if (!config.newChat && config.chatUrl && page
+      && getOwnTargetInfo(browser)?.created === true
+      && !cleanupAuthorityUnprovenPages.has(page)) {
+      invocationCreatedExistingChatPage = page;
+      invocationCreatedExistingChatUrl = normalizeConversationUrl(config.chatUrl);
+    }
     if (page) attachHeld429(page, !config.newChat ? config.chatUrl : undefined);
     if (page && typeof page === 'object' && !getOwnTargetInfo(browser)?.created) {
       // An existing URL-selected tab never grants cleanup or Stop authority.
@@ -4659,6 +4678,12 @@ async function runTurnCore(
               reason: 'fresh_owned_marker_observed', sendCount, sendWitness: 'owned_marker',
             });
           }
+          // The bounded marker read may cross the unbound cutoff. A URL that
+          // existed earlier cannot retrospectively authorize this first claim.
+          if (Date.now() >= freshUnboundReturnByMs) {
+            claimed = true;
+            break;
+          }
           const claim = tryClaimStateLightFreshConversation(
             profileKey,
             conversationUrl,
@@ -5821,7 +5846,10 @@ async function runTurnCore(
         && markerCardinality.exactMarkerTokenCount === 1
       ) {
         const observedConversationUrl = readProjectConversationUrl(page, config.projectUrl ?? '');
-        if (observedConversationUrl && isSupportedChatGptConversationUrl(observedConversationUrl)) {
+        if (observedConversationUrl && isSupportedChatGptConversationUrl(observedConversationUrl)
+          && Date.now() < freshUnboundReturnByMs) {
+          // Recheck AFTER the bounded transcript observation, immediately
+          // before the non-recovery first claim; recovery has its own cutoff.
           let claim: ReturnType<typeof tryClaimStateLightFreshConversation>;
           try {
             claim = tryClaimStateLightFreshConversation(
@@ -6880,9 +6908,20 @@ async function runTurnCore(
               : 'return_local_error',
       );
     }
+    const provenOpenedFetch429 = cause === 'conversation_fetch_http_429'
+      && state === 'rate_limit' && !afterSend && !sendAttempted && sendCount === 0
+      && !ownershipForfeited && page === invocationCreatedExistingChatPage
+      && Boolean(invocationCreatedExistingChatUrl)
+      && !cleanupAuthorityUnprovenPages.has(page)
+      && !browserOrPageDefinitelyLost(page, browser)
+      && readOwnedConversationIdentity(page, invocationCreatedExistingChatUrl!).matched;
     return {
       ...(page ? { page } : {}),
       ...(browser ? { browser } : {}),
+      ...(provenOpenedFetch429 ? {
+        ownedPreSendFetch429Page: page,
+        ownedPreSendFetch429Url: invocationCreatedExistingChatUrl,
+      } : {}),
       ...(lostAfterSend ? { cleanupAction: 'skip' as const } : {}),
       ...(isSharedBlocked && !lostAfterSend ? { cleanupAction: 'preserve' as const } : {}),
       ...(ownershipForfeited ? { ownershipForfeited: true, cleanupAction: 'preserve' as const } : {}),
@@ -6986,6 +7025,16 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     && typeof outcome.page === 'object'
     && !cleanupAuthorityUnprovenPages.has(outcome.page),
   );
+  const ownedPreSendFetch429Close = Boolean(
+    observedNotSent && cleanupAuthorityProven && !pageLost
+    && outcome.ownershipForfeited !== true
+    && outcome.ownedPreSendFetch429Page === outcome.page
+    && outcome.ownedPreSendFetch429Url
+    && outcome.result.state === 'rate_limit'
+    && outcome.result.cause === 'conversation_fetch_http_429'
+    && outcome.result.send_count === 0 && outcome.result.send_attempted !== true
+    && readOwnedConversationIdentity(outcome.page, outcome.ownedPreSendFetch429Url!).matched,
+  );
   // Only the invocation-owned, reachable Page can be closed. A cleanupAction
   // of preserve (including an ambiguous Send) is not negative ownership proof;
   // forfeiture and pre-existing/recovered pages independently prohibit close.
@@ -7063,6 +7112,13 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
       };
       if (!appendIncident(cleanupIncident, outcome.result.invocation_id)) journalWriteFailed = true;
     }
+  }
+  // Recheck the original exact route at the destructive boundary, not merely
+  // at 429 observation. A redirect forfeits the narrow AC12 close authority.
+  if (pageAction === 'close' && outcome.ownedPreSendFetch429Page
+    && (!ownedPreSendFetch429Close
+      || !readOwnedConversationIdentity(outcome.page, outcome.ownedPreSendFetch429Url!).matched)) {
+    pageAction = 'preserve';
   }
   if (pageAction === 'close') {
     cleanup = await boundedResourceCleanup(
