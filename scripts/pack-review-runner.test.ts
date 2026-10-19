@@ -24,6 +24,7 @@ import {
   recordClaudeNativeChildFrame,
   parseAuthoritativeTier,
   reconcileStalePackReviewRuns,
+  maybeAdmitPackReviewBodyAmendment,
   resetPackReview,
   applyCliTargetProject,
   parseArgs,
@@ -1600,7 +1601,7 @@ describe('Issue #1887 immediate final-cap descendant reconciliation', () => {
 describe('Issue #2565 strict-descendant final-cap body binding', () => {
   const repository = 'chetwerikoff/orchestrator-pack';
   const originalBody = '<!-- source-revision: r01 -->\n```complexity-tier\ntier: T2\n```\nBinding r01\n';
-  function fixture(reviewer: 'codex' | 'gpt' = 'codex') {
+  function fixture(reviewer: 'codex' | 'gpt' = 'codex', reviewedBody = originalBody) {
     const root = mkdtempSync(join(tmpdir(), 'pack-review-2565-'));
     roots.push(root);
     const storeRoot = join(root, 'store');
@@ -1612,7 +1613,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     const current = '5'.repeat(40);
     const options = { projectId, storeRoot };
     captureBoundIssueSnapshot({
-      projectId, prNumber, issueNumber, prHeadSha: reviewed, issueBody: originalBody,
+      projectId, prNumber, issueNumber, prHeadSha: reviewed, issueBody: reviewedBody,
     });
     let authority = initializePackReviewAuthority({
       prNumber, headSha: reviewed, tier: 'T2',
@@ -1637,7 +1638,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
         schema: 'pack-review-gpt-round/v1', reviewer: 'gpt', tier: 'T2',
         accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
         roundOrdinal: 1, cardinality: 3, issueNumber,
-        boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(originalBody),
+        boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(reviewedBody),
         sourceSlots: [1, 2, 3].map((ordinal) => {
           const slotId = `source-${String(ordinal).padStart(2, '0')}`;
           const invocationId = `fixture-2565-${ordinal}`;
@@ -1829,6 +1830,94 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     expect(f.statusWrites.filter((s) => s === 'success')).toHaveLength(priorSuccessCount);
     expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
       .toMatchObject({ state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1] });
+  });
+
+  it.each(['codex', 'gpt'] as const)(
+    'Issue #2659: admits one exact same-H1 B1 after a committed %s findings terminal and pending read-back', async (reviewer) => {
+      const B0 = '<!-- source-revision: r01 -->\\n```complexity-tier\\ntier: T2\\n```\\n## Acceptance criteria\\n- old required behavior\\n\\n## Verification\\n- stable\\n'.replaceAll('\\n', '\n');
+      const B1 = B0.replace('old required behavior', 'amended required behavior');
+      const B2 = B0.replace('old required behavior', 'further required behavior');
+      const f = fixture(reviewer, B0);
+      const now = '2026-10-19T00:00:00.000Z';
+      updatePackReviewRun(f.run.id, {
+        journalOutcome: { state: 'persisted', recordedAtUtc: now, reason: 'verdict_persisted',
+          idempotencyKey: `verdict:${f.run.id}:${f.reviewed}`, attempts: 1 },
+        deliveryOutcomes: { githubComment: { state: 'succeeded', recordedAtUtc: now,
+          reason: 'comment_published', idempotencyKey: `github-comment:${f.run.id}` } },
+      }, f.options);
+      const original = resolveBoundIssueSnapshot({
+        projectId: f.projectId, prNumber: f.prNumber,
+        prHeadSha: f.reviewed, issueNumber: f.issueNumber,
+        snapshotDigest: computeBoundIssueSnapshotHash(B0),
+      });
+      expect(original.status).toBe('found');
+      expect(readFileSync(original.snapshotPath!, 'utf8')).toBe(B0);
+      let publicStatus = 'success';
+      const writes: string[] = [];
+      const request = (body: string) => ({
+        ...f.request(body), fixtureCurrentPrHeadSha: f.reviewed,
+        fixtureRequiredStatusReader: async () => publicStatus,
+        fixtureRequiredStatusWriter: async (value: { state: string }) => {
+          writes.push(value.state);
+          publicStatus = value.state;
+        },
+      });
+      const admission = await maybeAdmitPackReviewBodyAmendment(request(B1), {
+        projectId: f.projectId, storeRoot: f.storeRoot, repoSlug: f.repository,
+      });
+      expect(admission).toMatchObject({
+        amendmentAdmission: true, reason: 'body_amendment_admitted',
+        headSha: f.reviewed, requiredStatusState: 'pending', settled: false,
+      });
+      expect(writes).toEqual(['pending']);
+      expect(publicStatus).toBe('pending');
+      const newAuthority = readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot });
+      expect(newAuthority?.cycle).toMatchObject({
+        frozenCap: 1, state: 'open', consumedRoundOrdinals: [],
+        amendmentOrigin: {
+          originalCycleId: f.authority.cycle!.cycleId,
+          originalTerminalRunId: f.run.id,
+          reviewedBodyDigest: computeBoundIssueSnapshotHash(B0),
+          amendedBodyDigest: computeBoundIssueSnapshotHash(B1),
+        },
+      });
+      expect(newAuthority?.terminal).toBeUndefined();
+      expect(readFileSync(original.snapshotPath!, 'utf8')).toBe(B0);
+      expect(await maybeAdmitPackReviewBodyAmendment(request(B1), {
+        projectId: f.projectId, storeRoot: f.storeRoot, repoSlug: f.repository,
+      })).toBeNull();
+      expect(await maybeAdmitPackReviewBodyAmendment(request(B2), {
+        projectId: f.projectId, storeRoot: f.storeRoot, repoSlug: f.repository,
+      })).toMatchObject({ amendmentAdmission: false, reason: 'amendment_prior_round_not_terminal' });
+      expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle?.cycleId)
+        .toBe(newAuthority?.cycle!.cycleId);
+      expect(writes).toEqual(['pending']);
+    },
+  );
+
+  it('Issue #2659: failed same-head pending write never admits an amended reviewer', async () => {
+    const B0 = '<!-- source-revision: r01 -->\n```complexity-tier\ntier: T2\n```\n## Acceptance criteria\n- original\n';
+    const B1 = B0.replace('- original', '- amended');
+    const f = fixture('codex', B0);
+    const before = readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot });
+    updatePackReviewRun(f.run.id, {
+      journalOutcome: { state: 'persisted', recordedAtUtc: '2026-10-19T00:00:00.000Z',
+        reason: 'verdict_persisted', idempotencyKey: `verdict:${f.run.id}:${f.reviewed}`,
+        attempts: 1 },
+      deliveryOutcomes: { githubComment: { state: 'succeeded',
+        recordedAtUtc: '2026-10-19T00:00:00.000Z', reason: 'published',
+        idempotencyKey: `github-comment:${f.run.id}` } },
+    }, f.options);
+    const refused = await maybeAdmitPackReviewBodyAmendment({
+      ...f.request(B1), fixtureCurrentPrHeadSha: f.reviewed,
+      fixtureRequiredStatusWriter: async () => { throw new Error('pending rejected'); },
+      fixtureRequiredStatusReader: async () => 'success',
+    }, { projectId: f.projectId, storeRoot: f.storeRoot, repoSlug: f.repository });
+    expect(refused).toMatchObject({ amendmentAdmission: false, reason: 'amendment_admission_unverified' });
+    expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle!.cycleId)
+      .toBe(before?.cycle!.cycleId);
+    expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.terminal?.runId)
+      .toBe(f.run.id);
   });
 
   it('does not claim to detect a comment-only amendment when Issue body is identical', async () => {
