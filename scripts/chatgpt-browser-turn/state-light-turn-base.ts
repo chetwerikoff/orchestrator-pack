@@ -7066,6 +7066,8 @@ async function runTurnCore(
       );
     }
     const provenOpenedFetch429 = cause === 'conversation_fetch_http_429'
+      && held429Witness?.current()?.wall_kind === 'conversation_fetch_http_429'
+      && held429Witness.current()?.http_status === 429
       && state === 'rate_limit' && !afterSend && !sendAttempted && sendCount === 0
       && !ownershipForfeited && page === invocationCreatedExistingChatPage
       && Boolean(invocationCreatedExistingChatUrl)
@@ -7272,6 +7274,11 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   }
   // Recheck the original exact route at the destructive boundary, not merely
   // at 429 observation. A redirect forfeits the narrow AC12 close authority.
+  if (pageAction === 'close' && outcome.result.state === 'rate_limit'
+    && outcome.result.cause === 'conversation_fetch_http_429'
+    && !ownedPreSendFetch429Close) {
+    pageAction = 'preserve';
+  }
   if (pageAction === 'close' && outcome.ownedPreSendFetch429Page
     && (!ownedPreSendFetch429Close
       || !readOwnedConversationIdentity(outcome.page, outcome.ownedPreSendFetch429Url!).matched)) {
