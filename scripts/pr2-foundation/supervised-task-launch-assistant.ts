@@ -791,7 +791,8 @@ export async function runSupervisedTaskLaunchAssistant(
   const early = await checkpoint('dispatch_admission_early', timings, deps.now, () => deps.observeDispatch(taskId));
   if (early.status !== 'ok') return continued(input, 'dispatch_admission_early', early, resources, startedAtMs, timings, deps.now);
   const earlyCurrent = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
-  const earlyTerminal = sameTaskTerminalDispatch(early.value, earlyCurrent, taskId, deps.adapter.id);
+  const earlyTerminal = sameTaskTerminalDispatch(early.value, earlyCurrent, taskId, deps.adapter.id)
+    && earlyCurrent?.role === (input.workClass === 'manager' ? 'orchestrator' : 'worker');
   if (early.value.kind === 'present'
     && !earlyTerminal
     && (!delegatedIntegration || early.value.dispatchId !== predecessor?.bindingKey)) {
@@ -1686,20 +1687,10 @@ async function refreshManagerWorktree(
     );
   }
   if (dirtyStatus !== undefined) {
-    // A dirty *existing* Issue-owned PR checkout can resume, but must never be
-    // fast-forwarded. The PR/readback proof checks the exact status again.
-    if (!request.issueNumber || !request.managerTaskRunId) {
-      return worktreeContinue('manager_worktree_dirty',
-        { worktreeId: id, branch: identity.value.branch, head, originMain },
-        'preserve dirty bytes; only the exact existing Task and Issue-closing PR may resume here');
-    }
-    if (request.reuseAssignment) {
-      const nativeReuse = await reuseTerminalOwnedWorktree(request, id, path, execute);
-      if (nativeReuse.status === 'ok') return nativeReuse;
-    }
-    return resumeManagerAtOpenPrHead(
-      request, id, path, identity.value.branch, head, originMain, execute, dirtyStatus,
-    );
+    // A matching open PR proves HEAD/branch, not Task ownership of dirty bytes.
+    // Require native proof of the exact Issue-bound predecessor and worktree.
+    // The clean non-ancestor PR route below remains unchanged.
+    return reuseTerminalOwnedWorktree(request, id, path, execute);
   }
   if (head === originMain) {
     return {
@@ -1769,7 +1760,8 @@ async function reuseTerminalOwnedWorktree(
       'prove the existing exact Issue-bound Dispatch and worktree ownership; preserve all local edits');
   if (!expected || expected.kind !== 'local' || expected.provider !== 'orca'
     || expected.issueNumber !== request.issueNumber
-    || expected.repository !== request.repository.trim().toLowerCase()) {
+    || expected.repository !== request.repository.trim().toLowerCase()
+    || expected.role !== (request.managerRefresh ? 'orchestrator' : 'worker')) {
     return refusal('worktree_reuse_ownership_unproven');
   }
   if (request.managerRefresh) {
