@@ -131,10 +131,12 @@ the exact ownership anchor. Reuse does not fetch or mutate local bytes.
 For manager continuation, the exact Run/Task and caller-supplied
 worktree selector must identify one manager-local non-main branch owned by exactly
 one worktree. A clean ancestor can follow the assistant's ff-only `origin/main`
-refresh. An existing dirty checkout instead requires native exact Run/Task
-membership and either old-terminal/gone producer worktree ownership for the
-current Issue assignment or one matching open Issue-closing PR with the same
-branch and HEAD. Recheck unchanged status bytes and do not refresh it.
+refresh. An existing dirty checkout requires native exact Run/Task
+membership, a current orchestrator-role predecessor assignment, and its
+terminal/gone producer witness matching the selected worktree; a PR alone
+does not grant permission to touch another Task's uncommitted bytes. Clean
+non-ancestor PR/HEAD reuse remains distinct. Recheck unchanged status
+bytes, branch and HEAD, and do not refresh dirty worktrees.
 Fresh manager worktrees
 must be clean. Never reset, stash, rebase, merge, force-repair, replace the
 worktree, or mutate the shared primary checkout as recovery.
@@ -147,6 +149,16 @@ two fresh-start Dispatch absence witnesses; launch timing/diagnostics; and the
 call to the existing supervised-start boundary. It creates no durable retry
 state, queue, lease, WorkerReport/WorkerStatus, scheduler, or second assignment
 store.
+
+The supported `--worktree` CLI selects and validates the existing
+`exact_terminal_worktree` executor route before effects, rather than silently
+defaulting Cursor to `provider_new_top_level`. For new
+`--worktree-name` starts, an atomic provider call cannot witness fresh-tree
+cleanliness before it dispatches input. The assistant therefore selects the
+already admitted exact-terminal split setup path: complete the setup hook,
+observe clean Git status, then spawn and invoke supervised start.
+Explicit provider-mode requests without a native pre-dispatch clean witness
+fail closed; a post-start receipt is not an equivalent witness.
 
 The calling shell first exports the matching stable profile names. The profile
 checkpoint validates the closed executor family, executor-specific model catalog,
