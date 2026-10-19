@@ -39,7 +39,7 @@ import {
   type ExecutorRoute,
   type SemanticExecutorProfile,
 } from '../executor-profile-policy.ts';
-import { runSupervisedWorkerStart, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
+import { runSupervisedWorkerStart, readTerminalGoneDispatch, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
 
 export const LAUNCH_ASSISTANT_SCHEMA = 'supervised-task-launch-assistant/v1' as const;
 export const LAUNCH_STARTUP_OBSERVATION_WINDOW_MS = 30_000;
@@ -160,6 +160,8 @@ export interface WorktreePreparationRequest {
   readonly primaryReuseRoot?: string;
   /** Only populated after native Run/Task membership was proven for an existing manager. */
   readonly managerTaskRunId?: string;
+  /** Exact Issue-owned predecessor for an existing worker's worktree (not a guess from path). */
+  readonly reuseAssignment?: WorkerAssignment;
 }
 
 export type DispatchObservation = { readonly kind: 'absent' }
@@ -784,6 +786,9 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(input.workClass === 'manager' ? { managerRefresh: true } : {}),
     ...(input.workClass === 'merge' ? { primaryReuseRoot: input.primaryRoot } : {}),
     ...(input.workClass === 'manager' && input.taskId?.trim() ? { managerTaskRunId: input.runId?.trim() } : {}),
+    ...(input.workClass !== 'manager' && input.workClass !== 'merge'
+      && input.worktreeSelector && earlyCurrent
+      ? { reuseAssignment: earlyCurrent } : {}),
   }));
   if (prepared.status !== 'ok') return continued(input, 'worktree_prepare', prepared, resources, startedAtMs, timings, deps.now);
   if (input.workClass === 'merge' && (!prepared.value.path || resolve(prepared.value.path) !== resolve(input.primaryRoot!))) {
@@ -1715,6 +1720,67 @@ async function refreshManagerWorktree(
   };
 }
 
+/**
+ * Reuse of an existing worker worktree is bound to the current Issue assignment,
+ * not to a caller-provided path, old terminal or PR title. Revalidate the exact
+ * native terminal/gone predecessor before spawning, and never mutate the tree.
+ * The supervised-start decision repeats this witness inside its assignment fence.
+ */
+async function reuseOwnedWorkerWorktree(
+  request: WorktreePreparationRequest,
+  id: string,
+  path: string,
+  execute: ChildExecutor,
+): Promise<EdgeResult<PreparedWorktree>> {
+  const expected = request.reuseAssignment;
+  const refusal = (cause: string): EdgeResult<PreparedWorktree> =>
+    worktreeContinue(cause, { worktreeId: id, worktreePath: path },
+      'prove the existing exact Issue-bound Dispatch and worktree ownership; preserve all local edits');
+  if (!expected || expected.kind !== 'local' || expected.provider !== 'orca'
+    || expected.issueNumber !== request.issueNumber
+    || expected.repository !== request.repository.trim().toLowerCase()) {
+    return refusal('worktree_reuse_ownership_unproven');
+  }
+  const identity = await observeManagerWorktreeIdentity(request, id, path, execute);
+  if (identity.status !== 'ok') return identity;
+
+  const status = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'],
+    undefined, undefined, path);
+  const headResult = await execute(['git', 'rev-parse', '--verify', 'HEAD^{commit}'],
+    undefined, undefined, path);
+  const head = text(headResult.stdout);
+  if (!status.ok || !headResult.ok || !/^[0-9a-f]{40}$/iu.test(head)) {
+    return refusal('worktree_reuse_local_unverified');
+  }
+
+  const witness = await readTerminalGoneDispatch(expected,
+    (args) => execute(['orca', ...args], undefined, undefined, path));
+  if (!witness || witness.worktreeId !== id) {
+    return refusal('worktree_reuse_ownership_unproven');
+  }
+
+  const finalStatus = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'],
+    undefined, undefined, path);
+  const finalHead = await execute(['git', 'rev-parse', '--verify', 'HEAD^{commit}'],
+    undefined, undefined, path);
+  const finalBranch = await execute(['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'],
+    undefined, undefined, path);
+  if (!finalStatus.ok || finalStatus.stdout !== status.stdout
+    || !finalHead.ok || text(finalHead.stdout) !== head
+    || !finalBranch.ok || text(finalBranch.stdout) !== identity.value.branch) {
+    return refusal('worktree_reuse_local_changed');
+  }
+  return {
+    status: 'ok',
+    value: { id, selector: request.worktreeSelector!, path, setupWitness: 'proven_reuse' },
+    evidence: {
+      worktreeId: id, worktreePath: path, branch: identity.value.branch, head,
+      previousDispatchId: expected.bindingKey,
+      reuse: status.stdout.trim() ? 'dirty_preserved' : 'clean_preserved',
+    },
+  };
+}
+
 export async function prepareWorktreeWithOrca(
   request: WorktreePreparationRequest,
   execute: ChildExecutor,
@@ -1756,7 +1822,7 @@ export async function prepareWorktreeWithOrca(
     const path = text(worktree?.path);
     if (!id || !path) return worktreeContinue('worktree_prepare_failed_or_unknown');
     if (!request.managerRefresh) {
-      return worktreeContinue('worktree_reuse_readiness_unproven', { worktreeId: id, worktreePath: path });
+      return reuseOwnedWorkerWorktree(request, id, path, execute);
     }
     return refreshManagerWorktree(request, id, path, execute);
   }
