@@ -4651,6 +4651,9 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
           worktreePath: workspace, title: 'previous-manager', status: 'running', command: 'opencode',
         };
         f.state.goneIncumbent = true; // native gone does not retire Dispatch
+        const oldIdentity = { runtime: 'orca' as const, id: 'incumbent', generation: 'previous-native-generation' };
+        expect(f.adapter.liveness({ worker: oldIdentity, observationWindowMs: 1_000 },
+          { cwd: workspace }).status).toBe('gone');
       }
       expect(await f.run()).toMatchObject({ outcome: 'continue',
         cause: 'resume_incumbent_or_assignment_unverified', attempts: 0 });
