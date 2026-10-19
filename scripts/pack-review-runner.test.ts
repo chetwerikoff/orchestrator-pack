@@ -1975,7 +1975,8 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     expect(f.getStatus()).toBe('pending');
     const persisted = listPackReviewRuns({ projectId: f.projectId, storeRoot: f.storeRoot });
     expect(persisted).toHaveLength(2);
-    expect(persisted[1]?.boundIssueSnapshotDigest).toBe(computeBoundIssueSnapshotHash(B1));
+    expect(persisted.find((run) => run.id === outcome.runId)?.boundIssueSnapshotDigest)
+      .toBe(computeBoundIssueSnapshotHash(B1));
     expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
       .toMatchObject({ consumedRoundOrdinals: [1] });
   });
