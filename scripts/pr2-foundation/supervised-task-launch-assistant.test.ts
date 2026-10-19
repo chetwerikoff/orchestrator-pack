@@ -4477,8 +4477,15 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
         : resolveLiveExecutorProfile('manager', inherited, startMode, async (args) => opencodeProbeResult(args)),
       finalizeProfile: async (profile, selectedWorkspace, requestedSession) => {
         expect(selectedWorkspace).toBe(workspace);
+        const selectedInline = JSON.parse(profile.inlineConfigJson ?? '{}') as {
+          agent?: Record<string, { model?: string; variant?: string }>;
+        };
+        const admittedAgent = profile.agentName ? selectedInline.agent?.[profile.agentName] : undefined;
+        if (!admittedAgent?.model || !admittedAgent.variant) {
+          throw new Error('synthetic fixture has no admitted selected model/variant');
+        }
         const overlay = buildOpenCodeAgentOverlay({
-          agentName: 'pack-opk-b5-selected', model: profile.model, effort: profile.effort,
+          agentName: 'pack-opk-b5-selected', model: admittedAgent.model, effort: admittedAgent.variant,
           baseline: { name: 'build', mode: 'primary', prompt: 'synthetic benign task', permission: [] },
           stateRoot: '/tmp/opk-2661-disposable-state', resumeSession: requestedSession,
         });

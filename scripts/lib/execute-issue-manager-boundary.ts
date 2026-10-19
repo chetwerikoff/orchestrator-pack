@@ -908,6 +908,11 @@ export function classifyExecuteIssueManagerRecord(
 ): ManagerBoundaryEvaluation {
   const value = record(input);
   if (!value) return defect(context, 'execute-issue-manager-boundary', 'input record must be a JSON object');
+  // An invalid caller-bound Issue is never an inspect or GitHub reconciliation target.
+  if (!/^[^/\s]+\/[^/\s]+$/u.test(text(context.repository))
+    || !Number.isSafeInteger(context.issueNumber) || context.issueNumber <= 0) {
+    return defect(context, 'execute-issue-manager-boundary', 'selected repository/Issue binding invalid');
+  }
   if (value.schema === 'turn-result/v1') return classifyTurn(value, context);
   if (value.schema === 'browser-gpt-page-probe/v1') return classifyProbe(value, context);
   if (isWorkerSmokeRecord(value)) return classifyWorkerSmoke(value, context);

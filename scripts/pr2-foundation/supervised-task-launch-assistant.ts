@@ -2685,7 +2685,7 @@ export async function runExistingOpenCodeResume(
     }
     // A missing/wrong session, a healthy foreign responder, or an uncertain
     // endpoint is NEVER a reason to stop and duplicate an existing session.
-    const reason = health?.status === 'ok' ? '' : health?.reason ?? '';
+    const reason = health?.reason ?? '';
     const endpointUnavailable = health?.status === 'failed'
       && /^opencode_http_request_failed:/u.test(reason);
     if (attempt === 2 || !endpointUnavailable) return result('resume_control_unavailable', attempt, worker.identity);

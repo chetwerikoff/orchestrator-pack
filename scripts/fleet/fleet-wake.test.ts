@@ -2737,7 +2737,7 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
         readOriginalHandoffReceipt: () => receipt,
       });
       expect(texts(first.calls)).toHaveLength(1);
-      expect(texts(first.calls)[0]).toContain('synthetic_mgr334_terminal.json');
+      expect(texts(first.calls)[0]?.join(' ')).toContain('synthetic_mgr334_terminal.json');
       expect(sendsTo(first.calls, 'foreign-stale-handle')).toHaveLength(0);
       expect(first.result).toMatchObject({
         state: 'no_orchestrator', paneWakeAttempts: 1, paneWakeConfirmed: 1,
@@ -2754,6 +2754,10 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
       [{ ...event, handoffReceiptPath: undefined }, receipt],
     ] as const) {
       const checked = await invoke({
+        // A successful named producer may still wake a PARKED pane. An idle
+        // panel isolates only the failure-specific exact-owner route.
+        screens: { [manager.handle]: 'done' },
+        executor: executorFor({ [manager.handle]: 'done' }),
         listPublishedIssueFacts: () => [], listTerminalEnvelopes: () => [variant],
         readOriginalHandoffReceipt: () => observed,
       });

@@ -1096,9 +1096,15 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       }
     }
     if (!record || !sameRuntimeWorker(record.identity, worker)) return undefined;
-    const native = this.findWorker(worker);
-    if (native.status !== 'ok' || !native.value || (native.value.title?.startsWith('opk-resume-')
-      && record.session !== native.value.title.slice('opk-resume-'.length))) return undefined;
+    // Only explicit resume control requires an extra native session/title read.
+    // For ordinary non-resume, the bounded HTTP dispatch owns the deadline and
+    // must not spend its pre-dispatch time budget resolving an additional roster.
+    if (record.session) {
+      const native = this.findWorker(worker);
+      if (native.status !== 'ok' || !native.value
+        || (native.value.title?.startsWith('opk-resume-')
+          && record.session !== native.value.title.slice('opk-resume-'.length))) return undefined;
+    }
     return {
       kind: 'opencode-http',
       dispatch: (request, options) => this.#openCodeDispatch(worker, request, options),
