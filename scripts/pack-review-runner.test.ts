@@ -65,6 +65,7 @@ import {
   observePackReviewHead,
   readPackReviewAuthority,
   settleLogicalPackReviewFindingsByStrictDescendant,
+  stableJson,
 } from './pack-review-state.ts';
 
 const roots: string[] = [];
@@ -5409,6 +5410,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     });
     if (posted.kind !== 'credentialed') throw new Error('fixture source-01 was not credentialed');
     if (violation === 'optional_undefined_finding') {
+      expect(posted.payload).toMatchObject({ verdict: 'findings', findingCount: 1 });
       expect(posted.payload.findings[0]).toHaveProperty('filePath', undefined);
     }
 
@@ -5440,7 +5442,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       };
       if (index === 0) return {
         ...admitted,
-        terminalClass: 'complete_clean',
+        terminalClass: violation === 'optional_undefined_finding' ? 'complete_findings' : 'complete_clean',
         terminalResult: {
           schema: 'turn-result/v1', state: 'ok', scope: 'none',
           cause: 'github_source_comment_credentialed', invocation_id: invocationId,
@@ -5508,7 +5510,9 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     const savedPartial = getPackReviewRun(newer.id, f.options)!.reviewRound!.sourceSlots[0]!;
     if (violation === 'optional_undefined_finding') {
       // The run store JSON round trip keeps every completed slot, not undefined keys.
+      expect(savedPartial.terminalClass).toBe('complete_findings');
       expect(savedPartial.payload?.findings[0]).not.toHaveProperty('filePath');
+      expect(stableJson(posted.payload)).toBe(stableJson(savedPartial.payload));
     }
     const postedSourceOne = f.comments[0]!;
     const commentsBefore = [...f.comments];
