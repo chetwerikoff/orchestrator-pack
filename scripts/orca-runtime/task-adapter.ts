@@ -409,6 +409,9 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
   readonly #assignmentOwned = new Map<string, RuntimeWorkerIdentity>();
   readonly #unprovenOwnedPresence = new Map<string, UnprovenOwnedPresence>();
   readonly #runJson: typeof runOrcaJson;
+  // Within one synchronous dispatch, composer-control recovery may reuse the
+  // exact worker just verified by dispatchInput; never carry it to another effect.
+  #dispatchRead: { identity: RuntimeWorkerIdentity; worker?: RuntimeWorker; composerRead: boolean } | null = null;
 
   constructor(options: OrcaRuntimeAdapterOptions = {}) {
     super(options);
@@ -549,6 +552,32 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     };
   }
 
+  override dispatchInput(
+    input: Parameters<OrcaRuntimeAdapter['dispatchInput']>[0],
+    options: RuntimeCallOptions = {},
+  ): ReturnType<OrcaRuntimeAdapter['dispatchInput']> {
+    const previous = this.#dispatchRead;
+    this.#dispatchRead = { identity: input.worker, composerRead: false };
+    try {
+      return super.dispatchInput(input, options);
+    } finally {
+      this.#dispatchRead = previous;
+    }
+  }
+
+  override composerControl(
+    worker: RuntimeWorkerIdentity,
+  ): ReturnType<OrcaRuntimeAdapter['composerControl']> {
+    const read = this.#dispatchRead;
+    if (!read || !sameRuntimeWorker(read.identity, worker)) return super.composerControl(worker);
+    read.composerRead = true;
+    try {
+      return super.composerControl(worker);
+    } finally {
+      read.composerRead = false;
+    }
+  }
+
   override findWorker(
     worker: RuntimeWorkerIdentity,
     options: RuntimeCallOptions = {},
@@ -557,9 +586,16 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (unproven && sameRuntimeWorker(unproven.identity, worker)) {
       return runtimeFailure('find_worker', unproven.reason);
     }
+    const read = this.#dispatchRead;
+    if (read?.composerRead && read.worker && sameRuntimeWorker(read.identity, worker)) {
+      return { status: 'ok', value: read.worker };
+    }
     const current = super.findWorker(worker, options);
     if (current.status !== 'ok' || current.value === null) return current;
-    return { status: 'ok', value: this.#assignmentProvenance(current.value) };
+    const value = this.#assignmentProvenance(current.value);
+    if (read && !read.composerRead && !read.worker && sameRuntimeWorker(read.identity, worker)
+      && sameRuntimeWorker(value.identity, worker)) read.worker = value;
+    return { status: 'ok', value };
   }
 
   /**
