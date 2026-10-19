@@ -386,9 +386,9 @@ export async function readTerminalGoneDispatch(
     || providerText(dispatch?.status).toLowerCase() !== status
     || observation?.exactWorker !== false
     || !['missing', 'terminal_missing'].includes(providerText(observation?.status).toLowerCase())
-    || providerText(worker?.state).toLowerCase() !== 'abandoned'
-    || providerText(worker?.stage).toLowerCase() !== 'terminal_missing'
     || shown?.terminal !== null
+    || (shown?.worker !== null && shown?.worker !== undefined && !isRecord(shown.worker))
+    || (shown?.terminalResource !== null && shown?.terminalResource !== undefined && !isRecord(shown.terminalResource))
     || (workerTerminalId && resourceTerminalId && workerTerminalId !== resourceTerminalId)
     || (workerWorktreeId && resourceWorktreeId && workerWorktreeId !== resourceWorktreeId)
     || (resource !== null && (
