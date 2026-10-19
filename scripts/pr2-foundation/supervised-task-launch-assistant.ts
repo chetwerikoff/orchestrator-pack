@@ -1834,6 +1834,11 @@ export async function prepareWorktreeWithOrca(
     if (request.managerRefresh) {
       const identity = await observeManagerWorktreeIdentity(request, id, path, execute);
       if (identity.status !== 'ok') return identity;
+      const freshStatus = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'],
+        undefined, undefined, path);
+      if (!freshStatus.ok) return worktreeContinue('manager_worktree_status_unavailable', baseEvidence);
+      if (freshStatus.stdout.trim()) return worktreeContinue('manager_worktree_dirty', baseEvidence,
+        'keep newly created manager worktree bytes unchanged and refuse launch until setup leaves it clean');
       return {
         status: 'ok',
         value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete' },
