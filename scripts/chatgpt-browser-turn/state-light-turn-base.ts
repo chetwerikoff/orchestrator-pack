@@ -272,6 +272,7 @@ const MESSAGE_NODE_READ_RETRY_TIMEOUT_MS = 400;
 const MESSAGE_NODE_READ_ATTEMPTS = 2;
 /** Exact generation selector already owned by browser-gpt-page-probe; do not widen it here. */
 const BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR = '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]';
+const ASSISTANT_CONTENT_ROOT_SELECTOR = '.markdown';
 const CONTINUE_GENERATING_SELECTOR = 'button[aria-label*="Continue generating" i], button[data-testid*="continue-generating"], button[data-testid*="continue_generating"]';
 /** Post-send wall probes must not block transcript reads or the confirm loop. */
 const POST_SEND_PRODUCT_WALL_PROBE_MS = 2_000;
@@ -743,10 +744,12 @@ export async function revalidateKeyedHarvest(
         userMessageStyle: string;
         unitKeyAttribute: string;
         assistantMessageStyle: string;
+          contentRootSelector: string;
         assistantKey: string;
         turnSelector: string;
         inProgressSelector: string;
         actionSelector: string;
+        continuationSelector: string;
       }) => {
         const elements = allElements.filter((element) => element.getBoundingClientRect().height > 0);
         const valid = (value: string | null): value is string => Boolean(value && value.length >= 8);
@@ -761,6 +764,95 @@ export async function revalidateKeyedHarvest(
           }
           return undefined;
         };
+        // Canonical notation for visible DOM only, not reconstructed Markdown.
+        const serializeAssistant = (message: Element, selected: boolean): { text: string; complete: boolean } => {
+          const wholeRow = () => ({ text: (message as HTMLElement).innerText, complete: true });
+          const unsupported = () => selected ? { text: '', complete: false } : wholeRow();
+          if (message.querySelectorAll('pre').length === 0) return wholeRow();
+          const roots = Array.from(message.querySelectorAll(args.contentRootSelector));
+          if (roots.length !== 1) return unsupported();
+          const root = roots[0]!;
+          const view = root.ownerDocument?.defaultView;
+          if (!view || typeof view.getComputedStyle !== 'function') return unsupported();
+          const visible = (node: Element): boolean => {
+            for (let current: Element | null = node; current; current = current.parentElement) {
+              if (current.tagName === 'BUTTON' || current.getAttribute('role') === 'button'
+                || current.getAttribute('aria-hidden') === 'true' || current.hasAttribute('inert')
+                || typeof current.getClientRects !== 'function' || current.getClientRects().length === 0) return false;
+              const style = view.getComputedStyle(current);
+              if (!style || style.display === 'none' || style.visibility === 'hidden'
+                || style.visibility === 'collapse') return false;
+              if (current === message) return true;
+            }
+            return false;
+          };
+          if (!visible(root)) return unsupported();
+          const blocks: string[] = [];
+          for (const child of Array.from(root.children)) {
+            const pres = [
+              ...(child.tagName === 'PRE' ? [child] : []),
+              ...Array.from(child.querySelectorAll('pre')),
+            ];
+            if (!visible(child)) {
+              if (pres.length > 0) return unsupported();
+              continue;
+            }
+            if (pres.length === 0) {
+              // Whole innerText preserves browser whitespace for prose,
+              // headings, tables and lists. Ambiguous nested controls fail.
+              if (child.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
+              const block = (child as HTMLElement).innerText;
+              if (block) blocks.push(block);
+              continue;
+            }
+            if (pres.length !== 1 || /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)) {
+              return unsupported();
+            }
+            const pre = pres[0]!;
+            const directCodes = Array.from(pre.children).filter((node) => node.tagName === 'CODE');
+            if (!visible(pre) || directCodes.length !== 1 || pre.querySelectorAll('code').length !== 1) {
+              return unsupported();
+            }
+            const code = directCodes[0]!;
+            if (!visible(code)) return unsupported();
+            // Language comes exclusively from unique visible non-control
+            // text outside CODE in this one header-and-pre wrapper.
+            const labels: string[] = [];
+            const visitLabel = (node: Element): void => {
+              if (node === code) return;
+              const children = Array.from(node.childNodes);
+              if (children.length === 0 && node !== child) {
+                const leaf = (node as HTMLElement).innerText?.trim();
+                if (leaf) labels.push(leaf);
+                return;
+              }
+              for (const item of children) {
+                if (item.nodeType === 3) {
+                  const label = item.textContent?.trim();
+                  if (label) labels.push(label);
+                } else if (item.nodeType === 1) {
+                  const element = item as Element;
+                  if (element === code || element.tagName === 'BUTTON'
+                    || element.getAttribute('role') === 'button'
+                    || element.getAttribute('aria-hidden') === 'true'
+                    || element.hasAttribute('inert') || !visible(element)) continue;
+                  visitLabel(element);
+                }
+              }
+            };
+            visitLabel(child);
+            if (labels.length > 1 || labels.some((label) => !/^[A-Za-z][A-Za-z0-9_+#.-]{0,31}$/u.test(label))) {
+              return unsupported();
+            }
+            const codeText = (code as HTMLElement).innerText;
+            if (typeof codeText !== 'string') return unsupported();
+            const backtickRuns = codeText.match(/\x60+/gu) ?? [];
+            const fence = String.fromCharCode(96).repeat(Math.max(3, ...backtickRuns.map((run) => run.length + 1)));
+            blocks.push(fence + (labels[0] ?? '') + '\n' + codeText
+              + (codeText.endsWith('\n') ? '' : '\n') + fence);
+          }
+          return blocks.length > 0 ? { text: blocks.join('\n\n'), complete: true } : unsupported();
+        };
         const rows: Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean }> = [];
         for (let domIndex = 0; domIndex < elements.length; domIndex++) {
           const element = elements[domIndex]!;
@@ -771,41 +863,18 @@ export async function revalidateKeyedHarvest(
               : (element.getAttribute?.(args.unitKeyAttribute) ?? '').endsWith(':user') ? args.userMessageStyle : undefined;
             const role = style === args.userMessageStyle ? 'user' : style === args.assistantMessageStyle ? 'assistant' : '';
             let text = (element as HTMLElement).innerText;
+            let rowComplete = true;
             if (role === 'assistant') {
-              // Preserve only text exposed by the code element's rendered innerText.
-              // textContent can include hidden descendants and is never publication evidence.
-              for (const code of Array.from(element.querySelectorAll('pre code'))) {
-                if (code.getBoundingClientRect().height <= 0) continue;
-                const visible = (code as HTMLElement).innerText;
-                const lines = visible.split('\n');
-                const firstLine = lines[0] ?? '';
-                if (!firstLine || lines.length < 2 || text.includes(visible)) continue;
-                // A unique, line-aligned prefix binds the code node to this outer message.
-                const offset = text.indexOf(firstLine);
-                if (offset < 0 || (offset > 0 && text[offset - 1] !== '\n')
-                  || text.indexOf(firstLine, offset + firstLine.length) !== -1) continue;
-                let end = offset + firstLine.length;
-                if (end < text.length && text[end] !== '\n') continue;
-                let matchedLines = 1;
-                while (matchedLines < lines.length) {
-                  const line = lines[matchedLines]!;
-                  const nextEnd = end + 1 + line.length;
-                  if (text[end] !== '\n' || !text.startsWith(line, end + 1)
-                    || (nextEnd < text.length && text[nextEnd] !== '\n')) break;
-                  end = nextEnd;
-                  matchedLines += 1;
-                }
-                if (matchedLines === lines.length) continue;
-                // Keep the outer message's non-code prose and footer byte-for-byte.
-                text = text.slice(0, offset) + visible + text.slice(end);
-              }
+              const serialized = serializeAssistant(element, canonicalKey(element) === args.assistantKey);
+              text = serialized.text;
+              rowComplete = serialized.complete;
             }
             rows.push({
               role,
               text,
               key: canonicalKey(element),
               domIndex,
-              complete: true,
+              complete: rowComplete,
             });
           } catch {
             rows.push({ role: '', text: '', domIndex, complete: false });
@@ -818,16 +887,25 @@ export async function revalidateKeyedHarvest(
         const turn = element.closest(args.turnSelector) ?? element;
         const assistantFinal = !turn.querySelector(args.inProgressSelector)
           && Boolean(turn.querySelector(args.actionSelector));
-        return { rows, assistantFinal };
+        const lateContinue = typeof document !== 'undefined'
+          && Array.from(document.querySelectorAll(args.continuationSelector)).some((control) => {
+            const rect = control.getBoundingClientRect();
+            const style = control.ownerDocument?.defaultView?.getComputedStyle(control);
+            return rect.height > 0 && (!style || (style.display !== 'none' && style.visibility !== 'hidden'))
+              && !control.hasAttribute('disabled') && control.getAttribute('aria-disabled') !== 'true';
+          });
+        return { rows, assistantFinal: assistantFinal && !lateContinue };
       }, {
         roleAttribute: MESSAGE_AUTHOR_ROLE_ATTR,
         userMessageStyle: USER_MESSAGE_STYLE,
         unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
         assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
+        contentRootSelector: ASSISTANT_CONTENT_ROOT_SELECTOR,
         assistantKey: expected.assistantKey,
         turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
         inProgressSelector: ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
         actionSelector: ASSISTANT_TURN_ACTION_SELECTOR,
+        continuationSelector: CONTINUE_GENERATING_SELECTOR,
       }),
       MAX_LOCAL_READ_WAIT_MS,
       'keyed_harvest_revalidation_timeout',
@@ -1792,11 +1870,13 @@ export async function readPageObservation(
           userMessageStyle: string;
           unitKeyAttribute: string;
           assistantMessageStyle: string;
+          contentRootSelector: string;
           generationSelector: string;
           continuationSelector: string;
           turnSelector: string;
           inProgressSelector: string;
           actionSelector: string;
+        continuationSelector: string;
         }) => {
           const elements = allElements.filter((element) => element.getBoundingClientRect().height > 0);
           const valid = (value: string | null): value is string => Boolean(value && value.length >= 8);
@@ -1810,6 +1890,95 @@ export async function readPageObservation(
               if (valid(value)) return `${attribute}:${value}`;
             }
             return undefined;
+          };
+          // Canonical notation for visible DOM only, not reconstructed Markdown.
+          const serializeAssistant = (message: Element, selected: boolean): { text: string; complete: boolean } => {
+            const wholeRow = () => ({ text: (message as HTMLElement).innerText, complete: true });
+            const unsupported = () => selected ? { text: '', complete: false } : wholeRow();
+            if (message.querySelectorAll('pre').length === 0) return wholeRow();
+            const roots = Array.from(message.querySelectorAll(args.contentRootSelector));
+            if (roots.length !== 1) return unsupported();
+            const root = roots[0]!;
+            const view = root.ownerDocument?.defaultView;
+            if (!view || typeof view.getComputedStyle !== 'function') return unsupported();
+            const visible = (node: Element): boolean => {
+              for (let current: Element | null = node; current; current = current.parentElement) {
+                if (current.tagName === 'BUTTON' || current.getAttribute('role') === 'button'
+                  || current.getAttribute('aria-hidden') === 'true' || current.hasAttribute('inert')
+                  || typeof current.getClientRects !== 'function' || current.getClientRects().length === 0) return false;
+                const style = view.getComputedStyle(current);
+                if (!style || style.display === 'none' || style.visibility === 'hidden'
+                  || style.visibility === 'collapse') return false;
+                if (current === message) return true;
+              }
+              return false;
+            };
+            if (!visible(root)) return unsupported();
+            const blocks: string[] = [];
+            for (const child of Array.from(root.children)) {
+              const pres = [
+                ...(child.tagName === 'PRE' ? [child] : []),
+                ...Array.from(child.querySelectorAll('pre')),
+              ];
+              if (!visible(child)) {
+                if (pres.length > 0) return unsupported();
+                continue;
+              }
+              if (pres.length === 0) {
+                // Whole innerText preserves browser whitespace for prose,
+                // headings, tables and lists. Ambiguous nested controls fail.
+                if (child.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
+                const block = (child as HTMLElement).innerText;
+                if (block) blocks.push(block);
+                continue;
+              }
+              if (pres.length !== 1 || /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)) {
+                return unsupported();
+              }
+              const pre = pres[0]!;
+              const directCodes = Array.from(pre.children).filter((node) => node.tagName === 'CODE');
+              if (!visible(pre) || directCodes.length !== 1 || pre.querySelectorAll('code').length !== 1) {
+                return unsupported();
+              }
+              const code = directCodes[0]!;
+              if (!visible(code)) return unsupported();
+              // Language comes exclusively from unique visible non-control
+              // text outside CODE in this one header-and-pre wrapper.
+              const labels: string[] = [];
+              const visitLabel = (node: Element): void => {
+                if (node === code) return;
+                const children = Array.from(node.childNodes);
+                if (children.length === 0 && node !== child) {
+                  const leaf = (node as HTMLElement).innerText?.trim();
+                  if (leaf) labels.push(leaf);
+                  return;
+                }
+                for (const item of children) {
+                  if (item.nodeType === 3) {
+                    const label = item.textContent?.trim();
+                    if (label) labels.push(label);
+                  } else if (item.nodeType === 1) {
+                    const element = item as Element;
+                    if (element === code || element.tagName === 'BUTTON'
+                      || element.getAttribute('role') === 'button'
+                      || element.getAttribute('aria-hidden') === 'true'
+                      || element.hasAttribute('inert') || !visible(element)) continue;
+                    visitLabel(element);
+                  }
+                }
+              };
+              visitLabel(child);
+              if (labels.length > 1 || labels.some((label) => !/^[A-Za-z][A-Za-z0-9_+#.-]{0,31}$/u.test(label))) {
+                return unsupported();
+              }
+              const codeText = (code as HTMLElement).innerText;
+              if (typeof codeText !== 'string') return unsupported();
+              const backtickRuns = codeText.match(/\x60+/gu) ?? [];
+              const fence = String.fromCharCode(96).repeat(Math.max(3, ...backtickRuns.map((run) => run.length + 1)));
+              blocks.push(fence + (labels[0] ?? '') + '\n' + codeText
+                + (codeText.endsWith('\n') ? '' : '\n') + fence);
+            }
+            return blocks.length > 0 ? { text: blocks.join('\n\n'), complete: true } : unsupported();
           };
           const rows: Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean; completionReady: boolean; continuationVisible: boolean }> = [];
           let observedAssistantNodes = 0;
@@ -1827,34 +1996,14 @@ export async function readPageObservation(
                 if (role === 'assistant') observedAssistantNodes += 1;
               }
               let text = (element as HTMLElement).innerText;
+              let rowComplete = true;
               if (role === 'assistant') {
-                // Preserve only text exposed by the code element's rendered innerText.
-                // textContent can include hidden descendants and is never publication evidence.
-                for (const code of Array.from(element.querySelectorAll('pre code'))) {
-                  if (code.getBoundingClientRect().height <= 0) continue;
-                  const visible = (code as HTMLElement).innerText;
-                  const lines = visible.split('\n');
-                  const firstLine = lines[0] ?? '';
-                  if (!firstLine || lines.length < 2 || text.includes(visible)) continue;
-                  // A unique, line-aligned prefix binds the code node to this outer message.
-                  const offset = text.indexOf(firstLine);
-                  if (offset < 0 || (offset > 0 && text[offset - 1] !== '\n')
-                    || text.indexOf(firstLine, offset + firstLine.length) !== -1) continue;
-                  let end = offset + firstLine.length;
-                  if (end < text.length && text[end] !== '\n') continue;
-                  let matchedLines = 1;
-                  while (matchedLines < lines.length) {
-                    const line = lines[matchedLines]!;
-                    const nextEnd = end + 1 + line.length;
-                    if (text[end] !== '\n' || !text.startsWith(line, end + 1)
-                      || (nextEnd < text.length && text[nextEnd] !== '\n')) break;
-                    end = nextEnd;
-                    matchedLines += 1;
-                  }
-                  if (matchedLines === lines.length) continue;
-                  // Keep the outer message's non-code prose and footer byte-for-byte.
-                  text = text.slice(0, offset) + visible + text.slice(end);
-                }
+                const hasLaterAssistant = elements.slice(domIndex + 1).some((later) =>
+                  later.querySelector(`[${args.roleAttribute}]`)?.getAttribute(args.roleAttribute)
+                    === args.assistantMessageStyle);
+                const serialized = serializeAssistant(element, !hasLaterAssistant);
+                text = serialized.text;
+                rowComplete = serialized.complete;
               }
               let completionReady = false;
               let continuationVisible = false;
@@ -1881,7 +2030,7 @@ export async function readPageObservation(
               } catch {
                 completionReady = false;
               }
-              rows.push({ role, text, key: canonicalKey(element), domIndex, complete: true, completionReady, continuationVisible });
+              rows.push({ role, text, key: canonicalKey(element), domIndex, complete: rowComplete, completionReady, continuationVisible });
             } catch {
               rows.push({ role: '', text: '', domIndex, complete: false, completionReady: false, continuationVisible: false });
             }
@@ -1911,11 +2060,13 @@ export async function readPageObservation(
           userMessageStyle: USER_MESSAGE_STYLE,
           unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
           assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
+        contentRootSelector: ASSISTANT_CONTENT_ROOT_SELECTOR,
           generationSelector: BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR,
           continuationSelector: CONTINUE_GENERATING_SELECTOR,
           turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
           inProgressSelector: ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
           actionSelector: ASSISTANT_TURN_ACTION_SELECTOR,
+        continuationSelector: CONTINUE_GENERATING_SELECTOR,
         }),
         snapshotWaitMs,
         'atomic_transcript_snapshot_timeout',
