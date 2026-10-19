@@ -615,3 +615,80 @@ describe('real Orca assignment target resolution', () => {
       .toEqual({ status: 'target_unresolved' });
   });
 });
+
+describe('Issue #2655 exact reboot evidence with adapter-unresolved assignment', () => {
+  it('admits an exact terminal/gone predecessor without a terminal-mail ledger', async () => {
+    const file = assignmentFile();
+    const expected = await publish(file, { bindingKey: 'ctx_3761867313e2', taskId: 'task_6af384b00044' });
+    const { adapter } = runtimeWith({
+      status: 'failed', operation: 'resolve_assignment_worker', reason: 'assignment_target_unresolved',
+    });
+    Object.defineProperty(adapter, 'observeAssignmentLifecycle', {
+      configurable: true,
+      value: vi.fn(() => ({
+        status: 'failed', operation: 'resolve_assignment_worker', reason: 'assignment_target_unresolved',
+      })),
+    });
+    const witness = vi.fn(async () => ({
+      taskId: 'task_6af384b00044', dispatchId: 'ctx_3761867313e2',
+      dispatchState: 'failed' as const, priorTerminalId: 'term-old', workerAbsent: true as const,
+    }));
+    expect(await admitCurrentWorkerAssignmentReplacement({
+      file, expected, adapter, requestedTerminalId: 'term-new', proveTerminalGone: witness,
+    })).toEqual({ status: 'replaceable', expected });
+    expect(witness).toHaveBeenCalledWith(expected);
+    expect(await admitCurrentWorkerAssignmentReplacement({
+      file, expected, adapter, requestedTerminalId: 'term-old', proveTerminalGone: witness,
+    })).toEqual({ status: 'target_unresolved', reason: 'terminal_reuse_unauthorized' });
+  });
+
+  it.each([
+    { name: 'foreign Dispatch', dispatchId: 'ctx_2055f1bb0511', state: 'failed', prior: 'term-old' },
+    { name: 'foreign Task', dispatchId: 'ctx_3761867313e2', taskId: 'task-other', state: 'failed', prior: 'term-old' },
+    { name: 'still dispatched', dispatchId: 'ctx_3761867313e2', state: 'dispatched', prior: 'term-old' },
+    { name: 'no former terminal', dispatchId: 'ctx_3761867313e2', state: 'failed', prior: '' },
+  ])('rejects $name as replacement evidence', async ({ dispatchId, taskId, state, prior }) => {
+    const file = assignmentFile();
+    const expected = await publish(file, { bindingKey: 'ctx_3761867313e2', taskId: 'task_6af384b00044' });
+    const { adapter } = runtimeWith({
+      status: 'failed', operation: 'resolve_assignment_worker', reason: 'assignment_target_unresolved',
+    });
+    const result = await admitCurrentWorkerAssignmentReplacement({
+      file, expected, adapter, proveTerminalGone: async () => ({
+        taskId: taskId ?? expected.taskId, dispatchId,
+        dispatchState: state as 'failed', priorTerminalId: prior, workerAbsent: true,
+      }),
+    });
+    expect(result).toEqual({ status: 'target_unresolved' });
+  });
+
+  it('never substitutes a terminal witness for a live adapter worker or unknown lifecycle', async () => {
+    const file = assignmentFile();
+    const expected = await publish(file, { bindingKey: 'ctx_3761867313e2' });
+    const active = runtimeWith({ status: 'ok', value: { kind: 'gone' } });
+    Object.defineProperty(active.adapter, 'resolveAssignmentWorker', {
+      configurable: true,
+      value: vi.fn(() => ({ status: 'ok', value: { kind: 'resolved', worker: active.worker } })),
+    });
+    const witness = vi.fn(async () => ({
+      taskId: expected.taskId, dispatchId: expected.bindingKey,
+      dispatchState: 'failed' as const, priorTerminalId: 'term-old', workerAbsent: true as const,
+    }));
+    expect((await admitCurrentWorkerAssignmentReplacement({
+      file, expected, adapter: active.adapter, proveTerminalGone: witness,
+    })).status).toBe('skipped_live');
+    expect(witness).not.toHaveBeenCalled();
+
+    const unresolved = runtimeWith({
+      status: 'failed', operation: 'resolve_assignment_worker', reason: 'assignment_target_unresolved',
+    });
+    Object.defineProperty(unresolved.adapter, 'observeAssignmentLifecycle', {
+      configurable: true,
+      value: vi.fn(() => ({ status: 'ok', value: { kind: 'terminal', released: false } })),
+    });
+    expect(await admitCurrentWorkerAssignmentReplacement({
+      file, expected, adapter: unresolved.adapter, proveTerminalGone: witness,
+    })).toEqual({ status: 'target_unresolved' });
+    expect(witness).not.toHaveBeenCalled();
+  });
+});
