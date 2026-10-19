@@ -1,51 +1,94 @@
 # Coordinator fleet alarm
 
-Fleet sweep/wake is a per-project operator notifier. A selected agent pane
-whose **last non-empty content line** is `PARKED on <X>` is `PARKED`.
-Task binding, a separate `wait` object, a producer receipt, invocation index,
-owner/generation assertion or PID identity is **not** required. The last line
-wins over earlier scrollback and the regular busy/STOPPED classification.
+Fleet sweep/wake is an advisory **selected-project** tick, not a continuation,
+permission, reviewer, Task/Dispatch, merge, or completion authority. It reports
+observed facts so the existing manager/coordinator can independently re-check
+GitHub, Orca, and Browser-GPT send/no-resend state. A published review, comment,
+PR head, check result or terminal incident is progress for inspection, **not**
+evidence of the author's settled turn or completed task. Earlier-head green
+checks never establish current-head green. No cooldown, admission, tick interval,
+send ownership or scheduling policy changes in Issue #2661.
 
-A parked dependency is a plain event-name match: `X` is matched against the
-eligible terminal-envelope filename or invocation ID, a finished pack-review
-run, or a finished CI result. A match sends one ordinary `Wake: ... re-check`
-message to **that parked pane**, not an instruction to resume or resend a
-Browser-GPT turn. The only Wake safety exclusion is a pane detected as
-`suspected_bare_shell`: the notifier must never type Wake text into that
-shell (it could execute the line as a command). It sends one coordinator
-alarm identifying the pane instead. No other ownership, receipt, launcher,
-Task, process, generation or claimant proof is required. No receipt/locator
-index is maintained in the fleet notifier.
+## PARKED, factual Issue Wake, and exact launching-owner incidents
 
-Each successful named Wake records one simple `(pane,event)` sent marker.
-A repeat tick does not resend the same event to the same pane; a different
-pane parked on the same event can be woken independently. A changed event
-can generate another Wake. Any substring of a completed CI or pack-review
-event name (for example, `PR #42`) may match X; X need not spell the event
-type. The legacy PR-owner CI route is limited to STOPPED panes, so an
-unrelated PARKED pane is never woken and a matching one cannot receive the
-same CI completion through both routes. The normal 30-minute parked Reminder remains
-available for unresolved dependencies; a PARKED pane does **not** raise
-an immediate coordinator alarm for missing or unresolvable producer evidence.
+A pane's last **own** non-empty content line \`PARKED on <X>\` classifies it
+\`PARKED\` without a Task assignment, handoff receipt, process ID, generation
+or producer completeness requirement. Ignore older/quoted/historical park
+lines, newer own work and in-flight spinner lines. Preserve the #2485/#2473
+plain named-producer match against a landed terminal envelope, finished
+pack-review or finished CI event; a producer-name match is a re-check hint,
+never a Browser-GPT resend. Suspected bare-shell panes must receive **no**
+direct text/Enter; report a coordinator-only shell warning if available.
 
-Coordinator alarms are keyed by **individual pane state**, not the hash of
-the entire stopped-pane set. A pane becoming STOPPED or POLLING raises one
-alarm for that change; an unchanged pane is not re-alarmed merely because
-another pane changes between busy, PARKED and STOPPED. PARKED is silent
-until its existing 30-minute Reminder. Bare-shell suspicion produces one
-coordinator alarm per pane/state change. On coordinator replacement (handle
-or observed incarnation), unchanged actionable pane alarms must reach the new
-recipient. PERMISSION is recorded as an intervening per-pane state so a
-STOPPED -> PERMISSION -> STOPPED transition produces a new STOPPED alarm;
-its separate warning marks and ordinary reminder cadence remain unchanged.
-A failed advisory history write cannot erase an observed bare-shell alarm.
-ChatGPT banner and Run-mail notifications retain their separate routing
-and marks.
+**Issue-directed published GitHub progress** is a narrower separate route:
+current numbered WorkerAssignment must uniquely bind selected project and
+repository, the exact Issue, Task, Dispatch and its current live native
+worker, terminal handle, incarnation and worktree/branch. The unique current
+pane must itself be PARKED and send-safe. A matching PR must have exactly
+one unambiguous explicit closing target from Closes/Fixes/Resolves; \`Refs #A\`
+alone does not bind A. Thus \`Refs #A; Closes #B\` admits only B;
+references-only and conflicting distinct closers admit neither. A same-repo
+foreign Issue comment, stale/duplicate/unavailable assignment, Run objective,
+Task prose or guessed branch never selects an Issue Wake recipient. Independently
+verified same-Issue new comment/review, head H1-to-H2, or a current-head CI or
+pack-review change can cause one coalesced direct re-check **attempt per pane
+per tick**, even if the pane's local GPT turn record is stale. The manager
+then verifies the current head and its own unsent/unharvested turn separately.
 
-The notifier itself makes no GitHub, Task/Dispatch, scheduler or supervisor
-mutation and grants no authority to automatically continue, merge, retry or
-send a Browser-GPT prompt. The #2484 PERMISSION classification is separate
-from this park/wake policy and is not changed.
+**A valid not-ok terminal envelope** (\`lifecycle_outcome=incident\` or a
+present non-\`ok\` \`turn_result_state\`) can trigger an independent direct
+owner re-check. Correlate original attempt, invocation and envelope with the
+original handoff receipt's invocation/launching terminal/Task/Dispatch and
+corroborate the current exact selected-project native owner and assignment.
+The original verified launching pane is eligible even when STOPPED, PARKED
+or idle, with no named wait or cooldown expiry and no coordinator. The
+reported mgr-334/\`term_0dfb5c20\` incident is an example, **not** a
+host-reproduced cause. A bare terminal handle, envelope \`cwd\`, child
+worktree, title or receipt hint alone cannot prove ownership. Wrong,
+ambiguous, stale, recycled or unreadable identity means non-delivery;
+a valid success/ok envelope does not activate this failure-specific path.
+A not-ok envelope does not itself complete, fail or resend the child turn.
+
+Every independently due direct fact uses the incumbent episode/event marks.
+Persist \`attempted_unverified\` **before** a text/send effect; failed
+reservation means zero sends. Upgrade to \`sent\` only after both the text
+and submit actions are confirmed. Ambiguous submit or failed post-send
+upgrade preserves the uncertain mark and suppresses blind replay on the
+next tick; only existing positively confirmed non-delivery rearm is eligible.
+Independent later facts remain eligible. Revalidate current recipient near
+effect. Native sends are handle-only; in-send incarnation replacement and
+cross-tick transactional exactly-once receipt are **not** proved.
+
+## Missing units, coordinator absence, and reminders
+
+On a complete current native/Assignment/Task/Dispatch census, confirmed
+missing/gone previous panes plus positively replaceable #2655 evidence and
+nonterminal Issue work may produce a **coordinator-only recovery-needed**
+advisory, even with zero STOPPED panes. Unknown, partial, unreadable,
+foreign or live evidence proves no disappearance or completion and never
+licenses a new worker or replacement; #2655 remains the sole recovery owner.
+Coordinator-only STOPPED/POLLING, PERMISSION, missing-unit and Run-mail
+alarms require an exact present coordinator. With no coordinator, independently
+safe exact direct-pane Wake, owner-bound banner and existing pane Reminder
+can still be attempted. The tick returns \`no_orchestrator\` with actual
+\`paneWakeAttempts\`, \`paneWakeConfirmed\` and \`paneWakeNotConfirmed\`
+(counting every attempted pane delivery, including uncertain, with attempts
+equal to confirmed plus not-confirmed); that state means **no coordinator
+advisory delivered**, not that no safe pane was reached.
+
+STOPPED/POLLING coordinator alarms retain per-pane state transitions, and
+the ordinary unresolved PARKED reminder remains on **30-minute due slots**,
+including 0/30/60-minute observational checks. A reminder is a re-check,
+not a forced continuation. New, attributable progress can wake early;
+unchanged busy/live state grants no completion, unknown liveness is
+unverified, and positively gone/incomplete work requires coordinator
+investigation. A PARKED pane does not raise an immediate missing-producer
+alarm. Suspected bare shell never gets direct Wake text. Coordinator
+replacement (verified handle/incarnation) makes the new recipient eligible
+for unchanged actionable alarms. PERMISSION is a distinct intervening
+pane state; one-shot permission warnings do not change STOPPED/POLLING
+throttle, ordinary reminders, producer wakes or the existing cooldown.
+Local ChatGPT banners and Run mail retain their independent rules.
 
 ## Visible OpenCode permission UI (Issue #2484)
 
@@ -200,16 +243,18 @@ tail -f ~/.local/state/orchestrator-fleet/my-project.fleet-wake.log
 
 A healthy tick logs `nothing stopped` when there is no newly
 actionable pane. A project with no matching coordinator logs
-`normal fleet result: no orchestrator pane found` and returns without sending
-a Wake. STOPPED/POLLING alarms are per-pane and fire once per state transition.
+`normal fleet result: no orchestrator pane found` only after independently
+safe direct-pane Wakes/reminders/banners; coordinator-only alarms are not sent
+and the result includes actual direct-pane attempted/confirmed/uncertain counts. STOPPED/POLLING alarms are per-pane and fire once per state transition.
 Changes to another pane do not duplicate an existing alarm. PARKED never
 causes an immediate coordinator alarm; a matching producer event sends
 a direct re-check Wake to its pane, and an unresolved park receives its
 existing Reminder on elapsed 30-minute slots. `suspected_bare_shell`
 is the one exception: send no Wake text to the shell and alarm the
-coordinator once for that pane's state change. The notifier uses per-(pane,
-event) sent marks, not owner proofs or an alarm-set digest. An unreadable
-required pane screen skips that sweep tick.
+coordinator once for that pane's state change. The plain named-PARKED route uses per-(pane,event) marks; the separate
+Issue-directed and original-owner not-ok envelope routes require exact live
+ownership. Failed reads suppress only routes lacking their required evidence,
+not other independently safe recipient sends.
 
 ### Unsaved ChatGPT local banners — Issue #2471
 

@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from 'vitest';
 import * as subprocess from '../kernel/subprocess.ts';
 import { runProcess } from '../kernel/subprocess.ts';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
+import { openCodeControlFromCommand } from '../orca-runtime/adapter.ts';
+import { lastFleetParkedLine, ownPaneOutcome } from '../fleet/fleet-sweep.ts';
 import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import { runSupervisedWorkerStart, type SupervisedWorkerStartResult } from './supervised-worker-start.ts';
@@ -25,6 +27,7 @@ import {
   finalizeOpenCodeExecutorProfile,
   parseOpenCodePrimaryProbeArgs,
   runOpenCodePrimaryProbe,
+  runExistingOpenCodeResume,
   runSupervisedTaskLaunchAssistant,
   LAUNCH_STARTUP_OBSERVATION_WINDOW_MS,
   CANONICAL_MERGE_LAUNCH_COMMAND,
@@ -33,6 +36,7 @@ import {
   type EdgeResult,
   type LaunchDependencies,
   type LaunchInput,
+  type OpenCodeResumeDependencies,
 } from './supervised-task-launch-assistant.ts';
 import {
   buildExecutorCommand,
@@ -4302,5 +4306,372 @@ describe('Issue #2655 r02 AppliedIn #118 same Task terminal identity retry', () 
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+
+describe('Issue #2661 B5 existing-session exact intent, census, and safe restart', () => {
+  const projectId = 'orchestrator-pack';
+  const repository = 'chetwerikoff/orchestrator-pack';
+  const workspace = '/tmp/opk-2661-selected-workspace';
+  const otherWorkspace = '/tmp/opk-2661-other-workspace';
+  const session = 'ses_2661requested';
+  type NativePane = {
+    handle: string;
+    incarnationId: string;
+    worktreePath: string;
+    title: string;
+    status: string;
+    command: string;
+  };
+  type FailureMode = 'healthy' | 'first-hang' | 'two-hangs' | 'stop-fails'
+    | 'gone-unverified' | 'early-gone' | 'liveness-unknown' | 'generation-drift';
+
+  function resumeFixture(mode: FailureMode = 'healthy') {
+    const events: string[] = [];
+    const nativePanes: NativePane[] = [];
+    const spawnedCommands: string[] = [];
+    const queriedUrls: string[] = [];
+    const assignment: WorkerAssignment = {
+      schema: 'orchestrator-pack/worker-assignment/v1',
+      projectId, repository, issueNumber: 2661,
+      taskId: 'task-2661', assignmentId: 'assignment-2661', generation: 1,
+      kind: 'local', provider: 'orca', bindingKey: 'dispatch-2661',
+      role: 'orchestrator', createdAtUtc: '2026-10-19T00:00:00.000Z',
+    };
+    const state: {
+      assignments: WorkerAssignment[];
+      catalog: string[];
+      unreadableList: boolean;
+      extraPane: NativePane | null;
+      refuseProfile: boolean;
+      stopReturned: boolean;
+    } = {
+      assignments: [], catalog: [session], unreadableList: false, extraPane: null,
+      refuseProfile: false, stopReturned: false,
+    };
+    const asResult = (result: Record<string, unknown>) => ({ ok: true, result });
+    const native = ((args: readonly string[]): OrcaJsonResponse => {
+      const operation = args.slice(0, 2).join(' ');
+      events.push(operation);
+      if (operation === 'terminal list') {
+        if (state.unreadableList) return asResult({ terminals: null, totalCount: 0, truncated: true });
+        const selected = [...nativePanes, ...(state.extraPane ? [state.extraPane] : [])];
+        const worktreeIndex = args.indexOf('--worktree');
+        const rows = worktreeIndex >= 0
+          ? selected.filter((pane) => pane.worktreePath === args[worktreeIndex + 1])
+          : selected;
+        return asResult({ terminals: rows, totalCount: rows.length, truncated: false });
+      }
+      if (operation === 'terminal create') {
+        const index = spawnedCommands.length + 1;
+        const command = args[args.indexOf('--command') + 1] ?? '';
+        const pane: NativePane = {
+          handle: 'term-b5-' + index,
+          incarnationId: 'native-inc-b5-' + index,
+          worktreePath: args[args.indexOf('--worktree') + 1] ?? '',
+          title: args[args.indexOf('--title') + 1] ?? '',
+          status: 'running',
+          command,
+        };
+        spawnedCommands.push(command);
+        nativePanes.push(pane);
+        events.push('created:' + pane.handle);
+        return asResult({ terminal: pane });
+      }
+      if (operation === 'terminal show') {
+        const handle = args[args.indexOf('--terminal') + 1] ?? '';
+        return asResult({ terminal: nativePanes.find((pane) => pane.handle === handle)
+          ?? (state.extraPane?.handle === handle ? state.extraPane : null) });
+      }
+      if (operation === 'terminal wait') {
+        const handle = args[args.indexOf('--terminal') + 1];
+        if (mode === 'early-gone' && handle === 'term-b5-1') {
+          return asResult({ wait: { status: 'exited', satisfied: false } });
+        }
+        if (mode === 'liveness-unknown' && handle === 'term-b5-1') {
+          return { ok: false, error: { code: 'unavailable', message: 'synthetic native wait unavailable' } };
+        }
+        return asResult({ wait: { status: 'running', satisfied: false } });
+      }
+      if (operation === 'terminal close') {
+        const handle = args[args.indexOf('--terminal') + 1];
+        events.push('closed:' + handle);
+        if (mode === 'stop-fails') {
+          return { ok: false, error: { code: 'permission_denied', message: 'synthetic close refused' } };
+        }
+        state.stopReturned = true;
+        const index = nativePanes.findIndex((pane) => pane.handle === handle);
+        if (index >= 0 && mode !== 'gone-unverified') nativePanes.splice(index, 1);
+        return asResult({ closed: true });
+      }
+      if (operation === 'orchestration worker-show') {
+        return asResult({
+          dispatch: { id: assignment.bindingKey, taskId: assignment.taskId, status: 'dispatched' },
+          terminal: { worktreePath: workspace },
+        });
+      }
+      return { ok: false, error: { code: 'unexpected_synthetic_operation', message: operation } };
+    }) as typeof import('../orca-runtime/native.ts').runOrcaJson;
+
+    // No fake "listener belongs to this worker" oracle: an unrelated responder
+    // with the exact same JSON is observationally indistinguishable.
+    const openCodeHttpRequest = ({ url }: { readonly url: string; readonly method: 'GET' | 'POST'; readonly timeoutMs: number }) => {
+      queriedUrls.push(url);
+      events.push('http-request');
+      const command = spawnedCommands.at(-1) ?? '';
+      const binding = openCodeControlFromCommand(command);
+      if (!binding || !url.startsWith(binding.url + '/')) {
+        throw new Error('synthetic wrong command-derived control URL');
+      }
+      const spawnIndex = spawnedCommands.length;
+      if ((mode === 'first-hang' && spawnIndex === 1) || mode === 'two-hangs'
+        || mode === 'stop-fails' || mode === 'gone-unverified'
+        || mode === 'generation-drift') {
+        if (mode === 'generation-drift' && nativePanes[0]) {
+          nativePanes[0].incarnationId = 'native-recycled-incarnation';
+        }
+        throw new Error('ECONNREFUSED synthetic selected port');
+      }
+      if (url.endsWith('/global/health')) return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.35' }) };
+      if (url.endsWith('/session?directory=' + encodeURIComponent(workspace))) {
+        return { status: 200, body: JSON.stringify(state.catalog.map((id) => ({ id, directory: workspace }))) };
+      }
+      throw new Error('synthetic wrong directory/session request');
+    };
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: native, openCodeHttpRequest,
+      env: { OPK_WAKE_SUPERVISOR_STATE_DIR: '/tmp/opk-2661-no-persisted-launch-owner' } });
+    const deps: OpenCodeResumeDependencies = {
+      adapter,
+      commandPreflight: () => ({ status: 'ok', value: true }),
+      repositoryPreflight: async () => ({ status: 'ok', value: true }),
+      resolveProfile: (_workClass, inherited, startMode) => state.refuseProfile
+        ? Promise.resolve({ status: 'continue', cause: 'executor_effort_channel_unavailable',
+          actor: 'operator', evidence: {},
+          nextAction: { kind: 'repair_executor_profile', note: 'synthetic pre-spawn refusal' } })
+        : resolveLiveExecutorProfile('manager', inherited, startMode, async (args) => opencodeProbeResult(args)),
+      finalizeProfile: async (profile, selectedWorkspace, requestedSession) => {
+        expect(selectedWorkspace).toBe(workspace);
+        const overlay = buildOpenCodeAgentOverlay({
+          agentName: 'pack-opk-b5-selected', model: profile.model, effort: profile.effort,
+          baseline: { name: 'build', mode: 'primary', prompt: 'synthetic benign task', permission: [] },
+          stateRoot: '/tmp/opk-2661-disposable-state', resumeSession: requestedSession,
+        });
+        return { status: 'ok', value: {
+          ...profile, launchCommand: overlay.command, agentName: overlay.agentName,
+          inlineConfigJson: overlay.inlineConfigJson,
+        } };
+      },
+      listAssignments: () => state.assignments,
+      assignmentWorkspace: async (row) => {
+        const result = native(['orchestration', 'worker-show', '--dispatch', row.bindingKey, '--json']);
+        const observation = result.ok ? result.result as {
+          dispatch?: { id?: string; taskId?: string };
+          terminal?: { worktreePath?: string };
+        } : null;
+        return observation?.dispatch?.id === row.bindingKey
+          && observation.dispatch.taskId === row.taskId
+          ? observation.terminal?.worktreePath ?? null : null;
+      },
+    };
+    const run = () => runExistingOpenCodeResume({
+      session, projectId, repository, workspace, env: opencodeProfileEnv('manager'),
+    }, deps);
+    return { run, deps, adapter, native, nativePanes, spawnedCommands,
+      queriedUrls, events, state, assignment };
+  }
+
+  it('B5 actual requested --session command, full selected overlay, and deliberate unassignment', async () => {
+    const f = resumeFixture();
+    f.state.catalog = [session, 'ses_wrongother'];
+    const result = await f.run();
+    expect(result).toMatchObject({
+      outcome: 'catalog_observed_unverified', cause: 'requested_session_directory_catalog_membership_only',
+      attempts: 1, unassigned: true, activeSelectionVerified: false, listenerOwnershipVerified: false,
+    });
+    expect(f.spawnedCommands).toHaveLength(1);
+    const command = f.spawnedCommands[0]!;
+    expect(command).toMatch(/ --session 'ses_2661requested'$/u);
+    expect(command.match(/--session /gu)).toHaveLength(1);
+    expect(command.match(/OPENCODE_CONFIG_CONTENT=/gu)).toHaveLength(1);
+    const binding = openCodeControlFromCommand(command);
+    expect(binding).toMatchObject({ session, agent: 'pack-opk-b5-selected' });
+    expect(f.queriedUrls).toEqual([
+      binding?.url + '/global/health',
+      binding?.url + '/session?directory=' + encodeURIComponent(workspace),
+    ]);
+    const inline = JSON.parse(command.match(/^OPENCODE_CONFIG_CONTENT='([^']+)'/u)?.[1] ?? '{}') as {
+      permission: Record<string, Record<string, string>>;
+      agent: Record<string, { model?: string; variant?: string; permission: Record<string, Record<string, string>> }>;
+    };
+    expect(inline.agent['pack-opk-b5-selected']).toMatchObject({
+      model: 'fixture-opencode-model', variant: 'fixture-opencode-effort',
+    });
+    for (const permission of [inline.permission, inline.agent.general?.permission,
+      inline.agent.explore?.permission, inline.agent['pack-opk-b5-selected']?.permission]) {
+      expect(permission?.read?.['*.env']).toBe('deny');
+      expect(permission?.read?.['*.env.*']).toBe('deny');
+    }
+    expect(openCodeLaunchHasFleetBrowserDenies({
+      command, agentName: 'pack-opk-b5-selected',
+      inlineConfigJson: JSON.stringify(inline),
+    })).toBe(true);
+    expect(f.nativePanes).toHaveLength(1);
+    expect(f.nativePanes[0]?.title).toBe('opk-resume-' + session);
+    expect(f.events.every((event) => !/orchestration (?:task|dispatch|run)-(?:create|start)/u.test(event))).toBe(true);
+    expect(f.state.assignments).toEqual([]);
+  });
+
+  it('B5 wrong-only catalog is non-ready and identical foreign same-session responder proves no owner', async () => {
+    const wrong = resumeFixture();
+    wrong.state.catalog = ['ses_otheronly'];
+    expect(await wrong.run()).toMatchObject({
+      outcome: 'continue', cause: 'resume_control_unavailable', attempts: 1,
+      activeSelectionVerified: false, listenerOwnershipVerified: false,
+    });
+    expect(wrong.spawnedCommands).toHaveLength(1);
+    expect(wrong.events).not.toContain('closed:term-b5-1');
+
+    // The returned bytes deliberately cannot tell a local listener from a
+    // foreign server that happens to list the requested session in this directory.
+    const foreign = resumeFixture();
+    foreign.state.catalog = [session, 'ses_another'];
+    const observation = await foreign.run();
+    expect(observation).toMatchObject({
+      outcome: 'catalog_observed_unverified', attempts: 1,
+      activeSelectionVerified: false, listenerOwnershipVerified: false,
+    });
+    expect(foreign.events).not.toContain('closed:term-b5-1');
+  });
+
+  it('B5 cross-adapter-instance unknown and ordinary no-session directory-only control', async () => {
+    const f = resumeFixture();
+    const observed = await f.run();
+    expect(observed.terminal).toBeDefined();
+    const fresh = new OrcaTaskRuntimeAdapter({
+      runJson: f.native,
+      openCodeHttpRequest: () => ({ status: 200, body: '[]' }),
+      env: { OPK_WAKE_SUPERVISOR_STATE_DIR: '/tmp/opk-2661-no-persisted-launch-owner' },
+    });
+    expect(fresh.openCodeHealth(observed.terminal!, { cwd: workspace })).toMatchObject({
+      status: 'unsupported', reason: 'runtime_opencode_control_unavailable',
+    });
+    const ordinary = f.adapter.spawnWorker({
+      title: 'ordinary-opencode', workspace,
+      command: "opencode --hostname 127.0.0.1 --port 47771 --agent 'general'",
+    }, { cwd: workspace });
+    expect(ordinary.status).toBe('ok');
+    if (ordinary.status === 'ok') {
+      f.state.catalog = ['ses_unrelated'];
+      expect(f.adapter.openCodeHealth(ordinary.value.identity, { cwd: workspace })).toMatchObject({
+        status: 'ok',
+      });
+    }
+  });
+
+  it('B5 full selected-workspace native worker and assignment/Dispatch census refuses incumbents', async () => {
+    for (const census of ['live', 'unknown', 'gone', 'foreign-worker', 'unreadable', 'duplicate'] as const) {
+      const f = resumeFixture();
+      if (census === 'unreadable') f.state.unreadableList = true;
+      else if (census === 'duplicate') {
+        f.state.extraPane = { handle: 'other', incarnationId: 'generation-a',
+          worktreePath: workspace, title: 'other', status: 'running', command: 'other' };
+        f.nativePanes.push({ ...f.state.extraPane });
+      } else f.state.extraPane = {
+        handle: 'incumbent', incarnationId: 'generation-incumbent',
+        worktreePath: census === 'foreign-worker' ? otherWorkspace : workspace,
+        title: 'native-existing', status: 'running', command: 'other',
+      };
+      if (census === 'unknown') {
+        const value = await f.run();
+        expect(value).toMatchObject({ outcome: 'continue', attempts: 0,
+          cause: 'resume_incumbent_or_assignment_unverified' });
+      } else if (census === 'gone') {
+        // A positively gone old native worker does not release a replaceable Dispatch.
+        f.state.assignments = [f.assignment];
+        f.state.extraPane = null;
+        expect(await f.run()).toMatchObject({ attempts: 0,
+          cause: 'resume_incumbent_or_assignment_unverified' });
+      } else if (census === 'foreign-worker') {
+        expect((await f.run()).outcome).toBe('catalog_observed_unverified');
+      } else {
+        expect(await f.run()).toMatchObject({ attempts: 0,
+          cause: 'resume_incumbent_or_assignment_unverified' });
+      }
+      if (census !== 'foreign-worker') expect(f.spawnedCommands).toHaveLength(0);
+    }
+    for (const type of ['active', 'unknown', 'still-2655-replaceable',
+      'wrong-metadata', 'assignment-list-unreadable'] as const) {
+      const f = resumeFixture();
+      if (type === 'assignment-list-unreadable') {
+        f.deps.listAssignments = () => null;
+      } else {
+        f.state.assignments = [type === 'wrong-metadata'
+          ? { ...f.assignment, bindingKey: '' } : f.assignment];
+      }
+      expect(await f.run()).toMatchObject({ outcome: 'continue',
+        cause: 'resume_incumbent_or_assignment_unverified', attempts: 0 });
+      expect(f.spawnedCommands).toHaveLength(0);
+    }
+  });
+
+  it('B5 first port hang then healthy resume', async () => {
+    const f = resumeFixture('first-hang');
+    f.state.catalog = [session, 'ses_wrongother'];
+    const result = await f.run();
+    expect(result).toMatchObject({
+      outcome: 'catalog_observed_unverified', attempts: 2,
+      unassigned: true, activeSelectionVerified: false, listenerOwnershipVerified: false,
+    });
+    expect(f.spawnedCommands).toHaveLength(2);
+    expect(f.spawnedCommands[1]).toBe(f.spawnedCommands[0]);
+    expect(f.events.filter((event) => event === 'terminal close')).toHaveLength(1);
+    const firstSpawn = f.events.indexOf('created:term-b5-1');
+    const closed = f.events.indexOf('closed:term-b5-1');
+    const secondSpawn = f.events.indexOf('created:term-b5-2');
+    expect(firstSpawn).toBeGreaterThanOrEqual(0);
+    expect(closed).toBeGreaterThan(firstSpawn);
+    expect(secondSpawn).toBeGreaterThan(closed);
+    expect(f.events.slice(closed + 1, secondSpawn).filter((event) => event === 'terminal list').length)
+      .toBeGreaterThan(0); // separately observed gone and renewed full exclusion
+    expect(f.nativePanes.map((pane) => pane.handle)).toEqual(['term-b5-2']);
+    expect(f.queriedUrls.at(-1)).toContain('/session?directory=');
+  });
+
+  it('B5 hung startup fails closed', async () => {
+    const expected = [
+      ['two-hangs', 'resume_control_unavailable', 2, 1],
+      ['stop-fails', 'resume_stop_unverified', 1, 1],
+      ['gone-unverified', 'resume_gone_unverified', 1, 1],
+      ['early-gone', 'resume_worker_liveness_unverified', 1, 0],
+      ['liveness-unknown', 'resume_worker_liveness_unverified', 1, 0],
+      ['generation-drift', 'resume_worker_identity_unverified', 1, 0],
+    ] as const;
+    for (const [mode, cause, attempts, closeCount] of expected) {
+      const f = resumeFixture(mode);
+      const observation = await f.run();
+      expect(observation).toMatchObject({
+        outcome: 'continue', cause, attempts,
+        activeSelectionVerified: false, listenerOwnershipVerified: false,
+      });
+      expect(f.spawnedCommands).toHaveLength(attempts);
+      expect(f.events.filter((event) => event === 'terminal close')).toHaveLength(closeCount);
+      expect(f.spawnedCommands.length).toBeLessThanOrEqual(2);
+    }
+    const refusal = resumeFixture();
+    refusal.state.refuseProfile = true;
+    expect(await refusal.run()).toMatchObject({ outcome: 'continue',
+      cause: 'executor_effort_channel_unavailable', attempts: 0 });
+    expect(refusal.spawnedCommands).toHaveLength(0);
+  });
+
+  it('B4 own-last-line synthetic GPT PARKED excludes an in-flight spinner', () => {
+    expect(lastFleetParkedLine('older text\nPARKED on GPT turn invocation-2661')).toBe(
+      'PARKED on GPT turn invocation-2661',
+    );
+    expect(lastFleetParkedLine('⠋ PARKED on GPT turn invocation-2661')).toBeUndefined();
+    expect(ownPaneOutcome('⠋ PARKED on GPT turn invocation-2661').wait).toBeUndefined();
+    expect(lastFleetParkedLine('PARKED on GPT turn invocation-2661\nAssistant: newer own response'))
+      .toBeUndefined();
   });
 });
