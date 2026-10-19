@@ -353,7 +353,7 @@ function readOnlyCorrectionCause(value: string): boolean {
 // attribution of a GitHub effect to the inspected Browser-GPT invocation.
 function exactRetainedIssueIdentity(value: JsonRecord, context: ExecuteIssueManagerBoundaryContext): boolean {
   if (!text(context.profile) || !text(context.invocationId)
-    || !/^[^\\s/]+\\/[^\\s/]+$/u.test(text(context.repository))
+    || !/^[^\s/]+\/[^\s/]+$/u.test(text(context.repository))
     || !Number.isSafeInteger(context.issueNumber) || context.issueNumber <= 0) return false;
   for (const [key, expected] of [
     ['configured_profile_key', context.profile], ['profile', context.profile],
