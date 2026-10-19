@@ -132,8 +132,10 @@ For manager continuation, the exact Run/Task and caller-supplied
 worktree selector must identify one manager-local non-main branch owned by exactly
 one worktree. A clean ancestor can follow the assistant's ff-only `origin/main`
 refresh. An existing dirty checkout instead requires native exact Run/Task
-membership and one matching open Issue-closing PR with same branch and HEAD;
-recheck unchanged status bytes and do not refresh it. Fresh manager worktrees
+membership and either old-terminal/gone producer worktree ownership for the
+current Issue assignment or one matching open Issue-closing PR with the same
+branch and HEAD. Recheck unchanged status bytes and do not refresh it.
+Fresh manager worktrees
 must be clean. Never reset, stash, rebase, merge, force-repair, replace the
 worktree, or mutate the shared primary checkout as recovery.
 
