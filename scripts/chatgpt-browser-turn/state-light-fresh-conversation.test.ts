@@ -386,6 +386,75 @@ describe('state-light fresh conversation collision recovery', () => {
     vi.restoreAllMocks();
   });
 
+  // Exercise the real held-Page GET witness, wrapper and finalizer (not a
+  // fabricated TerminalEnvelope). The request must be from this exact Page.
+  function installExistingChatFetch429(page: any) {
+    const events = new EventEmitter();
+    page.on = events.on.bind(events);
+    page.off = events.off.bind(events);
+    const request = {
+      url: () => 'https://chatgpt.com/backend-api/conversations/11111111-1111-4111-8111-111111111111',
+      method: () => 'GET',
+    };
+    return () => {
+      events.emit('request', request);
+      events.emit('response', { request: () => request, status: () => 429 });
+    };
+  }
+
+  it('AC12 closes only a freshly opened existing-chat Page after a witnessed pre-Send fetch 429', async () => {
+    const fixture = makeLoserPage('NO-SEND-429', 'NEVER-SEND');
+    const notify429 = installExistingChatFetch429(fixture.page);
+    const goto = fixture.page.goto.getMockImplementation()!;
+    fixture.page.goto.mockImplementation(async (target: string) => {
+      await goto(target);
+      notify429(); // own-GET response follows this invocation's opening.
+    });
+    enqueueBrowserForTurn(mocks, fixture.page);
+    const output = join(stateDir, 'fetch-429-owned.txt');
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', output,
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '60000',
+      '--poll-ms', '1',
+    ]);
+    expect(outcome.result).toMatchObject({
+      state: 'rate_limit', cause: 'conversation_fetch_http_429',
+      send_count: 0, cleanup: 'confirmed',
+    });
+    expect(outcome.result.send_attempted).not.toBe(true);
+    expect(fixture.page.close).toHaveBeenCalledTimes(1);
+    expect(fixture.sendButton.click).not.toHaveBeenCalled();
+  });
+
+  it('AC12 preserves a selected pre-existing 429 Page and its sibling', async () => {
+    const fixture = makeLoserPage('NO-SEND-EXISTING', 'NEVER-SEND');
+    fixture.page.url.mockImplementation(() => SHARED_CONV);
+    const notify429 = installExistingChatFetch429(fixture.page);
+    const originalLocator = fixture.page.locator.getMockImplementation()!;
+    let triggered = false;
+    fixture.page.locator.mockImplementation((selector: string) => {
+      if (!triggered) { triggered = true; notify429(); }
+      return originalLocator(selector);
+    });
+    const sibling = { url: () => LOSER_CONV, close: vi.fn(async () => undefined) };
+    const harness = enqueueBrowserForTurn(mocks, fixture.page);
+    Object.assign(harness.context, { pages: vi.fn(() => [fixture.page, sibling]) });
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', join(stateDir, 'fetch-429-preexisting.txt'),
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '60000',
+      '--poll-ms', '1',
+    ]);
+    expect(outcome.result.send_count).toBe(0);
+    expect(fixture.page.close).not.toHaveBeenCalled();
+    expect(sibling.close).not.toHaveBeenCalled();
+  });
+
   it('serializes conversation claims so only the owner holds the shared surface', () => {
     const profileKey = 'collision-profile';
     expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'winner')).toBe('claimed');
