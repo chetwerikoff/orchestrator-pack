@@ -4946,7 +4946,9 @@ export async function maybeAdmitPackReviewBodyAmendment(
       || priorRun.canonicalRepository?.toLowerCase() !== options.repoSlug.toLowerCase()
       || priorRun.journalOutcome?.state !== 'persisted'
       || priorRun.deliveryOutcomes.githubComment?.state !== 'succeeded') {
-    return failure('amendment_original_terminal_unverified');
+    // Leave legacy unchanged-body and unverified routes to the existing #2565 full-body guard.
+    // A new review is never authorized without the complete original terminal evidence.
+    return null;
   }
   const boundDigest = priorRun.boundIssueSnapshotDigest
     ?? priorRun.reviewRound?.boundIssueSnapshotDigest
@@ -4962,7 +4964,9 @@ export async function maybeAdmitPackReviewBodyAmendment(
       || (boundDigest && frozen.snapshotHash !== boundDigest)
       || (cycle.amendmentOrigin && frozen.snapshotHash !== cycle.amendmentOrigin.amendedBodyDigest)
       || (priorRun.reviewRound && priorRun.reviewRound.issueNumber !== issueNumber)) {
-    return failure('amendment_original_snapshot_unverified');
+    // The existing #2565 binding guard owns missing/corrupt originals; do not
+    // pre-empt unrelated final-cap settlement with amendment-only requirements.
+    return null;
   }
   const oldBody = readFileSync(frozen.snapshotPath, 'utf8');
   if (nextDigest === frozen.snapshotHash) return null;
@@ -9083,7 +9087,12 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     } else if (!worktree) {
       await createReviewWorktree(
         target.sourceRepoRoot, storeRoot, run.id, target.headSha,
-        (allocatedTarget) => { worktree = allocatedTarget; },
+        (allocatedTarget) => {
+           worktree = allocatedTarget;
+           // Persist exact ownership before `git worktree add`: even a post-add
+           // exception must leave the owned checkout eligible for outer finally.
+           updatePackReviewRun(run.id, { reviewTargetRoot: allocatedTarget }, { projectId, storeRoot });
+         },
         input.fixtureAfterReviewWorktreeAdd,
       );
     }
