@@ -348,7 +348,7 @@ describe('DOM observation boundary', () => {
   ): any {
     const children: any[] = [];
     const node: any = {
-      tagName, innerText, textContent: innerText, children, childNodes: [] as any[],
+      nodeType: 1, tagName, innerText, textContent: innerText, children, childNodes: [] as any[],
       parentElement: null, attributes: attrs, shown,
       ownerDocument: {
         defaultView: {
