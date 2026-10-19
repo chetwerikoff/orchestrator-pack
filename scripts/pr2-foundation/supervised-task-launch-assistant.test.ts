@@ -4349,12 +4349,15 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       unknownIncumbent: boolean;
       goneIncumbent: boolean;
       workerShowUnknown: boolean;
+      catalogShape: 'normal' | 'empty' | 'malformed' | 'wrong-directory';
+      injectAssignmentAfterStop: boolean;
       stopReturned: boolean;
     } = {
       assignments: [], catalog: [session], unreadableList: false, extraPane: null,
       refuseProfile: false, assignmentsReadable: true,
       unknownIncumbent: false, goneIncumbent: false,
-      workerShowUnknown: false, stopReturned: false,
+      workerShowUnknown: false, catalogShape: 'normal',
+      injectAssignmentAfterStop: false, stopReturned: false,
     };
     const asResult = (result: Record<string, unknown>) => ({ ok: true, result });
     const native = ((args: readonly string[]): OrcaJsonResponse => {
@@ -4367,6 +4370,9 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
         const rows = worktreeIndex >= 0
           ? selected.filter((pane) => pane.worktreePath === args[worktreeIndex + 1])
           : selected;
+        if (state.stopReturned && !selected.some((pane) => pane.handle === 'term-b5-1')) {
+          events.push('gone-readback:term-b5-1');
+        }
         return asResult({ terminals: rows, totalCount: rows.length, truncated: false });
       }
       if (operation === 'terminal create') {
@@ -4415,6 +4421,7 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
         state.stopReturned = true;
         const index = nativePanes.findIndex((pane) => pane.handle === handle);
         if (index >= 0 && mode !== 'gone-unverified') nativePanes.splice(index, 1);
+        if (state.injectAssignmentAfterStop) state.assignments = [assignment];
         return asResult({ closed: true });
       }
       if (operation === 'orchestration worker-show') {
@@ -4450,7 +4457,10 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       }
       if (url.endsWith('/global/health')) return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.35' }) };
       if (url.endsWith('/session?directory=' + encodeURIComponent(workspace))) {
-        return { status: 200, body: JSON.stringify(state.catalog.map((id) => ({ id, directory: workspace }))) };
+        if (state.catalogShape === 'malformed') return { status: 200, body: '{invalid-fixture-json' };
+        if (state.catalogShape === 'empty') return { status: 200, body: '[]' };
+        return { status: 200, body: JSON.stringify(state.catalog.map((id) => ({ id,
+          directory: state.catalogShape === 'wrong-directory' ? otherWorkspace : workspace }))) };
       }
       throw new Error('synthetic wrong directory/session request');
     };
@@ -4461,9 +4471,9 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       commandPreflight: () => ({ status: 'ok', value: true }),
       repositoryPreflight: async () => ({ status: 'ok', value: true }),
       resolveProfile: (_workClass, inherited, startMode) => state.refuseProfile
-        ? Promise.resolve({ status: 'continue', cause: 'executor_effort_channel_unavailable',
-          actor: 'operator', evidence: {},
-          nextAction: { kind: 'repair_executor_profile', note: 'synthetic pre-spawn refusal' } })
+        ? Promise.resolve({ status: 'continue' as const, cause: 'executor_effort_channel_unavailable',
+          actor: 'operator' as const, evidence: {},
+          nextAction: { kind: 'repair_executor_profile' as const, note: 'synthetic pre-spawn refusal' } })
         : resolveLiveExecutorProfile('manager', inherited, startMode, async (args) => opencodeProbeResult(args)),
       finalizeProfile: async (profile, selectedWorkspace, requestedSession) => {
         expect(selectedWorkspace).toBe(workspace);
@@ -4546,6 +4556,15 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
     });
     expect(wrong.spawnedCommands).toHaveLength(1);
     expect(wrong.events).not.toContain('closed:term-b5-1');
+    for (const catalogShape of ['empty', 'malformed', 'wrong-directory'] as const) {
+      const f = resumeFixture();
+      f.state.catalogShape = catalogShape;
+      expect(await f.run()).toMatchObject({
+        outcome: 'continue', cause: 'resume_control_unavailable', attempts: 1,
+      });
+      expect(f.events).not.toContain('closed:term-b5-1');
+      expect(f.spawnedCommands).toHaveLength(1);
+    }
 
     // The returned bytes deliberately cannot tell a local listener from a
     // foreign server that happens to list the requested session in this directory.
@@ -4656,6 +4675,7 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
     expect(firstSpawn).toBeGreaterThanOrEqual(0);
     expect(closed).toBeGreaterThan(firstSpawn);
     expect(secondSpawn).toBeGreaterThan(closed);
+    expect(f.events.slice(closed + 1, secondSpawn)).toContain('gone-readback:term-b5-1');
     expect(f.events.slice(closed + 1, secondSpawn).filter((event) => event === 'terminal list').length)
       .toBeGreaterThan(0); // separately observed gone and renewed full exclusion
     expect(f.nativePanes.map((pane) => pane.handle)).toEqual(['term-b5-2']);
@@ -4682,11 +4702,24 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       expect(f.events.filter((event) => event === 'terminal close')).toHaveLength(closeCount);
       expect(f.spawnedCommands.length).toBeLessThanOrEqual(2);
     }
+    const afterStop = resumeFixture('first-hang');
+    afterStop.state.injectAssignmentAfterStop = true;
+    expect(await afterStop.run()).toMatchObject({
+      outcome: 'continue', cause: 'resume_incumbent_or_assignment_unverified', attempts: 1,
+    });
+    expect(afterStop.spawnedCommands).toHaveLength(1);
+    expect(afterStop.events).toContain('closed:term-b5-1');
     const refusal = resumeFixture();
     refusal.state.refuseProfile = true;
     expect(await refusal.run()).toMatchObject({ outcome: 'continue',
       cause: 'executor_effort_channel_unavailable', attempts: 0 });
     expect(refusal.spawnedCommands).toHaveLength(0);
+    const invalid = resumeFixture();
+    expect(await runExistingOpenCodeResume({
+      session: 'invalid_session_token', projectId, repository, workspace,
+      env: opencodeProfileEnv('manager'),
+    }, invalid.deps)).toMatchObject({ cause: 'resume_input_invalid', attempts: 0 });
+    expect(invalid.spawnedCommands).toHaveLength(0);
   });
 
   it('B4 own-last-line synthetic GPT PARKED excludes an in-flight spinner', () => {
