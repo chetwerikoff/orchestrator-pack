@@ -3514,6 +3514,21 @@ async function runTurnCore(
   };
   // Fresh preparation owns its internal goto. Intercept its existing counter hook
   // immediately before that goto without modifying the excluded helper module.
+  const ownedPreSendFetch429CleanupFields = (
+    state: TurnState, cause: string,
+  ): Pick<TurnRunOutcome, 'ownedPreSendFetch429Page' | 'ownedPreSendFetch429Url'> => (
+    state === 'rate_limit' && cause === 'conversation_fetch_http_429'
+    && held429Witness?.current()?.wall_kind === 'conversation_fetch_http_429'
+    && held429Witness.current()?.http_status === 429
+    && !afterSend && !sendAttempted && sendCount === 0
+    && !ownershipForfeited && page === invocationCreatedExistingChatPage
+    && Boolean(invocationCreatedExistingChatUrl)
+    && !cleanupAuthorityUnprovenPages.has(page)
+    && !browserOrPageDefinitelyLost(page, browser)
+    && readOwnedConversationIdentity(page, invocationCreatedExistingChatUrl!).matched
+      ? { ownedPreSendFetch429Page: page, ownedPreSendFetch429Url: invocationCreatedExistingChatUrl }
+      : {}
+  );
   const guardedFreshPreparationNavigation = new Proxy(navigation, {
     get(target, property, receiver) {
       if (property === 'recordGoto') return () => {
@@ -5085,6 +5100,7 @@ async function runTurnCore(
         incident('invocation_blocker', composerState.cause, 'return_local_error');
         return {
           page, browser,
+          ...ownedPreSendFetch429CleanupFields(composerState.state, composerState.cause),
           result: compactResult(
             composerState.state, 'invocation', composerState.cause, invocationId,
             profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed,
