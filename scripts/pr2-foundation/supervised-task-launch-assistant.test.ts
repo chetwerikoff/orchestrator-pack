@@ -2909,7 +2909,7 @@ The words Firefighter universal appear here only as prose.`;
       worktreeSelector: 'id:repo::existing',
       managerRefresh: true,
     }, fixture.execute);
-    expect(result).toMatchObject({ status: 'continue', cause: 'manager_worktree_dirty' });
+    expect(result).toMatchObject({ status: 'continue', cause: 'worktree_reuse_ownership_unproven' });
     expect(fixture.head()).toBe('1'.repeat(40));
     expect(fixture.mergeTransitions()).toBe(0);
     expect(fixture.calls.some((args) => args[0] === 'git' && args[1] === 'merge')).toBe(false);
@@ -3572,7 +3572,7 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
       expect(fixture.head()).toBe('1'.repeat(40));
       expect(fixture.mergeTransitions()).toBe(0);
       expect(fixture.calls.filter((argv) =>
-        argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toHaveLength(2);
+        argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toHaveLength(1);
       expect(fixture.calls.some((argv) =>
         argv[0] === 'git' && ['merge', 'reset', 'stash', 'rebase'].includes(argv[1]!))).toBe(false);
     } finally {
@@ -3591,7 +3591,7 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
     expect(outcome).toMatchObject({ status: 'continue', cause: 'worktree_reuse_ownership_unproven' });
     expect(fixture.head()).toBe('1'.repeat(40));
     expect(fixture.mergeTransitions()).toBe(0);
-    expect(fixture.calls.filter((argv) => argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toHaveLength(2);
+    expect(fixture.calls.filter((argv) => argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toHaveLength(1);
     expect(fixture.calls.some((argv) => argv[0] === 'git' && ['merge', 'reset', 'rebase'].includes(argv[1]!))).toBe(false);
   });
 
@@ -3611,7 +3611,7 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
       managerRefresh: true, worktreeSelector: 'id:repo::existing',
     }, fixture.execute);
-    expect(outcome).toMatchObject({ status: 'continue', cause: 'manager_worktree_dirty' });
+    expect(outcome).toMatchObject({ status: 'continue', cause: 'worktree_reuse_ownership_unproven' });
     expect(fixture.mergeTransitions()).toBe(0);
   });
   it('refuses fresh dirty manager worktree after setup without erasing test changes', async () => {
