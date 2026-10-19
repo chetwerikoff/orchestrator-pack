@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { hashIssueBodySnapshot } from './reviewer-contract-mapping.ts';
@@ -111,6 +111,8 @@ export function boundIssueSnapshotArtifactPaths(input: {
   issueNumber: number;
   stateBaseDir?: string;
   storeDirOverride?: string | null;
+  /** Exact immutable body digest; absent means legacy head-only selection. */
+  snapshotDigest?: string;
 }): { artifactDir: string; snapshotPath: string; metadataPath: string } {
   const prHeadSha = normalizeSha(input.prHeadSha);
   const artifactDir = join(
@@ -121,7 +123,19 @@ export function boundIssueSnapshotArtifactPaths(input: {
     `pr-${input.prNumber}`,
     prHeadSha.slice(0, 12),
   );
-  const baseName = `issue-${input.issueNumber}`;
+  const legacyName = `issue-${input.issueNumber}`;
+  let baseName = legacyName;
+  if (input.snapshotDigest !== undefined) {
+    if (!/^sha256:[a-f0-9]{64}$/.test(input.snapshotDigest)) {
+      throw new Error('bound Issue snapshot digest must be exact sha256:64-hex');
+    }
+    const old = readBoundIssueSnapshotMetadata(join(artifactDir, `${legacyName}.meta.json`));
+    // A historical B0 continues to resolve from its original bytes and path.
+    // B1 at the same head lives beside it, under the entire body digest.
+    if (old?.snapshotHash !== input.snapshotDigest) {
+      baseName = `${legacyName}-${input.snapshotDigest.slice('sha256:'.length)}`;
+    }
+  }
   return {
     artifactDir,
     snapshotPath: join(artifactDir, `${baseName}.md`),
@@ -146,6 +160,7 @@ export function captureBoundIssueSnapshot(input: {
   stateBaseDir?: string;
   storeDirOverride?: string | null;
   capturedAt?: string;
+  snapshotDigest?: string;
 }): BoundIssueSnapshotCaptureResult {
   if (!Number.isInteger(input.prNumber) || input.prNumber <= 0) {
     throw new Error('prNumber must be a positive integer');
@@ -158,6 +173,10 @@ export function captureBoundIssueSnapshot(input: {
     throw new Error('prHeadSha must be a git commit SHA');
   }
 
+  const snapshotHash = computeBoundIssueSnapshotHash(input.issueBody);
+  if (input.snapshotDigest !== undefined && input.snapshotDigest !== snapshotHash) {
+    throw new Error('bound Issue snapshot capture digest differs from exact body');
+  }
   const paths = boundIssueSnapshotArtifactPaths({
     projectId: input.projectId,
     prNumber: input.prNumber,
@@ -165,8 +184,8 @@ export function captureBoundIssueSnapshot(input: {
     issueNumber: input.issueNumber,
     stateBaseDir: input.stateBaseDir,
     storeDirOverride: input.storeDirOverride,
+    snapshotDigest: input.snapshotDigest,
   });
-  const snapshotHash = computeBoundIssueSnapshotHash(input.issueBody);
   const metadata: BoundIssueSnapshotMetadata = {
     schemaVersion: BOUND_ISSUE_SNAPSHOT_SCHEMA_VERSION,
     projectId: input.projectId,
@@ -256,6 +275,7 @@ export function loadValidatedBoundSnapshotBody(input: {
   snapshotFilePath: string;
   stateBaseDir?: string;
   storeDirOverride?: string | null;
+  snapshotDigest?: string;
 }): { body: string; snapshotHash: string; snapshotPath: string } {
   const resolved = resolveBoundIssueSnapshot({
     projectId: input.projectId,
@@ -264,6 +284,7 @@ export function loadValidatedBoundSnapshotBody(input: {
     issueNumber: input.issueNumber,
     stateBaseDir: input.stateBaseDir,
     storeDirOverride: input.storeDirOverride,
+    snapshotDigest: input.snapshotDigest,
   });
 
   if (resolved.status !== 'found' || !resolved.snapshotPath || !resolved.snapshotHash) {
@@ -294,8 +315,9 @@ export function resolveBoundIssueSnapshot(input: {
   issueNumber: number;
   stateBaseDir?: string;
   storeDirOverride?: string | null;
+  snapshotDigest?: string;
 }): BoundIssueSnapshotResolveResult {
-  const paths = boundIssueSnapshotArtifactPaths({
+  const legacy = boundIssueSnapshotArtifactPaths({
     projectId: input.projectId,
     prNumber: input.prNumber,
     prHeadSha: input.prHeadSha,
@@ -303,6 +325,343 @@ export function resolveBoundIssueSnapshot(input: {
     stateBaseDir: input.stateBaseDir,
     storeDirOverride: input.storeDirOverride,
   });
+  // A head-only lookup cannot choose B0 over B1 (or vice versa). Count
+  // candidate names, not only successfully parsed metadata, so corrupt or
+  // partially published siblings never silently weaken that guarantee.
+  const qualified = existsSync(legacy.artifactDir)
+    ? readdirSync(legacy.artifactDir).filter((name) =>
+      new RegExp(`^issue-${input.issueNumber}-[0-9a-f]{64}\\.meta\\.jsonimport { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { hashIssueBodySnapshot } from './reviewer-contract-mapping.ts';
+
+export const BOUND_ISSUE_SNAPSHOT_SCHEMA_VERSION = 1;
+export const BOUND_ISSUE_SNAPSHOT_STORE_REL = 'code-reviews/bound-issue-snapshots';
+export const BOUND_ISSUE_SNAPSHOT_CAPTURE_PHASE = 'review-preflight' as const;
+
+export interface BoundIssueSnapshotMetadata {
+  schemaVersion: typeof BOUND_ISSUE_SNAPSHOT_SCHEMA_VERSION;
+  projectId: string;
+  prNumber: number;
+  prHeadSha: string;
+  issueNumber: number;
+  snapshotHash: string;
+  capturedAt: string;
+  capturePhase: typeof BOUND_ISSUE_SNAPSHOT_CAPTURE_PHASE;
+}
+
+export interface BoundIssueSnapshotCaptureResult {
+  issueNumber: number;
+  snapshotPath: string;
+  metadataPath: string;
+  snapshotHash: string;
+  created: boolean;
+}
+
+export interface BoundIssueSnapshotResolveResult {
+  status: 'found' | 'missing' | 'corrupted';
+  snapshotPath: string | null;
+  metadataPath: string | null;
+  snapshotHash: string | null;
+  metadata: BoundIssueSnapshotMetadata | null;
+}
+
+export function computeBoundIssueSnapshotHash(issueBody: string): string {
+  return `sha256:${hashIssueBodySnapshot(issueBody)}`;
+}
+
+function verifyBoundIssueSnapshotBody(snapshotPath: string, expectedHash: string): boolean {
+  try {
+    const body = readFileSync(snapshotPath, 'utf8');
+    return computeBoundIssueSnapshotHash(body) === expectedHash;
+  } catch {
+    return false;
+  }
+}
+
+function readBoundIssueSnapshotMetadata(metadataPath: string): BoundIssueSnapshotMetadata | null {
+  try {
+    const parsed = JSON.parse(readFileSync(metadataPath, 'utf8')) as Partial<BoundIssueSnapshotMetadata>;
+    if (
+      parsed.schemaVersion !== BOUND_ISSUE_SNAPSHOT_SCHEMA_VERSION
+      || typeof parsed.snapshotHash !== 'string'
+      || !parsed.snapshotHash.startsWith('sha256:')
+      || typeof parsed.projectId !== 'string'
+      || typeof parsed.prNumber !== 'number'
+      || typeof parsed.prHeadSha !== 'string'
+      || typeof parsed.issueNumber !== 'number'
+      || typeof parsed.capturedAt !== 'string'
+      || parsed.capturePhase !== BOUND_ISSUE_SNAPSHOT_CAPTURE_PHASE
+    ) {
+      return null;
+    }
+    return parsed as BoundIssueSnapshotMetadata;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeSha(sha: string): string {
+  return sha.trim().toLowerCase();
+}
+
+function metadataMatchesRequestedBinding(
+  metadata: BoundIssueSnapshotMetadata,
+  requested: {
+    projectId: string;
+    prNumber: number;
+    prHeadSha: string;
+    issueNumber: number;
+  },
+): boolean {
+  return metadata.projectId === requested.projectId
+    && metadata.prNumber === requested.prNumber
+    && metadata.issueNumber === requested.issueNumber
+    && normalizeSha(metadata.prHeadSha) === normalizeSha(requested.prHeadSha);
+}
+
+export function resolveDefaultProjectId(env: NodeJS.ProcessEnv = process.env): string {
+  return (env.OPK_PROJECT_ID ?? 'orchestrator-pack').trim() || 'orchestrator-pack';
+}
+
+export function resolveBoundIssueSnapshotStoreDir(
+  projectId: string,
+  options: { stateBaseDir?: string; storeDirOverride?: string | null } = {},
+): string {
+  const override = options.storeDirOverride ?? process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR ?? null;
+  if (override) {
+    return override;
+  }
+  const baseDir = options.stateBaseDir ?? process.env.OPK_BASE_DIR?.trim() ?? join(homedir(), '.orchestrator-pack');
+  return join(baseDir, 'projects', projectId.trim() || 'orchestrator-pack', BOUND_ISSUE_SNAPSHOT_STORE_REL);
+}
+
+export function boundIssueSnapshotArtifactPaths(input: {
+  projectId: string;
+  prNumber: number;
+  prHeadSha: string;
+  issueNumber: number;
+  stateBaseDir?: string;
+  storeDirOverride?: string | null;
+  /** Exact immutable body digest; absent means legacy head-only selection. */
+  snapshotDigest?: string;
+}): { artifactDir: string; snapshotPath: string; metadataPath: string } {
+  const prHeadSha = normalizeSha(input.prHeadSha);
+  const artifactDir = join(
+    resolveBoundIssueSnapshotStoreDir(input.projectId, {
+      stateBaseDir: input.stateBaseDir,
+      storeDirOverride: input.storeDirOverride,
+    }),
+    `pr-${input.prNumber}`,
+    prHeadSha.slice(0, 12),
+  );
+  const legacyName = `issue-${input.issueNumber}`;
+  let baseName = legacyName;
+  if (input.snapshotDigest !== undefined) {
+    if (!/^sha256:[a-f0-9]{64}$/.test(input.snapshotDigest)) {
+      throw new Error('bound Issue snapshot digest must be exact sha256:64-hex');
+    }
+    const old = readBoundIssueSnapshotMetadata(join(artifactDir, `${legacyName}.meta.json`));
+    // A historical B0 continues to resolve from its original bytes and path.
+    // B1 at the same head lives beside it, under the entire body digest.
+    if (old?.snapshotHash !== input.snapshotDigest) {
+      baseName = `${legacyName}-${input.snapshotDigest.slice('sha256:'.length)}`;
+    }
+  }
+  return {
+    artifactDir,
+    snapshotPath: join(artifactDir, `${baseName}.md`),
+    metadataPath: join(artifactDir, `${baseName}.meta.json`),
+  };
+}
+
+function writeFileAtomically(targetPath: string, content: string): void {
+  const parent = dirname(targetPath);
+  mkdirSync(parent, { recursive: true });
+  const tempPath = `${targetPath}.${process.pid}.tmp`;
+  writeFileSync(tempPath, content, 'utf8');
+  renameSync(tempPath, targetPath);
+}
+
+export function captureBoundIssueSnapshot(input: {
+  projectId: string;
+  prNumber: number;
+  prHeadSha: string;
+  issueNumber: number;
+  issueBody: string;
+  stateBaseDir?: string;
+  storeDirOverride?: string | null;
+  capturedAt?: string;
+  snapshotDigest?: string;
+}): BoundIssueSnapshotCaptureResult {
+  if (!Number.isInteger(input.prNumber) || input.prNumber <= 0) {
+    throw new Error('prNumber must be a positive integer');
+  }
+  if (!Number.isInteger(input.issueNumber) || input.issueNumber <= 0) {
+    throw new Error('issueNumber must be a positive integer');
+  }
+  const prHeadSha = normalizeSha(input.prHeadSha);
+  if (!/^[0-9a-f]{7,40}$/.test(prHeadSha)) {
+    throw new Error('prHeadSha must be a git commit SHA');
+  }
+
+  const snapshotHash = computeBoundIssueSnapshotHash(input.issueBody);
+  if (input.snapshotDigest !== undefined && input.snapshotDigest !== snapshotHash) {
+    throw new Error('bound Issue snapshot capture digest differs from exact body');
+  }
+  const paths = boundIssueSnapshotArtifactPaths({
+    projectId: input.projectId,
+    prNumber: input.prNumber,
+    prHeadSha,
+    issueNumber: input.issueNumber,
+    stateBaseDir: input.stateBaseDir,
+    storeDirOverride: input.storeDirOverride,
+    snapshotDigest: input.snapshotDigest,
+  });
+  const metadata: BoundIssueSnapshotMetadata = {
+    schemaVersion: BOUND_ISSUE_SNAPSHOT_SCHEMA_VERSION,
+    projectId: input.projectId,
+    prNumber: input.prNumber,
+    prHeadSha,
+    issueNumber: input.issueNumber,
+    snapshotHash,
+    capturedAt: input.capturedAt ?? new Date().toISOString(),
+    capturePhase: BOUND_ISSUE_SNAPSHOT_CAPTURE_PHASE,
+  };
+
+  let created = false;
+  if (existsSync(paths.metadataPath)) {
+    const existing = readBoundIssueSnapshotMetadata(paths.metadataPath);
+    if (!existing) {
+      throw new Error(
+        `bound issue snapshot metadata corrupted for PR #${input.prNumber} head ${prHeadSha} issue #${input.issueNumber}`,
+      );
+    }
+    if (!metadataMatchesRequestedBinding(existing, {
+      projectId: input.projectId,
+      prNumber: input.prNumber,
+      prHeadSha,
+      issueNumber: input.issueNumber,
+    })) {
+      throw new Error(
+        `bound issue snapshot metadata binding mismatch for PR #${input.prNumber} head ${prHeadSha} issue #${input.issueNumber}`,
+      );
+    }
+    if (existing.snapshotHash !== snapshotHash) {
+      throw new Error(
+        `bound issue snapshot already captured for PR #${input.prNumber} head ${prHeadSha} issue #${input.issueNumber} with different content`,
+      );
+    }
+    if (!existsSync(paths.snapshotPath) || !verifyBoundIssueSnapshotBody(paths.snapshotPath, snapshotHash)) {
+      throw new Error(
+        `bound issue snapshot body corrupted for PR #${input.prNumber} head ${prHeadSha} issue #${input.issueNumber}`,
+      );
+    }
+  } else {
+    writeFileAtomically(paths.snapshotPath, input.issueBody);
+    writeFileAtomically(paths.metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+    created = true;
+  }
+
+  return {
+    issueNumber: input.issueNumber,
+    snapshotPath: paths.snapshotPath,
+    metadataPath: paths.metadataPath,
+    snapshotHash,
+    created,
+  };
+}
+
+export function captureBoundIssueSnapshotsFromPreflight(input: {
+  projectId: string;
+  prNumber: number;
+  prHeadSha: string;
+  specBodies: Array<{ issueNumber: number; body: string }>;
+  stateBaseDir?: string;
+  storeDirOverride?: string | null;
+}): BoundIssueSnapshotCaptureResult[] {
+  if (!Number.isInteger(input.prNumber) || input.prNumber <= 0) {
+    return [];
+  }
+  const prHeadSha = normalizeSha(input.prHeadSha);
+  if (!prHeadSha || prHeadSha === 'unknown' || !/^[0-9a-f]{7,40}$/.test(prHeadSha)) {
+    return [];
+  }
+
+  return input.specBodies.map((spec) => captureBoundIssueSnapshot({
+    projectId: input.projectId,
+    prNumber: input.prNumber,
+    prHeadSha,
+    issueNumber: spec.issueNumber,
+    issueBody: spec.body,
+    stateBaseDir: input.stateBaseDir,
+    storeDirOverride: input.storeDirOverride,
+  }));
+}
+
+export function loadValidatedBoundSnapshotBody(input: {
+  projectId: string;
+  prNumber: number;
+  prHeadSha: string;
+  issueNumber: number;
+  snapshotFilePath: string;
+  stateBaseDir?: string;
+  storeDirOverride?: string | null;
+  snapshotDigest?: string;
+}): { body: string; snapshotHash: string; snapshotPath: string } {
+  const resolved = resolveBoundIssueSnapshot({
+    projectId: input.projectId,
+    prNumber: input.prNumber,
+    prHeadSha: input.prHeadSha,
+    issueNumber: input.issueNumber,
+    stateBaseDir: input.stateBaseDir,
+    storeDirOverride: input.storeDirOverride,
+    snapshotDigest: input.snapshotDigest,
+  });
+
+  if (resolved.status !== 'found' || !resolved.snapshotPath || !resolved.snapshotHash) {
+    throw new Error(
+      `bound issue snapshot ${resolved.status} for PR #${input.prNumber} head ${input.prHeadSha} issue #${input.issueNumber}`,
+    );
+  }
+
+  const normalizedProvided = resolve(input.snapshotFilePath);
+  const normalizedResolved = resolve(resolved.snapshotPath);
+  if (normalizedProvided !== normalizedResolved) {
+    throw new Error(
+      'snapshot file path does not match resolver-validated bound snapshot artifact',
+    );
+  }
+
+  return {
+    body: readFileSync(resolved.snapshotPath, 'utf8'),
+    snapshotHash: resolved.snapshotHash,
+    snapshotPath: resolved.snapshotPath,
+  };
+}
+
+export function resolveBoundIssueSnapshot(input: {
+  projectId: string;
+  prNumber: number;
+  prHeadSha: string;
+  issueNumber: number;
+  stateBaseDir?: string;
+).test(name))
+    : [];
+  const hasLegacy = existsSync(legacy.snapshotPath) || existsSync(legacy.metadataPath);
+  if (input.snapshotDigest === undefined && qualified.length + Number(hasLegacy) > 1) {
+    return {
+      status: 'corrupted', snapshotPath: null, metadataPath: null,
+      snapshotHash: null, metadata: null,
+    };
+  }
+  const paths = input.snapshotDigest === undefined && !hasLegacy && qualified.length === 1
+    ? {
+        artifactDir: legacy.artifactDir,
+        metadataPath: join(legacy.artifactDir, qualified[0]!),
+        snapshotPath: join(legacy.artifactDir, qualified[0]!.replace(/\\.meta\\.json$/, '.md')),
+      }
+    : boundIssueSnapshotArtifactPaths(input);
 
   if (!existsSync(paths.snapshotPath) || !existsSync(paths.metadataPath)) {
     return {
@@ -330,7 +689,7 @@ export function resolveBoundIssueSnapshot(input: {
     prNumber: input.prNumber,
     prHeadSha: input.prHeadSha,
     issueNumber: input.issueNumber,
-  })) {
+  }) || (input.snapshotDigest !== undefined && metadata.snapshotHash !== input.snapshotDigest)) {
     return {
       status: 'corrupted',
       snapshotPath: null,
