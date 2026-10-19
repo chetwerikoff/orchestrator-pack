@@ -2083,7 +2083,7 @@ describe('state-light fresh conversation collision recovery', () => {
               const doc = { defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible' }) } };
               const node = (tagName: string, innerText: string, attrs: Record<string, string> = {}) => {
                 const value: any = {
-                  tagName, innerText, children: [] as any[], childNodes: [] as any[], parentElement: null,
+                  nodeType: 1, tagName, innerText, children: [] as any[], childNodes: [] as any[], parentElement: null,
                   ownerDocument: doc,
                   getClientRects: () => [{}], getBoundingClientRect: () => ({ height: 1 }),
                   getAttribute: (name: string) => attrs[name] ?? null,
