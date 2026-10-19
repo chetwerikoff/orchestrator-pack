@@ -4345,10 +4345,16 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       unreadableList: boolean;
       extraPane: NativePane | null;
       refuseProfile: boolean;
+      assignmentsReadable: boolean;
+      unknownIncumbent: boolean;
+      goneIncumbent: boolean;
+      workerShowUnknown: boolean;
       stopReturned: boolean;
     } = {
       assignments: [], catalog: [session], unreadableList: false, extraPane: null,
-      refuseProfile: false, stopReturned: false,
+      refuseProfile: false, assignmentsReadable: true,
+      unknownIncumbent: false, goneIncumbent: false,
+      workerShowUnknown: false, stopReturned: false,
     };
     const asResult = (result: Record<string, unknown>) => ({ ok: true, result });
     const native = ((args: readonly string[]): OrcaJsonResponse => {
@@ -4386,6 +4392,12 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       }
       if (operation === 'terminal wait') {
         const handle = args[args.indexOf('--terminal') + 1];
+        if (state.goneIncumbent && handle === 'incumbent') {
+          return asResult({ wait: { status: 'exited', satisfied: false } });
+        }
+        if (state.unknownIncumbent && handle === 'incumbent') {
+          return { ok: false, error: { code: 'unavailable', message: 'synthetic unknown incumbent' } };
+        }
         if (mode === 'early-gone' && handle === 'term-b5-1') {
           return asResult({ wait: { status: 'exited', satisfied: false } });
         }
@@ -4406,6 +4418,9 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
         return asResult({ closed: true });
       }
       if (operation === 'orchestration worker-show') {
+        if (state.workerShowUnknown) {
+          return { ok: false, error: { code: 'unavailable', message: 'synthetic Dispatch unreadable' } };
+        }
         return asResult({
           dispatch: { id: assignment.bindingKey, taskId: assignment.taskId, status: 'dispatched' },
           terminal: { worktreePath: workspace },
@@ -4462,7 +4477,7 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
           inlineConfigJson: overlay.inlineConfigJson,
         } };
       },
-      listAssignments: () => state.assignments,
+      listAssignments: () => state.assignmentsReadable ? state.assignments : null,
       assignmentWorkspace: async (row) => {
         const result = native(['orchestration', 'worker-show', '--dispatch', row.bindingKey, '--json']);
         const observation = result.ok ? result.result as {
@@ -4583,31 +4598,40 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
         title: 'native-existing', status: 'running', command: 'other',
       };
       if (census === 'unknown') {
+        f.state.unknownIncumbent = true;
         const value = await f.run();
         expect(value).toMatchObject({ outcome: 'continue', attempts: 0,
           cause: 'resume_incumbent_or_assignment_unverified' });
       } else if (census === 'gone') {
-        // A positively gone old native worker does not release a replaceable Dispatch.
-        f.state.assignments = [f.assignment];
-        f.state.extraPane = null;
-        expect(await f.run()).toMatchObject({ attempts: 0,
-          cause: 'resume_incumbent_or_assignment_unverified' });
+        // A native gone witness alone does not prove anything about an assignment.
+        f.state.goneIncumbent = true;
+        expect((await f.run()).outcome).toBe('catalog_observed_unverified');
       } else if (census === 'foreign-worker') {
         expect((await f.run()).outcome).toBe('catalog_observed_unverified');
       } else {
         expect(await f.run()).toMatchObject({ attempts: 0,
           cause: 'resume_incumbent_or_assignment_unverified' });
       }
-      if (census !== 'foreign-worker') expect(f.spawnedCommands).toHaveLength(0);
+      if (census !== 'foreign-worker' && census !== 'gone') expect(f.spawnedCommands).toHaveLength(0);
     }
     for (const type of ['active', 'unknown', 'still-2655-replaceable',
-      'wrong-metadata', 'assignment-list-unreadable'] as const) {
+      'wrong-metadata', 'assignment-list-unreadable', 'ambiguous'] as const) {
       const f = resumeFixture();
       if (type === 'assignment-list-unreadable') {
-        f.deps.listAssignments = () => null;
+        f.state.assignmentsReadable = false;
+      } else if (type === 'ambiguous') {
+        f.state.assignments = [f.assignment, { ...f.assignment, assignmentId: 'second-claim' }];
       } else {
         f.state.assignments = [type === 'wrong-metadata'
           ? { ...f.assignment, bindingKey: '' } : f.assignment];
+      }
+      if (type === 'unknown') f.state.workerShowUnknown = true;
+      if (type === 'still-2655-replaceable') {
+        f.state.extraPane = {
+          handle: 'incumbent', incarnationId: 'previous-native-generation',
+          worktreePath: workspace, title: 'previous-manager', status: 'running', command: 'opencode',
+        };
+        f.state.goneIncumbent = true; // native gone does not retire Dispatch
       }
       expect(await f.run()).toMatchObject({ outcome: 'continue',
         cause: 'resume_incumbent_or_assignment_unverified', attempts: 0 });

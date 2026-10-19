@@ -11,8 +11,8 @@ send ownership or scheduling policy changes in Issue #2661.
 
 ## PARKED, factual Issue Wake, and exact launching-owner incidents
 
-A pane's last **own** non-empty content line \`PARKED on <X>\` classifies it
-\`PARKED\` without a Task assignment, handoff receipt, process ID, generation
+A pane's last **own** non-empty content line `PARKED on <X>` classifies it
+`PARKED` without a Task assignment, handoff receipt, process ID, generation
 or producer completeness requirement. Ignore older/quoted/historical park
 lines, newer own work and in-flight spinner lines. Preserve the #2485/#2473
 plain named-producer match against a landed terminal envelope, finished
@@ -25,8 +25,8 @@ current numbered WorkerAssignment must uniquely bind selected project and
 repository, the exact Issue, Task, Dispatch and its current live native
 worker, terminal handle, incarnation and worktree/branch. The unique current
 pane must itself be PARKED and send-safe. A matching PR must have exactly
-one unambiguous explicit closing target from Closes/Fixes/Resolves; \`Refs #A\`
-alone does not bind A. Thus \`Refs #A; Closes #B\` admits only B;
+one unambiguous explicit closing target from Closes/Fixes/Resolves; `Refs #A`
+alone does not bind A. Thus `Refs #A; Closes #B` admits only B;
 references-only and conflicting distinct closers admit neither. A same-repo
 foreign Issue comment, stale/duplicate/unavailable assignment, Run objective,
 Task prose or guessed branch never selects an Issue Wake recipient. Independently
@@ -35,23 +35,23 @@ pack-review change can cause one coalesced direct re-check **attempt per pane
 per tick**, even if the pane's local GPT turn record is stale. The manager
 then verifies the current head and its own unsent/unharvested turn separately.
 
-**A valid not-ok terminal envelope** (\`lifecycle_outcome=incident\` or a
-present non-\`ok\` \`turn_result_state\`) can trigger an independent direct
+**A valid not-ok terminal envelope** (`lifecycle_outcome=incident` or a
+present non-`ok` `turn_result_state`) can trigger an independent direct
 owner re-check. Correlate original attempt, invocation and envelope with the
 original handoff receipt's invocation/launching terminal/Task/Dispatch and
 corroborate the current exact selected-project native owner and assignment.
 The original verified launching pane is eligible even when STOPPED, PARKED
 or idle, with no named wait or cooldown expiry and no coordinator. The
-reported mgr-334/\`term_0dfb5c20\` incident is an example, **not** a
-host-reproduced cause. A bare terminal handle, envelope \`cwd\`, child
+reported mgr-334/`term_0dfb5c20` incident is an example, **not** a
+host-reproduced cause. A bare terminal handle, envelope `cwd`, child
 worktree, title or receipt hint alone cannot prove ownership. Wrong,
 ambiguous, stale, recycled or unreadable identity means non-delivery;
 a valid success/ok envelope does not activate this failure-specific path.
 A not-ok envelope does not itself complete, fail or resend the child turn.
 
 Every independently due direct fact uses the incumbent episode/event marks.
-Persist \`attempted_unverified\` **before** a text/send effect; failed
-reservation means zero sends. Upgrade to \`sent\` only after both the text
+Persist `attempted_unverified` **before** a text/send effect; failed
+reservation means zero sends. Upgrade to `sent` only after both the text
 and submit actions are confirmed. Ambiguous submit or failed post-send
 upgrade preserves the uncertain mark and suppresses blind replay on the
 next tick; only existing positively confirmed non-delivery rearm is eligible.
@@ -70,8 +70,8 @@ licenses a new worker or replacement; #2655 remains the sole recovery owner.
 Coordinator-only STOPPED/POLLING, PERMISSION, missing-unit and Run-mail
 alarms require an exact present coordinator. With no coordinator, independently
 safe exact direct-pane Wake, owner-bound banner and existing pane Reminder
-can still be attempted. The tick returns \`no_orchestrator\` with actual
-\`paneWakeAttempts\`, \`paneWakeConfirmed\` and \`paneWakeNotConfirmed\`
+can still be attempted. The tick returns `no_orchestrator` with actual
+`paneWakeAttempts`, `paneWakeConfirmed` and `paneWakeNotConfirmed`
 (counting every attempted pane delivery, including uncertain, with attempts
 equal to confirmed plus not-confirmed); that state means **no coordinator
 advisory delivered**, not that no safe pane was reached.
