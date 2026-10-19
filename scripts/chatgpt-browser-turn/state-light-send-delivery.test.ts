@@ -2611,6 +2611,7 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     let sawTransientGenerationDuringStall = false;
     let appendedLateAssistant = false;
     let injectedWhitespaceMutation = false;
+    let observedReusedNegativeGet = false;
     let injectedAfterClear = false;
     let stopVisible = false;
     let closed = false;
@@ -2701,6 +2702,16 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       click: vi.fn(async () => {
         clickCount++;
         if (firstClickAt < 0) firstClickAt = now;
+        if (kind === 'reused-page' && !observedReusedNegativeGet) {
+          // Even a complete matching-UUID marker-negative GET from passive
+          // Page traffic cannot turn a created:false target into retry authority.
+          observedReusedNegativeGet = true;
+          emitGet('https://chatgpt.com/backend-api/conversations/' + uuid,
+            undefined, 'old user text', 200);
+          await Promise.resolve();
+          await Promise.resolve();
+          await Promise.resolve();
+        }
         if ((kind === 'pre-actionability-budget' && clickCount === 1)
           || kind === 'affirmative-finalized'
           || kind === 'affirmative-late-stop' || kind === 'affirmative-late-draft') {
@@ -2800,6 +2811,7 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
         explicitGetAt, getClock: () => now, getDraft: () => draft,
         injectedNaturalPositive, oversleptPoll, sawTransientGenerationDuringStall,
         appendedLateAssistant, injectedWhitespaceMutation, injectedAfterClear,
+        observedReusedNegativeGet,
         close: page.close,
         observation: readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId),
       };
@@ -2846,6 +2858,7 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       expect(t.sawTransientGenerationDuringStall).toBe(true);
     }
     if (kind === 'late-assistant') expect(t.appendedLateAssistant).toBe(true);
+    if (kind === 'reused-page') expect(t.observedReusedNegativeGet).toBe(true);
     if (kind === 'post-guard-whitespace') expect(t.injectedWhitespaceMutation).toBe(true);
     if (kind === 'reused-page' || kind === 'late-assistant'
       || kind === 'overslept-poll' || kind === 'post-guard-whitespace') {
