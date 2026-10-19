@@ -1911,6 +1911,11 @@ export async function prepareWorktreeWithOrca(
         evidence: { ...baseEvidence, ...setupEvidence, branch: identity.value.branch },
       };
     }
+    const freshStatus = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'],
+      undefined, undefined, path);
+    if (!freshStatus.ok) return worktreeContinue('worktree_fresh_status_unavailable', baseEvidence);
+    if (freshStatus.stdout.trim()) return worktreeContinue('worktree_fresh_dirty', baseEvidence,
+      'preserve newly created worktree bytes; clean fresh setup is required before launch');
     return {
       status: 'ok',
       value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete' },
