@@ -1119,3 +1119,101 @@ describe('supervised worker start exact assignment admission',()=>{
     expect(result.assignment.role).toBe('orchestrator');
   });
 });
+
+describe('Issue #2655 reboot terminal retirement at supervised start', () => {
+  it.each(['failed', 'abandoned', 'cancelled', 'done'] as const)(
+    'starts from native %s and abandoned/terminal_missing with adapter resolve not-ok',
+    async (state) => {
+      const base = root();
+      const env = { ...process.env, OPK_BASE_DIR: base };
+      const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+      const previous = await publishCurrentWorkerAssignment({
+        file, repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1416,
+        taskId: 'task_6af384b00044', kind: 'local', provider: 'orca',
+        bindingKey: 'ctx_3761867313e2', role: 'worker',
+      });
+      if (!previous.ok) throw new Error(previous.reason);
+      const shown = {
+        dispatch: { id: 'ctx_3761867313e2', status: state, last_heartbeat_at: null },
+        worker: { agent_terminal_handle: canonicalTerminal, state: 'abandoned', stage: 'terminal_missing' },
+        terminal: null, observation: { exactWorker: false, status: 'missing' },
+      };
+      const adapter = new OrcaTaskRuntimeAdapter({
+        runJson: vi.fn((): OrcaJsonResponse => ({ ok: true, result: shown })) as never,
+        env,
+      });
+      const standardInspect = inspectPlacement({ terminal: 'term-fresh' });
+      const inspect = async (argv: readonly string[]) => {
+        if (argv[0] === 'orchestration' && argv[1] === 'dispatch-show') {
+          expect(argv).toEqual(['orchestration', 'dispatch-show', '--task', 'task_6af384b00044', '--json']);
+          return { ok: true, stdout: envelope({ dispatch: { id: 'ctx_3761867313e2', status: state } }) };
+        }
+        if (argv[0] === 'orchestration' && argv[1] === 'worker-show') {
+          expect(argv).toEqual(['orchestration', 'worker-show', '--dispatch', 'ctx_3761867313e2', '--json']);
+          return { ok: true, stdout: envelope(shown) };
+        }
+        return standardInspect(argv);
+      };
+      let starts = 0;
+      const started = await runSupervisedWorkerStart({
+        role: 'worker', repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1416,
+        env, adapter, inspect, orcaArgs: argsForTerminal('terminal:fresh', 'task_6af384b00044'),
+        execute: async () => {
+          starts += 1;
+          return { ok: true, stdout: envelope({
+            taskId: 'task_6af384b00044', dispatchId: 'dispatch-new', state: 'ready',
+            effects: producerEffects({ terminal: 'term-fresh' }),
+          }) };
+        },
+      });
+      expect(started).toMatchObject({
+        ok: true, reason: 'ready_and_assignment_bound',
+        assignment: { taskId: 'task_6af384b00044', bindingKey: 'dispatch-new', generation: 2 },
+      });
+      expect(starts).toBe(1);
+      expect(currentWorkerAssignment(file, 1416)?.assignmentId).not.toBe(previous.assignment.assignmentId);
+    },
+  );
+
+  it.each([
+    { name: 'live worker', status: 'live', exactWorker: true, workerState: 'ready', stage: 'input_accepted', state: 'dispatched' },
+    { name: 'unknown worker', status: 'unknown', exactWorker: false, workerState: 'abandoned', stage: 'terminal_missing', state: 'failed' },
+    { name: 'foreign Dispatch', status: 'missing', exactWorker: false, workerState: 'abandoned', stage: 'terminal_missing', state: 'failed', id: 'ctx_foreign' },
+  ])('refuses $name without new Dispatch publication', async ({ status, exactWorker, workerState, stage, state, id }) => {
+    const base = root(); const env = { ...process.env, OPK_BASE_DIR: base };
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    const previous = await publishCurrentWorkerAssignment({
+      file, repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1416,
+      taskId: 'task_6af384b00044', kind: 'local', provider: 'orca',
+      bindingKey: 'ctx_3761867313e2', role: 'worker',
+    });
+    if (!previous.ok) throw new Error(previous.reason);
+    const shown = {
+      dispatch: { id: id ?? 'ctx_3761867313e2', status: state, last_heartbeat_at: null },
+      worker: { agent_terminal_handle: canonicalTerminal, state: workerState, stage },
+      terminal: status === 'live' ? { handle: canonicalTerminal } : null,
+      observation: { exactWorker, status },
+    };
+    const native = vi.fn((): OrcaJsonResponse => ({ ok: true, result: shown }));
+    const inspect = async (argv: readonly string[]) => {
+      if (argv[0] === 'orchestration' && argv[1] === 'dispatch-show')
+        return { ok: true, stdout: envelope({ dispatch: { id: 'ctx_3761867313e2', status: state } }) };
+      if (argv[0] === 'orchestration' && argv[1] === 'worker-show')
+        return { ok: true, stdout: envelope(shown) };
+      return inspectPlacement({ terminal: 'term-fresh' })(argv);
+    };
+    let starts = 0;
+    const outcome = await runSupervisedWorkerStart({
+      role: 'worker', repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1416,
+      env, adapter: new OrcaTaskRuntimeAdapter({ runJson: native as never, env }), inspect,
+      orcaArgs: argsForTerminal('terminal:fresh', 'task_6af384b00044'),
+      execute: async () => { starts += 1; return { ok: true, stdout: envelope({
+        taskId: 'task_6af384b00044', dispatchId: 'dispatch-new', state: 'ready',
+        effects: producerEffects({ terminal: 'term-fresh' }),
+      }) }; },
+    });
+    expect(outcome.ok).toBe(false);
+    expect(starts).toBe(0);
+    expect(currentWorkerAssignment(file, 1416)).toEqual(previous.assignment);
+  });
+});
