@@ -1484,6 +1484,55 @@ describe('Issue #2659 immutable same-head body-amendment authority', () => {
     })).toThrow(/reversion|already admitted/);
   });
 
+  it('opens a same-H1 B1 review after a completed clean B0 without audited reset', () => {
+    const opts = options();
+    const prNumber = 2661;
+    const base = initializePackReviewAuthority({
+      prNumber, headSha: sha('a'), tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: opts,
+    });
+    const cleanB0 = commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: base.transitionSeq,
+      terminal: {
+        schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal',
+        runId: 'original-clean', targetSha: sha('a'),
+        reviewVerdict: 'clean', findingCount: 0, findingsDigest: 'clean-B0',
+        logicalRoundOrdinal: 1, automaticBudgetDisposition: 'consume',
+      },
+      status: 'up_to_date', findingCount: 0, options: opts,
+    });
+    expect(cleanB0.cycle).toMatchObject({
+      reviewStageComplete: true, state: 'closed', frozenCap: 1,
+      consumedRoundOrdinals: [1],
+    });
+    const next = beginPackReviewBodyAmendmentContinuation({
+      prNumber, expectedTransitionSeq: cleanB0.transitionSeq,
+      headSha: sha('a'), closingIssueNumber: 2661,
+      priorTerminalRunId: 'original-clean',
+      reviewedBodyDigest: digest('0'), amendedBodyDigest: digest('1'),
+      options: opts,
+    });
+    expect(next.currentHeadSha).toBe(cleanB0.currentHeadSha);
+    expect(next.cycle).toMatchObject({
+      frozenCap: 1, state: 'open', consumedRoundOrdinals: [],
+      amendmentOrigin: {
+        originalCycleId: cleanB0.cycle!.cycleId,
+        originalTerminalRunId: 'original-clean',
+        reviewedBodyDigest: digest('0'), amendedBodyDigest: digest('1'),
+      },
+    });
+    expect(next.cycle!.cycleId).not.toBe(cleanB0.cycle!.cycleId);
+    expect(next.cycle!.resetProvenance).toBeUndefined();
+    expect(next.terminal).toBeUndefined();
+    expect(() => beginPackReviewBodyAmendmentContinuation({
+      prNumber, expectedTransitionSeq: next.transitionSeq,
+      headSha: sha('a'), closingIssueNumber: 2661,
+      priorTerminalRunId: 'original-clean',
+      reviewedBodyDigest: digest('0'), amendedBodyDigest: digest('1'),
+      options: opts,
+    })).toThrow(/eligible|unverified/);
+  });
+
   it('retains ordinary T3 cap two and fails closed for unaccepted origin/head', () => {
     const opts = options();
     const initial = initializePackReviewAuthority({
