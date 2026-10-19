@@ -261,14 +261,14 @@ node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts"
 The assistant proves the selected worktree's Git root, origin, unique local
 branch and exact native Run/Task membership. For a **dirty** existing checkout
 it preserves every tracked/untracked byte and never refreshes/merges that tree.
-Dirty reuse requires either native proof that the exact current Issue-bound
-old Dispatch is terminal, its worker is gone, and its producer worktree ID
-equals the selected worktree (also rechecking Run/Task membership), **or**
-exactly one currently open PR whose live body closes the Issue with
-`Closes/Fixes/Resolves #N`. For the PR path, the head repository, base
-`$DEFAULT_BRANCH`, local branch and full HEAD must all match. Both paths
-recheck unchanged local branch, HEAD and dirty porcelain status before launch;
-neither path refreshes or merges the worktree.
+Dirty reuse requires **native proof** that the exact current Issue-bound
+orchestrator-role old Dispatch is terminal, its worker is gone, and its
+producer worktree ID equals the selected worktree (rechecking Run/Task
+membership). An Issue-closing PR is insufficient to prove who owns dirty
+bytes. For a **clean** non-ancestor worktree, the existing unique open
+Issue-closing PR/branch/HEAD check still applies. The dirty path rechecks
+unchanged branch, HEAD and full porcelain status before launch, and never
+refreshes or merges the worktree.
 Unproven/foreign/changed worktrees refuse without reset, stash, rebase, merge,
 or deletion. A fresh manager worktree still takes the separate
 `--manager-brief --worktree-name` path; dirty reuse does not turn fresh setup
@@ -297,6 +297,17 @@ node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts"
   --task "$TASK_ID" --worktree "$WORKTREE_SELECTOR" \
   --base-branch "origin/$DEFAULT_BRANCH"
 ```
+
+The documented `--worktree` CLI selects the admitted
+`exact_terminal_worktree` route (also for a manager); it cannot send an
+existing worktree into the fresh provider creation request. The normal
+`--worktree-name` Cursor launch uses the existing split Orca worktree
+create/setup and verifies an entirely clean tree **before** new terminal
+spawn and Dispatch. Atomic `provider_new_top_level` startup cannot prove
+that fact before agent input, so an explicit
+`--start-mode provider_new_top_level` request refuses until the native
+provider supplies a true pre-dispatch cleanliness witness. Neither refusal
+nor split setup modifies an already-dirty checkout.
 
 `WORK_CLASS` is the exact existing `t1`, `t2` or `t3` execution class.
 An unknown/active old worker, mismatched Task/Dispatch/worktree, missing
