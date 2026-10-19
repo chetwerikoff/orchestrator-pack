@@ -1329,7 +1329,9 @@ describe('Issue #1826 logical-round smoke independence', () => {
       capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
       options,
     });
-    const startedAt = new Date(Date.now() - 20 * 60_000);
+    // The persisted 30-minute native attempt has actually exceeded its ceiling;
+    // a 20-minute active run would correctly be reused instead.
+    const startedAt = new Date(Date.now() - 40 * 60_000);
     const prior = createPackReviewRun({
       projectId: 'orchestrator-pack',
       storeRoot,
