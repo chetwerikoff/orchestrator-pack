@@ -5454,3 +5454,552 @@ describe('Issue #1752 production liveness regressions', () => {
       releaseStartedAtWrite = writes.length;
       await new Promise((resolve) => setTimeout(resolve, 45));
     });
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const code = await runStateLightTurn(
+        livenessArgv(join(livenessStateDir, 'finalize.txt')),
+        { entryLivenessHeartbeat: true },
+      );
+      expect(code).toBe(0);
+      expect(releaseStartedAtWrite).toBeGreaterThanOrEqual(0);
+
+      const finalizationRecords = parseRecords(writes.slice(releaseStartedAtWrite));
+      expect(finalizationRecords.filter((record) => record.schema === 'observation-heartbeat/v1').length)
+        .toBeGreaterThan(2);
+      const records = parseRecords(writes);
+      expect(records.at(-1)).toMatchObject({
+        schema: 'turn-result/v1',
+        state: 'ok',
+        send_count: 1,
+      });
+
+      const terminalWriteCount = writes.length;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(writes).toHaveLength(terminalWriteCount);
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('times out initial newPage without liveness loss, abandons a late page, and leaves foreign tabs untouched', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-LIVENESS-INITIAL'));
+
+    let resolveLatePage!: (page: any) => void;
+    const pendingPage = new Promise<any>((resolve) => {
+      resolveLatePage = resolve;
+    });
+    const latePage = {
+      close: vi.fn(async () => undefined),
+      goto: vi.fn(async () => undefined),
+    };
+    const foreignPage = {
+      close: vi.fn(async () => undefined),
+      url: vi.fn(() => 'https://chatgpt.com/c/foreign'),
+    };
+    const context = {
+      newPage: vi.fn(() => pendingPage),
+      pages: vi.fn(() => [foreignPage]),
+    };
+    const browser = {
+      contexts: vi.fn(() => [context]),
+      isConnected: vi.fn(() => true),
+      close: vi.fn(async () => undefined),
+    };
+    mocks.browserQueue.push(browser);
+
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const code = await runStateLightTurn(
+        livenessArgv(join(livenessStateDir, 'initial-page.txt'), '45'),
+        { entryLivenessHeartbeat: true },
+      );
+      expect(code).not.toBe(0);
+      const records = parseRecords(writes);
+      expect(records.filter((record) => record.schema === 'observation-heartbeat/v1').length)
+        .toBeGreaterThan(2);
+      expect(records.at(-1)).toMatchObject({
+        schema: 'turn-result/v1',
+        state: 'driver_error',
+        cause: 'browser_operation_timeout:new_page',
+        send_count: 0,
+      });
+
+      resolveLatePage(latePage);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(latePage.close).toHaveBeenCalledTimes(1);
+      expect(latePage.goto).not.toHaveBeenCalled();
+      expect(foreignPage.close).not.toHaveBeenCalled();
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('keeps heartbeats flowing during recovery newPage timeout and abandons its late successor without resend', async () => {
+    const prompt = 'PROMPT-LIVENESS-RECOVERY';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+    let sends = 0;
+    let sent = false;
+    let lost = false;
+    let url = PROJECT_URL;
+    let composerText = '';
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async (value: string) => { composerText = value; }),
+      innerText: vi.fn(async () => sent ? '' : composerText),
+      textContent: vi.fn(async () => sent ? '' : composerText),
+      press: vi.fn(async () => { sends += 1; sent = true; url = SHARED_CONV; }),
+    });
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => { sends += 1; sent = true; url = SHARED_CONV; }),
+    });
+    const workingMessages = (): StateLightTestMessage[] => [
+      { role: 'user', text: composerText },
+      { role: 'assistant', text: 'working', inProgress: true },
+    ];
+    const initialClose = vi.fn(async () => undefined);
+    const initialPage: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async (target: string) => { url = target; }),
+      url: vi.fn(() => url),
+      isClosed: vi.fn(() => lost),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
+      close: initialClose,
+      getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          return sent ? collectionLocator(workingMessages(), true) : collectionLocator([]);
+        }
+        if (selector === USER_MESSAGE_SELECTOR) {
+          return sent
+            ? collectionLocator(workingMessages().filter((message) => message.role === 'user'), true)
+            : collectionLocator([]);
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          return sent
+            ? collectionLocator(workingMessages().filter((message) => message.role === 'assistant'), true)
+            : collectionLocator([]);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          return sent ? messageLocator(workingMessages().at(-1)!, true) : scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
+        return scalarLocator();
+      }),
+    };
+
+    let resolveLateSuccessor!: (page: any) => void;
+    const pendingSuccessor = new Promise<any>((resolve) => {
+      resolveLateSuccessor = resolve;
+    });
+    const lateSuccessor = {
+      close: vi.fn(async () => undefined),
+      goto: vi.fn(async () => undefined),
+      url: vi.fn(() => 'about:blank#late-recovery-successor'),
+    };
+    const foreignPage = {
+      close: vi.fn(async () => undefined),
+      url: vi.fn(() => LOSER_CONV),
+      isClosed: vi.fn(() => false),
+    };
+    const context = {
+      newPage: vi.fn()
+        .mockResolvedValueOnce(initialPage)
+        .mockImplementationOnce(() => pendingSuccessor),
+      pages: vi.fn(() => lost ? [foreignPage] : [initialPage]),
+    };
+    const browser = {
+      contexts: vi.fn(() => [context]),
+      isConnected: vi.fn(() => true),
+      close: vi.fn(async () => undefined),
+    };
+    mocks.browserQueue.push(browser);
+
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const code = await runStateLightTurn(
+        livenessArgv(join(livenessStateDir, 'recovery-page.txt'), '90000'),
+        {
+          entryLivenessHeartbeat: true,
+          recoveryHooks: {
+            faultActuator: () => {
+              lost = true;
+              // Reach the post-send deadline with only a bounded recovery
+              // newPage budget; the full 60s pre-send reserve was already met.
+              mocks.nowMs += (2 * 90_000) - 2_000;
+            },
+          },
+        },
+      );
+      expect(code).not.toBe(0);
+      const records = parseRecords(writes);
+      const heartbeats = records.filter((record) => record.schema === 'observation-heartbeat/v1');
+      expect(heartbeats.length).toBeGreaterThan(3);
+      expect(heartbeats.some((record) => record.phase === 'post_send_observation')).toBe(true);
+      expect(records.at(-1)).toMatchObject({
+        schema: 'turn-result/v1',
+        state: 'driver_error',
+        cause: 'replacement_observation_page_create_failed',
+        send_count: 1,
+      });
+      expect(sends).toBe(1);
+      expect(context.newPage).toHaveBeenCalledTimes(2);
+      expect(initialClose).not.toHaveBeenCalled();
+      expect(foreignPage.close).not.toHaveBeenCalled();
+
+      resolveLateSuccessor(lateSuccessor);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(lateSuccessor.close).toHaveBeenCalledTimes(1);
+      expect(lateSuccessor.goto).not.toHaveBeenCalled();
+      expect(foreignPage.close).not.toHaveBeenCalled();
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+});
+
+
+describe('Issue #1990 late-banner execute-Issue recovery', () => {
+  let integrationStateDir: string;
+  const timeoutText = 'Message delivery timed out. Please try again.';
+
+  beforeEach(() => {
+    integrationStateDir = mkdtempSync(join(tmpdir(), 'slt-1990-'));
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = integrationStateDir;
+    disableSendSlotForTest();
+    mocks.browserQueue.length = 0;
+    mocks.cleanupOutcome = 'confirmed';
+    mocks.verifyProfile.mockReset();
+    mocks.verifyProfile.mockResolvedValue({ state: 'verified' });
+    mocks.nowMs = 10_000;
+    mocks.readStableInput.mockReset();
+    vi.spyOn(Date, 'now').mockImplementation(() => mocks.nowMs);
+  });
+
+  afterEach(() => {
+    delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    clearSendSlotDisableEnv();
+    rmSync(integrationStateDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  async function runExistingChat(page: any, outputPath: string, timeoutMs = '5000') {
+    enqueueBrowserForTurn(mocks, page);
+    return runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', outputPath,
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', timeoutMs,
+      '--poll-ms', '1',
+    ]);
+  }
+
+  function recoveryPage(sequence: ReadonlyArray<'generating' | 'banner'>, bannerText = timeoutText) {
+    let sent = false;
+    let filled = '';
+    let observationIndex = 0;
+    let phase: 'generating' | 'banner' = sequence[0] ?? 'generating';
+    const retryClicks = vi.fn(async () => undefined);
+    const sendClicks = vi.fn(async () => { sent = true; });
+    const close = vi.fn(async () => undefined);
+
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async (value: string) => { filled = value; }),
+      innerText: vi.fn(async () => filled),
+      textContent: vi.fn(async () => filled),
+      press: sendClicks,
+    });
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: sendClicks,
+    });
+    const historicalUser = {
+      getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user-message' : null,
+      getBoundingClientRect: () => ({ height: 1 }),
+      innerText: 'historical user',
+      closest: (selector: string) => selector.includes('data-turn-key')
+        ? { getAttribute: () => 'conversation-turn-history' } : null,
+      querySelectorAll: () => [],
+      querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+        ? { getAttribute: () => 'user-message' } : null,
+    };
+
+    function currentPhase(): 'generating' | 'banner' {
+      if (!sent) return 'generating';
+      return sequence[Math.min(observationIndex, sequence.length - 1)] ?? 'generating';
+    }
+
+    function messageElements() {
+      phase = currentPhase();
+      const user = {
+        getAttribute: (name: string) => (name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user-message' : null),
+        getBoundingClientRect: () => ({ height: 1 }),
+        innerText: filled || `${TEST_OWNED_MARKER}\n\nPROMPT`,
+        closest: (selector: string) => (
+          selector.includes('data-turn-key')
+            ? { getAttribute: () => 'conversation-turn-1' }
+            : null
+        ),
+        querySelectorAll: () => [],
+        querySelector: (selector: string) => (
+          selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]` ? { getAttribute: () => 'user-message' } : null
+        ),
+      };
+      const assistantInner = phase === 'banner' ? `${bannerText}\n\nRetry` : 'working';
+      const assistant = {
+        getAttribute: (name: string) => (name === MESSAGE_AUTHOR_ROLE_ATTR ? 'assistant-message' : null),
+        getBoundingClientRect: () => ({ height: 1 }),
+        innerText: assistantInner,
+        closest: (selector: string) => (
+          selector.includes('data-turn-key')
+            ? { getAttribute: () => 'conversation-turn-2' }
+            : null
+        ),
+        querySelectorAll: (selector: string) => (
+          selector === 'p' && phase === 'banner' ? [{ innerText: bannerText }] : []
+        ),
+        querySelector: (selector: string) => (
+          selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+            ? { getAttribute: () => 'assistant-message' }
+            : selector.includes('regenerate-thread-error') && phase === 'banner'
+              ? { innerText: 'Retry' }
+              : null
+        ),
+      };
+      return { user, assistant, phase };
+    }
+
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async () => undefined),
+      url: vi.fn(() => SHARED_CONV),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
+      close,
+      getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (selector.includes('regenerate-thread-error') || selector.includes('data-testid*="error"')) {
+          return scalarLocator({
+            count: vi.fn(async () => (sent && currentPhase() === 'banner' ? 1 : 0)),
+            nth: vi.fn(() => scalarLocator({
+              innerText: vi.fn(async () => 'Retry'),
+              click: retryClicks,
+            })),
+            click: retryClicks,
+          });
+        }
+        if (selector.includes('role="alert"')) {
+          return scalarLocator({
+            count: vi.fn(async () => 1),
+            nth: vi.fn(() => scalarLocator({ innerText: vi.fn(async () => '') })),
+          });
+        }
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          if (!sent) {
+            return Object.assign(collectionLocator([{ role: 'user', text: 'historical user' }]), {
+              evaluateAll: vi.fn(async () => ({
+                rows: [{
+                  role: 'user', text: 'historical user', key: 'historical-user-1990', domIndex: 0,
+                  complete: true, completionReady: false, continuationVisible: false,
+                }],
+                pageTurnEvidence: {
+                  generationInProgress: false, observedAssistantNodes: 0,
+                  continueGeneratingVisible: false,
+                },
+              })),
+            });
+          }
+          const snapshot = messageElements();
+          const pollIndex = observationIndex;
+          observationIndex += 1;
+          const messages = [
+            { role: 'user' as const, text: 'historical user' },
+            { role: 'user' as const, text: filled },
+            {
+              role: 'assistant' as const,
+              text: snapshot.phase === 'banner' ? `${timeoutText}\n\nRetry` : 'working',
+            },
+          ];
+          const loc = collectionLocator(messages, snapshot.phase === 'generating');
+          loc.evaluateAll = vi.fn(async (
+            callback: (elements: Element[], args: unknown) => unknown,
+            args: unknown,
+          ) => {
+            const prior = (globalThis as { document?: unknown }).document;
+            const generating = snapshot.phase === 'generating';
+            (globalThis as { document?: unknown }).document = {
+              querySelectorAll: (sel: string) => {
+                if (sel.includes('data-turn-key')) {
+                  return [
+                    { getAttribute: () => 'conversation-turn-history' },
+                    { getAttribute: () => 'conversation-turn-1' },
+                    { getAttribute: () => 'conversation-turn-2' },
+                  ];
+                }
+                if (sel.includes('assistant')) return [snapshot.assistant];
+                return [];
+              },
+              querySelector: (sel: string) => {
+                if (sel.includes('stop-button') || sel.includes('aria-busy') || sel.includes('streaming')) {
+                  return generating ? {} : null;
+                }
+                return null;
+              },
+            };
+            try {
+              return callback([historicalUser, snapshot.user, snapshot.assistant] as unknown as Element[], args);
+            } finally {
+              if (prior === undefined) delete (globalThis as { document?: unknown }).document;
+              else (globalThis as { document?: unknown }).document = prior;
+            }
+          });
+          void pollIndex;
+          return loc;
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          if (!sent) return collectionLocator([]);
+          const snapshot = messageElements();
+          return collectionLocator([{
+            role: 'assistant',
+            text: snapshot.phase === 'banner' ? `${timeoutText}\n\nRetry` : 'working',
+          }], snapshot.phase === 'generating');
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH) {
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (matchesStopButtonSelector(selector) || selector.includes(STOP_BUTTON_TESTID)) {
+          return scalarLocator({
+            count: vi.fn(async () => (sent && currentPhase() === 'generating' ? 1 : 0)),
+          });
+        }
+        return scalarLocator();
+      }),
+    };
+    return { page, retryClicks, sendClicks, close, getSends: () => (sent ? 1 : 0) };
+  }
+
+  it('emits recovery_required on the first poll where the successor-turn banner is visible', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-1990'));
+    const fake = recoveryPage(['generating', 'banner']);
+    const outcome = await runExistingChat(fake.page, join(integrationStateDir, 'late-banner.txt'));
+    expect(outcome.result).toMatchObject({
+      schema: 'turn-result/v1',
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'message_delivery_timed_out',
+      send_count: 1,
+    });
+    expect(fake.getSends()).toBe(1);
+    expect(fake.retryClicks).not.toHaveBeenCalled();
+    expect(fake.close).toHaveBeenCalledTimes(1);
+    expect(outcome.result.cleanup).toBe('confirmed');
+  });
+
+  it('continues in an already-open tab of the conversation instead of reloading it', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-OPEN-TAB'));
+    const fake = recoveryPage(['generating', 'banner']);
+    const harness = enqueueBrowserForTurn(mocks, fake.page);
+    Object.assign(harness.context, { pages: vi.fn(() => [fake.page]) });
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', join(integrationStateDir, 'open-tab.txt'),
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '5000',
+      '--poll-ms', '1',
+    ]);
+    expect(harness.context.newPage).not.toHaveBeenCalled();
+    expect(fake.page.goto).not.toHaveBeenCalled();
+    expect(fake.close).not.toHaveBeenCalled();
+    expect(outcome.result).toMatchObject({ goto_count: 0, send_count: 1 });
+  });
+
+  it('projects exact message stream errors through the existing conversation recovery result', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-STREAM-ERROR'));
+    const fake = recoveryPage(['generating', 'generating', 'generating', 'generating', 'generating', 'generating', 'banner'], 'Error in message stream');
+    const outcome = await runExistingChat(fake.page, join(integrationStateDir, 'stream-error.txt'));
+    expect(outcome.result).toMatchObject({
+      schema: 'turn-result/v1',
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'message_stream_error',
+      send_count: 1,
+    });
+    expect(fake.getSends()).toBe(1);
+    expect(fake.retryClicks).not.toHaveBeenCalled();
+    expect(fake.close).toHaveBeenCalledTimes(1);
+    expect(outcome.result.cleanup).toBe('confirmed');
+  });
+
+  it('does not end a turn on a recovery banner before its generation was ever observed', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-STALE-BANNER'));
+    const fake = recoveryPage(['banner', 'banner', 'banner'], 'Error in message stream');
+    const outcome = await runExistingChat(fake.page, join(integrationStateDir, 'stale-banner.txt'));
+    expect(outcome.result.state).not.toBe('recovery_required');
+    expect(fake.getSends()).toBe(1);
+    expect(fake.retryClicks).not.toHaveBeenCalled();
+  });
+
+  it('ends a turn on a recovery banner once the Stop grace after the send runs out', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-GRACE-BANNER'));
+    const fake = recoveryPage(['banner', 'banner', 'banner'], 'Error in message stream');
+    const outcome = await runExistingChat(fake.page, join(integrationStateDir, 'grace-banner.txt'), '600000');
+    expect(outcome.result).toMatchObject({
+      state: 'recovery_required',
+      scope: 'conversation',
+      cause: 'message_stream_error',
+      send_count: 1,
+    });
+    expect(fake.retryClicks).not.toHaveBeenCalled();
+  });
+
+  it('keeps polling with no wall while generation stays active and the banner is absent', async () => {
+    const actual = await vi.importActual<typeof import('./ui-adapter.ts')>('./ui-adapter.ts');
+    vi.mocked(uiAdapter.productStatusText).mockImplementation(actual.productStatusText);
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation(actual.classifyProductWall);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-1990-WAIT'));
+    const fake = recoveryPage(['generating', 'generating', 'generating']);
+    const outcome = await runExistingChat(fake.page, join(integrationStateDir, 'still-generating.txt'), '50');
+    expect(outcome.result.state).not.toBe('recovery_required');
+    expect(outcome.result.cause).not.toBe('message_delivery_timed_out');
+    expect(fake.getSends()).toBe(1);
+    expect(fake.retryClicks).not.toHaveBeenCalled();
+  });
+});
