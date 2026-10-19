@@ -4889,7 +4889,8 @@ export async function maybeAdmitPackReviewBodyAmendment(
     && cycle.consumedRoundOrdinals.at(-1) === cycle.frozenCap
     && Boolean(authority.terminal?.runId)
     && (authority.terminal?.reviewVerdict === 'findings'
-      || Boolean(cycle.amendmentOrigin && authority.terminal?.reviewVerdict === 'clean'));
+      || (authority.terminal?.reviewVerdict === 'clean'
+        && cycle.reviewStageComplete === true));
   if (!isFinalTerminal && !cycle.amendmentOrigin) return null;
   const failure = (reason: string, detail?: string) => ({
     prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
