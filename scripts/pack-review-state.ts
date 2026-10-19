@@ -697,7 +697,8 @@ export function beginPackReviewBodyAmendmentContinuation(input: {
           || !previous || !isLogicalRoundCycle(previous)
           || !['closed', 'at_cap_open_findings', 'at_cap_continuation_required'].includes(previous.state)
           || cycleConsumedCount(previous) !== previous.frozenCap
-          || !current.terminal || current.terminal.reviewVerdict !== 'findings'
+          || !current.terminal
+          || (current.terminal.reviewVerdict !== 'findings' && !previous.amendmentOrigin)
           || current.terminal.runId !== input.priorTerminalRunId) {
         throw new PackReviewAuthorityError('amendment_authority_unverified',
           'exact final-cap findings terminal/head/cycle not eligible');
