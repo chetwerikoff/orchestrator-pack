@@ -406,9 +406,12 @@ describe('DOM observation boundary', () => {
       container.append(pre);
       root.append(container);
     }
+    const baseQuery = outer.querySelector.bind(outer);
     Object.assign(outer, {
       getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR
         ? 'assistant-message' : name === 'data-message-id' ? key : null,
+      querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+        ? { getAttribute: () => 'assistant-message' } : baseQuery(selector),
       closest: () => ({ querySelector: (selector: string) =>
         selector === ASSISTANT_TURN_ACTION_SELECTOR ? {} : null }),
     });
