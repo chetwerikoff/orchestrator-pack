@@ -2572,3 +2572,212 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
     expect(get).not.toHaveBeenCalled();
   });
 });
+
+
+describe('Issue #2651 integrated held-Page server-checked recovery and delivery promotion', () => {
+  const cdp = 'http://127.0.0.1:9222';
+  const uuid = '26512651-2651-4651-8651-265126512651';
+  const chatUrl = 'https://chatgpt.com/c/' + uuid;
+  type Case = 'negative' | 'positive' | 'incomplete' | 'paginated' | 'get429'
+    | 'changed-composer' | 'pre-actionability-budget' | 'late-positive';
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'opk-2651-connected-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    mocks.verifyProfile.mockResolvedValue({ state: 'verified' });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    mocks.browserQueue.length = 0;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  async function connectedTurn(kind: Case) {
+    const profile = join(root, 'profile');
+    const invocationId = randomUUID();
+    let now = 100_000;
+    let draft = '';
+    let clickCount = 0;
+    let firstClickAt = -1;
+    let explicitGetAt = -1;
+    let injectedNaturalPositive = false;
+    const pageEvents = new EventEmitter();
+    const calls: Array<{ url: string; header?: string }> = [];
+    const prior = [
+      { role: 'user' as const, text: 'historical user question', finalActionInTurnContainer: false },
+      { role: 'assistant' as const, text: 'historical answer', finalActionInTurnContainer: true },
+    ];
+    const historic = Object.assign(collectionLocator(prior), {
+      evaluateAll: vi.fn(async () => ({
+        rows: prior.map((message, index) => ({
+          role: message.role, text: message.text, domIndex: index,
+          key: 'data-message-id:2651-historical-' + index, complete: true,
+          completionReady: message.role === 'assistant', continuationVisible: false,
+        })),
+        pageTurnEvidence: {
+          generationInProgress: false, observedAssistantNodes: 1, continueGeneratingVisible: false,
+        },
+      })),
+    });
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async (value: string) => { draft = value; }),
+      innerText: vi.fn(async () => draft),
+      textContent: vi.fn(async () => draft),
+      evaluate: vi.fn(async (callback: (element: unknown) => unknown, _args?: unknown, options?: { timeout?: number }) => {
+        if (options?.timeout !== undefined) return true; // Older readiness adapter.
+        const element = {
+          get textContent() { return draft; }, get innerText() { return draft; },
+          isConnected: true, isContentEditable: true,
+        };
+        return callback(element);
+      }),
+    });
+    const history = (text: string) => ({
+      has_more: kind === 'paginated',
+      current_node: 'user-one',
+      mapping: {
+        root: { parent: null, message: null },
+        'user-one': { parent: 'root', message: {
+          author: { role: 'user' }, content: { content_type: 'text', parts: [text] },
+        } },
+      },
+    });
+    const emitGet = (url: string, header: string | undefined, text: string, status: number) => {
+      const request = {
+        method: () => 'GET', url: () => url,
+        headers: () => header ? { 'x-opk-recovery-invocation': header } : {},
+      };
+      pageEvents.emit('request', request);
+      pageEvents.emit('response', {
+        request: () => request, status: () => status,
+        finished: async () => null, json: async () => history(text),
+      });
+    };
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => {
+        clickCount++;
+        if (firstClickAt < 0) firstClickAt = now;
+        if (kind === 'pre-actionability-budget' && clickCount === 1) {
+          const error = Object.assign(new Error([
+            'locator.click: Timeout 5000ms exceeded', 'Call log:',
+            '  - waiting for element to be visible, enabled and stable',
+            '  - element is not enabled',
+          ].join('\n')), { name: 'TimeoutError' });
+          throw error;
+        }
+        throw new Error('synthetic ambiguous Send action');
+      }),
+    });
+    const evaluate = vi.fn(async (callback: (details: unknown) => Promise<void>, details?: { uuid?: string; marker?: string }) => {
+      if (!details?.uuid) return undefined; // Pre-Send alert marking.
+      const priorFetch = globalThis.fetch;
+      const fetchOnHeldPage = vi.fn(async (resource: unknown, options?: { headers?: Record<string, string> }) => {
+        const url = new URL(String(resource), 'https://chatgpt.com').toString();
+        calls.push({ url, header: options?.headers?.['x-opk-recovery-invocation'] });
+        explicitGetAt = now;
+        emitGet(url, options?.headers?.['x-opk-recovery-invocation'],
+          kind === 'positive' ? details.marker! : 'old user text', kind === 'get429' ? 429 : 200);
+        return { arrayBuffer: async () => new ArrayBuffer(0) };
+      });
+      // Execute the real Page-origin callback against an in-memory same-Page
+      // transport. The existing held witness receives its request/response events.
+      (globalThis as any).fetch = fetchOnHeldPage;
+      try { await callback(details); }
+      finally { globalThis.fetch = priorFetch; }
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      return undefined;
+    });
+    const page = Object.assign(pageEvents, {
+      __fakeBrowserGptPage: true,
+      url: vi.fn(() => chatUrl), isClosed: vi.fn(() => false),
+      goto: vi.fn(async () => undefined), close: vi.fn(async () => undefined),
+      waitForTimeout: vi.fn(async (ms: number) => {
+        now += ms;
+        if (kind === 'changed-composer' && clickCount === 1 && now >= firstClickAt + 10_000) {
+          draft += ' ';
+        }
+        if (kind === 'late-positive' && clickCount === 2 && !injectedNaturalPositive) {
+          injectedNaturalPositive = true;
+          const marker = /^OPKTURNV1[0-9a-f]{32}/u.exec(draft)?.[0];
+          if (marker) emitGet('https://chatgpt.com/backend-api/conversations/' + uuid, undefined, marker, 200);
+          await Promise.resolve();
+          await Promise.resolve();
+          await Promise.resolve();
+        }
+      }),
+      evaluate, getByText: vi.fn(() => scalarLocator()), getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (selector === MESSAGE_NODE_SELECTOR) return historic;
+        if (selector === USER_MESSAGE_SELECTOR) return collectionLocator([prior[0]!]);
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) return collectionLocator([prior[1]!]);
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          return messageLocator(prior[1]!);
+        }
+        if (selector === RENDERED_CONVERSATION_TURN_SECTION_SELECTOR) return scalarLocator({
+          last: () => scalarLocator({ turnActionButtons: true }),
+        });
+        return scalarLocator();
+      }),
+    });
+    const harness = enqueueBrowserForTurn(mocks, page);
+    Object.assign(harness.context, { pages: () => [page] });
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        '--profile', profile, '--cdp', cdp, '--input', join(root, 'prompt'),
+        '--output', join(root, 'reply'), '--chat-url', chatUrl,
+        '--invocation-id', invocationId, '--timeout-ms', '120000', '--poll-ms', '1',
+      ]);
+      return {
+        ...outcome, click: sendButton.click, evaluate, calls, firstClickAt,
+        explicitGetAt, getClock: () => now, getDraft: () => draft,
+        injectedNaturalPositive,
+        observation: readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId),
+      };
+    } finally {
+      clock.mockRestore();
+    }
+  }
+
+  it.each([
+    ['negative', 2, 1], ['positive', 1, 1], ['incomplete', 1, 1],
+    ['paginated', 1, 1], ['get429', 1, 1], ['changed-composer', 1, 0],
+    ['pre-actionability-budget', 2, 0], ['late-positive', 2, 1],
+  ] as const)('guards full held-Page GET and one shared repeat: %s', async (kind, clicks, explicitGets) => {
+    const t = await connectedTurn(kind);
+    expect(t.click).toHaveBeenCalledTimes(clicks);
+    expect(t.calls).toHaveLength(explicitGets);
+    if (explicitGets === 1) {
+      expect(t.calls[0]).toEqual({
+        url: 'https://chatgpt.com/backend-api/conversations/' + uuid,
+        header: expect.stringMatching(/^OPKTURNV1[0-9a-f]{32}$/u),
+      });
+      expect(t.explicitGetAt - t.firstClickAt).toBeGreaterThanOrEqual(30_000);
+      expect(t.evaluate).toHaveBeenCalledWith(expect.any(Function), {
+        uuid, marker: expect.stringMatching(/^OPKTURNV1[0-9a-f]{32}$/u),
+      });
+    }
+    // Even two ambiguous actions never grant a third Send or terminal not_sent.
+    expect(t.click).not.toHaveBeenCalledTimes(3);
+    expect(t.observation.phase).not.toBe('not_sent');
+    if (kind === 'negative') {
+      expect(t.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'observation_uncertain' });
+      expect(deriveDelivery({ ...t.result, resolved_send_count: t.result.send_count } as any, false))
+        .toBe('POSSIBLY_DELIVERED');
+    }
+    if (kind === 'positive' || kind === 'late-positive') {
+      expect(t.result.send_count).toBe(1);
+      expect(t.observation).toMatchObject({ phase: 'sent_unharvested', send_count: 1 });
+    }
+    if (kind === 'late-positive') expect(t.injectedNaturalPositive).toBe(true);
+  });
+});
