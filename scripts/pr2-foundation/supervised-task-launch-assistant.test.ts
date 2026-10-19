@@ -3956,3 +3956,167 @@ describe('Issue #2655 provider safety and same-unit dirty ownership', () => {
     expect(fixture.calls.some((argv) => argv[0] === 'gh')).toBe(false);
   });
 });
+
+
+describe('Issue #2655 r02 fresh PR remote head', () => {
+  const head = 'a'.repeat(40);
+  const branch = 'issue-2655-reboot-relaunch';
+  const repo = 'chetwerikoff/orchestrator-pack';
+  const project = () => ({
+    projectId: 'orchestrator-pack', repository: repo,
+    primaryRoot: '/tmp/primary', defaultBranch: 'main',
+  } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>);
+  const request = () => ({
+    repository: repo, issueNumber: 2655, taskId: 'task_8f2c8e5ccab8',
+    worktreeName: 'fresh-2655', baseBranch: 'origin/' + branch,
+    defaultBranch: 'main', managerRefresh: true,
+  } as const);
+
+  function fixture(options: {
+    readonly noPr?: boolean;
+    readonly duplicate?: boolean;
+    readonly pr?: Record<string, unknown>;
+    readonly remoteHead?: string;
+    readonly checkoutHead?: string;
+    readonly fetchOk?: boolean;
+    readonly changed?: boolean;
+    readonly dirty?: boolean;
+  } = {}) {
+    const calls: Array<{ argv: string[]; cwd?: string }> = [];
+    const root = '/tmp/primary';
+    const newPath = '/tmp/fresh-2655';
+    const source = {
+      number: 2656, state: 'OPEN', baseRefName: 'main',
+      headRefName: branch, headRefOid: head,
+      headRepository: { nameWithOwner: repo }, body: 'Closes #2655',
+      ...options.pr,
+    };
+    let reads = 0;
+    const execute = async (argv: readonly string[], _ms?: number,
+      _env?: Readonly<NodeJS.ProcessEnv>, cwd?: string) => {
+      calls.push({ argv: [...argv], cwd });
+      const cmd = argv.join(' ');
+      if (cmd === 'orca repo list --json') return {
+        ok: true, stdout: repoListEnvelope([registeredOrcaRepo('repo-1', root)]),
+      };
+      if (cmd === 'git rev-parse --show-toplevel') return {
+        ok: true, stdout: (cwd ?? '') + '\n',
+      };
+      if (cmd === 'git remote get-url origin') return {
+        ok: true, stdout: 'git@github.com:chetwerikoff/orchestrator-pack.git\n',
+      };
+      if (cmd.startsWith('gh pr list ')) return {
+        ok: true, stdout: JSON.stringify(options.noPr ? [] :
+          options.duplicate ? [{ number: 2656 }, { number: 2657 }] : [{ number: 2656 }]),
+      };
+      if (cmd.startsWith('gh pr view ')) {
+        reads += 1;
+        return { ok: true, stdout: JSON.stringify({
+          ...source,
+          number: Number(argv[3]),
+          ...(options.changed && reads > 2 ? { headRefOid: 'b'.repeat(40) } : {}),
+        }) };
+      }
+      if (cmd === 'git fetch --no-tags origin refs/heads/' + branch +
+        ':refs/remotes/origin/' + branch) return {
+        ok: options.fetchOk !== false, stdout: '',
+      };
+      if (cmd === 'git rev-parse --verify refs/remotes/origin/' + branch + '^{commit}')
+        return { ok: true, stdout: (options.remoteHead ?? head) + '\n' };
+      if (cmd.startsWith('orca worktree create ')) return {
+        ok: true, stdout: okEnvelope({
+          worktree: { id: 'repo::fresh', path: newPath },
+          setupReceipt: { requested: 'run', hookFound: false, state: 'not_configured' },
+        }),
+      };
+      if (cmd === 'git worktree list --porcelain') return {
+        ok: true, stdout: [
+          'worktree /tmp/primary', 'HEAD ' + 'c'.repeat(40),
+          'branch refs/heads/main', '',
+          'worktree ' + newPath, 'HEAD ' + (options.checkoutHead ?? head),
+          'branch refs/heads/fresh-local-2655', '',
+        ].join('\n'),
+      };
+      if (cmd === 'git rev-parse --verify HEAD^{commit}') return {
+        ok: true, stdout: (options.checkoutHead ?? head) + '\n',
+      };
+      if (cmd === 'git status --porcelain=v1 --untracked-files=all')
+        return { ok: true, stdout: options.dirty ? '?? hook-output.txt\n' : '' };
+      return { ok: false, stdout: '', stderr: 'unexpected ' + cmd };
+    };
+    return { execute, calls };
+  }
+
+  it('parses a requested remote PR branch only with exact Issue and fresh selector', () => {
+    const argv = [
+      '--project', 'orchestrator-pack', '--work-class', 'manager', '--run', 'run-1',
+      '--manager-brief', 'continue Issue #2655', '--issue-number', '2655',
+      '--worktree-name', 'fresh-2655', '--base-branch', 'origin/' + branch,
+    ];
+    expect(parseLaunchAssistantCli(argv, profileEnv(), project)).toMatchObject({
+      issueNumber: 2655, baseBranch: 'origin/' + branch,
+      worktreeName: 'fresh-2655', startMode: undefined,
+    });
+    expect(() => parseLaunchAssistantCli(argv.filter((arg, n) =>
+      arg !== '--issue-number' && argv[n - 1] !== '--issue-number'),
+      profileEnv(), project)).toThrow(/--issue-number/u);
+    expect(() => parseLaunchAssistantCli([
+      ...argv.slice(0, -1), 'some-local-branch',
+    ], profileEnv(), project)).toThrow(/--base-branch/u);
+  });
+
+  it('fetches only PR #2656 remote branch and proves the clean fresh HEAD before launching', async () => {
+    const f = fixture();
+    const response = await prepareWorktreeWithOrca(request(), f.execute);
+    expect(response).toMatchObject({
+      status: 'ok', value: {
+        id: 'repo::fresh', selector: 'id:repo::fresh', path: '/tmp/fresh-2655',
+        setupWitness: 'same_invocation_complete',
+      }, evidence: { branch: 'fresh-local-2655' },
+    });
+    const created = f.calls.find((c) => c.argv.slice(0, 3).join(' ') === 'orca worktree create');
+    expect(created?.argv).toContain('origin/' + branch);
+    expect(created?.argv).toContain('--issue');
+    expect(created?.argv).toContain('2655');
+    expect(f.calls.some((c) => c.argv.join(' ') ===
+      'git fetch --no-tags origin refs/heads/' + branch +
+      ':refs/remotes/origin/' + branch)).toBe(true);
+    expect(f.calls.filter((c) => c.argv.slice(0, 3).join(' ') === 'gh pr view')).toHaveLength(3);
+    expect(f.calls.some((c) => c.argv.join(' ') === 'git rev-parse --verify HEAD^{commit}'
+      && c.cwd === '/tmp/fresh-2655')).toBe(true);
+    expect(f.calls.some((c) => c.argv[0] === 'git'
+      && ['merge', 'reset', 'rebase', 'stash', 'clean'].includes(c.argv[1]!))).toBe(false);
+  });
+
+  it.each([
+    ['foreign head repository', { pr: { headRepository: { nameWithOwner: 'foreign/repo' } } }, 'fresh_pr_head_mismatch'],
+    ['wrong base', { pr: { baseRefName: 'release' } }, 'fresh_pr_head_mismatch'],
+    ['wrong named branch', { pr: { headRefName: 'unrelated' } }, 'fresh_pr_head_mismatch'],
+    ['closed PR', { pr: { state: 'CLOSED' } }, 'fresh_pr_head_mismatch'],
+    ['wrong Issue', { pr: { body: 'Closes #119' } }, 'fresh_pr_link_ambiguous'],
+    ['missing PR', { noPr: true }, 'fresh_pr_link_ambiguous'],
+    ['duplicate Issue-closing PR', { duplicate: true }, 'fresh_pr_link_ambiguous'],
+    ['remote fetch unavailable', { fetchOk: false }, 'fresh_pr_remote_fetch_failed'],
+    ['remote head moved', { remoteHead: 'b'.repeat(40) }, 'fresh_pr_remote_head_mismatch'],
+    ['PR changed during preparation', { changed: true }, 'fresh_pr_head_changed'],
+  ] as const)('rejects %s before worktree creation', async (_name, options, cause) => {
+    const f = fixture(options);
+    const result = await prepareWorktreeWithOrca(request(), f.execute);
+    expect(result).toMatchObject({ status: 'continue', cause });
+    expect(f.calls.some((call) => call.argv.slice(0, 3).join(' ')
+      === 'orca worktree create')).toBe(false);
+  });
+
+  it.each([
+    ['checkout HEAD differs', { checkoutHead: 'f'.repeat(40) }, 'fresh_pr_head_changed_or_unproven'],
+    ['setup dirty', { dirty: true }, 'manager_worktree_dirty'],
+  ] as const)('refuses %s after creation, without any spawn authority', async (_name, options, cause) => {
+    const f = fixture(options);
+    const result = await prepareWorktreeWithOrca(request(), f.execute);
+    expect(result).toMatchObject({ status: 'continue', cause });
+    expect(f.calls.some((call) => call.argv.slice(0, 3).join(' ')
+      === 'orca worktree create')).toBe(true);
+    expect(f.calls.some((call) => call.argv[0] === 'git'
+      && ['merge', 'reset', 'rebase', 'stash', 'clean'].includes(call.argv[1]!))).toBe(false);
+  });
+});
