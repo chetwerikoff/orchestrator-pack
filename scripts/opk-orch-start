@@ -1,0 +1,19 @@
+#!/usr/bin/env -S node --experimental-strip-types
+import './toolchain/native-entrypoint-preflight.ts';
+import { runProductionExistingOpenCodeResume } from './pr2-foundation/supervised-task-launch-assistant.ts';
+
+// Deliberately no ambient checkout selector, Task, Dispatch or untracked profile write.
+const args = process.argv.slice(2);
+if (args.length !== 2 || args[0] !== 'resume') {
+  process.stderr.write('usage: scripts/opk-orch-start resume <existing-session-id>\n');
+  process.exitCode = 2;
+} else {
+  try {
+    const result = await runProductionExistingOpenCodeResume(args[1]!);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    process.exitCode = result.outcome === 'catalog_observed_unverified' ? 0 : 1;
+  } catch (error) {
+    process.stderr.write(`resume refused: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  }
+}
