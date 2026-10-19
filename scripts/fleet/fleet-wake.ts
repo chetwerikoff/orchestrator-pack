@@ -922,7 +922,10 @@ function namedRepository(config: FleetWakeConfig): string | undefined {
 /** Only selected-repository, current Issue/Dispatch/native terminal can authorize this route. */
 export interface PublishedIssueFact {
   readonly id: string;
+  readonly issueNumber: number;
   readonly kind: 'issue-comment' | 'pull-head' | 'pull-review' | 'head-ci' | 'pack-review';
+  readonly prNumber?: number;
+  readonly headSha?: string;
 }
 
 function publishedGithubRows(repository: string, endpoint: string): readonly Record<string, unknown>[] | null {
@@ -955,7 +958,7 @@ function publishedIssueFacts(
   if (comments) {
     for (const comment of comments) {
       if (typeof comment.id === 'number' && Number.isSafeInteger(comment.id) && typeof comment.updated_at === 'string') {
-        facts.push({ kind: 'issue-comment', id: `comment:${comment.id}:${comment.updated_at}` });
+        facts.push({ kind: 'issue-comment', issueNumber: issue, id: `comment:${comment.id}:${comment.updated_at}` });
       }
     }
   }
@@ -964,14 +967,14 @@ function publishedIssueFacts(
     const read = (options.readNamedPull ?? readNativePull)(repository, pull.number);
     if (!read || read.number !== pull.number || read.state !== 'open'
       || read.merged || read.headSha !== pull.sha) continue;
-    facts.push({ kind: 'pull-head', id: `pr:${pull.number}:${pull.sha}` });
+    facts.push({ kind: 'pull-head', issueNumber: issue, prNumber: pull.number, headSha: pull.sha, id: `pr:${pull.number}:${pull.sha}` });
     const ciAt = (options.checkRunsFinishedAt ?? checkRunsFinishedAt)(repository, pull.sha);
     if (ciAt !== undefined && Number.isFinite(ciAt)) facts.push({
-      kind: 'head-ci', id: `ci:${pull.number}:${pull.sha}:${ciAt}`,
+      kind: 'head-ci', issueNumber: issue, prNumber: pull.number, headSha: pull.sha, id: `ci:${pull.number}:${pull.sha}:${ciAt}`,
     });
     const stage = (options.readPackReviewStage ?? readPackReviewStatus)(repository, pull.sha);
     if (stage && ['success', 'failure'].includes(stage.state)) facts.push({
-      kind: 'pack-review', id: `stage:${pull.number}:${pull.sha}:${stage.state}:${stage.description}`,
+      kind: 'pack-review', issueNumber: issue, prNumber: pull.number, headSha: pull.sha, id: `stage:${pull.number}:${pull.sha}:${stage.state}:${stage.description}`,
     });
     const reviews = publishedGithubRows(repository, `pulls/${pull.number}/reviews?per_page=100`);
     if (!reviews) continue;
@@ -979,7 +982,7 @@ function publishedIssueFacts(
       if (typeof review.id === 'number' && Number.isSafeInteger(review.id) && review.commit_id === pull.sha
         && typeof review.state === 'string' && review.state !== 'PENDING'
         && typeof review.submitted_at === 'string') facts.push({
-        kind: 'pull-review', id: `review:${pull.number}:${pull.sha}:${review.id}:${review.state}`,
+        kind: 'pull-review', issueNumber: issue, prNumber: pull.number, headSha: pull.sha, id: `review:${pull.number}:${pull.sha}:${review.id}:${review.state}`,
       });
     }
   }
@@ -1045,19 +1048,32 @@ async function wakeAssignedIssueManagers(
   if (!repository) return;
   const assignmentsFrom = options.readCurrentAssignments
     ?? (() => listCurrentWorkerAssignmentRecords(resolveWorkerAssignmentStorePath(options.config.projectId)));
-  const assignments = assignmentsFrom();
+  let assignments: readonly WorkerAssignmentRecord[] | null;
+  try { assignments = assignmentsFrom(); }
+  catch { assignments = null; }
   if (!assignments) { log('Issue-directed Wake withheld: assignment census unavailable'); return; }
   const numbered = [...new Set(assignments.filter((row) => row.projectId === options.config.projectId
     && row.repository === repository && row.role === 'orchestrator' && row.issueNumber)
     .map((row) => row.issueNumber!))];
   if (numbered.length === 0) return;
-  const pulls = (options.listOpenPulls ?? listOpenPullHeads)(repository);
+  let pulls: readonly OpenPullHead[];
+  try { pulls = (options.listOpenPulls ?? listOpenPullHeads)(repository); }
+  catch { log('Issue-directed Wake withheld: PR census unavailable'); return; }
   for (const issue of numbered) {
     const bound = boundIssueManager(repository, options.config.projectId, issue, observations, terminals, executor, assignments);
     if (!bound || bareShellHandles.has(bound.pane.handle)) continue;
-    const facts = (options.listPublishedIssueFacts ?? ((repo, number, names) =>
-      publishedIssueFacts(repo, number, names, options)))(repository, issue, pulls);
-    const keys = [...new Set(facts.map((fact) => `${fact.kind}:${fact.id}`))].sort();
+    let facts: readonly PublishedIssueFact[];
+    try { facts = (options.listPublishedIssueFacts ?? ((repo, number, names) =>
+      publishedIssueFacts(repo, number, names, options)))(repository, issue, pulls); }
+    catch { log('Issue-directed Wake withheld: published facts unavailable for #' + issue); continue; }
+    const validFacts = facts.filter((fact) => fact.issueNumber === issue
+      && (fact.kind === 'issue-comment' || pulls.some((pull) => {
+        if (pull.issue !== issue || pull.number !== fact.prNumber || pull.sha !== fact.headSha) return false;
+        const fresh = (options.readNamedPull ?? readNativePull)(repository, pull.number);
+        return Boolean(fresh && fresh.number === pull.number && fresh.state === 'open'
+          && !fresh.merged && fresh.headSha === pull.sha);
+      }))).slice(-200);
+    const keys = [...new Set(validFacts.map((fact) => `${fact.kind}:${fact.id}`))].sort();
     if (keys.length === 0) continue;
     const digest = createHash('sha256').update(JSON.stringify(keys)).digest('hex');
     const key = `issue:${issue}:${bound.pane.handle}:${bound.pane.incarnationId}:${bound.assignment.assignmentId}:${bound.assignment.generation}:${digest}`;
