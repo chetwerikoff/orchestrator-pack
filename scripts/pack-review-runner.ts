@@ -54,6 +54,7 @@ import {
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS,
   acknowledgePackReviewReset,
+  beginPackReviewBodyAmendmentContinuation,
   commitPackReviewAuthorityTransition,
   commitPackReviewTerminal,
   commitPackReviewTriage,
@@ -4858,6 +4859,207 @@ async function observePackReviewVerdictDelivery(options: {
   return { verified: true, reason: 'completed', requiredStatusState };
 }
 
+/** Read exactly one behavior-criteria section, never infer a semantic change
+ * from a revision marker, allowed-roots edit, prose or comments alone. */
+function reviewBehaviorCriteria(body: string): string | null {
+  const lines = body.replace(/\r\n/g, '\n').split('\n');
+  const begin = lines.findIndex((line) => /^## Acceptance criteria(?:\\s|$)/i.test(line));
+  if (begin < 0) return null;
+  const tail = lines.findIndex((line, index) => index > begin && /^## /.test(line));
+  return lines.slice(begin + 1, tail >= 0 ? tail : undefined).join('\n').trim() || null;
+}
+
+/**
+ * One amendment admission under the existing authority lock; no second store,
+ * reset, shadow verdict or same-head snapshot overwrite. B1 must be terminal
+ * before B2 can be admitted. A failed public pending read-back never starts a
+ * reviewer, even if the local authority still says stage complete.
+ */
+export async function maybeAdmitPackReviewBodyAmendment(
+  input: ReconcileStalePackReviewRunsInput,
+  options: { projectId: string; storeRoot: string; repoSlug: string },
+): Promise<Record<string, unknown> | null> {
+  if (!input.prNumber) return null;
+  const prNumber = input.prNumber;
+  const authority = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot });
+  const cycle = authority?.cycle;
+  if (!authority || !cycle || cycle.capMapVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) return null;
+  const isFinalTerminal = cycle.consumedRoundOrdinals?.length === cycle.frozenCap
+    && cycle.consumedRoundOrdinals.at(-1) === cycle.frozenCap
+    && Boolean(authority.terminal?.runId)
+    && (authority.terminal?.reviewVerdict === 'findings'
+      || Boolean(cycle.amendmentOrigin && authority.terminal?.reviewVerdict === 'clean'));
+  if (!isFinalTerminal && !cycle.amendmentOrigin) return null;
+  const failure = (reason: string, detail?: string) => ({
+    prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
+    settled: false, amendmentAdmission: false, reason,
+    ...(detail ? { detail } : {}),
+    nextAction: 'reconcile the original exact-head terminal, live closing Issue and current required status; do not reset the cycle or send a new review',
+  });
+  let livePr: { body: string; headSha: string };
+  try {
+    if (process.env.OPK_VITEST_HARNESS === '1') {
+      if (input.fixturePrState?.toUpperCase() !== 'OPEN'
+          || input.fixturePrMerged === true
+          || !input.fixturePrBody || !input.fixtureCurrentPrHeadSha) return null;
+      livePr = { body: input.fixturePrBody,
+        headSha: trim(input.fixtureCurrentPrHeadSha).toLowerCase() };
+    } else {
+      livePr = await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, prNumber);
+    }
+  } catch {
+    // Merged PRs are not new-review candidates. The original pre-merge
+    // terminal/status-only reconciliation remains a separate path.
+    return null;
+  }
+  const issueNumber = extractClosingIssueNumber(livePr.body);
+  if (!issueNumber) return failure('amendment_closing_issue_unverified');
+  let currentIssue: { title: string; body: string };
+  try {
+    if (process.env.OPK_VITEST_HARNESS === '1') {
+      if (input.fixtureIssueNumber !== issueNumber
+          || input.fixtureIssueTitle === undefined || input.fixtureIssueBody === undefined) {
+        return failure('amendment_issue_fixture_unverified');
+      }
+      currentIssue = { title: input.fixtureIssueTitle, body: input.fixtureIssueBody };
+    } else {
+      currentIssue = await resolveCurrentIssueFields(input.sourceRepoRoot, options.repoSlug, issueNumber);
+    }
+  } catch (error) {
+    return failure('amendment_live_issue_unavailable', describeError(error));
+  }
+  const nextDigest = computeBoundIssueSnapshotHash(currentIssue.body);
+  if (cycle.amendmentOrigin && !isFinalTerminal) {
+    return nextDigest === cycle.amendmentOrigin.amendedBodyDigest
+      ? null : failure('amendment_prior_round_not_terminal');
+  }
+  if (!isFinalTerminal || !authority.terminal) return null;
+  const terminal = authority.terminal;
+  const priorRun = getPackReviewRun(terminal.runId, {
+    projectId: options.projectId, storeRoot: options.storeRoot,
+  });
+  if (!priorRun || !hasPersistedPackReviewVerdict(priorRun)
+      || !priorRun.completedAtUtc || priorRun.prNumber !== prNumber
+      || priorRun.projectId !== options.projectId
+      || priorRun.reviewCycleId !== cycle.cycleId
+      || priorRun.targetSha !== terminal.targetSha
+      || priorRun.canonicalRepository?.toLowerCase() !== options.repoSlug.toLowerCase()
+      || priorRun.journalOutcome?.state !== 'persisted'
+      || priorRun.deliveryOutcomes.githubComment?.state !== 'succeeded') {
+    return failure('amendment_original_terminal_unverified');
+  }
+  const boundDigest = priorRun.boundIssueSnapshotDigest
+    ?? priorRun.reviewRound?.boundIssueSnapshotDigest
+    ?? cycle.amendmentOrigin?.amendedBodyDigest;
+  const frozen = resolveBoundIssueSnapshot({
+    projectId: options.projectId, prNumber,
+    prHeadSha: terminal.targetSha, issueNumber,
+    snapshotDigest: boundDigest,
+    storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+  });
+  if (frozen.status !== 'found' || !frozen.snapshotPath || !frozen.snapshotHash
+      || frozen.metadata?.capturePhase !== 'review-preflight'
+      || (boundDigest && frozen.snapshotHash !== boundDigest)
+      || (cycle.amendmentOrigin && frozen.snapshotHash !== cycle.amendmentOrigin.amendedBodyDigest)
+      || (priorRun.reviewRound && priorRun.reviewRound.issueNumber !== issueNumber)) {
+    return failure('amendment_original_snapshot_unverified');
+  }
+  const oldBody = readFileSync(frozen.snapshotPath, 'utf8');
+  if (nextDigest === frozen.snapshotHash) return null;
+  if (cycle.amendmentOrigin?.previouslyAdmittedBodyDigests.includes(nextDigest)) {
+    return failure('amendment_digest_replayed');
+  }
+  let liveTier: PackReviewTier;
+  try { liveTier = parseAuthoritativeTier(currentIssue.body, currentIssue.title); }
+  catch (error) { return failure('amendment_tier_invalid', describeError(error)); }
+  if (liveTier !== cycle.frozenTier) return null; // Existing upward-tier reconciliation owns that distinct case.
+  const oldCriteria = reviewBehaviorCriteria(oldBody);
+  const newCriteria = reviewBehaviorCriteria(currentIssue.body);
+  if (!oldCriteria || !newCriteria || oldCriteria === newCriteria) {
+    // Scope-only edits, dispositions and metadata do not consume an amended
+    // behavior round. The historic same-head/descendant path decides them.
+    return null;
+  }
+  const originalImmutable = listPackReviewImmutableRecords('terminal', { storeRoot: options.storeRoot })
+    .filter((entry) => entry.digest === terminal.digest
+      && (entry.value as PackReviewTerminalV2 | undefined)?.runId === priorRun.id
+      && (entry.value as PackReviewTerminalV2 | undefined)?.targetSha === terminal.targetSha);
+  if (originalImmutable.length !== 1) return failure('amendment_immutable_terminal_unverified');
+  if (livePr.headSha !== authority.currentHeadSha && livePr.headSha !== terminal.targetSha) {
+    const descendant = await resolvePackReviewStrictDescendant({
+      repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+      reviewedHeadSha: terminal.targetSha, currentHeadSha: livePr.headSha,
+      fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
+    });
+    if (!descendant) return failure('amendment_head_not_descendant');
+  }
+  // Recheck both observable bindings before and after the non-atomic GitHub
+  // pending projection; no current public success may silently authorize B1.
+  const stillCurrent = async () => {
+    const latest = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot });
+    if (latest?.transitionSeq !== authority.transitionSeq
+        || latest.terminal?.runId !== terminal.runId
+        || latest.cycle?.cycleId !== cycle.cycleId) return false;
+    if (process.env.OPK_VITEST_HARNESS === '1') {
+      return livePr.headSha === trim(input.fixtureCurrentPrHeadSha).toLowerCase()
+        && computeBoundIssueSnapshotHash(input.fixtureIssueBody ?? '') === nextDigest;
+    }
+    const [pr, issue] = await Promise.all([
+      resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, prNumber),
+      resolveCurrentIssueFields(input.sourceRepoRoot, options.repoSlug, issueNumber),
+    ]);
+    return pr.headSha === livePr.headSha
+      && extractClosingIssueNumber(pr.body) === issueNumber
+      && computeBoundIssueSnapshotHash(issue.body) === nextDigest;
+  };
+  try {
+    if (!(await stillCurrent())) return failure('amendment_binding_changed_before_pending');
+    const writer = input.fixtureRequiredStatusWriter ?? ((request: Parameters<PackReviewRequiredStatusWriter>[0]) =>
+      publishPackReviewRequiredStatus({
+        repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+        headSha: livePr.headSha, request,
+      }));
+    await writer({
+      state: 'pending',
+      context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+      description: 'review_cycle_pending: amended Issue behavior requires a new review',
+      idempotencyKey: `body-amendment:${prNumber}:${livePr.headSha}:${nextDigest}`,
+    });
+    if (await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha) !== 'pending'
+        || !(await stillCurrent())) {
+      return failure('amendment_pending_status_unverified');
+    }
+    let beforeAdmission = authority;
+    if (livePr.headSha !== authority.currentHeadSha) {
+      beforeAdmission = observePackReviewHead({
+        prNumber, expectedTransitionSeq: authority.transitionSeq,
+        headSha: livePr.headSha, options: { storeRoot: options.storeRoot },
+      });
+    }
+    const admitted = beginPackReviewBodyAmendmentContinuation({
+      prNumber, expectedTransitionSeq: beforeAdmission.transitionSeq,
+      headSha: livePr.headSha, closingIssueNumber: issueNumber,
+      priorTerminalRunId: terminal.runId,
+      reviewedBodyDigest: frozen.snapshotHash,
+      amendedBodyDigest: nextDigest,
+      options: { storeRoot: options.storeRoot },
+    });
+    const observed = await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha);
+    if (observed !== 'pending' || admitted.cycle?.amendmentOrigin?.amendedBodyDigest !== nextDigest) {
+      return failure('amendment_post_commit_pending_unverified');
+    }
+    return {
+      prNumber, headSha: livePr.headSha, amendmentAdmission: true,
+      reason: 'body_amendment_admitted',
+      cycleId: admitted.cycle.cycleId,
+      reviewedBodyDigest: frozen.snapshotHash, amendedBodyDigest: nextDigest,
+      requiredStatusState: 'pending', settled: false,
+    };
+  } catch (error) {
+    return failure('amendment_admission_unverified', describeError(error));
+  }
+}
+
 async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsInput, options: {
   projectId: string;
   storeRoot: string;
@@ -4867,6 +5069,8 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   if (!prNumber) return null;
   let authority = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot });
   if (!authority?.cycle) return null;
+  const amendmentAdmission = await maybeAdmitPackReviewBodyAmendment(input, options);
+  if (amendmentAdmission) return amendmentAdmission;
   // A former T2 final-cap checkpoint must not close the review while a
   // verifiable linked-Issue amendment makes it a pre-cap T3 checkpoint.
   if (authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
@@ -7590,6 +7794,18 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           nextAction: 'restore the real PR-closing Issue and exact bound snapshot binding before starting this audited cycle' };
       }
     }
+    if (!supplementalMode) {
+      const amendmentAdmission = await maybeAdmitPackReviewBodyAmendment({
+        ...input,
+        prNumber: target.prNumber,
+        sourceRepoRoot: target.sourceRepoRoot,
+      }, { projectId, storeRoot, repoSlug: target.repoSlug });
+      if (amendmentAdmission && amendmentAdmission.reason !== 'body_amendment_admitted') {
+        await releaseEarlyClaim(String(amendmentAdmission.reason));
+        return { ok: false, created: false, reused: false,
+          ...amendmentAdmission, httpStatus: 409 };
+      }
+    }
     const authoritative = await resolveAuthoritativeReviewContext(input, target, projectId);
     if (firstResetRound) {
       const captured = target.issueNumber && resolveBoundIssueSnapshot({
@@ -7663,6 +7879,38 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       && authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
       && (authority.cycle.reviewStageComplete === true
         || (authority.cycle.consumedRoundOrdinals?.length ?? 0) >= authority.cycle.frozenCap));
+    if (!supplementalMode && authority.cycle?.amendmentOrigin
+        && (authority.cycle.consumedRoundOrdinals?.length ?? 0) === 0) {
+      const digest = authority.cycle.amendmentOrigin.amendedBodyDigest;
+      let verifiedPending = false;
+      try {
+        verifiedPending = authoritative.snapshotDigest === digest
+          && await readProjectionHead() === target.headSha.toLowerCase()
+          && await readFinalCapRequiredStatus({
+            sourceRepoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+            fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
+          }, target.repoSlug, target.headSha) === 'pending';
+      } catch { /* No public read-back means no reviewer admission. */ }
+      if (!verifiedPending) {
+        await releaseEarlyClaim('amendment_pending_status_unverified');
+        return { ok: false, created: false, reused: false,
+          reason: 'amendment_pending_status_unverified',
+          nextAction: 'restore and confirm current-head pending status before any amended review invocation',
+          prNumber: target.prNumber, headSha: target.headSha, httpStatus: 409 };
+      }
+      const currentRequiredCi = await manualPackReviewRequiredCiGreen({
+        startInput: input, targetContext: selectedTarget,
+        target: { prNumber: target.prNumber, headSha: target.headSha,
+          repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
+          prBaseRef: target.prBaseRef },
+      });
+      if (!currentRequiredCi) {
+        await releaseEarlyClaim('required_ci_not_green_for_amendment');
+        return { ok: false, created: false, reused: false,
+          reason: 'required_ci_not_green_for_amendment',
+          prNumber: target.prNumber, headSha: target.headSha, httpStatus: 409 };
+      }
+    }
     const priorTerminalRun = authority.currentHeadSha === target.headSha && authority.terminal?.runId
       ? getPackReviewRun(authority.terminal.runId, { projectId, storeRoot })
       : null;
