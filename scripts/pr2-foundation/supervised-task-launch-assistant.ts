@@ -682,10 +682,38 @@ export async function runSupervisedTaskLaunchAssistant(
   const repository = await checkpoint('repository_preflight', timings, deps.now, () => deps.repositoryPreflight(resources.repository));
   if (repository.status !== 'ok') return continued(input, 'repository_preflight', repository, resources, startedAtMs, timings, deps.now);
 
+  // The existing-worktree CLI requires a pre-created terminal/placement witness.
+  // A provider-created fresh worktree cannot supply its clean Git status before
+  // the atomic provider worker-start; use the already supported split setup
+  // and exact-terminal route instead of accepting post-dispatch cleanliness.
+  if (input.worktreeSelector && input.startMode === 'provider_new_top_level') {
+    return continued(input, 'executor_profile', {
+      cause: 'executor_route_mismatch', actor: 'orchestrator', evidence: {},
+      nextAction: { kind: 'repair_executor_profile',
+        note: 'an existing --worktree requires exact_terminal_worktree' },
+    }, resources, startedAtMs, timings, deps.now);
+  }
+  if (input.worktreeName && input.startMode === 'provider_new_top_level') {
+    return continued(input, 'executor_profile', {
+      cause: 'fresh_provider_clean_witness_unavailable', actor: 'orchestrator', evidence: {},
+      nextAction: { kind: 'repair_executor_profile',
+        note: 'use the existing split setup/clean-observation route: omit --start-mode or select exact_terminal_worktree' },
+    }, resources, startedAtMs, timings, deps.now);
+  }
+  const selectedMode = input.worktreeSelector || input.worktreeName
+    ? 'exact_terminal_worktree' : input.startMode;
   const profileEdge = await checkpoint('executor_profile', timings, deps.now, () =>
-    deps.resolveProfile(input.workClass, input.env ?? process.env, input.startMode));
+    deps.resolveProfile(input.workClass, input.env ?? process.env, selectedMode));
   if (profileEdge.status !== 'ok') return continued(input, 'executor_profile', profileEdge, resources, startedAtMs, timings, deps.now);
   let profile = profileEdge.value;
+  if (profile.route !== 'exact_terminal_worktree'
+    && (input.worktreeSelector || input.worktreeName)) {
+    return continued(input, 'executor_profile', {
+      cause: 'fresh_provider_clean_witness_unavailable', actor: 'orchestrator', evidence: {},
+      nextAction: { kind: 'repair_executor_profile',
+        note: 'require the split clean worktree setup and exact terminal before any new Dispatch' },
+    }, resources, startedAtMs, timings, deps.now);
+  }
   if (input.workClass === 'merge'
     && (profile.family !== 'opencode' || profile.route !== 'exact_terminal_worktree'
       || !input.primaryRoot || input.worktreeSelector !== `path:${input.primaryRoot}`)) {
@@ -2283,6 +2311,7 @@ const LAUNCH_CLI_OPTIONS = new Set([
   '--worktree',
   '--worktree-name',
   '--base-branch',
+  '--start-mode',
 ]);
 
 function launchCliOptions(argv: readonly string[]): ReadonlyMap<string, string> {
@@ -2344,6 +2373,14 @@ export function parseLaunchAssistantCli(
   const hasManagerBrief = managerBrief !== undefined;
   const hasWorktreeSelector = Boolean(worktreeSelector);
   const hasWorktreeName = Boolean(worktreeName);
+  const requestedMode = options.get('--start-mode');
+  if (requestedMode && requestedMode !== 'exact_terminal_worktree'
+    && requestedMode !== 'provider_new_top_level') {
+    throw new Error('--start-mode requires exact_terminal_worktree or provider_new_top_level');
+  }
+  if (hasWorktreeSelector && requestedMode === 'provider_new_top_level') {
+    throw new Error('existing --worktree requires exact_terminal_worktree');
+  }
 
   if (workClass === 'merge') {
     if (!hasTask || !issueNumber || !delegatedIntegration || runId || hasManagerBrief || hasWorktreeSelector || hasWorktreeName) {
@@ -2377,6 +2414,9 @@ export function parseLaunchAssistantCli(
     ...(workClass === 'merge' ? { worktreeSelector: `path:${target.primaryRoot}` }
       : worktreeSelector ? { worktreeSelector } : {}),
     ...(worktreeName ? { worktreeName } : {}),
+    ...((hasWorktreeSelector || workClass === 'merge')
+      ? { startMode: 'exact_terminal_worktree' as const }
+      : requestedMode ? { startMode: requestedMode as WorkerStartMode } : {}),
     baseBranch,
     defaultBranch: target.defaultBranch,
   };
