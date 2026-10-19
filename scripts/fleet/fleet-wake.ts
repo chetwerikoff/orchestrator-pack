@@ -1278,6 +1278,7 @@ async function wakeOriginalTerminalFailures(
 interface PaneWakeCounts {
   attempts: number;
   confirmed: number;
+  attemptedPanes: Set<string>;
 }
 
 async function sendMarkedUnitMessage(
@@ -1287,7 +1288,7 @@ async function sendMarkedUnitMessage(
   counts?: PaneWakeCounts,
   stillSelected?: () => boolean,
 ): Promise<boolean> {
-  if (store.hasParkedWakeEvent(key)) return false;
+  if (store.hasParkedWakeEvent(key) || counts?.attemptedPanes.has(handle)) return false;
   // Durable reservation must precede both text and Enter effects. A failed
   // upgrade must not authorize a second attempt at this same fact.
   try { store.markParkedWakeEvent(key, 'attempted_unverified'); }
@@ -1296,7 +1297,7 @@ async function sendMarkedUnitMessage(
     log('unit wake selected owner changed; send withheld: ' + key);
     return false;
   }
-  if (counts) counts.attempts += 1;
+  if (counts) { counts.attempts += 1; counts.attemptedPanes.add(handle); }
   let delivered = false;
   try {
     delivered = sendCoordinator(executor, handle, message)
@@ -1691,7 +1692,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   // Keep legacy fleet effects first: stale recovery belongs to this same
   // already-scheduled tick, but must not delay coordinator/banner delivery.
   const operationalTick = async (): Promise<FleetAlarmTickResult> => {
-  const wakeCounts: PaneWakeCounts = { attempts: 0, confirmed: 0 };
+  const wakeCounts: PaneWakeCounts = { attempts: 0, confirmed: 0, attemptedPanes: new Set() };
   let terminals: FleetTerminal[];
   try {
     terminals = listFleetTerminals(executor);
