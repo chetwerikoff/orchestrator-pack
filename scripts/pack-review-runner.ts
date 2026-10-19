@@ -2144,9 +2144,15 @@ async function findJournaledDeliveryResumeCandidate(options: {
   explicitReviewer?: PackReviewer;
   supplementalMode?: boolean;
 }): Promise<PackReviewRunRecord | null> {
+  const selectedCycle = readPackReviewAuthority(options.prNumber, { storeRoot: options.storeRoot })?.cycle;
   const candidates = listPackReviewRuns({ projectId: options.projectId, storeRoot: options.storeRoot })
     .filter((candidate) => candidate.prNumber === options.prNumber
       && candidate.targetSha === options.headSha
+      // A prior B0 terminal's delivery is historical after a digest-bound B1
+      // continuation opens. It cannot be resumed as the new cycle's reviewer.
+      && (candidate.automaticBudgetDisposition === 'non_consuming_explicit'
+        || !selectedCycle?.amendmentOrigin
+        || candidate.reviewCycleId === selectedCycle.cycleId)
       && (options.explicitReviewer
         ? candidate.resolvedReviewer === options.explicitReviewer
           && (candidate.automaticBudgetDisposition === 'non_consuming_explicit') === (options.supplementalMode === true)
@@ -5297,6 +5303,18 @@ export async function maybeAdmitPackReviewBodyAmendment(
   }
   const oldBody = readFileSync(frozen.snapshotPath, 'utf8');
   if (nextDigest === frozen.snapshotHash) return null;
+  // The pre-existing #2537 T2 -> T3 promotion changes the authoritative tier
+  // without amending any reviewed behavior. Leave exactly that byte-level
+  // tier-only transition to the existing tier/CI/head admission owner.
+  // A changed criterion or any other additional Issue-body byte is not exempt.
+  if (!cycle.amendmentOrigin && cycle.frozenTier === 'T2'
+      && terminal.reviewVerdict === 'findings' && cycle.reviewStageComplete !== true
+      && parseAuthoritativeTier(oldBody) === 'T2'
+      && parseAuthoritativeTier(currentIssue.body, currentIssue.title) === 'T3'
+      && (oldBody.match(/^tier: T2\r?$/gm) ?? []).length === 1
+      && oldBody.replace(/^tier: T2(?=\r?$)/m, 'tier: T3') === currentIssue.body) {
+    return null;
+  }
   if (prNumber === 2656 && issueNumber === 2655
       && exact2655ScopeOnlyLineDelta(oldBody, currentIssue.body)) {
     const approved = await verify2655ScopeOnlyFixSettlement(input, {
@@ -8884,10 +8902,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         }
         const older = storedCandidates.filter((candidate) => candidate.id !== priorSameRound.id);
         const failedRateLimitRound = hasFailedRateLimitSource(priorSameRound);
-        if (older.length > 0 && !failedRateLimitRound) {
-          return rejectIncumbent(priorSameRound, 'gpt_incumbent_ambiguous_run',
-            'inspect competing same-round records; do not reassign any incumbent owner');
-        }
+        // An older fully settled 0/3 cooldown run is history, not another
+        // incumbent competing with a newer partial run in the same round.
+        // Every older entry still needs exact zero-send/GitHub absence proof.
         // An older verdict-bearing record is never made safe by a newer failed
         // record; likewise every older no-verdict record needs its own census.
         const verdictHistory = allRecords.find((candidate) =>
@@ -8915,6 +8932,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
               rateLimitOriginalRecoveryAction(historical));
           }
         }
+        sameRoundGptHistory = older;
         const postedPartial = failedRateLimitRound && gptUsableSourceCount(priorSameRound.reviewRound) > 0;
         if (postedPartial) {
           if (!incumbentOwnerDead(priorSameRound)) {
