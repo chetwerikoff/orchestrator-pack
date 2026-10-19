@@ -2,9 +2,14 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 2659,
   "declared_paths": [
+    "docs/chat-executor-rules.md",
+    "docs/orchestration-runbook.md",
     "scripts/bound-issue-snapshot-cli.ts",
     "scripts/lib/pack-review-run-store.ts",
     "scripts/lib/reverify-bound-issue-snapshot.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner-issue-1591.test.ts",
+    "scripts/pack-review-runner.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pack-review-state.test.ts",
     "scripts/pack-review-state.ts"
@@ -28,5 +33,5 @@
     "scripts/pack-review-state.test.ts",
     "scripts/pack-review-state.ts"
   ],
-  "source_revision": "64e2a11a2ebc98971a28657addcefa129b908576"
+  "source_revision": "f492374ba107d846f75657e28e47b828bd2ba3b2"
 }
