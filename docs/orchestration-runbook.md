@@ -121,8 +121,14 @@ double-null timing, selector resolution, ff-only refresh steps, structured envel
 and provider-recovery internals. Agents preserve only the obligations below.
 
 Before effects, pass the assistant's repository/runtime/profile preflight. A fresh
-worktree must have supported setup proof; a reused worktree must have supported
-reuse proof. For manager continuation, the exact Run/Task and caller-supplied
+worktree must have supported setup proof **and be clean after setup**; a reused
+worktree must have supported reuse proof. T1/T2/T3 reuse of a dirty existing
+worktree requires the exact current Issue-owned predecessor assignment plus
+native terminal/gone Dispatch and matching producer worktree ID, a unique
+non-default Git branch and unchanged HEAD/status. A fresh continuation Task
+may differ from the predecessor Task; the old assignment's Dispatch remains
+the exact ownership anchor. Reuse does not fetch or mutate local bytes.
+For manager continuation, the exact Run/Task and caller-supplied
 worktree selector must identify one manager-local non-main branch owned by exactly
 one worktree. A clean ancestor can follow the assistant's ff-only `origin/main`
 refresh. An existing dirty checkout instead requires native exact Run/Task
