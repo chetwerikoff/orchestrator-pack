@@ -798,7 +798,7 @@ export async function runSupervisedTaskLaunchAssistant(
     && earlyCurrent?.role === (input.workClass === 'manager' ? 'orchestrator' : 'worker');
   const earlyGone = earlyCandidate && earlyCurrent && deps.proveTerminalGone
     ? await deps.proveTerminalGone(earlyCurrent) : null;
-  const earlyTerminal = Boolean(earlyGone && earlyCurrent
+  const earlyTerminal = early.value.kind === 'present' && Boolean(earlyGone && earlyCurrent
     && earlyGone.workerAbsent && earlyGone.taskId === taskId
     && earlyGone.dispatchId === earlyCurrent.bindingKey
     && earlyGone.dispatchState === early.value.status);

@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -1052,11 +1052,11 @@ describe('supervised worker start exact assignment admission',()=>{
     mkdirSync(primary, { recursive: true });
     mkdirSync(config, { recursive: true });
     mkdirSync(fakeBin, { recursive: true });
-    const init = spawnSync('git', ['init', '-q', primary], { encoding: 'utf8' });
-    expect(init.status).toBe(0);
-    const remote = spawnSync('git', ['-C', primary, 'remote', 'add', 'origin',
-      'https://github.com/chetwerikoff/orchestrator-pack.git'], { encoding: 'utf8' });
-    expect(remote.status).toBe(0);
+    const init = runProcessSync({ command: 'git', args: ['init', '-q', primary], inheritParentEnv: true });
+    expect(init.exitCode).toBe(0);
+    const remote = runProcessSync({ command: 'git', args: ['-C', primary, 'remote', 'add', 'origin',
+      'https://github.com/chetwerikoff/orchestrator-pack.git'], inheritParentEnv: true });
+    expect(remote.exitCode).toBe(0);
     writeFileSync(path.join(config, 'orchestrator-pack.json'), JSON.stringify({
       projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
       primaryRoot: primary, defaultBranch: 'main',
@@ -1071,15 +1071,15 @@ describe('supervised worker start exact assignment admission',()=>{
       OPK_PROJECT_ID: 'orchestrator-pack', OPK_ORCA_EFFECT_MARKER: markerFile,
       PATH: fakeBin + ':' + (process.env.PATH ?? ''),
     };
-    const run = spawnSync(process.execPath, ['--experimental-strip-types',
+    const run = runProcessSync({ command: process.execPath, args: ['--experimental-strip-types',
       fileURLToPath(new URL('./supervised-worker-start.ts', import.meta.url)),
       '--project', 'orchestrator-pack', '--repository', 'chetwerikoff/orchestrator-pack',
       '--role', 'worker', '--mode', 'provider_new_top_level', '--',
       '--task', 'task_1', '--worktree', 'new-top-level', '--repo', 'id:repo-1',
       '--name', 'unsafe-hook-output', '--agent', 'cursor', '--model', 'model-medium',
       '--setup', 'run',
-    ], { env, encoding: 'utf8', timeout: 15_000 });
-    expect(run.status).toBe(1);
+    ], env, timeoutMs: 15_000 });
+    expect(run.exitCode).toBe(1);
     expect(run.stdout).toContain('"reason":"supervised_start_provider_clean_witness_unavailable"');
     expect(existsSync(markerFile)).toBe(false);
     expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack', env), 1416)).toBeNull();
