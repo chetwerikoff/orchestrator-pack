@@ -2063,6 +2063,7 @@ describe('state-light fresh conversation collision recovery', () => {
               outer.childNodes = [];
               outer.ownerDocument = doc;
               outer.getClientRects = () => [{}];
+              outer.hasAttribute = () => false;
               const root = attach(outer, node('DIV', '', { class: 'markdown' }));
               attach(root, node('P', 'Before'));
               const wrapper = attach(root, node('DIV', ''));
