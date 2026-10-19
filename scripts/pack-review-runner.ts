@@ -10254,7 +10254,11 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     }
     // A promoted native ordinal-one run also needs independent current-head
     // status confirmation; the historical delivery ACK/cap cannot certify it.
-    const confirmRequiredStatus = reviewer === 'gpt'
+    // An amended round is not externally complete merely because a native
+    // status POST returned. A B2 observation may have converted B1 success
+    // to pending; every reviewer kind requires the exact public read-back.
+    const amendmentNeedsPublicProof = Boolean(authority.cycle?.amendmentOrigin);
+    const confirmRequiredStatus = reviewer === 'gpt' || amendmentNeedsPublicProof
       || (!classifyPackReviewPayload(payload).blocking
         && outstandingPackReviewCycle(deliveryRun, storeRoot));
     const confirmation = confirmRequiredStatus
@@ -10303,10 +10307,11 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       (getPackReviewRun(run.id, { projectId, storeRoot }) ?? run).reviewRound,
     );
     return {
-      ok: true,
+      ok: amendmentNeedsPublicProof ? confirmation?.verified === true : true,
       created: true,
       reused: false,
-      reason: delivered.reason,
+      reason: amendmentNeedsPublicProof && confirmation?.verified !== true
+        ? 'amendment_status_unverified' : delivered.reason,
       ...(confirmation ? {
         deliveryReason: delivered.reason,
         publicationVerified: confirmation.verified,
