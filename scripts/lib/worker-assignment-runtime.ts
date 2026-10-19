@@ -104,7 +104,10 @@ export interface TerminalGoneAssignmentEvidence {
   readonly taskId: string;
   readonly dispatchId: string;
   readonly dispatchState: 'failed' | 'abandoned' | 'cancelled' | 'done';
-  readonly priorTerminalId: string;
+  /** Present only when the native producer retains a corroborated old handle. */
+  readonly priorTerminalId?: string;
+  /** Exact Orca worktree ownership witness, when the native observation provides it. */
+  readonly worktreeId?: string;
   readonly workerAbsent: true;
 }
 
@@ -365,14 +368,16 @@ export async function admitCurrentWorkerAssignmentReplacement(input: {
       const lifecycle = observeCurrentWorkerAssignmentLifecycle({
         file: input.file, expected: input.expected, adapter: input.adapter, timeoutMs: input.timeoutMs,
       });
-      if (lifecycle.status === 'target_unresolved') {
+      if (lifecycle.status === 'target_unresolved' || lifecycle.status === 'gone') {
         const evidence = await input.proveTerminalGone(input.expected);
         if (evidence?.workerAbsent === true
           && evidence.taskId === input.expected.taskId
           && evidence.dispatchId === input.expected.bindingKey
           && ['failed', 'abandoned', 'cancelled', 'done'].includes(evidence.dispatchState)
-          && evidence.priorTerminalId.trim()) {
-          if (requestedTerminalId && sameTerminalHandle(requestedTerminalId, evidence.priorTerminalId)) {
+          && (evidence.priorTerminalId === undefined
+            || (typeof evidence.priorTerminalId === 'string' && Boolean(evidence.priorTerminalId.trim())))) {
+          if (requestedTerminalId && evidence.priorTerminalId
+            && sameTerminalHandle(requestedTerminalId, evidence.priorTerminalId)) {
             return { status: 'target_unresolved', reason: 'terminal_reuse_unauthorized' } as const;
           }
           return { status: 'replaceable', expected: input.expected } as const;
