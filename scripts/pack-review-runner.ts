@@ -8920,9 +8920,14 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         }
         const older = storedCandidates.filter((candidate) => candidate.id !== priorSameRound.id);
         const failedRateLimitRound = hasFailedRateLimitSource(priorSameRound);
-        // An older fully settled 0/3 cooldown run is history, not another
-        // incumbent competing with a newer partial run in the same round.
-        // Every older entry still needs exact zero-send/GitHub absence proof.
+        // Only a proven zero-judgment cooldown predecessor is historical.
+        // Unrelated competing records remain ambiguous, not eligible retries.
+        if (older.length > 0 && !failedRateLimitRound
+            && !older.every((historical) => originalRateLimitZeroJudgment(historical, storeRoot))) {
+          return rejectIncumbent(priorSameRound, 'gpt_incumbent_ambiguous_run',
+            'inspect competing same-round records; do not reassign any incumbent owner');
+        }
+        // Every older cooldown still needs exact zero-send/GitHub absence proof.
         // An older verdict-bearing record is never made safe by a newer failed
         // record; likewise every older no-verdict record needs its own census.
         const verdictHistory = allRecords.find((candidate) =>
