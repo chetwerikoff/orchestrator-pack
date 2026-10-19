@@ -4863,7 +4863,7 @@ async function observePackReviewVerdictDelivery(options: {
  * from a revision marker, allowed-roots edit, prose or comments alone. */
 function reviewBehaviorCriteria(body: string): string | null {
   const lines = body.replace(/\r\n/g, '\n').split('\n');
-  const begin = lines.findIndex((line) => /^## Acceptance criteria(?:\\s|$)/i.test(line));
+  const begin = lines.findIndex((line) => /^## Acceptance criteria(?:\s|$)/i.test(line));
   if (begin < 0) return null;
   const tail = lines.findIndex((line, index) => index > begin && /^## /.test(line));
   return lines.slice(begin + 1, tail >= 0 ? tail : undefined).join('\n').trim() || null;
@@ -7797,6 +7797,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     if (!supplementalMode) {
       const amendmentAdmission = await maybeAdmitPackReviewBodyAmendment({
         ...input,
+        repoSlug: target.repoSlug,
         prNumber: target.prNumber,
         sourceRepoRoot: target.sourceRepoRoot,
       }, { projectId, storeRoot, repoSlug: target.repoSlug });
