@@ -52,7 +52,7 @@ import {
 } from './chat-error-banners.ts';
 import { readChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
 import { listCurrentWorkerAssignmentRecords, resolveWorkerAssignmentStorePath, type WorkerAssignmentRecord } from '../lib/worker-assignment-store.ts';
-import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath } from '../flow-manager-long-running-child.ts';
+import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath, readHandoffReceipt, type HandoffReceipt } from '../flow-manager-long-running-child.ts';
 
 export interface FleetWakeConfig {
   readonly projectId: string;
@@ -287,6 +287,7 @@ export interface FleetAlarmTickOptions {
   readonly readChats?: (cdpUrl: string, scope: ChatBannerScope) => Promise<ProjectChat[]>;
   readonly closeChat?: (cdpUrl: string, targetId: string) => Promise<boolean>;
   readonly listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
+  readonly readOriginalHandoffReceipt?: typeof readHandoffReceipt;
   readonly listUnreadRunMessages?: (coordinatorHandle: string) => readonly RunMailWakeEvent[];
   readonly listOpenPulls?: (repository: string) => readonly OpenPullHead[];
   readonly checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
@@ -553,6 +554,11 @@ export interface TerminalEnvelopeEvent {
   readonly cwd?: string;
   readonly terminalHandle?: string;
   readonly observedInvocationId?: string;
+  readonly runIdentity?: string;
+  readonly attemptIdentity?: string;
+  readonly handoffReceiptPath?: string;
+  readonly lifecycleOutcome?: 'incident' | 'success';
+  readonly turnResultState?: string;
 }
 
 export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeEvent[] {
@@ -585,6 +591,12 @@ export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeE
         const invocationId = observedInvocationId ?? String(envelope.attempt_identity ?? basename(path));
         events.push({
           path, invocationId,
+          ...(typeof envelope.run_identity === 'string' ? { runIdentity: envelope.run_identity } : {}),
+          ...(typeof envelope.attempt_identity === 'string' ? { attemptIdentity: envelope.attempt_identity } : {}),
+          ...(typeof envelope.handoff_receipt_path === 'string' ? { handoffReceiptPath: envelope.handoff_receipt_path } : {}),
+          ...(envelope.lifecycle_outcome === 'incident' || envelope.lifecycle_outcome === 'success'
+            ? { lifecycleOutcome: envelope.lifecycle_outcome } : {}),
+          ...(typeof envelope.turn_result_state === 'string' ? { turnResultState: envelope.turn_result_state } : {}),
           ...(cwd ? { cwd } : {}),
           ...(terminalHandle ? { terminalHandle } : {}),
           ...(observedInvocationId ? { observedInvocationId } : {}),
@@ -987,7 +999,7 @@ function publishedIssueFacts(
   const facts: PublishedIssueFact[] = [];
   if (comments) {
     for (const comment of comments) {
-      if (Number.isSafeInteger(comment.id) && typeof comment.updated_at === 'string') {
+      if (typeof comment.id === 'number' && Number.isSafeInteger(comment.id) && typeof comment.updated_at === 'string') {
         facts.push({ kind: 'issue-comment', id: `comment:${comment.id}:${comment.updated_at}` });
       }
     }
@@ -1009,7 +1021,7 @@ function publishedIssueFacts(
     const reviews = publishedGithubRows(repository, `pulls/${pull.number}/reviews?per_page=100`);
     if (!reviews) continue;
     for (const review of reviews) {
-      if (Number.isSafeInteger(review.id) && review.commit_id === pull.sha
+      if (typeof review.id === 'number' && Number.isSafeInteger(review.id) && review.commit_id === pull.sha
         && typeof review.state === 'string' && review.state !== 'PENDING'
         && typeof review.submitted_at === 'string') facts.push({
         kind: 'pull-review', id: `review:${pull.number}:${pull.sha}:${review.id}:${review.state}`,
@@ -1126,8 +1138,9 @@ function resolveParkEvent(
   const key = producer?.kind === 'gpt' ? producer.id
     : parked.replace(/^GPT turn\s+/iu, '').replace(/\s+\(self-wake armed\)$/u, '').trim();
   if (!key) return undefined;
-  const envelope = envelopes.find((event) => [basename(event.path), event.path, event.invocationId, event.observedInvocationId]
-    .some((value) => value?.includes(key)));
+  const envelope = envelopes.find((event) => !failureTerminalEnvelope(event)
+    && [basename(event.path), event.path, event.invocationId, event.observedInvocationId]
+      .some((value) => value?.includes(key)));
   if (envelope) return {
     label: parked, terminalState: 'terminal-envelope', evidence: envelope.path,
     eventId: 'terminal:' + envelope.path,
@@ -1220,6 +1233,91 @@ function safeUnitReminderText(producer: string): string | undefined {
   const message = 'Reminder: parked 30 min on ' + p
     + ' - re-check its envelope or PR or CI state yourself - continue only if ended otherwise re-park with the same line';
   return /^[A-Za-z0-9 _./:%#=+-]+$/u.test(message) ? message : undefined;
+}
+
+
+function failureTerminalEnvelope(event: TerminalEnvelopeEvent): boolean {
+  return event.lifecycleOutcome === 'incident'
+    || (event.turnResultState !== undefined && event.turnResultState !== 'ok');
+}
+
+function nativeReceiptLaunchingOwner(
+  event: TerminalEnvelopeEvent,
+  options: FleetAlarmTickOptions,
+  observations: readonly FleetPaneObservation[],
+  terminals: readonly FleetTerminal[],
+  executor: OrcaExecutor,
+  assignments: readonly WorkerAssignmentRecord[] | null,
+): FleetPaneObservation | undefined {
+  const repository = namedRepository(options.config);
+  if (!repository || !failureTerminalEnvelope(event) || !assignments
+    || !event.observedInvocationId || !event.runIdentity || !event.attemptIdentity
+    || !event.handoffReceiptPath) return undefined;
+  const receipt = (options.readOriginalHandoffReceipt ?? readHandoffReceipt)(event.handoffReceiptPath, {
+    runIdentity: event.runIdentity, attemptIdentity: event.attemptIdentity,
+  });
+  if (!receipt || receipt.run_identity !== event.runIdentity
+    || receipt.attempt_identity !== event.attemptIdentity
+    || receipt.invocation_id !== event.observedInvocationId
+    || !receipt.launching_terminal_handle || !receipt.owner_task_id || !receipt.owner_dispatch_id) return undefined;
+  const candidates = assignments.filter((row) => row.projectId === options.config.projectId
+    && row.repository.toLowerCase() === repository.toLowerCase() && row.role === 'orchestrator'
+    && row.kind === 'local' && row.provider === 'orca'
+    && row.taskId === receipt.owner_task_id && row.bindingKey === receipt.owner_dispatch_id
+    && row.assignmentId && Number.isSafeInteger(row.generation) && row.generation > 0);
+  if (candidates.length !== 1) return undefined;
+  const witness = orcaReceipt(executor, ['orchestration', 'worker-show', '--dispatch', receipt.owner_dispatch_id, '--json']);
+  const dispatch = witness?.dispatch as { id?: unknown; taskId?: unknown; status?: unknown } | undefined;
+  const native = witness?.terminal as {
+    handle?: unknown; incarnationId?: unknown; worktreePath?: unknown; branch?: unknown;
+  } | undefined;
+  const observation = witness?.observation as { status?: unknown; exactWorker?: unknown } | undefined;
+  if (dispatch?.id !== receipt.owner_dispatch_id || dispatch.taskId !== receipt.owner_task_id
+    || dispatch.status !== 'dispatched' || observation?.status !== 'live' || observation.exactWorker !== true
+    || native?.handle !== receipt.launching_terminal_handle
+    || typeof native.incarnationId !== 'string' || !native.incarnationId
+    || typeof native.worktreePath !== 'string' || typeof native.branch !== 'string') return undefined;
+  const matchedTerminals = terminals.filter((row) => row.handle === native.handle
+    && row.incarnationId === native.incarnationId && row.worktreePath === native.worktreePath
+    && row.branch === native.branch && row.status?.toLowerCase() !== 'exited');
+  const matchedPanes = observations.filter((row) => row.handle === native.handle
+    && row.incarnationId === native.incarnationId && row.worktreePath === native.worktreePath
+    && row.branch === native.branch && (row.state === 'PARKED' || row.state === 'STOPPED'));
+  return matchedTerminals.length === 1 && matchedPanes.length === 1 ? matchedPanes[0] : undefined;
+}
+
+/** A non-ok envelope with its original receipt wakes its exact live launcher directly. */
+async function wakeOriginalTerminalFailures(
+  options: FleetAlarmTickOptions,
+  observations: readonly FleetPaneObservation[],
+  terminals: readonly FleetTerminal[],
+  executor: OrcaExecutor,
+  store: FleetWakeStateStore,
+  sleepMs: (milliseconds: number) => void | Promise<void>,
+  log: (line: string) => void,
+  bareShellHandles: ReadonlySet<string>,
+  counts: PaneWakeCounts,
+): Promise<void> {
+  const readAssignments = options.readCurrentAssignments
+    ?? (() => listCurrentWorkerAssignmentRecords(resolveWorkerAssignmentStorePath(options.config.projectId)));
+  const assignments = readAssignments();
+  const events = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)().filter(failureTerminalEnvelope);
+  for (const event of events) {
+    const owner = nativeReceiptLaunchingOwner(event, options, observations, terminals, executor, assignments);
+    if (!owner || bareShellHandles.has(owner.handle)) continue;
+    const key = `failure:${owner.handle}:${owner.incarnationId}:${event.attemptIdentity}:${event.observedInvocationId}:${event.path}`;
+    const message = safeUnitWakeText('terminal-' + event.observedInvocationId!,
+      event.turnResultState ?? 'incident', event.path)
+      ?? 'Wake: bound terminal outcome not-ok - inspect the original handoff and decide yourself';
+    const currentOwner = (): boolean => {
+      try {
+        const updated = nativeReceiptLaunchingOwner(event, options, observations,
+          listFleetTerminals(executor), executor, readAssignments());
+        return updated?.handle === owner.handle && updated.incarnationId === owner.incarnationId;
+      } catch { return false; }
+    };
+    await sendMarkedUnitMessage(store, key, owner.handle, message, executor, sleepMs, log, counts, currentOwner);
+  }
 }
 
 interface PaneWakeCounts {
