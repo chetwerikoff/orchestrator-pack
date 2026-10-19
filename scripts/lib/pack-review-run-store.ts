@@ -23,6 +23,7 @@ import {
   PACK_REVIEW_DISTINCT_HEAD_CAPS,
   PACK_REVIEW_LEGACY_CAP_MAP_VERSION,
   selectPackReviewGptSourceCardinality,
+  readPackReviewAuthority,
   type PackReviewAutomaticBudgetDisposition,
 } from '../pack-review-state.ts';
 
@@ -2095,13 +2096,26 @@ function buildUpdatedPackReviewRun(
     mergedDeliveryOutcomes[channel] = incoming;
   }
   const verdictAlreadyCommitted = hasPersistedPackReviewVerdict(existing);
+  // The pre-aggregate native verdict's severity may still be re-evaluated by
+  // the established status writer. An authoritative committed terminal, or a
+  // frozen GPT quorum, never grants that mutable pre-aggregate exception.
+  const aggregateCommitted = readPackReviewAuthority(existing.prNumber, {
+    storeRoot: dirname(dirname(path)),
+  })?.terminal?.runId === existing.id;
+  const allowPreAggregateSeverityUpdate = verdictAlreadyCommitted
+    && !aggregateCommitted
+    && existing.reviewRound === undefined
+    && fields.findings !== undefined
+    && fields.reviewVerdict === undefined
+    && fields.findingCount === undefined
+    && fields.journalOutcome === undefined;
   const candidate: Record<string, unknown> = {
     ...existing,
     ...fields,
     ...(verdictAlreadyCommitted ? {
       reviewVerdict: existing.reviewVerdict,
       findingCount: existing.findingCount,
-      findings: existing.findings,
+      findings: allowPreAggregateSeverityUpdate ? fields.findings : existing.findings,
       journalOutcome: existing.journalOutcome,
     } : {}),
     ...(staleNoJudgmentTerminal ? {
