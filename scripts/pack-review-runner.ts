@@ -1210,6 +1210,9 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
   const exactStartedRun = exactStartedRunId
     ? getPackReviewRun(exactStartedRunId, { projectId, storeRoot })
     : null;
+  const selectedSnapshotDigest = exactStartedRun?.boundIssueSnapshotDigest
+    ?? exactStartedRun?.reviewRound?.boundIssueSnapshotDigest
+    ?? priorCycle?.amendmentOrigin?.amendedBodyDigest;
   // Older synthetic journal/resume fixtures legitimately predate cycle-bound
   // run accounting. Keep only that test-only, unbound recovery shape; a modern
   // run always has to match the exact already-persisted review cycle.
@@ -1271,6 +1274,7 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
       prNumber: target.prNumber,
       prHeadSha: target.headSha,
       issueNumber,
+      snapshotDigest: selectedSnapshotDigest,
       storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
     });
     if (resolvedSnapshot.status === 'corrupted') {
@@ -1295,6 +1299,7 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
           prHeadSha: target.headSha,
           issueNumber,
           issueBody: observedBody,
+          snapshotDigest: selectedSnapshotDigest,
           storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
         });
         resolvedSnapshot = resolveBoundIssueSnapshot({
@@ -1302,6 +1307,7 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
           prNumber: target.prNumber,
           prHeadSha: target.headSha,
           issueNumber,
+          snapshotDigest: selectedSnapshotDigest,
           storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
         });
         if (resolvedSnapshot.status !== 'found' || !resolvedSnapshot.snapshotPath) {
@@ -1326,6 +1332,7 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
         prHeadSha: target.headSha,
         issueNumber,
         snapshotFilePath: configuredSnapshotPath || resolvedSnapshot.snapshotPath,
+        snapshotDigest: selectedSnapshotDigest,
         storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
       });
       body = snapshot.body;
@@ -1490,7 +1497,9 @@ function freezeGptRoundSourceCount(
       return Boolean(round
         && round.reviewer === 'gpt'
         && round.settledSourceCount === undefined
-        && gptUsableSourceCount(round) >= requiredSourceCount);
+        && gptUsableSourceCount(round) >= requiredSourceCount
+        && (process.env.OPK_VITEST_HARNESS === '1'
+          || hasCredentialedGptSourceAuthority(current!)));
     },
     (existing) => {
       const round = existing.reviewRound;
@@ -1867,8 +1876,8 @@ function verifyReviewWorktreeOwner(
       || (owner.canonicalRepository && owner.canonicalRepository.toLowerCase() !== ctx.repoSlug.toLowerCase())) {
     return 'missing selected-repository run owner';
   }
-  if (owner.reviewTargetRoot && owner.reviewTargetRoot !== target) {
-    return 'persisted reviewTargetRoot is not the owned direct child';
+  if (owner.reviewTargetRoot !== target) {
+    return 'persisted reviewTargetRoot is absent or not the owned direct child';
   }
   for (const record of records) {
     if (record.id !== runId && !referencesReviewWorktree(record.reviewTargetRoot, target)) continue;
@@ -8050,6 +8059,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       && candidate.reviewRound?.cardinality === cardinality
       && candidate.reviewRound?.issueNumber === authoritative.issueNumber
       && candidate.reviewRound?.boundIssueSnapshotDigest === authoritative.snapshotDigest
+      && (candidate.boundIssueSnapshotDigest === undefined
+        || candidate.boundIssueSnapshotDigest === authoritative.snapshotDigest)
     );
     const incumbentOwnerDead = (candidate: PackReviewRunRecord) => {
       const original = deadOwnersBeforeReconcile.get(candidate.id);
@@ -8067,9 +8078,11 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       await releaseEarlyClaim(reason);
       // Every incumbent refusal exposes an immediately runnable, PR-scoped
       // read/reconciliation command rather than an unexecutable "observe".
-      const command = reason === 'gpt_incumbent_claim_not_owned'
-        ? `npm run --silent pack-gpt-review -- --project ${projectId} --pr-number ${target.prNumber}`
-        : `node --experimental-strip-types scripts/pack-review-runner.ts reconcile --source-repo-root ${JSON.stringify(target.sourceRepoRoot)} --repo-slug ${target.repoSlug} --pr-number ${target.prNumber} --immediate`;
+      const command = reason === 'gpt_incumbent_owner_not_dead'
+        ? `node --experimental-strip-types scripts/pack-review-runner.ts list --project-id ${projectId}`
+        : reason === 'gpt_incumbent_claim_not_owned'
+          ? `npm run --silent pack-gpt-review -- --project ${projectId} --pr-number ${target.prNumber}`
+          : `node --experimental-strip-types scripts/pack-review-runner.ts reconcile --source-repo-root ${JSON.stringify(target.sourceRepoRoot)} --repo-slug ${target.repoSlug} --pr-number ${target.prNumber} --immediate`;
       return {
         ok: false, created: false, reused: true, reason,
         replacementEligible: false,
@@ -8721,6 +8734,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       } : {}),
       ...(reviewer ? { resolvedReviewer: reviewer, resolvedReviewerSource: reviewerResolution.source } : {}),
       ...(gptRound ? { reviewRound: gptRound } : {}),
+      boundIssueSnapshotDigest: authoritative.snapshotDigest,
       ...(allowSameRoundReplacement ? { allowSameRoundReplacement: true } : {}),
       });
       run = created.run;
