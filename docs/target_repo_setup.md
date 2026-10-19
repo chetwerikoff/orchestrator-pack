@@ -273,6 +273,37 @@ or deletion. A fresh manager worktree still takes the separate
 into permission to overwrite a working tree. Both early/final Task Dispatch
 checks remain mandatory, even when terminal/worktree preparation already passed.
 
+### Restore an existing worker on its own dirty worktree
+
+An already-bound T1/T2/T3 worker can relaunch on its existing worktree, including
+a worktree with uncommitted tracked and untracked changes. Use the selected
+project card, the same positive Issue, an existing/fresh native Task, and the
+**exact existing** worktree selector, not a guessed local path. For a fresh
+continuation Task, the predecessor assignment may belong to the old Task.
+The assistant proves that the existing Issue assignment's old Dispatch is
+terminal and the native worker is gone, and that the old producer's
+`worktree_id` (or exact-owned terminal-resource worktree ID) equals the Orca
+worktree selected by the caller. It also checks the Git root, matching origin,
+unique non-default local branch, and unchanged HEAD/porcelain status before
+starting a new terminal. It never fetches/fast-forwards, resets, stashes or
+cleans that dirty worktree.
+
+```bash
+node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" \
+  --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/pr2-foundation/supervised-task-launch-assistant.ts" -- \
+  --project "$PROJECT_ID" --work-class "$WORK_CLASS" --issue-number "$ISSUE_NUMBER" \
+  --task "$TASK_ID" --worktree "$WORKTREE_SELECTOR" \
+  --base-branch "origin/$DEFAULT_BRANCH"
+```
+
+`WORK_CLASS` is the exact existing `t1`, `t2` or `t3` execution class.
+An unknown/active old worker, mismatched Task/Dispatch/worktree, missing
+ownership evidence, or changed Git checkout still refuses without a guessed
+replacement. The supervised-start boundary rechecks old-worker absence under
+the current assignment fence; native circuit-break/active-start safeguards
+remain in force. New worktrees via `--worktree-name` require a clean tree after
+their setup receipt and never borrow dirty-reuse authorization.
+
 ### Coordinator Run binding is independent of worker-start
 
 **Never** recover a coordinator by calling `worker-start` against the
