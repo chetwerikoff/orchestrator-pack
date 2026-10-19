@@ -11,6 +11,7 @@ import {
   FileFleetWakeStateStore,
   bannerOwnerPane,
   listTerminalEnvelopes,
+  uniqueClosingIssue,
   fleetAlarmMessage,
   fleetWakeConfigFromEnv,
   managerBannerMessage,
@@ -23,8 +24,11 @@ import {
   type FleetWakeStateStore,
   type OpenPullHead,
   type TerminalEnvelopeEvent,
+  type PublishedIssueFact,
 } from './fleet-wake.ts';
 import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
+import { HANDOFF_SCHEMA, COMPLETION_MODE, type HandoffReceipt } from '../flow-manager-long-running-child.ts';
+import type { WorkerAssignmentRecord } from '../lib/worker-assignment-store.ts';
 import type { ChatErrorBanner, ProjectChat } from './chat-error-banners.ts';
 import { FileFleetStateStore, formatFleetSweep, runFleetSweep, visibleOpenCodePermission, type FleetPaneObservation, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
 import { runLaunch, readTerminalEnvelope } from '../flow-manager-long-running-child.ts';
@@ -142,6 +146,9 @@ async function tick(input: {
   readChats?: FleetAlarmTickOptions['readChats'];
   closeChat?: FleetAlarmTickOptions['closeChat'];
   listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
+  readOriginalHandoffReceipt?: () => HandoffReceipt | null;
+  readCurrentAssignments?: () => readonly WorkerAssignmentRecord[] | null;
+  listPublishedIssueFacts?: (repository: string, issue: number, pulls: readonly OpenPullHead[]) => readonly PublishedIssueFact[];
   listUnreadRunMessages?: () => readonly { id: string; subject: string; toHandle: string; fromHandle: string }[];
   listOpenPulls?: (repository: string) => readonly OpenPullHead[];
   checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
@@ -170,6 +177,9 @@ async function tick(input: {
     ...(input.readChats ? { readChats: input.readChats } : {}),
     ...(input.closeChat ? { closeChat: input.closeChat } : {}),
     listTerminalEnvelopes: input.listTerminalEnvelopes ?? (() => []),
+    ...(input.readOriginalHandoffReceipt ? { readOriginalHandoffReceipt: input.readOriginalHandoffReceipt } : {}),
+    ...(input.readCurrentAssignments ? { readCurrentAssignments: input.readCurrentAssignments } : {}),
+    ...(input.listPublishedIssueFacts ? { listPublishedIssueFacts: input.listPublishedIssueFacts } : {}),
     ...(input.listUnreadRunMessages ? { listUnreadRunMessages: input.listUnreadRunMessages } : {}),
     ...(input.listOpenPulls ? { listOpenPulls: input.listOpenPulls } : {}),
     ...(input.checkRunsFinishedAt ? { checkRunsFinishedAt: input.checkRunsFinishedAt } : {}),
@@ -671,10 +681,9 @@ describe('fleet alarm', () => {
       listOpenPulls: () => [pull],
       checkRunsFinishedAt: () => Date.parse('2026-10-03T18:00:00Z'),
     });
-    expect(sendsTo(observed.calls, 'mgr')[0]).toContain(`Wake: CI on ${pull.sha} finished for PR #150`);
+    expect(sendsTo(observed.calls, 'mgr')).toHaveLength(0); // Prose-only manager ownership is no longer admitted.
     expect(sendsTo(observed.calls, 'foreign')).toHaveLength(0);
-    expect(observed.calls).toContainEqual(['orchestration', 'dispatch-show', '--task', 'task-145', '--json']);
-    expect(observed.calls).toContainEqual(['orchestration', 'worker-show', '--dispatch', 'ctx-manager', '--json']);
+    expect(observed.calls).not.toContainEqual(['orchestration', 'dispatch-show', '--task', 'task-145', '--json']);
   });
 
   it('falls back to the pane on the PR head when no supervised dispatch owns the Issue', async () => {
@@ -692,7 +701,7 @@ describe('fleet alarm', () => {
       supervisedPullOwner: () => undefined,
       readWorktreeHead: (worktreePath) => worktreePath === manager.worktreePath ? head : undefined,
     });
-    expect(sendsTo(observed.calls, 'mgr')[0]).toContain(`Wake: CI on ${head} finished for PR #153`);
+    expect(sendsTo(observed.calls, 'mgr')).toHaveLength(0); // An Issue-linked PR cannot fall back to branch/head alone.
   });
 
   it('logs a finished-CI PR without an owner pane once per CI event', async () => {
@@ -2356,7 +2365,7 @@ describe('Issue #2556 stale-only selected-project pack-review fleet backstop', (
       reconcilePackReview,
     };
     const fresh = await tick(input);
-    expect(fresh.result).toEqual({ state: 'no_orchestrator' });
+    expect(fresh.result).toMatchObject({ state: 'no_orchestrator', paneWakeAttempts: 0, paneWakeConfirmed: 0, paneWakeNotConfirmed: 0 });
     expect(calls).toEqual([]);
 
     run.heartbeatAtUtc = staleHeartbeat();
@@ -2366,7 +2375,7 @@ describe('Issue #2556 stale-only selected-project pack-review fleet backstop', (
 
     run.runnerPid = 2147483647;
     const recovered = await tick(input);
-    expect(recovered.result).toEqual({ state: 'no_orchestrator' });
+    expect(recovered.result).toMatchObject({ state: 'no_orchestrator', paneWakeAttempts: 0, paneWakeConfirmed: 0, paneWakeNotConfirmed: 0 });
     expect(calls).toEqual([expect.objectContaining({
       projectId: 'orchestrator-pack', sourceRepoRoot: primary,
       repoSlug: repository, prNumber: 2556, runId: run.id,
