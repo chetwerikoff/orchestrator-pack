@@ -2586,9 +2586,9 @@ async function observeExistingServerCheckedRecovery(input: {
     && normalizeConversationUrl(String(input.page.url())) === input.targetChatUrl
     && readOwnedConversationIdentity(input.page, input.targetChatUrl).matched
     && Date.now() < input.deadlineMs;
-  const positive = () => witness.ownSubmissionIssued() || witness.latestSuccessfulGet()?.markerPresent === true;
+  const positive = () => witness.ownSubmissionIssued() || witness.serverMarkerPresent() === true;
   if (!identity() || positive()) {
-    return witness.latestSuccessfulGet()?.markerPresent ? 'server_marker_present' : 'unproven';
+    return witness.serverMarkerPresent() ? 'server_marker_present' : 'unproven';
   }
   // Reserve a bounded same-Page GET and possible action in the original budget.
   const settleStart = Date.now();
@@ -2602,7 +2602,7 @@ async function observeExistingServerCheckedRecovery(input: {
         targetChatUrl: input.targetChatUrl, markedPayload: input.markedPayload,
         marker: input.marker, baselineSnapshot: input.baselineSnapshot,
         deadlineMs: input.deadlineMs,
-      })) return witness.latestSuccessfulGet()?.markerPresent ? 'server_marker_present' : 'unproven';
+      })) return witness.serverMarkerPresent() ? 'server_marker_present' : 'unproven';
     // Every observation remains on the same held Page. An interrupted poll,
     // incompletely rendered transcript or generation vetoes the settle.
     if (!identity()) return 'unproven';
@@ -2615,7 +2615,7 @@ async function observeExistingServerCheckedRecovery(input: {
       page: input.page, browser: input.browser, composer: input.composer,
       targetChatUrl: input.targetChatUrl, markedPayload: input.markedPayload,
       marker: input.marker, baselineSnapshot: input.baselineSnapshot, deadlineMs: input.deadlineMs,
-    })) return witness.latestSuccessfulGet()?.markerPresent ? 'server_marker_present' : 'unproven';
+    })) return witness.serverMarkerPresent() ? 'server_marker_present' : 'unproven';
   const beforeSequence = witness.ownedGetRequestSequence();
   const getDeadline = Math.min(input.deadlineMs - MAX_LOCAL_READ_WAIT_MS,
     Date.now() + MAX_LOCAL_READ_WAIT_MS);
@@ -2636,7 +2636,7 @@ async function observeExistingServerCheckedRecovery(input: {
     );
   } catch { return 'unproven'; }
   if (!identity() || positive() || witness.ownedGetRequestSequence() !== beforeSequence + 1) {
-    return witness.latestSuccessfulGet()?.markerPresent ? 'server_marker_present' : 'unproven';
+    return witness.serverMarkerPresent() ? 'server_marker_present' : 'unproven';
   }
   const expectedSequence = beforeSequence + 1;
   // The existing response callback finishes its body asynchronously. Wait
@@ -3727,7 +3727,7 @@ async function runTurnCore(
           || browserOrPageDefinitelyLost(page, browser)
           || getOwnTargetInfo(browser)?.created !== true
           || held429Witness?.ownSubmissionIssued() === true
-          || held429Witness?.latestSuccessfulGet()?.markerPresent === true
+          || held429Witness?.serverMarkerPresent() === true
           || held429Witness?.current()) return false;
         try {
           return config.newChat
@@ -3768,7 +3768,7 @@ async function runTurnCore(
       const close = await abandonLatePageHandle(page, RESOURCE_CLEANUP_BOUND_MS);
       // Closing has to be positively observed; a timed-out close is not finalization.
       if (close !== 'confirmed' || typeof page.isClosed !== 'function' || page.isClosed() !== true
-        || held429Witness?.ownSubmissionIssued() || held429Witness?.latestSuccessfulGet()?.markerPresent) return null;
+        || held429Witness?.ownSubmissionIssued() || held429Witness?.serverMarkerPresent()) return null;
       transitionStateLightTurnObservation({
         profileKey, invocationId, phase: 'not_sent',
         reason: 'affirmative_pre_actionability_no_dispatch',
@@ -4182,7 +4182,7 @@ async function runTurnCore(
             beforeBrowserAction();
             if (recoveryReclickArmed && (
               held429Witness?.ownSubmissionIssued()
-              || held429Witness?.latestSuccessfulGet()?.markerPresent === true
+              || held429Witness?.serverMarkerPresent() === true
               || !originalExactChat
               || !readOwnedConversationIdentity(page, originalExactChat).matched
             )) throw new Error('server_checked_reclick_guard_lost');
@@ -5356,6 +5356,24 @@ async function runTurnCore(
       // A late observed own request is still the original physical Send.
       const zeroCountCutoffMs = config.newChat && !ownedConversationUrl
         ? freshUnboundReturnByMs : invocationDeadlineMs;
+      // A finished exact-owned server GET with this invocation's user marker
+      // proves delivery even after an ambiguous second action. Its sticky
+      // current-epoch witness outranks a later GET that lacks the marker.
+      // Bind this only to the unchanged original held Page and owned URL.
+      if (!config.newChat && sendAttempted && sendCount === 0
+        && targetChatUrl && held429Page === page
+        && readOwnedConversationIdentity(page, targetChatUrl).matched
+        && held429Witness?.serverMarkerPresent() === true) {
+        sendCount = 1;
+        markerDerivedSend = true;
+        ownedPromptEverSeen = true;
+        transitionStateLightTurnObservation({
+          profileKey, invocationId, phase: 'sent_unharvested',
+          reason: 'owned_server_user_marker', sendCount, sendWitness: 'owned_marker',
+          conversationUrl: targetChatUrl,
+        });
+        emitCancellationReceipt(targetChatUrl);
+      }
       if (sendAttempted && sendCount === 0 && Date.now() < zeroCountCutoffMs
         && held429Witness?.ownSubmissionIssued()) {
         sendCount = 1;
