@@ -86,8 +86,8 @@ export interface OpenCodeControlBinding {
 export function openCodeControlFromCommand(command: string): OpenCodeControlBinding | undefined {
   const url = openCodeUrlFromCommand(command);
   if (!url) return undefined;
-  const sessionArgs = [...command.matchAll(/(?:^|\\s)--session(?:=|\\s+)(?:'([^']+)'|"([^"]+)"|(\\S+))/gu)];
-  const hasSessionToken = /(?:^|\\s)--session(?:=|\\s|$)/u.test(command);
+  const sessionArgs = [...command.matchAll(/(?:^|\s)--session(?:=|\s+)(?:'([^']+)'|"([^"]+)"|(\S+))/gu)];
+  const hasSessionToken = /(?:^|\s)--session(?:=|\s|$)/u.test(command);
   if ((hasSessionToken && sessionArgs.length !== 1) || sessionArgs.length > 1) return undefined;
   const session = sessionArgs[0]?.[1] ?? sessionArgs[0]?.[2] ?? sessionArgs[0]?.[3];
   if (hasSessionToken && (!session || !validOpenCodeResumeSession(session))) return undefined;
