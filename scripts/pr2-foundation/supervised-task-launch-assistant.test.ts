@@ -3566,6 +3566,48 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
     expect(starts).toBe(0);
   });
 
+  it('recovers dirty manager without an existing PR only from exact native Run/Task and old worktree', async () => {
+    const fixture = managerReuseFixture({ noPr: true, status: ' M tests/test_database_guard.py\n' });
+    const expected = {
+      ...readyStart('task_old').assignment,
+      issueNumber: 2430, taskId: 'task_old', bindingKey: 'ctx_2055f1bb0511',
+    } as WorkerAssignment;
+    const execute: typeof fixture.execute = async (argv, timeout, env, cwd) => {
+      if (argv[0] === 'orca' && argv[1] === 'orchestration') {
+        if (argv[2] === 'dispatch-show') {
+          expect(argv).toContain('task_old');
+          return { ok: true, stdout: okEnvelope({
+            dispatch: { id: 'ctx_2055f1bb0511', status: 'failed' },
+          }) };
+        }
+        if (argv[2] === 'worker-show') {
+          expect(argv).toContain('ctx_2055f1bb0511');
+          return { ok: true, stdout: okEnvelope({
+            dispatch: { status: 'failed' },
+            worker: { worktree_id: 'repo::existing', state: 'abandoned', stage: 'terminal_missing' },
+            terminal: null, observation: { exactWorker: false, status: 'missing' },
+          }) };
+        }
+      }
+      return fixture.execute(argv, timeout, env, cwd);
+    };
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2430,
+      taskId: 'task-1', worktreeSelector: 'id:repo::existing',
+      managerTaskRunId: 'run-1', managerRefresh: true, defaultBranch: 'main',
+      reuseAssignment: expected,
+    }, execute);
+    expect(result).toMatchObject({
+      status: 'ok', evidence: {
+        reuse: 'dirty_preserved', previousDispatchId: 'ctx_2055f1bb0511',
+      },
+    });
+    expect(fixture.calls.some((argv) => argv[0] === 'gh')).toBe(false);
+    expect(fixture.calls.some((argv) =>
+      argv[0] === 'git' && ['merge', 'reset', 'stash', 'clean'].includes(argv[1]!))).toBe(false);
+    expect(fixture.head()).toBe('1'.repeat(40));
+  });
+
   it('launches a manager from the same exact dirty PR with a byte-identical 14-line test diff', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-2655-dirty-worktree-'));
     const testFile = join(root, 'tests', 'test_database_guard.py');
