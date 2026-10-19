@@ -1,0 +1,39 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2661,
+  "declared_paths": [
+    "docs/fleet-alarm.md",
+    "scripts/executor-profile-policy.ts",
+    "scripts/fleet/fleet-sweep.test.ts",
+    "scripts/fleet/fleet-sweep.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/execute-issue-manager-boundary.ts",
+    "scripts/opk-orch-start",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/fleet-alarm.md",
+    "scripts/executor-profile-policy.ts",
+    "scripts/fleet/fleet-sweep.test.ts",
+    "scripts/fleet/fleet-sweep.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/execute-issue-manager-boundary.ts",
+    "scripts/opk-orch-start",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+  ],
+  "source_revision": "ebc5079e20167582b2cd105a8c4c9ad8637c7967"
+}
