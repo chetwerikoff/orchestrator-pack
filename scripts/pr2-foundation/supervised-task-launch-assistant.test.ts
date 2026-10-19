@@ -3187,6 +3187,9 @@ The words Firefighter universal appear here only as prose.`;
           stderr: '',
         };
       }
+      if (command === 'git status --porcelain=v1 --untracked-files=all') {
+        return { ok: true, stdout: '', stderr: '' };
+      }
       return { ok: false, stdout: '', stderr: `unexpected: ${command}` };
     });
     expect(result).toMatchObject({
@@ -3544,6 +3547,28 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
       outcome: 'continue', stage: 'dispatch_admission_final', observedCause: 'fresh_dispatch_not_absent',
     });
     expect(starts).toBe(0);
+  });
+
+  it('launches a manager from the same exact dirty PR without modifying its worktree', async () => {
+    const dirty = ' M tests/test_database_guard.py\n?? migration-backup.diff\n';
+    const fixture = managerReuseFixture({
+      worktreeId: 'manager-worktree', worktreePath: '/tmp/exact-worktree',
+      status: dirty,
+    });
+    let starts = 0;
+    const result = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('manager'), issueNumber: 2430, defaultBranch: 'main',
+    }, {
+      ...deps({ onSupervised: () => { starts += 1; } }),
+      prepareWorktree: (request) => prepareWorktreeWithOrca(request, fixture.execute),
+    });
+    expect(result).toMatchObject({
+      outcome: 'ready', resources: { taskId: 'task-1', worktreePath: '/tmp/exact-worktree' },
+    });
+    expect(starts).toBe(1);
+    expect(fixture.head()).toBe('1'.repeat(40));
+    expect(fixture.mergeTransitions()).toBe(0);
+    expect(fixture.calls.filter((argv) => argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toHaveLength(2);
   });
 
   it('preserves every dirty own-PR worktree byte while allowing exact manager Task reuse', async () => {
