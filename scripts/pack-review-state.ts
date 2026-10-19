@@ -636,6 +636,19 @@ export function readPackReviewAuthority(
   return withPackReviewAuthorityLock(options, () => readAuthorityUnlocked(prNumber, options));
 }
 
+/**
+ * The run store and authority use the same non-reentrant .store-lock.
+ * Only call this while the caller already holds that lock for options.storeRoot;
+ * never acquire it again from inside a run-store mutation. The existing
+ * readAuthorityUnlocked performs the full authority validation.
+ */
+export function readPackReviewAuthorityUnderHeldStoreLock(
+  prNumber: number,
+  options: PackReviewAuthorityOptions,
+): PackReviewAuthorityDocument | null {
+  return readAuthorityUnlocked(prNumber, options);
+}
+
 export function createNewPackReviewCycle(
   tier: PackReviewTier,
   options: Pick<PackReviewAuthorityOptions, 'now'> & {
