@@ -352,9 +352,10 @@ function parsePlacementEnvelope(execution: ChildResult): Record<string, unknown>
 /**
  * Native Orca evidence complements an adapter-unresolved post-reboot worker;
  * it does not turn a failed adapter call or an old terminal handle into absence.
- * Both queries are exact and run inside the assignment admission fence.
+ * Both queries are exact. Replacement rechecks them under the assignment
+ * fence; pre-start worktree reuse treats the same read as provisional evidence.
  */
-async function readTerminalGoneDispatch(
+export async function readTerminalGoneDispatch(
   expected: WorkerAssignmentRecord,
   inspect: (args: readonly string[]) => Promise<ChildResult>,
 ): Promise<TerminalGoneAssignmentEvidence | null> {
@@ -374,26 +375,35 @@ async function readTerminalGoneDispatch(
   const worker = isRecord(shown?.worker) ? shown.worker : null;
   const observation = isRecord(shown?.observation) ? shown.observation : null;
   const resource = isRecord(shown?.terminalResource) ? shown.terminalResource : null;
-  const priorTerminalId = providerText(worker?.agent_terminal_handle);
-  if (providerText(dispatch?.id) !== expected.bindingKey
+  // worker-show is selected by an exact --dispatch argument; some supported
+  // producer envelopes omit dispatch.id. A contradictory id must still refuse.
+  const observedId = providerText(dispatch?.id);
+  const workerTerminalId = providerText(worker?.agent_terminal_handle);
+  const resourceTerminalId = providerText(resource?.terminalHandle);
+  const workerWorktreeId = providerText(worker?.worktree_id);
+  const resourceWorktreeId = providerText(resource?.worktreeId);
+  if ((observedId && observedId !== expected.bindingKey)
     || providerText(dispatch?.status).toLowerCase() !== status
     || observation?.exactWorker !== false
     || !['missing', 'terminal_missing'].includes(providerText(observation?.status).toLowerCase())
     || providerText(worker?.state).toLowerCase() !== 'abandoned'
     || providerText(worker?.stage).toLowerCase() !== 'terminal_missing'
     || shown?.terminal !== null
-    || !priorTerminalId
+    || (workerTerminalId && resourceTerminalId && workerTerminalId !== resourceTerminalId)
+    || (workerWorktreeId && resourceWorktreeId && workerWorktreeId !== resourceWorktreeId)
     || (resource !== null && (
       providerText(resource.originDispatchId) !== expected.bindingKey
       || providerText(resource.ownerDispatchId) !== expected.bindingKey
-      || (providerText(resource.terminalHandle) && providerText(resource.terminalHandle) !== priorTerminalId)
     ))) return null;
 
+  const priorTerminalId = workerTerminalId || resourceTerminalId;
+  const worktreeId = workerWorktreeId || resourceWorktreeId;
   return {
     taskId: expected.taskId,
     dispatchId: expected.bindingKey,
     dispatchState: status as TerminalGoneAssignmentEvidence['dispatchState'],
-    priorTerminalId,
+    ...(priorTerminalId ? { priorTerminalId } : {}),
+    ...(worktreeId ? { worktreeId } : {}),
     workerAbsent: true,
   };
 }
