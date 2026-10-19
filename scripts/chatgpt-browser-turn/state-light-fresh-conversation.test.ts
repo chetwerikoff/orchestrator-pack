@@ -255,7 +255,15 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void, owned
     // Browser-side callbacks execute against one live editable element. Do
     // not fake an always-true evaluate: atomic compare/clear and URL guards
     // must actually inspect the same state they can modify.
-    evaluate: vi.fn(async (callback: (element: unknown, arg?: unknown) => unknown, arg?: unknown) => {
+    evaluate: vi.fn(async (
+      callback: (element: unknown, arg?: unknown) => unknown,
+      arg?: unknown,
+      options?: { timeout?: number },
+    ) => {
+      // The older readiness test adapter intentionally models a presence-only
+      // locator. Its three-argument evaluate must keep the original fallback;
+      // only the new lossless/atomic calls use the browser-element model below.
+      if (options?.timeout !== undefined) return true;
       const element = {
         isConnected: true,
         isContentEditable: true,
@@ -707,7 +715,15 @@ describe('state-light fresh conversation collision recovery', () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'NOT-SENT');
     turn.sendButton.isEnabled.mockResolvedValue(false);
-    turn.composer.evaluate.mockRejectedValue(new Error('synthetic atomic composer evaluation failure'));
+    const evaluate = turn.composer.evaluate.getMockImplementation()!;
+    turn.composer.evaluate.mockImplementation(async (
+      callback: (element: unknown, arg?: unknown) => unknown,
+      arg?: unknown,
+      options?: { timeout?: number },
+    ) => {
+      if (options?.timeout !== undefined) return evaluate(callback, arg, options);
+      throw new Error('synthetic atomic composer evaluation failure');
+    });
 
     const outcome = await runNewChatTurn(
       turn.page, join(stateDir, 'failed-composer-clear-2510.txt'), '90000', invocationId,
@@ -739,13 +755,17 @@ describe('state-light fresh conversation collision recovery', () => {
     turn.sendButton.isEnabled.mockResolvedValue(false);
     const evaluate = turn.composer.evaluate.getMockImplementation()!;
     let changed = false;
-    turn.composer.evaluate.mockImplementation(async (callback: (element: unknown, arg?: unknown) => unknown, arg?: unknown) => {
+    turn.composer.evaluate.mockImplementation(async (
+      callback: (element: unknown, arg?: unknown) => unknown,
+      arg?: unknown,
+      options?: { timeout?: number },
+    ) => {
       const payload = typeof arg === 'string' ? arg : (arg as { payload?: string } | undefined)?.payload;
       if (!changed && typeof payload === 'string' && payload.includes(prompt)) {
         changed = true;
         await turn.composer.fill('FOREIGN-EDIT-BEFORE-ATOMIC-COMPARE');
       }
-      return evaluate(callback, arg);
+      return evaluate(callback, arg, options);
     });
     const outcome = await runNewChatTurn(turn.page, join(stateDir, 'atomic-shared-edit-2651.txt'));
     expect(changed).toBe(true);
@@ -765,10 +785,14 @@ describe('state-light fresh conversation collision recovery', () => {
     let navigated = false;
     turn.page.url.mockImplementation(() => navigated ? OTHER_PROJECT_CONVERSATION_URL : originalUrl());
     const evaluate = turn.composer.evaluate.getMockImplementation()!;
-    turn.composer.evaluate.mockImplementation(async (callback: (element: unknown, arg?: unknown) => unknown, arg?: unknown) => {
+    turn.composer.evaluate.mockImplementation(async (
+      callback: (element: unknown, arg?: unknown) => unknown,
+      arg?: unknown,
+      options?: { timeout?: number },
+    ) => {
       const payload = typeof arg === 'string' ? arg : (arg as { payload?: string } | undefined)?.payload;
       if (!navigated && typeof payload === 'string' && payload.includes(prompt)) navigated = true;
-      return evaluate(callback, arg);
+      return evaluate(callback, arg, options);
     });
     const outcome = await runNewChatTurn(turn.page, join(stateDir, 'atomic-navigation-2651.txt'));
     expect(navigated).toBe(true);
