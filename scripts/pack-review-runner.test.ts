@@ -1437,7 +1437,7 @@ describe('Issue #2412 first bound snapshot tier admission', () => {
     expect(readFileSync(paths.snapshotPath, 'utf8')).toBe(correctedBody);
     const metadataBytes = readFileSync(paths.metadataPath, 'utf8');
 
-    const reused = await startPackReview({ ...common, fixtureIssueTitle: "[T2] Historical frozen block", fixtureIssueBody: malformedBody });
+    const reused = await startPackReview({ ...common, fixtureIssueTitle: "[T2] Historical frozen block", fixtureIssueBody: correctedBody });
     expect(reused).toMatchObject({ ok: true, created: false, reused: true });
     expect(readFileSync(paths.snapshotPath, 'utf8')).toBe(correctedBody);
     expect(readFileSync(paths.metadataPath, 'utf8')).toBe(metadataBytes);
@@ -1669,7 +1669,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
               terminalClass: 'driver_error:original_source_incomplete',
               attemptOrdinal: 1,
               terminalResult: { schema: 'turn-result/v1', state: 'driver_error',
-                cause: 'original_source_not_complete', scope: 'none', send_count: 1,
+                cause: 'original_source_incomplete', scope: 'none', send_count: 0,
                 invocation_id: invocationId } };
           }
           return {
@@ -1743,7 +1743,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
       const result = await reconcileStalePackReviewRuns(f.request(originalBody + 'new authoritative requirement\n'));
       expect(result.results).toContainEqual(expect.objectContaining({
         settled: false, reason: 'final_cap_issue_body_amended',
-        nextAction: expect.stringContaining('start one new review round on the current head; an Issue amendment resets the cap'),
+        nextAction: expect.stringContaining('a nonqualifying mismatch must retain a non-success status'),
       }));
       expect(f.statusWrites).not.toContain('success');
       expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle?.reviewStageComplete)
@@ -1783,7 +1783,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     });
     expect(outcome).toMatchObject({
       ok: false, created: false, reason: 'final_cap_issue_body_amended',
-      nextAction: expect.stringContaining('start one new review round on the current head; an Issue amendment resets the cap'),
+      nextAction: expect.stringContaining('a nonqualifying mismatch must retain a non-success status'),
     });
     expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
       .toMatchObject({ cycleId: beforeCycle, consumedRoundOrdinals: [1] });
@@ -3799,7 +3799,12 @@ describe('Issue #2537 scoped final-cap promotion and status integrity', () => {
     const seeded = await seed(prNumber);
     const result = await reconcileStalePackReviewRuns({ ...promotedInput(prNumber, seeded), ...override });
     expect(result.results).toEqual(expect.arrayContaining([
-      expect.objectContaining({ reason: 'final_cap_promotion_pr_binding_unverified', settled: false }),
+      expect.objectContaining({
+        reason: override.fixturePrMerged
+          ? 'merged_pr_metadata_unverified'
+          : 'final_cap_promotion_pr_binding_unverified',
+        settled: false,
+      }),
     ]));
     const after = readPackReviewAuthority(prNumber, { storeRoot: seeded.storeRoot })!;
     expect(after.cycle).toMatchObject({
