@@ -123,10 +123,13 @@ and provider-recovery internals. Agents preserve only the obligations below.
 Before effects, pass the assistant's repository/runtime/profile preflight. A fresh
 worktree must have supported setup proof; a reused worktree must have supported
 reuse proof. For manager continuation, the exact Run/Task and caller-supplied
-worktree selector must identify one clean manager-local non-main branch; after those
-identity checks, refresh it from `origin/main` only with the assistant's ff-only
-path. Never reset, rebase, merge, force-repair, replace the worktree, or mutate the
-shared primary checkout as recovery.
+worktree selector must identify one manager-local non-main branch owned by exactly
+one worktree. A clean ancestor can follow the assistant's ff-only `origin/main`
+refresh. An existing dirty checkout instead requires native exact Run/Task
+membership and one matching open Issue-closing PR with same branch and HEAD;
+recheck unchanged status bytes and do not refresh it. Fresh manager worktrees
+must be clean. Never reset, stash, rebase, merge, force-repair, replace the
+worktree, or mutate the shared primary checkout as recovery.
 
 It is a continuation-safe launch assistant, not a lifecycle authority. It owns
 only the shared mechanical sequence: Node/repository preflight; the production
@@ -169,7 +172,13 @@ Supervised starts finish through
 `scripts/pr2-foundation/supervised-worker-start.ts::runSupervisedWorkerStart`.
 Publish a local WorkerAssignment only after Orca returns a proven `ready` receipt
 with both Task and Dispatch identity. Failed, malformed, or outcome-unknown startup
-does not publish a successful assignment.
+does not publish a successful assignment. After reboot, an adapter-unresolved
+predecessor is replaceable only through the exact fenced Task/Dispatch native
+terminal-state plus worker-absent witness; the previous terminal must not be
+reused. A failed/abandoned Dispatch on the same Task may pass both assistant
+observations only while its exact local assignment still matches. Live and
+unknown workers remain protected; the reconciliation module is not a CLI or a
+substitute for this start admission.
 
 When a manager starts before an Issue exists, store the assignment by its canonical
 Task/Dispatch deliverable identity and attach the positive Issue later to that same
