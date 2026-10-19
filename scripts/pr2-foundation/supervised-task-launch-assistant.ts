@@ -163,7 +163,23 @@ export interface WorktreePreparationRequest {
 }
 
 export type DispatchObservation = { readonly kind: 'absent' }
-  | { readonly kind: 'present'; readonly dispatchId?: string };
+  | { readonly kind: 'present'; readonly dispatchId?: string; readonly status?: string };
+
+/** A terminal Dispatch is reusable only for its exact current Issue/Task assignment. */
+function sameTaskTerminalDispatch(
+  observed: DispatchObservation,
+  assignment: WorkerAssignment | null,
+  taskId: string,
+  adapterId: string,
+): boolean {
+  return observed.kind === 'present'
+    && Boolean(assignment
+      && observed.dispatchId === assignment.bindingKey
+      && assignment.taskId === taskId
+      && assignment.kind === 'local'
+      && assignment.provider === adapterId
+      && ['failed', 'abandoned', 'cancelled', 'done'].includes(observed.status ?? ''));
+}
 
 export type ManagerBriefTemplateName = 'manager-preamble.md' | 'ff-prompt-universal.md';
 
@@ -744,7 +760,10 @@ export async function runSupervisedTaskLaunchAssistant(
 
   const early = await checkpoint('dispatch_admission_early', timings, deps.now, () => deps.observeDispatch(taskId));
   if (early.status !== 'ok') return continued(input, 'dispatch_admission_early', early, resources, startedAtMs, timings, deps.now);
+  const earlyCurrent = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
+  const earlyTerminal = sameTaskTerminalDispatch(early.value, earlyCurrent, taskId, deps.adapter.id);
   if (early.value.kind === 'present'
+    && !earlyTerminal
     && (!delegatedIntegration || early.value.dispatchId !== predecessor?.bindingKey)) {
     return continued(input, 'dispatch_admission_early', {
       cause: 'fresh_dispatch_not_absent', actor: 'orchestrator', evidence: { dispatchState: 'present' },
@@ -854,7 +873,13 @@ export async function runSupervisedTaskLaunchAssistant(
   }
   const final = await checkpoint('dispatch_admission_final', timings, deps.now, () => deps.observeDispatch(taskId));
   if (final.status !== 'ok') return continued(input, 'dispatch_admission_final', final, resources, startedAtMs, timings, deps.now);
+  const finalCurrent = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
+  const finalTerminal = earlyTerminal
+    && sameTaskTerminalDispatch(final.value, finalCurrent, taskId, deps.adapter.id)
+    && earlyCurrent?.assignmentId === finalCurrent?.assignmentId
+    && earlyCurrent?.generation === finalCurrent?.generation;
   if (final.value.kind === 'present'
+    && !finalTerminal
     && (!delegatedIntegration || final.value.dispatchId !== finalPredecessor?.bindingKey)) {
     return continued(input, 'dispatch_admission_final', {
       cause: 'fresh_dispatch_not_absent', actor: 'orchestrator', evidence: { dispatchState: 'present' },
@@ -1475,12 +1500,13 @@ async function resumeManagerAtOpenPrHead(
   head: string,
   originMain: string,
   execute: ChildExecutor,
+  unchangedDirtyStatus?: string,
 ): Promise<EdgeResult<PreparedWorktree>> {
   const refused = (cause: string, extra: Readonly<Record<string, unknown>> = {}): EdgeResult<PreparedWorktree> =>
     worktreeContinue(
       cause,
       { worktreeId: id, branch, head, originMain, ...extra },
-      'reconcile the exact Run/Task, clean worktree and unique live Issue-closing open PR; never move the manager PR branch',
+      'reconcile the exact Run/Task, unchanged worktree and unique live Issue-closing open PR; never move the manager PR branch',
     );
 
   if (!request.issueNumber || !request.managerTaskRunId) return refused('manager_worktree_non_ancestor');
@@ -1547,7 +1573,9 @@ async function resumeManagerAtOpenPrHead(
   const finalStatus = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'], undefined, undefined, path);
   const finalBranch = await execute(['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'], undefined, undefined, path);
   const finalHead = await execute(['git', 'rev-parse', '--verify', 'HEAD^{commit}'], undefined, undefined, path);
-  if (!finalStatus.ok || finalStatus.stdout.trim() || !finalBranch.ok || text(finalBranch.stdout) !== branch
+  if (!finalStatus.ok
+    || (unchangedDirtyStatus === undefined ? Boolean(finalStatus.stdout.trim()) : finalStatus.stdout !== unchangedDirtyStatus)
+    || !finalBranch.ok || text(finalBranch.stdout) !== branch
     || !finalHead.ok || text(finalHead.stdout) !== head) {
     return refused('manager_pr_resume_local_changed', { prNumber });
   }
@@ -1558,7 +1586,10 @@ async function resumeManagerAtOpenPrHead(
   return {
     status: 'ok',
     value: { id, selector: request.worktreeSelector!, path, setupWitness: 'proven_reuse' },
-    evidence: { worktreeId: id, worktreePath: path, branch, head, originMain, prNumber, refresh: 'pr_head_preserved' },
+    evidence: {
+      worktreeId: id, worktreePath: path, branch, head, originMain, prNumber,
+      refresh: unchangedDirtyStatus === undefined ? 'pr_head_preserved' : 'dirty_pr_head_preserved',
+    },
   };
 }
 
@@ -1612,14 +1643,7 @@ async function refreshManagerWorktree(
       'require a successful clean-status observation after fetch and before any local worktree update',
     );
   }
-  if (status.stdout.trim().length !== 0) {
-    return worktreeContinue(
-      'manager_worktree_dirty',
-      { worktreeId: id, branch: identity.value.branch, originMain },
-      'leave dirty manager worktree bytes unchanged and refuse this turn boundary',
-    );
-  }
-
+  const dirtyStatus = status.stdout.trim() ? status.stdout : undefined;
   const headResult = await execute(['git', 'rev-parse', '--verify', 'HEAD^{commit}'], undefined, undefined, path);
   const head = text(headResult.stdout);
   if (!headResult.ok || !/^[0-9a-f]{40}$/iu.test(head)) {
@@ -1627,6 +1651,18 @@ async function refreshManagerWorktree(
       'manager_worktree_head_unresolved',
       { worktreeId: id, branch: identity.value.branch, originMain },
       'require one exact current manager HEAD before ancestry or fast-forward',
+    );
+  }
+  if (dirtyStatus !== undefined) {
+    // A dirty *existing* Issue-owned PR checkout can resume, but must never be
+    // fast-forwarded. The PR/readback proof checks the exact status again.
+    if (!request.issueNumber || !request.managerTaskRunId) {
+      return worktreeContinue('manager_worktree_dirty',
+        { worktreeId: id, branch: identity.value.branch, head, originMain },
+        'preserve dirty bytes; only the exact existing Task and Issue-closing PR may resume here');
+    }
+    return resumeManagerAtOpenPrHead(
+      request, id, path, identity.value.branch, head, originMain, execute, dirtyStatus,
     );
   }
   if (head === originMain) {
@@ -1855,7 +1891,11 @@ function dispatchEdge(value: Record<string, unknown> | null): EdgeResult<Dispatc
     nextAction: { kind: 'reconcile_dispatch', note: 'reconcile the exact Task Dispatch through installed Orca authority' },
   };
   const id = text(result.dispatch.id);
-  return { status: 'ok', value: { kind: 'present', ...(id ? { dispatchId: id } : {}) } };
+  const status = text(result.dispatch.status).toLowerCase();
+  return {
+    status: 'ok',
+    value: { kind: 'present', ...(id ? { dispatchId: id } : {}), ...(status ? { status } : {}) },
+  };
 }
 
 export async function createProductionLaunchDependencies(input: LaunchInput): Promise<LaunchDependencies> {
