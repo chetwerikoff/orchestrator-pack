@@ -1617,6 +1617,55 @@ describe('state-light fresh conversation collision recovery', () => {
     return { turn, sentAt: () => sendAt };
   }
 
+  it.each([
+    { boundary: 'before', offset: -1, admitted: true },
+    { boundary: 'after', offset: 1, admitted: false },
+  ])('AC2 claim-time cutoff $boundary the bounded original Page user-marker read', async ({ boundary, offset, admitted }) => {
+    const invocationId = randomUUID();
+    const prompt = 'ISSUE-2660-CLAIM-TIME-' + boundary;
+    const output = join(stateDir, invocationId + '-claim-race.txt');
+    const cutoff = mocks.nowMs + 180_000 - 5_000 - 15_000 - 2_000;
+    const { turn } = countedOwnPostWithLateFreshUrl(prompt, 'CLAIM-TIME-ANSWER', 43_000, true);
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    let clockChangedInRead = false;
+    turn.page.locator.mockImplementation((selector: string) => {
+      const locator = originalLocator(selector);
+      if (selector !== USER_MESSAGE_SELECTOR || turn.getSends() < 1) return locator;
+      const originalNth = locator.nth.bind(locator);
+      locator.nth = vi.fn((index: number) => {
+        const row = originalNth(index);
+        const originalInnerText = row.innerText.bind(row);
+        row.innerText = vi.fn(async (...args: any[]) => {
+          const text = await originalInnerText(...args);
+          if (!clockChangedInRead && text.includes(TEST_OWNED_MARKER) && mocks.nowMs < cutoff) {
+            mocks.nowMs = cutoff + offset;
+            clockChangedInRead = true;
+          }
+          return text;
+        });
+        return row;
+      });
+      return locator;
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(turn.page, output, '180000', invocationId);
+    expect(clockChangedInRead).toBe(true);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.getSends()).toBe(1);
+    expect(outcome.result.send_count).toBe(1);
+    if (admitted) {
+      expect(outcome.result).toMatchObject({ state: 'ok', conversation_id: SHARED_CONV });
+      expect(readFileSync(output, 'utf8')).toBe('CLAIM-TIME-ANSWER');
+    } else {
+      expect(outcome.result).toMatchObject({
+        state: 'observation_uncertain', cause: 'fresh_conversation_owner_unproven',
+      });
+      expect(outcome.result).not.toHaveProperty('conversation_id');
+      expect(existsSync(output)).toBe(false);
+      expect(turn.page.goto).toHaveBeenCalledTimes(1); // No preclaim navigation.
+    }
+  });
+
   it('Issue #2636 review source-01: counted own POST with unchanged composer survives early fresh URL wait', async () => {
     const invocationId = randomUUID();
     const prompt = 'D46-COUNTED-STILL-DRAFT';
