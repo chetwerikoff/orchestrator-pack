@@ -349,6 +349,25 @@ function readOnlyCorrectionCause(value: string): boolean {
   return /(inspect|observation|target|conversation|cdp).*(argument|option|identity)|(?:argument|option).*(inspect|observation|target|conversation|cdp)/iu.test(value);
 }
 
+// A retained manager identity authorizes a selected-Issue read, not Send or
+// attribution of a GitHub effect to the inspected Browser-GPT invocation.
+function exactRetainedIssueIdentity(value: JsonRecord, context: ExecuteIssueManagerBoundaryContext): boolean {
+  if (!text(context.profile) || !text(context.invocationId)
+    || !/^[^\\s/]+\\/[^\\s/]+$/u.test(text(context.repository))
+    || !Number.isSafeInteger(context.issueNumber) || context.issueNumber <= 0) return false;
+  for (const [key, expected] of [
+    ['configured_profile_key', context.profile], ['profile', context.profile],
+    ['invocation_id', context.invocationId], ['invocationId', context.invocationId],
+    ['repository', context.repository], ['repository_full_name', context.repository],
+  ] as const) {
+    if (value[key] !== undefined && text(value[key]) !== text(expected)) return false;
+  }
+  for (const key of ['issue_number', 'issueNumber']) {
+    if (value[key] !== undefined && value[key] !== context.issueNumber) return false;
+  }
+  return true;
+}
+
 function classifyTurn(
   value: JsonRecord,
   context: ExecuteIssueManagerBoundaryContext,
@@ -373,6 +392,9 @@ function classifyTurn(
     case 'output_conflict':
       return pause(context, producer, 'external:content_authority_conflict', value, 'resolve the content-authority conflict, then resume the same execute-Issue Dispatch');
     case 'observation_uncertain':
+      if (exactRetainedIssueIdentity(value, context)) {
+        return recoverable(context, producer, 'execute_github_first_reconciliation', githubFirstAction(context));
+      }
       return text(context.cdp)
         ? recoverObservation(context, producer, value, 'execute_owned_turn_reobserve')
         : pause(
@@ -387,8 +409,11 @@ function classifyTurn(
     case 'conversation_busy':
     case 'profile_busy':
     case 'send_failed':
-    case 'rate_limit':
       return recoverObservation(context, producer, value, 'execute_owned_turn_reobserve');
+    case 'rate_limit':
+      return exactRetainedIssueIdentity(value, context)
+        ? recoverable(context, producer, 'execute_github_first_reconciliation', githubFirstAction(context))
+        : recoverObservation(context, producer, value, 'execute_owned_turn_reobserve');
     case 'orphaned_fresh_turn': {
       const action = observeAction(context, value);
       if (action) return recoverable(context, producer, 'execute_owned_conversation_reconcile', action);
@@ -533,6 +558,12 @@ function classifyProbe(
           );
       }
       const inspect = executionRecoveryInspect(value);
+      if (value.identity_bound === true && value.observation_phase === 'sent_unharvested'
+        && inspect?.reason === 'no_owned_prompt' && inspect.generation_in_progress === false
+        && inspect.owned_user_turn_key === null && inspect.candidate_assistant_turn_key === null
+        && exactRetainedIssueIdentity(value, context)) {
+        return recoverable(context, producer, 'execute_github_first_reconciliation', githubFirstAction(context));
+      }
       if (inspect?.reason === 'ambiguous_marker') {
         return pause(
           context,
