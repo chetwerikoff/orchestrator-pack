@@ -52,7 +52,7 @@ import {
 } from './chat-error-banners.ts';
 import { readChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
 import { listCurrentWorkerAssignmentRecords, resolveWorkerAssignmentStorePath, type WorkerAssignmentRecord } from '../lib/worker-assignment-store.ts';
-import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath, readHandoffReceipt, type HandoffReceipt } from '../flow-manager-long-running-child.ts';
+import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath, readHandoffReceipt } from '../flow-manager-long-running-child.ts';
 
 export interface FleetWakeConfig {
   readonly projectId: string;
@@ -1364,6 +1364,7 @@ async function wakeNamedParkedProducers(
   sleepMs: (milliseconds: number) => void | Promise<void>,
   log: (line: string) => void,
   bareShellHandles: ReadonlySet<string>,
+  counts?: PaneWakeCounts,
 ): Promise<void> {
   const now = (options.now ?? Date.now)();
   const envelopes = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)();
@@ -1385,7 +1386,7 @@ async function wakeNamedParkedProducers(
       if (!store.hasParkedWakeEvent(eventKey)) {
         const message = safeUnitWakeText(match.label, match.terminalState, match.evidence)
           ?? 'Wake: matching producer event landed - re-check it yourself before continuing';
-        if (await sendMarkedUnitMessage(store, eventKey, pane.handle, message, executor, sleepMs, log)) {
+        if (await sendMarkedUnitMessage(store, eventKey, pane.handle, message, executor, sleepMs, log, counts)) {
           if (epoch) store.writeParkedEpoch?.(pane.handle, { ...epoch, since: now });
           store.clearPaneWait?.(pane.handle);
           continue;
@@ -1399,7 +1400,7 @@ async function wakeNamedParkedProducers(
       if (slot >= 1 && !store.hasParkedWakeEvent(key)) {
         const message = safeUnitReminderText(pane.wait.slice('PARKED on '.length))
           ?? 'Reminder: parked 30 min - re-check the named producer yourself before continuing';
-        await sendMarkedUnitMessage(store, key, pane.handle, message, executor, sleepMs, log);
+        await sendMarkedUnitMessage(store, key, pane.handle, message, executor, sleepMs, log, counts);
       }
     }
   }
@@ -1410,18 +1411,26 @@ async function wakeNamedParkedProducers(
  * Wakes idle panes for their own completed events and wakes the coordinator
  * for parked FLEET units or unread Run mail. The event marks suppress repeat wakes.
  */
+/** One complete native terminal row, including its current incarnation. */
+function terminalsIdentity(pane: FleetTerminal): string {
+  return JSON.stringify([pane.handle, pane.incarnationId ?? null, pane.worktreePath, pane.branch ?? null]);
+}
+
 async function wakePanesOnEvents(
   options: FleetAlarmTickOptions,
-  coordinator: FleetTerminal,
+  coordinator: FleetTerminal | undefined,
   observations: readonly FleetPaneObservation[],
   executor: OrcaExecutor,
   store: FleetWakeStateStore,
   log: (line: string) => void,
   sleepMs: (milliseconds: number) => void | Promise<void>,
   bareShellHandles: ReadonlySet<string>,
+  counts?: PaneWakeCounts,
 ): Promise<number> {
   const wakes: Array<{ pane: FleetTerminal | FleetPaneObservation; key: string; message: string }> = [];
   for (const envelope of (options.listTerminalEnvelopes ?? listTerminalEnvelopes)()) {
+    // Non-ok envelopes require the original receipt/Dispatch/native witness.
+    if (failureTerminalEnvelope(envelope)) continue;
     const eventId = 'terminal:' + envelope.path;
     const pane = envelope.terminalHandle !== undefined
       ? observations.find((candidate) =>
@@ -1449,15 +1458,15 @@ async function wakePanesOnEvents(
   }
   store.rearmParkedWakeEvents(observedParkedKeys);
   for (const { pane, parked, key } of parkedEpisodes) {
-    if (!store.hasParkedWakeEvent(key)) {
+    if (coordinator && !store.hasParkedWakeEvent(key)) {
       wakes.push({ pane: coordinator, key, message: `Wake: FLEET unit ${pane.handle} parked on orchestrator answer: ${parked[1]}` });
     }
   }
-  const unread = options.listUnreadRunMessages
+  const unread = !coordinator ? [] : options.listUnreadRunMessages
     ? options.listUnreadRunMessages(coordinator.handle)
     : listUnreadRunMessages(coordinator.handle, executor, options.config.projectId, log);
   for (const event of unread) {
-    if (event.toHandle === coordinator.handle || !event.toHandle.startsWith('run:')) continue;
+    if (!coordinator || event.toHandle === coordinator.handle || !event.toHandle.startsWith('run:')) continue;
     const key = `mail:${event.fromHandle}:${event.id}`;
     if (store.hasParkedWakeEvent(key)) continue;
     wakes.push({ pane: coordinator, key, message: `Wake: FLEET unit ${event.fromHandle} sent Run message: ${event.subject}` });
@@ -1465,7 +1474,8 @@ async function wakePanesOnEvents(
   const repository = namedRepository(options.config);
   if (repository && observations.some((pane) => pane.state === 'STOPPED')) {
     const finishedAt = options.checkRunsFinishedAt ?? checkRunsFinishedAt;
-    const ownerForPull = options.supervisedPullOwner ?? ((candidate, panes) => supervisedOwnerForPull(candidate, panes, executor));
+    // Prose-only Run objective / Task spec is never Issue ownership authority.
+    const ownerForPull = options.supervisedPullOwner ?? (() => undefined);
     const readHead = options.readWorktreeHead ?? readWorktreeHead;
     const heads = new Map<string, string | undefined>();
     const headOf = (worktreePath: string): string | undefined => {
@@ -1476,7 +1486,7 @@ async function wakePanesOnEvents(
       const at = finishedAt(repository, pull.sha);
       if (at === undefined) continue;
       // An exact supervised manager wins; a manager started outside orchestration owns the PR by its head.
-      const pane = (pull.issue ? ownerForPull(pull, observations) : undefined) ?? pullOwner(pull, observations, headOf);
+      const pane = pull.issue ? ownerForPull(pull, observations) : pullOwner(pull, observations, headOf);
       // A re-run of failed checks on the same head is a new event.
       const key = `event:${pane?.handle ?? 'none'}:ci:${pull.number}:${pull.sha}:${at}`;
       if (!pane) {
@@ -1495,15 +1505,13 @@ async function wakePanesOnEvents(
   }
   for (const { pane, key, message } of wakes) {
     if (bareShellHandles.has(pane.handle)) continue;
-    const delivered = sendCoordinator(executor, pane.handle, message)
-      && (await sleepMs(4_000), submitCoordinator(executor, pane.handle));
-    if (!delivered) {
-      log(`event wake send failed to ${pane.handle}: ${key}`);
-      continue;
-    }
-    store.markParkedWakeEvent(key);
-    if (pane.handle !== coordinator.handle) store.clearPaneWait?.(pane.handle);
-    log(`sent event wake to ${pane.handle}: ${key}`);
+    const expected = terminalsIdentity(pane);
+    const current = (): boolean => {
+      try { return listFleetTerminals(executor).filter((row) => terminalsIdentity(row) === expected).length === 1; }
+      catch { return false; }
+    };
+    const delivered = await sendMarkedUnitMessage(store, key, pane.handle, message, executor, sleepMs, log, counts, current);
+    if (delivered && (!coordinator || pane.handle !== coordinator.handle)) store.clearPaneWait?.(pane.handle);
   }
   return unread.length;
 }
@@ -1687,6 +1695,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   // Keep legacy fleet effects first: stale recovery belongs to this same
   // already-scheduled tick, but must not delay coordinator/banner delivery.
   const operationalTick = async (): Promise<FleetAlarmTickResult> => {
+  const wakeCounts: PaneWakeCounts = { attempts: 0, confirmed: 0 };
   let terminals: FleetTerminal[];
   try {
     terminals = listFleetTerminals(executor);
@@ -1702,18 +1711,13 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   let activeChats: ProjectChat[] = [];
   try {
     const coordinator = resolveCoordinatorPane(terminals, config);
-    if (!coordinator) {
-      log('normal fleet result: no orchestrator pane found');
-      return { state: 'no_orchestrator' };
-    }
-
     let observations: FleetPaneObservation[];
     try {
       observations = runFleetSweep({
         primary: config.primary,
         projectId: config.projectId,
         workspaceRe: config.workspaceRe,
-        coordinatorHandle: coordinator.handle,
+        ...(coordinator ? { coordinatorHandle: coordinator.handle } : {}),
         coordinatorTitleRe: config.orchestratorTitleRe,
         architectHandle: config.architectHandle,
         busyRe: config.busyRe,
@@ -1735,7 +1739,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     try {
       bareShellHandles = new Set(collectFleetDiagnostics({
         projectId: config.projectId, primary: config.primary, workspaceRe: config.workspaceRe,
-        coordinatorHandle: coordinator.handle, architectHandle: config.architectHandle,
+        coordinatorHandle: coordinator?.handle, architectHandle: config.architectHandle,
         coordinatorTitleRe: config.orchestratorTitleRe, busyRe: config.busyRe,
         terminals, observations, executor, store,
       }).filter((row) => row.reason === 'suspected_bare_shell' && row.handle)
@@ -1745,8 +1749,33 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       // panes are already excluded from agent selection by the sweep.
       log('DIAG state=unverified reason=diagnostic_unreadable evidence=read_only_projection_failure');
     }
-    await wakeNamedParkedProducers(options, observations, terminals, store, executor, sleepMs, log, bareShellHandles);
-    const eligibleUnreadRunMessages = await wakePanesOnEvents(options, coordinator, observations, executor, store, log, sleepMs, bareShellHandles);
+    const envelopes = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)();
+    const tickOptions: FleetAlarmTickOptions = { ...options, listTerminalEnvelopes: () => envelopes };
+    await wakeNamedParkedProducers(tickOptions, observations, terminals, store, executor, sleepMs, log, bareShellHandles, wakeCounts);
+    await wakeOriginalTerminalFailures(tickOptions, observations, terminals, executor, store, sleepMs, log, bareShellHandles, wakeCounts);
+    await wakeAssignedIssueManagers(tickOptions, observations, terminals, executor, store, sleepMs, log, bareShellHandles, wakeCounts);
+    const eligibleUnreadRunMessages = await wakePanesOnEvents(tickOptions, coordinator, observations, executor, store, log, sleepMs, bareShellHandles, wakeCounts);
+    if (!coordinator) {
+      // Coordinator-only STOPPED/POLLING/PERMISSION/Run-mail alarms are withheld,
+      // but exact URL-bound direct banner warnings remain eligible.
+      const chatsWithoutCoordinator = config.chatCdpUrl && config.chatScope
+        ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => []) : [];
+      activeChats = chatsWithoutCoordinator;
+      for (const chat of chatsWithoutCoordinator) {
+        if (chat.generating || isLocalPlaceholderUrl(chat.url)) continue;
+        for (const banner of chat.banners.filter((row) => row.url === chat.url)) {
+          const owner = boundChatBannerPane(banner, terminals, config);
+          if (!owner) continue;
+          const key = `banner:${owner.handle}:${owner.incarnationId ?? ''}:${createHash('sha256').update(banner.url + banner.text).digest('hex')}`;
+          await sendMarkedUnitMessage(store, key, owner.handle, managerBannerMessage(banner), executor, sleepMs, log, wakeCounts,
+            () => { try { return listFleetTerminals(executor).filter((row) => terminalsIdentity(row) === terminalsIdentity(owner)).length === 1; }
+              catch { return false; } });
+        }
+      }
+      log('normal fleet result: no orchestrator pane found (direct Wake path observed)');
+      return { state: 'no_orchestrator', paneWakeAttempts: wakeCounts.attempts,
+        paneWakeConfirmed: wakeCounts.confirmed, paneWakeNotConfirmed: wakeCounts.attempts - wakeCounts.confirmed };
+    }
 
     const chats = config.chatCdpUrl && config.chatScope
       ? await (options.readChats ?? readProjectChats)(config.chatCdpUrl, config.chatScope).catch(() => [])
@@ -1803,8 +1832,10 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       for (const [owner, banner] of direct) {
         let delivered = false;
         try {
-          delivered = sendCoordinator(executor, owner.handle, managerBannerMessage(banner))
-            && (await sleepMs(4_000), submitCoordinator(executor, owner.handle));
+          const key = `banner:${owner.handle}:${owner.incarnationId ?? ''}:${createHash('sha256').update(banner.url + banner.text).digest('hex')}`;
+          delivered = await sendMarkedUnitMessage(store, key, owner.handle, managerBannerMessage(banner), executor, sleepMs, log, wakeCounts,
+            () => { try { return listFleetTerminals(executor).filter((row) => terminalsIdentity(row) === terminalsIdentity(owner)).length === 1; }
+              catch { return false; } });
         } catch {
           // A thrown terminal send also means uncertain delivery, not reroute.
         }
