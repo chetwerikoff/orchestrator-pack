@@ -261,12 +261,14 @@ node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts"
 The assistant proves the selected worktree's Git root, origin, unique local
 branch and exact native Run/Task membership. For a **dirty** existing checkout
 it preserves every tracked/untracked byte and never refreshes/merges that tree.
-Dirty reuse (like a clean non-ancestor HEAD) additionally requires exactly one
-currently **open PR whose live body closes the Issue** with
-`Closes/Fixes/Resolves #N`; the PR must have the selected repository as head
-(not a fork), base `$DEFAULT_BRANCH`, head branch equal to the observed local
-branch and full head SHA equal to the observed local HEAD. Branch, HEAD, status
-(including all dirty porcelain bytes), and PR are checked again before launch.
+Dirty reuse requires either native proof that the exact current Issue-bound
+old Dispatch is terminal, its worker is gone, and its producer worktree ID
+equals the selected worktree (also rechecking Run/Task membership), **or**
+exactly one currently open PR whose live body closes the Issue with
+`Closes/Fixes/Resolves #N`. For the PR path, the head repository, base
+`$DEFAULT_BRANCH`, local branch and full HEAD must all match. Both paths
+recheck unchanged local branch, HEAD and dirty porcelain status before launch;
+neither path refreshes or merges the worktree.
 Unproven/foreign/changed worktrees refuse without reset, stash, rebase, merge,
 or deletion. A fresh manager worktree still takes the separate
 `--manager-brief --worktree-name` path; dirty reuse does not turn fresh setup
