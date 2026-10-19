@@ -23,7 +23,7 @@ import {
   PACK_REVIEW_DISTINCT_HEAD_CAPS,
   PACK_REVIEW_LEGACY_CAP_MAP_VERSION,
   selectPackReviewGptSourceCardinality,
-  readPackReviewAuthority,
+  readPackReviewAuthorityUnderHeldStoreLock,
   type PackReviewAutomaticBudgetDisposition,
 } from '../pack-review-state.ts';
 
@@ -2099,7 +2099,10 @@ function buildUpdatedPackReviewRun(
   // The pre-aggregate native verdict's severity may still be re-evaluated by
   // the established status writer. An authoritative committed terminal, or a
   // frozen GPT quorum, never grants that mutable pre-aggregate exception.
-  const aggregateCommitted = readPackReviewAuthority(existing.prNumber, {
+  // buildUpdatedPackReviewRun runs inside withStoreLock on the same root.
+  // Reacquiring that directory lock via readPackReviewAuthority self-blocks
+  // every update until the nested lock times out.
+  const aggregateCommitted = readPackReviewAuthorityUnderHeldStoreLock(existing.prNumber, {
     storeRoot: dirname(dirname(path)),
   })?.terminal?.runId === existing.id;
   const allowPreAggregateSeverityUpdate = verdictAlreadyCommitted
