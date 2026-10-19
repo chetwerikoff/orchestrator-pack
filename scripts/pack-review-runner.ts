@@ -5831,6 +5831,14 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     }
   }
 
+  if (!authority.terminal || authority.terminal.runId !== priorRun.id) {
+    return {
+      prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
+      settled: false, reason: 'final_cap_settlement_prior_findings_missing',
+      nextAction: 'restore the original exact terminal before settlement; never substitute a new reviewer',
+    };
+  }
+
   const publishFinalCapStatus = async (
     description: string,
     digest: string,
