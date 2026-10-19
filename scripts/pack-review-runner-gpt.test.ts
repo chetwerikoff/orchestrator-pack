@@ -6165,7 +6165,7 @@ describe('Issue #2659 ARCH23:01 old cooldown history versus a newer partial sour
       issueNumber: prNumber, boundIssueSnapshotDigest: digest,
     });
     oldRound.sourceSlots = oldRound.sourceSlots.map((slot) => {
-      const invocationId = 'cooldown-original-' + slot.ordinal;
+      const invocationId = '26591500-0000-4000-8000-' + String(slot.ordinal).padStart(12, '0');
       return {
         ...slot, lifecycle: 'terminal' as const, invocationId, attemptOrdinal: 1,
         launchProfileKey: 'profile-' + 'a'.repeat(32),
@@ -6224,7 +6224,7 @@ describe('Issue #2659 ARCH23:01 old cooldown history versus a newer partial sour
         return comment;
       },
     };
-    const firstInvocation = 'newer-partial-01';
+    const firstInvocation = '26591501-0000-4000-8000-000000000001';
     comments.push(makeComment('source-01', firstInvocation, 265915001));
     const credential = await resolvePackGptSourceComment({
       identity: { repository, prNumber, headSha: HEAD_A, runId: successor.id,
