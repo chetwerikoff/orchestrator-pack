@@ -1524,6 +1524,85 @@ function githubJson(execution: ChildResult): unknown {
   catch { return null; }
 }
 
+
+/** A fresh local branch may begin at a remote PR head only on complete,
+ * current native Git + live GitHub evidence. Never adopt a local alias. */
+interface FreshPrHead {
+  readonly prNumber: number;
+  readonly branch: string;
+  readonly head: string;
+}
+
+function matchesFreshPrHead(
+  value: unknown,
+  request: WorktreePreparationRequest,
+  selected: FreshPrHead,
+): boolean {
+  return record(value)
+    && value.number === selected.prNumber
+    && text(value.state).toLowerCase() === 'open'
+    && text(value.baseRefName) === managerDefaultBranch(request)
+    && text(value.headRefName) === selected.branch
+    && text(value.headRefOid) === selected.head
+    && /^[0-9a-f]{40}$/u.test(selected.head)
+    && record(value.headRepository)
+    && text(value.headRepository.nameWithOwner).toLowerCase() === request.repository.trim().toLowerCase()
+    && typeof value.body === 'string'
+    && Boolean(request.issueNumber && prBodyClosesIssue(value.body, request.issueNumber));
+}
+
+async function resolveFreshPrRemoteHead(
+  request: WorktreePreparationRequest,
+  branch: string,
+  registeredRoot: string,
+  execute: ChildExecutor,
+): Promise<EdgeResult<FreshPrHead>> {
+  const denied = (cause: string): EdgeResult<FreshPrHead> => worktreeContinue<FreshPrHead>(
+    cause, { requestedRemoteBranch: `origin/${branch}` },
+    'identify one current same-repository open Issue-closing PR and fetch its exact remote head before creating a worktree',
+  );
+  if (!request.issueNumber || !managerDefaultBranch(request)) return denied('fresh_pr_issue_unproven');
+  const listing = githubJson(await execute([
+    'gh', 'pr', 'list', '--repo', request.repository, '--state', 'open', '--limit', '200',
+    '--json', 'baseRefName,headRefName,headRefOid,number',
+  ], undefined, undefined, registeredRoot));
+  if (!Array.isArray(listing) || listing.length >= 200) return denied('fresh_pr_inventory_unavailable');
+  const seen = new Set<number>();
+  const closing: Record<string, unknown>[] = [];
+  for (const item of listing) {
+    if (!record(item) || typeof item.number !== 'number' || !Number.isSafeInteger(item.number)
+      || item.number <= 0 || seen.has(item.number)) return denied('fresh_pr_inventory_unavailable');
+    seen.add(item.number);
+    const view = githubJson(await execute([
+      'gh', 'pr', 'view', String(item.number), '--repo', request.repository,
+      '--json', 'baseRefName,body,headRefName,headRefOid,headRepository,number,state',
+    ], undefined, undefined, registeredRoot));
+    if (!record(view) || view.number !== item.number || typeof view.body !== 'string') {
+      return denied('fresh_pr_inventory_unavailable');
+    }
+    if (prBodyClosesIssue(view.body, request.issueNumber)) closing.push(view);
+  }
+  if (closing.length !== 1) return denied('fresh_pr_link_ambiguous');
+  const selected: FreshPrHead = {
+    prNumber: closing[0]!.number as number,
+    branch,
+    head: text(closing[0]!.headRefOid),
+  };
+  if (!matchesFreshPrHead(closing[0], request, selected)) return denied('fresh_pr_head_mismatch');
+  const fetched = await execute(['git', 'fetch', '--no-tags', 'origin',
+    `refs/heads/${branch}:refs/remotes/origin/${branch}`], 120_000, undefined, registeredRoot);
+  if (!fetched.ok) return denied('fresh_pr_remote_fetch_failed');
+  const current = await execute(['git', 'rev-parse', '--verify',
+    `refs/remotes/origin/${branch}^{commit}`], undefined, undefined, registeredRoot);
+  if (!current.ok || text(current.stdout) !== selected.head) return denied('fresh_pr_remote_head_mismatch');
+  const reread = githubJson(await execute([
+    'gh', 'pr', 'view', String(selected.prNumber), '--repo', request.repository,
+    '--json', 'baseRefName,body,headRefName,headRefOid,headRepository,number,state',
+  ], undefined, undefined, registeredRoot));
+  if (!matchesFreshPrHead(reread, request, selected)) return denied('fresh_pr_head_changed');
+  return { status: 'ok', value: selected, evidence: { prNumber: selected.prNumber, head: selected.head } };
+}
+
 /** Non-ancestor reuse is admitted by the current exact Issue-linked PR, never by ancestry alone. */
 async function resumeManagerAtOpenPrHead(
   request: WorktreePreparationRequest,
@@ -1863,12 +1942,23 @@ export async function prepareWorktreeWithOrca(
   }
 
   const selectedDefaultBranch = managerDefaultBranch(request);
-  if (request.managerRefresh && (!selectedDefaultBranch || request.baseBranch !== `origin/${selectedDefaultBranch}`)) {
+  const remotePrBranch = request.baseBranch?.startsWith('origin/')
+    && request.baseBranch !== `origin/${selectedDefaultBranch}`
+    ? request.baseBranch.slice('origin/'.length) : '';
+  if (request.managerRefresh && (!selectedDefaultBranch || (!remotePrBranch
+    && request.baseBranch !== `origin/${selectedDefaultBranch}`))) {
     return worktreeContinue(
       'manager_worktree_selected_base_required',
       { requestedBaseBranch: request.baseBranch ?? 'missing', defaultBranch: selectedDefaultBranch || 'missing' },
-      'fresh manager worktrees must use a distinct manager-local branch initialized from the selected default branch',
+      'fresh manager worktrees require the selected default branch or the exact verified open Issue-closing PR remote branch',
     );
+  }
+  if (remotePrBranch && (!request.issueNumber || request.providerTopLevel
+    || !selectedDefaultBranch || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(remotePrBranch)
+    || remotePrBranch.includes('..') || remotePrBranch.includes('//')
+    || remotePrBranch.endsWith('/') || remotePrBranch.endsWith('.lock'))) {
+    return worktreeContinue('fresh_pr_remote_branch_invalid', {},
+      'select a valid remote branch of the exact unique open same-repository Issue-closing PR');
   }
 
   const repository = request.repository.trim().toLowerCase();
@@ -1883,7 +1973,7 @@ export async function prepareWorktreeWithOrca(
   if (!githubRepositoryPath(request.repository, false)) {
     return worktreeContinue('worktree_repository_resolution_malformed', { repository }, repositoryResolutionNote);
   }
-  const matches: string[] = [];
+  const matches: Array<{ readonly id: string; readonly path: string }> = [];
   for (const repo of repos) {
     const entry = repo as Record<string, unknown>;
     const id = text(entry.id);
@@ -1897,7 +1987,7 @@ export async function prepareWorktreeWithOrca(
       const root = await execute(['git', 'rev-parse', '--show-toplevel'], undefined, undefined, registeredPath);
       if (!root.ok || !isAbsolute(text(root.stdout)) || resolve(text(root.stdout)) !== resolve(registeredPath)) continue;
       const origin = await execute(['git', 'remote', 'get-url', 'origin'], undefined, undefined, registeredPath);
-      if (origin.ok && matchesGithubRepository(origin.stdout, request.repository)) matches.push(id);
+      if (origin.ok && matchesGithubRepository(origin.stdout, request.repository)) matches.push({ id, path: registeredPath });
     } catch {
       // A failed local inspection cannot authorize this registered candidate.
     }
@@ -1908,7 +1998,15 @@ export async function prepareWorktreeWithOrca(
   if (matches.length !== 1) {
     return worktreeContinue('worktree_repository_resolution_ambiguous', { repository, matchCount: matches.length }, repositoryResolutionNote);
   }
-  const repositoryId = matches[0]!;
+  const repositoryId = matches[0]!.id;
+  const repositoryRoot = matches[0]!.path;
+  // The ordinary fresh path still uses origin/<default>. The exceptional PR
+  // path must positively identify the only Issue-closing PR and fetched SHA
+  // before invoking the native worktree-create mutation.
+  const prBase = remotePrBranch
+    ? await resolveFreshPrRemoteHead(request, remotePrBranch, repositoryRoot, execute)
+    : null;
+  if (prBase && prBase.status !== 'ok') return prBase;
   if (request.providerTopLevel) {
     return {
       status: 'ok',
@@ -1932,6 +2030,24 @@ export async function prepareWorktreeWithOrca(
   const freshReady = async (
     setupEvidence: Readonly<Record<string, unknown>>,
   ): Promise<EdgeResult<PreparedWorktree>> => {
+    if (prBase?.status === 'ok') {
+      const identity = await observeManagerWorktreeIdentity(request, id, path, execute);
+      if (identity.status !== 'ok') return identity;
+      const localHead = await execute(['git', 'rev-parse', '--verify', 'HEAD^{commit}'], undefined, undefined, path);
+      const remoteHead = await execute(['git', 'rev-parse', '--verify',
+        `refs/remotes/origin/${prBase.value.branch}^{commit}`], undefined, undefined, repositoryRoot);
+      const finalPr = githubJson(await execute([
+        'gh', 'pr', 'view', String(prBase.value.prNumber), '--repo', request.repository,
+        '--json', 'baseRefName,body,headRefName,headRefOid,headRepository,number,state',
+      ], undefined, undefined, repositoryRoot));
+      if (!localHead.ok || text(localHead.stdout) !== prBase.value.head
+        || !remoteHead.ok || text(remoteHead.stdout) !== prBase.value.head
+        || !matchesFreshPrHead(finalPr, request, prBase.value)) {
+        return worktreeContinue('fresh_pr_head_changed_or_unproven',
+          { ...baseEvidence, prNumber: prBase.value.prNumber },
+          'do not start on an arbitrary local alias or stale PR head; preserve the created worktree unchanged');
+      }
+    }
     if (request.managerRefresh) {
       const identity = await observeManagerWorktreeIdentity(request, id, path, execute);
       if (identity.status !== 'ok') return identity;
@@ -2357,14 +2473,22 @@ export function parseLaunchAssistantCli(
   const worktreeName = (options.get('--worktree-name') ?? '').trim();
   const explicitBaseBranch = (options.get('--base-branch') ?? '').trim();
   const selectedBaseBranch = `origin/${target.defaultBranch}`;
-  if (explicitBaseBranch && explicitBaseBranch !== selectedBaseBranch) {
-    throw new Error(`--base-branch ${explicitBaseBranch} disagrees with selected project default branch ${selectedBaseBranch}`);
-  }
   const baseBranch = explicitBaseBranch || selectedBaseBranch;
+  const remotePrBranch = baseBranch !== selectedBaseBranch
+    && baseBranch.startsWith('origin/') ? baseBranch.slice('origin/'.length) : '';
+  if (baseBranch !== selectedBaseBranch && (!remotePrBranch
+    || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(remotePrBranch)
+    || remotePrBranch.includes('..') || remotePrBranch.includes('//')
+    || remotePrBranch.endsWith('/') || remotePrBranch.endsWith('.lock'))) {
+    throw new Error('--base-branch must be the selected origin/default or a valid Issue-closing PR remote branch');
+  }
   const hasTask = Boolean(taskId);
   const hasManagerBrief = managerBrief !== undefined;
   const hasWorktreeSelector = Boolean(worktreeSelector);
   const hasWorktreeName = Boolean(worktreeName);
+  if (remotePrBranch && (!issueNumber || !hasWorktreeName || hasWorktreeSelector || workClass === 'merge')) {
+    throw new Error('a PR remote --base-branch requires --issue-number and fresh --worktree-name');
+  }
   const requestedMode = options.get('--start-mode');
   if (requestedMode && requestedMode !== 'exact_terminal_worktree'
     && requestedMode !== 'provider_new_top_level') {
