@@ -4120,3 +4120,141 @@ describe('Issue #2655 r02 fresh PR remote head', () => {
       && ['merge', 'reset', 'rebase', 'stash', 'clean'].includes(call.argv[1]!))).toBe(false);
   });
 });
+
+
+describe('Issue #2655 r02 AppliedIn #118 same Task terminal identity retry', () => {
+  it('preserves failed start, refuses replaced terminal, and reuses only exactly verified same-Task terminal', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk2655-same-task-118-'));
+    const stateRoot = join(root, 'runtime');
+    const worktree = join(root, 'appliedin-mgr-118-fresh-1151');
+    mkdirSync(worktree, { recursive: true });
+    const env = {
+      ...opencodeProfileEnv('manager'), OPK_WAKE_SUPERVISOR_STATE_DIR: stateRoot,
+      OPK_BASE_DIR: join(root, 'assignments'),
+    };
+    const taskId = 'task_8f2c8e5ccab8';
+    const runId = 'run_a2645892e047';
+    const handle = 'term-exact-118';
+    const generation = 'incarnation-118';
+    const worktreeId = 'appliedin::manager-118';
+    const title = 'opk-manager-' + taskId;
+    let created = 0;
+    let startCalls = 0;
+    let nativeVisibility: 'verified' | 'replaced' | 'foreign' | 'absent' | 'unknown' = 'verified';
+    let newCommand = '';
+    const terminal = () => ({
+      handle, incarnationId: nativeVisibility === 'replaced' ? 'replaced-incarnation' : generation,
+      title,
+      command: newCommand,
+      worktreePath: nativeVisibility === 'foreign' ? '/tmp/other-task-worktree' : worktree,
+      status: 'running',
+    });
+    const runJson = ((argv: readonly string[]): OrcaJsonResponse => {
+      const operation = argv.slice(0, 2).join(' ');
+      if (operation === 'terminal list') {
+        if (nativeVisibility === 'unknown') return {
+          ok: false, error: { code: 'unavailable', message: 'native inventory unknown' },
+        };
+        return { ok: true, result: {
+          totalCount: created && nativeVisibility !== 'absent' ? 1 : 0,
+          truncated: false,
+          terminals: created && nativeVisibility !== 'absent' ? [terminal()] : [],
+        } };
+      }
+      if (operation === 'terminal create') {
+        created += 1;
+        newCommand = String(argv[argv.indexOf('--command') + 1] ?? '');
+        return { ok: true, result: { terminal: terminal() } };
+      }
+      if (operation === 'terminal show') {
+        if (nativeVisibility === 'unknown') return {
+          ok: false, error: { code: 'unavailable', message: 'terminal identity unknown' },
+        };
+        return { ok: true, result: { terminal: nativeVisibility === 'absent' ? null : terminal() } };
+      }
+      if (operation === 'terminal wait') return {
+        ok: true, result: { wait: { status: 'running', satisfied: true } },
+      };
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    }) as typeof import('../orca-runtime/native.ts').runOrcaJson;
+    const attempt = (supervised: LaunchDependencies['runSupervisedStart']) => {
+      const adapter = new OrcaTaskRuntimeAdapter({ runJson, env });
+      return runSupervisedTaskLaunchAssistant({
+        repository: 'chetwerikoff/AppliedIn', projectId: 'orchestrator-pack',
+        issueNumber: 118, workClass: 'manager', taskId, runId,
+        worktreeSelector: 'id:' + worktreeId, defaultBranch: 'main',
+        baseBranch: 'origin/main', env,
+      }, {
+        ...deps({ adapter }),
+        resolveProfile: (workClass, inherited, mode) => resolveLiveExecutorProfile(
+          workClass, inherited, mode, async (args) => opencodeProbeResult(args),
+        ),
+        prepareWorktree: async () => ({
+          status: 'ok', value: {
+            id: worktreeId, selector: 'id:' + worktreeId, path: worktree,
+            setupWitness: 'proven_reuse',
+          },
+        }),
+        finalizeProfile: async (profile) => ({ status: 'ok', value: profile }),
+        runSupervisedStart: supervised,
+      });
+    };
+    try {
+      const first = await attempt(async () => {
+        startCalls += 1;
+        return { ok: false, reason: 'target_unresolved', errorMessage: 'native cause unavailable' };
+      });
+      expect(first).toMatchObject({ outcome: 'continue', stage: 'supervised_start',
+        observedCause: 'target_unresolved' });
+      expect(created).toBe(1);
+      expect(startCalls).toBe(1);
+
+      for (const visibility of ['replaced', 'foreign', 'absent', 'unknown'] as const) {
+        nativeVisibility = visibility;
+        const refused = await attempt(async () => {
+          startCalls += 1;
+          return readyStart(taskId);
+        });
+        expect(refused).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare' });
+        expect(JSON.stringify(refused)).not.toContain('"outcome":"ready"');
+        expect(startCalls).toBe(1);
+        expect(created).toBe(1);
+      }
+
+      nativeVisibility = 'verified';
+      const inspect = async (args: readonly string[]) => {
+        if (args[0] === 'terminal' && args[1] === 'show') return {
+          ok: true, stdout: okEnvelope({ terminal: { handle, worktreeId } }),
+        };
+        if (args[0] === 'worktree' && args[1] === 'show') return {
+          ok: true, stdout: okEnvelope({ worktree: { id: worktreeId, path: worktree } }),
+        };
+        return { ok: false, stdout: '', stderr: 'unknown native placement' };
+      };
+      const third = await attempt((start) => runSupervisedWorkerStart({
+        ...start, env, inspect,
+        execute: async () => {
+          startCalls += 1;
+          return { ok: true, stdout: okEnvelope({
+            taskId, dispatchId: 'dispatch-118-retry', state: 'ready',
+            effects: [
+              { kind: 'worktree', action: 'reused', id: worktreeId },
+              { kind: 'terminal', role: 'agent', action: 'reused', id: handle },
+              { kind: 'dispatch_input', role: 'agent', id: handle, state: 'accepted' },
+            ],
+          }) };
+        },
+      }));
+      expect(third).toMatchObject({
+        outcome: 'ready', resources: { taskId, dispatchId: 'dispatch-118-retry',
+          worktreePath: worktree, worktreeId },
+      });
+      expect(created).toBe(1);
+      expect(startCalls).toBe(2);
+      expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack', env), 118))
+        .toMatchObject({ taskId, bindingKey: 'dispatch-118-retry', role: 'orchestrator' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
