@@ -5309,11 +5309,16 @@ export async function maybeAdmitPackReviewBodyAmendment(
   // A changed criterion or any other additional Issue-body byte is not exempt.
   if (!cycle.amendmentOrigin && cycle.frozenTier === 'T2'
       && terminal.reviewVerdict === 'findings' && cycle.reviewStageComplete !== true
-      && parseAuthoritativeTier(oldBody) === 'T2'
-      && parseAuthoritativeTier(currentIssue.body, currentIssue.title) === 'T3'
       && (oldBody.match(/^tier: T2\r?$/gm) ?? []).length === 1
       && oldBody.replace(/^tier: T2(?=\r?$)/m, 'tier: T3') === currentIssue.body) {
-    return null;
+    // Invalid live tier is not a promotion: let the full-body mismatch refuse
+    // success instead of throwing before its non-success read-back.
+    try {
+      if (parseAuthoritativeTier(oldBody) === 'T2'
+          && parseAuthoritativeTier(currentIssue.body, currentIssue.title) === 'T3') {
+        return null;
+      }
+    } catch { /* Not a valid tier-only promotion. */ }
   }
   if (prNumber === 2656 && issueNumber === 2655
       && exact2655ScopeOnlyLineDelta(oldBody, currentIssue.body)) {
