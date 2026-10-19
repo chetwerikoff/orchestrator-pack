@@ -275,6 +275,8 @@ export interface PackReviewRunRecord {
   deliveryOutcomes: Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>>;
   canonicalRepository?: string;
   reviewRound?: PackReviewGptRoundRecord;
+  /** Immutable exact body for native as well as GPT verdicts. */
+  boundIssueSnapshotDigest?: string;
   stale?: boolean;
 }
 
@@ -354,6 +356,7 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   canonicalRepository?: string;
   legacyRepositoryBySourceRoot?: Record<string, string>;
   reviewRound?: PackReviewGptRoundRecord;
+  boundIssueSnapshotDigest?: string;
   accountingVersion?: string;
   reviewCycleId?: string;
   logicalRoundOrdinal?: number;
@@ -1485,6 +1488,13 @@ function parseRecord(
   const reviewRound = raw.reviewRound === undefined || raw.reviewRound === null
     ? undefined
     : normalizePackReviewGptRoundRecord(raw.reviewRound, path);
+  const boundIssueSnapshotDigest = raw.boundIssueSnapshotDigest === undefined
+    ? undefined
+    : requiredJsonString(raw.boundIssueSnapshotDigest, 'boundIssueSnapshotDigest', path);
+  if (reviewRound && boundIssueSnapshotDigest !== undefined
+      && boundIssueSnapshotDigest !== reviewRound.boundIssueSnapshotDigest) {
+    throw new Error(`corrupt pack review run record at ${path}: GPT/native bound Issue digest differs`);
+  }
   const reviewVerdict = raw.reviewVerdict === 'clean' || raw.reviewVerdict === 'findings'
     ? raw.reviewVerdict
     : undefined;
@@ -1548,6 +1558,7 @@ function parseRecord(
     reviewerInvokedForThisRun: reviewerInvokedForThisRun as PackReviewRunRecord['reviewerInvokedForThisRun'],
     nativeAttempt,
     reviewRound,
+    boundIssueSnapshotDigest,
     runnerPid: Number(raw.runnerPid ?? 0),
     createdAt,
     updatedAt,
@@ -1934,7 +1945,9 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
         && input.resolvedReviewer !== undefined
         && record.resolvedReviewer !== input.resolvedReviewer)
       && (disposition !== 'non_consuming_explicit'
-        || record.resolvedReviewer === input.resolvedReviewer);
+        || record.resolvedReviewer === input.resolvedReviewer)
+      && (!input.boundIssueSnapshotDigest
+        || record.boundIssueSnapshotDigest === input.boundIssueSnapshotDigest);
     const active = boundRecords.filter((record) => matchesTargetIdentity(record)
       && PACK_REVIEW_ACTIVE_STATUSES.has(record.status)
       && !isPackReviewRunStale(record));
@@ -2024,6 +2037,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       ...(input.resolvedReviewer ? { resolvedReviewer: input.resolvedReviewer } : {}),
       ...(input.resolvedReviewerSource ? { resolvedReviewerSource: input.resolvedReviewerSource } : {}),
       ...(input.reviewRound ? { reviewRound: input.reviewRound } : {}),
+      ...(input.boundIssueSnapshotDigest ? { boundIssueSnapshotDigest: input.boundIssueSnapshotDigest } : {}),
       runnerPid: process.pid,
       createdAt: now,
       updatedAt: now,
@@ -2113,6 +2127,7 @@ function buildUpdatedPackReviewRun(
     reviewCycleId: existing.reviewCycleId ?? fields.reviewCycleId,
     logicalRoundOrdinal: existing.logicalRoundOrdinal ?? fields.logicalRoundOrdinal,
     logicalRoundCap: existing.logicalRoundCap ?? fields.logicalRoundCap,
+    boundIssueSnapshotDigest: existing.boundIssueSnapshotDigest ?? fields.boundIssueSnapshotDigest,
     schemaVersion: 1,
     updatedAt,
     heartbeatAtUtc: PACK_REVIEW_ACTIVE_STATUSES.has(String(fields.status ?? existing.status))
