@@ -653,6 +653,112 @@ describe('DOM observation boundary', () => {
     })).toEqual({ state: 'ready', reply: expected });
   });
 
+  function richPage(blocks: RichBlock[], historical?: RichBlock[]) {
+    const current = richAssistantNode('OUTER MISLEADING FIRST LINE; UI COPY; HIDDEN', blocks);
+    const user = {
+      getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user-message'
+        : name === 'data-message-id' ? 'owned-user-12345678' : null,
+      querySelector: (selector: string) => selector === '[' + MESSAGE_AUTHOR_ROLE_ATTR + ']'
+        ? { getAttribute: () => 'user-message' } : null,
+      querySelectorAll: () => [],
+      getBoundingClientRect: () => ({ height: 1 }),
+      innerText: markedPrompt,
+    };
+    const history = historical
+      ? [richAssistantNode('HISTORICAL WHOLE ROW', historical, 'assistant-old-12345678')]
+      : [];
+    let lateContinue = false;
+    const nodes = scalarLocator({
+      evaluateAll: vi.fn(async (callback: (items: Element[], args: unknown) => unknown, args: unknown) => {
+        const old = (globalThis as { document?: unknown }).document;
+        const continueButton = {
+          getBoundingClientRect: () => ({ height: 20 }),
+          hasAttribute: () => false,
+          getAttribute: () => null,
+          ownerDocument: { defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible' }) } },
+        };
+        (globalThis as { document?: unknown }).document = {
+          querySelectorAll: (selector: string) => selector.includes('continue-generating') && lateContinue
+            ? [continueButton] : [],
+        };
+        try { return callback([...history, user, current] as unknown as Element[], args); }
+        finally {
+          if (old === undefined) delete (globalThis as { document?: unknown }).document;
+          else (globalThis as { document?: unknown }).document = old;
+        }
+      }),
+    });
+    return {
+      page: { locator: (selector: string) => selector === MESSAGE_NODE_SELECTOR ? nodes : scalarLocator() },
+      setLateContinue: (value: boolean) => { lateContinue = value; },
+    };
+  }
+
+  it('serializes two complete visible diff blocks into one literal UTF-8 keyed and final reply', async () => {
+    const diffOne = 'diff --git a/alpha b/alpha\n--- a/alpha\n+++ b/alpha\n@@ -1 +1 @@\n old\n-foo\n+bar\n';
+    const diffTwo = 'diff --git a/beta b/beta\n--- a/beta\n+++ b/beta\n@@ -2 +2 @@\n  nested  spaces\n\t+tab\n\n```';
+    const proseOne = 'Summary before code';
+    const proseTwo = 'Between diff blocks';
+    const proseThree = 'After diff blocks\nEXECUTION_STATUS: complete';
+    const fixture = richPage([
+      { prose: proseOne, tag: 'H2' },
+      { code: diffOne, label: 'diff', copyControl: true },
+      { prose: proseTwo, tag: 'UL' },
+      { code: diffTwo, label: 'diff', copyControl: true },
+      { prose: proseThree },
+    ]);
+    const expected = [
+      proseOne,
+      '```diff\n' + diffOne + '```',
+      proseTwo,
+      '````diff\n' + diffTwo + '\n````',
+      proseThree,
+    ].join('\n\n');
+    const observation = await readPageObservation(fixture.page, marker, 0);
+    expect(observation.transcriptIncomplete).toBe(false);
+    expect(observation.snapshot?.carriers.at(-1)?.text).toBe(expected);
+    expect(observation.messages.at(-1)?.text).toBe(expected);
+    expect(expected).not.toContain('Copy');
+    expect(expected).not.toContain('OUTER MISLEADING');
+    const base = { complete: true, carriers: [] } as const;
+    const ownedKey = observation.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    const candidate = keyedHarvestCandidate(observation.snapshot!, base, ownedKey);
+    expect(candidate.state).toBe('ready');
+    if (candidate.state !== 'ready') throw new Error('expected_ready_candidate');
+    expect(candidate.reply).toBe(expected);
+    const signature = atomicSnapshotSignature(observation.snapshot!);
+    expect(await revalidateKeyedHarvest(fixture.page, base, ownedKey, {
+      ...candidate, snapshotSignature: signature,
+    })).toEqual({ state: 'ready', reply: expected });
+    expect(Buffer.from(candidate.reply, 'utf8')).toEqual(Buffer.from(expected, 'utf8'));
+  });
+
+  it('uses whole-row fallback only for nonselected history; rejects unsupported selected code', async () => {
+    const withHistory = richPage([{ prose: 'FINAL OWNED' }], [{ code: 'historical', nested: true }]);
+    const observation = await readPageObservation(withHistory.page, marker, 0);
+    expect(observation.transcriptIncomplete).toBe(false);
+    expect(observation.snapshot?.carriers[0]?.text).toBe('HISTORICAL WHOLE ROW');
+    const invalid = richPage([{ code: 'must-not-publish', nested: true }]);
+    expect((await readPageObservation(invalid.page, marker, 0)).transcriptIncomplete).toBe(true);
+    const ambiguous = richPage([{ code: 'x', label: 'diff', extraLabel: 'javascript' }]);
+    expect((await readPageObservation(ambiguous.page, marker, 0)).transcriptIncomplete).toBe(true);
+  });
+
+  it('rejects unchanged keyed bytes when Continue generating appears page-wide only at revalidation', async () => {
+    const fixture = richPage([{ code: 'line\n', label: 'diff' }]);
+    const observation = await readPageObservation(fixture.page, marker, 0);
+    expect(observation.snapshot?.complete).toBe(true);
+    const base = { complete: true, carriers: [] } as const;
+    const userKey = observation.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    const candidate = keyedHarvestCandidate(observation.snapshot!, base, userKey);
+    expect(candidate.state).toBe('ready');
+    if (candidate.state !== 'ready') throw new Error('expected_candidate');
+    fixture.setLateContinue(true);
+    await expect(revalidateKeyedHarvest(fixture.page, base, userKey, {
+      ...candidate, snapshotSignature: atomicSnapshotSignature(observation.snapshot!),
+    })).resolves.toEqual({ state: 'continuity-unproven' });
+  });
+
   it('reads complete rendered innerText and never textContent', async () => {
     const user = {
       ...({ role: 'user', text: markedPrompt } as const),
