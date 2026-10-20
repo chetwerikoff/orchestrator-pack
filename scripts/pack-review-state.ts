@@ -102,8 +102,21 @@ export interface PackReviewTerminalV2 {
   focusedResolutionVerdict?: 'clean';
 }
 
+export interface PackReviewBodyAmendmentOrigin {
+  originalTerminalRunId: string;
+  originalCycleId: string;
+  previousCycleId: string;
+  previousTerminalRunId: string;
+  closingIssueNumber: number;
+  reviewedBodyDigest: string;
+  amendedBodyDigest: string;
+  /** Persisted in the existing cycle, not a separate admission ledger. */
+  previouslyAdmittedBodyDigests: string[];
+}
+
 export interface PackReviewCycle {
   cycleId: string;
+  amendmentOrigin?: PackReviewBodyAmendmentOrigin;
   state: PackReviewCycleState;
   frozenTier: PackReviewTier;
   frozenCap: number;
@@ -466,8 +479,29 @@ function validateCycle(cycle: PackReviewCycle | null): void {
 
   let consumedCount: number;
   if (cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) {
-    if (cycle.frozenCap !== PACK_REVIEW_LOGICAL_CAPS[cycle.frozenTier] || cycle.frozenMapOrigin !== undefined) {
+    if (cycle.frozenCap !== (cycle.amendmentOrigin ? 1 : PACK_REVIEW_LOGICAL_CAPS[cycle.frozenTier])
+        || cycle.frozenMapOrigin !== undefined) {
       throw new PackReviewAuthorityError('cap_state_invalid', 'current-map cycle has mismatched discriminator');
+    }
+    if (cycle.amendmentOrigin) {
+      const origin = cycle.amendmentOrigin;
+      nonEmpty(origin.originalTerminalRunId, 'amendment originalTerminalRunId');
+      nonEmpty(origin.originalCycleId, 'amendment originalCycleId');
+      nonEmpty(origin.previousCycleId, 'amendment previousCycleId');
+      nonEmpty(origin.previousTerminalRunId, 'amendment previousTerminalRunId');
+      positiveInteger(origin.closingIssueNumber, 'amendment closingIssueNumber');
+      for (const digest of [origin.reviewedBodyDigest, origin.amendedBodyDigest, ...(origin.previouslyAdmittedBodyDigests ?? [])]) {
+        if (!/^sha256:[0-9a-f]{64}$/.test(digest)) {
+          throw new PackReviewAuthorityError('cap_state_invalid', 'amendment digest is invalid');
+        }
+      }
+      if (!Array.isArray(origin.previouslyAdmittedBodyDigests)
+          || new Set(origin.previouslyAdmittedBodyDigests).size !== origin.previouslyAdmittedBodyDigests.length
+          || !origin.previouslyAdmittedBodyDigests.includes(origin.reviewedBodyDigest)
+          || origin.previouslyAdmittedBodyDigests.includes(origin.amendedBodyDigest)
+          || cycle.resetProvenance !== undefined) {
+        throw new PackReviewAuthorityError('cap_state_invalid', 'amendment origin/replay invalid');
+      }
     }
     if (!Array.isArray(cycle.consumedRoundOrdinals)) {
       throw new PackReviewAuthorityError('cap_state_invalid', 'logical-round cycle lacks consumedRoundOrdinals');
@@ -483,7 +517,7 @@ function validateCycle(cycle: PackReviewCycle | null): void {
     }
     consumedCount = rounds.length;
   } else {
-    if (cycle.consumedRoundOrdinals !== undefined) {
+    if (cycle.consumedRoundOrdinals !== undefined || cycle.amendmentOrigin !== undefined) {
       throw new PackReviewAuthorityError('cap_state_invalid', 'legacy cycle cannot carry logical-round accounting');
     }
     if (cycle.capMapVersion === PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION) {
@@ -602,10 +636,24 @@ export function readPackReviewAuthority(
   return withPackReviewAuthorityLock(options, () => readAuthorityUnlocked(prNumber, options));
 }
 
+/**
+ * The run store and authority use the same non-reentrant .store-lock.
+ * Only call this while the caller already holds that lock for options.storeRoot;
+ * never acquire it again from inside a run-store mutation. The existing
+ * readAuthorityUnlocked performs the full authority validation.
+ */
+export function readPackReviewAuthorityUnderHeldStoreLock(
+  prNumber: number,
+  options: PackReviewAuthorityOptions,
+): PackReviewAuthorityDocument | null {
+  return readAuthorityUnlocked(prNumber, options);
+}
+
 export function createNewPackReviewCycle(
   tier: PackReviewTier,
   options: Pick<PackReviewAuthorityOptions, 'now'> & {
     capMapVersion?: typeof PACK_REVIEW_CAP_MAP_VERSION | typeof PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
+    amendmentOrigin?: PackReviewBodyAmendmentOrigin;
   } = {},
   resetProvenance?: PackReviewResetProvenance,
 ): PackReviewCycle {
@@ -614,17 +662,96 @@ export function createNewPackReviewCycle(
   }
   const capMapVersion = options.capMapVersion ?? PACK_REVIEW_CAP_MAP_VERSION;
   const logicalAccounting = capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
+  if (options.amendmentOrigin && (!logicalAccounting || resetProvenance)) {
+    throw new PackReviewAuthorityError('cap_state_invalid', 'amendment requires an unreset logical cycle');
+  }
   return {
+    ...(options.amendmentOrigin ? { amendmentOrigin: options.amendmentOrigin } : {}),
     cycleId: `cycle-${randomUUID().replaceAll('-', '')}`,
     state: 'open',
     frozenTier: tier,
-    frozenCap: logicalAccounting ? PACK_REVIEW_LOGICAL_CAPS[tier] : PACK_REVIEW_CAPS[tier],
+    frozenCap: options.amendmentOrigin ? 1
+      : logicalAccounting ? PACK_REVIEW_LOGICAL_CAPS[tier] : PACK_REVIEW_CAPS[tier],
     capMapVersion,
     openedAtUtc: (options.now ?? new Date()).toISOString(),
     consumedHeadShas: [],
     ...(logicalAccounting ? { consumedRoundOrdinals: [] } : {}),
     resetProvenance,
   };
+}
+
+/**
+ * One durable continuation under the existing PR authority lock. An Issue-body
+ * amendment does not mutate the original final-cap terminal/cycle or require
+ * an audited reset. It consumes its own ordinary, capped logical round.
+ */
+export function beginPackReviewBodyAmendmentContinuation(input: {
+  prNumber: number;
+  expectedTransitionSeq: number;
+  headSha: string;
+  closingIssueNumber: number;
+  priorTerminalRunId: string;
+  reviewedBodyDigest: string;
+  amendedBodyDigest: string;
+  options: PackReviewAuthorityOptions;
+}): PackReviewAuthorityDocument {
+  const headSha = normalizeSha(input.headSha);
+  if (input.reviewedBodyDigest === input.amendedBodyDigest) {
+    throw new PackReviewAuthorityError('amendment_not_changed', 'Issue body digest unchanged');
+  }
+  return commitPackReviewAuthorityTransition({
+    prNumber: input.prNumber,
+    expectedTransitionSeq: input.expectedTransitionSeq,
+    nextPhase: 'head_observed',
+    options: input.options,
+    mutate(current) {
+      const previous = current.cycle;
+      if (current.currentHeadSha !== headSha
+          || !previous || !isLogicalRoundCycle(previous)
+          || !['closed', 'at_cap_open_findings', 'at_cap_continuation_required'].includes(previous.state)
+          || cycleConsumedCount(previous) !== previous.frozenCap
+          || !current.terminal
+          || (current.terminal.reviewVerdict !== 'findings'
+            && !(current.terminal.reviewVerdict === 'clean'
+              && previous.reviewStageComplete === true))
+          || current.terminal.runId !== input.priorTerminalRunId) {
+        throw new PackReviewAuthorityError('amendment_authority_unverified',
+          'exact final-cap terminal/head/cycle not eligible');
+      }
+      const old = previous.amendmentOrigin;
+      if (old && (old.closingIssueNumber !== input.closingIssueNumber
+          || old.amendedBodyDigest !== input.reviewedBodyDigest)) {
+        throw new PackReviewAuthorityError('amendment_serial_order_invalid',
+          'prior amendment body or closing Issue changed');
+      }
+      const previouslyAdmittedBodyDigests = old
+        ? [...old.previouslyAdmittedBodyDigests, old.amendedBodyDigest]
+        : [input.reviewedBodyDigest];
+      if (previouslyAdmittedBodyDigests.includes(input.amendedBodyDigest)) {
+        throw new PackReviewAuthorityError('amendment_digest_replayed',
+          'reversion or already admitted body cannot consume another round');
+      }
+      current.cycle = createNewPackReviewCycle(previous.frozenTier, {
+        now: input.options.now,
+        capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+        amendmentOrigin: {
+          originalCycleId: old?.originalCycleId ?? previous.cycleId,
+          originalTerminalRunId: old?.originalTerminalRunId ?? current.terminal.runId,
+          previousCycleId: previous.cycleId,
+          previousTerminalRunId: current.terminal.runId,
+          closingIssueNumber: input.closingIssueNumber,
+          reviewedBodyDigest: input.reviewedBodyDigest,
+          amendedBodyDigest: input.amendedBodyDigest,
+          previouslyAdmittedBodyDigests,
+        },
+      });
+      current.terminal = undefined;
+      current.evidence = undefined;
+      current.triage = undefined;
+      current.publication = undefined;
+      return current;
+    },
+  });
 }
 
 export function retainPersistedOpenCycle(raw: unknown): PackReviewCycle {

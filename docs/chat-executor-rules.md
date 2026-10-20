@@ -248,10 +248,18 @@ After every new commit or history rewrite:
 - for a new pack-review cycle, required rounds are logical PR/task-cycle units
   with caps T1=1, T2=1, T3=2; T3 round 2 may review the same head as round 1;
 - once the required stage has durably reached `reviewStageComplete=true`,
-  later heads do not reopen or consume another required round. Instead the
-  pack-owned status projection writes
+  later **code-head movement alone** does not reopen or consume another required
+  round. The pack-owned status projection writes
   `orchestrator-pack/pack-review=success` on the current head with
-  `Required pack-review stage completed; no additional review round required.`;
+  `Required pack-review stage completed; no additional review round required.`
+  only while the original closing-Issue body remains verified against its
+  immutable reviewed binding, or the sole exact scope-only #2655/#2656
+  exception in Issue #2659 Binding §11 is fully proven. A verified changed
+  behavior-criteria body instead requires current-head non-success status
+  write/read-back on first observation and one genuine digest-bound ordinary
+  continuation round; an unverified mismatch cannot inherit historical green.
+  The pre-observation interval may still display the previous same-SHA green;
+  no watcher or new gate is implied;
 - direct connected-GitHub reviews remain exact-commit evidence and do not
   themselves create or rewrite the runner's durable stage-completion latch.
 

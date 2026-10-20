@@ -23,6 +23,7 @@ import {
   PACK_REVIEW_DISTINCT_HEAD_CAPS,
   PACK_REVIEW_LEGACY_CAP_MAP_VERSION,
   selectPackReviewGptSourceCardinality,
+  readPackReviewAuthorityUnderHeldStoreLock,
   type PackReviewAutomaticBudgetDisposition,
 } from '../pack-review-state.ts';
 
@@ -275,6 +276,8 @@ export interface PackReviewRunRecord {
   deliveryOutcomes: Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>>;
   canonicalRepository?: string;
   reviewRound?: PackReviewGptRoundRecord;
+  /** Immutable exact body for native as well as GPT verdicts. */
+  boundIssueSnapshotDigest?: string;
   stale?: boolean;
 }
 
@@ -354,6 +357,7 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   canonicalRepository?: string;
   legacyRepositoryBySourceRoot?: Record<string, string>;
   reviewRound?: PackReviewGptRoundRecord;
+  boundIssueSnapshotDigest?: string;
   accountingVersion?: string;
   reviewCycleId?: string;
   logicalRoundOrdinal?: number;
@@ -922,6 +926,9 @@ function mergeFrozenGptSlot(
   const incomingAttempt = incoming.attemptOrdinal;
   const existingComplete = existing.lifecycle === 'terminal'
     && COMPLETE_GPT_TERMINAL_CLASSES.has(existing.terminalClass ?? '');
+  // A published complete source slot is first-writer immutable. A duplicate,
+  // delayed or conflicting result from another attempt cannot poison that run.
+  if (existingComplete) return existing;
   const legalAttemptIdentityRotation = !existingComplete
     && incomingAttempt !== undefined
     && incomingAttempt > (existingAttempt ?? 0)
@@ -1035,25 +1042,30 @@ function mergeFrozenGptRound(
   existing: PackReviewGptRoundRecord,
   incoming: PackReviewGptRoundRecord,
   path: string,
+  aggregateCommitted: boolean,
 ): PackReviewGptRoundRecord {
   assertFrozenGptRoundIdentity(existing, incoming, path);
-  if (existing.settledSourceCount !== undefined
-      && incoming.settledSourceCount !== undefined
-      && existing.settledSourceCount !== incoming.settledSourceCount) {
-    throw new Error(`corrupt pack review run record at ${path}: settledSourceCount cannot change once settled`);
-  }
-  const settledSourceCount = existing.settledSourceCount ?? incoming.settledSourceCount;
+  // The actual aggregate terminal, not an earlier 2/3 checkpoint,
+  // seals the source slots and quorum. Never change a committed round.
+  if (aggregateCommitted) return existing;
+  const sourceSlots = existing.sourceSlots.map((existingSlot) => {
+    const incomingSlot = incoming.sourceSlots.find((slot) => slot.ordinal === existingSlot.ordinal)!;
+    return mergeFrozenGptSlot(
+      existingSlot,
+      incomingSlot,
+      `${path}.reviewRound.sourceSlots[${existingSlot.ordinal - 1}]`,
+    );
+  });
+  const censusStaged = existing.settledSourceCount !== undefined
+    || incoming.settledSourceCount !== undefined;
+  const settledSourceCount = censusStaged
+    ? sourceSlots.filter((slot) => slot.lifecycle === 'terminal'
+      && COMPLETE_GPT_TERMINAL_CLASSES.has(slot.terminalClass ?? '')).length
+    : undefined;
   return {
     ...existing,
     ...(settledSourceCount === undefined ? {} : { settledSourceCount }),
-    sourceSlots: existing.sourceSlots.map((existingSlot) => {
-      const incomingSlot = incoming.sourceSlots.find((slot) => slot.ordinal === existingSlot.ordinal)!;
-      return mergeFrozenGptSlot(
-        existingSlot,
-        incomingSlot,
-        `${path}.reviewRound.sourceSlots[${existingSlot.ordinal - 1}]`,
-      );
-    }),
+    sourceSlots,
   };
 }
 
@@ -1483,6 +1495,13 @@ function parseRecord(
   const reviewRound = raw.reviewRound === undefined || raw.reviewRound === null
     ? undefined
     : normalizePackReviewGptRoundRecord(raw.reviewRound, path);
+  const boundIssueSnapshotDigest = raw.boundIssueSnapshotDigest === undefined
+    ? undefined
+    : requiredJsonString(raw.boundIssueSnapshotDigest, 'boundIssueSnapshotDigest', path);
+  if (reviewRound && boundIssueSnapshotDigest !== undefined
+      && boundIssueSnapshotDigest !== reviewRound.boundIssueSnapshotDigest) {
+    throw new Error(`corrupt pack review run record at ${path}: GPT/native bound Issue digest differs`);
+  }
   const reviewVerdict = raw.reviewVerdict === 'clean' || raw.reviewVerdict === 'findings'
     ? raw.reviewVerdict
     : undefined;
@@ -1546,6 +1565,7 @@ function parseRecord(
     reviewerInvokedForThisRun: reviewerInvokedForThisRun as PackReviewRunRecord['reviewerInvokedForThisRun'],
     nativeAttempt,
     reviewRound,
+    boundIssueSnapshotDigest,
     runnerPid: Number(raw.runnerPid ?? 0),
     createdAt,
     updatedAt,
@@ -1932,7 +1952,20 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
         && input.resolvedReviewer !== undefined
         && record.resolvedReviewer !== input.resolvedReviewer)
       && (disposition !== 'non_consuming_explicit'
-        || record.resolvedReviewer === input.resolvedReviewer);
+        || record.resolvedReviewer === input.resolvedReviewer)
+      && (!input.boundIssueSnapshotDigest
+        || record.boundIssueSnapshotDigest === input.boundIssueSnapshotDigest
+        // Native runs created before digest persistence may be replaced only
+        // after the caller has proven the same-round replacement ceiling.
+        // Never treat a different populated digest or a GPT round as an alias.
+        || (input.allowSameRoundReplacement === true
+          && record.boundIssueSnapshotDigest === undefined
+          && record.reviewRound === undefined
+          && input.reviewRound === undefined
+          && input.reviewCycleId !== undefined
+          && record.reviewCycleId === input.reviewCycleId
+          && input.logicalRoundOrdinal !== undefined
+          && record.logicalRoundOrdinal === input.logicalRoundOrdinal));
     const active = boundRecords.filter((record) => matchesTargetIdentity(record)
       && PACK_REVIEW_ACTIVE_STATUSES.has(record.status)
       && !isPackReviewRunStale(record));
@@ -2022,6 +2055,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       ...(input.resolvedReviewer ? { resolvedReviewer: input.resolvedReviewer } : {}),
       ...(input.resolvedReviewerSource ? { resolvedReviewerSource: input.resolvedReviewerSource } : {}),
       ...(input.reviewRound ? { reviewRound: input.reviewRound } : {}),
+      ...(input.boundIssueSnapshotDigest ? { boundIssueSnapshotDigest: input.boundIssueSnapshotDigest } : {}),
       runnerPid: process.pid,
       createdAt: now,
       updatedAt: now,
@@ -2078,9 +2112,32 @@ function buildUpdatedPackReviewRun(
     if (olderSnapshot || submittedDowngrade || obsoleteVerdictStatus) continue;
     mergedDeliveryOutcomes[channel] = incoming;
   }
+  const verdictAlreadyCommitted = hasPersistedPackReviewVerdict(existing);
+  // The pre-aggregate native verdict's severity may still be re-evaluated by
+  // the established status writer. An authoritative committed terminal, or a
+  // frozen GPT quorum, never grants that mutable pre-aggregate exception.
+  // buildUpdatedPackReviewRun runs inside withStoreLock on the same root.
+  // Reacquiring that directory lock via readPackReviewAuthority self-blocks
+  // every update until the nested lock times out.
+  const aggregateCommitted = readPackReviewAuthorityUnderHeldStoreLock(existing.prNumber, {
+    storeRoot: dirname(dirname(path)),
+  })?.terminal?.runId === existing.id;
+  const allowPreAggregateSeverityUpdate = verdictAlreadyCommitted
+    && !aggregateCommitted
+    && existing.reviewRound === undefined
+    && fields.findings !== undefined
+    && fields.reviewVerdict === undefined
+    && fields.findingCount === undefined
+    && fields.journalOutcome === undefined;
   const candidate: Record<string, unknown> = {
     ...existing,
     ...fields,
+    ...(verdictAlreadyCommitted ? {
+      reviewVerdict: existing.reviewVerdict,
+      findingCount: existing.findingCount,
+      findings: allowPreAggregateSeverityUpdate ? fields.findings : existing.findings,
+      journalOutcome: existing.journalOutcome,
+    } : {}),
     ...(staleNoJudgmentTerminal ? {
       status: existing.status,
       latestRunStatus: existing.latestRunStatus,
@@ -2104,6 +2161,7 @@ function buildUpdatedPackReviewRun(
     reviewCycleId: existing.reviewCycleId ?? fields.reviewCycleId,
     logicalRoundOrdinal: existing.logicalRoundOrdinal ?? fields.logicalRoundOrdinal,
     logicalRoundCap: existing.logicalRoundCap ?? fields.logicalRoundCap,
+    boundIssueSnapshotDigest: existing.boundIssueSnapshotDigest ?? fields.boundIssueSnapshotDigest,
     schemaVersion: 1,
     updatedAt,
     heartbeatAtUtc: PACK_REVIEW_ACTIVE_STATUSES.has(String(fields.status ?? existing.status))
@@ -2118,6 +2176,7 @@ function buildUpdatedPackReviewRun(
       existing.reviewRound,
       normalizePackReviewGptRoundRecord(candidate.reviewRound, path),
       path,
+      aggregateCommitted,
     );
   } else if (candidate.reviewRound !== undefined && candidate.reviewRound !== null) {
     candidate.reviewRound = normalizePackReviewGptRoundRecord(candidate.reviewRound, path);

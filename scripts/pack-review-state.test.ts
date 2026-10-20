@@ -10,6 +10,7 @@ import {
   PACK_REVIEW_LEGACY_CAP_MAP_VERSION,
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   acknowledgePackReviewReset,
+  beginPackReviewBodyAmendmentContinuation,
   commitPackReviewAuthorityTransition,
   commitPackReviewTerminal,
   commitPackReviewTriage,
@@ -32,6 +33,13 @@ import {
   terminalConsumesCapSlot,
   validateTerminalV2,
 } from './pack-review-state.ts';
+import {
+  boundIssueSnapshotArtifactPaths,
+  captureBoundIssueSnapshot,
+  computeBoundIssueSnapshotHash,
+  loadValidatedBoundSnapshotBody,
+  resolveBoundIssueSnapshot,
+} from './lib/reverify-bound-issue-snapshot.ts';
 import {
   createPackReviewRun,
   getPackReviewRun,
@@ -1375,5 +1383,234 @@ describe('Issue #2537 monotonic linked-Issue tier promotion', () => {
       prNumber: 2539, tier: 'T3', startedRunExists: true, options: opts,
     });
     expect(authority.cycle).toMatchObject({ cycleId, frozenTier: 'T2', frozenCap: 1 });
+  });
+});
+
+describe('Issue #2659 immutable same-head body-amendment authority', () => {
+  const digest = (digit: string) => `sha256:${digit.repeat(64)}`;
+  it('starts one cap-one continuation, preserves original verdict, and serializes a second amendment', () => {
+    const opts = options();
+    const prNumber = 2659;
+    const first = initializePackReviewAuthority({
+      prNumber, headSha: sha('a'), tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: opts,
+    });
+    const final = commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: first.transitionSeq,
+      terminal: { ...findingsTerminal('original-final', sha('a')),
+        logicalRoundOrdinal: 1, automaticBudgetDisposition: 'consume' },
+      status: 'changes_requested', findingCount: 1, options: opts,
+    });
+    expect(final.cycle).toMatchObject({
+      frozenCap: 1, state: 'at_cap_open_findings', consumedRoundOrdinals: [1],
+    });
+    const original = structuredClone(final.terminal);
+    const continuation = beginPackReviewBodyAmendmentContinuation({
+      prNumber, expectedTransitionSeq: final.transitionSeq,
+      headSha: sha('a'), closingIssueNumber: 2659,
+      priorTerminalRunId: 'original-final',
+      reviewedBodyDigest: digest('0'), amendedBodyDigest: digest('1'),
+      options: opts,
+    });
+    expect(continuation.cycle).toMatchObject({
+      frozenTier: 'T2', frozenCap: 1, consumedRoundOrdinals: [], state: 'open',
+      amendmentOrigin: {
+        originalCycleId: final.cycle!.cycleId,
+        originalTerminalRunId: 'original-final',
+        previousTerminalRunId: 'original-final',
+        reviewedBodyDigest: digest('0'), amendedBodyDigest: digest('1'),
+        previouslyAdmittedBodyDigests: [digest('0')],
+      },
+    });
+    expect(continuation.cycle!.cycleId).not.toBe(final.cycle!.cycleId);
+    expect(continuation.terminal).toBeUndefined();
+    expect(original?.runId).toBe('original-final');
+    expect(readPackReviewAuthority(prNumber, opts)?.cycle!.cycleId).toBe(continuation.cycle!.cycleId);
+    expect(() => beginPackReviewBodyAmendmentContinuation({
+      prNumber, expectedTransitionSeq: continuation.transitionSeq,
+      headSha: sha('a'), closingIssueNumber: 2659,
+      priorTerminalRunId: 'original-final',
+      reviewedBodyDigest: digest('0'), amendedBodyDigest: digest('1'),
+      options: opts,
+    })).toThrow(/eligible|unverified/);
+    const cleanB1 = commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: continuation.transitionSeq,
+      terminal: {
+        schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal',
+        runId: 'first-amendment', targetSha: sha('a'),
+        reviewVerdict: 'clean', findingCount: 0,
+        findingsDigest: 'clean-first', logicalRoundOrdinal: 1,
+        automaticBudgetDisposition: 'consume',
+      },
+      status: 'up_to_date', findingCount: 0, options: opts,
+    });
+    expect(cleanB1.cycle).toMatchObject({
+      state: 'closed', reviewStageComplete: true, frozenCap: 1,
+      consumedRoundOrdinals: [1],
+    });
+    const continuation2 = beginPackReviewBodyAmendmentContinuation({
+      prNumber, expectedTransitionSeq: cleanB1.transitionSeq,
+      headSha: sha('a'), closingIssueNumber: 2659,
+      priorTerminalRunId: 'first-amendment',
+      reviewedBodyDigest: digest('1'), amendedBodyDigest: digest('2'),
+      options: opts,
+    });
+    expect(continuation2.cycle?.amendmentOrigin).toMatchObject({
+      originalTerminalRunId: 'original-final',
+      originalCycleId: final.cycle!.cycleId,
+      previousCycleId: cleanB1.cycle!.cycleId,
+      previousTerminalRunId: 'first-amendment',
+      previouslyAdmittedBodyDigests: [digest('0'), digest('1')],
+      amendedBodyDigest: digest('2'),
+    });
+    expect(continuation2.cycle?.frozenCap).toBe(1);
+    const cleanB2 = commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: continuation2.transitionSeq,
+      terminal: {
+        schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal',
+        runId: 'second-amendment', targetSha: sha('a'),
+        reviewVerdict: 'clean', findingCount: 0,
+        findingsDigest: 'clean-second', logicalRoundOrdinal: 1,
+        automaticBudgetDisposition: 'consume',
+      },
+      status: 'up_to_date', findingCount: 0, options: opts,
+    });
+    expect(() => beginPackReviewBodyAmendmentContinuation({
+      prNumber, expectedTransitionSeq: cleanB2.transitionSeq,
+      headSha: sha('a'), closingIssueNumber: 2659,
+      priorTerminalRunId: 'second-amendment',
+      reviewedBodyDigest: digest('2'), amendedBodyDigest: digest('0'),
+      options: opts,
+    })).toThrow(/reversion|already admitted/);
+  });
+
+  it('opens a same-H1 B1 review after a completed clean B0 without audited reset', () => {
+    const opts = options();
+    const prNumber = 2661;
+    const base = initializePackReviewAuthority({
+      prNumber, headSha: sha('a'), tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: opts,
+    });
+    const cleanB0 = commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: base.transitionSeq,
+      terminal: {
+        schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal',
+        runId: 'original-clean', targetSha: sha('a'),
+        reviewVerdict: 'clean', findingCount: 0, findingsDigest: 'clean-B0',
+        logicalRoundOrdinal: 1, automaticBudgetDisposition: 'consume',
+      },
+      status: 'up_to_date', findingCount: 0, options: opts,
+    });
+    expect(cleanB0.cycle).toMatchObject({
+      reviewStageComplete: true, state: 'closed', frozenCap: 1,
+      consumedRoundOrdinals: [1],
+    });
+    const next = beginPackReviewBodyAmendmentContinuation({
+      prNumber, expectedTransitionSeq: cleanB0.transitionSeq,
+      headSha: sha('a'), closingIssueNumber: 2661,
+      priorTerminalRunId: 'original-clean',
+      reviewedBodyDigest: digest('0'), amendedBodyDigest: digest('1'),
+      options: opts,
+    });
+    expect(next.currentHeadSha).toBe(cleanB0.currentHeadSha);
+    expect(next.cycle).toMatchObject({
+      frozenCap: 1, state: 'open', consumedRoundOrdinals: [],
+      amendmentOrigin: {
+        originalCycleId: cleanB0.cycle!.cycleId,
+        originalTerminalRunId: 'original-clean',
+        reviewedBodyDigest: digest('0'), amendedBodyDigest: digest('1'),
+      },
+    });
+    expect(next.cycle!.cycleId).not.toBe(cleanB0.cycle!.cycleId);
+    expect(next.cycle!.resetProvenance).toBeUndefined();
+    expect(next.terminal).toBeUndefined();
+    expect(() => beginPackReviewBodyAmendmentContinuation({
+      prNumber, expectedTransitionSeq: next.transitionSeq,
+      headSha: sha('a'), closingIssueNumber: 2661,
+      priorTerminalRunId: 'original-clean',
+      reviewedBodyDigest: digest('0'), amendedBodyDigest: digest('1'),
+      options: opts,
+    })).toThrow(/eligible|unverified/);
+  });
+
+  it('retains ordinary T3 cap two and fails closed for unaccepted origin/head', () => {
+    const opts = options();
+    const initial = initializePackReviewAuthority({
+      prNumber: 2660, headSha: sha('c'), tier: 'T3',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: opts,
+    });
+    expect(initial.cycle!.frozenCap).toBe(2);
+    expect(() => beginPackReviewBodyAmendmentContinuation({
+      prNumber: 2660, expectedTransitionSeq: initial.transitionSeq,
+      headSha: sha('d'), closingIssueNumber: 2660,
+      priorTerminalRunId: 'invented', reviewedBodyDigest: digest('0'),
+      amendedBodyDigest: digest('1'), options: opts,
+    })).toThrow(/eligible|unverified/);
+    expect(readPackReviewAuthority(2660, opts)?.cycle!.frozenCap).toBe(2);
+  });
+});
+
+describe('Issue #2659 H1/B0 and H1/B1 digest-qualified snapshots', () => {
+  it('preserves the original body, selects both exact digests and rejects ambiguous head-only recovery', () => {
+    const stateBaseDir = mkdtempSync(join(tmpdir(), 'pack-review-amendment-snapshot-'));
+    roots.push(stateBaseDir);
+    const key = { projectId: 'orchestrator-pack', prNumber: 2659,
+      prHeadSha: sha('b'), issueNumber: 2659, stateBaseDir };
+    const oldBody = '## Acceptance criteria\n- old behavior\n';
+    const newBody = '## Acceptance criteria\n- amended behavior\n';
+    const b0 = captureBoundIssueSnapshot({ ...key, issueBody: oldBody });
+    const newDigest = computeBoundIssueSnapshotHash(newBody);
+    const b1 = captureBoundIssueSnapshot({
+      ...key, issueBody: newBody, snapshotDigest: newDigest,
+    });
+    expect(b1.created).toBe(true);
+    expect(b1.snapshotPath).not.toBe(b0.snapshotPath);
+    expect(readFileSync(b0.snapshotPath, 'utf8')).toBe(oldBody);
+    expect(readFileSync(b1.snapshotPath, 'utf8')).toBe(newBody);
+    expect(resolveBoundIssueSnapshot(key).status).toBe('corrupted');
+    const old = resolveBoundIssueSnapshot({ ...key, snapshotDigest: b0.snapshotHash });
+    const fresh = resolveBoundIssueSnapshot({ ...key, snapshotDigest: newDigest });
+    expect(old).toMatchObject({ status: 'found', snapshotPath: b0.snapshotPath });
+    expect(fresh).toMatchObject({ status: 'found', snapshotPath: b1.snapshotPath });
+    expect(loadValidatedBoundSnapshotBody({
+      ...key, snapshotDigest: newDigest, snapshotFilePath: b1.snapshotPath,
+    }).body).toBe(newBody);
+    expect(captureBoundIssueSnapshot({
+      ...key, issueBody: oldBody, snapshotDigest: b0.snapshotHash,
+    }).created).toBe(false);
+    expect(captureBoundIssueSnapshot({
+      ...key, issueBody: newBody, snapshotDigest: newDigest,
+    }).created).toBe(false);
+    expect(() => captureBoundIssueSnapshot({ ...key, issueBody: newBody })).toThrow();
+    expect(() => captureBoundIssueSnapshot({
+      ...key, issueBody: newBody, snapshotDigest: b0.snapshotHash,
+    })).toThrow(/digest differs/);
+    const paths = boundIssueSnapshotArtifactPaths({ ...key, snapshotDigest: newDigest });
+    expect(paths.snapshotPath).toBe(b1.snapshotPath);
+  });
+});
+
+describe('Issue #2659 shared run-store and authority lock regression', () => {
+  it('updates a run with missing and existing authority without reacquiring its held .store-lock', () => {
+    const config = options();
+    const storeOptions = { projectId: 'orchestrator-pack', storeRoot: config.storeRoot };
+    const prNumber = 26591;
+    const headSha = sha('a');
+    const run = createPackReviewRun({
+      ...storeOptions, prNumber, headSha,
+      trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+    }).run;
+
+    // Both paths require the normal validated authority lookup, but the
+    // run-store writer already owns the shared non-reentrant directory lock.
+    expect(updatePackReviewRun(run.id, { status: 'preparing' }, storeOptions).status).toBe('preparing');
+    const authority = initializePackReviewAuthority({
+      prNumber, headSha, tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: config,
+    });
+    expect(authority.currentHeadSha).toBe(headSha);
+    expect(updatePackReviewRun(run.id, { status: 'running' }, storeOptions).status).toBe('running');
+    expect(readPackReviewAuthority(prNumber, config)?.transitionSeq).toBe(authority.transitionSeq);
+    expect(getPackReviewRun(run.id, storeOptions)?.status).toBe('running');
   });
 });

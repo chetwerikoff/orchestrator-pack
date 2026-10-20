@@ -22,6 +22,7 @@ interface SharedOptions {
   issueNumber: number;
   json: boolean;
   issueBodyFile?: string;
+  snapshotDigest?: string;
   require: boolean;
   pathOnly: boolean;
 }
@@ -32,6 +33,7 @@ function usage(mode: Mode): string {
     '  --pr-number <n>               PR number (required)',
     '  --pr-head-sha <sha>           PR head SHA (required)',
     '  --issue-number <n>            Linked issue number (required)',
+    '  --snapshot-digest <sha256:...> Select immutable same-head Issue body (optional)',
   ];
   if (mode === 'capture') {
     return [
@@ -85,6 +87,9 @@ function parseArgs(argv: string[]): SharedOptions {
       case '--issue-body-file':
         opts.issueBodyFile = String(argv[++i] ?? '');
         break;
+      case '--snapshot-digest':
+        opts.snapshotDigest = String(argv[++i] ?? '');
+        break;
       case '--require':
         opts.require = true;
         break;
@@ -121,6 +126,7 @@ function runCapture(opts: SharedOptions): void {
     prHeadSha,
     issueNumber,
     issueBody: readText(issueBodyFile),
+    snapshotDigest: opts.snapshotDigest,
   });
 
   if (opts.json) {
@@ -140,6 +146,7 @@ function runResolve(opts: SharedOptions): void {
     prNumber,
     prHeadSha,
     issueNumber,
+    snapshotDigest: opts.snapshotDigest,
   });
 
   if ((result.status === 'missing' || result.status === 'corrupted') && opts.require) {

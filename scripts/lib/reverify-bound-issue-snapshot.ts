@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { hashIssueBodySnapshot } from './reviewer-contract-mapping.ts';
@@ -111,6 +111,7 @@ export function boundIssueSnapshotArtifactPaths(input: {
   issueNumber: number;
   stateBaseDir?: string;
   storeDirOverride?: string | null;
+  snapshotDigest?: string;
 }): { artifactDir: string; snapshotPath: string; metadataPath: string } {
   const prHeadSha = normalizeSha(input.prHeadSha);
   const artifactDir = join(
@@ -121,7 +122,18 @@ export function boundIssueSnapshotArtifactPaths(input: {
     `pr-${input.prNumber}`,
     prHeadSha.slice(0, 12),
   );
-  const baseName = `issue-${input.issueNumber}`;
+  const legacyName = `issue-${input.issueNumber}`;
+  let baseName = legacyName;
+  if (input.snapshotDigest !== undefined) {
+    if (!/^sha256:[a-f0-9]{64}$/.test(input.snapshotDigest)) {
+      throw new Error('bound Issue snapshot digest must be exact sha256:64-hex');
+    }
+    // Preserve the original immutable H1/B0 path when the caller binds B0.
+    const old = readBoundIssueSnapshotMetadata(join(artifactDir, `${legacyName}.meta.json`));
+    if (old?.snapshotHash !== input.snapshotDigest) {
+      baseName = `${legacyName}-${input.snapshotDigest.slice('sha256:'.length)}`;
+    }
+  }
   return {
     artifactDir,
     snapshotPath: join(artifactDir, `${baseName}.md`),
@@ -146,6 +158,7 @@ export function captureBoundIssueSnapshot(input: {
   stateBaseDir?: string;
   storeDirOverride?: string | null;
   capturedAt?: string;
+  snapshotDigest?: string;
 }): BoundIssueSnapshotCaptureResult {
   if (!Number.isInteger(input.prNumber) || input.prNumber <= 0) {
     throw new Error('prNumber must be a positive integer');
@@ -158,6 +171,10 @@ export function captureBoundIssueSnapshot(input: {
     throw new Error('prHeadSha must be a git commit SHA');
   }
 
+  const snapshotHash = computeBoundIssueSnapshotHash(input.issueBody);
+  if (input.snapshotDigest !== undefined && input.snapshotDigest !== snapshotHash) {
+    throw new Error('bound Issue snapshot capture digest differs from exact body');
+  }
   const paths = boundIssueSnapshotArtifactPaths({
     projectId: input.projectId,
     prNumber: input.prNumber,
@@ -165,8 +182,8 @@ export function captureBoundIssueSnapshot(input: {
     issueNumber: input.issueNumber,
     stateBaseDir: input.stateBaseDir,
     storeDirOverride: input.storeDirOverride,
+    snapshotDigest: input.snapshotDigest,
   });
-  const snapshotHash = computeBoundIssueSnapshotHash(input.issueBody);
   const metadata: BoundIssueSnapshotMetadata = {
     schemaVersion: BOUND_ISSUE_SNAPSHOT_SCHEMA_VERSION,
     projectId: input.projectId,
@@ -256,6 +273,7 @@ export function loadValidatedBoundSnapshotBody(input: {
   snapshotFilePath: string;
   stateBaseDir?: string;
   storeDirOverride?: string | null;
+  snapshotDigest?: string;
 }): { body: string; snapshotHash: string; snapshotPath: string } {
   const resolved = resolveBoundIssueSnapshot({
     projectId: input.projectId,
@@ -264,6 +282,7 @@ export function loadValidatedBoundSnapshotBody(input: {
     issueNumber: input.issueNumber,
     stateBaseDir: input.stateBaseDir,
     storeDirOverride: input.storeDirOverride,
+    snapshotDigest: input.snapshotDigest,
   });
 
   if (resolved.status !== 'found' || !resolved.snapshotPath || !resolved.snapshotHash) {
@@ -294,8 +313,9 @@ export function resolveBoundIssueSnapshot(input: {
   issueNumber: number;
   stateBaseDir?: string;
   storeDirOverride?: string | null;
+  snapshotDigest?: string;
 }): BoundIssueSnapshotResolveResult {
-  const paths = boundIssueSnapshotArtifactPaths({
+  const legacy = boundIssueSnapshotArtifactPaths({
     projectId: input.projectId,
     prNumber: input.prNumber,
     prHeadSha: input.prHeadSha,
@@ -303,6 +323,24 @@ export function resolveBoundIssueSnapshot(input: {
     stateBaseDir: input.stateBaseDir,
     storeDirOverride: input.storeDirOverride,
   });
+  // All same-head candidates count, including incomplete or damaged files.
+  // Head-only resolution is ambiguous when historical B0 and B1 coexist.
+  const qualified = existsSync(legacy.artifactDir)
+    ? readdirSync(legacy.artifactDir).filter((name) =>
+      new RegExp(`^issue-${input.issueNumber}-[0-9a-f]{64}\\.meta\\.json$`).test(name))
+    : [];
+  const hasLegacy = existsSync(legacy.snapshotPath) || existsSync(legacy.metadataPath);
+  if (input.snapshotDigest === undefined && qualified.length + Number(hasLegacy) > 1) {
+    return { status: 'corrupted', snapshotPath: null, metadataPath: null,
+      snapshotHash: null, metadata: null };
+  }
+  const paths = input.snapshotDigest === undefined && !hasLegacy && qualified.length === 1
+    ? {
+        artifactDir: legacy.artifactDir,
+        metadataPath: join(legacy.artifactDir, qualified[0]!),
+        snapshotPath: join(legacy.artifactDir, qualified[0]!.replace(/\.meta\.json$/, '.md')),
+      }
+    : boundIssueSnapshotArtifactPaths(input);
 
   if (!existsSync(paths.snapshotPath) || !existsSync(paths.metadataPath)) {
     return {
@@ -330,7 +368,7 @@ export function resolveBoundIssueSnapshot(input: {
     prNumber: input.prNumber,
     prHeadSha: input.prHeadSha,
     issueNumber: input.issueNumber,
-  })) {
+  }) || (input.snapshotDigest !== undefined && metadata.snapshotHash !== input.snapshotDigest)) {
     return {
       status: 'corrupted',
       snapshotPath: null,

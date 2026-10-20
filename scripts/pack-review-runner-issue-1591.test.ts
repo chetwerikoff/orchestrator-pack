@@ -1199,6 +1199,83 @@ describe('Issue #1591 exact-head final-cap settlement', () => {
   });
 });
 
+describe('Issue #2659 aggregate quorum identity after a late third credentialed source', () => {
+  it('keeps the committed 2/3 original terminal and source slots immutable', () => {
+    const storeRoot = tempRoot('opk-2659-late-third-');
+    harness(storeRoot);
+    const options = { projectId: PROJECT, storeRoot };
+    const stamp = '2026-10-19T00:00:00.000Z';
+    const round = threeSourceRound(stamp);
+    round.sourceSlots = round.sourceSlots.map((slot) => slot.ordinal > 2
+      ? slot
+      : {
+          ...slot, lifecycle: 'terminal' as const,
+          terminalClass: slot.ordinal === 1 ? 'complete_findings' : 'complete_clean',
+          terminalResult: { schema: 'turn-result/v1', state: 'ok', send_count: 1,
+            scope: 'invocation', invocation_id: slot.invocationId,
+            cause: 'github_source_comment_credentialed' },
+          payload: slot.ordinal === 1
+            ? { verdict: 'findings', findingCount: 1,
+                findings: [{ severity: 'blocking', title: 'original retained finding' }] }
+            : { verdict: 'clean', findingCount: 0, findings: [] },
+        });
+    round.settledSourceCount = 2;
+    const created = createPackReviewRun({
+      ...options, prNumber: 1591, headSha: HEAD_A,
+      trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+      canonicalRepository: REPO, reviewRound: round,
+    }).run;
+    setPackReviewRunTerminal(created.id, 'changes_requested', {
+      reviewVerdict: 'findings', findingCount: 1,
+      findings: [{ severity: 'blocking', title: 'original retained finding',
+        sourceSlotId: 'source-01' }],
+      journalOutcome: { state: 'persisted', recordedAtUtc: stamp,
+        reason: 'verdict_persisted',
+        idempotencyKey: `verdict:${created.id}:${HEAD_A}`, attempts: 1 },
+    }, options);
+    // A staged source census is not immutable until the actual aggregate
+    // terminal commits under authority; setPackReviewRunTerminal alone is not enough.
+    const authority = initializePackReviewAuthority({
+      prNumber: 1591, headSha: HEAD_A, tier: 'T1', options: { storeRoot },
+    });
+    commitPackReviewTerminal({
+      prNumber: 1591, expectedTransitionSeq: authority.transitionSeq,
+      terminal: {
+        schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal',
+        runId: created.id, targetSha: HEAD_A, reviewVerdict: 'findings',
+        findingCount: 1, findingsDigest: 'issue-2659-committed-quorum-fixture',
+      },
+      status: 'changes_requested', findingCount: 1, options: { storeRoot },
+    });
+    expect(readPackReviewAuthority(1591, { storeRoot })?.terminal?.runId).toBe(created.id);
+    const original = getPackReviewRun(created.id, options)!;
+    const late = structuredClone(original.reviewRound!);
+    late.sourceSlots[0]!.terminalClass = 'complete_clean';
+    late.sourceSlots[0]!.payload = { verdict: 'clean', findingCount: 0, findings: [] };
+    late.sourceSlots[2] = {
+      ...late.sourceSlots[2]!, lifecycle: 'terminal', terminalClass: 'complete_clean',
+      invocationId: 'late-invocation', attemptOrdinal: 1,
+      terminalResult: { schema: 'turn-result/v1', state: 'ok',
+        scope: 'invocation', invocation_id: 'late-invocation',
+        cause: 'github_source_comment_credentialed', send_count: 1 },
+      payload: { verdict: 'clean', findingCount: 0, findings: [] },
+    };
+    late.settledSourceCount = 3;
+    updatePackReviewRun(created.id, {
+      reviewRound: late, reviewVerdict: 'clean', findingCount: 0, findings: [],
+      journalOutcome: { state: 'journal_write_failed', recordedAtUtc: stamp,
+        reason: 'late_aggregate_retry', idempotencyKey: `verdict:${created.id}:${HEAD_A}`,
+        attempts: 2 },
+    }, options);
+    const after = getPackReviewRun(created.id, options)!;
+    expect(after.reviewRound).toEqual(original.reviewRound);
+    expect(after.reviewRound?.settledSourceCount).toBe(2);
+    expect(after.reviewVerdict).toBe('findings');
+    expect(after.findings).toEqual(original.findings);
+    expect(after.journalOutcome).toEqual(original.journalOutcome);
+  });
+});
+
 describe('Issue #2451 same-run late error versus recovered verdict', () => {
   it('keeps a credentialed complete verdict terminal and its success channel against stale no-judgment writes', () => {
     const storeRoot = tempRoot('opk-2451-recovery-writer-order-');

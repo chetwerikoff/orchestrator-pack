@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -21,6 +22,7 @@ import {
   isRetryablePackReviewZeroSendCollision,
   parseArgs,
   reconcileStalePackReviewRuns,
+  maybeAdmitPackReviewBodyAmendment,
   observeGptPackReviewAttempt,
   resolveCurrentPrHead,
   resolvePackReviewReconcileRepository,
@@ -5274,7 +5276,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       .toEqual([]);
   });
 
-  it('preserves a persisted legal 2/3 freeze when a third comment arrives before the verdict resumes', async () => {
+  it('hydrates a blocking third source after staged 2/3 but before aggregate commit', async () => {
     const f = seed(2);
     f.expireGrace();
     let interrupted = false;
@@ -5292,28 +5294,56 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
     expect(first).toBeNull();
     expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.settledSourceCount).toBe(2);
     expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
+    const stagedRound = structuredClone(getPackReviewRun(f.runId, f.options)!.reviewRound!);
 
     const lastIdentity: PackGptSourceIdentity = {
       repository: repoSlug, prNumber, headSha: HEAD_A, runId: f.runId,
       slotId: 'source-03', invocationId: f.invocationIds[2]!,
     };
+    const blocker = JSON.stringify({ findings: [{
+      type: 'quality', code: 'quality:third-before-aggregate',
+      severity: 'blocking', path: 'scripts/lib/pack-review-run-store.ts',
+      summary: 'Credentialed third source blocks a false clean aggregate',
+      source: 'gpt-browser',
+    }] });
     f.comments.push({
       ...f.comments[1]!, id: 2556003,
-      body: formatPackGptSourceCommentEnvelope(lastIdentity, 'NO_FINDINGS'),
+      body: formatPackGptSourceCommentEnvelope(lastIdentity, blocker),
       url: `https://github.com/${repoSlug}/pull/${prNumber}#issuecomment-2556003`,
     });
     const resumed = await reconcileStalePackReviewRuns(f.input);
     expect(resumed.results).toEqual(expect.arrayContaining([
       expect.objectContaining({
         runId: f.runId, recovered: true, statusReconciled: true,
-        settledSourceCount: 2, degraded: true,
+        settledSourceCount: 3, degraded: false,
       }),
     ]));
-    expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.settledSourceCount).toBe(2);
+    const committed = getPackReviewRun(f.runId, f.options)!;
+    expect(committed).toMatchObject({
+      reviewVerdict: 'findings', findingCount: 1,
+      reviewRound: { settledSourceCount: 3 },
+    });
+    expect(committed.findings).toEqual([
+      expect.objectContaining({
+        title: 'Credentialed third source blocks a false clean aggregate',
+        fingerprint: createHash('sha256').update([
+          'quality', 'quality:third-before-aggregate',
+          'scripts/lib/pack-review-run-store.ts',
+        ].join('\n'), 'utf8').digest('hex'),
+        severity: 'error',
+        sourceSlotId: 'source-03',
+        filePath: 'scripts/lib/pack-review-run-store.ts',
+        body: expect.stringContaining('code: quality:third-before-aggregate'),
+      }),
+    ]);
     expect(f.reviewBodies).toHaveLength(1);
-    expect(f.statusStates).toEqual(['success']);
+    expect(f.statusStates).toEqual(['failure']);
     expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
       .toEqual([1]);
+    // Only the actual committed terminal freezes the slots and source count.
+    updatePackReviewRun(f.runId, { reviewRound: stagedRound }, f.options);
+    expect(getPackReviewRun(f.runId, f.options)?.reviewRound).toEqual(committed.reviewRound);
+    expect(getPackReviewRun(f.runId, f.options)?.findings).toEqual(committed.findings);
   });
 
   it('waits for 2/3 before grace then settles the existing degraded quorum after grace', async () => {
@@ -6139,6 +6169,240 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
 });
 
 
+describe('Issue #2659 ARCH23:01 old cooldown history versus a newer partial source', () => {
+  it('resumes only the newer 1/3 run while the terminal 0/3 cooldown consumes no round', async () => {
+    const projectId = 'orchestrator-pack';
+    const repository = 'chetwerikoff/orchestrator-pack';
+    const prNumber = 265915;
+    const issueBody = ['```complexity-tier', 'tier: T2', '```',
+      '## Acceptance criteria', '- original B0 required behavior', ''].join('\n');
+    const storeRoot = tempRoot('opk-2659-cooldown-history-');
+    harnessEnv(storeRoot, path.join(storeRoot, 'review.json'));
+    selectProjectCard(storeRoot);
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(new Date('2026-10-12T00:00:00.000Z'));
+    const options = { projectId, storeRoot };
+    const authority = initializePackReviewAuthority({
+      prNumber, headSha: HEAD_A, tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: { storeRoot },
+    });
+    const digest = computeBoundIssueSnapshotHash(issueBody);
+    captureBoundIssueSnapshot({
+      projectId, prNumber, prHeadSha: HEAD_A,
+      issueNumber: prNumber, issueBody,
+    });
+    const oldRound = plannedStoredGptRound();
+    Object.assign(oldRound, {
+      tier: 'T2', accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      issueNumber: prNumber, boundIssueSnapshotDigest: digest,
+    });
+    oldRound.sourceSlots = oldRound.sourceSlots.map((slot) => {
+      const invocationId = '26591500-0000-4000-8000-' + String(slot.ordinal).padStart(12, '0');
+      return {
+        ...slot, lifecycle: 'terminal' as const, invocationId, attemptOrdinal: 1,
+        launchProfileKey: 'profile-' + 'a'.repeat(32),
+        terminalClass: 'rate_limit:account_cooldown_active',
+        terminalResult: storedTerminalTurnResult(invocationId, {
+          state: 'rate_limit', cause: 'account_cooldown_active', scope: 'invocation',
+          send_count: 0, send_attempted: false,
+        }),
+      };
+    });
+    const original = createPackReviewRun({
+      ...options, prNumber, headSha: HEAD_A,
+      canonicalRepository: repository, trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: authority.cycle!.cycleId, logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      automaticBudgetDisposition: 'consume', resolvedReviewer: 'gpt', reviewRound: oldRound,
+    }).run;
+    setPackReviewRunTerminal(original.id, 'failed', {
+      failureReason: 'gpt_source_non_complete:account_cooldown_active:0/3',
+    }, options);
+    const frozenZero = getPackReviewRun(original.id, options)!;
+    expect(derivePackReviewNoJudgmentBudgetOutcome(frozenZero, [])).toBe('non_consuming_no_judgment');
+    expect(readPackReviewAuthority(prNumber, { storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([]);
+
+    const partialRound = plannedStoredGptRound();
+    Object.assign(partialRound, {
+      tier: 'T2', accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      issueNumber: prNumber, boundIssueSnapshotDigest: digest,
+    });
+    const successor = createPackReviewRun({
+      ...options, prNumber, headSha: HEAD_A,
+      canonicalRepository: repository, trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: authority.cycle!.cycleId, logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      automaticBudgetDisposition: 'consume', resolvedReviewer: 'gpt',
+      allowSameRoundReplacement: true, reviewRound: partialRound,
+    }).run;
+    const comments: PackGptSourceGithubComment[] = [];
+    const makeComment = (slotId: string, invocationId: string, id: number): PackGptSourceGithubComment => ({
+      id,
+      body: formatPackGptSourceCommentEnvelope({
+        repository, prNumber, headSha: HEAD_A, runId: successor.id, slotId, invocationId,
+      }, 'NO_FINDINGS'),
+      actorLogin: 'browser-gpt-bot',
+      createdAt: '2026-10-12T00:01:00.000Z', updatedAt: '2026-10-12T00:01:00.000Z',
+      url: 'https://github.com/' + repository + '/pull/' + prNumber + '#issuecomment-' + id,
+      issueUrl: 'https://api.github.com/repos/' + repository + '/issues/' + prNumber,
+    });
+    const sourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async () => [...comments],
+      getComment: async (id) => {
+        const comment = comments.find((item) => item.id === id);
+        if (!comment) throw new Error('original source comment missing');
+        return comment;
+      },
+    };
+    const firstInvocation = '26591501-0000-4000-8000-000000000001';
+    comments.push(makeComment('source-01', firstInvocation, 265915001));
+    const credential = await resolvePackGptSourceComment({
+      identity: { repository, prNumber, headSha: HEAD_A, runId: successor.id,
+        slotId: 'source-01', invocationId: firstInvocation },
+      transport: sourceTransport,
+    });
+    expect(credential.kind).toBe('credentialed');
+    if (credential.kind !== 'credentialed') throw new Error('source-01 must be credentialed');
+    partialRound.sourceSlots[0] = {
+      slotId: 'source-01', ordinal: 1, lifecycle: 'terminal',
+      invocationId: firstInvocation, attemptOrdinal: 1,
+      terminalClass: 'complete_clean',
+      terminalResult: storedTerminalTurnResult(firstInvocation, {
+        source_comment_authority: 'credentialed_github',
+        source_comment_receipt: credential.receipt,
+      }),
+      payload: credential.payload,
+    };
+    updatePackReviewRun(successor.id, {
+      reviewRound: partialRound, status: 'preparing', latestRunStatus: 'preparing',
+      runnerPid: 2147483647,
+    }, options);
+    vi.setSystemTime(new Date('2026-10-12T00:20:00.000Z'));
+
+    const launches: string[] = [];
+    const attempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+    const result = await startPackReview({
+      ...options, sourceRepoRoot: repoRoot, prNumber, headSha: HEAD_A,
+      claimMode: 'acquire', tier: 'T2',
+      fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
+      fixturePrState: 'OPEN', fixturePrBody: 'Closes #' + prNumber,
+      fixturePostReviewPrBody: 'Closes #' + prNumber,
+      fixtureRepoSlug: repository, fixtureIssueNumber: prNumber,
+      fixtureIssueTitle: '[T2] Same-head cooldown recovery', fixtureIssueBody: issueBody,
+      fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureGptAttemptObserver: async () => ({
+        state: 'continuation_eligible' as const, replacementEligible: false,
+        initialLaunchSlotIds: ['source-02', 'source-03'],
+      }),
+      fixtureReviewBySourceSlot: attempts,
+      fixtureAfterGptInvocationBound: ({ slotId, invocationId }) => {
+        launches.push(slotId);
+        attempts[slotId] = [{ stdout: successfulCleanReviewPayload(invocationId), exitCode: 0 }];
+      },
+      fixtureBeforeGptSourceCommentCensus: ({ slotId, invocationId }) => {
+        if (slotId !== 'source-01') {
+          comments.push(makeComment(slotId, invocationId, slotId === 'source-02' ? 265915002 : 265915003));
+        }
+      },
+      fixtureRequiredStatusWriter: async () => {},
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      ok: true, runId: successor.id, created: true,
+      coverage: { kind: 'complete', completedSourceCount: 3, cardinality: 3 },
+    });
+    expect(launches.slice().sort()).toEqual(['source-02', 'source-03']);
+    expect(getPackReviewRun(successor.id, options)?.reviewRound?.sourceSlots[0]?.invocationId)
+      .toBe(firstInvocation);
+    expect(getPackReviewRun(original.id, options)?.reviewRound).toEqual(frozenZero.reviewRound);
+    expect(getPackReviewRun(original.id, options)?.reviewVerdict).toBeUndefined();
+    expect(readPackReviewAuthority(prNumber, { storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([1]);
+
+    // An amended B1 on exactly the same SHA has its own active cycle. The old
+    // B0 zero-judgment cooldown must remain history, not a new incumbent.
+    const B1 = issueBody.replace('original B0 required behavior', 'amended B1 required behavior');
+    let publicStatus = 'success';
+    const newCycleInput = {
+      ...options, sourceRepoRoot: repoRoot, repoSlug: repository, prNumber,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixturePrState: 'OPEN', fixturePrBody: 'Closes #' + prNumber,
+      fixtureIssueNumber: prNumber, fixtureIssueTitle: '[T2] Amended B1 behavior',
+      fixtureIssueBody: B1,
+      fixtureRequiredStatusReader: async () => publicStatus,
+      fixtureRequiredStatusWriter: async (request: { state: string }) => {
+        publicStatus = request.state;
+      },
+      fixtureRequiredCiPolicy: { contexts: ['CI'], checks: [] },
+      fixtureRequiredCiChecks: [{ name: 'CI', state: 'SUCCESS' as const }],
+    };
+    const amended = await maybeAdmitPackReviewBodyAmendment(newCycleInput, {
+      projectId, storeRoot, repoSlug: repository,
+    });
+    expect(amended, JSON.stringify(amended)).toMatchObject({
+      amendmentAdmission: true, reason: 'body_amendment_admitted',
+      requiredStatusState: 'pending',
+    });
+    const newCycle = readPackReviewAuthority(prNumber, { storeRoot })!.cycle!;
+    expect(newCycle.cycleId).not.toBe(authority.cycle!.cycleId);
+    expect(publicStatus).toBe('pending');
+
+    const b1Comments: PackGptSourceGithubComment[] = [];
+    const b1Transport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async () => [...b1Comments],
+      getComment: async (id) => {
+        const found = b1Comments.find((comment) => comment.id === id);
+        if (!found) throw new Error('missing B1 comment');
+        return found;
+      },
+    };
+    const b1Attempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+    const b1Result = await startPackReview({
+      ...newCycleInput, headSha: HEAD_A, tier: 'T2', claimMode: 'acquire',
+      fixturePostReviewHeadSha: HEAD_A,
+      fixturePostReviewPrBody: 'Closes #' + prNumber,
+      fixtureGptSourceCommentTransport: b1Transport,
+      fixtureReviewBySourceSlot: b1Attempts,
+      fixtureAfterGptInvocationBound: ({ slotId, invocationId }) => {
+        b1Attempts[slotId] = [{ stdout: successfulCleanReviewPayload(invocationId), exitCode: 0 }];
+      },
+      fixtureBeforeGptSourceCommentCensus: ({ slotId, invocationId }) => {
+        const fresh = listPackReviewRuns(options).find((candidate) =>
+          candidate.reviewCycleId === newCycle.cycleId && candidate.reviewRound?.reviewer === 'gpt');
+        if (!fresh) throw new Error('B1 fresh-cycle run missing');
+        const id = 265915100 + Number(slotId.slice(-2));
+        b1Comments.push({
+          id, body: formatPackGptSourceCommentEnvelope({
+            repository, prNumber, headSha: HEAD_A, runId: fresh.id,
+            slotId, invocationId,
+          }, 'NO_FINDINGS'),
+          actorLogin: 'browser-gpt-bot',
+          createdAt: '2026-10-12T00:21:00.000Z',
+          updatedAt: '2026-10-12T00:21:00.000Z',
+          url: 'https://github.com/' + repository + '/pull/' + prNumber + '#issuecomment-' + id,
+          issueUrl: 'https://api.github.com/repos/' + repository + '/issues/' + prNumber,
+        });
+      },
+    });
+    expect(b1Result, JSON.stringify(b1Result)).toMatchObject({
+      ok: true, created: true, status: 'up_to_date',
+      coverage: { kind: 'complete', completedSourceCount: 3, cardinality: 3 },
+    });
+    expect(b1Result.runId).not.toBe(original.id);
+    expect(b1Result.runId).not.toBe(successor.id);
+    expect(getPackReviewRun(original.id, options)?.reviewVerdict).toBeUndefined();
+    expect(listPackReviewRuns(options)).toHaveLength(3);
+    expect(readPackReviewAuthority(prNumber, { storeRoot })?.cycle).toMatchObject({
+      cycleId: newCycle.cycleId, consumedRoundOrdinals: [1],
+    });
+  });
+});
+
 describe('Issue #2532 dead partial GPT incumbent through public start', () => {
   const projectId = 'orchestrator-pack';
   const repository = 'chetwerikoff/orchestrator-pack';
@@ -6620,12 +6884,21 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
 
   it('rejects an unowned preacquired continuation before PID rebind or a new source-03 send', async () => {
     const f = await seedDeadIncumbent();
-    // No matching claim has ever been acquired. The flag alone is not a holder.
+    // A foreign live holder is not an invitation to rerun this exact claim.
+    const foreign = acquireReviewStartClaim({
+      projectId, prNumber, headSha: HEAD_A,
+      surface: 'fixture-foreign-owner', startReason: 'holding-claim',
+      reviewRuns: listPackReviewRuns(f.options),
+    });
+    expect(foreign.acquired).toBe(true);
+    expect(testReviewStartClaimOwnership(foreign)).toBe(true);
     const result = await startPackReview({ ...f.input, claimMode: 'preacquired' });
     expect(result, JSON.stringify(result)).toMatchObject({
       ok: false, created: false, runId: f.runId, reason: 'gpt_preacquired_claim_not_owned',
     });
-    expect(result.nextAction).toMatch(/^npm run --silent pack-gpt-review -- --project orchestrator-pack --pr-number 2532/);
+    expect(result.nextAction).toContain('Read-ReviewStartClaimRecord');
+    expect(result.nextAction).toContain('review-start-claims');
+    expect(result.nextAction).not.toContain('pack-gpt-review');
     const stored = getPackReviewRun(f.runId, f.options)!;
     expect(stored.runnerPid).toBe(oldPid);
     expect(stored.reviewRound!.sourceSlots[0]).toEqual(f.originalFirst);
@@ -6651,7 +6924,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       const result = await startPackReview({ ...f.input, claimMode: 'acquire' });
       expect(result.reason).toBe('gpt_incumbent_owner_not_dead');
       expect(result.ok).toBe(false);
-      expect(result.nextAction).toMatch(/^node --experimental-strip-types scripts\/pack-review-runner\.ts reconcile /);
+      expect(result.nextAction).toMatch(/^node --experimental-strip-types scripts\/pack-review-runner\.ts list --project-id orchestrator-pack$/);
       expect(getPackReviewRun(f.runId, f.options)?.runnerPid).toBe(before.runnerPid);
       expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots).toEqual(before.reviewRound?.sourceSlots);
       expect(f.launches).toEqual([]);
