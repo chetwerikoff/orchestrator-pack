@@ -21,6 +21,7 @@ import {
   isRetryablePackReviewZeroSendCollision,
   parseArgs,
   reconcileStalePackReviewRuns,
+  maybeAdmitPackReviewBodyAmendment,
   observeGptPackReviewAttempt,
   resolveCurrentPrHead,
   resolvePackReviewReconcileRepository,
@@ -5274,7 +5275,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       .toEqual([]);
   });
 
-  it('preserves a persisted legal 2/3 freeze when a third comment arrives before the verdict resumes', async () => {
+  it('hydrates a blocking third source after staged 2/3 but before aggregate commit', async () => {
     const f = seed(2);
     f.expireGrace();
     let interrupted = false;
@@ -5292,28 +5293,46 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
     expect(first).toBeNull();
     expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.settledSourceCount).toBe(2);
     expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
+    const stagedRound = structuredClone(getPackReviewRun(f.runId, f.options)!.reviewRound!);
 
     const lastIdentity: PackGptSourceIdentity = {
       repository: repoSlug, prNumber, headSha: HEAD_A, runId: f.runId,
       slotId: 'source-03', invocationId: f.invocationIds[2]!,
     };
+    const blocker = JSON.stringify({ findings: [{
+      type: 'quality', code: 'quality:third-before-aggregate',
+      severity: 'blocking', path: 'scripts/lib/pack-review-run-store.ts',
+      summary: 'Credentialed third source blocks a false clean aggregate',
+      source: 'gpt-browser',
+    }] });
     f.comments.push({
       ...f.comments[1]!, id: 2556003,
-      body: formatPackGptSourceCommentEnvelope(lastIdentity, 'NO_FINDINGS'),
+      body: formatPackGptSourceCommentEnvelope(lastIdentity, blocker),
       url: `https://github.com/${repoSlug}/pull/${prNumber}#issuecomment-2556003`,
     });
     const resumed = await reconcileStalePackReviewRuns(f.input);
     expect(resumed.results).toEqual(expect.arrayContaining([
       expect.objectContaining({
         runId: f.runId, recovered: true, statusReconciled: true,
-        settledSourceCount: 2, degraded: true,
+        settledSourceCount: 3, degraded: false,
       }),
     ]));
-    expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.settledSourceCount).toBe(2);
+    const committed = getPackReviewRun(f.runId, f.options)!;
+    expect(committed).toMatchObject({
+      reviewVerdict: 'findings', findingCount: 1,
+      reviewRound: { settledSourceCount: 3 },
+    });
+    expect(committed.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'quality:third-before-aggregate', sourceSlotId: 'source-03' }),
+    ]));
     expect(f.reviewBodies).toHaveLength(1);
-    expect(f.statusStates).toEqual(['success']);
+    expect(f.statusStates).toEqual(['failure']);
     expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
       .toEqual([1]);
+    // Only the actual committed terminal freezes the slots and source count.
+    updatePackReviewRun(f.runId, { reviewRound: stagedRound }, f.options);
+    expect(getPackReviewRun(f.runId, f.options)?.reviewRound).toEqual(committed.reviewRound);
+    expect(getPackReviewRun(f.runId, f.options)?.findings).toEqual(committed.findings);
   });
 
   it('waits for 2/3 before grace then settles the existing degraded quorum after grace', async () => {
@@ -6144,7 +6163,8 @@ describe('Issue #2659 ARCH23:01 old cooldown history versus a newer partial sour
     const projectId = 'orchestrator-pack';
     const repository = 'chetwerikoff/orchestrator-pack';
     const prNumber = 265915;
-    const issueBody = ['```complexity-tier', 'tier: T2', '```'].join('\n');
+    const issueBody = ['```complexity-tier', 'tier: T2', '```',
+      '## Acceptance criteria', '- original B0 required behavior', ''].join('\n');
     const storeRoot = tempRoot('opk-2659-cooldown-history-');
     harnessEnv(storeRoot, path.join(storeRoot, 'review.json'));
     selectProjectCard(storeRoot);
@@ -6159,6 +6179,10 @@ describe('Issue #2659 ARCH23:01 old cooldown history versus a newer partial sour
       capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: { storeRoot },
     });
     const digest = computeBoundIssueSnapshotHash(issueBody);
+    captureBoundIssueSnapshot({
+      projectId, prNumber, prHeadSha: HEAD_A,
+      issueNumber: prNumber, issueBody,
+    });
     const oldRound = plannedStoredGptRound();
     Object.assign(oldRound, {
       tier: 'T2', accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
@@ -6287,6 +6311,84 @@ describe('Issue #2659 ARCH23:01 old cooldown history versus a newer partial sour
     expect(getPackReviewRun(original.id, options)?.reviewVerdict).toBeUndefined();
     expect(readPackReviewAuthority(prNumber, { storeRoot })?.cycle?.consumedRoundOrdinals)
       .toEqual([1]);
+
+    // An amended B1 on exactly the same SHA has its own active cycle. The old
+    // B0 zero-judgment cooldown must remain history, not a new incumbent.
+    const B1 = issueBody.replace('original B0 required behavior', 'amended B1 required behavior');
+    let publicStatus = 'success';
+    const newCycleInput = {
+      ...options, sourceRepoRoot: repoRoot, repoSlug: repository, prNumber,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixturePrState: 'OPEN', fixturePrBody: 'Closes #' + prNumber,
+      fixtureIssueNumber: prNumber, fixtureIssueTitle: '[T2] Amended B1 behavior',
+      fixtureIssueBody: B1,
+      fixtureRequiredStatusReader: async () => publicStatus,
+      fixtureRequiredStatusWriter: async (request: { state: string }) => {
+        publicStatus = request.state;
+      },
+      fixtureRequiredCiPolicy: { contexts: ['CI'], checks: [] },
+      fixtureRequiredCiChecks: [{ name: 'CI', state: 'SUCCESS' as const }],
+    };
+    const amended = await maybeAdmitPackReviewBodyAmendment(newCycleInput, {
+      projectId, storeRoot, repoSlug: repository,
+    });
+    expect(amended, JSON.stringify(amended)).toMatchObject({
+      amendmentAdmission: true, reason: 'body_amendment_admitted',
+      requiredStatusState: 'pending',
+    });
+    const newCycle = readPackReviewAuthority(prNumber, { storeRoot })!.cycle!;
+    expect(newCycle.cycleId).not.toBe(authority.cycle!.cycleId);
+    expect(publicStatus).toBe('pending');
+
+    const b1Comments: PackGptSourceGithubComment[] = [];
+    const b1Transport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async () => [...b1Comments],
+      getComment: async (id) => {
+        const found = b1Comments.find((comment) => comment.id === id);
+        if (!found) throw new Error('missing B1 comment');
+        return found;
+      },
+    };
+    const b1Attempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+    const b1Result = await startPackReview({
+      ...newCycleInput, headSha: HEAD_A, tier: 'T2', claimMode: 'acquire',
+      fixturePostReviewHeadSha: HEAD_A,
+      fixturePostReviewPrBody: 'Closes #' + prNumber,
+      fixtureGptSourceCommentTransport: b1Transport,
+      fixtureReviewBySourceSlot: b1Attempts,
+      fixtureAfterGptInvocationBound: ({ slotId, invocationId }) => {
+        b1Attempts[slotId] = [{ stdout: successfulCleanReviewPayload(invocationId), exitCode: 0 }];
+      },
+      fixtureBeforeGptSourceCommentCensus: ({ slotId, invocationId }) => {
+        const fresh = listPackReviewRuns(options).find((candidate) =>
+          candidate.reviewCycleId === newCycle.cycleId && candidate.reviewRound?.reviewer === 'gpt');
+        if (!fresh) throw new Error('B1 fresh-cycle run missing');
+        const id = 265915100 + Number(slotId.slice(-2));
+        b1Comments.push({
+          id, body: formatPackGptSourceCommentEnvelope({
+            repository, prNumber, headSha: HEAD_A, runId: fresh.id,
+            slotId, invocationId,
+          }, 'NO_FINDINGS'),
+          actorLogin: 'browser-gpt-bot',
+          createdAt: '2026-10-12T00:21:00.000Z',
+          updatedAt: '2026-10-12T00:21:00.000Z',
+          url: 'https://github.com/' + repository + '/pull/' + prNumber + '#issuecomment-' + id,
+          issueUrl: 'https://api.github.com/repos/' + repository + '/issues/' + prNumber,
+        });
+      },
+    });
+    expect(b1Result, JSON.stringify(b1Result)).toMatchObject({
+      ok: true, created: true, status: 'up_to_date',
+      coverage: { kind: 'complete', completedSourceCount: 3, cardinality: 3 },
+    });
+    expect(b1Result.runId).not.toBe(original.id);
+    expect(b1Result.runId).not.toBe(successor.id);
+    expect(getPackReviewRun(original.id, options)?.reviewVerdict).toBeUndefined();
+    expect(listPackReviewRuns(options)).toHaveLength(3);
+    expect(readPackReviewAuthority(prNumber, { storeRoot })?.cycle).toMatchObject({
+      cycleId: newCycle.cycleId, consumedRoundOrdinals: [1],
+    });
   });
 });
 
@@ -6771,12 +6873,21 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
 
   it('rejects an unowned preacquired continuation before PID rebind or a new source-03 send', async () => {
     const f = await seedDeadIncumbent();
-    // No matching claim has ever been acquired. The flag alone is not a holder.
+    // A foreign live holder is not an invitation to rerun this exact claim.
+    const foreign = acquireReviewStartClaim({
+      projectId, prNumber, headSha: HEAD_A,
+      surface: 'fixture-foreign-owner', startReason: 'holding-claim',
+      reviewRuns: listPackReviewRuns(f.options),
+    });
+    expect(foreign.acquired).toBe(true);
+    expect(testReviewStartClaimOwnership(foreign)).toBe(true);
     const result = await startPackReview({ ...f.input, claimMode: 'preacquired' });
     expect(result, JSON.stringify(result)).toMatchObject({
       ok: false, created: false, runId: f.runId, reason: 'gpt_preacquired_claim_not_owned',
     });
-    expect(result.nextAction).toMatch(/^npm run --silent pack-gpt-review -- --project orchestrator-pack --pr-number 2532/);
+    expect(result.nextAction).toContain('Read-ReviewStartClaimRecord');
+    expect(result.nextAction).toContain('review-start-claims');
+    expect(result.nextAction).not.toContain('pack-gpt-review');
     const stored = getPackReviewRun(f.runId, f.options)!;
     expect(stored.runnerPid).toBe(oldPid);
     expect(stored.reviewRound!.sourceSlots[0]).toEqual(f.originalFirst);
