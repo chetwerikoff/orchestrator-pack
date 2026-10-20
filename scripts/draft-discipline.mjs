@@ -381,12 +381,19 @@ export function resolveSmokeRequirement(markdown) {
     return { requirement: 'unknown', scenarios: [] };
   }
   const parsed = parseSmokeTestPlan(trimmed);
-  if (parsed) {
-    if (parsed.requirement === 'not-applicable' && !String(parsed.reason ?? '').trim()) {
-      return { requirement: 'required', scenarios: [], reason: 'missing_not_applicable_reason' };
-    }
-    return parsed;
+  // Both smoke gate implementations and the publisher consume this resolver.
+  // Never admit a valid subset of an invalid live plan or a malformed waiver.
+  const checked = checkSmokeTestPlan(trimmed);
+  if (!checked.ok) {
+    const missingReason = parsed?.requirement === 'not-applicable'
+      && !String(parsed.reason ?? '').trim();
+    return {
+      requirement: 'required',
+      scenarios: [],
+      reason: missingReason ? 'missing_not_applicable_reason' : 'invalid_smoke_plan',
+    };
   }
+  if (parsed) return parsed;
   if (isSmokePlanGrandfathered(trimmed)) {
     return { requirement: 'legacy-exempt', scenarios: [], reason: 'grandfathered' };
   }
