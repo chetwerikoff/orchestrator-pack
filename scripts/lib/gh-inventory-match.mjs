@@ -54,10 +54,6 @@ function hasOnlySupportedFields(fields, supported) {
 }
 
 /**
- * @param {string | boolean | undefined} searchFlag
- * @returns {number | null}
- */
-/**
  * Numbered high-level read routes accept exactly one safe decimal target.
  * Avoid coercion of fractions, exponents, and extra operands into REST reads.
  */
@@ -69,6 +65,10 @@ function singlePositiveDecimalTarget(parsed) {
   return Number.isSafeInteger(number) && number > 0 ? number : null;
 }
 
+/**
+ * @param {string | boolean | undefined} searchFlag
+ * @returns {number | null}
+ */
 function parseClosesIssueSearch(searchFlag) {
   if (typeof searchFlag !== 'string') {
     return null;
