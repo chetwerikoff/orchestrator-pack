@@ -1813,8 +1813,10 @@ async function locatorCount(
   locator: any,
   deadlineMs = Date.now() + MAX_LOCAL_READ_WAIT_MS,
   preserveNetworkChange = false,
+  useInvocationDeadline = false,
 ): Promise<number> {
-  const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+  const waitMs = useInvocationDeadline ? deadlineMs - Date.now()
+    : Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
   if (waitMs <= 0) throw new BrowserOperationTimeoutError('locator_count');
   const timeoutCause = 'browser_operation_timeout:locator_count';
   try {
@@ -2440,7 +2442,7 @@ async function readComposerReadiness(
     const composer = page.locator(COMPOSER_SELECTOR);
     let remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
-    if (await locatorCount(composer, deadline, true) <= 0) {
+    if (await locatorCount(composer, deadline, true, true) <= 0) {
       observe?.('absent');
       return false;
     }
@@ -2452,7 +2454,7 @@ async function readComposerReadiness(
     remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
     const readiness = typeof composer.evaluate === 'function'
-      ? await composer.evaluate(
+      ? await boundedBrowserRead(Promise.resolve(composer.evaluate(
         (element: any) => {
           const style = window.getComputedStyle(element);
           const rect = element.getBoundingClientRect();
@@ -2470,7 +2472,7 @@ async function readComposerReadiness(
         },
         undefined,
         { timeout: remainingMs },
-      )
+      )), remainingMs, 'composer_readiness_timeout')
       : undefined;
     if (Date.now() >= deadline) return false;
 
@@ -2508,8 +2510,10 @@ type StateLightSendDeliveryWitness = 'owned_user_node' | 'composer_cleared' | 'o
 async function readComposerTextForSendDelivery(
   composer: any,
   deadlineMs: number,
+  useInvocationDeadline = false,
 ): Promise<string | undefined> {
-  const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+  const waitMs = useInvocationDeadline ? deadlineMs - Date.now()
+    : Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
   if (waitMs <= 0) return undefined;
   const timeoutCause = 'send_delivery_composer_read_timeout';
   try {
@@ -3017,7 +3021,9 @@ async function mutateComposerOrCause(
   const composer = page.locator(COMPOSER_SELECTOR);
   const insertionStart = Date.now();
   const insertionBudgetMs = deriveComposerInsertionBudgetMs(text);
-  const insertionDeadlineMs = Math.min(insertionStart + insertionBudgetMs, invocationDeadlineMs);
+  // Composer preparation shares the invocation's finite deadline. A completed
+  // fill must not be rejected solely for overrunning a line-count estimate.
+  const insertionDeadlineMs = invocationDeadlineMs;
   if (insertionContext) insertionContext.insertionDeadlineMs = insertionDeadlineMs;
   const exhausted = (branch: ComposerMutationDiagnosticV1['branch']): PreSendComposerFailureCause => {
     if (insertionContext) {
@@ -3042,7 +3048,7 @@ async function mutateComposerOrCause(
     // classifying failure, not as a veto on the ordinary click/fill attempt.
     let composerAbsent = false;
     try {
-      composerAbsent = await locatorCount(composer, insertionDeadlineMs) === 0;
+      composerAbsent = await locatorCount(composer, invocationDeadlineMs, false, true) === 0;
     } catch {
       return exhausted('readiness_before_click');
     }
@@ -3055,8 +3061,11 @@ async function mutateComposerOrCause(
       if (actionBudgetMs <= 0) return exhausted('budget_before_fill');
       beforeAction?.();
       await composer.fill(text, { timeout: actionBudgetMs });
-      // If readiness recovered during the attempt, proceed to dispatch.
-      if (await readComposerReadiness(page, insertionDeadlineMs)) return null;
+      // Verify the complete draft even when readiness recovered during fill.
+      if (await readComposerReadiness(page, invocationDeadlineMs)
+        && renderedPayloadMatches(await readComposerTextForSendDelivery(
+          composer, invocationDeadlineMs, true,
+        ), text) && Date.now() < invocationDeadlineMs) return null;
     } catch (error) {
       if (error instanceof Error && (error.message === 'conversation_fetch_http_429'
         || (error.message === 'rate_limit' && heldPage429Diagnostic(page)?.http_status === 429)
@@ -3082,14 +3091,17 @@ async function mutateComposerOrCause(
     if (actionBudgetMs <= 0) return exhausted('budget_before_fill2');
     beforeAction?.();
     await composer.fill(text, { timeout: actionBudgetMs });
-    if (Date.now() >= insertionDeadlineMs) return 'composer_mutation_budget_exhausted';
-    return null;
+    if (Date.now() >= invocationDeadlineMs) return 'composer_mutation_budget_exhausted';
+    const actual = await readComposerTextForSendDelivery(composer, invocationDeadlineMs, true);
+    return Date.now() < invocationDeadlineMs && renderedPayloadMatches(actual, text)
+      ? null : 'composer_mutation_budget_exhausted';
   } catch (error) {
     if (error instanceof Error && (error.message === 'conversation_fetch_http_429'
       || (error.message === 'rate_limit' && heldPage429Diagnostic(page)?.http_status === 429)
       || error.message === 'account_cooldown_active')) throw error;
     if (
       isPlaywrightTimeoutError(error)
+      && Date.now() < invocationDeadlineMs
       && await hasBlockingPageOverlay(page, invocationDeadlineMs)
     ) {
       return 'blocking_page_overlay';
@@ -4285,7 +4297,7 @@ async function runTurnCore(
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       const composer = page.locator(COMPOSER_SELECTOR);
-      if (!renderedPayloadMatches(await readComposerTextForSendDelivery(composer, invocationDeadlineMs), markedPayload)) {
+      if (!renderedPayloadMatches(await readComposerTextForSendDelivery(composer, invocationDeadlineMs, true), markedPayload)) {
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
@@ -4353,7 +4365,7 @@ async function runTurnCore(
       // The composer can change during Send readiness polling. Do not send a
       // different draft as though it were the invocation's marked payload.
       if (!renderedPayloadMatches(await readComposerTextForSendDelivery(
-        composer, Math.min(invocationDeadlineMs, readinessDeadlineMs),
+        composer, Math.min(invocationDeadlineMs, readinessDeadlineMs), true,
       ), markedPayload)) throw new Error('ui_contract_mismatch:fresh_owned_payload_changed_before_click');
       assertFreshOwner();
       const sendAction = async () => await dispatchStateLightSendAndObserveDelivery({
@@ -4449,7 +4461,7 @@ async function runTurnCore(
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
       const hasSendButton = await locatorCount(
         sendButton,
-        Math.min(insertionDeadlineMs, invocationDeadlineMs),
+        invocationDeadlineMs, false, true,
       ) > 0;
       remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
@@ -4465,6 +4477,13 @@ async function runTurnCore(
         const beforeDispatchFailure = await verifyReopenedExistingPage();
         if (beforeDispatchFailure) return beforeDispatchFailure;
         sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+        if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+        if (!renderedPayloadMatches(await readComposerTextForSendDelivery(
+          composer, invocationDeadlineMs, true,
+        ), markedPayload) || Date.now() >= invocationDeadlineMs) {
+          return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+        }
+        sendWaitMs = invocationDeadlineMs - Date.now();
         if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       // Reapply existing read-only destination predicates after composer mutation

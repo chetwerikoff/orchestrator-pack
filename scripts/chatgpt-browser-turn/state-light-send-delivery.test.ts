@@ -1511,7 +1511,8 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     | 'post-delayed-452' | 'post-generation-late' | 'post-fetch-429'
     | 'post-active' | 'post-stop' | 'initial-active'
     | 'initial-unknown' | 'initial-empty' | 'initial-incomplete'
-    | 'initial-stop' | 'initial-wrong-url' | 'short-budget';
+    | 'initial-stop' | 'initial-wrong-url' | 'short-budget'
+    | 'slow-fill' | 'partial-fill' | 'expired-fill' | 'failed-fill';
 
   async function fullTurn(scenario: Scenario) {
     const chatUrl = 'https://chatgpt.com/c/25602560-2560-4560-8560-256025602560';
@@ -1533,10 +1534,15 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     let readsAtSend: number | undefined;
     const events = new EventEmitter();
     let postReopenComposerProbes = 0;
-    const usableComposer = () => scenario === 'ready'
+    const usableComposer = () => ['ready', 'slow-fill', 'partial-fill', 'expired-fill', 'failed-fill'].includes(scenario)
       || (scenario === 'late-hydration' && now - startedAt >= 20_000)
       || (reopened && !['composer-still-absent', 'late-redirect', 'late-close'].includes(scenario));
-    const fill = vi.fn(async (value: string) => { composerText = value; });
+    const fill = vi.fn(async (value: string) => {
+      if (scenario === 'failed-fill') throw new Error('fill failed');
+      composerText = scenario === 'partial-fill' ? value.slice(0, -1) : value;
+      if (scenario === 'slow-fill' || scenario === 'partial-fill') now += 6_000;
+      if (scenario === 'expired-fill') now = startedAt + 60_000;
+    });
     const composer = scalarLocator({
       count: vi.fn(async () => {
         if (reopened) postReopenComposerProbes++;
@@ -1712,6 +1718,27 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
       clock.mockRestore();
     }
   }
+
+  it('dispatches exactly once after a verified fill exceeds the old insertion budget (#2669)', async () => {
+    const run = await fullTurn('slow-fill');
+    expect(run.fill).toHaveBeenCalledTimes(1);
+    expect(run.send).toHaveBeenCalledTimes(1);
+    expect(run.sentAt! - run.startedAt).toBeGreaterThanOrEqual(6_000);
+    expect(run.sentAt! - run.startedAt).toBeLessThan(60_000);
+    expect(run.sentText).toMatch(/^OPKTURNV1[0-9a-f]{32}\n\nPROMPT$/u);
+    expect(run.result.send_count).toBe(1);
+    expect(run.goto).not.toHaveBeenCalled();
+  });
+
+  it.each(['partial-fill', 'expired-fill', 'failed-fill'] as const)(
+    'never dispatches %s despite a present composer (#2669)', async (scenario) => {
+      const run = await fullTurn(scenario);
+      expect(run.fill).toHaveBeenCalledTimes(1);
+      expect(run.send).not.toHaveBeenCalled();
+      expect(run.result.send_count).toBe(0);
+      expect(run.result.send_attempted).not.toBe(true);
+    },
+  );
 
   it('reopens exactly once and sends once when the entire real 30s watch fits the invocation budget', async () => {
     const run = await fullTurn('restored-long');

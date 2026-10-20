@@ -1371,7 +1371,11 @@ describe('state-light fresh conversation collision recovery', () => {
     const initialUrl = solo.page.url.getMockImplementation()!;
     let redirected = false;
     solo.page.url.mockImplementation(() => redirected ? LOSER_CONV : initialUrl());
-    solo.composer.fill.mockImplementation(async () => { redirected = true; });
+    const originalFill = solo.composer.fill.getMockImplementation()!;
+    solo.composer.fill.mockImplementation(async (...args) => {
+      await originalFill(...args);
+      redirected = true;
+    });
     enqueueBrowserForTurn(mocks, solo.page);
     const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
       ...STATE_LIGHT_TURN_BASE_ARGV,
@@ -3648,6 +3652,51 @@ describe('state-light fresh conversation collision recovery', () => {
       phase: 'not_sent',
       send_witness: 'numeric_send_count',
     });
+  });
+
+  it.each(['ready', 'readiness-recovery'] as const)(
+    'verifies the complete slow-filled prompt in the %s branch (#2669)', async (branch) => {
+      const text = wrapOwnedPromptPayload(TEST_OWNED_MARKER, Array.from(
+        { length: 80 }, (_, index) => `Synthetic task instruction ${index}`,
+      ).join('\n'));
+      const budget = deriveComposerInsertionBudgetMs(text);
+      let value = '';
+      let reads = 0;
+      const composer = {
+        count: vi.fn(async () => 1),
+        evaluate: vi.fn(async () => {
+          const ready = branch === 'ready' || ++reads > 1;
+          return { visible: ready, enabled: ready, contentEditable: ready };
+        }),
+        click: vi.fn(async () => undefined),
+        fill: vi.fn(async (input: string) => {
+          mocks.nowMs += budget + 1_000;
+          value = input;
+        }),
+        innerText: vi.fn(async () => value),
+      };
+      const page = { locator: () => composer };
+      const cause = await __testComposerMutation.mutateComposerOrCause(page, text, mocks.nowMs + 60_000);
+      expect(cause).toBeNull();
+      expect(composer.innerText).toHaveBeenCalledTimes(1);
+      expect(value).toBe(text);
+      expect(composer.fill).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('preserves cancellation between readiness and mutation (#2669)', async () => {
+    const composer = {
+      count: async () => 1,
+      evaluate: async () => ({ visible: true, enabled: true, contentEditable: true }),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async () => undefined),
+    };
+    const beforeAction = vi.fn(() => { throw new Error('account_cooldown_active'); });
+    await expect(__testComposerMutation.mutateComposerOrCause(
+      { locator: () => composer }, 'cancelled prompt', mocks.nowMs + 60_000, undefined, beforeAction,
+    )).rejects.toThrow('account_cooldown_active');
+    expect(composer.click).not.toHaveBeenCalled();
+    expect(composer.fill).not.toHaveBeenCalled();
   });
 
   it('reports privacy-safe diagnostics from each composer mutation budget exit', async () => {

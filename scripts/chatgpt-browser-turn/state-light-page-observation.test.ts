@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import './too-many-requests-capture.test-cases.ts';
 import {
@@ -1636,6 +1636,37 @@ describe('Issue #2467 committed composer readiness under the absolute deadline',
     } finally {
       nowSpy.mockRestore();
     }
+  });
+});
+
+describe('Issue #2669 invocation-bound composer reads', () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it.each(['count', 'evaluate'] as const)('accepts a slow %s beyond the former 5s bound', async (operation) => {
+    vi.useFakeTimers();
+    const slow = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 6_000));
+      return operation === 'count' ? 1 : { visible: true, enabled: true, contentEditable: true };
+    };
+    const composer = {
+      count: operation === 'count' ? slow : async () => 1,
+      evaluate: operation === 'evaluate' ? slow : async () => ({ visible: true, enabled: true, contentEditable: true }),
+    };
+    const pending = __testComposerMutation.readComposerReadiness({ locator: () => composer }, Date.now() + 10_000);
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(await pending).toBe(true);
+  });
+
+  it.each(['count', 'evaluate'] as const)('bounds a stalled %s by invocation expiry', async (operation) => {
+    vi.useFakeTimers();
+    const never = () => new Promise(() => undefined);
+    const composer = {
+      count: operation === 'count' ? never : async () => 1,
+      evaluate: operation === 'evaluate' ? never : async () => ({ visible: true, enabled: true, contentEditable: true }),
+    };
+    const pending = __testComposerMutation.readComposerReadiness({ locator: () => composer }, Date.now() + 10_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await pending).toBe(false);
   });
 });
 

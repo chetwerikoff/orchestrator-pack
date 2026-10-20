@@ -3937,6 +3937,7 @@ describe('issue 1188 composer readiness and insertion timing', () => {
       finalActionInTurnContainer: message.finalActionInTurnContainer,
     }));
     let readinessProbe = 0;
+    let composerText = '';
     const composer = scalarLocator({
       count: vi.fn(async () => options.composerPresent === false ? 0 : 1),
       isVisible: vi.fn(async () => options.visible !== false),
@@ -3961,7 +3962,9 @@ describe('issue 1188 composer readiness and insertion timing', () => {
         if (options.fillReject) throw new Error('fill rejected');
         options.onFillCall?.(opts?.timeout ?? COMPOSER_INSERTION_WAIT_MS);
         await settleAction(options.fillDelayMs ?? 0, opts?.timeout ?? COMPOSER_INSERTION_WAIT_MS);
+        composerText = _text;
       }),
+      innerText: vi.fn(async () => composerText),
     });
     const page = {
       __fakeBrowserGptPage: true,
@@ -4015,10 +4018,10 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     const longContext: { insertionDeadlineMs?: number } = {};
     expect(await __testComposerMutation.mutateComposerOrCause(short.page, shortPayload, 100_000, shortContext)).toBeNull();
     expect(await __testComposerMutation.mutateComposerOrCause(long.page, longMarkdownPayload, 100_000, longContext)).toBeNull();
-    expect(shortContext.insertionDeadlineMs).toBe(shortBudget);
-    expect(longContext.insertionDeadlineMs).toBe(longMarkdownBudget);
-    expect(short.composer.click.mock.calls[0]?.[0]?.timeout).toBe(shortBudget);
-    expect(long.composer.click.mock.calls[0]?.[0]?.timeout).toBe(longMarkdownBudget);
+    expect(shortContext.insertionDeadlineMs).toBe(100_000);
+    expect(longContext.insertionDeadlineMs).toBe(100_000);
+    expect(short.composer.click.mock.calls[0]?.[0]?.timeout).toBe(100_000);
+    expect(long.composer.click.mock.calls[0]?.[0]?.timeout).toBe(100_000);
 
     const clamped = makeComposerPage();
     const clampedContext: { insertionDeadlineMs?: number } = {};
@@ -4046,7 +4049,7 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     expect(Date.now()).toBe(COMPOSER_READINESS_WAIT_MS);
   });
 
-  it('keeps each action timeout within the remaining insertion budget on a controlled clock', async () => {
+  it('keeps each action timeout within the remaining invocation budget on a controlled clock', async () => {
     const invocationDeadlineMs = 10_000;
     const insertionContext: { insertionDeadlineMs?: number } = {};
     let evidence: { timeoutMs: number; remainingMs: number } | undefined;
@@ -4072,7 +4075,7 @@ describe('issue 1188 composer readiness and insertion timing', () => {
       insertionContext,
     );
 
-    expect(failure).toBe('composer_mutation_budget_exhausted');
+    expect(failure).toBeNull();
     expect(evidence).toBeDefined();
     expect(evidence!.timeoutMs).toBeGreaterThan(0);
     expect(evidence!.timeoutMs).toBeLessThanOrEqual(evidence!.remainingMs);
@@ -4108,8 +4111,8 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     expect(recovered.composer.fill).toHaveBeenCalledTimes(1);
   });
 
-  it('bounds the first post-readiness probe by the insertion phase', async () => {
-    const fixture = makeComposerPage({ readinessDelayMs: COMPOSER_INSERTION_WAIT_MS });
+  it('bounds the first post-readiness probe by the invocation deadline', async () => {
+    const fixture = makeComposerPage({ readinessDelayMs: 10_000 });
     const failure = await __testComposerMutation.mutateComposerOrCause(fixture.page, 'payload', 10_000);
     expect(failure).toBe('composer_mutation_budget_exhausted');
     expect(fixture.composer.click).not.toHaveBeenCalled();
@@ -4125,23 +4128,23 @@ describe('issue 1188 composer readiness and insertion timing', () => {
   });
 
   it('maps exact and late click/fill timeouts to mutation exhaustion', async () => {
-    const clickBoundary = makeComposerPage({ clickDelayMs: COMPOSER_INSERTION_WAIT_MS });
+    const clickBoundary = makeComposerPage({ clickDelayMs: 10_000 });
     expect(await __testComposerMutation.mutateComposerOrCause(clickBoundary.page, 'payload', 10_000))
       .toBe('composer_mutation_budget_exhausted');
     expect(clickBoundary.composer.fill).not.toHaveBeenCalled();
 
-    const fillLate = makeComposerPage({ fillDelayMs: COMPOSER_INSERTION_WAIT_MS + 1 });
-    expect(await __testComposerMutation.mutateComposerOrCause(fillLate.page, 'payload', 10_000))
+    const fillLate = makeComposerPage({ fillDelayMs: 10_001 });
+    expect(await __testComposerMutation.mutateComposerOrCause(fillLate.page, 'payload', Date.now() + 10_000))
       .toBe('composer_mutation_budget_exhausted');
     expect(fillLate.composer.fill).toHaveBeenCalledTimes(1);
 
     const immediateClickFailure = makeComposerPage({ clickReject: true });
-    expect(await __testComposerMutation.mutateComposerOrCause(immediateClickFailure.page, 'payload', 10_000))
+    expect(await __testComposerMutation.mutateComposerOrCause(immediateClickFailure.page, 'payload', Date.now() + 10_000))
       .toBe('composer_mutation_budget_exhausted');
     expect(immediateClickFailure.composer.fill).not.toHaveBeenCalled();
 
     const immediateFillFailure = makeComposerPage({ fillReject: true });
-    expect(await __testComposerMutation.mutateComposerOrCause(immediateFillFailure.page, 'payload', 10_000))
+    expect(await __testComposerMutation.mutateComposerOrCause(immediateFillFailure.page, 'payload', Date.now() + 10_000))
       .toBe('composer_mutation_budget_exhausted');
   });
 
@@ -4233,7 +4236,8 @@ describe('issue 1188 composer readiness and insertion timing', () => {
   });
 
   it('keeps blocking overlay as a distinct timeout cause', async () => {
-    const fixture = makeComposerPage({ clickDelayMs: COMPOSER_INSERTION_WAIT_MS, blockingOverlay: true });
+    const fixture = makeComposerPage({ blockingOverlay: true });
+    fixture.composer.click.mockRejectedValueOnce(Object.assign(new Error('Timeout exceeded'), { name: 'TimeoutError' }));
     expect(await __testComposerMutation.mutateComposerOrCause(fixture.page, 'payload', 10_000))
       .toBe('blocking_page_overlay');
   });
