@@ -42,7 +42,7 @@ vi.mock('./ui-adapter.ts', async (original) => buildUiAdapterTestMock(
 ));
 
 import { buildUiAdapterTestMock, collectionLocator, createBrowserSessionModuleMock, createCoordinationModuleMock, enqueueBrowserForTurn, runStateLightTurnWithStdoutCapture, scalarLocator, stableTurnInput } from './state-light-turn.test-fixtures.ts';
-import { messageLocator, readyTurnObservationFrames } from './state-light-turn.test-fixtures.ts';
+import { messageLocator, proseMirrorEditorSurface, readyTurnObservationFrames } from './state-light-turn.test-fixtures.ts';
 import {
   COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR, MESSAGE_NODE_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE, RENDERED_CONVERSATION_TURN_SECTION_SELECTOR,
@@ -1513,7 +1513,8 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     | 'initial-unknown' | 'initial-empty' | 'initial-incomplete'
     | 'initial-stop' | 'initial-wrong-url' | 'short-budget'
     | 'slow-fill' | 'partial-fill' | 'expired-fill' | 'failed-fill'
-    | 'joined-marker-fill' | 'joined-marker-before-send';
+    | 'joined-marker-fill' | 'joined-marker-before-send'
+    | 'changed-marker-fill' | 'changed-marker-before-send' | 'rendered-blank-lines';
 
   async function fullTurn(scenario: Scenario, prompt = 'PROMPT') {
     const { readStableInput } = await import('./input.ts');
@@ -1539,19 +1540,21 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     let postReopenComposerProbes = 0;
     let composerTextReads = 0;
     const usableComposer = () => ['ready', 'slow-fill', 'partial-fill', 'expired-fill', 'failed-fill',
+      'changed-marker-fill', 'changed-marker-before-send', 'rendered-blank-lines',
       'joined-marker-fill', 'joined-marker-before-send'].includes(scenario)
       || (scenario === 'late-hydration' && now - startedAt >= 20_000)
       || (reopened && !['composer-still-absent', 'late-redirect', 'late-close'].includes(scenario));
     const fill = vi.fn(async (value: string, { timeout }: { timeout: number }) => {
       if (scenario === 'failed-fill') throw new Error('fill failed');
-      const costMs = ['slow-fill', 'partial-fill', 'joined-marker-fill', 'joined-marker-before-send']
+      const costMs = ['slow-fill', 'partial-fill', 'changed-marker-fill', 'changed-marker-before-send']
         .includes(scenario) ? 6_000 : 0;
       if (timeout < costMs) {
         now += timeout;
         throw new Error('TimeoutError: fill timed out before full insertion');
       }
       composerText = scenario === 'partial-fill' ? value.slice(0, -1)
-        : scenario === 'joined-marker-fill' ? value.replace('\n\n', '') : value;
+        : scenario === 'joined-marker-fill' ? value.replace(/\n\n\s*/u, '')
+          : scenario === 'changed-marker-fill' ? value.replace('OPKTURNV1', 'OTHER-TURN') : value;
       now += costMs;
       if (scenario === 'expired-fill') now = startedAt + 60_000;
     });
@@ -1565,10 +1568,14 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
       }),
       fill,
       innerText: vi.fn(async () => {
-        if (++composerTextReads > 1 && scenario === 'joined-marker-before-send') {
-          composerText = composerText.replace('\n\n', '');
+        if (++composerTextReads > 1 && scenario === 'changed-marker-before-send') {
+          composerText = composerText.replace('OPKTURNV1', 'OTHER-TURN');
         }
-        return composerText;
+        if (composerTextReads > 1 && scenario === 'joined-marker-before-send') {
+          composerText = composerText.replace(/\n\n\s*/u, '');
+        }
+        return scenario === 'rendered-blank-lines' && composerText
+          ? proseMirrorEditorSurface(composerText + '\n').innerText : composerText;
       }),
     });
     const send = vi.fn(async () => {
@@ -1752,7 +1759,15 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     },
   );
 
+  it('sends a normalized blank-paragraph draft once on an existing owned chat (#2671)', async () => {
+    const run = await fullTurn('rendered-blank-lines', 'First instruction.\n\nSecond instruction.\n\nReply with both checks.');
+    expect(run.result.send_count).toBe(1);
+    expect(run.send).toHaveBeenCalledTimes(1);
+    expect(run.fill).toHaveBeenCalledTimes(1);
+  });
+
   it.each((['partial-fill', 'expired-fill', 'failed-fill',
+    'changed-marker-fill', 'changed-marker-before-send',
     'joined-marker-fill', 'joined-marker-before-send'] as const).flatMap((scenario) =>
       (['short', 'single-100KB-line'] as const).map((shape) => ({ scenario, shape })),
     ))(
@@ -1764,6 +1779,8 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
       expect(run.send).not.toHaveBeenCalled();
       expect(run.result.send_count).toBe(0);
       expect(run.result.send_attempted).not.toBe(true);
+      expect(run.result.cause).toBe(['expired-fill', 'failed-fill'].includes(scenario)
+        ? 'composer_mutation_budget_exhausted' : 'composer_payload_mismatch');
     },
   );
 
@@ -2661,7 +2678,7 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
   });
 
   async function connectedTurn(kind: Case, corruption?: {
-    content: 'joined-marker' | 'indentation' | 'line-break';
+    content: 'joined-marker' | 'marker-content' | 'middle-content' | 'truncated-tail';
     when: 'after-click' | 'after-proof-read';
   }) {
     if (corruption) {
@@ -2677,8 +2694,8 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     let injectedRetryCorruption = false;
     const corruptDraft = () => {
       draft = corruption?.content === 'joined-marker' ? draft.replace('\n\n', '')
-        : corruption?.content === 'indentation' ? draft.replace('\n  indented', '\nindented')
-          : draft.replace('words\n  indented', 'words   indented');
+        : corruption?.content === 'marker-content' ? draft.replace('OPKTURNV1', 'OTHER-TURN')
+          : corruption?.content === 'middle-content' ? draft.replace('indented', 'different') : draft.slice(0, -1);
       injectedRetryCorruption = true;
     };
     let firstClickAt = -1;
@@ -2952,7 +2969,7 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     }
   });
 
-  it.each((['joined-marker', 'indentation', 'line-break'] as const).flatMap((content) =>
+  it.each((['joined-marker', 'marker-content', 'middle-content', 'truncated-tail'] as const).flatMap((content) =>
     (['after-click', 'after-proof-read'] as const).map((when) => ({ content, when })),
   ))('vetoes an existing-chat retry with $content corruption $when (#2669)', async (corruption) => {
     const t = await connectedTurn('pre-actionability-budget', corruption);

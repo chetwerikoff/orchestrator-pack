@@ -1847,12 +1847,33 @@ describe('Issue #2669 coherent structured composer verification', () => {
     expect(await matches(composer, expected)).toBe(true);
   });
 
-  it.each(['marker-separator', 'indentation', 'line-break', 'trailing-newline', 'extra-space'] as const)(
-    'rejects actual %s corruption rather than normalizing it', async (kind) => {
-      const damaged = kind === 'marker-separator' ? payload.replace('\n\n', '')
-        : kind === 'indentation' ? payload.replace('\n  indented', '\nindented')
-          : kind === 'line-break' ? payload.replace('words\n', 'words ')
-            : kind === 'trailing-newline' ? payload.slice(0, -1) : payload + ' ';
+  it.each(['indentation', 'line-break', 'trailing-newline', 'extra-space'] as const)(
+    'accepts equivalent rendered %s whitespace (#2671)', async (kind) => {
+      const damaged = kind === 'indentation' ? payload.replace('\n  indented', '\nindented')
+        : kind === 'line-break' ? payload.replace('words\n', 'words ')
+          : kind === 'trailing-newline' ? payload.slice(0, -1) : payload + ' ';
+      expect(await matches(editor(damaged).composer)).toBe(true);
+    },
+  );
+
+  it.each(['joined-marker', 'split-marker'] as const)(
+    'rejects normalized content with an unrecognizable %s (#2671 review)', async (kind) => {
+      const damaged = kind === 'joined-marker' ? payload.replace('\n\n', '')
+        : payload.replace(marker, marker.slice(0, 9) + ' ' + marker.slice(9));
+      expect(await matches(editor(damaged).composer)).toBe(false);
+    },
+  );
+
+  it.each([' ', '\n\n\n', '\u00a0'] as const)(
+    'accepts an intact leading marker with rendered boundary %j (#2671 review)', async (boundary) => {
+      expect(await matches(editor(payload.replace('\n\n', boundary)).composer)).toBe(true);
+    },
+  );
+
+  it.each(['marker', 'middle-content', 'truncated-tail'] as const)(
+    'rejects genuine %s differences despite matching surrounding whitespace (#2671)', async (kind) => {
+      const damaged = kind === 'marker' ? payload.replace(marker, 'different-marker')
+        : kind === 'middle-content' ? payload.replace('separate', 'different') : payload.trimEnd().slice(0, -1);
       expect(await matches(editor(damaged).composer)).toBe(false);
     },
   );
@@ -1860,6 +1881,8 @@ describe('Issue #2669 coherent structured composer verification', () => {
   it.each(['unknown-element', 'hidden', 'aria-hidden', 'noneditable', 'css-hidden', 'misplaced-placeholder', 'unknown-editor'] as const)(
     'refuses unprovable structure: %s', async (kind) => {
       const { element, composer } = editor();
+      // Exercise the exact structured fallback without a normalized visible witness.
+      composer.innerText = async () => 'unverified draft';
       const paragraph = element.childNodes[2];
       const readAttribute = paragraph.getAttribute;
       if (kind === 'unknown-element') paragraph.tagName = 'SCRIPT';
@@ -1878,6 +1901,7 @@ describe('Issue #2669 coherent structured composer verification', () => {
 
   it.each(['depth', 'nodes'] as const)('bounds excessive DOM %s', async (kind) => {
     const { element, composer } = editor();
+    composer.innerText = async () => 'unverified draft';
     const paragraph = element.childNodes[2];
     if (kind === 'nodes') {
       paragraph.childNodes.unshift(...Array.from({ length: 1_000 }, () => ({ nodeType: 3, nodeValue: '' })));
@@ -1899,9 +1923,16 @@ describe('Issue #2669 coherent structured composer verification', () => {
 
   it('bounds an unresponsive DOM read to the invocation deadline', async () => {
     const { composer } = editor();
+    composer.innerText = async () => 'unverified draft';
     composer.evaluate = () => new Promise(() => {});
     const started = Date.now();
     expect(await __testSendDelivery.composerPayloadMatchesBeforeSend(composer, payload, started + 30)).toBe(false);
     expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it('accepts normalized content without waiting for an unavailable exact reader (#2671)', async () => {
+    const { composer } = editor();
+    composer.evaluate = () => new Promise(() => {});
+    expect(await matches(composer)).toBe(true);
   });
 });
