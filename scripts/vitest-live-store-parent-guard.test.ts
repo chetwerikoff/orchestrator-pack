@@ -145,7 +145,7 @@ async function runSynchronizedHarnessChild(
     "  expect(true).toBe(true);",
     "}, 15_000);",
     '',
-  ].join('\\n'), 'utf8');
+  ].join('\n'), 'utf8');
   const controller = new AbortController();
   const childPromise = runHarnessedVitest(fixture, env, controller.signal);
   let joined = false;
