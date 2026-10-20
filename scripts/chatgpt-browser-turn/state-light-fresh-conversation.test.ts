@@ -122,6 +122,7 @@ import {
   createCoordinationModuleMock,
   enqueueBrowserForTurn,
   messageLocator,
+  proseMirrorEditorSurface,
   readyTurnObservationFrames,
   runStateLightTurnWithStdoutCapture,
   scalarLocator,
@@ -217,7 +218,10 @@ function clearSendSlotDisableEnv(): void {
   delete process.env.OPK_STATE_LIGHT_SEND_SLOT_DISABLE_REASON;
 }
 
-function makeLoserPage(prompt: string, reply: string, onSend?: () => void, ownedPriorHistory = false) {
+function makeLoserPage(
+  prompt: string, reply: string, onSend?: () => void, ownedPriorHistory = false,
+  rendering?: 'paragraphs' | 'autolink' | 'blank-paragraphs',
+) {
   let sends = 0;
   let sent = false;
   let composerText = '';
@@ -245,13 +249,17 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void, owned
     generating: index < 2,
   }));
   let activeSnapshot = snapshotFrames[0]!;
+  const editorSurface = () => rendering ? proseMirrorEditorSurface(
+    sent ? '' : composerText + (rendering === 'blank-paragraphs' ? '\n' : ''),
+    rendering === 'blank-paragraphs' ? 'paragraphs' : rendering,
+  ) : undefined;
 
   const composer = scalarLocator({
     count: vi.fn(async () => 1),
     click: vi.fn(async () => undefined),
     fill: vi.fn(async (value: string) => { composerText = value; }),
-    innerText: vi.fn(async () => (sent ? '' : composerText)),
-    textContent: vi.fn(async () => (sent ? '' : composerText)),
+    innerText: vi.fn(async () => editorSurface()?.innerText ?? (sent ? '' : composerText)),
+    textContent: vi.fn(async () => editorSurface()?.textContent ?? (sent ? '' : composerText)),
     // Browser-side callbacks execute against one live editable element. Do
     // not fake an always-true evaluate: atomic compare/clear and URL guards
     // must actually inspect the same state they can modify.
@@ -264,13 +272,18 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void, owned
       // locator. Its three-argument evaluate must keep the original fallback;
       // only the new lossless/atomic calls use the browser-element model below.
       if (options?.timeout !== undefined) return true;
+      const surface = editorSurface();
       const element = {
+        ...surface,
         isConnected: true,
         isContentEditable: true,
-        ownerDocument: { defaultView: { location: { get href() { return String(page.url()); } } } },
-        get textContent() { return sent ? '' : composerText; },
+        ownerDocument: { defaultView: {
+          location: { get href() { return String(page.url()); } },
+          getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+        } },
+        get textContent() { return surface?.textContent ?? (sent ? '' : composerText); },
         set textContent(value: string) { composerText = value; },
-        get innerText() { return sent ? '' : composerText; },
+        get innerText() { return surface?.innerText ?? (sent ? '' : composerText); },
       };
       return callback(element, arg);
     }),
@@ -553,23 +566,54 @@ describe('state-light fresh conversation collision recovery', () => {
   it.each(['', '\n'])('sends a rendered five-newline separator and three-newline suffix for prompt suffix %j (#2492)', async (suffix) => {
     const prompt = `Reply with the single word OK.${suffix}`;
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const turn = makeLoserPage(prompt, 'OK');
-    const read = turn.composer.innerText.getMockImplementation()!;
-    turn.composer.innerText.mockImplementation(async () => {
-      const text = await read();
-      return text ? text.replace(/\n\n/u, '\n\n\n\n\n').trimEnd() + '\n\n\n' : '\n';
-    });
+    const turn = makeLoserPage(prompt, 'OK', undefined, false, 'paragraphs');
     const outcome = await runNewChatTurn(turn.page, join(stateDir, 'rendered-paragraphs.txt'));
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(turn.getSends()).toBe(1);
   });
 
+  it('sends six blank lines with ProseMirror empty paragraphs and trailing breaks (#2671)', async () => {
+    const prompt = ['Explain the two checks.', 'First check: draft content.',
+      'Second check: exactly one Send.', 'Keep all six blank lines.',
+      'Do not operate on other chats.', 'This is a synthetic regression.',
+      'Reply with the result.'].join('\n\n').padEnd(1668, 'x');
+    expect(Buffer.byteLength(prompt)).toBe(1668);
+    expect(prompt.match(/\n\n/gu)).toHaveLength(6);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'Both checks passed.', undefined, false, 'blank-paragraphs');
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'blank-paragraphs-2671.txt'));
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(turn.getSends()).toBe(1);
+  });
+
+  it.each((['content', 'marker-boundary'] as const).flatMap((kind) =>
+    (['fill', 'before-click'] as const).map((stage) => ({ kind, stage })),
+  ))(
+    'rejects a genuine $kind mismatch at $stage without Send (#2671)', async ({ kind, stage }) => {
+      const prompt = 'Explain draft verification.\n\nReply with both checks.';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'must not send');
+      const corrupt = (text: string) => kind === 'marker-boundary'
+        ? text.replace('\n\n', '') : text.replace('both', 'neither');
+      if (stage === 'fill') {
+        const fill = turn.composer.fill.getMockImplementation()!;
+        turn.composer.fill.mockImplementation(async (text: string) => fill(corrupt(text)));
+      } else {
+        turn.sendButton.isEnabled.mockImplementation(async () => {
+          await turn.composer.fill(corrupt(await turn.composer.innerText()));
+          return true;
+        });
+      }
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, `mismatch-${kind}-${stage}-2671.txt`));
+      expect(outcome.result).toMatchObject({ cause: 'composer_payload_mismatch', send_count: 0 });
+      expect(turn.getSends()).toBe(0);
+    },
+  );
+
   it('sends a backticked https URL when editor autolinking adds whitespace (#2497)', async () => {
     const prompt = 'Reply OK for `https://example.com/2497`';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const turn = makeLoserPage(prompt, 'OK');
-    const read = turn.composer.innerText.getMockImplementation()!;
-    turn.composer.innerText.mockImplementation(async () => (await read()).replace('`https://', '` https://'));
+    const turn = makeLoserPage(prompt, 'OK', undefined, false, 'autolink');
     const outcome = await runNewChatTurn(turn.page, join(stateDir, 'autolink-2497.txt'));
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(turn.getSends()).toBe(1);
@@ -712,7 +756,7 @@ describe('state-light fresh conversation collision recovery', () => {
       turn.page, join(stateDir, 'foreign-before-send.txt'), '90000', invocationId,
     );
     expect(outcome.result).toMatchObject({
-      state: 'ui_contract_mismatch', cause: 'ui_contract_mismatch:fresh_owned_payload_changed_before_click', send_count: 0,
+      state: 'driver_error', cause: 'composer_payload_mismatch', send_count: 0,
     });
     expect(turn.getSends()).toBe(0);
     expect(turn.sendButton.click).not.toHaveBeenCalled();
@@ -916,6 +960,47 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result.send_count).toBe(1);
     expect(turn.getSends()).toBe(1);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
+  });
+
+  it.each((['joined-marker', 'marker-content', 'middle-content', 'truncated-tail'] as const).flatMap((content) =>
+    (['after-click', 'after-proof-read'] as const).map((when) => ({ content, when })),
+  ))('vetoes a fresh retry with $content corruption $when (#2669)', async ({ content, when }) => {
+    const prompt = 'keep separate words\n  indented line';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    const corrupt = (text: string) => content === 'joined-marker' ? text.replace('\n\n', '')
+      : content === 'marker-content' ? text.replace('OPKTURNV1', 'OTHER-TURN')
+        : content === 'middle-content' ? text.replace('indented', 'different') : text.slice(0, -1);
+    let firstClickAt: number | undefined;
+    let tailReads = 0;
+    let injected = false;
+    const read = turn.composer.innerText.getMockImplementation()!;
+    turn.composer.innerText.mockImplementation(async () => {
+      const visible = await read();
+      // At the end of delivery probing, first comes its final composer read,
+      // then the retry guard's read. Mutate after that read captures old text
+      // to require a fresh payload check immediately before the physical retry.
+      if (when === 'after-proof-read' && firstClickAt !== undefined
+        && mocks.nowMs >= firstClickAt + 5_000 && ++tailReads === 2 && !injected) {
+        await turn.composer.fill(corrupt(visible));
+        injected = true;
+      }
+      return visible;
+    });
+    turn.sendButton.click.mockImplementationOnce(async () => {
+      firstClickAt = mocks.nowMs;
+      if (when === 'after-click') {
+        await turn.composer.fill(corrupt(turn.getComposerText()));
+        injected = true;
+      }
+      throw timeoutError();
+    });
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, randomUUID() + '-retry-exact.txt'));
+    expect(injected).toBe(true);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.getSends()).toBe(0);
+    expect(outcome.result.send_count).toBe(0);
+    expect(turn.page.close).not.toHaveBeenCalled();
   });
 
   it('never retries or clears an ambiguous first click (#2487)', async () => {
@@ -1371,7 +1456,11 @@ describe('state-light fresh conversation collision recovery', () => {
     const initialUrl = solo.page.url.getMockImplementation()!;
     let redirected = false;
     solo.page.url.mockImplementation(() => redirected ? LOSER_CONV : initialUrl());
-    solo.composer.fill.mockImplementation(async () => { redirected = true; });
+    const originalFill = solo.composer.fill.getMockImplementation()!;
+    solo.composer.fill.mockImplementation(async (...args) => {
+      await originalFill(...args);
+      redirected = true;
+    });
     enqueueBrowserForTurn(mocks, solo.page);
     const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
       ...STATE_LIGHT_TURN_BASE_ARGV,
@@ -3648,6 +3737,70 @@ describe('state-light fresh conversation collision recovery', () => {
       phase: 'not_sent',
       send_witness: 'numeric_send_count',
     });
+  });
+
+  it.each((['ready', 'readiness-recovery'] as const).flatMap((branch) =>
+    (['many-lines', 'single-100KB-line'] as const).flatMap((shape) =>
+      (['complete', 'marker-separator', 'joined-words', 'indentation', 'changed-content'] as const)
+        .map((content) => ({ branch, shape, content })),
+    ),
+  ))(
+    'verifies slow-filled $shape $content text in the $branch branch (#2669)', async ({ branch, shape, content }) => {
+      const prompt = shape === 'single-100KB-line'
+        ? '  Synthetic task instruction 0'.padEnd(100 * 1024, 'x')
+        : Array.from({ length: 80 }, (_, index) => `  Synthetic task instruction ${index}`).join('\n');
+      if (shape === 'single-100KB-line') {
+        expect(Buffer.byteLength(prompt)).toBe(100 * 1024);
+        expect(prompt).not.toContain('\n');
+      }
+      const text = wrapOwnedPromptPayload(TEST_OWNED_MARKER, prompt);
+      const budget = deriveComposerInsertionBudgetMs(text);
+      let value = '';
+      let reads = 0;
+      const composer = {
+        count: vi.fn(async () => 1),
+        evaluate: vi.fn(async (read: (element: any) => unknown) => {
+          if (String(read).includes('textContent')) return read({ textContent: value, innerText: value });
+          const ready = branch === 'ready' || ++reads > 1;
+          return { visible: ready, enabled: ready, contentEditable: ready };
+        }),
+        click: vi.fn(async () => undefined),
+        fill: vi.fn(async (input: string, { timeout }: { timeout: number }) => {
+          const fillCostMs = budget + 1_000;
+          mocks.nowMs += Math.min(fillCostMs, timeout);
+          if (timeout < fillCostMs) throw new Error('TimeoutError: fill timed out before full insertion');
+          value = content === 'marker-separator' ? input.replace(/\n\n\s*/u, '')
+            : content === 'joined-words' ? input.replace('Synthetic task', 'Synthetictask')
+              : content === 'indentation' ? input.replace(/  Synthetic/u, 'Synthetic')
+                : content === 'changed-content' ? input.replace('instruction', 'different') : input;
+        }),
+        innerText: vi.fn(async () => value),
+      };
+      const page = { locator: (selector: string) => selector === COMPOSER_SELECTOR ? composer : scalarLocator() };
+      const cause = await __testComposerMutation.mutateComposerOrCause(page, text, mocks.nowMs + 60_000);
+      expect(cause).toBe(['marker-separator', 'changed-content'].includes(content)
+        ? 'composer_payload_mismatch' : null);
+      expect(composer.innerText).toHaveBeenCalledTimes(1);
+      if (content === 'complete') expect(value).toBe(text);
+      else expect(value).not.toBe(text);
+      expect(composer.fill).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('preserves cancellation between readiness and mutation (#2669)', async () => {
+    const composer = {
+      count: async () => 1,
+      evaluate: async () => ({ visible: true, enabled: true, contentEditable: true }),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async () => undefined),
+    };
+    const beforeAction = vi.fn(() => { throw new Error('account_cooldown_active'); });
+    await expect(__testComposerMutation.mutateComposerOrCause(
+      { locator: () => composer }, 'cancelled 100KB prompt'.padEnd(100 * 1024, 'x'),
+      mocks.nowMs + 60_000, undefined, beforeAction,
+    )).rejects.toThrow('account_cooldown_active');
+    expect(composer.click).not.toHaveBeenCalled();
+    expect(composer.fill).not.toHaveBeenCalled();
   });
 
   it('reports privacy-safe diagnostics from each composer mutation budget exit', async () => {

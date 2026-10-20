@@ -8,6 +8,8 @@ import { describe, expect, it, vi } from 'vitest';
 import * as targetContext from '../lib/target-context.ts';
 import {
   classifyFleetPane,
+  lastFleetParkedLine,
+  visibleOpenCodePermission,
   collectFleetDiagnostics,
   parseSweepCli,
   FileFleetStateStore,
@@ -821,4 +823,41 @@ describe('Issue #2441 observational-only fleet diagnostics', () => {
     expect(rows[0]?.state).toBe('PARKED');
     expect(rows[0]?.reason).toBe('agent_unverified');
   }));
+});
+
+
+describe('Issue #2661 B4 native pane observation remains classification only', () => {
+  it('admits the captured OpenCode permission UI without treating an old GPT park as the last own line', () => {
+    const modal = [
+      '  ┃  △ Permission required',
+      '  ┃    → Read permission-probe.txt',
+      '  ┃',
+      '  ┃  Path: permission-probe.txt',
+      '  ┃',
+      '  ┃   Allow once   Allow always   Reject                                 ctrl+f fullscreen  ⇆ select  enter confirm',
+      '',
+    ].join('\n');
+    expect(visibleOpenCodePermission(modal)).toMatchObject({
+      action: 'Read', target: 'permission-probe.txt',
+    });
+    const native: FleetTerminal = {
+      handle: 'mgr2661', title: 'OpenCode manager', worktreePath: workerPath,
+      incarnationId: 'incarnation-2661', branch: 'refs/heads/issue-2661',
+      agentIdentity: 'opencode', status: 'running',
+    };
+    const observation = runFleetSweep({
+      primary, terminals: [native], store: new MemoryPollingStore(),
+      executor: fakeExecutor([native], { mgr2661: modal }),
+    })[0];
+    expect(observation?.state).toBe('PERMISSION');
+    expect(observation?.permission?.fingerprint).toMatch(/^[0-9a-f]{64}$/u);
+    expect(observation?.permission?.excerpt).not.toContain('ctrl+f');
+
+    const own = 'prior unrelated sentence\nPARKED on GPT turn inv-2661';
+    const stale = 'PARKED on GPT turn inv-2661\nAssistant: independent newer work';
+    expect(lastFleetParkedLine(own)).toBe('PARKED on GPT turn inv-2661');
+    expect(classifyFleetPane(own, 'mgr2661', new MemoryPollingStore())).toBe('PARKED');
+    expect(lastFleetParkedLine(stale)).toBeUndefined();
+    expect(classifyFleetPane(stale, 'mgr2661', new MemoryPollingStore())).toBe('STOPPED');
+  });
 });
