@@ -1178,6 +1178,11 @@ export async function finalizeOpenCodeExecutorProfile(
     '~/.local/share/opencode/tool-output/*',
     join(homedir(), '.local', 'share', 'opencode', 'tool-output', '*'),
   ]);
+  // The same runtime-owned allow is moved last when XDG_DATA_HOME is selected.
+  // Admit only that exact data-home tool-output path, not a parent wildcard.
+  if (dataRoot && isAbsolute(dataRoot)) {
+    runtimeToolOutputPatterns.add(join(dataRoot, 'opencode', 'tool-output', '*'));
+  }
   const matchingRuntimeRules = Array.isArray(baselineValue.permission)
     ? baselineValue.permission.filter((rule) => record(rule)
       && rule.permission === 'external_directory' && rule.action === 'allow'

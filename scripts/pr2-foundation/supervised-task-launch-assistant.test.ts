@@ -1401,6 +1401,11 @@ describe('supervised Task launch assistant', () => {
   it.each([
     ['real 1.18.35 normal-config TO-only ordering', 'none', true, 'home'],
     ['tilde runtime allow, only TO moved', 'none', true, 'tilde'],
+    ['isolated XDG data-home runtime allow, only TO moved', 'none', true, 'data'],
+    ['isolated XDG data-home inherited action drift', 'inherited-drift', false, 'data'],
+    ['isolated XDG data-home tool-output action drift', 'changed-action', false, 'data'],
+    ['isolated XDG data-home tool-output path drift', 'changed-path', false, 'data'],
+    ['foreign XDG data home cannot excuse permission reordering', 'none', false, 'foreign-data'],
     ['unrelated rule reordering', 'other-order', false, 'home'],
     ['an extra allow', 'extra-allow', false, 'home'],
     ['an unchanged inherited external-directory allow', 'inherited-allow', true, 'home'],
@@ -1434,9 +1439,12 @@ describe('supervised Task launch assistant', () => {
         ...remaining.slice(lastReadIndex + 1),
       ];
     };
+    const selectedDataRoot = join(tmpdir(), 'opk2447-synthetic-xdg-data');
     const runtimePattern = pathKind === 'tilde' ? '~/.local/share/opencode/tool-output/*'
-      : pathKind === 'foreign' ? join(homedir(), 'unrelated-home', '.local', 'share', 'opencode', 'tool-output', '*')
-        : join(homedir(), '.local', 'share', 'opencode', 'tool-output', '*');
+      : pathKind === 'data' || pathKind === 'foreign-data'
+        ? join(selectedDataRoot, 'opencode', 'tool-output', '*')
+        : pathKind === 'foreign' ? join(homedir(), 'unrelated-home', '.local', 'share', 'opencode', 'tool-output', '*')
+          : join(homedir(), '.local', 'share', 'opencode', 'tool-output', '*');
     const toolOutput = { permission: 'external_directory', pattern: runtimePattern, action: 'allow' };
     for (const agent of [fixture.baseline, fixture.contextual]) {
       for (const rule of agent.permission) {
@@ -1484,6 +1492,9 @@ describe('supervised Task launch assistant', () => {
     vi.stubEnv('XDG_CONFIG_HOME', sandbox);
     vi.stubEnv('OPENCODE_CONFIG_DIR', join(sandbox, 'opencode'));
     vi.stubEnv('OPENCODE_CONFIG', join(sandbox, 'synthetic.json'));
+    if (pathKind === 'data' || pathKind === 'foreign-data') vi.stubEnv('XDG_DATA_HOME', selectedDataRoot);
+    const dataRoot = pathKind === 'data' ? selectedDataRoot
+      : pathKind === 'foreign-data' ? join(tmpdir(), 'opk2447-unselected-xdg-data') : undefined;
     try {
       const env = profileEnv({
         PACK_EXECUTOR_T2_AGENT: 'opencode',
@@ -1545,10 +1556,14 @@ describe('supervised Task launch assistant', () => {
             return { ok: true, stdout: JSON.stringify(resolved), stderr: '' };
           }
           return { ok: false, stdout: '', stderr: 'unexpected fixture probe' };
-        }, () => true);
+        }, () => true, undefined, dataRoot);
       expect(result).toMatchObject(accepted
         ? { status: 'ok', evidence: { exactContext: true } }
         : { status: 'continue', cause: 'executor_effort_channel_unavailable' });
+      if (pathKind === 'data' && accepted) {
+        if (result.status !== 'ok') throw new Error('selected XDG data-home semantics must resolve');
+        expect(result.value.launchCommand).toContain(` XDG_DATA_HOME='${selectedDataRoot}' opencode --hostname`);
+      }
     } finally {
       vi.unstubAllEnvs();
       rmSync(sandbox, { recursive: true, force: true });
