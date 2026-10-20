@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -5322,9 +5323,19 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       reviewVerdict: 'findings', findingCount: 1,
       reviewRound: { settledSourceCount: 3 },
     });
-    expect(committed.findings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'quality:third-before-aggregate', sourceSlotId: 'source-03' }),
-    ]));
+    expect(committed.findings).toEqual([
+      expect.objectContaining({
+        title: 'Credentialed third source blocks a false clean aggregate',
+        fingerprint: createHash('sha256').update([
+          'quality', 'quality:third-before-aggregate',
+          'scripts/lib/pack-review-run-store.ts',
+        ].join('\n'), 'utf8').digest('hex'),
+        severity: 'error',
+        sourceSlotId: 'source-03',
+        filePath: 'scripts/lib/pack-review-run-store.ts',
+        body: expect.stringContaining('code: quality:third-before-aggregate'),
+      }),
+    ]);
     expect(f.reviewBodies).toHaveLength(1);
     expect(f.statusStates).toEqual(['failure']);
     expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)

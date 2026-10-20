@@ -5336,6 +5336,15 @@ export async function maybeAdmitPackReviewBodyAmendment(
   }
   if (prNumber === 2656 && issueNumber === 2655
       && exact2655ScopeOnlyLineDelta(oldBody, currentIssue.body)) {
+    // An already committed §11 strict-descendant completion is rechecked by
+    // the completed-stage projection, which repeats exact-byte, identity,
+    // architect/diff and current-head CI proof. Do not veto that route here.
+    // This is only routing, never independent success authority.
+    if (cycle.state === 'closed' && cycle.reviewStageComplete === true
+        && cycle.settlementKind === 'strict_descendant'
+        && authority.currentHeadSha.toLowerCase() === livePr.headSha.toLowerCase()) {
+      return null;
+    }
     const approved = await verify2655ScopeOnlyFixSettlement(input, {
       projectId: options.projectId, repoSlug: options.repoSlug, prNumber, issueNumber,
       reviewedHeadSha: terminal.targetSha, currentHeadSha: livePr.headSha,
@@ -8445,6 +8454,16 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       });
     }
 
+    // An already completed §11 incident must use the completed-stage branch,
+    // which independently revalidates the exact incident evidence on retry.
+    // This candidate predicate is NOT a waiver or a success verdict.
+    const completedScopeOnlyReplayCandidate = authority.cycle?.state === 'closed'
+      && authority.cycle.reviewStageComplete === true
+      && authority.cycle.settlementKind === 'strict_descendant'
+      && authority.terminal?.reviewVerdict === 'findings'
+      && target.repoSlug.toLowerCase() === 'chetwerikoff/orchestrator-pack'
+      && target.prNumber === 2656 && target.issueNumber === 2655
+      && authority.currentHeadSha.toLowerCase() === target.headSha.toLowerCase();
     // Reuse the same final-cap evidence and publication decision as scoped
     // reconciliation. Do not let start settle first or swallow its refusal.
     const finalFindings = authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
@@ -8455,7 +8474,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           && authority.terminal.targetSha !== target.headSha));
     // Completed final-cap stages still require verified Issue binding on
     // rewritten/diverged heads; ancestry is decided inside reconciliation.
-    if (finalFindings && authority.terminal!.targetSha !== target.headSha && !supplementalMode) {
+    if (finalFindings && authority.terminal!.targetSha !== target.headSha
+        && !supplementalMode && !completedScopeOnlyReplayCandidate) {
       const result = await reconcileFinalCapSettlement({
         projectId, storeRoot, prNumber: target.prNumber,
         repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
@@ -8940,7 +8960,12 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       const storedCandidates = incumbentCandidates(allRecords);
       const otherSameHead = allRecords.find((candidate) => (
         candidate.prNumber === target.prNumber
-        && candidate.reviewCycleId === authority.cycle?.cycleId
+        // A foreign cycle still fences ordinary same-head exceptional retry.
+        // An authenticated body-amendment continuation or audited reset is a
+        // genuinely new cycle: old 0/3 cooldown records are not its incumbent.
+        && (candidate.reviewCycleId === authority.cycle?.cycleId
+          || (authority.cycle?.amendmentOrigin === undefined
+            && authority.cycle?.resetProvenance === undefined))
         && candidate.logicalRoundOrdinal === roundOrdinal
         && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
         && candidate.reviewRound?.reviewer === 'gpt'

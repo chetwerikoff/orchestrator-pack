@@ -1233,6 +1233,21 @@ describe('Issue #2659 aggregate quorum identity after a late third credentialed 
         reason: 'verdict_persisted',
         idempotencyKey: `verdict:${created.id}:${HEAD_A}`, attempts: 1 },
     }, options);
+    // A staged source census is not immutable until the actual aggregate
+    // terminal commits under authority; setPackReviewRunTerminal alone is not enough.
+    const authority = initializePackReviewAuthority({
+      prNumber: 1591, headSha: HEAD_A, tier: 'T1', options: { storeRoot },
+    });
+    commitPackReviewTerminal({
+      prNumber: 1591, expectedTransitionSeq: authority.transitionSeq,
+      terminal: {
+        schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal',
+        runId: created.id, targetSha: HEAD_A, reviewVerdict: 'findings',
+        findingCount: 1, findingsDigest: 'issue-2659-committed-quorum-fixture',
+      },
+      status: 'changes_requested', findingCount: 1, options: { storeRoot },
+    });
+    expect(readPackReviewAuthority(1591, { storeRoot })?.terminal?.runId).toBe(created.id);
     const original = getPackReviewRun(created.id, options)!;
     const late = structuredClone(original.reviewRound!);
     late.sourceSlots[0]!.terminalClass = 'complete_clean';
