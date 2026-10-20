@@ -28,6 +28,7 @@ export type IncidentPhase = 'pre_send' | 'possible_delivery' | 'reply_complete' 
 
 export const PRE_SEND_COMPOSER_FAILURE_CAUSES = [
   'composer_mutation_budget_exhausted', 'composer_unavailable', 'blocking_page_overlay',
+  'composer_payload_mismatch',
 ] as const;
 export type PreSendComposerFailureCause = (typeof PRE_SEND_COMPOSER_FAILURE_CAUSES)[number];
 

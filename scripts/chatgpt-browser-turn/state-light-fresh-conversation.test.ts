@@ -220,7 +220,7 @@ function clearSendSlotDisableEnv(): void {
 
 function makeLoserPage(
   prompt: string, reply: string, onSend?: () => void, ownedPriorHistory = false,
-  rendering?: 'paragraphs' | 'autolink',
+  rendering?: 'paragraphs' | 'autolink' | 'blank-paragraphs',
 ) {
   let sends = 0;
   let sent = false;
@@ -249,7 +249,10 @@ function makeLoserPage(
     generating: index < 2,
   }));
   let activeSnapshot = snapshotFrames[0]!;
-  const editorSurface = () => rendering ? proseMirrorEditorSurface(sent ? '' : composerText, rendering) : undefined;
+  const editorSurface = () => rendering ? proseMirrorEditorSurface(
+    sent ? '' : composerText + (rendering === 'blank-paragraphs' ? '\n' : ''),
+    rendering === 'blank-paragraphs' ? 'paragraphs' : rendering,
+  ) : undefined;
 
   const composer = scalarLocator({
     count: vi.fn(async () => 1),
@@ -569,6 +572,40 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.getSends()).toBe(1);
   });
 
+  it('sends six blank lines with ProseMirror empty paragraphs and trailing breaks (#2671)', async () => {
+    const prompt = ['Explain the two checks.', 'First check: draft content.',
+      'Second check: exactly one Send.', 'Keep all six blank lines.',
+      'Do not operate on other chats.', 'This is a synthetic regression.',
+      'Reply with the result.'].join('\n\n').padEnd(1668, 'x');
+    expect(Buffer.byteLength(prompt)).toBe(1668);
+    expect(prompt.match(/\n\n/gu)).toHaveLength(6);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'Both checks passed.', undefined, false, 'blank-paragraphs');
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'blank-paragraphs-2671.txt'));
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(turn.getSends()).toBe(1);
+  });
+
+  it.each(['fill', 'before-click'] as const)(
+    'rejects a genuine content mismatch at %s without Send (#2671)', async (stage) => {
+      const prompt = 'Explain draft verification.\n\nReply with both checks.';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'must not send');
+      if (stage === 'fill') {
+        const fill = turn.composer.fill.getMockImplementation()!;
+        turn.composer.fill.mockImplementation(async (text: string) => fill(text.replace('both', 'neither')));
+      } else {
+        turn.sendButton.isEnabled.mockImplementation(async () => {
+          await turn.composer.fill('A genuinely different draft.');
+          return true;
+        });
+      }
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, `mismatch-${stage}-2671.txt`));
+      expect(outcome.result).toMatchObject({ cause: 'composer_payload_mismatch', send_count: 0 });
+      expect(turn.getSends()).toBe(0);
+    },
+  );
+
   it('sends a backticked https URL when editor autolinking adds whitespace (#2497)', async () => {
     const prompt = 'Reply OK for `https://example.com/2497`';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
@@ -715,7 +752,7 @@ describe('state-light fresh conversation collision recovery', () => {
       turn.page, join(stateDir, 'foreign-before-send.txt'), '90000', invocationId,
     );
     expect(outcome.result).toMatchObject({
-      state: 'ui_contract_mismatch', cause: 'ui_contract_mismatch:fresh_owned_payload_changed_before_click', send_count: 0,
+      state: 'driver_error', cause: 'composer_payload_mismatch', send_count: 0,
     });
     expect(turn.getSends()).toBe(0);
     expect(turn.sendButton.click).not.toHaveBeenCalled();
@@ -921,15 +958,15 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
   });
 
-  it.each((['joined-marker', 'indentation', 'line-break'] as const).flatMap((content) =>
+  it.each((['marker-content', 'middle-content', 'truncated-tail'] as const).flatMap((content) =>
     (['after-click', 'after-proof-read'] as const).map((when) => ({ content, when })),
   ))('vetoes a fresh retry with $content corruption $when (#2669)', async ({ content, when }) => {
     const prompt = 'keep separate words\n  indented line';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'UNREACHED');
-    const corrupt = (text: string) => content === 'joined-marker' ? text.replace('\n\n', '')
-      : content === 'indentation' ? text.replace('\n  indented', '\nindented')
-        : text.replace('words\n  indented', 'words   indented');
+    const corrupt = (text: string) => content === 'marker-content' ? text.replace('OPKTURNV1', 'OTHER-TURN')
+      : content === 'middle-content' ? text.replace('indented', 'different')
+        : text.slice(0, -1);
     let firstClickAt: number | undefined;
     let tailReads = 0;
     let injected = false;
@@ -938,7 +975,7 @@ describe('state-light fresh conversation collision recovery', () => {
       const visible = await read();
       // At the end of delivery probing, first comes its final composer read,
       // then the retry guard's read. Mutate after that read captures old text
-      // to require a fresh exact check immediately before the physical retry.
+      // to require a fresh payload check immediately before the physical retry.
       if (when === 'after-proof-read' && firstClickAt !== undefined
         && mocks.nowMs >= firstClickAt + 5_000 && ++tailReads === 2 && !injected) {
         await turn.composer.fill(corrupt(visible));
@@ -3700,7 +3737,7 @@ describe('state-light fresh conversation collision recovery', () => {
 
   it.each((['ready', 'readiness-recovery'] as const).flatMap((branch) =>
     (['many-lines', 'single-100KB-line'] as const).flatMap((shape) =>
-      (['complete', 'marker-separator', 'joined-words', 'indentation'] as const)
+      (['complete', 'marker-separator', 'joined-words', 'indentation', 'changed-content'] as const)
         .map((content) => ({ branch, shape, content })),
     ),
   ))(
@@ -3730,13 +3767,14 @@ describe('state-light fresh conversation collision recovery', () => {
           if (timeout < fillCostMs) throw new Error('TimeoutError: fill timed out before full insertion');
           value = content === 'marker-separator' ? input.replace('\n\n', '')
             : content === 'joined-words' ? input.replace('Synthetic task', 'Synthetictask')
-              : content === 'indentation' ? input.replace('\n  Synthetic', '\nSynthetic') : input;
+              : content === 'indentation' ? input.replace(/  Synthetic/u, 'Synthetic')
+                : content === 'changed-content' ? input.replace('instruction', 'different') : input;
         }),
         innerText: vi.fn(async () => value),
       };
       const page = { locator: (selector: string) => selector === COMPOSER_SELECTOR ? composer : scalarLocator() };
       const cause = await __testComposerMutation.mutateComposerOrCause(page, text, mocks.nowMs + 60_000);
-      expect(cause).toBe(content === 'complete' ? null : 'composer_mutation_budget_exhausted');
+      expect(cause).toBe(content === 'changed-content' ? 'composer_payload_mismatch' : null);
       expect(composer.innerText).toHaveBeenCalledTimes(1);
       if (content === 'complete') expect(value).toBe(text);
       else expect(value).not.toBe(text);

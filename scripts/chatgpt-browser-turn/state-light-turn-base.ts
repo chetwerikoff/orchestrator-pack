@@ -2517,9 +2517,8 @@ async function readComposerTextForSendDelivery(
   return text === undefined ? undefined : collapseUnicodeWhitespace(text);
 }
 
-// Pre-Send verification preserves every visible code point, including marker
-// separators, code indentation and newlines. Delivery-witness normalization
-// must never authorize dispatch of a different draft.
+// Read complete visible text within the invocation deadline. Pre-Send matching
+// uses the incumbent rendered-payload normalization as well as exact readers.
 async function readComposerTextWithinDeadline(
   composer: any,
   deadlineMs: number,
@@ -2544,12 +2543,19 @@ async function composerPayloadMatchesBeforeSend(
   deadlineMs: number,
 ): Promise<boolean> {
   const visible = await readComposerTextWithinDeadline(composer, deadlineMs);
-  // Rendered editor paragraphs/autolinks can add presentation whitespace.
-  // Recover only explicit editor structure, never normalize payload whitespace.
-  const matches = visible === expected
+  // ProseMirror empty paragraphs/trailing breaks change presentation whitespace.
+  // Keep the pre-#2670 semantic match; exact DOM readers are additional paths.
+  const matches = renderedPayloadMatches(
+    visible === undefined ? undefined : collapseUnicodeWhitespace(visible), expected,
+  ) || visible === expected
     || await readLosslessOwnedComposer(composer, deadlineMs, true) === expected
     || await readStructuredComposerText(composer, expected.length, deadlineMs) === expected;
   return matches && Date.now() < deadlineMs;
+}
+
+function composerPayloadFailureCause(deadlineMs: number): PreSendComposerFailureCause {
+  return Date.now() >= deadlineMs
+    ? 'composer_mutation_budget_exhausted' : 'composer_payload_mismatch';
 }
 
 async function readStructuredComposerText(
@@ -3158,10 +3164,10 @@ async function mutateComposerOrCause(
       beforeAction?.();
       await composer.fill(text, { timeout: actionBudgetMs });
       // Verify the complete draft even when readiness recovered during fill.
-      if (await readComposerReadiness(page, invocationDeadlineMs)
-        && await composerPayloadMatchesBeforeSend(
-          composer, text, invocationDeadlineMs,
-        )) return null;
+      if (await readComposerReadiness(page, invocationDeadlineMs)) {
+        return await composerPayloadMatchesBeforeSend(composer, text, invocationDeadlineMs)
+          ? null : composerPayloadFailureCause(invocationDeadlineMs);
+      }
     } catch (error) {
       if (error instanceof Error && (error.message === 'conversation_fetch_http_429'
         || (error.message === 'rate_limit' && heldPage429Diagnostic(page)?.http_status === 429)
@@ -3189,7 +3195,7 @@ async function mutateComposerOrCause(
     await composer.fill(text, { timeout: actionBudgetMs });
     if (Date.now() >= invocationDeadlineMs) return 'composer_mutation_budget_exhausted';
     return await composerPayloadMatchesBeforeSend(composer, text, invocationDeadlineMs)
-      ? null : 'composer_mutation_budget_exhausted';
+      ? null : composerPayloadFailureCause(invocationDeadlineMs);
   } catch (error) {
     if (error instanceof Error && (error.message === 'conversation_fetch_http_429'
       || (error.message === 'rate_limit' && heldPage429Diagnostic(page)?.http_status === 429)
@@ -4393,7 +4399,7 @@ async function runTurnCore(
       }
       const composer = page.locator(COMPOSER_SELECTOR);
       if (!await composerPayloadMatchesBeforeSend(composer, markedPayload, invocationDeadlineMs)) {
-        return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+        return returnComposerMutationFailure(composerPayloadFailureCause(invocationDeadlineMs));
       }
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
       // A pre-existing recovery alert is not evidence from this Send. Read
@@ -4461,7 +4467,11 @@ async function runTurnCore(
       // different draft as though it were the invocation's marked payload.
       if (!await composerPayloadMatchesBeforeSend(
         composer, markedPayload, Math.min(invocationDeadlineMs, readinessDeadlineMs),
-      )) throw new Error('ui_contract_mismatch:fresh_owned_payload_changed_before_click');
+      )) {
+        return returnComposerMutationFailure(composerPayloadFailureCause(
+          Math.min(invocationDeadlineMs, readinessDeadlineMs),
+        ));
+      }
       assertFreshOwner();
       const sendAction = async () => await dispatchStateLightSendAndObserveDelivery({
         page, browser, composer, sendButton, hasSendButton: true, marker,
@@ -4580,7 +4590,7 @@ async function runTurnCore(
         if (!await composerPayloadMatchesBeforeSend(
           composer, markedPayload, invocationDeadlineMs,
         )) {
-          return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+          return returnComposerMutationFailure(composerPayloadFailureCause(invocationDeadlineMs));
         }
         sendWaitMs = invocationDeadlineMs - Date.now();
         if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
