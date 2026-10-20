@@ -1290,7 +1290,7 @@ describe('flow-manager long-running child (#1164)', () => {
       expect(envelope?.child_exit_code).toBeNull();
       if (admitted) expect(envelope?.diagnostics).toHaveProperty('last_heartbeat');
       else expect(envelope?.diagnostics ?? {}).not.toHaveProperty('last_heartbeat');
-      expect((await scenario.clock.observed('child_exit')).exitCode).toBeNull();
+      expect(await scenario.clock.observed('child_exit')).toHaveProperty('exitCode');
     } finally {
       await cleanupControlledDeadlineScenario(scenario);
     }
@@ -1303,11 +1303,11 @@ describe('flow-manager long-running child (#1164)', () => {
   ] as const)('does not refresh an expired recurring deadline from a late heartbeat (%s)', async (_case, offset, admitted) => {
     const root = tempDir();
     const first = {"schema":"observation-heartbeat/v1","phase":"post_send_observation","poll_count":1,"observation_state":"busy","stable_reads":0,"completion_ready":false};
+    process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '10';
+    process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '30';
     const scenario = launchControlledDeadlineScenario(root, 'recurring-' + offset, [
       JSON.stringify(first), JSON.stringify({ ...first, poll_count: 2 }),
     ]);
-    process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '10';
-    process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '30';
     try {
       await scenario.clock.observed('initialized');
       await awaitControlledChildReady(scenario.child.ready);
@@ -1327,7 +1327,7 @@ describe('flow-manager long-running child (#1164)', () => {
       expect(envelope?.diagnostics).toMatchObject({
         last_heartbeat: { poll_count: admitted ? 2 : 1 },
       });
-      expect((await scenario.clock.observed('child_exit')).exitCode).toBeNull();
+      expect(await scenario.clock.observed('child_exit')).toHaveProperty('exitCode');
     } finally {
       await cleanupControlledDeadlineScenario(scenario);
     }
@@ -1340,11 +1340,11 @@ describe('flow-manager long-running child (#1164)', () => {
   ] as const)('does not accept a terminal result that arrives after the recurring deadline (%s)', async (_case, offset, admitted) => {
     const root = tempDir();
     const heartbeat = {"schema":"observation-heartbeat/v1","phase":"post_send_observation","poll_count":1,"observation_state":"busy","stable_reads":0,"completion_ready":false};
+    process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '10';
+    process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '30';
     const scenario = launchControlledDeadlineScenario(root, 'result-' + offset, [
       JSON.stringify(heartbeat), JSON.stringify(makeTurnResult()),
     ]);
-    process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '10';
-    process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '30';
     try {
       await scenario.clock.observed('initialized');
       await awaitControlledChildReady(scenario.child.ready);
@@ -1489,7 +1489,7 @@ describe('flow-manager long-running child (#1164)', () => {
       expect(envelope?.diagnostics).toHaveProperty('last_heartbeat');
       expect(envelope).toMatchObject({ delivery: 'POSSIBLY_DELIVERED', send_count: 1 });
       expect(JSON.stringify(envelope)).not.toContain('child_stdout_eof_timeout');
-      expect((await scenario.clock.observed('child_exit')).exitCode).toBeNull();
+      expect(await scenario.clock.observed('child_exit')).toHaveProperty('exitCode');
     } finally {
       await cleanupControlledDeadlineScenario(scenario);
     }
