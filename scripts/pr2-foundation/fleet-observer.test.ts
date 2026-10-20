@@ -503,42 +503,71 @@ describe('S1 fleet observer', () => {
     });
     expect(observerFailureBoundary.listCandidates).not.toHaveBeenCalled();
 
-    const phaseStartedAt = { value: 0 };
-    const cancel = vi.fn();
-    const delayedHandoff = vi.fn(() => ({ ok: true }));
-    const delayedObserver = {
-      schedulerGeneration: 'sg-delayed',
-      tick: vi.fn(() => new Promise<FleetObserverResult>((resolve) => {
-        setTimeout(() => resolve({} as FleetObserverResult), 100);
-      })),
-      getEffectiveBudgetMs: () => 10,
-      cancel,
-    };
-    const deadlineBoundary = {
-      ...boundary,
-      publishHandoff: delayedHandoff,
-      listCandidates: vi.fn(() => {
-        phaseStartedAt.value = Date.now();
-        return [];
-      }),
-      fleetObserver: delayedObserver,
-    };
-    const startedAt = Date.now();
-    await expect(runSchedulerTick(deadlineBoundary, {
-      ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath,
-      ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
-      ORCHESTRATOR_CUTOVER_NONCE: nonce,
-    })).rejects.toThrow('scheduler_observer_untrusted:observer_timeout');
-    expect(delayedObserver.tick).toHaveBeenCalledTimes(1);
-    expect(cancel).toHaveBeenCalledTimes(1);
-    expect(delayedHandoff).toHaveBeenCalledWith({
-      reason: 'observer_untrusted', schedulerGeneration: 'sg-delayed', tickSequence: 1,
-    });
-    expect(phaseStartedAt.value).toBe(0);
-    expect(Date.now() - startedAt).toBeLessThan(80);
+    // The scheduler owns the 10-ms Promise.race budget. Exercise the
+    // just-before completion and at-budget cancellation with its fake timers,
+    // not by measuring wall time under shared-runner load.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const env = {
+        ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath,
+        ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
+        ORCHESTRATOR_CUTOVER_NONCE: nonce,
+      };
+      let completeEarly!: (value: FleetObserverResult) => void;
+      const earlyResult = new Promise<FleetObserverResult>((resolve) => { completeEarly = resolve; });
+      const earlyObserver = {
+        schedulerGeneration: 'sg-early',
+        tick: vi.fn(() => earlyResult),
+        getEffectiveBudgetMs: () => 10,
+        cancel: vi.fn(),
+      };
+      const earlyRun = runSchedulerTick({ ...boundary, fleetObserver: earlyObserver }, env);
+      await Promise.resolve(); // the scheduler schedules observer.tick in a microtask
+      expect(earlyObserver.tick).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(9);
+      completeEarly(result.observer!);
+      const beforeDeadline = await earlyRun;
+      expect(beforeDeadline.observer).toEqual(result.observer);
+      expect(earlyObserver.cancel).not.toHaveBeenCalled();
+
+      let completeLate!: (value: FleetObserverResult) => void;
+      const lateResult = new Promise<FleetObserverResult>((resolve) => { completeLate = resolve; });
+      const cancel = vi.fn();
+      const delayedHandoff = vi.fn(() => ({ ok: true }));
+      const delayedObserver = {
+        schedulerGeneration: 'sg-delayed',
+        tick: vi.fn(() => lateResult),
+        getEffectiveBudgetMs: () => 10,
+        cancel,
+      };
+      const deadlineBoundary = {
+        ...boundary,
+        publishHandoff: delayedHandoff,
+        listCandidates: vi.fn(() => []),
+        fleetObserver: delayedObserver,
+      };
+      const afterDeadline = runSchedulerTick(deadlineBoundary, env);
+      await Promise.resolve();
+      expect(delayedObserver.tick).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(9);
+      expect(cancel).not.toHaveBeenCalled();
+      expect(delayedHandoff).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      await expect(afterDeadline).rejects.toThrow('scheduler_observer_untrusted:observer_timeout');
+      expect(delayedObserver.tick).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(delayedHandoff).toHaveBeenCalledWith({
+        reason: 'observer_untrusted', schedulerGeneration: 'sg-delayed', tickSequence: 1,
+      });
+      expect(deadlineBoundary.listCandidates).not.toHaveBeenCalled();
+      completeLate(result.observer!); // settle the test-owned deferred response
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it('covers smoke scenario 3 through production serialization and commit boundaries', async () => {
+    it('covers smoke scenario 3 through production serialization and commit boundaries', async () => {
     const source = new FakeFleetSource();
     source.add('byte-boundary');
     const observer = observerFor(source);
