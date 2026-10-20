@@ -8,7 +8,7 @@ import {
   extractActionsRunId,
 } from './lib/gh-pr-checks.mjs';
 import { parseGhArgv } from './lib/gh-parse-argv.mjs';
-import { parseRemoteSlug } from './lib/git-origin-slug.mjs';
+import { originSlugFromGitConfig, parseRemoteSlug } from './lib/git-origin-slug.mjs';
 import * as repoResolve from './lib/gh-repo-resolve.mjs';
 const {
   applyListedJq,
@@ -3090,6 +3090,52 @@ describe('Issue #2658 gh syntax and provenance read parity', () => {
       expect(observed.stdout, args.join(' ')).toBe('');
       expect(observed.stderr, args.join(' ')).toContain('gh-wrapper: REST route failed');
     }
+  });
+
+  it('runs authorized REST-direct GET, method-specific native write and other API passthrough without a shim route', () => {
+    if (process.platform === 'win32') return;
+    const fixture = createTrackedGhRuntimeFixture();
+    const endpoint = 'repos/' + REPOSITORY + '/pulls/' + PR_NUMBER + '/reviews';
+    const env = {
+      ...process.env,
+      PATH: fixture.pathValue,
+      GH_REAL_BINARY: fixture.nativeGh,
+      GH_REPO: REPOSITORY,
+      GH_HOST: 'github.com',
+      OPK_PROJECT_ID: '',
+      GH_WRAPPER_ACTIVE: '',
+      GH_GOVERNOR_DISABLED: '1',
+    };
+    const calls = [
+      ['api', endpoint],
+      ['api', endpoint, '--method', 'POST'],
+      ['api', 'repos/' + REPOSITORY + '/unknown-api-resource'],
+    ];
+    const statuses: number[] = [];
+    for (const args of calls) {
+      const observed = runProcessSync({
+        command: join(repoRoot, 'scripts', 'gh'),
+        args, cwd: fixture.checkout, env,
+      });
+      statuses.push(observed.exitCode ?? -1);
+    }
+    expect(statuses).toEqual([0, 0, 2]);
+    const nativeCalls = parseNativeCalls(fixture.nativeCallsFile)
+      .filter((call) => call.kind === 'api');
+    expect(nativeCalls).toHaveLength(3);
+    expect(nativeCalls.map((call) => call.args)).toEqual(calls);
+    for (const call of nativeCalls) expect(call.wrapperActive).toBe('1');
+  });
+
+  it('binds pack origin from its own git config and refuses a foreign-host origin', () => {
+    const checkout = tempRoot('opk-2658-origin-source-');
+    expect(commandResult('git', ['init', '--quiet', checkout], checkout).ok).toBe(true);
+    expect(commandResult('git', ['-C', checkout, 'remote', 'add', 'origin',
+      'git@github.com:Acme/Pack.git'], checkout).ok).toBe(true);
+    expect(originSlugFromGitConfig(checkout)).toBe('Acme/Pack');
+    expect(commandResult('git', ['-C', checkout, 'remote', 'set-url', 'origin',
+      'git@other.example:Acme/Pack.git'], checkout).ok).toBe(true);
+    expect(originSlugFromGitConfig(checkout)).toBeNull();
   });
 
   it('parses only GitHub origins with unchanged owner/repository case', () => {
