@@ -7938,7 +7938,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       target.prNumber, target.headSha);
     const payload = JSON.stringify({ path });
     const quoted = "'" + payload.replaceAll("'", "'\\''") + "'";
-    return `printf '%s\\n' ${quoted} | node --experimental-strip-types scripts/lib/review-start-claim-store.ts Read-ReviewStartClaimRecord`;
+    return `printf '%s\\n' ${quoted} | node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/lib/review-start-claim-store.ts -- Read-ReviewStartClaimRecord`;
   };
   const unownedPreacquiredResult = (candidate: PackReviewRunRecord) => ({
     ok: false, created: false, reused: true,
