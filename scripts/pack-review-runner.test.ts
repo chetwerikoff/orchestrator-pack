@@ -5297,14 +5297,15 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
   });
 
   it.each([
-    ['safe repeated 429', false],
-    ['unsafe older attempted send', true],
-  ] as const)('admits R1 -> R2 -> R3 only with %s history', async (_case, unsafeOlder) => {
+    ['safe repeated 429, source admission gate first', false, 'admission'],
+    ['safe repeated 429, dead-runner stale gate first', false, 'stale'],
+    ['unsafe older attempted send', true, 'admission'],
+  ] as const)('admits R1 -> R2 -> R3 only with %s history', async (_case, unsafeOlder, firstGate) => {
     const f = fixture({ historicalClaim: true });
     const claimBytes = readFileSync(f.historicalClaimPath!, 'utf8');
     const zeroSendAttempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
-    // Freeze Date before the R2 start so source admission, run heartbeat and
-    // creation all share persisted logical-time witnesses. Real timers remain real.
+    // Freeze Date before R2 creation/start, then deliberately move its persisted
+    // dead-runner heartbeat away from source admission. Real timers remain real.
     const graceMs = packReviewRunStaleMinutes() * 60_000;
     // Preserve the original R1 -> R2 creation order while freezing R2 timestamps.
     vi.useFakeTimers({ toFake: ['Date'], now: new Date(Date.now() + 1_000) });
@@ -5331,22 +5332,45 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       expect(r2Id).not.toBe(f.original.id);
       expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
 
-      // The stale-run gate and 0/3 grace are distinct: the first uses the
-      // dead runner's heartbeat/updatedAt; the second uses earliest admission,
-      // falling back to run creation when no finite admission is persisted.
-      const deadR2 = updatePackReviewRun(r2Id, { runnerPid: 2147483647 }, f.options);
-      const staleAnchor = Date.parse(deadR2.heartbeatAtUtc || deadR2.updatedAt);
-      const admissions = deadR2.reviewRound!.sourceSlots
+      // The two persisted gates have different authorities. In both orders,
+      // reconcile must refuse zero-send terminalization after only one expires:
+      // (1) dead-PID heartbeat/updatedAt stale gate, (2) earliest finite source
+      // admission (createdAt fallback) 0/3 grace. No immediate recovery shortcut.
+      const activeR2 = getPackReviewRun(r2Id, f.options)!;
+      const admissions = activeR2.reviewRound!.sourceSlots
         .map((slot) => Date.parse(slot.admissionStartedAtUtc ?? ''))
         .filter((stamp) => Number.isFinite(stamp));
-      const graceAnchor = admissions.length > 0 ? Math.min(...admissions) : Date.parse(deadR2.createdAt);
-      expect(Number.isFinite(staleAnchor)).toBe(true);
+      const graceAnchor = admissions.length > 0 ? Math.min(...admissions) : Date.parse(activeR2.createdAt);
       expect(Number.isFinite(graceAnchor)).toBe(true);
+      const heartbeatOffsetMs = firstGate === 'stale' ? -10_000 : 10_000;
+      vi.setSystemTime(new Date(graceAnchor + heartbeatOffsetMs));
+      const deadR2 = updatePackReviewRun(r2Id, { runnerPid: 2147483647 }, f.options);
+      const staleAnchor = Date.parse(deadR2.heartbeatAtUtc || deadR2.updatedAt);
+      expect(Number.isFinite(staleAnchor)).toBe(true);
+      expect(staleAnchor - graceAnchor).toBe(heartbeatOffsetMs);
       const staleBoundary = staleAnchor + graceMs;
       const zeroSendBoundary = graceAnchor + graceMs;
+      const firstBoundary = Math.min(staleBoundary, zeroSendBoundary);
       const settleBoundary = Math.max(staleBoundary, zeroSendBoundary);
+      expect(firstBoundary).toBeLessThan(settleBoundary);
+      expect(firstBoundary).toBe(firstGate === 'stale' ? staleBoundary : zeroSendBoundary);
       expect(isPackReviewRunStale(deadR2, new Date(staleBoundary - 1))).toBe(false);
       expect(isPackReviewRunStale(deadR2, new Date(staleBoundary))).toBe(true);
+
+      vi.setSystemTime(new Date(firstBoundary - 1));
+      const beforeEitherGate = await f.reconcile({ runId: r2Id });
+      expect(beforeEitherGate.results.some((row) => row.runId === r2Id && row.terminalized)).toBe(false);
+      expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
+
+      vi.setSystemTime(new Date(firstBoundary));
+      const afterOneGate = await f.reconcile({ runId: r2Id });
+      expect(afterOneGate.results.some((row) => row.runId === r2Id && row.terminalized)).toBe(false);
+      expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
+      if (firstGate === 'stale') {
+        expect(afterOneGate.results.find((row) => row.runId === r2Id)).toMatchObject({
+          terminalized: false, graceExpired: false,
+        });
+      }
 
       vi.setSystemTime(new Date(settleBoundary - 1));
       const justBefore = await f.reconcile({ runId: r2Id });
