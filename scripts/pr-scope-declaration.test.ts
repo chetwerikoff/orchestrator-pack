@@ -1073,6 +1073,30 @@ describe('AO-free PR scope declaration contract', () => {
     });
   });
 
+  it('shares fence syntax but keeps guarded multiplicity, grammar and root ceilings strict', () => {
+    const valid = [
+      '```denylist', 'vendor/**', 'packages/core/**', '```',
+      '```allowed-roots', 'scripts/**', '```',
+    ].join('\n');
+    const scope = parseIssueBody(valid);
+    expect(selectLiveIssueScope(valid, scope)).toMatchObject({ ok: true });
+    const repeated = valid + '\n```denylist\nsecrets/**\n```';
+    expect(parseIssueBody(repeated).denylist).toContain('secrets/**');
+    expect(selectLiveIssueScope(repeated, parseIssueBody(repeated))).toMatchObject({
+      ok: false, message: expect.stringContaining('exactly one denylist'),
+    });
+    for (const invalid of [
+      valid.replace('```allowed-roots\nscripts/**\n```', ''),
+      valid.replace('allowed-roots\nscripts/**', 'allowed-roots\n# empty'),
+      valid.replace('allowed-roots\nscripts/**', 'allowed-roots\nscripts/*.ts'),
+      valid.replace('allowed-roots\nscripts/**', 'allowed-roots\nscripts/**\nscripts/**'),
+      valid.replace('allowed-roots\nscripts/**', 'allowed-roots\nother/**'),
+      valid.replace('allowed-roots\nscripts/**', 'allowed-roots\n../scripts/**'),
+    ]) {
+      expect(selectLiveIssueScope(invalid, parseIssueBody(invalid)).ok, invalid).toBe(false);
+    }
+  });
+
   it('uses one explicit live-Issue scope only when no declaration candidate exists', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
     roots.push(root);
