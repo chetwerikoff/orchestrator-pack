@@ -1515,7 +1515,9 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     | 'slow-fill' | 'partial-fill' | 'expired-fill' | 'failed-fill'
     | 'joined-marker-fill' | 'joined-marker-before-send';
 
-  async function fullTurn(scenario: Scenario) {
+  async function fullTurn(scenario: Scenario, prompt = 'PROMPT') {
+    const { readStableInput } = await import('./input.ts');
+    vi.mocked(readStableInput).mockReturnValueOnce(stableTurnInput(prompt));
     const chatUrl = 'https://chatgpt.com/c/25602560-2560-4560-8560-256025602560';
     const invocationId = randomUUID();
     const profile = join(root, 'profile');
@@ -1540,11 +1542,17 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
       'joined-marker-fill', 'joined-marker-before-send'].includes(scenario)
       || (scenario === 'late-hydration' && now - startedAt >= 20_000)
       || (reopened && !['composer-still-absent', 'late-redirect', 'late-close'].includes(scenario));
-    const fill = vi.fn(async (value: string) => {
+    const fill = vi.fn(async (value: string, { timeout }: { timeout: number }) => {
       if (scenario === 'failed-fill') throw new Error('fill failed');
+      const costMs = ['slow-fill', 'partial-fill', 'joined-marker-fill', 'joined-marker-before-send']
+        .includes(scenario) ? 6_000 : 0;
+      if (timeout < costMs) {
+        now += timeout;
+        throw new Error('TimeoutError: fill timed out before full insertion');
+      }
       composerText = scenario === 'partial-fill' ? value.slice(0, -1)
         : scenario === 'joined-marker-fill' ? value.replace('\n\n', '') : value;
-      if (['slow-fill', 'partial-fill', 'joined-marker-fill', 'joined-marker-before-send'].includes(scenario)) now += 6_000;
+      now += costMs;
       if (scenario === 'expired-fill') now = startedAt + 60_000;
     });
     const composer = scalarLocator({
@@ -1728,21 +1736,30 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     }
   }
 
-  it('dispatches exactly once after a verified fill exceeds the old insertion budget (#2669)', async () => {
-    const run = await fullTurn('slow-fill');
-    expect(run.fill).toHaveBeenCalledTimes(1);
-    expect(run.send).toHaveBeenCalledTimes(1);
-    expect(run.sentAt! - run.startedAt).toBeGreaterThanOrEqual(6_000);
-    expect(run.sentAt! - run.startedAt).toBeLessThan(60_000);
-    expect(run.sentText).toMatch(/^OPKTURNV1[0-9a-f]{32}\n\nPROMPT$/u);
-    expect(run.result.send_count).toBe(1);
-    expect(run.goto).not.toHaveBeenCalled();
-  });
+  it.each(['short', 'single-100KB-line'] as const)(
+    'dispatches exactly once after a verified slow %s fill (#2669)', async (shape) => {
+      const prompt = shape === 'short' ? 'PROMPT'
+        : '  Synthetic task instruction 0'.padEnd(100 * 1024, 'x');
+      const run = await fullTurn('slow-fill', prompt);
+      expect(run.fill).toHaveBeenCalledTimes(1);
+      expect(run.send).toHaveBeenCalledTimes(1);
+      expect(run.sentAt! - run.startedAt).toBeGreaterThanOrEqual(6_000);
+      expect(run.sentAt! - run.startedAt).toBeLessThan(60_000);
+      expect(run.sentText).toMatch(/^OPKTURNV1[0-9a-f]{32}\n\n/u);
+      expect(run.sentText.slice(run.sentText.indexOf('\n\n') + 2)).toBe(prompt);
+      expect(run.result.send_count).toBe(1);
+      expect(run.goto).not.toHaveBeenCalled();
+    },
+  );
 
-  it.each(['partial-fill', 'expired-fill', 'failed-fill',
-    'joined-marker-fill', 'joined-marker-before-send'] as const)(
-    'never dispatches %s despite a present composer (#2669)', async (scenario) => {
-      const run = await fullTurn(scenario);
+  it.each((['partial-fill', 'expired-fill', 'failed-fill',
+    'joined-marker-fill', 'joined-marker-before-send'] as const).flatMap((scenario) =>
+      (['short', 'single-100KB-line'] as const).map((shape) => ({ scenario, shape })),
+    ))(
+    'never dispatches $shape $scenario despite a present composer (#2669)', async ({ scenario, shape }) => {
+      const prompt = shape === 'short' ? 'PROMPT'
+        : '  Synthetic task instruction 0'.padEnd(100 * 1024, 'x');
+      const run = await fullTurn(scenario, prompt);
       expect(run.fill).toHaveBeenCalledTimes(1);
       expect(run.send).not.toHaveBeenCalled();
       expect(run.result.send_count).toBe(0);

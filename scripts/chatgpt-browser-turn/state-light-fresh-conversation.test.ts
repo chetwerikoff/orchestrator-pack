@@ -3655,13 +3655,20 @@ describe('state-light fresh conversation collision recovery', () => {
   });
 
   it.each((['ready', 'readiness-recovery'] as const).flatMap((branch) =>
-    (['complete', 'marker-separator', 'joined-words', 'indentation'] as const)
-      .map((content) => ({ branch, content })),
+    (['many-lines', 'single-100KB-line'] as const).flatMap((shape) =>
+      (['complete', 'marker-separator', 'joined-words', 'indentation'] as const)
+        .map((content) => ({ branch, shape, content })),
+    ),
   ))(
-    'verifies slow-filled $content text in the $branch branch (#2669)', async ({ branch, content }) => {
-      const text = wrapOwnedPromptPayload(TEST_OWNED_MARKER, Array.from(
-        { length: 80 }, (_, index) => `  Synthetic task instruction ${index}`,
-      ).join('\n'));
+    'verifies slow-filled $shape $content text in the $branch branch (#2669)', async ({ branch, shape, content }) => {
+      const prompt = shape === 'single-100KB-line'
+        ? '  Synthetic task instruction 0'.padEnd(100 * 1024, 'x')
+        : Array.from({ length: 80 }, (_, index) => `  Synthetic task instruction ${index}`).join('\n');
+      if (shape === 'single-100KB-line') {
+        expect(Buffer.byteLength(prompt)).toBe(100 * 1024);
+        expect(prompt).not.toContain('\n');
+      }
+      const text = wrapOwnedPromptPayload(TEST_OWNED_MARKER, prompt);
       const budget = deriveComposerInsertionBudgetMs(text);
       let value = '';
       let reads = 0;
@@ -3673,15 +3680,17 @@ describe('state-light fresh conversation collision recovery', () => {
           return { visible: ready, enabled: ready, contentEditable: ready };
         }),
         click: vi.fn(async () => undefined),
-        fill: vi.fn(async (input: string) => {
-          mocks.nowMs += budget + 1_000;
+        fill: vi.fn(async (input: string, { timeout }: { timeout: number }) => {
+          const fillCostMs = budget + 1_000;
+          mocks.nowMs += Math.min(fillCostMs, timeout);
+          if (timeout < fillCostMs) throw new Error('TimeoutError: fill timed out before full insertion');
           value = content === 'marker-separator' ? input.replace('\n\n', '')
             : content === 'joined-words' ? input.replace('Synthetic task', 'Synthetictask')
               : content === 'indentation' ? input.replace('\n  Synthetic', '\nSynthetic') : input;
         }),
         innerText: vi.fn(async () => value),
       };
-      const page = { locator: () => composer };
+      const page = { locator: (selector: string) => selector === COMPOSER_SELECTOR ? composer : scalarLocator() };
       const cause = await __testComposerMutation.mutateComposerOrCause(page, text, mocks.nowMs + 60_000);
       expect(cause).toBe(content === 'complete' ? null : 'composer_mutation_budget_exhausted');
       expect(composer.innerText).toHaveBeenCalledTimes(1);
@@ -3700,7 +3709,8 @@ describe('state-light fresh conversation collision recovery', () => {
     };
     const beforeAction = vi.fn(() => { throw new Error('account_cooldown_active'); });
     await expect(__testComposerMutation.mutateComposerOrCause(
-      { locator: () => composer }, 'cancelled prompt', mocks.nowMs + 60_000, undefined, beforeAction,
+      { locator: () => composer }, 'cancelled 100KB prompt'.padEnd(100 * 1024, 'x'),
+      mocks.nowMs + 60_000, undefined, beforeAction,
     )).rejects.toThrow('account_cooldown_active');
     expect(composer.click).not.toHaveBeenCalled();
     expect(composer.fill).not.toHaveBeenCalled();

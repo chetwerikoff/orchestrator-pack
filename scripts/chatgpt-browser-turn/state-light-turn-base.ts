@@ -3046,8 +3046,8 @@ async function mutateComposerOrCause(
   const composer = page.locator(COMPOSER_SELECTOR);
   const insertionStart = Date.now();
   const insertionBudgetMs = deriveComposerInsertionBudgetMs(text);
-  // Composer preparation shares the invocation's finite deadline. A completed
-  // fill must not be rejected solely for overrunning a line-count estimate.
+  // The line estimate is diagnostic only. Both fill() timeouts, including a
+  // single large line, use the remaining finite invocation deadline below.
   const insertionDeadlineMs = invocationDeadlineMs;
   if (insertionContext) insertionContext.insertionDeadlineMs = insertionDeadlineMs;
   const exhausted = (branch: ComposerMutationDiagnosticV1['branch']): PreSendComposerFailureCause => {

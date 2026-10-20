@@ -30,5 +30,5 @@
     "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
-  "source_revision": "708a4d48fa5c8af66b3d7ce2b220c3df1f0b8429"
+  "source_revision": "1823ce93fd1468190101bd3236d57b7913632b81"
 }
