@@ -2545,10 +2545,79 @@ async function composerPayloadMatchesBeforeSend(
 ): Promise<boolean> {
   const visible = await readComposerTextWithinDeadline(composer, deadlineMs);
   // Rendered editor paragraphs/autolinks can add presentation whitespace.
-  // Accept that difference only with independent exact, lossless DOM proof.
+  // Recover only explicit editor structure, never normalize payload whitespace.
   const matches = visible === expected
-    || await readLosslessOwnedComposer(composer, deadlineMs, true) === expected;
+    || await readLosslessOwnedComposer(composer, deadlineMs, true) === expected
+    || await readStructuredComposerText(composer, expected.length, deadlineMs) === expected;
   return matches && Date.now() < deadlineMs;
+}
+
+async function readStructuredComposerText(
+  composer: any, expectedLength: number, deadlineMs: number,
+): Promise<string | undefined> {
+  const waitMs = deadlineMs - Date.now();
+  if (waitMs <= 0 || typeof composer?.evaluate !== 'function') return undefined;
+  try {
+    const text = await boundedBrowserRead(
+      Promise.resolve(composer.evaluate((element: HTMLElement, maxChars: number) => {
+        // ProseMirror paragraphs encode document newlines independently of
+        // CSS innerText spacing. Text nodes (including spaces/tabs) are literal.
+        if (!element.isConnected || !element.isContentEditable
+          || !element.classList.contains('ProseMirror')) return undefined;
+        const view = element.ownerDocument.defaultView;
+        if (!view) return undefined;
+        const parts: string[] = [];
+        const maxNodes = Math.min(20_000, maxChars * 2 + 256);
+        let nodes = 0;
+        let chars = 0;
+        const append = (value: string): boolean => {
+          chars += value.length;
+          if (chars > maxChars) return false;
+          parts.push(value);
+          return true;
+        };
+        const readable = (node: HTMLElement): boolean => {
+          if (node.getAttribute('hidden') !== null || node.getAttribute('aria-hidden') === 'true'
+            || node.getAttribute('contenteditable') === 'false') return false;
+          const style = view.getComputedStyle(node);
+          return style.display !== 'none' && style.visibility !== 'hidden' && style.visibility !== 'collapse';
+        };
+        const walk = (node: Node, depth: number, trailingBreak: boolean): boolean => {
+          if (++nodes > maxNodes || depth > 32) return false;
+          if (node.nodeType === 3) return append(node.nodeValue ?? '');
+          if (node.nodeType !== 1) return false;
+          const child = node as HTMLElement;
+          if (!readable(child)) return false;
+          if (child.tagName === 'BR') {
+            if (child.childNodes.length !== 0) return false;
+            return child.classList.contains('ProseMirror-trailingBreak') ? trailingBreak : append('\n');
+          }
+          if (!(child.tagName === 'P' && depth === 1)
+            && !['A', 'SPAN', 'CODE', 'STRONG', 'EM', 'B', 'I', 'S', 'U'].includes(child.tagName)) return false;
+          for (let i = 0; i < child.childNodes.length; i++) {
+            if (!walk(child.childNodes[i]!, depth + 1,
+              child.tagName === 'P' && i === child.childNodes.length - 1)) return false;
+          }
+          return true;
+        };
+        if (!readable(element) || element.childNodes.length > maxNodes) return undefined;
+        let paragraphs: boolean | undefined;
+        for (let i = 0; i < element.childNodes.length; i++) {
+          const child = element.childNodes[i]!;
+          const isParagraph = child.nodeType === 1 && (child as HTMLElement).tagName === 'P';
+          paragraphs ??= isParagraph;
+          if (paragraphs !== isParagraph || (isParagraph && i > 0 && !append('\n'))
+            || !walk(child, 1, false)) return undefined;
+        }
+        return parts.join('');
+      }, expectedLength)),
+      waitMs, 'send_composer_structure_timeout',
+    );
+    return typeof text === 'string' ? text : undefined;
+  } catch (error) {
+    if (isPostSendTargetCrash(error)) throw error;
+    return undefined;
+  }
 }
 
 async function observeStateLightSendDelivery(
@@ -7575,6 +7644,7 @@ export const __testSendDelivery = {
   affirmativePreActionabilityTimeout,
   waitForFreshSendButton,
   readLosslessOwnedComposer,
+  composerPayloadMatchesBeforeSend,
   conditionalClearOwnedComposerDraft,
   observeExistingServerCheckedRecovery,
 };

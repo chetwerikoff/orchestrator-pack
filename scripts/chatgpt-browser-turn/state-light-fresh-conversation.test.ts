@@ -122,6 +122,7 @@ import {
   createCoordinationModuleMock,
   enqueueBrowserForTurn,
   messageLocator,
+  proseMirrorEditorSurface,
   readyTurnObservationFrames,
   runStateLightTurnWithStdoutCapture,
   scalarLocator,
@@ -217,7 +218,10 @@ function clearSendSlotDisableEnv(): void {
   delete process.env.OPK_STATE_LIGHT_SEND_SLOT_DISABLE_REASON;
 }
 
-function makeLoserPage(prompt: string, reply: string, onSend?: () => void, ownedPriorHistory = false) {
+function makeLoserPage(
+  prompt: string, reply: string, onSend?: () => void, ownedPriorHistory = false,
+  rendering?: 'paragraphs' | 'autolink',
+) {
   let sends = 0;
   let sent = false;
   let composerText = '';
@@ -245,13 +249,14 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void, owned
     generating: index < 2,
   }));
   let activeSnapshot = snapshotFrames[0]!;
+  const editorSurface = () => rendering ? proseMirrorEditorSurface(sent ? '' : composerText, rendering) : undefined;
 
   const composer = scalarLocator({
     count: vi.fn(async () => 1),
     click: vi.fn(async () => undefined),
     fill: vi.fn(async (value: string) => { composerText = value; }),
-    innerText: vi.fn(async () => (sent ? '' : composerText)),
-    textContent: vi.fn(async () => (sent ? '' : composerText)),
+    innerText: vi.fn(async () => editorSurface()?.innerText ?? (sent ? '' : composerText)),
+    textContent: vi.fn(async () => editorSurface()?.textContent ?? (sent ? '' : composerText)),
     // Browser-side callbacks execute against one live editable element. Do
     // not fake an always-true evaluate: atomic compare/clear and URL guards
     // must actually inspect the same state they can modify.
@@ -264,13 +269,18 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void, owned
       // locator. Its three-argument evaluate must keep the original fallback;
       // only the new lossless/atomic calls use the browser-element model below.
       if (options?.timeout !== undefined) return true;
+      const surface = editorSurface();
       const element = {
+        ...surface,
         isConnected: true,
         isContentEditable: true,
-        ownerDocument: { defaultView: { location: { get href() { return String(page.url()); } } } },
-        get textContent() { return sent ? '' : composerText; },
+        ownerDocument: { defaultView: {
+          location: { get href() { return String(page.url()); } },
+          getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+        } },
+        get textContent() { return surface?.textContent ?? (sent ? '' : composerText); },
         set textContent(value: string) { composerText = value; },
-        get innerText() { return sent ? '' : composerText; },
+        get innerText() { return surface?.innerText ?? (sent ? '' : composerText); },
       };
       return callback(element, arg);
     }),
@@ -553,12 +563,7 @@ describe('state-light fresh conversation collision recovery', () => {
   it.each(['', '\n'])('sends a rendered five-newline separator and three-newline suffix for prompt suffix %j (#2492)', async (suffix) => {
     const prompt = `Reply with the single word OK.${suffix}`;
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const turn = makeLoserPage(prompt, 'OK');
-    const read = turn.composer.innerText.getMockImplementation()!;
-    turn.composer.innerText.mockImplementation(async () => {
-      const text = await read();
-      return text ? text.replace(/\n\n/u, '\n\n\n\n\n').trimEnd() + '\n\n\n' : '\n';
-    });
+    const turn = makeLoserPage(prompt, 'OK', undefined, false, 'paragraphs');
     const outcome = await runNewChatTurn(turn.page, join(stateDir, 'rendered-paragraphs.txt'));
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(turn.getSends()).toBe(1);
@@ -567,9 +572,7 @@ describe('state-light fresh conversation collision recovery', () => {
   it('sends a backticked https URL when editor autolinking adds whitespace (#2497)', async () => {
     const prompt = 'Reply OK for `https://example.com/2497`';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const turn = makeLoserPage(prompt, 'OK');
-    const read = turn.composer.innerText.getMockImplementation()!;
-    turn.composer.innerText.mockImplementation(async () => (await read()).replace('`https://', '` https://'));
+    const turn = makeLoserPage(prompt, 'OK', undefined, false, 'autolink');
     const outcome = await runNewChatTurn(turn.page, join(stateDir, 'autolink-2497.txt'));
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(turn.getSends()).toBe(1);

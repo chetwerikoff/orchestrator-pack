@@ -17,7 +17,7 @@ import {
   RENDERED_STOP_BUTTON_SELECTOR,
   matchesStopButtonSelector,
 } from './product-page-selectors.ts';
-import { __testComposerMutation, __testWaitForExistingGeneration, atomicSnapshotSignature, keyedHarvestCandidate, revalidateKeyedHarvest } from './state-light-turn-base.ts';
+import { __testComposerMutation, __testSendDelivery, __testWaitForExistingGeneration, atomicSnapshotSignature, keyedHarvestCandidate, revalidateKeyedHarvest } from './state-light-turn-base.ts';
 import {
   buildObservationHeartbeat,
   classifyBrowserGptPageTurnStatus,
@@ -35,6 +35,7 @@ import {
 import {
   collectionLocator,
   messageLocator,
+  proseMirrorEditorSurface,
   scalarLocator,
   TEST_OWNED_MARKER,
   type StateLightTestMessage,
@@ -1805,5 +1806,102 @@ describe('existing generation behind a connection-recovery status', () => {
     const { page, click } = recoveryPage(false);
     await expect(__testWaitForExistingGeneration(page, Date.now() + 200)).resolves.toBe('busy');
     expect(click).not.toHaveBeenCalled();
+  });
+});
+
+describe('Issue #2669 coherent structured composer verification', () => {
+  const payload = `${marker}\n\nkeep separate words\n  indented\tline\n`;
+  function editor(text = payload, rendering: 'paragraphs' | 'autolink' = 'paragraphs') {
+    const element = proseMirrorEditorSurface(text, rendering);
+    const composer = {
+      innerText: async () => element.innerText,
+      evaluate: async (callback: (element: unknown, arg?: unknown) => unknown, arg?: unknown) => callback(element, arg),
+    };
+    return { element, composer };
+  }
+  const matches = (composer: unknown, expected = payload) =>
+    __testSendDelivery.composerPayloadMatchesBeforeSend(composer, expected, Date.now() + 2_000);
+
+  it.each(['paragraphs', 'autolink'] as const)('reconstructs exact %s content from one coherent DOM', async (rendering) => {
+    const expected = payload + '`https://example.com/2669`';
+    const { element, composer } = editor(expected, rendering);
+    expect(await composer.innerText()).toBe(element.innerText);
+    expect(element.innerText).not.toBe(expected);
+    expect(element.textContent).not.toBe(expected);
+    expect(await matches(composer, expected)).toBe(true);
+  });
+
+  it('preserves an entire single 100 KB line through structured verification', async () => {
+    const expected = `${marker}\n\n` + 'x'.repeat(102_400);
+    expect(await matches(editor(expected).composer, expected)).toBe(true);
+  });
+
+  it('retains a hard line break while ignoring only a final ProseMirror placeholder', async () => {
+    const expected = `${marker}\n\nfirst\nsecond`;
+    const { element, composer } = editor(expected);
+    const paragraphs = element.childNodes;
+    paragraphs[2].childNodes.push({ nodeType: 1, tagName: 'BR', childNodes: [],
+      classList: { contains: () => false }, getAttribute: () => null });
+    paragraphs[2].childNodes.push(...paragraphs[3].childNodes);
+    paragraphs.pop();
+    expect(await matches(composer, expected)).toBe(true);
+  });
+
+  it.each(['marker-separator', 'indentation', 'line-break', 'trailing-newline', 'extra-space'] as const)(
+    'rejects actual %s corruption rather than normalizing it', async (kind) => {
+      const damaged = kind === 'marker-separator' ? payload.replace('\n\n', '')
+        : kind === 'indentation' ? payload.replace('\n  indented', '\nindented')
+          : kind === 'line-break' ? payload.replace('words\n', 'words ')
+            : kind === 'trailing-newline' ? payload.slice(0, -1) : payload + ' ';
+      expect(await matches(editor(damaged).composer)).toBe(false);
+    },
+  );
+
+  it.each(['unknown-element', 'hidden', 'aria-hidden', 'noneditable', 'css-hidden', 'misplaced-placeholder', 'unknown-editor'] as const)(
+    'refuses unprovable structure: %s', async (kind) => {
+      const { element, composer } = editor();
+      const paragraph = element.childNodes[2];
+      const readAttribute = paragraph.getAttribute;
+      if (kind === 'unknown-element') paragraph.tagName = 'SCRIPT';
+      else if (kind === 'css-hidden') {
+        element.ownerDocument.defaultView.getComputedStyle = () => ({ display: 'none', visibility: 'visible' });
+      } else if (kind === 'unknown-editor') element.classList.contains = () => false;
+      else if (kind === 'misplaced-placeholder') {
+        paragraph.childNodes.unshift(element.childNodes[1].childNodes[0]);
+      } else {
+        paragraph.getAttribute = (name: string) => name === (kind === 'noneditable' ? 'contenteditable' : kind)
+          ? kind === 'noneditable' ? 'false' : kind === 'aria-hidden' ? 'true' : '' : readAttribute(name);
+      }
+      expect(await matches(composer)).toBe(false);
+    },
+  );
+
+  it.each(['depth', 'nodes'] as const)('bounds excessive DOM %s', async (kind) => {
+    const { element, composer } = editor();
+    const paragraph = element.childNodes[2];
+    if (kind === 'nodes') {
+      paragraph.childNodes.unshift(...Array.from({ length: 1_000 }, () => ({ nodeType: 3, nodeValue: '' })));
+    } else {
+      for (let i = 0; i < 40; i++) {
+        paragraph.childNodes = [{ nodeType: 1, tagName: 'SPAN', childNodes: paragraph.childNodes,
+          getAttribute: () => null }];
+      }
+    }
+    expect(await matches(composer)).toBe(false);
+  });
+
+  it('makes no browser call after the invocation deadline', async () => {
+    const composer = { innerText: vi.fn(), evaluate: vi.fn() };
+    expect(await __testSendDelivery.composerPayloadMatchesBeforeSend(composer, payload, Date.now() - 1)).toBe(false);
+    expect(composer.innerText).not.toHaveBeenCalled();
+    expect(composer.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('bounds an unresponsive DOM read to the invocation deadline', async () => {
+    const { composer } = editor();
+    composer.evaluate = () => new Promise(() => {});
+    const started = Date.now();
+    expect(await __testSendDelivery.composerPayloadMatchesBeforeSend(composer, payload, started + 30)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(500);
   });
 });
