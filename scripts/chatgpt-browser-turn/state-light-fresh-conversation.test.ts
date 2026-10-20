@@ -386,6 +386,75 @@ describe('state-light fresh conversation collision recovery', () => {
     vi.restoreAllMocks();
   });
 
+  // Exercise the real held-Page GET witness, wrapper and finalizer (not a
+  // fabricated TerminalEnvelope). The request must be from this exact Page.
+  function installExistingChatFetch429(page: any) {
+    const events = new EventEmitter();
+    page.on = events.on.bind(events);
+    page.off = events.off.bind(events);
+    const request = {
+      url: () => 'https://chatgpt.com/backend-api/conversations/11111111-1111-4111-8111-111111111111',
+      method: () => 'GET',
+    };
+    return () => {
+      events.emit('request', request);
+      events.emit('response', { request: () => request, status: () => 429 });
+    };
+  }
+
+  it('AC12 closes only a freshly opened existing-chat Page after a witnessed pre-Send fetch 429', async () => {
+    const fixture = makeLoserPage('NO-SEND-429', 'NEVER-SEND');
+    const notify429 = installExistingChatFetch429(fixture.page);
+    const goto = fixture.page.goto.getMockImplementation()!;
+    fixture.page.goto.mockImplementation(async (target: string) => {
+      await goto(target);
+      notify429(); // own-GET response follows this invocation's opening.
+    });
+    enqueueBrowserForTurn(mocks, fixture.page);
+    const output = join(stateDir, 'fetch-429-owned.txt');
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', output,
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '60000',
+      '--poll-ms', '1',
+    ]);
+    expect(outcome.result).toMatchObject({
+      state: 'rate_limit', cause: 'conversation_fetch_http_429',
+      send_count: 0, cleanup: 'confirmed',
+    });
+    expect(outcome.result.send_attempted).not.toBe(true);
+    expect(fixture.page.close).toHaveBeenCalledTimes(1);
+    expect(fixture.sendButton.click).not.toHaveBeenCalled();
+  });
+
+  it('AC12 preserves a selected pre-existing 429 Page and its sibling', async () => {
+    const fixture = makeLoserPage('NO-SEND-EXISTING', 'NEVER-SEND');
+    fixture.page.url.mockImplementation(() => SHARED_CONV);
+    const notify429 = installExistingChatFetch429(fixture.page);
+    const originalLocator = fixture.page.locator.getMockImplementation()!;
+    let triggered = false;
+    fixture.page.locator.mockImplementation((selector: string) => {
+      if (!triggered) { triggered = true; notify429(); }
+      return originalLocator(selector);
+    });
+    const sibling = { url: () => LOSER_CONV, close: vi.fn(async () => undefined) };
+    const harness = enqueueBrowserForTurn(mocks, fixture.page);
+    Object.assign(harness.context, { pages: vi.fn(() => [fixture.page, sibling]) });
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', join(stateDir, 'fetch-429-preexisting.txt'),
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '60000',
+      '--poll-ms', '1',
+    ]);
+    expect(outcome.result.send_count).toBe(0);
+    expect(fixture.page.close).not.toHaveBeenCalled();
+    expect(sibling.close).not.toHaveBeenCalled();
+  });
+
   it('serializes conversation claims so only the owner holds the shared surface', () => {
     const profileKey = 'collision-profile';
     expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'winner')).toBe('claimed');
@@ -1548,6 +1617,57 @@ describe('state-light fresh conversation collision recovery', () => {
     return { turn, sentAt: () => sendAt };
   }
 
+  it.each([
+    { site: 'early', urlDelayMs: 1_200, boundary: 'before', offset: -1, admitted: true },
+    { site: 'early', urlDelayMs: 1_200, boundary: 'after', offset: 1, admitted: false },
+    { site: 'post', urlDelayMs: 43_000, boundary: 'before', offset: -1, admitted: true },
+    { site: 'post', urlDelayMs: 43_000, boundary: 'after', offset: 1, admitted: false },
+  ])('AC2 claim-time cutoff $boundary the bounded $site original Page census', async ({ site, urlDelayMs, boundary, offset, admitted }) => {
+    const invocationId = randomUUID();
+    const prompt = 'ISSUE-2660-CLAIM-TIME-' + site + '-' + boundary;
+    const output = join(stateDir, invocationId + '-claim-race.txt');
+    const cutoff = mocks.nowMs + 180_000 - 5_000 - 15_000 - 2_000;
+    const { turn } = countedOwnPostWithLateFreshUrl(prompt, 'CLAIM-TIME-ANSWER', urlDelayMs, true);
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    let clockChangedInRead = false;
+    turn.page.locator.mockImplementation((selector: string) => {
+      const locator = originalLocator(selector);
+      if ((selector !== USER_MESSAGE_SELECTOR && selector !== MESSAGE_NODE_SELECTOR) || turn.getSends() < 1) return locator;
+      const originalNth = locator.nth.bind(locator);
+      locator.nth = vi.fn((index: number) => {
+        const row = originalNth(index);
+        const originalInnerText = row.innerText.bind(row);
+        row.innerText = vi.fn(async (...args: any[]) => {
+          const text = await originalInnerText(...args);
+          if (!clockChangedInRead && text.includes(TEST_OWNED_MARKER) && mocks.nowMs < cutoff) {
+            mocks.nowMs = cutoff + offset;
+            clockChangedInRead = true;
+          }
+          return text;
+        });
+        return row;
+      });
+      return locator;
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(turn.page, output, '180000', invocationId);
+    expect(clockChangedInRead).toBe(true);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.getSends()).toBe(1);
+    expect(outcome.result.send_count).toBe(1);
+    if (admitted) {
+      expect(outcome.result).toMatchObject({ state: 'ok', conversation_id: SHARED_CONV });
+      expect(readFileSync(output, 'utf8')).toBe('CLAIM-TIME-ANSWER');
+    } else {
+      expect(outcome.result).toMatchObject({
+        state: 'observation_uncertain', cause: 'fresh_conversation_owner_unproven',
+      });
+      expect(outcome.result).not.toHaveProperty('conversation_id');
+      expect(existsSync(output)).toBe(false);
+      expect(turn.page.goto).toHaveBeenCalledTimes(1); // No preclaim navigation.
+    }
+  });
+
   it('Issue #2636 review source-01: counted own POST with unchanged composer survives early fresh URL wait', async () => {
     const invocationId = randomUUID();
     const prompt = 'D46-COUNTED-STILL-DRAFT';
@@ -1833,7 +1953,7 @@ describe('state-light fresh conversation collision recovery', () => {
       userMarkerlessFromRead?: number;
       assistantCarrierKeysByRead?: readonly string[];
       neverMarkerProof?: boolean;
-      assistantCode?: { visible: string; domTextContent: string };
+      assistantCode?: { visible: string; domTextContent: string; secondVisible?: string; firstLanguage?: string; secondLanguage?: string; interleavedProse?: string; standaloneProseFromRead?: number };
     } = {},
   ) {
     const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0, composerText: '' };
@@ -1953,6 +2073,85 @@ describe('state-light fresh conversation collision recovery', () => {
                 },
               }),
             }));
+          // Mirror only the rendered DOM primitives used by both production
+          // evaluateAll callbacks. The outer parent text intentionally differs
+          // from the visible complete code child (#2590 and #2660).
+          if (observationOverrides.assistantCode) {
+            for (let i = 0; i < elements.length; i++) {
+              if (active[i]?.role !== 'assistant') continue;
+              const outer = elements[i] as any;
+              const doc = { defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible' }) } };
+              const node = (tagName: string, innerText: string, attrs: Record<string, string> = {}) => {
+                const value: any = {
+                  nodeType: 1, tagName, innerText, children: [] as any[], childNodes: [] as any[], parentElement: null,
+                  ownerDocument: doc,
+                  getClientRects: () => [{}], getBoundingClientRect: () => ({ height: 1 }),
+                  getAttribute: (name: string) => attrs[name] ?? null,
+                  hasAttribute: (name: string) => Object.hasOwn(attrs, name),
+                  querySelectorAll(selector: string): any[] {
+                    const matches = (child: any) => selector === 'pre' ? child.tagName === 'PRE'
+                      : selector === 'code' ? child.tagName === 'CODE'
+                        : selector === '.markdown' ? child.getAttribute('class') === 'markdown'
+                          : selector === 'pre code' ? child.tagName === 'CODE' && child.parentElement?.tagName === 'PRE'
+                            : false;
+                    const descendants = (parent: any): any[] => parent.children.flatMap((child: any) =>
+                      [...(matches(child) ? [child] : []), ...descendants(child)]);
+                    return descendants(value);
+                  },
+                  querySelector(selector: string): any { return value.querySelectorAll(selector)[0] ?? null; },
+                };
+                return value;
+              };
+              const attach = (parent: any, child: any) => {
+                child.parentElement = parent;
+                parent.children.push(child);
+                parent.childNodes.push(child);
+                return child;
+              };
+              outer.tagName = 'ARTICLE';
+              outer.parentElement = null;
+              outer.children = [];
+              outer.childNodes = [];
+              outer.ownerDocument = doc;
+              outer.getClientRects = () => [{}];
+              outer.hasAttribute = () => false;
+              const root = attach(outer, node('DIV', '', { class: 'markdown' }));
+              attach(root, node('P', 'Before'));
+              const wrapper = attach(root, node('DIV', ''));
+              if (observationOverrides.assistantCode.interleavedProse) {
+                const proseParent = state.reads >= (observationOverrides.assistantCode.standaloneProseFromRead ?? Infinity)
+                  ? root : wrapper;
+                attach(proseParent, node('P', observationOverrides.assistantCode.interleavedProse));
+              }
+              if (observationOverrides.assistantCode.firstLanguage) {
+                const header = attach(wrapper, node('HEADER', ''));
+                attach(header, node('SPAN', observationOverrides.assistantCode.firstLanguage));
+              }
+              const pre = attach(wrapper, node('PRE', ''));
+              attach(pre, node('CODE', observationOverrides.assistantCode.visible));
+              const second = observationOverrides.assistantCode.secondVisible;
+              const secondPre = second === undefined ? undefined : (() => {
+                attach(root, node('UL', 'Between diff blocks'));
+                const sibling = attach(root, node('DIV', ''));
+                if (observationOverrides.assistantCode?.secondLanguage) {
+                  const header = attach(sibling, node('HEADER', ''));
+                  attach(header, node('SPAN', observationOverrides.assistantCode.secondLanguage));
+                }
+                const next = attach(sibling, node('PRE', ''));
+                attach(next, node('CODE', second));
+                return next;
+              })();
+              attach(root, node('P', secondPre ? 'After diff blocks\nEXECUTION_STATUS: complete'
+                : 'Following  prose\nEXECUTION_STATUS: complete'));
+              const originalQuerySelector = outer.querySelector;
+              outer.querySelector = (selector: string) => selector === '.markdown'
+                ? root : originalQuerySelector(selector);
+              outer.querySelectorAll = (selector: string) => selector === '.markdown'
+                ? [root] : selector === 'pre' ? [pre, ...(secondPre ? [secondPre] : [])]
+                  : selector === 'pre code' ? [pre, ...(secondPre ? [secondPre] : [])]
+                    .flatMap((item) => item.querySelectorAll('code')) : [];
+            }
+          }
             const previousDocument = (globalThis as { document?: unknown }).document;
             (globalThis as { document?: unknown }).document = {
               querySelectorAll: (query: string) => (query.includes('stop-button') && generating) || ((query.includes('continue-generating') || query.includes('continue_generating')) && continuationVisible) ? [{}] : [],
@@ -2902,7 +3101,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const prompt = 'PROMPT-2590-' + caseName;
     const footer = '\n\nFollowing  prose\nEXECUTION_STATUS: complete';
     const outer = 'Before\n\n' + parentPrefix + footer;
-    const expected = 'Before\n\n' + expectedCode + footer;
+    const expected = 'Before\n\n```\n' + expectedCode + (expectedCode.endsWith('\n') ? '' : '\n') + '```' + footer;
     const output = join(stateDir, 'long-code-2590-' + caseName + '.txt');
     const { page, state } = unrenderedOwnedMessagePage(
       prompt, outer, false, false, false, [outer], [],
@@ -2921,6 +3120,74 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readFileSync(output)).toEqual(expectedBytes);
     expect(readFileSync(output, 'utf8')).not.toContain('HIDDEN-DESCENDANT');
     expect(state.reads).toBeGreaterThanOrEqual(5);
+  });
+
+  it('Issue #2660 B8 publishes exact two fenced diffs with text before, between, after', async () => {
+    const diffOne = 'diff --git a/alpha b/alpha\n--- a/alpha\n+++ b/alpha\n@@ -1 +1 @@\n old\n-foo\n+bar\n';
+    const diffTwo = 'diff --git a/beta b/beta\n--- a/beta\n+++ b/beta\n@@ -2 +2 @@\n  nested  spaces\n\t+tab\n\n```';
+    const expected = [
+      'Before',
+      '```diff\n' + diffOne + '```',
+      'Between diff blocks',
+      '````diff\n' + diffTwo + '\n````',
+      'After diff blocks\nEXECUTION_STATUS: complete',
+    ].join('\n\n');
+    const outer = 'MISLEADING OUTER FIRST DIFF LINE; Copy control; NOT COMPLETE';
+    const output = join(stateDir, 'issue-2660-two-diff-primary.txt');
+    const prompt = 'ISSUE-2660-TWO-DIFF-PRIMARY';
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt, outer, false, false, false, [outer], [],
+      {
+        includeOwnedUser: true,
+        assistantCode: {
+          visible: diffOne,
+          domTextContent: diffOne + 'HIDDEN',
+          firstLanguage: 'diff',
+          secondVisible: diffTwo,
+          secondLanguage: 'diff',
+        },
+      },
+    );
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+    const bytes = Buffer.from(expected, 'utf8');
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'ok', cause: 'completed_page_only', send_count: 1,
+      output: {
+        byte_length: bytes.byteLength,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+      },
+    });
+    expect(readFileSync(output)).toEqual(bytes);
+    expect(state.reads).toBeGreaterThanOrEqual(5);
+  });
+
+
+  it('Issue #2660 never loses FAIL prose before a mixed wrapper becomes a supported block', async () => {
+    const prompt = 'ISSUE-2660-MIXED-PROSE-NEGATIVE';
+    const code = 'diff --git a/a b/a\n';
+    const outer = 'MISLEADING MIXED WRAPPER';
+    const output = join(stateDir, 'issue-2660-mixed-prose-must-not-publish.txt');
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt, outer, false, false, false, [outer], [],
+      { includeOwnedUser: true, assistantCode: {
+        visible: code, domTextContent: code, interleavedProse: 'FAIL',
+        // The owned Page's observation timeout is soft. A permanently
+        // unsupported reply must not be awaited as a terminal test case.
+        standaloneProseFromRead: 12,
+      } },
+    );
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+    const expected = [
+      'Before', '```\n' + code + '```', 'FAIL',
+      'Following  prose\nEXECUTION_STATUS: complete',
+    ].join('\n\n');
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'ok', cause: 'completed_page_only', send_count: 1,
+    });
+    expect(state.reads).toBeGreaterThanOrEqual(12);
+    expect(readFileSync(output, 'utf8')).toBe(expected);
   });
 
   it('rejects a changed middle indentation on the fresh precommit read', async () => {
