@@ -3654,32 +3654,39 @@ describe('state-light fresh conversation collision recovery', () => {
     });
   });
 
-  it.each(['ready', 'readiness-recovery'] as const)(
-    'verifies the complete slow-filled prompt in the %s branch (#2669)', async (branch) => {
+  it.each((['ready', 'readiness-recovery'] as const).flatMap((branch) =>
+    (['complete', 'marker-separator', 'joined-words', 'indentation'] as const)
+      .map((content) => ({ branch, content })),
+  ))(
+    'verifies slow-filled $content text in the $branch branch (#2669)', async ({ branch, content }) => {
       const text = wrapOwnedPromptPayload(TEST_OWNED_MARKER, Array.from(
-        { length: 80 }, (_, index) => `Synthetic task instruction ${index}`,
+        { length: 80 }, (_, index) => `  Synthetic task instruction ${index}`,
       ).join('\n'));
       const budget = deriveComposerInsertionBudgetMs(text);
       let value = '';
       let reads = 0;
       const composer = {
         count: vi.fn(async () => 1),
-        evaluate: vi.fn(async () => {
+        evaluate: vi.fn(async (read: (element: any) => unknown) => {
+          if (String(read).includes('textContent')) return read({ textContent: value, innerText: value });
           const ready = branch === 'ready' || ++reads > 1;
           return { visible: ready, enabled: ready, contentEditable: ready };
         }),
         click: vi.fn(async () => undefined),
         fill: vi.fn(async (input: string) => {
           mocks.nowMs += budget + 1_000;
-          value = input;
+          value = content === 'marker-separator' ? input.replace('\n\n', '')
+            : content === 'joined-words' ? input.replace('Synthetic task', 'Synthetictask')
+              : content === 'indentation' ? input.replace('\n  Synthetic', '\nSynthetic') : input;
         }),
         innerText: vi.fn(async () => value),
       };
       const page = { locator: () => composer };
       const cause = await __testComposerMutation.mutateComposerOrCause(page, text, mocks.nowMs + 60_000);
-      expect(cause).toBeNull();
+      expect(cause).toBe(content === 'complete' ? null : 'composer_mutation_budget_exhausted');
       expect(composer.innerText).toHaveBeenCalledTimes(1);
-      expect(value).toBe(text);
+      if (content === 'complete') expect(value).toBe(text);
+      else expect(value).not.toBe(text);
       expect(composer.fill).toHaveBeenCalledTimes(1);
     },
   );

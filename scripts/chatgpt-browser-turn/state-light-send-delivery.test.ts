@@ -1512,7 +1512,8 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     | 'post-active' | 'post-stop' | 'initial-active'
     | 'initial-unknown' | 'initial-empty' | 'initial-incomplete'
     | 'initial-stop' | 'initial-wrong-url' | 'short-budget'
-    | 'slow-fill' | 'partial-fill' | 'expired-fill' | 'failed-fill';
+    | 'slow-fill' | 'partial-fill' | 'expired-fill' | 'failed-fill'
+    | 'joined-marker-fill' | 'joined-marker-before-send';
 
   async function fullTurn(scenario: Scenario) {
     const chatUrl = 'https://chatgpt.com/c/25602560-2560-4560-8560-256025602560';
@@ -1534,13 +1535,16 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     let readsAtSend: number | undefined;
     const events = new EventEmitter();
     let postReopenComposerProbes = 0;
-    const usableComposer = () => ['ready', 'slow-fill', 'partial-fill', 'expired-fill', 'failed-fill'].includes(scenario)
+    let composerTextReads = 0;
+    const usableComposer = () => ['ready', 'slow-fill', 'partial-fill', 'expired-fill', 'failed-fill',
+      'joined-marker-fill', 'joined-marker-before-send'].includes(scenario)
       || (scenario === 'late-hydration' && now - startedAt >= 20_000)
       || (reopened && !['composer-still-absent', 'late-redirect', 'late-close'].includes(scenario));
     const fill = vi.fn(async (value: string) => {
       if (scenario === 'failed-fill') throw new Error('fill failed');
-      composerText = scenario === 'partial-fill' ? value.slice(0, -1) : value;
-      if (scenario === 'slow-fill' || scenario === 'partial-fill') now += 6_000;
+      composerText = scenario === 'partial-fill' ? value.slice(0, -1)
+        : scenario === 'joined-marker-fill' ? value.replace('\n\n', '') : value;
+      if (['slow-fill', 'partial-fill', 'joined-marker-fill', 'joined-marker-before-send'].includes(scenario)) now += 6_000;
       if (scenario === 'expired-fill') now = startedAt + 60_000;
     });
     const composer = scalarLocator({
@@ -1552,7 +1556,12 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
         if (!usableComposer()) throw new Error('no composer in the rendered page');
       }),
       fill,
-      innerText: vi.fn(async () => composerText),
+      innerText: vi.fn(async () => {
+        if (++composerTextReads > 1 && scenario === 'joined-marker-before-send') {
+          composerText = composerText.replace('\n\n', '');
+        }
+        return composerText;
+      }),
     });
     const send = vi.fn(async () => {
       sentAt = now;
@@ -1730,7 +1739,8 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     expect(run.goto).not.toHaveBeenCalled();
   });
 
-  it.each(['partial-fill', 'expired-fill', 'failed-fill'] as const)(
+  it.each(['partial-fill', 'expired-fill', 'failed-fill',
+    'joined-marker-fill', 'joined-marker-before-send'] as const)(
     'never dispatches %s despite a present composer (#2669)', async (scenario) => {
       const run = await fullTurn(scenario);
       expect(run.fill).toHaveBeenCalledTimes(1);
