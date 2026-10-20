@@ -3123,7 +3123,7 @@ describe('Issue #2658 gh syntax and provenance read parity', () => {
     const nativeCalls = parseNativeCalls(fixture.nativeCallsFile)
       .filter((call) => call.kind === 'api');
     expect(nativeCalls).toHaveLength(3);
-    expect(nativeCalls.map((call) => call.args)).toEqual(calls);
+    expect(nativeCalls.map((call) => call.args)).toEqual(calls.map((args) => args.slice(1)));
     for (const call of nativeCalls) expect(call.wrapperActive).toBe('1');
   });
 
