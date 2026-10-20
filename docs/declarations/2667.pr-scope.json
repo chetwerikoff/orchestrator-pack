@@ -1,0 +1,27 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2667,
+  "declared_paths": [
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/vitest-live-store-parent-guard.mjs",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pr2-foundation/fleet-observer.test.ts",
+    "scripts/vitest-live-store-parent-guard.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/vitest-live-store-parent-guard.mjs",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pr2-foundation/fleet-observer.test.ts",
+    "scripts/vitest-live-store-parent-guard.test.ts"
+  ],
+  "source_revision": "21e5cad75e11ae6f168918469ff5d8c6f5f6f7f6"
+}
