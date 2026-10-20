@@ -910,6 +910,18 @@ describe('Issue #2319 terminal-free publish', () => {
         allowed: true, reason: 'smoke_not_required', smokeRequired: false,
       });
     }
+    const grandfathered = [
+      '```behavior-kind', 'action-producing', '```',
+      '```smoke-plan-floor', 'grandfathered: true', '```',
+    ].join('\n');
+    expect(resolveSmokeRequirement(grandfathered)).toMatchObject({
+      requirement: 'legacy-exempt', scenarios: [],
+    });
+    for (const gate of [evaluateWorkerSmokeGate, evaluateBaseSmokeGate]) {
+      expect(gate({ ...gateInput, issueBody: grandfathered })).toMatchObject({
+        allowed: true, reason: 'smoke_not_required', smokeRequired: false,
+      });
+    }
   });
 
   it('publishes a terminal-free PASS from local HEAD and emits the confirmed comment URL', async () => {
