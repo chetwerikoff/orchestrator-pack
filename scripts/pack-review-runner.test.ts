@@ -2049,6 +2049,24 @@ stale same-Task terminal ownership; no unrelated changes.`,
     if (variation === 'approved') {
       expect(completed).toBe(true);
       expect(f.getStatus()).toBe('success');
+      // An exact §11 strict-descendant completion remains authoritative on
+      // an ordinary PR-led start and its repeated completed-stage projection.
+      const prLed = {
+        ...start, headSha: f.current, immediate: undefined,
+        claimMode: 'preacquired' as const,
+        fixturePostReviewHeadSha: f.current,
+        fixturePostReviewPrBody: `Closes #${f.issueNumber}`,
+      };
+      for (let retry = 0; retry < 2; retry += 1) {
+        const replay = await startPackReview(prLed);
+        expect(replay, JSON.stringify(replay)).toMatchObject({
+          ok: true, created: false, reused: true,
+          reason: 'review_stage_complete', publicationVerified: true,
+          publicationHeadSha: f.current,
+        });
+        expect(f.getStatus()).toBe('success');
+      }
+      expect(f.statusWrites).not.toContain('error');
     } else {
       expect(completed).toBe(false);
       expect(f.getStatus()).not.toBe('success');
