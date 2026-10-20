@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import { Worker } from 'node:worker_threads';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { TURN_STATES, turnExitCode, type FailureScope, type TurnState } from '../chatgpt-browser-turn/contracts.ts';
 import {
   acquireDomainLock,
@@ -204,6 +204,9 @@ describe('Issue #1998 Target crash classification', () => {
   });
 
   it('routes Target crashed from the Continue generating probe through the terminal classifier', async () => {
+    // Use the existing synthetic attach seam even when shared Chrome is live.
+    const metadataFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
+    onTestFinished(() => metadataFetch.mockRestore());
     const input = join(root, 'target-crash-input.txt');
     const output = join(root, 'target-crash-output.txt');
     const profile = join(root, 'target-crash-profile');
@@ -4157,6 +4160,9 @@ describe('issue 1188 composer readiness and insertion timing', () => {
   });
 
   it('runTurn starts its invocation deadline before CDP connect and navigation', async () => {
+    // Metadata must not escape this synthetic browser/deadline fixture.
+    const metadataFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
+    onTestFinished(() => metadataFetch.mockRestore());
     let now = 1_000;
     let connectAt = -1;
     let navigateAt = -1;

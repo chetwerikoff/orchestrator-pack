@@ -1492,6 +1492,8 @@ describe('Issue #2457 unproven terminal locator', () => {
     const input = join(root, 'input.txt');
     const projectUrl = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111/project';
     writeFileSync(input, 'synthetic prompt', 'utf8');
+    // Keep this fake browser independent of the host's live CDP metadata.
+    const metadataFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
     try {
       for (const handle of ['pane-recycled', '', undefined]) {
         if (handle === undefined) delete process.env.ORCA_TERMINAL_HANDLE;
@@ -1581,6 +1583,7 @@ describe('Issue #2457 unproven terminal locator', () => {
         expect(readChatBinding(conversationUrl)).not.toHaveProperty('terminal_handle');
       }
     } finally {
+      metadataFetch.mockRestore();
       vi.doUnmock('./browser-session.ts');
       vi.doUnmock('./coordination.ts');
       vi.doUnmock('./input.ts');
