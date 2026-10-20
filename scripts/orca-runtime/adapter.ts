@@ -1268,12 +1268,20 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }>(['terminal', 'list'], options);
     if (!response.ok) return runtimeFailure('list_workers', neutralFailureReason(response));
     const terminals = response.result?.terminals;
+    if (!Array.isArray(terminals)) {
+      return runtimeUnsupported('list_workers', 'runtime_worker_list_shape_unsupported');
+    }
     const totalCount = response.result?.totalCount;
-    // Every all-workspace admission needs a positively complete native roster,
-    // including retry after exact stop/gone; a valid partial array is not proof.
-    if (!Array.isArray(terminals) || response.result?.truncated !== false
-      || typeof totalCount !== 'number' || !Number.isSafeInteger(totalCount)
-      || totalCount !== terminals.length) {
+    const truncated = response.result?.truncated;
+    const complete = truncated === false
+      && typeof totalCount === 'number' && Number.isSafeInteger(totalCount)
+      && totalCount === terminals.length;
+    const metadataAbsent = truncated === undefined && totalCount === undefined;
+    // Workspace-bound callers (including resume admission) require a provably
+    // complete all-workspace census. Legacy unscoped reads also accept the
+    // original terminals-only shape, never malformed or partial metadata.
+    const requiresComplete = _input.workspace !== undefined || options.cwd !== undefined;
+    if (!complete && (requiresComplete || !metadataAbsent)) {
       return runtimeUnsupported('list_workers', 'runtime_worker_list_incomplete');
     }
     const workers: RuntimeWorker[] = [];
