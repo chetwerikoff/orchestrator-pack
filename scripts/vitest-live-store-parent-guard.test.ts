@@ -362,33 +362,17 @@ describe('parent live-store guard', () => {
     temporaryRoots.push(root);
     const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-supervisor-status-child.test.ts');
     temporaryFiles.push(fixture);
-    const readyFile = join(root, 'child-live-store-guard-ready');
-    writeFileSync(
-      fixture,
-      [
-        "import { expect, it } from 'vitest';",
-        "import { writeFileSync } from 'node:fs';",
-        "it('passes', async () => {",
-        `  writeFileSync(${JSON.stringify(readyFile)}, 'ready\\n');`,
-        '  await new Promise((resolve) => setTimeout(resolve, 400));',
-        '  expect(true).toBe(true);',
-        '});',
-        '',
-      ].join('\n'),
-      'utf8',
-    );
     const childEnvironment = productionEnvironment(join(root, 'child-production'));
-    const childPromise = runHarnessedVitest(fixture, childEnvironment);
-    await waitForFile(readyFile);
     const wakeRoot = childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!;
-    const status = join(wakeRoot, 'typescript-supervisor-status.json');
-    const temporary = join(
-      wakeRoot,
-      '.typescript-supervisor-status.json.1234.00000000-0000-4000-8000-000000000000.tmp',
-    );
-    writeFileSync(temporary, '{"restartState":"running"}\n', 'utf8');
-    renameSync(temporary, status);
-    const child = await childPromise;
+    const child = await runSynchronizedHarnessChild(root, fixture, childEnvironment, () => {
+      const status = join(wakeRoot, 'typescript-supervisor-status.json');
+      const temporary = join(
+        wakeRoot,
+        '.typescript-supervisor-status.json.1234.00000000-0000-4000-8000-000000000000.tmp',
+      );
+      writeFileSync(temporary, '{"restartState":"running"}\n', 'utf8');
+      renameSync(temporary, status);
+    });
 
     expect(child.exitCode, child.stderr).toBe(0);
   });
