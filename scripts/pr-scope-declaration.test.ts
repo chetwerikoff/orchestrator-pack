@@ -360,6 +360,23 @@ describe('AO-free PR scope declaration contract', () => {
       .toMatchObject({ status: 'unverified' });
   });
 
+  it('distinguishes a guarded default from a guard-free explicit baseRef', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-guard-default-'));
+    roots.push(root);
+    initializeDefaultWorkflow(root);
+    const workflow = join(root, '.github', 'workflows', 'scope-guard.yml');
+    writeFileSync(workflow, [
+      'name: unrelated build', 'on:', '  push:', 'jobs:', '  build:',
+      '    steps:', '      - run: echo inert',
+    ].join('\n'), 'utf8');
+    fixtureGit(root, ['add', '.github/workflows/scope-guard.yml']);
+    fixtureGit(root, ['commit', '--quiet', '-m', 'unguarded release']);
+    fixtureGit(root, ['push', '--quiet', 'origin', 'HEAD:refs/heads/release']);
+    expect(resolvePrScopeGuardApplicability(root)).toMatchObject({ status: 'guarded' });
+    expect(resolvePrScopeGuardApplicability(root, { baseRef: 'refs/heads/release' }))
+      .toMatchObject({ status: 'guard-free' });
+  });
+
   it('recognizes active inline and four-space YAML guard configurations', () => {
     const workflows = [
       [
