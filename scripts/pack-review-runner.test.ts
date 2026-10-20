@@ -1999,7 +1999,10 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
       issueNumber: variation === 'wrong-issue' ? 2654 : 2655,
       settledSourceCount: 2 as const };
     const f = fixture('gpt', B0, true, undefined, 'findings', incident);
-    const currentBody = variation === 'additional-body-byte' ? B1 + 'extra byte' : B1;
+    // A one-byte revision-marker mutation is not a change to behavior criteria.
+    // Appending inside the acceptance section would test a different, reviewable case.
+    const currentBody = variation === 'additional-body-byte'
+      ? B1.replace('<!-- source-revision: r02 -->', '<!-- source-revision: r02x -->') : B1;
     const paths = [
       { filename: 'scripts/orca-runtime/task-adapter.ts', sha: 'a'.repeat(40),
         status: 'modified', patch: '@@ -1,2 +1,3 @@\n+ same-task replacement' },
