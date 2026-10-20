@@ -48,6 +48,7 @@ import {
   openCodeAgentSemantics,
   openCodeFleetBrowserDenyRulesAreTerminal,
   openCodeLaunchHasFleetBrowserDenies,
+  openCodeControlPort,
   EXECUTOR_FAMILY_DESCRIPTORS,
   profileNamesForTask,
   profileNamesForSmoke,
@@ -4340,7 +4341,7 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
   type FailureMode = 'healthy' | 'first-hang' | 'two-hangs' | 'stop-fails'
     | 'gone-unverified' | 'early-gone' | 'liveness-unknown' | 'generation-drift';
 
-  function resumeFixture(mode: FailureMode = 'healthy') {
+  function resumeFixture(mode: FailureMode = 'healthy', selectedEnv: NodeJS.ProcessEnv = opencodeProfileEnv('manager')) {
     const events: string[] = [];
     const nativePanes: NativePane[] = [];
     const spawnedCommands: string[] = [];
@@ -4498,8 +4499,9 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
           actor: 'operator' as const, evidence: {},
           nextAction: { kind: 'repair_executor_profile' as const, note: 'synthetic pre-spawn refusal' } })
         : resolveLiveExecutorProfile('manager', inherited, startMode, async (args) => opencodeProbeResult(args)),
-      finalizeProfile: async (profile, selectedWorkspace, requestedSession) => {
+      finalizeProfile: async (profile, selectedWorkspace, requestedSession, dataRoot) => {
         expect(selectedWorkspace).toBe(workspace);
+        expect(dataRoot).toBe(selectedEnv.XDG_DATA_HOME);
         const selectedInline = JSON.parse(profile.inlineConfigJson ?? '{}') as {
           agent?: Record<string, { model?: string; variant?: string }>;
         };
@@ -4510,7 +4512,8 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
         const overlay = buildOpenCodeAgentOverlay({
           agentName: 'pack-opk-b5-selected', model: admittedAgent.model, effort: admittedAgent.variant,
           baseline: { name: 'build', mode: 'primary', prompt: 'synthetic benign task', permission: [] },
-          stateRoot: '/tmp/opk-2661-disposable-state', resumeSession: requestedSession,
+          stateRoot: '/tmp/opk-2661-disposable-state',
+          ...(dataRoot !== undefined ? { dataRoot } : {}), resumeSession: requestedSession,
         });
         return { status: 'ok', value: {
           ...profile, launchCommand: overlay.command, agentName: overlay.agentName,
@@ -4530,7 +4533,7 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       },
     };
     const run = () => runExistingOpenCodeResume({
-      session, projectId, repository, workspace, env: opencodeProfileEnv('manager'),
+      session, projectId, repository, workspace, env: selectedEnv,
     }, deps);
     return { run, deps, adapter, native, nativePanes, spawnedCommands,
       queriedUrls, events, state, assignment };
@@ -4575,6 +4578,52 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
     expect(f.nativePanes[0]?.title).toBe('opk-resume-' + session);
     expect(f.events.every((event) => !/orchestration (?:task|dispatch|run)-(?:create|start)/u.test(event))).toBe(true);
     expect(f.state.assignments).toEqual([]);
+  });
+
+
+  it('B5 optional selected XDG_DATA_HOME survives native command quoting, validation and adapter parsing', async () => {
+    const dataRoot = "/tmp/opk-2661 disposable/it's database --port 49999 --agent bogus --session ses_spoofed";
+    for (const explicit of [false, true]) {
+      const selectedEnv = opencodeProfileEnv('manager');
+      if (explicit) selectedEnv.XDG_DATA_HOME = dataRoot;
+      const f = resumeFixture('healthy', selectedEnv);
+      const observation = await f.run();
+      expect(observation).toMatchObject({
+        outcome: 'catalog_observed_unverified', attempts: 1,
+        activeSelectionVerified: false, listenerOwnershipVerified: false,
+      });
+      expect(f.spawnedCommands).toHaveLength(1);
+      const command = f.spawnedCommands[0]!;
+      expect(command.match(/OPENCODE_CONFIG_CONTENT=/gu)).toHaveLength(1);
+      expect(command).toContain(" XDG_STATE_HOME='/tmp/opk-2661-disposable-state'");
+      const inlineConfigJson = command.match(/^OPENCODE_CONFIG_CONTENT='([^']+)'/u)?.[1];
+      expect(inlineConfigJson).toBeDefined();
+      const inline = JSON.parse(inlineConfigJson ?? '{}') as { agent: Record<string, { model: string; variant: string }> };
+      expect(inline.agent['pack-opk-b5-selected']).toMatchObject({
+        model: 'fixture-opencode-model', variant: 'fixture-opencode-effort',
+      });
+      expect(openCodeLaunchHasFleetBrowserDenies({
+        command, agentName: 'pack-opk-b5-selected', inlineConfigJson,
+      })).toBe(true);
+      const binding = openCodeControlFromCommand(command);
+      expect(binding).toMatchObject({ agent: 'pack-opk-b5-selected', session });
+      expect(binding?.url).toBe(`http://127.0.0.1:${openCodeControlPort('pack-opk-b5-selected')}`);
+      expect(f.queriedUrls).toEqual([
+        binding?.url + '/global/health',
+        `${binding?.url}/session?directory=${encodeURIComponent(workspace)}`,
+      ]);
+      if (explicit) {
+        const quotedData = "'" + dataRoot.replaceAll("'", "'\\''") + "'";
+        expect(command).toContain(` XDG_DATA_HOME=${quotedData} opencode --hostname 127.0.0.1`);
+        expect(openCodeLaunchHasFleetBrowserDenies({
+          command: command.replace(`XDG_DATA_HOME=${quotedData}`, `XDG_DATA_HOME=${dataRoot}`),
+          agentName: 'pack-opk-b5-selected', inlineConfigJson,
+        })).toBe(false);
+      } else {
+        expect(command).not.toContain('XDG_DATA_HOME=');
+        expect(command).toContain("XDG_STATE_HOME='/tmp/opk-2661-disposable-state' opencode --hostname");
+      }
+    }
   });
 
   it('B5 wrong-only catalog is non-ready and identical foreign same-session responder proves no owner', async () => {

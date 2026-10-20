@@ -460,6 +460,7 @@ export interface OpenCodeAgentOverlay {
   readonly model: string;
   readonly effort: string;
   readonly stateRoot?: string;
+  readonly dataRoot?: string;
   readonly resumeSession?: string;
 }
 
@@ -631,7 +632,8 @@ export function buildOpenCodeAgentOverlay(input: OpenCodeAgentOverlay): Executor
   };
   const inlineConfig = JSON.stringify({ permission, agent });
   const state = input.stateRoot ? ` XDG_STATE_HOME=${quote(input.stateRoot)}` : '';
-  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)}${state} opencode --hostname 127.0.0.1 --port ${openCodeControlPort(input.agentName)} --agent ${quote(input.agentName)}${input.resumeSession ? ` --session ${quote(input.resumeSession)}` : ''}`;
+  const data = input.dataRoot !== undefined ? ` XDG_DATA_HOME=${quote(input.dataRoot)}` : '';
+  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)}${state}${data} opencode --hostname 127.0.0.1 --port ${openCodeControlPort(input.agentName)} --agent ${quote(input.agentName)}${input.resumeSession ? ` --session ${quote(input.resumeSession)}` : ''}`;
   return {
     executable: 'opencode',
     command,
@@ -658,7 +660,7 @@ export function openCodeLaunchHasFleetBrowserDenies(
   if (sessionMatch && !validOpenCodeResumeSession(sessionMatch[1]!)) return false;
   const finalExecutable = executable + (sessionMatch ? sessionMatch[0] : '');
   const statePrefix = rest.endsWith(` ${finalExecutable}`) ? rest.slice(0, -(finalExecutable.length + 1)) : '';
-  if (rest !== finalExecutable && !/^XDG_STATE_HOME='(?:[^']|'\\'')*'$/u.test(statePrefix)) return false;
+  if (rest !== finalExecutable && !/^(?:XDG_STATE_HOME='(?:[^']|'\\'')*'(?: XDG_DATA_HOME='(?:[^']|'\\'')*')?|XDG_DATA_HOME='(?:[^']|'\\'')*')$/u.test(statePrefix)) return false;
 
   try {
     const config: unknown = JSON.parse(inlineConfigJson);

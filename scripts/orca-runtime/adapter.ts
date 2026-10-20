@@ -84,14 +84,19 @@ export interface OpenCodeControlBinding {
 }
 
 export function openCodeControlFromCommand(command: string): OpenCodeControlBinding | undefined {
-  const url = openCodeUrlFromCommand(command);
+  // Quoted XDG homes may contain flag-shaped text; inspect only the actual
+  // native OpenCode argv after the pack's serialized environment assignments.
+  const nativeStart = command.startsWith('OPENCODE_CONFIG_CONTENT=')
+    ? command.lastIndexOf(' opencode --hostname ') : -1;
+  const nativeCommand = nativeStart >= 0 ? command.slice(nativeStart + 1) : command;
+  const url = openCodeUrlFromCommand(nativeCommand);
   if (!url) return undefined;
-  const sessionArgs = [...command.matchAll(/(?:^|\s)--session(?:=|\s+)(?:'([^']+)'|"([^"]+)"|(\S+))/gu)];
-  const hasSessionToken = /(?:^|\s)--session(?:=|\s|$)/u.test(command);
+  const sessionArgs = [...nativeCommand.matchAll(/(?:^|\s)--session(?:=|\s+)(?:'([^']+)'|"([^"]+)"|(\S+))/gu)];
+  const hasSessionToken = /(?:^|\s)--session(?:=|\s|$)/u.test(nativeCommand);
   if ((hasSessionToken && sessionArgs.length !== 1) || sessionArgs.length > 1) return undefined;
   const session = sessionArgs[0]?.[1] ?? sessionArgs[0]?.[2] ?? sessionArgs[0]?.[3];
   if (hasSessionToken && (!session || !validOpenCodeResumeSession(session))) return undefined;
-  const agent = openCodeAgentFromCommand(command);
+  const agent = openCodeAgentFromCommand(nativeCommand);
   return { url, ...(agent ? { agent } : {}), ...(session ? { session } : {}) };
 }
 

@@ -224,7 +224,7 @@ export interface LaunchDependencies {
   /** Native exact-Dispatch/worker-absent witness, not an assignment/store guess. */
   readonly proveTerminalGone?: (assignment: WorkerAssignment) => Promise<TerminalGoneAssignmentEvidence | null>;
   readonly prepareWorktree: (input: WorktreePreparationRequest) => Promise<EdgeResult<PreparedWorktree>>;
-  readonly finalizeProfile?: (profile: ExecutorProfile, worktreePath: string, resumeSession?: string) => Promise<EdgeResult<ExecutorProfile>>;
+  readonly finalizeProfile?: (profile: ExecutorProfile, worktreePath: string, resumeSession?: string, dataRoot?: string) => Promise<EdgeResult<ExecutorProfile>>;
   readonly adapter: RuntimeAdapter;
   readonly runSupervisedStart: typeof runSupervisedWorkerStart;
   readonly now: () => number;
@@ -1146,6 +1146,7 @@ export async function finalizeOpenCodeExecutorProfile(
   execute: ChildExecutor,
   proveNoWrite?: OpenCodeNoWriteProof,
   resumeSession?: string,
+  dataRoot?: string,
 ): Promise<EdgeResult<ExecutorProfile>> {
   if (profile.family !== 'opencode' || profile.route === 'provider_new_top_level') return { status: 'ok', value: profile };
   if (!worktreePath.trim()) return contextualRefusal(profile, 'executor_route_unavailable');
@@ -1167,7 +1168,8 @@ export async function finalizeOpenCodeExecutorProfile(
   const effortMatch = profile.launchCommand.match(/"variant":"([^"]+)"/u);
   if (!modelMatch?.[1] || !effortMatch?.[1]) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
-  const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model: modelMatch[1], effort: effortMatch[1], stateRoot, ...(resumeSession ? { resumeSession } : {}) });
+  const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model: modelMatch[1], effort: effortMatch[1], stateRoot,
+    ...(dataRoot !== undefined ? { dataRoot } : {}), ...(resumeSession ? { resumeSession } : {}) });
   // OpenCode 1.18.35 appends its runtime tool-output allow after the overlay rules.
   // Leave every other permission's ordered semantics unchanged.
   // Match only the OpenCode runtime tool-output allow from this user's home;
@@ -2261,9 +2263,9 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       input.workClass === 'merge' ? { ...request, primaryReuseRoot: target.primaryRoot } : request,
       (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),
     ),
-    finalizeProfile: (profile, worktreePath, resumeSession) => finalizeOpenCodeExecutorProfile(profile, worktreePath,
+    finalizeProfile: (profile, worktreePath, resumeSession, dataRoot) => finalizeOpenCodeExecutorProfile(profile, worktreePath,
       (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),
-      proveOpenCodeNoWrite, resumeSession),
+      proveOpenCodeNoWrite, resumeSession, dataRoot !== undefined ? dataRoot : env.XDG_DATA_HOME),
   };
 }
 
@@ -2645,7 +2647,7 @@ export async function runExistingOpenCodeResume(
   if (profileResult.status !== 'ok') return result(profileResult.cause, 0);
   const profile = profileResult.value;
   if (profile.family !== 'opencode' || profile.route !== 'exact_terminal_worktree') return result('resume_opencode_profile_required', 0);
-  const finalized = await deps.finalizeProfile(profile, input.workspace, input.session);
+  const finalized = await deps.finalizeProfile(profile, input.workspace, input.session, input.env.XDG_DATA_HOME);
   if (finalized.status !== 'ok') return result(finalized.cause, 0);
   const selected = finalized.value;
   if (selected.family !== 'opencode' || selected.route !== 'exact_terminal_worktree'
