@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runProcessSync } from '../kernel/subprocess.ts';
+import { parseRemoteSlug } from './git-origin-slug.mjs';
 
 export type TargetContextErrorCode =
   | 'missing-selection'
@@ -127,17 +128,8 @@ function selectedProjectId(input: ResolveTargetContextInput): string {
 }
 
 function canonicalGitHubRepository(remote: string): string | null {
-  const value = remote.trim();
-  const scp = /^git@github\.com:([^/\s]+\/[^/\s]+?)(?:\.git)?$/iu.exec(value);
-  if (scp) return scp[1]!.replace(/\.git$/iu, '').toLowerCase();
-  try {
-    const url = new URL(value);
-    if (url.hostname.toLowerCase() !== 'github.com') return null;
-    const path = url.pathname.replace(/^\/+|\/+$/gu, '').replace(/\.git$/iu, '');
-    return REPOSITORY_RE.test(path) ? path.toLowerCase() : null;
-  } catch {
-    return null;
-  }
+  const slug = parseRemoteSlug(remote);
+  return slug ? slug.toLowerCase() : null;
 }
 
 function readOrigin(primaryRoot: string): string {
