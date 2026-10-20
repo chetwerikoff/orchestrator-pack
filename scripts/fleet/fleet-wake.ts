@@ -295,6 +295,7 @@ export interface FleetAlarmTickOptions {
   readonly supervisedPullOwner?: (pull: OpenPullHead, panes: readonly FleetPaneObservation[]) => FleetPaneObservation | undefined;
   readonly readWorktreeHead?: (worktreePath: string) => string | undefined;
   readonly readNamedPull?: (repository: string, number: number) => NativePull | undefined;
+  readonly readNamedIssue?: (repository: string, number: number) => { readonly number: number; readonly state: 'open' | 'closed' } | undefined;
   readonly readNamedReview?: (repository: string, number: number, reviewId: number) => NativeReview | undefined;
   readonly readPackReviewStage?: (repository: string, sha: string) => PackReviewStageFact | undefined;
   /** Offline fixtures; production revalidates the selected registered card. */
@@ -889,6 +890,12 @@ function readNativePull(repository: string, number: number): NativePull | undefi
   return { number, headSha: String(head!.sha), state: row.state, merged: row.merged };
 }
 
+function readNativeIssue(repository: string, number: number): { readonly number: number; readonly state: 'open' | 'closed' } | undefined {
+  const row = githubJson(repository, 'issues/' + number);
+  return row?.number === number && (row.state === 'open' || row.state === 'closed') && !('pull_request' in row)
+    ? { number, state: row.state } : undefined;
+}
+
 function readNativeReview(repository: string, number: number, reviewId: number): NativeReview | undefined {
   const row = githubJson(repository, 'pulls/' + number + '/reviews/' + reviewId);
   if (row?.id !== reviewId || typeof row?.state !== 'string'
@@ -1033,6 +1040,44 @@ function boundIssueManager(
   return current.length === 1 && pane.length === 1 ? { pane: pane[0]!, assignment } : undefined;
 }
 
+/** Verify a fresh native designation and actual pane screen, without mutating sweep history. */
+function freshSendSafePane(
+  expected: FleetPaneObservation,
+  current: readonly FleetTerminal[],
+  options: FleetAlarmTickOptions,
+  executor: OrcaExecutor,
+  store: FleetWakeStateStore,
+): boolean {
+  const matches = current.filter((row) => terminalsIdentity(row) === terminalsIdentity(expected)
+    && row.title === expected.title && row.agentIdentity === expected.agentIdentity
+    && row.status?.toLowerCase() !== 'exited');
+  if (matches.length !== 1 || (expected.state !== 'PARKED' && expected.state !== 'STOPPED')) return false;
+  // Run the existing screen classifier for this pane only. Read-only store
+  // methods keep a near-effect check from pruning another pane's wait.
+  const fresh = runFleetSweep({
+    primary: options.config.primary, projectId: options.config.projectId,
+    workspaceRe: options.config.workspaceRe,
+    coordinatorTitleRe: options.config.orchestratorTitleRe,
+    architectHandle: options.config.architectHandle, busyRe: options.config.busyRe,
+    terminals: matches, executor,
+    store: {
+      hasPollingMark: (handle) => store.hasPollingMark(handle),
+      setPollingMark: () => {}, clearPollingMark: () => {},
+    },
+  });
+  if (fresh.length !== 1) return false;
+  const pane = fresh[0]!;
+  if (terminalsIdentity(pane) !== terminalsIdentity(expected) || pane.state !== expected.state) return false;
+  if (expected.state === 'STOPPED') {
+    // Without an unchanged own terminal response, idle vs former shell is
+    // unverified. A newly active, permission or shell screen must not get Enter.
+    return pane.wait === undefined && pane.lines.length > 0
+      && JSON.stringify(pane.lines) === JSON.stringify(expected.lines);
+  }
+  return pane.wait === expected.wait
+    && lastFleetParkedLine(readFleetScreen(expected.handle, executor)) === expected.wait;
+}
+
 /** Multiple landed facts for the same manager collapse to one re-check per tick. */
 async function wakeAssignedIssueManagers(
   options: FleetAlarmTickOptions,
@@ -1093,7 +1138,8 @@ async function wakeAssignedIssueManagers(
           && active.pane.incarnationId === bound.pane.incarnationId
           && active.assignment.assignmentId === bound.assignment.assignmentId
           && active.assignment.generation === bound.assignment.generation
-          && active.assignment.bindingKey === bound.assignment.bindingKey);
+          && active.assignment.bindingKey === bound.assignment.bindingKey
+          && freshSendSafePane(bound.pane, current, options, executor, store));
       } catch { return false; }
     };
     const message = `Wake: Issue #${issue} published GitHub facts changed (${keys.length}) - re-check exact Issue, current PR/head and reviews; do not infer completion`;
@@ -1294,11 +1340,13 @@ async function wakeOriginalTerminalFailures(
       ?? 'Wake: bound terminal outcome not-ok - inspect the original handoff and decide yourself';
     const currentOwner = (): boolean => {
       try {
+        const current = listFleetTerminals(executor);
         const updated = nativeReceiptLaunchingOwner(event, options, observations,
-          listFleetTerminals(executor), executor, readAssignments());
+          current, executor, readAssignments());
         return updated?.pane.handle === owner.pane.handle
           && updated?.pane.incarnationId === owner.pane.incarnationId
-          && updated?.invocationId === owner.invocationId;
+          && updated?.invocationId === owner.invocationId
+          && freshSendSafePane(owner.pane, current, options, executor, store);
       } catch { return false; }
     };
     await sendMarkedUnitMessage(store, key, owner.pane.handle, message, executor, sleepMs, log, counts, currentOwner);
@@ -1322,14 +1370,16 @@ async function sendMarkedUnitMessage(
 ): Promise<boolean> {
   if (store.hasParkedWakeEvent(key)
     || (producerFactId && counts?.attemptedProducerFacts.has(handle + ':' + producerFactId))) return false;
-  // Durable reservation must precede both text and Enter effects. A failed
-  // upgrade must not authorize a second attempt at this same fact.
-  try { store.markParkedWakeEvent(key, 'attempted_unverified'); }
-  catch { log('unit wake pre-effect mark unwritable; send withheld: ' + key); return false; }
+  // A failed read-only owner recheck proves no effect was attempted.
+  // Keep the event eligible after transient failures or observed drift.
   if (stillSelected && !stillSelected()) {
     log('unit wake selected owner changed; send withheld: ' + key);
     return false;
   }
+  // Durable reservation must precede both text and Enter effects. A failed
+  // upgrade must not authorize a second attempt at this same fact.
+  try { store.markParkedWakeEvent(key, 'attempted_unverified'); }
+  catch { log('unit wake pre-effect mark unwritable; send withheld: ' + key); return false; }
   if (counts) {
     counts.attempts += 1;
     if (producerFactId) counts.attemptedProducerFacts.add(handle + ':' + producerFactId);
@@ -1437,19 +1487,49 @@ async function alarmGoneIssueOwners(
     if (assignment.projectId !== options.config.projectId || assignment.repository !== repository
       || assignment.role !== 'orchestrator' || assignment.kind !== 'local'
       || assignment.provider !== 'orca' || !assignment.issueNumber
-      || !assignment.assignmentId || !assignment.bindingKey || !assignment.taskId) continue;
+      || !assignment.assignmentId || !Number.isSafeInteger(assignment.generation)
+      || assignment.generation <= 0 || !assignment.bindingKey || !assignment.taskId) continue;
+    if (assignments.filter((row) => row.projectId === assignment.projectId
+      && row.repository === repository && row.issueNumber === assignment.issueNumber
+      && row.role === 'orchestrator' && row.kind === 'local' && row.provider === 'orca').length !== 1
+      || assignments.filter((row) => row.bindingKey === assignment.bindingKey).length !== 1) continue;
+    // A stale ended Issue is not an active recovery obligation. Failed or
+    // unavailable GitHub reads do not become positive nonterminal evidence.
+    const githubIssue = (options.readNamedIssue ?? readNativeIssue)(repository, assignment.issueNumber);
+    if (githubIssue?.number !== assignment.issueNumber || githubIssue.state !== 'open') continue;
+    // Same #2655 evidence as readTerminalGoneDispatch: terminally failed
+    // exact selected Dispatch plus missing/terminal_missing retained worker.
+    const selected = orcaReceipt(executor, ['orchestration', 'dispatch-show', '--task', assignment.taskId, '--json']);
+    const selectedDispatch = selected?.dispatch as { id?: unknown; status?: unknown } | undefined;
+    const state = typeof selectedDispatch?.status === 'string' ? selectedDispatch.status.trim().toLowerCase() : '';
+    if (selectedDispatch?.id !== assignment.bindingKey
+      || !['failed', 'abandoned', 'cancelled', 'done', 'completed'].includes(state)) continue;
     const witness = orcaReceipt(executor, ['orchestration', 'worker-show', '--dispatch', assignment.bindingKey, '--json']);
     const dispatch = witness?.dispatch as { id?: unknown; taskId?: unknown; status?: unknown } | undefined;
-    const terminal = witness?.terminal as { handle?: unknown; incarnationId?: unknown } | undefined;
     const observed = witness?.observation as { status?: unknown; exactWorker?: unknown } | undefined;
-    if (dispatch?.id !== assignment.bindingKey || dispatch.taskId !== assignment.taskId
-      || dispatch.status !== 'dispatched' || observed?.exactWorker !== true
-      || observed.status !== 'gone'
-      || typeof terminal?.handle !== 'string' || typeof terminal.incarnationId !== 'string'
-      || terminals.some((row) => row.handle === terminal.handle && row.incarnationId === terminal.incarnationId
-        && row.status?.toLowerCase() !== 'exited')) continue;
+    const worker = witness?.worker as { agent_terminal_handle?: unknown; worktree_id?: unknown } | null | undefined;
+    const resource = witness?.terminalResource as {
+      terminalHandle?: unknown; worktreeId?: unknown; originDispatchId?: unknown; ownerDispatchId?: unknown;
+    } | null | undefined;
+    if (!witness || witness.terminal !== null
+      || (dispatch?.id !== undefined && dispatch.id !== assignment.bindingKey)
+      || (dispatch?.taskId !== undefined && dispatch.taskId !== assignment.taskId)
+      || dispatch?.status !== state || observed?.exactWorker !== false
+      || !['missing', 'terminal_missing'].includes(String(observed?.status ?? '').trim().toLowerCase())
+      || (worker !== null && worker !== undefined && (typeof worker !== 'object' || Array.isArray(worker)))
+      || (resource !== null && resource !== undefined && (typeof resource !== 'object' || Array.isArray(resource)))
+      || (resource && (resource.originDispatchId !== assignment.bindingKey
+        || resource.ownerDispatchId !== assignment.bindingKey))) continue;
+    const workerHandle = typeof worker?.agent_terminal_handle === 'string' ? worker.agent_terminal_handle.trim() : '';
+    const resourceHandle = typeof resource?.terminalHandle === 'string' ? resource.terminalHandle.trim() : '';
+    const workerWorktree = typeof worker?.worktree_id === 'string' ? worker.worktree_id.trim() : '';
+    const resourceWorktree = typeof resource?.worktreeId === 'string' ? resource.worktreeId.trim() : '';
+    const priorHandle = workerHandle || resourceHandle;
+    if ((workerHandle && resourceHandle && workerHandle !== resourceHandle)
+      || (workerWorktree && resourceWorktree && workerWorktree !== resourceWorktree)
+      || (priorHandle && terminals.some((row) => row.handle === priorHandle && row.status?.toLowerCase() !== 'exited'))) continue;
     const key = `gone-issue:${assignment.issueNumber}:${assignment.assignmentId}:${assignment.generation}:${assignment.bindingKey}`;
-    const message = `Wake: Issue #${assignment.issueNumber} assigned manager is positively gone while Dispatch is active - recovery needed, reconcile without replacement guess`;
+    const message = `Wake: Issue #${assignment.issueNumber} assigned manager is positively gone with a terminally failed Dispatch - recovery needed, reconcile without replacement guess`;
     await sendMarkedUnitMessage(store, key, coordinator.handle, message, executor, sleepMs, log, counts,
       () => { try { return listFleetTerminals(executor).filter((row) => terminalsIdentity(row) === terminalsIdentity(coordinator)).length === 1; }
         catch { return false; } });
