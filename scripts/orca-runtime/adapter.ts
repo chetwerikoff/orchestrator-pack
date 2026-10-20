@@ -670,6 +670,11 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (!urlRecord || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
       return { status: 'send_failed', reason: 'runtime_opencode_control_unavailable' };
     }
+    // An explicit --session proves launch intent only, not the selected TUI
+    // session or the listener's native owner. Never POST to that endpoint.
+    if (urlRecord.session) {
+      return { status: 'send_failed', reason: 'runtime_opencode_resume_control_unverified' };
+    }
     if (request.action !== 'append-prompt' && request.action !== 'submit-prompt') {
       return { status: 'send_failed', reason: 'runtime_opencode_prompt_request_invalid' };
     }
@@ -1096,15 +1101,10 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       }
     }
     if (!record || !sameRuntimeWorker(record.identity, worker)) return undefined;
-    // Only explicit resume control requires an extra native session/title read.
-    // For ordinary non-resume, the bounded HTTP dispatch owns the deadline and
-    // must not spend its pre-dispatch time budget resolving an additional roster.
-    if (record.session) {
-      const native = this.findWorker(worker);
-      if (native.status !== 'ok' || !native.value
-        || (native.value.title?.startsWith('opk-resume-')
-          && record.session !== native.value.title.slice('opk-resume-'.length))) return undefined;
-    }
+    // A command-derived resume endpoint has no listener-ownership or active
+    // selected-session witness, even when the directory catalog contains ses.
+    // Ordinary non-resume OpenCode composer control remains available.
+    if (record.session) return undefined;
     return {
       kind: 'opencode-http',
       dispatch: (request, options) => this.#openCodeDispatch(worker, request, options),
@@ -1158,13 +1158,16 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
 
     const sessionTimeoutMs = openCodeHttpSubprocessTimeoutMs(this.#remaining(deadline));
-    if (sessionTimeoutMs === null) return runtimeFailure('readiness', 'runtime_timeout');
+    // Health has already succeeded: catalog timeout cannot prove a dead port.
+    if (sessionTimeoutMs === null) return runtimeFailure('readiness', 'opencode_session_catalog_timeout');
     const sessions = this.#openCodeRequest({
       url: `${urlRecord.url}/session?directory=${encodeURIComponent(current.value.workspacePath)}`,
       method: 'GET',
       timeoutMs: sessionTimeoutMs,
     });
-    if ('error' in sessions) return runtimeFailure('readiness', sessions.error);
+    // Failed catalog lookup is not an unavailable /global/health endpoint;
+    // do not turn it into the resume branch's stop-and-restart authority.
+    if ('error' in sessions) return runtimeFailure('readiness', 'opencode_session_catalog_request_failed');
     if (sessions.status < 200 || sessions.status >= 300) {
       return runtimeFailure('readiness', `opencode_http_status_${sessions.status}`);
     }
@@ -1258,14 +1261,20 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     _input: { readonly workspace?: 'active' | string } = {},
     options: RuntimeCallOptions = {},
   ): Promise<RuntimeResult<readonly RuntimeWorker[]>> {
-    const response = await this.#runAsync<{ terminals?: OrcaTerminalSummary[] }>(
-      ['terminal', 'list'],
-      options,
-    );
+    const response = await this.#runAsync<{
+      terminals?: OrcaTerminalSummary[];
+      totalCount?: number;
+      truncated?: boolean;
+    }>(['terminal', 'list'], options);
     if (!response.ok) return runtimeFailure('list_workers', neutralFailureReason(response));
     const terminals = response.result?.terminals;
-    if (!Array.isArray(terminals)) {
-      return runtimeUnsupported('list_workers', 'runtime_worker_list_shape_unsupported');
+    const totalCount = response.result?.totalCount;
+    // Every all-workspace admission needs a positively complete native roster,
+    // including retry after exact stop/gone; a valid partial array is not proof.
+    if (!Array.isArray(terminals) || response.result?.truncated !== false
+      || typeof totalCount !== 'number' || !Number.isSafeInteger(totalCount)
+      || totalCount !== terminals.length) {
+      return runtimeUnsupported('list_workers', 'runtime_worker_list_incomplete');
     }
     const workers: RuntimeWorker[] = [];
     for (const terminal of terminals) {

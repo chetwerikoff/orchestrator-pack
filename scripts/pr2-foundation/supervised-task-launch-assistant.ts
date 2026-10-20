@@ -2601,9 +2601,11 @@ async function resumeAdmitted(
     // A possibly replaceable Dispatch is stronger than a gone terminal.
     if (resolve(workspace) === resolve(input.workspace)) return false;
   }
-  const workers = deps.adapter.listWorkersAsync
-    ? await deps.adapter.listWorkersAsync({}, { cwd: input.workspace })
-    : deps.adapter.listWorkers({ workspace: input.workspace }, { cwd: input.workspace });
+  // A workspace-filtered/synchronous list cannot establish that an omitted
+  // foreign-workspace entry was not a live incumbent. The registered Orca async
+  // census validates native truncated=false and exact totalCount.
+  if (!deps.adapter.listWorkersAsync) return false;
+  const workers = await deps.adapter.listWorkersAsync({}, { cwd: input.workspace });
   if (workers.status !== 'ok') return false;
   const seen = new Set<string>();
   for (const worker of workers.value) {
@@ -2686,6 +2688,9 @@ export async function runExistingOpenCodeResume(
     // A missing/wrong session, a healthy foreign responder, or an uncertain
     // endpoint is NEVER a reason to stop and duplicate an existing session.
     const reason = health?.reason ?? '';
+    // Only the health endpoint's transport failure authorizes the bounded
+    // exact-worker stop/gone retry. A successful health with a failed session
+    // catalog request has its own non-restartable adapter reason.
     const endpointUnavailable = health?.status === 'failed'
       && /^opencode_http_request_failed:/u.test(reason);
     if (attempt === 2 || !endpointUnavailable) return result('resume_control_unavailable', attempt, worker.identity);

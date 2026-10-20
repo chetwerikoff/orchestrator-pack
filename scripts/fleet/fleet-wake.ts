@@ -32,6 +32,7 @@ import {
   defaultOrcaExecutor,
   defaultWorkspaceRegex,
   isBusyScreen,
+  lastFleetParkedLine,
   listFleetTerminals,
   readFleetScreen,
   runFleetSweep,
@@ -1073,6 +1074,11 @@ async function wakeAssignedIssueManagers(
         return Boolean(fresh && fresh.number === pull.number && fresh.state === 'open'
           && !fresh.merged && fresh.headSha === pull.sha);
       }))).slice(-200);
+    // A named CI wake earlier in this tick already told this exact pane to
+    // re-check the current head. The Issue projection may include the same
+    // CI and other facts, but a second prompt would interrupt that re-check.
+    if (validFacts.some((fact) => fact.kind === 'head-ci'
+      && counts.attemptedProducerFacts.has(bound.pane.handle + ':' + fact.id))) continue;
     const keys = [...new Set(validFacts.map((fact) => `${fact.kind}:${fact.id}`))].sort();
     if (keys.length === 0) continue;
     const digest = createHash('sha256').update(JSON.stringify(keys)).digest('hex');
@@ -1219,17 +1225,22 @@ function nativeReceiptLaunchingOwner(
   terminals: readonly FleetTerminal[],
   executor: OrcaExecutor,
   assignments: readonly WorkerAssignmentRecord[] | null,
-): FleetPaneObservation | undefined {
+): { readonly pane: FleetPaneObservation; readonly invocationId: string } | undefined {
   const repository = namedRepository(options.config);
   if (!repository || !failureTerminalEnvelope(event) || !assignments
-    || !event.observedInvocationId || !event.runIdentity || !event.attemptIdentity
+    || !event.runIdentity || !event.attemptIdentity
     || !event.handoffReceiptPath) return undefined;
   const receipt = (options.readOriginalHandoffReceipt ?? readHandoffReceipt)(event.handoffReceiptPath, {
     runIdentity: event.runIdentity, attemptIdentity: event.attemptIdentity,
   });
   if (!receipt || receipt.run_identity !== event.runIdentity
     || receipt.attempt_identity !== event.attemptIdentity
-    || receipt.invocation_id !== event.observedInvocationId
+    || !receipt.invocation_id
+    // When a child never produced a result there is no observed invocation.
+    // The original path/run/attempt-bound receipt supplies it; a present
+    // observed identity must still match exactly, never be overridden.
+    || (event.observedInvocationId !== undefined
+      && receipt.invocation_id !== event.observedInvocationId)
     || !receipt.launching_terminal_handle || !receipt.owner_task_id || !receipt.owner_dispatch_id) return undefined;
   const candidates = assignments.filter((row) => row.projectId === options.config.projectId
     && row.repository.toLowerCase() === repository.toLowerCase() && row.role === 'orchestrator'
@@ -1254,7 +1265,8 @@ function nativeReceiptLaunchingOwner(
   const matchedPanes = observations.filter((row) => row.handle === native.handle
     && row.incarnationId === native.incarnationId && row.worktreePath === native.worktreePath
     && row.branch === native.branch && (row.state === 'PARKED' || row.state === 'STOPPED'));
-  return matchedTerminals.length === 1 && matchedPanes.length === 1 ? matchedPanes[0] : undefined;
+  return matchedTerminals.length === 1 && matchedPanes.length === 1
+    ? { pane: matchedPanes[0]!, invocationId: receipt.invocation_id } : undefined;
 }
 
 /** A non-ok envelope with its original receipt wakes its exact live launcher directly. */
@@ -1275,25 +1287,29 @@ async function wakeOriginalTerminalFailures(
   const events = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)().filter(failureTerminalEnvelope);
   for (const event of events) {
     const owner = nativeReceiptLaunchingOwner(event, options, observations, terminals, executor, assignments);
-    if (!owner || bareShellHandles.has(owner.handle)) continue;
-    const key = `failure:${owner.handle}:${owner.incarnationId}:${event.attemptIdentity}:${event.observedInvocationId}:${event.path}`;
-    const message = safeUnitWakeText('terminal-' + event.observedInvocationId!,
+    if (!owner || bareShellHandles.has(owner.pane.handle)) continue;
+    const key = `failure:${owner.pane.handle}:${owner.pane.incarnationId}:${event.attemptIdentity}:${owner.invocationId}:${event.path}`;
+    const message = safeUnitWakeText('terminal-' + owner.invocationId,
       event.turnResultState ?? 'incident', event.path)
       ?? 'Wake: bound terminal outcome not-ok - inspect the original handoff and decide yourself';
     const currentOwner = (): boolean => {
       try {
         const updated = nativeReceiptLaunchingOwner(event, options, observations,
           listFleetTerminals(executor), executor, readAssignments());
-        return updated?.handle === owner.handle && updated.incarnationId === owner.incarnationId;
+        return updated?.pane.handle === owner.pane.handle
+          && updated?.pane.incarnationId === owner.pane.incarnationId
+          && updated?.invocationId === owner.invocationId;
       } catch { return false; }
     };
-    await sendMarkedUnitMessage(store, key, owner.handle, message, executor, sleepMs, log, counts, currentOwner);
+    await sendMarkedUnitMessage(store, key, owner.pane.handle, message, executor, sleepMs, log, counts, currentOwner);
   }
 }
 
 interface PaneWakeCounts {
   attempts: number;
   confirmed: number;
+  /** Only this tick: exact producer fact already attempted for a pane. */
+  attemptedProducerFacts: Set<string>;
 }
 
 async function sendMarkedUnitMessage(
@@ -1302,8 +1318,10 @@ async function sendMarkedUnitMessage(
   log: (line: string) => void,
   counts?: PaneWakeCounts,
   stillSelected?: () => boolean,
+  producerFactId?: string,
 ): Promise<boolean> {
-  if (store.hasParkedWakeEvent(key)) return false;
+  if (store.hasParkedWakeEvent(key)
+    || (producerFactId && counts?.attemptedProducerFacts.has(handle + ':' + producerFactId))) return false;
   // Durable reservation must precede both text and Enter effects. A failed
   // upgrade must not authorize a second attempt at this same fact.
   try { store.markParkedWakeEvent(key, 'attempted_unverified'); }
@@ -1312,7 +1330,10 @@ async function sendMarkedUnitMessage(
     log('unit wake selected owner changed; send withheld: ' + key);
     return false;
   }
-  if (counts) counts.attempts += 1;
+  if (counts) {
+    counts.attempts += 1;
+    if (producerFactId) counts.attemptedProducerFacts.add(handle + ':' + producerFactId);
+  }
   let delivered = false;
   try {
     delivered = sendCoordinator(executor, handle, message)
@@ -1351,13 +1372,28 @@ async function wakeNamedParkedProducers(
       epoch = { key: episode, since: now, started: now };
       store.writeParkedEpoch?.(pane.handle, epoch);
     }
+    // Re-observe this same native pane AND its actual last own PARKED line
+    // immediately before text and again before Enter. A recycled handle or
+    // newly bare shell cannot receive a stale parked event/reminder.
+    const stillParkedOwner = (): boolean => {
+      try {
+        const candidates = listFleetTerminals(executor).filter((row) => row.handle === pane.handle);
+        if (candidates.length !== 1) return false;
+        const current = candidates[0]!;
+        if (terminalsIdentity(current) !== terminalsIdentity(pane)
+          || current.title !== pane.title || current.agentIdentity !== pane.agentIdentity
+          || current.status?.toLowerCase() === 'exited') return false;
+        return lastFleetParkedLine(readFleetScreen(pane.handle, executor)) === pane.wait;
+      } catch { return false; }
+    };
     const match = resolveParkEvent(pane.wait, terminals, envelopes, options);
     if (match) {
       const eventKey = 'event:' + pane.handle + ':' + match.eventId;
       if (!store.hasParkedWakeEvent(eventKey)) {
         const message = safeUnitWakeText(match.label, match.terminalState, match.evidence)
           ?? 'Wake: matching producer event landed - re-check it yourself before continuing';
-        if (await sendMarkedUnitMessage(store, eventKey, pane.handle, message, executor, sleepMs, log, counts)) {
+        if (await sendMarkedUnitMessage(store, eventKey, pane.handle, message,
+          executor, sleepMs, log, counts, stillParkedOwner, match.eventId)) {
           if (epoch) store.writeParkedEpoch?.(pane.handle, { ...epoch, since: now });
           store.clearPaneWait?.(pane.handle);
           continue;
@@ -1371,7 +1407,8 @@ async function wakeNamedParkedProducers(
       if (slot >= 1 && !store.hasParkedWakeEvent(key)) {
         const message = safeUnitReminderText(pane.wait.slice('PARKED on '.length))
           ?? 'Reminder: parked 30 min - re-check the named producer yourself before continuing';
-        await sendMarkedUnitMessage(store, key, pane.handle, message, executor, sleepMs, log, counts);
+        await sendMarkedUnitMessage(store, key, pane.handle, message,
+          executor, sleepMs, log, counts, stillParkedOwner);
       }
     }
   }
@@ -1707,7 +1744,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   // Keep legacy fleet effects first: stale recovery belongs to this same
   // already-scheduled tick, but must not delay coordinator/banner delivery.
   const operationalTick = async (): Promise<FleetAlarmTickResult> => {
-  const wakeCounts: PaneWakeCounts = { attempts: 0, confirmed: 0 };
+  const wakeCounts: PaneWakeCounts = { attempts: 0, confirmed: 0, attemptedProducerFacts: new Set() };
   let terminals: FleetTerminal[];
   try {
     terminals = listFleetTerminals(executor);

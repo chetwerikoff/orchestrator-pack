@@ -27,7 +27,7 @@ import {
   type PublishedIssueFact,
 } from './fleet-wake.ts';
 import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
-import { HANDOFF_SCHEMA, COMPLETION_MODE, type HandoffReceipt } from '../flow-manager-long-running-child.ts';
+import { HANDOFF_SCHEMA, COMPLETION_MODE, TERMINAL_SCHEMA, type HandoffReceipt } from '../flow-manager-long-running-child.ts';
 import type { WorkerAssignmentRecord } from '../lib/worker-assignment-store.ts';
 import type { ChatErrorBanner, ProjectChat } from './chat-error-banners.ts';
 import { FileFleetStateStore, formatFleetSweep, runFleetSweep, visibleOpenCodePermission, type FleetPaneObservation, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
@@ -2772,6 +2772,149 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
       expect(texts(checked.calls)).toHaveLength(0);
     }
   });
+
+  it.each(['PARKED on CI PR', 'PARKED on ci:'] as const)(
+    'one tick coalesces named and Issue-directed current-head CI on same owner: %s',
+    async (form) => {
+      const sha = 'd'.repeat(40), prNumber = 2666, completed = 17;
+      const id = `ci:${prNumber}:${sha}:${completed}`;
+      const parked = form === 'PARKED on CI PR'
+        ? `PARKED on CI PR #${prNumber} head ${sha}`
+        : 'PARKED on ' + id;
+      const first = await invoke({
+        screens: { [manager.handle]: parked }, executor: executorFor({ [manager.handle]: parked }),
+        listPublishedIssueFacts: () => [{
+          issueNumber: issue, kind: 'head-ci', prNumber, headSha: sha, id,
+        }, {
+          issueNumber: issue, kind: 'pull-head', prNumber, headSha: sha,
+          id: `pr:${prNumber}:${sha}`,
+        }],
+        listOpenPulls: () => [{ number: prNumber, ref: 'issue-2661', sha, issue }],
+        readNamedPull: () => ({ number: prNumber, headSha: sha, state: 'open', merged: false }),
+        checkRunsFinishedAt: () => completed,
+      });
+      expect(texts(first.calls)).toHaveLength(1);
+      expect(sendsTo(first.calls, manager.handle)).toHaveLength(2); // text plus one Enter
+      expect(first.result).toMatchObject({
+        state: 'no_orchestrator', paneWakeAttempts: 1, paneWakeConfirmed: 1, paneWakeNotConfirmed: 0,
+      });
+    },
+  );
+
+  it.each(['recycled-incarnation', 'bare-shell-title'] as const)(
+    'refuses stale named-PARKED recipient before text: %s',
+    async (change) => {
+      const parked = 'PARKED on GPT turn inv-mgr334';
+      const base = executorFor({ [manager.handle]: parked });
+      let lists = 0;
+      const changed = change === 'recycled-incarnation'
+        ? { ...manager, incarnationId: 'recycled-incarnation' }
+        : { ...manager, title: 'zsh', agentIdentity: undefined };
+      const executor: OrcaExecutor = (args) => {
+        if (args[0] === 'terminal' && args[1] === 'list' && ++lists >= 2) {
+          return commandResult(JSON.stringify({ ok: true, result: {
+            terminals: [changed], totalCount: 1, truncated: false,
+          } }));
+        }
+        return base(args);
+      };
+      const result = await invoke({
+        screens: { [manager.handle]: parked }, executor,
+        listPublishedIssueFacts: () => [],
+        listTerminalEnvelopes: () => [{ ...event, lifecycleOutcome: 'success', turnResultState: 'ok' }],
+      });
+      expect(texts(result.calls)).toHaveLength(0);
+      expect(sendsTo(result.calls, manager.handle)).toHaveLength(0);
+    },
+  );
+
+  it('refuses Enter when a named-PARKED screen changes after Wake text', async () => {
+    const parked = 'PARKED on GPT turn inv-mgr334';
+    const base = executorFor({ [manager.handle]: parked });
+    let sentText = false;
+    const executor: OrcaExecutor = (args) => {
+      if (args[0] === 'terminal' && args[1] === 'read' && sentText) return commandResult('zsh prompt');
+      if (args[0] === 'terminal' && args[1] === 'send' && args.includes('--text')) sentText = true;
+      return base(args);
+    };
+    const store = new MemoryWakeStore();
+    const result = await invoke({
+      screens: { [manager.handle]: parked }, executor, store,
+      listPublishedIssueFacts: () => [],
+      listTerminalEnvelopes: () => [{ ...event, lifecycleOutcome: 'success', turnResultState: 'ok' }],
+    });
+    expect(texts(result.calls)).toHaveLength(1);
+    expect(sendsTo(result.calls, manager.handle)).toHaveLength(1); // no Enter
+    expect(result.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 0, paneWakeNotConfirmed: 1 });
+    const retry = await invoke({ store, screens: { [manager.handle]: parked },
+      executor: executorFor({ [manager.handle]: parked }), listPublishedIssueFacts: () => [],
+      listTerminalEnvelopes: () => [{ ...event, lifecycleOutcome: 'success', turnResultState: 'ok' }] });
+    expect(texts(retry.calls)).toHaveLength(0);
+  });
+
+  it('refuses the due 30-minute reminder when the native pane becomes a bare shell', async () => {
+    const parked = 'PARKED on unknown-event', store = new MemoryWakeStore();
+    const original = executorFor({ [manager.handle]: parked });
+    await invoke({ store, screens: { [manager.handle]: parked }, executor: original,
+      now: () => 0, listPublishedIssueFacts: () => [] });
+    let lists = 0;
+    const drift: OrcaExecutor = (args) => {
+      if (args[0] === 'terminal' && args[1] === 'list' && ++lists >= 2) {
+        return commandResult(JSON.stringify({ ok: true, result: {
+          terminals: [{ ...manager, title: 'zsh', agentIdentity: undefined }],
+          totalCount: 1, truncated: false,
+        } }));
+      }
+      return original(args);
+    };
+    const due = await invoke({ store, screens: { [manager.handle]: parked },
+      executor: drift, now: () => 1_800_000, listPublishedIssueFacts: () => [] });
+    expect(texts(due.calls)).toHaveLength(0);
+    expect(sendsTo(due.calls, manager.handle)).toHaveLength(0);
+  });
+
+  it.each(['child_start_failed', 'child_liveness_timeout'] as const)(
+    'wakes only receipt-bound launcher for a valid no-result incident: %s',
+    async (incident) => {
+      const root = mkdtempSync(join(tmpdir(), 'fleet-2661-no-result-'));
+      try {
+        const path = join(root, 'synthetic-no-result-terminal.json');
+        writeFileSync(path, JSON.stringify({
+          schema: TERMINAL_SCHEMA, run_identity: event.runIdentity,
+          attempt_identity: event.attemptIdentity,
+          handoff_receipt_path: event.handoffReceiptPath,
+          completion_mode: COMPLETION_MODE, lifecycle_outcome: 'incident',
+          incident, terminal_at: '2026-10-19T08:00:01Z',
+        }));
+        const parsed = listTerminalEnvelopes(root);
+        expect(parsed).toHaveLength(1);
+        expect(parsed[0]?.observedInvocationId).toBeUndefined();
+        expect(parsed[0]?.invocationId).toBe(event.attemptIdentity); // non-authoritative fallback
+        const base = {
+          screens: { [manager.handle]: 'done' },
+          executor: executorFor({ [manager.handle]: 'done' }),
+          listPublishedIssueFacts: () => [], listTerminalEnvelopes: () => parsed,
+          readOriginalHandoffReceipt: () => receipt,
+        };
+        const good = await invoke(base);
+        expect(texts(good.calls)).toHaveLength(1);
+        expect(texts(good.calls)[0]?.join(' ')).toContain('terminal-inv-mgr334');
+        expect(sendsTo(good.calls, 'foreign-stale-handle')).toHaveLength(0);
+        expect(good.result).toMatchObject({
+          state: 'no_orchestrator', paneWakeAttempts: 1, paneWakeConfirmed: 1,
+        });
+        const mismatched = await invoke({ ...base,
+          listTerminalEnvelopes: () => [{ ...parsed[0]!, observedInvocationId: 'foreign-observed' }],
+        });
+        expect(texts(mismatched.calls)).toHaveLength(0);
+        const wrongReceipt = await invoke({ ...base, readOriginalHandoffReceipt: () =>
+          ({ ...receipt, attempt_identity: 'foreign-attempt' }) });
+        expect(texts(wrongReceipt.calls)).toHaveLength(0);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('persists attempted_unverified before text; failed premark suppresses delivery and failed upgrade prevents blind resend', async () => {
     const store = new MemoryWakeStore();

@@ -4343,6 +4343,9 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       assignments: WorkerAssignment[];
       catalog: string[];
       unreadableList: boolean;
+      rosterMode: 'complete' | 'truncated' | 'count-mismatch';
+      truncateAfterStop: boolean;
+      catalogRequestFails: boolean;
       extraPane: NativePane | null;
       refuseProfile: boolean;
       assignmentsReadable: boolean;
@@ -4353,7 +4356,9 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       injectAssignmentAfterStop: boolean;
       stopReturned: boolean;
     } = {
-      assignments: [], catalog: [session], unreadableList: false, extraPane: null,
+      assignments: [], catalog: [session], unreadableList: false,
+      rosterMode: 'complete', truncateAfterStop: false, catalogRequestFails: false,
+      extraPane: null,
       refuseProfile: false, assignmentsReadable: true,
       unknownIncumbent: false, goneIncumbent: false,
       workerShowUnknown: false, catalogShape: 'normal',
@@ -4373,7 +4378,11 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
         if (state.stopReturned && !selected.some((pane) => pane.handle === 'term-b5-1')) {
           events.push('gone-readback:term-b5-1');
         }
-        return asResult({ terminals: rows, totalCount: rows.length, truncated: false });
+        return asResult({
+          terminals: rows,
+          totalCount: rows.length + (state.rosterMode === 'count-mismatch' ? 1 : 0),
+          truncated: state.rosterMode === 'truncated' || (state.stopReturned && state.truncateAfterStop),
+        });
       }
       if (operation === 'terminal create') {
         const index = spawnedCommands.length + 1;
@@ -4457,6 +4466,7 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       }
       if (url.endsWith('/global/health')) return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.35' }) };
       if (url.endsWith('/session?directory=' + encodeURIComponent(workspace))) {
+        if (state.catalogRequestFails) throw new Error('ECONNRESET synthetic catalog request after healthy health');
         if (state.catalogShape === 'malformed') return { status: 200, body: '{invalid-fixture-json' };
         if (state.catalogShape === 'empty') return { status: 200, body: '[]' };
         return { status: 200, body: JSON.stringify(state.catalog.map((id) => ({ id,
@@ -4607,7 +4617,53 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       expect(f.adapter.openCodeHealth(ordinary.value.identity, { cwd: workspace })).toMatchObject({
         status: 'ok',
       });
+      expect(f.adapter.composerControl?.(ordinary.value.identity)?.kind).toBe('opencode-http');
     }
+  });
+
+  it('B5 rejects well-formed but incomplete native rosters before spawn and after stopped-worker re-admission', async () => {
+    for (const rosterMode of ['truncated', 'count-mismatch'] as const) {
+      const f = resumeFixture();
+      f.state.rosterMode = rosterMode;
+      const census = await f.adapter.listWorkersAsync?.({}, { cwd: workspace });
+      expect(census).toMatchObject({ status: 'unsupported', reason: 'runtime_worker_list_incomplete' });
+      expect(await f.run()).toMatchObject({
+        outcome: 'continue', attempts: 0, cause: 'resume_incumbent_or_assignment_unverified',
+      });
+      expect(f.spawnedCommands).toHaveLength(0);
+    }
+    const afterStop = resumeFixture('first-hang');
+    afterStop.state.truncateAfterStop = true;
+    expect(await afterStop.run()).toMatchObject({
+      outcome: 'continue', attempts: 1, cause: 'resume_incumbent_or_assignment_unverified',
+    });
+    expect(afterStop.events).toContain('closed:term-b5-1');
+    expect(afterStop.spawnedCommands).toHaveLength(1);
+  });
+
+  it('B5 successful health followed by catalog transport failure never authorizes stop or retry', async () => {
+    const f = resumeFixture();
+    f.state.catalogRequestFails = true;
+    expect(await f.run()).toMatchObject({
+      outcome: 'continue', attempts: 1, cause: 'resume_control_unavailable',
+    });
+    expect(f.queriedUrls.some((url) => url.endsWith('/global/health'))).toBe(true);
+    expect(f.queriedUrls.some((url) => url.includes('/session?directory='))).toBe(true);
+    expect(f.events).not.toContain('terminal close');
+    expect(f.spawnedCommands).toHaveLength(1);
+  });
+
+  it('B5 explicit resume never exposes effectful composer control for an unverified listener', async () => {
+    const f = resumeFixture();
+    f.state.catalog = [session, 'ses_foreignother'];
+    const result = await f.run();
+    expect(result).toMatchObject({
+      outcome: 'catalog_observed_unverified',
+      activeSelectionVerified: false, listenerOwnershipVerified: false,
+    });
+    expect(result.terminal).toBeDefined();
+    expect(f.adapter.composerControl?.(result.terminal!)).toBeUndefined();
+    expect(f.queriedUrls.some((url) => /\/tui\/(?:append|submit)-prompt$/u.test(url))).toBe(false);
   });
 
   it('B5 full selected-workspace native worker and assignment/Dispatch census refuses incumbents', async () => {
