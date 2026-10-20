@@ -33,7 +33,9 @@ import {
 import {
   createPackReviewRun,
   getPackReviewRun,
+  isPackReviewRunStale,
   listPackReviewRuns,
+  packReviewRunStaleMinutes,
   resolvePackReviewRequiredRunOrder,
   resolvePackReviewRunStoreRoot,
   setPackReviewRunTerminal,
@@ -5301,39 +5303,58 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     const f = fixture({ historicalClaim: true });
     const claimBytes = readFileSync(f.historicalClaimPath!, 'utf8');
     const zeroSendAttempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
-    const r2 = await f.start({
-      fixtureReviewBySourceSlot: zeroSendAttempts,
-      fixtureBeforeGptSourceCommentCensus: async () => undefined,
-      fixtureAfterGptInvocationBound: ({ slotId, invocationId }: { slotId: string; invocationId: string }) => {
-        f.freshStarts.push(slotId);
-        zeroSendAttempts[slotId] = [{
-          stdout: JSON.stringify({
-            schema: 'turn-result/v1', state: 'rate_limit', cause: 'account_cooldown_active',
-            scope: 'invocation', invocation_id: invocationId, send_count: 0, send_attempted: false,
-          }),
-          exitCode: 13,
-        }];
-      },
-    });
-    // The initial R2 run has no usable sources but has not passed the shared
-    // grace threshold. It must not terminalize or authorize another run yet.
-    expect(r2.result, JSON.stringify(r2.result)).toMatchObject({
-      created: true, headSha: HEAD, runnerReason: 'gpt_sources_waiting_for_grace:0/3',
-    });
-    const r2Id = String(r2.result.runId);
-    expect(r2Id).not.toBe(f.original.id);
-    expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
-    // Simulate the same runner becoming dead and its real grace interval
-    // elapsing; only the existing reconciler may then terminalize safe 0/3.
-    const deadR2 = updatePackReviewRun(r2Id, { runnerPid: 2147483647 }, f.options);
-    // Anchor grace to this R2's persisted heartbeat rather than the ambient
-    // wall clock. Reconcile only R2: processing historic R1 first can restore
-    // R2's pending status, refresh its heartbeat and undo the stale predicate.
-    const afterGraceAt = new Date(Date.parse(deadR2.heartbeatAtUtc) + 60 * 60_000);
-    vi.useFakeTimers({ toFake: ['Date'], now: afterGraceAt });
+    // Freeze Date before the R2 start so source admission, run heartbeat and
+    // creation all share persisted logical-time witnesses. Real timers remain real.
+    const graceMs = packReviewRunStaleMinutes() * 60_000;
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-20T00:00:00.000Z') });
+    let r2Id = '';
     try {
-      const afterGrace = await f.reconcile({ runId: r2Id });
-      expect(afterGrace.results.find((row) => row.runId === r2Id && row.terminalized)).toMatchObject({
+      const r2 = await f.start({
+        fixtureReviewBySourceSlot: zeroSendAttempts,
+        fixtureBeforeGptSourceCommentCensus: async () => undefined,
+        fixtureAfterGptInvocationBound: ({ slotId, invocationId }: { slotId: string; invocationId: string }) => {
+          f.freshStarts.push(slotId);
+          zeroSendAttempts[slotId] = [{
+            stdout: JSON.stringify({
+              schema: 'turn-result/v1', state: 'rate_limit', cause: 'account_cooldown_active',
+              scope: 'invocation', invocation_id: invocationId, send_count: 0, send_attempted: false,
+            }),
+            exitCode: 13,
+          }];
+        },
+      });
+      expect(r2.result, JSON.stringify(r2.result)).toMatchObject({
+        created: true, headSha: HEAD, runnerReason: 'gpt_sources_waiting_for_grace:0/3',
+      });
+      r2Id = String(r2.result.runId);
+      expect(r2Id).not.toBe(f.original.id);
+      expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
+
+      // The stale-run gate and 0/3 grace are distinct: the first uses the
+      // dead runner's heartbeat/updatedAt; the second uses earliest admission,
+      // falling back to run creation when no finite admission is persisted.
+      const deadR2 = updatePackReviewRun(r2Id, { runnerPid: 2147483647 }, f.options);
+      const staleAnchor = Date.parse(deadR2.heartbeatAtUtc || deadR2.updatedAt);
+      const admissions = deadR2.reviewRound!.sourceSlots
+        .map((slot) => Date.parse(slot.admissionStartedAtUtc ?? ''))
+        .filter((stamp) => Number.isFinite(stamp));
+      const graceAnchor = admissions.length > 0 ? Math.min(...admissions) : Date.parse(deadR2.createdAt);
+      expect(Number.isFinite(staleAnchor)).toBe(true);
+      expect(Number.isFinite(graceAnchor)).toBe(true);
+      const staleBoundary = staleAnchor + graceMs;
+      const zeroSendBoundary = graceAnchor + graceMs;
+      const settleBoundary = Math.max(staleBoundary, zeroSendBoundary);
+      expect(isPackReviewRunStale(deadR2, new Date(staleBoundary - 1))).toBe(false);
+      expect(isPackReviewRunStale(deadR2, new Date(staleBoundary))).toBe(true);
+
+      vi.setSystemTime(new Date(settleBoundary - 1));
+      const justBefore = await f.reconcile({ runId: r2Id });
+      expect(justBefore.results.some((row) => row.runId === r2Id && row.terminalized)).toBe(false);
+      expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
+
+      vi.setSystemTime(new Date(settleBoundary));
+      const atBothGates = await f.reconcile({ runId: r2Id });
+      expect(atBothGates.results.find((row) => row.runId === r2Id && row.terminalized)).toMatchObject({
         terminalized: true, statusReconciled: true,
       });
     } finally {
