@@ -3,11 +3,12 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFile
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runProcessSync } from './kernel/subprocess.ts';
-import { checkSmokeTestPlan, parseSmokeTestPlan } from './draft-discipline.mjs';
+import { checkSmokeTestPlan, parseSmokeTestPlan, resolveSmokeRequirement } from './draft-discipline.mjs';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import {
   buildSmokeGhChildEnv,
   classifyDeclaredScenarioNonPassCause,
+  evaluateWorkerSmokeGate,
   evaluateWorkerSmokeCoverage,
   formatSmokeReportComment,
   isSmokeNonPassCause,
@@ -19,7 +20,7 @@ import {
   type WorkerSmokeCommentRecord,
 } from './lib/worker-smoke-core.ts';
 import { publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath } from './lib/worker-assignment-store.ts';
-import { scrubSmokeOutput } from './lib/worker-smoke-core-base.ts';
+import { evaluateWorkerSmokeGate as evaluateBaseSmokeGate, scrubSmokeOutput } from './lib/worker-smoke-core-base.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 import {
   emit,
@@ -833,6 +834,83 @@ describe('Issue #2319 terminal-free publish', () => {
       return '  - ' + parts.join(' | ');
     }),
   ].join('\n');
+
+  it('fails closed in the shared resolver, both real smoke gates and publisher for malformed nonempty plans', async () => {
+    const scenarios = [
+      [
+        'scenarios:',
+        '  - action: valid step | expected: observed',
+        '  - name: incomplete',
+        '    action: missing expected',
+      ],
+      [
+        'scenarios:',
+        '  - action: valid step | expected: observed',
+        '  - name: duplicate child',
+        '    action: first',
+        '    action: second',
+        '    expected: done',
+      ],
+      [
+        'scenarios:',
+        '  - action: valid step | expected: observed',
+        '  fixture: unregistered metadata',
+      ],
+      ['not-applicable: true', 'reason: short'],
+    ].map((rows) => [
+      '```behavior-kind', 'action-producing', '```',
+      '```smoke-test-plan', ...rows, '```',
+    ].join('\n'));
+    const gateInput = {
+      issueNumber: 1343,
+      prNumber: 2001,
+      headSha: HEAD_ONE,
+      prComments: [],
+      ciGreen: true,
+      orcaWorktreeOk: true,
+      ownedTerminalClosed: true,
+      terminalProvenanceOk: true,
+    };
+    let posts = 0;
+    let reportReads = 0;
+    for (const body of scenarios) {
+      expect(checkSmokeTestPlan(body).ok, body).toBe(false);
+      expect(resolveSmokeRequirement(body)).toMatchObject({ requirement: 'required', scenarios: [] });
+      for (const gate of [evaluateWorkerSmokeGate, evaluateBaseSmokeGate]) {
+        expect(gate({ ...gateInput, issueBody: body })).toMatchObject({
+          allowed: false, reason: 'missing_smoke_plan', smokeRequired: true,
+        });
+      }
+      await expect(runPublishSmoke(publishOptions(), {
+        resolveTarget: () => ({ ...publishTarget, issueBody: body }),
+        readReportFile: () => { reportReads += 1; return ''; },
+        publishComment: () => { posts += 1; return 'https://github.com/comment'; },
+      })).rejects.toThrow('publish requires a required scenario-bearing smoke-test-plan');
+    }
+    expect(posts).toBe(0);
+    expect(reportReads).toBe(0);
+
+    const validNamed = [
+      '```smoke-test-plan',
+      'scenarios:',
+      '  - name: supported named scenario',
+      '    action: inspect supported path',
+      '    expected: scenario passes',
+      '```',
+    ].join('\n');
+    expect(resolveSmokeRequirement(validNamed)).toMatchObject({
+      requirement: 'required',
+      scenarios: [{ action: 'inspect supported path', expected: 'scenario passes' }],
+    });
+    expect(resolveSmokeRequirement(publishPlanBody).scenarios).toHaveLength(2);
+    const validNotApplicable = '```smoke-test-plan\nnot-applicable: true\nreason: Documentation changes require no runtime execution.\n```';
+    expect(resolveSmokeRequirement(validNotApplicable).requirement).toBe('not-applicable');
+    for (const gate of [evaluateWorkerSmokeGate, evaluateBaseSmokeGate]) {
+      expect(gate({ ...gateInput, issueBody: validNotApplicable })).toMatchObject({
+        allowed: true, reason: 'smoke_not_required', smokeRequired: false,
+      });
+    }
+  });
 
   it('publishes a terminal-free PASS from local HEAD and emits the confirmed comment URL', async () => {
     const writes: string[] = [];
