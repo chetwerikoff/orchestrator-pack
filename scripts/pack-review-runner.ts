@@ -5341,7 +5341,9 @@ export async function maybeAdmitPackReviewBodyAmendment(
     // architect/diff and current-head CI proof. Do not veto that route here.
     // This is only routing, never independent success authority.
     if (cycle.state === 'closed' && cycle.reviewStageComplete === true
-        && cycle.settlementKind === 'strict_descendant'
+        && cycle.settlementKind !== 'same_head_issue_resolution'
+        && authority.terminal?.reviewVerdict === 'findings'
+        && terminal.targetSha.toLowerCase() !== livePr.headSha.toLowerCase()
         && authority.currentHeadSha.toLowerCase() === livePr.headSha.toLowerCase()) {
       return null;
     }
@@ -8459,8 +8461,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     // This candidate predicate is NOT a waiver or a success verdict.
     const completedScopeOnlyReplayCandidate = authority.cycle?.state === 'closed'
       && authority.cycle.reviewStageComplete === true
-      && authority.cycle.settlementKind === 'strict_descendant'
+      && authority.cycle.settlementKind !== 'same_head_issue_resolution'
       && authority.terminal?.reviewVerdict === 'findings'
+      && authority.terminal.targetSha.toLowerCase() !== target.headSha.toLowerCase()
       && target.repoSlug.toLowerCase() === 'chetwerikoff/orchestrator-pack'
       && target.prNumber === 2656 && target.issueNumber === 2655
       && authority.currentHeadSha.toLowerCase() === target.headSha.toLowerCase();
