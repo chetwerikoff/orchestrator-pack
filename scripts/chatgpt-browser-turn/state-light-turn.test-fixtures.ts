@@ -17,26 +17,28 @@ import {
 
 export function scalarLocator(overrides: Record<string, unknown> = {}) {
   const turnActionButtons = overrides.turnActionButtons === true;
+  // Only actions inspected or overridden by tests need mock histories. Vitest
+  // retains every vi.fn, including otherwise unreachable per-poll locators.
   const locator: Record<string, any> = {
-    count: vi.fn(async () => 0),
-    first: vi.fn(function first() { return locator; }),
-    nth: vi.fn(() => locator),
-    locator: vi.fn((selector: string) => {
+    count: async () => 0,
+    first: function first() { return locator; },
+    nth: () => locator,
+    locator: (selector: string) => {
       if (turnActionButtons && matchesAssistantTurnActionSelector(selector)) {
         return scalarLocator({ count: vi.fn(async () => 1) });
       }
       return scalarLocator();
-    }),
+    },
     click: vi.fn(async () => undefined),
     fill: vi.fn(async () => undefined),
     press: vi.fn(async () => undefined),
-    isVisible: vi.fn(async () => true),
+    isVisible: async () => true,
     isEnabled: vi.fn(async () => true),
-    evaluate: vi.fn(async () => true),
-    innerText: vi.fn(async () => ''),
-    textContent: vi.fn(async () => ''),
-    getAttribute: vi.fn(async () => null),
-    or: vi.fn(function or() { return locator; }),
+    evaluate: async () => true,
+    innerText: async () => '',
+    textContent: async () => '',
+    getAttribute: async () => null,
+    or: function or() { return locator; },
     ...overrides,
   };
   return locator;

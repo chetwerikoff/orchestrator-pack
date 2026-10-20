@@ -2761,8 +2761,9 @@ async function freshRetryDomGuards(input: {
   if (browserOrPageDefinitelyLost(input.page, input.browser)) return false;
   try {
     if (await readFreshStopVisible(input.page, input.deadlineMs) !== false) return false;
-    const typed = await readComposerTextForSendDelivery(input.composer, input.deadlineMs);
-    if (!renderedPayloadMatches(typed, input.markerPayload)) return false;
+    if (!await composerPayloadMatchesBeforeSend(
+      input.composer, input.markerPayload, input.deadlineMs,
+    )) return false;
     const observed = await readPageObservation(
       input.page, undefined, undefined, true, input.deadlineMs,
     );
@@ -2824,8 +2825,9 @@ async function existingRetryDomGuards(input: {
     && Date.now() < input.deadlineMs;
   if (!samePage()) return false;
   try {
-    if (await readComposerTextForSendDelivery(input.composer, input.deadlineMs)
-      !== collapseUnicodeWhitespace(input.markedPayload)) return false;
+    if (!await composerPayloadMatchesBeforeSend(
+      input.composer, input.markedPayload, input.deadlineMs,
+    )) return false;
     if (await readFreshStopVisible(input.page, input.deadlineMs) !== false) return false;
     const observed = await readPageObservation(
       input.page, undefined, undefined, true, input.deadlineMs,
@@ -4413,9 +4415,13 @@ async function runTurnCore(
         })) {
         // Positive Playwright actionability proof and all independent current
         // DOM/owner checks are required; no third attempt after this second call.
-        assertFreshOwner();
-        freshRepeated = true;
-        delivery = await sendAction();
+        if (await composerPayloadMatchesBeforeSend(
+          composer, markedPayload, Math.min(invocationDeadlineMs, readinessDeadlineMs),
+        )) {
+          assertFreshOwner();
+          freshRepeated = true;
+          delivery = await sendAction();
+        }
       }
       if (delivery.sendCount === 0 && delivery.preDispatchTimeoutProven === true
         && (!freshRepeated || firstActionAffirmative)
@@ -4589,10 +4595,15 @@ async function runTurnCore(
         })) {
         // Only the first click's actual positive non-dispatch action result grants
         // this one optional repeat; an uncertain first action or Enter never does.
-        const repeatWaitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now());
-        if (repeatWaitMs > 0) {
-          repeated = true;
-          delivery = await dispatchExisting(repeatWaitMs);
+        if (await composerPayloadMatchesBeforeSend(composer, markedPayload, invocationDeadlineMs)
+          && originalExactChat && !browserOrPageDefinitelyLost(page, browser)
+          && normalizeConversationUrl(String(page.url())) === originalExactChat
+          && readOwnedConversationIdentity(page, originalExactChat).matched) {
+          const repeatWaitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now());
+          if (repeatWaitMs > 0) {
+            repeated = true;
+            delivery = await dispatchExisting(repeatWaitMs);
+          }
         }
       }
       if (!repeated && hasSendButton && delivery.sendCount === 0
@@ -4612,8 +4623,8 @@ async function runTurnCore(
             page, browser, composer, targetChatUrl: originalExactChat,
             markedPayload, marker, baselineSnapshot, deadlineMs: invocationDeadlineMs,
           })
-          // The normalized guard above contains awaits. Its equality does not
-          // protect a whitespace-only edit made while that guard was running.
+          // The guard above contains awaits. Recheck exact text after it so
+          // a concurrent whitespace-only edit cannot authorize a re-click.
           && await readFreshStopVisible(page, invocationDeadlineMs) === false
           && await readLosslessOwnedComposer(composer, invocationDeadlineMs) === markedPayload
           && page === originalHeldPage && getOwnTargetInfo(browser)?.created === true

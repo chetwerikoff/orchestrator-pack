@@ -2660,12 +2660,27 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     rmSync(root, { recursive: true, force: true });
   });
 
-  async function connectedTurn(kind: Case) {
+  async function connectedTurn(kind: Case, corruption?: {
+    content: 'joined-marker' | 'indentation' | 'line-break';
+    when: 'after-click' | 'after-proof-read';
+  }) {
+    if (corruption) {
+      const { readStableInput } = await import('./input.ts');
+      vi.mocked(readStableInput).mockReturnValueOnce(stableTurnInput('keep separate words\n  indented line'));
+    }
     const profile = join(root, 'profile');
     const invocationId = randomUUID();
     let now = 100_000;
     let draft = '';
     let clickCount = 0;
+    let retryTailReads = 0;
+    let injectedRetryCorruption = false;
+    const corruptDraft = () => {
+      draft = corruption?.content === 'joined-marker' ? draft.replace('\n\n', '')
+        : corruption?.content === 'indentation' ? draft.replace('\n  indented', '\nindented')
+          : draft.replace('words\n  indented', 'words   indented');
+      injectedRetryCorruption = true;
+    };
     let firstClickAt = -1;
     let explicitGetAt = -1;
     let injectedNaturalPositive = false;
@@ -2710,7 +2725,12 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
           injectedWhitespaceMutation = true;
           draft = draft.replace('\n\n', '\n');
         }
-        return draft;
+        const visible = draft;
+        if (corruption?.when === 'after-proof-read' && clickCount === 1
+          && now >= firstClickAt + 5_000 && ++retryTailReads === 2 && !injectedRetryCorruption) {
+          corruptDraft();
+        }
+        return visible;
       }),
       textContent: vi.fn(async () => draft),
       evaluate: vi.fn(async (callback: (element: unknown, arg?: unknown) => unknown, args?: unknown, options?: { timeout?: number }) => {
@@ -2765,6 +2785,7 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       click: vi.fn(async () => {
         clickCount++;
         if (firstClickAt < 0) firstClickAt = now;
+        if (clickCount === 1 && corruption?.when === 'after-click') corruptDraft();
         if (kind === 'reused-page' && !observedReusedNegativeGet) {
           // Even a complete matching-UUID marker-negative GET from passive
           // Page traffic cannot turn a created:false target into retry authority.
@@ -2874,6 +2895,7 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
         explicitGetAt, getClock: () => now, getDraft: () => draft,
         injectedNaturalPositive, oversleptPoll, sawTransientGenerationDuringStall,
         appendedLateAssistant, injectedWhitespaceMutation, injectedAfterClear,
+        injectedRetryCorruption,
         observedReusedNegativeGet,
         close: page.close,
         observation: readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId),
@@ -2928,6 +2950,17 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       expect(t.close).not.toHaveBeenCalled();
       expect(t.observation.phase).not.toBe('not_sent');
     }
+  });
+
+  it.each((['joined-marker', 'indentation', 'line-break'] as const).flatMap((content) =>
+    (['after-click', 'after-proof-read'] as const).map((when) => ({ content, when })),
+  ))('vetoes an existing-chat retry with $content corruption $when (#2669)', async (corruption) => {
+    const t = await connectedTurn('pre-actionability-budget', corruption);
+    expect(t.injectedRetryCorruption).toBe(true);
+    expect(t.click).toHaveBeenCalledTimes(1);
+    expect(t.result.send_count).toBe(0);
+    expect(t.calls).toHaveLength(0);
+    expect(t.close).not.toHaveBeenCalled();
   });
 
   it('finalizes affirmative all-action non-dispatch only on a created owned blank Page', async () => {
