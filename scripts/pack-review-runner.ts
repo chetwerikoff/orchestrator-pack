@@ -5154,14 +5154,28 @@ async function verify2655ScopeOnlyFixSettlement(
   }
 }
 
-/** Read exactly one behavior-criteria section, never infer a semantic change
- * from a revision marker, allowed-roots edit, prose or comments alone. */
+/** Read structured acceptance items, not arbitrary trailing section prose.
+ * Only changed criterion items (including indented continuations) can support
+ * an ordinary body-amendment round. Other body changes stay on the full-body
+ * mismatch refusal path instead of authorizing a new reviewer. */
 function reviewBehaviorCriteria(body: string): string | null {
   const lines = body.replace(/\r\n/g, '\n').split('\n');
   const begin = lines.findIndex((line) => /^## Acceptance criteria(?:\s|$)/i.test(line));
   if (begin < 0) return null;
   const tail = lines.findIndex((line, index) => index > begin && /^## /.test(line));
-  return lines.slice(begin + 1, tail >= 0 ? tail : undefined).join('\n').trim() || null;
+  const items: string[] = [];
+  let inItem = false;
+  for (const line of lines.slice(begin + 1, tail >= 0 ? tail : undefined)) {
+    if (/^\s*(?:[-*+]|\d+[.)])\s+\S/.test(line)) {
+      items.push(line.trimEnd());
+      inItem = true;
+    } else if (inItem && /^\s{2,}\S/.test(line)) {
+      items.push(line.trimEnd());
+    } else if (line.trim()) {
+      inItem = false;
+    }
+  }
+  return items.join('\n').trim() || null;
 }
 
 /**
