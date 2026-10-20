@@ -586,21 +586,25 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.getSends()).toBe(1);
   });
 
-  it.each(['fill', 'before-click'] as const)(
-    'rejects a genuine content mismatch at %s without Send (#2671)', async (stage) => {
+  it.each((['content', 'marker-boundary'] as const).flatMap((kind) =>
+    (['fill', 'before-click'] as const).map((stage) => ({ kind, stage })),
+  ))(
+    'rejects a genuine $kind mismatch at $stage without Send (#2671)', async ({ kind, stage }) => {
       const prompt = 'Explain draft verification.\n\nReply with both checks.';
       mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
       const turn = makeLoserPage(prompt, 'must not send');
+      const corrupt = (text: string) => kind === 'marker-boundary'
+        ? text.replace('\n\n', '') : text.replace('both', 'neither');
       if (stage === 'fill') {
         const fill = turn.composer.fill.getMockImplementation()!;
-        turn.composer.fill.mockImplementation(async (text: string) => fill(text.replace('both', 'neither')));
+        turn.composer.fill.mockImplementation(async (text: string) => fill(corrupt(text)));
       } else {
         turn.sendButton.isEnabled.mockImplementation(async () => {
-          await turn.composer.fill('A genuinely different draft.');
+          await turn.composer.fill(corrupt(await turn.composer.innerText()));
           return true;
         });
       }
-      const outcome = await runNewChatTurn(turn.page, join(stateDir, `mismatch-${stage}-2671.txt`));
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, `mismatch-${kind}-${stage}-2671.txt`));
       expect(outcome.result).toMatchObject({ cause: 'composer_payload_mismatch', send_count: 0 });
       expect(turn.getSends()).toBe(0);
     },
@@ -958,15 +962,15 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
   });
 
-  it.each((['marker-content', 'middle-content', 'truncated-tail'] as const).flatMap((content) =>
+  it.each((['joined-marker', 'marker-content', 'middle-content', 'truncated-tail'] as const).flatMap((content) =>
     (['after-click', 'after-proof-read'] as const).map((when) => ({ content, when })),
   ))('vetoes a fresh retry with $content corruption $when (#2669)', async ({ content, when }) => {
     const prompt = 'keep separate words\n  indented line';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'UNREACHED');
-    const corrupt = (text: string) => content === 'marker-content' ? text.replace('OPKTURNV1', 'OTHER-TURN')
-      : content === 'middle-content' ? text.replace('indented', 'different')
-        : text.slice(0, -1);
+    const corrupt = (text: string) => content === 'joined-marker' ? text.replace('\n\n', '')
+      : content === 'marker-content' ? text.replace('OPKTURNV1', 'OTHER-TURN')
+        : content === 'middle-content' ? text.replace('indented', 'different') : text.slice(0, -1);
     let firstClickAt: number | undefined;
     let tailReads = 0;
     let injected = false;
@@ -3765,7 +3769,7 @@ describe('state-light fresh conversation collision recovery', () => {
           const fillCostMs = budget + 1_000;
           mocks.nowMs += Math.min(fillCostMs, timeout);
           if (timeout < fillCostMs) throw new Error('TimeoutError: fill timed out before full insertion');
-          value = content === 'marker-separator' ? input.replace('\n\n', '')
+          value = content === 'marker-separator' ? input.replace(/\n\n\s*/u, '')
             : content === 'joined-words' ? input.replace('Synthetic task', 'Synthetictask')
               : content === 'indentation' ? input.replace(/  Synthetic/u, 'Synthetic')
                 : content === 'changed-content' ? input.replace('instruction', 'different') : input;
@@ -3774,7 +3778,8 @@ describe('state-light fresh conversation collision recovery', () => {
       };
       const page = { locator: (selector: string) => selector === COMPOSER_SELECTOR ? composer : scalarLocator() };
       const cause = await __testComposerMutation.mutateComposerOrCause(page, text, mocks.nowMs + 60_000);
-      expect(cause).toBe(content === 'changed-content' ? 'composer_payload_mismatch' : null);
+      expect(cause).toBe(['marker-separator', 'changed-content'].includes(content)
+        ? 'composer_payload_mismatch' : null);
       expect(composer.innerText).toHaveBeenCalledTimes(1);
       if (content === 'complete') expect(value).toBe(text);
       else expect(value).not.toBe(text);

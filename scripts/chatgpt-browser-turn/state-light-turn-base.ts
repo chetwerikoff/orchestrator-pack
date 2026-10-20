@@ -33,6 +33,8 @@ import {
 } from './contracts.ts';
 import { readStableInput } from './input.ts';
 import {
+  extractOwnedPromptMarkerToken,
+  isOwnedPromptMarker,
   generateOwnedPromptMarker,
   ownedPromptMarkerMatches,
   wrapOwnedPromptPayload,
@@ -2545,9 +2547,12 @@ async function composerPayloadMatchesBeforeSend(
   const visible = await readComposerTextWithinDeadline(composer, deadlineMs);
   // ProseMirror empty paragraphs/trailing breaks change presentation whitespace.
   // Keep the pre-#2670 semantic match; exact DOM readers are additional paths.
-  const matches = renderedPayloadMatches(
-    visible === undefined ? undefined : collapseUnicodeWhitespace(visible), expected,
-  ) || visible === expected
+  const expectedMarker = extractOwnedPromptMarkerToken(expected);
+  const normalizedMatches = visible !== undefined
+    // Use the same token authority as post-Send correlation before normalizing.
+    && (!isOwnedPromptMarker(expectedMarker) || ownedPromptMarkerMatches(visible, expectedMarker))
+    && renderedPayloadMatches(collapseUnicodeWhitespace(visible), expected);
+  const matches = normalizedMatches || visible === expected
     || await readLosslessOwnedComposer(composer, deadlineMs, true) === expected
     || await readStructuredComposerText(composer, expected.length, deadlineMs) === expected;
   return matches && Date.now() < deadlineMs;
