@@ -2055,7 +2055,7 @@ stale same-Task terminal ownership; no unrelated changes.`,
       expect(f.statusWrites).not.toContain('success');
     }
     if (variation === 'additional-body-byte') {
-      // Stray prose after a criterion is not evidence of a changed criterion
+      // A changed revision marker alone is not a behavior-criteria amendment
       // and must not erase the frozen 2/3 terminal by admitting a new cycle.
       expect(result.results).toContainEqual(expect.objectContaining({
         settled: false, amendmentAdmission: false, reason: 'amendment_unverified_body_mismatch',
