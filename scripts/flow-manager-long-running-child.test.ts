@@ -33,6 +33,7 @@ import {
   runLaunch,
   runWait,
   type LaunchConfig,
+  type LaunchDeadlineTestControl,
   type ParsedTurnResult,
 } from './flow-manager-long-running-child.ts';
 import {
@@ -170,6 +171,114 @@ function makeTurnResult(overrides: Partial<TurnResultV1> = {}): TurnResultV1 {
 
 function nodeFixture(source: string): { command: string; args: string[] } {
   return { command: process.execPath, args: ['-e', source] };
+}
+
+type ControlledDeadlineEvent = Parameters<NonNullable<LaunchDeadlineTestControl['onEvent']>>[0];
+
+function controlledDeadlineClock(): {
+  control: LaunchDeadlineTestControl;
+  setTime: (time: number) => void;
+  pulseWatchdog: () => void;
+  observed: (kind: ControlledDeadlineEvent['kind'], ordinal?: number) => Promise<ControlledDeadlineEvent>;
+} {
+  let time = Date.parse('2026-10-20T00:00:00.000Z');
+  const history: ControlledDeadlineEvent[] = [];
+  const changed: Array<() => void> = [];
+  const waitingWatchdog: Array<() => void> = [];
+  let permits = 0;
+  return {
+    control: {
+      now: () => time,
+      onEvent(event) {
+        history.push(event);
+        for (const notify of changed.splice(0)) notify();
+      },
+      awaitWatchdogTurn: () => new Promise<void>((resolve) => {
+        if (permits > 0) { permits -= 1; resolve(); }
+        else waitingWatchdog.push(resolve);
+      }),
+    },
+    setTime: (value) => { time = value; },
+    pulseWatchdog: () => {
+      const wake = waitingWatchdog.shift();
+      if (wake) wake();
+      else permits += 1;
+    },
+    async observed(kind, ordinal = 1) {
+      const deadline = Date.now() + 10_000; // safety timeout only; never pass evidence
+      while (true) {
+        const matches = history.filter((event) => event.kind === kind);
+        if (matches.length >= ordinal) return matches[ordinal - 1]!;
+        if (Date.now() >= deadline) throw new Error('parent did not observe ' + kind + '#' + ordinal);
+        await new Promise<void>((resolve) => {
+          const timeout = setTimeout(resolve, 50);
+          changed.push(() => { clearTimeout(timeout); resolve(); });
+        });
+      }
+    },
+  };
+}
+
+// A real Node child acknowledges its own start and waits for each explicit emit.
+function controlledNodeFixture(root: string, lines: string[]): {
+  fixture: ReturnType<typeof nodeFixture>;
+  ready: string;
+  emit: (ordinal: number) => void;
+} {
+  const ready = join(root, 'controlled-child-ready');
+  const gates = lines.map((_, index) => join(root, 'controlled-child-emit-' + (index + 1)));
+  const script = [
+    "const fs = require('node:fs');",
+    `const ready = ${JSON.stringify(ready)};`,
+    `const gates = ${JSON.stringify(gates)};`,
+    `const lines = ${JSON.stringify(lines)};`,
+    "fs.writeFileSync(ready, 'ready');",
+    "(async () => {",
+    "  for (let index = 0; index < lines.length; index += 1) {",
+    "    while (!fs.existsSync(gates[index])) await new Promise((resolve) => setTimeout(resolve, 5));",
+    "    process.stdout.write(lines[index] + '\\n');",
+    "  }",
+    "  setInterval(() => {}, 1000);",
+    "})().catch((error) => { process.stderr.write(String(error)); process.exit(1); });",
+  ].join('\n');
+  return {
+    fixture: nodeFixture(script),
+    ready,
+    emit(ordinal) {
+      if (ordinal < 1 || ordinal > gates.length) throw new Error('invalid child emit step');
+      writeFileSync(gates[ordinal - 1]!, 'emit');
+    },
+  };
+}
+
+async function awaitControlledChildReady(path: string): Promise<void> {
+  const deadline = Date.now() + 10_000; // failure bound, not an ordering assertion
+  while (!existsSync(path)) {
+    if (Date.now() >= deadline) throw new Error('real child never signalled readiness');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+function launchControlledDeadlineScenario(root: string, id: string, lines: string[]) {
+  const paths = launchPaths(root, id);
+  const child = controlledNodeFixture(root, lines);
+  const clock = controlledDeadlineClock();
+  const completion = runFixtureLaunch(root, {
+    runIdentity: 'run-' + id, attemptIdentity: 'attempt-' + id,
+    handoffReceiptPath: paths.receipt, terminalEnvelopePath: paths.envelope,
+    browserOutputPath: paths.output, cwd: repoRoot,
+    childCommand: child.fixture.command, childArgs: child.fixture.args,
+    deadlineTestControl: clock.control,
+  });
+  return { paths, child, clock, completion };
+}
+
+async function cleanupControlledDeadlineScenario(
+  scenario: ReturnType<typeof launchControlledDeadlineScenario>,
+): Promise<void> {
+  scenario.clock.setTime(Date.parse('2100-01-01T00:00:00.000Z'));
+  scenario.clock.pulseWatchdog();
+  try { await scenario.completion; } catch { /* Preserve the assertion error. */ }
 }
 
 function launchPaths(root: string, id: string): {
@@ -1154,125 +1263,108 @@ describe('flow-manager long-running child (#1164)', () => {
     });
   });
 
-  it('does not admit a first heartbeat that arrives after the startup deadline', async () => {
+  it.each([
+    ['just before', -1, true],
+    ['at', 0, false],
+    ['after', 1, false],
+  ] as const)('does not admit a first heartbeat that arrives after the startup deadline (%s)', async (_case, offset, admitted) => {
     const root = tempDir();
-    const paths = launchPaths(root, 'late-startup-heartbeat');
-    const heartbeat = {
-      schema: 'observation-heartbeat/v1',
-      phase: 'admitted_pre_send',
-      poll_count: 0,
-      observation_state: 'admitted',
-      stable_reads: 0,
-      completion_ready: false,
-    };
-    const fixture = nodeFixture(`
-      setTimeout(() => {
-        process.stdout.write(JSON.stringify(${JSON.stringify(heartbeat)}) + '\\n');
-      }, 35);
-      setInterval(() => {}, 1000);
-    `);
+    const heartbeat = {"schema":"observation-heartbeat/v1","phase":"admitted_pre_send","poll_count":0,"observation_state":"admitted","stable_reads":0,"completion_ready":false};
     process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS = '20';
     process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '10';
     process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '30';
-
-    const code = await runFixtureLaunch(root, {
-      runIdentity: 'run-late-startup-heartbeat',
-      attemptIdentity: 'attempt-late-startup-heartbeat',
-      handoffReceiptPath: paths.receipt,
-      terminalEnvelopePath: paths.envelope,
-      browserOutputPath: paths.output,
-      cwd: repoRoot,
-      childCommand: fixture.command,
-      childArgs: fixture.args,
-    });
-
-    expect(code).toBe(1);
-    const envelope = readTerminalEnvelope(paths.envelope);
-    expect(envelope?.incident).toBe('child_startup_timeout');
-    expect(envelope?.child_exit_code).toBeNull();
-    expect(envelope?.diagnostics ?? {}).not.toHaveProperty('last_heartbeat');
+    const scenario = launchControlledDeadlineScenario(root, 'startup-' + offset, [JSON.stringify(heartbeat)]);
+    try {
+      const initialized = await scenario.clock.observed('initialized');
+      await awaitControlledChildReady(scenario.child.ready);
+      scenario.clock.setTime(initialized.deadline + offset);
+      scenario.child.emit(1);
+      const parsed = await scenario.clock.observed('heartbeat');
+      expect(parsed).toMatchObject({ observedAt: initialized.deadline + offset, accepted: admitted });
+      scenario.clock.setTime(parsed.deadline); // expire only after the parent parsed the line
+      scenario.clock.pulseWatchdog();
+      const code = await scenario.completion;
+      expect(code).toBe(1);
+      const envelope = readTerminalEnvelope(scenario.paths.envelope);
+      expect(envelope?.incident).toBe(admitted ? 'child_liveness_timeout' : 'child_startup_timeout');
+      expect(envelope?.child_exit_code).toBeNull();
+      if (admitted) expect(envelope?.diagnostics).toHaveProperty('last_heartbeat');
+      else expect(envelope?.diagnostics ?? {}).not.toHaveProperty('last_heartbeat');
+      expect((await scenario.clock.observed('child_exit')).exitCode).toBeNull();
+    } finally {
+      await cleanupControlledDeadlineScenario(scenario);
+    }
   });
 
-  it('does not refresh an expired recurring deadline from a late heartbeat', async () => {
+  it.each([
+    ['just before', -1, true],
+    ['at', 0, false],
+    ['after', 1, false],
+  ] as const)('does not refresh an expired recurring deadline from a late heartbeat (%s)', async (_case, offset, admitted) => {
     const root = tempDir();
-    const paths = launchPaths(root, 'late-recurring-heartbeat');
-    const heartbeat = {
-      schema: 'observation-heartbeat/v1',
-      phase: 'post_send_observation',
-      poll_count: 1,
-      observation_state: 'busy',
-      stable_reads: 0,
-      completion_ready: false,
-    };
-    const fixture = nodeFixture(`
-      const heartbeat = ${JSON.stringify(heartbeat)};
-      process.stdout.write(JSON.stringify(heartbeat) + '\\n');
-      setTimeout(() => {
-        process.stdout.write(JSON.stringify({ ...heartbeat, poll_count: 2 }) + '\\n');
-      }, 45);
-      setInterval(() => {}, 1000);
-    `);
+    const first = {"schema":"observation-heartbeat/v1","phase":"post_send_observation","poll_count":1,"observation_state":"busy","stable_reads":0,"completion_ready":false};
+    const scenario = launchControlledDeadlineScenario(root, 'recurring-' + offset, [
+      JSON.stringify(first), JSON.stringify({ ...first, poll_count: 2 }),
+    ]);
     process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '10';
     process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '30';
-
-    const code = await runFixtureLaunch(root, {
-      runIdentity: 'run-late-recurring-heartbeat',
-      attemptIdentity: 'attempt-late-recurring-heartbeat',
-      handoffReceiptPath: paths.receipt,
-      terminalEnvelopePath: paths.envelope,
-      browserOutputPath: paths.output,
-      cwd: repoRoot,
-      childCommand: fixture.command,
-      childArgs: fixture.args,
-    });
-
-    expect(code).toBe(1);
-    const envelope = readTerminalEnvelope(paths.envelope);
-    expect(envelope?.incident).toBe('child_liveness_timeout');
-    expect(envelope?.diagnostics).toMatchObject({
-      last_heartbeat: { poll_count: 1 },
-    });
+    try {
+      await scenario.clock.observed('initialized');
+      await awaitControlledChildReady(scenario.child.ready);
+      scenario.child.emit(1);
+      const firstParsed = await scenario.clock.observed('heartbeat', 1);
+      expect(firstParsed.accepted).toBe(true);
+      scenario.clock.setTime(firstParsed.deadline + offset);
+      scenario.child.emit(2);
+      const secondParsed = await scenario.clock.observed('heartbeat', 2);
+      expect(secondParsed).toMatchObject({ observedAt: firstParsed.deadline + offset, accepted: admitted });
+      scenario.clock.setTime(secondParsed.deadline);
+      scenario.clock.pulseWatchdog();
+      const code = await scenario.completion;
+      expect(code).toBe(1);
+      const envelope = readTerminalEnvelope(scenario.paths.envelope);
+      expect(envelope?.incident).toBe('child_liveness_timeout');
+      expect(envelope?.diagnostics).toMatchObject({
+        last_heartbeat: { poll_count: admitted ? 2 : 1 },
+      });
+      expect((await scenario.clock.observed('child_exit')).exitCode).toBeNull();
+    } finally {
+      await cleanupControlledDeadlineScenario(scenario);
+    }
   });
 
-  it('does not accept a terminal result that arrives after the recurring deadline', async () => {
+  it.each([
+    ['just before', -1, true],
+    ['at', 0, false],
+    ['after', 1, false],
+  ] as const)('does not accept a terminal result that arrives after the recurring deadline (%s)', async (_case, offset, admitted) => {
     const root = tempDir();
-    const paths = launchPaths(root, 'late-recurring-result');
-    const result = makeTurnResult();
-    const heartbeat = {
-      schema: 'observation-heartbeat/v1',
-      phase: 'post_send_observation',
-      poll_count: 1,
-      observation_state: 'busy',
-      stable_reads: 0,
-      completion_ready: false,
-    };
-    const fixture = nodeFixture(`
-      process.stdout.write(JSON.stringify(${JSON.stringify(heartbeat)}) + '\\n');
-      setTimeout(() => {
-        process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n');
-      }, 45);
-      setInterval(() => {}, 1000);
-    `);
+    const heartbeat = {"schema":"observation-heartbeat/v1","phase":"post_send_observation","poll_count":1,"observation_state":"busy","stable_reads":0,"completion_ready":false};
+    const scenario = launchControlledDeadlineScenario(root, 'result-' + offset, [
+      JSON.stringify(heartbeat), JSON.stringify(makeTurnResult()),
+    ]);
     process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '10';
     process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '30';
-
-    const code = await runFixtureLaunch(root, {
-      runIdentity: 'run-late-recurring-result',
-      attemptIdentity: 'attempt-late-recurring-result',
-      handoffReceiptPath: paths.receipt,
-      terminalEnvelopePath: paths.envelope,
-      browserOutputPath: paths.output,
-      cwd: repoRoot,
-      childCommand: fixture.command,
-      childArgs: fixture.args,
-    });
-
-    expect(code).toBe(1);
-    expect(readTerminalEnvelope(paths.envelope)).toMatchObject({
-      lifecycle_outcome: 'incident',
-      incident: 'child_liveness_timeout',
-      child_exit_code: null,
-    });
+    try {
+      await scenario.clock.observed('initialized');
+      await awaitControlledChildReady(scenario.child.ready);
+      scenario.child.emit(1);
+      const firstParsed = await scenario.clock.observed('heartbeat');
+      expect(firstParsed.accepted).toBe(true);
+      scenario.clock.setTime(firstParsed.deadline + offset);
+      scenario.child.emit(2);
+      const resultParsed = await scenario.clock.observed('result');
+      expect(resultParsed).toMatchObject({ observedAt: firstParsed.deadline + offset, accepted: admitted });
+      scenario.clock.pulseWatchdog();
+      const code = await scenario.completion;
+      expect(code).toBe(admitted ? 0 : 1);
+      expect(readTerminalEnvelope(scenario.paths.envelope)).toMatchObject(admitted
+        ? { lifecycle_outcome: 'success' }
+        : { lifecycle_outcome: 'incident', incident: 'child_liveness_timeout', child_exit_code: null });
+      await scenario.clock.observed('child_exit');
+    } finally {
+      await cleanupControlledDeadlineScenario(scenario);
+    }
   });
 
   it('accepts an already-complete reply when the browser completion signal was not detected', async () => {
@@ -1312,44 +1404,44 @@ describe('flow-manager long-running child (#1164)', () => {
     });
   });
 
-  it('publishes a timeout envelope when ongoing heartbeats never produce a completion signal', async () => {
+  it.each([
+    ['heartbeats without completion', 'heartbeat', -1, false],
+    ['terminal just before hard limit', 'result', -1, true],
+    ['terminal at hard limit', 'result', 0, false],
+    ['terminal after hard limit', 'result', 1, false],
+  ] as const)('publishes a timeout envelope when ongoing heartbeats never produce a completion signal (%s)', async (_case, secondKind, offset, admitted) => {
     const root = tempDir();
-    const paths = launchPaths(root, 'hard-timeout');
-    const heartbeat = {
-      schema: 'observation-heartbeat/v1',
-      phase: 'post_send_observation',
-      poll_count: 1,
-      observation_state: 'busy',
-      stable_reads: 0,
-      completion_ready: false,
-    };
-    const fixture = nodeFixture(`
-      let pollCount = 0;
-      setInterval(() => process.stdout.write(JSON.stringify({ ...${JSON.stringify(heartbeat)}, poll_count: ++pollCount }) + '\\n'), 10);
-    `);
+    const heartbeat = {"schema":"observation-heartbeat/v1","phase":"post_send_observation","poll_count":1,"observation_state":"busy","stable_reads":0,"completion_ready":false};
     process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS = '100';
     process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '50';
-    process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '100';
+    process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '300';
     process.env.OPK_FM_LONG_CHILD_HARD_DEADLINE_MS = '160';
-    const startedAt = Date.now();
-    const code = await runFixtureLaunch(root, {
-      runIdentity: 'run-hard-timeout',
-      attemptIdentity: 'attempt-hard-timeout',
-      handoffReceiptPath: paths.receipt,
-      terminalEnvelopePath: paths.envelope,
-      browserOutputPath: paths.output,
-      cwd: repoRoot,
-      childCommand: fixture.command,
-      childArgs: fixture.args,
-    });
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
-    expect(code).toBe(1);
-    expect(readTerminalEnvelope(paths.envelope)).toMatchObject({
-      lifecycle_outcome: 'incident',
-      incident: 'child_liveness_timeout',
-      child_exit_code: null,
-      delivery: 'POSSIBLY_DELIVERED',
-    });
+    const scenario = launchControlledDeadlineScenario(root, 'hard-' + secondKind + '-' + offset, [
+      JSON.stringify(heartbeat), secondKind === 'heartbeat'
+        ? JSON.stringify({ ...heartbeat, poll_count: 2 })
+        : JSON.stringify(makeTurnResult()),
+    ]);
+    try {
+      const initialized = await scenario.clock.observed('initialized');
+      await awaitControlledChildReady(scenario.child.ready);
+      scenario.child.emit(1);
+      const firstParsed = await scenario.clock.observed('heartbeat');
+      expect(firstParsed).toMatchObject({ accepted: true, deadline: initialized.hardDeadline });
+      scenario.clock.setTime(initialized.hardDeadline + offset);
+      scenario.child.emit(2);
+      const secondParsed = await scenario.clock.observed(secondKind === 'heartbeat' ? 'heartbeat' : 'result', secondKind === 'heartbeat' ? 2 : 1);
+      expect(secondParsed).toMatchObject({ observedAt: initialized.hardDeadline + offset, accepted: secondKind === 'heartbeat' || admitted });
+      if (!admitted) scenario.clock.setTime(initialized.hardDeadline);
+      scenario.clock.pulseWatchdog();
+      const code = await scenario.completion;
+      expect(code).toBe(admitted ? 0 : 1);
+      expect(readTerminalEnvelope(scenario.paths.envelope)).toMatchObject(admitted
+        ? { lifecycle_outcome: 'success' }
+        : { lifecycle_outcome: 'incident', incident: 'child_liveness_timeout', child_exit_code: null, delivery: 'POSSIBLY_DELIVERED' });
+      await scenario.clock.observed('child_exit');
+    } finally {
+      await cleanupControlledDeadlineScenario(scenario);
+    }
   });
 
   it('classifies a live child with no first heartbeat as child_startup_timeout', async () => {
@@ -1377,44 +1469,30 @@ describe('flow-manager long-running child (#1164)', () => {
 
   it('times out a child after heartbeats go silent past the idle window', async () => {
     const root = tempDir();
-    const paths = launchPaths(root, 'heartbeat-idle-timeout');
-    const heartbeat = {
-      schema: 'observation-heartbeat/v1',
-      phase: 'post_send_observation',
-      poll_count: 1,
-      observation_state: 'busy',
-      stable_reads: 0,
-      completion_ready: false,
-    };
-    const fixture = nodeFixture(`
-      process.stdout.write(JSON.stringify(${JSON.stringify(heartbeat)}) + '\\n');
-      setTimeout(() => {}, 1000);
-    `);
+    const heartbeat = {"schema":"observation-heartbeat/v1","phase":"post_send_observation","poll_count":1,"observation_state":"busy","stable_reads":0,"completion_ready":false};
     process.env.OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS = '100';
     process.env.OPK_FM_LONG_CHILD_CANDIDATE_GRACE_MS = '100';
-    const startedAt = Date.now();
-    const code = await runFixtureLaunch(root, {
-      runIdentity: 'run-heartbeat-idle',
-      attemptIdentity: 'attempt-heartbeat-idle',
-      handoffReceiptPath: paths.receipt,
-      terminalEnvelopePath: paths.envelope,
-      browserOutputPath: paths.output,
-      cwd: repoRoot,
-      childCommand: fixture.command,
-      childArgs: fixture.args,
-    });
-    const elapsedMs = Date.now() - startedAt;
-    expect(code).toBe(1);
-    expect(elapsedMs).toBeGreaterThanOrEqual(120);
-    const envelope = readTerminalEnvelope(paths.envelope);
-    expect(envelope?.incident).toBe('child_liveness_timeout');
-    expect(envelope?.child_exit_code).toBeNull();
-    expect(envelope?.diagnostics).toHaveProperty('last_heartbeat');
-    expect(envelope).toMatchObject({
-      delivery: 'POSSIBLY_DELIVERED',
-      send_count: 1,
-    });
-    expect(JSON.stringify(envelope)).not.toContain('child_stdout_eof_timeout');
+    const scenario = launchControlledDeadlineScenario(root, 'heartbeat-idle-timeout', [JSON.stringify(heartbeat)]);
+    try {
+      await scenario.clock.observed('initialized');
+      await awaitControlledChildReady(scenario.child.ready);
+      scenario.child.emit(1);
+      const firstParsed = await scenario.clock.observed('heartbeat');
+      expect(firstParsed.accepted).toBe(true);
+      scenario.clock.setTime(firstParsed.deadline);
+      scenario.clock.pulseWatchdog();
+      const code = await scenario.completion;
+      expect(code).toBe(1);
+      const envelope = readTerminalEnvelope(scenario.paths.envelope);
+      expect(envelope?.incident).toBe('child_liveness_timeout');
+      expect(envelope?.child_exit_code).toBeNull();
+      expect(envelope?.diagnostics).toHaveProperty('last_heartbeat');
+      expect(envelope).toMatchObject({ delivery: 'POSSIBLY_DELIVERED', send_count: 1 });
+      expect(JSON.stringify(envelope)).not.toContain('child_stdout_eof_timeout');
+      expect((await scenario.clock.observed('child_exit')).exitCode).toBeNull();
+    } finally {
+      await cleanupControlledDeadlineScenario(scenario);
+    }
   });
 
   it('does not refresh recurring liveness from malformed heartbeat stdout', async () => {
