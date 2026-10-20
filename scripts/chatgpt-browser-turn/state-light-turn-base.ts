@@ -1813,8 +1813,10 @@ async function locatorCount(
   locator: any,
   deadlineMs = Date.now() + MAX_LOCAL_READ_WAIT_MS,
   preserveNetworkChange = false,
+  useInvocationDeadline = false,
 ): Promise<number> {
-  const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+  const waitMs = useInvocationDeadline ? deadlineMs - Date.now()
+    : Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
   if (waitMs <= 0) throw new BrowserOperationTimeoutError('locator_count');
   const timeoutCause = 'browser_operation_timeout:locator_count';
   try {
@@ -2440,7 +2442,7 @@ async function readComposerReadiness(
     const composer = page.locator(COMPOSER_SELECTOR);
     let remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
-    if (await locatorCount(composer, deadline, true) <= 0) {
+    if (await locatorCount(composer, deadline, true, true) <= 0) {
       observe?.('absent');
       return false;
     }
@@ -2452,7 +2454,7 @@ async function readComposerReadiness(
     remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
     const readiness = typeof composer.evaluate === 'function'
-      ? await composer.evaluate(
+      ? await boundedBrowserRead(Promise.resolve(composer.evaluate(
         (element: any) => {
           const style = window.getComputedStyle(element);
           const rect = element.getBoundingClientRect();
@@ -2470,7 +2472,7 @@ async function readComposerReadiness(
         },
         undefined,
         { timeout: remainingMs },
-      )
+      )), remainingMs, 'composer_readiness_timeout')
       : undefined;
     if (Date.now() >= deadline) return false;
 
@@ -2509,15 +2511,109 @@ async function readComposerTextForSendDelivery(
   composer: any,
   deadlineMs: number,
 ): Promise<string | undefined> {
-  const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+  const text = await readComposerTextWithinDeadline(
+    composer, Math.min(deadlineMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
+  );
+  return text === undefined ? undefined : collapseUnicodeWhitespace(text);
+}
+
+// Pre-Send verification preserves every visible code point, including marker
+// separators, code indentation and newlines. Delivery-witness normalization
+// must never authorize dispatch of a different draft.
+async function readComposerTextWithinDeadline(
+  composer: any,
+  deadlineMs: number,
+): Promise<string | undefined> {
+  const waitMs = deadlineMs - Date.now();
   if (waitMs <= 0) return undefined;
-  const timeoutCause = 'send_delivery_composer_read_timeout';
   try {
-    return collapseUnicodeWhitespace(String(await boundedBrowserRead(
+    return String(await boundedBrowserRead(
       Promise.resolve(composer.innerText({ timeout: waitMs })),
       waitMs,
-      timeoutCause,
-    )));
+      'send_delivery_composer_read_timeout',
+    ));
+  } catch (error) {
+    if (isPostSendTargetCrash(error)) throw error;
+    return undefined;
+  }
+}
+
+async function composerPayloadMatchesBeforeSend(
+  composer: any,
+  expected: string,
+  deadlineMs: number,
+): Promise<boolean> {
+  const visible = await readComposerTextWithinDeadline(composer, deadlineMs);
+  // Rendered editor paragraphs/autolinks can add presentation whitespace.
+  // Recover only explicit editor structure, never normalize payload whitespace.
+  const matches = visible === expected
+    || await readLosslessOwnedComposer(composer, deadlineMs, true) === expected
+    || await readStructuredComposerText(composer, expected.length, deadlineMs) === expected;
+  return matches && Date.now() < deadlineMs;
+}
+
+async function readStructuredComposerText(
+  composer: any, expectedLength: number, deadlineMs: number,
+): Promise<string | undefined> {
+  const waitMs = deadlineMs - Date.now();
+  if (waitMs <= 0 || typeof composer?.evaluate !== 'function') return undefined;
+  try {
+    const text = await boundedBrowserRead(
+      Promise.resolve(composer.evaluate((element: HTMLElement, maxChars: number) => {
+        // ProseMirror paragraphs encode document newlines independently of
+        // CSS innerText spacing. Text nodes (including spaces/tabs) are literal.
+        if (!element.isConnected || !element.isContentEditable
+          || !element.classList.contains('ProseMirror')) return undefined;
+        const view = element.ownerDocument.defaultView;
+        if (!view) return undefined;
+        const parts: string[] = [];
+        const maxNodes = Math.min(20_000, maxChars * 2 + 256);
+        let nodes = 0;
+        let chars = 0;
+        const append = (value: string): boolean => {
+          chars += value.length;
+          if (chars > maxChars) return false;
+          parts.push(value);
+          return true;
+        };
+        const readable = (node: HTMLElement): boolean => {
+          if (node.getAttribute('hidden') !== null || node.getAttribute('aria-hidden') === 'true'
+            || node.getAttribute('contenteditable') === 'false') return false;
+          const style = view.getComputedStyle(node);
+          return style.display !== 'none' && style.visibility !== 'hidden' && style.visibility !== 'collapse';
+        };
+        const walk = (node: Node, depth: number, trailingBreak: boolean): boolean => {
+          if (++nodes > maxNodes || depth > 32) return false;
+          if (node.nodeType === 3) return append(node.nodeValue ?? '');
+          if (node.nodeType !== 1) return false;
+          const child = node as HTMLElement;
+          if (!readable(child)) return false;
+          if (child.tagName === 'BR') {
+            if (child.childNodes.length !== 0) return false;
+            return child.classList.contains('ProseMirror-trailingBreak') ? trailingBreak : append('\n');
+          }
+          if (!(child.tagName === 'P' && depth === 1)
+            && !['A', 'SPAN', 'CODE', 'STRONG', 'EM', 'B', 'I', 'S', 'U'].includes(child.tagName)) return false;
+          for (let i = 0; i < child.childNodes.length; i++) {
+            if (!walk(child.childNodes[i]!, depth + 1,
+              child.tagName === 'P' && i === child.childNodes.length - 1)) return false;
+          }
+          return true;
+        };
+        if (!readable(element) || element.childNodes.length > maxNodes) return undefined;
+        let paragraphs: boolean | undefined;
+        for (let i = 0; i < element.childNodes.length; i++) {
+          const child = element.childNodes[i]!;
+          const isParagraph = child.nodeType === 1 && (child as HTMLElement).tagName === 'P';
+          paragraphs ??= isParagraph;
+          if (paragraphs !== isParagraph || (isParagraph && i > 0 && !append('\n'))
+            || !walk(child, 1, false)) return undefined;
+        }
+        return parts.join('');
+      }, expectedLength)),
+      waitMs, 'send_composer_structure_timeout',
+    );
+    return typeof text === 'string' ? text : undefined;
   } catch (error) {
     if (isPostSendTargetCrash(error)) throw error;
     return undefined;
@@ -2734,8 +2830,9 @@ async function freshRetryDomGuards(input: {
   if (browserOrPageDefinitelyLost(input.page, input.browser)) return false;
   try {
     if (await readFreshStopVisible(input.page, input.deadlineMs) !== false) return false;
-    const typed = await readComposerTextForSendDelivery(input.composer, input.deadlineMs);
-    if (!renderedPayloadMatches(typed, input.markerPayload)) return false;
+    if (!await composerPayloadMatchesBeforeSend(
+      input.composer, input.markerPayload, input.deadlineMs,
+    )) return false;
     const observed = await readPageObservation(
       input.page, undefined, undefined, true, input.deadlineMs,
     );
@@ -2755,8 +2852,10 @@ async function freshRetryDomGuards(input: {
 async function readLosslessOwnedComposer(
   composer: any,
   deadlineMs: number,
+  useInvocationDeadline = false,
 ): Promise<string | undefined> {
-  const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+  const waitMs = useInvocationDeadline ? deadlineMs - Date.now()
+    : Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
   if (waitMs <= 0 || typeof composer?.evaluate !== 'function') return undefined;
   try {
     const result = await boundedBrowserRead(
@@ -2795,8 +2894,9 @@ async function existingRetryDomGuards(input: {
     && Date.now() < input.deadlineMs;
   if (!samePage()) return false;
   try {
-    if (await readComposerTextForSendDelivery(input.composer, input.deadlineMs)
-      !== collapseUnicodeWhitespace(input.markedPayload)) return false;
+    if (!await composerPayloadMatchesBeforeSend(
+      input.composer, input.markedPayload, input.deadlineMs,
+    )) return false;
     if (await readFreshStopVisible(input.page, input.deadlineMs) !== false) return false;
     const observed = await readPageObservation(
       input.page, undefined, undefined, true, input.deadlineMs,
@@ -3017,7 +3117,9 @@ async function mutateComposerOrCause(
   const composer = page.locator(COMPOSER_SELECTOR);
   const insertionStart = Date.now();
   const insertionBudgetMs = deriveComposerInsertionBudgetMs(text);
-  const insertionDeadlineMs = Math.min(insertionStart + insertionBudgetMs, invocationDeadlineMs);
+  // The line estimate is diagnostic only. Both fill() timeouts, including a
+  // single large line, use the remaining finite invocation deadline below.
+  const insertionDeadlineMs = invocationDeadlineMs;
   if (insertionContext) insertionContext.insertionDeadlineMs = insertionDeadlineMs;
   const exhausted = (branch: ComposerMutationDiagnosticV1['branch']): PreSendComposerFailureCause => {
     if (insertionContext) {
@@ -3042,7 +3144,7 @@ async function mutateComposerOrCause(
     // classifying failure, not as a veto on the ordinary click/fill attempt.
     let composerAbsent = false;
     try {
-      composerAbsent = await locatorCount(composer, insertionDeadlineMs) === 0;
+      composerAbsent = await locatorCount(composer, invocationDeadlineMs, false, true) === 0;
     } catch {
       return exhausted('readiness_before_click');
     }
@@ -3055,8 +3157,11 @@ async function mutateComposerOrCause(
       if (actionBudgetMs <= 0) return exhausted('budget_before_fill');
       beforeAction?.();
       await composer.fill(text, { timeout: actionBudgetMs });
-      // If readiness recovered during the attempt, proceed to dispatch.
-      if (await readComposerReadiness(page, insertionDeadlineMs)) return null;
+      // Verify the complete draft even when readiness recovered during fill.
+      if (await readComposerReadiness(page, invocationDeadlineMs)
+        && await composerPayloadMatchesBeforeSend(
+          composer, text, invocationDeadlineMs,
+        )) return null;
     } catch (error) {
       if (error instanceof Error && (error.message === 'conversation_fetch_http_429'
         || (error.message === 'rate_limit' && heldPage429Diagnostic(page)?.http_status === 429)
@@ -3082,14 +3187,16 @@ async function mutateComposerOrCause(
     if (actionBudgetMs <= 0) return exhausted('budget_before_fill2');
     beforeAction?.();
     await composer.fill(text, { timeout: actionBudgetMs });
-    if (Date.now() >= insertionDeadlineMs) return 'composer_mutation_budget_exhausted';
-    return null;
+    if (Date.now() >= invocationDeadlineMs) return 'composer_mutation_budget_exhausted';
+    return await composerPayloadMatchesBeforeSend(composer, text, invocationDeadlineMs)
+      ? null : 'composer_mutation_budget_exhausted';
   } catch (error) {
     if (error instanceof Error && (error.message === 'conversation_fetch_http_429'
       || (error.message === 'rate_limit' && heldPage429Diagnostic(page)?.http_status === 429)
       || error.message === 'account_cooldown_active')) throw error;
     if (
       isPlaywrightTimeoutError(error)
+      && Date.now() < invocationDeadlineMs
       && await hasBlockingPageOverlay(page, invocationDeadlineMs)
     ) {
       return 'blocking_page_overlay';
@@ -4285,7 +4392,7 @@ async function runTurnCore(
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       const composer = page.locator(COMPOSER_SELECTOR);
-      if (!renderedPayloadMatches(await readComposerTextForSendDelivery(composer, invocationDeadlineMs), markedPayload)) {
+      if (!await composerPayloadMatchesBeforeSend(composer, markedPayload, invocationDeadlineMs)) {
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
@@ -4352,9 +4459,9 @@ async function runTurnCore(
       };
       // The composer can change during Send readiness polling. Do not send a
       // different draft as though it were the invocation's marked payload.
-      if (!renderedPayloadMatches(await readComposerTextForSendDelivery(
-        composer, Math.min(invocationDeadlineMs, readinessDeadlineMs),
-      ), markedPayload)) throw new Error('ui_contract_mismatch:fresh_owned_payload_changed_before_click');
+      if (!await composerPayloadMatchesBeforeSend(
+        composer, markedPayload, Math.min(invocationDeadlineMs, readinessDeadlineMs),
+      )) throw new Error('ui_contract_mismatch:fresh_owned_payload_changed_before_click');
       assertFreshOwner();
       const sendAction = async () => await dispatchStateLightSendAndObserveDelivery({
         page, browser, composer, sendButton, hasSendButton: true, marker,
@@ -4377,9 +4484,13 @@ async function runTurnCore(
         })) {
         // Positive Playwright actionability proof and all independent current
         // DOM/owner checks are required; no third attempt after this second call.
-        assertFreshOwner();
-        freshRepeated = true;
-        delivery = await sendAction();
+        if (await composerPayloadMatchesBeforeSend(
+          composer, markedPayload, Math.min(invocationDeadlineMs, readinessDeadlineMs),
+        )) {
+          assertFreshOwner();
+          freshRepeated = true;
+          delivery = await sendAction();
+        }
       }
       if (delivery.sendCount === 0 && delivery.preDispatchTimeoutProven === true
         && (!freshRepeated || firstActionAffirmative)
@@ -4449,7 +4560,7 @@ async function runTurnCore(
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
       const hasSendButton = await locatorCount(
         sendButton,
-        Math.min(insertionDeadlineMs, invocationDeadlineMs),
+        invocationDeadlineMs, false, true,
       ) > 0;
       remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
@@ -4465,6 +4576,13 @@ async function runTurnCore(
         const beforeDispatchFailure = await verifyReopenedExistingPage();
         if (beforeDispatchFailure) return beforeDispatchFailure;
         sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+        if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+        if (!await composerPayloadMatchesBeforeSend(
+          composer, markedPayload, invocationDeadlineMs,
+        )) {
+          return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+        }
+        sendWaitMs = invocationDeadlineMs - Date.now();
         if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       // Reapply existing read-only destination predicates after composer mutation
@@ -4546,10 +4664,15 @@ async function runTurnCore(
         })) {
         // Only the first click's actual positive non-dispatch action result grants
         // this one optional repeat; an uncertain first action or Enter never does.
-        const repeatWaitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now());
-        if (repeatWaitMs > 0) {
-          repeated = true;
-          delivery = await dispatchExisting(repeatWaitMs);
+        if (await composerPayloadMatchesBeforeSend(composer, markedPayload, invocationDeadlineMs)
+          && originalExactChat && !browserOrPageDefinitelyLost(page, browser)
+          && normalizeConversationUrl(String(page.url())) === originalExactChat
+          && readOwnedConversationIdentity(page, originalExactChat).matched) {
+          const repeatWaitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now());
+          if (repeatWaitMs > 0) {
+            repeated = true;
+            delivery = await dispatchExisting(repeatWaitMs);
+          }
         }
       }
       if (!repeated && hasSendButton && delivery.sendCount === 0
@@ -4569,8 +4692,8 @@ async function runTurnCore(
             page, browser, composer, targetChatUrl: originalExactChat,
             markedPayload, marker, baselineSnapshot, deadlineMs: invocationDeadlineMs,
           })
-          // The normalized guard above contains awaits. Its equality does not
-          // protect a whitespace-only edit made while that guard was running.
+          // The guard above contains awaits. Recheck exact text after it so
+          // a concurrent whitespace-only edit cannot authorize a re-click.
           && await readFreshStopVisible(page, invocationDeadlineMs) === false
           && await readLosslessOwnedComposer(composer, invocationDeadlineMs) === markedPayload
           && page === originalHeldPage && getOwnTargetInfo(browser)?.created === true
@@ -7521,6 +7644,7 @@ export const __testSendDelivery = {
   affirmativePreActionabilityTimeout,
   waitForFreshSendButton,
   readLosslessOwnedComposer,
+  composerPayloadMatchesBeforeSend,
   conditionalClearOwnedComposerDraft,
   observeExistingServerCheckedRecovery,
 };

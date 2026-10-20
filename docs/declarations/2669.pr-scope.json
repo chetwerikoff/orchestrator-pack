@@ -1,0 +1,35 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2669,
+  "declared_paths": [
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
+  ],
+  "denylist": [
+    ".env",
+    ".env.*",
+    ".github/workflows/",
+    "credentials/",
+    "packages/core/",
+    "scripts/.env",
+    "scripts/.env.*",
+    "scripts/vitest-ci-lanes.config.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
+  ],
+  "source_revision": "89c1c5ff9fc0854d4699f8fe4c39c2d5a7727dbf"
+}

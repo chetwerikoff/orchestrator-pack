@@ -1511,9 +1511,13 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     | 'post-delayed-452' | 'post-generation-late' | 'post-fetch-429'
     | 'post-active' | 'post-stop' | 'initial-active'
     | 'initial-unknown' | 'initial-empty' | 'initial-incomplete'
-    | 'initial-stop' | 'initial-wrong-url' | 'short-budget';
+    | 'initial-stop' | 'initial-wrong-url' | 'short-budget'
+    | 'slow-fill' | 'partial-fill' | 'expired-fill' | 'failed-fill'
+    | 'joined-marker-fill' | 'joined-marker-before-send';
 
-  async function fullTurn(scenario: Scenario) {
+  async function fullTurn(scenario: Scenario, prompt = 'PROMPT') {
+    const { readStableInput } = await import('./input.ts');
+    vi.mocked(readStableInput).mockReturnValueOnce(stableTurnInput(prompt));
     const chatUrl = 'https://chatgpt.com/c/25602560-2560-4560-8560-256025602560';
     const invocationId = randomUUID();
     const profile = join(root, 'profile');
@@ -1533,10 +1537,24 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     let readsAtSend: number | undefined;
     const events = new EventEmitter();
     let postReopenComposerProbes = 0;
-    const usableComposer = () => scenario === 'ready'
+    let composerTextReads = 0;
+    const usableComposer = () => ['ready', 'slow-fill', 'partial-fill', 'expired-fill', 'failed-fill',
+      'joined-marker-fill', 'joined-marker-before-send'].includes(scenario)
       || (scenario === 'late-hydration' && now - startedAt >= 20_000)
       || (reopened && !['composer-still-absent', 'late-redirect', 'late-close'].includes(scenario));
-    const fill = vi.fn(async (value: string) => { composerText = value; });
+    const fill = vi.fn(async (value: string, { timeout }: { timeout: number }) => {
+      if (scenario === 'failed-fill') throw new Error('fill failed');
+      const costMs = ['slow-fill', 'partial-fill', 'joined-marker-fill', 'joined-marker-before-send']
+        .includes(scenario) ? 6_000 : 0;
+      if (timeout < costMs) {
+        now += timeout;
+        throw new Error('TimeoutError: fill timed out before full insertion');
+      }
+      composerText = scenario === 'partial-fill' ? value.slice(0, -1)
+        : scenario === 'joined-marker-fill' ? value.replace('\n\n', '') : value;
+      now += costMs;
+      if (scenario === 'expired-fill') now = startedAt + 60_000;
+    });
     const composer = scalarLocator({
       count: vi.fn(async () => {
         if (reopened) postReopenComposerProbes++;
@@ -1546,7 +1564,12 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
         if (!usableComposer()) throw new Error('no composer in the rendered page');
       }),
       fill,
-      innerText: vi.fn(async () => composerText),
+      innerText: vi.fn(async () => {
+        if (++composerTextReads > 1 && scenario === 'joined-marker-before-send') {
+          composerText = composerText.replace('\n\n', '');
+        }
+        return composerText;
+      }),
     });
     const send = vi.fn(async () => {
       sentAt = now;
@@ -1712,6 +1735,37 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
       clock.mockRestore();
     }
   }
+
+  it.each(['short', 'single-100KB-line'] as const)(
+    'dispatches exactly once after a verified slow %s fill (#2669)', async (shape) => {
+      const prompt = shape === 'short' ? 'PROMPT'
+        : '  Synthetic task instruction 0'.padEnd(100 * 1024, 'x');
+      const run = await fullTurn('slow-fill', prompt);
+      expect(run.fill).toHaveBeenCalledTimes(1);
+      expect(run.send).toHaveBeenCalledTimes(1);
+      expect(run.sentAt! - run.startedAt).toBeGreaterThanOrEqual(6_000);
+      expect(run.sentAt! - run.startedAt).toBeLessThan(60_000);
+      expect(run.sentText).toMatch(/^OPKTURNV1[0-9a-f]{32}\n\n/u);
+      expect(run.sentText.slice(run.sentText.indexOf('\n\n') + 2)).toBe(prompt);
+      expect(run.result.send_count).toBe(1);
+      expect(run.goto).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each((['partial-fill', 'expired-fill', 'failed-fill',
+    'joined-marker-fill', 'joined-marker-before-send'] as const).flatMap((scenario) =>
+      (['short', 'single-100KB-line'] as const).map((shape) => ({ scenario, shape })),
+    ))(
+    'never dispatches $shape $scenario despite a present composer (#2669)', async ({ scenario, shape }) => {
+      const prompt = shape === 'short' ? 'PROMPT'
+        : '  Synthetic task instruction 0'.padEnd(100 * 1024, 'x');
+      const run = await fullTurn(scenario, prompt);
+      expect(run.fill).toHaveBeenCalledTimes(1);
+      expect(run.send).not.toHaveBeenCalled();
+      expect(run.result.send_count).toBe(0);
+      expect(run.result.send_attempted).not.toBe(true);
+    },
+  );
 
   it('reopens exactly once and sends once when the entire real 30s watch fits the invocation budget', async () => {
     const run = await fullTurn('restored-long');
@@ -2606,12 +2660,27 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     rmSync(root, { recursive: true, force: true });
   });
 
-  async function connectedTurn(kind: Case) {
+  async function connectedTurn(kind: Case, corruption?: {
+    content: 'joined-marker' | 'indentation' | 'line-break';
+    when: 'after-click' | 'after-proof-read';
+  }) {
+    if (corruption) {
+      const { readStableInput } = await import('./input.ts');
+      vi.mocked(readStableInput).mockReturnValueOnce(stableTurnInput('keep separate words\n  indented line'));
+    }
     const profile = join(root, 'profile');
     const invocationId = randomUUID();
     let now = 100_000;
     let draft = '';
     let clickCount = 0;
+    let retryTailReads = 0;
+    let injectedRetryCorruption = false;
+    const corruptDraft = () => {
+      draft = corruption?.content === 'joined-marker' ? draft.replace('\n\n', '')
+        : corruption?.content === 'indentation' ? draft.replace('\n  indented', '\nindented')
+          : draft.replace('words\n  indented', 'words   indented');
+      injectedRetryCorruption = true;
+    };
     let firstClickAt = -1;
     let explicitGetAt = -1;
     let injectedNaturalPositive = false;
@@ -2656,7 +2725,12 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
           injectedWhitespaceMutation = true;
           draft = draft.replace('\n\n', '\n');
         }
-        return draft;
+        const visible = draft;
+        if (corruption?.when === 'after-proof-read' && clickCount === 1
+          && now >= firstClickAt + 5_000 && ++retryTailReads === 2 && !injectedRetryCorruption) {
+          corruptDraft();
+        }
+        return visible;
       }),
       textContent: vi.fn(async () => draft),
       evaluate: vi.fn(async (callback: (element: unknown, arg?: unknown) => unknown, args?: unknown, options?: { timeout?: number }) => {
@@ -2711,6 +2785,7 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       click: vi.fn(async () => {
         clickCount++;
         if (firstClickAt < 0) firstClickAt = now;
+        if (clickCount === 1 && corruption?.when === 'after-click') corruptDraft();
         if (kind === 'reused-page' && !observedReusedNegativeGet) {
           // Even a complete matching-UUID marker-negative GET from passive
           // Page traffic cannot turn a created:false target into retry authority.
@@ -2820,6 +2895,7 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
         explicitGetAt, getClock: () => now, getDraft: () => draft,
         injectedNaturalPositive, oversleptPoll, sawTransientGenerationDuringStall,
         appendedLateAssistant, injectedWhitespaceMutation, injectedAfterClear,
+        injectedRetryCorruption,
         observedReusedNegativeGet,
         close: page.close,
         observation: readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId),
@@ -2874,6 +2950,17 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       expect(t.close).not.toHaveBeenCalled();
       expect(t.observation.phase).not.toBe('not_sent');
     }
+  });
+
+  it.each((['joined-marker', 'indentation', 'line-break'] as const).flatMap((content) =>
+    (['after-click', 'after-proof-read'] as const).map((when) => ({ content, when })),
+  ))('vetoes an existing-chat retry with $content corruption $when (#2669)', async (corruption) => {
+    const t = await connectedTurn('pre-actionability-budget', corruption);
+    expect(t.injectedRetryCorruption).toBe(true);
+    expect(t.click).toHaveBeenCalledTimes(1);
+    expect(t.result.send_count).toBe(0);
+    expect(t.calls).toHaveLength(0);
+    expect(t.close).not.toHaveBeenCalled();
   });
 
   it('finalizes affirmative all-action non-dispatch only on a created owned blank Page', async () => {
