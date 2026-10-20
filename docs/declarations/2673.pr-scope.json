@@ -1,0 +1,19 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2673,
+  "declared_paths": [
+    "scripts/pr2-foundation/foundation.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "scripts/lib/cutover/activation-platform-preflight.ts",
+    "scripts/pr2a/final-conformance.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/pr2-foundation/foundation.test.ts"
+  ],
+  "source_revision": "97f7d65107c57019038c0592b5a358226dad3201"
+}
