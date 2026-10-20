@@ -5,7 +5,7 @@ import {
 } from '../draft-discipline.mjs';
 import { checkContractEvidence } from '../contract-evidence-validator.mjs';
 import { canonicalizeEntry } from '../pr-scope-declaration.ts';
-import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
+import { parseIssueScopeFences } from '@orchestrator-pack/shared/lib/issue_parser.js';
 
 export interface TierGateFloorOptions {
   repoRoot?: string;
@@ -33,6 +33,7 @@ export function checkWorkerSafetyFloor(draftText: string): { ok: boolean; errors
       errors.push('substantive floor: missing ## ' + heading + ' section');
     }
   }
+  const parsedScope = parseIssueScopeFences(draftText);
   for (const fence of [
     'behavior-kind',
     'complexity-tier',
@@ -41,14 +42,15 @@ export function checkWorkerSafetyFloor(draftText: string): { ok: boolean; errors
     'smoke-test-plan',
     'contract-evidence',
   ]) {
-    if (!hasFence(draftText, fence)) {
+    const present = fence === 'denylist' || fence === 'allowed-roots'
+      ? parsedScope.occurrences.some((occurrence) => occurrence.kind === fence)
+      : hasFence(draftText, fence);
+    if (!present) {
       errors.push('substantive floor: missing ' + fence + ' fence');
     }
   }
-  // Use the Issue parser's entries so repeated fences share one field index sequence.
-  const scope: ReturnType<typeof parseIssueBody> = hasFence(draftText, 'denylist')
-    ? parseIssueBody(draftText)
-    : { denylist: [] };
+  // Shared parser preserves field-local indices across repeated scope fences.
+  const scope = parsedScope.constraints;
   for (const required of ['packages/core/**', 'vendor/**']) {
     if (!scope.denylist.includes(required)) {
       errors.push('worker-safety floor: denylist must include ' + required);
