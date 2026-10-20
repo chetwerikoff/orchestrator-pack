@@ -256,7 +256,12 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function observerFor(source: FakeFleetSource, config: unknown = undefined, generation = 'sg-test-1'): FleetObserver {
+function observerFor(
+  source: FakeFleetSource,
+  config: unknown = undefined,
+  generation = 'sg-test-1',
+  now?: () => number,
+): FleetObserver {
   const root = mkdtempSync(path.join(os.tmpdir(), 'fleet-observer-1258-'));
   roots.push(root);
   const configPath = path.join(root, 'config.json');
@@ -266,6 +271,7 @@ function observerFor(source: FakeFleetSource, config: unknown = undefined, gener
     configPath,
     snapshotPath: path.join(root, 'state', 'snapshot.json'),
     generationFactory: () => generation,
+    ...(now ? { now } : {}),
   });
 }
 
@@ -290,7 +296,8 @@ describe('S1 fleet observer', () => {
     source.add('idle');
     source.add('busy', 'gen-1', 'busy');
     source.add('unknown', 'gen-1', 'unknown');
-    const observer = observerFor(source, { schemaVersion: 1, livelockTicks: 2 });
+    // This classification test needs logical ordering, not an expired real-time phase budget.
+    const observer = observerFor(source, { schemaVersion: 1, livelockTicks: 2 }, 'sg-test-1', () => 0);
 
     const first = await observer.tick({ schedulerIntervalMs: 1_000 });
     expect(first.snapshot?.census.map((row) => row.class)).toEqual(['idle', 'unknown', 'unknown']);
@@ -570,8 +577,9 @@ describe('S1 fleet observer', () => {
     it('covers smoke scenario 3 through production serialization and commit boundaries', async () => {
     const source = new FakeFleetSource();
     source.add('byte-boundary');
-    const observer = observerFor(source);
+    const observer = observerFor(source, undefined, 'sg-test-1', () => 0);
     const accepted = await observer.tick({ schedulerIntervalMs: 1_000 });
+    expect(accepted.snapshotCommitted, accepted.reason).toBe(true);
     const canonical = readFileSync(observer.snapshotPath, 'utf8');
     expect(Buffer.byteLength(canonical, 'utf8')).toBeLessThan(MAX_SNAPSHOT_BYTES);
     expect(isAcceptedFleetSnapshot(canonical)).toBe(true);
@@ -651,7 +659,7 @@ describe('S1 fleet observer', () => {
   it('covers smoke scenario 6 without emitting disappearance for contradictory generation evidence', async () => {
     const source = new ContradictoryGenerationSource();
     source.add('contradictory', 'gen-1', 'gone');
-    const observer = observerFor(source);
+    const observer = observerFor(source, undefined, 'sg-test-1', () => 0);
     const result = await observer.tick({ schedulerIntervalMs: 1_000 });
 
     expect(result.snapshot?.census[0]?.class).toBe('unknown');
@@ -766,12 +774,18 @@ describe('S1 fleet observer', () => {
     const configPath = path.join(root, 'config.json');
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
     const snapshotPath = path.join(root, 'snapshot.json');
-    const first = new FleetObserver({ source, configPath, snapshotPath, generationFactory: () => 'sg-before-restart' });
+    const first = new FleetObserver({
+      source, configPath, snapshotPath, generationFactory: () => 'sg-before-restart',
+      now: () => 0,
+    });
     const firstResult = await first.tick({ schedulerIntervalMs: 1_000 });
     source.setChanged('restart-worker', false);
     const secondResult = await first.tick({ schedulerIntervalMs: 1_000 });
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 2, exceptions: [{ kind: 'HELD', schedulerGeneration: 'sg-before-restart', unitRef: 'u-000001' }] }));
-    const restarted = new FleetObserver({ source, configPath, snapshotPath, generationFactory: () => 'sg-after-restart' });
+    const restarted = new FleetObserver({
+      source, configPath, snapshotPath, generationFactory: () => 'sg-after-restart',
+      now: () => 0,
+    });
     const restartedResult = await restarted.tick({ schedulerIntervalMs: 1_000 });
     expect(firstResult.snapshot?.census[0]?.unitRef).toBe('u-000001');
     expect(secondResult.snapshot?.census[0]?.class).toBe('livelock');
