@@ -400,38 +400,6 @@ function writeWrapperAudit(event, fields = {}) {
   process.stderr.write(`gh-wrapper-audit: ${event}${suffix ? ` ${suffix}` : ''}\n`);
 }
 
-/**
- * The tracked scripts/gh entrypoint has already verified the selected project
- * card and exported its repository/default-branch pair before this process.
- * Use that admitted binding for REST context resolution, rather than reopening
- * the project card in the nested gh resolver (which would drift from a single
- * target authorization and can disagree with a target-mode test harness).
- *
- * Never trust a partial pair, a conflicting GH_REPO, or a foreign host.
- */
-function executeBoundRestRoute(route, parsed, realGh) {
-  const projectId = String(process.env.OPK_PROJECT_ID ?? '').trim();
-  const authorizedRepo = String(process.env.OPK_TARGET_REPOSITORY ?? '').trim();
-  const authorizedDefault = String(process.env.OPK_TARGET_DEFAULT_BRANCH ?? '').trim();
-  const options = { realGh, parsed, route, cwd: process.cwd() };
-  if (!projectId || !authorizedRepo || !authorizedDefault) {
-    return executeRestRoute(route.id, options);
-  }
-  if (String(process.env.GH_REPO ?? '').trim().toLowerCase() !== authorizedRepo.toLowerCase()
-    || String(process.env.GH_HOST ?? '').trim().toLowerCase() !== 'github.com') {
-    throw new Error('target gh authorized repository/host binding has drifted');
-  }
-  // The target card was checked by scripts/gh, not by arbitrary direct
-  // native passthrough. This synchronous resolver reads the bound GH_REPO.
-  const originalProjectId = process.env.OPK_PROJECT_ID;
-  try {
-    delete process.env.OPK_PROJECT_ID;
-    return executeRestRoute(route.id, options);
-  } finally {
-    process.env.OPK_PROJECT_ID = originalProjectId;
-  }
-}
-
 function main() {
   const argv = process.argv.slice(2);
   writeWrapperAudit('entry', buildAuditFields(argv));
@@ -465,7 +433,7 @@ function main() {
     return;
   }
   try {
-    const result = executeBoundRestRoute(route, parsed, realGh);
+    const result = executeRestRoute(route.id, { realGh, parsed, route, cwd: process.cwd() });
     if (route.id === 'pr-checks' && (!Array.isArray(result) || result.length === 0)) {
       throw new Error('PR checks returned no check rows; no complete successful checks result can be asserted');
     }
