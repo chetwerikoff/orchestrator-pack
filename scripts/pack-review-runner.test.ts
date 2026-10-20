@@ -5367,8 +5367,12 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       expect(afterOneGate.results.some((row) => row.runId === r2Id && row.terminalized)).toBe(false);
       expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
       if (firstGate === 'stale') {
+        // This ordinary reconcile may return before producing a graceExpired
+        // diagnostic; prove the persisted admission deadline is still pending
+        // and no required status reconciliation or terminalization occurred.
+        expect(Date.now()).toBeLessThan(zeroSendBoundary);
         expect(afterOneGate.results.find((row) => row.runId === r2Id)).toMatchObject({
-          terminalized: false, graceExpired: false,
+          terminalized: false, statusReconciled: false,
         });
       }
 
