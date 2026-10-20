@@ -407,6 +407,8 @@ describe('[AC2] production foundation admission', () => {
     const user = os.userInfo();
     vi.spyOn(os, 'userInfo').mockReturnValue({ ...user, homedir: home });
     const previousPath = process.env.PATH;
+    const previousStateHome = process.env.XDG_STATE_HOME;
+    const previousLocalAppData = process.env.LOCALAPPDATA;
     const previousOverride = process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
     const previousAdapter = process.env.OPK_RUNTIME_ADAPTER;
     const sourcePath = path.join(repoRoot, 'scripts', 'pr2-foundation', 'config.ts');
@@ -426,6 +428,10 @@ describe('[AC2] production foundation admission', () => {
     }))});\n`);
     chmodSync(runtimeCli, 0o755);
     process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ''}`;
+    process.env.XDG_STATE_HOME = path.join(home, '.local', 'state');
+    if (previousLocalAppData !== undefined) {
+      process.env.LOCALAPPDATA = path.join(home, 'AppData', 'Local');
+    }
     delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
     delete process.env.OPK_RUNTIME_ADAPTER;
     try {
@@ -486,6 +492,10 @@ describe('[AC2] production foundation admission', () => {
       rmSync(home, { recursive: true, force: true });
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
+      if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = previousStateHome;
+      if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = previousLocalAppData;
       if (previousOverride === undefined) delete process.env.OPK_WAKE_SUPERVISOR_STATE_DIR;
       else process.env.OPK_WAKE_SUPERVISOR_STATE_DIR = previousOverride;
       if (previousAdapter === undefined) delete process.env.OPK_RUNTIME_ADAPTER;
