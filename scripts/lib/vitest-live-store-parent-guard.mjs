@@ -171,7 +171,7 @@ export function isExternalWakeSupervisorSnapshotOnlyChange(
   );
 }
 
-export function startParentLiveStoreGuard(env = process.env) {
+export function startParentLiveStoreGuard(env = process.env, { onWatchEvent } = {}) {
   const baselineGuard = startLiveStoreGuard(env);
   const stores = resolvedLiveStores(env);
   const fences = resolvedClassFences(env);
@@ -238,6 +238,9 @@ export function startParentLiveStoreGuard(env = process.env) {
         for (const target of targets) {
           if (candidate && pathIsSameOrWithin(target, candidate)) armTree(target);
         }
+        // Optional synchronous observation for watcher-specific tests, after dynamic tree arming.
+        // An absent callback retains the identical production watch and snapshot behavior.
+        onWatchEvent?.({ eventType: _eventType, candidate, storeId: match?.storeId ?? null });
       });
       watchers.push(handle);
     } catch {

@@ -256,7 +256,12 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function observerFor(source: FakeFleetSource, config: unknown = undefined, generation = 'sg-test-1'): FleetObserver {
+function observerFor(
+  source: FakeFleetSource,
+  config: unknown = undefined,
+  generation = 'sg-test-1',
+  now?: () => number,
+): FleetObserver {
   const root = mkdtempSync(path.join(os.tmpdir(), 'fleet-observer-1258-'));
   roots.push(root);
   const configPath = path.join(root, 'config.json');
@@ -266,6 +271,7 @@ function observerFor(source: FakeFleetSource, config: unknown = undefined, gener
     configPath,
     snapshotPath: path.join(root, 'state', 'snapshot.json'),
     generationFactory: () => generation,
+    ...(now ? { now } : {}),
   });
 }
 
@@ -290,7 +296,8 @@ describe('S1 fleet observer', () => {
     source.add('idle');
     source.add('busy', 'gen-1', 'busy');
     source.add('unknown', 'gen-1', 'unknown');
-    const observer = observerFor(source, { schemaVersion: 1, livelockTicks: 2 });
+    // This classification test needs logical ordering, not an expired real-time phase budget.
+    const observer = observerFor(source, { schemaVersion: 1, livelockTicks: 2 }, 'sg-test-1', () => 0);
 
     const first = await observer.tick({ schedulerIntervalMs: 1_000 });
     expect(first.snapshot?.census.map((row) => row.class)).toEqual(['idle', 'unknown', 'unknown']);
@@ -317,7 +324,7 @@ describe('S1 fleet observer', () => {
   it('closes positive gone and gives a reappearance a fresh reference', async () => {
     const source = new FakeFleetSource();
     source.add('worker', 'gen-1', 'gone');
-    const observer = observerFor(source);
+    const observer = observerFor(source, undefined, 'sg-test-1', () => 0);
     const gone = await observer.tick({ schedulerIntervalMs: 1_000 });
     expect(gone.snapshot?.census).toEqual([]);
     expect(gone.snapshot?.transitions.some((transition) => transition.reason === 'positive-gone')).toBe(true);
@@ -388,7 +395,7 @@ describe('S1 fleet observer', () => {
         terminalState: 'running',
       },
     } as unknown as RuntimeResult<RuntimeBoundedOutput>);
-    const result = await observerFor(source).tick({ schedulerIntervalMs: 1_000 });
+    const result = await observerFor(source, undefined, 'sg-test-1', () => 0).tick({ schedulerIntervalMs: 1_000 });
     expect(result.snapshot?.census[0]).toMatchObject({ class: 'unknown', reason: 'observation-failed' });
   });
 
@@ -503,46 +510,76 @@ describe('S1 fleet observer', () => {
     });
     expect(observerFailureBoundary.listCandidates).not.toHaveBeenCalled();
 
-    const phaseStartedAt = { value: 0 };
-    const cancel = vi.fn();
-    const delayedHandoff = vi.fn(() => ({ ok: true }));
-    const delayedObserver = {
-      schedulerGeneration: 'sg-delayed',
-      tick: vi.fn(() => new Promise<FleetObserverResult>((resolve) => {
-        setTimeout(() => resolve({} as FleetObserverResult), 100);
-      })),
-      getEffectiveBudgetMs: () => 10,
-      cancel,
-    };
-    const deadlineBoundary = {
-      ...boundary,
-      publishHandoff: delayedHandoff,
-      listCandidates: vi.fn(() => {
-        phaseStartedAt.value = Date.now();
-        return [];
-      }),
-      fleetObserver: delayedObserver,
-    };
-    const startedAt = Date.now();
-    await expect(runSchedulerTick(deadlineBoundary, {
-      ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath,
-      ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
-      ORCHESTRATOR_CUTOVER_NONCE: nonce,
-    })).rejects.toThrow('scheduler_observer_untrusted:observer_timeout');
-    expect(delayedObserver.tick).toHaveBeenCalledTimes(1);
-    expect(cancel).toHaveBeenCalledTimes(1);
-    expect(delayedHandoff).toHaveBeenCalledWith({
-      reason: 'observer_untrusted', schedulerGeneration: 'sg-delayed', tickSequence: 1,
-    });
-    expect(phaseStartedAt.value).toBe(0);
-    expect(Date.now() - startedAt).toBeLessThan(80);
+    // The scheduler owns the 10-ms Promise.race budget. Exercise the
+    // just-before completion and at-budget cancellation with its fake timers,
+    // not by measuring wall time under shared-runner load.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const env = {
+        ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath,
+        ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
+        ORCHESTRATOR_CUTOVER_NONCE: nonce,
+      };
+      let completeEarly!: (value: FleetObserverResult) => void;
+      const earlyResult = new Promise<FleetObserverResult>((resolve) => { completeEarly = resolve; });
+      const earlyObserver = {
+        schedulerGeneration: 'sg-early',
+        tick: vi.fn(() => earlyResult),
+        getEffectiveBudgetMs: () => 10,
+        cancel: vi.fn(),
+      };
+      const earlyRun = runSchedulerTick({ ...boundary, fleetObserver: earlyObserver }, env);
+      await Promise.resolve(); // the scheduler schedules observer.tick in a microtask
+      expect(earlyObserver.tick).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(9);
+      completeEarly(result.observer!);
+      const beforeDeadline = await earlyRun;
+      expect(beforeDeadline.observer).toEqual(result.observer);
+      expect(earlyObserver.cancel).not.toHaveBeenCalled();
+
+      let completeLate!: (value: FleetObserverResult) => void;
+      const lateResult = new Promise<FleetObserverResult>((resolve) => { completeLate = resolve; });
+      const cancel = vi.fn();
+      const delayedHandoff = vi.fn(() => ({ ok: true }));
+      const delayedObserver = {
+        schedulerGeneration: 'sg-delayed',
+        tick: vi.fn(() => lateResult),
+        getEffectiveBudgetMs: () => 10,
+        cancel,
+      };
+      const deadlineBoundary = {
+        ...boundary,
+        publishHandoff: delayedHandoff,
+        listCandidates: vi.fn(() => []),
+        fleetObserver: delayedObserver,
+      };
+      const afterDeadline = runSchedulerTick(deadlineBoundary, env);
+      await Promise.resolve();
+      expect(delayedObserver.tick).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(9);
+      expect(cancel).not.toHaveBeenCalled();
+      expect(delayedHandoff).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      await expect(afterDeadline).rejects.toThrow('scheduler_observer_untrusted:observer_timeout');
+      expect(delayedObserver.tick).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(delayedHandoff).toHaveBeenCalledWith({
+        reason: 'observer_untrusted', schedulerGeneration: 'sg-delayed', tickSequence: 1,
+      });
+      expect(deadlineBoundary.listCandidates).not.toHaveBeenCalled();
+      completeLate(result.observer!); // settle the test-owned deferred response
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it('covers smoke scenario 3 through production serialization and commit boundaries', async () => {
+    it('covers smoke scenario 3 through production serialization and commit boundaries', async () => {
     const source = new FakeFleetSource();
     source.add('byte-boundary');
-    const observer = observerFor(source);
+    const observer = observerFor(source, undefined, 'sg-test-1', () => 0);
     const accepted = await observer.tick({ schedulerIntervalMs: 1_000 });
+    expect(accepted.snapshotCommitted, accepted.reason).toBe(true);
     const canonical = readFileSync(observer.snapshotPath, 'utf8');
     expect(Buffer.byteLength(canonical, 'utf8')).toBeLessThan(MAX_SNAPSHOT_BYTES);
     expect(isAcceptedFleetSnapshot(canonical)).toBe(true);
@@ -622,7 +659,7 @@ describe('S1 fleet observer', () => {
   it('covers smoke scenario 6 without emitting disappearance for contradictory generation evidence', async () => {
     const source = new ContradictoryGenerationSource();
     source.add('contradictory', 'gen-1', 'gone');
-    const observer = observerFor(source);
+    const observer = observerFor(source, undefined, 'sg-test-1', () => 0);
     const result = await observer.tick({ schedulerIntervalMs: 1_000 });
 
     expect(result.snapshot?.census[0]?.class).toBe('unknown');
@@ -634,7 +671,7 @@ describe('S1 fleet observer', () => {
     const source = new DeferredListingFleetSource();
     const existing = source.add('existing-listing');
     source.queueListing([existing]);
-    const observer = observerFor(source);
+    const observer = observerFor(source, undefined, 'sg-test-1', () => 0);
     const initialPromise = observer.tick({ schedulerIntervalMs: 1_000, tickSequence: 1 });
     await source.waitForPending(1);
     source.releaseNext();
@@ -666,7 +703,7 @@ describe('S1 fleet observer', () => {
   it('does not settle gone when output identity differs', async () => {
     const source = new WrongIdentityGoneOutputSource();
     source.add('worker', 'gen-1', 'gone');
-    const observer = observerFor(source);
+    const observer = observerFor(source, undefined, 'sg-test-1', () => 0);
     const result = await observer.tick({ schedulerIntervalMs: 1_000 });
 
     expect(result.snapshot?.census[0]?.class).toBe('unknown');
@@ -737,12 +774,18 @@ describe('S1 fleet observer', () => {
     const configPath = path.join(root, 'config.json');
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
     const snapshotPath = path.join(root, 'snapshot.json');
-    const first = new FleetObserver({ source, configPath, snapshotPath, generationFactory: () => 'sg-before-restart' });
+    const first = new FleetObserver({
+      source, configPath, snapshotPath, generationFactory: () => 'sg-before-restart',
+      now: () => 0,
+    });
     const firstResult = await first.tick({ schedulerIntervalMs: 1_000 });
     source.setChanged('restart-worker', false);
     const secondResult = await first.tick({ schedulerIntervalMs: 1_000 });
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 2, exceptions: [{ kind: 'HELD', schedulerGeneration: 'sg-before-restart', unitRef: 'u-000001' }] }));
-    const restarted = new FleetObserver({ source, configPath, snapshotPath, generationFactory: () => 'sg-after-restart' });
+    const restarted = new FleetObserver({
+      source, configPath, snapshotPath, generationFactory: () => 'sg-after-restart',
+      now: () => 0,
+    });
     const restartedResult = await restarted.tick({ schedulerIntervalMs: 1_000 });
     expect(firstResult.snapshot?.census[0]?.unitRef).toBe('u-000001');
     expect(secondResult.snapshot?.census[0]?.class).toBe('livelock');
@@ -757,7 +800,7 @@ describe('S1 fleet observer', () => {
     const exercise = async (fault: 'replacement' | 'read-back'): Promise<void> => {
       const source = new FakeFleetSource();
       source.add(`publication-fault-${fault}`);
-      const observer = observerFor(source);
+      const observer = observerFor(source, undefined, 'sg-test-1', () => 0);
       const accepted = await observer.tick({ schedulerIntervalMs: 1_000 });
       const priorBytes = readFileSync(observer.snapshotPath, 'utf8');
       const rename = vi.mocked(fs.renameSync);
@@ -798,7 +841,7 @@ describe('S1 fleet observer', () => {
     const exercise = async (boundary: 'serializer' | 'temp-write'): Promise<void> => {
       const source = new FakeFleetSource();
       source.add(`superseded-${boundary}`);
-      const observer = observerFor(source, undefined, `sg-${boundary}`);
+      const observer = observerFor(source, undefined, `sg-${boundary}`, () => 0);
       let newer: Promise<Awaited<ReturnType<FleetObserver['tick']>>> | undefined;
       const originalStringify = JSON.stringify;
       const stringifySpy = boundary === 'serializer' ? vi.spyOn(JSON, 'stringify') : undefined;
