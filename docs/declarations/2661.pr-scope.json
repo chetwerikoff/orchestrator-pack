@@ -13,7 +13,8 @@
     "scripts/opk-orch-start",
     "scripts/orca-runtime/adapter.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
-    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/runtime/caller-census.ts"
   ],
   "denylist": [
     "credentials/",
@@ -33,7 +34,8 @@
     "scripts/opk-orch-start",
     "scripts/orca-runtime/adapter.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
-    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/runtime/caller-census.ts"
   ],
-  "source_revision": "ebc5079e20167582b2cd105a8c4c9ad8637c7967"
+  "source_revision": "ae41fe306ea4e3913b27373adb4a25db1e6a90e1"
 }
