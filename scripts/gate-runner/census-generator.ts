@@ -187,7 +187,7 @@ async function treeSnapshot(repoRoot: string, measuredHead: string): Promise<Sou
       if (headerEnd < 0) throw new Error('git cat-file batch header missing for ' + path);
       const header = bytes.toString('utf8', offset, headerEnd);
       offset = headerEnd + 1;
-      if (header === requests[index] + ' missing') {
+      if (header === requests[index]! + ' missing') {
         unreadable.set(path, 'not a readable regular blob at measuredHead');
         continue;
       }
