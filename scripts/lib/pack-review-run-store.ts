@@ -1042,24 +1042,30 @@ function mergeFrozenGptRound(
   existing: PackReviewGptRoundRecord,
   incoming: PackReviewGptRoundRecord,
   path: string,
+  aggregateCommitted: boolean,
 ): PackReviewGptRoundRecord {
   assertFrozenGptRoundIdentity(existing, incoming, path);
-  // The first settled source quorum is immutable. Late third comments, retries
-  // and stale whole-round updates cannot rewrite a frozen 2/3 into 3/3 or alter
-  // its already committed aggregate. Preserve the exact original round bytes.
-  if (existing.settledSourceCount !== undefined) return existing;
-  const settledSourceCount = existing.settledSourceCount ?? incoming.settledSourceCount;
+  // The actual aggregate terminal, not an earlier 2/3 checkpoint,
+  // seals the source slots and quorum. Never change a committed round.
+  if (aggregateCommitted) return existing;
+  const sourceSlots = existing.sourceSlots.map((existingSlot) => {
+    const incomingSlot = incoming.sourceSlots.find((slot) => slot.ordinal === existingSlot.ordinal)!;
+    return mergeFrozenGptSlot(
+      existingSlot,
+      incomingSlot,
+      `${path}.reviewRound.sourceSlots[${existingSlot.ordinal - 1}]`,
+    );
+  });
+  const censusStaged = existing.settledSourceCount !== undefined
+    || incoming.settledSourceCount !== undefined;
+  const settledSourceCount = censusStaged
+    ? sourceSlots.filter((slot) => slot.lifecycle === 'terminal'
+      && COMPLETE_GPT_TERMINAL_CLASSES.has(slot.terminalClass ?? '')).length
+    : undefined;
   return {
     ...existing,
     ...(settledSourceCount === undefined ? {} : { settledSourceCount }),
-    sourceSlots: existing.sourceSlots.map((existingSlot) => {
-      const incomingSlot = incoming.sourceSlots.find((slot) => slot.ordinal === existingSlot.ordinal)!;
-      return mergeFrozenGptSlot(
-        existingSlot,
-        incomingSlot,
-        `${path}.reviewRound.sourceSlots[${existingSlot.ordinal - 1}]`,
-      );
-    }),
+    sourceSlots,
   };
 }
 
@@ -2170,6 +2176,7 @@ function buildUpdatedPackReviewRun(
       existing.reviewRound,
       normalizePackReviewGptRoundRecord(candidate.reviewRound, path),
       path,
+      aggregateCommitted,
     );
   } else if (candidate.reviewRound !== undefined && candidate.reviewRound !== null) {
     candidate.reviewRound = normalizePackReviewGptRoundRecord(candidate.reviewRound, path);

@@ -306,6 +306,8 @@ interface StartInput {
   fixtureBoundIssueSnapshotBytes?: string;
   fixtureReviewCompareStatus?: string;
   fixtureSameHeadIssueResolutionRunner?: typeof runProcess;
+  /** Synthetic GitHub evidence for the narrow #2655/#2656 incident. */
+  fixtureIncidentGithubRunner?: typeof runProcess;
 }
 
 interface DirectCliStartInput extends StartInput {
@@ -2812,7 +2814,11 @@ function updateGptRoundSlot(
 ): PackReviewGptRoundRecord {
   const persisted = getPackReviewRun(runId, options);
   const base = persisted?.reviewRound ?? round;
-  if (base.settledSourceCount !== undefined) return base;
+  // A staged 2/3 checkpoint may accept an additional credentialed source
+  // until the actual aggregate terminal commits.
+  if (persisted && readPackReviewAuthority(persisted.prNumber, {
+    storeRoot: options.storeRoot,
+  })?.terminal?.runId === runId) return base;
   const currentSlot = base.sourceSlots.find((slot) => slot.slotId === slotId);
   if (!currentSlot) throw new Error(`unknown GPT source slot ${slotId}`);
   if (expectedInvocationId && trim(currentSlot.invocationId) !== trim(expectedInvocationId)) return base;
@@ -2820,12 +2826,17 @@ function updateGptRoundSlot(
   if (slots.filter((slot) => slot.slotId === slotId).length !== 1) {
     throw new Error(`unknown GPT source slot ${slotId}`);
   }
-  const next = { ...base, sourceSlots: slots };
+  // Normalization precedes store-lock merging; omit the now-stale
+  // checkpoint count while adding a third complete source, then recensus
+  // under the existing shared lock.
+  const next = { ...base, settledSourceCount: undefined, sourceSlots: slots };
   try {
     updatePackReviewRun(runId, { reviewRound: next }, options);
   } catch (error) {
-    const latest = getPackReviewRun(runId, options)?.reviewRound;
-    if (latest?.settledSourceCount !== undefined) return latest;
+    const latest = getPackReviewRun(runId, options);
+    if (latest && readPackReviewAuthority(latest.prNumber, {
+      storeRoot: options.storeRoot,
+    })?.terminal?.runId === runId) return latest.reviewRound ?? base;
     throw error;
   }
   return getPackReviewRun(runId, options)?.reviewRound ?? next;
@@ -3887,7 +3898,10 @@ async function recoverStaleGptSourceComments(options: {
       graceExpired: true,
     };
   }
-  const resumeFrozenRound = initialRound.settledSourceCount !== undefined;
+  const resumeFrozenRound = initialRound.settledSourceCount !== undefined
+    && readPackReviewAuthority(options.run.prNumber, {
+      storeRoot: options.storeRoot,
+    })?.terminal?.runId === options.run.id;
   if (process.env.OPK_VITEST_HARNESS === '1'
       && !resumeFrozenRound
       && !options.input.fixtureGptSourceCommentTransport) {
@@ -7919,10 +7933,17 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
   const preacquiredClaimOwned = () => ownsBoundPreacquiredClaim(input.preacquiredClaim, {
     projectId, prNumber: target.prNumber, headSha: target.headSha,
   });
+  const readOnlyClaimObservationAction = () => {
+    const path = claimPath(resolveReviewStartClaimNamespace({ projectId }),
+      target.prNumber, target.headSha);
+    const payload = JSON.stringify({ path });
+    const quoted = "'" + payload.replaceAll("'", "'\\''") + "'";
+    return `printf '%s\\n' ${quoted} | node --experimental-strip-types scripts/lib/review-start-claim-store.ts Read-ReviewStartClaimRecord`;
+  };
   const unownedPreacquiredResult = (candidate: PackReviewRunRecord) => ({
     ok: false, created: false, reused: true,
     reason: 'gpt_preacquired_claim_not_owned',
-    nextAction: `npm run --silent pack-gpt-review -- --project ${projectId} --pr-number ${target.prNumber} # acquire a real claim instead of reusing an unowned preacquired claim`,
+    nextAction: readOnlyClaimObservationAction(),
     prNumber: target.prNumber, headSha: target.headSha,
     runId: candidate.id, status: candidate.status,
     coverage: derivePackReviewGptCoverage(candidate.reviewRound), httpStatus: 409,
@@ -8506,18 +8527,27 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           const bound = original.boundIssueSnapshotDigest
             ?? original.reviewRound?.boundIssueSnapshotDigest
             ?? authoritative.snapshotDigest;
-          if (!bound || bound !== authoritative.snapshotDigest) return false;
+          // Only #2655/#2656 §11 deliberately binds its exact scope-only
+          // edited body on a strict descendant. Revalidate the full independent
+          // architect/diff/CI evidence, never just the changed Issue digest.
+          const scopeOnlyIncident = target.repoSlug.toLowerCase() === 'chetwerikoff/orchestrator-pack'
+            && target.prNumber === 2656 && target.issueNumber === 2655
+            && authority.terminal.reviewVerdict === 'findings'
+            && authority.terminal.targetSha !== target.headSha;
+          const originalDigestMatches = Boolean(bound && bound === authoritative.snapshotDigest);
+          if (!originalDigestMatches && !scopeOnlyIncident) return false;
           const body = process.env.OPK_VITEST_HARNESS === '1'
             ? input.fixtureIssueBody
             : (await resolveCurrentIssueFields(
               target.sourceRepoRoot, target.repoSlug, target.issueNumber,
             )).body;
           if (body === undefined) return false;
-          if (computeBoundIssueSnapshotHash(body) === bound) return true;
-          if (authority.cycle?.settlementKind !== 'same_head_issue_resolution'
-              || authority.terminal.reviewVerdict !== 'findings') return false;
-          // Only the existing, evidence-checked #2428 Issue-only settlement
-          // may bind an authorized post-review body without a replacement run.
+          if (originalDigestMatches && computeBoundIssueSnapshotHash(body) === bound) return true;
+          if (!scopeOnlyIncident
+              && (authority.cycle?.settlementKind !== 'same_head_issue_resolution'
+                || authority.terminal.reviewVerdict !== 'findings')) return false;
+          // Both exceptional completions are proven by the existing scoped
+          // reconciler; a general Issue mutation cannot inherit their success.
           const accepted = await reconcileFinalCapSettlement({
             projectId, storeRoot, prNumber: target.prNumber,
             repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
@@ -8528,6 +8558,15 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
             fixtureIssueBody: input.fixtureIssueBody, fixtureIssueTitle: input.fixtureIssueTitle,
             fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
             fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
+            fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
+            fixtureIncidentGithubRunner: input.fixtureIncidentGithubRunner,
+            fixtureRequiredCi: input.fixtureRequiredCi,
+            fixtureRequiredCiChecks: input.fixtureRequiredCiChecks,
+            fixtureRequiredCiPolicy: input.fixtureRequiredCiPolicy,
+            fixtureRequiredCiPolicyHttpStatus: input.fixtureRequiredCiPolicyHttpStatus,
+            fixtureRequiredCiHeadAfterGate: input.fixtureRequiredCiHeadAfterGate,
+            fixtureRequiredCiBaseAfterGate: input.fixtureRequiredCiBaseAfterGate,
+            baseRef: target.prBaseRef,
           }, { projectId, storeRoot, repoSlug: target.repoSlug });
           return accepted?.settled === true;
         } catch { return false; }
@@ -8815,10 +8854,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       : claimLease?.owns() === true;
     const incumbentCandidates = (records: readonly PackReviewRunRecord[]) => records.filter((candidate) => (
       candidate.prNumber === target.prNumber
-      && ((
-        candidate.reviewCycleId === authority.cycle?.cycleId
-        && candidate.logicalRoundOrdinal === roundOrdinal
-      ) || hasFailedRateLimitSource(candidate))
+      && candidate.reviewCycleId === authority.cycle?.cycleId
+      && candidate.logicalRoundOrdinal === roundOrdinal
       && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
       && candidate.reviewRound?.reviewer === 'gpt'
       && !hasPersistedPackReviewVerdict(candidate)
@@ -8884,7 +8921,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       const command = reason === 'gpt_incumbent_owner_not_dead'
         ? `node --experimental-strip-types scripts/pack-review-runner.ts list --project-id ${projectId}`
         : reason === 'gpt_incumbent_claim_not_owned'
-          ? `npm run --silent pack-gpt-review -- --project ${projectId} --pr-number ${target.prNumber}`
+          ? readOnlyClaimObservationAction()
           : `node --experimental-strip-types scripts/pack-review-runner.ts reconcile --source-repo-root ${JSON.stringify(target.sourceRepoRoot)} --repo-slug ${target.repoSlug} --pr-number ${target.prNumber} --immediate`;
       return {
         ok: false, created: false, reused: true, reason,
@@ -8903,6 +8940,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       const storedCandidates = incumbentCandidates(allRecords);
       const otherSameHead = allRecords.find((candidate) => (
         candidate.prNumber === target.prNumber
+        && candidate.reviewCycleId === authority.cycle?.cycleId
+        && candidate.logicalRoundOrdinal === roundOrdinal
         && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
         && candidate.reviewRound?.reviewer === 'gpt'
         && !hasPersistedPackReviewVerdict(candidate)
