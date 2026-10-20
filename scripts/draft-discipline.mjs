@@ -381,19 +381,23 @@ export function resolveSmokeRequirement(markdown) {
     return { requirement: 'unknown', scenarios: [] };
   }
   const parsed = parseSmokeTestPlan(trimmed);
-  // Both smoke gate implementations and the publisher consume this resolver.
-  // Never admit a valid subset of an invalid live plan or a malformed waiver.
-  const checked = checkSmokeTestPlan(trimmed);
-  if (!checked.ok) {
-    const missingReason = parsed?.requirement === 'not-applicable'
-      && !String(parsed.reason ?? '').trim();
-    return {
-      requirement: 'required',
-      scenarios: [],
-      reason: missingReason ? 'missing_not_applicable_reason' : 'invalid_smoke_plan',
-    };
+  // Only validate a present scenario-bearing/waiver plan. A missing plan may
+  // still have the incumbent explicit smoke-plan-floor grandfather exemption.
+  if (parsed) {
+    // Both smoke gates and the publisher consume this same resolution.
+    // Never admit a valid subset of a malformed live plan.
+    const checked = checkSmokeTestPlan(trimmed);
+    if (!checked.ok) {
+      const missingReason = parsed.requirement === 'not-applicable'
+        && !String(parsed.reason ?? '').trim();
+      return {
+        requirement: 'required',
+        scenarios: [],
+        reason: missingReason ? 'missing_not_applicable_reason' : 'invalid_smoke_plan',
+      };
+    }
+    return parsed;
   }
-  if (parsed) return parsed;
   if (isSmokePlanGrandfathered(trimmed)) {
     return { requirement: 'legacy-exempt', scenarios: [], reason: 'grandfathered' };
   }
