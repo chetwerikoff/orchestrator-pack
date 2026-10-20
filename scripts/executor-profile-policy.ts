@@ -416,7 +416,15 @@ export function evaluateExecutorRouteAdmission(input: {
     : { ok: false, refusal: EXECUTOR_PROFILE_REFUSAL.routeUnavailable };
 }
 
-export function buildExecutorCommand(profile: SemanticExecutorProfile): ExecutorInvocationShape {
+/** OpenCode session IDs are opaque arguments, never shell fragments or workspace selectors. */
+export function validOpenCodeResumeSession(value: string): boolean {
+  return /^ses_[A-Za-z0-9_-]{6,128}$/u.test(value);
+}
+
+export function buildExecutorCommand(profile: SemanticExecutorProfile, resumeSession?: string): ExecutorInvocationShape {
+  if (resumeSession !== undefined && (profile.family !== 'opencode' || !validOpenCodeResumeSession(resumeSession))) {
+    throw new Error('opencode_resume_session_invalid');
+  }
   const descriptor = EXECUTOR_FAMILY_DESCRIPTORS[profile.family];
   if (profile.family === 'cursor') {
     const modelArgument = cursorSpawnModelId(profile);
@@ -437,7 +445,7 @@ export function buildExecutorCommand(profile: SemanticExecutorProfile): Executor
     explore: { permission },
   };
   const inlineConfig = JSON.stringify({ permission, agent });
-  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)} ${executable} --hostname 127.0.0.1 --port ${openCodeControlPort(agentName)} --agent ${quote(agentName)}`;
+  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)} ${executable} --hostname 127.0.0.1 --port ${openCodeControlPort(agentName)} --agent ${quote(agentName)}${resumeSession ? ` --session ${quote(resumeSession)}` : ''}`;
   return {
     executable,
     command,
@@ -452,6 +460,8 @@ export interface OpenCodeAgentOverlay {
   readonly model: string;
   readonly effort: string;
   readonly stateRoot?: string;
+  readonly dataRoot?: string;
+  readonly resumeSession?: string;
 }
 
 function stableValue(value: unknown): unknown {
@@ -607,6 +617,7 @@ export function openCodeControlPort(agentName: string): number {
 }
 
 export function buildOpenCodeAgentOverlay(input: OpenCodeAgentOverlay): ExecutorInvocationShape {
+  if (input.resumeSession !== undefined && !validOpenCodeResumeSession(input.resumeSession)) throw new Error('opencode_resume_session_invalid');
   const baseline = openCodeAgentConfigFromInfo(input.baseline);
   const permission = withOpenCodeFleetBrowserDenies(undefined);
   const agent = {
@@ -621,7 +632,8 @@ export function buildOpenCodeAgentOverlay(input: OpenCodeAgentOverlay): Executor
   };
   const inlineConfig = JSON.stringify({ permission, agent });
   const state = input.stateRoot ? ` XDG_STATE_HOME=${quote(input.stateRoot)}` : '';
-  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)}${state} opencode --hostname 127.0.0.1 --port ${openCodeControlPort(input.agentName)} --agent ${quote(input.agentName)}`;
+  const data = input.dataRoot !== undefined ? ` XDG_DATA_HOME=${quote(input.dataRoot)}` : '';
+  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)}${state}${data} opencode --hostname 127.0.0.1 --port ${openCodeControlPort(input.agentName)} --agent ${quote(input.agentName)}${input.resumeSession ? ` --session ${quote(input.resumeSession)}` : ''}`;
   return {
     executable: 'opencode',
     command,
@@ -644,8 +656,11 @@ export function openCodeLaunchHasFleetBrowserDenies(
   const rest = command.slice(assignment.length);
   if (rest.includes('OPENCODE_CONFIG_CONTENT=')) return false;
   const executable = `opencode --hostname 127.0.0.1 --port ${openCodeControlPort(agentName)} --agent ${quote(agentName)}`;
-  const statePrefix = rest.endsWith(` ${executable}`) ? rest.slice(0, -(executable.length + 1)) : '';
-  if (rest !== executable && !/^XDG_STATE_HOME='(?:[^']|'\\'')*'$/u.test(statePrefix)) return false;
+  const sessionMatch = / --session '([^']+)'$/u.exec(rest);
+  if (sessionMatch && !validOpenCodeResumeSession(sessionMatch[1]!)) return false;
+  const finalExecutable = executable + (sessionMatch ? sessionMatch[0] : '');
+  const statePrefix = rest.endsWith(` ${finalExecutable}`) ? rest.slice(0, -(finalExecutable.length + 1)) : '';
+  if (rest !== finalExecutable && !/^(?:XDG_STATE_HOME='(?:[^']|'\\'')*'(?: XDG_DATA_HOME='(?:[^']|'\\'')*')?|XDG_DATA_HOME='(?:[^']|'\\'')*')$/u.test(statePrefix)) return false;
 
   try {
     const config: unknown = JSON.parse(inlineConfigJson);

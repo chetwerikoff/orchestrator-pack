@@ -17,29 +17,63 @@ import {
 
 export function scalarLocator(overrides: Record<string, unknown> = {}) {
   const turnActionButtons = overrides.turnActionButtons === true;
+  // Only actions inspected or overridden by tests need mock histories. Vitest
+  // retains every vi.fn, including otherwise unreachable per-poll locators.
   const locator: Record<string, any> = {
-    count: vi.fn(async () => 0),
-    first: vi.fn(function first() { return locator; }),
-    nth: vi.fn(() => locator),
-    locator: vi.fn((selector: string) => {
+    count: async () => 0,
+    first: function first() { return locator; },
+    nth: () => locator,
+    locator: (selector: string) => {
       if (turnActionButtons && matchesAssistantTurnActionSelector(selector)) {
         return scalarLocator({ count: vi.fn(async () => 1) });
       }
       return scalarLocator();
-    }),
+    },
     click: vi.fn(async () => undefined),
     fill: vi.fn(async () => undefined),
     press: vi.fn(async () => undefined),
-    isVisible: vi.fn(async () => true),
+    isVisible: async () => true,
     isEnabled: vi.fn(async () => true),
-    evaluate: vi.fn(async () => true),
-    innerText: vi.fn(async () => ''),
-    textContent: vi.fn(async () => ''),
-    getAttribute: vi.fn(async () => null),
-    or: vi.fn(function or() { return locator; }),
+    evaluate: async () => true,
+    innerText: async () => '',
+    textContent: async () => '',
+    getAttribute: async () => null,
+    or: function or() { return locator; },
     ...overrides,
   };
   return locator;
+}
+
+/** One editor DOM supplies both locator.innerText and evaluate(element.innerText). */
+export function proseMirrorEditorSurface(text: string, rendering: 'paragraphs' | 'autolink' = 'paragraphs') {
+  const textNode = (nodeValue: string) => ({ nodeType: 3, nodeValue });
+  const element = (tagName: string, childNodes: any[], attributes: Record<string, string> = {}): any => ({
+    nodeType: 1, tagName, childNodes,
+    classList: { contains: (name: string) => (attributes.class ?? '').split(' ').includes(name) },
+    getAttribute: (name: string) => attributes[name] ?? null,
+    get textContent(): string {
+      return childNodes.map((child) => child.nodeType === 3 ? child.nodeValue : child.textContent).join('');
+    },
+  });
+  const paragraphs = text.split('\n').map((line) => {
+    if (!line) return element('P', [element('BR', [], { class: 'ProseMirror-trailingBreak' })]);
+    const link = rendering === 'autolink' ? /https?:\/\/[^\s`]+/u.exec(line) : null;
+    const children = link ? [
+      textNode(line.slice(0, link.index)),
+      element('A', [textNode(link[0])], { href: link[0] }),
+      textNode(line.slice(link.index + link[0].length)),
+    ] : [textNode(line)];
+    return element('P', children);
+  });
+  return {
+    ...element('DIV', paragraphs, { class: 'ProseMirror' }),
+    isConnected: true, isContentEditable: true,
+    ownerDocument: { defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible' }) } },
+    get innerText(): string {
+      if (rendering === 'autolink') return text.replace('`https://', '` https://');
+      return text ? text.replace(/\n\n/u, '\n\n\n\n\n').trimEnd() + '\n\n\n' : '\n';
+    },
+  };
 }
 
 export type StateLightTestMessage = {

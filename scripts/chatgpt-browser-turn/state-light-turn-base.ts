@@ -33,6 +33,8 @@ import {
 } from './contracts.ts';
 import { readStableInput } from './input.ts';
 import {
+  extractOwnedPromptMarkerToken,
+  isOwnedPromptMarker,
   generateOwnedPromptMarker,
   ownedPromptMarkerMatches,
   wrapOwnedPromptPayload,
@@ -272,6 +274,7 @@ const MESSAGE_NODE_READ_RETRY_TIMEOUT_MS = 400;
 const MESSAGE_NODE_READ_ATTEMPTS = 2;
 /** Exact generation selector already owned by browser-gpt-page-probe; do not widen it here. */
 const BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR = '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]';
+const ASSISTANT_CONTENT_ROOT_SELECTOR = '.markdown';
 const CONTINUE_GENERATING_SELECTOR = 'button[aria-label*="Continue generating" i], button[data-testid*="continue-generating"], button[data-testid*="continue_generating"]';
 /** Post-send wall probes must not block transcript reads or the confirm loop. */
 const POST_SEND_PRODUCT_WALL_PROBE_MS = 2_000;
@@ -485,6 +488,9 @@ export interface TurnRunOutcome {
   /** Process-local publication fact; not part of turn-result/v1. */
   readonly publicationState?: StateLightPublicationResult['state'];
   readonly cleanupAction?: PageCleanupAction;
+  /** Positive original Page and exact URL for a no-dispatch existing-chat fetch-429 close. */
+  readonly ownedPreSendFetch429Page?: any;
+  readonly ownedPreSendFetch429Url?: string;
   /** Process-local authority for the two still-owned counted fresh/local terminals. */
   readonly retainOwnedFreshLocalPage?: boolean;
   /** Exact owned page observation; never cancellation authority by itself. */
@@ -740,10 +746,12 @@ export async function revalidateKeyedHarvest(
         userMessageStyle: string;
         unitKeyAttribute: string;
         assistantMessageStyle: string;
+          contentRootSelector: string;
         assistantKey: string;
         turnSelector: string;
         inProgressSelector: string;
         actionSelector: string;
+        continuationSelector: string;
       }) => {
         const elements = allElements.filter((element) => element.getBoundingClientRect().height > 0);
         const valid = (value: string | null): value is string => Boolean(value && value.length >= 8);
@@ -758,6 +766,136 @@ export async function revalidateKeyedHarvest(
           }
           return undefined;
         };
+        // Canonical notation for visible DOM only, not reconstructed Markdown.
+        const serializeAssistant = (message: Element, selected: boolean): { text: string; complete: boolean } => {
+          const wholeRow = () => ({ text: (message as HTMLElement).innerText, complete: true });
+          const unsupported = () => selected ? { text: '', complete: false } : wholeRow();
+          if (message.querySelectorAll('pre').length === 0) return wholeRow();
+          const roots = Array.from(message.querySelectorAll(args.contentRootSelector));
+          if (roots.length !== 1) return unsupported();
+          const root = roots[0]!;
+          const view = root.ownerDocument?.defaultView;
+          if (!view || typeof view.getComputedStyle !== 'function') return unsupported();
+          const visible = (node: Element): boolean => {
+            for (let current: Element | null = node; current; current = current.parentElement) {
+              if (current.tagName === 'BUTTON' || current.getAttribute('role') === 'button'
+                || current.getAttribute('aria-hidden') === 'true' || current.hasAttribute('inert')
+                || typeof current.getClientRects !== 'function' || current.getClientRects().length === 0) return false;
+              const style = view.getComputedStyle(current);
+              if (!style || style.display === 'none' || style.visibility === 'hidden'
+                || style.visibility === 'collapse') return false;
+              if (current === message) return true;
+            }
+            return false;
+          };
+          if (!visible(root)) return unsupported();
+          // root.children omits direct Text nodes; do not certify a lossy rich reply.
+          if (Array.from(root.childNodes).some((node) => node.nodeType === 3 && Boolean(node.textContent?.trim()))) {
+            return unsupported();
+          }
+          const blocks: string[] = [];
+          for (const child of Array.from(root.children)) {
+            const pres = [
+              ...(child.tagName === 'PRE' ? [child] : []),
+              ...Array.from(child.querySelectorAll('pre')),
+            ];
+            if (!visible(child)) {
+              // A display:contents wrapper has no rectangle but may render prose children.
+              if (pres.length > 0 || view.getComputedStyle(child)?.display === 'contents') return unsupported();
+              continue;
+            }
+            if (pres.length === 0) {
+              // Whole innerText preserves browser whitespace for prose,
+              // headings, tables and lists. Ambiguous nested controls fail.
+              if (child.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
+              const block = (child as HTMLElement).innerText;
+              if (block) blocks.push(block);
+              continue;
+            }
+            if (pres.length !== 1 || /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)) {
+              return unsupported();
+            }
+            const pre = pres[0]!;
+            const directCodes = Array.from(pre.children).filter((node) => node.tagName === 'CODE');
+            if (!visible(pre) || directCodes.length !== 1 || pre.querySelectorAll('code').length !== 1) {
+              return unsupported();
+            }
+            const code = directCodes[0]!;
+            if (!visible(code)) return unsupported();
+            // code.innerText includes some aria-hidden/inert/control descendant text.
+            if (code.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
+            // Language comes exclusively from unique visible non-control
+            // text outside CODE in this one header-and-pre wrapper.
+            const headerSiblings = pre.parentElement === child
+              ? Array.from(child.children).filter((candidate) => candidate !== pre
+                && candidate.tagName !== 'BUTTON' && candidate.getAttribute('role') !== 'button'
+                && visible(candidate))
+              : [];
+            const header = headerSiblings.length === 1
+              && Array.from(child.children).indexOf(headerSiblings[0]!) < Array.from(child.children).indexOf(pre)
+              && (headerSiblings[0]!.tagName === 'HEADER'
+                || (headerSiblings[0]!.tagName === 'DIV'
+                  && (/(?:^|\s)header(?:\s|$)/u.test(headerSiblings[0]!.getAttribute('class') ?? '')
+                    || Boolean(headerSiblings[0]!.querySelector('button, [role="button"]')))))
+              ? headerSiblings[0]! : null;
+            const labels: string[] = [];
+            let invalidLabel = false;
+            let sawPre = false;
+            const visitLabel = (node: Element): void => {
+              if (node === code) return;
+              // Prose is not a language label: allow only inline header labels
+              // outside PRE, or visible language text within this same PRE.
+              if (node !== child && node !== pre && !/^(?:SPAN|LABEL|DIV|HEADER)$/u.test(node.tagName)) {
+                invalidLabel = true;
+                return;
+              }
+              if (node === pre) sawPre = true;
+              const children = Array.from(node.childNodes);
+              if (children.length === 0 && node !== child) {
+                const leaf = (node as HTMLElement).innerText?.trim();
+                if (leaf) {
+                  if (node === pre || node.parentElement === pre || (header !== null
+                    && (node === header || node.parentElement === header))) labels.push(leaf);
+                  else invalidLabel = true;
+                }
+                return;
+              }
+              for (const item of children) {
+                if (item.nodeType === 3) {
+                  const label = item.textContent?.trim();
+                  if (label) {
+                    if (node === pre || node.parentElement === pre || (header !== null
+                      && (node === header || node.parentElement === header))) labels.push(label);
+                    else invalidLabel = true;
+                  }
+                } else if (item.nodeType === 1) {
+                  const element = item as Element;
+                  if (element === code || element.tagName === 'BUTTON'
+                    || element.getAttribute('role') === 'button'
+                    || element.getAttribute('aria-hidden') === 'true'
+                    || element.hasAttribute('inert') || !visible(element)) continue;
+                  if (node === child && child !== pre && sawPre && element !== pre) {
+                    invalidLabel = true;
+                    continue;
+                  }
+                  visitLabel(element);
+                }
+              }
+            };
+            visitLabel(child);
+            if (invalidLabel) return unsupported();
+            if (labels.length > 1 || labels.some((label) => !/^[A-Za-z][A-Za-z0-9_+#.-]{0,31}$/u.test(label))) {
+              return unsupported();
+            }
+            const codeText = (code as HTMLElement).innerText;
+            if (typeof codeText !== 'string') return unsupported();
+            const backtickRuns = codeText.match(/\x60+/gu) ?? [];
+            const fence = String.fromCharCode(96).repeat(Math.max(3, ...backtickRuns.map((run) => run.length + 1)));
+            blocks.push(fence + (labels[0] ?? '') + '\n' + codeText
+              + (codeText.endsWith('\n') ? '' : '\n') + fence);
+          }
+          return blocks.length > 0 ? { text: blocks.join('\n\n'), complete: true } : unsupported();
+        };
         const rows: Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean }> = [];
         for (let domIndex = 0; domIndex < elements.length; domIndex++) {
           const element = elements[domIndex]!;
@@ -768,41 +906,18 @@ export async function revalidateKeyedHarvest(
               : (element.getAttribute?.(args.unitKeyAttribute) ?? '').endsWith(':user') ? args.userMessageStyle : undefined;
             const role = style === args.userMessageStyle ? 'user' : style === args.assistantMessageStyle ? 'assistant' : '';
             let text = (element as HTMLElement).innerText;
+            let rowComplete = true;
             if (role === 'assistant') {
-              // Preserve only text exposed by the code element's rendered innerText.
-              // textContent can include hidden descendants and is never publication evidence.
-              for (const code of Array.from(element.querySelectorAll('pre code'))) {
-                if (code.getBoundingClientRect().height <= 0) continue;
-                const visible = (code as HTMLElement).innerText;
-                const lines = visible.split('\n');
-                const firstLine = lines[0] ?? '';
-                if (!firstLine || lines.length < 2 || text.includes(visible)) continue;
-                // A unique, line-aligned prefix binds the code node to this outer message.
-                const offset = text.indexOf(firstLine);
-                if (offset < 0 || (offset > 0 && text[offset - 1] !== '\n')
-                  || text.indexOf(firstLine, offset + firstLine.length) !== -1) continue;
-                let end = offset + firstLine.length;
-                if (end < text.length && text[end] !== '\n') continue;
-                let matchedLines = 1;
-                while (matchedLines < lines.length) {
-                  const line = lines[matchedLines]!;
-                  const nextEnd = end + 1 + line.length;
-                  if (text[end] !== '\n' || !text.startsWith(line, end + 1)
-                    || (nextEnd < text.length && text[nextEnd] !== '\n')) break;
-                  end = nextEnd;
-                  matchedLines += 1;
-                }
-                if (matchedLines === lines.length) continue;
-                // Keep the outer message's non-code prose and footer byte-for-byte.
-                text = text.slice(0, offset) + visible + text.slice(end);
-              }
+              const serialized = serializeAssistant(element, canonicalKey(element) === args.assistantKey);
+              text = serialized.text;
+              rowComplete = serialized.complete;
             }
             rows.push({
               role,
               text,
               key: canonicalKey(element),
               domIndex,
-              complete: true,
+              complete: rowComplete,
             });
           } catch {
             rows.push({ role: '', text: '', domIndex, complete: false });
@@ -815,16 +930,25 @@ export async function revalidateKeyedHarvest(
         const turn = element.closest(args.turnSelector) ?? element;
         const assistantFinal = !turn.querySelector(args.inProgressSelector)
           && Boolean(turn.querySelector(args.actionSelector));
-        return { rows, assistantFinal };
+        const lateContinue = typeof document !== 'undefined'
+          && Array.from(document.querySelectorAll(args.continuationSelector)).some((control) => {
+            const rect = control.getBoundingClientRect();
+            const style = control.ownerDocument?.defaultView?.getComputedStyle(control);
+            return rect.height > 0 && (!style || (style.display !== 'none' && style.visibility !== 'hidden'))
+              && !control.hasAttribute('disabled') && control.getAttribute('aria-disabled') !== 'true';
+          });
+        return { rows, assistantFinal: assistantFinal && !lateContinue };
       }, {
         roleAttribute: MESSAGE_AUTHOR_ROLE_ATTR,
         userMessageStyle: USER_MESSAGE_STYLE,
         unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
         assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
+        contentRootSelector: ASSISTANT_CONTENT_ROOT_SELECTOR,
         assistantKey: expected.assistantKey,
         turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
         inProgressSelector: ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
         actionSelector: ASSISTANT_TURN_ACTION_SELECTOR,
+        continuationSelector: CONTINUE_GENERATING_SELECTOR,
       }),
       MAX_LOCAL_READ_WAIT_MS,
       'keyed_harvest_revalidation_timeout',
@@ -1691,8 +1815,10 @@ async function locatorCount(
   locator: any,
   deadlineMs = Date.now() + MAX_LOCAL_READ_WAIT_MS,
   preserveNetworkChange = false,
+  useInvocationDeadline = false,
 ): Promise<number> {
-  const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+  const waitMs = useInvocationDeadline ? deadlineMs - Date.now()
+    : Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
   if (waitMs <= 0) throw new BrowserOperationTimeoutError('locator_count');
   const timeoutCause = 'browser_operation_timeout:locator_count';
   try {
@@ -1761,6 +1887,7 @@ export async function readPageObservation(
   baselineCount?: number,
   strictTranscriptCount = false,
   deadlineMs = Date.now() + MAX_LOCAL_READ_WAIT_MS,
+  historicalBaseline = false,
 ): Promise<PageObservationResult> {
   const nodes = page.locator(MESSAGE_NODE_SELECTOR);
   const incomplete = (): PageObservationResult => ({
@@ -1789,6 +1916,9 @@ export async function readPageObservation(
           userMessageStyle: string;
           unitKeyAttribute: string;
           assistantMessageStyle: string;
+          contentRootSelector: string;
+          ownedMarker?: string;
+          historicalBaseline: boolean;
           generationSelector: string;
           continuationSelector: string;
           turnSelector: string;
@@ -1808,6 +1938,155 @@ export async function readPageObservation(
             }
             return undefined;
           };
+          // Canonical notation for visible DOM only, not reconstructed Markdown.
+          const serializeAssistant = (message: Element, selected: boolean): { text: string; complete: boolean } => {
+            const wholeRow = () => ({ text: (message as HTMLElement).innerText, complete: true });
+            const unsupported = () => selected ? { text: '', complete: false } : wholeRow();
+            if (message.querySelectorAll('pre').length === 0) return wholeRow();
+            const roots = Array.from(message.querySelectorAll(args.contentRootSelector));
+            if (roots.length !== 1) return unsupported();
+            const root = roots[0]!;
+            const view = root.ownerDocument?.defaultView;
+            if (!view || typeof view.getComputedStyle !== 'function') return unsupported();
+            const visible = (node: Element): boolean => {
+              for (let current: Element | null = node; current; current = current.parentElement) {
+                if (current.tagName === 'BUTTON' || current.getAttribute('role') === 'button'
+                  || current.getAttribute('aria-hidden') === 'true' || current.hasAttribute('inert')
+                  || typeof current.getClientRects !== 'function' || current.getClientRects().length === 0) return false;
+                const style = view.getComputedStyle(current);
+                if (!style || style.display === 'none' || style.visibility === 'hidden'
+                  || style.visibility === 'collapse') return false;
+                if (current === message) return true;
+              }
+              return false;
+            };
+            if (!visible(root)) return unsupported();
+            // root.children omits direct Text nodes; do not certify a lossy rich reply.
+            if (Array.from(root.childNodes).some((node) => node.nodeType === 3 && Boolean(node.textContent?.trim()))) {
+              return unsupported();
+            }
+            const blocks: string[] = [];
+            for (const child of Array.from(root.children)) {
+              const pres = [
+                ...(child.tagName === 'PRE' ? [child] : []),
+                ...Array.from(child.querySelectorAll('pre')),
+              ];
+              if (!visible(child)) {
+                // A display:contents wrapper has no rectangle but may render prose children.
+                if (pres.length > 0 || view.getComputedStyle(child)?.display === 'contents') return unsupported();
+                continue;
+              }
+              if (pres.length === 0) {
+                // Whole innerText preserves browser whitespace for prose,
+                // headings, tables and lists. Ambiguous nested controls fail.
+                if (child.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
+                const block = (child as HTMLElement).innerText;
+                if (block) blocks.push(block);
+                continue;
+              }
+              if (pres.length !== 1 || /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)) {
+                return unsupported();
+              }
+              const pre = pres[0]!;
+              const directCodes = Array.from(pre.children).filter((node) => node.tagName === 'CODE');
+              if (!visible(pre) || directCodes.length !== 1 || pre.querySelectorAll('code').length !== 1) {
+                return unsupported();
+              }
+              const code = directCodes[0]!;
+              if (!visible(code)) return unsupported();
+              // code.innerText includes some aria-hidden/inert/control descendant text.
+              if (code.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
+              // Language comes exclusively from unique visible non-control
+              // text outside CODE in this one header-and-pre wrapper.
+              const headerSiblings = pre.parentElement === child
+                ? Array.from(child.children).filter((candidate) => candidate !== pre
+                  && candidate.tagName !== 'BUTTON' && candidate.getAttribute('role') !== 'button'
+                  && visible(candidate))
+                : [];
+              const header = headerSiblings.length === 1
+                && Array.from(child.children).indexOf(headerSiblings[0]!) < Array.from(child.children).indexOf(pre)
+                && (headerSiblings[0]!.tagName === 'HEADER'
+                  || (headerSiblings[0]!.tagName === 'DIV'
+                    && (/(?:^|\s)header(?:\s|$)/u.test(headerSiblings[0]!.getAttribute('class') ?? '')
+                      || Boolean(headerSiblings[0]!.querySelector('button, [role="button"]')))))
+                ? headerSiblings[0]! : null;
+              const labels: string[] = [];
+              let invalidLabel = false;
+              let sawPre = false;
+              const visitLabel = (node: Element): void => {
+                if (node === code) return;
+                // Prose is not a language label: allow only inline header labels
+                // outside PRE, or visible language text within this same PRE.
+                if (node !== child && node !== pre && !/^(?:SPAN|LABEL|DIV|HEADER)$/u.test(node.tagName)) {
+                  invalidLabel = true;
+                  return;
+                }
+                if (node === pre) sawPre = true;
+                const children = Array.from(node.childNodes);
+                if (children.length === 0 && node !== child) {
+                  const leaf = (node as HTMLElement).innerText?.trim();
+                  if (leaf) {
+                    if (node === pre || node.parentElement === pre || (header !== null
+                      && (node === header || node.parentElement === header))) labels.push(leaf);
+                    else invalidLabel = true;
+                  }
+                  return;
+                }
+                for (const item of children) {
+                  if (item.nodeType === 3) {
+                    const label = item.textContent?.trim();
+                    if (label) {
+                      if (node === pre || node.parentElement === pre || (header !== null
+                        && (node === header || node.parentElement === header))) labels.push(label);
+                      else invalidLabel = true;
+                    }
+                  } else if (item.nodeType === 1) {
+                    const element = item as Element;
+                    if (element === code || element.tagName === 'BUTTON'
+                      || element.getAttribute('role') === 'button'
+                      || element.getAttribute('aria-hidden') === 'true'
+                      || element.hasAttribute('inert') || !visible(element)) continue;
+                    if (node === child && child !== pre && sawPre && element !== pre) {
+                      invalidLabel = true;
+                      continue;
+                    }
+                    visitLabel(element);
+                  }
+                }
+              };
+              visitLabel(child);
+              if (invalidLabel) return unsupported();
+              if (labels.length > 1 || labels.some((label) => !/^[A-Za-z][A-Za-z0-9_+#.-]{0,31}$/u.test(label))) {
+                return unsupported();
+              }
+              const codeText = (code as HTMLElement).innerText;
+              if (typeof codeText !== 'string') return unsupported();
+              const backtickRuns = codeText.match(/\x60+/gu) ?? [];
+              const fence = String.fromCharCode(96).repeat(Math.max(3, ...backtickRuns.map((run) => run.length + 1)));
+              blocks.push(fence + (labels[0] ?? '') + '\n' + codeText
+                + (codeText.endsWith('\n') ? '' : '\n') + fence);
+            }
+            return blocks.length > 0 ? { text: blocks.join('\n\n'), complete: true } : unsupported();
+          };
+          // A final historical assistant is not the current response while
+          // taking a pre-Send baseline. After Send the marker, not the last
+          // page-wide assistant, bounds the owned turn against later users.
+          const isUser = (node: Element): boolean =>
+            node.querySelector(`[${args.roleAttribute}]`)?.getAttribute(args.roleAttribute) === args.userMessageStyle
+            || (node.getAttribute(args.unitKeyAttribute) ?? '').endsWith(':user');
+          const ownedUserIndices = args.ownedMarker
+            ? elements.flatMap((node, index) => {
+              if (!isUser(node)) return [];
+              const rendered = (node as HTMLElement).innerText;
+              const head = typeof rendered === 'string'
+                ? rendered.match(/^[\p{White_Space}\uFEFF\u200B]*([^\p{White_Space}\uFEFF\u200B]+)/u)?.[1]
+                : undefined;
+              return head === args.ownedMarker ? [index] : [];
+            })
+            : [];
+          const ownedUserIndex = ownedUserIndices.length === 1 ? ownedUserIndices[0]! : -1;
+          const nextUserIndex = ownedUserIndex < 0 ? -1
+            : elements.findIndex((node, index) => index > ownedUserIndex && isUser(node));
           const rows: Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean; completionReady: boolean; continuationVisible: boolean }> = [];
           let observedAssistantNodes = 0;
           let observedMessageNodes = 0;
@@ -1824,34 +2103,17 @@ export async function readPageObservation(
                 if (role === 'assistant') observedAssistantNodes += 1;
               }
               let text = (element as HTMLElement).innerText;
+              let rowComplete = true;
               if (role === 'assistant') {
-                // Preserve only text exposed by the code element's rendered innerText.
-                // textContent can include hidden descendants and is never publication evidence.
-                for (const code of Array.from(element.querySelectorAll('pre code'))) {
-                  if (code.getBoundingClientRect().height <= 0) continue;
-                  const visible = (code as HTMLElement).innerText;
-                  const lines = visible.split('\n');
-                  const firstLine = lines[0] ?? '';
-                  if (!firstLine || lines.length < 2 || text.includes(visible)) continue;
-                  // A unique, line-aligned prefix binds the code node to this outer message.
-                  const offset = text.indexOf(firstLine);
-                  if (offset < 0 || (offset > 0 && text[offset - 1] !== '\n')
-                    || text.indexOf(firstLine, offset + firstLine.length) !== -1) continue;
-                  let end = offset + firstLine.length;
-                  if (end < text.length && text[end] !== '\n') continue;
-                  let matchedLines = 1;
-                  while (matchedLines < lines.length) {
-                    const line = lines[matchedLines]!;
-                    const nextEnd = end + 1 + line.length;
-                    if (text[end] !== '\n' || !text.startsWith(line, end + 1)
-                      || (nextEnd < text.length && text[nextEnd] !== '\n')) break;
-                    end = nextEnd;
-                    matchedLines += 1;
-                  }
-                  if (matchedLines === lines.length) continue;
-                  // Keep the outer message's non-code prose and footer byte-for-byte.
-                  text = text.slice(0, offset) + visible + text.slice(end);
-                }
+                const hasLaterAssistant = elements.slice(domIndex + 1).some((later) =>
+                  later.querySelector(`[${args.roleAttribute}]`)?.getAttribute(args.roleAttribute)
+                    === args.assistantMessageStyle);
+                const selected = !args.historicalBaseline && (ownedUserIndex >= 0
+                  ? domIndex > ownedUserIndex && (nextUserIndex < 0 || domIndex < nextUserIndex)
+                  : !hasLaterAssistant);
+                const serialized = serializeAssistant(element, selected);
+                text = serialized.text;
+                rowComplete = serialized.complete;
               }
               let completionReady = false;
               let continuationVisible = false;
@@ -1878,7 +2140,7 @@ export async function readPageObservation(
               } catch {
                 completionReady = false;
               }
-              rows.push({ role, text, key: canonicalKey(element), domIndex, complete: true, completionReady, continuationVisible });
+              rows.push({ role, text, key: canonicalKey(element), domIndex, complete: rowComplete, completionReady, continuationVisible });
             } catch {
               rows.push({ role: '', text: '', domIndex, complete: false, completionReady: false, continuationVisible: false });
             }
@@ -1908,6 +2170,9 @@ export async function readPageObservation(
           userMessageStyle: USER_MESSAGE_STYLE,
           unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
           assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
+        contentRootSelector: ASSISTANT_CONTENT_ROOT_SELECTOR,
+          ownedMarker: expectedMarker,
+          historicalBaseline,
           generationSelector: BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR,
           continuationSelector: CONTINUE_GENERATING_SELECTOR,
           turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
@@ -2179,7 +2444,7 @@ async function readComposerReadiness(
     const composer = page.locator(COMPOSER_SELECTOR);
     let remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
-    if (await locatorCount(composer, deadline, true) <= 0) {
+    if (await locatorCount(composer, deadline, true, true) <= 0) {
       observe?.('absent');
       return false;
     }
@@ -2191,7 +2456,7 @@ async function readComposerReadiness(
     remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
     const readiness = typeof composer.evaluate === 'function'
-      ? await composer.evaluate(
+      ? await boundedBrowserRead(Promise.resolve(composer.evaluate(
         (element: any) => {
           const style = window.getComputedStyle(element);
           const rect = element.getBoundingClientRect();
@@ -2209,7 +2474,7 @@ async function readComposerReadiness(
         },
         undefined,
         { timeout: remainingMs },
-      )
+      )), remainingMs, 'composer_readiness_timeout')
       : undefined;
     if (Date.now() >= deadline) return false;
 
@@ -2248,15 +2513,118 @@ async function readComposerTextForSendDelivery(
   composer: any,
   deadlineMs: number,
 ): Promise<string | undefined> {
-  const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+  const text = await readComposerTextWithinDeadline(
+    composer, Math.min(deadlineMs, Date.now() + MAX_LOCAL_READ_WAIT_MS),
+  );
+  return text === undefined ? undefined : collapseUnicodeWhitespace(text);
+}
+
+// Read complete visible text within the invocation deadline. Pre-Send matching
+// uses the incumbent rendered-payload normalization as well as exact readers.
+async function readComposerTextWithinDeadline(
+  composer: any,
+  deadlineMs: number,
+): Promise<string | undefined> {
+  const waitMs = deadlineMs - Date.now();
   if (waitMs <= 0) return undefined;
-  const timeoutCause = 'send_delivery_composer_read_timeout';
   try {
-    return collapseUnicodeWhitespace(String(await boundedBrowserRead(
+    return String(await boundedBrowserRead(
       Promise.resolve(composer.innerText({ timeout: waitMs })),
       waitMs,
-      timeoutCause,
-    )));
+      'send_delivery_composer_read_timeout',
+    ));
+  } catch (error) {
+    if (isPostSendTargetCrash(error)) throw error;
+    return undefined;
+  }
+}
+
+async function composerPayloadMatchesBeforeSend(
+  composer: any,
+  expected: string,
+  deadlineMs: number,
+): Promise<boolean> {
+  const visible = await readComposerTextWithinDeadline(composer, deadlineMs);
+  // ProseMirror empty paragraphs/trailing breaks change presentation whitespace.
+  // Keep the pre-#2670 semantic match; exact DOM readers are additional paths.
+  const expectedMarker = extractOwnedPromptMarkerToken(expected);
+  const normalizedMatches = visible !== undefined
+    // Use the same token authority as post-Send correlation before normalizing.
+    && (!isOwnedPromptMarker(expectedMarker) || ownedPromptMarkerMatches(visible, expectedMarker))
+    && renderedPayloadMatches(collapseUnicodeWhitespace(visible), expected);
+  const matches = normalizedMatches || visible === expected
+    || await readLosslessOwnedComposer(composer, deadlineMs, true) === expected
+    || await readStructuredComposerText(composer, expected.length, deadlineMs) === expected;
+  return matches && Date.now() < deadlineMs;
+}
+
+function composerPayloadFailureCause(deadlineMs: number): PreSendComposerFailureCause {
+  return Date.now() >= deadlineMs
+    ? 'composer_mutation_budget_exhausted' : 'composer_payload_mismatch';
+}
+
+async function readStructuredComposerText(
+  composer: any, expectedLength: number, deadlineMs: number,
+): Promise<string | undefined> {
+  const waitMs = deadlineMs - Date.now();
+  if (waitMs <= 0 || typeof composer?.evaluate !== 'function') return undefined;
+  try {
+    const text = await boundedBrowserRead(
+      Promise.resolve(composer.evaluate((element: HTMLElement, maxChars: number) => {
+        // ProseMirror paragraphs encode document newlines independently of
+        // CSS innerText spacing. Text nodes (including spaces/tabs) are literal.
+        if (!element.isConnected || !element.isContentEditable
+          || !element.classList.contains('ProseMirror')) return undefined;
+        const view = element.ownerDocument.defaultView;
+        if (!view) return undefined;
+        const parts: string[] = [];
+        const maxNodes = Math.min(20_000, maxChars * 2 + 256);
+        let nodes = 0;
+        let chars = 0;
+        const append = (value: string): boolean => {
+          chars += value.length;
+          if (chars > maxChars) return false;
+          parts.push(value);
+          return true;
+        };
+        const readable = (node: HTMLElement): boolean => {
+          if (node.getAttribute('hidden') !== null || node.getAttribute('aria-hidden') === 'true'
+            || node.getAttribute('contenteditable') === 'false') return false;
+          const style = view.getComputedStyle(node);
+          return style.display !== 'none' && style.visibility !== 'hidden' && style.visibility !== 'collapse';
+        };
+        const walk = (node: Node, depth: number, trailingBreak: boolean): boolean => {
+          if (++nodes > maxNodes || depth > 32) return false;
+          if (node.nodeType === 3) return append(node.nodeValue ?? '');
+          if (node.nodeType !== 1) return false;
+          const child = node as HTMLElement;
+          if (!readable(child)) return false;
+          if (child.tagName === 'BR') {
+            if (child.childNodes.length !== 0) return false;
+            return child.classList.contains('ProseMirror-trailingBreak') ? trailingBreak : append('\n');
+          }
+          if (!(child.tagName === 'P' && depth === 1)
+            && !['A', 'SPAN', 'CODE', 'STRONG', 'EM', 'B', 'I', 'S', 'U'].includes(child.tagName)) return false;
+          for (let i = 0; i < child.childNodes.length; i++) {
+            if (!walk(child.childNodes[i]!, depth + 1,
+              child.tagName === 'P' && i === child.childNodes.length - 1)) return false;
+          }
+          return true;
+        };
+        if (!readable(element) || element.childNodes.length > maxNodes) return undefined;
+        let paragraphs: boolean | undefined;
+        for (let i = 0; i < element.childNodes.length; i++) {
+          const child = element.childNodes[i]!;
+          const isParagraph = child.nodeType === 1 && (child as HTMLElement).tagName === 'P';
+          paragraphs ??= isParagraph;
+          if (paragraphs !== isParagraph || (isParagraph && i > 0 && !append('\n'))
+            || !walk(child, 1, false)) return undefined;
+        }
+        return parts.join('');
+      }, expectedLength)),
+      waitMs, 'send_composer_structure_timeout',
+    );
+    return typeof text === 'string' ? text : undefined;
   } catch (error) {
     if (isPostSendTargetCrash(error)) throw error;
     return undefined;
@@ -2473,8 +2841,9 @@ async function freshRetryDomGuards(input: {
   if (browserOrPageDefinitelyLost(input.page, input.browser)) return false;
   try {
     if (await readFreshStopVisible(input.page, input.deadlineMs) !== false) return false;
-    const typed = await readComposerTextForSendDelivery(input.composer, input.deadlineMs);
-    if (!renderedPayloadMatches(typed, input.markerPayload)) return false;
+    if (!await composerPayloadMatchesBeforeSend(
+      input.composer, input.markerPayload, input.deadlineMs,
+    )) return false;
     const observed = await readPageObservation(
       input.page, undefined, undefined, true, input.deadlineMs,
     );
@@ -2494,8 +2863,10 @@ async function freshRetryDomGuards(input: {
 async function readLosslessOwnedComposer(
   composer: any,
   deadlineMs: number,
+  useInvocationDeadline = false,
 ): Promise<string | undefined> {
-  const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+  const waitMs = useInvocationDeadline ? deadlineMs - Date.now()
+    : Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
   if (waitMs <= 0 || typeof composer?.evaluate !== 'function') return undefined;
   try {
     const result = await boundedBrowserRead(
@@ -2534,8 +2905,9 @@ async function existingRetryDomGuards(input: {
     && Date.now() < input.deadlineMs;
   if (!samePage()) return false;
   try {
-    if (await readComposerTextForSendDelivery(input.composer, input.deadlineMs)
-      !== collapseUnicodeWhitespace(input.markedPayload)) return false;
+    if (!await composerPayloadMatchesBeforeSend(
+      input.composer, input.markedPayload, input.deadlineMs,
+    )) return false;
     if (await readFreshStopVisible(input.page, input.deadlineMs) !== false) return false;
     const observed = await readPageObservation(
       input.page, undefined, undefined, true, input.deadlineMs,
@@ -2756,7 +3128,9 @@ async function mutateComposerOrCause(
   const composer = page.locator(COMPOSER_SELECTOR);
   const insertionStart = Date.now();
   const insertionBudgetMs = deriveComposerInsertionBudgetMs(text);
-  const insertionDeadlineMs = Math.min(insertionStart + insertionBudgetMs, invocationDeadlineMs);
+  // The line estimate is diagnostic only. Both fill() timeouts, including a
+  // single large line, use the remaining finite invocation deadline below.
+  const insertionDeadlineMs = invocationDeadlineMs;
   if (insertionContext) insertionContext.insertionDeadlineMs = insertionDeadlineMs;
   const exhausted = (branch: ComposerMutationDiagnosticV1['branch']): PreSendComposerFailureCause => {
     if (insertionContext) {
@@ -2781,7 +3155,7 @@ async function mutateComposerOrCause(
     // classifying failure, not as a veto on the ordinary click/fill attempt.
     let composerAbsent = false;
     try {
-      composerAbsent = await locatorCount(composer, insertionDeadlineMs) === 0;
+      composerAbsent = await locatorCount(composer, invocationDeadlineMs, false, true) === 0;
     } catch {
       return exhausted('readiness_before_click');
     }
@@ -2794,8 +3168,11 @@ async function mutateComposerOrCause(
       if (actionBudgetMs <= 0) return exhausted('budget_before_fill');
       beforeAction?.();
       await composer.fill(text, { timeout: actionBudgetMs });
-      // If readiness recovered during the attempt, proceed to dispatch.
-      if (await readComposerReadiness(page, insertionDeadlineMs)) return null;
+      // Verify the complete draft even when readiness recovered during fill.
+      if (await readComposerReadiness(page, invocationDeadlineMs)) {
+        return await composerPayloadMatchesBeforeSend(composer, text, invocationDeadlineMs)
+          ? null : composerPayloadFailureCause(invocationDeadlineMs);
+      }
     } catch (error) {
       if (error instanceof Error && (error.message === 'conversation_fetch_http_429'
         || (error.message === 'rate_limit' && heldPage429Diagnostic(page)?.http_status === 429)
@@ -2821,14 +3198,16 @@ async function mutateComposerOrCause(
     if (actionBudgetMs <= 0) return exhausted('budget_before_fill2');
     beforeAction?.();
     await composer.fill(text, { timeout: actionBudgetMs });
-    if (Date.now() >= insertionDeadlineMs) return 'composer_mutation_budget_exhausted';
-    return null;
+    if (Date.now() >= invocationDeadlineMs) return 'composer_mutation_budget_exhausted';
+    return await composerPayloadMatchesBeforeSend(composer, text, invocationDeadlineMs)
+      ? null : composerPayloadFailureCause(invocationDeadlineMs);
   } catch (error) {
     if (error instanceof Error && (error.message === 'conversation_fetch_http_429'
       || (error.message === 'rate_limit' && heldPage429Diagnostic(page)?.http_status === 429)
       || error.message === 'account_cooldown_active')) throw error;
     if (
       isPlaywrightTimeoutError(error)
+      && Date.now() < invocationDeadlineMs
       && await hasBlockingPageOverlay(page, invocationDeadlineMs)
     ) {
       return 'blocking_page_overlay';
@@ -2984,6 +3363,15 @@ export function readOwnedConversationIdentity(page: any, targetChatUrl: string):
     pageUuid,
     pageUrl,
   };
+}
+
+/** AC12 only: UUID equality never grants destructive close after a route change. */
+function ownedPreSendFetch429ExactRoute(page: any, expectedUrl: string): boolean {
+  try {
+    return normalizeConversationUrl(String(page.url())) === normalizeConversationUrl(expectedUrl);
+  } catch {
+    return false;
+  }
 }
 
 function returnOwnedConversationIdentityMismatch(
@@ -3193,8 +3581,14 @@ async function runTurn(
       } else if (diagnostic.http_status !== 429 && diagnostic.wall_kind !== 'account_load_error'
         && (value.wall_kind !== 'none' || value.matched_text !== 'none')) diagnostic = value;
     }, freshCleanup);
-    // A named product-wall stop never grants authority to close the held Page.
-    if (outcome.page && typeof outcome.page === 'object'
+    // A named wall cannot close any selected, recovered or unproven Page.
+    // AC12 exempts only the positively invocation-created pre-Send fetch-429
+    // original; finalizeTurn still requires a durable not_sent observation.
+    const ownNotSentFetch429 = outcome.ownedPreSendFetch429Page === outcome.page
+      && outcome.result.state === 'rate_limit'
+      && outcome.result.cause === 'conversation_fetch_http_429'
+      && outcome.result.send_count === 0 && outcome.result.send_attempted !== true;
+    if (outcome.page && typeof outcome.page === 'object' && !ownNotSentFetch429
       && (diagnostic.http_status === 429 || diagnostic.wall_kind === 'conversation_load_error'
         || outcome.result.cause === 'account_cooldown_active')) {
       cleanupAuthorityUnprovenPages.add(outcome.page);
@@ -3257,6 +3651,8 @@ async function runTurnCore(
   let ownedStopDeliveryObserved = false;
   let deliveryProofPendingRecovery = false;
   let ownershipForfeited = false;
+  let invocationCreatedExistingChatPage: any;
+  let invocationCreatedExistingChatUrl: string | undefined;
   let cancellationReceiptEmitted = false;
   let heartbeatScheduler: TurnScopedHeartbeatScheduler | undefined;
   let heartbeatPhase: BrowserTurnLivenessPhase = 'admitted_pre_send';
@@ -3354,6 +3750,21 @@ async function runTurnCore(
   };
   // Fresh preparation owns its internal goto. Intercept its existing counter hook
   // immediately before that goto without modifying the excluded helper module.
+  const ownedPreSendFetch429CleanupFields = (
+    state: TurnState, cause: string,
+  ): Pick<TurnRunOutcome, 'ownedPreSendFetch429Page' | 'ownedPreSendFetch429Url'> => (
+    state === 'rate_limit' && cause === 'conversation_fetch_http_429'
+    && held429Witness?.current()?.wall_kind === 'conversation_fetch_http_429'
+    && held429Witness.current()?.http_status === 429
+    && !afterSend && !sendAttempted && sendCount === 0
+    && !ownershipForfeited && page === invocationCreatedExistingChatPage
+    && Boolean(invocationCreatedExistingChatUrl)
+    && !cleanupAuthorityUnprovenPages.has(page)
+    && !browserOrPageDefinitelyLost(page, browser)
+    && ownedPreSendFetch429ExactRoute(page, invocationCreatedExistingChatUrl!)
+      ? { ownedPreSendFetch429Page: page, ownedPreSendFetch429Url: invocationCreatedExistingChatUrl }
+      : {}
+  );
   const guardedFreshPreparationNavigation = new Proxy(navigation, {
     get(target, property, receiver) {
       if (property === 'recordGoto') return () => {
@@ -3488,13 +3899,29 @@ async function runTurnCore(
     const selection = await selectConversationPage(browser, chromium, config, invocationBudget, invocationDeadlineMs);
     browser = selection.browser;
     page = selection.page;
+    // Created is attachOwnTarget's affirmative target provenance, not a URL
+    // match or a cleanupAction hint. Capture only the original existing-chat Page.
+    if (!config.newChat && config.chatUrl && page
+      && getOwnTargetInfo(browser)?.created === true
+      && !cleanupAuthorityUnprovenPages.has(page)) {
+      invocationCreatedExistingChatPage = page;
+      invocationCreatedExistingChatUrl = normalizeConversationUrl(config.chatUrl);
+    }
     if (page) attachHeld429(page, !config.newChat ? config.chatUrl : undefined);
     if (page && typeof page === 'object' && !getOwnTargetInfo(browser)?.created) {
       // An existing URL-selected tab never grants cleanup or Stop authority.
       cleanupAuthorityUnprovenPages.add(page);
     }
     if (!page || getOwnTargetInfo(browser)?.created) {
-      if (!page) page = await createDedicatedTurnPage(browser, invocationBudget);
+      if (!page) {
+        page = await createDedicatedTurnPage(browser, invocationBudget);
+        // Explicit newPage resolution also proves creation, even when the
+        // original attach target did not carry a created Page.
+        if (!config.newChat && config.chatUrl && !cleanupAuthorityUnprovenPages.has(page)) {
+          invocationCreatedExistingChatPage = page;
+          invocationCreatedExistingChatUrl = normalizeConversationUrl(config.chatUrl);
+        }
+      }
       attachHeld429(page, !config.newChat ? config.chatUrl : undefined);
       if (config.newChat && freshCleanup) {
         freshCleanup.page = page;
@@ -3701,6 +4128,7 @@ async function runTurnCore(
         undefined,
         true,
         invocationDeadlineMs,
+        true, // Every pre-Send assistant is historical, including the final one.
       );
       if (baseline.transcriptIncomplete || !baseline.snapshot?.complete) {
         incident('pre_send_observation_error', 'baseline_transcript_incomplete', 'return_local_error');
@@ -3975,8 +4403,8 @@ async function runTurnCore(
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       const composer = page.locator(COMPOSER_SELECTOR);
-      if (!renderedPayloadMatches(await readComposerTextForSendDelivery(composer, invocationDeadlineMs), markedPayload)) {
-        return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      if (!await composerPayloadMatchesBeforeSend(composer, markedPayload, invocationDeadlineMs)) {
+        return returnComposerMutationFailure(composerPayloadFailureCause(invocationDeadlineMs));
       }
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
       // A pre-existing recovery alert is not evidence from this Send. Read
@@ -4042,9 +4470,13 @@ async function runTurnCore(
       };
       // The composer can change during Send readiness polling. Do not send a
       // different draft as though it were the invocation's marked payload.
-      if (!renderedPayloadMatches(await readComposerTextForSendDelivery(
-        composer, Math.min(invocationDeadlineMs, readinessDeadlineMs),
-      ), markedPayload)) throw new Error('ui_contract_mismatch:fresh_owned_payload_changed_before_click');
+      if (!await composerPayloadMatchesBeforeSend(
+        composer, markedPayload, Math.min(invocationDeadlineMs, readinessDeadlineMs),
+      )) {
+        return returnComposerMutationFailure(composerPayloadFailureCause(
+          Math.min(invocationDeadlineMs, readinessDeadlineMs),
+        ));
+      }
       assertFreshOwner();
       const sendAction = async () => await dispatchStateLightSendAndObserveDelivery({
         page, browser, composer, sendButton, hasSendButton: true, marker,
@@ -4067,9 +4499,13 @@ async function runTurnCore(
         })) {
         // Positive Playwright actionability proof and all independent current
         // DOM/owner checks are required; no third attempt after this second call.
-        assertFreshOwner();
-        freshRepeated = true;
-        delivery = await sendAction();
+        if (await composerPayloadMatchesBeforeSend(
+          composer, markedPayload, Math.min(invocationDeadlineMs, readinessDeadlineMs),
+        )) {
+          assertFreshOwner();
+          freshRepeated = true;
+          delivery = await sendAction();
+        }
       }
       if (delivery.sendCount === 0 && delivery.preDispatchTimeoutProven === true
         && (!freshRepeated || firstActionAffirmative)
@@ -4139,7 +4575,7 @@ async function runTurnCore(
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
       const hasSendButton = await locatorCount(
         sendButton,
-        Math.min(insertionDeadlineMs, invocationDeadlineMs),
+        invocationDeadlineMs, false, true,
       ) > 0;
       remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
       if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
@@ -4155,6 +4591,13 @@ async function runTurnCore(
         const beforeDispatchFailure = await verifyReopenedExistingPage();
         if (beforeDispatchFailure) return beforeDispatchFailure;
         sendWaitMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+        if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+        if (!await composerPayloadMatchesBeforeSend(
+          composer, markedPayload, invocationDeadlineMs,
+        )) {
+          return returnComposerMutationFailure(composerPayloadFailureCause(invocationDeadlineMs));
+        }
+        sendWaitMs = invocationDeadlineMs - Date.now();
         if (sendWaitMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
       // Reapply existing read-only destination predicates after composer mutation
@@ -4236,10 +4679,15 @@ async function runTurnCore(
         })) {
         // Only the first click's actual positive non-dispatch action result grants
         // this one optional repeat; an uncertain first action or Enter never does.
-        const repeatWaitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now());
-        if (repeatWaitMs > 0) {
-          repeated = true;
-          delivery = await dispatchExisting(repeatWaitMs);
+        if (await composerPayloadMatchesBeforeSend(composer, markedPayload, invocationDeadlineMs)
+          && originalExactChat && !browserOrPageDefinitelyLost(page, browser)
+          && normalizeConversationUrl(String(page.url())) === originalExactChat
+          && readOwnedConversationIdentity(page, originalExactChat).matched) {
+          const repeatWaitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now());
+          if (repeatWaitMs > 0) {
+            repeated = true;
+            delivery = await dispatchExisting(repeatWaitMs);
+          }
         }
       }
       if (!repeated && hasSendButton && delivery.sendCount === 0
@@ -4259,8 +4707,8 @@ async function runTurnCore(
             page, browser, composer, targetChatUrl: originalExactChat,
             markedPayload, marker, baselineSnapshot, deadlineMs: invocationDeadlineMs,
           })
-          // The normalized guard above contains awaits. Its equality does not
-          // protect a whitespace-only edit made while that guard was running.
+          // The guard above contains awaits. Recheck exact text after it so
+          // a concurrent whitespace-only edit cannot authorize a re-click.
           && await readFreshStopVisible(page, invocationDeadlineMs) === false
           && await readLosslessOwnedComposer(composer, invocationDeadlineMs) === markedPayload
           && page === originalHeldPage && getOwnTargetInfo(browser)?.created === true
@@ -4659,6 +5107,12 @@ async function runTurnCore(
               reason: 'fresh_owned_marker_observed', sendCount, sendWitness: 'owned_marker',
             });
           }
+          // The bounded marker read may cross the unbound cutoff. A URL that
+          // existed earlier cannot retrospectively authorize this first claim.
+          if (Date.now() >= freshUnboundReturnByMs) {
+            claimed = true;
+            break;
+          }
           const claim = tryClaimStateLightFreshConversation(
             profileKey,
             conversationUrl,
@@ -4903,6 +5357,7 @@ async function runTurnCore(
         incident('invocation_blocker', composerState.cause, 'return_local_error');
         return {
           page, browser,
+          ...ownedPreSendFetch429CleanupFields(composerState.state, composerState.cause),
           result: compactResult(
             composerState.state, 'invocation', composerState.cause, invocationId,
             profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed,
@@ -5821,7 +6276,10 @@ async function runTurnCore(
         && markerCardinality.exactMarkerTokenCount === 1
       ) {
         const observedConversationUrl = readProjectConversationUrl(page, config.projectUrl ?? '');
-        if (observedConversationUrl && isSupportedChatGptConversationUrl(observedConversationUrl)) {
+        if (observedConversationUrl && isSupportedChatGptConversationUrl(observedConversationUrl)
+          && Date.now() < freshUnboundReturnByMs) {
+          // Recheck AFTER the bounded transcript observation, immediately
+          // before the non-recovery first claim; recovery has its own cutoff.
           let claim: ReturnType<typeof tryClaimStateLightFreshConversation>;
           try {
             claim = tryClaimStateLightFreshConversation(
@@ -6880,9 +7338,22 @@ async function runTurnCore(
               : 'return_local_error',
       );
     }
+    const provenOpenedFetch429 = cause === 'conversation_fetch_http_429'
+      && held429Witness?.current()?.wall_kind === 'conversation_fetch_http_429'
+      && held429Witness.current()?.http_status === 429
+      && state === 'rate_limit' && !afterSend && !sendAttempted && sendCount === 0
+      && !ownershipForfeited && page === invocationCreatedExistingChatPage
+      && Boolean(invocationCreatedExistingChatUrl)
+      && !cleanupAuthorityUnprovenPages.has(page)
+      && !browserOrPageDefinitelyLost(page, browser)
+      && ownedPreSendFetch429ExactRoute(page, invocationCreatedExistingChatUrl!);
     return {
       ...(page ? { page } : {}),
       ...(browser ? { browser } : {}),
+      ...(provenOpenedFetch429 ? {
+        ownedPreSendFetch429Page: page,
+        ownedPreSendFetch429Url: invocationCreatedExistingChatUrl,
+      } : {}),
       ...(lostAfterSend ? { cleanupAction: 'skip' as const } : {}),
       ...(isSharedBlocked && !lostAfterSend ? { cleanupAction: 'preserve' as const } : {}),
       ...(ownershipForfeited ? { ownershipForfeited: true, cleanupAction: 'preserve' as const } : {}),
@@ -6986,6 +7457,16 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     && typeof outcome.page === 'object'
     && !cleanupAuthorityUnprovenPages.has(outcome.page),
   );
+  const ownedPreSendFetch429Close = Boolean(
+    observedNotSent && cleanupAuthorityProven && !pageLost
+    && outcome.ownershipForfeited !== true
+    && outcome.ownedPreSendFetch429Page === outcome.page
+    && outcome.ownedPreSendFetch429Url
+    && outcome.result.state === 'rate_limit'
+    && outcome.result.cause === 'conversation_fetch_http_429'
+    && outcome.result.send_count === 0 && outcome.result.send_attempted !== true
+    && ownedPreSendFetch429ExactRoute(outcome.page, outcome.ownedPreSendFetch429Url!),
+  );
   // Only the invocation-owned, reachable Page can be closed. A cleanupAction
   // of preserve (including an ambiguous Send) is not negative ownership proof;
   // forfeiture and pre-existing/recovered pages independently prohibit close.
@@ -7063,6 +7544,18 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
       };
       if (!appendIncident(cleanupIncident, outcome.result.invocation_id)) journalWriteFailed = true;
     }
+  }
+  // Recheck the original exact route at the destructive boundary, not merely
+  // at 429 observation. A redirect forfeits the narrow AC12 close authority.
+  if (pageAction === 'close' && outcome.result.state === 'rate_limit'
+    && outcome.result.cause === 'conversation_fetch_http_429'
+    && !ownedPreSendFetch429Close) {
+    pageAction = 'preserve';
+  }
+  if (pageAction === 'close' && outcome.ownedPreSendFetch429Page
+    && (!ownedPreSendFetch429Close
+      || !ownedPreSendFetch429ExactRoute(outcome.page, outcome.ownedPreSendFetch429Url!))) {
+    pageAction = 'preserve';
   }
   if (pageAction === 'close') {
     cleanup = await boundedResourceCleanup(
@@ -7166,6 +7659,7 @@ export const __testSendDelivery = {
   affirmativePreActionabilityTimeout,
   waitForFreshSendButton,
   readLosslessOwnedComposer,
+  composerPayloadMatchesBeforeSend,
   conditionalClearOwnedComposerDraft,
   observeExistingServerCheckedRecovery,
 };

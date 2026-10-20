@@ -550,7 +550,10 @@ export function ownPaneOutcome(screen: string): { wait?: string; acknowledgment:
   const newOutcome = /\?\s*$|\b(?:STOPPED|done|finished|handed[- ]off|worker_done|error)\b/iu;
   const foreign = (boundary >= 0 && /^User:/iu.test(lines[boundary]!)) || context.some((line) => toolLine.test(line));
   const superseded = own.slice(Math.max(0, start) + 1).some((line) => toolLine.test(line) || newOutcome.test(line));
-  const wait = !foreign && !superseded && /^PARKED(?: on\s+|:\s*(?:wait\s+)?)(.+)$/iu.exec(response)?.[1];
+  const lastContent = contentLines(screen).at(-1);
+  const inFlightPark = lastContent?.running && /^PARKED(?:\s+on\b|:)/iu.test(lastContent.text);
+  const wait = !inFlightPark && !foreign && !superseded
+    && /^PARKED(?: on\s+|:\s*(?:wait\s+)?)(.+)$/iu.exec(response)?.[1];
   // The turn, including tool paragraphs before its final summary, must be a short own
   // response with no work or new outcome. Its natural language does not authorize parking.
   const turn = paragraphs.flat();
@@ -601,8 +604,11 @@ function liveTaskBinding(terminal: FleetTerminal, projectId: string, executor: O
 }
 /** The final non-empty content line, not a Task/receipt, is park authority. */
 export function lastFleetParkedLine(screen: string): string | undefined {
-  const last = nonChromeLines(screen).at(-1)?.trim() ?? '';
-  return /^PARKED on\s+\S.+$/u.test(last) || /^PARKED on\s+\S$/u.test(last) ? last : undefined;
+  const final = contentLines(screen).at(-1);
+  const last = final?.text.trim() ?? '';
+  // A running spinner before PARKED is an executing command, not the agent's final own response.
+  return !final?.running && (/^PARKED on\s+\S.+$/u.test(last) || /^PARKED on\s+\S$/u.test(last))
+    ? last : undefined;
 }
 
 export function classifyFleetPane(

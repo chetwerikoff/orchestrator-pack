@@ -122,6 +122,7 @@ import {
   createCoordinationModuleMock,
   enqueueBrowserForTurn,
   messageLocator,
+  proseMirrorEditorSurface,
   readyTurnObservationFrames,
   runStateLightTurnWithStdoutCapture,
   scalarLocator,
@@ -217,7 +218,10 @@ function clearSendSlotDisableEnv(): void {
   delete process.env.OPK_STATE_LIGHT_SEND_SLOT_DISABLE_REASON;
 }
 
-function makeLoserPage(prompt: string, reply: string, onSend?: () => void, ownedPriorHistory = false) {
+function makeLoserPage(
+  prompt: string, reply: string, onSend?: () => void, ownedPriorHistory = false,
+  rendering?: 'paragraphs' | 'autolink' | 'blank-paragraphs',
+) {
   let sends = 0;
   let sent = false;
   let composerText = '';
@@ -245,13 +249,17 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void, owned
     generating: index < 2,
   }));
   let activeSnapshot = snapshotFrames[0]!;
+  const editorSurface = () => rendering ? proseMirrorEditorSurface(
+    sent ? '' : composerText + (rendering === 'blank-paragraphs' ? '\n' : ''),
+    rendering === 'blank-paragraphs' ? 'paragraphs' : rendering,
+  ) : undefined;
 
   const composer = scalarLocator({
     count: vi.fn(async () => 1),
     click: vi.fn(async () => undefined),
     fill: vi.fn(async (value: string) => { composerText = value; }),
-    innerText: vi.fn(async () => (sent ? '' : composerText)),
-    textContent: vi.fn(async () => (sent ? '' : composerText)),
+    innerText: vi.fn(async () => editorSurface()?.innerText ?? (sent ? '' : composerText)),
+    textContent: vi.fn(async () => editorSurface()?.textContent ?? (sent ? '' : composerText)),
     // Browser-side callbacks execute against one live editable element. Do
     // not fake an always-true evaluate: atomic compare/clear and URL guards
     // must actually inspect the same state they can modify.
@@ -264,13 +272,18 @@ function makeLoserPage(prompt: string, reply: string, onSend?: () => void, owned
       // locator. Its three-argument evaluate must keep the original fallback;
       // only the new lossless/atomic calls use the browser-element model below.
       if (options?.timeout !== undefined) return true;
+      const surface = editorSurface();
       const element = {
+        ...surface,
         isConnected: true,
         isContentEditable: true,
-        ownerDocument: { defaultView: { location: { get href() { return String(page.url()); } } } },
-        get textContent() { return sent ? '' : composerText; },
+        ownerDocument: { defaultView: {
+          location: { get href() { return String(page.url()); } },
+          getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+        } },
+        get textContent() { return surface?.textContent ?? (sent ? '' : composerText); },
         set textContent(value: string) { composerText = value; },
-        get innerText() { return sent ? '' : composerText; },
+        get innerText() { return surface?.innerText ?? (sent ? '' : composerText); },
       };
       return callback(element, arg);
     }),
@@ -386,6 +399,75 @@ describe('state-light fresh conversation collision recovery', () => {
     vi.restoreAllMocks();
   });
 
+  // Exercise the real held-Page GET witness, wrapper and finalizer (not a
+  // fabricated TerminalEnvelope). The request must be from this exact Page.
+  function installExistingChatFetch429(page: any) {
+    const events = new EventEmitter();
+    page.on = events.on.bind(events);
+    page.off = events.off.bind(events);
+    const request = {
+      url: () => 'https://chatgpt.com/backend-api/conversations/11111111-1111-4111-8111-111111111111',
+      method: () => 'GET',
+    };
+    return () => {
+      events.emit('request', request);
+      events.emit('response', { request: () => request, status: () => 429 });
+    };
+  }
+
+  it('AC12 closes only a freshly opened existing-chat Page after a witnessed pre-Send fetch 429', async () => {
+    const fixture = makeLoserPage('NO-SEND-429', 'NEVER-SEND');
+    const notify429 = installExistingChatFetch429(fixture.page);
+    const goto = fixture.page.goto.getMockImplementation()!;
+    fixture.page.goto.mockImplementation(async (target: string) => {
+      await goto(target);
+      notify429(); // own-GET response follows this invocation's opening.
+    });
+    enqueueBrowserForTurn(mocks, fixture.page);
+    const output = join(stateDir, 'fetch-429-owned.txt');
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', output,
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '60000',
+      '--poll-ms', '1',
+    ]);
+    expect(outcome.result).toMatchObject({
+      state: 'rate_limit', cause: 'conversation_fetch_http_429',
+      send_count: 0, cleanup: 'confirmed',
+    });
+    expect(outcome.result.send_attempted).not.toBe(true);
+    expect(fixture.page.close).toHaveBeenCalledTimes(1);
+    expect(fixture.sendButton.click).not.toHaveBeenCalled();
+  });
+
+  it('AC12 preserves a selected pre-existing 429 Page and its sibling', async () => {
+    const fixture = makeLoserPage('NO-SEND-EXISTING', 'NEVER-SEND');
+    fixture.page.url.mockImplementation(() => SHARED_CONV);
+    const notify429 = installExistingChatFetch429(fixture.page);
+    const originalLocator = fixture.page.locator.getMockImplementation()!;
+    let triggered = false;
+    fixture.page.locator.mockImplementation((selector: string) => {
+      if (!triggered) { triggered = true; notify429(); }
+      return originalLocator(selector);
+    });
+    const sibling = { url: () => LOSER_CONV, close: vi.fn(async () => undefined) };
+    const harness = enqueueBrowserForTurn(mocks, fixture.page);
+    Object.assign(harness.context, { pages: vi.fn(() => [fixture.page, sibling]) });
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', join(stateDir, 'fetch-429-preexisting.txt'),
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '60000',
+      '--poll-ms', '1',
+    ]);
+    expect(outcome.result.send_count).toBe(0);
+    expect(fixture.page.close).not.toHaveBeenCalled();
+    expect(sibling.close).not.toHaveBeenCalled();
+  });
+
   it('serializes conversation claims so only the owner holds the shared surface', () => {
     const profileKey = 'collision-profile';
     expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'winner')).toBe('claimed');
@@ -484,23 +566,54 @@ describe('state-light fresh conversation collision recovery', () => {
   it.each(['', '\n'])('sends a rendered five-newline separator and three-newline suffix for prompt suffix %j (#2492)', async (suffix) => {
     const prompt = `Reply with the single word OK.${suffix}`;
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const turn = makeLoserPage(prompt, 'OK');
-    const read = turn.composer.innerText.getMockImplementation()!;
-    turn.composer.innerText.mockImplementation(async () => {
-      const text = await read();
-      return text ? text.replace(/\n\n/u, '\n\n\n\n\n').trimEnd() + '\n\n\n' : '\n';
-    });
+    const turn = makeLoserPage(prompt, 'OK', undefined, false, 'paragraphs');
     const outcome = await runNewChatTurn(turn.page, join(stateDir, 'rendered-paragraphs.txt'));
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(turn.getSends()).toBe(1);
   });
 
+  it('sends six blank lines with ProseMirror empty paragraphs and trailing breaks (#2671)', async () => {
+    const prompt = ['Explain the two checks.', 'First check: draft content.',
+      'Second check: exactly one Send.', 'Keep all six blank lines.',
+      'Do not operate on other chats.', 'This is a synthetic regression.',
+      'Reply with the result.'].join('\n\n').padEnd(1668, 'x');
+    expect(Buffer.byteLength(prompt)).toBe(1668);
+    expect(prompt.match(/\n\n/gu)).toHaveLength(6);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'Both checks passed.', undefined, false, 'blank-paragraphs');
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'blank-paragraphs-2671.txt'));
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(turn.getSends()).toBe(1);
+  });
+
+  it.each((['content', 'marker-boundary'] as const).flatMap((kind) =>
+    (['fill', 'before-click'] as const).map((stage) => ({ kind, stage })),
+  ))(
+    'rejects a genuine $kind mismatch at $stage without Send (#2671)', async ({ kind, stage }) => {
+      const prompt = 'Explain draft verification.\n\nReply with both checks.';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'must not send');
+      const corrupt = (text: string) => kind === 'marker-boundary'
+        ? text.replace('\n\n', '') : text.replace('both', 'neither');
+      if (stage === 'fill') {
+        const fill = turn.composer.fill.getMockImplementation()!;
+        turn.composer.fill.mockImplementation(async (text: string) => fill(corrupt(text)));
+      } else {
+        turn.sendButton.isEnabled.mockImplementation(async () => {
+          await turn.composer.fill(corrupt(await turn.composer.innerText()));
+          return true;
+        });
+      }
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, `mismatch-${kind}-${stage}-2671.txt`));
+      expect(outcome.result).toMatchObject({ cause: 'composer_payload_mismatch', send_count: 0 });
+      expect(turn.getSends()).toBe(0);
+    },
+  );
+
   it('sends a backticked https URL when editor autolinking adds whitespace (#2497)', async () => {
     const prompt = 'Reply OK for `https://example.com/2497`';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const turn = makeLoserPage(prompt, 'OK');
-    const read = turn.composer.innerText.getMockImplementation()!;
-    turn.composer.innerText.mockImplementation(async () => (await read()).replace('`https://', '` https://'));
+    const turn = makeLoserPage(prompt, 'OK', undefined, false, 'autolink');
     const outcome = await runNewChatTurn(turn.page, join(stateDir, 'autolink-2497.txt'));
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(turn.getSends()).toBe(1);
@@ -643,7 +756,7 @@ describe('state-light fresh conversation collision recovery', () => {
       turn.page, join(stateDir, 'foreign-before-send.txt'), '90000', invocationId,
     );
     expect(outcome.result).toMatchObject({
-      state: 'ui_contract_mismatch', cause: 'ui_contract_mismatch:fresh_owned_payload_changed_before_click', send_count: 0,
+      state: 'driver_error', cause: 'composer_payload_mismatch', send_count: 0,
     });
     expect(turn.getSends()).toBe(0);
     expect(turn.sendButton.click).not.toHaveBeenCalled();
@@ -847,6 +960,47 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result.send_count).toBe(1);
     expect(turn.getSends()).toBe(1);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
+  });
+
+  it.each((['joined-marker', 'marker-content', 'middle-content', 'truncated-tail'] as const).flatMap((content) =>
+    (['after-click', 'after-proof-read'] as const).map((when) => ({ content, when })),
+  ))('vetoes a fresh retry with $content corruption $when (#2669)', async ({ content, when }) => {
+    const prompt = 'keep separate words\n  indented line';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'UNREACHED');
+    const corrupt = (text: string) => content === 'joined-marker' ? text.replace('\n\n', '')
+      : content === 'marker-content' ? text.replace('OPKTURNV1', 'OTHER-TURN')
+        : content === 'middle-content' ? text.replace('indented', 'different') : text.slice(0, -1);
+    let firstClickAt: number | undefined;
+    let tailReads = 0;
+    let injected = false;
+    const read = turn.composer.innerText.getMockImplementation()!;
+    turn.composer.innerText.mockImplementation(async () => {
+      const visible = await read();
+      // At the end of delivery probing, first comes its final composer read,
+      // then the retry guard's read. Mutate after that read captures old text
+      // to require a fresh payload check immediately before the physical retry.
+      if (when === 'after-proof-read' && firstClickAt !== undefined
+        && mocks.nowMs >= firstClickAt + 5_000 && ++tailReads === 2 && !injected) {
+        await turn.composer.fill(corrupt(visible));
+        injected = true;
+      }
+      return visible;
+    });
+    turn.sendButton.click.mockImplementationOnce(async () => {
+      firstClickAt = mocks.nowMs;
+      if (when === 'after-click') {
+        await turn.composer.fill(corrupt(turn.getComposerText()));
+        injected = true;
+      }
+      throw timeoutError();
+    });
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, randomUUID() + '-retry-exact.txt'));
+    expect(injected).toBe(true);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.getSends()).toBe(0);
+    expect(outcome.result.send_count).toBe(0);
+    expect(turn.page.close).not.toHaveBeenCalled();
   });
 
   it('never retries or clears an ambiguous first click (#2487)', async () => {
@@ -1302,7 +1456,11 @@ describe('state-light fresh conversation collision recovery', () => {
     const initialUrl = solo.page.url.getMockImplementation()!;
     let redirected = false;
     solo.page.url.mockImplementation(() => redirected ? LOSER_CONV : initialUrl());
-    solo.composer.fill.mockImplementation(async () => { redirected = true; });
+    const originalFill = solo.composer.fill.getMockImplementation()!;
+    solo.composer.fill.mockImplementation(async (...args) => {
+      await originalFill(...args);
+      redirected = true;
+    });
     enqueueBrowserForTurn(mocks, solo.page);
     const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
       ...STATE_LIGHT_TURN_BASE_ARGV,
@@ -1547,6 +1705,57 @@ describe('state-light fresh conversation collision recovery', () => {
         ? collectionLocator([]) : originalLocator(selector));
     return { turn, sentAt: () => sendAt };
   }
+
+  it.each([
+    { site: 'early', urlDelayMs: 1_200, boundary: 'before', offset: -1, admitted: true },
+    { site: 'early', urlDelayMs: 1_200, boundary: 'after', offset: 1, admitted: false },
+    { site: 'post', urlDelayMs: 43_000, boundary: 'before', offset: -1, admitted: true },
+    { site: 'post', urlDelayMs: 43_000, boundary: 'after', offset: 1, admitted: false },
+  ])('AC2 claim-time cutoff $boundary the bounded $site original Page census', async ({ site, urlDelayMs, boundary, offset, admitted }) => {
+    const invocationId = randomUUID();
+    const prompt = 'ISSUE-2660-CLAIM-TIME-' + site + '-' + boundary;
+    const output = join(stateDir, invocationId + '-claim-race.txt');
+    const cutoff = mocks.nowMs + 180_000 - 5_000 - 15_000 - 2_000;
+    const { turn } = countedOwnPostWithLateFreshUrl(prompt, 'CLAIM-TIME-ANSWER', urlDelayMs, true);
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    let clockChangedInRead = false;
+    turn.page.locator.mockImplementation((selector: string) => {
+      const locator = originalLocator(selector);
+      if ((selector !== USER_MESSAGE_SELECTOR && selector !== MESSAGE_NODE_SELECTOR) || turn.getSends() < 1) return locator;
+      const originalNth = locator.nth.bind(locator);
+      locator.nth = vi.fn((index: number) => {
+        const row = originalNth(index);
+        const originalInnerText = row.innerText.bind(row);
+        row.innerText = vi.fn(async (...args: any[]) => {
+          const text = await originalInnerText(...args);
+          if (!clockChangedInRead && text.includes(TEST_OWNED_MARKER) && mocks.nowMs < cutoff) {
+            mocks.nowMs = cutoff + offset;
+            clockChangedInRead = true;
+          }
+          return text;
+        });
+        return row;
+      });
+      return locator;
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(turn.page, output, '180000', invocationId);
+    expect(clockChangedInRead).toBe(true);
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.getSends()).toBe(1);
+    expect(outcome.result.send_count).toBe(1);
+    if (admitted) {
+      expect(outcome.result).toMatchObject({ state: 'ok', conversation_id: SHARED_CONV });
+      expect(readFileSync(output, 'utf8')).toBe('CLAIM-TIME-ANSWER');
+    } else {
+      expect(outcome.result).toMatchObject({
+        state: 'observation_uncertain', cause: 'fresh_conversation_owner_unproven',
+      });
+      expect(outcome.result).not.toHaveProperty('conversation_id');
+      expect(existsSync(output)).toBe(false);
+      expect(turn.page.goto).toHaveBeenCalledTimes(1); // No preclaim navigation.
+    }
+  });
 
   it('Issue #2636 review source-01: counted own POST with unchanged composer survives early fresh URL wait', async () => {
     const invocationId = randomUUID();
@@ -1833,7 +2042,7 @@ describe('state-light fresh conversation collision recovery', () => {
       userMarkerlessFromRead?: number;
       assistantCarrierKeysByRead?: readonly string[];
       neverMarkerProof?: boolean;
-      assistantCode?: { visible: string; domTextContent: string };
+      assistantCode?: { visible: string; domTextContent: string; secondVisible?: string; firstLanguage?: string; secondLanguage?: string; interleavedProse?: string; standaloneProseFromRead?: number };
     } = {},
   ) {
     const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0, composerText: '' };
@@ -1953,6 +2162,85 @@ describe('state-light fresh conversation collision recovery', () => {
                 },
               }),
             }));
+          // Mirror only the rendered DOM primitives used by both production
+          // evaluateAll callbacks. The outer parent text intentionally differs
+          // from the visible complete code child (#2590 and #2660).
+          if (observationOverrides.assistantCode) {
+            for (let i = 0; i < elements.length; i++) {
+              if (active[i]?.role !== 'assistant') continue;
+              const outer = elements[i] as any;
+              const doc = { defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible' }) } };
+              const node = (tagName: string, innerText: string, attrs: Record<string, string> = {}) => {
+                const value: any = {
+                  nodeType: 1, tagName, innerText, children: [] as any[], childNodes: [] as any[], parentElement: null,
+                  ownerDocument: doc,
+                  getClientRects: () => [{}], getBoundingClientRect: () => ({ height: 1 }),
+                  getAttribute: (name: string) => attrs[name] ?? null,
+                  hasAttribute: (name: string) => Object.hasOwn(attrs, name),
+                  querySelectorAll(selector: string): any[] {
+                    const matches = (child: any) => selector === 'pre' ? child.tagName === 'PRE'
+                      : selector === 'code' ? child.tagName === 'CODE'
+                        : selector === '.markdown' ? child.getAttribute('class') === 'markdown'
+                          : selector === 'pre code' ? child.tagName === 'CODE' && child.parentElement?.tagName === 'PRE'
+                            : false;
+                    const descendants = (parent: any): any[] => parent.children.flatMap((child: any) =>
+                      [...(matches(child) ? [child] : []), ...descendants(child)]);
+                    return descendants(value);
+                  },
+                  querySelector(selector: string): any { return value.querySelectorAll(selector)[0] ?? null; },
+                };
+                return value;
+              };
+              const attach = (parent: any, child: any) => {
+                child.parentElement = parent;
+                parent.children.push(child);
+                parent.childNodes.push(child);
+                return child;
+              };
+              outer.tagName = 'ARTICLE';
+              outer.parentElement = null;
+              outer.children = [];
+              outer.childNodes = [];
+              outer.ownerDocument = doc;
+              outer.getClientRects = () => [{}];
+              outer.hasAttribute = () => false;
+              const root = attach(outer, node('DIV', '', { class: 'markdown' }));
+              attach(root, node('P', 'Before'));
+              const wrapper = attach(root, node('DIV', ''));
+              if (observationOverrides.assistantCode.interleavedProse) {
+                const proseParent = state.reads >= (observationOverrides.assistantCode.standaloneProseFromRead ?? Infinity)
+                  ? root : wrapper;
+                attach(proseParent, node('P', observationOverrides.assistantCode.interleavedProse));
+              }
+              if (observationOverrides.assistantCode.firstLanguage) {
+                const header = attach(wrapper, node('HEADER', ''));
+                attach(header, node('SPAN', observationOverrides.assistantCode.firstLanguage));
+              }
+              const pre = attach(wrapper, node('PRE', ''));
+              attach(pre, node('CODE', observationOverrides.assistantCode.visible));
+              const second = observationOverrides.assistantCode.secondVisible;
+              const secondPre = second === undefined ? undefined : (() => {
+                attach(root, node('UL', 'Between diff blocks'));
+                const sibling = attach(root, node('DIV', ''));
+                if (observationOverrides.assistantCode?.secondLanguage) {
+                  const header = attach(sibling, node('HEADER', ''));
+                  attach(header, node('SPAN', observationOverrides.assistantCode.secondLanguage));
+                }
+                const next = attach(sibling, node('PRE', ''));
+                attach(next, node('CODE', second));
+                return next;
+              })();
+              attach(root, node('P', secondPre ? 'After diff blocks\nEXECUTION_STATUS: complete'
+                : 'Following  prose\nEXECUTION_STATUS: complete'));
+              const originalQuerySelector = outer.querySelector;
+              outer.querySelector = (selector: string) => selector === '.markdown'
+                ? root : originalQuerySelector(selector);
+              outer.querySelectorAll = (selector: string) => selector === '.markdown'
+                ? [root] : selector === 'pre' ? [pre, ...(secondPre ? [secondPre] : [])]
+                  : selector === 'pre code' ? [pre, ...(secondPre ? [secondPre] : [])]
+                    .flatMap((item) => item.querySelectorAll('code')) : [];
+            }
+          }
             const previousDocument = (globalThis as { document?: unknown }).document;
             (globalThis as { document?: unknown }).document = {
               querySelectorAll: (query: string) => (query.includes('stop-button') && generating) || ((query.includes('continue-generating') || query.includes('continue_generating')) && continuationVisible) ? [{}] : [],
@@ -2902,7 +3190,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const prompt = 'PROMPT-2590-' + caseName;
     const footer = '\n\nFollowing  prose\nEXECUTION_STATUS: complete';
     const outer = 'Before\n\n' + parentPrefix + footer;
-    const expected = 'Before\n\n' + expectedCode + footer;
+    const expected = 'Before\n\n```\n' + expectedCode + (expectedCode.endsWith('\n') ? '' : '\n') + '```' + footer;
     const output = join(stateDir, 'long-code-2590-' + caseName + '.txt');
     const { page, state } = unrenderedOwnedMessagePage(
       prompt, outer, false, false, false, [outer], [],
@@ -2921,6 +3209,74 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readFileSync(output)).toEqual(expectedBytes);
     expect(readFileSync(output, 'utf8')).not.toContain('HIDDEN-DESCENDANT');
     expect(state.reads).toBeGreaterThanOrEqual(5);
+  });
+
+  it('Issue #2660 B8 publishes exact two fenced diffs with text before, between, after', async () => {
+    const diffOne = 'diff --git a/alpha b/alpha\n--- a/alpha\n+++ b/alpha\n@@ -1 +1 @@\n old\n-foo\n+bar\n';
+    const diffTwo = 'diff --git a/beta b/beta\n--- a/beta\n+++ b/beta\n@@ -2 +2 @@\n  nested  spaces\n\t+tab\n\n```';
+    const expected = [
+      'Before',
+      '```diff\n' + diffOne + '```',
+      'Between diff blocks',
+      '````diff\n' + diffTwo + '\n````',
+      'After diff blocks\nEXECUTION_STATUS: complete',
+    ].join('\n\n');
+    const outer = 'MISLEADING OUTER FIRST DIFF LINE; Copy control; NOT COMPLETE';
+    const output = join(stateDir, 'issue-2660-two-diff-primary.txt');
+    const prompt = 'ISSUE-2660-TWO-DIFF-PRIMARY';
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt, outer, false, false, false, [outer], [],
+      {
+        includeOwnedUser: true,
+        assistantCode: {
+          visible: diffOne,
+          domTextContent: diffOne + 'HIDDEN',
+          firstLanguage: 'diff',
+          secondVisible: diffTwo,
+          secondLanguage: 'diff',
+        },
+      },
+    );
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+    const bytes = Buffer.from(expected, 'utf8');
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'ok', cause: 'completed_page_only', send_count: 1,
+      output: {
+        byte_length: bytes.byteLength,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+      },
+    });
+    expect(readFileSync(output)).toEqual(bytes);
+    expect(state.reads).toBeGreaterThanOrEqual(5);
+  });
+
+
+  it('Issue #2660 never loses FAIL prose before a mixed wrapper becomes a supported block', async () => {
+    const prompt = 'ISSUE-2660-MIXED-PROSE-NEGATIVE';
+    const code = 'diff --git a/a b/a\n';
+    const outer = 'MISLEADING MIXED WRAPPER';
+    const output = join(stateDir, 'issue-2660-mixed-prose-must-not-publish.txt');
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt, outer, false, false, false, [outer], [],
+      { includeOwnedUser: true, assistantCode: {
+        visible: code, domTextContent: code, interleavedProse: 'FAIL',
+        // The owned Page's observation timeout is soft. A permanently
+        // unsupported reply must not be awaited as a terminal test case.
+        standaloneProseFromRead: 12,
+      } },
+    );
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output);
+    const expected = [
+      'Before', '```\n' + code + '```', 'FAIL',
+      'Following  prose\nEXECUTION_STATUS: complete',
+    ].join('\n\n');
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'ok', cause: 'completed_page_only', send_count: 1,
+    });
+    expect(state.reads).toBeGreaterThanOrEqual(12);
+    expect(readFileSync(output, 'utf8')).toBe(expected);
   });
 
   it('rejects a changed middle indentation on the fresh precommit read', async () => {
@@ -3381,6 +3737,70 @@ describe('state-light fresh conversation collision recovery', () => {
       phase: 'not_sent',
       send_witness: 'numeric_send_count',
     });
+  });
+
+  it.each((['ready', 'readiness-recovery'] as const).flatMap((branch) =>
+    (['many-lines', 'single-100KB-line'] as const).flatMap((shape) =>
+      (['complete', 'marker-separator', 'joined-words', 'indentation', 'changed-content'] as const)
+        .map((content) => ({ branch, shape, content })),
+    ),
+  ))(
+    'verifies slow-filled $shape $content text in the $branch branch (#2669)', async ({ branch, shape, content }) => {
+      const prompt = shape === 'single-100KB-line'
+        ? '  Synthetic task instruction 0'.padEnd(100 * 1024, 'x')
+        : Array.from({ length: 80 }, (_, index) => `  Synthetic task instruction ${index}`).join('\n');
+      if (shape === 'single-100KB-line') {
+        expect(Buffer.byteLength(prompt)).toBe(100 * 1024);
+        expect(prompt).not.toContain('\n');
+      }
+      const text = wrapOwnedPromptPayload(TEST_OWNED_MARKER, prompt);
+      const budget = deriveComposerInsertionBudgetMs(text);
+      let value = '';
+      let reads = 0;
+      const composer = {
+        count: vi.fn(async () => 1),
+        evaluate: vi.fn(async (read: (element: any) => unknown) => {
+          if (String(read).includes('textContent')) return read({ textContent: value, innerText: value });
+          const ready = branch === 'ready' || ++reads > 1;
+          return { visible: ready, enabled: ready, contentEditable: ready };
+        }),
+        click: vi.fn(async () => undefined),
+        fill: vi.fn(async (input: string, { timeout }: { timeout: number }) => {
+          const fillCostMs = budget + 1_000;
+          mocks.nowMs += Math.min(fillCostMs, timeout);
+          if (timeout < fillCostMs) throw new Error('TimeoutError: fill timed out before full insertion');
+          value = content === 'marker-separator' ? input.replace(/\n\n\s*/u, '')
+            : content === 'joined-words' ? input.replace('Synthetic task', 'Synthetictask')
+              : content === 'indentation' ? input.replace(/  Synthetic/u, 'Synthetic')
+                : content === 'changed-content' ? input.replace('instruction', 'different') : input;
+        }),
+        innerText: vi.fn(async () => value),
+      };
+      const page = { locator: (selector: string) => selector === COMPOSER_SELECTOR ? composer : scalarLocator() };
+      const cause = await __testComposerMutation.mutateComposerOrCause(page, text, mocks.nowMs + 60_000);
+      expect(cause).toBe(['marker-separator', 'changed-content'].includes(content)
+        ? 'composer_payload_mismatch' : null);
+      expect(composer.innerText).toHaveBeenCalledTimes(1);
+      if (content === 'complete') expect(value).toBe(text);
+      else expect(value).not.toBe(text);
+      expect(composer.fill).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('preserves cancellation between readiness and mutation (#2669)', async () => {
+    const composer = {
+      count: async () => 1,
+      evaluate: async () => ({ visible: true, enabled: true, contentEditable: true }),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async () => undefined),
+    };
+    const beforeAction = vi.fn(() => { throw new Error('account_cooldown_active'); });
+    await expect(__testComposerMutation.mutateComposerOrCause(
+      { locator: () => composer }, 'cancelled 100KB prompt'.padEnd(100 * 1024, 'x'),
+      mocks.nowMs + 60_000, undefined, beforeAction,
+    )).rejects.toThrow('account_cooldown_active');
+    expect(composer.click).not.toHaveBeenCalled();
+    expect(composer.fill).not.toHaveBeenCalled();
   });
 
   it('reports privacy-safe diagnostics from each composer mutation budget exit', async () => {

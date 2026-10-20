@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from 'vitest';
 import * as subprocess from '../kernel/subprocess.ts';
 import { runProcess } from '../kernel/subprocess.ts';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
+import { openCodeControlFromCommand } from '../orca-runtime/adapter.ts';
+import { lastFleetParkedLine, ownPaneOutcome } from '../fleet/fleet-sweep.ts';
 import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import { runSupervisedWorkerStart, type SupervisedWorkerStartResult } from './supervised-worker-start.ts';
@@ -25,6 +27,7 @@ import {
   finalizeOpenCodeExecutorProfile,
   parseOpenCodePrimaryProbeArgs,
   runOpenCodePrimaryProbe,
+  runExistingOpenCodeResume,
   runSupervisedTaskLaunchAssistant,
   LAUNCH_STARTUP_OBSERVATION_WINDOW_MS,
   CANONICAL_MERGE_LAUNCH_COMMAND,
@@ -33,6 +36,7 @@ import {
   type EdgeResult,
   type LaunchDependencies,
   type LaunchInput,
+  type OpenCodeResumeDependencies,
 } from './supervised-task-launch-assistant.ts';
 import {
   buildExecutorCommand,
@@ -44,6 +48,7 @@ import {
   openCodeAgentSemantics,
   openCodeFleetBrowserDenyRulesAreTerminal,
   openCodeLaunchHasFleetBrowserDenies,
+  openCodeControlPort,
   EXECUTOR_FAMILY_DESCRIPTORS,
   profileNamesForTask,
   profileNamesForSmoke,
@@ -292,32 +297,6 @@ function readyStart(taskId: string): SupervisedWorkerStartResult {
   } as unknown as SupervisedWorkerStartResult;
 }
 
-function providerReadyStart(taskId: string): SupervisedWorkerStartResult {
-  const result = readyStart(taskId);
-  return {
-    ...result,
-    receipt: {
-      taskId,
-      dispatchId: 'dispatch-1',
-      state: 'ready',
-      worktree: { id: 'orca-repo-1::/tmp/created-worktree', path: '/tmp/created-worktree' },
-      terminal: { handle: 'term-provider' },
-      setup: { requested: 'run', effective: 'run', state: 'running' },
-      launch: {
-        requested: { agent: 'cursor', model: 'model-medium' },
-        effective: { agent: 'cursor', model: 'model-medium' },
-      },
-      providerSentinel: 'RAW_RECEIPT_SENTINEL',
-      effects: [
-        { kind: 'worktree', action: 'created_top_level', id: 'orca-repo-1::/tmp/created-worktree' },
-        { kind: 'setup', action: 'running', state: 'running' },
-        { kind: 'terminal', role: 'agent', action: 'reused_agent_terminal', id: 'term-provider' },
-        { kind: 'dispatch_input', role: 'agent', id: 'term-provider', state: 'accepted' },
-      ],
-    },
-  } as unknown as SupervisedWorkerStartResult;
-}
-
 function deps(input: {
   adapter?: RuntimeAdapter;
   dispatch?: DispatchObservation[];
@@ -333,6 +312,7 @@ function deps(input: {
   supervised?: SupervisedWorkerStartResult;
   onSupervised?: () => void;
   currentAssignment?: WorkerAssignment | null;
+  proveTerminalGone?: LaunchDependencies['proveTerminalGone'];
   clock?: number[];
 } = {}): LaunchDependencies {
   const dispatch = [...(input.dispatch ?? [{ kind: 'absent' }, { kind: 'absent' }])];
@@ -355,6 +335,7 @@ function deps(input: {
     },
     observeDispatch: async () => { input.onDispatch?.(); return { status: 'ok', value: dispatch.shift() ?? { kind: 'absent' } }; },
     readCurrentAssignment: () => input.currentAssignment ?? null,
+    ...(input.proveTerminalGone ? { proveTerminalGone: input.proveTerminalGone } : {}),
     prepareWorktree: async () => { input.onWorktree?.(); return { status: 'ok', value: {
       id: 'repo::exact-worktree', selector: 'id:repo::exact-worktree', path: '/tmp/exact-worktree', setupWitness: 'same_invocation_complete',
     } }; },
@@ -397,6 +378,7 @@ function freshRepoFixture(input: {
   failOrigin?: boolean;
   setupState?: 'not_configured' | 'running' | 'absent';
   waitExitCode?: number;
+  freshStatus?: string;
 } = {}) {
   const calls: Array<{ argv: string[]; cwd: string | undefined }> = [];
   const execute = async (
@@ -419,6 +401,9 @@ function freshRepoFixture(input: {
         stdout: (input.originByPath?.[cwd ?? ''] ?? 'git@github.com:chetwerikoff/orchestrator-pack.git') + '\n',
         stderr: '',
       };
+    }
+    if (command === 'git status --porcelain=v1 --untracked-files=all') {
+      return { ok: true, stdout: input.freshStatus ?? '', stderr: '' };
     }
     if (args[0] === 'orca' && args[1] === 'worktree' && args[2] === 'create') {
       const receipt = input.setupState === 'absent' ? {} : {
@@ -1142,35 +1127,28 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
 });
 
 describe('supervised Task launch assistant', () => {
-  it('uses exactly one provider worker-start composition without low-level worktree or RuntimeAdapter spawn', async () => {
-    const calls: string[][] = [];
+  it('refuses an explicit atomic provider fresh start before any unverified setup or worker effect', async () => {
+    let preparations = 0;
     let spawns = 0;
+    let starts = 0;
     const result = await runSupervisedTaskLaunchAssistant({
-      ...launchInput('t2'), startMode: 'provider_new_top_level', baseBranch: 'feature/base',
+      ...launchInput('t2'), startMode: 'provider_new_top_level',
     }, {
-      ...deps({ adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }) }),
-      prepareWorktree: async () => ({ status: 'ok', value: {
-        selector: 'new-top-level', repositorySelector: 'id:orca-repo-1', setupWitness: 'provider_top_level',
-      } }),
-      runSupervisedStart: async (start) => {
-        calls.push([...start.orcaArgs]);
-        return providerReadyStart('task-1');
-      },
+      ...deps({
+        adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }),
+        onSupervised: () => { starts += 1; },
+      }),
+      prepareWorktree: async () => { preparations += 1; return {
+        status: 'ok', value: { selector: 'new-top-level', setupWitness: 'provider_top_level' },
+      }; },
     });
-    expect(result.outcome).toBe('ready');
+    expect(result).toMatchObject({
+      outcome: 'continue', stage: 'executor_profile',
+      observedCause: 'fresh_provider_clean_witness_unavailable',
+    });
+    expect(preparations).toBe(0);
     expect(spawns).toBe(0);
-    expect(calls).toEqual([[
-      '--task', 'task-1', '--worktree', 'new-top-level', '--repo', 'id:orca-repo-1', '--name', 'issue-1479', '--base-branch', 'feature/base',
-      '--agent', 'cursor', '--model', 'model-medium', '--setup', 'run', '--json',
-    ]]);
-    if (result.outcome === 'ready') {
-      expect(result.resources.providerAgentTerminalId).toBe('term-provider');
-      expect(result.resources.terminal).toBeUndefined();
-      const serialized = JSON.stringify(result);
-      expect(serialized).not.toContain('RAW_RECEIPT_SENTINEL');
-      expect(serialized).not.toContain('model-medium');
-      expect(result.supervisedStart).toEqual({ ok: true, reason: 'ready_and_assignment_bound', assignmentBound: true });
-    }
+    expect(starts).toBe(0);
   });
 
   it.each(['manager', 't1', 't2', 't3'] as const)('reaches ready only through supervised-start for %s', async (workClass) => {
@@ -1423,6 +1401,11 @@ describe('supervised Task launch assistant', () => {
   it.each([
     ['real 1.18.35 normal-config TO-only ordering', 'none', true, 'home'],
     ['tilde runtime allow, only TO moved', 'none', true, 'tilde'],
+    ['isolated XDG data-home runtime allow, only TO moved', 'none', true, 'data'],
+    ['isolated XDG data-home inherited action drift', 'inherited-drift', false, 'data'],
+    ['isolated XDG data-home tool-output action drift', 'changed-action', false, 'data'],
+    ['isolated XDG data-home tool-output path drift', 'changed-path', false, 'data'],
+    ['foreign XDG data home cannot excuse permission reordering', 'none', false, 'foreign-data'],
     ['unrelated rule reordering', 'other-order', false, 'home'],
     ['an extra allow', 'extra-allow', false, 'home'],
     ['an unchanged inherited external-directory allow', 'inherited-allow', true, 'home'],
@@ -1456,9 +1439,12 @@ describe('supervised Task launch assistant', () => {
         ...remaining.slice(lastReadIndex + 1),
       ];
     };
+    const selectedDataRoot = join(tmpdir(), 'opk2447-synthetic-xdg-data');
     const runtimePattern = pathKind === 'tilde' ? '~/.local/share/opencode/tool-output/*'
-      : pathKind === 'foreign' ? join(homedir(), 'unrelated-home', '.local', 'share', 'opencode', 'tool-output', '*')
-        : join(homedir(), '.local', 'share', 'opencode', 'tool-output', '*');
+      : pathKind === 'data' || pathKind === 'foreign-data'
+        ? join(selectedDataRoot, 'opencode', 'tool-output', '*')
+        : pathKind === 'foreign' ? join(homedir(), 'unrelated-home', '.local', 'share', 'opencode', 'tool-output', '*')
+          : join(homedir(), '.local', 'share', 'opencode', 'tool-output', '*');
     const toolOutput = { permission: 'external_directory', pattern: runtimePattern, action: 'allow' };
     for (const agent of [fixture.baseline, fixture.contextual]) {
       for (const rule of agent.permission) {
@@ -1506,6 +1492,9 @@ describe('supervised Task launch assistant', () => {
     vi.stubEnv('XDG_CONFIG_HOME', sandbox);
     vi.stubEnv('OPENCODE_CONFIG_DIR', join(sandbox, 'opencode'));
     vi.stubEnv('OPENCODE_CONFIG', join(sandbox, 'synthetic.json'));
+    if (pathKind === 'data' || pathKind === 'foreign-data') vi.stubEnv('XDG_DATA_HOME', selectedDataRoot);
+    const dataRoot = pathKind === 'data' ? selectedDataRoot
+      : pathKind === 'foreign-data' ? join(tmpdir(), 'opk2447-unselected-xdg-data') : undefined;
     try {
       const env = profileEnv({
         PACK_EXECUTOR_T2_AGENT: 'opencode',
@@ -1567,10 +1556,14 @@ describe('supervised Task launch assistant', () => {
             return { ok: true, stdout: JSON.stringify(resolved), stderr: '' };
           }
           return { ok: false, stdout: '', stderr: 'unexpected fixture probe' };
-        }, () => true);
+        }, () => true, undefined, dataRoot);
       expect(result).toMatchObject(accepted
         ? { status: 'ok', evidence: { exactContext: true } }
         : { status: 'continue', cause: 'executor_effort_channel_unavailable' });
+      if (pathKind === 'data' && accepted) {
+        if (result.status !== 'ok') throw new Error('selected XDG data-home semantics must resolve');
+        expect(result.value.launchCommand).toContain(` XDG_DATA_HOME='${selectedDataRoot}' opencode --hostname`);
+      }
     } finally {
       vi.unstubAllEnvs();
       rmSync(sandbox, { recursive: true, force: true });
@@ -2584,46 +2577,7 @@ The words Firefighter universal appear here only as prose.`;
     }
   });
 
-  it('preserves provider base branch on retry action', async () => {
-    const result = await runSupervisedTaskLaunchAssistant({
-      ...launchInput('t2'), startMode: 'provider_new_top_level', baseBranch: 'feature/base',
-    }, deps({ supervised: {
-      ok: false, reason: 'supervised_start_envelope_error', recovery: { requestId: 'request-base' },
-    } }));
-    expect(result).toMatchObject({ outcome: 'continue', nextAction: { kind: 'retry_supervised_start' } });
-    if (result.outcome === 'continue') {
-      expect(result.nextAction.command).toContain('--base-branch');
-      expect(result.nextAction.command).toContain("'feature/base'");
-      expect(result.nextAction.command).toContain("--agent 'cursor'");
-      expect(result.nextAction.command).toContain("--model 'model-medium'");
-      expect(result.nextAction.command).not.toContain('--effort');
-    }
-  });
 
-  it('builds worker-start provider recovery only from attempt-bound profile and request identity', async () => {
-    const recoveryCommand = 'PROVIDER_RECOVERY_SENTINEL';
-    const result = await runSupervisedTaskLaunchAssistant({
-      ...launchInput(), startMode: 'provider_new_top_level',
-    }, deps({ supervised: {
-      ok: false, reason: 'supervised_start_envelope_error', errorCode: 'runtime_timeout',
-      recovery: { requestId: 'request-7', dispatchId: 'dispatch-accepted', recoveryCommand },
-    } }));
-    expect(result).toMatchObject({
-      outcome: 'continue',
-      stage: 'supervised_start',
-      resources: { dispatchId: 'dispatch-accepted' },
-      evidence: { requestId: 'request-7', dispatchId: 'dispatch-accepted' },
-      nextAction: { kind: 'retry_supervised_start', requestId: 'request-7' },
-    });
-    if (result.outcome === 'continue') {
-      expect(result.nextAction.command).toContain('--retry-request');
-      expect(result.nextAction.command).toContain('request-7');
-      expect(result.nextAction.command).toContain("--agent 'cursor'");
-      expect(result.nextAction.command).toContain("--model 'model-medium'");
-      expect(JSON.stringify(result)).not.toContain(recoveryCommand);
-      expect(result.timings.at(-1)).toMatchObject({ stage: 'supervised_start', outcome: 'continued' });
-    }
-  });
 
   it('uses the registered local fork origin, not upstream Orca identity, for both fresh effect boundaries', async () => {
     const repo = {
@@ -2815,7 +2769,7 @@ The words Firefighter universal appear here only as prose.`;
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
     }, fixture.execute);
     expect(result).toMatchObject({ status: 'ok', value: { id: 'repo::wt', setupWitness: 'same_invocation_complete' } });
-    expect(fixture.calls.map((call) => call.argv[0])).toEqual(['orca', 'git', 'git', 'orca']);
+    expect(fixture.calls.map((call) => call.argv[0])).toEqual(['orca', 'git', 'git', 'orca', 'git']);
   });
 
   it('accepts a fresh worktree with no setup receipt', async () => {
@@ -2831,6 +2785,19 @@ The words Firefighter universal appear here only as prose.`;
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
       '--issue', '1479', '--setup', 'run', '--json',
     ]);
+  });
+
+  it('refuses dirty newly created worker worktree without reset or stash', async () => {
+    const fixture = freshRepoFixture({ freshStatus: ' M tests/test_database_guard.py\n' });
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task_98269fb5e0c2',
+      worktreeName: 'issue-2653', issueNumber: 2653,
+    }, fixture.execute);
+    expect(result).toMatchObject({ status: 'continue', cause: 'worktree_fresh_dirty' });
+    expect(fixture.calls.some((call) => call.argv.join(' ') ===
+      'git status --porcelain=v1 --untracked-files=all')).toBe(true);
+    expect(fixture.calls.some((call) =>
+      call.argv[0] === 'git' && ['reset', 'stash', 'merge', 'clean'].includes(call.argv[1]!))).toBe(false);
   });
 
   it('waits for the exact fresh setup terminal to exit successfully', async () => {
@@ -2860,7 +2827,7 @@ The words Firefighter universal appear here only as prose.`;
     const result = await prepareWorktreeWithOrca({
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeSelector: 'id:repo::existing',
     }, async () => ({ ok: true, stdout: okEnvelope({ worktree: { id: 'repo::existing', path: '/tmp/existing', head: 'abc' } }) }));
-    expect(result).toMatchObject({ status: 'continue', cause: 'worktree_reuse_readiness_unproven', evidence: { worktreeId: 'repo::existing' } });
+    expect(result).toMatchObject({ status: 'continue', cause: 'worktree_reuse_ownership_unproven', evidence: { worktreeId: 'repo::existing' } });
   });
 
   it('refreshes a bound clean manager worktree before returning proven reuse', async () => {
@@ -2964,7 +2931,7 @@ The words Firefighter universal appear here only as prose.`;
       worktreeSelector: 'id:repo::existing',
       managerRefresh: true,
     }, fixture.execute);
-    expect(result).toMatchObject({ status: 'continue', cause: 'manager_worktree_dirty' });
+    expect(result).toMatchObject({ status: 'continue', cause: 'worktree_reuse_ownership_unproven' });
     expect(fixture.head()).toBe('1'.repeat(40));
     expect(fixture.mergeTransitions()).toBe(0);
     expect(fixture.calls.some((args) => args[0] === 'git' && args[1] === 'merge')).toBe(false);
@@ -3186,6 +3153,9 @@ The words Firefighter universal appear here only as prose.`;
           ].join('\n'),
           stderr: '',
         };
+      }
+      if (command === 'git status --porcelain=v1 --untracked-files=all') {
+        return { ok: true, stdout: '', stderr: '' };
       }
       return { ok: false, stdout: '', stderr: `unexpected: ${command}` };
     });
@@ -3489,5 +3459,1419 @@ describe('machine-local executor profile store', () => {
     };
     expect(readExecutorProfileStore({ storePath: '/operator/missing/executor-profiles.env', readFile: missing })).toEqual({});
     expect(overlayExecutorProfileEnv(env, { storePath: '/operator/missing/executor-profiles.env', readFile: missing })).toBe(env);
+  });
+});
+
+describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => {
+  const nativeGone = (state: 'failed' | 'abandoned' | 'cancelled' | 'done' | 'completed') =>
+    async (assignment: WorkerAssignment) => ({
+      taskId: assignment.taskId, dispatchId: assignment.bindingKey,
+      dispatchState: state, workerAbsent: true as const, worktreeId: 'repo::exact-worktree',
+    });
+
+  const terminal = (status: string): DispatchObservation => ({
+    kind: 'present', dispatchId: 'ctx_3761867313e2', status,
+  });
+  const owned = (): WorkerAssignment => ({
+    ...readyStart('task-1').assignment,
+    role: 'worker',
+    bindingKey: 'ctx_3761867313e2',
+  } as WorkerAssignment);
+
+  it.each(['failed', 'abandoned', 'cancelled', 'done', 'completed'] as const)(
+    'allows the exact %s current Dispatch at both new-start observations', async (status) => {
+      let starts = 0;
+      const launched = await runSupervisedTaskLaunchAssistant(launchInput('t2'), deps({
+        currentAssignment: owned(), dispatch: [terminal(status), terminal(status)],
+        proveTerminalGone: nativeGone(status),
+        onSupervised: () => { starts += 1; },
+      }));
+      expect(launched).toMatchObject({
+        outcome: 'ready', resources: { taskId: 'task-1', dispatchId: 'dispatch-1' },
+      });
+      expect(starts).toBe(1);
+    },
+  );
+
+  it.each([
+    { name: 'still-dispatched', early: terminal('dispatched'), final: terminal('dispatched') },
+    { name: 'foreign Dispatch', early: { kind: 'present', dispatchId: 'foreign', status: 'failed' }, final: terminal('failed') },
+    { name: 'unknown status', early: { kind: 'present', dispatchId: 'ctx_3761867313e2' }, final: terminal('failed') },
+  ] as const)('refuses $name without starting an additional worker', async ({ early, final }) => {
+    let spawns = 0;
+    let starts = 0;
+    const launched = await runSupervisedTaskLaunchAssistant(launchInput('t2'), deps({
+      currentAssignment: owned(), dispatch: [early, final],
+      adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }),
+      onSupervised: () => { starts += 1; },
+    }));
+    expect(launched).toMatchObject({
+      outcome: 'continue', stage: 'dispatch_admission_early', observedCause: 'fresh_dispatch_not_absent',
+    });
+    expect(spawns).toBe(0);
+    expect(starts).toBe(0);
+  });
+
+  it.each(['missing', 'foreign', 'stale-state'] as const)(
+    'refuses %s terminal-gone proof before worktree or new terminal effects', async (caseName) => {
+      let prepares = 0; let spawns = 0; let starts = 0;
+      const old = owned();
+      const actual = nativeGone('completed');
+      const proof: NonNullable<LaunchDependencies['proveTerminalGone']> = async (assignment) => {
+        if (caseName === 'missing') return null;
+        const witness = await actual(assignment);
+        return caseName === 'foreign'
+          ? { ...witness, dispatchId: 'ctx_foreign' }
+          : { ...witness, dispatchState: 'failed' };
+      };
+      const launched = await runSupervisedTaskLaunchAssistant(launchInput('t2'), {
+        ...deps({
+          currentAssignment: old,
+          dispatch: [terminal('completed'), terminal('completed')],
+          adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }),
+          onWorktree: () => { prepares += 1; },
+          onSupervised: () => { starts += 1; },
+          proveTerminalGone: proof,
+        }),
+      });
+      expect(launched).toMatchObject({
+        outcome: 'continue', stage: 'dispatch_admission_early', observedCause: 'fresh_dispatch_not_absent',
+      });
+      expect(prepares).toBe(0);
+      expect(spawns).toBe(0);
+      expect(starts).toBe(0);
+    },
+  );
+
+  it('refuses a Dispatch that becomes live or changes after terminal early witness', async () => {
+    let starts = 0;
+    const launched = await runSupervisedTaskLaunchAssistant(launchInput('t2'), deps({
+      currentAssignment: owned(), dispatch: [terminal('failed'), terminal('dispatched')],
+      proveTerminalGone: nativeGone('failed'),
+      onSupervised: () => { starts += 1; },
+    }));
+    expect(launched).toMatchObject({
+      outcome: 'continue', stage: 'dispatch_admission_final', observedCause: 'fresh_dispatch_not_absent',
+    });
+    expect(starts).toBe(0);
+  });
+
+  it('recovers dirty manager without an existing PR only from exact native Run/Task and old worktree', async () => {
+    const fixture = managerReuseFixture({ noPr: true, status: ' M tests/test_database_guard.py\n' });
+    const expected = {
+      ...readyStart('task_old').assignment,
+      role: 'orchestrator',
+      issueNumber: 2430, taskId: 'task_old', bindingKey: 'ctx_2055f1bb0511',
+    } as WorkerAssignment;
+    const execute: typeof fixture.execute = async (argv, timeout, env, cwd) => {
+      if (argv[0] === 'orca' && argv[1] === 'orchestration') {
+        if (argv[2] === 'dispatch-show') {
+          expect(argv).toContain('task_old');
+          return { ok: true, stdout: okEnvelope({
+            dispatch: { id: 'ctx_2055f1bb0511', status: 'failed' },
+          }) };
+        }
+        if (argv[2] === 'worker-show') {
+          expect(argv).toContain('ctx_2055f1bb0511');
+          return { ok: true, stdout: okEnvelope({
+            dispatch: { status: 'failed' },
+            worker: { worktree_id: 'repo::existing', state: 'abandoned', stage: 'terminal_missing' },
+            terminal: null, observation: { exactWorker: false, status: 'missing' },
+          }) };
+        }
+      }
+      return fixture.execute(argv, timeout, env, cwd);
+    };
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2430,
+      taskId: 'task-1', worktreeSelector: 'id:repo::existing',
+      managerTaskRunId: 'run-1', managerRefresh: true, defaultBranch: 'main',
+      reuseAssignment: expected,
+    }, execute);
+    expect(result).toMatchObject({
+      status: 'ok', evidence: {
+        reuse: 'dirty_preserved', previousDispatchId: 'ctx_2055f1bb0511',
+      },
+    });
+    expect(fixture.calls.some((argv) => argv[0] === 'gh')).toBe(false);
+    expect(fixture.calls.some((argv) =>
+      argv[0] === 'git' && ['merge', 'reset', 'stash', 'clean'].includes(argv[1]!))).toBe(false);
+    expect(fixture.head()).toBe('1'.repeat(40));
+  });
+
+  it('does not launch a foreign manager from an unbound dirty PR with a byte-identical 14-line test diff', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2655-dirty-worktree-'));
+    const testFile = join(root, 'tests', 'test_database_guard.py');
+    const untracked = join(root, 'migration-backup.diff');
+    try {
+      mkdirSync(join(root, 'tests'), { recursive: true });
+      writeFileSync(testFile, Array.from({ length: 14 }, (_value, index) =>
+        `# preserved reboot change ${index + 1}\n`).join(''));
+      writeFileSync(untracked, 'diff --git a/old b/new\n+do not delete\n');
+      const beforeTest = readFileSync(testFile);
+      const beforeUntracked = readFileSync(untracked);
+      const dirty = ' M tests/test_database_guard.py\n?? migration-backup.diff\n';
+      const fixture = managerReuseFixture({
+        worktreeId: 'manager-worktree', worktreePath: root, status: dirty,
+      });
+      let starts = 0;
+      const result = await runSupervisedTaskLaunchAssistant({
+        ...launchInput('manager'), issueNumber: 2430, defaultBranch: 'main',
+      }, {
+        ...deps({
+          adapter: runtimeAdapter({ worker: { ...worker, workspacePath: root } }),
+          onSupervised: () => { starts += 1; },
+        }),
+        prepareWorktree: (request) => prepareWorktreeWithOrca(request, fixture.execute),
+      });
+      expect(result).toMatchObject({
+        outcome: 'continue', stage: 'worktree_prepare', observedCause: 'worktree_reuse_ownership_unproven',
+      });
+      expect(starts).toBe(0);
+      expect(readFileSync(testFile)).toEqual(beforeTest);
+      expect(readFileSync(untracked)).toEqual(beforeUntracked);
+      expect(fixture.head()).toBe('1'.repeat(40));
+      expect(fixture.mergeTransitions()).toBe(0);
+      expect(fixture.calls.filter((argv) =>
+        argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toHaveLength(1);
+      expect(fixture.calls.some((argv) =>
+        argv[0] === 'git' && ['merge', 'reset', 'stash', 'rebase'].includes(argv[1]!))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a dirty PR-only checkout without native Task ownership', async () => {
+    const dirty = ' M tests/test_database_guard.py\n?? migration-backup.diff\n';
+    const fixture = managerReuseFixture({ status: dirty });
+    const outcome = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
+      managerRefresh: true, managerTaskRunId: 'run-1', issueNumber: 2430,
+      worktreeSelector: 'id:repo::existing', defaultBranch: 'main',
+    }, fixture.execute);
+    expect(outcome).toMatchObject({ status: 'continue', cause: 'worktree_reuse_ownership_unproven' });
+    expect(fixture.head()).toBe('1'.repeat(40));
+    expect(fixture.mergeTransitions()).toBe(0);
+    expect(fixture.calls.filter((argv) => argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toHaveLength(1);
+    expect(fixture.calls.some((argv) => argv[0] === 'git' && ['merge', 'reset', 'rebase'].includes(argv[1]!))).toBe(false);
+  });
+
+  it('refuses a dirty foreign PR and a dirty manager with no exact Run/Task authorization', async () => {
+    for (const options of [{ prOverrides: { headRefOid: '9'.repeat(40) } }, { noPr: true }]) {
+      const fixture = managerReuseFixture({ status: ' M tests/test_database_guard.py\n', ...options });
+      const outcome = await prepareWorktreeWithOrca({
+        repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
+        managerRefresh: true, managerTaskRunId: 'run-1', issueNumber: 2430,
+        worktreeSelector: 'id:repo::existing', defaultBranch: 'main',
+      }, fixture.execute);
+      expect(outcome.status).toBe('continue');
+      expect(fixture.mergeTransitions()).toBe(0);
+    }
+    const fixture = managerReuseFixture({ status: ' M tests/test_database_guard.py\n' });
+    const outcome = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1',
+      managerRefresh: true, worktreeSelector: 'id:repo::existing',
+    }, fixture.execute);
+    expect(outcome).toMatchObject({ status: 'continue', cause: 'worktree_reuse_ownership_unproven' });
+    expect(fixture.mergeTransitions()).toBe(0);
+  });
+  it('refuses fresh dirty manager worktree after setup without erasing test changes', async () => {
+    const root = '/tmp/fresh-manager';
+    const dirty = ' M tests/test_database_guard.py\n';
+    const commands: string[][] = [];
+    const outcome = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack',
+      taskId: 'task-1', issueNumber: 2655,
+      worktreeName: 'fresh-manager', baseBranch: 'origin/main', managerRefresh: true,
+    }, async (argv, _timeout, _env, cwd) => {
+      commands.push([...argv]);
+      const joined = argv.join(' ');
+      if (joined === 'orca repo list --json')
+        return { ok: true, stdout: repoListEnvelope([registeredOrcaRepo('orca-repo-1', '/tmp/primary')]) };
+      if (joined === 'git rev-parse --show-toplevel')
+        return { ok: true, stdout: (cwd ?? '') + '\n' };
+      if (joined === 'git remote get-url origin')
+        return { ok: true, stdout: 'git@github.com:chetwerikoff/orchestrator-pack.git\n' };
+      if (joined.startsWith('orca worktree create '))
+        return { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::fresh-manager', path: root } }) };
+      if (joined === 'git worktree list --porcelain')
+        return { ok: true, stdout: [
+          'worktree /tmp/primary', `HEAD ${'2'.repeat(40)}`, 'branch refs/heads/main', '',
+          `worktree ${root}`, `HEAD ${'2'.repeat(40)}`, 'branch refs/heads/fresh-manager', '',
+        ].join('\n') };
+      if (joined === 'git status --porcelain=v1 --untracked-files=all')
+        return { ok: true, stdout: dirty };
+      return { ok: false, stdout: '', stderr: 'unexpected ' + joined };
+    });
+    expect(outcome).toMatchObject({ status: 'continue', cause: 'manager_worktree_dirty' });
+    expect(commands.some((argv) => argv[0] === 'git' && ['merge', 'reset', 'rebase', 'stash'].includes(argv[1]!))).toBe(false);
+    expect(commands.some((argv) => argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toBe(true);
+  });
+
+});
+
+describe('Issue #2655 worker existing-worktree relaunch', () => {
+  const bound = (): WorkerAssignment => ({
+    ...readyStart('task_original').assignment,
+    role: 'worker',
+    issueNumber: 1479, taskId: 'task_original', bindingKey: 'ctx_3761867313e2',
+  } as WorkerAssignment);
+
+  it('preserves the exact 14-line diff and untracked bytes on a fresh Task in the old worker worktree', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2655-worker-reboot-'));
+    const testFile = join(root, 'tests', 'test_database_guard.py');
+    const untracked = join(root, 'migration-backup.diff');
+    try {
+      mkdirSync(join(root, 'tests'), { recursive: true });
+      writeFileSync(testFile, Array.from({ length: 14 }, (_line, n) => `# edit ${n + 1}\n`).join(''));
+      writeFileSync(untracked, 'untracked work preserved\n');
+      const before = readFileSync(testFile);
+      const beforeUntracked = readFileSync(untracked);
+      const fixture = managerReuseFixture({
+        worktreeId: 'repo::existing', worktreePath: root,
+        status: ' M tests/test_database_guard.py\n?? migration-backup.diff\n',
+      });
+      const inspected: string[][] = [];
+      const execute: typeof fixture.execute = async (argv, timeout, env, cwd) => {
+        if (argv[0] === 'orca' && argv[1] === 'orchestration') {
+          inspected.push([...argv]);
+          if (argv[2] === 'dispatch-show') {
+            return { ok: true, stdout: okEnvelope({
+              dispatch: { id: 'ctx_3761867313e2', status: 'failed' },
+            }) };
+          }
+          if (argv[2] === 'worker-show') {
+            return { ok: true, stdout: okEnvelope({
+              dispatch: { status: 'failed' },
+              worker: { worktree_id: 'repo::existing', state: 'abandoned', stage: 'terminal_missing' },
+              terminal: null, observation: { exactWorker: false, status: 'missing' },
+            }) };
+          }
+        }
+        return fixture.execute(argv, timeout, env, cwd);
+      };
+      let started = 0;
+      const outcome = await runSupervisedTaskLaunchAssistant({
+        ...launchInput('t2'),
+        taskId: 'task_6af384b00044', worktreeName: undefined, worktreeSelector: 'id:repo::existing',
+      }, {
+        ...deps({
+          currentAssignment: bound(),
+          adapter: runtimeAdapter({ worker: { ...worker, workspacePath: root } }),
+          onSupervised: () => { started += 1; },
+        }),
+        prepareWorktree: (request) => prepareWorktreeWithOrca(request, execute),
+      });
+      expect(outcome).toMatchObject({
+        outcome: 'ready', resources: { taskId: 'task_6af384b00044', worktreePath: root },
+      });
+      expect(started).toBe(1);
+      expect(inspected.map((call) => call.slice(0, 3))).toEqual([
+        ['orca', 'orchestration', 'dispatch-show'], ['orca', 'orchestration', 'worker-show'],
+      ]);
+      expect(readFileSync(testFile)).toEqual(before);
+      expect(readFileSync(untracked)).toEqual(beforeUntracked);
+      expect(fixture.mergeTransitions()).toBe(0);
+      expect(fixture.head()).toBe('1'.repeat(40));
+      expect(fixture.calls.some((argv) =>
+        argv[0] === 'git' && ['merge', 'reset', 'stash', 'rebase'].includes(argv[1]!))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['foreign owner', 'live worker', 'unverified worktree'] as const)(
+    'rejects %s before worker effects', async (scenario) => {
+      const fixture = managerReuseFixture({ status: ' M tests/test_database_guard.py\n' });
+      const execute: typeof fixture.execute = async (argv, timeout, env, cwd) => {
+        if (argv[0] === 'orca' && argv[1] === 'orchestration') {
+          if (argv[2] === 'dispatch-show') {
+            return { ok: true, stdout: okEnvelope({
+              dispatch: { id: 'ctx_3761867313e2', status: scenario === 'live worker' ? 'dispatched' : 'failed' },
+            }) };
+          }
+          return { ok: true, stdout: okEnvelope({
+            dispatch: { status: 'failed' },
+            worker: {
+              worktree_id: scenario === 'foreign owner' ? 'repo::foreign'
+                : scenario === 'unverified worktree' ? null : 'repo::existing',
+              state: 'abandoned', stage: 'terminal_missing',
+            },
+            terminal: null, observation: { exactWorker: false, status: 'missing' },
+          }) };
+        }
+        return fixture.execute(argv, timeout, env, cwd);
+      };
+      const response = await prepareWorktreeWithOrca({
+        repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1479,
+        taskId: 'task_new', worktreeSelector: 'id:repo::existing',
+        baseBranch: 'origin/main', defaultBranch: 'main',
+        reuseAssignment: bound(),
+      }, execute);
+      expect(response).toMatchObject({ status: 'continue', cause: 'worktree_reuse_ownership_unproven' });
+      expect(fixture.mergeTransitions()).toBe(0);
+    },
+  );
+});
+
+describe('Issue #2655 real parsed Cursor reboot route', () => {
+  const target = () => ({
+    projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+    primaryRoot: '/tmp/primary', defaultBranch: 'main',
+  } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>);
+
+  it('chooses exact mode for worker and manager --worktree and refuses conflicting provider route', () => {
+    for (const workClass of ['t2', 'manager'] as const) {
+      const argv = [
+        '--project', 'orchestrator-pack', '--work-class', workClass,
+        '--issue-number', '2655',
+        ...(workClass === 'manager' ? ['--run', 'run-1'] : []),
+        '--task', 'task_new', '--worktree', 'id:repo::existing',
+      ];
+      expect(parseLaunchAssistantCli(argv, profileEnv(), target).startMode)
+        .toBe('exact_terminal_worktree');
+      expect(() => parseLaunchAssistantCli([...argv, '--start-mode', 'provider_new_top_level'],
+        profileEnv(), target)).toThrow(/exact_terminal_worktree/u);
+    }
+  });
+
+  it('launches actual supervised start from parsed CLI and native absent Dispatch while preserving dirty bytes', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2655-real-cli-'));
+    const edited = join(root, 'tests', 'test_database_guard.py');
+    const untracked = join(root, 'local.patch');
+    try {
+      mkdirSync(join(root, 'tests'), { recursive: true });
+      writeFileSync(edited, Array.from({ length: 14 }, (_line, index) =>
+        '# kept change ' + (index + 1) + '\n').join(''));
+      writeFileSync(untracked, 'uncommitted bytes stay here\n');
+      const before = readFileSync(edited);
+      const beforeUntracked = readFileSync(untracked);
+      const env = profileEnv({ OPK_BASE_DIR: root });
+      const input = {
+        ...parseLaunchAssistantCli([
+          '--project', 'orchestrator-pack', '--work-class', 't2', '--issue-number', '2655',
+          '--task', 'task_6af384b00044', '--worktree', 'id:repo::existing',
+        ], env, target), env,
+      };
+      const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+      const prev = await publishCurrentWorkerAssignment({
+        file, projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+        issueNumber: 2655, taskId: 'task_old', kind: 'local', provider: 'orca',
+        bindingKey: 'ctx_3761867313e2', role: 'worker',
+      });
+      if (!prev.ok) throw new Error(prev.reason);
+      const fixture = managerReuseFixture({
+        worktreePath: root, status: ' M tests/test_database_guard.py\n?? local.patch\n',
+      });
+      const nativeCalls: string[][] = [];
+      const oldShow = {
+        dispatch: { status: 'failed', last_heartbeat_at: null },
+        worker: { state: 'abandoned', stage: 'terminal_missing', worktree_id: 'repo::existing' },
+        terminal: null, observation: { exactWorker: false, status: 'missing' },
+      };
+      const inspect = async (argv: readonly string[]) => {
+        nativeCalls.push([...argv]);
+        if (argv[0] === 'orchestration' && argv[1] === 'dispatch-show') return {
+          ok: true, stdout: okEnvelope({ dispatch: { id: 'ctx_3761867313e2', status: 'failed' } }),
+        };
+        if (argv[0] === 'orchestration' && argv[1] === 'worker-show') return {
+          ok: true, stdout: okEnvelope(oldShow),
+        };
+        if (argv[0] === 'terminal' && argv[1] === 'show') return {
+          ok: true, stdout: okEnvelope({ terminal: { handle: 'term-new', worktreeId: 'repo::existing' } }),
+        };
+        if (argv[0] === 'worktree' && argv[1] === 'show') return {
+          ok: true, stdout: okEnvelope({ worktree: { id: 'repo::existing', path: root } }),
+        };
+        return { ok: false, stdout: '', stderr: 'unexpected native read' };
+      };
+      const execute = async (argv: readonly string[], timeout?: number,
+        extraEnv?: Readonly<NodeJS.ProcessEnv>, cwd?: string) =>
+        argv[0] === 'orca' && argv[1] === 'orchestration'
+          ? inspect(argv.slice(1)) : fixture.execute(argv, timeout, extraEnv, cwd);
+      const live = { ...worker, identity: {
+        runtime: 'orca', id: 'term-new', generation: 'pty-new',
+      }, workspacePath: root };
+      const adapter = runtimeAdapter({ worker: live });
+      Object.defineProperty(adapter, 'resolveAssignmentWorker', {
+        value: vi.fn(() => ({
+          status: 'failed', operation: 'resolve_assignment_worker', reason: 'assignment_target_unresolved',
+        })),
+      });
+      Object.defineProperty(adapter, 'observeAssignmentLifecycle', {
+        value: vi.fn(() => ({
+          status: 'failed', operation: 'resolve_assignment_worker', reason: 'assignment_target_unresolved',
+        })),
+      });
+      const selectedModes: string[] = [];
+      let realStarts = 0;
+      const outcome = await runSupervisedTaskLaunchAssistant(input, {
+        ...deps({ adapter, currentAssignment: prev.assignment }),
+        resolveProfile: (workClass, inherited, mode) => {
+          selectedModes.push(mode ?? 'default');
+          return resolveLiveExecutorProfile(workClass, inherited, mode, async (argv) => ({
+            ok: true, stdout: argv[0] === 'cursor-agent' ? 'model-medium\n' : '',
+          }));
+        },
+        prepareWorktree: (request) => prepareWorktreeWithOrca(request, execute),
+        runSupervisedStart: (start) => runSupervisedWorkerStart({
+          ...start, inspect, execute: async () => {
+            realStarts += 1;
+            return { ok: true, stdout: okEnvelope({
+              taskId: 'task_6af384b00044', dispatchId: 'dispatch-new', state: 'ready',
+              effects: [
+                { kind: 'worktree', action: 'reused', id: 'repo::existing' },
+                { kind: 'setup', action: 'not_applicable', state: 'not_applicable' },
+                { kind: 'terminal', role: 'agent', action: 'reused', id: 'term-new' },
+                { kind: 'dispatch_input', role: 'agent', id: 'term-new', state: 'accepted' },
+              ],
+            }) };
+          },
+        }),
+      });
+      expect(outcome).toMatchObject({ outcome: 'ready', resources: {
+        taskId: 'task_6af384b00044', dispatchId: 'dispatch-new', worktreePath: root,
+      } });
+      expect(selectedModes).toEqual(['exact_terminal_worktree']);
+      expect(realStarts).toBe(1);
+      expect(currentWorkerAssignment(file, 2655)).toMatchObject({
+        bindingKey: 'dispatch-new', generation: prev.assignment.generation + 1,
+      });
+      expect(nativeCalls.some((argv) =>
+        argv[0] === 'orchestration' && argv[1] === 'worker-show')).toBe(true);
+      expect(readFileSync(edited)).toEqual(before);
+      expect(readFileSync(untracked)).toEqual(beforeUntracked);
+      expect(fixture.mergeTransitions()).toBe(0);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('Issue #2655 provider safety and same-unit dirty ownership', () => {
+  it('uses the split setup for fresh default Cursor mode and rejects a dirty setup hook before input', async () => {
+    const env = profileEnv();
+    const selected = resolveExecutorProfile('t2', env);
+    expect(selected).toMatchObject({ status: 'ok',
+      value: { family: 'cursor', route: 'provider_new_top_level' } });
+    const cli = parseLaunchAssistantCli([
+      '--project', 'orchestrator-pack', '--work-class', 't2',
+      '--issue-number', '2655', '--task', 'task-new', '--worktree-name', 'issue-2655',
+    ], env, () => ({
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: '/tmp/primary', defaultBranch: 'main',
+    } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>));
+    expect(cli.startMode).toBeUndefined();
+    const fixture = freshRepoFixture({
+      setupState: 'running',
+      freshStatus: ' M tests/test_database_guard.py\n?? setup-hook.txt\n',
+    });
+    let spawns = 0;
+    let starts = 0;
+    const result = await runSupervisedTaskLaunchAssistant({ ...cli, env }, {
+      ...deps({
+        adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }),
+        onSupervised: () => { starts += 1; },
+      }),
+      prepareWorktree: (request) => prepareWorktreeWithOrca(request, fixture.execute),
+    });
+    expect(result).toMatchObject({ outcome: 'continue',
+      stage: 'worktree_prepare', observedCause: 'worktree_fresh_dirty' });
+    expect(fixture.calls.some((call) =>
+      call.argv[0] === 'orca' && call.argv[1] === 'worktree' && call.argv[2] === 'create')).toBe(true);
+    expect(fixture.calls.some((call) =>
+      call.argv[0] === 'orca' && call.argv[1] === 'terminal' && call.argv[2] === 'wait')).toBe(true);
+    expect(fixture.calls.some((call) =>
+      call.argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toBe(true);
+    expect(spawns).toBe(0);
+    expect(starts).toBe(0);
+  });
+
+  it.each(['manager onto worker', 'worker onto manager'] as const)(
+    'rejects %s on a matching Issue and dirty worktree', async (name) => {
+      const isManager = name === 'manager onto worker';
+      const fixture = managerReuseFixture({ status: ' M tests/test_database_guard.py\n' });
+      const previous = {
+        ...readyStart('task_old').assignment, taskId: 'task_old', issueNumber: 2655,
+        role: isManager ? 'worker' : 'orchestrator',
+        bindingKey: 'ctx_3761867313e2',
+      } as WorkerAssignment;
+      const result = await prepareWorktreeWithOrca({
+        repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2655,
+        taskId: 'task-1', worktreeSelector: 'id:repo::existing',
+        managerRefresh: isManager, ...(isManager ? { managerTaskRunId: 'run-1' } : {}),
+        defaultBranch: 'main', reuseAssignment: previous,
+      }, fixture.execute);
+      expect(result).toMatchObject({ status: 'continue', cause: 'worktree_reuse_ownership_unproven' });
+      expect(fixture.calls.some((argv) =>
+        argv[0] === 'git' && ['merge', 'reset', 'stash', 'clean'].includes(argv[1]!))).toBe(false);
+    },
+  );
+
+  it('refuses a foreign manager Task whose Issue-closing PR happens to name its dirty branch', async () => {
+    const fixture = managerReuseFixture({ status: ' M tests/test_database_guard.py\n' });
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2430,
+      taskId: 'task-1', worktreeSelector: 'id:repo::existing',
+      managerRefresh: true, managerTaskRunId: 'run-1', defaultBranch: 'main',
+    }, fixture.execute);
+    expect(result).toMatchObject({ status: 'continue', cause: 'worktree_reuse_ownership_unproven' });
+    expect(fixture.calls.some((argv) => argv[0] === 'gh')).toBe(false);
+  });
+});
+
+
+describe('Issue #2655 r02 fresh PR remote head', () => {
+  const head = 'a'.repeat(40);
+  const branch = 'issue-2655-reboot-relaunch';
+  const repo = 'chetwerikoff/orchestrator-pack';
+  const project = () => ({
+    projectId: 'orchestrator-pack', repository: repo,
+    primaryRoot: '/tmp/primary', defaultBranch: 'main',
+  } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>);
+  const request = () => ({
+    repository: repo, issueNumber: 2655, taskId: 'task_8f2c8e5ccab8',
+    worktreeName: 'fresh-2655', baseBranch: 'origin/' + branch,
+    defaultBranch: 'main', managerRefresh: true,
+  } as const);
+
+  function fixture(options: {
+    readonly noPr?: boolean;
+    readonly duplicate?: boolean;
+    readonly pr?: Record<string, unknown>;
+    readonly remoteHead?: string;
+    readonly checkoutHead?: string;
+    readonly fetchOk?: boolean;
+    readonly changed?: boolean;
+    readonly dirty?: boolean;
+  } = {}) {
+    const calls: Array<{ argv: string[]; cwd?: string }> = [];
+    const root = '/tmp/primary';
+    const newPath = '/tmp/fresh-2655';
+    const source = {
+      number: 2656, state: 'OPEN', baseRefName: 'main',
+      headRefName: branch, headRefOid: head,
+      headRepository: { nameWithOwner: repo }, body: 'Closes #2655',
+      ...options.pr,
+    };
+    let reads = 0;
+    const execute = async (argv: readonly string[], _ms?: number,
+      _env?: Readonly<NodeJS.ProcessEnv>, cwd?: string) => {
+      calls.push({ argv: [...argv], cwd });
+      const cmd = argv.join(' ');
+      if (cmd === 'orca repo list --json') return {
+        ok: true, stdout: repoListEnvelope([registeredOrcaRepo('repo-1', root)]),
+      };
+      if (cmd === 'git rev-parse --show-toplevel') return {
+        ok: true, stdout: (cwd ?? '') + '\n',
+      };
+      if (cmd === 'git remote get-url origin') return {
+        ok: true, stdout: 'git@github.com:chetwerikoff/orchestrator-pack.git\n',
+      };
+      if (cmd.startsWith('gh pr list ')) return {
+        ok: true, stdout: JSON.stringify(options.noPr ? [] :
+          options.duplicate ? [{ number: 2656 }, { number: 2657 }] : [{ number: 2656 }]),
+      };
+      if (cmd.startsWith('gh pr view ')) {
+        reads += 1;
+        return { ok: true, stdout: JSON.stringify({
+          ...source,
+          number: Number(argv[3]),
+          ...(options.changed && reads > 1 ? { headRefOid: 'b'.repeat(40) } : {}),
+        }) };
+      }
+      if (cmd === 'git fetch --no-tags origin refs/heads/' + branch +
+        ':refs/remotes/origin/' + branch) return {
+        ok: options.fetchOk !== false, stdout: '',
+      };
+      if (cmd === 'git rev-parse --verify refs/remotes/origin/' + branch + '^{commit}')
+        return { ok: true, stdout: (options.remoteHead ?? head) + '\n' };
+      if (cmd.startsWith('orca worktree create ')) return {
+        ok: true, stdout: okEnvelope({
+          worktree: { id: 'repo::fresh', path: newPath },
+          setupReceipt: { requested: 'run', hookFound: false, state: 'not_configured' },
+        }),
+      };
+      if (cmd === 'git worktree list --porcelain') return {
+        ok: true, stdout: [
+          'worktree /tmp/primary', 'HEAD ' + 'c'.repeat(40),
+          'branch refs/heads/main', '',
+          'worktree ' + newPath, 'HEAD ' + (options.checkoutHead ?? head),
+          'branch refs/heads/fresh-local-2655', '',
+        ].join('\n'),
+      };
+      if (cmd === 'git rev-parse --verify HEAD^{commit}') return {
+        ok: true, stdout: (options.checkoutHead ?? head) + '\n',
+      };
+      if (cmd === 'git status --porcelain=v1 --untracked-files=all')
+        return { ok: true, stdout: options.dirty ? '?? hook-output.txt\n' : '' };
+      return { ok: false, stdout: '', stderr: 'unexpected ' + cmd };
+    };
+    return { execute, calls };
+  }
+
+  it('parses a requested remote PR branch only with exact Issue and fresh selector', () => {
+    const argv = [
+      '--project', 'orchestrator-pack', '--work-class', 'manager', '--run', 'run-1',
+      '--manager-brief', 'continue Issue #2655', '--issue-number', '2655',
+      '--worktree-name', 'fresh-2655', '--base-branch', 'origin/' + branch,
+    ];
+    const input = parseLaunchAssistantCli(argv, profileEnv(), project);
+    expect(input).toMatchObject({
+      issueNumber: 2655, baseBranch: 'origin/' + branch, worktreeName: 'fresh-2655',
+    });
+    expect(input.startMode).toBeUndefined();
+    expect(() => parseLaunchAssistantCli(argv.filter((arg, n) =>
+      arg !== '--issue-number' && argv[n - 1] !== '--issue-number'),
+      profileEnv(), project)).toThrow(/--issue-number/u);
+    expect(() => parseLaunchAssistantCli([
+      ...argv.slice(0, -1), 'some-local-branch',
+    ], profileEnv(), project)).toThrow(/--base-branch/u);
+  });
+
+  it('fetches only PR #2656 remote branch and proves the clean fresh HEAD before launching', async () => {
+    const f = fixture();
+    const response = await prepareWorktreeWithOrca(request(), f.execute);
+    expect(response).toMatchObject({
+      status: 'ok', value: {
+        id: 'repo::fresh', selector: 'id:repo::fresh', path: '/tmp/fresh-2655',
+        setupWitness: 'same_invocation_complete',
+      }, evidence: { branch: 'fresh-local-2655' },
+    });
+    const created = f.calls.find((c) => c.argv.slice(0, 3).join(' ') === 'orca worktree create');
+    expect(created?.argv).toContain('origin/' + branch);
+    expect(created?.argv).toContain('--issue');
+    expect(created?.argv).toContain('2655');
+    expect(f.calls.some((c) => c.argv.join(' ') ===
+      'git fetch --no-tags origin refs/heads/' + branch +
+      ':refs/remotes/origin/' + branch)).toBe(true);
+    expect(f.calls.filter((c) => c.argv.slice(0, 3).join(' ') === 'gh pr view')).toHaveLength(3);
+    expect(f.calls.some((c) => c.argv.join(' ') === 'git rev-parse --verify HEAD^{commit}'
+      && c.cwd === '/tmp/fresh-2655')).toBe(true);
+    expect(f.calls.some((c) => c.argv[0] === 'git'
+      && ['merge', 'reset', 'rebase', 'stash', 'clean'].includes(c.argv[1]!))).toBe(false);
+  });
+
+  it.each([
+    ['foreign head repository', { pr: { headRepository: { nameWithOwner: 'foreign/repo' } } }, 'fresh_pr_head_mismatch'],
+    ['wrong base', { pr: { baseRefName: 'release' } }, 'fresh_pr_head_mismatch'],
+    ['wrong named branch', { pr: { headRefName: 'unrelated' } }, 'fresh_pr_head_mismatch'],
+    ['closed PR', { pr: { state: 'CLOSED' } }, 'fresh_pr_head_mismatch'],
+    ['wrong Issue', { pr: { body: 'Closes #119' } }, 'fresh_pr_link_ambiguous'],
+    ['missing PR', { noPr: true }, 'fresh_pr_link_ambiguous'],
+    ['duplicate Issue-closing PR', { duplicate: true }, 'fresh_pr_link_ambiguous'],
+    ['remote fetch unavailable', { fetchOk: false }, 'fresh_pr_remote_fetch_failed'],
+    ['remote head moved', { remoteHead: 'b'.repeat(40) }, 'fresh_pr_remote_head_mismatch'],
+    ['PR changed during preparation', { changed: true }, 'fresh_pr_head_changed'],
+  ] as const)('rejects %s before worktree creation', async (_name, options, cause) => {
+    const f = fixture(options);
+    const result = await prepareWorktreeWithOrca(request(), f.execute);
+    expect(result).toMatchObject({ status: 'continue', cause });
+    expect(f.calls.some((call) => call.argv.slice(0, 3).join(' ')
+      === 'orca worktree create')).toBe(false);
+  });
+
+  it.each([
+    ['checkout HEAD differs', { checkoutHead: 'f'.repeat(40) }, 'fresh_pr_head_changed_or_unproven'],
+    ['setup dirty', { dirty: true }, 'manager_worktree_dirty'],
+  ] as const)('refuses %s after creation, without any spawn authority', async (_name, options, cause) => {
+    const f = fixture(options);
+    const result = await prepareWorktreeWithOrca(request(), f.execute);
+    expect(result).toMatchObject({ status: 'continue', cause });
+    expect(f.calls.some((call) => call.argv.slice(0, 3).join(' ')
+      === 'orca worktree create')).toBe(true);
+    expect(f.calls.some((call) => call.argv[0] === 'git'
+      && ['merge', 'reset', 'rebase', 'stash', 'clean'].includes(call.argv[1]!))).toBe(false);
+  });
+});
+
+
+describe('Issue #2655 r02 AppliedIn #118 same Task terminal identity retry', () => {
+  it('preserves failed start, refuses replaced terminal, and reuses only exactly verified same-Task terminal', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk2655-same-task-118-'));
+    const stateRoot = join(root, 'runtime');
+    const worktree = join(root, 'appliedin-mgr-118-fresh-1151');
+    mkdirSync(worktree, { recursive: true });
+    const env = {
+      ...opencodeProfileEnv('manager'), OPK_WAKE_SUPERVISOR_STATE_DIR: stateRoot,
+      OPK_BASE_DIR: join(root, 'assignments'),
+    };
+    const taskId = 'task_8f2c8e5ccab8';
+    const runId = 'run_a2645892e047';
+    const handle = 'term-exact-118';
+    const generation = 'incarnation-118';
+    const worktreeId = 'appliedin::manager-118';
+    const title = 'opk-manager-' + taskId;
+    let created = 0;
+    let startCalls = 0;
+    let nativeVisibility: 'verified' | 'replaced' | 'foreign' | 'absent' | 'unknown' = 'verified';
+    let newCommand = '';
+    const terminal = () => ({
+      handle, incarnationId: nativeVisibility === 'replaced' ? 'replaced-incarnation' : generation,
+      title,
+      command: newCommand,
+      worktreePath: nativeVisibility === 'foreign' ? '/tmp/other-task-worktree' : worktree,
+      status: 'running',
+    });
+    const runJson = ((argv: readonly string[]): OrcaJsonResponse => {
+      const operation = argv.slice(0, 2).join(' ');
+      if (operation === 'terminal list') {
+        if (nativeVisibility === 'unknown') return {
+          ok: false, error: { code: 'unavailable', message: 'native inventory unknown' },
+        };
+        return { ok: true, result: {
+          totalCount: created && nativeVisibility !== 'absent' ? 1 : 0,
+          truncated: false,
+          terminals: created && nativeVisibility !== 'absent' ? [terminal()] : [],
+        } };
+      }
+      if (operation === 'terminal create') {
+        created += 1;
+        newCommand = String(argv[argv.indexOf('--command') + 1] ?? '');
+        return { ok: true, result: { terminal: terminal() } };
+      }
+      if (operation === 'terminal show') {
+        if (nativeVisibility === 'unknown') return {
+          ok: false, error: { code: 'unavailable', message: 'terminal identity unknown' },
+        };
+        return { ok: true, result: { terminal: nativeVisibility === 'absent' ? null : terminal() } };
+      }
+      if (operation === 'terminal wait') return {
+        ok: true, result: { wait: { status: 'running', satisfied: true } },
+      };
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    }) as typeof import('../orca-runtime/native.ts').runOrcaJson;
+    const attempt = (supervised: LaunchDependencies['runSupervisedStart']) => {
+      const adapter = new OrcaTaskRuntimeAdapter({ runJson, env });
+      return runSupervisedTaskLaunchAssistant({
+        repository: 'chetwerikoff/AppliedIn', projectId: 'orchestrator-pack',
+        issueNumber: 118, workClass: 'manager', taskId, runId,
+        worktreeSelector: 'id:' + worktreeId, defaultBranch: 'main',
+        baseBranch: 'origin/main', env,
+      }, {
+        ...deps({
+          adapter,
+          managerRun: { status: 'ok', value: { runId } },
+          managerMembership: { status: 'ok', value: { taskId } },
+        }),
+        resolveProfile: (workClass, inherited, mode) => resolveLiveExecutorProfile(
+          workClass, inherited, mode, async (args) => opencodeProbeResult(args),
+        ),
+        prepareWorktree: async () => ({
+          status: 'ok', value: {
+            id: worktreeId, selector: 'id:' + worktreeId, path: worktree,
+            setupWitness: 'proven_reuse',
+          },
+        }),
+        finalizeProfile: async (profile) => ({ status: 'ok', value: profile }),
+        runSupervisedStart: supervised,
+      });
+    };
+    try {
+      const first = await attempt(async () => {
+        startCalls += 1;
+        return { ok: false, reason: 'target_unresolved', errorMessage: 'native cause unavailable' };
+      });
+      expect(first).toMatchObject({ outcome: 'continue', stage: 'supervised_start',
+        observedCause: 'target_unresolved' });
+      expect(created).toBe(1);
+      expect(startCalls).toBe(1);
+
+      for (const visibility of ['replaced', 'foreign', 'absent', 'unknown'] as const) {
+        nativeVisibility = visibility;
+        const refused = await attempt(async () => {
+          startCalls += 1;
+          return readyStart(taskId);
+        });
+        expect(refused).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare' });
+        expect(JSON.stringify(refused)).not.toContain('"outcome":"ready"');
+        expect(startCalls).toBe(1);
+        expect(created).toBe(1);
+      }
+
+      nativeVisibility = 'verified';
+      const inspect = async (args: readonly string[]) => {
+        if (args[0] === 'terminal' && args[1] === 'show') return {
+          ok: true, stdout: okEnvelope({ terminal: { handle, worktreeId } }),
+        };
+        if (args[0] === 'worktree' && args[1] === 'show') return {
+          ok: true, stdout: okEnvelope({ worktree: { id: worktreeId, path: worktree } }),
+        };
+        return { ok: false, stdout: '', stderr: 'unknown native placement' };
+      };
+      const third = await attempt((start) => runSupervisedWorkerStart({
+        ...start, env, inspect,
+        execute: async () => {
+          startCalls += 1;
+          return { ok: true, stdout: okEnvelope({
+            taskId, dispatchId: 'dispatch-118-retry', state: 'ready',
+            effects: [
+              { kind: 'worktree', action: 'reused', id: worktreeId },
+              { kind: 'terminal', role: 'agent', action: 'reused', id: handle },
+              { kind: 'dispatch_input', role: 'agent', id: handle, state: 'accepted' },
+            ],
+          }) };
+        },
+      }));
+      expect(third).toMatchObject({
+        outcome: 'ready', resources: { taskId, dispatchId: 'dispatch-118-retry',
+          worktreePath: worktree, worktreeId },
+      });
+      expect(created).toBe(1);
+      expect(startCalls).toBe(2);
+      expect(currentWorkerAssignment(resolveWorkerAssignmentStorePath('orchestrator-pack', env), 118))
+        .toMatchObject({ taskId, bindingKey: 'dispatch-118-retry', role: 'orchestrator' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+
+describe('Issue #2661 B5 existing-session exact intent, census, and safe restart', () => {
+  it('B5 extensionless resume entrypoint passes the native Node parser boundary', async () => {
+    const entrypoint = fileURLToPath(new URL('../opk-orch-start', import.meta.url));
+    for (const flags of [[], ['--experimental-strip-types']]) {
+      const parsed = await runProcess({
+        command: process.execPath,
+        args: [...flags, '--check', entrypoint],
+        allowEmptyStdout: true,
+      });
+      expect(parsed.outcome, parsed.stderr).toBe('exit');
+      expect(parsed.exitCode, parsed.stderr).toBe(0);
+    }
+  });
+
+  const projectId = 'orchestrator-pack';
+  const repository = 'chetwerikoff/orchestrator-pack';
+  const workspace = '/tmp/opk-2661-selected-workspace';
+  const otherWorkspace = '/tmp/opk-2661-other-workspace';
+  const session = 'ses_2661requested';
+  type NativePane = {
+    handle: string;
+    incarnationId: string;
+    worktreePath: string;
+    title: string;
+    status: string;
+    command: string;
+  };
+  type FailureMode = 'healthy' | 'first-hang' | 'two-hangs' | 'stop-fails'
+    | 'gone-unverified' | 'early-gone' | 'liveness-unknown' | 'generation-drift';
+
+  function resumeFixture(mode: FailureMode = 'healthy', selectedEnv: NodeJS.ProcessEnv = opencodeProfileEnv('manager')) {
+    const events: string[] = [];
+    const nativePanes: NativePane[] = [];
+    const spawnedCommands: string[] = [];
+    const queriedUrls: string[] = [];
+    const assignment: WorkerAssignment = {
+      schema: 'orchestrator-pack/worker-assignment/v1',
+      projectId, repository, issueNumber: 2661,
+      taskId: 'task-2661', assignmentId: 'assignment-2661', generation: 1,
+      kind: 'local', provider: 'orca', bindingKey: 'dispatch-2661',
+      role: 'orchestrator', createdAtUtc: '2026-10-19T00:00:00.000Z',
+    };
+    const state: {
+      assignments: WorkerAssignment[];
+      catalog: string[];
+      unreadableList: boolean;
+      rosterMode: 'complete' | 'truncated' | 'count-mismatch';
+      truncateAfterStop: boolean;
+      catalogRequestFails: boolean;
+      extraPane: NativePane | null;
+      refuseProfile: boolean;
+      assignmentsReadable: boolean;
+      unknownIncumbent: boolean;
+      goneIncumbent: boolean;
+      workerShowUnknown: boolean;
+      catalogShape: 'normal' | 'empty' | 'malformed' | 'wrong-directory';
+      injectAssignmentAfterStop: boolean;
+      stopReturned: boolean;
+    } = {
+      assignments: [], catalog: [session], unreadableList: false,
+      rosterMode: 'complete', truncateAfterStop: false, catalogRequestFails: false,
+      extraPane: null,
+      refuseProfile: false, assignmentsReadable: true,
+      unknownIncumbent: false, goneIncumbent: false,
+      workerShowUnknown: false, catalogShape: 'normal',
+      injectAssignmentAfterStop: false, stopReturned: false,
+    };
+    const asResult = (result: Record<string, unknown>) => ({ ok: true, result });
+    const native = ((args: readonly string[]): OrcaJsonResponse => {
+      const operation = args.slice(0, 2).join(' ');
+      events.push(operation);
+      if (operation === 'terminal list') {
+        if (state.unreadableList) return asResult({ terminals: null, totalCount: 0, truncated: true });
+        const selected = [...nativePanes, ...(state.extraPane ? [state.extraPane] : [])];
+        const worktreeIndex = args.indexOf('--worktree');
+        const rows = worktreeIndex >= 0
+          ? selected.filter((pane) => pane.worktreePath === args[worktreeIndex + 1])
+          : selected;
+        if (state.stopReturned && !selected.some((pane) => pane.handle === 'term-b5-1')) {
+          events.push('gone-readback:term-b5-1');
+        }
+        return asResult({
+          terminals: rows,
+          totalCount: rows.length + (state.rosterMode === 'count-mismatch' ? 1 : 0),
+          truncated: state.rosterMode === 'truncated' || (state.stopReturned && state.truncateAfterStop),
+        });
+      }
+      if (operation === 'terminal create') {
+        const index = spawnedCommands.length + 1;
+        const command = args[args.indexOf('--command') + 1] ?? '';
+        const pane: NativePane = {
+          handle: 'term-b5-' + index,
+          incarnationId: 'native-inc-b5-' + index,
+          worktreePath: args[args.indexOf('--worktree') + 1] ?? '',
+          title: args[args.indexOf('--title') + 1] ?? '',
+          status: 'running',
+          command,
+        };
+        spawnedCommands.push(command);
+        nativePanes.push(pane);
+        events.push('created:' + pane.handle);
+        return asResult({ terminal: pane });
+      }
+      if (operation === 'terminal show') {
+        const handle = args[args.indexOf('--terminal') + 1] ?? '';
+        return asResult({ terminal: nativePanes.find((pane) => pane.handle === handle)
+          ?? (state.extraPane?.handle === handle ? state.extraPane : null) });
+      }
+      if (operation === 'terminal wait') {
+        const handle = args[args.indexOf('--terminal') + 1];
+        if (state.goneIncumbent && handle === 'incumbent') {
+          return asResult({ wait: { status: 'exited', satisfied: false } });
+        }
+        if (state.unknownIncumbent && handle === 'incumbent') {
+          return { ok: false, error: { code: 'unavailable', message: 'synthetic unknown incumbent' } };
+        }
+        if (mode === 'early-gone' && handle === 'term-b5-1') {
+          return asResult({ wait: { status: 'exited', satisfied: false } });
+        }
+        if (mode === 'liveness-unknown' && handle === 'term-b5-1') {
+          return { ok: false, error: { code: 'unavailable', message: 'synthetic native wait unavailable' } };
+        }
+        return asResult({ wait: { status: 'running', satisfied: false } });
+      }
+      if (operation === 'terminal close') {
+        const handle = args[args.indexOf('--terminal') + 1];
+        events.push('closed:' + handle);
+        if (mode === 'stop-fails') {
+          return { ok: false, error: { code: 'permission_denied', message: 'synthetic close refused' } };
+        }
+        state.stopReturned = true;
+        const index = nativePanes.findIndex((pane) => pane.handle === handle);
+        if (index >= 0 && mode !== 'gone-unverified') nativePanes.splice(index, 1);
+        if (state.injectAssignmentAfterStop) state.assignments = [assignment];
+        return asResult({ closed: true });
+      }
+      if (operation === 'orchestration worker-show') {
+        if (state.workerShowUnknown) {
+          return { ok: false, error: { code: 'unavailable', message: 'synthetic Dispatch unreadable' } };
+        }
+        return asResult({
+          dispatch: { id: assignment.bindingKey, taskId: assignment.taskId, status: 'dispatched' },
+          terminal: { worktreePath: workspace },
+        });
+      }
+      return { ok: false, error: { code: 'unexpected_synthetic_operation', message: operation } };
+    }) as typeof import('../orca-runtime/native.ts').runOrcaJson;
+
+    // No fake "listener belongs to this worker" oracle: an unrelated responder
+    // with the exact same JSON is observationally indistinguishable.
+    const openCodeHttpRequest = ({ url }: { readonly url: string; readonly method: 'GET' | 'POST'; readonly timeoutMs: number }) => {
+      queriedUrls.push(url);
+      events.push('http-request');
+      const command = spawnedCommands.at(-1) ?? '';
+      const binding = openCodeControlFromCommand(command);
+      if (!binding || !url.startsWith(binding.url + '/')) {
+        throw new Error('synthetic wrong command-derived control URL');
+      }
+      const spawnIndex = spawnedCommands.length;
+      if ((mode === 'first-hang' && spawnIndex === 1) || mode === 'two-hangs'
+        || mode === 'stop-fails' || mode === 'gone-unverified'
+        || mode === 'generation-drift') {
+        if (mode === 'generation-drift' && nativePanes[0]) {
+          nativePanes[0].incarnationId = 'native-recycled-incarnation';
+        }
+        throw new Error('ECONNREFUSED synthetic selected port');
+      }
+      if (url.endsWith('/global/health')) return { status: 200, body: JSON.stringify({ healthy: true, version: '1.18.35' }) };
+      if (url.endsWith('/session?directory=' + encodeURIComponent(workspace))) {
+        if (state.catalogRequestFails) throw new Error('ECONNRESET synthetic catalog request after healthy health');
+        if (state.catalogShape === 'malformed') return { status: 200, body: '{invalid-fixture-json' };
+        if (state.catalogShape === 'empty') return { status: 200, body: '[]' };
+        return { status: 200, body: JSON.stringify(state.catalog.map((id) => ({ id,
+          directory: state.catalogShape === 'wrong-directory' ? otherWorkspace : workspace }))) };
+      }
+      throw new Error('synthetic wrong directory/session request');
+    };
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: native, openCodeHttpRequest,
+      env: { OPK_WAKE_SUPERVISOR_STATE_DIR: '/tmp/opk-2661-no-persisted-launch-owner' } });
+    const deps: OpenCodeResumeDependencies = {
+      adapter,
+      commandPreflight: () => ({ status: 'ok', value: true }),
+      repositoryPreflight: async () => ({ status: 'ok', value: true }),
+      resolveProfile: (_workClass, inherited, startMode) => state.refuseProfile
+        ? Promise.resolve({ status: 'continue' as const, cause: 'executor_effort_channel_unavailable',
+          actor: 'operator' as const, evidence: {},
+          nextAction: { kind: 'repair_executor_profile' as const, note: 'synthetic pre-spawn refusal' } })
+        : resolveLiveExecutorProfile('manager', inherited, startMode, async (args) => opencodeProbeResult(args)),
+      finalizeProfile: async (profile, selectedWorkspace, requestedSession, dataRoot) => {
+        expect(selectedWorkspace).toBe(workspace);
+        expect(dataRoot).toBe(selectedEnv.XDG_DATA_HOME);
+        const selectedInline = JSON.parse(profile.inlineConfigJson ?? '{}') as {
+          agent?: Record<string, { model?: string; variant?: string }>;
+        };
+        const admittedAgent = profile.agentName ? selectedInline.agent?.[profile.agentName] : undefined;
+        if (!admittedAgent?.model || !admittedAgent.variant) {
+          throw new Error('synthetic fixture has no admitted selected model/variant');
+        }
+        const overlay = buildOpenCodeAgentOverlay({
+          agentName: 'pack-opk-b5-selected', model: admittedAgent.model, effort: admittedAgent.variant,
+          baseline: { name: 'build', mode: 'primary', prompt: 'synthetic benign task', permission: [] },
+          stateRoot: '/tmp/opk-2661-disposable-state',
+          ...(dataRoot !== undefined ? { dataRoot } : {}), resumeSession: requestedSession,
+        });
+        return { status: 'ok', value: {
+          ...profile, launchCommand: overlay.command, agentName: overlay.agentName,
+          inlineConfigJson: overlay.inlineConfigJson,
+        } };
+      },
+      listAssignments: () => state.assignmentsReadable ? state.assignments : null,
+      assignmentWorkspace: async (row) => {
+        const result = native(['orchestration', 'worker-show', '--dispatch', row.bindingKey, '--json']);
+        const observation = result.ok ? result.result as {
+          dispatch?: { id?: string; taskId?: string };
+          terminal?: { worktreePath?: string };
+        } : null;
+        return observation?.dispatch?.id === row.bindingKey
+          && observation.dispatch.taskId === row.taskId
+          ? observation.terminal?.worktreePath ?? null : null;
+      },
+    };
+    const run = () => runExistingOpenCodeResume({
+      session, projectId, repository, workspace, env: selectedEnv,
+    }, deps);
+    return { run, deps, adapter, native, nativePanes, spawnedCommands,
+      queriedUrls, events, state, assignment };
+  }
+
+  it('B5 actual requested --session command, full selected overlay, and deliberate unassignment', async () => {
+    const f = resumeFixture();
+    f.state.catalog = [session, 'ses_wrongother'];
+    const result = await f.run();
+    expect(result).toMatchObject({
+      outcome: 'catalog_observed_unverified', cause: 'requested_session_directory_catalog_membership_only',
+      attempts: 1, unassigned: true, activeSelectionVerified: false, listenerOwnershipVerified: false,
+    });
+    expect(f.spawnedCommands).toHaveLength(1);
+    const command = f.spawnedCommands[0]!;
+    expect(command).toMatch(/ --session 'ses_2661requested'$/u);
+    expect(command.match(/--session /gu)).toHaveLength(1);
+    expect(command.match(/OPENCODE_CONFIG_CONTENT=/gu)).toHaveLength(1);
+    const binding = openCodeControlFromCommand(command);
+    expect(binding).toMatchObject({ session, agent: 'pack-opk-b5-selected' });
+    expect(f.queriedUrls).toEqual([
+      binding?.url + '/global/health',
+      binding?.url + '/session?directory=' + encodeURIComponent(workspace),
+    ]);
+    const inline = JSON.parse(command.match(/^OPENCODE_CONFIG_CONTENT='([^']+)'/u)?.[1] ?? '{}') as {
+      permission: Record<string, Record<string, string>>;
+      agent: Record<string, { model?: string; variant?: string; permission: Record<string, Record<string, string>> }>;
+    };
+    expect(inline.agent['pack-opk-b5-selected']).toMatchObject({
+      model: 'fixture-opencode-model', variant: 'fixture-opencode-effort',
+    });
+    for (const permission of [inline.permission, inline.agent.general?.permission,
+      inline.agent.explore?.permission, inline.agent['pack-opk-b5-selected']?.permission]) {
+      expect(permission?.read?.['*.env']).toBe('deny');
+      expect(permission?.read?.['*.env.*']).toBe('deny');
+    }
+    expect(openCodeLaunchHasFleetBrowserDenies({
+      command, agentName: 'pack-opk-b5-selected',
+      inlineConfigJson: JSON.stringify(inline),
+    })).toBe(true);
+    expect(f.nativePanes).toHaveLength(1);
+    expect(f.nativePanes[0]?.title).toBe('opk-resume-' + session);
+    expect(f.events.every((event) => !/orchestration (?:task|dispatch|run)-(?:create|start)/u.test(event))).toBe(true);
+    expect(f.state.assignments).toEqual([]);
+  });
+
+
+  it('B5 optional selected XDG_DATA_HOME survives native command quoting, validation and adapter parsing', async () => {
+    const dataRoot = "/tmp/opk-2661 disposable/it's database --port 49999 --agent bogus --session ses_spoofed";
+    for (const explicit of [false, true]) {
+      const selectedEnv = opencodeProfileEnv('manager');
+      if (explicit) selectedEnv.XDG_DATA_HOME = dataRoot;
+      const f = resumeFixture('healthy', selectedEnv);
+      const observation = await f.run();
+      expect(observation).toMatchObject({
+        outcome: 'catalog_observed_unverified', attempts: 1,
+        activeSelectionVerified: false, listenerOwnershipVerified: false,
+      });
+      expect(f.spawnedCommands).toHaveLength(1);
+      const command = f.spawnedCommands[0]!;
+      expect(command.match(/OPENCODE_CONFIG_CONTENT=/gu)).toHaveLength(1);
+      expect(command).toContain(" XDG_STATE_HOME='/tmp/opk-2661-disposable-state'");
+      const inlineConfigJson = command.match(/^OPENCODE_CONFIG_CONTENT='([^']+)'/u)?.[1];
+      expect(inlineConfigJson).toBeDefined();
+      const inline = JSON.parse(inlineConfigJson ?? '{}') as { agent: Record<string, { model: string; variant: string }> };
+      expect(inline.agent['pack-opk-b5-selected']).toMatchObject({
+        model: 'fixture-opencode-model', variant: 'fixture-opencode-effort',
+      });
+      expect(openCodeLaunchHasFleetBrowserDenies({
+        command, agentName: 'pack-opk-b5-selected', inlineConfigJson,
+      })).toBe(true);
+      const binding = openCodeControlFromCommand(command);
+      expect(binding).toMatchObject({ agent: 'pack-opk-b5-selected', session });
+      expect(binding?.url).toBe(`http://127.0.0.1:${openCodeControlPort('pack-opk-b5-selected')}`);
+      expect(f.queriedUrls).toEqual([
+        binding?.url + '/global/health',
+        `${binding?.url}/session?directory=${encodeURIComponent(workspace)}`,
+      ]);
+      if (explicit) {
+        const quotedData = "'" + dataRoot.replaceAll("'", "'\\''") + "'";
+        expect(command).toContain(` XDG_DATA_HOME=${quotedData} opencode --hostname 127.0.0.1`);
+        expect(openCodeLaunchHasFleetBrowserDenies({
+          command: command.replace(`XDG_DATA_HOME=${quotedData}`, `XDG_DATA_HOME=${dataRoot}`),
+          agentName: 'pack-opk-b5-selected', inlineConfigJson,
+        })).toBe(false);
+      } else {
+        expect(command).not.toContain('XDG_DATA_HOME=');
+        expect(command).toContain("XDG_STATE_HOME='/tmp/opk-2661-disposable-state' opencode --hostname");
+      }
+    }
+  });
+
+  it('B5 wrong-only catalog is non-ready and identical foreign same-session responder proves no owner', async () => {
+    const wrong = resumeFixture();
+    wrong.state.catalog = ['ses_otheronly'];
+    expect(await wrong.run()).toMatchObject({
+      outcome: 'continue', cause: 'resume_control_unavailable', attempts: 1,
+      activeSelectionVerified: false, listenerOwnershipVerified: false,
+    });
+    expect(wrong.spawnedCommands).toHaveLength(1);
+    expect(wrong.events).not.toContain('closed:term-b5-1');
+    for (const catalogShape of ['empty', 'malformed', 'wrong-directory'] as const) {
+      const f = resumeFixture();
+      f.state.catalogShape = catalogShape;
+      expect(await f.run()).toMatchObject({
+        outcome: 'continue', cause: 'resume_control_unavailable', attempts: 1,
+      });
+      expect(f.events).not.toContain('closed:term-b5-1');
+      expect(f.spawnedCommands).toHaveLength(1);
+    }
+
+    // The returned bytes deliberately cannot tell a local listener from a
+    // foreign server that happens to list the requested session in this directory.
+    const foreign = resumeFixture();
+    foreign.state.catalog = [session, 'ses_another'];
+    const observation = await foreign.run();
+    expect(observation).toMatchObject({
+      outcome: 'catalog_observed_unverified', attempts: 1,
+      activeSelectionVerified: false, listenerOwnershipVerified: false,
+    });
+    expect(foreign.events).not.toContain('closed:term-b5-1');
+  });
+
+  it('B5 cross-adapter-instance unknown and ordinary no-session directory-only control', async () => {
+    const f = resumeFixture();
+    const observed = await f.run();
+    expect(observed.terminal).toBeDefined();
+    const fresh = new OrcaTaskRuntimeAdapter({
+      runJson: f.native,
+      openCodeHttpRequest: () => ({ status: 200, body: '[]' }),
+      env: { OPK_WAKE_SUPERVISOR_STATE_DIR: '/tmp/opk-2661-no-persisted-launch-owner' },
+    });
+    expect(fresh.openCodeHealth(observed.terminal!, { cwd: workspace })).toMatchObject({
+      status: 'unsupported', reason: 'runtime_opencode_control_unavailable',
+    });
+    const ordinary = f.adapter.spawnWorker({
+      title: 'ordinary-opencode', workspace,
+      command: "opencode --hostname 127.0.0.1 --port 47771 --agent 'general'",
+    }, { cwd: workspace });
+    expect(ordinary.status).toBe('ok');
+    if (ordinary.status === 'ok') {
+      f.state.catalog = ['ses_unrelated'];
+      expect(f.adapter.openCodeHealth(ordinary.value.identity, { cwd: workspace })).toMatchObject({
+        status: 'ok',
+      });
+      expect(f.adapter.composerControl?.(ordinary.value.identity)?.kind).toBe('opencode-http');
+    }
+  });
+
+  it('B5 rejects well-formed but incomplete native rosters before spawn and after stopped-worker re-admission', async () => {
+    for (const rosterMode of ['truncated', 'count-mismatch'] as const) {
+      const f = resumeFixture();
+      f.state.rosterMode = rosterMode;
+      const census = await f.adapter.listWorkersAsync?.({}, { cwd: workspace });
+      expect(census).toMatchObject({ status: 'unsupported', reason: 'runtime_worker_list_incomplete' });
+      expect(await f.run()).toMatchObject({
+        outcome: 'continue', attempts: 0, cause: 'resume_incumbent_or_assignment_unverified',
+      });
+      expect(f.spawnedCommands).toHaveLength(0);
+    }
+    const afterStop = resumeFixture('first-hang');
+    afterStop.state.truncateAfterStop = true;
+    expect(await afterStop.run()).toMatchObject({
+      outcome: 'continue', attempts: 1, cause: 'resume_incumbent_or_assignment_unverified',
+    });
+    expect(afterStop.events).toContain('closed:term-b5-1');
+    expect(afterStop.spawnedCommands).toHaveLength(1);
+  });
+
+  it('B5 successful health followed by catalog transport failure never authorizes stop or retry', async () => {
+    const f = resumeFixture();
+    f.state.catalogRequestFails = true;
+    expect(await f.run()).toMatchObject({
+      outcome: 'continue', attempts: 1, cause: 'resume_control_unavailable',
+    });
+    expect(f.queriedUrls.some((url) => url.endsWith('/global/health'))).toBe(true);
+    expect(f.queriedUrls.some((url) => url.includes('/session?directory='))).toBe(true);
+    expect(f.events).not.toContain('terminal close');
+    expect(f.spawnedCommands).toHaveLength(1);
+  });
+
+  it('B5 explicit resume never exposes effectful composer control for an unverified listener', async () => {
+    const f = resumeFixture();
+    f.state.catalog = [session, 'ses_foreignother'];
+    const result = await f.run();
+    expect(result).toMatchObject({
+      outcome: 'catalog_observed_unverified',
+      activeSelectionVerified: false, listenerOwnershipVerified: false,
+    });
+    expect(result.terminal).toBeDefined();
+    expect(f.adapter.composerControl?.(result.terminal!)).toBeUndefined();
+    expect(f.queriedUrls.some((url) => /\/tui\/(?:append|submit)-prompt$/u.test(url))).toBe(false);
+  });
+
+  it('B5 full selected-workspace native worker and assignment/Dispatch census refuses incumbents', async () => {
+    for (const census of ['live', 'unknown', 'gone', 'foreign-worker', 'unreadable', 'duplicate'] as const) {
+      const f = resumeFixture();
+      if (census === 'unreadable') f.state.unreadableList = true;
+      else if (census === 'duplicate') {
+        f.state.extraPane = { handle: 'other', incarnationId: 'generation-a',
+          worktreePath: workspace, title: 'other', status: 'running', command: 'other' };
+        f.nativePanes.push({ ...f.state.extraPane });
+      } else f.state.extraPane = {
+        handle: 'incumbent', incarnationId: 'generation-incumbent',
+        worktreePath: census === 'foreign-worker' ? otherWorkspace : workspace,
+        title: 'native-existing', status: 'running', command: 'other',
+      };
+      if (census === 'unknown') {
+        f.state.unknownIncumbent = true;
+        const value = await f.run();
+        expect(value).toMatchObject({ outcome: 'continue', attempts: 0,
+          cause: 'resume_incumbent_or_assignment_unverified' });
+      } else if (census === 'gone') {
+        // A native gone witness alone does not prove anything about an assignment.
+        f.state.goneIncumbent = true;
+        expect((await f.run()).outcome).toBe('catalog_observed_unverified');
+      } else if (census === 'foreign-worker') {
+        expect((await f.run()).outcome).toBe('catalog_observed_unverified');
+      } else {
+        expect(await f.run()).toMatchObject({ attempts: 0,
+          cause: 'resume_incumbent_or_assignment_unverified' });
+      }
+      if (census !== 'foreign-worker' && census !== 'gone') expect(f.spawnedCommands).toHaveLength(0);
+    }
+    for (const type of ['active', 'unknown', 'still-2655-replaceable',
+      'wrong-metadata', 'assignment-list-unreadable', 'ambiguous'] as const) {
+      const f = resumeFixture();
+      if (type === 'assignment-list-unreadable') {
+        f.state.assignmentsReadable = false;
+      } else if (type === 'ambiguous') {
+        f.state.assignments = [f.assignment, { ...f.assignment, assignmentId: 'second-claim' }];
+      } else {
+        f.state.assignments = [type === 'wrong-metadata'
+          ? { ...f.assignment, bindingKey: '' } : f.assignment];
+      }
+      if (type === 'unknown') f.state.workerShowUnknown = true;
+      if (type === 'still-2655-replaceable') {
+        f.state.extraPane = {
+          handle: 'incumbent', incarnationId: 'previous-native-generation',
+          worktreePath: workspace, title: 'previous-manager', status: 'running', command: 'opencode',
+        };
+        f.state.goneIncumbent = true; // native gone does not retire Dispatch
+        const oldIdentity = { runtime: 'orca' as const, id: 'incumbent', generation: 'previous-native-generation' };
+        expect(f.adapter.liveness({ worker: oldIdentity, observationWindowMs: 1_000 },
+          { cwd: workspace }).status).toBe('gone');
+      }
+      expect(await f.run()).toMatchObject({ outcome: 'continue',
+        cause: 'resume_incumbent_or_assignment_unverified', attempts: 0 });
+      expect(f.spawnedCommands).toHaveLength(0);
+    }
+  });
+
+  it('B5 first port hang then healthy resume', async () => {
+    const f = resumeFixture('first-hang');
+    f.state.catalog = [session, 'ses_wrongother'];
+    const result = await f.run();
+    expect(result).toMatchObject({
+      outcome: 'catalog_observed_unverified', attempts: 2,
+      unassigned: true, activeSelectionVerified: false, listenerOwnershipVerified: false,
+    });
+    expect(f.spawnedCommands).toHaveLength(2);
+    expect(f.spawnedCommands[1]).toBe(f.spawnedCommands[0]);
+    expect(f.events.filter((event) => event === 'terminal close')).toHaveLength(1);
+    const firstSpawn = f.events.indexOf('created:term-b5-1');
+    const closed = f.events.indexOf('closed:term-b5-1');
+    const secondSpawn = f.events.indexOf('created:term-b5-2');
+    expect(firstSpawn).toBeGreaterThanOrEqual(0);
+    expect(closed).toBeGreaterThan(firstSpawn);
+    expect(secondSpawn).toBeGreaterThan(closed);
+    expect(f.events.slice(closed + 1, secondSpawn)).toContain('gone-readback:term-b5-1');
+    expect(f.events.slice(closed + 1, secondSpawn).filter((event) => event === 'terminal list').length)
+      .toBeGreaterThan(0); // separately observed gone and renewed full exclusion
+    expect(f.nativePanes.map((pane) => pane.handle)).toEqual(['term-b5-2']);
+    expect(f.queriedUrls.at(-1)).toContain('/session?directory=');
+  });
+
+  it('B5 hung startup fails closed', async () => {
+    const expected = [
+      ['two-hangs', 'resume_control_unavailable', 2, 1],
+      ['stop-fails', 'resume_stop_unverified', 1, 1],
+      ['gone-unverified', 'resume_gone_unverified', 1, 1],
+      ['early-gone', 'resume_worker_liveness_unverified', 1, 0],
+      ['liveness-unknown', 'resume_worker_liveness_unverified', 1, 0],
+      ['generation-drift', 'resume_worker_identity_unverified', 1, 0],
+    ] as const;
+    for (const [mode, cause, attempts, closeCount] of expected) {
+      const f = resumeFixture(mode);
+      const observation = await f.run();
+      expect(observation).toMatchObject({
+        outcome: 'continue', cause, attempts,
+        activeSelectionVerified: false, listenerOwnershipVerified: false,
+      });
+      expect(f.spawnedCommands).toHaveLength(attempts);
+      expect(f.events.filter((event) => event === 'terminal close')).toHaveLength(closeCount);
+      expect(f.spawnedCommands.length).toBeLessThanOrEqual(2);
+    }
+    const afterStop = resumeFixture('first-hang');
+    afterStop.state.injectAssignmentAfterStop = true;
+    expect(await afterStop.run()).toMatchObject({
+      outcome: 'continue', cause: 'resume_incumbent_or_assignment_unverified', attempts: 1,
+    });
+    expect(afterStop.spawnedCommands).toHaveLength(1);
+    expect(afterStop.events).toContain('closed:term-b5-1');
+    const refusal = resumeFixture();
+    refusal.state.refuseProfile = true;
+    expect(await refusal.run()).toMatchObject({ outcome: 'continue',
+      cause: 'executor_effort_channel_unavailable', attempts: 0 });
+    expect(refusal.spawnedCommands).toHaveLength(0);
+    const invalid = resumeFixture();
+    expect(await runExistingOpenCodeResume({
+      session: 'invalid_session_token', projectId, repository, workspace,
+      env: opencodeProfileEnv('manager'),
+    }, invalid.deps)).toMatchObject({ cause: 'resume_input_invalid', attempts: 0 });
+    expect(invalid.spawnedCommands).toHaveLength(0);
+  });
+
+  it('B4 own-last-line synthetic GPT PARKED excludes an in-flight spinner', () => {
+    expect(lastFleetParkedLine('older text\nPARKED on GPT turn invocation-2661')).toBe(
+      'PARKED on GPT turn invocation-2661',
+    );
+    expect(lastFleetParkedLine('⠋ PARKED on GPT turn invocation-2661')).toBeUndefined();
+    expect(ownPaneOutcome('⠋ PARKED on GPT turn invocation-2661').wait).toBeUndefined();
+    expect(lastFleetParkedLine('PARKED on GPT turn invocation-2661\nAssistant: newer own response'))
+      .toBeUndefined();
   });
 });

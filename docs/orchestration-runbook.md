@@ -121,12 +121,25 @@ double-null timing, selector resolution, ff-only refresh steps, structured envel
 and provider-recovery internals. Agents preserve only the obligations below.
 
 Before effects, pass the assistant's repository/runtime/profile preflight. A fresh
-worktree must have supported setup proof; a reused worktree must have supported
-reuse proof. For manager continuation, the exact Run/Task and caller-supplied
-worktree selector must identify one clean manager-local non-main branch; after those
-identity checks, refresh it from `origin/main` only with the assistant's ff-only
-path. Never reset, rebase, merge, force-repair, replace the worktree, or mutate the
-shared primary checkout as recovery.
+worktree must have supported setup proof **and be clean after setup**; a reused
+worktree must have supported reuse proof. T1/T2/T3 reuse of a dirty existing
+worktree requires the exact current Issue-owned predecessor assignment plus
+native terminal/gone Dispatch and matching producer worktree ID, a unique
+non-default Git branch and unchanged HEAD/status. A fresh continuation Task
+may differ from the predecessor Task; the old assignment's Dispatch remains
+the exact ownership anchor. Reuse does not fetch or mutate local bytes.
+For manager continuation, the exact Run/Task and caller-supplied
+worktree selector must identify one manager-local non-main branch owned by exactly
+one worktree. A clean ancestor can follow the assistant's ff-only `origin/main`
+refresh. An existing dirty checkout requires native exact Run/Task
+membership, a current orchestrator-role predecessor assignment, and its
+terminal/gone producer witness matching the selected worktree; a PR alone
+does not grant permission to touch another Task's uncommitted bytes. Clean
+non-ancestor PR/HEAD reuse remains distinct. Recheck unchanged status
+bytes, branch and HEAD, and do not refresh dirty worktrees.
+Fresh manager worktrees
+must be clean. Never reset, stash, rebase, merge, force-repair, replace the
+worktree, or mutate the shared primary checkout as recovery.
 
 It is a continuation-safe launch assistant, not a lifecycle authority. It owns
 only the shared mechanical sequence: Node/repository preflight; the production
@@ -136,6 +149,16 @@ two fresh-start Dispatch absence witnesses; launch timing/diagnostics; and the
 call to the existing supervised-start boundary. It creates no durable retry
 state, queue, lease, WorkerReport/WorkerStatus, scheduler, or second assignment
 store.
+
+The supported `--worktree` CLI selects and validates the existing
+`exact_terminal_worktree` executor route before effects, rather than silently
+defaulting Cursor to `provider_new_top_level`. For new
+`--worktree-name` starts, an atomic provider call cannot witness fresh-tree
+cleanliness before it dispatches input. The assistant therefore selects the
+already admitted exact-terminal split setup path: complete the setup hook,
+observe clean Git status, then spawn and invoke supervised start.
+Explicit provider-mode requests without a native pre-dispatch clean witness
+fail closed; a post-start receipt is not an equivalent witness.
 
 The calling shell first exports the matching stable profile names. The profile
 checkpoint validates the closed executor family, executor-specific model catalog,
@@ -169,7 +192,13 @@ Supervised starts finish through
 `scripts/pr2-foundation/supervised-worker-start.ts::runSupervisedWorkerStart`.
 Publish a local WorkerAssignment only after Orca returns a proven `ready` receipt
 with both Task and Dispatch identity. Failed, malformed, or outcome-unknown startup
-does not publish a successful assignment.
+does not publish a successful assignment. After reboot, an adapter-unresolved
+predecessor is replaceable only through the exact fenced Task/Dispatch native
+terminal-state plus worker-absent witness; the previous terminal must not be
+reused. A failed/abandoned Dispatch on the same Task may pass both assistant
+observations only while its exact local assignment still matches. Live and
+unknown workers remain protected; the reconciliation module is not a CLI or a
+substitute for this start admission.
 
 When a manager starts before an Issue exists, store the assignment by its canonical
 Task/Dispatch deliverable identity and attach the positive Issue later to that same

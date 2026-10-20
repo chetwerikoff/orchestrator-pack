@@ -14,8 +14,8 @@ import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter, RuntimeWorker, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
 import { overlayExecutorProfileEnv } from '../executor-profile-store.ts';
 import {
-  currentWorkerAssignment, parseDelegatedIntegrationMarker, resolveWorkerAssignmentStorePath,
-  sameDelegatedIntegrationMarker, type DelegatedIntegrationMarker, type WorkerAssignment,
+  currentWorkerAssignment, listCurrentWorkerAssignmentRecords, parseDelegatedIntegrationMarker, resolveWorkerAssignmentStorePath,
+  sameDelegatedIntegrationMarker, type DelegatedIntegrationMarker, type WorkerAssignment, type WorkerAssignmentRecord,
 } from '../lib/worker-assignment-store.ts';
 import {
   buildExecutorCommand,
@@ -30,6 +30,7 @@ import {
   openCodeAgentSemantics,
   openCodeFleetBrowserDenyRulesAreTerminal,
   openCodeLaunchHasFleetBrowserDenies,
+  validOpenCodeResumeSession,
   withOpenCodeFleetBrowserDenies,
   openCodeConfigPaths,
   openCodeEdgeCapabilities,
@@ -39,7 +40,8 @@ import {
   type ExecutorRoute,
   type SemanticExecutorProfile,
 } from '../executor-profile-policy.ts';
-import { runSupervisedWorkerStart, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
+import { runSupervisedWorkerStart, readTerminalGoneDispatch, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
+import type { TerminalGoneAssignmentEvidence } from '../lib/worker-assignment-runtime.ts';
 
 export const LAUNCH_ASSISTANT_SCHEMA = 'supervised-task-launch-assistant/v1' as const;
 export const LAUNCH_STARTUP_OBSERVATION_WINDOW_MS = 30_000;
@@ -160,10 +162,28 @@ export interface WorktreePreparationRequest {
   readonly primaryReuseRoot?: string;
   /** Only populated after native Run/Task membership was proven for an existing manager. */
   readonly managerTaskRunId?: string;
+  /** Exact Issue-owned predecessor for an existing worker's worktree (not a guess from path). */
+  readonly reuseAssignment?: WorkerAssignment;
 }
 
 export type DispatchObservation = { readonly kind: 'absent' }
-  | { readonly kind: 'present'; readonly dispatchId?: string };
+  | { readonly kind: 'present'; readonly dispatchId?: string; readonly status?: string };
+
+/** A terminal Dispatch is reusable only for its exact current Issue/Task assignment. */
+function sameTaskTerminalDispatch(
+  observed: DispatchObservation,
+  assignment: WorkerAssignment | null,
+  taskId: string,
+  adapterId: string,
+): boolean {
+  return observed.kind === 'present'
+    && Boolean(assignment
+      && observed.dispatchId === assignment.bindingKey
+      && assignment.taskId === taskId
+      && assignment.kind === 'local'
+      && assignment.provider === adapterId
+      && ['failed', 'abandoned', 'cancelled', 'done', 'completed'].includes(observed.status ?? ''));
+}
 
 export type ManagerBriefTemplateName = 'manager-preamble.md' | 'ff-prompt-universal.md';
 
@@ -201,8 +221,10 @@ export interface LaunchDependencies {
   readonly createManagerTask: (runId: string, brief: string) => Promise<EdgeResult<{ readonly taskId: string; readonly status: string }>>;
   readonly observeDispatch: (taskId: string) => Promise<EdgeResult<DispatchObservation>>;
   readonly readCurrentAssignment: (issueNumber: number) => WorkerAssignment | null;
+  /** Native exact-Dispatch/worker-absent witness, not an assignment/store guess. */
+  readonly proveTerminalGone?: (assignment: WorkerAssignment) => Promise<TerminalGoneAssignmentEvidence | null>;
   readonly prepareWorktree: (input: WorktreePreparationRequest) => Promise<EdgeResult<PreparedWorktree>>;
-  readonly finalizeProfile?: (profile: ExecutorProfile, worktreePath: string) => Promise<EdgeResult<ExecutorProfile>>;
+  readonly finalizeProfile?: (profile: ExecutorProfile, worktreePath: string, resumeSession?: string, dataRoot?: string) => Promise<EdgeResult<ExecutorProfile>>;
   readonly adapter: RuntimeAdapter;
   readonly runSupervisedStart: typeof runSupervisedWorkerStart;
   readonly now: () => number;
@@ -664,10 +686,38 @@ export async function runSupervisedTaskLaunchAssistant(
   const repository = await checkpoint('repository_preflight', timings, deps.now, () => deps.repositoryPreflight(resources.repository));
   if (repository.status !== 'ok') return continued(input, 'repository_preflight', repository, resources, startedAtMs, timings, deps.now);
 
+  // The existing-worktree CLI requires a pre-created terminal/placement witness.
+  // A provider-created fresh worktree cannot supply its clean Git status before
+  // the atomic provider worker-start; use the already supported split setup
+  // and exact-terminal route instead of accepting post-dispatch cleanliness.
+  if (input.worktreeSelector && input.startMode === 'provider_new_top_level') {
+    return continued(input, 'executor_profile', {
+      cause: 'executor_route_mismatch', actor: 'orchestrator', evidence: {},
+      nextAction: { kind: 'repair_executor_profile',
+        note: 'an existing --worktree requires exact_terminal_worktree' },
+    }, resources, startedAtMs, timings, deps.now);
+  }
+  if (input.worktreeName && input.startMode === 'provider_new_top_level') {
+    return continued(input, 'executor_profile', {
+      cause: 'fresh_provider_clean_witness_unavailable', actor: 'orchestrator', evidence: {},
+      nextAction: { kind: 'repair_executor_profile',
+        note: 'use the existing split setup/clean-observation route: omit --start-mode or select exact_terminal_worktree' },
+    }, resources, startedAtMs, timings, deps.now);
+  }
+  const selectedMode = input.worktreeSelector || input.worktreeName
+    ? 'exact_terminal_worktree' : input.startMode;
   const profileEdge = await checkpoint('executor_profile', timings, deps.now, () =>
-    deps.resolveProfile(input.workClass, input.env ?? process.env, input.startMode));
+    deps.resolveProfile(input.workClass, input.env ?? process.env, selectedMode));
   if (profileEdge.status !== 'ok') return continued(input, 'executor_profile', profileEdge, resources, startedAtMs, timings, deps.now);
   let profile = profileEdge.value;
+  if (profile.route !== 'exact_terminal_worktree'
+    && (input.worktreeSelector || input.worktreeName)) {
+    return continued(input, 'executor_profile', {
+      cause: 'fresh_provider_clean_witness_unavailable', actor: 'orchestrator', evidence: {},
+      nextAction: { kind: 'repair_executor_profile',
+        note: 'require the split clean worktree setup and exact terminal before any new Dispatch' },
+    }, resources, startedAtMs, timings, deps.now);
+  }
   if (input.workClass === 'merge'
     && (profile.family !== 'opencode' || profile.route !== 'exact_terminal_worktree'
       || !input.primaryRoot || input.worktreeSelector !== `path:${input.primaryRoot}`)) {
@@ -744,7 +794,17 @@ export async function runSupervisedTaskLaunchAssistant(
 
   const early = await checkpoint('dispatch_admission_early', timings, deps.now, () => deps.observeDispatch(taskId));
   if (early.status !== 'ok') return continued(input, 'dispatch_admission_early', early, resources, startedAtMs, timings, deps.now);
+  const earlyCurrent = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
+  const earlyCandidate = sameTaskTerminalDispatch(early.value, earlyCurrent, taskId, deps.adapter.id)
+    && earlyCurrent?.role === (input.workClass === 'manager' ? 'orchestrator' : 'worker');
+  const earlyGone = earlyCandidate && earlyCurrent && deps.proveTerminalGone
+    ? await deps.proveTerminalGone(earlyCurrent) : null;
+  const earlyTerminal = early.value.kind === 'present' && Boolean(earlyGone && earlyCurrent
+    && earlyGone.workerAbsent && earlyGone.taskId === taskId
+    && earlyGone.dispatchId === earlyCurrent.bindingKey
+    && earlyGone.dispatchState === early.value.status);
   if (early.value.kind === 'present'
+    && !earlyTerminal
     && (!delegatedIntegration || early.value.dispatchId !== predecessor?.bindingKey)) {
     return continued(input, 'dispatch_admission_early', {
       cause: 'fresh_dispatch_not_absent', actor: 'orchestrator', evidence: { dispatchState: 'present' },
@@ -765,6 +825,8 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(input.workClass === 'manager' ? { managerRefresh: true } : {}),
     ...(input.workClass === 'merge' ? { primaryReuseRoot: input.primaryRoot } : {}),
     ...(input.workClass === 'manager' && input.taskId?.trim() ? { managerTaskRunId: input.runId?.trim() } : {}),
+    ...(input.workClass !== 'merge' && input.worktreeSelector && earlyCurrent
+      ? { reuseAssignment: earlyCurrent } : {}),
   }));
   if (prepared.status !== 'ok') return continued(input, 'worktree_prepare', prepared, resources, startedAtMs, timings, deps.now);
   if (input.workClass === 'merge' && (!prepared.value.path || resolve(prepared.value.path) !== resolve(input.primaryRoot!))) {
@@ -815,6 +877,12 @@ export async function runSupervisedTaskLaunchAssistant(
       title: `opk-${input.workClass === 'merge' ? 't2-merge' : input.workClass}-${taskId}`,
       command: profile.launchCommand,
       workspace: prepared.value.path,
+      // Extra adapter-consumed input on the existing runtime-neutral spawn path.
+      // The production Orca adapter rechecks the current fence and native proof
+      // before replacing an absent terminal's durable title ownership.
+      ...(earlyTerminal && earlyCurrent && earlyGone?.worktreeId === prepared.value.id
+        ? { terminalGoneRecovery: { assignment: earlyCurrent, worktreeId: prepared.value.id } }
+        : {}),
     });
     const spawnNativeError = spawn.status !== 'ok' ? nativeRuntimeError(spawn) : null;
     if (spawn.status !== 'ok') terminalCause = `terminal_spawn_${spawn.status}`;
@@ -854,7 +922,13 @@ export async function runSupervisedTaskLaunchAssistant(
   }
   const final = await checkpoint('dispatch_admission_final', timings, deps.now, () => deps.observeDispatch(taskId));
   if (final.status !== 'ok') return continued(input, 'dispatch_admission_final', final, resources, startedAtMs, timings, deps.now);
+  const finalCurrent = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
+  const finalTerminal = earlyTerminal
+    && sameTaskTerminalDispatch(final.value, finalCurrent, taskId, deps.adapter.id)
+    && earlyCurrent?.assignmentId === finalCurrent?.assignmentId
+    && earlyCurrent?.generation === finalCurrent?.generation;
   if (final.value.kind === 'present'
+    && !finalTerminal
     && (!delegatedIntegration || final.value.dispatchId !== finalPredecessor?.bindingKey)) {
     return continued(input, 'dispatch_admission_final', {
       cause: 'fresh_dispatch_not_absent', actor: 'orchestrator', evidence: { dispatchState: 'present' },
@@ -1071,6 +1145,8 @@ export async function finalizeOpenCodeExecutorProfile(
   worktreePath: string,
   execute: ChildExecutor,
   proveNoWrite?: OpenCodeNoWriteProof,
+  resumeSession?: string,
+  dataRoot?: string,
 ): Promise<EdgeResult<ExecutorProfile>> {
   if (profile.family !== 'opencode' || profile.route === 'provider_new_top_level') return { status: 'ok', value: profile };
   if (!worktreePath.trim()) return contextualRefusal(profile, 'executor_route_unavailable');
@@ -1092,7 +1168,8 @@ export async function finalizeOpenCodeExecutorProfile(
   const effortMatch = profile.launchCommand.match(/"variant":"([^"]+)"/u);
   if (!modelMatch?.[1] || !effortMatch?.[1]) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
-  const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model: modelMatch[1], effort: effortMatch[1], stateRoot });
+  const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model: modelMatch[1], effort: effortMatch[1], stateRoot,
+    ...(dataRoot !== undefined ? { dataRoot } : {}), ...(resumeSession ? { resumeSession } : {}) });
   // OpenCode 1.18.35 appends its runtime tool-output allow after the overlay rules.
   // Leave every other permission's ordered semantics unchanged.
   // Match only the OpenCode runtime tool-output allow from this user's home;
@@ -1101,6 +1178,11 @@ export async function finalizeOpenCodeExecutorProfile(
     '~/.local/share/opencode/tool-output/*',
     join(homedir(), '.local', 'share', 'opencode', 'tool-output', '*'),
   ]);
+  // The same runtime-owned allow is moved last when XDG_DATA_HOME is selected.
+  // Admit only that exact data-home tool-output path, not a parent wildcard.
+  if (dataRoot && isAbsolute(dataRoot)) {
+    runtimeToolOutputPatterns.add(join(dataRoot, 'opencode', 'tool-output', '*'));
+  }
   const matchingRuntimeRules = Array.isArray(baselineValue.permission)
     ? baselineValue.permission.filter((rule) => record(rule)
       && rule.permission === 'external_directory' && rule.action === 'allow'
@@ -1466,6 +1548,85 @@ function githubJson(execution: ChildResult): unknown {
   catch { return null; }
 }
 
+
+/** A fresh local branch may begin at a remote PR head only on complete,
+ * current native Git + live GitHub evidence. Never adopt a local alias. */
+interface FreshPrHead {
+  readonly prNumber: number;
+  readonly branch: string;
+  readonly head: string;
+}
+
+function matchesFreshPrHead(
+  value: unknown,
+  request: WorktreePreparationRequest,
+  selected: FreshPrHead,
+): boolean {
+  return record(value)
+    && value.number === selected.prNumber
+    && text(value.state).toLowerCase() === 'open'
+    && text(value.baseRefName) === managerDefaultBranch(request)
+    && text(value.headRefName) === selected.branch
+    && text(value.headRefOid) === selected.head
+    && /^[0-9a-f]{40}$/u.test(selected.head)
+    && record(value.headRepository)
+    && text(value.headRepository.nameWithOwner).toLowerCase() === request.repository.trim().toLowerCase()
+    && typeof value.body === 'string'
+    && Boolean(request.issueNumber && prBodyClosesIssue(value.body, request.issueNumber));
+}
+
+async function resolveFreshPrRemoteHead(
+  request: WorktreePreparationRequest,
+  branch: string,
+  registeredRoot: string,
+  execute: ChildExecutor,
+): Promise<EdgeResult<FreshPrHead>> {
+  const denied = (cause: string): EdgeResult<FreshPrHead> => worktreeContinue<FreshPrHead>(
+    cause, { requestedRemoteBranch: `origin/${branch}` },
+    'identify one current same-repository open Issue-closing PR and fetch its exact remote head before creating a worktree',
+  );
+  if (!request.issueNumber || !managerDefaultBranch(request)) return denied('fresh_pr_issue_unproven');
+  const listing = githubJson(await execute([
+    'gh', 'pr', 'list', '--repo', request.repository, '--state', 'open', '--limit', '200',
+    '--json', 'baseRefName,headRefName,headRefOid,number',
+  ], undefined, undefined, registeredRoot));
+  if (!Array.isArray(listing) || listing.length >= 200) return denied('fresh_pr_inventory_unavailable');
+  const seen = new Set<number>();
+  const closing: Record<string, unknown>[] = [];
+  for (const item of listing) {
+    if (!record(item) || typeof item.number !== 'number' || !Number.isSafeInteger(item.number)
+      || item.number <= 0 || seen.has(item.number)) return denied('fresh_pr_inventory_unavailable');
+    seen.add(item.number);
+    const view = githubJson(await execute([
+      'gh', 'pr', 'view', String(item.number), '--repo', request.repository,
+      '--json', 'baseRefName,body,headRefName,headRefOid,headRepository,number,state',
+    ], undefined, undefined, registeredRoot));
+    if (!record(view) || view.number !== item.number || typeof view.body !== 'string') {
+      return denied('fresh_pr_inventory_unavailable');
+    }
+    if (prBodyClosesIssue(view.body, request.issueNumber)) closing.push(view);
+  }
+  if (closing.length !== 1) return denied('fresh_pr_link_ambiguous');
+  const selected: FreshPrHead = {
+    prNumber: closing[0]!.number as number,
+    branch,
+    head: text(closing[0]!.headRefOid),
+  };
+  if (!matchesFreshPrHead(closing[0], request, selected)) return denied('fresh_pr_head_mismatch');
+  const fetched = await execute(['git', 'fetch', '--no-tags', 'origin',
+    `refs/heads/${branch}:refs/remotes/origin/${branch}`], 120_000, undefined, registeredRoot);
+  if (!fetched.ok) return denied('fresh_pr_remote_fetch_failed');
+  const current = await execute(['git', 'rev-parse', '--verify',
+    `refs/remotes/origin/${branch}^{commit}`], undefined, undefined, registeredRoot);
+  if (!current.ok || text(current.stdout) !== selected.head) return denied('fresh_pr_remote_head_mismatch');
+  const reread = githubJson(await execute([
+    'gh', 'pr', 'view', String(selected.prNumber), '--repo', request.repository,
+    '--json', 'baseRefName,body,headRefName,headRefOid,headRepository,number,state',
+  ], undefined, undefined, registeredRoot));
+  if (!matchesFreshPrHead(reread, request, selected)) return denied('fresh_pr_head_changed');
+  return { status: 'ok', value: selected, evidence: { prNumber: selected.prNumber, head: selected.head } };
+}
+
 /** Non-ancestor reuse is admitted by the current exact Issue-linked PR, never by ancestry alone. */
 async function resumeManagerAtOpenPrHead(
   request: WorktreePreparationRequest,
@@ -1475,12 +1636,13 @@ async function resumeManagerAtOpenPrHead(
   head: string,
   originMain: string,
   execute: ChildExecutor,
+  unchangedDirtyStatus?: string,
 ): Promise<EdgeResult<PreparedWorktree>> {
   const refused = (cause: string, extra: Readonly<Record<string, unknown>> = {}): EdgeResult<PreparedWorktree> =>
     worktreeContinue(
       cause,
       { worktreeId: id, branch, head, originMain, ...extra },
-      'reconcile the exact Run/Task, clean worktree and unique live Issue-closing open PR; never move the manager PR branch',
+      'reconcile the exact Run/Task, unchanged worktree and unique live Issue-closing open PR; never move the manager PR branch',
     );
 
   if (!request.issueNumber || !request.managerTaskRunId) return refused('manager_worktree_non_ancestor');
@@ -1547,7 +1709,9 @@ async function resumeManagerAtOpenPrHead(
   const finalStatus = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'], undefined, undefined, path);
   const finalBranch = await execute(['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'], undefined, undefined, path);
   const finalHead = await execute(['git', 'rev-parse', '--verify', 'HEAD^{commit}'], undefined, undefined, path);
-  if (!finalStatus.ok || finalStatus.stdout.trim() || !finalBranch.ok || text(finalBranch.stdout) !== branch
+  if (!finalStatus.ok
+    || (unchangedDirtyStatus === undefined ? Boolean(finalStatus.stdout.trim()) : finalStatus.stdout !== unchangedDirtyStatus)
+    || !finalBranch.ok || text(finalBranch.stdout) !== branch
     || !finalHead.ok || text(finalHead.stdout) !== head) {
     return refused('manager_pr_resume_local_changed', { prNumber });
   }
@@ -1558,7 +1722,10 @@ async function resumeManagerAtOpenPrHead(
   return {
     status: 'ok',
     value: { id, selector: request.worktreeSelector!, path, setupWitness: 'proven_reuse' },
-    evidence: { worktreeId: id, worktreePath: path, branch, head, originMain, prNumber, refresh: 'pr_head_preserved' },
+    evidence: {
+      worktreeId: id, worktreePath: path, branch, head, originMain, prNumber,
+      refresh: unchangedDirtyStatus === undefined ? 'pr_head_preserved' : 'dirty_pr_head_preserved',
+    },
   };
 }
 
@@ -1612,14 +1779,7 @@ async function refreshManagerWorktree(
       'require a successful clean-status observation after fetch and before any local worktree update',
     );
   }
-  if (status.stdout.trim().length !== 0) {
-    return worktreeContinue(
-      'manager_worktree_dirty',
-      { worktreeId: id, branch: identity.value.branch, originMain },
-      'leave dirty manager worktree bytes unchanged and refuse this turn boundary',
-    );
-  }
-
+  const dirtyStatus = status.stdout.trim() ? status.stdout : undefined;
   const headResult = await execute(['git', 'rev-parse', '--verify', 'HEAD^{commit}'], undefined, undefined, path);
   const head = text(headResult.stdout);
   if (!headResult.ok || !/^[0-9a-f]{40}$/iu.test(head)) {
@@ -1628,6 +1788,12 @@ async function refreshManagerWorktree(
       { worktreeId: id, branch: identity.value.branch, originMain },
       'require one exact current manager HEAD before ancestry or fast-forward',
     );
+  }
+  if (dirtyStatus !== undefined) {
+    // A matching open PR proves HEAD/branch, not Task ownership of dirty bytes.
+    // Require native proof of the exact Issue-bound predecessor and worktree.
+    // The clean non-ancestor PR route below remains unchanged.
+    return reuseTerminalOwnedWorktree(request, id, path, execute);
   }
   if (head === originMain) {
     return {
@@ -1679,6 +1845,80 @@ async function refreshManagerWorktree(
   };
 }
 
+/**
+ * Reuse of an existing worker worktree is bound to the current Issue assignment,
+ * not to a caller-provided path, old terminal or PR title. Revalidate the exact
+ * native terminal/gone predecessor before spawning, and never mutate the tree.
+ * The supervised-start decision repeats this witness inside its assignment fence.
+ */
+async function reuseTerminalOwnedWorktree(
+  request: WorktreePreparationRequest,
+  id: string,
+  path: string,
+  execute: ChildExecutor,
+): Promise<EdgeResult<PreparedWorktree>> {
+  const expected = request.reuseAssignment;
+  const refusal = (cause: string): EdgeResult<PreparedWorktree> =>
+    worktreeContinue(cause, { worktreeId: id, worktreePath: path },
+      'prove the existing exact Issue-bound Dispatch and worktree ownership; preserve all local edits');
+  if (!expected || expected.kind !== 'local' || expected.provider !== 'orca'
+    || expected.issueNumber !== request.issueNumber
+    || expected.repository !== request.repository.trim().toLowerCase()
+    || expected.role !== (request.managerRefresh ? 'orchestrator' : 'worker')) {
+    return refusal('worktree_reuse_ownership_unproven');
+  }
+  if (request.managerRefresh) {
+    if (!request.managerTaskRunId) return refusal('manager_pr_resume_task_unproven');
+    const member = resultRecord(envelope(await execute([
+      'orca', 'orchestration', 'task-list', '--run', request.managerTaskRunId, '--json',
+    ], undefined, undefined, path)));
+    const selectedRun = member && record(member.run) ? text(member.run.id) : text(member?.runId);
+    const tasks = Array.isArray(member?.tasks) ? member.tasks : [];
+    if (!member || (selectedRun && selectedRun !== request.managerTaskRunId)
+      || tasks.filter((task) => record(task) && text(task.id) === request.taskId).length !== 1) {
+      return refusal('manager_pr_resume_task_unproven');
+    }
+  }
+  const identity = await observeManagerWorktreeIdentity(request, id, path, execute);
+  if (identity.status !== 'ok') return identity;
+
+  const status = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'],
+    undefined, undefined, path);
+  const headResult = await execute(['git', 'rev-parse', '--verify', 'HEAD^{commit}'],
+    undefined, undefined, path);
+  const head = text(headResult.stdout);
+  if (!status.ok || !headResult.ok || !/^[0-9a-f]{40}$/iu.test(head)) {
+    return refusal('worktree_reuse_local_unverified');
+  }
+
+  const witness = await readTerminalGoneDispatch(expected,
+    (args) => execute(['orca', ...args], undefined, undefined, path));
+  if (!witness || witness.worktreeId !== id) {
+    return refusal('worktree_reuse_ownership_unproven');
+  }
+
+  const finalStatus = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'],
+    undefined, undefined, path);
+  const finalHead = await execute(['git', 'rev-parse', '--verify', 'HEAD^{commit}'],
+    undefined, undefined, path);
+  const finalBranch = await execute(['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'],
+    undefined, undefined, path);
+  if (!finalStatus.ok || finalStatus.stdout !== status.stdout
+    || !finalHead.ok || text(finalHead.stdout) !== head
+    || !finalBranch.ok || text(finalBranch.stdout) !== identity.value.branch) {
+    return refusal('worktree_reuse_local_changed');
+  }
+  return {
+    status: 'ok',
+    value: { id, selector: request.worktreeSelector!, path, setupWitness: 'proven_reuse' },
+    evidence: {
+      worktreeId: id, worktreePath: path, branch: identity.value.branch, head,
+      previousDispatchId: expected.bindingKey,
+      reuse: status.stdout.trim() ? 'dirty_preserved' : 'clean_preserved',
+    },
+  };
+}
+
 export async function prepareWorktreeWithOrca(
   request: WorktreePreparationRequest,
   execute: ChildExecutor,
@@ -1720,18 +1960,29 @@ export async function prepareWorktreeWithOrca(
     const path = text(worktree?.path);
     if (!id || !path) return worktreeContinue('worktree_prepare_failed_or_unknown');
     if (!request.managerRefresh) {
-      return worktreeContinue('worktree_reuse_readiness_unproven', { worktreeId: id, worktreePath: path });
+      return reuseTerminalOwnedWorktree(request, id, path, execute);
     }
     return refreshManagerWorktree(request, id, path, execute);
   }
 
   const selectedDefaultBranch = managerDefaultBranch(request);
-  if (request.managerRefresh && (!selectedDefaultBranch || request.baseBranch !== `origin/${selectedDefaultBranch}`)) {
+  const remotePrBranch = request.baseBranch?.startsWith('origin/')
+    && request.baseBranch !== `origin/${selectedDefaultBranch}`
+    ? request.baseBranch.slice('origin/'.length) : '';
+  if (request.managerRefresh && (!selectedDefaultBranch || (!remotePrBranch
+    && request.baseBranch !== `origin/${selectedDefaultBranch}`))) {
     return worktreeContinue(
       'manager_worktree_selected_base_required',
       { requestedBaseBranch: request.baseBranch ?? 'missing', defaultBranch: selectedDefaultBranch || 'missing' },
-      'fresh manager worktrees must use a distinct manager-local branch initialized from the selected default branch',
+      'fresh manager worktrees require the selected default branch or the exact verified open Issue-closing PR remote branch',
     );
+  }
+  if (remotePrBranch && (!request.issueNumber || request.providerTopLevel
+    || !selectedDefaultBranch || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(remotePrBranch)
+    || remotePrBranch.includes('..') || remotePrBranch.includes('//')
+    || remotePrBranch.endsWith('/') || remotePrBranch.endsWith('.lock'))) {
+    return worktreeContinue('fresh_pr_remote_branch_invalid', {},
+      'select a valid remote branch of the exact unique open same-repository Issue-closing PR');
   }
 
   const repository = request.repository.trim().toLowerCase();
@@ -1746,7 +1997,7 @@ export async function prepareWorktreeWithOrca(
   if (!githubRepositoryPath(request.repository, false)) {
     return worktreeContinue('worktree_repository_resolution_malformed', { repository }, repositoryResolutionNote);
   }
-  const matches: string[] = [];
+  const matches: Array<{ readonly id: string; readonly path: string }> = [];
   for (const repo of repos) {
     const entry = repo as Record<string, unknown>;
     const id = text(entry.id);
@@ -1760,7 +2011,7 @@ export async function prepareWorktreeWithOrca(
       const root = await execute(['git', 'rev-parse', '--show-toplevel'], undefined, undefined, registeredPath);
       if (!root.ok || !isAbsolute(text(root.stdout)) || resolve(text(root.stdout)) !== resolve(registeredPath)) continue;
       const origin = await execute(['git', 'remote', 'get-url', 'origin'], undefined, undefined, registeredPath);
-      if (origin.ok && matchesGithubRepository(origin.stdout, request.repository)) matches.push(id);
+      if (origin.ok && matchesGithubRepository(origin.stdout, request.repository)) matches.push({ id, path: registeredPath });
     } catch {
       // A failed local inspection cannot authorize this registered candidate.
     }
@@ -1771,7 +2022,15 @@ export async function prepareWorktreeWithOrca(
   if (matches.length !== 1) {
     return worktreeContinue('worktree_repository_resolution_ambiguous', { repository, matchCount: matches.length }, repositoryResolutionNote);
   }
-  const repositoryId = matches[0]!;
+  const repositoryId = matches[0]!.id;
+  const repositoryRoot = matches[0]!.path;
+  // The ordinary fresh path still uses origin/<default>. The exceptional PR
+  // path must positively identify the only Issue-closing PR and fetched SHA
+  // before invoking the native worktree-create mutation.
+  const prBase = remotePrBranch
+    ? await resolveFreshPrRemoteHead(request, remotePrBranch, repositoryRoot, execute)
+    : null;
+  if (prBase && prBase.status !== 'ok') return prBase;
   if (request.providerTopLevel) {
     return {
       status: 'ok',
@@ -1795,15 +2054,43 @@ export async function prepareWorktreeWithOrca(
   const freshReady = async (
     setupEvidence: Readonly<Record<string, unknown>>,
   ): Promise<EdgeResult<PreparedWorktree>> => {
+    if (prBase?.status === 'ok') {
+      const identity = await observeManagerWorktreeIdentity(request, id, path, execute);
+      if (identity.status !== 'ok') return identity;
+      const localHead = await execute(['git', 'rev-parse', '--verify', 'HEAD^{commit}'], undefined, undefined, path);
+      const remoteHead = await execute(['git', 'rev-parse', '--verify',
+        `refs/remotes/origin/${prBase.value.branch}^{commit}`], undefined, undefined, repositoryRoot);
+      const finalPr = githubJson(await execute([
+        'gh', 'pr', 'view', String(prBase.value.prNumber), '--repo', request.repository,
+        '--json', 'baseRefName,body,headRefName,headRefOid,headRepository,number,state',
+      ], undefined, undefined, repositoryRoot));
+      if (!localHead.ok || text(localHead.stdout) !== prBase.value.head
+        || !remoteHead.ok || text(remoteHead.stdout) !== prBase.value.head
+        || !matchesFreshPrHead(finalPr, request, prBase.value)) {
+        return worktreeContinue('fresh_pr_head_changed_or_unproven',
+          { ...baseEvidence, prNumber: prBase.value.prNumber },
+          'do not start on an arbitrary local alias or stale PR head; preserve the created worktree unchanged');
+      }
+    }
     if (request.managerRefresh) {
       const identity = await observeManagerWorktreeIdentity(request, id, path, execute);
       if (identity.status !== 'ok') return identity;
+      const freshStatus = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'],
+        undefined, undefined, path);
+      if (!freshStatus.ok) return worktreeContinue('manager_worktree_status_unavailable', baseEvidence);
+      if (freshStatus.stdout.trim()) return worktreeContinue('manager_worktree_dirty', baseEvidence,
+        'keep newly created manager worktree bytes unchanged and refuse launch until setup leaves it clean');
       return {
         status: 'ok',
         value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete' },
         evidence: { ...baseEvidence, ...setupEvidence, branch: identity.value.branch },
       };
     }
+    const freshStatus = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'],
+      undefined, undefined, path);
+    if (!freshStatus.ok) return worktreeContinue('worktree_fresh_status_unavailable', baseEvidence);
+    if (freshStatus.stdout.trim()) return worktreeContinue('worktree_fresh_dirty', baseEvidence,
+      'preserve newly created worktree bytes; clean fresh setup is required before launch');
     return {
       status: 'ok',
       value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete' },
@@ -1855,7 +2142,11 @@ function dispatchEdge(value: Record<string, unknown> | null): EdgeResult<Dispatc
     nextAction: { kind: 'reconcile_dispatch', note: 'reconcile the exact Task Dispatch through installed Orca authority' },
   };
   const id = text(result.dispatch.id);
-  return { status: 'ok', value: { kind: 'present', ...(id ? { dispatchId: id } : {}) } };
+  const status = text(result.dispatch.status).toLowerCase();
+  return {
+    status: 'ok',
+    value: { kind: 'present', ...(id ? { dispatchId: id } : {}), ...(status ? { status } : {}) },
+  };
 }
 
 export async function createProductionLaunchDependencies(input: LaunchInput): Promise<LaunchDependencies> {
@@ -1968,6 +2259,8 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
     ),
     readCurrentAssignment: (issueNumber) =>
       currentWorkerAssignment(resolveWorkerAssignmentStorePath(target.projectId, env), issueNumber),
+    proveTerminalGone: (assignment) => readTerminalGoneDispatch(assignment,
+      (args) => child(['orca', ...args], cwd, env)),
     observeDispatch: async (taskId) => dispatchEdge(envelope(await child([
       'orca', 'orchestration', 'dispatch-show', '--task', taskId, '--json',
     ], cwd, env))),
@@ -1975,9 +2268,9 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       input.workClass === 'merge' ? { ...request, primaryReuseRoot: target.primaryRoot } : request,
       (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),
     ),
-    finalizeProfile: (profile, worktreePath) => finalizeOpenCodeExecutorProfile(profile, worktreePath,
+    finalizeProfile: (profile, worktreePath, resumeSession, dataRoot) => finalizeOpenCodeExecutorProfile(profile, worktreePath,
       (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),
-      proveOpenCodeNoWrite),
+      proveOpenCodeNoWrite, resumeSession, dataRoot !== undefined ? dataRoot : env.XDG_DATA_HOME),
   };
 }
 
@@ -2152,6 +2445,7 @@ const LAUNCH_CLI_OPTIONS = new Set([
   '--worktree',
   '--worktree-name',
   '--base-branch',
+  '--start-mode',
 ]);
 
 function launchCliOptions(argv: readonly string[]): ReadonlyMap<string, string> {
@@ -2205,14 +2499,30 @@ export function parseLaunchAssistantCli(
   const worktreeName = (options.get('--worktree-name') ?? '').trim();
   const explicitBaseBranch = (options.get('--base-branch') ?? '').trim();
   const selectedBaseBranch = `origin/${target.defaultBranch}`;
-  if (explicitBaseBranch && explicitBaseBranch !== selectedBaseBranch) {
-    throw new Error(`--base-branch ${explicitBaseBranch} disagrees with selected project default branch ${selectedBaseBranch}`);
-  }
   const baseBranch = explicitBaseBranch || selectedBaseBranch;
+  const remotePrBranch = baseBranch !== selectedBaseBranch
+    && baseBranch.startsWith('origin/') ? baseBranch.slice('origin/'.length) : '';
+  if (baseBranch !== selectedBaseBranch && (!remotePrBranch
+    || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(remotePrBranch)
+    || remotePrBranch.includes('..') || remotePrBranch.includes('//')
+    || remotePrBranch.endsWith('/') || remotePrBranch.endsWith('.lock'))) {
+    throw new Error('--base-branch must be the selected origin/default or a valid Issue-closing PR remote branch');
+  }
   const hasTask = Boolean(taskId);
   const hasManagerBrief = managerBrief !== undefined;
   const hasWorktreeSelector = Boolean(worktreeSelector);
   const hasWorktreeName = Boolean(worktreeName);
+  if (remotePrBranch && (!issueNumber || !hasWorktreeName || hasWorktreeSelector || workClass === 'merge')) {
+    throw new Error('a PR remote --base-branch requires --issue-number and fresh --worktree-name');
+  }
+  const requestedMode = options.get('--start-mode');
+  if (requestedMode && requestedMode !== 'exact_terminal_worktree'
+    && requestedMode !== 'provider_new_top_level') {
+    throw new Error('--start-mode requires exact_terminal_worktree or provider_new_top_level');
+  }
+  if (hasWorktreeSelector && requestedMode === 'provider_new_top_level') {
+    throw new Error('existing --worktree requires exact_terminal_worktree');
+  }
 
   if (workClass === 'merge') {
     if (!hasTask || !issueNumber || !delegatedIntegration || runId || hasManagerBrief || hasWorktreeSelector || hasWorktreeName) {
@@ -2246,12 +2556,207 @@ export function parseLaunchAssistantCli(
     ...(workClass === 'merge' ? { worktreeSelector: `path:${target.primaryRoot}` }
       : worktreeSelector ? { worktreeSelector } : {}),
     ...(worktreeName ? { worktreeName } : {}),
+    ...((hasWorktreeSelector || workClass === 'merge')
+      ? { startMode: 'exact_terminal_worktree' as const }
+      : requestedMode ? { startMode: requestedMode as WorkerStartMode } : {}),
     baseBranch,
     defaultBranch: target.defaultBranch,
   };
 }
 
+
+/** Unassigned operator session restoration: never a Task/Dispatch/Issue owner. */
+export interface OpenCodeResumeDependencies {
+  readonly adapter: RuntimeAdapter;
+  readonly commandPreflight: LaunchDependencies['commandPreflight'];
+  readonly repositoryPreflight: LaunchDependencies['repositoryPreflight'];
+  readonly resolveProfile: LaunchDependencies['resolveProfile'];
+  readonly finalizeProfile: NonNullable<LaunchDependencies['finalizeProfile']>;
+  readonly listAssignments: () => readonly WorkerAssignmentRecord[] | null;
+  readonly assignmentWorkspace: (assignment: WorkerAssignmentRecord) => Promise<string | null>;
+}
+
+export interface OpenCodeResumeResult {
+  readonly schema: 'opk-orch-start-resume/v1';
+  readonly outcome: 'continue' | 'catalog_observed_unverified';
+  readonly cause: string;
+  readonly session: string;
+  readonly attempts: number;
+  readonly unassigned: true;
+  readonly activeSelectionVerified: false;
+  readonly listenerOwnershipVerified: false;
+  readonly terminal?: RuntimeWorkerIdentity;
+}
+
+/**
+ * Each admission observes both the complete native roster and every numbered
+ * project assignment. An unresolved Dispatch may be #2655-replaceable even
+ * after its pane is positively gone: it must be reconciled by its own owner.
+ */
+async function resumeAdmitted(
+  input: { readonly projectId: string; readonly repository: string; readonly workspace: string },
+  deps: OpenCodeResumeDependencies,
+): Promise<boolean> {
+  const assignments = deps.listAssignments();
+  if (!assignments) return false;
+  for (const assignment of assignments) {
+    if (assignment.projectId !== input.projectId || assignment.repository !== input.repository) return false;
+    if (!assignment.bindingKey || !assignment.taskId || !assignment.assignmentId
+      || !Number.isSafeInteger(assignment.generation)) return false;
+    const workspace = await deps.assignmentWorkspace(assignment);
+    if (!workspace) return false;
+    // A possibly replaceable Dispatch is stronger than a gone terminal.
+    if (resolve(workspace) === resolve(input.workspace)) return false;
+  }
+  // A workspace-filtered/synchronous list cannot establish that an omitted
+  // foreign-workspace entry was not a live incumbent. The registered Orca async
+  // census validates native truncated=false and exact totalCount.
+  if (!deps.adapter.listWorkersAsync) return false;
+  const workers = await deps.adapter.listWorkersAsync({}, { cwd: input.workspace });
+  if (workers.status !== 'ok') return false;
+  const seen = new Set<string>();
+  for (const worker of workers.value) {
+    if (!worker.identity.id || !worker.identity.generation
+      || seen.has(worker.identity.id + ':' + worker.identity.generation)) return false;
+    seen.add(worker.identity.id + ':' + worker.identity.generation);
+    if (resolve(worker.workspacePath) !== resolve(input.workspace)) continue;
+    const current = deps.adapter.findWorker(worker.identity, { cwd: input.workspace });
+    if (current.status !== 'ok') return false;
+    if (current.value && (current.value.workspacePath !== worker.workspacePath
+      || !sameIdentity(current.value.identity, worker.identity))) return false;
+    if (!current.value) continue; // Positively gone old terminal, not an ownership release.
+    const live = deps.adapter.liveness({ worker: worker.identity, observationWindowMs: 1_000 }, { cwd: input.workspace });
+    if (!sameIdentity(live.worker, worker.identity) || live.status !== 'gone') return false;
+  }
+  return true;
+}
+
+/** Positive outcome proves only command intent + catalog membership, not active TUI/port ownership. */
+export async function runExistingOpenCodeResume(
+  input: { readonly session: string; readonly projectId: string; readonly repository: string; readonly workspace: string; readonly env: Readonly<NodeJS.ProcessEnv> },
+  deps: OpenCodeResumeDependencies,
+): Promise<OpenCodeResumeResult> {
+  const result = (cause: string, attempts: number, terminal?: RuntimeWorkerIdentity): OpenCodeResumeResult => ({
+    schema: 'opk-orch-start-resume/v1', outcome: 'continue', cause, session: input.session,
+    attempts, unassigned: true, activeSelectionVerified: false, listenerOwnershipVerified: false,
+    ...(terminal ? { terminal } : {}),
+  });
+  if (!validOpenCodeResumeSession(input.session) || !input.projectId || !input.repository
+    || !isAbsolute(input.workspace)) return result('resume_input_invalid', 0);
+  const command = await deps.commandPreflight();
+  if (command.status !== 'ok') return result('resume_command_preflight_unavailable', 0);
+  const repository = await deps.repositoryPreflight(input.repository);
+  if (repository.status !== 'ok') return result('resume_repository_preflight_unavailable', 0);
+  if (!(await resumeAdmitted(input, deps))) return result('resume_incumbent_or_assignment_unverified', 0);
+  const profileResult = await deps.resolveProfile('manager', input.env, 'exact_terminal_worktree');
+  if (profileResult.status !== 'ok') return result(profileResult.cause, 0);
+  const profile = profileResult.value;
+  if (profile.family !== 'opencode' || profile.route !== 'exact_terminal_worktree') return result('resume_opencode_profile_required', 0);
+  const finalized = await deps.finalizeProfile(profile, input.workspace, input.session, input.env.XDG_DATA_HOME);
+  if (finalized.status !== 'ok') return result(finalized.cause, 0);
+  const selected = finalized.value;
+  if (selected.family !== 'opencode' || selected.route !== 'exact_terminal_worktree'
+    || !selected.agentName || !selected.inlineConfigJson
+    || !selected.launchCommand.endsWith(` --session '${input.session}'`)
+    || !openCodeLaunchHasFleetBrowserDenies({
+      command: selected.launchCommand, agentName: selected.agentName, inlineConfigJson: selected.inlineConfigJson,
+    })) return result('resume_profile_overlay_unverified', 0);
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    if (!(await resumeAdmitted(input, deps))) return result('resume_incumbent_or_assignment_unverified', attempt - 1);
+    const spawn = deps.adapter.spawnWorker({
+      title: `opk-resume-${input.session}`, workspace: input.workspace, command: selected.launchCommand,
+    }, { cwd: input.workspace });
+    if (spawn.status !== 'ok') return result('resume_spawn_unverified', attempt);
+    const worker = spawn.value;
+    if (worker.provenance !== 'internal' || worker.title !== `opk-resume-${input.session}`
+      || resolve(worker.workspacePath) !== resolve(input.workspace) || worker.identity.runtime !== deps.adapter.id
+      || !worker.identity.id || !worker.identity.generation) return result('resume_spawn_identity_unverified', attempt, worker.identity);
+    const firstLive = deps.adapter.liveness({ worker: worker.identity, observationWindowMs: LAUNCH_STARTUP_OBSERVATION_WINDOW_MS }, { cwd: input.workspace });
+    if (!sameIdentity(firstLive.worker, worker.identity) || firstLive.status === 'gone' || firstLive.status === 'unknown') {
+      return result('resume_worker_liveness_unverified', attempt, worker.identity);
+    }
+    // This adapter is the spawn instance. The exact requested session is
+    // checked against GET /session?directory, NOT the active TUI session.
+    const health = deps.adapter.openCodeHealth?.(worker.identity, { cwd: input.workspace, timeoutMs: 10_000 });
+    const after = deps.adapter.findWorker(worker.identity, { cwd: input.workspace });
+    const secondLive = deps.adapter.liveness({ worker: worker.identity, observationWindowMs: 1_000 }, { cwd: input.workspace });
+    if (after.status !== 'ok' || !after.value || !sameIdentity(after.value.identity, worker.identity)
+      || !sameIdentity(secondLive.worker, worker.identity)
+      || secondLive.status === 'unknown' || secondLive.status === 'gone') {
+      return result('resume_worker_identity_unverified', attempt, worker.identity);
+    }
+    if (health?.status === 'ok') {
+      return {
+        ...result('requested_session_directory_catalog_membership_only', attempt, worker.identity),
+        outcome: 'catalog_observed_unverified',
+      };
+    }
+    // A missing/wrong session, a healthy foreign responder, or an uncertain
+    // endpoint is NEVER a reason to stop and duplicate an existing session.
+    const reason = health?.reason ?? '';
+    // Only the health endpoint's transport failure authorizes the bounded
+    // exact-worker stop/gone retry. A successful health with a failed session
+    // catalog request has its own non-restartable adapter reason.
+    const endpointUnavailable = health?.status === 'failed'
+      && /^opencode_http_request_failed:/u.test(reason);
+    if (attempt === 2 || !endpointUnavailable) return result('resume_control_unavailable', attempt, worker.identity);
+    const stopped = deps.adapter.stopWorker(worker.identity, { cwd: input.workspace });
+    if (stopped.status !== 'ok' || stopped.value.stopped !== true) return result('resume_stop_unverified', attempt, worker.identity);
+    // Separately witness native gone after the registered adapter's exact close.
+    const gone = deps.adapter.liveness({ worker: worker.identity, observationWindowMs: 1_000 }, { cwd: input.workspace });
+    const absent = deps.adapter.findWorker(worker.identity, { cwd: input.workspace });
+    if (!sameIdentity(gone.worker, worker.identity) || gone.status !== 'gone'
+      || absent.status !== 'ok' || absent.value !== null) return result('resume_gone_unverified', attempt, worker.identity);
+  }
+  return result('resume_retry_limit', 2);
+}
+
+export async function runProductionExistingOpenCodeResume(
+  session: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<OpenCodeResumeResult> {
+  // The selected project card and inherited profile store, never ambient cwd,
+  // choose the workspace and executor route.
+  const selectedEnv = overlayExecutorProfileEnv(env);
+  const target = resolveTargetContext({ env: selectedEnv });
+  const input: LaunchInput = {
+    repository: target.repository, projectId: target.projectId,
+    primaryRoot: target.primaryRoot, workClass: 'manager', cwd: target.primaryRoot, env: selectedEnv,
+    startMode: 'exact_terminal_worktree',
+  };
+  const base = await createProductionLaunchDependencies(input);
+  const deps: OpenCodeResumeDependencies = {
+    adapter: base.adapter,
+    commandPreflight: base.commandPreflight,
+    repositoryPreflight: base.repositoryPreflight,
+    resolveProfile: base.resolveProfile,
+    finalizeProfile: base.finalizeProfile!,
+    listAssignments: () => listCurrentWorkerAssignmentRecords(resolveWorkerAssignmentStorePath(target.projectId, selectedEnv)),
+    assignmentWorkspace: async (assignment) => {
+      const read = await child(['orca', 'orchestration', 'worker-show', '--dispatch', assignment.bindingKey, '--json'], target.primaryRoot, selectedEnv);
+      const observation = resultRecord(envelope(read));
+      const dispatch = observation && record(observation.dispatch) ? observation.dispatch : null;
+      const terminal = observation && record(observation.terminal) ? observation.terminal : null;
+      return dispatch?.id === assignment.bindingKey && dispatch.taskId === assignment.taskId
+        && typeof terminal?.worktreePath === 'string' && isAbsolute(terminal.worktreePath)
+        ? terminal.worktreePath : null;
+    },
+  };
+  return runExistingOpenCodeResume({
+    session, projectId: target.projectId, repository: target.repository,
+    workspace: target.primaryRoot, env: selectedEnv,
+  }, deps);
+}
+
 async function main(argv = process.argv.slice(2)): Promise<void> {
+  if (argv[0] === 'resume') {
+    if (argv.length !== 2) throw new Error('resume requires exactly one existing OpenCode session ID');
+    const resumed = await runProductionExistingOpenCodeResume(argv[1]!);
+    process.stdout.write(`${JSON.stringify(resumed)}\n`);
+    process.exitCode = resumed.outcome === 'catalog_observed_unverified' ? 0 : 1;
+    return;
+  }
   if (argv[0] === 'probe') {
     const result = await runOpenCodePrimaryProbe(argv.slice(1));
     process.stdout.write(`${JSON.stringify(result)}\n`);

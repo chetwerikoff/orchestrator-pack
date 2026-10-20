@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import './too-many-requests-capture.test-cases.ts';
 import {
@@ -17,7 +17,7 @@ import {
   RENDERED_STOP_BUTTON_SELECTOR,
   matchesStopButtonSelector,
 } from './product-page-selectors.ts';
-import { __testComposerMutation, __testWaitForExistingGeneration, atomicSnapshotSignature, keyedHarvestCandidate, revalidateKeyedHarvest } from './state-light-turn-base.ts';
+import { __testComposerMutation, __testSendDelivery, __testWaitForExistingGeneration, atomicSnapshotSignature, keyedHarvestCandidate, revalidateKeyedHarvest } from './state-light-turn-base.ts';
 import {
   buildObservationHeartbeat,
   classifyBrowserGptPageTurnStatus,
@@ -35,6 +35,7 @@ import {
 import {
   collectionLocator,
   messageLocator,
+  proseMirrorEditorSurface,
   scalarLocator,
   TEST_OWNED_MARKER,
   type StateLightTestMessage,
@@ -337,27 +338,154 @@ describe('owned marker primitive', () => {
 });
 
 describe('DOM observation boundary', () => {
+  // Small rendered-DOM mock: synthetic UI nodes expose only the browser
+  // primitives consumed by the actual evaluateAll callbacks, no Markdown source.
+  type RichBlock = { prose: string; tag?: string; displayContents?: boolean } | { directText: string } | {
+    code: string; label?: string; extraLabel?: string; nested?: boolean;
+    divHeader?: boolean; headerClass?: boolean;
+    hidden?: boolean; copyControl?: boolean; interleavedProse?: string; spanProse?: string;
+    excludedCodeDescendant?: 'aria-hidden' | 'inert' | 'role-button' | 'button';
+  };
+  function richNode(
+    tagName: string, innerText = '', attrs: Record<string, string> = {}, shown = true,
+    displayContents = false,
+  ): any {
+    const children: any[] = [];
+    const node: any = {
+      nodeType: 1, tagName, innerText, textContent: innerText, children, childNodes: [] as any[],
+      parentElement: null, attributes: attrs, shown, displayContents,
+      ownerDocument: {
+        defaultView: {
+          getComputedStyle: (element: any) => ({
+            display: element.displayContents ? 'contents' : element.shown ? 'block' : 'none', visibility: 'visible',
+          }),
+        },
+      },
+      getClientRects: () => shown ? [{}] : [],
+      getBoundingClientRect: () => ({ height: shown ? 1 : 0 }),
+      getAttribute: (name: string) => attrs[name] ?? null,
+      hasAttribute: (name: string) => Object.hasOwn(attrs, name),
+      append(child: any) {
+        child.parentElement = node;
+        children.push(child);
+        node.childNodes.push(child);
+        return node;
+      },
+      appendText(text: string) {
+        node.childNodes.push({ nodeType: 3, textContent: text, parentElement: node });
+        return node;
+      },
+      querySelectorAll(selector: string): any[] {
+        const match = (candidate: any) => {
+          if (selector === '.markdown') return candidate.getAttribute('class') === 'markdown';
+          if (selector === 'pre') return candidate.tagName === 'PRE';
+          if (selector === 'code') return candidate.tagName === 'CODE';
+          if (selector === 'pre code') return candidate.tagName === 'CODE' && candidate.parentElement?.tagName === 'PRE';
+          if (selector.includes('button') || selector.includes('inert') || selector.includes('aria-hidden')) {
+            return candidate.tagName === 'BUTTON' || candidate.getAttribute('role') === 'button'
+              || candidate.hasAttribute('inert') || candidate.getAttribute('aria-hidden') === 'true';
+          }
+          return false;
+        };
+        const walk = (parent: any): any[] => parent.children.flatMap((child: any) =>
+          [...(match(child) ? [child] : []), ...walk(child)]);
+        return walk(node);
+      },
+      querySelector(selector: string): any { return node.querySelectorAll(selector)[0] ?? null; },
+    };
+    return node;
+  }
+
+  function richAssistantNode(outerText: string, blocks: RichBlock[], key = 'assistant-rich-12345678') {
+    const outer = richNode('ARTICLE', outerText);
+    const root = richNode('DIV', '', { class: 'markdown' });
+    outer.append(root);
+    for (const block of blocks) {
+      if ('directText' in block) {
+        root.appendText(block.directText);
+        continue;
+      }
+      if ('prose' in block) {
+        const prose = richNode((block.tag ?? 'P').toUpperCase(), block.prose);
+        if (block.displayContents) {
+          // The wrapper has no rectangle while its child text is rendered.
+          const wrapper = richNode('DIV', '', {}, false, true);
+          wrapper.append(prose);
+          root.append(wrapper);
+        } else {
+          root.append(prose);
+        }
+        continue;
+      }
+      const container = richNode(block.nested ? 'BLOCKQUOTE' : 'DIV');
+      if (block.label || block.extraLabel) {
+        // A semantic header is distinguishable from ordinary prose SPANs.
+        const header = richNode(block.divHeader ? 'DIV' : 'HEADER', '', block.headerClass ? { class: 'header' } : {});
+        if (block.label) header.append(richNode('SPAN', block.label));
+        if (block.extraLabel) header.append(richNode('SPAN', block.extraLabel));
+        if (block.copyControl && block.divHeader) header.append(richNode('BUTTON', 'Copy'));
+        container.append(header);
+      }
+      if (block.spanProse) container.append(richNode('SPAN', block.spanProse));
+      if (block.copyControl && !block.divHeader) container.append(richNode('BUTTON', 'Copy'));
+      if (block.interleavedProse) container.append(richNode('P', block.interleavedProse));
+      const pre = richNode('PRE', '', {}, !block.hidden);
+      const code = richNode('CODE', block.code, {}, !block.hidden);
+      if (block.excludedCodeDescendant) {
+        const kind = block.excludedCodeDescendant;
+        const attrs = kind === 'aria-hidden' ? { 'aria-hidden': 'true' }
+          : kind === 'inert' ? { inert: '' }
+            : kind === 'role-button' ? { role: 'button' } : {};
+        code.append(richNode(kind === 'button' ? 'BUTTON' : 'SPAN', 'UI', attrs));
+      }
+      pre.append(code);
+      container.append(pre);
+      root.append(container);
+    }
+    const baseQuery = outer.querySelector.bind(outer);
+    Object.assign(outer, {
+      getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR
+        ? 'assistant-message' : name === 'data-message-id' ? key : null,
+      querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+        ? { getAttribute: () => 'assistant-message' } : baseQuery(selector),
+      closest: () => ({ querySelector: (selector: string) =>
+        selector === ASSISTANT_TURN_ACTION_SELECTOR ? {} : null }),
+    });
+    // Give content root and descendants the same ownerDocument as outer.
+    const doc = outer.ownerDocument;
+    const propagate = (node: any) => { node.ownerDocument = doc; for (const child of node.children) propagate(child); };
+    propagate(outer);
+    return outer;
+  }
+
   async function readAtomicEvidence(
     messages: Array<{ role: 'user' | 'assistant'; text: string; code?: { visible: string; domTextContent: string }; domTextContent?: string }>,
     generationQuery: () => unknown,
   ) {
-    const elements = messages.map((message, index) => ({
-      getAttribute: (name: string) => {
-        if (name === MESSAGE_AUTHOR_ROLE_ATTR) return message.role === 'user' ? 'user-message' : 'assistant-message';
-        if (name === 'data-message-id') return `${message.role}-${index}-12345678`;
-        return null;
-      },
-      closest: () => ({ querySelector: (selector: string) => message.code && selector === ASSISTANT_TURN_ACTION_SELECTOR ? {} : null }),
-      querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
-        ? { getAttribute: () => message.role === 'user' ? 'user-message' : 'assistant-message' }
-        : null,
-      querySelectorAll: (selector: string) => selector === 'pre code' && message.role === 'assistant' && message.code
-        ? [{ innerText: message.code.visible, textContent: message.code.domTextContent, getBoundingClientRect: () => ({ height: 1 }) }]
-        : [],
-      getBoundingClientRect: () => ({ height: 1 }),
-      innerText: message.text,
-      textContent: message.domTextContent,
-    }));
+    const elements = messages.map((message, index) => {
+      if (message.role === 'assistant' && message.code) {
+        return richAssistantNode(message.text, [
+          { prose: 'Before' },
+          { code: message.code.visible, copyControl: true },
+          { prose: 'Following  prose\nEXECUTION_STATUS: complete' },
+        ], `assistant-${index}-12345678`);
+      }
+      return {
+        getAttribute: (name: string) => {
+          if (name === MESSAGE_AUTHOR_ROLE_ATTR) return message.role === 'user' ? 'user-message' : 'assistant-message';
+          if (name === 'data-message-id') return `${message.role}-${index}-12345678`;
+          return null;
+        },
+        closest: () => ({ querySelector: (selector: string) => message.code && selector === ASSISTANT_TURN_ACTION_SELECTOR ? {} : null }),
+        querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+          ? { getAttribute: () => message.role === 'user' ? 'user-message' : 'assistant-message' }
+          : null,
+        querySelectorAll: () => [],
+        getBoundingClientRect: () => ({ height: 1 }),
+        innerText: message.text,
+        textContent: message.domTextContent,
+      };
+    });
     const querySelectorAll = vi.fn((selector: string) => {
       if (selector !== '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]') return [];
       const match = generationQuery();
@@ -539,7 +667,7 @@ describe('DOM observation boundary', () => {
     // Fixture-only evidence. AC1 remains unverified: two tabs, zero assistant code blocks.
     const footer = '\n\nFollowing  prose\nEXECUTION_STATUS: complete';
     const partialOuter = 'Before\n\n' + parentPrefix2590 + footer;
-    const expected = 'Before\n\n' + expectedCode + footer;
+    const expected = 'Before\n\n```\n' + expectedCode + (expectedCode.endsWith('\n') ? '' : '\n') + '```' + footer;
     const { result, page } = await readAtomicEvidence([
       { role: 'user', text: markedPrompt },
       { role: 'assistant', text: partialOuter, code: { visible, domTextContent }, domTextContent: 'SCREEN-READER-ONLY' },
@@ -559,6 +687,268 @@ describe('DOM observation boundary', () => {
       ...candidate,
       snapshotSignature: atomicSnapshotSignature(snapshot),
     })).toEqual({ state: 'ready', reply: expected });
+  });
+
+  function richPage(
+    blocks: RichBlock[], historical?: RichBlock[],
+    options: { initialHistoricalOnly?: boolean; laterForeign?: boolean } = {},
+  ) {
+    const current = richAssistantNode('OUTER MISLEADING FIRST LINE; UI COPY; HIDDEN', blocks);
+    const user = {
+      getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user-message'
+        : name === 'data-message-id' ? 'owned-user-12345678' : null,
+      querySelector: (selector: string) => selector === '[' + MESSAGE_AUTHOR_ROLE_ATTR + ']'
+        ? { getAttribute: () => 'user-message' } : null,
+      querySelectorAll: () => [],
+      getBoundingClientRect: () => ({ height: 1 }),
+      innerText: markedPrompt,
+    };
+    const history = historical
+      ? [richAssistantNode('HISTORICAL WHOLE ROW', historical, 'assistant-old-12345678')]
+      : [];
+    const historicalUser = { ...user, innerText: 'HISTORICAL PROMPT',
+      getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user-message'
+        : name === 'data-message-id' ? 'historical-user-12345678' : null };
+    const prior = options.initialHistoricalOnly ? [historicalUser, ...history] : history;
+    const foreignUser = { ...user, innerText: 'FOREIGN USER PROMPT',
+      getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user-message'
+        : name === 'data-message-id' ? 'foreign-user-12345678' : null };
+    const foreign = options.laterForeign
+      ? [foreignUser, richAssistantNode('FOREIGN WHOLE ROW', [{ prose: 'FOREIGN WHOLE ROW' }], 'assistant-foreign-12345678')]
+      : [];
+    let historicalOnly = options.initialHistoricalOnly === true;
+    let lateContinue = false;
+    const nodes = scalarLocator({
+      evaluateAll: vi.fn(async (callback: (items: Element[], args: unknown) => unknown, args: unknown) => {
+        const old = (globalThis as { document?: unknown }).document;
+        const continueButton = {
+          getBoundingClientRect: () => ({ height: 20 }),
+          hasAttribute: () => false,
+          getAttribute: () => null,
+          ownerDocument: { defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible' }) } },
+        };
+        (globalThis as { document?: unknown }).document = {
+          querySelectorAll: (selector: string) => selector.includes('continue-generating') && lateContinue
+            ? [continueButton] : [],
+        };
+        try {
+          const rows = historicalOnly ? prior : [...prior, user, current, ...foreign];
+          return callback(rows as unknown as Element[], args);
+        }
+        finally {
+          if (old === undefined) delete (globalThis as { document?: unknown }).document;
+          else (globalThis as { document?: unknown }).document = old;
+        }
+      }),
+    });
+    return {
+      page: { locator: (selector: string) => selector === MESSAGE_NODE_SELECTOR ? nodes : scalarLocator() },
+      setLateContinue: (value: boolean) => { lateContinue = value; },
+      setHistoricalOnly: (value: boolean) => { historicalOnly = value; },
+    };
+  }
+
+  it('serializes two complete visible diff blocks into one literal UTF-8 keyed and final reply', async () => {
+    const diffOne = 'diff --git a/alpha b/alpha\n--- a/alpha\n+++ b/alpha\n@@ -1 +1 @@\n old\n-foo\n+bar\n';
+    const diffTwo = 'diff --git a/beta b/beta\n--- a/beta\n+++ b/beta\n@@ -2 +2 @@\n  nested  spaces\n\t+tab\n\n```';
+    const proseOne = 'Summary before code';
+    const proseTwo = 'Between diff blocks';
+    const proseThree = 'After diff blocks\nEXECUTION_STATUS: complete';
+    const fixture = richPage([
+      { prose: proseOne, tag: 'H2' },
+      { code: diffOne, label: 'diff', copyControl: true },
+      { prose: proseTwo, tag: 'UL' },
+      { code: diffTwo, label: 'diff', copyControl: true },
+      { prose: proseThree },
+    ]);
+    const expected = [
+      proseOne,
+      '```diff\n' + diffOne + '```',
+      proseTwo,
+      '````diff\n' + diffTwo + '\n````',
+      proseThree,
+    ].join('\n\n');
+    const observation = await readPageObservation(fixture.page, marker, 0);
+    expect(observation.transcriptIncomplete).toBe(false);
+    expect(observation.snapshot?.carriers.at(-1)?.text).toBe(expected);
+    expect(observation.messages.at(-1)?.text).toBe(expected);
+    expect(expected).not.toContain('Copy');
+    expect(expected).not.toContain('OUTER MISLEADING');
+    const base = { complete: true, carriers: [] } as const;
+    const ownedKey = observation.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    const candidate = keyedHarvestCandidate(observation.snapshot!, base, ownedKey);
+    expect(candidate.state).toBe('ready');
+    if (candidate.state !== 'ready') throw new Error('expected_ready_candidate');
+    expect(candidate.reply).toBe(expected);
+    const signature = atomicSnapshotSignature(observation.snapshot!);
+    expect(await revalidateKeyedHarvest(fixture.page, base, ownedKey, {
+      ...candidate, snapshotSignature: signature,
+    })).toEqual({ state: 'ready', reply: expected });
+    expect(Buffer.from(candidate.reply, 'utf8')).toEqual(Buffer.from(expected, 'utf8'));
+  });
+
+  it('uses whole-row fallback only for nonselected history; rejects unsupported selected code', async () => {
+    const withHistory = richPage([{ prose: 'FINAL OWNED' }], [{ code: 'historical', nested: true }]);
+    const observation = await readPageObservation(withHistory.page, marker, 0);
+    expect(observation.transcriptIncomplete).toBe(false);
+    expect(observation.snapshot?.carriers[0]?.text).toBe('HISTORICAL WHOLE ROW');
+    const invalid = richPage([{ code: 'must-not-publish', nested: true }]);
+    expect((await readPageObservation(invalid.page, marker, 0)).transcriptIncomplete).toBe(true);
+    const ambiguous = richPage([{ code: 'x', label: 'diff', extraLabel: 'javascript' }]);
+    expect((await readPageObservation(ambiguous.page, marker, 0)).transcriptIncomplete).toBe(true);
+  });
+
+
+  it('rejects interleaved visible prose in a code wrapper at observation and keyed revalidation', async () => {
+    const code = 'diff --git a/a b/a\n';
+    const fixture = richPage([{ code, interleavedProse: 'FAIL' }]);
+    const observation = await readPageObservation(fixture.page, marker, 0);
+    expect(observation.transcriptIncomplete).toBe(true);
+    expect(observation.snapshot?.complete).toBe(false);
+    const base = { complete: true, carriers: [] } as const;
+    const userKey = observation.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    expect(keyedHarvestCandidate(observation.snapshot!, base, userKey).state).not.toBe('ready');
+    await expect(revalidateKeyedHarvest(fixture.page, base, userKey, {
+      reply: '```FAIL\n' + code + '```',
+      assistantKey: 'data-message-id:assistant-rich-12345678',
+      snapshotSignature: atomicSnapshotSignature(observation.snapshot!),
+    })).resolves.toEqual({ state: 'continuity-unproven' });
+  });
+
+
+  async function expectUnsupportedSelectedRichBlock(blocks: RichBlock[], corruptedReply: string) {
+    const fixture = richPage(blocks);
+    const observation = await readPageObservation(fixture.page, marker, 0);
+    expect(observation.transcriptIncomplete).toBe(true);
+    expect(observation.snapshot?.complete).toBe(false);
+    const baseline = { complete: true, carriers: [] } as const;
+    const ownedKey = observation.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    expect(keyedHarvestCandidate(observation.snapshot!, baseline, ownedKey).state).not.toBe('ready');
+    await expect(revalidateKeyedHarvest(fixture.page, baseline, ownedKey, {
+      reply: corruptedReply,
+      assistantKey: 'data-message-id:assistant-rich-12345678',
+      snapshotSignature: atomicSnapshotSignature(observation.snapshot!),
+    })).resolves.toEqual({ state: 'continuity-unproven' });
+  }
+
+  it('rejects visible direct .markdown Text nodes before and after code instead of truncating bytes', async () => {
+    const code = 'diff --git a/a b/a\n';
+    await expectUnsupportedSelectedRichBlock([
+      { directText: 'INTRO ' }, { code }, { directText: ' DO_NOT_MERGE' },
+    ], '```\n' + code + '```');
+
+    const whitespace = richPage([{ directText: '  \n\t  ' }, { code }]);
+    const observation = await readPageObservation(whitespace.page, marker, 0);
+    expect(observation.transcriptIncomplete).toBe(false);
+    expect(observation.snapshot?.carriers.at(-1)?.text).toBe('```\n' + code + '```');
+  });
+
+  it('does not recast a token-shaped ordinary sibling SPAN into a language header', async () => {
+    const code = 'diff --git a/a b/a\n';
+    await expectUnsupportedSelectedRichBlock([
+      { code, spanProse: 'DO_NOT_MERGE' },
+    ], '```DO_NOT_MERGE\n' + code + '```');
+  });
+
+  it.each(['aria-hidden', 'inert', 'role-button', 'button'] as const)(
+    'rejects %s descendants of CODE instead of publishing contaminated visible code bytes',
+    async (excludedCodeDescendant) => {
+      const code = 'UIdiff --git a/a b/a\n';
+      await expectUnsupportedSelectedRichBlock([
+        { code, excludedCodeDescendant },
+      ], '```\n' + code + '```');
+    },
+  );
+
+
+  it('keeps an unsupported final historical rich baseline and accepts the new owned reply', async () => {
+    const code = 'diff --git a/owned b/owned\n';
+    const fixture = richPage(
+      [{ code, label: 'diff' }], [{ code: 'unsupported historical', nested: true }],
+      { initialHistoricalOnly: true },
+    );
+    const before = await readPageObservation(fixture.page, undefined, undefined, true, Date.now() + 5_000, true);
+    expect(before.transcriptIncomplete).toBe(false);
+    expect(before.snapshot?.complete).toBe(true);
+    expect(before.messages.at(-1)?.text).toBe('HISTORICAL WHOLE ROW');
+
+    fixture.setHistoricalOnly(false);
+    const after = await readPageObservation(fixture.page, marker, before.messages.length);
+    const expected = '```diff\n' + code + '```';
+    expect(after.transcriptIncomplete).toBe(false);
+    expect(after.messages.at(-1)?.text).toBe(expected);
+    expect(classifyPageObservation(after.messages, before.messages.length, marker, false))
+      .toEqual({ state: 'ready', reply: expected });
+    const ownedKey = after.snapshot!.carriers.find((row) => row.role === 'user' && row.text === markedPrompt)!.key!;
+    const candidate = keyedHarvestCandidate(after.snapshot!, before.snapshot!, ownedKey);
+    expect(candidate).toMatchObject({ state: 'ready', reply: expected });
+    if (candidate.state !== 'ready') throw new Error('expected_owned_continuation');
+    await expect(revalidateKeyedHarvest(fixture.page, before.snapshot, ownedKey, {
+      ...candidate, snapshotSignature: atomicSnapshotSignature(after.snapshot!),
+    })).resolves.toEqual({ state: 'ready', reply: expected });
+  });
+
+  it('keeps unsupported owned rich replies incomplete despite a later foreign user and assistant', async () => {
+    const fixture = richPage([{ code: 'compound diff', nested: true }], undefined, { laterForeign: true });
+    const observed = await readPageObservation(fixture.page, marker, 0);
+    expect(observed.transcriptIncomplete).toBe(true);
+    expect(observed.snapshot?.complete).toBe(false);
+    expect(observed.messages.some((row) =>
+      row.role === 'assistant' && row.text === 'OUTER MISLEADING FIRST LINE; UI COPY; HIDDEN')).toBe(false);
+    expect(classifyPageObservation(observed.messages, 0, marker, false).state).not.toBe('ready');
+    expect(keyedHarvestCandidate(
+      observed.snapshot!, { complete: true, carriers: [] }, 'data-message-id:owned-user-12345678',
+    ).state).not.toBe('ready');
+  });
+
+  it('serializes a unique DIV code-header label beside Copy, not unrelated or ambiguous prose', async () => {
+    const code = 'diff --git a/one b/one\n';
+    const expected = '```diff\n' + code + '```';
+    for (const headerClass of [false, true]) {
+      const fixture = richPage([{ code, label: 'diff', copyControl: true, divHeader: true, headerClass }]);
+      const observed = await readPageObservation(fixture.page, marker, 0);
+      expect(observed.transcriptIncomplete).toBe(false);
+      expect(observed.messages.at(-1)?.text).toBe(expected);
+      const baseline = { complete: true, carriers: [] } as const;
+      const userKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+      const candidate = keyedHarvestCandidate(observed.snapshot!, baseline, userKey);
+      expect(candidate.state).toBe('ready');
+      if (candidate.state !== 'ready') throw new Error('expected_div_header_candidate');
+      await expect(revalidateKeyedHarvest(fixture.page, baseline, userKey, {
+        ...candidate, snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+      })).resolves.toEqual({ state: 'ready', reply: expected });
+    }
+    for (const block of [
+      { code, label: 'diff', copyControl: true, divHeader: true, interleavedProse: 'DO_NOT_MERGE' },
+      { code, label: 'diff', extraLabel: 'javascript', copyControl: true, divHeader: true },
+    ]) {
+      const observed = await readPageObservation(richPage([block]).page, marker, 0);
+      expect(observed.transcriptIncomplete).toBe(true);
+      expect(observed.snapshot?.complete).toBe(false);
+    }
+  });
+
+  it('rejects a rectless display: contents wrapper with visible prose next to code', async () => {
+    const code = 'diff --git a/safe b/safe\n';
+    await expectUnsupportedSelectedRichBlock([
+      { prose: 'DO_NOT_MERGE', displayContents: true },
+      { code },
+    ], '```\n' + code + '```');
+  });
+
+  it('rejects unchanged keyed bytes when Continue generating appears page-wide only at revalidation', async () => {
+    const fixture = richPage([{ code: 'line\n', label: 'diff' }]);
+    const observation = await readPageObservation(fixture.page, marker, 0);
+    expect(observation.snapshot?.complete).toBe(true);
+    const base = { complete: true, carriers: [] } as const;
+    const userKey = observation.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    const candidate = keyedHarvestCandidate(observation.snapshot!, base, userKey);
+    expect(candidate.state).toBe('ready');
+    if (candidate.state !== 'ready') throw new Error('expected_candidate');
+    fixture.setLateContinue(true);
+    await expect(revalidateKeyedHarvest(fixture.page, base, userKey, {
+      ...candidate, snapshotSignature: atomicSnapshotSignature(observation.snapshot!),
+    })).resolves.toEqual({ state: 'continuity-unproven' });
   });
 
   it('reads complete rendered innerText and never textContent', async () => {
@@ -768,6 +1158,121 @@ describe('issue 1168 source tooling', () => {
     expect(captured.shape).toEqual(exactShape());
     const ambiguousPage = { locator: vi.fn(() => new Locator([dialog, dialog], { role: 'dialog', 'aria-modal': 'true' })) };
     await expect(captureTooManyRequestsSource(ambiguousPage)).rejects.toThrow('capture_ambiguous_visible_match');
+  });
+});
+
+describe('Issue #2660 AC12 bounded pre-Send Page cleanup authority', () => {
+  it('closes only the proven Page after not_sent observation; preserves selected, forfeited and possibly-sent Pages', async () => {
+    const { randomUUID } = await import('node:crypto');
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { __testFinalizeTurn, __testConversationPageSelection } = await import('./state-light-turn.ts');
+    const { admitStateLightTurnObservation, transitionStateLightTurnObservation } =
+      await import('./state-light-turn-observation.ts');
+    const stateDir = mkdtempSync(join(tmpdir(), 'opk-2660-ac12-'));
+    const priorDir = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = stateDir;
+    const exact = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test/c/11111111-1111-4111-8111-111111111111';
+    const profileKey = 'ac12-fetch-429';
+    const makeOutcome = (page: any, invocationId: string, sendAttempted = false) => ({
+      page,
+      ownedPreSendFetch429Page: page,
+      ownedPreSendFetch429Url: exact,
+      result: {
+        schema: 'turn-result/v1' as const,
+        state: 'rate_limit' as const,
+        scope: 'invocation' as const,
+        cause: 'conversation_fetch_http_429',
+        invocation_id: invocationId,
+        configured_profile_key: profileKey,
+        send_count: 0,
+        poll_count: 0,
+        goto_count: 1,
+        new_chat_click_count: 0,
+        navigation_count: 1,
+        incidents: [],
+        ...(sendAttempted ? { send_attempted: true } : {}),
+      },
+    });
+    const prepare = (invocationId: string) => {
+      admitStateLightTurnObservation({ profileKey, invocationId, marker: 'OPKTURNV1' + '12'.repeat(16) });
+      transitionStateLightTurnObservation({
+        profileKey, invocationId, phase: 'prepared', reason: 'existing_conversation_bound_before_send',
+        conversationUrl: exact,
+      });
+    };
+    const page = () => ({
+      url: () => exact,
+      isClosed: () => false,
+      close: vi.fn(async () => undefined),
+    });
+    try {
+      const owned = page();
+      const ownedInvocation = randomUUID();
+      prepare(ownedInvocation);
+      const closed = await __testFinalizeTurn(makeOutcome(owned, ownedInvocation));
+      expect(closed).toMatchObject({ state: 'rate_limit', cause: 'conversation_fetch_http_429', send_count: 0, cleanup: 'confirmed' });
+      expect(owned.close).toHaveBeenCalledOnce();
+
+      const selected = page();
+      const selectedInvocation = randomUUID();
+      prepare(selectedInvocation);
+      __testConversationPageSelection.markSelectedPageUnowned(selected);
+      const retained = await __testFinalizeTurn(makeOutcome(selected, selectedInvocation));
+      expect(retained.cleanup).toBe('skipped');
+      expect(selected.close).not.toHaveBeenCalled();
+
+      const forfeited = page();
+      const forfeitedInvocation = randomUUID();
+      prepare(forfeitedInvocation);
+      const notOwned = await __testFinalizeTurn({ ...makeOutcome(forfeited, forfeitedInvocation), ownershipForfeited: true });
+      expect(notOwned.cleanup).toBe('skipped');
+      expect(forfeited.close).not.toHaveBeenCalled();
+
+      const attempted = page();
+      const attemptedInvocation = randomUUID();
+      prepare(attemptedInvocation);
+      const maybeSent = await __testFinalizeTurn(makeOutcome(attempted, attemptedInvocation, true));
+      expect(maybeSent.cleanup).toBe('skipped');
+      expect(attempted.close).not.toHaveBeenCalled();
+
+      const redirected = page();
+      const redirectedInvocation = randomUUID();
+      prepare(redirectedInvocation);
+      const foreign = await __testFinalizeTurn({
+        ...makeOutcome(redirected, redirectedInvocation),
+        ownedPreSendFetch429Url: 'https://chatgpt.com/c/22222222-2222-4222-8222-222222222222',
+      });
+      expect(foreign.cleanup).toBe('skipped');
+      expect(redirected.close).not.toHaveBeenCalled();
+
+      // Same UUID must not authorize close after a route or project redirect.
+      const uuid = '11111111-1111-4111-8111-111111111111';
+      for (const target of [
+        'https://chatgpt.com/c/' + uuid,
+        'https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-other/c/' + uuid,
+      ]) {
+        const changedRoute = { ...page(), url: () => target };
+        const redirectedInvocation = randomUUID();
+        prepare(redirectedInvocation);
+        const result = await __testFinalizeTurn(makeOutcome(changedRoute, redirectedInvocation));
+        expect(result.cleanup).toBe('skipped');
+        expect(changedRoute.close).not.toHaveBeenCalled();
+      }
+
+      const failedClose = page();
+      failedClose.close.mockRejectedValue(new Error('close failed'));
+      const failedInvocation = randomUUID();
+      prepare(failedInvocation);
+      const failed = await __testFinalizeTurn(makeOutcome(failedClose, failedInvocation));
+      expect(failed.cleanup).not.toBe('confirmed');
+      expect(failed.incidents).toContain('owned_tab_cleanup_failed');
+    } finally {
+      if (priorDir === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+      else process.env.CHATGPT_BROWSER_TURN_STATE_DIR = priorDir;
+      rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -988,6 +1493,8 @@ describe('Issue #2457 unproven terminal locator', () => {
     const input = join(root, 'input.txt');
     const projectUrl = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111/project';
     writeFileSync(input, 'synthetic prompt', 'utf8');
+    // Keep this fake browser independent of the host's live CDP metadata.
+    const metadataFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
     try {
       for (const handle of ['pane-recycled', '', undefined]) {
         if (handle === undefined) delete process.env.ORCA_TERMINAL_HANDLE;
@@ -1077,6 +1584,7 @@ describe('Issue #2457 unproven terminal locator', () => {
         expect(readChatBinding(conversationUrl)).not.toHaveProperty('terminal_handle');
       }
     } finally {
+      metadataFetch.mockRestore();
       vi.doUnmock('./browser-session.ts');
       vi.doUnmock('./coordination.ts');
       vi.doUnmock('./input.ts');
@@ -1132,6 +1640,37 @@ describe('Issue #2467 committed composer readiness under the absolute deadline',
     } finally {
       nowSpy.mockRestore();
     }
+  });
+});
+
+describe('Issue #2669 invocation-bound composer reads', () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it.each(['count', 'evaluate'] as const)('accepts a slow %s beyond the former 5s bound', async (operation) => {
+    vi.useFakeTimers();
+    const slow = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 6_000));
+      return operation === 'count' ? 1 : { visible: true, enabled: true, contentEditable: true };
+    };
+    const composer = {
+      count: operation === 'count' ? slow : async () => 1,
+      evaluate: operation === 'evaluate' ? slow : async () => ({ visible: true, enabled: true, contentEditable: true }),
+    };
+    const pending = __testComposerMutation.readComposerReadiness({ locator: () => composer }, Date.now() + 10_000);
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(await pending).toBe(true);
+  });
+
+  it.each(['count', 'evaluate'] as const)('bounds a stalled %s by invocation expiry', async (operation) => {
+    vi.useFakeTimers();
+    const never = () => new Promise(() => undefined);
+    const composer = {
+      count: operation === 'count' ? never : async () => 1,
+      evaluate: operation === 'evaluate' ? never : async () => ({ visible: true, enabled: true, contentEditable: true }),
+    };
+    const pending = __testComposerMutation.readComposerReadiness({ locator: () => composer }, Date.now() + 10_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await pending).toBe(false);
   });
 });
 
@@ -1267,5 +1806,133 @@ describe('existing generation behind a connection-recovery status', () => {
     const { page, click } = recoveryPage(false);
     await expect(__testWaitForExistingGeneration(page, Date.now() + 200)).resolves.toBe('busy');
     expect(click).not.toHaveBeenCalled();
+  });
+});
+
+describe('Issue #2669 coherent structured composer verification', () => {
+  const payload = `${marker}\n\nkeep separate words\n  indented\tline\n`;
+  function editor(text = payload, rendering: 'paragraphs' | 'autolink' = 'paragraphs') {
+    const element = proseMirrorEditorSurface(text, rendering);
+    const composer = {
+      innerText: async () => element.innerText,
+      evaluate: async (callback: (element: unknown, arg?: unknown) => unknown, arg?: unknown) => callback(element, arg),
+    };
+    return { element, composer };
+  }
+  const matches = (composer: unknown, expected = payload) =>
+    __testSendDelivery.composerPayloadMatchesBeforeSend(composer, expected, Date.now() + 2_000);
+
+  it.each(['paragraphs', 'autolink'] as const)('reconstructs exact %s content from one coherent DOM', async (rendering) => {
+    const expected = payload + '`https://example.com/2669`';
+    const { element, composer } = editor(expected, rendering);
+    expect(await composer.innerText()).toBe(element.innerText);
+    expect(element.innerText).not.toBe(expected);
+    expect(element.textContent).not.toBe(expected);
+    expect(await matches(composer, expected)).toBe(true);
+  });
+
+  it('preserves an entire single 100 KB line through structured verification', async () => {
+    const expected = `${marker}\n\n` + 'x'.repeat(102_400);
+    expect(await matches(editor(expected).composer, expected)).toBe(true);
+  });
+
+  it('retains a hard line break while ignoring only a final ProseMirror placeholder', async () => {
+    const expected = `${marker}\n\nfirst\nsecond`;
+    const { element, composer } = editor(expected);
+    const paragraphs = element.childNodes;
+    paragraphs[2].childNodes.push({ nodeType: 1, tagName: 'BR', childNodes: [],
+      classList: { contains: () => false }, getAttribute: () => null });
+    paragraphs[2].childNodes.push(...paragraphs[3].childNodes);
+    paragraphs.pop();
+    expect(await matches(composer, expected)).toBe(true);
+  });
+
+  it.each(['indentation', 'line-break', 'trailing-newline', 'extra-space'] as const)(
+    'accepts equivalent rendered %s whitespace (#2671)', async (kind) => {
+      const damaged = kind === 'indentation' ? payload.replace('\n  indented', '\nindented')
+        : kind === 'line-break' ? payload.replace('words\n', 'words ')
+          : kind === 'trailing-newline' ? payload.slice(0, -1) : payload + ' ';
+      expect(await matches(editor(damaged).composer)).toBe(true);
+    },
+  );
+
+  it.each(['joined-marker', 'split-marker'] as const)(
+    'rejects normalized content with an unrecognizable %s (#2671 review)', async (kind) => {
+      const damaged = kind === 'joined-marker' ? payload.replace('\n\n', '')
+        : payload.replace(marker, marker.slice(0, 9) + ' ' + marker.slice(9));
+      expect(await matches(editor(damaged).composer)).toBe(false);
+    },
+  );
+
+  it.each([' ', '\n\n\n', '\u00a0'] as const)(
+    'accepts an intact leading marker with rendered boundary %j (#2671 review)', async (boundary) => {
+      expect(await matches(editor(payload.replace('\n\n', boundary)).composer)).toBe(true);
+    },
+  );
+
+  it.each(['marker', 'middle-content', 'truncated-tail'] as const)(
+    'rejects genuine %s differences despite matching surrounding whitespace (#2671)', async (kind) => {
+      const damaged = kind === 'marker' ? payload.replace(marker, 'different-marker')
+        : kind === 'middle-content' ? payload.replace('separate', 'different') : payload.trimEnd().slice(0, -1);
+      expect(await matches(editor(damaged).composer)).toBe(false);
+    },
+  );
+
+  it.each(['unknown-element', 'hidden', 'aria-hidden', 'noneditable', 'css-hidden', 'misplaced-placeholder', 'unknown-editor'] as const)(
+    'refuses unprovable structure: %s', async (kind) => {
+      const { element, composer } = editor();
+      // Exercise the exact structured fallback without a normalized visible witness.
+      composer.innerText = async () => 'unverified draft';
+      const paragraph = element.childNodes[2];
+      const readAttribute = paragraph.getAttribute;
+      if (kind === 'unknown-element') paragraph.tagName = 'SCRIPT';
+      else if (kind === 'css-hidden') {
+        element.ownerDocument.defaultView.getComputedStyle = () => ({ display: 'none', visibility: 'visible' });
+      } else if (kind === 'unknown-editor') element.classList.contains = () => false;
+      else if (kind === 'misplaced-placeholder') {
+        paragraph.childNodes.unshift(element.childNodes[1].childNodes[0]);
+      } else {
+        paragraph.getAttribute = (name: string) => name === (kind === 'noneditable' ? 'contenteditable' : kind)
+          ? kind === 'noneditable' ? 'false' : kind === 'aria-hidden' ? 'true' : '' : readAttribute(name);
+      }
+      expect(await matches(composer)).toBe(false);
+    },
+  );
+
+  it.each(['depth', 'nodes'] as const)('bounds excessive DOM %s', async (kind) => {
+    const { element, composer } = editor();
+    composer.innerText = async () => 'unverified draft';
+    const paragraph = element.childNodes[2];
+    if (kind === 'nodes') {
+      paragraph.childNodes.unshift(...Array.from({ length: 1_000 }, () => ({ nodeType: 3, nodeValue: '' })));
+    } else {
+      for (let i = 0; i < 40; i++) {
+        paragraph.childNodes = [{ nodeType: 1, tagName: 'SPAN', childNodes: paragraph.childNodes,
+          getAttribute: () => null }];
+      }
+    }
+    expect(await matches(composer)).toBe(false);
+  });
+
+  it('makes no browser call after the invocation deadline', async () => {
+    const composer = { innerText: vi.fn(), evaluate: vi.fn() };
+    expect(await __testSendDelivery.composerPayloadMatchesBeforeSend(composer, payload, Date.now() - 1)).toBe(false);
+    expect(composer.innerText).not.toHaveBeenCalled();
+    expect(composer.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('bounds an unresponsive DOM read to the invocation deadline', async () => {
+    const { composer } = editor();
+    composer.innerText = async () => 'unverified draft';
+    composer.evaluate = () => new Promise(() => {});
+    const started = Date.now();
+    expect(await __testSendDelivery.composerPayloadMatchesBeforeSend(composer, payload, started + 30)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it('accepts normalized content without waiting for an unavailable exact reader (#2671)', async () => {
+    const { composer } = editor();
+    composer.evaluate = () => new Promise(() => {});
+    expect(await matches(composer)).toBe(true);
   });
 });

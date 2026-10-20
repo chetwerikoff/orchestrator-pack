@@ -11,6 +11,7 @@ import {
   FileFleetWakeStateStore,
   bannerOwnerPane,
   listTerminalEnvelopes,
+  uniqueClosingIssue,
   fleetAlarmMessage,
   fleetWakeConfigFromEnv,
   managerBannerMessage,
@@ -23,8 +24,11 @@ import {
   type FleetWakeStateStore,
   type OpenPullHead,
   type TerminalEnvelopeEvent,
+  type PublishedIssueFact,
 } from './fleet-wake.ts';
 import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
+import { HANDOFF_SCHEMA, COMPLETION_MODE, TERMINAL_SCHEMA, type HandoffReceipt } from '../flow-manager-long-running-child.ts';
+import type { WorkerAssignmentRecord } from '../lib/worker-assignment-store.ts';
 import type { ChatErrorBanner, ProjectChat } from './chat-error-banners.ts';
 import { FileFleetStateStore, formatFleetSweep, runFleetSweep, visibleOpenCodePermission, type FleetPaneObservation, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
 import { runLaunch, readTerminalEnvelope } from '../flow-manager-long-running-child.ts';
@@ -142,12 +146,16 @@ async function tick(input: {
   readChats?: FleetAlarmTickOptions['readChats'];
   closeChat?: FleetAlarmTickOptions['closeChat'];
   listTerminalEnvelopes?: () => readonly TerminalEnvelopeEvent[];
+  readOriginalHandoffReceipt?: () => HandoffReceipt | null;
+  readCurrentAssignments?: () => readonly WorkerAssignmentRecord[] | null;
+  listPublishedIssueFacts?: (repository: string, issue: number, pulls: readonly OpenPullHead[]) => readonly PublishedIssueFact[];
   listUnreadRunMessages?: () => readonly { id: string; subject: string; toHandle: string; fromHandle: string }[];
   listOpenPulls?: (repository: string) => readonly OpenPullHead[];
   checkRunsFinishedAt?: (repository: string, sha: string) => number | undefined;
   supervisedPullOwner?: (pull: OpenPullHead, panes: readonly FleetPaneObservation[]) => FleetPaneObservation | undefined;
   readWorktreeHead?: (worktreePath: string) => string | undefined;
   readNamedPull?: FleetAlarmTickOptions['readNamedPull'];
+  readNamedIssue?: FleetAlarmTickOptions['readNamedIssue'];
   readNamedReview?: FleetAlarmTickOptions['readNamedReview'];
   readPackReviewStage?: FleetAlarmTickOptions['readPackReviewStage'];
   resolveSelectedReviewProject?: FleetAlarmTickOptions['resolveSelectedReviewProject'];
@@ -170,12 +178,16 @@ async function tick(input: {
     ...(input.readChats ? { readChats: input.readChats } : {}),
     ...(input.closeChat ? { closeChat: input.closeChat } : {}),
     listTerminalEnvelopes: input.listTerminalEnvelopes ?? (() => []),
+    ...(input.readOriginalHandoffReceipt ? { readOriginalHandoffReceipt: input.readOriginalHandoffReceipt } : {}),
+    ...(input.readCurrentAssignments ? { readCurrentAssignments: input.readCurrentAssignments } : {}),
+    ...(input.listPublishedIssueFacts ? { listPublishedIssueFacts: input.listPublishedIssueFacts } : {}),
     ...(input.listUnreadRunMessages ? { listUnreadRunMessages: input.listUnreadRunMessages } : {}),
     ...(input.listOpenPulls ? { listOpenPulls: input.listOpenPulls } : {}),
     ...(input.checkRunsFinishedAt ? { checkRunsFinishedAt: input.checkRunsFinishedAt } : {}),
     ...(input.supervisedPullOwner ? { supervisedPullOwner: input.supervisedPullOwner } : {}),
     readWorktreeHead: input.readWorktreeHead ?? (() => undefined),
     ...(input.readNamedPull ? { readNamedPull: input.readNamedPull } : {}),
+    ...(input.readNamedIssue ? { readNamedIssue: input.readNamedIssue } : {}),
     ...(input.readNamedReview ? { readNamedReview: input.readNamedReview } : {}),
     ...(input.readPackReviewStage ? { readPackReviewStage: input.readPackReviewStage } : {}),
     ...(input.resolveSelectedReviewProject ? { resolveSelectedReviewProject: input.resolveSelectedReviewProject } : {}),
@@ -671,10 +683,9 @@ describe('fleet alarm', () => {
       listOpenPulls: () => [pull],
       checkRunsFinishedAt: () => Date.parse('2026-10-03T18:00:00Z'),
     });
-    expect(sendsTo(observed.calls, 'mgr')[0]).toContain(`Wake: CI on ${pull.sha} finished for PR #150`);
+    expect(sendsTo(observed.calls, 'mgr')).toHaveLength(0); // Prose-only manager ownership is no longer admitted.
     expect(sendsTo(observed.calls, 'foreign')).toHaveLength(0);
-    expect(observed.calls).toContainEqual(['orchestration', 'dispatch-show', '--task', 'task-145', '--json']);
-    expect(observed.calls).toContainEqual(['orchestration', 'worker-show', '--dispatch', 'ctx-manager', '--json']);
+    expect(observed.calls).not.toContainEqual(['orchestration', 'dispatch-show', '--task', 'task-145', '--json']);
   });
 
   it('falls back to the pane on the PR head when no supervised dispatch owns the Issue', async () => {
@@ -692,7 +703,7 @@ describe('fleet alarm', () => {
       supervisedPullOwner: () => undefined,
       readWorktreeHead: (worktreePath) => worktreePath === manager.worktreePath ? head : undefined,
     });
-    expect(sendsTo(observed.calls, 'mgr')[0]).toContain(`Wake: CI on ${head} finished for PR #153`);
+    expect(sendsTo(observed.calls, 'mgr')).toHaveLength(0); // An Issue-linked PR cannot fall back to branch/head alone.
   });
 
   it('logs a finished-CI PR without an owner pane once per CI event', async () => {
@@ -2356,7 +2367,7 @@ describe('Issue #2556 stale-only selected-project pack-review fleet backstop', (
       reconcilePackReview,
     };
     const fresh = await tick(input);
-    expect(fresh.result).toEqual({ state: 'no_orchestrator' });
+    expect(fresh.result).toMatchObject({ state: 'no_orchestrator', paneWakeAttempts: 0, paneWakeConfirmed: 0, paneWakeNotConfirmed: 0 });
     expect(calls).toEqual([]);
 
     run.heartbeatAtUtc = staleHeartbeat();
@@ -2366,7 +2377,7 @@ describe('Issue #2556 stale-only selected-project pack-review fleet backstop', (
 
     run.runnerPid = 2147483647;
     const recovered = await tick(input);
-    expect(recovered.result).toEqual({ state: 'no_orchestrator' });
+    expect(recovered.result).toMatchObject({ state: 'no_orchestrator', paneWakeAttempts: 0, paneWakeConfirmed: 0, paneWakeNotConfirmed: 0 });
     expect(calls).toEqual([expect.objectContaining({
       projectId: 'orchestrator-pack', sourceRepoRoot: primary,
       repoSlug: repository, prNumber: 2556, runId: run.id,
@@ -2604,4 +2615,520 @@ describe('Issue #2575 process-local startup wake', () => {
     expect([...observed.store.parkedWakeEvents].sort()).toEqual([...baselineStore.parkedWakeEvents].sort());
     expect([...observed.store.eventStatus.entries()]).toEqual([...baselineStore.eventStatus.entries()]);
   });
+});
+
+
+describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', () => {
+  const repository = 'example/repo';
+  const issue = 2661;
+  const manager: FleetTerminal = {
+    handle: 'synthetic_mgr334_owner_pane', title: 'OpenCode manager',
+    worktreePath: workerBase + '/mgr2661', branch: 'refs/heads/issue-2661',
+    incarnationId: 'incarnation-2661', status: 'running', agentIdentity: 'opencode',
+  };
+  const assignment: WorkerAssignmentRecord = {
+    schema: 'orchestrator-pack/worker-assignment/v1', projectId: 'orchestrator-pack',
+    repository, issueNumber: issue, taskId: 'task-2661', assignmentId: 'assignment-2661',
+    generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-2661',
+    role: 'orchestrator', createdAtUtc: '2026-10-19T08:00:00.000Z',
+  };
+  const githubFact = (id: string): PublishedIssueFact => ({
+    issueNumber: issue, kind: 'issue-comment', id,
+  });
+  const event: TerminalEnvelopeEvent = {
+    path: '/tmp/opencode/synthetic_mgr334_terminal.json',
+    invocationId: 'inv-mgr334', observedInvocationId: 'inv-mgr334',
+    runIdentity: 'run-mgr334', attemptIdentity: 'attempt-mgr334',
+    handoffReceiptPath: '/tmp/opencode/synthetic_mgr334_handoff.json',
+    lifecycleOutcome: 'incident', turnResultState: 'rate_limit',
+    cwd: '/tmp/opencode/foreign-child', terminalHandle: 'foreign-stale-handle',
+  };
+  const receipt: HandoffReceipt = {
+    schema: HANDOFF_SCHEMA, run_identity: 'run-mgr334', attempt_identity: 'attempt-mgr334',
+    launcher_started_at: '2026-10-19T08:00:00Z',
+    handoff_committed_at: '2026-10-19T08:00:01Z',
+    completion_mode: COMPLETION_MODE, invocation_id: 'inv-mgr334',
+    owner_task_id: assignment.taskId, owner_dispatch_id: assignment.bindingKey,
+    launching_terminal_handle: manager.handle,
+  };
+  const executorFor = (
+    screens: Readonly<Record<string, string>>,
+    roster: readonly FleetTerminal[] = [manager],
+    native: FleetTerminal = manager,
+    witnessStatus: 'live' | 'gone' | 'unknown' = 'live',
+    failSubmit = false,
+  ): OrcaExecutor => {
+    const terminalExec = fakeOrca(screens, [], roster);
+    return (args) => {
+      if (args[0] === 'orchestration' && args[1] === 'worker-show') {
+        return commandResult(JSON.stringify({ ok: true, result: {
+          dispatch: { id: assignment.bindingKey, taskId: assignment.taskId, status: 'dispatched' },
+          terminal: native,
+          observation: { status: witnessStatus, exactWorker: true },
+        } }));
+      }
+      if (failSubmit && args[0] === 'terminal' && args[1] === 'send'
+        && !args.includes('--text')) return commandResult('', false);
+      return terminalExec(args);
+    };
+  };
+  const invoke = (overrides: Partial<Parameters<typeof tick>[0]> = {}) => tick({
+    screens: { [manager.handle]: 'PARKED on GPT turn inv-mgr334' },
+    terminals: [manager], executor: executorFor({ [manager.handle]: 'PARKED on GPT turn inv-mgr334' }),
+    config: config({ selectedRepository: repository }), store: new MemoryWakeStore(),
+    readCurrentAssignments: () => [assignment],
+    listPublishedIssueFacts: () => [githubFact('comment-1'), githubFact('comment-2')],
+    listOpenPulls: () => [], listTerminalEnvelopes: () => [],
+    ...overrides,
+  });
+  const texts = (calls: readonly string[][], handle = manager.handle) =>
+    sendsTo(calls, handle).filter((row) => row.includes('--text'));
+
+  it('accepts exactly one unique closer while ignoring Refs and conflicting targets', () => {
+    expect(uniqueClosingIssue('Refs #2662; Closes #2661')).toBe(2661);
+    expect(uniqueClosingIssue('Refs #2661; Fixes #2662')).toBe(2662);
+    expect(uniqueClosingIssue('Refs #2661')).toBeUndefined();
+    expect(uniqueClosingIssue('Closes #2661; Fixes #2662')).toBeUndefined();
+    expect(uniqueClosingIssue('<!-- Closes #2661 --> Refs #2662')).toBeUndefined();
+    expect(uniqueClosingIssue('Closes #2661; Closes #2661')).toBe(2661);
+  });
+
+  it('coalesces two published Issue facts, then admits only the distinct third fact on a later tick without a coordinator', async () => {
+    const store = new MemoryWakeStore();
+    const common = { store };
+    const first = await invoke(common);
+    expect(texts(first.calls)).toHaveLength(1);
+    expect(first.result).toMatchObject({
+      state: 'no_orchestrator', paneWakeAttempts: 1,
+      paneWakeConfirmed: 1, paneWakeNotConfirmed: 0,
+    });
+    const second = await invoke(common);
+    expect(texts(second.calls)).toHaveLength(0);
+    expect(second.result).toMatchObject({ paneWakeAttempts: 0, paneWakeConfirmed: 0 });
+    const changed = await invoke({ ...common,
+      listPublishedIssueFacts: () => [githubFact('comment-1'), githubFact('comment-2'), githubFact('comment-3')],
+    });
+    expect(texts(changed.calls)).toHaveLength(1);
+    expect(changed.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 1 });
+    expect(sendsTo(changed.calls, 'foreign-stale-handle')).toHaveLength(0);
+  });
+
+  it('rejects other Issue, duplicate assignment and mismatched native incarnation even if titles look related', async () => {
+    const foreignFact = await invoke({ listPublishedIssueFacts: () => [githubFact('other') && {
+      issueNumber: 2662, kind: 'issue-comment', id: 'other',
+    }] });
+    expect(texts(foreignFact.calls)).toHaveLength(0);
+    const duplicate = await invoke({ readCurrentAssignments: () =>
+      [assignment, { ...assignment, assignmentId: 'other-assignment' }] });
+    expect(texts(duplicate.calls)).toHaveLength(0);
+    const wrongIncarnation = { ...manager, incarnationId: 'stale-incarnation' };
+    const stale = await invoke({ executor: executorFor({
+      [manager.handle]: 'PARKED on GPT turn inv-mgr334',
+    }, [manager], wrongIncarnation) });
+    expect(texts(stale.calls)).toHaveLength(0);
+    const noAssignments = await invoke({ readCurrentAssignments: () => null });
+    expect(texts(noAssignments.calls)).toHaveLength(0);
+  });
+
+  it.each(['done', 'PARKED on GPT turn inv-mgr334'])(
+    'wakes only the original receipt-bound launching pane for a non-ok envelope: %s',
+    async (screen) => {
+      const first = await invoke({
+        screens: { [manager.handle]: screen }, executor: executorFor({ [manager.handle]: screen }),
+        listPublishedIssueFacts: () => [], listTerminalEnvelopes: () => [event],
+        readOriginalHandoffReceipt: () => receipt,
+      });
+      expect(texts(first.calls)).toHaveLength(1);
+      expect(texts(first.calls)[0]?.join(' ')).toContain('synthetic_mgr334_terminal.json');
+      expect(sendsTo(first.calls, 'foreign-stale-handle')).toHaveLength(0);
+      expect(first.result).toMatchObject({
+        state: 'no_orchestrator', paneWakeAttempts: 1, paneWakeConfirmed: 1,
+      });
+    },
+  );
+
+  it('rejects a successful envelope, foreign invocation, mismatched handoff and unknown/gone owner without send', async () => {
+    for (const [variant, observed] of [
+      [{ ...event, lifecycleOutcome: 'success' as const, turnResultState: 'ok' }, receipt],
+      [event, { ...receipt, invocation_id: 'foreign-invocation' }],
+      [{ ...event, attemptIdentity: 'other-attempt' }, receipt],
+      [event, { ...receipt, launching_terminal_handle: 'foreign-stale-handle' }],
+      [{ ...event, handoffReceiptPath: undefined }, receipt],
+    ] as const) {
+      const checked = await invoke({
+        // A successful named producer may still wake a PARKED pane. An idle
+        // panel isolates only the failure-specific exact-owner route.
+        screens: { [manager.handle]: 'done' },
+        executor: executorFor({ [manager.handle]: 'done' }),
+        listPublishedIssueFacts: () => [], listTerminalEnvelopes: () => [variant],
+        readOriginalHandoffReceipt: () => observed,
+      });
+      expect(texts(checked.calls)).toHaveLength(0);
+    }
+    for (const witness of ['gone', 'unknown'] as const) {
+      const checked = await invoke({
+        listPublishedIssueFacts: () => [], listTerminalEnvelopes: () => [event],
+        readOriginalHandoffReceipt: () => receipt,
+        executor: executorFor({ [manager.handle]: 'done' }, [manager], manager, witness),
+      });
+      expect(texts(checked.calls)).toHaveLength(0);
+    }
+  });
+
+  it.each(['PARKED on CI PR', 'PARKED on ci:'] as const)(
+    'one tick coalesces named and Issue-directed current-head CI on same owner: %s',
+    async (form) => {
+      const sha = 'd'.repeat(40), prNumber = 2666, completed = 17;
+      const id = `ci:${prNumber}:${sha}:${completed}`;
+      const parked = form === 'PARKED on CI PR'
+        ? `PARKED on CI PR #${prNumber} head ${sha}`
+        : 'PARKED on ' + id;
+      const first = await invoke({
+        screens: { [manager.handle]: parked }, executor: executorFor({ [manager.handle]: parked }),
+        listPublishedIssueFacts: () => [{
+          issueNumber: issue, kind: 'head-ci', prNumber, headSha: sha, id,
+        }, {
+          issueNumber: issue, kind: 'pull-head', prNumber, headSha: sha,
+          id: `pr:${prNumber}:${sha}`,
+        }],
+        listOpenPulls: () => [{ number: prNumber, ref: 'issue-2661', sha, issue }],
+        readNamedPull: () => ({ number: prNumber, headSha: sha, state: 'open', merged: false }),
+        checkRunsFinishedAt: () => completed,
+      });
+      expect(texts(first.calls)).toHaveLength(1);
+      expect(sendsTo(first.calls, manager.handle)).toHaveLength(2); // text plus one Enter
+      expect(first.result).toMatchObject({
+        state: 'no_orchestrator', paneWakeAttempts: 1, paneWakeConfirmed: 1, paneWakeNotConfirmed: 0,
+      });
+    },
+  );
+
+  it.each(['recycled-incarnation', 'bare-shell-title'] as const)(
+    'refuses stale named-PARKED recipient before text: %s',
+    async (change) => {
+      const parked = 'PARKED on GPT turn inv-mgr334';
+      const base = executorFor({ [manager.handle]: parked });
+      let lists = 0;
+      const changed = change === 'recycled-incarnation'
+        ? { ...manager, incarnationId: 'recycled-incarnation' }
+        : { ...manager, title: 'zsh', agentIdentity: undefined };
+      const executor: OrcaExecutor = (args) => {
+        if (args[0] === 'terminal' && args[1] === 'list' && ++lists >= 2) {
+          return commandResult(JSON.stringify({ ok: true, result: {
+            terminals: [changed], totalCount: 1, truncated: false,
+          } }));
+        }
+        return base(args);
+      };
+      const result = await invoke({
+        screens: { [manager.handle]: parked }, executor,
+        listPublishedIssueFacts: () => [],
+        listTerminalEnvelopes: () => [{ ...event, lifecycleOutcome: 'success', turnResultState: 'ok' }],
+      });
+      expect(texts(result.calls)).toHaveLength(0);
+      expect(sendsTo(result.calls, manager.handle)).toHaveLength(0);
+    },
+  );
+
+  it('refuses Enter when a named-PARKED screen changes after Wake text', async () => {
+    const parked = 'PARKED on GPT turn inv-mgr334';
+    const base = executorFor({ [manager.handle]: parked });
+    let sentText = false;
+    const executor: OrcaExecutor = (args) => {
+      if (args[0] === 'terminal' && args[1] === 'read' && sentText) return commandResult('zsh prompt');
+      if (args[0] === 'terminal' && args[1] === 'send' && args.includes('--text')) sentText = true;
+      return base(args);
+    };
+    const store = new MemoryWakeStore();
+    const result = await invoke({
+      screens: { [manager.handle]: parked }, executor, store,
+      listPublishedIssueFacts: () => [],
+      listTerminalEnvelopes: () => [{ ...event, lifecycleOutcome: 'success', turnResultState: 'ok' }],
+    });
+    expect(texts(result.calls)).toHaveLength(1);
+    expect(sendsTo(result.calls, manager.handle)).toHaveLength(1); // no Enter
+    expect(result.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 0, paneWakeNotConfirmed: 1 });
+    const retry = await invoke({ store, screens: { [manager.handle]: parked },
+      executor: executorFor({ [manager.handle]: parked }), listPublishedIssueFacts: () => [],
+      listTerminalEnvelopes: () => [{ ...event, lifecycleOutcome: 'success', turnResultState: 'ok' }] });
+    expect(texts(retry.calls)).toHaveLength(0);
+  });
+
+  it('refuses the due 30-minute reminder when the native pane becomes a bare shell', async () => {
+    const parked = 'PARKED on unknown-event', store = new MemoryWakeStore();
+    const original = executorFor({ [manager.handle]: parked });
+    await invoke({ store, screens: { [manager.handle]: parked }, executor: original,
+      now: () => 0, listPublishedIssueFacts: () => [] });
+    let lists = 0;
+    const drift: OrcaExecutor = (args) => {
+      if (args[0] === 'terminal' && args[1] === 'list' && ++lists >= 2) {
+        return commandResult(JSON.stringify({ ok: true, result: {
+          terminals: [{ ...manager, title: 'zsh', agentIdentity: undefined }],
+          totalCount: 1, truncated: false,
+        } }));
+      }
+      return original(args);
+    };
+    const due = await invoke({ store, screens: { [manager.handle]: parked },
+      executor: drift, now: () => 1_800_000, listPublishedIssueFacts: () => [] });
+    expect(texts(due.calls)).toHaveLength(0);
+    expect(sendsTo(due.calls, manager.handle)).toHaveLength(0);
+  });
+
+  it.each(['child_start_failed', 'child_liveness_timeout'] as const)(
+    'wakes only receipt-bound launcher for a valid no-result incident: %s',
+    async (incident) => {
+      const root = mkdtempSync(join(tmpdir(), 'fleet-2661-no-result-'));
+      try {
+        const path = join(root, 'synthetic-no-result-terminal.json');
+        writeFileSync(path, JSON.stringify({
+          schema: TERMINAL_SCHEMA, run_identity: event.runIdentity,
+          attempt_identity: event.attemptIdentity,
+          handoff_receipt_path: event.handoffReceiptPath,
+          completion_mode: COMPLETION_MODE, lifecycle_outcome: 'incident',
+          incident, terminal_at: '2026-10-19T08:00:01Z',
+        }));
+        const parsed = listTerminalEnvelopes(root);
+        expect(parsed).toHaveLength(1);
+        expect(parsed[0]?.observedInvocationId).toBeUndefined();
+        expect(parsed[0]?.invocationId).toBe(event.attemptIdentity); // non-authoritative fallback
+        const base = {
+          screens: { [manager.handle]: 'done' },
+          executor: executorFor({ [manager.handle]: 'done' }),
+          listPublishedIssueFacts: () => [], listTerminalEnvelopes: () => parsed,
+          readOriginalHandoffReceipt: () => receipt,
+        };
+        const good = await invoke(base);
+        expect(texts(good.calls)).toHaveLength(1);
+        expect(texts(good.calls)[0]?.join(' ')).toContain('terminal-inv-mgr334');
+        expect(sendsTo(good.calls, 'foreign-stale-handle')).toHaveLength(0);
+        expect(good.result).toMatchObject({
+          state: 'no_orchestrator', paneWakeAttempts: 1, paneWakeConfirmed: 1,
+        });
+        const mismatched = await invoke({ ...base,
+          listTerminalEnvelopes: () => [{ ...parsed[0]!, observedInvocationId: 'foreign-observed' }],
+        });
+        expect(texts(mismatched.calls)).toHaveLength(0);
+        const wrongReceipt = await invoke({ ...base, readOriginalHandoffReceipt: () =>
+          ({ ...receipt, attempt_identity: 'foreign-attempt' }) });
+        expect(texts(wrongReceipt.calls)).toHaveLength(0);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('persists attempted_unverified before text; failed premark suppresses delivery and failed upgrade prevents blind resend', async () => {
+    const store = new MemoryWakeStore();
+    const marker = vi.spyOn(store, 'markParkedWakeEvent').mockImplementationOnce(() => {
+      throw new Error('synthetic pre-effect refusal');
+    });
+    const withheld = await invoke({ store });
+    expect(texts(withheld.calls)).toHaveLength(0);
+    expect(withheld.result).toMatchObject({ paneWakeAttempts: 0 });
+    marker.mockRestore();
+
+    const secondStore = new MemoryWakeStore();
+    const originalMark = secondStore.markParkedWakeEvent.bind(secondStore);
+    const failedUpgrade = vi.spyOn(secondStore, 'markParkedWakeEvent').mockImplementation((key, status = 'sent') => {
+      if (status === 'sent') throw new Error('synthetic post-send disk refusal');
+      originalMark(key, status);
+    });
+    const first = await invoke({ store: secondStore });
+    expect(texts(first.calls)).toHaveLength(1);
+    expect(first.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 0, paneWakeNotConfirmed: 1 });
+    const marks = [...secondStore.parkedWakeEvents].filter((key) => key.startsWith('issue:'));
+    expect(marks).toHaveLength(1);
+    expect(secondStore.readParkedWakeEventStatus(marks[0]!)).toBe('attempted_unverified');
+    failedUpgrade.mockRestore();
+    const retry = await invoke({ store: secondStore });
+    expect(texts(retry.calls)).toHaveLength(0);
+
+    const uncertainStore = new MemoryWakeStore();
+    const uncertain = await invoke({ store: uncertainStore, executor: executorFor({
+      [manager.handle]: 'PARKED on GPT turn inv-mgr334',
+    }, [manager], manager, 'live', true) });
+    expect(texts(uncertain.calls)).toHaveLength(1);
+    expect(uncertain.result).toMatchObject({ paneWakeAttempts: 1, paneWakeNotConfirmed: 1 });
+    expect(texts((await invoke({ store: uncertainStore })).calls)).toHaveLength(0);
+  });
+  it('AC3 gone-after-reboot: terminally failed selected Dispatch plus retained missing worker notifies coordinator without STOPPED panes', async () => {
+    const coordinator: FleetTerminal = {
+      handle: 'synthetic-coordinator', title: 'Cursor coordinator',
+      incarnationId: 'coordinator-incarnation', worktreePath: primary,
+    };
+    const oldHandle = 'synthetic-prior-manager';
+    const observe = async (
+      status: 'missing' | 'terminal_missing' | 'unknown' | 'live' | 'foreign' | 'partial',
+      state: 'open' | 'closed' = 'open',
+      hasCoordinator = true,
+    ) => {
+      const native = fakeOrca({}, [], hasCoordinator ? [coordinator] : []);
+      const executor: OrcaExecutor = (args) => {
+        if (args[0] === 'terminal' && args[1] === 'list') return commandResult(JSON.stringify({
+          ok: true, result: {
+            terminals: hasCoordinator ? [coordinator] : [],
+            totalCount: hasCoordinator ? 1 : 0, truncated: status === 'partial',
+          },
+        }));
+        if (args[0] === 'orchestration' && args[1] === 'dispatch-show') return commandResult(JSON.stringify({
+          ok: true, result: { dispatch: { id: assignment.bindingKey, status: 'failed' } },
+        }));
+        if (args[0] === 'orchestration' && args[1] === 'worker-show') return commandResult(JSON.stringify({
+          ok: true, result: {
+            dispatch: { status: 'failed' },
+            worker: { agent_terminal_handle: oldHandle, worktree_id: 'repo::old' },
+            terminal: null,
+            terminalResource: {
+              terminalHandle: oldHandle, worktreeId: 'repo::old',
+              originDispatchId: assignment.bindingKey,
+              ownerDispatchId: status === 'foreign' ? 'foreign-dispatch' : assignment.bindingKey,
+              releaseState: 'retained',
+            },
+            observation: {
+              exactWorker: status === 'live',
+              status: ['foreign', 'partial'].includes(status) ? 'missing' : status,
+            },
+          },
+        }));
+        return native(args);
+      };
+      return tick({
+        screens: {}, terminals: hasCoordinator ? [coordinator] : [],
+        executor, config: config({ selectedRepository: repository,
+          ...(hasCoordinator ? { orchestratorHandle: coordinator.handle } : {}) }),
+        readCurrentAssignments: () => [assignment],
+        readNamedIssue: () => ({ number: issue, state }),
+        listPublishedIssueFacts: () => [], listOpenPulls: () => [],
+        listTerminalEnvelopes: () => [],
+      });
+    };
+    for (const status of ['missing', 'terminal_missing'] as const) {
+      const positive = await observe(status);
+      const textsToCoordinator = sendsTo(positive.calls, coordinator.handle).filter((call) => call.includes('--text'));
+      expect(textsToCoordinator).toHaveLength(1);
+      expect(textsToCoordinator[0]?.join(' ')).toContain('recovery needed');
+      expect(sendsTo(positive.calls, coordinator.handle)).toHaveLength(2);
+      expect(sendsTo(positive.calls, oldHandle)).toHaveLength(0);
+      expect(positive.calls.some((call) => call[0] === 'orchestration' && call[1] === 'dispatch-show')).toBe(true);
+    }
+    for (const status of ['unknown', 'live', 'foreign', 'partial'] as const) {
+      const negative = await observe(status);
+      expect(sendsTo(negative.calls, coordinator.handle)).toHaveLength(0);
+      if (status === 'partial') expect(negative.result).toMatchObject({ state: 'unreadable' });
+    }
+    expect(sends((await observe('missing', 'closed')).calls)).toHaveLength(0);
+    const noCoordinator = await observe('missing', 'open', false);
+    expect(noCoordinator.result).toMatchObject({
+      state: 'no_orchestrator', paneWakeAttempts: 0, paneWakeConfirmed: 0, paneWakeNotConfirmed: 0,
+    });
+    expect(sends(noCoordinator.calls)).toHaveLength(0);
+  });
+
+  it('pre-effect native owner-read failure does not consume an unsent published Issue fact', async () => {
+    const store = new MemoryWakeStore();
+    const parked = 'PARKED on GPT turn inv-mgr334';
+    const base = executorFor({ [manager.handle]: parked });
+    let lists = 0;
+    const transient: OrcaExecutor = (args) => {
+      if (args[0] === 'terminal' && args[1] === 'list' && ++lists === 2) return commandResult('', false);
+      return base(args);
+    };
+    const first = await invoke({ store, executor: transient });
+    expect(texts(first.calls)).toHaveLength(0);
+    expect(first.result).toMatchObject({ paneWakeAttempts: 0 });
+    expect([...store.parkedWakeEvents].filter((key) => key.startsWith('issue:'))).toHaveLength(0);
+    const recovered = await invoke({ store });
+    expect(texts(recovered.calls)).toHaveLength(1);
+    expect(recovered.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 1 });
+  });
+
+  it.each(['issue-PARKED', 'envelope-STOPPED'] as const)(
+    'rechecks a fresh own pane screen before direct Wake text: %s',
+    async (route) => {
+      const parked = 'PARKED on GPT turn inv-mgr334';
+      const initial = route === 'issue-PARKED' ? parked : 'done';
+      const base = executorFor({ [manager.handle]: initial });
+      let reads = 0;
+      const staleScreen: OrcaExecutor = (args) => {
+        if (args[0] === 'terminal' && args[1] === 'read'
+          && args[args.indexOf('--terminal') + 1] === manager.handle && ++reads >= 3) {
+          return commandResult('zsh prompt');
+        }
+        return base(args);
+      };
+      const store = new MemoryWakeStore();
+      const result = await invoke({
+        store, screens: { [manager.handle]: initial }, executor: staleScreen,
+        listPublishedIssueFacts: () => route === 'issue-PARKED' ? [githubFact('published-fact')] : [],
+        listTerminalEnvelopes: () => route === 'envelope-STOPPED' ? [event] : [],
+        readOriginalHandoffReceipt: () => receipt,
+      });
+      expect(reads).toBeGreaterThanOrEqual(3);
+      expect(texts(result.calls)).toHaveLength(0);
+      expect(result.result).toMatchObject({ paneWakeAttempts: 0 });
+      expect([...store.parkedWakeEvents].filter((key) =>
+        key.startsWith(route === 'issue-PARKED' ? 'issue:' : 'failure:'))).toHaveLength(0);
+      const stable = await invoke({
+        store, screens: { [manager.handle]: initial }, executor: executorFor({ [manager.handle]: initial }),
+        listPublishedIssueFacts: () => route === 'issue-PARKED' ? [githubFact('published-fact')] : [],
+        listTerminalEnvelopes: () => route === 'envelope-STOPPED' ? [event] : [],
+        readOriginalHandoffReceipt: () => receipt,
+      });
+      expect(texts(stable.calls)).toHaveLength(1);
+    },
+  );
+
+  it('withholds direct Issue and envelope Wake if the native designation turns into a shell before text', async () => {
+    for (const route of ['issue', 'envelope'] as const) {
+      const initial = route === 'issue' ? 'PARKED on GPT turn inv-mgr334' : 'done';
+      const base = executorFor({ [manager.handle]: initial });
+      let lists = 0;
+      const executor: OrcaExecutor = (args) => {
+        if (args[0] === 'terminal' && args[1] === 'list' && ++lists >= 2) {
+          return commandResult(JSON.stringify({
+            ok: true, result: { terminals: [{ ...manager, title: 'zsh', agentIdentity: undefined }],
+              totalCount: 1, truncated: false },
+          }));
+        }
+        return base(args);
+      };
+      const result = await invoke({
+        screens: { [manager.handle]: initial }, executor,
+        listPublishedIssueFacts: () => route === 'issue' ? [githubFact('new')] : [],
+        listTerminalEnvelopes: () => route === 'envelope' ? [event] : [],
+        readOriginalHandoffReceipt: () => receipt,
+      });
+      expect(texts(result.calls)).toHaveLength(0);
+    }
+  });
+
+  it.each(['issue', 'envelope'] as const)(
+    'a screen switching to shell after text blocks Enter and retains the uncertain event mark: %s',
+    async (route) => {
+      const initial = route === 'issue' ? 'PARKED on GPT turn inv-mgr334' : 'done';
+      const base = executorFor({ [manager.handle]: initial });
+      let sentText = false;
+      const executor: OrcaExecutor = (args) => {
+        if (args[0] === 'terminal' && args[1] === 'read' && sentText) return commandResult('zsh prompt');
+        if (args[0] === 'terminal' && args[1] === 'send' && args.includes('--text')) sentText = true;
+        return base(args);
+      };
+      const store = new MemoryWakeStore();
+      const first = await invoke({
+        store, screens: { [manager.handle]: initial }, executor,
+        listPublishedIssueFacts: () => route === 'issue' ? [githubFact('new')] : [],
+        listTerminalEnvelopes: () => route === 'envelope' ? [event] : [],
+        readOriginalHandoffReceipt: () => receipt,
+      });
+      expect(texts(first.calls)).toHaveLength(1);
+      expect(sendsTo(first.calls, manager.handle)).toHaveLength(1);
+      expect(first.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 0, paneWakeNotConfirmed: 1 });
+      const marks = [...store.parkedWakeEvents].filter((key) =>
+        key.startsWith(route === 'issue' ? 'issue:' : 'failure:'));
+      expect(marks).toHaveLength(1);
+      expect(store.readParkedWakeEventStatus(marks[0]!)).toBe('attempted_unverified');
+    },
+  );
+
 });

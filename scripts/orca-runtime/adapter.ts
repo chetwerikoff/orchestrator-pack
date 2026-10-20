@@ -44,6 +44,7 @@ import {
   type OrcaWorktreeShow,
 } from './native.ts';
 import { openCodeComposerContentLines, openCodeComposerMatchesText } from './opencode-composer.ts';
+import { validOpenCodeResumeSession } from '../executor-profile-policy.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -78,13 +79,25 @@ function openCodeAgentFromCommand(command: string): string | undefined {
 export interface OpenCodeControlBinding {
   readonly url: string;
   readonly agent?: string;
+  /** Spawned command intent, not observed active TUI selection or HTTP listener ownership. */
+  readonly session?: string;
 }
 
 export function openCodeControlFromCommand(command: string): OpenCodeControlBinding | undefined {
-  const url = openCodeUrlFromCommand(command);
+  // Quoted XDG homes may contain flag-shaped text; inspect only the actual
+  // native OpenCode argv after the pack's serialized environment assignments.
+  const nativeStart = command.startsWith('OPENCODE_CONFIG_CONTENT=')
+    ? command.lastIndexOf(' opencode --hostname ') : -1;
+  const nativeCommand = nativeStart >= 0 ? command.slice(nativeStart + 1) : command;
+  const url = openCodeUrlFromCommand(nativeCommand);
   if (!url) return undefined;
-  const agent = openCodeAgentFromCommand(command);
-  return { url, ...(agent ? { agent } : {}) };
+  const sessionArgs = [...nativeCommand.matchAll(/(?:^|\s)--session(?:=|\s+)(?:'([^']+)'|"([^"]+)"|(\S+))/gu)];
+  const hasSessionToken = /(?:^|\s)--session(?:=|\s|$)/u.test(nativeCommand);
+  if ((hasSessionToken && sessionArgs.length !== 1) || sessionArgs.length > 1) return undefined;
+  const session = sessionArgs[0]?.[1] ?? sessionArgs[0]?.[2] ?? sessionArgs[0]?.[3];
+  if (hasSessionToken && (!session || !validOpenCodeResumeSession(session))) return undefined;
+  const agent = openCodeAgentFromCommand(nativeCommand);
+  return { url, ...(agent ? { agent } : {}), ...(session ? { session } : {}) };
 }
 
 function defaultOpenCodeHttpRequest(input: {
@@ -662,6 +675,11 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (!urlRecord || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
       return { status: 'send_failed', reason: 'runtime_opencode_control_unavailable' };
     }
+    // An explicit --session proves launch intent only, not the selected TUI
+    // session or the listener's native owner. Never POST to that endpoint.
+    if (urlRecord.session) {
+      return { status: 'send_failed', reason: 'runtime_opencode_resume_control_unverified' };
+    }
     if (request.action !== 'append-prompt' && request.action !== 'submit-prompt') {
       return { status: 'send_failed', reason: 'runtime_opencode_prompt_request_invalid' };
     }
@@ -779,7 +797,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     this.#openCodeUrls.set(nextIdentity.id, { ...record, identity: nextIdentity });
   }
 
-  #rememberOpenCodeUrl(identity: RuntimeWorkerIdentity, url: string, agent?: string): void {
+  #rememberOpenCodeUrl(identity: RuntimeWorkerIdentity, url: string, agent?: string, session?: string): void {
     const previous = this.#openCodeUrls.get(identity.id);
     const sameBinding = previous
       && sameRuntimeWorker(previous.identity, identity)
@@ -788,6 +806,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       identity,
       url,
       ...(agent ? { agent } : sameBinding && previous?.agent ? { agent: previous.agent } : {}),
+      ...(session && validOpenCodeResumeSession(session) ? { session } : {}),
     });
     const owned = this.#owned.get(identity.id);
     if (owned?.openCodeUrl) {
@@ -1087,6 +1106,10 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       }
     }
     if (!record || !sameRuntimeWorker(record.identity, worker)) return undefined;
+    // A command-derived resume endpoint has no listener-ownership or active
+    // selected-session witness, even when the directory catalog contains ses.
+    // Ordinary non-resume OpenCode composer control remains available.
+    if (record.session) return undefined;
     return {
       kind: 'opencode-http',
       dispatch: (request, options) => this.#openCodeDispatch(worker, request, options),
@@ -1111,7 +1134,11 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
         urlRecord = this.#openCodeUrls.get(worker.id);
       }
     }
-    if (!urlRecord || !sameRuntimeWorker(urlRecord.identity, current.value.identity)) {
+    if (!urlRecord || !sameRuntimeWorker(urlRecord.identity, current.value.identity)
+      || (current.value.title?.startsWith('opk-resume-')
+        && urlRecord.session !== current.value.title.slice('opk-resume-'.length))) {
+      // A fresh adapter cannot recover --session from RuntimeWorker or from
+      // excluded launch-Task persistence for deliberately unassigned resumes.
       return runtimeUnsupported('readiness', 'runtime_opencode_control_unavailable');
     }
     const healthTimeoutMs = openCodeHttpSubprocessTimeoutMs(this.#remaining(deadline));
@@ -1136,13 +1163,16 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
 
     const sessionTimeoutMs = openCodeHttpSubprocessTimeoutMs(this.#remaining(deadline));
-    if (sessionTimeoutMs === null) return runtimeFailure('readiness', 'runtime_timeout');
+    // Health has already succeeded: catalog timeout cannot prove a dead port.
+    if (sessionTimeoutMs === null) return runtimeFailure('readiness', 'opencode_session_catalog_timeout');
     const sessions = this.#openCodeRequest({
       url: `${urlRecord.url}/session?directory=${encodeURIComponent(current.value.workspacePath)}`,
       method: 'GET',
       timeoutMs: sessionTimeoutMs,
     });
-    if ('error' in sessions) return runtimeFailure('readiness', sessions.error);
+    // Failed catalog lookup is not an unavailable /global/health endpoint;
+    // do not turn it into the resume branch's stop-and-restart authority.
+    if ('error' in sessions) return runtimeFailure('readiness', 'opencode_session_catalog_request_failed');
     if (sessions.status < 200 || sessions.status >= 300) {
       return runtimeFailure('readiness', `opencode_http_status_${sessions.status}`);
     }
@@ -1154,7 +1184,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     const matchingSession = parsedSessions.some((value) => {
       if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
       const row = value as Record<string, unknown>;
-      return typeof row.id === 'string' && /^ses/u.test(row.id)
+      return typeof row.id === 'string' && (urlRecord.session ? row.id === urlRecord.session : /^ses/u.test(row.id))
         && row.directory === current.value!.workspacePath;
     });
     if (!matchingSession) return runtimeUnsupported('readiness', 'opencode_session_directory_mismatch');
@@ -1236,14 +1266,28 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     _input: { readonly workspace?: 'active' | string } = {},
     options: RuntimeCallOptions = {},
   ): Promise<RuntimeResult<readonly RuntimeWorker[]>> {
-    const response = await this.#runAsync<{ terminals?: OrcaTerminalSummary[] }>(
-      ['terminal', 'list'],
-      options,
-    );
+    const response = await this.#runAsync<{
+      terminals?: OrcaTerminalSummary[];
+      totalCount?: number;
+      truncated?: boolean;
+    }>(['terminal', 'list'], options);
     if (!response.ok) return runtimeFailure('list_workers', neutralFailureReason(response));
     const terminals = response.result?.terminals;
     if (!Array.isArray(terminals)) {
       return runtimeUnsupported('list_workers', 'runtime_worker_list_shape_unsupported');
+    }
+    const totalCount = response.result?.totalCount;
+    const truncated = response.result?.truncated;
+    const complete = truncated === false
+      && typeof totalCount === 'number' && Number.isSafeInteger(totalCount)
+      && totalCount === terminals.length;
+    const metadataAbsent = truncated === undefined && totalCount === undefined;
+    // Workspace-bound callers (including resume admission) require a provably
+    // complete all-workspace census. Legacy unscoped reads also accept the
+    // original terminals-only shape, never malformed or partial metadata.
+    const requiresComplete = _input.workspace !== undefined || options.cwd !== undefined;
+    if (!complete && (requiresComplete || !metadataAbsent)) {
+      return runtimeUnsupported('list_workers', 'runtime_worker_list_incomplete');
     }
     const workers: RuntimeWorker[] = [];
     for (const terminal of terminals) {
@@ -1520,7 +1564,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       ...(openCodeControl ? { openCodeUrl: openCodeControl.url } : {}),
     });
     if (openCodeControl) {
-      this.#rememberOpenCodeUrl(identity, openCodeControl.url, openCodeControl.agent);
+      this.#rememberOpenCodeUrl(identity, openCodeControl.url, openCodeControl.agent, openCodeControl.session);
     }
     this.#rememberWorkspace(identity, workspace, worker.workspacePath);
     return { status: 'ok', value: worker };

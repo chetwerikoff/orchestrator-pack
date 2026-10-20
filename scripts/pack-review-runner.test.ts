@@ -34,7 +34,9 @@ import {
 import {
   createPackReviewRun,
   getPackReviewRun,
+  isPackReviewRunStale,
   listPackReviewRuns,
+  packReviewRunStaleMinutes,
   resolvePackReviewRequiredRunOrder,
   resolvePackReviewRunStoreRoot,
   setPackReviewRunTerminal,
@@ -5693,45 +5695,93 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
   });
 
   it.each([
-    ['safe repeated 429', false],
-    ['unsafe older attempted send', true],
-  ] as const)('admits R1 -> R2 -> R3 only with %s history', async (_case, unsafeOlder) => {
+    ['safe repeated 429, source admission gate first', false, 'admission'],
+    ['safe repeated 429, dead-runner stale gate first', false, 'stale'],
+    ['unsafe older attempted send', true, 'admission'],
+  ] as const)('admits R1 -> R2 -> R3 only with %s history', async (_case, unsafeOlder, firstGate) => {
     const f = fixture({ historicalClaim: true });
     const claimBytes = readFileSync(f.historicalClaimPath!, 'utf8');
     const zeroSendAttempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
-    const r2 = await f.start({
-      fixtureReviewBySourceSlot: zeroSendAttempts,
-      fixtureBeforeGptSourceCommentCensus: async () => undefined,
-      fixtureAfterGptInvocationBound: ({ slotId, invocationId }: { slotId: string; invocationId: string }) => {
-        f.freshStarts.push(slotId);
-        zeroSendAttempts[slotId] = [{
-          stdout: JSON.stringify({
-            schema: 'turn-result/v1', state: 'rate_limit', cause: 'account_cooldown_active',
-            scope: 'invocation', invocation_id: invocationId, send_count: 0, send_attempted: false,
-          }),
-          exitCode: 13,
-        }];
-      },
-    });
-    // The initial R2 run has no usable sources but has not passed the shared
-    // grace threshold. It must not terminalize or authorize another run yet.
-    expect(r2.result, JSON.stringify(r2.result)).toMatchObject({
-      created: true, headSha: HEAD, runnerReason: 'gpt_sources_waiting_for_grace:0/3',
-    });
-    const r2Id = String(r2.result.runId);
-    expect(r2Id).not.toBe(f.original.id);
-    expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
-    // Simulate the same runner becoming dead and its real grace interval
-    // elapsing; only the existing reconciler may then terminalize safe 0/3.
-    const deadR2 = updatePackReviewRun(r2Id, { runnerPid: 2147483647 }, f.options);
-    // Anchor grace to this R2's persisted heartbeat rather than the ambient
-    // wall clock. Reconcile only R2: processing historic R1 first can restore
-    // R2's pending status, refresh its heartbeat and undo the stale predicate.
-    const afterGraceAt = new Date(Date.parse(deadR2.heartbeatAtUtc) + 60 * 60_000);
-    vi.useFakeTimers({ toFake: ['Date'], now: afterGraceAt });
+    // Freeze Date before R2 creation/start, then deliberately move its persisted
+    // dead-runner heartbeat away from source admission. Real timers remain real.
+    const graceMs = packReviewRunStaleMinutes() * 60_000;
+    // Preserve the original R1 -> R2 creation order while freezing R2 timestamps.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(Date.now() + 1_000) });
+    let r2Id = '';
     try {
-      const afterGrace = await f.reconcile({ runId: r2Id });
-      expect(afterGrace.results.find((row) => row.runId === r2Id && row.terminalized)).toMatchObject({
+      const r2 = await f.start({
+        fixtureReviewBySourceSlot: zeroSendAttempts,
+        fixtureBeforeGptSourceCommentCensus: async () => undefined,
+        fixtureAfterGptInvocationBound: ({ slotId, invocationId }: { slotId: string; invocationId: string }) => {
+          f.freshStarts.push(slotId);
+          zeroSendAttempts[slotId] = [{
+            stdout: JSON.stringify({
+              schema: 'turn-result/v1', state: 'rate_limit', cause: 'account_cooldown_active',
+              scope: 'invocation', invocation_id: invocationId, send_count: 0, send_attempted: false,
+            }),
+            exitCode: 13,
+          }];
+        },
+      });
+      expect(r2.result, JSON.stringify(r2.result)).toMatchObject({
+        created: true, headSha: HEAD, runnerReason: 'gpt_sources_waiting_for_grace:0/3',
+      });
+      r2Id = String(r2.result.runId);
+      expect(r2Id).not.toBe(f.original.id);
+      expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
+
+      // The two persisted gates have different authorities. In both orders,
+      // reconcile must refuse zero-send terminalization after only one expires:
+      // (1) dead-PID heartbeat/updatedAt stale gate, (2) earliest finite source
+      // admission (createdAt fallback) 0/3 grace. No immediate recovery shortcut.
+      const activeR2 = getPackReviewRun(r2Id, f.options)!;
+      const admissions = activeR2.reviewRound!.sourceSlots
+        .map((slot) => Date.parse(slot.admissionStartedAtUtc ?? ''))
+        .filter((stamp) => Number.isFinite(stamp));
+      const graceAnchor = admissions.length > 0 ? Math.min(...admissions) : Date.parse(activeR2.createdAt);
+      expect(Number.isFinite(graceAnchor)).toBe(true);
+      const heartbeatOffsetMs = firstGate === 'stale' ? -10_000 : 10_000;
+      vi.setSystemTime(new Date(graceAnchor + heartbeatOffsetMs));
+      const deadR2 = updatePackReviewRun(r2Id, { runnerPid: 2147483647 }, f.options);
+      const staleAnchor = Date.parse(deadR2.heartbeatAtUtc || deadR2.updatedAt);
+      expect(Number.isFinite(staleAnchor)).toBe(true);
+      expect(staleAnchor - graceAnchor).toBe(heartbeatOffsetMs);
+      const staleBoundary = staleAnchor + graceMs;
+      const zeroSendBoundary = graceAnchor + graceMs;
+      const firstBoundary = Math.min(staleBoundary, zeroSendBoundary);
+      const settleBoundary = Math.max(staleBoundary, zeroSendBoundary);
+      expect(firstBoundary).toBeLessThan(settleBoundary);
+      expect(firstBoundary).toBe(firstGate === 'stale' ? staleBoundary : zeroSendBoundary);
+      expect(isPackReviewRunStale(deadR2, new Date(staleBoundary - 1))).toBe(false);
+      expect(isPackReviewRunStale(deadR2, new Date(staleBoundary))).toBe(true);
+
+      vi.setSystemTime(new Date(firstBoundary - 1));
+      const beforeEitherGate = await f.reconcile({ runId: r2Id });
+      expect(beforeEitherGate.results.some((row) => row.runId === r2Id && row.terminalized)).toBe(false);
+      expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
+
+      vi.setSystemTime(new Date(firstBoundary));
+      const afterOneGate = await f.reconcile({ runId: r2Id });
+      expect(afterOneGate.results.some((row) => row.runId === r2Id && row.terminalized)).toBe(false);
+      expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
+      if (firstGate === 'stale') {
+        // This ordinary reconcile may return before producing a graceExpired
+        // diagnostic; prove the persisted admission deadline is still pending
+        // and no required status reconciliation or terminalization occurred.
+        expect(Date.now()).toBeLessThan(zeroSendBoundary);
+        expect(afterOneGate.results.find((row) => row.runId === r2Id)).toMatchObject({
+          terminalized: false, statusReconciled: false,
+        });
+      }
+
+      vi.setSystemTime(new Date(settleBoundary - 1));
+      const justBefore = await f.reconcile({ runId: r2Id });
+      expect(justBefore.results.some((row) => row.runId === r2Id && row.terminalized)).toBe(false);
+      expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
+
+      vi.setSystemTime(new Date(settleBoundary));
+      const atBothGates = await f.reconcile({ runId: r2Id });
+      expect(atBothGates.results.find((row) => row.runId === r2Id && row.terminalized)).toMatchObject({
         terminalized: true, statusReconciled: true,
       });
     } finally {
