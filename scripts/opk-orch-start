@@ -9,7 +9,7 @@ if (args.length !== 2 || args[0] !== 'resume') {
   process.exitCode = 2;
 } else {
   try {
-    const result = await runProductionExistingOpenCodeResume(args[1]!);
+    const result = await runProductionExistingOpenCodeResume(args[1]);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     process.exitCode = result.outcome === 'catalog_observed_unverified' ? 0 : 1;
   } catch (error) {
