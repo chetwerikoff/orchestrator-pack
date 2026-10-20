@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
@@ -4312,12 +4311,16 @@ describe('Issue #2655 r02 AppliedIn #118 same Task terminal identity retry', () 
 
 
 describe('Issue #2661 B5 existing-session exact intent, census, and safe restart', () => {
-  it('B5 extensionless resume entrypoint passes the native Node parser boundary', () => {
+  it('B5 extensionless resume entrypoint passes the native Node parser boundary', async () => {
     const entrypoint = fileURLToPath(new URL('../opk-orch-start', import.meta.url));
     for (const flags of [[], ['--experimental-strip-types']]) {
-      const parsed = spawnSync(process.execPath, [...flags, '--check', entrypoint], { encoding: 'utf8' });
-      expect(parsed.error).toBeUndefined();
-      expect(parsed.status, parsed.stderr).toBe(0);
+      const parsed = await runProcess({
+        command: process.execPath,
+        args: [...flags, '--check', entrypoint],
+        allowEmptyStdout: true,
+      });
+      expect(parsed.outcome, parsed.stderr).toBe('exit');
+      expect(parsed.exitCode, parsed.stderr).toBe(0);
     }
   });
 
