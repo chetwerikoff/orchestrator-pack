@@ -798,7 +798,8 @@ export async function revalidateKeyedHarvest(
               ...Array.from(child.querySelectorAll('pre')),
             ];
             if (!visible(child)) {
-              if (pres.length > 0) return unsupported();
+              // A display:contents wrapper has no rectangle but may render prose children.
+              if (pres.length > 0 || view.getComputedStyle(child)?.display === 'contents') return unsupported();
               continue;
             }
             if (pres.length === 0) {
@@ -823,6 +824,18 @@ export async function revalidateKeyedHarvest(
             if (code.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
             // Language comes exclusively from unique visible non-control
             // text outside CODE in this one header-and-pre wrapper.
+            const headerSiblings = pre.parentElement === child
+              ? Array.from(child.children).filter((candidate) => candidate !== pre
+                && candidate.tagName !== 'BUTTON' && candidate.getAttribute('role') !== 'button'
+                && visible(candidate))
+              : [];
+            const header = headerSiblings.length === 1
+              && Array.from(child.children).indexOf(headerSiblings[0]!) < Array.from(child.children).indexOf(pre)
+              && (headerSiblings[0]!.tagName === 'HEADER'
+                || (headerSiblings[0]!.tagName === 'DIV'
+                  && (/(?:^|\s)header(?:\s|$)/u.test(headerSiblings[0]!.getAttribute('class') ?? '')
+                    || Boolean(headerSiblings[0]!.querySelector('button, [role="button"]')))))
+              ? headerSiblings[0]! : null;
             const labels: string[] = [];
             let invalidLabel = false;
             let sawPre = false;
@@ -839,8 +852,8 @@ export async function revalidateKeyedHarvest(
               if (children.length === 0 && node !== child) {
                 const leaf = (node as HTMLElement).innerText?.trim();
                 if (leaf) {
-                  if (node === pre || node.parentElement === pre || node.tagName === 'HEADER'
-                    || node.parentElement?.tagName === 'HEADER') labels.push(leaf);
+                  if (node === pre || node.parentElement === pre || (header !== null
+                    && (node === header || node.parentElement === header))) labels.push(leaf);
                   else invalidLabel = true;
                 }
                 return;
@@ -849,8 +862,8 @@ export async function revalidateKeyedHarvest(
                 if (item.nodeType === 3) {
                   const label = item.textContent?.trim();
                   if (label) {
-                    if (node === pre || node.parentElement === pre || node.tagName === 'HEADER'
-                      || node.parentElement?.tagName === 'HEADER') labels.push(label);
+                    if (node === pre || node.parentElement === pre || (header !== null
+                      && (node === header || node.parentElement === header))) labels.push(label);
                     else invalidLabel = true;
                   }
                 } else if (item.nodeType === 1) {
@@ -1870,6 +1883,7 @@ export async function readPageObservation(
   baselineCount?: number,
   strictTranscriptCount = false,
   deadlineMs = Date.now() + MAX_LOCAL_READ_WAIT_MS,
+  historicalBaseline = false,
 ): Promise<PageObservationResult> {
   const nodes = page.locator(MESSAGE_NODE_SELECTOR);
   const incomplete = (): PageObservationResult => ({
@@ -1899,6 +1913,8 @@ export async function readPageObservation(
           unitKeyAttribute: string;
           assistantMessageStyle: string;
           contentRootSelector: string;
+          ownedMarker?: string;
+          historicalBaseline: boolean;
           generationSelector: string;
           continuationSelector: string;
           turnSelector: string;
@@ -1952,7 +1968,8 @@ export async function readPageObservation(
                 ...Array.from(child.querySelectorAll('pre')),
               ];
               if (!visible(child)) {
-                if (pres.length > 0) return unsupported();
+                // A display:contents wrapper has no rectangle but may render prose children.
+                if (pres.length > 0 || view.getComputedStyle(child)?.display === 'contents') return unsupported();
                 continue;
               }
               if (pres.length === 0) {
@@ -1977,6 +1994,18 @@ export async function readPageObservation(
               if (code.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
               // Language comes exclusively from unique visible non-control
               // text outside CODE in this one header-and-pre wrapper.
+              const headerSiblings = pre.parentElement === child
+                ? Array.from(child.children).filter((candidate) => candidate !== pre
+                  && candidate.tagName !== 'BUTTON' && candidate.getAttribute('role') !== 'button'
+                  && visible(candidate))
+                : [];
+              const header = headerSiblings.length === 1
+                && Array.from(child.children).indexOf(headerSiblings[0]!) < Array.from(child.children).indexOf(pre)
+                && (headerSiblings[0]!.tagName === 'HEADER'
+                  || (headerSiblings[0]!.tagName === 'DIV'
+                    && (/(?:^|\s)header(?:\s|$)/u.test(headerSiblings[0]!.getAttribute('class') ?? '')
+                      || Boolean(headerSiblings[0]!.querySelector('button, [role="button"]')))))
+                ? headerSiblings[0]! : null;
               const labels: string[] = [];
               let invalidLabel = false;
               let sawPre = false;
@@ -1993,8 +2022,8 @@ export async function readPageObservation(
                 if (children.length === 0 && node !== child) {
                   const leaf = (node as HTMLElement).innerText?.trim();
                   if (leaf) {
-                    if (node === pre || node.parentElement === pre || node.tagName === 'HEADER'
-                      || node.parentElement?.tagName === 'HEADER') labels.push(leaf);
+                    if (node === pre || node.parentElement === pre || (header !== null
+                      && (node === header || node.parentElement === header))) labels.push(leaf);
                     else invalidLabel = true;
                   }
                   return;
@@ -2003,8 +2032,8 @@ export async function readPageObservation(
                   if (item.nodeType === 3) {
                     const label = item.textContent?.trim();
                     if (label) {
-                      if (node === pre || node.parentElement === pre || node.tagName === 'HEADER'
-                        || node.parentElement?.tagName === 'HEADER') labels.push(label);
+                      if (node === pre || node.parentElement === pre || (header !== null
+                        && (node === header || node.parentElement === header))) labels.push(label);
                       else invalidLabel = true;
                     }
                   } else if (item.nodeType === 1) {
@@ -2035,6 +2064,25 @@ export async function readPageObservation(
             }
             return blocks.length > 0 ? { text: blocks.join('\n\n'), complete: true } : unsupported();
           };
+          // A final historical assistant is not the current response while
+          // taking a pre-Send baseline. After Send the marker, not the last
+          // page-wide assistant, bounds the owned turn against later users.
+          const isUser = (node: Element): boolean =>
+            node.querySelector(`[${args.roleAttribute}]`)?.getAttribute(args.roleAttribute) === args.userMessageStyle
+            || (node.getAttribute(args.unitKeyAttribute) ?? '').endsWith(':user');
+          const ownedUserIndices = args.ownedMarker
+            ? elements.flatMap((node, index) => {
+              if (!isUser(node)) return [];
+              const rendered = (node as HTMLElement).innerText;
+              const head = typeof rendered === 'string'
+                ? rendered.match(/^[\p{White_Space}\uFEFF\u200B]*([^\p{White_Space}\uFEFF\u200B]+)/u)?.[1]
+                : undefined;
+              return head === args.ownedMarker ? [index] : [];
+            })
+            : [];
+          const ownedUserIndex = ownedUserIndices.length === 1 ? ownedUserIndices[0]! : -1;
+          const nextUserIndex = ownedUserIndex < 0 ? -1
+            : elements.findIndex((node, index) => index > ownedUserIndex && isUser(node));
           const rows: Array<{ role: string; text: string; key?: string; domIndex: number; complete: boolean; completionReady: boolean; continuationVisible: boolean }> = [];
           let observedAssistantNodes = 0;
           let observedMessageNodes = 0;
@@ -2056,7 +2104,10 @@ export async function readPageObservation(
                 const hasLaterAssistant = elements.slice(domIndex + 1).some((later) =>
                   later.querySelector(`[${args.roleAttribute}]`)?.getAttribute(args.roleAttribute)
                     === args.assistantMessageStyle);
-                const serialized = serializeAssistant(element, !hasLaterAssistant);
+                const selected = !args.historicalBaseline && (ownedUserIndex >= 0
+                  ? domIndex > ownedUserIndex && (nextUserIndex < 0 || domIndex < nextUserIndex)
+                  : !hasLaterAssistant);
+                const serialized = serializeAssistant(element, selected);
                 text = serialized.text;
                 rowComplete = serialized.complete;
               }
@@ -2116,6 +2167,8 @@ export async function readPageObservation(
           unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
           assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
         contentRootSelector: ASSISTANT_CONTENT_ROOT_SELECTOR,
+          ownedMarker: expectedMarker,
+          historicalBaseline,
           generationSelector: BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR,
           continuationSelector: CONTINUE_GENERATING_SELECTOR,
           turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
@@ -3957,6 +4010,7 @@ async function runTurnCore(
         undefined,
         true,
         invocationDeadlineMs,
+        true, // Every pre-Send assistant is historical, including the final one.
       );
       if (baseline.transcriptIncomplete || !baseline.snapshot?.complete) {
         incident('pre_send_observation_error', 'baseline_transcript_incomplete', 'return_local_error');
