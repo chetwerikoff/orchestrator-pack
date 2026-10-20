@@ -2051,6 +2051,13 @@ stale same-Task terminal ownership; no unrelated changes.`,
       expect(f.getStatus()).not.toBe('success');
       expect(f.statusWrites).not.toContain('success');
     }
+    if (variation === 'additional-body-byte') {
+      // Stray prose after a criterion is not evidence of a changed criterion
+      // and must not erase the frozen 2/3 terminal by admitting a new cycle.
+      expect(result.results).toContainEqual(expect.objectContaining({
+        settled: false, amendmentAdmission: false, reason: 'amendment_unverified_body_mismatch',
+      }));
+    }
     const after = readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot });
     expect(after?.terminal?.runId).toBe(before?.terminal?.runId);
     expect(after?.terminal?.digest).toBe(before?.terminal?.digest);
@@ -2829,13 +2836,17 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(f.read).not.toHaveBeenCalled();
   });
 
-  it('observes but refuses an unrelated changed head without taking the same-head shortcut', async () => {
+  it('refuses an unrelated changed head without adopting it or using same-head settlement', async () => {
     const f = unchangedDescendantFixture();
+    const before = readPackReviewAuthority(prNumber, f.options);
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'diverged';
     const result = await reconcileStalePackReviewRuns(f.input);
     expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required' }));
-    expect(readPackReviewAuthority(prNumber, f.options)?.currentHeadSha).toBe(HEAD);
+    // An unproven descendant is observed as a candidate only; authority keeps
+    // the original reviewed head and terminal instead of adopting the divergence.
+    expect(readPackReviewAuthority(prNumber, f.options)?.currentHeadSha).toBe(reviewedHead);
+    expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(before?.terminal);
     expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.reviewStageComplete).not.toBe(true);
     expect(f.read).not.toHaveBeenCalled();
   });
