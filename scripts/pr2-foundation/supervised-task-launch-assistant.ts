@@ -14,8 +14,8 @@ import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter, RuntimeWorker, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
 import { overlayExecutorProfileEnv } from '../executor-profile-store.ts';
 import {
-  currentWorkerAssignment, parseDelegatedIntegrationMarker, resolveWorkerAssignmentStorePath,
-  sameDelegatedIntegrationMarker, type DelegatedIntegrationMarker, type WorkerAssignment,
+  currentWorkerAssignment, listCurrentWorkerAssignmentRecords, parseDelegatedIntegrationMarker, resolveWorkerAssignmentStorePath,
+  sameDelegatedIntegrationMarker, type DelegatedIntegrationMarker, type WorkerAssignment, type WorkerAssignmentRecord,
 } from '../lib/worker-assignment-store.ts';
 import {
   buildExecutorCommand,
@@ -30,6 +30,7 @@ import {
   openCodeAgentSemantics,
   openCodeFleetBrowserDenyRulesAreTerminal,
   openCodeLaunchHasFleetBrowserDenies,
+  validOpenCodeResumeSession,
   withOpenCodeFleetBrowserDenies,
   openCodeConfigPaths,
   openCodeEdgeCapabilities,
@@ -223,7 +224,7 @@ export interface LaunchDependencies {
   /** Native exact-Dispatch/worker-absent witness, not an assignment/store guess. */
   readonly proveTerminalGone?: (assignment: WorkerAssignment) => Promise<TerminalGoneAssignmentEvidence | null>;
   readonly prepareWorktree: (input: WorktreePreparationRequest) => Promise<EdgeResult<PreparedWorktree>>;
-  readonly finalizeProfile?: (profile: ExecutorProfile, worktreePath: string) => Promise<EdgeResult<ExecutorProfile>>;
+  readonly finalizeProfile?: (profile: ExecutorProfile, worktreePath: string, resumeSession?: string, dataRoot?: string) => Promise<EdgeResult<ExecutorProfile>>;
   readonly adapter: RuntimeAdapter;
   readonly runSupervisedStart: typeof runSupervisedWorkerStart;
   readonly now: () => number;
@@ -1144,6 +1145,8 @@ export async function finalizeOpenCodeExecutorProfile(
   worktreePath: string,
   execute: ChildExecutor,
   proveNoWrite?: OpenCodeNoWriteProof,
+  resumeSession?: string,
+  dataRoot?: string,
 ): Promise<EdgeResult<ExecutorProfile>> {
   if (profile.family !== 'opencode' || profile.route === 'provider_new_top_level') return { status: 'ok', value: profile };
   if (!worktreePath.trim()) return contextualRefusal(profile, 'executor_route_unavailable');
@@ -1165,7 +1168,8 @@ export async function finalizeOpenCodeExecutorProfile(
   const effortMatch = profile.launchCommand.match(/"variant":"([^"]+)"/u);
   if (!modelMatch?.[1] || !effortMatch?.[1]) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
-  const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model: modelMatch[1], effort: effortMatch[1], stateRoot });
+  const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model: modelMatch[1], effort: effortMatch[1], stateRoot,
+    ...(dataRoot !== undefined ? { dataRoot } : {}), ...(resumeSession ? { resumeSession } : {}) });
   // OpenCode 1.18.35 appends its runtime tool-output allow after the overlay rules.
   // Leave every other permission's ordered semantics unchanged.
   // Match only the OpenCode runtime tool-output allow from this user's home;
@@ -1174,6 +1178,11 @@ export async function finalizeOpenCodeExecutorProfile(
     '~/.local/share/opencode/tool-output/*',
     join(homedir(), '.local', 'share', 'opencode', 'tool-output', '*'),
   ]);
+  // The same runtime-owned allow is moved last when XDG_DATA_HOME is selected.
+  // Admit only that exact data-home tool-output path, not a parent wildcard.
+  if (dataRoot && isAbsolute(dataRoot)) {
+    runtimeToolOutputPatterns.add(join(dataRoot, 'opencode', 'tool-output', '*'));
+  }
   const matchingRuntimeRules = Array.isArray(baselineValue.permission)
     ? baselineValue.permission.filter((rule) => record(rule)
       && rule.permission === 'external_directory' && rule.action === 'allow'
@@ -2259,9 +2268,9 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       input.workClass === 'merge' ? { ...request, primaryReuseRoot: target.primaryRoot } : request,
       (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),
     ),
-    finalizeProfile: (profile, worktreePath) => finalizeOpenCodeExecutorProfile(profile, worktreePath,
+    finalizeProfile: (profile, worktreePath, resumeSession, dataRoot) => finalizeOpenCodeExecutorProfile(profile, worktreePath,
       (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),
-      proveOpenCodeNoWrite),
+      proveOpenCodeNoWrite, resumeSession, dataRoot !== undefined ? dataRoot : env.XDG_DATA_HOME),
   };
 }
 
@@ -2555,7 +2564,199 @@ export function parseLaunchAssistantCli(
   };
 }
 
+
+/** Unassigned operator session restoration: never a Task/Dispatch/Issue owner. */
+export interface OpenCodeResumeDependencies {
+  readonly adapter: RuntimeAdapter;
+  readonly commandPreflight: LaunchDependencies['commandPreflight'];
+  readonly repositoryPreflight: LaunchDependencies['repositoryPreflight'];
+  readonly resolveProfile: LaunchDependencies['resolveProfile'];
+  readonly finalizeProfile: NonNullable<LaunchDependencies['finalizeProfile']>;
+  readonly listAssignments: () => readonly WorkerAssignmentRecord[] | null;
+  readonly assignmentWorkspace: (assignment: WorkerAssignmentRecord) => Promise<string | null>;
+}
+
+export interface OpenCodeResumeResult {
+  readonly schema: 'opk-orch-start-resume/v1';
+  readonly outcome: 'continue' | 'catalog_observed_unverified';
+  readonly cause: string;
+  readonly session: string;
+  readonly attempts: number;
+  readonly unassigned: true;
+  readonly activeSelectionVerified: false;
+  readonly listenerOwnershipVerified: false;
+  readonly terminal?: RuntimeWorkerIdentity;
+}
+
+/**
+ * Each admission observes both the complete native roster and every numbered
+ * project assignment. An unresolved Dispatch may be #2655-replaceable even
+ * after its pane is positively gone: it must be reconciled by its own owner.
+ */
+async function resumeAdmitted(
+  input: { readonly projectId: string; readonly repository: string; readonly workspace: string },
+  deps: OpenCodeResumeDependencies,
+): Promise<boolean> {
+  const assignments = deps.listAssignments();
+  if (!assignments) return false;
+  for (const assignment of assignments) {
+    if (assignment.projectId !== input.projectId || assignment.repository !== input.repository) return false;
+    if (!assignment.bindingKey || !assignment.taskId || !assignment.assignmentId
+      || !Number.isSafeInteger(assignment.generation)) return false;
+    const workspace = await deps.assignmentWorkspace(assignment);
+    if (!workspace) return false;
+    // A possibly replaceable Dispatch is stronger than a gone terminal.
+    if (resolve(workspace) === resolve(input.workspace)) return false;
+  }
+  // A workspace-filtered/synchronous list cannot establish that an omitted
+  // foreign-workspace entry was not a live incumbent. The registered Orca async
+  // census validates native truncated=false and exact totalCount.
+  if (!deps.adapter.listWorkersAsync) return false;
+  const workers = await deps.adapter.listWorkersAsync({}, { cwd: input.workspace });
+  if (workers.status !== 'ok') return false;
+  const seen = new Set<string>();
+  for (const worker of workers.value) {
+    if (!worker.identity.id || !worker.identity.generation
+      || seen.has(worker.identity.id + ':' + worker.identity.generation)) return false;
+    seen.add(worker.identity.id + ':' + worker.identity.generation);
+    if (resolve(worker.workspacePath) !== resolve(input.workspace)) continue;
+    const current = deps.adapter.findWorker(worker.identity, { cwd: input.workspace });
+    if (current.status !== 'ok') return false;
+    if (current.value && (current.value.workspacePath !== worker.workspacePath
+      || !sameIdentity(current.value.identity, worker.identity))) return false;
+    if (!current.value) continue; // Positively gone old terminal, not an ownership release.
+    const live = deps.adapter.liveness({ worker: worker.identity, observationWindowMs: 1_000 }, { cwd: input.workspace });
+    if (!sameIdentity(live.worker, worker.identity) || live.status !== 'gone') return false;
+  }
+  return true;
+}
+
+/** Positive outcome proves only command intent + catalog membership, not active TUI/port ownership. */
+export async function runExistingOpenCodeResume(
+  input: { readonly session: string; readonly projectId: string; readonly repository: string; readonly workspace: string; readonly env: Readonly<NodeJS.ProcessEnv> },
+  deps: OpenCodeResumeDependencies,
+): Promise<OpenCodeResumeResult> {
+  const result = (cause: string, attempts: number, terminal?: RuntimeWorkerIdentity): OpenCodeResumeResult => ({
+    schema: 'opk-orch-start-resume/v1', outcome: 'continue', cause, session: input.session,
+    attempts, unassigned: true, activeSelectionVerified: false, listenerOwnershipVerified: false,
+    ...(terminal ? { terminal } : {}),
+  });
+  if (!validOpenCodeResumeSession(input.session) || !input.projectId || !input.repository
+    || !isAbsolute(input.workspace)) return result('resume_input_invalid', 0);
+  const command = await deps.commandPreflight();
+  if (command.status !== 'ok') return result('resume_command_preflight_unavailable', 0);
+  const repository = await deps.repositoryPreflight(input.repository);
+  if (repository.status !== 'ok') return result('resume_repository_preflight_unavailable', 0);
+  if (!(await resumeAdmitted(input, deps))) return result('resume_incumbent_or_assignment_unverified', 0);
+  const profileResult = await deps.resolveProfile('manager', input.env, 'exact_terminal_worktree');
+  if (profileResult.status !== 'ok') return result(profileResult.cause, 0);
+  const profile = profileResult.value;
+  if (profile.family !== 'opencode' || profile.route !== 'exact_terminal_worktree') return result('resume_opencode_profile_required', 0);
+  const finalized = await deps.finalizeProfile(profile, input.workspace, input.session, input.env.XDG_DATA_HOME);
+  if (finalized.status !== 'ok') return result(finalized.cause, 0);
+  const selected = finalized.value;
+  if (selected.family !== 'opencode' || selected.route !== 'exact_terminal_worktree'
+    || !selected.agentName || !selected.inlineConfigJson
+    || !selected.launchCommand.endsWith(` --session '${input.session}'`)
+    || !openCodeLaunchHasFleetBrowserDenies({
+      command: selected.launchCommand, agentName: selected.agentName, inlineConfigJson: selected.inlineConfigJson,
+    })) return result('resume_profile_overlay_unverified', 0);
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    if (!(await resumeAdmitted(input, deps))) return result('resume_incumbent_or_assignment_unverified', attempt - 1);
+    const spawn = deps.adapter.spawnWorker({
+      title: `opk-resume-${input.session}`, workspace: input.workspace, command: selected.launchCommand,
+    }, { cwd: input.workspace });
+    if (spawn.status !== 'ok') return result('resume_spawn_unverified', attempt);
+    const worker = spawn.value;
+    if (worker.provenance !== 'internal' || worker.title !== `opk-resume-${input.session}`
+      || resolve(worker.workspacePath) !== resolve(input.workspace) || worker.identity.runtime !== deps.adapter.id
+      || !worker.identity.id || !worker.identity.generation) return result('resume_spawn_identity_unverified', attempt, worker.identity);
+    const firstLive = deps.adapter.liveness({ worker: worker.identity, observationWindowMs: LAUNCH_STARTUP_OBSERVATION_WINDOW_MS }, { cwd: input.workspace });
+    if (!sameIdentity(firstLive.worker, worker.identity) || firstLive.status === 'gone' || firstLive.status === 'unknown') {
+      return result('resume_worker_liveness_unverified', attempt, worker.identity);
+    }
+    // This adapter is the spawn instance. The exact requested session is
+    // checked against GET /session?directory, NOT the active TUI session.
+    const health = deps.adapter.openCodeHealth?.(worker.identity, { cwd: input.workspace, timeoutMs: 10_000 });
+    const after = deps.adapter.findWorker(worker.identity, { cwd: input.workspace });
+    const secondLive = deps.adapter.liveness({ worker: worker.identity, observationWindowMs: 1_000 }, { cwd: input.workspace });
+    if (after.status !== 'ok' || !after.value || !sameIdentity(after.value.identity, worker.identity)
+      || !sameIdentity(secondLive.worker, worker.identity)
+      || secondLive.status === 'unknown' || secondLive.status === 'gone') {
+      return result('resume_worker_identity_unverified', attempt, worker.identity);
+    }
+    if (health?.status === 'ok') {
+      return {
+        ...result('requested_session_directory_catalog_membership_only', attempt, worker.identity),
+        outcome: 'catalog_observed_unverified',
+      };
+    }
+    // A missing/wrong session, a healthy foreign responder, or an uncertain
+    // endpoint is NEVER a reason to stop and duplicate an existing session.
+    const reason = health?.reason ?? '';
+    // Only the health endpoint's transport failure authorizes the bounded
+    // exact-worker stop/gone retry. A successful health with a failed session
+    // catalog request has its own non-restartable adapter reason.
+    const endpointUnavailable = health?.status === 'failed'
+      && /^opencode_http_request_failed:/u.test(reason);
+    if (attempt === 2 || !endpointUnavailable) return result('resume_control_unavailable', attempt, worker.identity);
+    const stopped = deps.adapter.stopWorker(worker.identity, { cwd: input.workspace });
+    if (stopped.status !== 'ok' || stopped.value.stopped !== true) return result('resume_stop_unverified', attempt, worker.identity);
+    // Separately witness native gone after the registered adapter's exact close.
+    const gone = deps.adapter.liveness({ worker: worker.identity, observationWindowMs: 1_000 }, { cwd: input.workspace });
+    const absent = deps.adapter.findWorker(worker.identity, { cwd: input.workspace });
+    if (!sameIdentity(gone.worker, worker.identity) || gone.status !== 'gone'
+      || absent.status !== 'ok' || absent.value !== null) return result('resume_gone_unverified', attempt, worker.identity);
+  }
+  return result('resume_retry_limit', 2);
+}
+
+export async function runProductionExistingOpenCodeResume(
+  session: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<OpenCodeResumeResult> {
+  // The selected project card and inherited profile store, never ambient cwd,
+  // choose the workspace and executor route.
+  const selectedEnv = overlayExecutorProfileEnv(env);
+  const target = resolveTargetContext({ env: selectedEnv });
+  const input: LaunchInput = {
+    repository: target.repository, projectId: target.projectId,
+    primaryRoot: target.primaryRoot, workClass: 'manager', cwd: target.primaryRoot, env: selectedEnv,
+    startMode: 'exact_terminal_worktree',
+  };
+  const base = await createProductionLaunchDependencies(input);
+  const deps: OpenCodeResumeDependencies = {
+    adapter: base.adapter,
+    commandPreflight: base.commandPreflight,
+    repositoryPreflight: base.repositoryPreflight,
+    resolveProfile: base.resolveProfile,
+    finalizeProfile: base.finalizeProfile!,
+    listAssignments: () => listCurrentWorkerAssignmentRecords(resolveWorkerAssignmentStorePath(target.projectId, selectedEnv)),
+    assignmentWorkspace: async (assignment) => {
+      const read = await child(['orca', 'orchestration', 'worker-show', '--dispatch', assignment.bindingKey, '--json'], target.primaryRoot, selectedEnv);
+      const observation = resultRecord(envelope(read));
+      const dispatch = observation && record(observation.dispatch) ? observation.dispatch : null;
+      const terminal = observation && record(observation.terminal) ? observation.terminal : null;
+      return dispatch?.id === assignment.bindingKey && dispatch.taskId === assignment.taskId
+        && typeof terminal?.worktreePath === 'string' && isAbsolute(terminal.worktreePath)
+        ? terminal.worktreePath : null;
+    },
+  };
+  return runExistingOpenCodeResume({
+    session, projectId: target.projectId, repository: target.repository,
+    workspace: target.primaryRoot, env: selectedEnv,
+  }, deps);
+}
+
 async function main(argv = process.argv.slice(2)): Promise<void> {
+  if (argv[0] === 'resume') {
+    if (argv.length !== 2) throw new Error('resume requires exactly one existing OpenCode session ID');
+    const resumed = await runProductionExistingOpenCodeResume(argv[1]!);
+    process.stdout.write(`${JSON.stringify(resumed)}\n`);
+    process.exitCode = resumed.outcome === 'catalog_observed_unverified' ? 0 : 1;
+    return;
+  }
   if (argv[0] === 'probe') {
     const result = await runOpenCodePrimaryProbe(argv.slice(1));
     process.stdout.write(`${JSON.stringify(result)}\n`);
