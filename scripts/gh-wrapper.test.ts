@@ -8,6 +8,7 @@ import {
   extractActionsRunId,
 } from './lib/gh-pr-checks.mjs';
 import { parseGhArgv } from './lib/gh-parse-argv.mjs';
+import { parseRemoteSlug } from './lib/git-origin-slug.mjs';
 import * as repoResolve from './lib/gh-repo-resolve.mjs';
 const {
   applyListedJq,
@@ -3008,6 +3009,105 @@ describe('Issue #2507 exact checks arguments and actionable non-equivalent read 
   });
 });
 
+
+describe('Issue #2658 gh syntax and provenance read parity', () => {
+  it('rejects malformed high-level numbered reads and never permits GraphQL fallback', () => {
+    const supported = [
+      { args: ['issue', 'view', '42', '--json', 'body'], id: 'issue-view-body' },
+      { args: ['pr', 'diff', '42', '--name-only'], id: 'pr-diff-name-only' },
+      { args: ['pr', 'view', '42', '--json', PR_INFO_FROM_VIEW_JSON], id: 'pr-view' },
+      { args: ['repo', 'view', '--json', 'nameWithOwner'], id: 'repo-view-name-with-owner' },
+    ];
+    for (const { args, id } of supported) {
+      expect(classifyArgv(args).route?.id, args.join(' ')).toBe(id);
+    }
+    const rejected = [
+      ...['1.5', '1e2', '0', '9007199254740992', 'invalid'].flatMap((id) => [
+        ['issue', 'view', id, '--json', 'body'],
+        ['pr', 'diff', id, '--name-only'],
+      ]),
+      ['issue', 'view', '42', 'extra', '--json', 'body'],
+      ['pr', 'diff', '42', 'extra', '--name-only'],
+      ['pr', 'diff', '42', '--name-only', '--json', 'body'],
+      ['issue', 'view', '42', '--json', 'body,unsupported'],
+      ['issue', 'view', '42', '--json', 'body', '--jq', '.title'],
+      ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.body'],
+      ['repo', 'view', 'other/repo', '--json', 'nameWithOwner'],
+      ['pr', 'view', '42', '--json', 'headRefName,isDraft,unsupported'],
+      ['pr', 'view', '42', '43', '--json', PR_INFO_FROM_VIEW_JSON],
+    ];
+    for (const args of rejected) {
+      const { parsed, route } = classifyArgv(args);
+      expect(route, args.join(' ')).toBeNull();
+      expect(isUnsupportedHighLevelRead(parsed), args.join(' ')).toBe(true);
+    }
+  });
+
+  it('keeps REST-direct review GET inventoried, POST non-read, and the Bash sed intercept absent', () => {
+    const get = 'gh api repos/example/target/pulls/42/reviews';
+    expect(classifyArgv(['api', 'repos/example/target/pulls/42/reviews']).route).toBeNull();
+    expect(isClassifiedGhReadCommand(get)).toBe(true);
+    expect(isClassifiedGhReadCommand(get + ' --method POST')).toBe(false);
+    expect(isClassifiedGhReadCommand(get + ' --header X-Test:yes')).toBe(false);
+    expect(isClassifiedGhReadCommand('gh api repos/example/target/issues/42')).toBe(false);
+    expect(isClassifiedGhReadCommand('gh api graphql -f query=anything')).toBe(false);
+    const entry = readFileSync(join(repoRoot, 'scripts', 'gh'), 'utf8');
+    expect(entry).toContain('lib/gh-wrapper.mjs');
+    expect(entry).not.toContain('Operator REST unblock: resolvePR');
+    expect(entry).not.toMatch(/\bsed\s+-E\b/u);
+  });
+
+  it('rejects malicious numbered reads before native gh via the tracked Bash entrypoint', () => {
+    if (process.platform === 'win32') return;
+    const root = tempRoot('opk-2658-high-level-');
+    const nativeBinary = join(root, 'gh');
+    symlinkSync(process.execPath, nativeBinary);
+    const env = {
+      ...process.env,
+      PATH: controlledPath(root),
+      GH_REAL_BINARY: nativeBinary,
+      OPK_PROJECT_ID: '',
+      GH_REPO: 'example/target',
+      GH_HOST: 'github.com',
+      GH_WRAPPER_ACTIVE: '',
+    };
+    const rejected = [
+      ['issue', 'view', '1.5', '--json', 'body'],
+      ['issue', 'view', '42', '--json', 'unsupported'],
+      ['pr', 'diff', '1e2', '--name-only'],
+      ['pr', 'diff', '42', 'extra', '--name-only'],
+      ['repo', 'view', '--json', 'unsupported'],
+      ['pr', 'view', '42', '--json', 'headRefName,isDraft,bogus'],
+    ];
+    for (const args of rejected) {
+      const observed = runProcessSync({
+        command: join(repoRoot, 'scripts', 'gh'),
+        args,
+        cwd: root,
+        env,
+      });
+      expect(observed.exitCode, args.join(' ')).not.toBe(0);
+      expect(observed.stdout, args.join(' ')).toBe('');
+      expect(observed.stderr, args.join(' ')).toContain('gh-wrapper: REST route failed');
+    }
+  });
+
+  it('parses only GitHub origins with unchanged owner/repository case', () => {
+    expect(parseRemoteSlug('git@github.com:Acme/Pack.git')).toBe('Acme/Pack');
+    expect(parseRemoteSlug('https://github.com/Acme/Pack.git')).toBe('Acme/Pack');
+    expect(parseRemoteSlug('ssh://git@github.com/Acme/Pack.git')).toBe('Acme/Pack');
+    for (const remote of [
+      'git@other.example:Acme/Pack.git',
+      'https://github.com.evil.example/Acme/Pack',
+      'https://other.example/Acme/Pack',
+      'Acme/Pack',
+      'https://github.com/Acme/../Pack.git',
+    ]) expect(parseRemoteSlug(remote), remote).toBeNull();
+    const skill = readFileSync(join(repoRoot, '.cursor', 'skills', 'merge-with-local-adoption', 'SKILL.md'), 'utf8');
+    expect(skill).toContain("Bind the selected card's `repository` as `TARGET_REPOSITORY`");
+    expect(skill).toContain('Bind `PACK_REPOSITORY` from the trusted `{PACK_ROOT}` checkout');
+  });
+});
 
 describe('Issue #2589 merge-skill executable gh read coverage', () => {
   const skillPath = join(repoRoot, '.cursor', 'skills', 'merge-with-local-adoption', 'SKILL.md');
