@@ -2124,7 +2124,8 @@ describe('state-light fresh conversation collision recovery', () => {
                 attach(proseParent, node('P', observationOverrides.assistantCode.interleavedProse));
               }
               if (observationOverrides.assistantCode.firstLanguage) {
-                attach(wrapper, node('SPAN', observationOverrides.assistantCode.firstLanguage));
+                const header = attach(wrapper, node('HEADER', ''));
+                attach(header, node('SPAN', observationOverrides.assistantCode.firstLanguage));
               }
               const pre = attach(wrapper, node('PRE', ''));
               attach(pre, node('CODE', observationOverrides.assistantCode.visible));
@@ -2133,7 +2134,8 @@ describe('state-light fresh conversation collision recovery', () => {
                 attach(root, node('UL', 'Between diff blocks'));
                 const sibling = attach(root, node('DIV', ''));
                 if (observationOverrides.assistantCode?.secondLanguage) {
-                  attach(sibling, node('SPAN', observationOverrides.assistantCode.secondLanguage));
+                  const header = attach(sibling, node('HEADER', ''));
+                  attach(header, node('SPAN', observationOverrides.assistantCode.secondLanguage));
                 }
                 const next = attach(sibling, node('PRE', ''));
                 attach(next, node('CODE', second));

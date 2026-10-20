@@ -787,6 +787,10 @@ export async function revalidateKeyedHarvest(
             return false;
           };
           if (!visible(root)) return unsupported();
+          // root.children omits direct Text nodes; do not certify a lossy rich reply.
+          if (Array.from(root.childNodes).some((node) => node.nodeType === 3 && Boolean(node.textContent?.trim()))) {
+            return unsupported();
+          }
           const blocks: string[] = [];
           for (const child of Array.from(root.children)) {
             const pres = [
@@ -815,6 +819,8 @@ export async function revalidateKeyedHarvest(
             }
             const code = directCodes[0]!;
             if (!visible(code)) return unsupported();
+            // code.innerText includes some aria-hidden/inert/control descendant text.
+            if (code.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
             // Language comes exclusively from unique visible non-control
             // text outside CODE in this one header-and-pre wrapper.
             const labels: string[] = [];
@@ -833,7 +839,8 @@ export async function revalidateKeyedHarvest(
               if (children.length === 0 && node !== child) {
                 const leaf = (node as HTMLElement).innerText?.trim();
                 if (leaf) {
-                  if (node === pre || node.tagName === 'SPAN' || node.tagName === 'LABEL') labels.push(leaf);
+                  if (node === pre || node.parentElement === pre || node.tagName === 'HEADER'
+                    || node.parentElement?.tagName === 'HEADER') labels.push(leaf);
                   else invalidLabel = true;
                 }
                 return;
@@ -842,7 +849,8 @@ export async function revalidateKeyedHarvest(
                 if (item.nodeType === 3) {
                   const label = item.textContent?.trim();
                   if (label) {
-                    if (node === pre || node.tagName === 'SPAN' || node.tagName === 'LABEL') labels.push(label);
+                    if (node === pre || node.parentElement === pre || node.tagName === 'HEADER'
+                      || node.parentElement?.tagName === 'HEADER') labels.push(label);
                     else invalidLabel = true;
                   }
                 } else if (item.nodeType === 1) {
@@ -1933,6 +1941,10 @@ export async function readPageObservation(
               return false;
             };
             if (!visible(root)) return unsupported();
+            // root.children omits direct Text nodes; do not certify a lossy rich reply.
+            if (Array.from(root.childNodes).some((node) => node.nodeType === 3 && Boolean(node.textContent?.trim()))) {
+              return unsupported();
+            }
             const blocks: string[] = [];
             for (const child of Array.from(root.children)) {
               const pres = [
@@ -1961,6 +1973,8 @@ export async function readPageObservation(
               }
               const code = directCodes[0]!;
               if (!visible(code)) return unsupported();
+              // code.innerText includes some aria-hidden/inert/control descendant text.
+              if (code.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
               // Language comes exclusively from unique visible non-control
               // text outside CODE in this one header-and-pre wrapper.
               const labels: string[] = [];
@@ -1979,7 +1993,8 @@ export async function readPageObservation(
                 if (children.length === 0 && node !== child) {
                   const leaf = (node as HTMLElement).innerText?.trim();
                   if (leaf) {
-                    if (node === pre || node.tagName === 'SPAN' || node.tagName === 'LABEL') labels.push(leaf);
+                    if (node === pre || node.parentElement === pre || node.tagName === 'HEADER'
+                      || node.parentElement?.tagName === 'HEADER') labels.push(leaf);
                     else invalidLabel = true;
                   }
                   return;
@@ -1988,7 +2003,8 @@ export async function readPageObservation(
                   if (item.nodeType === 3) {
                     const label = item.textContent?.trim();
                     if (label) {
-                      if (node === pre || node.tagName === 'SPAN' || node.tagName === 'LABEL') labels.push(label);
+                      if (node === pre || node.parentElement === pre || node.tagName === 'HEADER'
+                        || node.parentElement?.tagName === 'HEADER') labels.push(label);
                       else invalidLabel = true;
                     }
                   } else if (item.nodeType === 1) {
@@ -3178,6 +3194,15 @@ export function readOwnedConversationIdentity(page: any, targetChatUrl: string):
   };
 }
 
+/** AC12 only: UUID equality never grants destructive close after a route change. */
+function ownedPreSendFetch429ExactRoute(page: any, expectedUrl: string): boolean {
+  try {
+    return normalizeConversationUrl(String(page.url())) === normalizeConversationUrl(expectedUrl);
+  } catch {
+    return false;
+  }
+}
+
 function returnOwnedConversationIdentityMismatch(
   identity: OwnedConversationIdentity,
   page: any,
@@ -3565,7 +3590,7 @@ async function runTurnCore(
     && Boolean(invocationCreatedExistingChatUrl)
     && !cleanupAuthorityUnprovenPages.has(page)
     && !browserOrPageDefinitelyLost(page, browser)
-    && readOwnedConversationIdentity(page, invocationCreatedExistingChatUrl!).matched
+    && ownedPreSendFetch429ExactRoute(page, invocationCreatedExistingChatUrl!)
       ? { ownedPreSendFetch429Page: page, ownedPreSendFetch429Url: invocationCreatedExistingChatUrl }
       : {}
   );
@@ -7129,7 +7154,7 @@ async function runTurnCore(
       && Boolean(invocationCreatedExistingChatUrl)
       && !cleanupAuthorityUnprovenPages.has(page)
       && !browserOrPageDefinitelyLost(page, browser)
-      && readOwnedConversationIdentity(page, invocationCreatedExistingChatUrl!).matched;
+      && ownedPreSendFetch429ExactRoute(page, invocationCreatedExistingChatUrl!);
     return {
       ...(page ? { page } : {}),
       ...(browser ? { browser } : {}),
@@ -7248,7 +7273,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     && outcome.result.state === 'rate_limit'
     && outcome.result.cause === 'conversation_fetch_http_429'
     && outcome.result.send_count === 0 && outcome.result.send_attempted !== true
-    && readOwnedConversationIdentity(outcome.page, outcome.ownedPreSendFetch429Url!).matched,
+    && ownedPreSendFetch429ExactRoute(outcome.page, outcome.ownedPreSendFetch429Url!),
   );
   // Only the invocation-owned, reachable Page can be closed. A cleanupAction
   // of preserve (including an ambiguous Send) is not negative ownership proof;
@@ -7337,7 +7362,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   }
   if (pageAction === 'close' && outcome.ownedPreSendFetch429Page
     && (!ownedPreSendFetch429Close
-      || !readOwnedConversationIdentity(outcome.page, outcome.ownedPreSendFetch429Url!).matched)) {
+      || !ownedPreSendFetch429ExactRoute(outcome.page, outcome.ownedPreSendFetch429Url!))) {
     pageAction = 'preserve';
   }
   if (pageAction === 'close') {

@@ -339,9 +339,10 @@ describe('owned marker primitive', () => {
 describe('DOM observation boundary', () => {
   // Small rendered-DOM mock: synthetic UI nodes expose only the browser
   // primitives consumed by the actual evaluateAll callbacks, no Markdown source.
-  type RichBlock = { prose: string; tag?: string } | {
+  type RichBlock = { prose: string; tag?: string } | { directText: string } | {
     code: string; label?: string; extraLabel?: string; nested?: boolean;
-    hidden?: boolean; copyControl?: boolean; interleavedProse?: string;
+    hidden?: boolean; copyControl?: boolean; interleavedProse?: string; spanProse?: string;
+    excludedCodeDescendant?: 'aria-hidden' | 'inert' | 'role-button' | 'button';
   };
   function richNode(
     tagName: string, innerText = '', attrs: Record<string, string> = {}, shown = true,
@@ -365,6 +366,10 @@ describe('DOM observation boundary', () => {
         child.parentElement = node;
         children.push(child);
         node.childNodes.push(child);
+        return node;
+      },
+      appendText(text: string) {
+        node.childNodes.push({ nodeType: 3, textContent: text, parentElement: node });
         return node;
       },
       querySelectorAll(selector: string): any[] {
@@ -393,17 +398,35 @@ describe('DOM observation boundary', () => {
     const root = richNode('DIV', '', { class: 'markdown' });
     outer.append(root);
     for (const block of blocks) {
+      if ('directText' in block) {
+        root.appendText(block.directText);
+        continue;
+      }
       if ('prose' in block) {
         root.append(richNode((block.tag ?? 'P').toUpperCase(), block.prose));
         continue;
       }
       const container = richNode(block.nested ? 'BLOCKQUOTE' : 'DIV');
-      if (block.label) container.append(richNode('SPAN', block.label));
-      if (block.extraLabel) container.append(richNode('SPAN', block.extraLabel));
+      if (block.label || block.extraLabel) {
+        // A semantic header is distinguishable from ordinary prose SPANs.
+        const header = richNode('HEADER');
+        if (block.label) header.append(richNode('SPAN', block.label));
+        if (block.extraLabel) header.append(richNode('SPAN', block.extraLabel));
+        container.append(header);
+      }
+      if (block.spanProse) container.append(richNode('SPAN', block.spanProse));
       if (block.copyControl) container.append(richNode('BUTTON', 'Copy'));
       if (block.interleavedProse) container.append(richNode('P', block.interleavedProse));
       const pre = richNode('PRE', '', {}, !block.hidden);
-      pre.append(richNode('CODE', block.code, {}, !block.hidden));
+      const code = richNode('CODE', block.code, {}, !block.hidden);
+      if (block.excludedCodeDescendant) {
+        const kind = block.excludedCodeDescendant;
+        const attrs = kind === 'aria-hidden' ? { 'aria-hidden': 'true' }
+          : kind === 'inert' ? { inert: '' }
+            : kind === 'role-button' ? { role: 'button' } : {};
+        code.append(richNode(kind === 'button' ? 'BUTTON' : 'SPAN', 'UI', attrs));
+      }
+      pre.append(code);
       container.append(pre);
       root.append(container);
     }
@@ -762,6 +785,51 @@ describe('DOM observation boundary', () => {
     })).resolves.toEqual({ state: 'continuity-unproven' });
   });
 
+
+  async function expectUnsupportedSelectedRichBlock(blocks: RichBlock[], corruptedReply: string) {
+    const fixture = richPage(blocks);
+    const observation = await readPageObservation(fixture.page, marker, 0);
+    expect(observation.transcriptIncomplete).toBe(true);
+    expect(observation.snapshot?.complete).toBe(false);
+    const baseline = { complete: true, carriers: [] } as const;
+    const ownedKey = observation.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    expect(keyedHarvestCandidate(observation.snapshot!, baseline, ownedKey).state).not.toBe('ready');
+    await expect(revalidateKeyedHarvest(fixture.page, baseline, ownedKey, {
+      reply: corruptedReply,
+      assistantKey: 'data-message-id:assistant-rich-12345678',
+      snapshotSignature: atomicSnapshotSignature(observation.snapshot!),
+    })).resolves.toEqual({ state: 'continuity-unproven' });
+  }
+
+  it('rejects visible direct .markdown Text nodes before and after code instead of truncating bytes', async () => {
+    const code = 'diff --git a/a b/a\n';
+    await expectUnsupportedSelectedRichBlock([
+      { directText: 'INTRO ' }, { code }, { directText: ' DO_NOT_MERGE' },
+    ], '```\n' + code + '```');
+
+    const whitespace = richPage([{ directText: '  \n\t  ' }, { code }]);
+    const observation = await readPageObservation(whitespace.page, marker, 0);
+    expect(observation.transcriptIncomplete).toBe(false);
+    expect(observation.snapshot?.carriers.at(-1)?.text).toBe('```\n' + code + '```');
+  });
+
+  it('does not recast a token-shaped ordinary sibling SPAN into a language header', async () => {
+    const code = 'diff --git a/a b/a\n';
+    await expectUnsupportedSelectedRichBlock([
+      { code, spanProse: 'DO_NOT_MERGE' },
+    ], '```DO_NOT_MERGE\n' + code + '```');
+  });
+
+  it.each(['aria-hidden', 'inert', 'role-button', 'button'] as const)(
+    'rejects %s descendants of CODE instead of publishing contaminated visible code bytes',
+    async (excludedCodeDescendant) => {
+      const code = 'UIdiff --git a/a b/a\n';
+      await expectUnsupportedSelectedRichBlock([
+        { code, excludedCodeDescendant },
+      ], '```\n' + code + '```');
+    },
+  );
+
   it('rejects unchanged keyed bytes when Continue generating appears page-wide only at revalidation', async () => {
     const fixture = richPage([{ code: 'line\n', label: 'diff' }]);
     const observation = await readPageObservation(fixture.page, marker, 0);
@@ -1072,6 +1140,20 @@ describe('Issue #2660 AC12 bounded pre-Send Page cleanup authority', () => {
       });
       expect(foreign.cleanup).toBe('skipped');
       expect(redirected.close).not.toHaveBeenCalled();
+
+      // Same UUID must not authorize close after a route or project redirect.
+      const uuid = '11111111-1111-4111-8111-111111111111';
+      for (const target of [
+        'https://chatgpt.com/c/' + uuid,
+        'https://chatgpt.com/g/g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-other/c/' + uuid,
+      ]) {
+        const changedRoute = { ...page(), url: () => target };
+        const redirectedInvocation = randomUUID();
+        prepare(redirectedInvocation);
+        const result = await __testFinalizeTurn(makeOutcome(changedRoute, redirectedInvocation));
+        expect(result.cleanup).toBe('skipped');
+        expect(changedRoute.close).not.toHaveBeenCalled();
+      }
 
       const failedClose = page();
       failedClose.close.mockRejectedValue(new Error('close failed'));
