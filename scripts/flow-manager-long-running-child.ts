@@ -1017,6 +1017,21 @@ async function abortManagedProcess(
   }
 }
 
+/** Optional test fixture clock and parent-ingestion observation; absent in production launches. */
+export interface LaunchDeadlineTestControl {
+  readonly now: () => number;
+  readonly onEvent?: (event: {
+    kind: 'initialized' | 'heartbeat' | 'result' | 'child_exit' | 'watchdog';
+    observedAt: number;
+    deadline: number;
+    hardDeadline: number;
+    accepted?: boolean;
+    exitCode?: number | null;
+  }) => void;
+  /** A test-controlled watchdog wake barrier; the default remains the real delay loop. */
+  readonly awaitWatchdogTurn?: () => Promise<void>;
+}
+
 export interface LaunchConfig {
   readonly runIdentity: string;
   readonly attemptIdentity: string;
@@ -1037,6 +1052,7 @@ export interface LaunchConfig {
   readonly cdp?: string;
   readonly secretCanaries?: readonly string[];
   readonly cancellationDependencies?: BrowserTurnCancellationDependencies;
+  readonly deadlineTestControl?: LaunchDeadlineTestControl;
 }
 
 function scanArtifactForCanaries(path: string, canaries: readonly string[]): string[] {
@@ -1328,8 +1344,22 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
   let childExitedBeforeCandidate = false;
   let watchdogExpiredAt: number | null = null;
   let lastStdoutObservedAt: number | null = null;
-  const hardDeadline = Date.now() + hardDeadlineMs();
-  let deadline = Math.min(Date.now() + livenessTiming.startupAllowanceMs, hardDeadline);
+  const deadlineClock = config.deadlineTestControl?.now ?? Date.now;
+  const hardDeadline = deadlineClock() + hardDeadlineMs();
+  let deadline = Math.min(deadlineClock() + livenessTiming.startupAllowanceMs, hardDeadline);
+  const observed = (
+    kind: 'initialized' | 'heartbeat' | 'result' | 'child_exit' | 'watchdog',
+    observedAt: number,
+    accepted?: boolean,
+    exitCode?: number | null,
+  ): void => {
+    config.deadlineTestControl?.onEvent?.({
+      kind, observedAt, deadline, hardDeadline,
+      ...(accepted === undefined ? {} : { accepted }),
+      ...(exitCode === undefined ? {} : { exitCode }),
+    });
+  };
+  observed('initialized', deadlineClock());
 
   const observeDeadline = (observedAt: number): boolean => {
     if (observedAt < deadline) return false;
@@ -1337,7 +1367,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     return true;
   };
 
-  const ingestStdoutLine = (line: string, observedAt = Date.now()): void => {
+  const ingestStdoutLine = (line: string, observedAt = deadlineClock()): void => {
     const cancellationReceipt = parseCancellationReceiptLine(line);
     if (cancellationReceipt) {
       if (!capture.cancellationReceipt) capture.cancellationReceipt = cancellationReceipt;
@@ -1346,26 +1376,35 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     }
     const heartbeat = parseObservationHeartbeatLine(line);
     if (heartbeat) {
-      if (capture.firstCandidate || observeDeadline(observedAt)) return;
+      if (capture.firstCandidate || observeDeadline(observedAt)) {
+        observed('heartbeat', observedAt, false);
+        return;
+      }
       acceptedHeartbeat = true;
       lastHeartbeatDiagnostics = boundedDiagnostics({
         ...heartbeat,
         accepted_at: new Date(observedAt).toISOString(),
       });
       deadline = Math.min(observedAt + livenessTiming.liveChildIdleWindowMs, hardDeadline);
+      observed('heartbeat', observedAt, true);
       return;
     }
     const candidate = parseTurnResult(line);
     if (!candidate) return;
     if (capture.firstCandidate) {
       capture.duplicateCandidate = true;
+      observed('result', observedAt, false);
       return;
     }
-    if (observeDeadline(observedAt)) return;
+    if (observeDeadline(observedAt)) {
+      observed('result', observedAt, false);
+      return;
+    }
     capture.firstCandidate = candidate;
+    observed('result', observedAt, true);
   };
 
-  const drainStdoutBuffer = (observedAt = Date.now()): void => {
+  const drainStdoutBuffer = (observedAt = deadlineClock()): void => {
     let newlineIndex = capture.stdoutBuffer.indexOf('\n');
     while (newlineIndex >= 0) {
       const line = capture.stdoutBuffer.slice(0, newlineIndex);
@@ -1378,7 +1417,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     if (!capture.stdoutBuffer.trim() || capture.firstCandidate) return;
     const candidate = parseTurnResult(capture.stdoutBuffer);
     if (!candidate) return;
-    const observedAt = lastStdoutObservedAt ?? Date.now();
+    const observedAt = lastStdoutObservedAt ?? deadlineClock();
     if (observeDeadline(observedAt)) return;
     capture.firstCandidate = candidate;
   };
@@ -1429,21 +1468,22 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     allowEmptyStdout: true,
     signal: controller.signal,
     onStdoutChunk: (chunk) => {
-      const observedAt = Date.now();
+      const observedAt = deadlineClock();
       lastStdoutObservedAt = observedAt;
       capture.stdoutBuffer += chunk;
       drainStdoutBuffer(observedAt);
     },
   }).then((result) => {
-    const observedAt = Date.now();
+    const observedAt = deadlineClock();
     childExitCode = result.exitCode;
     drainStdoutBuffer(observedAt);
     if (!capture.firstCandidate && !observeDeadline(observedAt)) childExitedBeforeCandidate = true;
+    observed('child_exit', observedAt, undefined, result.exitCode);
     return result;
   });
   cleanupProcess = runPromise;
 
-  const spawnProbeWaitMs = Math.max(1, Math.min(100, deadline - Date.now()));
+  const spawnProbeWaitMs = Math.max(1, Math.min(100, deadline - deadlineClock()));
   const spawnProbe = await Promise.race([
     runPromise.then((result) => ({ kind: 'done' as const, result })),
     delay(spawnProbeWaitMs).then(() => ({ kind: 'pending' as const })),
@@ -1468,12 +1508,18 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
   }
 
   while (!capture.firstCandidate && !childExitedBeforeCandidate && !launcherSignal) {
-    const remainingMs = deadline - Date.now();
+    const observedAt = deadlineClock();
+    observed('watchdog', observedAt);
+    const remainingMs = deadline - observedAt;
     if (remainingMs <= 0) {
-      observeDeadline(Date.now());
+      observeDeadline(observedAt);
       break;
     }
-    await delay(Math.min(20, remainingMs));
+    if (config.deadlineTestControl?.awaitWatchdogTurn) {
+      await config.deadlineTestControl.awaitWatchdogTurn();
+    } else {
+      await delay(Math.min(20, remainingMs));
+    }
   }
 
   ingestTrailingCandidate();
