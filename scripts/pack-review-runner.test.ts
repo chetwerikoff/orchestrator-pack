@@ -5306,7 +5306,8 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     // Freeze Date before the R2 start so source admission, run heartbeat and
     // creation all share persisted logical-time witnesses. Real timers remain real.
     const graceMs = packReviewRunStaleMinutes() * 60_000;
-    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-20T00:00:00.000Z') });
+    // Preserve the original R1 -> R2 creation order while freezing R2 timestamps.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(Date.now() + 1_000) });
     let r2Id = '';
     try {
       const r2 = await f.start({
