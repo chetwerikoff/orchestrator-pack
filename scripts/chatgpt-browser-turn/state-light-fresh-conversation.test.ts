@@ -1953,7 +1953,7 @@ describe('state-light fresh conversation collision recovery', () => {
       userMarkerlessFromRead?: number;
       assistantCarrierKeysByRead?: readonly string[];
       neverMarkerProof?: boolean;
-      assistantCode?: { visible: string; domTextContent: string; secondVisible?: string; firstLanguage?: string; secondLanguage?: string; interleavedProse?: string };
+      assistantCode?: { visible: string; domTextContent: string; secondVisible?: string; firstLanguage?: string; secondLanguage?: string; interleavedProse?: string; standaloneProseFromRead?: number };
     } = {},
   ) {
     const state = { sent: false, url: PROJECT_URL, reloads: 0, reads: 0, composerText: '' };
@@ -2119,7 +2119,9 @@ describe('state-light fresh conversation collision recovery', () => {
               attach(root, node('P', 'Before'));
               const wrapper = attach(root, node('DIV', ''));
               if (observationOverrides.assistantCode.interleavedProse) {
-                attach(wrapper, node('P', observationOverrides.assistantCode.interleavedProse));
+                const proseParent = state.reads >= (observationOverrides.assistantCode.standaloneProseFromRead ?? Infinity)
+                  ? root : wrapper;
+                attach(proseParent, node('P', observationOverrides.assistantCode.interleavedProse));
               }
               if (observationOverrides.assistantCode.firstLanguage) {
                 attach(wrapper, node('SPAN', observationOverrides.assistantCode.firstLanguage));
@@ -3159,22 +3161,31 @@ describe('state-light fresh conversation collision recovery', () => {
   });
 
 
-  it('Issue #2660 does not publish a code fence that swallows adjacent FAIL prose', async () => {
+  it('Issue #2660 never loses FAIL prose before a mixed wrapper becomes a supported block', async () => {
     const prompt = 'ISSUE-2660-MIXED-PROSE-NEGATIVE';
     const code = 'diff --git a/a b/a\n';
     const outer = 'MISLEADING MIXED WRAPPER';
     const output = join(stateDir, 'issue-2660-mixed-prose-must-not-publish.txt');
-    const { page } = unrenderedOwnedMessagePage(
+    const { page, state } = unrenderedOwnedMessagePage(
       prompt, outer, false, false, false, [outer], [],
       { includeOwnedUser: true, assistantCode: {
         visible: code, domTextContent: code, interleavedProse: 'FAIL',
+        // The owned Page's observation timeout is soft. A permanently
+        // unsupported reply must not be awaited as a terminal test case.
+        standaloneProseFromRead: 12,
       } },
     );
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const outcome = await runNewChatTurn(page, output, '90000');
-    expect(outcome.result.state).not.toBe('ok');
-    expect(outcome.result.send_count).toBe(1);
-    expect(existsSync(output)).toBe(false);
+    const outcome = await runNewChatTurn(page, output);
+    const expected = [
+      'Before', '```\n' + code + '```', 'FAIL',
+      'Following  prose\nEXECUTION_STATUS: complete',
+    ].join('\n\n');
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'ok', cause: 'completed_page_only', send_count: 1,
+    });
+    expect(state.reads).toBeGreaterThanOrEqual(12);
+    expect(readFileSync(output, 'utf8')).toBe(expected);
   });
 
   it('rejects a changed middle indentation on the fresh precommit read', async () => {
