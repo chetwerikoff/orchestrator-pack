@@ -23,6 +23,7 @@ function cleanEnvironment(): NodeJS.ProcessEnv {
     'OPK_VITEST_HARNESS_ROOT',
     'OPK_VITEST_HARNESS_INVENTORY',
     'OPK_VITEST_REENTRY_HARNESS_ROOT',
+    'OPK_VITEST_PRE_TOPOLOGY_MEASUREMENT',
     'NODE_OPTIONS',
   ]) delete env[name];
   return env;
@@ -63,11 +64,41 @@ async function waitForFile(filePath: string, timeoutMs = 10_000): Promise<void> 
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
-async function waitForWatchDelivery(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 50));
+type ObservedWatchEvent = { candidate: string; storeId: string | null };
+function observedWatchGuard(env: NodeJS.ProcessEnv): {
+  guard: ReturnType<typeof startParentLiveStoreGuard>;
+  awaitPath: (path: string) => Promise<ObservedWatchEvent>;
+} {
+  const observations = new Map<string, ObservedWatchEvent>();
+  const pending = new Map<string, (event: ObservedWatchEvent) => void>();
+  const guard = startParentLiveStoreGuard(env, {
+    onWatchEvent: (event: ObservedWatchEvent) => {
+      observations.set(event.candidate, event);
+      pending.get(event.candidate)?.(event);
+      pending.delete(event.candidate);
+    },
+  });
+  return {
+    guard,
+    async awaitPath(path: string) {
+      const observed = observations.get(path);
+      if (observed) return observed;
+      let cancel: (() => void) | undefined;
+      try {
+        return await new Promise<ObservedWatchEvent>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('watch callback not observed: ' + path)), 10_000);
+          cancel = () => clearTimeout(timeout);
+          pending.set(path, resolve);
+        });
+      } finally {
+        cancel?.();
+        pending.delete(path);
+      }
+    },
+  };
 }
 
-function runHarnessedVitest(testPath: string, env: NodeJS.ProcessEnv): Promise<{
+function runHarnessedVitest(testPath: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<{
   exitCode: number | null;
   stderr: string;
   stdout: string;
@@ -83,7 +114,62 @@ function runHarnessedVitest(testPath: string, env: NodeJS.ProcessEnv): Promise<{
     cwd: repoRoot,
     env,
     inheritParentEnv: false,
+    signal,
   }).then((result) => ({ exitCode: result.exitCode, stderr: result.stderr, stdout: result.stdout }));
+}
+
+// The ready/release files are siblings of child-production, outside the guarded synthetic
+// HOME/TMP/wake/pack-base/store/fence roots. An inner test signals only after test-body start.
+async function runSynchronizedHarnessChild(
+  root: string,
+  fixture: string,
+  env: NodeJS.ProcessEnv,
+  mutate: () => void,
+): Promise<{ exitCode: number | null; stderr: string; stdout: string }> {
+  const ready = join(root, 'child-live-store-guard-ready');
+  const release = join(root, 'child-live-store-guard-release');
+  writeFileSync(fixture, [
+    "import { expect, it } from 'vitest';",
+    "import { existsSync, writeFileSync } from 'node:fs';",
+    "it('passes', async () => {",
+    `  writeFileSync(${JSON.stringify(ready)}, 'ready\\n');`,
+    "  await new Promise<void>((resolve, reject) => {",
+    "    const safetyDeadline = Date.now() + 12_000;",
+    "    const observeRelease = () => {",
+    `      if (existsSync(${JSON.stringify(release)})) return resolve();`,
+    "      if (Date.now() >= safetyDeadline) return reject(new Error('parent release never arrived'));",
+    "      setTimeout(observeRelease, 10);",
+    "    };",
+    "    observeRelease();",
+    "  });",
+    "  expect(true).toBe(true);",
+    "}, 15_000);",
+    '',
+  ].join('\\n'), 'utf8');
+  const controller = new AbortController();
+  const childPromise = runHarnessedVitest(fixture, env, controller.signal);
+  let joined = false;
+  const safetyAbort = setTimeout(() => controller.abort(), 25_000);
+  try {
+    await Promise.race([
+      waitForFile(ready),
+      childPromise.then((child) => {
+        throw new Error('harness child exited before ready: ' + child.exitCode + ' ' + child.stderr);
+      }),
+    ]);
+    // The external write is synchronously settled while the real child is held open.
+    mutate();
+    writeFileSync(release, 'release\\n');
+    const child = await childPromise;
+    joined = true;
+    if (controller.signal.aborted) throw new Error('harness child did not join before safety abort');
+    return child;
+  } finally {
+    if (!existsSync(release)) writeFileSync(release, 'release\\n');
+    if (!joined) controller.abort();
+    try { await childPromise; } catch { /* abort has joined/settled the failed child */ }
+    clearTimeout(safetyAbort);
+  }
 }
 
 
@@ -370,8 +456,11 @@ describe('parent live-store guard', () => {
     env.OPK_PROJECT_ID = 'selected-project';
     const foreignProjectRoot = join(env.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'foreign-project');
     const foreignSupervisorRoot = join(foreignProjectRoot, 'supervisor');
-    const guard = startParentLiveStoreGuard(env);
-    mkdirSync(foreignSupervisorRoot, { recursive: true });
+    const { guard, awaitPath } = observedWatchGuard(env);
+    mkdirSync(foreignProjectRoot);
+    await awaitPath(foreignProjectRoot); // callback arms the new child directory
+    mkdirSync(foreignSupervisorRoot);
+    await awaitPath(foreignSupervisorRoot); // callback arms the supervisor directory
     const status = join(foreignSupervisorRoot, 'typescript-supervisor-status.json');
     const temporary = join(
       foreignSupervisorRoot,
@@ -393,7 +482,7 @@ describe('parent live-store guard', () => {
       '{}\n',
       'utf8',
     );
-    await waitForWatchDelivery();
+    expect((await awaitPath(status)).storeId).toBe('wake-supervisor-runtime-state');
 
     expect(() => guard.stop()).not.toThrow();
   });
@@ -455,10 +544,12 @@ describe('parent live-store guard', () => {
     const env = productionEnvironment(join(root, 'production'));
     env.OPK_PROJECT_ID = 'selected-project';
     const foreignRoot = join(env.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'foreign-project');
-    const guard = startParentLiveStoreGuard(env);
-    mkdirSync(foreignRoot, { recursive: true });
-    writeFileSync(join(foreignRoot, 'unrelated-live-store-leak.json'), 'leak\n', 'utf8');
-    await waitForWatchDelivery();
+    const { guard, awaitPath } = observedWatchGuard(env);
+    mkdirSync(foreignRoot);
+    await awaitPath(foreignRoot);
+    const leakedPath = join(foreignRoot, 'unrelated-live-store-leak.json');
+    writeFileSync(leakedPath, 'leak\n', 'utf8');
+    expect((await awaitPath(leakedPath)).storeId).toBe('wake-supervisor-runtime-state');
 
     expect(() => guard.stop()).toThrow(/OPK_VITEST_LIVE_STORE_GUARD_FAILED/);
   });
@@ -504,21 +595,6 @@ describe('parent live-store guard', () => {
     temporaryRoots.push(root);
     const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-supervisor-layout-child.test.ts');
     temporaryFiles.push(fixture);
-    const readyFile = join(root, 'child-live-store-guard-ready');
-    writeFileSync(
-      fixture,
-      [
-        "import { expect, it } from 'vitest';",
-        "import { writeFileSync } from 'node:fs';",
-        "it('passes', async () => {",
-        `  writeFileSync(${JSON.stringify(readyFile)}, 'ready\\n');`,
-        '  await new Promise((resolve) => setTimeout(resolve, 400));',
-        '  expect(true).toBe(true);',
-        '});',
-        '',
-      ].join('\n'),
-      'utf8',
-    );
     const childEnvironment = productionEnvironment(join(root, 'child-production'));
     const projectId = DEFAULT_WAKE_SUPERVISOR_PROJECT_ID;
     delete childEnvironment.OPK_PROJECT_ID;
@@ -526,7 +602,6 @@ describe('parent live-store guard', () => {
     const projectStateDir = join(wakeRoot, projectId);
     const supervisorDir = join(projectStateDir, 'supervisor');
     mkdirSync(supervisorDir, { recursive: true });
-    mkdirSync(projectStateDir, { recursive: true });
     const durableWrite = (target: string, name: string, content: string): void => {
       const temporary = join(supervisorDir, `.${name}.1234.00000000-0000-4000-8000-000000000000.tmp`);
       writeFileSync(temporary, content, 'utf8');
@@ -543,17 +618,15 @@ describe('parent live-store guard', () => {
     writeFileSync(reconcileLock, '1\n', 'utf8');
     writeFileSync(fleetSnapshot, '{"snapshot":"before"}\n', 'utf8');
 
-    const childPromise = runHarnessedVitest(fixture, childEnvironment);
-    await waitForFile(readyFile);
-    durableWrite(status, 'typescript-supervisor-status.json', '{"restartState":"running"}\n');
-    durableWrite(projected, 'projected-registry.json', '{"children":[{"id":"pr2-scheduler"}]}\n');
-    writeFileSync(reconcileLock, '2\n', 'utf8');
-    writeFileSync(reconcile, '{"messages":{"msg":1}}\n', 'utf8');
-    const fleetTemporary = join(projectStateDir, '.tmp-1234-1700000000000-deadbeef');
-    writeFileSync(fleetTemporary, '{"snapshot":"after"}\n', 'utf8');
-    renameSync(fleetTemporary, fleetSnapshot);
-    const child = await childPromise;
-
+    const child = await runSynchronizedHarnessChild(root, fixture, childEnvironment, () => {
+      durableWrite(status, 'typescript-supervisor-status.json', '{"restartState":"running"}\n');
+      durableWrite(projected, 'projected-registry.json', '{"children":[{"id":"pr2-scheduler"}]}\n');
+      writeFileSync(reconcileLock, '2\n', 'utf8');
+      writeFileSync(reconcile, '{"messages":{"msg":1}}\n', 'utf8');
+      const fleetTemporary = join(projectStateDir, '.tmp-1234-1700000000000-deadbeef');
+      writeFileSync(fleetTemporary, '{"snapshot":"after"}\n', 'utf8');
+      renameSync(fleetTemporary, fleetSnapshot);
+    });
     expect(child.exitCode, child.stderr).toBe(0);
   });
 
@@ -562,17 +635,10 @@ describe('parent live-store guard', () => {
     temporaryRoots.push(root);
     const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-passing-child.test.ts');
     temporaryFiles.push(fixture);
-    writeFileSync(
-      fixture,
-      "import { expect, it } from 'vitest'; it('passes', async () => { await new Promise((resolve) => setTimeout(resolve, 400)); expect(true).toBe(true); });\n",
-      'utf8',
-    );
     const childEnvironment = productionEnvironment(join(root, 'child-production'));
-    const childPromise = runHarnessedVitest(fixture, childEnvironment);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    writeFileSync(join(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'worker-message-dispatch-journal.json'), 'tick\n');
-    const child = await childPromise;
-
+    const child = await runSynchronizedHarnessChild(root, fixture, childEnvironment, () => {
+      writeFileSync(join(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'worker-message-dispatch-journal.json'), 'tick\n');
+    });
     expect(child.exitCode, child.stderr).toBe(0);
   });
 
@@ -581,27 +647,10 @@ describe('parent live-store guard', () => {
     temporaryRoots.push(root);
     const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-atomic-journal-child.test.ts');
     temporaryFiles.push(fixture);
-    const readyFile = join(root, 'child-live-store-guard-ready');
-    writeFileSync(
-      fixture,
-      [
-        "import { expect, it } from 'vitest';",
-        "import { writeFileSync } from 'node:fs';",
-        "it('passes', async () => {",
-        `  writeFileSync(${JSON.stringify(readyFile)}, 'ready\\n');`,
-        '  await new Promise((resolve) => setTimeout(resolve, 400));',
-        '  expect(true).toBe(true);',
-        '});',
-        '',
-      ].join('\n'),
-      'utf8',
-    );
     const childEnvironment = productionEnvironment(join(root, 'child-production'));
-    const childPromise = runHarnessedVitest(fixture, childEnvironment);
-    await waitForFile(readyFile);
-    writeAtomicJournal(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!);
-    const child = await childPromise;
-
+    const child = await runSynchronizedHarnessChild(root, fixture, childEnvironment, () => {
+      writeAtomicJournal(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!);
+    });
     expect(child.exitCode, child.stderr).toBe(0);
   });
 
@@ -610,27 +659,19 @@ describe('parent live-store guard', () => {
     temporaryRoots.push(root);
     const fixture = join(repoRoot, 'scripts', '.opk-parent-guard-journal-and-leak-child.test.ts');
     temporaryFiles.push(fixture);
-    writeFileSync(
-      fixture,
-      "import { expect, it } from 'vitest'; it('passes', async () => { await new Promise((resolve) => setTimeout(resolve, 150)); expect(true).toBe(true); });\n",
-      'utf8',
-    );
     const childEnvironment = productionEnvironment(join(root, 'child-production'));
-    const childPromise = runHarnessedVitest(fixture, childEnvironment);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    writeAtomicJournal(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!);
-    writeFileSync(
-      join(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'unrelated-live-store-leak.json'),
-      'leak\n',
-      'utf8',
-    );
-    const child = await childPromise;
-
+    const child = await runSynchronizedHarnessChild(root, fixture, childEnvironment, () => {
+      writeAtomicJournal(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!);
+      writeFileSync(
+        join(childEnvironment.OPK_VITEST_PRODUCTION_WAKE_ROOT!, 'unrelated-live-store-leak.json'),
+        'leak\n',
+        'utf8',
+      );
+    });
     expect(child.exitCode).not.toBe(0);
     expect(child.stderr).toContain('OPK_VITEST_LIVE_STORE_GUARD_FAILED');
     expect(child.stderr).toContain('unrelated-live-store-leak.json');
   });
-
 
   it('removes inherited selectors at Vitest entry, before globalSetup, without erasing synthetic opt-ins', async () => {
     for (const seeded of [true, false]) {
