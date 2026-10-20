@@ -324,7 +324,7 @@ describe('S1 fleet observer', () => {
   it('closes positive gone and gives a reappearance a fresh reference', async () => {
     const source = new FakeFleetSource();
     source.add('worker', 'gen-1', 'gone');
-    const observer = observerFor(source);
+    const observer = observerFor(source, undefined, 'sg-test-1', () => 0);
     const gone = await observer.tick({ schedulerIntervalMs: 1_000 });
     expect(gone.snapshot?.census).toEqual([]);
     expect(gone.snapshot?.transitions.some((transition) => transition.reason === 'positive-gone')).toBe(true);
@@ -395,7 +395,7 @@ describe('S1 fleet observer', () => {
         terminalState: 'running',
       },
     } as unknown as RuntimeResult<RuntimeBoundedOutput>);
-    const result = await observerFor(source).tick({ schedulerIntervalMs: 1_000 });
+    const result = await observerFor(source, undefined, 'sg-test-1', () => 0).tick({ schedulerIntervalMs: 1_000 });
     expect(result.snapshot?.census[0]).toMatchObject({ class: 'unknown', reason: 'observation-failed' });
   });
 
@@ -671,7 +671,7 @@ describe('S1 fleet observer', () => {
     const source = new DeferredListingFleetSource();
     const existing = source.add('existing-listing');
     source.queueListing([existing]);
-    const observer = observerFor(source);
+    const observer = observerFor(source, undefined, 'sg-test-1', () => 0);
     const initialPromise = observer.tick({ schedulerIntervalMs: 1_000, tickSequence: 1 });
     await source.waitForPending(1);
     source.releaseNext();
@@ -703,7 +703,7 @@ describe('S1 fleet observer', () => {
   it('does not settle gone when output identity differs', async () => {
     const source = new WrongIdentityGoneOutputSource();
     source.add('worker', 'gen-1', 'gone');
-    const observer = observerFor(source);
+    const observer = observerFor(source, undefined, 'sg-test-1', () => 0);
     const result = await observer.tick({ schedulerIntervalMs: 1_000 });
 
     expect(result.snapshot?.census[0]?.class).toBe('unknown');
@@ -800,7 +800,7 @@ describe('S1 fleet observer', () => {
     const exercise = async (fault: 'replacement' | 'read-back'): Promise<void> => {
       const source = new FakeFleetSource();
       source.add(`publication-fault-${fault}`);
-      const observer = observerFor(source);
+      const observer = observerFor(source, undefined, 'sg-test-1', () => 0);
       const accepted = await observer.tick({ schedulerIntervalMs: 1_000 });
       const priorBytes = readFileSync(observer.snapshotPath, 'utf8');
       const rename = vi.mocked(fs.renameSync);
@@ -841,7 +841,7 @@ describe('S1 fleet observer', () => {
     const exercise = async (boundary: 'serializer' | 'temp-write'): Promise<void> => {
       const source = new FakeFleetSource();
       source.add(`superseded-${boundary}`);
-      const observer = observerFor(source, undefined, `sg-${boundary}`);
+      const observer = observerFor(source, undefined, `sg-${boundary}`, () => 0);
       let newer: Promise<Awaited<ReturnType<FleetObserver['tick']>>> | undefined;
       const originalStringify = JSON.stringify;
       const stringifySpy = boundary === 'serializer' ? vi.spyOn(JSON, 'stringify') : undefined;
