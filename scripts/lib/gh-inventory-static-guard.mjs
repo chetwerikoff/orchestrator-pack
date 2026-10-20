@@ -268,6 +268,13 @@ export function matchRestDirectInventoryRow(command) {
   if (!/^gh api repos\//i.test(normalized)) {
     return null;
   }
+  // An inventory-listed endpoint is a read only in its exact two-token GET
+  // spelling. POST and extra flags remain native governed passthrough, not read
+  // evidence; do not create a shim matcher route for rest_direct.
+  const argv = commandTemplateToArgv(normalized);
+  if (!argv || argv.length !== 2 || classifyArgv(argv).parsed.subcommand[0] !== 'api') {
+    return null;
+  }
   for (const row of inventory.rows) {
     if (row.ownerClass !== 'rest_direct' || !row.pattern) {
       continue;
