@@ -1230,3 +1230,85 @@ describe('Issue #2544: unavailable observation and Task-owned receipt recovery',
     }
   });
 });
+
+describe('W3 ARCH17:36 retained-identity no-owned-prompt GitHub-first recheck', () => {
+  const retained = { ...context, profile: 'profile-2081', invocationId: 'invocation-2081' };
+  const expected = ['scripts/gh', 'issue', 'view', '2081', '--json', 'state,title,body,closedAt'];
+
+  it('rechecks the selected Issue without a CDP or publication witness for independent stale turn records', () => {
+    for (const state of ['observation_uncertain', 'rate_limit']) {
+      for (const bound of [retained, { ...retained, cdp: undefined, targetId: undefined, conversationUrl: undefined }]) {
+        const evaluated = classifyExecuteIssueManagerRecord(turn(state), bound);
+        expect(evaluated.exitCode).toBe(3);
+        expect(evaluated.result).toMatchObject({ cause: 'execute_github_first_reconciliation' });
+        expect(expectReadOnly(evaluated)).toMatchObject({ kind: 'execute-github-first-read-only', argv: expected });
+      }
+    }
+  });
+
+  it('rechecks only a precise retained-identity, no-owned-prompt inspect', () => {
+    const input = probe('ok', {
+      profile: 'profile-2081', invocation_id: 'invocation-2081',
+      identity_bound: true, observation_phase: 'sent_unharvested',
+      execution_recovery_inspect: {
+        reason: 'no_owned_prompt', owned_user_turn_key: null,
+        candidate_assistant_turn_key: null, generation_in_progress: false,
+      },
+    });
+    const evaluated = classifyExecuteIssueManagerRecord(input, retained);
+    expect(evaluated.exitCode).toBe(3);
+    expect(expectReadOnly(evaluated).argv).toEqual(expected);
+    for (const invalid of [
+      { ...input, identity_bound: false },
+      { ...input, profile: 'foreign' },
+      { ...input, invocation_id: 'foreign' },
+      { ...input, repository: 'other/repository' },
+      { ...input, issueNumber: 999 },
+      { ...input, observation_phase: 'harvested' },
+      { ...input, execution_recovery_inspect: { ...input.execution_recovery_inspect as object, generation_in_progress: true } },
+      { ...input, execution_recovery_inspect: { ...input.execution_recovery_inspect as object, owned_user_turn_key: 'unknown' } },
+    ]) {
+      expect(actionOf(classifyExecuteIssueManagerRecord(invalid, retained))?.kind).not.toBe('execute-github-first-read-only');
+    }
+  });
+
+  it('does not authorize a repeated identical read or any Send after an uninformative Issue response', () => {
+    const input = turn('observation_uncertain');
+    const first = expectReadOnly(classifyExecuteIssueManagerRecord(input, retained));
+    // The pure boundary repeats the exact argv. Its existing manager caller
+    // must treat a second byte-identical recommendation as a producer defect.
+    const second = expectReadOnly(classifyExecuteIssueManagerRecord(input, retained));
+    expect(second.argv).toEqual(first.argv);
+    const executed: string[] = [];
+    let producerDefect = false;
+    for (const action of [first, second]) {
+      const serialized = JSON.stringify(action.argv);
+      if (executed.at(-1) === serialized) { producerDefect = true; break; }
+      executed.push(serialized); // Synthetic read-only Issue view; no asserted GitHub effect.
+    }
+    expect(executed).toHaveLength(1);
+    expect(producerDefect).toBe(true);
+    expect(first.argv).not.toContain('commit');
+    expect(first.argv).not.toContain('comments');
+  });
+
+  it('refuses missing and contradictory selected Issue/manager identity', () => {
+    for (const bad of [
+      { ...retained, profile: undefined },
+      { ...retained, invocationId: undefined },
+      { ...retained, repository: '' },
+      { ...retained, issueNumber: 0 },
+    ]) {
+      expect(actionOf(classifyExecuteIssueManagerRecord(turn('observation_uncertain'), bad))?.kind)
+        .not.toBe('execute-github-first-read-only');
+    }
+    for (const invalid of [
+      turn('rate_limit', { profile: 'foreign' }),
+      turn('rate_limit', { invocation_id: 'foreign' }),
+      turn('rate_limit', { issue_number: 999 }),
+      turn('rate_limit', { repository: 'foreign/repo' }),
+    ]) {
+      expect(actionOf(classifyExecuteIssueManagerRecord(invalid, retained))?.kind).not.toBe('execute-github-first-read-only');
+    }
+  });
+});

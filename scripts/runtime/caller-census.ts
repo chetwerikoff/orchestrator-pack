@@ -141,7 +141,7 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
   },
   {
     surface: 'scripts/pr2-foundation/supervised-task-launch-assistant.ts',
-    operations: ['runtime-composition', 'spawn', 'liveness'],
+    operations: ['runtime-composition', 'spawn', 'liveness', 'find', 'list', 'stop'],
     kind: 'runtime-port',
     disposition: 'use-runtime-interface',
     note: 'Launch composition creates one exact internal RuntimeAdapter worker, proves idle liveness, then delegates successful start to supervised-worker-start.',
