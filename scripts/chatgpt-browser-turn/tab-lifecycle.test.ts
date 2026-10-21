@@ -192,6 +192,14 @@ async function observeFinalizer(testCase: FinalizerCase) {
         cdp, initialRoute: chatUrl,
       });
     }
+    if (testCase.sendCount > 0) {
+      // A delivered turn must first enter dispatching; never weaken the
+      // production observation phase graph just to construct a test case.
+      transitionStateLightTurnObservation({
+        profileKey, invocationId, phase: 'dispatching',
+        reason: 'verified_1238_fixture_dispatching',
+      });
+    }
     transitionStateLightTurnObservation({
       profileKey, invocationId,
       phase: testCase.sendCount === 0 ? 'prepared' : 'sent_unharvested',
