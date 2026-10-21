@@ -96,6 +96,7 @@ type FinalizerCase = {
   readonly unreadableComposer?: boolean;
   readonly errorBanner?: string;
   readonly blankPage?: boolean;
+  readonly recoverySuccessor?: boolean;
 };
 
 function makeTurnResult(overrides: Partial<Omit<CompactTurnResult, 'cleanup'>> = {}): Omit<CompactTurnResult, 'cleanup'> {
@@ -132,6 +133,7 @@ async function observeFinalizer(testCase: FinalizerCase) {
   const targetId = 'fixture-own-target';
   let pageCloseCalls = 0;
   let browserCloseCalls = 0;
+  let successorCloseCalls = 0;
   let foreignTargetOpen = true;
   let physicallyPresent = testCase.pagePresent && !testCase.pageLost;
   const page = testCase.pagePresent
@@ -170,6 +172,11 @@ async function observeFinalizer(testCase: FinalizerCase) {
         return { count: async () => 0 };
       },
     }
+    : undefined;
+  // The successor can display the same URL and old marker as the original:
+  // route and transcript equality alone must not authorize closing it.
+  const recoverySuccessorPage = testCase.recoverySuccessor && page
+    ? { ...page, close: async () => { successorCloseCalls++; } }
     : undefined;
   const context = {
     newPage: vi.fn(async () => page),
@@ -232,9 +239,11 @@ async function observeFinalizer(testCase: FinalizerCase) {
         invocation_id: invocationId, configured_profile_key: profileKey,
         send_count: testCase.sendCount,
       }),
-      page, browser, publicationState: testCase.publicationState,
+      page: recoverySuccessorPage ?? page, browser,
+      ...(recoverySuccessorPage ? { originalCreatedPage: page } : {}),
+      publicationState: testCase.publicationState,
     }, cdp);
-    return { result, pageCloseCalls, browserCloseCalls, foreignTargetOpen };
+    return { result, pageCloseCalls, successorCloseCalls, browserCloseCalls, foreignTargetOpen };
   } finally {
     fetchSpy.mockRestore();
     if (priorStateDir === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
@@ -307,6 +316,20 @@ describe('Issue #1238 page cleanup equivalence', () => {
     expect(observed.result.cleanup_status).toBe('cleanup_unconfirmed');
     expect(observed.pageCloseCalls).toBe(0);
     expect(observed.browserCloseCalls).toBe(1); // CDP connection release, not a tab close.
+    expect(observed.foreignTargetOpen).toBe(true);
+  });
+
+  it('never closes a recovery successor carrying the original marker and URL as though it were the created target (#2678 R2)', async () => {
+    const observed = await observeFinalizer({
+      sendCount: 1, pagePresent: true, pageLost: false,
+      publicationState: 'committed_ok', recoverySuccessor: true,
+    });
+    // The original is still present in the CDP census. Its exact pinned
+    // reattach may fail, but the unrelated successor must not be destroyed.
+    expect(observed.result.cleanup).toBe('unconfirmed');
+    expect(observed.result.cleanup_status).toBe('cleanup_unconfirmed');
+    expect(observed.pageCloseCalls).toBe(0);
+    expect(observed.successorCloseCalls).toBe(0);
     expect(observed.foreignTargetOpen).toBe(true);
   });
 
