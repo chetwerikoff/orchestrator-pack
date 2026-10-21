@@ -5210,9 +5210,11 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
       // Deliberately observe the full 15-second visibility fence, not a
       // shortened visibility budget. Only this slow negative test gets headroom.
       const resumed = await invoke();
+      // The CLI intentionally maps every created:false failure to review_not_started.
+      // runnerReason preserves startPackReview's exact supplemental disposition.
       expect(resumed).toMatchObject({
         exitCode: 1, result: { ok: false, created: false, reused: true,
-          reason: 'supplemental_delivery_unverified', runId },
+          reason: 'review_not_started', runnerReason: 'supplemental_delivery_unverified', runId },
       });
       const terminal = readdirSync(terminalDir).filter((name) => !beforeTerminals.has(name))
         .map((name) => JSON.parse(readFileSync(join(terminalDir, name), 'utf8')));
