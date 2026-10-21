@@ -45,6 +45,13 @@ export interface StateLightTurnObservationRecord {
   readonly send_count?: number;
   readonly send_witness: StateLightTurnSendWitness;
   readonly conversation_url: string | null;
+  /** CDP-pinned original target, captured at allocation, never a URL-derived claim. */
+  readonly owned_target?: {
+    readonly id: string;
+    readonly created: boolean;
+    readonly cdp_sha256: string;
+    readonly initial_route: string;
+  };
   readonly primary?: StateLightTurnPrimaryBinding;
   readonly transitioned_at: string;
   readonly transition_reason: string;
@@ -142,6 +149,15 @@ function parseRecord(raw: string): StateLightTurnObservationRecord {
   }
   if (value.send_witness === 'numeric_send_count' && value.send_count === undefined) {
     throw new Error('observation_numeric_witness_without_count');
+  }
+  if (value.owned_target) {
+    const target = value.owned_target;
+    if (typeof target.id !== 'string' || !/^[A-Za-z0-9._:-]{1,256}$/u.test(target.id)
+      || typeof target.created !== 'boolean'
+      || typeof target.cdp_sha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(target.cdp_sha256)
+      || typeof target.initial_route !== 'string' || !/^https:\/\/chatgpt\.com\//u.test(target.initial_route)) {
+      throw new Error('observation_owned_target_invalid');
+    }
   }
   if (value.primary) {
     if (typeof value.primary.target !== 'string'
@@ -361,6 +377,9 @@ function validateTransition(
     throw new Error('observation_immutable_identity_changed');
   }
   if (!LEGAL_NEXT[current.phase].has(next.phase)) throw new Error('observation_phase_transition_invalid');
+  if (current.owned_target && JSON.stringify(current.owned_target) !== JSON.stringify(next.owned_target)) {
+    throw new Error('observation_owned_target_rebind');
+  }
   if (current.primary && !sameBinding(current.primary, next.primary)) {
     throw new Error('observation_primary_binding_conflict');
   }
@@ -429,6 +448,34 @@ export function transitionStateLightTurnObservation(input: {
     transitioned_at: new Date().toISOString(),
     transition_reason: input.reason,
   }));
+}
+
+/** Capture the original exact new/selected target before any Send; no later takeover. */
+export function bindStateLightOwnedTarget(input: {
+  readonly profileKey: string;
+  readonly invocationId: string;
+  readonly targetId: string;
+  readonly created: boolean;
+  readonly cdp: string;
+  readonly initialRoute: string;
+}): StateLightTurnObservationRecord {
+  const witness = {
+    id: input.targetId,
+    created: input.created,
+    cdp_sha256: createHash('sha256').update(input.cdp, 'utf8').digest('hex'),
+    initial_route: input.initialRoute,
+  };
+  return mutateStateLightTurnObservation(input.profileKey, input.invocationId, (current) => {
+    if (current.owned_target && JSON.stringify(current.owned_target) !== JSON.stringify(witness)) {
+      throw new Error('observation_owned_target_conflict');
+    }
+    return {
+      ...current,
+      owned_target: current.owned_target ?? witness,
+      transitioned_at: new Date().toISOString(),
+      transition_reason: 'own_target_pinned_before_send',
+    };
+  });
 }
 
 export function bindPrimaryPublication(input: {
