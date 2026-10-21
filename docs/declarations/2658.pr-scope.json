@@ -16,6 +16,7 @@
     "scripts/pr-scope-declaration.test.ts",
     "scripts/pr-scope-declaration.ts",
     "scripts/pr-scope-runner.test.ts",
+    "scripts/target-portability-sinks.test.ts",
     "scripts/tier-gate-guard.test.ts",
     "scripts/worker-smoke.test.ts"
   ],
@@ -48,9 +49,10 @@
     "scripts/pr-scope-declaration.test.ts",
     "scripts/pr-scope-declaration.ts",
     "scripts/pr-scope-runner.test.ts",
+    "scripts/target-portability-sinks.test.ts",
     "scripts/tier-gate-guard.test.ts",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "da10e12a3d402bf4ff2b10a417c08a27684501b5"
+  "source_revision": "8dc6d8ff95abc8298bfcfc70422b8101e4ee6538"
 }
