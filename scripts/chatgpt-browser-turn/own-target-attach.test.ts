@@ -12,7 +12,7 @@ import {
   countUninspectedRecoveryTargets,
   getOwnTargetInfo,
 } from './own-target-attach.ts';
-import { listCdpPageTargets } from './own-target-cdp-proxy.ts';
+import { listCdpPageTargets, probeCdpSiblingEvaluations } from './own-target-cdp-proxy.ts';
 import { takeRecoveryCensus, type PostSendRecoveryAdapter } from './state-light-turn-recovery.ts';
 
 const CDP = 'http://127.0.0.1:9222';
@@ -473,14 +473,196 @@ describe('Issue #2625 own-target attach isolation', () => {
 });
 
 
+
+describe('Issue #2682 direct-target sibling evaluation (same endpoint, not same context)', () => {
+  const owner = { id: 'probe-owner', type: 'page', url: CHAT, browserContextId: 'context-one' };
+  const frozen = { id: 'probe-frozen', type: 'page', url: FOREIGN, browserContextId: 'context-two' };
+  type ProbeTarget = typeof owner;
+  let probePages: ProbeTarget[];
+  let responder: 'stalled-evaluation' | 'responsive' | 'lost' | 'control-stall' | 'control-error' | 'stall-connect' | 'owner-unhealthy' | 'protocol-error';
+  let allSockets: ProbeSocket[];
+  let allCommands: Array<{ target: string; method: string }>;
+
+  class ProbeSocket {
+    static readonly OPEN = 1;
+    static readonly CLOSED = 3;
+    readonly id: string;
+    readyState = 0;
+    private listeners = new Map<string, Set<(event: { data?: unknown }) => void>>();
+
+    constructor(url: string) {
+      this.id = new URL(url).pathname.split('/').at(-1)!;
+      allSockets.push(this);
+      queueMicrotask(() => {
+        if (this.readyState !== 0 || (this.id === frozen.id && responder === 'stall-connect')) return;
+        this.readyState = ProbeSocket.OPEN;
+        this.emit('open', {});
+      });
+    }
+
+    addEventListener(kind: string, listener: (event: { data?: unknown }) => void): void {
+      const group = this.listeners.get(kind) ?? new Set();
+      group.add(listener);
+      this.listeners.set(kind, group);
+    }
+
+    removeEventListener(kind: string, listener: (event: { data?: unknown }) => void): void {
+      this.listeners.get(kind)?.delete(listener);
+    }
+
+    emit(kind: string, event: { data?: unknown }): void {
+      for (const listener of [...(this.listeners.get(kind) ?? [])]) listener(event);
+    }
+
+    send(raw: string): void {
+      const command = JSON.parse(raw) as { id: number; method: string; params?: { targetId?: string } };
+      allCommands.push({ target: this.id, method: command.method });
+      queueMicrotask(() => {
+        if (this.readyState !== ProbeSocket.OPEN) return;
+        const target = probePages.find((page) => page.id === this.id);
+        const emitResponse = (data: unknown) => this.emit('message', { data: JSON.stringify(data) });
+        if (command.method === 'Target.getTargetInfo') {
+          if (!target || command.params?.targetId !== this.id) {
+            emitResponse({ id: command.id, error: { code: -32000, message: 'target gone' } });
+          } else if (this.id === frozen.id && responder === 'control-stall') {
+            // The pre-evaluation independent control never replies.
+          } else if (this.id === frozen.id && responder === 'control-error') {
+            emitResponse({ id: command.id, error: { code: -32601, message: 'not supported' } });
+          } else {
+            emitResponse({ id: command.id, result: { targetInfo: {
+              targetId: target.id, type: target.type, url: target.url,
+            } } });
+          }
+        } else if (command.method === 'Runtime.evaluate') {
+          if (this.id === frozen.id && responder === 'lost') {
+            this.close();
+          } else if (this.id === frozen.id && responder === 'protocol-error') {
+            emitResponse({ id: command.id, error: { code: -32602, message: 'evaluation-error' } });
+          } else if ((this.id !== frozen.id && responder !== 'owner-unhealthy') || responder === 'responsive') {
+            emitResponse({ id: command.id, result: { result: { type: 'number', value: 2 } } });
+          } // Frozen evaluation itself remains unanswered without socket loss.
+        } else {
+          throw new Error('unanticipated probe side effect: ' + command.method);
+        }
+      });
+    }
+
+    close(): void {
+      if (this.readyState === 3) return;
+      this.readyState = ProbeSocket.CLOSED;
+      queueMicrotask(() => this.emit('close', {}));
+    }
+  }
+
+  beforeEach(() => {
+    probePages = [owner, frozen];
+    responder = 'stalled-evaluation';
+    allSockets = [];
+    allCommands = [];
+    vi.stubGlobal('WebSocket', ProbeSocket);
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      if (new URL(String(input)).pathname !== '/json/list') throw new Error('unexpected CDP HTTP mutation');
+      return new Response(JSON.stringify(probePages.map((page) => ({
+        ...page, webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/' + page.id,
+      }))), { status: 200 });
+    }));
+  });
+
+  it('qualifies only a direct-target timeout with surviving controls and a healthy owner', async () => {
+    const result = await probeCdpSiblingEvaluations(CDP, owner.id);
+    expect(result.nonresponsive).toEqual([{ id: frozen.id, url: frozen.url }]);
+    expect(result.unknown).toEqual([]);
+    expect(allSockets).toHaveLength(2); // one sibling plus one independent healthy owner
+    expect(allSockets.every((socket) => socket.readyState === ProbeSocket.CLOSED)).toBe(true);
+    expect(allCommands.filter((command) => command.target === frozen.id).map((command) => command.method))
+      .toEqual(['Target.getTargetInfo', 'Runtime.evaluate', 'Target.getTargetInfo']);
+    expect(allCommands.filter((command) => command.target === owner.id).map((command) => command.method))
+      .toEqual(['Target.getTargetInfo', 'Runtime.evaluate', 'Target.getTargetInfo']);
+    expect(allCommands.some((command) => !['Runtime.evaluate', 'Target.getTargetInfo'].includes(command.method))).toBe(false);
+    // This cross-context candidate establishes same CDP endpoint only; do not infer profile identity.
+    expect(owner.browserContextId).not.toBe(frozen.browserContextId);
+
+    responder = 'responsive';
+    const recovery = await probeCdpSiblingEvaluations(CDP, owner.id, result.nonresponsive);
+    expect(recovery.responsive).toEqual([{ id: frozen.id, url: frozen.url }]);
+    expect(recovery.nonresponsive).toEqual([]);
+  }, 12_000);
+
+  it.each(['lost', 'control-stall', 'control-error', 'stall-connect', 'protocol-error', 'owner-unhealthy'] as const)(
+    'returns unknown, never a frozen assertion, after %s', async (mode) => {
+      responder = mode;
+      const result = await probeCdpSiblingEvaluations(CDP, owner.id);
+      expect(result.nonresponsive).toEqual([]);
+      expect(result.unknown).toEqual([{ id: frozen.id, url: frozen.url }]);
+      expect(allSockets.every((socket) => socket.readyState === ProbeSocket.CLOSED)).toBe(true);
+    },
+    8_000,
+  );
+
+  it('distinguishes an original target that disappeared or changed URL from recovery', async () => {
+    probePages = [owner];
+    const original = [{ id: frozen.id, url: frozen.url }];
+    const absent = await probeCdpSiblingEvaluations(CDP, owner.id, original);
+    expect(absent.disappearedOrChanged).toEqual(original);
+    expect(absent.responsive).toEqual([]);
+    probePages = [owner, { ...frozen, url: 'https://chatgpt.com/c/navigated-elsewhere' }];
+    const changed = await probeCdpSiblingEvaluations(CDP, owner.id, original);
+    expect(changed.disappearedOrChanged).toEqual(original);
+    expect(changed.nonresponsive).toEqual([]);
+    expect(allCommands.filter((command) => command.target === frozen.id)).toEqual([]);
+  });
+
+  it('never starts more than four sibling sockets even when the fifth target is frozen', async () => {
+    responder = 'responsive';
+    probePages = [owner, ...Array.from({ length: 6 }, (_, index) => ({
+      ...frozen, id: 'a' + index, url: FOREIGN + '/' + index,
+    }))];
+    const result = await probeCdpSiblingEvaluations(CDP, owner.id);
+    expect(result.nonresponsive).toEqual([]);
+    expect(allSockets).toHaveLength(5);
+    expect(result.unknown).toEqual([
+      { id: 'a4', url: FOREIGN + '/4' }, { id: 'a5', url: FOREIGN + '/5' },
+    ]);
+    expect(allCommands.filter(({ target }) => target.startsWith('a'))
+      .map(({ target }) => target).every((id) => ['a0', 'a1', 'a2', 'a3'].includes(id))).toBe(true);
+    expect(allSockets.every((socket) => socket.readyState === ProbeSocket.CLOSED)).toBe(true);
+  });
+
+
+  it('leaves an unresponsive /json/list body without creating a target socket before its global cap', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      const body = new ReadableStream<Uint8Array>({ start() { /* never enqueue */ } });
+      return new Response(body, { status: 200 });
+    }));
+    const started = performance.now();
+    const result = await probeCdpSiblingEvaluations(CDP, owner.id, undefined, 100);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(result.nonresponsive).toEqual([]);
+    expect(allSockets).toHaveLength(0);
+  });
+
+  it('rejects an oversized /json/list before creating any direct socket', async () => {
+    const list = JSON.stringify(Array.from({ length: 5000 }, (_, i) => ({
+      id: 'x' + i, type: 'page', url: FOREIGN.repeat(2),
+    })));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(list, { status: 200 })));
+    const result = await probeCdpSiblingEvaluations(CDP, owner.id);
+    expect(result.nonresponsive).toEqual([]);
+    expect(allSockets).toHaveLength(0);
+  });
+});
+
 // Real-client regression for AC3. Unlike protocolChromium(), this launches a
 // separate Chrome and uses the installed playwright-core Chromium client.
 // The pack intentionally does not package operator-local playwright-core or
 // Chrome: require the test explicitly in that environment by setting
 // OPK_REQUIRE_REAL_CDP_TEST=1 (absence then fails, never silently skips).
+// Set OPK_TEST_PLAYWRIGHT_CORE_PATH when the test harness redirects HOME.
 const liveChromium = (() => {
   const require = createRequire(import.meta.url);
+  const explicitPlaywrightPath = process.env.OPK_TEST_PLAYWRIGHT_CORE_PATH;
   for (const location of [
+    ...(explicitPlaywrightPath ? [explicitPlaywrightPath] : []),
     join(homedir(), '.local/share/discuss-with-gpt/node_modules/playwright-core'),
     'playwright-core',
   ]) {
@@ -679,4 +861,278 @@ it.skipIf(!requireRealCdp && (!liveChromium || !chromeExecutable))(
     }
   },
   35_000,
+);
+
+it.skipIf(!requireRealCdp)(
+  'qualifies, rechecks and recovers a frozen ChatGPT-origin target on disposable real CDP',
+  async () => {
+    if (!chromeExecutable) throw new Error('Issue #2682 real-CDP smoke requires Chrome');
+    vi.unstubAllGlobals();
+    const profile = mkdtempSync(join(tmpdir(), 'opk-2682-real-cdp-'));
+    const chromeAbort = new AbortController();
+    let chromeTerminated = false;
+    const chromeRun = runProcess({
+      command: chromeExecutable,
+      args: [
+        '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
+        '--no-first-run', '--no-default-browser-check',
+        '--remote-allow-origins=*', '--remote-debugging-port=0',
+        '--user-data-dir=' + profile, 'about:blank',
+      ],
+      signal: chromeAbort.signal,
+      timeoutMs: 35_000,
+      allowEmptyStdout: true,
+    }).then((result) => { chromeTerminated = true; return result; });
+    type CdpReply = { id?: number; result?: Record<string, any>; error?: Record<string, any> };
+    type DirectSocket = {
+      command: (method: string, params?: Record<string, unknown>, timeoutMs?: number) => Promise<CdpReply>;
+      close: () => void;
+    };
+    const directSockets: DirectSocket[] = [];
+    let browserSocket: DirectSocket | undefined;
+    let ownerSocket: DirectSocket | undefined;
+    let siblingSocket: DirectSocket | undefined;
+    let ownerTargetId = '';
+    let siblingTargetId = '';
+    let endpoint = '';
+    let siblingAbsent = false;
+    let smoke: Record<string, unknown> | undefined;
+    const connectDirect = async (url: string): Promise<DirectSocket> => {
+      const socket = new WebSocket(url);
+      const opened = await new Promise<boolean>((resolve) => {
+        let done = false;
+        const finish = (value: boolean): void => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          socket.removeEventListener('open', onOpen);
+          socket.removeEventListener('error', onFailure);
+          socket.removeEventListener('close', onFailure);
+          resolve(value);
+        };
+        const onOpen = (): void => finish(true);
+        const onFailure = (): void => finish(false);
+        const timer = setTimeout(() => finish(false), 1_000);
+        socket.addEventListener('open', onOpen, { once: true });
+        socket.addEventListener('error', onFailure, { once: true });
+        socket.addEventListener('close', onFailure, { once: true });
+      });
+      if (!opened || socket.readyState !== 1) {
+        try { socket.close(); } catch { /* closed */ }
+        throw new Error('test-owned direct CDP socket did not open');
+      }
+      let nextId = 0;
+      const pending = new Map<number, {
+        resolve: (reply: CdpReply) => void;
+        timer: ReturnType<typeof setTimeout>;
+      }>();
+      socket.addEventListener('message', (event) => {
+        try {
+          const reply = JSON.parse(String(event.data)) as CdpReply;
+          if (typeof reply.id !== 'number') return;
+          const request = pending.get(reply.id);
+          if (!request) return;
+          pending.delete(reply.id);
+          clearTimeout(request.timer);
+          request.resolve(reply);
+        } catch { /* ignore non-response events */ }
+      });
+      const rejectPending = (): void => {
+        for (const [id, request] of pending) {
+          pending.delete(id);
+          clearTimeout(request.timer);
+          request.resolve({ id, error: { message: 'test-owned CDP socket closed' } });
+        }
+      };
+      socket.addEventListener('error', rejectPending);
+      socket.addEventListener('close', rejectPending);
+      const direct: DirectSocket = {
+        command: (method, params = {}, timeoutMs = 1_500) => new Promise((resolve) => {
+          if (socket.readyState !== 1) { resolve({ error: { message: 'socket not open' } }); return; }
+          const id = ++nextId;
+          const timer = setTimeout(() => {
+            pending.delete(id);
+            resolve({ id, error: { message: 'test-owned CDP command timed out' } });
+          }, timeoutMs);
+          pending.set(id, { resolve, timer });
+          try { socket.send(JSON.stringify({ id, method, params })); }
+          catch {
+            pending.delete(id);
+            clearTimeout(timer);
+            resolve({ id, error: { message: 'test-owned CDP command send failed' } });
+          }
+        }),
+        close: () => { try { socket.close(); } catch { /* already closed */ } },
+      };
+      directSockets.push(direct);
+      return direct;
+    };
+    const readRawTarget = async (targetId: string): Promise<{
+      id: string; type: string; url: string; webSocketDebuggerUrl: string;
+    } | undefined> => {
+      const response = await fetch(endpoint + '/json/list', {
+        signal: AbortSignal.timeout(1_500),
+      });
+      if (!response.ok) throw new Error('test-owned target listing failed');
+      const targets = await response.json() as Array<{
+        id?: unknown; type?: unknown; url?: unknown; webSocketDebuggerUrl?: unknown;
+      }>;
+      const target = targets.find((item) => item.id === targetId);
+      if (!target || typeof target.id !== 'string' || typeof target.type !== 'string'
+        || typeof target.url !== 'string' || typeof target.webSocketDebuggerUrl !== 'string') return undefined;
+      return target as { id: string; type: string; url: string; webSocketDebuggerUrl: string };
+    };
+    const waitForPage = async (socket: DirectSocket, targetId: string): Promise<string> => {
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        const target = await readRawTarget(targetId);
+        let isChatGptOrigin = false;
+        try {
+          const origin = new URL(target?.url ?? '').origin;
+          isChatGptOrigin = origin === 'https://chatgpt.com' || origin === 'https://chat.openai.com';
+        } catch { /* about:blank and incomplete URLs are not eligible */ }
+        if (target?.type === 'page' && isChatGptOrigin) {
+          const evaluated = await socket.command('Runtime.evaluate', {
+            expression: '1+1', returnByValue: true,
+          }, 1_000);
+          if (evaluated.result?.result?.value === 2) return target.url;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error('test-owned ChatGPT target did not become directly responsive');
+    };
+    try {
+      const activePortFile = join(profile, 'DevToolsActivePort');
+      let port = 0;
+      let browserPath = '';
+      for (let i = 0; i < 80; i++) {
+        if (existsSync(activePortFile)) {
+          const lines = readFileSync(activePortFile, 'utf8').split(/\r?\n/u);
+          const candidate = Number(lines[0]);
+          if (Number.isInteger(candidate) && candidate > 0 && lines[1]?.startsWith('/devtools/browser/')) {
+            port = candidate;
+            browserPath = lines[1];
+            break;
+          }
+        }
+        if (chromeTerminated) break;
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      }
+      if (!port || !browserPath) throw new Error('disposable Chrome did not expose browser CDP');
+      endpoint = 'http://127.0.0.1:' + port;
+      browserSocket = await connectDirect('ws://127.0.0.1:' + port + browserPath);
+      const createTarget = async (): Promise<string> => {
+        const reply = await browserSocket!.command('Target.createTarget', { url: 'about:blank' });
+        const targetId = reply.result?.targetId;
+        if (typeof targetId !== 'string' || !targetId) throw new Error('test-owned target creation unconfirmed');
+        return targetId;
+      };
+      ownerTargetId = await createTarget();
+      siblingTargetId = await createTarget();
+      expect(siblingTargetId).not.toBe(ownerTargetId);
+      const ownerMeta = await readRawTarget(ownerTargetId);
+      const siblingMeta = await readRawTarget(siblingTargetId);
+      if (!ownerMeta || !siblingMeta) throw new Error('test-owned blank targets missing from CDP listing');
+      ownerSocket = await connectDirect(ownerMeta.webSocketDebuggerUrl);
+      siblingSocket = await connectDirect(siblingMeta.webSocketDebuggerUrl);
+      const ownerNav = await ownerSocket.command('Page.navigate', { url: 'https://chatgpt.com/robots.txt' });
+      const siblingNav = await siblingSocket.command('Page.navigate', { url: 'https://chatgpt.com/robots.txt' });
+      expect(ownerNav.error).toBeUndefined();
+      expect(siblingNav.error).toBeUndefined();
+      const ownerUrl = await waitForPage(ownerSocket, ownerTargetId);
+      const siblingUrl = await waitForPage(siblingSocket, siblingTargetId);
+      expect(new URL(ownerUrl).origin).toMatch(/^https:\/\/(?:chatgpt\.com|chat\.openai\.com)$/u);
+      expect(new URL(siblingUrl).origin).toMatch(/^https:\/\/(?:chatgpt\.com|chat\.openai\.com)$/u);
+      const ownerHealth = async (): Promise<number> => {
+        const reply = await ownerSocket!.command('Runtime.evaluate', {
+          expression: '1+1', returnByValue: true,
+        }, 1_000);
+        if (reply.error || reply.result?.result?.value !== 2) {
+          throw new Error('healthy test-owned ChatGPT target evaluation failed');
+        }
+        return 2;
+      };
+      expect(await ownerHealth()).toBe(2);
+      const entryStarted = Date.now();
+      const entry = await probeCdpSiblingEvaluations(endpoint, ownerTargetId);
+      const entryElapsedMs = Date.now() - entryStarted;
+      expect(entry.responsive).toContainEqual({ id: siblingTargetId, url: siblingUrl });
+      expect(await ownerHealth()).toBe(2);
+      const freezeMs = 4_000;
+      const freezeScheduledAt = Date.now();
+      const trigger = await siblingSocket.command('Runtime.evaluate', {
+        expression: `setTimeout(() => { const until = performance.now() + ${freezeMs}; while (performance.now() < until) {} }, 350); true`,
+        returnByValue: true,
+      });
+      expect(trigger.result?.result?.value).toBe(true);
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+      const blockedStarted = Date.now();
+      const blocked = await probeCdpSiblingEvaluations(endpoint, ownerTargetId);
+      const blockedElapsedMs = Date.now() - blockedStarted;
+      expect(blockedElapsedMs).toBeLessThanOrEqual(5_500);
+      expect(blocked.nonresponsive).toContainEqual({ id: siblingTargetId, url: siblingUrl });
+      expect(await ownerHealth()).toBe(2);
+      const remainingFreezeMs = Math.max(0, freezeMs + 250 - (Date.now() - freezeScheduledAt));
+      if (remainingFreezeMs) await new Promise<void>((resolve) => setTimeout(resolve, remainingFreezeMs));
+      const recoveryStarted = Date.now();
+      const recovered = await probeCdpSiblingEvaluations(
+        endpoint, ownerTargetId, [{ id: siblingTargetId, url: siblingUrl }],
+      );
+      const recoveryElapsedMs = Date.now() - recoveryStarted;
+      expect(recovered.responsive).toContainEqual({ id: siblingTargetId, url: siblingUrl });
+      expect(recovered.nonresponsive).toEqual([]);
+      expect(await ownerHealth()).toBe(2);
+      const closed = await browserSocket.command('Target.closeTarget', { targetId: siblingTargetId }, 1_500);
+      expect(closed.error).toBeUndefined();
+      expect(closed.result?.success).toBe(true);
+      const cleanupDeadline = Date.now() + 1_500;
+      while (Date.now() < cleanupDeadline) {
+        if (!(await listCdpPageTargets(endpoint, Math.max(1, cleanupDeadline - Date.now())))
+          .some((target) => target.id === siblingTargetId)) { siblingAbsent = true; break; }
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      }
+      expect(siblingAbsent).toBe(true);
+      expect(await ownerHealth()).toBe(2);
+      smoke = {
+        smoke: 'issue-2682-real-cdp',
+        owner_target_id: ownerTargetId,
+        sibling_target_id: siblingTargetId,
+        entry_probe_ms: entryElapsedMs,
+        frozen_probe_ms: blockedElapsedMs,
+        finite_loop_ms: freezeMs,
+        recovery_probe_ms: recoveryElapsedMs,
+        owner_responsive_before_during_after: true,
+        exact_sibling_close_and_absence_confirmed: true,
+      };
+    } finally {
+      if (siblingTargetId && browserSocket && !siblingAbsent) {
+        const closed = await browserSocket.command(
+          'Target.closeTarget', { targetId: siblingTargetId }, 1_500,
+        ).catch(() => undefined);
+        if (closed?.result?.success) {
+          const cleanupDeadline = Date.now() + 1_500;
+          while (Date.now() < cleanupDeadline) {
+            try {
+              if (!(await listCdpPageTargets(endpoint, Math.max(1, cleanupDeadline - Date.now())))
+                .some((target) => target.id === siblingTargetId)) { siblingAbsent = true; break; }
+            } catch { /* final isolated Chrome shutdown remains bounded below */ }
+            await new Promise<void>((resolve) => setTimeout(resolve, 50));
+          }
+        }
+      }
+      for (const socket of directSockets) socket.close();
+      chromeAbort.abort();
+      await chromeRun;
+      rmSync(profile, { recursive: true, force: true });
+    }
+    expect(siblingAbsent).toBe(true);
+    expect(chromeTerminated).toBe(true);
+    expect(existsSync(profile)).toBe(false);
+    process.stdout.write(
+      JSON.stringify({
+        ...smoke, chrome_disposed: chromeTerminated, profile_removed: !existsSync(profile),
+      }) + '\n',
+    );
+  },
+  60_000,
 );

@@ -79,6 +79,12 @@ vi.mock('./own-target-attach.ts', async (importOriginal) => {
   };
 });
 
+
+vi.mock('./own-target-cdp-proxy.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./own-target-cdp-proxy.ts')>();
+  return { ...actual, probeCdpSiblingEvaluations: vi.fn(actual.probeCdpSiblingEvaluations) };
+});
+
 vi.mock('./browser-session.ts', () => {
   const session = createBrowserSessionModuleMock(mocks);
   return Object.assign(session, {
@@ -138,6 +144,7 @@ import { admitStateLightTurnObservation, finalizeStateLightPrimaryPublication, r
 import { deriveDelivery } from '../flow-manager-long-running-child.ts';
 import { __testBrowserOrPageDefinitelyLost, __testComposerMutation, __testSendDelivery, deriveComposerInsertionBudgetMs, POST_SEND_OBSERVATION_POLL_MS, probePageLiveness } from './state-light-turn-base.ts';
 import { attachOwnTarget, __testAttachOwnTargetFixture } from './own-target-attach.ts';
+import { probeCdpSiblingEvaluations } from './own-target-cdp-proxy.ts';
 import { currentOwnedPromptMarker, wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
   EXPLICIT_CANCELLATION_AUTHORITY,
@@ -834,6 +841,352 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(mocks.nowMs).toBeGreaterThanOrEqual(startedAt + 40_000);
     expect(turn.getSends()).toBe(1);
     expect(turn.page.bringToFront).not.toHaveBeenCalled();
+  });
+
+
+  describe('Issue #2682 bounded frozen-sibling Send extension', () => {
+    const sibling = { id: 'qualified-sibling', url: 'https://chatgpt.com/c/26822682-2682-4682-8682-268226822682' };
+    const positive = () => ({
+      nonresponsive: [sibling], responsive: [], disappearedOrChanged: [], unknown: [],
+    });
+    const empty = () => ({
+      nonresponsive: [], responsive: [], disappearedOrChanged: [], unknown: [],
+    });
+    const journal = () => mocks.appendFileSync.mock.calls
+      .map((args) => {
+        try { return JSON.parse(String(args[1]).trim()) as Record<string, any>; }
+        catch { return {}; }
+      }).filter((row) => row.event_class === 'fresh_send_extended_readiness');
+
+    beforeEach(() => {
+      vi.mocked(probeCdpSiblingEvaluations).mockReset();
+      vi.mocked(probeCdpSiblingEvaluations).mockResolvedValue(empty());
+      mocks.appendFileSync.mockClear();
+    });
+
+    it('leaves the four incumbent 15s windows and zero-click never-enabled cause untouched without evidence', async () => {
+      const prompt = '2682-NEGATIVE-SEND';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      turn.sendButton.isEnabled.mockResolvedValue(false);
+      const started = mocks.nowMs;
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-negative.txt'));
+      expect(outcome.result).toMatchObject({
+        state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
+      });
+      expect(mocks.nowMs - started).toBeGreaterThanOrEqual(60_000);
+      expect(mocks.nowMs - started).toBeLessThan(65_000);
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
+      expect(turn.sendButton.click).not.toHaveBeenCalled();
+      expect(journal()).toHaveLength(0);
+    });
+
+    it('sends the originally marked owned payload once after the 180s recovery, not to the sibling', async () => {
+      const prompt = '2682-SEND-AT-180S';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'RECOVERED');
+      const base = mocks.nowMs;
+      turn.sendButton.isEnabled.mockImplementation(async () => mocks.nowMs >= base + 180_000);
+      vi.mocked(probeCdpSiblingEvaluations).mockResolvedValueOnce(positive());
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-enabled.txt'), '900000');
+      expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+      expect(outcome.result.send_attempted).not.toBe(false);
+      expect(turn.getSends()).toBe(1);
+      expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+      expect(mocks.nowMs - base).toBeGreaterThanOrEqual(180_000);
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
+      expect(journal()).toEqual([expect.objectContaining({
+        entry_nonresponsive_count: 1, outcome: 'enabled',
+      })]);
+      expect(journal()[0]?.terminal_nonresponsive_count).toBeUndefined();
+      expect(JSON.stringify(journal())).not.toContain(sibling.id);
+      expect(JSON.stringify(journal())).not.toContain(sibling.url);
+      expect(JSON.stringify(journal())).not.toContain(prompt);
+    });
+
+    it.each([
+      { label: 'last eligible poll with action headroom', offsetMs: -10_000, state: 'ok', sends: 1, probes: 1 },
+      { label: 'at the cutoff', offsetMs: 0, state: 'send_failed', sends: 0, probes: 2 },
+      { label: 'after the cutoff', offsetMs: 1, state: 'send_failed', sends: 0, probes: 2 },
+    ])('applies the same extended cutoff at $label', async ({ offsetMs, state, sends, probes }) => {
+      const prompt = '2682-CUTOFF-' + offsetMs;
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      const base = mocks.nowMs;
+      let entryProbeAt = 0;
+      let movedToCutoff = false;
+      vi.mocked(probeCdpSiblingEvaluations).mockImplementation(async () => {
+        if (!entryProbeAt) entryProbeAt = mocks.nowMs;
+        return positive();
+      });
+      turn.sendButton.isEnabled.mockImplementation(async () => {
+        if (!entryProbeAt || movedToCutoff) return false;
+        movedToCutoff = true;
+        const readinessStartedAt = entryProbeAt - 60_000;
+        // Mirror fresh-unbound return, 30s dispatch observation, two 5s actions,
+        // the final 5s probe and the 600s readiness-start cap from Issue #2682.
+        const cutoff = Math.min(
+          readinessStartedAt + 600_000,
+          base + 900_000 - 22_000 - 30_000 - 4 * 5_000,
+        ) - 5_000;
+        mocks.nowMs = cutoff + offsetMs;
+        return true;
+      });
+      const outcome = await runNewChatTurn(
+        turn.page, join(stateDir, '2682-cutoff-' + offsetMs + '.txt'), '900000',
+      );
+      expect(outcome.result.state).toBe(state);
+      expect(turn.getSends()).toBe(sends);
+      expect(turn.sendButton.click).toHaveBeenCalledTimes(sends);
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(probes);
+      if (sends === 0) {
+        expect(outcome.result).toMatchObject({
+          state: 'send_failed', cause: 'fresh_send_blocked_by_frozen_sibling', send_count: 0,
+        });
+        expect(outcome.result.send_attempted).not.toBe(true);
+        expect(journal()).toEqual([expect.objectContaining({ outcome: 'still_frozen' })]);
+      } else {
+        expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+        expect(journal()).toEqual([expect.objectContaining({ outcome: 'enabled' })]);
+      }
+    });
+
+    it('classifies a last-moment enabled Send whose final marker read crosses the cutoff as not-sent budget exhaustion', async () => {
+      const prompt = '2682-LATE-MARKER';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      const base = mocks.nowMs;
+      let entryProbeAt = 0;
+      let lateEnabled = false;
+      const cutoff = () => Math.min(
+        entryProbeAt - 60_000 + 600_000,
+        base + 900_000 - 22_000 - 30_000 - 4 * 5_000,
+      ) - 5_000;
+      vi.mocked(probeCdpSiblingEvaluations).mockImplementation(async () => {
+        if (!entryProbeAt) entryProbeAt = mocks.nowMs;
+        return positive();
+      });
+      turn.sendButton.isEnabled.mockImplementation(async () => {
+        if (!entryProbeAt || lateEnabled) return false;
+        lateEnabled = true;
+        mocks.nowMs = cutoff() - 1;
+        return true;
+      });
+      const ordinaryInnerText = turn.composer.innerText.getMockImplementation()!;
+      turn.composer.innerText.mockImplementation(async () => {
+        const text = await ordinaryInnerText();
+        if (lateEnabled) mocks.nowMs += 2; // bounded final DOM read outlasts its cutoff
+        return text;
+      });
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-late-marker.txt'), '900000');
+      expect(lateEnabled).toBe(true);
+      expect(outcome.result).toMatchObject({
+        state: 'send_failed', scope: 'invocation',
+        cause: 'fresh_send_readiness_budget_exhausted', send_count: 0,
+      });
+      expect(outcome.result.send_attempted).not.toBe(true);
+      expect(turn.getSends()).toBe(0);
+      expect(turn.sendButton.click).not.toHaveBeenCalled();
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
+      expect(journal()).toEqual([expect.objectContaining({
+        entry_nonresponsive_count: 1, outcome: 'budget_exhausted',
+      })]);
+      expect(journal()[0]?.terminal_nonresponsive_count).toBeUndefined();
+    });
+
+    it('routes a pre-click cutoff crossing through the same zero-dispatch budget terminal', async () => {
+      const prompt = '2682-BEFORE-CLICK-CUTOFF';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      const base = mocks.nowMs;
+      let entryProbeAt = 0;
+      let lateEnabled = false;
+      let crossedInBeforeClick = false;
+      const cutoff = () => Math.min(
+        entryProbeAt - 60_000 + 600_000,
+        base + 900_000 - 22_000 - 30_000 - 4 * 5_000,
+      ) - 5_000;
+      vi.mocked(probeCdpSiblingEvaluations).mockImplementation(async () => {
+        if (!entryProbeAt) entryProbeAt = mocks.nowMs;
+        return positive();
+      });
+      turn.sendButton.isEnabled.mockImplementation(async () => {
+        if (!entryProbeAt || lateEnabled) return false;
+        lateEnabled = true;
+        mocks.nowMs = cutoff() - 1;
+        return true;
+      });
+      // Cross the boundary *inside* onDispatch, after the last successful
+      // marked-payload recheck but before any physical Playwright click.
+      vi.spyOn(Date, 'now').mockImplementation(() => {
+        if (lateEnabled && new Error().stack?.includes('beforeClick')) {
+          crossedInBeforeClick = true;
+          mocks.nowMs = cutoff();
+        }
+        return mocks.nowMs;
+      });
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-before-click-cutoff.txt'), '900000');
+      expect(crossedInBeforeClick).toBe(true);
+      expect(outcome.result).toMatchObject({
+        state: 'send_failed', scope: 'invocation',
+        cause: 'fresh_send_readiness_budget_exhausted', send_count: 0,
+      });
+      expect(outcome.result.send_attempted).not.toBe(true);
+      expect(turn.getSends()).toBe(0);
+      expect(turn.sendButton.click).not.toHaveBeenCalled();
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
+      expect(journal()).toEqual([expect.objectContaining({
+        entry_nonresponsive_count: 1, outcome: 'budget_exhausted',
+      })]);
+      expect(journal()[0]?.terminal_nonresponsive_count).toBeUndefined();
+    });
+
+    it('interleaves distinct own targets: B Sends and settles while A waits; A later Sends once', async () => {
+      const a = makeLoserPage('PROMPT', 'A-REPLY');
+      const b = makeLoserPage('PROMPT', 'B-REPLY');
+      b.page.url.mockImplementation(() => b.getSends() > 0 ? LOSER_CONV : PROJECT_URL);
+      const initialNow = mocks.nowMs;
+      let aQualified = false;
+      let bClicked = false;
+      let releaseB!: () => void;
+      let resolveAExtended!: () => void;
+      const bFinished = new Promise<void>((resolve) => { releaseB = resolve; });
+      const aExtendedWaiting = new Promise<void>((resolve) => { resolveAExtended = resolve; });
+      b.sendButton.isEnabled.mockResolvedValue(true);
+      a.sendButton.isEnabled.mockImplementation(async () => {
+        if (aQualified) resolveAExtended();
+        if (aQualified && !bClicked) await bFinished;
+        return bClicked && mocks.nowMs >= initialNow + 180_000;
+      });
+      vi.mocked(probeCdpSiblingEvaluations).mockImplementation(async (_endpoint, ownedId) => {
+        expect(ownedId).toBe('2682-owned-A');
+        aQualified = true;
+        return positive();
+      });
+      const attach = vi.mocked(attachOwnTarget);
+      attach.mockImplementationOnce(async (chromium, options) =>
+        __testAttachOwnTargetFixture(chromium, { ...options, pinnedTargetId: '2682-owned-A' }),
+      ).mockImplementationOnce(async (chromium, options) =>
+        __testAttachOwnTargetFixture(chromium, { ...options, pinnedTargetId: '2682-owned-B' }),
+      );
+      const originalBClick = b.sendButton.click.getMockImplementation()!;
+      b.sendButton.click.mockImplementation(async () => {
+        expect(aQualified).toBe(true);
+        bClicked = true;
+        await originalBClick();
+      });
+      enqueueBrowserForTurn(mocks, a.page);
+      enqueueBrowserForTurn(mocks, b.page);
+      const lastPage = (id: string) => id === '2682-owned-A' ? a.page : b.page;
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        if (new URL(String(input)).pathname !== '/json/list') throw Error('unexpected fixture CDP URL');
+        const active = ['2682-owned-A', '2682-owned-B']
+          .filter((id) => !lastPage(id).close.mock.calls.length)
+          .map((id) => ({
+            id, type: 'page', url: String(lastPage(id).url()),
+            webSocketDebuggerUrl: 'ws://example/' + id,
+          }));
+        return new Response(JSON.stringify([
+          ...active, { id: 'keepalive-2682', type: 'page', url: 'about:blank' },
+        ]), { status: 200 });
+      });
+      const written: string[] = [];
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+        written.push(String(chunk));
+        return true;
+      }) as typeof process.stdout.write);
+      const runArgs = (id: string) => [
+        ...STATE_LIGHT_TURN_BASE_ARGV,
+        '--invocation-id', id,
+        '--output', join(stateDir, '2682-' + id + '.txt'),
+        '--new-chat', '--project-url', PROJECT_URL,
+        '--timeout-ms', '900000', '--poll-ms', '1',
+      ];
+      try {
+        const aId = randomUUID();
+        const bId = randomUUID();
+        const aRun = runStateLightTurn(runArgs(aId));
+        await aExtendedWaiting;
+        const bCode = await runStateLightTurn(runArgs(bId));
+        releaseB();
+        const aCode = await aRun;
+        const results = written.map((line) => {
+          try { return JSON.parse(line) as { schema?: string; state?: string; invocation_id?: string; send_count?: number }; }
+          catch { return {}; }
+        }).filter((row) => row.schema === 'turn-result/v1');
+        expect([aCode, bCode], JSON.stringify(written)).toEqual([0, 0]);
+        expect(aQualified).toBe(true);
+        expect(bClicked).toBe(true);
+        expect(a.getSends()).toBe(1);
+        expect(b.getSends()).toBe(1);
+        expect(results).toHaveLength(2);
+        expect(results).toEqual(expect.arrayContaining([
+          expect.objectContaining({ invocation_id: aId, state: 'ok', send_count: 1 }),
+          expect.objectContaining({ invocation_id: bId, state: 'ok', send_count: 1 }),
+        ]));
+        expect(journal()).toEqual([expect.objectContaining({
+          entry_nonresponsive_count: 1, outcome: 'enabled', invocation: aId,
+        })]);
+        expect(a.page.bringToFront).not.toHaveBeenCalled();
+        expect(b.page.bringToFront).not.toHaveBeenCalled();
+      } finally {
+        releaseB();
+        attach.mockImplementation(__testAttachOwnTargetFixture);
+        stdout.mockRestore();
+      }
+    });
+
+    it.each([
+      { result: positive(), cause: 'fresh_send_blocked_by_frozen_sibling', outcome: 'still_frozen', count: 1 },
+      { result: { ...empty(), responsive: [sibling] }, cause: 'fresh_send_button_never_enabled',
+        outcome: 'recovered_but_disabled', count: undefined },
+      { result: { ...empty(), disappearedOrChanged: [sibling] }, cause: 'fresh_send_button_never_enabled',
+        outcome: 'target_disappeared_or_changed', count: undefined },
+      { result: { ...empty(), unknown: [sibling] }, cause: 'fresh_send_button_never_enabled',
+        outcome: 'terminal_unknown', count: undefined },
+    ])('rechecks original ID/URL once and returns zero clicks for $outcome', async ({ result, cause, outcome, count }) => {
+      const prompt = '2682-NO-SEND-' + outcome;
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      turn.sendButton.isEnabled.mockResolvedValue(false);
+      vi.mocked(probeCdpSiblingEvaluations).mockResolvedValueOnce(positive()).mockResolvedValueOnce(result);
+      const started = mocks.nowMs;
+      const resultTurn = await runNewChatTurn(turn.page, join(stateDir, '2682-' + outcome + '.txt'), '900000');
+      expect(resultTurn.result).toMatchObject({ state: 'send_failed', scope: 'invocation', cause, send_count: 0 });
+      expect(resultTurn.result.send_attempted).not.toBe(true);
+      expect(turn.getSends()).toBe(0);
+      expect(turn.sendButton.click).not.toHaveBeenCalled();
+      expect(mocks.nowMs - started).toBeLessThanOrEqual(600_000);
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(probeCdpSiblingEvaluations).mock.calls[1]?.[2]).toEqual([sibling]);
+      expect(journal()).toEqual([expect.objectContaining({
+        entry_nonresponsive_count: 1, outcome,
+      })]);
+      expect(journal()[0]?.terminal_nonresponsive_count).toBe(count);
+      expect(JSON.stringify(journal())).not.toContain(prompt);
+      expect(deriveDelivery({ ...resultTurn.result,
+        resolved_send_count: resultTurn.result.send_count }, false)).toBe('not-sent');
+      expect(resultTurn.result.next_action).toBeUndefined();
+    });
+
+    it('rejects extension when protected dispatch and cleanup reserves leave no time', async () => {
+      const prompt = '2682-EARLY-BUDGET';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      turn.sendButton.isEnabled.mockResolvedValue(false);
+      vi.mocked(probeCdpSiblingEvaluations).mockResolvedValueOnce(positive());
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-budget.txt'), '90000');
+      expect(outcome.result).toMatchObject({
+        state: 'send_failed', cause: 'fresh_send_readiness_budget_exhausted', send_count: 0,
+      });
+      expect(outcome.result.send_attempted).not.toBe(true);
+      expect(turn.sendButton.click).not.toHaveBeenCalled();
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
+      expect(journal()).toEqual([expect.objectContaining({
+        entry_nonresponsive_count: 1, outcome: 'budget_exhausted',
+      })]);
+      expect(journal()[0]?.terminal_nonresponsive_count).toBeUndefined();
+    });
   });
 
   it('closes a proven owned, never-clicked draft only after 60s of disabled Send (#2487)', async () => {

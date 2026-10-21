@@ -28,7 +28,7 @@ import {
   countUninspectedRecoveryTargets,
   getOwnTargetInfo,
 } from './own-target-attach.ts';
-import { listCdpPageTargets } from './own-target-cdp-proxy.ts';
+import { listCdpPageTargets, probeCdpSiblingEvaluations } from './own-target-cdp-proxy.ts';
 import {
   turnExitCode,
   type ComposerMutationDiagnosticV1,
@@ -491,12 +491,24 @@ export function classifyBrowserGptPageTurnStatus(
 
 export type PageLiveness = 'live' | 'lost' | 'unknown';
 
+
+type ExtendedReadinessOutcome = 'enabled' | 'still_frozen' | 'recovered_but_disabled'
+  | 'target_disappeared_or_changed' | 'terminal_unknown' | 'budget_exhausted';
+
+interface ExtendedReadinessDiagnostic {
+  readonly entryNonresponsiveCount: number;
+  readonly terminalNonresponsiveCount?: number;
+  readonly elapsedMs: number;
+  readonly outcome: ExtendedReadinessOutcome;
+}
+
 interface BrowserIncident {
   readonly eventClass: string;
   readonly symptom: string;
   readonly action?: string;
   readonly uncertaintyDiagnostics?: ObservationUncertaintyDiagnostics;
   readonly composerMutationDiagnostic?: ComposerMutationDiagnosticV1;
+  readonly extendedReadiness?: ExtendedReadinessDiagnostic;
 }
 
 export interface CompactTurnResult extends TurnResultV1 {
@@ -1758,6 +1770,15 @@ function appendIncident(
       ...(incident.uncertaintyDiagnostics ? {
         observation_uncertainty: incident.uncertaintyDiagnostics,
       } : {}),
+
+      ...(incident.extendedReadiness ? {
+        entry_nonresponsive_count: incident.extendedReadiness.entryNonresponsiveCount,
+        ...(incident.extendedReadiness.terminalNonresponsiveCount !== undefined ? {
+          terminal_nonresponsive_count: incident.extendedReadiness.terminalNonresponsiveCount,
+        } : {}),
+        extended_readiness_elapsed_ms: incident.extendedReadiness.elapsedMs,
+        outcome: incident.extendedReadiness.outcome,
+      } : {}),
       invocation: invocationId,
       agent_runtime: agent,
     })}\n`, 'utf8');
@@ -2787,6 +2808,49 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
 const FRESH_SEND_WINDOW_MS = 15_000;
 const FRESH_SEND_RESERVE_MS = 4 * FRESH_SEND_WINDOW_MS;
 const FRESH_SEND_PREPARE_RESERVE_MS = 3 * MAX_LOCAL_READ_WAIT_MS;
+
+const FRESH_SEND_EXTENDED_TOTAL_MS = 600_000;
+const FRESH_SEND_TERMINAL_PROBE_MS = 5_000;
+const FRESH_SEND_EXTENDED_POLL_MS = 2_000;
+
+async function waitForExtendedFreshSendButton(
+  page: any,
+  sendButton: any,
+  assertOwnerAndPage: () => void,
+  cutoffMs: number,
+): Promise<'enabled' | 'never_enabled' | 'busy'> {
+  while (Date.now() < cutoffMs) {
+    assertOwnerAndPage();
+    if (await readFreshStopVisible(page, cutoffMs) !== false) return 'busy';
+    const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, cutoffMs - Date.now());
+    if (waitMs <= 0) break;
+    try {
+      const count = await boundedBrowserRead(
+        Promise.resolve(sendButton.count()), waitMs, 'fresh_extended_send_count_timeout',
+      );
+      if (count === 1 && typeof sendButton.isVisible === 'function'
+        && typeof sendButton.isEnabled === 'function') {
+        const actionable = await boundedBrowserRead(
+          Promise.all([sendButton.isVisible(), sendButton.isEnabled()]),
+          Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, cutoffMs - Date.now())),
+          'fresh_extended_send_actionability_timeout',
+        );
+        if (actionable[0] === true && actionable[1] === true && Date.now() < cutoffMs) {
+          assertOwnerAndPage();
+          return 'enabled';
+        }
+      }
+    } catch {
+      // Unknown actionability never grants a physical Send.
+      return 'busy';
+    }
+    if (Date.now() < cutoffMs) {
+      await sleep(page, Math.min(FRESH_SEND_EXTENDED_POLL_MS, cutoffMs - Date.now()));
+    }
+  }
+  return 'never_enabled';
+}
+
 
 /** A Stop already present before our click is foreign/busy, not this turn's delivery. */
 async function readFreshStopVisible(page: any, deadlineMs: number): Promise<boolean | null> {
@@ -4572,9 +4636,103 @@ async function runTurnCore(
       requireFreshSendReserve(0);
       const readinessStartedAtMs = Date.now();
       const readinessDeadlineMs = readinessStartedAtMs + FRESH_SEND_RESERVE_MS;
-      const readiness = await waitForFreshSendButton(page, sendButton, assertFreshOwner, readinessStartedAtMs);
+      let preDispatchCutoffMs = readinessDeadlineMs;
+      let readiness = await waitForFreshSendButton(page, sendButton, assertFreshOwner, readinessStartedAtMs);
       assertFreshOwner();
+      let extendedEntryCount = 0;
+      let extendedRecorded = false;
+      const recordExtended = (
+        outcome: ExtendedReadinessOutcome, terminalNonresponsiveCount?: number,
+      ): void => {
+        if (!extendedEntryCount || extendedRecorded) return;
+        extendedRecorded = true;
+        const diagnostic: ExtendedReadinessDiagnostic = {
+          entryNonresponsiveCount: extendedEntryCount,
+          ...(terminalNonresponsiveCount !== undefined ? { terminalNonresponsiveCount } : {}),
+          elapsedMs: Math.max(0, Date.now() - readinessStartedAtMs),
+          outcome,
+        };
+        if (!recordIncident(incidents, {
+          eventClass: 'fresh_send_extended_readiness',
+          symptom: outcome,
+          action: outcome === 'enabled' ? 'dispatch_owned_send' : 'cleanup_own_unsent_payload',
+          extendedReadiness: diagnostic,
+        }, invocationId, navigation.snapshot())) journalWriteFailed = true;
+      };
+      const failExtended = (
+        cause: string, outcome: ExtendedReadinessOutcome, terminalNonresponsiveCount?: number,
+      ): TurnRunOutcome => {
+        recordExtended(outcome, terminalNonresponsiveCount);
+        return {
+          page, browser,
+          result: compactResult(
+            'send_failed', 'invocation', cause,
+            invocationId, profileKey, 0, pollCount, navigation, incidents, {}, journalWriteFailed,
+          ),
+        };
+      };
+      if (readiness === 'never_enabled') {
+        // A disabled own Send is not evidence about another renderer. Only a
+        // direct-target post-timeout *control-surviving* witness may extend.
+        const ownTargetId = getOwnTargetInfo(browser)?.targetId;
+        const entry = ownTargetId
+          ? await probeCdpSiblingEvaluations(config.cdp, ownTargetId) : undefined;
+        assertFreshOwner();
+        if (entry?.nonresponsive.length && ownTargetId) {
+          const originals = entry.nonresponsive;
+          extendedEntryCount = originals.length;
+          const readinessReturnByMs = Math.min(
+            readinessStartedAtMs + FRESH_SEND_EXTENDED_TOTAL_MS,
+            freshUnboundReturnByMs - DISPATCH_OBSERVATION_MS - 4 * MAX_LOCAL_READ_WAIT_MS,
+          );
+          preDispatchCutoffMs = readinessReturnByMs - FRESH_SEND_TERMINAL_PROBE_MS;
+          if (Date.now() >= preDispatchCutoffMs) {
+            return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
+          }
+          // Assert the original marker before extending, not just before Send.
+          if (!await composerPayloadMatchesBeforeSend(
+            composer, markedPayload, Math.min(invocationDeadlineMs, preDispatchCutoffMs),
+          )) {
+            if (Date.now() >= preDispatchCutoffMs) {
+              return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
+            }
+            recordExtended('terminal_unknown');
+            return returnComposerMutationFailure(composerPayloadFailureCause(preDispatchCutoffMs));
+          }
+          readiness = await waitForExtendedFreshSendButton(
+            page, sendButton, assertFreshOwner, preDispatchCutoffMs,
+          );
+          assertFreshOwner();
+          if (readiness === 'never_enabled' || Date.now() >= preDispatchCutoffMs) {
+            if (readinessReturnByMs <= Date.now()) {
+              return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
+            }
+            // Single fresh bounded re-probe of original positive ID/URL pairs.
+            // No new candidates, implicit recovery, retry or sibling mutation.
+            const terminal = await probeCdpSiblingEvaluations(
+              config.cdp, ownTargetId, originals,
+              Math.min(FRESH_SEND_TERMINAL_PROBE_MS, readinessReturnByMs - Date.now()),
+            );
+            if (Date.now() > readinessReturnByMs) {
+              return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
+            }
+            if (terminal.nonresponsive.length) {
+              return failExtended(
+                'fresh_send_blocked_by_frozen_sibling', 'still_frozen', terminal.nonresponsive.length,
+              );
+            }
+            if (terminal.responsive.length === originals.length) {
+              return failExtended('fresh_send_button_never_enabled', 'recovered_but_disabled');
+            }
+            if (terminal.disappearedOrChanged.length) {
+              return failExtended('fresh_send_button_never_enabled', 'target_disappeared_or_changed');
+            }
+            return failExtended('fresh_send_button_never_enabled', 'terminal_unknown');
+          }
+        }
+      }
       if (readiness === 'busy') {
+        recordExtended('terminal_unknown');
         incident('invocation_blocker', 'fresh_send_actionability_unknown_or_busy', 'retain_page');
         return {
           page, browser, cleanupAction: 'preserve',
@@ -4584,7 +4742,7 @@ async function runTurnCore(
           ),
         };
       }
-      if (readiness === 'never_enabled' || Date.now() >= readinessDeadlineMs) {
+      if (readiness === 'never_enabled' || Date.now() >= preDispatchCutoffMs) {
         incident('invocation_blocker', 'fresh_send_button_never_enabled', 'cleanup_own_unsent_payload');
         return {
           page, browser,
@@ -4598,7 +4756,7 @@ async function runTurnCore(
         beforeBrowserAction();
         assertFreshOwner();
         if (Date.now() >= invocationDeadlineMs) throw new Error('state_light_new_chat_send_budget_unavailable');
-        if (Date.now() >= readinessDeadlineMs) throw new Error('fresh_send_readiness_deadline_exhausted');
+        if (Date.now() >= preDispatchCutoffMs) throw new Error('fresh_send_readiness_deadline_exhausted');
         transitionStateLightTurnObservation({
           profileKey, invocationId, phase: 'dispatching', reason: 'dispatch_boundary_entered',
         });
@@ -4606,44 +4764,64 @@ async function runTurnCore(
         afterSend = true; // Dispatch was attempted even without positive delivery proof.
         held429Witness?.markDispatch(marker, markedPayload);
         if (freshCleanup) freshCleanup.sendAttempted = true;
+        recordExtended('enabled');
       };
       // The composer can change during Send readiness polling. Do not send a
       // different draft as though it were the invocation's marked payload.
-      if (!await composerPayloadMatchesBeforeSend(
-        composer, markedPayload, Math.min(invocationDeadlineMs, readinessDeadlineMs),
-      )) {
+      const finalPayloadMatches = await composerPayloadMatchesBeforeSend(
+        composer, markedPayload, Math.min(invocationDeadlineMs, preDispatchCutoffMs),
+      );
+      // A qualified extended wait may expire during its last awaited marker
+      // read. No dispatch callback or physical click has run yet.
+      if (extendedEntryCount && Date.now() >= preDispatchCutoffMs) {
+        return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
+      }
+      if (!finalPayloadMatches) {
         return returnComposerMutationFailure(composerPayloadFailureCause(
-          Math.min(invocationDeadlineMs, readinessDeadlineMs),
+          Math.min(invocationDeadlineMs, preDispatchCutoffMs),
         ));
       }
       assertFreshOwner();
       const sendAction = async () => await dispatchStateLightSendAndObserveDelivery({
         page, browser, composer, sendButton, hasSendButton: true, marker,
-        baselineUserNodeCount, sendWaitMs: Math.max(1, Math.min(MAX_LOCAL_READ_WAIT_MS, readinessDeadlineMs - Date.now())),
+        baselineUserNodeCount, sendWaitMs: Math.max(1, Math.min(MAX_LOCAL_READ_WAIT_MS, preDispatchCutoffMs - Date.now())),
         invocationDeadlineMs, preSendAlertsAlreadyMarked: true, allowOwnedStopWitness: true,
         onDispatch: beforeClick,
         ownSubmissionIssued: () => held429Witness?.ownSubmissionIssued() === true,
         onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_blind_resend'),
       });
-      let delivery = await sendAction();
+      let delivery: Awaited<ReturnType<typeof dispatchStateLightSendAndObserveDelivery>>;
+      try {
+        delivery = await sendAction();
+      } catch (error) {
+        // onDispatch rejects this deadline before Playwright can click. Only
+        // that exact zero-dispatch rejection is an extended budget terminal.
+        if (extendedEntryCount && !sendAttempted && Date.now() >= preDispatchCutoffMs
+          && error instanceof Error && error.message === 'fresh_send_readiness_deadline_exhausted') {
+          return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
+        }
+        throw error;
+      }
       const firstActionAffirmative = delivery.preDispatchTimeoutProven === true && delivery.sendCount === 0;
       let freshRepeated = false;
       if (delivery.sendCount === 0
         && delivery.witness === 'unproven'
         && delivery.preDispatchTimeoutProven === true
-        && Date.now() < readinessDeadlineMs
+        && Date.now() < preDispatchCutoffMs
         && await freshRetryDomGuards({
           page, browser, composer, markerPayload: markedPayload, baselineUserNodeCount,
-          deadlineMs: Math.min(invocationDeadlineMs, Date.now() + MAX_LOCAL_READ_WAIT_MS * 2),
+          deadlineMs: Math.min(invocationDeadlineMs, preDispatchCutoffMs, Date.now() + MAX_LOCAL_READ_WAIT_MS * 2),
         })) {
         // Positive Playwright actionability proof and all independent current
         // DOM/owner checks are required; no third attempt after this second call.
         if (await composerPayloadMatchesBeforeSend(
-          composer, markedPayload, Math.min(invocationDeadlineMs, readinessDeadlineMs),
+          composer, markedPayload, Math.min(invocationDeadlineMs, preDispatchCutoffMs),
         )) {
           assertFreshOwner();
-          freshRepeated = true;
-          delivery = await sendAction();
+          if (Date.now() < preDispatchCutoffMs) {
+            freshRepeated = true;
+            delivery = await sendAction();
+          }
         }
       }
       if (delivery.sendCount === 0 && delivery.preDispatchTimeoutProven === true
