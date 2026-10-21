@@ -197,6 +197,17 @@ describe('current substantive Issue floor', () => {
     expect(checkWorkerSafetyFloor(splitDenylist)).toEqual({ ok: true, errors: [] });
   });
 
+  it('uses the shared Issue occurrence parser without imposing guarded multiplicity on tier checks', () => {
+    const mark = String.fromCharCode(96).repeat(3);
+    const duplicated = valid + '\n' + [mark + 'denylist', 'secrets/**', mark, ''].join('\n');
+    expect(checkWorkerSafetyFloor(duplicated)).toEqual({ ok: true, errors: [] });
+    expect(checkTierGateGuard(duplicated)).toMatchObject({ ok: true });
+    const missingMandatory = valid.replace('packages/core/**\nvendor/**\n', 'packages/core/**\n');
+    expect(checkWorkerSafetyFloor(missingMandatory).errors).toContain(
+      'worker-safety floor: denylist must include vendor/**',
+    );
+  });
+
   it('rejects an invalid tier without adding review topology', () => {
     const result = checkTierGateGuard(valid.replace('tier: T2', 'tier: T4'));
     expect(result.ok).toBe(false);

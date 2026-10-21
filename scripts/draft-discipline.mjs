@@ -381,9 +381,20 @@ export function resolveSmokeRequirement(markdown) {
     return { requirement: 'unknown', scenarios: [] };
   }
   const parsed = parseSmokeTestPlan(trimmed);
+  // Only validate a present scenario-bearing/waiver plan. A missing plan may
+  // still have the incumbent explicit smoke-plan-floor grandfather exemption.
   if (parsed) {
-    if (parsed.requirement === 'not-applicable' && !String(parsed.reason ?? '').trim()) {
-      return { requirement: 'required', scenarios: [], reason: 'missing_not_applicable_reason' };
+    // Both smoke gates and the publisher consume this same resolution.
+    // Never admit a valid subset of a malformed live plan.
+    const checked = checkSmokeTestPlan(trimmed);
+    if (!checked.ok) {
+      const missingReason = parsed.requirement === 'not-applicable'
+        && !String(parsed.reason ?? '').trim();
+      return {
+        requirement: 'required',
+        scenarios: [],
+        reason: missingReason ? 'missing_not_applicable_reason' : 'invalid_smoke_plan',
+      };
     }
     return parsed;
   }
@@ -422,6 +433,16 @@ export function checkSmokeTestPlan(markdown) {
   if (plan.requirement === 'not-applicable') {
     if (!plan.reason || plan.reason.length < 8) {
       errors.push('smoke-test-plan not-applicable requires a one-line reason of at least 8 characters');
+    }
+    // A waiver is valid only with its recognized scalar fields. Without
+    // checking the raw lines, parseSmokeTestPlan discards scenario entries
+    // and a contradictory/malformed plan can bypass both smoke gates.
+    for (const line of rawSmokePlanFenceRaw.split(/\r?\n/u)) {
+      const entry = line.trim();
+      if (entry && !entry.startsWith('#') && !/^(?:not-applicable|na|reason|n\/a-reason):[^\r\n]*$/iu.test(entry)) {
+        errors.push('smoke-test-plan not-applicable cannot contain scenarios or unsupported entries');
+        break;
+      }
     }
     return { ok: errors.length === 0, errors, warnings, plan };
   }

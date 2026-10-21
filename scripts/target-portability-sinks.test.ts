@@ -345,24 +345,39 @@ describe('Issue #2188 target portability sinks', () => {
     const bin = join(fixture.root, 'fake-bin');
     mkdirSync(bin, { recursive: true });
     const audit = join(fixture.root, 'native-gh.log');
-    const fakeGh = join(bin, 'gh-native');
+    const fakeGh = process.execPath;
     const fakeNode = join(bin, 'node');
-    writeFileSync(fakeGh, `#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' "$*" >>"\${OPK_GH_AUDIT}"\nprintf '%s\\n' '{"number":12,"head":{"ref":"topic"},"base":{"ref":"trunk"},"draft":false}'\n`, 'utf8');
+    const preload = join(bin, 'native-gh-preload.cjs');
+    writeFileSync(preload, [
+      "const fs = require('node:fs');",
+      "const cp = require('node:child_process');",
+      'const spawnSync = cp.spawnSync;',
+      'cp.spawnSync = function(command, args, options) {',
+      "  if (command === process.env.GH_REAL_BINARY && args?.includes('api') && args?.includes('repos/example/alpha/pulls/12')) {",
+      "    fs.appendFileSync(process.env.OPK_GH_AUDIT, args.join(' ') + '\\n');",
+      "    const stdout = JSON.stringify({ number: 12, head: { ref: 'topic' }, base: { ref: 'trunk' }, draft: false });",
+      "    return { pid: 1, output: [null, stdout, ''], stdout, stderr: '', status: 0, signal: null };",
+      '  }',
+      '  return spawnSync.apply(this, arguments);',
+      '};',
+      "require('node:module').syncBuiltinESMExports();",
+    ].join('\n'), 'utf8');
     writeFileSync(fakeNode, `#!/usr/bin/env bash\nset -euo pipefail\njoined="$*"\ncase "$joined" in\n  *gh-target-authorization.ts*) printf '%s\\t%s\\n' "\${OPK_EXPECTED_TARGET_REPO}" "trunk" ;;\n  *gh-resolve-real-binary.mjs*) printf '%s\\n' "\${OPK_FAKE_GH}" ;;\n  *) exec "\${OPK_REAL_NODE}" "$@" ;;\nesac\n`, 'utf8');
-    chmodSync(fakeGh, 0o755);
     chmodSync(fakeNode, 0o755);
     const result = runProcessSync({
       command: join(process.cwd(), 'scripts', 'gh'),
       args: ['pr', 'view', '12', '--json', 'number,headRefName,isDraft'],
       cwd: fixture.root,
       env: isolatedChildEnv({
-        ...process.env,
+        ...fixture.env,
         PATH: `${bin}:/usr/bin:/bin`,
         GH_WRAPPER_ACTIVE: '',
         OPK_PROJECT_ID: 'alpha',
         OPK_EXPECTED_TARGET_REPO: 'example/alpha',
         OPK_FAKE_GH: fakeGh,
         OPK_GH_AUDIT: audit,
+        GH_REAL_BINARY: fakeGh,
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(' '),
         OPK_REAL_NODE: process.execPath,
       }),
     });

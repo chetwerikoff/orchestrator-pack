@@ -22,6 +22,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   parseIssueBody,
+  parseIssueScopeFences,
   type IssueConstraints,
 } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import {
@@ -529,8 +530,6 @@ const LIVE_ISSUE_BOOTSTRAP_FENCE_PATTERN =
 const SOURCE_REVISION_MARKER_PATTERN =
   /^<!--[ \t]*source-revision:[ \t]*(r\d+)[ \t]*-->[ \t]*\r?$/gm;
 const FULL_GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
-const ISSUE_SCOPE_FENCE_PATTERN =
-  /```(denylist|allowed-roots)\s*\r?\n([\s\S]*?)```/gi;
 
 function hasDuplicateEntries(entries: readonly string[]): boolean {
   return new Set(entries).size !== entries.length;
@@ -629,14 +628,8 @@ export function selectLiveIssueScope(
   binding?: LiveIssueScopeBinding,
 ): LiveIssueScopeSelectionResult {
   const fenceCounts = { denylist: 0, 'allowed-roots': 0 };
-  let match: RegExpExecArray | null;
-  const pattern = new RegExp(
-    ISSUE_SCOPE_FENCE_PATTERN.source,
-    ISSUE_SCOPE_FENCE_PATTERN.flags,
-  );
-  while ((match = pattern.exec(issueBody)) !== null) {
-    const label = match[1] as keyof typeof fenceCounts;
-    fenceCounts[label] += 1;
+  for (const occurrence of parseIssueScopeFences(issueBody).occurrences) {
+    fenceCounts[occurrence.kind] += 1;
   }
 
   if (fenceCounts.denylist !== 1 || fenceCounts['allowed-roots'] !== 1) {

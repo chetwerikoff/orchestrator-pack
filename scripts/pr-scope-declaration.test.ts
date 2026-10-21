@@ -360,6 +360,23 @@ describe('AO-free PR scope declaration contract', () => {
       .toMatchObject({ status: 'unverified' });
   });
 
+  it('distinguishes a guarded default from a guard-free explicit baseRef', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-guard-default-'));
+    roots.push(root);
+    initializeDefaultWorkflow(root);
+    const workflow = join(root, '.github', 'workflows', 'scope-guard.yml');
+    writeFileSync(workflow, [
+      'name: unrelated build', 'on:', '  push:', 'jobs:', '  build:',
+      '    steps:', '      - run: echo inert',
+    ].join('\n'), 'utf8');
+    fixtureGit(root, ['add', '.github/workflows/scope-guard.yml']);
+    fixtureGit(root, ['commit', '--quiet', '-m', 'unguarded release']);
+    fixtureGit(root, ['push', '--quiet', 'origin', 'HEAD:refs/heads/release']);
+    expect(resolvePrScopeGuardApplicability(root)).toMatchObject({ status: 'guarded' });
+    expect(resolvePrScopeGuardApplicability(root, { baseRef: 'refs/heads/release' }))
+      .toMatchObject({ status: 'guard-free' });
+  });
+
   it('recognizes active inline and four-space YAML guard configurations', () => {
     const workflows = [
       [
@@ -1071,6 +1088,30 @@ describe('AO-free PR scope declaration contract', () => {
       ok: false,
       reason: 'candidate-discovery-error',
     });
+  });
+
+  it('shares fence syntax but keeps guarded multiplicity, grammar and root ceilings strict', () => {
+    const valid = [
+      '```denylist', 'vendor/**', 'packages/core/**', '```',
+      '```allowed-roots', 'scripts/**', '```',
+    ].join('\n');
+    const scope = parseIssueBody(valid);
+    expect(selectLiveIssueScope(valid, scope)).toMatchObject({ ok: true });
+    const repeated = valid + '\n```denylist\nsecrets/**\n```';
+    expect(parseIssueBody(repeated).denylist).toContain('secrets/**');
+    expect(selectLiveIssueScope(repeated, parseIssueBody(repeated))).toMatchObject({
+      ok: false, message: expect.stringContaining('exactly one denylist'),
+    });
+    for (const invalid of [
+      valid.replace('```allowed-roots\nscripts/**\n```', ''),
+      valid.replace('allowed-roots\nscripts/**', 'allowed-roots\n# empty'),
+      valid.replace('allowed-roots\nscripts/**', 'allowed-roots\nscripts/*.ts'),
+      valid.replace('allowed-roots\nscripts/**', 'allowed-roots\nscripts/**\nscripts/**'),
+      valid.replace('allowed-roots\nscripts/**', 'allowed-roots\nother/**'),
+      valid.replace('allowed-roots\nscripts/**', 'allowed-roots\n../scripts/**'),
+    ]) {
+      expect(selectLiveIssueScope(invalid, parseIssueBody(invalid)).ok, invalid).toBe(false);
+    }
   });
 
   it('uses one explicit live-Issue scope only when no declaration candidate exists', () => {

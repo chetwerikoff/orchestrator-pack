@@ -228,6 +228,50 @@ describe('trusted PR scope runner', () => {
     });
   });
 
+  it('keeps a GitHub-invoked guarded runner strict despite a guard-free producer default', () => {
+    // The producer is deliberately absent: invoking the trusted runner means
+    // the PR-base workflow has required a guarded scope decision.
+    const scenarios: Array<{ name: string; files: Array<[string, string]> }> = [
+      { name: 'missing', files: [] },
+      { name: 'malformed', files: [['42.pr-scope.json', '{bad JSON']] },
+      { name: 'stale', files: [['42.pr-scope.json', JSON.stringify({
+        schema_version: PR_SCOPE_DECLARATION_SCHEMA,
+        issue_number: 43,
+        declared_paths: ['scripts/allowed.ts'],
+        denylist: ['vendor/'],
+        allowed_roots: ['scripts/'],
+      })]] },
+      { name: 'ambiguous', files: [
+        ['42.pr-scope.json', '{}'],
+        ['42.alternate.pr-scope.json', '{}'],
+      ] },
+    ];
+    for (const testCase of scenarios) {
+      const root = makeRepo();
+      if (testCase.files.length > 0) {
+        const dir = join(root, 'docs', 'declarations');
+        mkdirSync(dir, { recursive: true });
+        for (const [name, content] of testCase.files) {
+          writeFileSync(join(dir, name), content, 'utf8');
+        }
+      }
+      const fixture = fakeDependencies({
+        prBody: `Closes #${ISSUE_NUMBER}`,
+        issueBody: implementationIssueBody,
+        diff: fixedDiff(['scripts/allowed.ts']),
+      });
+      const outcome = runPrScopeRunner(runnerEnv(root), fixture.deps);
+      expect(outcome.result, testCase.name).toMatchObject({
+        ok: false,
+        reason: 'declaration-selection-failed',
+      });
+      expect(outcome.exitCode, testCase.name).not.toBe(0);
+      expect(fixture.issueReads(), testCase.name).toBe(1);
+    }
+    const runner = readFileSync(join(SCRIPT_DIR, 'pr-scope-runner.ts'), 'utf8');
+    expect(runner).not.toContain('resolvePrScopeGuardApplicability');
+  });
+
   it('fails declaration-backed out-of-scope paths', () => {
     const root = makeRepo(true);
     const fixture = fakeDependencies({

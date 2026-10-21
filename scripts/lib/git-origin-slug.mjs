@@ -12,17 +12,21 @@ export const RESOLVER_GIT_ARGV = Object.freeze([
  * @returns {string | null}
  */
 export function parseRemoteSlug(url) {
-  const trimmed = url.trim();
-  const ssh = /^git@[^:]+:([^/]+\/[^/]+?)(?:\.git)?$/i.exec(trimmed);
-  if (ssh) {
-    return ssh[1];
+  const remote = String(url ?? '').trim();
+  // Only GitHub-hosted HTTPS and authenticated git SSH remotes confer
+  // repository identity. No generic owner/repo or foreign-host fallback.
+  const match = /^(?:git@github\.com:|https:\/\/github\.com(?::443)?\/|ssh:\/\/git@github\.com(?::22)?\/)([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/iu.exec(remote);
+  if (!match) return null;
+  const owner = match[1];
+  const repository = match[2];
+  if (!/^[A-Za-z0-9-]+$/u.test(owner)
+    || !/^[A-Za-z0-9._-]+$/u.test(repository)
+    || repository === '.' || repository === '..'
+    || owner.startsWith('-') || owner.endsWith('-')) {
+    return null;
   }
-  const https = /github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?$/i.exec(trimmed);
-  if (https) {
-    return https[1];
-  }
-  const generic = /[/:]([^/]+\/[^/]+?)(?:\.git)?$/.exec(trimmed);
-  return generic ? generic[1] : null;
+  // Preserve GitHub's original casing; only equality checks case-fold.
+  return owner + '/' + repository;
 }
 
 /**

@@ -184,6 +184,37 @@ describe('target context', () => {
       .toBe('chetwerikoff/orchestrator-pack');
   });
 
+  it('binds the selected card to the strict GitHub origin with case-insensitive equality', () => {
+    const target = fixture({ repository: 'Example/MixedRepo' });
+    for (const origin of [
+      'https://github.com/example/mixedrepo.git',
+      'git@github.com:EXAMPLE/MIXEDREPO.git',
+      'ssh://git@github.com/Example/MixedRepo',
+      'https://github.com:443/Example/MixedRepo.git',
+      'ssh://git@github.com:22/EXAMPLE/MIXEDREPO.git',
+    ]) {
+      git(target.primaryRoot, 'remote', 'set-url', 'origin', origin);
+      expect(resolveTargetContext({
+        projectId: 'orchestrator-pack',
+        env: target.env,
+      }).repository).toBe('example/mixedrepo');
+    }
+    for (const untrusted of [
+      'git@other.example:Example/MixedRepo.git',
+      'https://github.com.attacker.example/Example/MixedRepo.git',
+      'https://github.com:444/Example/MixedRepo.git',
+      'ssh://git@github.com:222/Example/MixedRepo.git',
+      'https://another.example/Example/MixedRepo',
+      'Example/MixedRepo',
+    ]) {
+      git(target.primaryRoot, 'remote', 'set-url', 'origin', untrusted);
+      expect(codeOf(() => resolveTargetContext({
+        projectId: 'orchestrator-pack',
+        env: target.env,
+      })), untrusted).toBe('origin-mismatch');
+    }
+  });
+
   it('runs exactly card verification.local commands through sh -lc in the explicit target worktree', () => {
     const target = fixture({ projectId: 'fixture-target', repository: 'example/fixture-target' });
     const commands = [

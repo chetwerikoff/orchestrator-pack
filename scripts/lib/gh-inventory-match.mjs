@@ -54,6 +54,18 @@ function hasOnlySupportedFields(fields, supported) {
 }
 
 /**
+ * Numbered high-level read routes accept exactly one safe decimal target.
+ * Avoid coercion of fractions, exponents, and extra operands into REST reads.
+ */
+function singlePositiveDecimalTarget(parsed) {
+  if (parsed.positionals.length !== 1 || !/^\d+$/u.test(parsed.positionals[0] ?? '')) {
+    return null;
+  }
+  const number = Number(parsed.positionals[0]);
+  return Number.isSafeInteger(number) && number > 0 ? number : null;
+}
+
+/**
  * @param {string | boolean | undefined} searchFlag
  * @returns {number | null}
  */
@@ -203,7 +215,7 @@ export function matchInventoryRoute(parsed, options = {}) {
   }
 
   if (root === 'repo' && sub === 'view') {
-    if (!hasOnlyAllowedFlags(parsed, [])) {
+    if (!hasOnlyAllowedFlags(parsed, []) || parsed.positionals.length !== 0) {
       return null;
     }
     if (!jsonFieldsEqual(parsed.jsonFields, ['nameWithOwner'])) {
@@ -219,10 +231,8 @@ export function matchInventoryRoute(parsed, options = {}) {
     if (!hasOnlyAllowedFlags(parsed, [])) {
       return null;
     }
-    const num = Number(parsed.positionals[0]);
-    if (!Number.isFinite(num) || num <= 0) {
-      return null;
-    }
+    const num = singlePositiveDecimalTarget(parsed);
+    if (num === null) return null;
     const fields = parsed.jsonFields;
     if (!fields) {
       return null;
@@ -266,8 +276,8 @@ export function matchInventoryRoute(parsed, options = {}) {
     if (!hasOnlyAllowedFlags(parsed, ['--name-only'])) {
       return null;
     }
-    const num = Number(parsed.positionals[0]);
-    if (!Number.isFinite(num) || num <= 0) {
+    const num = singlePositiveDecimalTarget(parsed);
+    if (num === null || parsed.jsonFields !== null || parsed.jq !== null) {
       return null;
     }
     if (parsed.flags['--name-only'] !== true && parsed.flags['--name-only'] !== 'true') {
@@ -391,7 +401,7 @@ export function matchInventoryRoute(parsed, options = {}) {
       return null;
     }
     const prRef = parsed.positionals[0];
-    if (!prRef) {
+    if (parsed.positionals.length !== 1 || !prRef) {
       return null;
     }
     const fields = parsed.jsonFields;
@@ -406,8 +416,10 @@ export function matchInventoryRoute(parsed, options = {}) {
       return { id: 'pr-view', prRef };
     }
 
-    const num = Number(prRef);
-    if (!Number.isFinite(num) || num <= 0) {
+    // Other pr-view field sets require a real decimal PR number; the
+    // canonical prInfoFromView route above deliberately permits branch refs.
+    const num = singlePositiveDecimalTarget(parsed);
+    if (num === null) {
       return null;
     }
 
@@ -443,7 +455,9 @@ export function matchInventoryRoute(parsed, options = {}) {
  */
 export function isUnsupportedHighLevelRead(parsed) {
   const [root, sub] = parsed.subcommand;
-  return ((root === 'pr' && (sub === 'view' || sub === 'checks'))
+  return ((root === 'pr' && (sub === 'view' || sub === 'checks' || sub === 'diff'))
+    || (root === 'issue' && sub === 'view')
+    || (root === 'repo' && sub === 'view')
     || (root === 'run' && parsed.positionals[0] === 'view'))
     && matchInventoryRoute(parsed) === null;
 }
