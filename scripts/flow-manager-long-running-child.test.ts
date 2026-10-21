@@ -51,6 +51,7 @@ import {
 } from './chatgpt-browser-turn/liveness-contract.ts';
 import {
   admitStateLightTurnObservation,
+  bindStateLightOwnedTarget,
   bindPrimaryPublication,
   transitionStateLightTurnObservation,
 } from './chatgpt-browser-turn/state-light-turn-observation.ts';
@@ -1642,6 +1643,97 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(deriveDelivery(makeParsedTurnResult({ state: 'output_conflict', observation_uncertainty_diagnostics: { cause: 'output_conflict:exists', send_count: 0, owned_prompt_seen: false }, resolved_send_count: 0 }), false)).toBe('not-sent');
     expect(deriveDelivery(makeParsedTurnResult({ observation_uncertainty_diagnostics: { cause: 'sent', send_count: 1, owned_prompt_seen: false }, witness: undefined }), false)).toBe('POSSIBLY_DELIVERED');
     expect(deriveDelivery(makeParsedTurnResult(), false)).toBe('landed');
+  });
+
+  it('authenticates an exact unfinished predecessor in the child before any browser spawn (#2678)', async () => {
+    const root = tempDir('opk-predecessor-child-');
+    const stateDir = tempDir('opk-predecessor-observation-');
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', stateDir);
+    const profile = join(root, 'profile');
+    const cdp = 'http://127.0.0.1:9222';
+    const profileKey = configuredProfileKey(profile, cdp);
+    const run = 'run-predecessor-2678';
+    const ownerTask = 'task-predecessor-2678';
+    const previousInvocation = 'previous-invocation-2678';
+    const previousAttempt = 'previous-attempt-2678';
+    const previousTarget = 'own-previous-target-2678';
+    const marker = `OPKTURNV1${'cd'.repeat(16)}`;
+    const previousPaths = launchPaths(root, 'prior-exact');
+    const priorResult = makeTurnResult({
+      state: 'observation_uncertain', scope: 'invocation', cause: 'close_unconfirmed',
+      invocation_id: previousInvocation, configured_profile_key: profileKey,
+      conversation_id: undefined, send_count: 1, send_attempted: true,
+      owned_prompt_marker: marker, owned_target_id: previousTarget,
+      owned_target_created: true, cleanup_status: 'cleanup_unconfirmed',
+    });
+    const priorFixture = nodeFixture('process.stdout.write(JSON.stringify('
+      + JSON.stringify(priorResult) + ') + "\\n");');
+    const priorCode = await runFixtureLaunch(root, {
+      runIdentity: run, attemptIdentity: previousAttempt,
+      invocationId: previousInvocation, ownerTaskId: ownerTask,
+      profile, cdp,
+      handoffReceiptPath: previousPaths.receipt,
+      terminalEnvelopePath: previousPaths.envelope,
+      browserOutputPath: previousPaths.output, cwd: repoRoot,
+      childCommand: priorFixture.command, childArgs: priorFixture.args,
+    });
+    expect(priorCode).toBe(1);
+    expect(readTerminalEnvelope(previousPaths.envelope)).toMatchObject({
+      observed_invocation_id: previousInvocation,
+      cleanup_status: 'cleanup_unconfirmed',
+      owned_target_id: previousTarget,
+      owned_target_created: true,
+      owned_prompt_marker: marker,
+    });
+    admitStateLightTurnObservation({ profileKey, invocationId: previousInvocation, marker });
+    bindStateLightOwnedTarget({
+      profileKey, invocationId: previousInvocation, targetId: previousTarget,
+      created: true, cdp,
+      initialRoute: 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test',
+    });
+    const currentInvocation = 'next-invocation-2678';
+    const actualStarted = join(root, 'current-child-started');
+    const child = nodeFixture('require("node:fs").writeFileSync('
+      + JSON.stringify(actualStarted) + ', "started"); process.exit(0);');
+    const selectors = [
+      '--invocation-id', currentInvocation, '--profile', profile, '--cdp', cdp,
+      '--predecessor-invocation-id', previousInvocation,
+      '--predecessor-attempt-identity', previousAttempt,
+      '--predecessor-run-identity', run, '--predecessor-owner-task-id', ownerTask,
+    ];
+    const currentConfig = (id: string, childArgs: string[], overrides: Partial<LaunchConfig> = {}): LaunchConfig => {
+      const paths = launchPaths(root, id);
+      return {
+        runIdentity: run, attemptIdentity: 'next-attempt-2678',
+        invocationId: currentInvocation, ownerTaskId: ownerTask, profile, cdp,
+        handoffReceiptPath: paths.receipt, terminalEnvelopePath: paths.envelope,
+        browserOutputPath: paths.output, cwd: repoRoot,
+        childCommand: child.command, childArgs: [...child.args, '--', ...childArgs],
+        ...overrides,
+      };
+    };
+    for (const [id, args, override] of [
+      ['half-pair', selectors.slice(0, -2), {}],
+      ['wrong-owner-task', selectors, { ownerTaskId: 'other-task' }],
+      ['wrong-run', selectors, { runIdentity: 'other-run' }],
+      ['wrong-cdp', selectors, { cdp: 'http://127.0.0.1:9333' }],
+      ['wrong-prior-attempt',
+        selectors.map((value, index) => index === 8 ? 'foreign-attempt' : value), {}],
+    ] as const) {
+      const paths = launchPaths(root, id);
+      const code = await runFixtureLaunch(root, currentConfig(id, [...args], override));
+      expect(code, id).toBe(2);
+      expect(existsSync(paths.receipt), id).toBe(false);
+      expect(existsSync(paths.envelope), id).toBe(false);
+      expect(existsSync(actualStarted), id).toBe(false);
+    }
+    const acceptedPaths = launchPaths(root, 'validated-predecessor');
+    const admitted = await runFixtureLaunch(root, currentConfig('validated-predecessor', selectors));
+    // Deliberately no browser Send or Page: this fixture isolates child admission
+    // and proves the ordinary child spawns only after the exact old proof.
+    expect(admitted).toBe(1);
+    expect(existsSync(acceptedPaths.receipt)).toBe(true);
+    expect(existsSync(actualStarted)).toBe(true);
   });
 
   it('distinguishes original unique marker landing from positive POST and unknown attempt (#2678)', () => {
