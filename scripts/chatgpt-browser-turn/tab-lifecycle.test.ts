@@ -394,7 +394,7 @@ describe('Issue #1238 publication boundary', () => {
         beforePageClose: () => expect(readFileSync(output, 'utf8')).toBe(reply),
       });
       expect(observed.result.cleanup).toBe('unconfirmed');
-      expect(observed.result.incidents).toContain('owned_tab_cleanup_failed');
+      expect(observed.result.incidents).toContain('owned_tab_cleanup_unconfirmed');
       expect(observed.pageCloseCalls).toBe(1);
       expect(observed.browserCloseCalls).toBe(1);
       expect(observed.foreignTargetOpen).toBe(true);
