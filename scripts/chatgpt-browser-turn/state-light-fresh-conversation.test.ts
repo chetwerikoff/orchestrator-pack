@@ -1769,17 +1769,13 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.getSends()).toBe(1);
     expect(outcome.result.send_count).toBe(1);
-    if (admitted) {
-      expect(outcome.result).toMatchObject({ state: 'ok', conversation_id: SHARED_CONV });
-      expect(readFileSync(output, 'utf8')).toBe('CLAIM-TIME-ANSWER');
-    } else {
-      expect(outcome.result).toMatchObject({
-        state: 'observation_uncertain', cause: 'fresh_conversation_owner_unproven',
-      });
-      expect(outcome.result).not.toHaveProperty('conversation_id');
-      expect(existsSync(output)).toBe(false);
-      expect(turn.page.goto).toHaveBeenCalledTimes(1); // No preclaim navigation.
-    }
+    // Both before and after the old URL subwindow, the original Page's
+    // unique user marker and revalidated complete successor can publish.
+    // A late URL may remain optional rather than becoming Send authority.
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(readFileSync(output, 'utf8')).toBe('CLAIM-TIME-ANSWER');
+    if (admitted) expect(outcome.result.conversation_id).toBe(SHARED_CONV);
+    else expect(turn.page.goto).toHaveBeenCalledTimes(1); // No preclaim navigation.
   });
 
   it('Issue #2636 review source-01: counted own POST with unchanged composer survives early fresh URL wait', async () => {
@@ -2040,12 +2036,15 @@ describe('state-light fresh conversation collision recovery', () => {
     };
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const outcome = await runNewChatTurn(page, '/tmp/url-wait-expiry.txt');
+    const output = join(stateDir, 'url-wait-expiry.txt');
+    const outcome = await runNewChatTurn(page, output);
 
-    expect(outcome.code).not.toBe(0);
-    expect(outcome.result).toMatchObject({ send_count: 1 });
-    expect(outcome.result.state).not.toBe('send_failed');
-    expect(outcome.result.state).not.toBe('ok');
+    // No UUID/URL wait is needed after the original pinned Page proves its
+    // unique user marker and a complete stable assistant successor.
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(readFileSync(output, 'utf8')).toBe(reply);
     expect(outcome.result.incidents).toContain('send_observation_deferred');
   });
 
@@ -2377,13 +2376,15 @@ describe('state-light fresh conversation collision recovery', () => {
 
     const outcome = await runNewChatTurn(turn.page, output, '90000', invocationId);
 
+    // Even after the old URL-unbound cutoff, a unique own Page marker and
+    // finished assistant answer may commit inside the original 90s maximum.
     expect(outcome.result).toMatchObject({
-      state: 'observation_uncertain', cause: 'fresh_conversation_owner_unproven', send_count: 1,
+      state: 'ok', cause: 'completed_page_only', send_count: 1,
     });
     expect(mocks.nowMs - start).toBeLessThan(90_000);
     expect(turn.getSends()).toBe(1);
     expect(outcome.result).not.toHaveProperty('conversation_id');
-    expect(existsSync(output)).toBe(false);
+    expect(readFileSync(output, 'utf8')).toBe('NO-CANONICAL-REPLY');
   });
 
   // The Send fetch can fail while the server executes. Model the owned local
@@ -3002,19 +3003,17 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(turn.page, output, '1800000', invocationId);
 
     expect(outcome.result).toMatchObject({
-      state: 'observation_uncertain',
-      cause: 'fresh_conversation_owner_unproven',
-      send_count: 1,
+      state: 'ok', cause: 'completed_page_only', send_count: 1,
     });
     expect(outcome.result).not.toHaveProperty('conversation_id');
-    expect(mocks.nowMs - launcherStartMs).toBeLessThan(3_600_000);
+    expect(mocks.nowMs - launcherStartMs).toBeLessThan(1_800_000);
     expect(turn.getSends()).toBe(1);
     expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
-      phase: 'sent_unbound',
+      phase: 'harvested',
       conversation_url: null,
       send_count: 1,
     });
-    expect(existsSync(output)).toBe(false);
+    expect(readFileSync(output, 'utf8')).toBe(reply);
   });
 
   it('binds and harvests once after a local-chatgpt fresh URL becomes a canonical owned project URL', async () => {
