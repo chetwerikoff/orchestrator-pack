@@ -157,6 +157,7 @@ describe('Issue #1887 GitHub compare ancestry normalization', () => {
 function setupHarness(storeRoot: string): void {
   process.env.OPK_VITEST_HARNESS = '1';
   process.env.PACK_REVIEWER = 'codex';
+  process.env.PACK_REVIEW_BOUND_REVIEWER = 'codex';
   process.env.XDG_CONFIG_HOME = join(storeRoot, 'test-config');
   const projects = join(process.env.XDG_CONFIG_HOME, 'orchestrator-pack', 'projects');
   mkdirSync(projects, { recursive: true });
@@ -3124,6 +3125,7 @@ describe('Issue #2479 frozen reviewer and accepted-verdict provenance', () => {
     roots.push(root);
     const storeRoot = join(root, 'store');
     setupHarness(storeRoot);
+    delete process.env.PACK_REVIEW_BOUND_REVIEWER; // preserve saved-over-legacy precedence
     const config = getPackReviewerPreferencePath(process.env);
     writePackReviewerPreference('claude', config);
     process.env.PACK_REVIEWER = 'gpt';
@@ -3169,6 +3171,7 @@ describe('Issue #2479 frozen reviewer and accepted-verdict provenance', () => {
     roots.push(root);
     const storeRoot = join(root, 'store');
     setupHarness(storeRoot);
+    delete process.env.PACK_REVIEW_BOUND_REVIEWER; // preserve saved-over-legacy precedence
     const config = getPackReviewerPreferencePath(process.env);
     writePackReviewerPreference('claude', config);
     process.env.PACK_REVIEWER = 'gpt';
@@ -3893,6 +3896,7 @@ describe('Issue #2573 complete-slot persisted JSON reconciliation', () => {
     const storeRoot = join(root, 'store');
     setupHarness(storeRoot);
     process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
 
     const mapped = mapGptReplyToReviewPayload(rawPathlessFinding);
     expect(mapped).toMatchObject({ verdict: 'findings', findingCount: 1 });
@@ -4410,6 +4414,7 @@ describe('Issue #2576 owned worktree lifecycle with real disposable Git', () => 
     const f = realGitFixture();
     const prNumber = 257640;
     process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
 
@@ -5193,6 +5198,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     }));
     process.env.OPK_PROJECT_ID = projectId;
     process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
     process.env.PACK_GPT_BROWSER_PROFILE = join(root, 'chrome-profile');
     process.env.PACK_GPT_BROWSER_CDP = 'http://127.0.0.1:9222';
     process.env.CHATGPT_BROWSER_TURN_STATE_DIR = join(root, 'browser-state');
