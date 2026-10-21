@@ -418,7 +418,9 @@ describe('Issue #2596 production recovery caller boundaries', () => {
         expect(selection).toHaveBeenCalledTimes(1);
         expect(foreign.locator).not.toHaveBeenCalled();
         expect(result).toMatchObject({ state: 'ok', conversation_id: url, send_count: 1 });
-        expect(successor.close).toHaveBeenCalledTimes(1);
+        // The read-only successor provided the original reply, but it is
+        // not the invocation's CDP-pinned, originally created close target.
+        expect(successor.close).not.toHaveBeenCalled();
         expect(readFileSync(output, 'utf8')).toBe('RECOVERED-REPLY');
       } else {
         expect(selection).not.toHaveBeenCalled();
@@ -1029,16 +1031,11 @@ describe('production attempted-send result and durable envelope', () => {
       expect(result.send_count).toBe(witnessed ? 1 : 0);
       expect(observation.phase).toBe(preDispatch ? 'not_sent' : witnessed ? 'sent_unharvested' : 'dispatching');
       if (!preDispatch) {
-        // A positively witnessed Send follows the existing close path. An
-        // attempted zero-count Send is still possibly delivered, even when
-        // the Page was originally created by this invocation: retain its draft.
-        if (witnessed) {
-          expect(page.close).toHaveBeenCalledTimes(1);
-          expect(result.cleanup).toBe('confirmed');
-        } else {
-          expect(page.close).not.toHaveBeenCalled();
-          expect(result.cleanup).not.toBe('confirmed');
-        }
+        // This fixture selects a pre-existing exact-chat Page; a numeric
+        // Send witness authenticates delivery, not destructive ownership.
+        // Neither the witnessed nor attempted/unproven path may close it.
+        expect(page.close).not.toHaveBeenCalled();
+        expect(result.cleanup).not.toBe('confirmed');
         if (!witnessed) {
           expect(result.send_attempted).toBe(true);
           expect(observation.send_count).toBeUndefined();
@@ -1049,7 +1046,7 @@ describe('production attempted-send result and durable envelope', () => {
         // The click/Enter exception is a diagnostic, not proof that no Send happened.
         // The original-deadline outcome remains possibly delivered after no witness.
         expect(result).toMatchObject({
-          state: 'observation_uncertain', cause: 'send_delivery_unproven',
+          state: 'observation_uncertain', cause: 'post_send_absolute_deadline_elapsed',
           send_attempted: true, send_count: 0,
         });
         expect(result.incidents).toContain('send_transport_error');
@@ -1067,8 +1064,13 @@ describe('production attempted-send result and durable envelope', () => {
         conversationLocator: chatUrl,
         childCommand: process.execPath, childArgs: ['-e', `process.stdout.write(${JSON.stringify(JSON.stringify(result) + '\n')})`],
       });
+      if (witnessed) {
+        // The exception does not undo the unique original-Page user marker.
+        // Landed proves observed user-message delivery, NOT a completed reply.
+        expect(result.owned_marker_confirmed === true || result.send_witness === 'owned_marker').toBe(true);
+      }
       expect(readTerminalEnvelope(envelopePath)).toMatchObject({
-        delivery: preDispatch ? 'not-sent' : 'POSSIBLY_DELIVERED',
+        delivery: preDispatch ? 'not-sent' : witnessed ? 'landed' : 'POSSIBLY_DELIVERED',
         send_count: witnessed ? 1 : 0, observed_invocation_id: invocationId,
         ...(preDispatch ? {} : { recovery_available: true, conversation_locator: chatUrl }),
       });
@@ -1445,7 +1447,7 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
             state: 'observation_uncertain', send_count: 0,
             send_attempted: true,
             cause: scenario === 'lost-near-deadline'
-              ? 'owned_conversation_recovery_census_failed' : 'send_delivery_unproven',
+              ? 'owned_conversation_recovery_census_failed' : 'post_send_absolute_deadline_elapsed',
           });
           // This is an existing, explicitly selected exact chat. Its URL may
           // remain recorded without constituting a Send or reply witness.
@@ -1939,7 +1941,7 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
 });
 
 
-describe('conversation fetch HTTP 429 — shared 5-minute cross-process cooldown (#2617)', () => {
+describe('conversation fetch HTTP 429 — shared bounded cross-process cooldown (#2617/#2678)', () => {
   let root: string;
   let profileKey: string;
   let now: number;
@@ -1971,46 +1973,71 @@ process.stdout.write(JSON.stringify(readStateLightAccountCooldown(${JSON.stringi
     return JSON.parse(child.stdout);
   };
 
-  it('records exactly one epoch-ms field, expires at 300000ms and is shared across separate Node processes', () => {
+  it('starts at 60 seconds, preserves one profile record and shares it across Node processes', () => {
     const first = publishWitnessedStateLight429(profileKey, now);
-    expect(first).toEqual({ active: true, until: now + 300_000 });
+    expect(first).toEqual({ active: true, until: now + 60_000 });
     expect(JSON.parse(readFileSync(pathFor(profileKey), 'utf8'))).toEqual({
-      cooldown_until_ms: now + 300_000,
+      cooldown_until_ms: now + 60_000,
+      last_witness_at_ms: now,
+      backoff_step: 1,
     });
-    expect(readStateLightAccountCooldown(profileKey, now + 299_999)).toMatchObject({
-      active: true, until: now + 300_000,
+    expect(readStateLightAccountCooldown(profileKey, now + 59_999)).toMatchObject({
+      active: true, until: now + 60_000,
     });
     expect(readFromOtherNodeProcess(profileKey, now + 1)).toMatchObject({
-      active: true, until: now + 300_000,
+      active: true, until: now + 60_000,
     });
-    expect(readStateLightAccountCooldown(profileKey, now + 300_000).active).toBe(false);
+    expect(readStateLightAccountCooldown(profileKey, now + 60_000).active).toBe(false);
   });
 
-  it('never shortens the previous valid deadline on a separately witnessed 429', () => {
+  it('never shortens an active legacy deadline on a separately witnessed 429', () => {
+    writeFileSync(pathFor(profileKey), JSON.stringify({ cooldown_until_ms: now + 300_000 }));
+    expect(readStateLightAccountCooldown(profileKey, now)).toMatchObject({
+      active: true, until: now + 300_000,
+    });
     expect(publishWitnessedStateLight429(profileKey, now)).toMatchObject({
       until: now + 300_000,
     });
-    expect(publishWitnessedStateLight429(profileKey, now + 1_000)).toMatchObject({
-      until: now + 301_000,
+    expect(readFromOtherNodeProcess(profileKey, now + 1_000)).toMatchObject({
+      active: true, until: now + 300_000,
     });
-    expect(readFromOtherNodeProcess(profileKey, now + 1_100)).toMatchObject({
-      active: true, until: now + 301_000,
+    expect(JSON.parse(readFileSync(pathFor(profileKey), 'utf8'))).toMatchObject({
+      cooldown_until_ms: now + 300_000, last_witness_at_ms: now, backoff_step: 1,
     });
-    expect(JSON.parse(readFileSync(pathFor(profileKey), 'utf8')))
-      .toEqual({ cooldown_until_ms: now + 301_000 });
   });
 
-  it('rejects a +24-hour future deadline and replaces it with only newly witnessed 5-minute authority', () => {
+  it('steps through only new 429 witnesses and resets after 30 minutes without a witness', () => {
+    const ticks = [0, 60_001, 180_002, 420_003] as const;
+    const ends = [60_000, 180_001, 420_002, 720_003] as const;
+    for (let i = 0; i < ticks.length; i++) {
+      expect(publishWitnessedStateLight429(profileKey, ticks[i]!))
+        .toMatchObject({ active: true, until: ends[i]! });
+      expect(readStateLightAccountCooldown(profileKey, ticks[i]!)).toMatchObject({
+        active: true, until: ends[i]!, backoffStep: i + 1,
+      });
+    }
+    expect(readStateLightAccountCooldown(profileKey, 720_003)).toMatchObject({
+      active: false, diagnostic: 'account_cooldown_expired', backoffStep: 4,
+    });
+    expect(publishWitnessedStateLight429(profileKey, 720_004)).toMatchObject({
+      until: 1_020_004,
+    });
+    expect(publishWitnessedStateLight429(profileKey, 720_004 + 1_800_001)).toMatchObject({
+      until: 720_004 + 1_800_001 + 60_000,
+    });
+  });
+
+  it('rejects a +24-hour future deadline and replaces it with a new 60-second witness', () => {
     const path = pathFor(profileKey);
     writeFileSync(path, JSON.stringify({ cooldown_until_ms: now + 86_400_000 }));
     expect(readStateLightAccountCooldown(profileKey, now)).toMatchObject({
       active: false, diagnostic: 'account_cooldown_far_future',
     });
     expect(publishWitnessedStateLight429(profileKey, now)).toEqual({
-      active: true, until: now + 300_000,
+      active: true, until: now + 60_000,
     });
     expect(readFromOtherNodeProcess(profileKey, now + 100)).toMatchObject({
-      active: true, until: now + 300_000,
+      active: true, until: now + 60_000,
     });
   });
 
@@ -2331,7 +2358,7 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
     const path = join(profileDirs(key).locks, 'state-light-account-cooldown.v1.json');
     publishWitnessedStateLight429(key, clock.now);
     const exactExpiry = JSON.parse(readFileSync(path, 'utf8')).cooldown_until_ms as number;
-    expect(exactExpiry).toBe(400_000);
+    expect(exactExpiry).toBe(160_000);
 
     const ownAttach = await import('./own-target-attach.ts');
     const ui = await import('./ui-adapter.ts');
@@ -2451,7 +2478,7 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
       expect(readStateLightAccountCooldown(key, clock.now).active).toBe(eligible);
       if (eligible) {
         expect(JSON.parse(readFileSync(join(profileDirs(key).locks, 'state-light-account-cooldown.v1.json'), 'utf8')))
-          .toEqual({ cooldown_until_ms: 400_000 });
+          .toEqual({ cooldown_until_ms: 160_000, last_witness_at_ms: 100_000, backoff_step: 1 });
         expect(result.product_wall_diagnostic).toMatchObject({ wall_kind: 'rate_limit', http_status: 429 });
       }
     },
@@ -2479,7 +2506,23 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
     }
     expect(deriveDelivery({ ...result, resolved_send_count: result.send_count } as any, false))
       .toBe('POSSIBLY_DELIVERED');
-    expect(readStateLightAccountCooldown(configuredProfileKey(profile, cdp), clock.now).active).toBe(send429 === 'own');
+    const key = configuredProfileKey(profile, cdp);
+    if (send429 === 'own') {
+      // The POST 429 is witnessed at the Send boundary, but this deliberately
+      // uncertain turn may continue read-only observation past its 60s hold.
+      // Expiration must not erase or silently renew the original witness.
+      const record = JSON.parse(readFileSync(
+        join(profileDirs(key).locks, 'state-light-account-cooldown.v1.json'), 'utf8',
+      ));
+      expect(record).toEqual({
+        cooldown_until_ms: 160_000, last_witness_at_ms: 100_000, backoff_step: 1,
+      });
+      expect(readStateLightAccountCooldown(key, 100_000).active).toBe(true);
+      expect(readStateLightAccountCooldown(key, clock.now).active).toBe(clock.now < 160_000);
+    } else {
+      expect(readStateLightAccountCooldown(key, clock.now).active).toBe(false);
+      expect(existsSync(join(profileDirs(key).locks, 'state-light-account-cooldown.v1.json'))).toBe(false);
+    }
   });
 
   it.each([false, true])('three source pages cannot create/refresh a hold or block a fourth unit (seeded: %s)', async (seeded) => {

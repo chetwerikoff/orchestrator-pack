@@ -119,6 +119,18 @@ export interface TurnResultV1 {
   send_attempted?: boolean;
   invocation_id: string;
   configured_profile_key: string;
+  /** Original positively CDP-selected target, never an inferred URL-selected tab. */
+  owned_target_id?: string;
+  owned_target_created?: boolean;
+  owned_prompt_marker?: string;
+  owned_marker_confirmed?: true;
+  send_witness?: 'none' | 'numeric_send_count' | 'owned_marker';
+  /** Actionable uncertainty: target may still exist; no Stop was attempted. */
+  cleanup_status?: 'cleanup_unconfirmed';
+  predecessor_cleanup_status?: 'confirmed' | 'cleanup_unconfirmed';
+  predecessor_target_id?: string;
+  /** Exact selected profile's current witnessed cooldown; passive 429s do not write it. */
+  cooldown_until_ms?: number;
   legacy_configured_profile_key?: string;
   legacy_namespace_root?: string;
   conversation_id?: string;

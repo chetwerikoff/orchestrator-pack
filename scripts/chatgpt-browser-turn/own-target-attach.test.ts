@@ -6,7 +6,13 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { connectCdpBrowser } from './browser-session.ts';
-import { attachOwnTarget, countUninspectedRecoveryTargets, getOwnTargetInfo } from './own-target-attach.ts';
+import {
+  attachOwnTarget,
+  authorizeGuardedHistoricalTargetClose,
+  countUninspectedRecoveryTargets,
+  getOwnTargetInfo,
+} from './own-target-attach.ts';
+import { listCdpPageTargets } from './own-target-cdp-proxy.ts';
 import { takeRecoveryCensus, type PostSendRecoveryAdapter } from './state-light-turn-recovery.ts';
 
 const CDP = 'http://127.0.0.1:9222';
@@ -74,6 +80,10 @@ class FakeChromeSocket {
           targetId: id, type: 'page', url: target.url,
         } } });
         this.emitProtocol({ id: command.id, result: { targetId: id } });
+      } else if (command.method === 'Target.closeTarget') {
+        const index = targets.findIndex((candidate) => candidate.id === command.params?.targetId);
+        if (index >= 0) targets.splice(index, 1);
+        this.emitProtocol({ id: command.id, result: { success: index >= 0 } });
       } else if (command.method === 'Page.navigate') {
         const target = targets.find((candidate) => 'session-' + candidate.id === command.sessionId);
         if (target) target.url = command.params.url;
@@ -154,7 +164,10 @@ function protocolChromium() {
             const result = await send('Runtime.evaluate', { expression: 'document.title' }, sessionId);
             return result.result?.result?.value;
           },
-          close: async () => { await send('Target.closeTarget', { targetId }); },
+          close: async () => {
+            const result = await send('Target.closeTarget', { targetId });
+            if (result.error) throw new Error(result.error.message);
+          },
           isClosed: () => false,
         });
         onAttached?.();
@@ -322,6 +335,32 @@ describe('Issue #2625 own-target attach isolation', () => {
     await attached.browser.close();
   });
 
+  it('closes only the proven historical pinned ID through the actual filtered CDP proxy', async () => {
+    setupChrome([
+      { id: 'foreign-id', type: 'page', url: FOREIGN },
+      { id: 'historically-created-id', type: 'page', url: CHAT },
+    ]);
+    const chromium = protocolChromium();
+    const reattached = await attachOwnTarget(chromium, {
+      mode: 'own-target', cdp: CDP, deadlineMs: Date.now() + 10_000,
+      newChat: false, postSend: true, pinnedTargetId: 'historically-created-id',
+    });
+    expect(reattached.created).toBe(false);
+    // A reattached Page is not itself proof of historical creation.
+    await expect(reattached.page.close()).rejects.toThrow('existing_page_close_forbidden');
+    expect((await listCdpPageTargets(CDP, 1_000)).map((target) => target.id))
+      .toContain('historically-created-id');
+    expect(authorizeGuardedHistoricalTargetClose(reattached.browser, 'foreign-id')).toBe(false);
+    expect(authorizeGuardedHistoricalTargetClose(reattached.browser, 'historically-created-id')).toBe(true);
+    await reattached.page.close();
+    const after = await listCdpPageTargets(CDP, 1_000);
+    expect(after.map((target) => target.id)).not.toContain('historically-created-id');
+    expect(after.map((target) => target.id)).toContain('foreign-id');
+    expect(chromeCommands.filter((command) => command.method === 'Target.closeTarget')
+      .map((command) => command.params.targetId)).toEqual(['historically-created-id']);
+    await reattached.browser.close();
+  });
+
   it('fails closed on duplicate same-conversation targets before any WebSocket attach', async () => {
     setupChrome([
       { id: 'one', type: 'page', url: CHAT },
@@ -363,6 +402,10 @@ describe('Issue #2625 own-target attach isolation', () => {
       newChat: true, cleanupBudgetMs: 2_000,
     }).then(() => undefined, (cause: Error & { attachAttempts?: number }) => cause);
     expect(error?.attachAttempts).toBe(3);
+    // No Browser/Page handle survived the failed attach. The positive new CDP
+    // target identity must still reach the state-light terminal cleanup path.
+    expect((error as typeof error & { createdTargetId?: string })?.createdTargetId).toMatch(/^created-/u);
+    expect(targets.filter((target) => target.id === (error as any)?.createdTargetId)).toHaveLength(1);
     expect(chromium.connectOverCDP).toHaveBeenCalledTimes(3);
     expect(FakeChromeSocket.sockets.every((socket) => socket.readyState === 3)).toBe(true);
   });
@@ -375,6 +418,7 @@ describe('Issue #2625 own-target attach isolation', () => {
       newChat: false, chatUrl: CHAT, pinnedTargetId: 'owned-id', postSend: true,
     }).then(() => undefined, (cause: Error & { attachAttempts?: number }) => cause);
     expect(error?.attachAttempts).toBe(1);
+    expect((error as typeof error & { createdTargetId?: string })?.createdTargetId).toBeUndefined();
     expect(chromium.connectOverCDP).toHaveBeenCalledTimes(1);
     targets = [];
     await expect(attachOwnTarget(chromium, {

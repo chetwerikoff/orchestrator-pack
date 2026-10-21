@@ -43,6 +43,8 @@ const CLI = {
     { flag: '--poll-ms', value: 'ms' },
     { flag: '--chat-url', value: 'url' },
     { flag: '--new-chat' },
+    { flag: '--predecessor-invocation-id', value: 'id' },
+    { flag: '--predecessor-attempt-identity', value: 'id' },
   ],
 } as const satisfies ManagerCliDeclaration;
 
@@ -181,6 +183,17 @@ export async function runBrowserAdapter(
   const cwd = typeof options.get('cwd') === 'string' ? options.get('cwd') as string : repoRoot;
   const ownerTaskId = options.has('owner-task-id') ? requiredOption(options, 'owner-task-id') : undefined;
   const ownerDispatchId = options.has('owner-dispatch-id') ? requiredOption(options, 'owner-dispatch-id') : undefined;
+  const predecessorInvocation = options.get('predecessor-invocation-id');
+  const predecessorAttempt = options.get('predecessor-attempt-identity');
+  const hasPredecessor = typeof predecessorInvocation === 'string' && typeof predecessorAttempt === 'string';
+  if ((predecessorInvocation !== undefined || predecessorAttempt !== undefined)
+    && (!hasPredecessor || !ownerTaskId || predecessorInvocation === invocationId
+      || predecessorAttempt === attemptIdentity)) {
+    return refuse('predecessor_exact_pair_same_task_required');
+  }
+  // Only pass the exact paired selector. The long-running child authenticates
+  // its own handoff against the prior indexed receipt/terminal before spawning
+  // the driver; this wrapper has no target-cleanup authority.
 
   const browserArgs = [
     'turn',
@@ -196,6 +209,12 @@ export async function runBrowserAdapter(
   if (typeof options.get('chat-url') === 'string') browserArgs.push('--chat-url', options.get('chat-url') as string);
   if (typeof options.get('project-url') === 'string') browserArgs.push('--project-url', options.get('project-url') as string);
   if (options.get('new-chat') === true) browserArgs.push('--new-chat');
+  if (hasPredecessor) browserArgs.push(
+    '--predecessor-invocation-id', predecessorInvocation as string,
+    '--predecessor-attempt-identity', predecessorAttempt as string,
+    '--predecessor-run-identity', runIdentity,
+    '--predecessor-owner-task-id', ownerTaskId!,
+  );
 
   const launcherArgs = [
     'launch',

@@ -255,6 +255,13 @@ export interface TerminalEnvelope {
   readonly turn_result_state?: string;
   readonly turn_result_cause?: string;
   readonly next_action?: string;
+  readonly owned_target_id?: string;
+  readonly owned_prompt_marker?: string;
+  readonly owned_target_created?: boolean;
+  readonly cleanup_status?: 'cleanup_unconfirmed';
+  readonly predecessor_cleanup_status?: 'confirmed' | 'cleanup_unconfirmed';
+  readonly predecessor_target_id?: string;
+  readonly cooldown_until_ms?: number;
   readonly send_count?: number;
   readonly observed_invocation_id?: string;
   readonly send_slot_holder_invocation_id?: string;
@@ -528,6 +535,26 @@ function parseTurnResult(line: string): ParsedTurnResult | null {
     };
 
     if (body.send_attempted === true) result.send_attempted = true;
+    if (body.owned_marker_confirmed === true) result.owned_marker_confirmed = true;
+    if (body.send_witness === 'owned_marker' || body.send_witness === 'numeric_send_count'
+      || body.send_witness === 'none') result.send_witness = body.send_witness;
+    if (typeof body.owned_target_id === 'string'
+      && /^[A-Za-z0-9._:-]{1,256}$/u.test(body.owned_target_id)) result.owned_target_id = body.owned_target_id;
+    if (typeof body.owned_prompt_marker === 'string' && /^OPKTURNV1[a-f0-9]+$/u.test(body.owned_prompt_marker)) {
+      result.owned_prompt_marker = body.owned_prompt_marker;
+    }
+    if (typeof body.owned_target_created === 'boolean') result.owned_target_created = body.owned_target_created;
+    if (body.cleanup_status === 'cleanup_unconfirmed') result.cleanup_status = body.cleanup_status;
+    if (body.predecessor_cleanup_status === 'confirmed' || body.predecessor_cleanup_status === 'cleanup_unconfirmed') {
+      result.predecessor_cleanup_status = body.predecessor_cleanup_status;
+    }
+    if (typeof body.predecessor_target_id === 'string'
+      && /^[A-Za-z0-9._:-]{1,256}$/u.test(body.predecessor_target_id)) {
+      result.predecessor_target_id = body.predecessor_target_id;
+    }
+    if (typeof body.cooldown_until_ms === 'number' && Number.isSafeInteger(body.cooldown_until_ms)) {
+      result.cooldown_until_ms = body.cooldown_until_ms;
+    }
     if (typeof body.next_action === 'string') result.next_action = body.next_action;
     if (body.cause === 'state_light_new_chat_send_slot_timeout') {
       const validHolder = typeof body.send_slot_holder_invocation_id === 'string'
@@ -628,6 +655,35 @@ function resolveConversationLocator(
   return config.conversationLocator ?? candidate?.conversation_id ?? undefined;
 }
 
+function turnTargetEnvelopeFields(
+  candidate?: Pick<ParsedTurnResult, 'owned_target_id' | 'owned_prompt_marker'
+    | 'owned_target_created' | 'cleanup_status' | 'predecessor_cleanup_status'
+    | 'predecessor_target_id' | 'cooldown_until_ms'> | null,
+  record?: StateLightTurnObservationRecord,
+): Pick<TerminalEnvelope, 'owned_target_id' | 'owned_prompt_marker'
+  | 'owned_target_created' | 'cleanup_status' | 'predecessor_cleanup_status'
+  | 'predecessor_target_id' | 'cooldown_until_ms'> {
+  return {
+    ...(record?.owned_target
+      ? { owned_target_id: record.owned_target.id,
+        owned_prompt_marker: record.marker,
+        owned_target_created: record.owned_target.created }
+      : candidate?.owned_target_id && candidate.owned_prompt_marker
+        ? { owned_target_id: candidate.owned_target_id,
+          owned_prompt_marker: candidate.owned_prompt_marker,
+          owned_target_created: candidate.owned_target_created }
+        : {}),
+    ...(candidate?.cleanup_status === 'cleanup_unconfirmed'
+      ? { cleanup_status: 'cleanup_unconfirmed' as const } : {}),
+    ...(candidate?.predecessor_cleanup_status
+      ? { predecessor_cleanup_status: candidate.predecessor_cleanup_status,
+        ...(candidate.predecessor_target_id ? { predecessor_target_id: candidate.predecessor_target_id } : {}) }
+      : {}),
+    ...(candidate?.cooldown_until_ms !== undefined
+      ? { cooldown_until_ms: candidate.cooldown_until_ms } : {}),
+  };
+}
+
 function conversationLocatorFields(
   config: LaunchConfig,
   candidate?: { conversation_id?: string },
@@ -644,6 +700,11 @@ export function deriveDelivery(result: ParsedTurnResult | null, childStartFailed
   if (!result) return 'not-sent';
   const sendCount = result.resolved_send_count;
   if (sendCount === 0 && result.send_attempted === true) return 'POSSIBLY_DELIVERED';
+  // A unique owned marker proves physical Send independently of whether
+  // the assistant output file can be published. Conflict remains the true
+  // turn state; it cannot undo already observed user-message delivery.
+  if (sendCount === 1 && (result.owned_marker_confirmed === true
+    || result.send_witness === 'owned_marker')) return 'landed';
   if (result.state === 'output_conflict') {
     return sendCount === 0 ? 'not-sent' : 'POSSIBLY_DELIVERED';
   }
@@ -771,6 +832,52 @@ function childOption(config: LaunchConfig, flag: string): string | undefined {
   return value && !value.startsWith('--') ? value : undefined;
 }
 
+/**
+ * The launcher verifies the caller-supplied predecessor pair, not browser
+ * ownership. The exact earlier task/run/attempt/terminal and positively created
+ * target must agree before the current child is even spawned. Only the
+ * state-light driver can then reattach and attempt guarded physical retirement.
+ */
+function verifyOptionalPredecessorHandoff(config: LaunchConfig): void {
+  const invocation = childOption(config, '--predecessor-invocation-id');
+  const attempt = childOption(config, '--predecessor-attempt-identity');
+  const run = childOption(config, '--predecessor-run-identity');
+  const task = childOption(config, '--predecessor-owner-task-id');
+  if (![invocation, attempt, run, task].some(Boolean)) return;
+  if (!invocation || !attempt || !run || !task || !config.ownerTaskId
+    || !config.invocationId || !config.profile || !config.cdp
+    || invocation === config.invocationId || attempt === config.attemptIdentity
+    || run !== config.runIdentity || task !== config.ownerTaskId
+    || childOption(config, '--invocation-id') !== config.invocationId
+    || childOption(config, '--profile') !== config.profile
+    || childOption(config, '--cdp') !== config.cdp) {
+    throw new Error('predecessor_exact_owner_and_selector_required');
+  }
+  const bound = readInvocationReceiptLocator({
+    invocationId: invocation, runIdentity: run, attemptIdentity: attempt,
+    ownerTaskId: task, terminalEnvelopeRoot: config.terminalEnvelopeRoot,
+  });
+  const terminal = readTerminalEnvelope(bound.locator.terminal_envelope_path, {
+    runIdentity: run, attemptIdentity: attempt,
+  });
+  const original = readStateLightTurnObservation(
+    configuredProfileKey(config.profile, config.cdp), invocation,
+  );
+  const target = original.owned_target;
+  if (!terminal || terminal.observed_invocation_id !== invocation
+    || terminal.handoff_receipt_path !== bound.locator.handoff_receipt_path
+    || terminal.cleanup_status !== 'cleanup_unconfirmed'
+    || bound.receipt.owner_task_id !== task
+    || original.invocation_id !== invocation
+    || !target?.created
+    || target.cdp_sha256 !== createHash('sha256').update(config.cdp, 'utf8').digest('hex')
+    || terminal.owned_target_id !== target.id
+    || terminal.owned_target_created !== true
+    || terminal.owned_prompt_marker !== original.marker) {
+    throw new Error('predecessor_terminal_cleanup_or_created_target_unproven');
+  }
+}
+
 async function provenOwnedTab(
   config: LaunchConfig, record: StateLightTurnObservationRecord, cdp: string,
 ): Promise<string | undefined> {
@@ -886,7 +993,9 @@ function finalObservationProjection(
 
   return {
     record, cdp,
-    delivery: harvestedPrimary ? 'landed' : preDispatch ? 'not-sent' : 'POSSIBLY_DELIVERED',
+    delivery: harvestedPrimary || ((record.send_count ?? 0) === 1
+      && (record.owned_marker_confirmed || record.send_witness === 'owned_marker'))
+      ? 'landed' : preDispatch ? 'not-sent' : 'POSSIBLY_DELIVERED',
     ...(replyDiagnostics ? { replyDiagnostics } : {}),
   };
 }
@@ -931,6 +1040,8 @@ async function persistedTerminalEvidence(
     delivery: observed.delivery,
     recovery_available: Boolean(locator),
     ...(locator ? { conversation_locator: locator } : {}),
+    ...turnTargetEnvelopeFields(undefined, record),
+    ...(record.owned_target?.created ? { cleanup_status: 'cleanup_unconfirmed' as const } : {}),
     diagnostics: {
       persisted_observation: {
         phase: record.phase, ...(record.send_count !== undefined ? { send_count: record.send_count } : {}),
@@ -1144,6 +1255,7 @@ async function finalizeCandidatePath(
       ? { observed_turn_result_identity: candidate.observed_turn_result_identity }
       : {}),
     ...conversationLocatorFields(config, candidate),
+    ...turnTargetEnvelopeFields(candidate, candidateObservation?.record),
   });
   if (capture.duplicateCandidate) {
     await publishEnvelope(config, incidentEnvelope('child_terminal_result_duplicate'));
@@ -1183,6 +1295,7 @@ async function finalizeCandidatePath(
         ? { observed_turn_result_identity: candidate.observed_turn_result_identity }
         : {}),
       ...conversationLocatorFields(config, candidate),
+      ...turnTargetEnvelopeFields(candidate, candidateObservation?.record),
       ...(diagnostics ? { diagnostics } : {}),
     });
     await abortManagedProcess(controller, runPromise);
@@ -1195,6 +1308,14 @@ async function finalizeCandidatePath(
 
 export async function runLaunch(config: LaunchConfig): Promise<number> {
   const canaries = config.secretCanaries ?? [];
+  try {
+    verifyOptionalPredecessorHandoff(config);
+  } catch (error) {
+    refuse('predecessor_handoff_unproven', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return 2;
+  }
   if (!existsSync(config.cwd) || !statSync(config.cwd).isDirectory()) {
     refuse('invalid_cwd', { cwd: config.cwd });
     return 2;

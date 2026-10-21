@@ -22,7 +22,13 @@ import {
   type ResourceCleanupOutcome,
 } from './browser-session.ts';
 import { destinationIdentity } from './coordination.ts';
-import { attachOwnTarget, countUninspectedRecoveryTargets, getOwnTargetInfo } from './own-target-attach.ts';
+import {
+  attachOwnTarget,
+  authorizeGuardedHistoricalTargetClose,
+  countUninspectedRecoveryTargets,
+  getOwnTargetInfo,
+} from './own-target-attach.ts';
+import { listCdpPageTargets } from './own-target-cdp-proxy.ts';
 import {
   turnExitCode,
   type ComposerMutationDiagnosticV1,
@@ -62,7 +68,9 @@ import {
 import { atomicJson, configuredProfileKey, profileDirs } from './storage-common.ts';
 import {
   admitStateLightTurnObservation,
+  bindStateLightOwnedTarget,
   finalizeStateLightPrimaryPublication,
+  readVerifiedStateLightHarvestedPrimary,
   readStateLightTurnObservation,
   transitionStateLightTurnObservation,
 } from './state-light-turn-observation.ts';
@@ -139,6 +147,8 @@ const ACCOUNT_COOLDOWN_FILE = 'state-light-account-cooldown.v1.json';
 const ACCOUNT_COOLDOWN_GUARD = 'state-light-account-cooldown.v1.guard';
 const ACCOUNT_COOLDOWN_MS = 300_000;
 const ACCOUNT_COOLDOWN_ACTIONABLE_MS = ACCOUNT_COOLDOWN_MS + 1_000;
+const ACCOUNT_COOLDOWN_QUIET_RESET_MS = 30 * 60_000;
+const ACCOUNT_COOLDOWN_STEPS_MS = [60_000, 120_000, 240_000, ACCOUNT_COOLDOWN_MS] as const;
 
 const FRESH_LOCAL_POSSIBLY_DELIVERED_NEXT_ACTION =
   'No durable ChatGPT conversation URL was bound for this invocation; delivery is POSSIBLY_DELIVERED. '
@@ -168,6 +178,8 @@ export interface StateLightAccountCooldown {
   readonly active: boolean;
   readonly until?: number;
   readonly diagnostic?: string;
+  readonly lastWitnessAt?: number;
+  readonly backoffStep?: number;
 }
 
 export function readStateLightAccountCooldown(
@@ -185,19 +197,32 @@ export function readStateLightAccountCooldown(
     let record: unknown;
     try { record = JSON.parse(raw); }
     catch { return { active: false, diagnostic: 'account_cooldown_malformed' }; }
-    if (!record || typeof record !== 'object' || Array.isArray(record)
-      || Object.keys(record).length !== 1 || !Object.hasOwn(record, 'cooldown_until_ms')) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) {
       return { active: false, diagnostic: 'account_cooldown_wrong_shape' };
     }
+    const keys = Object.keys(record);
+    const legacy = keys.length === 1 && keys[0] === 'cooldown_until_ms';
+    const extended = keys.length === 3
+      && keys.every((key) => ['cooldown_until_ms', 'last_witness_at_ms', 'backoff_step'].includes(key));
+    if (!legacy && !extended) return { active: false, diagnostic: 'account_cooldown_wrong_shape' };
     const until = (record as { cooldown_until_ms?: unknown }).cooldown_until_ms;
     if (typeof until !== 'number' || !Number.isSafeInteger(until) || until < 0) {
       return { active: false, diagnostic: 'account_cooldown_invalid_deadline' };
     }
-    if (until <= nowMs) return { active: false, diagnostic: 'account_cooldown_expired' };
+    const lastWitnessAt = extended ? (record as { last_witness_at_ms?: unknown }).last_witness_at_ms : undefined;
+    const backoffStep = extended ? (record as { backoff_step?: unknown }).backoff_step : undefined;
+    if (extended && (typeof lastWitnessAt !== 'number'
+      || !Number.isSafeInteger(lastWitnessAt) || lastWitnessAt < 0
+      || typeof backoffStep !== 'number' || !Number.isSafeInteger(backoffStep)
+      || backoffStep < 1 || backoffStep > 4)) {
+      return { active: false, diagnostic: 'account_cooldown_invalid_witness' };
+    }
+    const witness = extended ? { lastWitnessAt: lastWitnessAt as number, backoffStep: backoffStep as number } : {};
+    if (until <= nowMs) return { ...witness, active: false, diagnostic: 'account_cooldown_expired' };
     if (until > nowMs + ACCOUNT_COOLDOWN_ACTIONABLE_MS) {
       return { active: false, diagnostic: 'account_cooldown_far_future' };
     }
-    return { active: true, until };
+    return { ...witness, active: true, until };
   } catch {
     // An inaccessible shared store never becomes a physical Send admission failure.
     return { active: false, diagnostic: 'account_cooldown_store_unavailable' };
@@ -215,8 +240,14 @@ export function publishWitnessedStateLight429(
     // Short writer-integrity guard only: no persistent owner, lease, wait or slot.
     guardFd = openSync(guardPath, 'wx', 0o600);
     const previous = readStateLightAccountCooldown(profileKey, nowMs);
-    const until = Math.max(nowMs + ACCOUNT_COOLDOWN_MS, previous.active ? previous.until! : 0);
-    atomicJson(join(locks, ACCOUNT_COOLDOWN_FILE), { cooldown_until_ms: until });
+    const continuous = previous.lastWitnessAt !== undefined
+      && previous.lastWitnessAt <= nowMs
+      && nowMs - previous.lastWitnessAt <= ACCOUNT_COOLDOWN_QUIET_RESET_MS;
+    const step = continuous ? Math.min(4, (previous.backoffStep ?? 0) + 1) : 1;
+    const until = Math.max(nowMs + ACCOUNT_COOLDOWN_STEPS_MS[step - 1]!, previous.active ? previous.until! : 0);
+    atomicJson(join(locks, ACCOUNT_COOLDOWN_FILE), {
+      cooldown_until_ms: until, last_witness_at_ms: nowMs, backoff_step: step,
+    });
     return { active: true, until };
   } catch {
     return { active: false, diagnostic: 'account_cooldown_write_unavailable' };
@@ -500,6 +531,12 @@ export interface TurnRunOutcome {
   readonly ownershipForfeited?: boolean;
   /** Private, process-local cleanup value; never emitted as turn-result. */
   readonly ownedTypedPayload?: string;
+  /** Process-local handle of the originally CDP-created Page, not a recovery successor. */
+  readonly originalCreatedPage?: any;
+  /** Exact attach-created target retirement after failed Playwright bootstrap. */
+  readonly createdAttachFailureCleanup?: 'confirmed' | 'unconfirmed';
+  /** Affirmative newly allocated ID, retained even if observation binding fails. */
+  readonly createdAttachFailureTargetId?: string;
   /** Exact new-chat project surface of a proven created tab; never emitted. */
   readonly ownedFreshProjectUrl?: string;
   /** Process-only positive-recovery cleanup, never a terminal locator. */
@@ -511,9 +548,13 @@ export interface TurnRunOutcome {
 
 interface FreshComposerCleanupContext {
   page?: any;
+  /** Original invocation-created handle must not silently become the recovery successor. */
+  originalCreatedPage?: any;
   markedPayload?: string;
   projectUrl?: string;
   sendAttempted?: boolean;
+  predecessorCleanupStatus?: 'confirmed' | 'cleanup_unconfirmed';
+  predecessorTargetId?: string;
   /** The original, provably created local-ID failure Page, never the recovered Page. */
   ownedDeadLocalPage?: any;
   ownedDeadLocalUrl?: string;
@@ -3581,19 +3622,33 @@ async function runTurn(
       } else if (diagnostic.http_status !== 429 && diagnostic.wall_kind !== 'account_load_error'
         && (value.wall_kind !== 'none' || value.matched_text !== 'none')) diagnostic = value;
     }, freshCleanup);
-    // A named wall cannot close any selected, recovered or unproven Page.
-    // AC12 exempts only the positively invocation-created pre-Send fetch-429
-    // original; finalizeTurn still requires a durable not_sent observation.
+    // A historical 429 is cooldown evidence, not a verdict on the original
+    // positively created target's *current* close ownership. Recovered,
+    // selected-existing and unproven Pages still fail closed.
+    const knownCreatedOriginal = Boolean(outcome.page
+      && outcome.page === freshCleanup.originalCreatedPage
+      && getOwnTargetInfo(outcome.browser)?.created === true);
     const ownNotSentFetch429 = outcome.ownedPreSendFetch429Page === outcome.page
       && outcome.result.state === 'rate_limit'
       && outcome.result.cause === 'conversation_fetch_http_429'
       && outcome.result.send_count === 0 && outcome.result.send_attempted !== true;
     if (outcome.page && typeof outcome.page === 'object' && !ownNotSentFetch429
+      && !knownCreatedOriginal
       && (diagnostic.http_status === 429 || diagnostic.wall_kind === 'conversation_load_error'
         || outcome.result.cause === 'account_cooldown_active')) {
       cleanupAuthorityUnprovenPages.add(outcome.page);
     }
-    return { ...outcome, result: { ...outcome.result, product_wall_diagnostic: diagnostic } };
+    return {
+      ...outcome,
+      result: {
+        ...outcome.result,
+        product_wall_diagnostic: diagnostic,
+        ...(freshCleanup.predecessorCleanupStatus
+          ? { predecessor_cleanup_status: freshCleanup.predecessorCleanupStatus,
+            ...(freshCleanup.predecessorTargetId ? { predecessor_target_id: freshCleanup.predecessorTargetId } : {}) }
+          : {}),
+      },
+    };
   } finally {
     try {
       if (freshCleanup.page && !freshCleanup.sendAttempted
@@ -3635,13 +3690,24 @@ async function runTurnCore(
     'timeout-ms',
     'poll-ms',
     'invocation-id',
+    'predecessor-invocation-id',
+    'predecessor-attempt-identity',
+    'predecessor-run-identity',
+    'predecessor-owner-task-id',
   ]);
   const invocationId = stringOption(args, 'invocation-id') ?? '';
+  const previousInvocation = stringOption(args, 'predecessor-invocation-id');
+  const previousAttempt = stringOption(args, 'predecessor-attempt-identity');
+  const previousRun = stringOption(args, 'predecessor-run-identity');
+  const previousOwnerTask = stringOption(args, 'predecessor-owner-task-id');
   let profileKey = 'profile-unresolved';
   let browser: any;
   let page: any;
   let sendCount = 0;
+  let refusedCooldownUntil: number | undefined;
   let attachAttempts = 0;
+  let createdAttachFailureCleanup: 'confirmed' | 'unconfirmed' | undefined;
+  let createdAttachFailureTargetId: string | undefined;
   let pollCount = 0;
   const navigation = new StateLightNavigationCounter();
   let journalWriteFailed = false;
@@ -3778,6 +3844,11 @@ async function runTurnCore(
 
   try {
     if (!invocationId) throw new Error('input_invalid:invocation_id_required');
+    if ([previousInvocation, previousAttempt, previousRun, previousOwnerTask].some((value) => Boolean(value))
+      && (!previousInvocation || !previousAttempt || !previousRun || !previousOwnerTask
+        || previousInvocation === invocationId)) {
+      throw new Error('input_invalid:exact_predecessor_selector_required');
+    }
     const baseConfig = browserConfig(args);
     if (baseConfig.timeoutMs > STATE_LIGHT_MAX_TIMEOUT_MS) {
       incident('input_invalid', 'timeout_ms_exceeds_maximum', 'return_local_error');
@@ -3871,6 +3942,21 @@ async function runTurnCore(
       };
     }
 
+    if (previousInvocation && previousAttempt && previousRun && previousOwnerTask) {
+      const previous = await retireExplicitPredecessor({
+        previousInvocationId: previousInvocation,
+        previousAttemptIdentity: previousAttempt,
+        runIdentity: previousRun, ownerTaskId: previousOwnerTask,
+        profileKey, cdp: config.cdp,
+        deadlineMs: Math.min(invocationDeadlineMs, Date.now() + 20_000),
+      });
+      if (freshCleanup) {
+        freshCleanup.predecessorCleanupStatus = previous.status;
+        freshCleanup.predecessorTargetId = previous.targetId;
+      }
+      if (previous.status !== 'confirmed') throw new Error('predecessor_cleanup_unconfirmed');
+    }
+
     // Refuse a new Send against the shared account cooldown before attachOwnTarget:
     // target allocation (including CDP creation) happens before page selection.
     // Refusal is read-only and cannot extend the existing cooldown deadline.
@@ -3878,7 +3964,10 @@ async function runTurnCore(
     if (admissionCooldown.diagnostic) {
       incident('shared_account_cooldown_diagnostic', admissionCooldown.diagnostic, 'fail_open');
     }
-    if (admissionCooldown.active) throw new Error('account_cooldown_active');
+    if (admissionCooldown.active) {
+      refusedCooldownUntil = admissionCooldown.until;
+      throw new Error('account_cooldown_active');
+    }
 
     // Distinct invocation-owned Pages do not share a profile-wide composer lock.
     // Exact destination claims and the selected Page's own Stop/marker guards
@@ -3886,19 +3975,68 @@ async function runTurnCore(
     const chromium = loadChromium();
     const connectWaitMs = invocationBudget.clampOperationWaitMs();
     if (connectWaitMs <= 0) throw new BrowserOperationTimeoutError('connect_over_cdp');
-    const initiallyAttached = await attachOwnTarget(chromium, {
-      mode: 'own-target',
-      cdp: config.cdp,
-      deadlineMs: invocationDeadlineMs,
-      cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
-      ...(config.chatUrl ? { chatUrl: config.chatUrl } : {}),
-      newChat: config.newChat,
-    });
+    let initiallyAttached: Awaited<ReturnType<typeof attachOwnTarget>>;
+    try {
+      initiallyAttached = await attachOwnTarget(chromium, {
+        mode: 'own-target',
+        cdp: config.cdp,
+        deadlineMs: invocationDeadlineMs,
+        cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
+        ...(config.chatUrl ? { chatUrl: config.chatUrl } : {}),
+        newChat: config.newChat,
+      });
+    } catch (error) {
+      // CDP may have created an exact new Page before the proxy or Playwright
+      // connection failed. A positive creation ID is carried by that error;
+      // no raw-ID close or foreign Page attach is permitted.
+      const createdTargetId = (error as { createdTargetId?: unknown } | null)?.createdTargetId;
+      if (typeof createdTargetId === 'string' && createdTargetId.length > 0) {
+        createdAttachFailureTargetId = createdTargetId;
+        createdAttachFailureCleanup = 'unconfirmed';
+        try {
+          bindStateLightOwnedTarget({
+            profileKey, invocationId, targetId: createdTargetId,
+            created: true, cdp: config.cdp,
+            initialRoute: config.newChat
+              ? projectConversationPrefix(config.projectUrl ?? '')
+              : normalizeConversationUrl(config.chatUrl ?? ''),
+          });
+          const retirement = await retireDetachedOriginalTarget({
+            profileKey, invocationId, cdp: config.cdp,
+            deadlineMs: Date.now() + 20_000,
+          });
+          if (retirement.targetId === createdTargetId && retirement.status === 'confirmed') {
+            createdAttachFailureCleanup = 'confirmed';
+          }
+        } catch {
+          // Never fabricate a confirmed close after a failed independent attach.
+        }
+      }
+      throw error;
+    }
     attachAttempts = initiallyAttached.attachAttempts;
+    if (initiallyAttached.created && freshCleanup) {
+      freshCleanup.originalCreatedPage = initiallyAttached.page;
+    }
     browser = initiallyAttached.browser;
     const selection = await selectConversationPage(browser, chromium, config, invocationBudget, invocationDeadlineMs);
     browser = selection.browser;
     page = selection.page;
+    const pinOriginalTargetBeforeNavigation = (): void => {
+      const info = getOwnTargetInfo(browser);
+      if (page && info) {
+        bindStateLightOwnedTarget({
+          profileKey, invocationId,
+          targetId: info.targetId,
+          created: info.created,
+          cdp: config.cdp,
+          initialRoute: config.newChat
+            ? projectConversationPrefix(config.projectUrl ?? '')
+            : normalizeConversationUrl(config.chatUrl ?? ''),
+        });
+      }
+    };
+    pinOriginalTargetBeforeNavigation();
     // Created is attachOwnTarget's affirmative target provenance, not a URL
     // match or a cleanupAction hint. Capture only the original existing-chat Page.
     if (!config.newChat && config.chatUrl && page
@@ -3915,6 +4053,7 @@ async function runTurnCore(
     if (!page || getOwnTargetInfo(browser)?.created) {
       if (!page) {
         page = await createDedicatedTurnPage(browser, invocationBudget);
+        pinOriginalTargetBeforeNavigation();
         // Explicit newPage resolution also proves creation, even when the
         // original attach target did not carry a created Page.
         if (!config.newChat && config.chatUrl && !cleanupAuthorityUnprovenPages.has(page)) {
@@ -5449,9 +5588,14 @@ async function runTurnCore(
     }
 
     const startedAt = Date.now();
-    const softDeadline = startedAt + config.timeoutMs;
-    // `2 × timeout-ms` is a post-send decision threshold, not a hard observation ceiling.
-    let hardExhaustionDeadline = startedAt + (config.timeoutMs * 2);
+    // Do not restart the original invocation's post-Send observation clock.
+    const hardAbsoluteDeadline = Math.min(invocationDeadlineMs, invocationStartedAt + STATE_LIGHT_MAX_TIMEOUT_MS);
+    const softDeadline = Math.min(startedAt + config.timeoutMs, hardAbsoluteDeadline);
+    let hardExhaustionDeadline = hardAbsoluteDeadline;
+    const postSendSleep = async (ms: number): Promise<void> => {
+      const remaining = hardExhaustionDeadline - Date.now();
+      if (remaining > 0) await sleep(page, Math.min(ms, remaining));
+    };
     const dispatchDeadline = startedAt + Math.min(DISPATCH_OBSERVATION_MS, config.timeoutMs);
     let lastReadyReply = '';
     let lastReadyObservedText = '';
@@ -5461,6 +5605,7 @@ async function runTurnCore(
     let uncertainCause = '';
     let observedUserHeads: string[] | undefined;
     let ownedPromptEverSeen = false;
+    let persistedOriginalMarkerProof = false;
     let ownedCarrierKey: string | undefined;
     let lastMarkerlessSnapshotSignature = '';
     let completionReadySeen = false;
@@ -5474,7 +5619,6 @@ async function runTurnCore(
     let streamRecoveryBannerFirstHeading: string | undefined;
     let streamRecoveryBannerLastIteration = -1;
     let bannerPollIteration = 0;
-    let witnessed429ReadOnlyPolls = 0;
     // Roleless recovery banners outlive the turn that raised them; one ends this
     // turn only after its own Stop was seen or the Stop grace since the send ran out.
     let ownedGenerationSeen = false;
@@ -5543,7 +5687,7 @@ async function runTurnCore(
           Date.now() + CONFIRMED_OWNED_PAGE_LOSS_RECOVERY_MS,
         );
       }
-      const recoveryDeadlineMs = config.newChat && !ownedConversationUrl
+      const recoveryDeadlineMs = config.newChat && !ownedConversationUrl && !ownedPromptEverSeen
         ? Math.min(hardExhaustionDeadline, freshUnboundReturnByMs)
         : !config.newChat && sendAttempted && sendCount === 0
           ? Math.min(hardExhaustionDeadline, invocationDeadlineMs)
@@ -5674,7 +5818,7 @@ async function runTurnCore(
         if (recoveryHooks.sleep) {
           await recoveryHooks.sleep(waitMs);
         } else {
-          await sleep(page, waitMs);
+          await postSendSleep(waitMs);
         }
       },
       now: () => Date.now(),
@@ -5684,6 +5828,8 @@ async function runTurnCore(
         // This invocation's local-chatgpt: tab lost the initial Send fetch.
         // Server execution is unknown; use only existing browser census evidence.
         const census = await takeRecoveryCensus(browser, marker, recoveryAdapter);
+        const committedAfterCensus = verifiedExternalPrimary();
+        if (committedAfterCensus) return committedAfterCensus;
         const matches = census.pages.filter((candidate) => candidate.eligible);
         const unbound = (cause: string): TurnRunOutcome => {
           incident('post_send_observation_error', cause, 'retain_page_no_resend');
@@ -5725,6 +5871,8 @@ async function runTurnCore(
       }
 
       browser = recovered.browser;
+      const committedAfterRecovery = verifiedExternalPrimary();
+      if (committedAfterRecovery) return committedAfterRecovery;
       if (recovered.kind === 'failure') return recoveryFailureOutcome(recovered);
       if (deliveryProofPendingRecovery) {
         sendCount = 1;
@@ -5740,7 +5888,14 @@ async function runTurnCore(
         zeroWitnessAccountRecovery = false;
       }
       if (config.newChat && !ownedConversationUrl) {
-        if (!(await freshProjectMarkerProven(recovered.page, recovered.conversationUrl, recoveryDeadlineMs))) {
+        const recoveredMarkerProven = await freshProjectMarkerProven(
+          recovered.page, recovered.conversationUrl, recoveryDeadlineMs,
+        );
+        // A probe may commit while this final read is awaiting the Page.
+        // Publication truth outranks either marker refusal or phase rollback.
+        const committedAfterRecoveryMarkerRead = verifiedExternalPrimary();
+        if (committedAfterRecoveryMarkerRead) return committedAfterRecoveryMarkerRead;
+        if (!recoveredMarkerProven) {
           incident('post_send_observation_error', 'recovered_fresh_owner_marker_or_project_unproven', 'retain_page_no_resend');
           return {
             page: recovered.page,
@@ -5796,7 +5951,7 @@ async function runTurnCore(
         emitCancellationReceipt(recovered.conversationUrl);
       }
       if (config.newChat) emitCancellationReceipt(recovered.conversationUrl);
-      transitionStateLightTurnObservation({
+      const committedBeforeRecoveryBinding = transitionUnlessProbeCommitted({
         profileKey,
         invocationId,
         phase: 'sent_unharvested',
@@ -5805,6 +5960,7 @@ async function runTurnCore(
         sendWitness: markerDerivedSend ? 'owned_marker' : 'numeric_send_count',
         conversationUrl: recovered.conversationUrl,
       });
+      if (committedBeforeRecoveryBinding) return committedBeforeRecoveryBinding;
 
       if (localFetchFailure && createdFreshPage && page === originalHeldPage
         && recovered.page !== page && !cleanupAuthorityUnprovenPages.has(page)
@@ -5842,11 +5998,97 @@ async function runTurnCore(
       );
     };
 
-    // `timeout-ms` is a soft post-send observation threshold for an owned
-    // conversation. A fresh Send still without a proven exact-project owner
-    // must instead return within its pre-Send invocation budget, including
-    // bounded cleanup; the 2 x timeout threshold is not a hard exit.
+    // An independent read-only Page probe may have committed the original
+    // invocation's complete primary while the driver saw an incomplete DOM.
+    // Verify the actual committed output, not merely an observed path or phase.
+    const verifiedExternalPrimary = (): TurnRunOutcome | null => {
+      let verified: ReturnType<typeof readVerifiedStateLightHarvestedPrimary>;
+      try {
+        verified = readVerifiedStateLightHarvestedPrimary({
+          profileKey, invocationId, marker, target: destination.finalPath,
+        });
+      } catch {
+        return null;
+      }
+      if (!verified) return null;
+      sendCount = 1;
+      ownedPromptEverSeen = true;
+      markerDerivedSend = verified.sendWitness === 'owned_marker';
+      return {
+        page, browser,
+        publicationState: 'committed_ok',
+        ...(ownedConversationUrl ? { profileKey, ownedConversationUrl } : {}),
+        ...(ownershipForfeited ? { ownershipForfeited: true } : {}),
+        result: compactResult(
+          'ok', 'none', 'completed_page_probe_primary',
+          invocationId, profileKey, 1, pollCount, navigation, incidents,
+          {
+            ...(sendAttempted ? { send_attempted: true } : {}),
+            ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
+            output: { byte_length: verified.byteLength, sha256: verified.sha256 },
+          },
+          journalWriteFailed,
+        ),
+      };
+    };
+    // A probe can commit while a driver read is awaited. Revalidate the exact
+    // committed bytes before any competing phase mutation, and on only the
+    // harvested-phase race. Unrelated observation errors must still surface.
+    const transitionUnlessProbeCommitted = (
+      input: Parameters<typeof transitionStateLightTurnObservation>[0],
+    ): TurnRunOutcome | null => {
+      const committed = verifiedExternalPrimary();
+      if (committed) return committed;
+      try {
+        transitionStateLightTurnObservation(input);
+      } catch (error) {
+        if (error instanceof Error && error.message === 'observation_phase_transition_invalid') {
+          const raced = verifiedExternalPrimary();
+          if (raced) return raced;
+        }
+        throw error;
+      }
+      return null;
+    };
+    // The early unbound cutoff remains valid ONLY while the original owned
+    // marker is unproven. A verified marker (including on a local-chatgpt URL)
+    // continues through the original absolute deadline for a late full reply.
+    const unprovenFreshCutoff = (): TurnRunOutcome | null => {
+      if (!config.newChat || ownedConversationUrl || ownedPromptEverSeen
+        || (!sendAttempted && sendCount < 1) || Date.now() < freshUnboundReturnByMs) return null;
+      incident('post_send_observation_error', 'fresh_conversation_owner_unproven', 'terminal_cleanup_no_resend');
+      return {
+        page, browser,
+        result: compactResult(
+          'observation_uncertain', 'invocation', 'fresh_conversation_owner_unproven',
+          invocationId, profileKey, sendCount, pollCount, navigation, incidents,
+          { ...(sendAttempted ? { send_attempted: true } : {}),
+            next_action: FRESH_LOCAL_POSSIBLY_DELIVERED_NEXT_ACTION },
+          journalWriteFailed,
+        ),
+      };
+    };
+    // Each iteration rechecks a same-invocation committed primary before any
+    // mutable Send-count/late-URL transition or new transcript acquisition.
     while (true) {
+      const independentlyCommitted = verifiedExternalPrimary();
+      if (independentlyCommitted) return independentlyCommitted;
+      if (Date.now() >= hardExhaustionDeadline) {
+        const cause = uncertainCause || 'post_send_absolute_deadline_elapsed';
+        incident('post_send_observation_error', cause, 'terminal_cleanup_no_resend');
+        return {
+          page, browser,
+          result: compactResult(
+            sendCount === 0 && !sendAttempted ? 'no_reply' : 'observation_uncertain',
+            'invocation', cause, invocationId, profileKey,
+            sendCount, pollCount, navigation, incidents,
+            { ...(sendAttempted ? { send_attempted: true } : {}),
+              ...(config.newChat && !ownedConversationUrl
+                ? { next_action: FRESH_LOCAL_POSSIBLY_DELIVERED_NEXT_ACTION } : {}) },
+            journalWriteFailed,
+          ),
+        };
+      }
       bannerPollIteration += 1;
       // A late observed own request is still the original physical Send.
       const zeroCountCutoffMs = config.newChat && !ownedConversationUrl
@@ -5862,42 +6104,32 @@ async function runTurnCore(
         sendCount = 1;
         markerDerivedSend = true;
         ownedPromptEverSeen = true;
-        transitionStateLightTurnObservation({
+        const committed = transitionUnlessProbeCommitted({
           profileKey, invocationId, phase: 'sent_unharvested',
           reason: 'owned_server_user_marker', sendCount, sendWitness: 'owned_marker',
           conversationUrl: targetChatUrl,
         });
+        if (committed) return committed;
         emitCancellationReceipt(targetChatUrl);
       }
       if (sendAttempted && sendCount === 0 && Date.now() < zeroCountCutoffMs
         && held429Witness?.ownSubmissionIssued()) {
         sendCount = 1;
         if (config.newChat) {
-          transitionStateLightTurnObservation({
+          const committed = transitionUnlessProbeCommitted({
             profileKey, invocationId, phase: 'sent_unbound',
             reason: 'own_submission_post_issued', sendCount, sendWitness: 'numeric_send_count',
           });
+          if (committed) return committed;
         } else if (targetChatUrl) {
-          transitionStateLightTurnObservation({
+          const committed = transitionUnlessProbeCommitted({
             profileKey, invocationId, phase: 'sent_unharvested',
             reason: 'own_submission_post_issued', sendCount, sendWitness: 'numeric_send_count',
             conversationUrl: targetChatUrl,
           });
+          if (committed) return committed;
           emitCancellationReceipt(targetChatUrl);
         }
-      }
-      const witnessed429 = held429Witness?.current();
-      if (witnessed429 && ++witnessed429ReadOnlyPolls > 3) {
-        incident('post_send_observation_error', witnessed429.wall_kind, 'retain_owned_page_no_resend');
-        return {
-          page, browser, cleanupAction: 'preserve',
-          result: compactResult(
-            'observation_uncertain', 'invocation', witnessed429.wall_kind,
-            invocationId, profileKey, sendCount, pollCount, navigation, incidents,
-            { ...(sendAttempted ? { send_attempted: true } : {}) },
-            journalWriteFailed,
-          ),
-        };
       }
       if (config.newChat && sendAttempted && sendCount === 0 && !ownedConversationUrl
         && freshPreSendFetchAlertAbsent && createdFreshPage
@@ -5936,48 +6168,12 @@ async function runTurnCore(
         if (terminal) return terminal;
         continue;
       }
-      // Count-gated 2x post-Send exits do not bound an unproved attempt.
-      // The original absolute deadline does, without inventing a zero-Send release.
-      if (sendAttempted && sendCount === 0 && Date.now() >= zeroCountCutoffMs) {
-        const cause = config.newChat && !ownedConversationUrl
-          ? 'fresh_conversation_owner_unproven' : 'send_delivery_unproven';
-        incident('post_send_observation_error', cause, 'retain_page_no_resend');
-        return {
-          page, browser,
-          cleanupAction: browserOrPageDefinitelyLost(page, browser) ? 'skip' : 'preserve',
-          result: compactResult(
-            'observation_uncertain', 'invocation', cause,
-            invocationId, profileKey, sendCount, pollCount, navigation, incidents,
-            { send_attempted: true }, journalWriteFailed,
-          ),
-        };
-      }
-      if (config.newChat && !ownedConversationUrl
-        && (sendCount >= 1 || deliveryProofPendingRecovery || zeroWitnessAccountRecovery || sendAttempted)
-        && Date.now() >= freshUnboundReturnByMs) {
-        const retainLocal = ownedFreshLocalPostSendPage();
-        incident('post_send_observation_error', 'fresh_conversation_owner_unproven', 'retain_page_no_resend');
-        return {
-          page,
-          browser,
-          cleanupAction: 'preserve',
-          ...(retainLocal ? { retainOwnedFreshLocalPage: true } : {}),
-          result: compactResult(
-            'observation_uncertain',
-            'invocation',
-            'fresh_conversation_owner_unproven',
-            invocationId,
-            profileKey,
-            sendCount,
-            pollCount,
-            navigation,
-            incidents,
-            { ...(sendAttempted ? { send_attempted: true } : {}),
-              ...(retainLocal ? { next_action: FRESH_LOCAL_POSSIBLY_DELIVERED_NEXT_ACTION } : {}) },
-            journalWriteFailed,
-          ),
-        };
-      }
+      // Never turn the fresh URL subwindow into a terminal Send verdict.
+      // The still-live original Page may expose its unique owned marker and a
+      // completed reply after freshUnboundReturnByMs. The whole post-Send loop
+      // remains bounded by hardExhaustionDeadline (the original invocation
+      // absolute maximum), while confirmed Page loss retains its separate
+      // bounded, read-only recovery deadline below.
       if ((sendCount >= 1 || deliveryProofPendingRecovery || sendAttempted) && browserOrPageDefinitelyLost(page, browser)) {
         const terminal = await recoverCurrentObservation();
         if (terminal) return terminal;
@@ -6030,14 +6226,14 @@ async function runTurnCore(
           page,
           marker,
           baselineCount,
-          sendAttempted && sendCount === 0
-            ? zeroCountCutoffMs
-            : config.newChat && !ownedConversationUrl
-              ? Math.min(hardExhaustionDeadline, freshUnboundReturnByMs)
-              : hardExhaustionDeadline,
+          hardExhaustionDeadline,
           observeProductWall,
         );
+        const committedDuringRead = verifiedExternalPrimary();
+        if (committedDuringRead) return committedDuringRead;
       } catch (error) {
+        const committedDuringRead = verifiedExternalPrimary();
+        if (committedDuringRead) return committedDuringRead;
         if (browserOrPageDefinitelyLost(page, browser)) {
           const terminal = await recoverCurrentObservation();
           if (terminal) return terminal;
@@ -6109,7 +6305,7 @@ async function runTurnCore(
         );
         if (readErrorExhausted) return readErrorExhausted;
         updateHeartbeatForPoll({ state: 'waiting' });
-        await sleep(page, INITIAL_POLL_MS);
+        await postSendSleep(INITIAL_POLL_MS);
         continue;
       }
 
@@ -6237,28 +6433,36 @@ async function runTurnCore(
           ownedCarrierKey,
         );
         if (incompleteExhausted) return incompleteExhausted;
+        const unproven = unprovenFreshCutoff();
+        if (unproven) return unproven;
         updateHeartbeatForPoll({ state: 'waiting' });
-        await sleep(page, INITIAL_POLL_MS);
+        await postSendSleep(INITIAL_POLL_MS);
         continue;
       }
 
       const markerCardinality = recoveryMarkerCardinality(messages, marker);
-      if (sendAttempted && sendCount === 0 && Date.now() < zeroCountCutoffMs
+      if (sendAttempted && sendCount === 0
         && markerCardinality.matchingUserCarrierCount === 1
         && markerCardinality.exactMarkerTokenCount === 1
         && (config.newChat
-          ? Boolean(readProjectConversationUrl(page, config.projectUrl ?? ''))
+          ? Boolean(createdFreshPage && page === originalHeldPage
+            && !ownershipForfeited && config.projectUrl
+            && (matchingFreshProjectLocalUrl(String(page.url()), config.projectUrl)
+              || isBlankProjectSurfaceUrl(String(page.url()), config.projectUrl)
+              || Boolean(readProjectConversationUrl(page, config.projectUrl))))
           : Boolean(targetChatUrl && readOwnedConversationIdentity(page, targetChatUrl).matched))) {
         // The original exact Page's unique owned marker proves the attempted
         // Send even if DOM evidence first appears after the 30s subwindow.
         sendCount = 1;
         markerDerivedSend = true;
+        ownedPromptEverSeen = true;
         zeroWitnessAccountRecovery = false;
         if (config.newChat) {
-          transitionStateLightTurnObservation({
+          const committed = transitionUnlessProbeCommitted({
             profileKey, invocationId, phase: 'sent_unbound',
             reason: 'fresh_owned_marker_observed', sendCount, sendWitness: 'owned_marker',
           });
+          if (committed) return committed;
         }
       }
       if (
@@ -6277,9 +6481,13 @@ async function runTurnCore(
       ) {
         const observedConversationUrl = readProjectConversationUrl(page, config.projectUrl ?? '');
         if (observedConversationUrl && isSupportedChatGptConversationUrl(observedConversationUrl)
-          && Date.now() < freshUnboundReturnByMs) {
-          // Recheck AFTER the bounded transcript observation, immediately
-          // before the non-recovery first claim; recovery has its own cutoff.
+          && Date.now() < hardExhaustionDeadline) {
+          // A probe's committed result outranks any new URL claim/transition.
+          const committedBeforeBinding = verifiedExternalPrimary();
+          if (committedBeforeBinding) return committedBeforeBinding;
+          // A marker on the original pinned Page can validate a later URL
+          // even after the initial fresh URL subwindow. The first-claim fence
+          // remains mandatory; no new Page, Retry or Send is authorized here.
           let claim: ReturnType<typeof tryClaimStateLightFreshConversation>;
           try {
             claim = tryClaimStateLightFreshConversation(
@@ -6318,7 +6526,7 @@ async function runTurnCore(
               ),
             };
           }
-          transitionStateLightTurnObservation({
+          const committed = transitionUnlessProbeCommitted({
             profileKey,
             invocationId,
             phase: 'sent_unharvested',
@@ -6327,6 +6535,7 @@ async function runTurnCore(
             sendWitness: markerDerivedSend ? 'owned_marker' : 'numeric_send_count',
             conversationUrl: observedConversationUrl,
           });
+          if (committed) return committed;
           ownedConversationUrl = observedConversationUrl;
           if (!held429Witness?.current()) attachHeld429(page, observedConversationUrl);
           recoveryState.immutableConversationUrl = observedConversationUrl;
@@ -6337,7 +6546,7 @@ async function runTurnCore(
       if (durableConversationUrl && sendCount >= 1) {
         const durableRecord = readStateLightTurnObservation(profileKey, invocationId);
         if (durableRecord.phase === 'dispatching' || !durableRecord.conversation_url) {
-          transitionStateLightTurnObservation({
+          const committed = transitionUnlessProbeCommitted({
             profileKey,
             invocationId,
             phase: 'sent_unharvested',
@@ -6346,6 +6555,7 @@ async function runTurnCore(
             sendWitness: markerDerivedSend ? 'owned_marker' : 'numeric_send_count',
             conversationUrl: durableConversationUrl,
           });
+          if (committed) return committed;
         }
       }
       if (
@@ -6668,7 +6878,7 @@ async function runTurnCore(
           baselineCount = 0;
           lastMarkerlessSnapshotSignature = '';
           updateHeartbeatForPoll({ state: 'waiting' });
-          await sleep(page, INITIAL_POLL_MS);
+          await postSendSleep(INITIAL_POLL_MS);
           continue;
         }
       } else {
@@ -6723,9 +6933,44 @@ async function runTurnCore(
       const inProgress = !ownedWindowCompletionReady;
       const decision = forcedDecision ?? classifyPageObservation(messages, baselineCount, marker, inProgress);
 
-      if (hasOwnedUserMessage(messages, marker)) {
+      if (markerCardinality.matchingUserCarrierCount === 1
+        && markerCardinality.exactMarkerTokenCount === 1
+        && (config.newChat
+          ? (createdFreshPage && page === originalHeldPage
+            && !ownershipForfeited && Boolean(config.projectUrl)
+            && (matchingFreshProjectLocalUrl(String(page.url()), config.projectUrl!)
+              || isBlankProjectSurfaceUrl(String(page.url()), config.projectUrl!)))
+          : Boolean(targetChatUrl && readOwnedConversationIdentity(page, targetChatUrl).matched))) {
         ownedPromptEverSeen = true;
+        if (!persistedOriginalMarkerProof) {
+          try {
+            const beforeProof = readStateLightTurnObservation(profileKey, invocationId);
+            if (beforeProof.phase === 'harvested') {
+              const committed = verifiedExternalPrimary();
+              if (committed) return committed;
+            } else if (!beforeProof.owned_marker_confirmed) {
+              transitionStateLightTurnObservation({
+                profileKey, invocationId,
+                phase: beforeProof.phase,
+                reason: 'unique_original_page_first_token_marker',
+                ownedMarkerConfirmed: true,
+              });
+            }
+            persistedOriginalMarkerProof = true;
+          } catch (error) {
+            if (error instanceof Error && error.message === 'observation_phase_transition_invalid') {
+              const racedCommit = verifiedExternalPrimary();
+              if (racedCommit) return racedCommit;
+            }
+            throw error;
+          }
+        }
       }
+
+      // Check only after this Page's complete marker census. Never use URL
+      // absence alone to reject a uniquely marker-proven late local reply.
+      const unproven = unprovenFreshCutoff();
+      if (unproven) return unproven;
 
       if (decision.state === 'uncertain') {
         uncertainCause = decision.cause === 'owned_prompt_marker_ambiguous'
@@ -6804,7 +7049,7 @@ async function runTurnCore(
         );
         if (uncertainWaitingExhausted) return uncertainWaitingExhausted;
         updateHeartbeatForPoll(decision);
-        await sleep(page, INITIAL_POLL_MS);
+        await postSendSleep(INITIAL_POLL_MS);
         continue;
       }
 
@@ -6883,7 +7128,7 @@ async function runTurnCore(
           completionReadySeen = false;
           lastReadyAssistantIdentity = '';
           updateHeartbeatForPoll({ state: 'waiting' });
-          await sleep(page, INITIAL_POLL_MS);
+          await postSendSleep(INITIAL_POLL_MS);
           continue;
         }
       }
@@ -6926,7 +7171,7 @@ async function runTurnCore(
           completionReadySeen = false;
           lastReadyAssistantIdentity = '';
           updateHeartbeatForPoll({ state: 'waiting' });
-          await sleep(page, INITIAL_POLL_MS);
+          await postSendSleep(INITIAL_POLL_MS);
           continue;
         }
         if (decision.reply.length > bestReadyReply.length) bestReadyReply = decision.reply;
@@ -6938,7 +7183,8 @@ async function runTurnCore(
           stableReads = 1;
         }
         if (stableReads >= 2) {
-          if (config.newChat && !ownedConversationUrl) {
+          if (config.newChat && !ownedConversationUrl
+            && !(createdFreshPage && page === originalHeldPage && ownedPromptEverSeen)) {
             // A ready assistant on a root/foreign/unproven fresh URL does not
             // authenticate the selected conversation. Keep observing within
             // the incumbent deadline; do not publish or close an unbound page.
@@ -6960,7 +7206,7 @@ async function runTurnCore(
             lastReadyObservedText = '';
             bestReadyReply = '';
             lastReadyAssistantIdentity = '';
-            await sleep(page, INITIAL_POLL_MS);
+            await postSendSleep(INITIAL_POLL_MS);
             continue;
           }
           if (
@@ -7086,7 +7332,7 @@ async function runTurnCore(
             completionReadySeen = false;
             lastReadyAssistantIdentity = '';
             updateHeartbeatForPoll({ state: 'waiting' });
-            await sleep(page, INITIAL_POLL_MS);
+            await postSendSleep(INITIAL_POLL_MS);
             continue;
           }
           const publication = await finalizeStateLightPrimaryPublication({
@@ -7175,7 +7421,7 @@ async function runTurnCore(
         );
         if (readyExhausted) return readyExhausted;
         updateHeartbeatForPoll(decision);
-        await sleep(page, STABILITY_READ_DELAY_MS);
+        await postSendSleep(STABILITY_READ_DELAY_MS);
         continue;
       }
 
@@ -7273,9 +7519,9 @@ async function runTurnCore(
           ? INITIAL_POLL_MS
           : POST_SEND_OBSERVATION_POLL_MS;
       const beforeSoftDeadline = Date.now() < softDeadline;
-      await sleep(page, sendAttempted && sendCount === 0
+      await postSendSleep(sendAttempted && sendCount === 0 && Date.now() < zeroCountCutoffMs
         ? Math.min(delay, Math.max(1, zeroCountCutoffMs - Date.now()))
-        : config.newChat && !ownedConversationUrl
+        : config.newChat && !ownedConversationUrl && Date.now() < freshUnboundReturnByMs
           ? Math.min(delay, Math.max(1, freshUnboundReturnByMs - Date.now()))
         : recoveryState.lossEpoch > 0
           ? Math.min(delay, Math.max(1, hardExhaustionDeadline - Date.now()))
@@ -7350,6 +7596,8 @@ async function runTurnCore(
     return {
       ...(page ? { page } : {}),
       ...(browser ? { browser } : {}),
+      ...(createdAttachFailureCleanup ? { createdAttachFailureCleanup } : {}),
+      ...(createdAttachFailureTargetId ? { createdAttachFailureTargetId } : {}),
       ...(provenOpenedFetch429 ? {
         ownedPreSendFetch429Page: page,
         ownedPreSendFetch429Url: invocationCreatedExistingChatUrl,
@@ -7368,6 +7616,8 @@ async function runTurnCore(
           pollCount, navigation, incidents,
           {
             ...(sendAttempted ? { send_attempted: true } : {}),
+            ...(isAccountCooldown && refusedCooldownUntil !== undefined
+              ? { cooldown_until_ms: refusedCooldownUntil } : {}),
             ...(!sendAttempted ? { attach_attempts: attachAttempts } : {}),
             ...(page && pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
             ...(holderTimeout ? {
@@ -7385,8 +7635,293 @@ async function runTurnCore(
   }
 }
 
-async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult> {
-  let cleanup: ResourceCleanupOutcome = 'skipped';
+/**
+ * Current destructive-boundary authority, not a historical ownership inference.
+ * A same-ID/same-route marker with a visible Stop or in-progress assistant can
+ * belong to an independent generation; no available current-generation witness
+ * makes that active surface closable.
+ */
+/**
+ * Optional exact predecessor handoff: the only accepted locator is the
+ * caller-supplied indexed invocation+attempt in the SAME run/task. No
+ * profile-wide sweep, URL selection, newPage, Send, Stop, Retry or harvest.
+ * The driver alone attaches and performs the current destructive-boundary read.
+ */
+async function retireExplicitPredecessor(input: {
+  readonly previousInvocationId: string;
+  readonly previousAttemptIdentity: string;
+  readonly runIdentity: string;
+  readonly ownerTaskId: string;
+  readonly profileKey: string;
+  readonly cdp: string;
+  readonly deadlineMs: number;
+}): Promise<{ status: 'confirmed' | 'cleanup_unconfirmed'; targetId?: string }> {
+  let original: ReturnType<typeof readStateLightTurnObservation>;
+  let originalId: string | undefined;
+  try {
+    const { readInvocationReceiptLocator, readTerminalEnvelope } =
+      await import('../flow-manager-long-running-child.ts');
+    const bound = readInvocationReceiptLocator({
+      invocationId: input.previousInvocationId,
+      runIdentity: input.runIdentity,
+      attemptIdentity: input.previousAttemptIdentity,
+      ownerTaskId: input.ownerTaskId,
+    });
+    const terminal = readTerminalEnvelope(bound.locator.terminal_envelope_path, {
+      runIdentity: input.runIdentity, attemptIdentity: input.previousAttemptIdentity,
+    });
+    if (!terminal || terminal.observed_invocation_id !== input.previousInvocationId
+      || terminal.handoff_receipt_path !== bound.locator.handoff_receipt_path
+      || terminal.cleanup_status !== 'cleanup_unconfirmed'
+      || bound.receipt.owner_task_id !== input.ownerTaskId) return { status: 'cleanup_unconfirmed' };
+    original = readStateLightTurnObservation(input.profileKey, input.previousInvocationId);
+    originalId = original.owned_target?.id;
+    if (!original.owned_target?.created
+      || original.owned_target.cdp_sha256 !== createHash('sha256').update(input.cdp, 'utf8').digest('hex')
+      || terminal.owned_target_created !== true
+      || terminal.owned_target_id !== original.owned_target.id
+      || terminal.owned_prompt_marker !== original.marker) {
+      return { status: 'cleanup_unconfirmed', ...(originalId ? { targetId: originalId } : {}) };
+    }
+  } catch {
+    return { status: 'cleanup_unconfirmed', ...(originalId ? { targetId: originalId } : {}) };
+  }
+  const targetId = original.owned_target.id;
+  let browser: any;
+  try {
+    // This census cannot create, navigate to or select a sibling target.
+    const census = await listCdpPageTargets(input.cdp, Math.min(
+      MAX_LOCAL_READ_WAIT_MS, Math.max(1, input.deadlineMs - Date.now()),
+    ));
+    const matches = census.filter((target) => target.id === targetId);
+    if (matches.length === 0) return { status: 'confirmed', targetId };
+    if (matches.length !== 1 || Date.now() >= input.deadlineMs) return { status: 'cleanup_unconfirmed', targetId };
+    const attached = await attachOwnTarget(loadChromium(), {
+      mode: 'own-target', cdp: input.cdp, newChat: false,
+      pinnedTargetId: targetId, deadlineMs: input.deadlineMs,
+      cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
+    });
+    browser = attached.browser;
+    const pages = browser.contexts();
+    const page = pages.length === 1 && pages[0]?.pages().length === 1
+      ? pages[0].pages()[0] : undefined;
+    if (!page || getOwnTargetInfo(browser)?.targetId !== targetId) {
+      return { status: 'cleanup_unconfirmed', targetId };
+    }
+    const result = compactResult(
+      'observation_uncertain', 'invocation', 'predecessor_cleanup_only',
+      input.previousInvocationId, input.profileKey, original.send_count ?? 0, 0,
+      new StateLightNavigationCounter(), [],
+    );
+    const closed = await guardedOriginalTargetRetirement({
+      outcome: { page, browser, result }, cdp: input.cdp, verifiedPredecessor: true,
+    });
+    return { status: closed === 'confirmed' ? 'confirmed' : 'cleanup_unconfirmed', targetId };
+  } catch {
+    return { status: 'cleanup_unconfirmed', targetId };
+  } finally {
+    if (browser) await releaseCdpBrowser(browser, RESOURCE_CLEANUP_BOUND_MS);
+  }
+}
+
+/**
+ * Reconnect read-only to this invocation's original created target after a
+ * separate recovery Page was used. The original pinned ID is necessary but
+ * never sufficient; the normal live destructive-boundary checks still decide.
+ */
+async function retireDetachedOriginalTarget(input: {
+  readonly profileKey: string;
+  readonly invocationId: string;
+  readonly cdp: string;
+  readonly deadlineMs: number;
+}): Promise<{ readonly status: 'confirmed' | 'cleanup_unconfirmed'; readonly targetId?: string }> {
+  let record: ReturnType<typeof readStateLightTurnObservation>;
+  try {
+    record = readStateLightTurnObservation(input.profileKey, input.invocationId);
+  } catch { return { status: 'cleanup_unconfirmed' }; }
+  const pinned = record.owned_target;
+  if (!pinned?.created || pinned.cdp_sha256 !== createHash('sha256').update(input.cdp, 'utf8').digest('hex')) {
+    return { status: 'cleanup_unconfirmed', ...(pinned ? { targetId: pinned.id } : {}) };
+  }
+  const targetId = pinned.id;
+  let attachedBrowser: any;
+  try {
+    const census = await listCdpPageTargets(input.cdp,
+      Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, input.deadlineMs - Date.now())));
+    const selected = census.filter((target) => target.id === targetId);
+    if (selected.length === 0) return { status: 'confirmed', targetId };
+    if (selected.length !== 1 || Date.now() >= input.deadlineMs) {
+      return { status: 'cleanup_unconfirmed', targetId };
+    }
+    const attached = await attachOwnTarget(loadChromium(), {
+      mode: 'own-target', cdp: input.cdp, newChat: false,
+      pinnedTargetId: targetId, deadlineMs: input.deadlineMs,
+      cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
+    });
+    attachedBrowser = attached.browser;
+    const contexts = attachedBrowser.contexts();
+    const page = contexts.length === 1 && contexts[0]?.pages().length === 1
+      ? contexts[0].pages()[0] : undefined;
+    if (!page || getOwnTargetInfo(attachedBrowser)?.targetId !== targetId) {
+      return { status: 'cleanup_unconfirmed', targetId };
+    }
+    const result = compactResult('observation_uncertain', 'invocation',
+      'original_target_retirement_only', input.invocationId, input.profileKey,
+      record.send_count ?? 0, 0, new StateLightNavigationCounter(), []);
+    const cleanup = await guardedOriginalTargetRetirement({
+      outcome: { page, browser: attachedBrowser, result },
+      cdp: input.cdp, verifiedPredecessor: true,
+    });
+    return { status: cleanup === 'confirmed' ? 'confirmed' : 'cleanup_unconfirmed', targetId };
+  } catch { return { status: 'cleanup_unconfirmed', targetId }; }
+  finally { if (attachedBrowser) await releaseCdpBrowser(attachedBrowser, RESOURCE_CLEANUP_BOUND_MS); }
+}
+
+async function guardedOriginalTargetRetirement(input: {
+  readonly outcome: TurnRunOutcome;
+  readonly cdp: string;
+  readonly verifiedPredecessor?: true;
+}): Promise<'confirmed' | 'unconfirmed'> {
+  const { outcome, cdp } = input;
+  const targetInfo = getOwnTargetInfo(outcome.browser);
+  if (!targetInfo?.targetId || !outcome.page
+    || (!targetInfo.created && input.verifiedPredecessor !== true)
+    || !cdp || outcome.ownershipForfeited || cleanupAuthorityUnprovenPages.has(outcome.page)) {
+    return 'unconfirmed';
+  }
+  let observation: ReturnType<typeof readStateLightTurnObservation>;
+  try {
+    observation = readStateLightTurnObservation(
+      outcome.result.configured_profile_key, outcome.result.invocation_id,
+    );
+  } catch { return 'unconfirmed'; }
+  const pin = observation.owned_target;
+  if (!pin?.created || pin.id !== targetInfo.targetId
+    || pin.cdp_sha256 !== createHash('sha256').update(cdp, 'utf8').digest('hex')) return 'unconfirmed';
+
+  const deadline = Date.now() + 18_000;
+  const budget = (): number => Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, deadline - Date.now()));
+  const routeMatches = (url: string): boolean => {
+    const original = pin.initial_route;
+    if (url === 'about:blank' && outcome.result.send_count === 0
+      && outcome.result.send_attempted !== true
+      && (observation.phase === 'prepared' || observation.phase === 'not_sent')) return true;
+    if (observation.conversation_url && normalizeConversationUrl(url) === normalizeConversationUrl(observation.conversation_url)
+      && isSupportedChatGptConversationUrl(url)) return true;
+    if (isBlankProjectSurfaceUrl(url, original)
+      || matchingFreshProjectLocalUrl(url, original)) return true;
+    try { return normalizeConversationUrl(url) === normalizeConversationUrl(original); }
+    catch { return false; }
+  };
+  const currentUrl = (): string | null => {
+    try {
+      if (browserOrPageDefinitelyLost(outcome.page, outcome.browser)) return null;
+      const url = String(outcome.page.url());
+      return routeMatches(url) ? url : null;
+    } catch { return null; }
+  };
+  const pinnedCensus = async (): Promise<boolean> => {
+    try {
+      if (Date.now() >= deadline) return false;
+      const census = await listCdpPageTargets(cdp, budget());
+      const selected = census.filter((target) => target.id === pin.id);
+      // A shared Chrome can terminate when its last Page is closed. Never
+      // retire this exact owned tab unless a different live Page remains.
+      // A foreign/keepalive Page is presence evidence only, never a close target.
+      return selected.length === 1
+        && census.some((target) => target.type === 'page' && target.id !== pin.id)
+        && currentUrl() !== null
+        && selected[0]!.url === currentUrl();
+    } catch { return false; }
+  };
+  const ownerAndIdle = async (): Promise<boolean> => {
+    if (currentUrl() === null || Date.now() >= deadline) return false;
+    try {
+      // Both Stop and a DOM streaming node are disqualifying. Marker adjacency
+      // alone cannot prove which Send started the current generation.
+      if (await readFreshStopVisible(outcome.page, Date.now() + budget()) !== false) return false;
+      if (await locatorCount(outcome.page.locator(ASSISTANT_TURN_IN_PROGRESS_SELECTOR), Date.now() + budget()) !== 0) return false;
+      const users = await boundedBrowserRead(
+        readRecoveryAuthoritativeUserMessages(outcome.page), budget(),
+        'terminal_ownership_user_read_timeout',
+      );
+      if (users.incomplete) return false;
+      const composer = await readLosslessOwnedComposer(
+        outcome.page.locator(COMPOSER_SELECTOR), Date.now() + budget(),
+      );
+      // An unsubmitted foreign draft is not a user-message DOM node. Never
+      // silently destroy it just because the old marker is still the last user.
+      if (composer !== undefined && composer !== ''
+        && composer !== outcome.ownedTypedPayload) return false;
+      if (composer === undefined) {
+        // A failed composer read is NOT proof that the editor is absent.
+        // Require an exact zero-count read, then either a truly blank body
+        // or a named error-only UI, even if the old marker remains last user.
+        if (await locatorCount(
+          outcome.page.locator(COMPOSER_SELECTOR), Date.now() + budget(),
+        ) !== 0) return false;
+        if (currentUrl() === 'about:blank') {
+          const emptyBody = await boundedBrowserRead(
+            outcome.page.locator('body').innerText({ timeout: budget() }), budget(),
+            'empty_about_blank_body_read_timeout',
+          );
+          if (typeof emptyBody !== 'string' || emptyBody.trim() !== '') return false;
+        } else {
+          const errors = ['Message delivery timed out', 'Network issue', 'Failed to fetch'];
+          let recognizedError = false;
+          for (const errorText of errors) {
+            if (await locatorCount(
+              outcome.page.getByText(errorText, { exact: false }), Date.now() + budget(),
+            ) > 0) { recognizedError = true; break; }
+          }
+          if (!recognizedError) return false;
+        }
+      }
+      const cardinality = recoveryMarkerCardinality(users.messages, observation.marker);
+      if (cardinality.matchingUserCarrierCount === 1 && cardinality.exactMarkerTokenCount === 1
+        && users.messages.length > 0
+        && ownedPromptMatches(users.messages[users.messages.length - 1]!.text, observation.marker)) {
+        return currentUrl() !== null;
+      }
+      if (users.messages.length !== 0 || cardinality.exactMarkerTokenCount !== 0) return false;
+      // An unrendered local/error Page may be retired only when its composer
+      // is provably empty, exactly the original typed payload, or truly absent
+      // on a previously verified blank/error-only surface.
+      if (composer === '') return currentUrl() !== null;
+      if (outcome.ownedTypedPayload && composer === outcome.ownedTypedPayload
+        && ownedPromptMatches(composer, observation.marker)) return currentUrl() !== null;
+      return composer === undefined && currentUrl() !== null;
+    } catch { return false; }
+  };
+
+  // Reads are awaited: validate again after each of them and immediately
+  // before Page.close(). No atomic exclusion against last-instant UI takeover
+  // is claimed.
+  if (!await pinnedCensus() || !await ownerAndIdle()) return 'unconfirmed';
+  if (!await pinnedCensus() || !await ownerAndIdle()) return 'unconfirmed';
+  if (!await pinnedCensus() || currentUrl() === null || Date.now() >= deadline) return 'unconfirmed';
+  // The reattached proxy intentionally sees created:false. Grant its sole
+  // historically created pinned ID close authority only *after* the fresh
+  // exact-ID, route, composer, Stop, generation and foreign-user rechecks.
+  if (!targetInfo.created && !authorizeGuardedHistoricalTargetClose(outcome.browser, pin.id)) {
+    return 'unconfirmed';
+  }
+  const closed = await boundedResourceCleanup(
+    () => outcome.page.close(),
+    Math.min(RESOURCE_CLEANUP_BOUND_MS, Math.max(1, deadline - Date.now())),
+  );
+  if (closed !== 'confirmed') return 'unconfirmed';
+  try {
+    const census = await listCdpPageTargets(cdp, budget());
+    return census.every((target) => target.id !== pin.id) ? 'confirmed' : 'unconfirmed';
+  } catch {
+    // A close response is not physical target disappearance evidence.
+    return 'unconfirmed';
+  }
+}
+
+async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactTurnResult> {
+  let cleanup: ResourceCleanupOutcome = outcome.createdAttachFailureCleanup ?? 'skipped';
   let journalWriteFailed = outcome.result.journal_write_failed === true;
   let retirementCleanupRequired = outcome.result.retirement_cleanup_required === true;
   const incidents = [...outcome.result.incidents];
@@ -7467,26 +8002,26 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     && outcome.result.send_count === 0 && outcome.result.send_attempted !== true
     && ownedPreSendFetch429ExactRoute(outcome.page, outcome.ownedPreSendFetch429Url!),
   );
-  // Only the invocation-owned, reachable Page can be closed. A cleanupAction
-  // of preserve (including an ambiguous Send) is not negative ownership proof;
-  // forfeiture and pre-existing/recovered pages independently prohibit close.
-  let pageAction: PageCleanupAction = cleanupAuthorityProven && !pageLost && outcome.ownershipForfeited !== true
-    ? 'close'
-    : 'skip';
-  // An ambiguous attempted Send with zero count is still possibly delivered.
-  // Never close its Page merely because the invocation originally created it.
-  if (pageAction === 'close' && outcome.result.send_attempted === true
-    && outcome.result.send_count === 0) pageAction = 'preserve';
-  // Only the exact flagged still-owned fresh/local terminal escapes #2510
-  // positive-owned Page close. The public cleanupAction alone grants nothing.
-  if (pageAction === 'close' && outcome.retainOwnedFreshLocalPage
-    && outcome.ownedFreshProjectUrl && outcome.result.send_count >= 1
-    && !outcome.result.conversation_id) {
-    // The already-verified local terminal grants retention for this exact
-    // positively owned Page. Route promotion or an unreadable URL after that
-    // terminal cannot revoke retention and authorize a destructive close.
-    pageAction = 'preserve';
-  }
+  // A created Page is eligible for a fresh safety assessment even after a
+  // possible Send or an unbound local terminal. Neither Send count nor a
+  // cleanupAction flag grants destructive authority on its own.
+  const pinnedOriginal = getOwnTargetInfo(outcome.browser);
+  const positivelyCreatedOriginal = Boolean(
+    pinnedOriginal?.created || outcome.createdAttachFailureCleanup || outcome.originalCreatedPage,
+  );
+  // A recovery successor may share the original's URL but has a different
+  // Page handle/target. Never close it using the first target's provenance.
+  const outcomePageIsOriginal = !outcome.originalCreatedPage
+    || outcome.page === outcome.originalCreatedPage;
+  // An in-flight post-Send Target crashed response is not a current idle
+  // Page witness, even when Playwright still reports isClosed() === false.
+  // The held, failed Page cannot be closed under stale creation authority.
+  // A positively lost target may still use the independent exact-ID reattach
+  // path below, which rechecks current owner, route and generation evidence.
+  let pageAction: PageCleanupAction = cleanupAuthorityProven && !pageLost
+    && outcome.result.cause !== 'post_send_target_crashed'
+    && outcome.ownershipForfeited !== true && positivelyCreatedOriginal
+    && outcomePageIsOriginal ? 'close' : 'skip';
   if (pageAction === 'close' && outcome.result.send_count === 0
     && outcome.result.send_attempted !== true && outcome.ownedFreshProjectUrl) {
     // The slot was already owner-released. For this proven-created tab, check
@@ -7545,76 +8080,70 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
       if (!appendIncident(cleanupIncident, outcome.result.invocation_id)) journalWriteFailed = true;
     }
   }
-  // Recheck the original exact route at the destructive boundary, not merely
-  // at 429 observation. A redirect forfeits the narrow AC12 close authority.
-  if (pageAction === 'close' && outcome.result.state === 'rate_limit'
-    && outcome.result.cause === 'conversation_fetch_http_429'
-    && !ownedPreSendFetch429Close) {
-    pageAction = 'preserve';
-  }
   if (pageAction === 'close' && outcome.ownedPreSendFetch429Page
     && (!ownedPreSendFetch429Close
       || !ownedPreSendFetch429ExactRoute(outcome.page, outcome.ownedPreSendFetch429Url!))) {
     pageAction = 'preserve';
   }
   if (pageAction === 'close') {
-    cleanup = await boundedResourceCleanup(
-      () => outcome.page.close(),
-      RESOURCE_CLEANUP_BOUND_MS,
-    );
-    if (cleanup !== 'confirmed') {
-      incidents.push('owned_tab_cleanup_failed');
-      const cleanupIncident: BrowserIncident = {
-        eventClass: 'owned_tab_cleanup_failed',
-        symptom: 'owned_tab_close_unconfirmed',
-        action: 'leave_sibling_tabs_untouched',
-      };
-      if (!appendIncident(cleanupIncident, outcome.result.invocation_id)) journalWriteFailed = true;
-    }
+    cleanup = await guardedOriginalTargetRetirement({ outcome, cdp });
+  }
+  // Recovery or an attach reconnect can replace the Playwright Page while
+  // the original CDP target remains. Use only its exact reattach/guard path.
+  let detachedOriginalCleanupUnconfirmed = false;
+  if (outcome.originalCreatedPage && !outcome.ownershipForfeited
+    && (outcome.page !== outcome.originalCreatedPage || pageLost || !pinnedOriginal?.created)) {
+    const detached = await retireDetachedOriginalTarget({
+      profileKey: outcome.result.configured_profile_key,
+      invocationId: outcome.result.invocation_id,
+      cdp, deadlineMs: Date.now() + 20_000,
+    });
+    cleanup = detached.status === 'confirmed' ? 'confirmed' : 'unconfirmed';
+    detachedOriginalCleanupUnconfirmed = detached.status !== 'confirmed';
+  }
+  if (positivelyCreatedOriginal && cleanup !== 'confirmed') {
+    // Never report a close from an old marker, an old Page reference or a
+    // settled Playwright close promise without physical ID disappearance.
+    if (cleanup === 'skipped') cleanup = 'unconfirmed';
+    incidents.push('owned_tab_cleanup_unconfirmed');
+    const cleanupIncident: BrowserIncident = {
+      eventClass: 'owned_tab_cleanup_unconfirmed',
+      symptom: 'exact_original_target_close_unconfirmed_or_refused',
+      action: 'manual_exact_target_reconciliation_no_stop_no_resend',
+    };
+    if (!appendIncident(cleanupIncident, outcome.result.invocation_id)) journalWriteFailed = true;
   }
 
-  // Cleanup requires a positive owned claim/locator, never a zero-match census.
-  // A recovered Page is marked cleanup-unproven and is never this close target.
-  if (outcome.ownedDeadLocalPage && outcome.ownedDeadLocalUrl
+  // The originally created dead-local Page may now be on a disconnected
+  // browser while a separate read-only recovery Page supplied the reply.
+  // Re-pin its exact original CDP target rather than closing an old Page
+  // reference or trusting a successful Playwright close promise.
+  if (!outcome.originalCreatedPage
+    && outcome.ownedDeadLocalPage && outcome.ownedDeadLocalUrl
     && outcome.ownedDeadLocalConversationUrl && outcome.ownedFreshProjectUrl
     && outcome.result.send_count === 1
     && !outcome.ownershipForfeited
     && outcome.result.conversation_id === outcome.ownedDeadLocalConversationUrl
     && outcome.page !== outcome.ownedDeadLocalPage
-    && outcome.result.configured_profile_key
     && verifyStateLightFreshClaimOwnerFence(
       outcome.result.configured_profile_key,
       outcome.ownedDeadLocalConversationUrl,
       outcome.result.invocation_id,
       outcome.ownedDeadLocalTimeoutMs ?? STATE_LIGHT_MAX_TIMEOUT_MS,
     ) === 'valid') {
-    try {
-      const dead = outcome.ownedDeadLocalPage;
-      if (!cleanupAuthorityUnprovenPages.has(dead)
-        && !browserOrPageDefinitelyLost(dead, outcome.browser)
-        && await ownedLocalFetchFailureVisibleOnPage(
-          dead, outcome.ownedFreshProjectUrl,
-          Date.now() + MAX_LOCAL_READ_WAIT_MS, outcome.ownedDeadLocalUrl,
-        )) {
-        const deadCleanup = await abandonLatePageHandle(dead, RESOURCE_CLEANUP_BOUND_MS);
-        cleanup = deadCleanup;
-        if (deadCleanup !== 'confirmed') {
-          incidents.push('owned_tab_cleanup_failed');
-          if (!appendIncident({
-            eventClass: 'owned_tab_cleanup_failed',
-            symptom: 'recovered_original_local_tab_close_unconfirmed',
-            action: 'leave_recovered_and_sibling_pages_untouched',
-          }, outcome.result.invocation_id)) journalWriteFailed = true;
-        } else {
-          cleanup = deadCleanup;
-        }
-      }
-    } catch {
-      incidents.push('owned_tab_cleanup_failed');
+    const detached = await retireDetachedOriginalTarget({
+      profileKey: outcome.result.configured_profile_key,
+      invocationId: outcome.result.invocation_id,
+      cdp, deadlineMs: Date.now() + 20_000,
+    });
+    cleanup = detached.status === 'confirmed' ? 'confirmed' : 'unconfirmed';
+    if (detached.status !== 'confirmed') {
+      detachedOriginalCleanupUnconfirmed = true;
+      incidents.push('owned_tab_cleanup_unconfirmed');
       if (!appendIncident({
-        eventClass: 'owned_tab_cleanup_failed',
-        symptom: 'recovered_original_local_tab_close_unconfirmed',
-        action: 'leave_recovered_and_sibling_pages_untouched',
+        eventClass: 'owned_tab_cleanup_unconfirmed',
+        symptom: 'detached_original_target_not_safely_retired',
+        action: 'manual_exact_target_reconciliation_no_stop_no_resend',
       }, outcome.result.invocation_id)) journalWriteFailed = true;
     }
   }
@@ -7626,9 +8155,32 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
       outcome.result.invocation_id,
     );
   }
+  const observedTarget = (() => {
+    try {
+      return readStateLightTurnObservation(
+        outcome.result.configured_profile_key, outcome.result.invocation_id,
+      );
+    } catch { return undefined; }
+  })();
+  const cooldown = readStateLightAccountCooldown(outcome.result.configured_profile_key);
   await releaseCdpBrowser(outcome.browser);
   return {
     ...outcome.result,
+    ...(observedTarget?.owned_target
+      ? { owned_target_id: observedTarget.owned_target.id,
+        owned_target_created: observedTarget.owned_target.created,
+        owned_prompt_marker: observedTarget.marker }
+      : outcome.createdAttachFailureTargetId
+        ? { owned_target_id: outcome.createdAttachFailureTargetId,
+          owned_target_created: true }
+        : {}),
+    ...(observedTarget?.owned_marker_confirmed ? { owned_marker_confirmed: true as const } : {}),
+    ...(observedTarget ? { send_witness: observedTarget.send_witness } : {}),
+    ...(outcome.result.cooldown_until_ms !== undefined
+      ? { cooldown_until_ms: outcome.result.cooldown_until_ms }
+      : cooldown.active && cooldown.until !== undefined ? { cooldown_until_ms: cooldown.until } : {}),
+    ...((positivelyCreatedOriginal || detachedOriginalCleanupUnconfirmed) && cleanup !== 'confirmed'
+      ? { cleanup_status: 'cleanup_unconfirmed' as const } : {}),
     cleanup,
     incidents,
     ...(retirementCleanupRequired ? { retirement_cleanup_required: true } : {}),
@@ -7764,13 +8316,14 @@ export async function runStateLightTurn(
     };
     const result = await finalizeTurn(admitFreshResultConversationId(args, {
       ...augmented,
+      ...(freshCleanup.originalCreatedPage ? { originalCreatedPage: freshCleanup.originalCreatedPage } : {}),
       ...(freshCleanup.ownedDeadLocalPage ? {
         ownedDeadLocalPage: freshCleanup.ownedDeadLocalPage,
         ownedDeadLocalUrl: freshCleanup.ownedDeadLocalUrl,
         ownedDeadLocalConversationUrl: freshCleanup.ownedDeadLocalConversationUrl,
         ownedDeadLocalTimeoutMs: freshCleanup.ownedDeadLocalTimeoutMs,
       } : {}),
-    }));
+    }), stringOption(args, 'cdp') ?? '');
     // Keep liveness continuous through every pre-emission cleanup await, then
     // stop the scheduler at the terminal publication boundary so no heartbeat
     // can follow turn-result/v1 or keep the subprocess alive.

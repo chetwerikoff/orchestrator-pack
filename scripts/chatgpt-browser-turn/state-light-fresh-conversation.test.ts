@@ -133,10 +133,11 @@ import {
   type CapturedStateLightTurnResult,
   type StateLightTestSnapshot,
 } from './state-light-turn.test-fixtures.ts';
-import { classifyPageObservation, classifySendLandingEvidence, readPageObservation, runStateLightTurn } from './state-light-turn.ts';
-import { admitStateLightTurnObservation, readStateLightTurnObservation } from './state-light-turn-observation.ts';
+import { classifyPageObservation, classifySendLandingEvidence, publishStateLightReply, readPageObservation, runStateLightTurn } from './state-light-turn.ts';
+import { admitStateLightTurnObservation, finalizeStateLightPrimaryPublication, readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { deriveDelivery } from '../flow-manager-long-running-child.ts';
 import { __testBrowserOrPageDefinitelyLost, __testComposerMutation, __testSendDelivery, deriveComposerInsertionBudgetMs, POST_SEND_OBSERVATION_POLL_MS, probePageLiveness } from './state-light-turn-base.ts';
+import { attachOwnTarget, __testAttachOwnTargetFixture } from './own-target-attach.ts';
 import { currentOwnedPromptMarker, wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
   EXPLICIT_CANCELLATION_AUTHORITY,
@@ -221,6 +222,7 @@ function clearSendSlotDisableEnv(): void {
 function makeLoserPage(
   prompt: string, reply: string, onSend?: () => void, ownedPriorHistory = false,
   rendering?: 'paragraphs' | 'autolink' | 'blank-paragraphs',
+  additionalWaitingFrames = 0,
 ) {
   let sends = 0;
   let sent = false;
@@ -328,7 +330,7 @@ function makeLoserPage(
       }
       if (selector === MESSAGE_NODE_SELECTOR) {
         if (!sent) return ownedPriorHistory ? atomicOwnedHistory(priorHistory) : collectionLocator([]);
-        activeSnapshot = snapshotFrames[Math.min(observationIndex, snapshotFrames.length - 1)]!;
+        activeSnapshot = snapshotFrames[Math.min(Math.max(0, observationIndex - additionalWaitingFrames), snapshotFrames.length - 1)]!;
         observationIndex++;
         return ownedPriorHistory
           ? atomicOwnedHistory(activeSnapshot.messages, activeSnapshot.generating)
@@ -352,6 +354,41 @@ function makeLoserPage(
 
   return { page, composer, sendButton, getSends: () => sends,
     getComposerText: () => sent ? '' : composerText, getObservationReads: () => observationIndex };
+}
+
+// First-party driver keeps a CDP-pinned ID. Legacy synthetic Page fixtures
+// need actual per-test census/retirement evidence to claim confirmed close.
+function proveCreatedPageCanClose(page: any): void {
+  const keepalive = { id: 'opk-keepalive', type: 'page', url: 'about:blank#opk-keepalive' };
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    if (new URL(String(input)).pathname !== '/json/list') {
+      throw new Error('unexpected CDP operation in exact-created-page fixture');
+    }
+    const closed = (page.close?.mock?.calls?.length ?? 0) > 0;
+    return new Response(JSON.stringify([
+      ...(!closed ? [{
+        id: 'fixture-own-target', type: 'page', url: String(page.url()),
+        webSocketDebuggerUrl: 'ws://example/fixture-own-target',
+      }] : []),
+      keepalive,
+    ]), { status: 200 });
+  });
+}
+
+// Negative fixture: a known original CDP target remains physically live even
+// when its Playwright Page is closed or recovery used a different Page. Absence
+// of a synthetic ID from a real Chrome census is not proof of its retirement.
+function proveCreatedPageRemainsVisibleToCdp(page: any): void {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    if (new URL(String(input)).pathname !== '/json/list') {
+      throw new Error('unexpected CDP operation in live-target negative fixture');
+    }
+    return new Response(JSON.stringify([
+      { id: 'fixture-own-target', type: 'page', url: String(page.url()),
+        webSocketDebuggerUrl: 'ws://example/fixture-own-target' },
+      { id: 'opk-keepalive', type: 'page', url: 'about:blank#opk-keepalive' },
+    ]), { status: 200 });
+  });
 }
 
 async function runNewChatTurn(
@@ -415,8 +452,54 @@ describe('state-light fresh conversation collision recovery', () => {
     };
   }
 
+  it('reports and pins a created tab after Playwright attach fails without closing the foreign survivor', async () => {
+    const invocationId = randomUUID();
+    const createdId = 'created-before-attach-failure';
+    const connectionFailure = Object.assign(new Error('injected_connect_failure'), {
+      attachAttempts: 3, createdTargetId: createdId,
+    });
+    const attach = vi.mocked(attachOwnTarget);
+    attach.mockRejectedValueOnce(connectionFailure);
+    // The exact-target cleanup reconnection also fails: no raw close, and
+    // no replacement target selection is allowed as a fallback.
+    attach.mockRejectedValueOnce(new Error('injected_cleanup_reattach_failure'));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname !== '/json/list') throw new Error('unexpected_destructive_cdp_request');
+      return new Response(JSON.stringify([
+        { id: createdId, type: 'page', url: 'about:blank', webSocketDebuggerUrl: 'ws://example/created-attach-failed' },
+        { id: 'foreign-survivor', type: 'page', url: 'https://chatgpt.com/c/foreign' },
+      ]), { status: 200 });
+    });
+    try {
+      const fixture = makeLoserPage('NO-SEND-AFTER-ATTACH-FAILURE', 'NEVER');
+      const outcome = await runNewChatTurn(
+        fixture.page, join(stateDir, 'attach-failure.txt'), '30000', invocationId,
+      );
+      expect(outcome.result).toMatchObject({
+        state: 'driver_error',
+        send_count: 0,
+        attach_attempts: 3,
+        owned_target_id: createdId,
+        owned_target_created: true,
+        cleanup: 'unconfirmed',
+        cleanup_status: 'cleanup_unconfirmed',
+      });
+      expect(readStateLightTurnObservation('collision-profile', invocationId).owned_target).toMatchObject({
+        id: createdId, created: true,
+      });
+      expect(fixture.getSends()).toBe(0);
+      expect(fixture.page.close).not.toHaveBeenCalled();
+      expect(fetchSpy.mock.calls.every(([input]) => new URL(String(input)).pathname === '/json/list')).toBe(true);
+    } finally {
+      attach.mockImplementation(__testAttachOwnTargetFixture);
+      fetchSpy.mockRestore();
+    }
+  });
+
   it('AC12 closes only a freshly opened existing-chat Page after a witnessed pre-Send fetch 429', async () => {
     const fixture = makeLoserPage('NO-SEND-429', 'NEVER-SEND');
+    proveCreatedPageCanClose(fixture.page);
     const notify429 = installExistingChatFetch429(fixture.page);
     const goto = fixture.page.goto.getMockImplementation()!;
     fixture.page.goto.mockImplementation(async (target: string) => {
@@ -440,6 +523,35 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result.send_attempted).not.toBe(true);
     expect(fixture.page.close).toHaveBeenCalledTimes(1);
     expect(fixture.sendButton.click).not.toHaveBeenCalled();
+  });
+
+  it('keeps exact owned GET 429 cooldown but harvests the late stable DOM reply and retires its idle created target (#2678 R2)', async () => {
+    const prompt = 'OWNED-GET-429-LATE';
+    const reply = 'FOURTH-POLL-ASSISTANT-COMPLETE';
+    let reportOwned429: () => void = () => undefined;
+    const fixture = makeLoserPage(prompt, reply, () => reportOwned429(), true, undefined, 2);
+    proveCreatedPageCanClose(fixture.page);
+    reportOwned429 = installExistingChatFetch429(fixture.page);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    enqueueBrowserForTurn(mocks, fixture.page);
+    const output = join(stateDir, 'owned-429-late-dom.txt');
+    const invocationId = randomUUID();
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', invocationId,
+      '--output', output,
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '90000',
+      '--poll-ms', '1',
+    ]);
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'ok', send_count: 1, cleanup: 'confirmed',
+    });
+    expect(outcome.result.poll_count).toBeGreaterThanOrEqual(4);
+    expect(fixture.getSends()).toBe(1);
+    expect(fixture.page.close).toHaveBeenCalledTimes(1);
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('harvested');
   });
 
   it('AC12 preserves a selected pre-existing 429 Page and its sibling', async () => {
@@ -730,6 +842,7 @@ describe('state-light fresh conversation collision recovery', () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'DO-NOT-SEND');
     turn.sendButton.isEnabled.mockResolvedValue(false);
+    proveCreatedPageCanClose(turn.page);
     const outcome = await runNewChatTurn(turn.page, '/tmp/never-enabled-2487.txt', '90000', invocationId);
     expect(outcome.result).toMatchObject({
       state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
@@ -790,6 +903,7 @@ describe('state-light fresh conversation collision recovery', () => {
       return oldLocator(selector);
     });
     turn.sendButton.isEnabled.mockImplementation(async () => mocks.nowMs >= invocationDeadlineMs + 500);
+    proveCreatedPageCanClose(turn.page);
     const outcome = await runNewChatTurn(
       turn.page, join(stateDir, 'slow-stop-reserve.txt'), '90000', invocationId,
     );
@@ -808,6 +922,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const invocationId = randomUUID();
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'UNREACHED');
+    proveCreatedPageCanClose(turn.page);
     const outcome = await runNewChatTurn(
       turn.page, join(stateDir, 'empty-pre-fill.txt'), '61000', invocationId,
     );
@@ -1128,7 +1243,7 @@ describe('state-light fresh conversation collision recovery', () => {
     // failure classification and foreign-Page cleanup refusal, not a pre-Send error.
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch', send_count: 0, send_attempted: true,
-      cause: 'helper_error_after_send_page_retained', cleanup: 'skipped',
+      cause: 'helper_error_after_send_page_retained', cleanup: 'unconfirmed',
     });
     expect(outcome.result.incidents).toContain('helper_failure_after_send');
     expect(outcome.result.incidents).not.toContain('helper_failure_before_send');
@@ -1162,7 +1277,7 @@ describe('state-light fresh conversation collision recovery', () => {
       state: 'ui_contract_mismatch',
       cause: 'owned_conversation_identity_mismatch',
       send_count: 1,
-      cleanup: 'skipped',
+      cleanup: 'unconfirmed',
     });
     expect(turn.getSends()).toBe(1);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
@@ -1245,7 +1360,8 @@ describe('state-light fresh conversation collision recovery', () => {
     expectPossibleEffect(outcome.result);
     expect(outcome.result.cause).not.toBe('fresh_conversation_landing_mismatch');
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
-    expect(turn.page.close).toHaveBeenCalledTimes(1);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(outcome.result.cleanup).toBe('unconfirmed');
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase)
       .toMatch(/sent_unbound|sent_unharvested/);
   });
@@ -1275,7 +1391,8 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result.poll_count).toBeGreaterThan(0);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
     expect(turn.getSends()).toBe(0);
-    expect(turn.page.close).toHaveBeenCalledTimes(1);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(outcome.result.cleanup).toBe('unconfirmed');
     expect(turn.composer.fill).not.toHaveBeenLastCalledWith('', expect.anything());
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase)
       .toMatch(/sent_unbound|sent_unharvested/);
@@ -1744,17 +1861,13 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.getSends()).toBe(1);
     expect(outcome.result.send_count).toBe(1);
-    if (admitted) {
-      expect(outcome.result).toMatchObject({ state: 'ok', conversation_id: SHARED_CONV });
-      expect(readFileSync(output, 'utf8')).toBe('CLAIM-TIME-ANSWER');
-    } else {
-      expect(outcome.result).toMatchObject({
-        state: 'observation_uncertain', cause: 'fresh_conversation_owner_unproven',
-      });
-      expect(outcome.result).not.toHaveProperty('conversation_id');
-      expect(existsSync(output)).toBe(false);
-      expect(turn.page.goto).toHaveBeenCalledTimes(1); // No preclaim navigation.
-    }
+    // Both before and after the old URL subwindow, the original Page's
+    // unique user marker and revalidated complete successor can publish.
+    // A late URL may remain optional rather than becoming Send authority.
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(readFileSync(output, 'utf8')).toBe('CLAIM-TIME-ANSWER');
+    if (admitted) expect(outcome.result.conversation_id).toBe(SHARED_CONV);
+    else expect(turn.page.goto).toHaveBeenCalledTimes(1); // No preclaim navigation.
   });
 
   it('Issue #2636 review source-01: counted own POST with unchanged composer survives early fresh URL wait', async () => {
@@ -2015,12 +2128,15 @@ describe('state-light fresh conversation collision recovery', () => {
     };
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const outcome = await runNewChatTurn(page, '/tmp/url-wait-expiry.txt');
+    const output = join(stateDir, 'url-wait-expiry.txt');
+    const outcome = await runNewChatTurn(page, output);
 
-    expect(outcome.code).not.toBe(0);
-    expect(outcome.result).toMatchObject({ send_count: 1 });
-    expect(outcome.result.state).not.toBe('send_failed');
-    expect(outcome.result.state).not.toBe('ok');
+    // No UUID/URL wait is needed after the original pinned Page proves its
+    // unique user marker and a complete stable assistant successor.
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(readFileSync(output, 'utf8')).toBe(reply);
     expect(outcome.result.incidents).toContain('send_observation_deferred');
   });
 
@@ -2352,13 +2468,15 @@ describe('state-light fresh conversation collision recovery', () => {
 
     const outcome = await runNewChatTurn(turn.page, output, '90000', invocationId);
 
+    // Even after the old URL-unbound cutoff, a unique own Page marker and
+    // finished assistant answer may commit inside the original 90s maximum.
     expect(outcome.result).toMatchObject({
-      state: 'observation_uncertain', cause: 'fresh_conversation_owner_unproven', send_count: 1,
+      state: 'ok', cause: 'completed_page_only', send_count: 1,
     });
     expect(mocks.nowMs - start).toBeLessThan(90_000);
     expect(turn.getSends()).toBe(1);
     expect(outcome.result).not.toHaveProperty('conversation_id');
-    expect(existsSync(output)).toBe(false);
+    expect(readFileSync(output, 'utf8')).toBe('NO-CANONICAL-REPLY');
   });
 
   // The Send fetch can fail while the server executes. Model the owned local
@@ -2366,6 +2484,7 @@ describe('state-light fresh conversation collision recovery', () => {
   // only already-open canonical server pages using the incumbent recovery path.
   function freshLocalFetchLossFixture(prompt: string, reply?: string) {
     const local = makeLoserPage(prompt, 'NO-LOCAL-ASSISTANT-REPLY');
+    proveCreatedPageRemainsVisibleToCdp(local.page);
     const retryClicks = vi.fn(async () => undefined);
     local.page.url.mockImplementation(() => local.getSends() ? LOCAL_ID_CONVERSATION_URL : PROJECT_URL);
     local.page.getByText.mockImplementation((value: string) => value === 'Failed to fetch'
@@ -2437,9 +2556,11 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(mocks.nowMs - start).toBeLessThan(90_000);
     expect(fixture.local.getSends()).toBe(1);
     expect(fixture.retryClicks).not.toHaveBeenCalled();
-    // One positive same-project claim permits closing only the original
-    // provably invocation-created dead local-ID Page.
-    expect(fixture.local.page.close).toHaveBeenCalledTimes(1);
+    // This legacy recovery fixture has no post-recovery exact CDP re-attach
+    // proof for its original local Page. The reply is real, but cleanup must
+    // remain unconfirmed instead of closing the recovered or original handle.
+    expect(outcome.result.cleanup).toBe('unconfirmed');
+    expect(fixture.local.page.close).not.toHaveBeenCalled();
     expect(fixture.serverPage.close).not.toHaveBeenCalled();
   });
 
@@ -2454,7 +2575,8 @@ describe('state-light fresh conversation collision recovery', () => {
 
     expect(outcome).toMatchObject({ code: 0, result: { state: 'ok', send_count: 1, conversation_id: SHARED_CONV } });
     expect(fixture.local.getSends()).toBe(1);
-    expect(fixture.local.page.close).toHaveBeenCalledTimes(1);
+    expect(outcome.result.cleanup).toBe('unconfirmed'); // no verified exact CDP re-attach
+    expect(fixture.local.page.close).not.toHaveBeenCalled();
     expect(fixture.serverPage.close).not.toHaveBeenCalled();
     expect(fixture.retryClicks).not.toHaveBeenCalled();
   });
@@ -2498,7 +2620,10 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await fixture.run(join(stateDir, 'fetch-error-vanished.txt'), randomUUID());
 
     expect(outcome).toMatchObject({ code: 0, result: { state: 'ok', send_count: 1, conversation_id: SHARED_CONV } });
-    expect(fetchFailureReads).toBeGreaterThanOrEqual(2);
+    // No destructive close is attempted without exact current CDP proof;
+    // the earlier failure may disappear after just the initial observation.
+    expect(fetchFailureReads).toBeGreaterThanOrEqual(1);
+    expect(outcome.result.cleanup).toBe('unconfirmed');
     expect(fixture.local.page.close).not.toHaveBeenCalled();
     expect(fixture.serverPage.close).not.toHaveBeenCalled();
     expect(fixture.retryClicks).not.toHaveBeenCalled();
@@ -2510,10 +2635,11 @@ describe('state-light fresh conversation collision recovery', () => {
     const output = join(stateDir, 'fetch-loss-late-owned-reply.txt');
     const invocationId = randomUUID();
     const fixture = freshLocalFetchLossFixture(prompt, reply);
-    // timeout=90s, and the existing cleanup/terminal reserve makes the
-    // pre-Send unbound cutoff ~68s. This owned reply completes later (~80s).
+    // timeout=90s; the old URL-unbound subwindow ends around 68s.
+    // Complete at 70s, still after that cutoff but with space for the
+    // bounded full-reply stability/revalidation before the original 90s cap.
     const start = mocks.nowMs;
-    const replyReadyAt = start + 80_000;
+    const replyReadyAt = start + 70_000;
     const originalLocator = fixture.serverPage.locator.getMockImplementation()!;
     const working = readyTurnObservationFrames(prompt, reply)[0]!;
     let workingReads = 0;
@@ -2540,12 +2666,14 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await fixture.run(output, invocationId);
 
     expect(workingReads).toBeGreaterThan(0);
-    expect(completeReads).toBeGreaterThan(0);
-    expect(mocks.nowMs - start).toBeGreaterThanOrEqual(80_000);
-    expect(mocks.nowMs - start).toBeLessThan(180_000);
-    expect(outcome).toMatchObject({ code: 0, result: {
+    // Put the terminal result first so a premature failure cannot masquerade
+    // as a missing fixture selector/read counter.
+    expect(outcome, JSON.stringify({ outcome, workingReads, completeReads, elapsed: mocks.nowMs - start })).toMatchObject({ code: 0, result: {
       state: 'ok', send_count: 1, conversation_id: SHARED_CONV,
     } });
+    expect(completeReads).toBeGreaterThan(0);
+    expect(mocks.nowMs - start).toBeGreaterThanOrEqual(70_000);
+    expect(mocks.nowMs - start).toBeLessThan(180_000);
     expect(readFileSync(output, 'utf8')).toBe(reply);
     expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
       phase: 'harvested', conversation_url: SHARED_CONV, send_count: 1,
@@ -2732,7 +2860,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(fixture.page, join(stateDir, '2641-alert-' + randomUUID() + '.txt'));
     expect(outcome.result).toMatchObject({
       state: 'recovery_required', scope: 'invocation', cause, product_banner_text: heading,
-      send_count: 1, cleanup: 'skipped',
+      send_count: 1, cleanup: 'unconfirmed',
     });
     expect(outcome.result).not.toHaveProperty('conversation_id');
     expect(outcome.result.next_action).toContain('GitHub effects first');
@@ -2930,11 +3058,11 @@ describe('state-light fresh conversation collision recovery', () => {
       );
       expect(outcome.result).toMatchObject({
         state: terminal, scope: 'invocation', send_count: 1,
-        cleanup: retain ? 'skipped' : 'confirmed',
+        cleanup: 'skipped',
       });
       expect(outcome.result).not.toHaveProperty('conversation_id');
-      if (retain) expect(fixture.page.close).not.toHaveBeenCalled();
-      else expect(fixture.page.close).toHaveBeenCalledTimes(1);
+      // No CDP target provenance exists in this injected finalizer outcome.
+      expect(fixture.page.close).not.toHaveBeenCalled();
       expect(fixture.page.goto).not.toHaveBeenCalled();
     },
   );
@@ -2946,7 +3074,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(fixture.page, join(stateDir, '2641-silent-local.txt'));
     expect(outcome.result).toMatchObject({
       state: 'observation_uncertain', scope: 'invocation',
-      cause: 'fresh_conversation_owner_unproven', send_count: 1, cleanup: 'skipped',
+      cause: 'fresh_conversation_owner_unproven', send_count: 1, cleanup: 'unconfirmed',
     });
     expect(outcome.result).not.toHaveProperty('conversation_id');
     expect(outcome.result.next_action).toContain('POSSIBLY_DELIVERED');
@@ -2977,19 +3105,17 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(turn.page, output, '1800000', invocationId);
 
     expect(outcome.result).toMatchObject({
-      state: 'observation_uncertain',
-      cause: 'fresh_conversation_owner_unproven',
-      send_count: 1,
+      state: 'ok', cause: 'completed_page_only', send_count: 1,
     });
     expect(outcome.result).not.toHaveProperty('conversation_id');
-    expect(mocks.nowMs - launcherStartMs).toBeLessThan(3_600_000);
+    expect(mocks.nowMs - launcherStartMs).toBeLessThan(1_800_000);
     expect(turn.getSends()).toBe(1);
     expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
-      phase: 'sent_unbound',
+      phase: 'harvested',
       conversation_url: null,
       send_count: 1,
     });
-    expect(existsSync(output)).toBe(false);
+    expect(readFileSync(output, 'utf8')).toBe(reply);
   });
 
   it('binds and harvests once after a local-chatgpt fresh URL becomes a canonical owned project URL', async () => {
@@ -3554,10 +3680,16 @@ describe('state-light fresh conversation collision recovery', () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const outcome = await runNewChatTurn(page, output);
 
-    expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0 });
-    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
-    expect(state.reloads).toBe(1);
-    expect(readFileSync(output, 'utf8')).toBe(reply);
+    // Without the first-token original user marker, a completed assistant
+    // alone is not this invocation's success authority. No URL-only reload
+    // or post-Send action may invent a reply binding.
+    expect(outcome.code).not.toBe(0);
+    expect(outcome.result).toMatchObject({
+      state: 'observation_uncertain', cause: 'post_send_absolute_deadline_elapsed',
+      send_count: 1,
+    });
+    expect(state.reloads).toBe(0);
+    expect(existsSync(output)).toBe(false);
   });
 
   it('reloads at most once and never resends when the owned user message stays unrendered (#2197)', async () => {
@@ -3571,7 +3703,9 @@ describe('state-light fresh conversation collision recovery', () => {
 
     expect(outcome.result.state).not.toBe('ok');
     expect(outcome.result.send_count).toBe(1);
-    expect(state.reloads).toBe(1);
+    // Same pinned Page and a 200/URL alone cannot repair a missing marker.
+    expect(state.reloads).toBe(0);
+    expect(existsSync(output)).toBe(false);
   });
 
   it('does not bind a delayed fresh-chat URL until that surface proves the owned marker', async () => {
@@ -3682,6 +3816,51 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(readFileSync(output, 'utf8')).toBe(reply);
     expect(composerText).toContain(prompt);
+  });
+
+  it('accepts probe primary committed during an in-flight post-Send transcript read', async () => {
+    const prompt = 'POST-SEND-PROBE-RACE';
+    const invocationId = randomUUID();
+    const output = join(stateDir, 'external-harvest-mid-read.txt');
+    const externalReply = 'PROBE PUBLISHED EXACT REPLY';
+    const turn = makeLoserPage(prompt, 'LOCAL-UNTRUSTED', undefined, true);
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    let injected = false;
+    turn.page.locator.mockImplementation((selector: string) => {
+      const locator = originalLocator(selector);
+      if (selector !== MESSAGE_NODE_SELECTOR || typeof locator.evaluateAll !== 'function') return locator;
+      const observe = locator.evaluateAll.bind(locator);
+      return {
+        ...locator,
+        evaluateAll: async (...args: any[]) => {
+          if (!injected && turn.getSends() === 1) {
+            const record = readStateLightTurnObservation('collision-profile', invocationId);
+            if (record.phase === 'sent_unbound' || record.phase === 'sent_unharvested') {
+              injected = true;
+              const publication = await finalizeStateLightPrimaryPublication({
+                profileKey: 'collision-profile',
+                invocationId,
+                target: output,
+                bytes: Buffer.from(externalReply, 'utf8'),
+                publish: () => publishStateLightReply(output, invocationId, externalReply),
+              });
+              expect(publication.state).toBe('committed_ok');
+              expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('harvested');
+            }
+          }
+          return observe(...args);
+        },
+      };
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(turn.page, output, '90000', invocationId);
+    expect(injected).toBe(true);
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'ok', cause: 'completed_page_probe_primary', send_count: 1,
+    });
+    expect(readFileSync(output, 'utf8')).toBe(externalReply);
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('harvested');
+    expect(turn.getSends()).toBe(1);
   });
 
   it('surfaces committed post-send observation retirement cleanup without resend', async () => {
@@ -4181,13 +4360,15 @@ describe('state-light fresh conversation collision recovery', () => {
     };
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const outcome = await runNewChatTurn(page, '/tmp/journal-defer-replay.txt');
+    const output = join(stateDir, 'journal-defer-replay.txt');
+    const outcome = await runNewChatTurn(page, output);
 
-    // A deferred URL that never materializes into a canonical project /c/UUID
-    // cannot become an owned fresh conversation, even if a reply looks ready.
-    expect(outcome.code).not.toBe(0);
-    expect(outcome.result).toMatchObject({ send_count: 1 });
-    expect(outcome.result.state).not.toBe('ok');
+    // A deferred UUID/URL cannot veto a uniquely marker-proven successor
+    // on the original pinned Page. Still publish only its full stable reply.
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(readFileSync(output, 'utf8')).toBe(reply);
     expect(page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), {
       waitUntil: 'commit',
       timeout: expect.any(Number),
@@ -5010,10 +5191,12 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     };
   }
 
-  function runProductionNewChat(outputPath: string, timeoutMs: string, pollMs = '1') {
+  function runProductionNewChat(
+    outputPath: string, timeoutMs: string, pollMs = '1', invocationId = randomUUID(),
+  ) {
     return runStateLightTurnWithStdoutCapture(runStateLightTurn, [
       ...STATE_LIGHT_TURN_BASE_ARGV,
-      '--invocation-id', randomUUID(),
+      '--invocation-id', invocationId,
       '--output', outputPath,
       '--new-chat',
       '--project-url', PROJECT_URL,
@@ -5021,6 +5204,79 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
       '--poll-ms', pollMs,
     ]);
   }
+
+  it('takes a concurrently harvested probe primary instead of reversing phase after recovery census (#2678 R2)', async () => {
+    const prompt = 'RECOVERY-PROBE-COMMIT-RACE';
+    const reply = 'EXTERNAL-COMMITTED-RECOVERY-REPLY';
+    const invocationId = randomUUID();
+    const output = join(integrationStateDir, 'recovery-probe-committed.txt');
+    let lost = false;
+    let injected = false;
+    const original = makeLoserPage(prompt, 'UNTRUSTED-ORIGINAL', () => { lost = true; }, true);
+    proveCreatedPageRemainsVisibleToCdp(original.page);
+    // Admit a lost Page only after the physical Send was recorded. This
+    // specifically exercises a probe commit during recovery, not zero-witness
+    // dispatching recovery while the initial Page is still sending.
+    let admittedLoss = false;
+    original.page.isClosed.mockImplementation(() => {
+      if (admittedLoss) return true;
+      if (!lost) return false;
+      try {
+        admittedLoss = ['sent_unbound', 'sent_unharvested', 'harvested']
+          .includes(readStateLightTurnObservation('collision-profile', invocationId).phase);
+      } catch { /* Observation is not committed yet. */ }
+      return admittedLoss;
+    });
+    const originalLocator = original.page.locator.getMockImplementation()!;
+    original.page.locator.mockImplementation((selector: string) =>
+      lost && selector === USER_MESSAGE_SELECTOR
+        ? collectionLocator([]) : originalLocator(selector));
+    const recoveredClose = vi.fn(async () => undefined);
+    const recovered: any = {
+      __fakeBrowserGptPage: true,
+      url: () => SHARED_CONV,
+      isClosed: () => false,
+      close: recoveredClose,
+      locator: (selector: string) => {
+        if (selector === USER_MESSAGE_SELECTOR) {
+          return {
+            count: async () => 1,
+            nth: () => ({
+              innerText: async () => {
+                if (!injected) {
+                  injected = true;
+                  const before = readStateLightTurnObservation('collision-profile', invocationId);
+                  expect(['sent_unbound', 'sent_unharvested']).toContain(before.phase);
+                  const publication = await finalizeStateLightPrimaryPublication({
+                    profileKey: 'collision-profile', invocationId, target: output,
+                    bytes: Buffer.from(reply, 'utf8'),
+                    publish: () => publishStateLightReply(output, invocationId, reply),
+                  });
+                  expect(publication.state).toBe('committed_ok');
+                }
+                return `${TEST_OWNED_MARKER}\n\n${prompt}`;
+              },
+            }),
+          };
+        }
+        return scalarLocator();
+      },
+    };
+    const browser = browserWithPages(original.page, [recovered], () => true);
+    mocks.browserQueue.push(browser);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const result = await runProductionNewChat(output, '90000', '1000', invocationId);
+    expect(injected).toBe(true);
+    expect(result.result, JSON.stringify(result.result)).toMatchObject({
+      state: 'ok', cause: 'completed_page_probe_primary', send_count: 1,
+      cleanup: 'unconfirmed',
+    });
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('harvested');
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+    expect(original.getSends()).toBe(1);
+    expect(original.page.close).not.toHaveBeenCalled();
+    expect(recoveredClose).not.toHaveBeenCalled();
+  });
 
   it('reconnects after post-send browser loss, claims the exact recovered conversation, and never resends or mutates a foreign page', async () => {
     const prompt = 'PROMPT-RECOVER';
@@ -5272,21 +5528,16 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     const outcome = await runProductionNewChat(output, '90000');
 
     expect(outcome.result).toMatchObject({
-      state: 'no_reply',
-      cause: 'observation_exhausted_no_resend',
-      send_count: 1,
-      cleanup: 'confirmed',
+      state: 'observation_uncertain', cause: 'post_send_absolute_deadline_elapsed',
+      send_count: 1, cleanup: 'unconfirmed',
     });
-    expect(outcome.result.incidents).toContain('observation_exhausted');
+    expect(outcome.result.incidents).toContain('post_send_observation_error');
+    expect(outcome.result.incidents).toContain('owned_tab_cleanup_unconfirmed');
     expect(ownedStop, JSON.stringify(outcome)).not.toHaveBeenCalled();
-    expect(outcome.result.incidents).toEqual([
-      'send_observation_deferred',
-      'observation_exhausted',
-      'owned_generation_stop_not_attempted_authority_absent',
-    ]);
+    // Same-last-marker Stop does not prove who owns the current generation.
     expect(sends).toBe(1);
     expect(foreignStop).not.toHaveBeenCalled();
-    expect(ownedClose).toHaveBeenCalledTimes(1);
+    expect(ownedClose).not.toHaveBeenCalled();
     expect(foreignClose).not.toHaveBeenCalled();
   });
 
@@ -5302,6 +5553,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
       publicationAtClose = existsSync(output) ? readFileSync(output, 'utf8') : undefined;
       closed = true;
     });
+    proveCreatedPageCanClose(turn.page);
     const browser = browserWithPages(turn.page, [turn.page], () => true);
     mocks.browserQueue.push(browser);
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
@@ -5364,6 +5616,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     let lost = false;
     let lostAt: number | undefined;
     const turn = makeLoserPage(prompt, 'NEVER PUBLISHED');
+    proveCreatedPageRemainsVisibleToCdp(turn.page);
     turn.page.isClosed.mockImplementation(() => lost);
     turn.page.waitForTimeout.mockImplementation(async (ms: number) => {
       mocks.nowMs += Math.max(ms, 5_000);
@@ -5403,10 +5656,10 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
       expect(lostAt).toBeUndefined();
       expect(terminal.result).toMatchObject({ state: 'driver_error', cause: 'post_send_target_crashed' });
     }
-    // A definitively closed Page is skipped; a still-reachable owned Page
-    // gets exactly one bounded terminal close even after a read error.
-    expect(turn.page.close).toHaveBeenCalledTimes(closeDuringRead ? 0 : 1);
-    expect(terminal.result.cleanup).toBe(closeDuringRead ? 'skipped' : 'confirmed');
+    // A crash is not a current-generation/physical-CDP close witness. Even a
+    // reachable fake Page must not be closed from the old handle alone.
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(terminal.result.cleanup).toBe('unconfirmed');
     expect(foreignClose).not.toHaveBeenCalled();
   });
 
@@ -5580,8 +5833,8 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
           });
           expect(existsSync(output)).toBe(false);
         }
-        if (closed) expect(turn.page.close).not.toHaveBeenCalled();
-        else expect(turn.page.close).toHaveBeenCalledTimes(1);
+        // A reconnected recovery handle is not an authenticated close handle.
+        expect(turn.page.close).not.toHaveBeenCalled();
         expect(foreignClose).not.toHaveBeenCalled();
         expect(foreignStop).not.toHaveBeenCalled();
       }
@@ -6095,22 +6348,26 @@ describe('Issue #1752 production liveness regressions', () => {
       expect(code).not.toBe(0);
       const records = parseRecords(writes);
       const heartbeats = records.filter((record) => record.schema === 'observation-heartbeat/v1');
-      expect(heartbeats.length).toBeGreaterThan(3);
+      // r06's original absolute bound shortens this synthetic recovery window.
+      expect(heartbeats.length).toBeGreaterThanOrEqual(3);
       expect(heartbeats.some((record) => record.phase === 'post_send_observation')).toBe(true);
+      // Current identity admission refuses a zero-match recovery census
+      // before allocating any successor. The pending fixture creation is
+      // deliberately never invoked; unrelated target(s) remain untouched.
       expect(records.at(-1)).toMatchObject({
         schema: 'turn-result/v1',
-        state: 'driver_error',
-        cause: 'replacement_observation_page_create_failed',
+        state: 'ui_contract_mismatch',
+        cause: 'owned_conversation_recovery_zero_match',
         send_count: 1,
       });
       expect(sends).toBe(1);
-      expect(context.newPage).toHaveBeenCalledTimes(2);
+      expect(context.newPage).toHaveBeenCalledTimes(1);
       expect(initialClose).not.toHaveBeenCalled();
       expect(foreignPage.close).not.toHaveBeenCalled();
 
       resolveLateSuccessor(lateSuccessor);
       await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(lateSuccessor.close).toHaveBeenCalledTimes(1);
+      expect(lateSuccessor.close).not.toHaveBeenCalled();
       expect(lateSuccessor.goto).not.toHaveBeenCalled();
       expect(foreignPage.close).not.toHaveBeenCalled();
     } finally {
@@ -6361,8 +6618,9 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     });
     expect(fake.getSends()).toBe(1);
     expect(fake.retryClicks).not.toHaveBeenCalled();
-    expect(fake.close).toHaveBeenCalledTimes(1);
-    expect(outcome.result.cleanup).toBe('confirmed');
+    // An unpinned Page handle alone is not close authority.
+    expect(fake.close).not.toHaveBeenCalled();
+    expect(outcome.result.cleanup).not.toBe('confirmed');
   });
 
   it('continues in an already-open tab of the conversation instead of reloading it', async () => {
@@ -6403,8 +6661,9 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     });
     expect(fake.getSends()).toBe(1);
     expect(fake.retryClicks).not.toHaveBeenCalled();
-    expect(fake.close).toHaveBeenCalledTimes(1);
-    expect(outcome.result.cleanup).toBe('confirmed');
+    // An unpinned Page handle alone is not close authority.
+    expect(fake.close).not.toHaveBeenCalled();
+    expect(outcome.result.cleanup).not.toBe('confirmed');
   });
 
   it('does not end a turn on a recovery banner before its generation was ever observed', async () => {

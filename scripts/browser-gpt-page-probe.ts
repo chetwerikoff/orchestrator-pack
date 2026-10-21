@@ -7,8 +7,10 @@ import { isSupportedChatGptConversationUrl } from './chatgpt-browser-turn/state-
 import {
   ASSISTANT_MESSAGE_SELECTOR,
   ASSISTANT_MESSAGE_STYLE,
+  COMPOSER_SELECTOR,
   ASSISTANT_TURN_ACTION_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
+  USER_MESSAGE_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_ID_ATTR,
@@ -2127,11 +2129,16 @@ function validateHarvestSnapshot(value: unknown, target: CompatibleTarget): Harv
   };
 }
 
-async function readHarvestSnapshot(target: CompatibleTarget, deps: ProbeDependencies): Promise<HarvestSnapshot> {
+async function readHarvestSnapshot(
+  target: CompatibleTarget, deps: ProbeDependencies, budgetMs = CDP_REQUEST_TIMEOUT_MS,
+): Promise<HarvestSnapshot> {
   if (!target.web_socket_debugger_url) throw new ProbeError('unavailable', 'target_attach_unavailable');
   let value: unknown;
   try {
-    value = await deps.evaluate(target, HARVEST_EXPRESSION);
+    value = await withTimeout(
+      deps.evaluate(target, HARVEST_EXPRESSION, budgetMs),
+      Math.max(1, budgetMs), deps, 'harvest_target_read_timeout',
+    );
   } catch (error) {
     throw new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
   }
@@ -2272,21 +2279,117 @@ async function harvestWithReadiness(
   throw new ProbeError('surface_unknown', 'harvest_readiness_timeout');
 }
 
+interface ProbeCreatedRecoveryTarget {
+  targetId?: string;
+  target?: CompatibleTarget;
+  requestedUrl?: string;
+}
+
+/** Exact pinned target and unique visible marker outrank a stale URL locator. */
 async function resolveHarvestTarget(
   args: ParsedHarvestArgs,
   marker: string,
   conversationUrl: string | null,
   deps: ProbeDependencies,
+  createdRecovery: ProbeCreatedRecoveryTarget,
+  pinnedOriginal?: { readonly id: string; readonly created: boolean; readonly cdp_sha256: string; readonly initial_route: string },
 ): Promise<{ target: CompatibleTarget; snapshot: HarvestSnapshot }> {
   const rawTargets = await listTargetCensus(args.cdp, deps);
   const targets = toCompatibleTargets(rawTargets);
+  const expectedCdp = createHash('sha256').update(args.cdp, 'utf8').digest('hex');
+  if (pinnedOriginal && pinnedOriginal.cdp_sha256 !== expectedCdp) {
+    throw new ProbeError('surface_unknown', 'pinned_original_cdp_changed');
+  }
+  const pinnedId = pinnedOriginal?.id;
+
+  const pinnedRouteAllowed = (url: string): boolean => {
+    if (!pinnedOriginal) return false;
+    try {
+      const expected = new URL(pinnedOriginal.initial_route);
+      const actual = new URL(url);
+      if (expected.origin !== actual.origin || actual.search || actual.hash
+        || actual.username || actual.password) return false;
+      if (actual.pathname === expected.pathname) return true;
+      // The fresh Page is initially pinned at /g/<project>/project (or
+      // /draft). Its /c/local-chatgpt:<id> route is the same project's Page,
+      // not a new identity. The unique marker must still be proved separately.
+      const projectRoot = /^\/g\/g-p-[^/]+(?:\/(?:project|draft))?$/iu.test(expected.pathname)
+        ? expected.pathname.replace(/\/(?:project|draft)$/iu, '')
+        : null;
+      if (projectRoot && /^\/c\/[^/]+$/iu.test(actual.pathname.slice(projectRoot.length))) {
+        return true;
+      }
+      return conversationUrl !== null
+        && normalizeConversationUrl(url) === normalizeConversationUrl(conversationUrl);
+    } catch { return false; }
+  };
+
+  const boundIdentity = conversationUrl === null ? null : normalizeConversationUrl(conversationUrl);
+  if (pinnedId) {
+    const original = targets.find((target) => target.target_id === pinnedId);
+    if (original?.web_socket_debugger_url) {
+      const snapshot = await readHarvestSnapshot(original, deps);
+      if (!pinnedRouteAllowed(snapshot.page_url)) {
+        throw new ProbeError('surface_unknown', 'pinned_original_route_changed');
+      }
+      // A pinned ID proves the original tab, not that its current contents
+      // still belong to the durable conversation after the user navigates it.
+      if (boundIdentity !== null && snapshot.page_url !== boundIdentity) {
+        throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+      }
+      if (ownedHarvestWindow(snapshot, marker)) return { target: original, snapshot };
+      // A reachable original Page with no unique owned marker cannot transfer
+      // its live invocation identity to a sibling merely sharing that marker.
+      // Read-only sidebar recovery is available only when the original target
+      // is genuinely unavailable, not when its current transcript is unproven.
+      throw new ProbeError('not_found', 'pinned_original_marker_not_found');
+    }
+  }
+
+  const matched: Array<{ target: CompatibleTarget; snapshot: HarvestSnapshot }> = [];
+  // A sibling's copied marker cannot override a durable bound conversation.
+  // With no bound URL, an invocation whose original Page is pinned to a project
+  // may only recover a same-project conversation, never a foreign project/root.
+  // A large sibling census cannot multiply per-target timeouts without bound.
+  // This is a read-only recovery budget; it never grants fallback Send.
+  const siblingDeadline = clockNow(deps) + LIVENESS_TOTAL_TIMEOUT_MS;
+  for (const target of targets) {
+    if (target.target_id === pinnedId || !target.web_socket_debugger_url) continue;
+    if (boundIdentity !== null && target.normalized_url !== boundIdentity) continue;
+    if (boundIdentity === null && pinnedOriginal
+      && (!pinnedRouteAllowed(target.normalized_url) || !isConversationUrl(target.normalized_url))) continue;
+    const remaining = siblingDeadline - clockNow(deps);
+    if (remaining <= 0) throw new ProbeError('surface_unknown', 'harvest_sibling_census_timeout');
+    let snapshot: HarvestSnapshot;
+    try { snapshot = await readHarvestSnapshot(target, deps, Math.min(CDP_REQUEST_TIMEOUT_MS, remaining)); }
+    catch {
+      if (clockNow(deps) >= siblingDeadline) {
+        throw new ProbeError('surface_unknown', 'harvest_sibling_census_timeout');
+      }
+      continue;
+    }
+    // Census URL is only a selection hint. Navigation between the CDP
+    // census and the DOM read invalidates this candidate even if an old
+    // marker remains visible in the new conversation.
+    if (snapshot.page_url !== target.normalized_url) {
+      if (conversationUrl !== null
+        && target.normalized_url === normalizeConversationUrl(conversationUrl)) {
+        throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+      }
+      continue;
+    }
+    if (ownedHarvestWindow(snapshot, marker)) matched.push({ target, snapshot });
+  }
+  if (matched.length > 1) throw new ProbeError('ambiguous', 'owned_turn_marker_ambiguous');
+  if (matched.length === 1) return matched[0]!;
+
   if (conversationUrl) {
     const normalized = normalizeConversationUrl(conversationUrl);
     const matches = targets.filter((target) => target.normalized_url === normalized);
     if (matches.length > 1) throw new ProbeError('ambiguous', 'owned_turn_url_ambiguous');
     if (matches.length === 1) {
       const target = matches[0]!;
-      const snapshot = await readHarvestSnapshot(target, deps);
+      const snapshot = await harvestWithReadiness(target, normalized, marker, deps);
       if (snapshot.page_url !== normalized) {
         throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
       }
@@ -2296,33 +2399,179 @@ async function resolveHarvestTarget(
     const preExistingTargetIds = new Set(rawTargets.flatMap((target) => typeof target.id === 'string' ? [target.id] : []));
     let created: CdpTarget | readonly CdpTarget[];
     try {
-      created = await deps.createPage(args.cdp, normalized);
+      created = await withTimeout(
+        deps.createPage(args.cdp, normalized), CDP_REQUEST_TIMEOUT_MS,
+        deps, 'harvest_page_create_timeout',
+      );
     } catch (error) {
       throw new ProbeError('unavailable', 'page_create_failed', boundedDetail(error));
     }
+    // A positive, validated *single* creation result is the sole new-target
+    // ownership witness. A malformed/ambiguous array, missing debugger URL or
+    // pre-existing ID is never close authority, even if a later census finds
+    // an attractive Page at the requested URL.
     const target = validateCreatedTarget(created, normalized, preExistingTargetIds);
-    // Harvest never derives cleanup authority. A recovery-opened page is left
-    // untouched for the caller/operator after this bounded readiness observation.
+    createdRecovery.targetId = target.target_id;
+    createdRecovery.requestedUrl = normalized;
+    createdRecovery.target = target;
     return { target, snapshot: await harvestWithReadiness(target, normalized, marker, deps) };
   }
+  throw new ProbeError('not_found', 'owned_turn_unbound_not_found');
+}
 
-  const candidates: Array<{ target: CompatibleTarget; snapshot: HarvestSnapshot }> = [];
-  for (const target of targets) {
-    if (!target.web_socket_debugger_url) continue;
-    let snapshot: HarvestSnapshot;
-    try {
-      snapshot = await readHarvestSnapshot(target, deps);
-    } catch {
-      continue;
+// Probe-created recovery targets are not transferred to the manager or the
+// original driver. Retire ONLY positively newly allocated target IDs; a failed
+// cleanup must remain visible even when harvest itself succeeded.
+const PROBE_RECOVERY_CLOSE_BUDGET_MS = 15_000;
+const PROBE_RECOVERY_GUARD_EXPRESSION = `(() => {
+  const visible = (node) => node.getBoundingClientRect().height > 0;
+  const users = Array.from(document.querySelectorAll(${JSON.stringify(USER_MESSAGE_SELECTOR)}))
+    .filter(visible);
+  const stop = Array.from(document.querySelectorAll(${JSON.stringify(STOP_BUTTON_SELECTOR)})).some(visible);
+  const streaming = Array.from(document.querySelectorAll(${JSON.stringify(ASSISTANT_TURN_IN_PROGRESS_SELECTOR)})).some(visible);
+  const composer = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
+  // Absence of a mounted body is unknown, not a proved empty tab.
+  const emptyBody = document.body !== null
+    && (document.body.innerText || '').trim() === ''
+    && (document.body.textContent || '').trim() === '';
+  const errorText = Array.from(document.querySelectorAll('[role="alert"]'))
+    .filter(visible).map(node => (node.textContent || '').trim());
+  return { page_url: location.href, user_count: users.length,
+    user_texts: users.length <= 100 ? users.map(node => node.innerText) : [],
+    stop, streaming,
+    composer_text: composer && composer.textContent === composer.innerText ? composer.textContent : null,
+    empty_body: emptyBody,
+    fetch_failure: errorText.some(text => text.includes('Failed to fetch')
+      || text.includes('Could not load this ChatGPT conversation')) };
+})()`;
+
+async function retireProbeCreatedRecoveryTarget(
+  args: ParsedHarvestArgs,
+  deps: ProbeDependencies,
+  marker: string,
+  lease: ProbeCreatedRecoveryTarget,
+): Promise<'confirmed' | 'cleanup_unconfirmed' | 'not_created'> {
+  if (!lease.targetId) return 'not_created';
+  if (!lease.requestedUrl || !deps.closePage) return 'cleanup_unconfirmed';
+  const deadline = clockNow(deps) + PROBE_RECOVERY_CLOSE_BUDGET_MS;
+  const remaining = (): number => Math.min(CDP_REQUEST_TIMEOUT_MS, Math.max(1, deadline - clockNow(deps)));
+  const currentTarget = async (): Promise<CompatibleTarget | null> => {
+    const census = await withTimeout(
+      deps.listTargets(args.cdp), remaining(), deps, 'cleanup_census_timeout',
+    );
+    // Check raw identities before the compatibility filter: even a duplicate
+    // foreign-route/non-Page record must invalidate destructive authority.
+    const matching = census.filter((target) => target.id === lease.targetId);
+    // Never retire Chrome's last Page, even if this target was created here.
+    if (matching.length !== 1 || !census.some((target) =>
+      target.type === 'page' && target.id !== lease.targetId)) return null;
+    const target = matching[0]!;
+    // A positively created recovery Page can remain at a truly empty
+    // about:blank after navigation fails. Normal compatible URL filtering
+    // deliberately excludes this route, so recognize only this exact target.
+    if (target.type === 'page' && target.url === 'about:blank'
+      && typeof target.id === 'string' && TARGET_ID_RE.test(target.id)
+      && isDebuggerWebSocketUrl(target.webSocketDebuggerUrl)) {
+      return { target_id: target.id, normalized_url: 'about:blank',
+        title: safeTitle(target.title), web_socket_debugger_url: target.webSocketDebuggerUrl };
     }
-    if (ownedHarvestWindow(snapshot, marker)) candidates.push({ target, snapshot });
+    return toCompatibleTargets(matching)[0] ?? null;
+  };
+  const safe = async (): Promise<boolean> => {
+    if (clockNow(deps) >= deadline) return false;
+    let target: CompatibleTarget | null;
+    try { target = await currentTarget(); } catch { return false; }
+    if (!target?.web_socket_debugger_url) return false;
+    const expectedRoute = target.normalized_url;
+    if (expectedRoute !== lease.requestedUrl && expectedRoute !== 'about:blank') return false;
+    try {
+      const value = await withTimeout(
+        deps.evaluate(target, PROBE_RECOVERY_GUARD_EXPRESSION, remaining()),
+        remaining(), deps, 'cleanup_guard_timeout',
+      );
+      if (!isRecord(value)
+        || value.stop !== false || value.streaming !== false
+        || value.user_count !== (Array.isArray(value.user_texts) ? value.user_texts.length : -1)
+        || typeof value.user_count !== 'number' || value.user_count < 0 || value.user_count > 100
+        || value.page_url !== expectedRoute) return false;
+      // A blank target is closable only while its body is provably empty,
+      // editor absent and user/generation absent. Never treat arbitrary
+      // about:blank content or an unreadable ChatGPT editor as idle.
+      if (expectedRoute === 'about:blank') {
+        if (value.user_count !== 0 || value.composer_text !== null
+          || value.empty_body !== true || value.fetch_failure !== false) return false;
+      } else if (value.composer_text !== '') {
+        // An attributable error-only Page can have no mounted editor. Its
+        // precise error witness and no-user proof distinguish it from an
+        // unreadable editor or a foreign typed draft.
+        if (!(value.composer_text === null && value.user_count === 0
+          && value.fetch_failure === true)) return false;
+      }
+      if (value.user_count > 0) {
+        const users = value.user_texts as unknown[];
+        const owned = users.filter((text) => typeof text === 'string' && ownedPromptMatches(text, marker));
+        if (owned.length !== 1 || users.at(-1) !== owned[0]) return false;
+        const count = recoveryMarkerCardinality(
+          users.map((text) => ({ role: 'user' as const, text: String(text) })), marker,
+        );
+        if (count.matchingUserCarrierCount !== 1 || count.exactMarkerTokenCount !== 1) return false;
+      }
+      // A concurrent URL redirect or replacement invalidates the first DOM
+      // sample. The next guard and census must reproduce this exact identity.
+      return (await currentTarget())?.normalized_url === expectedRoute;
+    } catch { return false; }
+  };
+  try {
+    if (!await safe() || !await safe() || clockNow(deps) >= deadline) return 'cleanup_unconfirmed';
+    const response = await withTimeout(
+      deps.closePage(args.cdp, lease.targetId), remaining(), deps, 'cleanup_close_timeout',
+    );
+    // HTTP 200/404 only describes a request result; physical disappearance
+    // is the confirmation witness and includes the late-close case.
+    if (response !== 'closed' && response !== 'already_gone') return 'cleanup_unconfirmed';
+    if (clockNow(deps) >= deadline) return 'cleanup_unconfirmed';
+    const post = await withTimeout(deps.listTargets(args.cdp), remaining(), deps, 'cleanup_readback_timeout');
+    return post.every((target) => target.id !== lease.targetId) ? 'confirmed' : 'cleanup_unconfirmed';
+  } catch {
+    return 'cleanup_unconfirmed';
   }
-  if (candidates.length === 0) throw new ProbeError('not_found', 'owned_turn_unbound_not_found');
-  if (candidates.length > 1) throw new ProbeError('ambiguous', 'owned_turn_marker_ambiguous');
-  return candidates[0]!;
 }
 
 async function runHarvest(args: ParsedHarvestArgs, deps: ProbeDependencies): Promise<ProbeEnvelope> {
+  const createdRecovery: ProbeCreatedRecoveryTarget = {};
+  let result: ProbeEnvelope | undefined;
+  let failure: unknown;
+  let marker = '';
+  try {
+    const profileKey = configuredProfileKey(args.profile, args.cdp);
+    marker = readStateLightTurnObservation(profileKey, args.invocationId).marker;
+    result = await runHarvestCore(args, deps, createdRecovery);
+  } catch (error) {
+    failure = error;
+  }
+  const cleanup = await retireProbeCreatedRecoveryTarget(args, deps, marker, createdRecovery);
+  if (failure) {
+    if (cleanup === 'cleanup_unconfirmed') {
+      const error = failure instanceof ProbeError ? failure
+        : new ProbeError('unavailable', 'unexpected_failure', boundedDetail(failure));
+      throw new ProbeError(error.status, error.reason, undefined, {
+        ...(error.details ?? {}), cleanup_status: 'cleanup_unconfirmed',
+        cleanup_target_id: createdRecovery.targetId,
+      });
+    }
+    throw failure;
+  }
+  if (!result) throw new ProbeError('unavailable', 'harvest_result_unavailable');
+  return {
+    ...result,
+    ...(createdRecovery.targetId
+      ? { cleanup_status: cleanup, cleanup_target_id: createdRecovery.targetId } : {}),
+  };
+}
+
+async function runHarvestCore(
+  args: ParsedHarvestArgs, deps: ProbeDependencies, createdRecovery: ProbeCreatedRecoveryTarget,
+): Promise<ProbeEnvelope> {
   const profileKey = configuredProfileKey(args.profile, args.cdp);
   let record;
   try {
@@ -2340,9 +2589,24 @@ async function runHarvest(args: ParsedHarvestArgs, deps: ProbeDependencies): Pro
     });
   }
 
-  const resolved = await resolveHarvestTarget(args, record.marker, record.conversation_url, deps);
+  const resolved = await resolveHarvestTarget(
+    args, record.marker, record.conversation_url, deps, createdRecovery, record.owned_target,
+  );
   const window = ownedHarvestWindow(resolved.snapshot, record.marker);
   if (!window) throw new ProbeError('not_found', 'owned_turn_marker_not_found');
+  if (record.send_count !== undefined && record.send_count !== 1) {
+    throw new ProbeError('surface_unknown', 'harvest_count_conflicts_with_owned_marker');
+  }
+  if (record.send_count === undefined && record.phase !== 'prepared') {
+    transitionStateLightTurnObservation({
+      profileKey, invocationId: args.invocationId,
+      phase: record.phase,
+      reason: 'harvest_unique_original_marker_send_proven',
+      sendCount: 1,
+      sendWitness: record.send_witness === 'numeric_send_count' ? undefined : 'owned_marker',
+    });
+    record = readStateLightTurnObservation(profileKey, args.invocationId);
+  }
   const classifier = classifyBrowserGptPageTurnStatus(
     resolved.snapshot.generation_in_progress,
     window.assistants.length,

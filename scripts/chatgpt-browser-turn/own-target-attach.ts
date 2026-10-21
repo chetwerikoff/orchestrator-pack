@@ -33,6 +33,8 @@ export interface OwnTargetAttachResult {
 
 export interface AttachAttemptError extends Error {
   readonly attachAttempts: number;
+  /** Affirmative CDP creation witness, even when no Playwright Page was returned. */
+  readonly createdTargetId?: string;
 }
 
 interface AttachedConnection {
@@ -60,9 +62,10 @@ function waitMs(deadlineMs: number): number {
   return Math.min(30_000, deadlineRemaining(deadlineMs));
 }
 
-function asAttemptError(error: unknown, attempts: number): AttachAttemptError {
+function asAttemptError(error: unknown, attempts: number, selected?: PinnedTarget): AttachAttemptError {
   const result = error instanceof Error ? error : new Error(String(error));
-  Object.assign(result, { attachAttempts: attempts });
+  Object.assign(result, { attachAttempts: attempts,
+    ...(selected?.created ? { createdTargetId: selected.id } : {}) });
   return result as AttachAttemptError;
 }
 
@@ -374,18 +377,18 @@ export async function attachOwnTarget(
         browser, pendingConnect: connect, proxy,
         cleanupBudgetMs: Math.min(options.cleanupBudgetMs ?? 5_000, deadlineRemaining(options.deadlineMs)),
       });
-      if (!disposed) throw asAttemptError(new Error('browser_operation_timeout:connect_cleanup_unconfirmed'), attempt);
+      if (!disposed) throw asAttemptError(new Error('browser_operation_timeout:connect_cleanup_unconfirmed'), attempt, selected);
       if (attempt === maxAttempts || !TRANSIENT.test(error instanceof Error ? error.message : String(error))) {
-        throw asAttemptError(error, attempt);
+        throw asAttemptError(error, attempt, selected);
       }
       const backoff = BACKOFF_MS[attempt - 1] ?? BACKOFF_MS[1];
       if (deadlineRemaining(options.deadlineMs) <= backoff) {
-        throw asAttemptError(new Error('browser_operation_timeout:connect_over_cdp'), attempt);
+        throw asAttemptError(new Error('browser_operation_timeout:connect_over_cdp'), attempt, selected);
       }
       await new Promise<void>((resolve) => setTimeout(resolve, backoff));
     }
   }
-  throw asAttemptError(lastError, maxAttempts);
+  throw asAttemptError(lastError, maxAttempts, selected);
 }
 
 export async function connectWithLegacyRetry(
@@ -421,6 +424,22 @@ export function getOwnTargetInfo(browser: unknown): {
     created: record.created,
     successorTargetIds: [...record.proxy.createdTargetIds].filter((id) => id !== record.initialTargetId),
   };
+}
+
+/**
+ * The original invocation's creation proof is checked by the driver against
+ * its persisted exact target and fresh idle/foreign-activity evidence before
+ * calling this. A reattach is intentionally marked created:false, so grant
+ * only that one pinned target a proxy close command at the last safe boundary.
+ * Ordinary selected existing Pages never enter this path.
+ */
+export function authorizeGuardedHistoricalTargetClose(browser: unknown, targetId: string): boolean {
+  if (!browser || typeof browser !== 'object' || !targetId) return false;
+  const attached = connections.get(browser);
+  if (!attached || attached.created || attached.initialTargetId !== targetId
+    || !attached.proxy.allowedTargetIds.has(targetId)) return false;
+  attached.proxy.createdTargetIds.add(targetId);
+  return true;
 }
 
 export async function countUninspectedRecoveryTargets(

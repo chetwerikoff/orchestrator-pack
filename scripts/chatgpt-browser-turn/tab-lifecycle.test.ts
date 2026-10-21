@@ -17,9 +17,16 @@ import { BEFORE_CDP_BROWSER_RELEASE, releaseCdpBrowser } from './browser-session
 import { parsePackReviewPreflightArgs, runPackReviewPreflight, runStateLightEntry } from './state-light-entry.ts';
 import { readChatBinding } from './chat-bindings.ts';
 import { configuredProfileKey } from './storage-common.ts';
-import { admitStateLightTurnObservation, transitionStateLightTurnObservation } from './state-light-turn-observation.ts';
+import {
+  admitStateLightTurnObservation, bindStateLightOwnedTarget, transitionStateLightTurnObservation,
+} from './state-light-turn-observation.ts';
 import { TURN_STATES } from './contracts.ts';
-import { COMPOSER_SELECTOR, loadChromium, SEND_BUTTON_SELECTOR } from './ui-adapter.ts';
+import {
+  COMPOSER_SELECTOR, loadChromium, SEND_BUTTON_SELECTOR,
+  RENDERED_STOP_BUTTON_SELECTOR, ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
+} from './ui-adapter.ts';
+import { USER_MESSAGE_SELECTOR } from './product-page-selectors.ts';
+import { __testAttachOwnTargetFixture } from './own-target-attach.ts';
 import {
   buildBrowserTurnCancellationReceipt,
   cancelOwnedGenerationFromReceipt,
@@ -84,6 +91,12 @@ type FinalizerCase = {
   readonly pageLost: boolean;
   readonly closeError?: boolean;
   readonly beforePageClose?: () => void;
+  readonly soleSharedChromePage?: boolean;
+  readonly absentComposer?: boolean;
+  readonly unreadableComposer?: boolean;
+  readonly errorBanner?: string;
+  readonly blankPage?: boolean;
+  readonly recoverySuccessor?: boolean;
 };
 
 function makeTurnResult(overrides: Partial<Omit<CompactTurnResult, 'cleanup'>> = {}): Omit<CompactTurnResult, 'cleanup'> {
@@ -105,33 +118,138 @@ function makeTurnResult(overrides: Partial<Omit<CompactTurnResult, 'cleanup'>> =
 }
 
 async function observeFinalizer(testCase: FinalizerCase) {
+  // r06: the production finalizer may close ONLY an invocation-created,
+  // currently reverified CDP target. Prove that contract in the fixture rather
+  // than granting old synthetic Page handles implicit cleanup authority.
+  const stateDir = mkdtempSync(join(tmpdir(), 'opk-1238-verified-owner-'));
+  const priorStateDir = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+  process.env.CHATGPT_BROWSER_TURN_STATE_DIR = stateDir;
+  const cdp = 'http://127.0.0.1:9222';
+  const profile = join(stateDir, 'profile');
+  const profileKey = configuredProfileKey(profile, cdp);
+  const invocationId = 'fixture-tab-' + Math.random().toString(16).slice(2);
+  const marker = `OPKTURNV1${'ef'.repeat(16)}`;
+  const chatUrl = 'https://chatgpt.com/c/123e4567-e89b-12d3-a456-426614174099';
+  const targetId = 'fixture-own-target';
   let pageCloseCalls = 0;
   let browserCloseCalls = 0;
+  let successorCloseCalls = 0;
   let foreignTargetOpen = true;
+  let physicallyPresent = testCase.pagePresent && !testCase.pageLost;
   const page = testCase.pagePresent
     ? {
+      __fakeBrowserGptPage: true,
       close: async () => {
         testCase.beforePageClose?.();
         pageCloseCalls++;
         if (testCase.closeError) throw new Error('fixture_page_close_failed');
+        physicallyPresent = false;
       },
-      isClosed: () => testCase.pageLost,
+      isClosed: () => testCase.pageLost || !physicallyPresent,
+      url: () => testCase.blankPage ? 'about:blank' : chatUrl,
+      getByText: (text: string) => ({
+        count: async () => testCase.errorBanner === text ? 1 : 0,
+      }),
+      locator: (selector: string) => {
+        if (selector === USER_MESSAGE_SELECTOR) {
+          const texts = testCase.sendCount > 0 ? [`${marker}\n\nprompt`] : [];
+          return { count: async () => texts.length,
+            nth: (index: number) => ({ innerText: async () => texts[index] ?? '' }) };
+        }
+        if (selector === COMPOSER_SELECTOR) return testCase.absentComposer
+          ? { count: async () => 0 }
+          : {
+            count: async () => 1,
+            evaluate: async () => testCase.unreadableComposer
+              ? { content: 'draft', visible: '' }
+              : { content: '', visible: '' },
+          };
+        if (selector === 'body') return { innerText: async () => '' };
+        if (selector === RENDERED_STOP_BUTTON_SELECTOR
+          || selector === ASSISTANT_TURN_IN_PROGRESS_SELECTOR) {
+          return { count: async () => 0 };
+        }
+        return { count: async () => 0 };
+      },
     }
     : undefined;
+  // The successor can display the same URL and old marker as the original:
+  // route and transcript equality alone must not authorize closing it.
+  const recoverySuccessorPage = testCase.recoverySuccessor && page
+    ? { ...page, close: async () => { successorCloseCalls++; } }
+    : undefined;
+  const context = {
+    newPage: vi.fn(async () => page),
+    pages: vi.fn(() => [] as any[]),
+  };
   const browser = {
+    contexts: vi.fn(() => [context]),
     close: async () => {
       expect(foreignTargetOpen).toBe(true);
       browserCloseCalls++;
     },
     isConnected: () => true,
   };
-  const result = await __testFinalizeTurn({
-    result: makeTurnResult({ send_count: testCase.sendCount }),
-    page,
-    browser,
-    publicationState: testCase.publicationState,
-  });
-  return { result, pageCloseCalls, browserCloseCalls, foreignTargetOpen };
+  const keepalive = { id: 'opk-keepalive', type: 'page', url: 'about:blank#opk-keepalive' };
+  const ownedTarget = {
+    id: targetId, type: 'page', url: testCase.blankPage ? 'about:blank' : chatUrl,
+    webSocketDebuggerUrl: 'ws://example/fixture-own-target',
+  };
+  const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
+    JSON.stringify([
+      ...(physicallyPresent ? [ownedTarget] : []),
+      ...(!testCase.soleSharedChromePage ? [keepalive] : []),
+    ]), { status: 200 },
+  ));
+  try {
+    admitStateLightTurnObservation({ profileKey, invocationId, marker });
+    if (testCase.pagePresent && !testCase.pageLost && page) {
+      const attached = await __testAttachOwnTargetFixture({
+        connectOverCDP: vi.fn(async () => browser),
+      }, {
+        mode: 'own-target', cdp, newChat: true,
+        deadlineMs: Date.now() + 15_000,
+      }, true);
+      expect(attached.created).toBe(true);
+      expect(attached.targetId).toBe(targetId);
+      bindStateLightOwnedTarget({
+        profileKey, invocationId, targetId, created: true,
+        cdp, initialRoute: chatUrl,
+      });
+    }
+    if (testCase.sendCount > 0) {
+      // A delivered turn must first enter dispatching; never weaken the
+      // production observation phase graph just to construct a test case.
+      transitionStateLightTurnObservation({
+        profileKey, invocationId, phase: 'dispatching',
+        reason: 'verified_1238_fixture_dispatching',
+      });
+    }
+    transitionStateLightTurnObservation({
+      profileKey, invocationId,
+      phase: testCase.sendCount === 0 ? 'prepared' : 'sent_unharvested',
+      reason: 'verified_1238_fixture',
+      sendCount: testCase.sendCount,
+      ...(testCase.sendCount > 0 ? {
+        sendWitness: 'numeric_send_count' as const, conversationUrl: chatUrl,
+      } : {}),
+    });
+    const result = await __testFinalizeTurn({
+      result: makeTurnResult({
+        invocation_id: invocationId, configured_profile_key: profileKey,
+        send_count: testCase.sendCount,
+      }),
+      page: recoverySuccessorPage ?? page, browser,
+      ...(recoverySuccessorPage ? { originalCreatedPage: page } : {}),
+      publicationState: testCase.publicationState,
+    }, cdp);
+    return { result, pageCloseCalls, successorCloseCalls, browserCloseCalls, foreignTargetOpen };
+  } finally {
+    fetchSpy.mockRestore();
+    if (priorStateDir === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    else process.env.CHATGPT_BROWSER_TURN_STATE_DIR = priorStateDir;
+    rmSync(stateDir, { recursive: true, force: true });
+  }
 }
 
 describe('Issue #2625 protected continuation tab bootstrap', () => {
@@ -174,6 +292,47 @@ describe('Issue #2625 protected continuation tab bootstrap', () => {
 });
 
 describe('Issue #1238 page cleanup equivalence', () => {
+  it.each([
+    { kind: 'no-editor Network issue', options: { absentComposer: true, errorBanner: 'Network issue' }, close: true },
+    { kind: 'no-editor delivery timeout', options: { absentComposer: true, errorBanner: 'Message delivery timed out' }, close: true },
+    { kind: 'empty attach-created about:blank', options: { absentComposer: true, blankPage: true }, close: true },
+    { kind: 'missing editor without an attributable error', options: { absentComposer: true }, close: false },
+    { kind: 'unreadable mounted composer with an error', options: { unreadableComposer: true, errorBanner: 'Network issue' }, close: false },
+  ] as const)('retirement verifies $kind without closing an unknown draft', async ({ options, close }) => {
+    const observed = await observeFinalizer({
+      sendCount: 0, pagePresent: true, pageLost: false, ...options,
+    });
+    expect(observed.pageCloseCalls).toBe(close ? 1 : 0);
+    expect(observed.result.cleanup).toBe(close ? 'confirmed' : 'unconfirmed');
+    expect(observed.result.cleanup_status).toBe(close ? undefined : 'cleanup_unconfirmed');
+  });
+
+  it('does not close the sole owned Page or kill shared Chrome when no keepalive/sibling exists', async () => {
+    const observed = await observeFinalizer({
+      sendCount: 1, pagePresent: true, pageLost: false,
+      publicationState: 'committed_ok', soleSharedChromePage: true,
+    });
+    expect(observed.result.cleanup).toBe('unconfirmed');
+    expect(observed.result.cleanup_status).toBe('cleanup_unconfirmed');
+    expect(observed.pageCloseCalls).toBe(0);
+    expect(observed.browserCloseCalls).toBe(1); // CDP connection release, not a tab close.
+    expect(observed.foreignTargetOpen).toBe(true);
+  });
+
+  it('never closes a recovery successor carrying the original marker and URL as though it were the created target (#2678 R2)', async () => {
+    const observed = await observeFinalizer({
+      sendCount: 1, pagePresent: true, pageLost: false,
+      publicationState: 'committed_ok', recoverySuccessor: true,
+    });
+    // The original is still present in the CDP census. Its exact pinned
+    // reattach may fail, but the unrelated successor must not be destroyed.
+    expect(observed.result.cleanup).toBe('unconfirmed');
+    expect(observed.result.cleanup_status).toBe('cleanup_unconfirmed');
+    expect(observed.pageCloseCalls).toBe(0);
+    expect(observed.successorCloseCalls).toBe(0);
+    expect(observed.foreignTargetOpen).toBe(true);
+  });
+
   it.each(cleanupCases)('$id observes the production finalizer', async (testCase) => {
     const observed = await observeFinalizer(testCase);
     expect(observed.result.cleanup).toBe(testCase.expected === 'close' ? 'confirmed' : 'skipped');
@@ -311,7 +470,7 @@ describe('Issue #1238 publication boundary', () => {
         beforePageClose: () => expect(readFileSync(output, 'utf8')).toBe(reply),
       });
       expect(observed.result.cleanup).toBe('unconfirmed');
-      expect(observed.result.incidents).toContain('owned_tab_cleanup_failed');
+      expect(observed.result.incidents).toContain('owned_tab_cleanup_unconfirmed');
       expect(observed.pageCloseCalls).toBe(1);
       expect(observed.browserCloseCalls).toBe(1);
       expect(observed.foreignTargetOpen).toBe(true);
@@ -381,9 +540,11 @@ describe('Issue #1238 publication boundary', () => {
       });
       const result = JSON.parse(writes.at(-1) ?? '{}') as CompactTurnResult;
       expect(exitCode).toBe(0);
-      expect(result.cleanup).toBe('confirmed');
+      // This injected entrypoint has no CDP-pinned owned target; publication
+      // alone is never permission to close a synthetic Page.
+      expect(result.cleanup).toBe('skipped');
       expect(result.send_count).toBe(1);
-      expect(pageCloseCalls).toBe(1);
+      expect(pageCloseCalls).toBe(0);
       expect(browserCloseCalls).toBe(1);
       expect(readFileSync(output, 'utf8')).toBe(reply);
       expect(readChatBinding(chatUrl)?.worktree).toBe(process.cwd());
@@ -496,8 +657,11 @@ describe('Issue #1238 mechanically derived production graph', () => {
       );
       const classifySink = (kind: string, receiver: string): string => {
         if (kind === 'newContext') return 'forbidden-context-create';
-        if (kind === 'contexts' && (receiver === '(activeBrowser as any)' || /(?:^|\.)browser$|state\.browser$|browser as/.test(receiver))) return 'browser-contexts';
-        if (kind === 'pages' && /^(?:ctx|context|contexts\[0\])$|contexts\[0\] as/.test(receiver)) return 'context-pages';
+        if (kind === 'contexts' && (receiver === '(activeBrowser as any)'
+          || receiver === 'attachedBrowser'
+          || /(?:^|\.)browser$|state\.browser$|browser as/.test(receiver))) return 'browser-contexts';
+        if (kind === 'pages' && (receiver === 'pages[0]'
+          || /^(?:ctx|context|contexts\[0\])$|contexts\[0\] as/.test(receiver))) return 'context-pages';
         if (kind === 'newPage' && /^(?:ctx|context|contexts\[0\])$|contexts\[0\] as/.test(receiver)) return 'context-new-page';
         if (kind === 'close' && /browser as/.test(receiver)) return 'browser-release';
         if (kind === 'close' && receiver === 'input.browser') return 'failed-attempt-browser-release';
@@ -580,7 +744,7 @@ describe('Issue #1238 mechanically derived production graph', () => {
       'close:owned-page-close:(opened.page as { close: () => Promise<void> }):closeOwnedTurnPage',
       'close:owned-page-close:(page as { close: () => Promise<void> }):abandonLatePageHandle',
       'close:owned-page-close:opened.page:runGateBCharacterizationCommand',
-      'close:owned-page-close:outcome.page:finalizeTurn',
+      'close:owned-page-close:outcome.page:guardedOriginalTargetRetirement',
       'close:owned-page-close:page:adoptNewPageWithBudget',
       'close:owned-page-close:secondaryPage:runGateBCharacterization',
       'close:owned-page-close:state.page:cleanupSession',
@@ -589,8 +753,10 @@ describe('Issue #1238 mechanically derived production graph', () => {
       'contexts:browser-contexts:browser:openGateBCharacterizationPage',
       'contexts:browser-contexts:browser:createDedicatedTurnPage',
       'contexts:browser-contexts:browser:openTurnPage',
+      'contexts:browser-contexts:browser:retireExplicitPredecessor',
       'contexts:browser-contexts:browser:onlyAllowedPage',
       'contexts:browser-contexts:browser:selectConversationPage',
+      'contexts:browser-contexts:attachedBrowser:retireDetachedOriginalTarget',
       'contexts:browser-contexts:(browser as { contexts: () => unknown[] }):probeProfileReady',
       'newPage:context-new-page:contexts[0]:createDedicatedTurnPage',
       'newPage:context-new-page:context:runGateBCharacterization',
@@ -603,7 +769,11 @@ describe('Issue #1238 mechanically derived production graph', () => {
       'pages:context-pages:contexts[0]:selectConversationPage',
       'pages:context-pages:contexts[0]:selectConversationPage',
       'pages:context-pages:context:attachPlaywrightContextCdpObservers',
+      'pages:context-pages:pages[0]:retireExplicitPredecessor',
+      'pages:context-pages:pages[0]:retireExplicitPredecessor',
       'pages:context-pages:contexts[0]:recoverCurrentObservation',
+      'pages:context-pages:contexts[0]:retireDetachedOriginalTarget',
+      'pages:context-pages:contexts[0]:retireDetachedOriginalTarget',
       'pages:context-pages:context:runGateBCharacterization',
       'pages:context-pages:ctx:openGateBCharacterizationPage',
       'pages:context-pages:ctx:openTurnPage',
@@ -651,13 +821,15 @@ describe('Issue #1377 explicit abandonment authority', () => {
       expect(result).toMatchObject({
         state,
         cause: `post_send_${state}`,
-        cleanup: 'confirmed',
+        cleanup: 'skipped',
       });
       expect(result.incidents).toContain('owned_generation_stop_not_attempted_authority_absent');
     }
 
     expect(stopClick).toHaveBeenCalledTimes(0);
-    expect(close).toHaveBeenCalledTimes(TURN_STATES.length - 1);
+    // No captured CDP target or current Stop-origin proof exists in this
+    // test seam; only the terminal classification is under test here.
+    expect(close).toHaveBeenCalledTimes(0);
   });
 
   it('does not Stop or close an unproven reachable page through runStateLightTurn', async () => {
@@ -706,8 +878,8 @@ describe('Issue #1377 explicit abandonment authority', () => {
       result: nonOkResult(),
     });
     expect(stopClick).toHaveBeenCalledTimes(0);
-    expect(close).toHaveBeenCalledTimes(1);
-    expect(result.cleanup).toBe('confirmed');
+    expect(close).toHaveBeenCalledTimes(0);
+    expect(result.cleanup).toBe('skipped');
     expect(result.incidents).toContain('owned_generation_stop_not_attempted_authority_absent');
   });
 
@@ -1120,12 +1292,12 @@ describe('Issue #1377 production runStateLightTurn recovery integration', () => 
       state: 'no_reply',
       cause: 'observation_exhausted_no_resend',
       send_count: 1,
-      cleanup: 'confirmed',
+      cleanup: 'skipped',
     });
     expect(outcome.result.incidents).toContain('owned_generation_stop_not_attempted_authority_absent');
     expect(sends).toBe(1);
     expect(owned.stopClick).not.toHaveBeenCalled();
-    expect(owned.close).toHaveBeenCalledTimes(1);
+    expect(owned.close).not.toHaveBeenCalled();
     expect(foreign.stopClick).not.toHaveBeenCalled();
     expect(foreign.close).not.toHaveBeenCalled();
   });
@@ -1166,8 +1338,8 @@ describe('Issue #1377 production runStateLightTurn recovery integration', () => 
       }),
     }));
     expect(outcome.code).not.toBe(0);
-    expect(order).toEqual(['page-close', 'capture', 'disconnect']);
-    expect(outcome.result).toMatchObject({ cleanup: 'confirmed', send_count: 1 });
+    expect(order).toEqual(['capture', 'disconnect']);
+    expect(outcome.result).toMatchObject({ cleanup: 'skipped', send_count: 1 });
   });
 });
 

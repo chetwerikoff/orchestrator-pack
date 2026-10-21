@@ -37,6 +37,7 @@ import {
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import {
   admitStateLightTurnObservation,
+  bindStateLightOwnedTarget,
   observationRecordPath,
   readStateLightTurnObservation,
   transitionStateLightTurnObservation,
@@ -2464,7 +2465,7 @@ test('harvest recovers a sent_unbound observation from exactly one owned marker 
   });
 });
 
-test('harvest promotes dispatching by exact owned marker without synthesizing numeric send_count', async () => {
+test('harvest promotes dispatching by exact owned marker with one proven Send', async () => {
   await withHarvestObservation('dispatching', async ({ profile, cdp, invocationId, marker, output }) => {
     const conversationUrl = 'https://chatgpt.com/c/55555555-5555-4555-8555-555555555555';
     let published = '';
@@ -2491,7 +2492,124 @@ test('harvest promotes dispatching by exact owned marker without synthesizing nu
     assert.equal(record.phase, 'harvested');
     assert.equal(record.conversation_url, conversationUrl);
     assert.equal(record.send_witness, 'owned_marker');
-    assert.equal(record.send_count, undefined);
+    // r06: a unique leading marker on the pinned Page is physical Send proof.
+    assert.equal(record.send_count, 1);
+  });
+});
+
+test('pinned /project Page harvests its own local-chatgpt successor before any UUID URL', async () => {
+  await withHarvestObservation('sent_unbound', async ({ profile, cdp, invocationId, marker, output }) => {
+    const projectRoot = 'https://chatgpt.com/g/g-p-1234567890abcdef0123456789abcdef-project';
+    const localUrl = projectRoot + '/c/local-chatgpt:owned-turn';
+    const targetId = 'pinned-original-local';
+    bindStateLightOwnedTarget({
+      profileKey: configuredProfileKey(profile, cdp), invocationId,
+      targetId, created: true, cdp, initialRoute: projectRoot + '/project',
+    });
+    let published = '';
+    const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      listTargets: async () => [{
+        id: targetId, type: 'page', url: localUrl, title: 'Original pinned Page',
+        webSocketDebuggerUrl: 'ws://example/pinned-original-local',
+      }],
+      sleep: async () => {},
+      evaluate: async (target, expression) => {
+        assert.equal(target.target_id, targetId);
+        assert.equal(expression, HARVEST_EXPRESSION);
+        return evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-pinned-local' }),
+          new FakeNode('assistant', 'LOCAL REPLY', 'LOCAL REPLY', { 'data-message-id': 'a-pinned-local' }),
+        ], false, localUrl);
+      },
+      publish: async (_destination, bytes) => { published = Buffer.from(bytes).toString('utf8'); },
+    }));
+    assert.equal(result.status, 'ok');
+    assert.equal(result.harvested, true);
+    assert.equal(published, 'LOCAL REPLY');
+    const record = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId);
+    assert.equal(record.phase, 'harvested');
+    assert.equal(record.conversation_url, null);
+  });
+});
+
+test('pinned original refuses a marker copied onto a different project route', async () => {
+  await withHarvestObservation('sent_unbound', async ({ profile, cdp, invocationId, marker, output }) => {
+    const projectRoot = 'https://chatgpt.com/g/g-p-1234567890abcdef0123456789abcdef-project';
+    const foreignUrl = 'https://chatgpt.com/g/g-p-fedcba0987654321fedcba0987654321-other/c/local-chatgpt:copied';
+    bindStateLightOwnedTarget({
+      profileKey: configuredProfileKey(profile, cdp), invocationId,
+      targetId: 'pinned-foreign-route', created: true, cdp, initialRoute: projectRoot + '/project',
+    });
+    let publications = 0;
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [{
+          id: 'pinned-foreign-route', type: 'page', url: foreignUrl,
+          webSocketDebuggerUrl: 'ws://example/pinned-foreign-route',
+        }],
+        evaluate: async (_target, expression) => evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`),
+          new FakeNode('assistant', 'FOREIGN', 'FOREIGN'),
+        ], false, foreignUrl),
+        publish: async () => { publications += 1; },
+      })),
+      (error: any) => error.status === 'surface_unknown' && error.reason === 'pinned_original_route_changed',
+    );
+    assert.equal(publications, 0);
+  });
+});
+
+test('durably bound pinned target rejects a copied marker after same-project navigation', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    const projectRoot = 'https://chatgpt.com/g/g-p-1234567890abcdef0123456789abcdef-project';
+    const navigatedUrl = projectRoot + '/c/local-chatgpt:unrelated';
+    bindStateLightOwnedTarget({
+      profileKey: configuredProfileKey(profile, cdp), invocationId,
+      targetId: 'bound-pinned-id', created: true, cdp, initialRoute: projectRoot + '/project',
+    });
+    let publications = 0;
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [{
+          id: 'bound-pinned-id', type: 'page', url: navigatedUrl,
+          webSocketDebuggerUrl: 'ws://example/bound-pinned-id',
+        }],
+        evaluate: async (_target, expression) => evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`),
+          new FakeNode('assistant', 'WRONG CONVERSATION', 'WRONG CONVERSATION'),
+        ], false, navigatedUrl),
+        publish: async () => { publications++; },
+      })),
+      (error: any) => error.status === 'surface_unknown' && error.reason === 'conversation_identity_mismatch',
+    );
+    assert.equal(publications, 0);
+  });
+});
+
+test('a copied marker in a foreign sibling cannot override the bound conversation', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    let evaluations = 0;
+    let publications = 0;
+    const foreignUrl = 'https://chatgpt.com/c/foreign-sibling';
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [{
+          id: 'copied-marker-sibling', type: 'page', url: foreignUrl,
+          webSocketDebuggerUrl: 'ws://example/copied-marker-sibling',
+        }],
+        evaluate: async (_target, expression) => {
+          evaluations += 1;
+          return evaluateExpression(expression, [
+            new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`),
+            new FakeNode('assistant', 'IMPERSONATED', 'IMPERSONATED'),
+          ], false, foreignUrl);
+        },
+        publish: async () => { publications += 1; },
+      })),
+      (error: any) => error.status === 'unavailable' && error.reason === 'page_create_unavailable',
+    );
+    assert.equal(evaluations, 0);
+    assert.equal(publications, 0);
   });
 });
 
@@ -2634,45 +2752,330 @@ test('harvest rejects a bound target that navigates before the snapshot', async 
   });
 });
 
-test('harvest waits for a recovery-opened bound page to expose a stable owned turn', async () => {
+test('harvest safely retires its own created recovery target after a stable original reply', async () => {
   await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
     let fakeNow = 0;
     let evaluateCalls = 0;
     let createCalls = 0;
     let closeCalls = 0;
+    let created = false;
+    let retired = false;
     let published = '';
+    const recoveryUrl = 'https://chatgpt.com/c/test';
+    const target = {
+      id: 'harvest-created', type: 'page', url: recoveryUrl,
+      title: 'Recovery', webSocketDebuggerUrl: 'ws://example/harvest-created',
+    };
     const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
-      listTargets: async () => [],
+      listTargets: async () => [
+        { id: 'foreign-remaining-page', type: 'page', url: 'about:blank' },
+        ...(created && !retired ? [target] : []),
+      ],
       createPage: async () => {
         createCalls += 1;
-        return {
-          id: 'harvest-created',
-          type: 'page',
-          url: 'about:blank',
-          title: 'Loading',
-          webSocketDebuggerUrl: 'ws://example/harvest-created',
-        };
+        created = true;
+        return { ...target, url: 'about:blank' };
       },
-      closePage: async () => { closeCalls += 1; return 'closed'; },
+      closePage: async (_cdp, targetId) => {
+        assert.equal(targetId, target.id);
+        closeCalls += 1;
+        retired = true;
+        return 'closed';
+      },
       now: () => fakeNow,
       sleep: async (delay) => { fakeNow += delay; },
       evaluate: async (_target, expression) => {
-        assert.equal(expression, HARVEST_EXPRESSION);
-        evaluateCalls += 1;
-        if (evaluateCalls === 1) {
-          return evaluateExpression(expression, [], false, 'https://chatgpt.com/');
+        if (expression !== HARVEST_EXPRESSION) {
+          assert.equal(_target.target_id, target.id);
+          return {
+            page_url: recoveryUrl, user_count: 1, user_texts: [`${marker}\n\nprompt`],
+            stop: false, streaming: false, composer_text: '',
+            fetch_failure: false,
+          };
         }
+        evaluateCalls += 1;
+        if (evaluateCalls === 1) return evaluateExpression(expression, [], false, 'https://chatgpt.com/');
         return evaluateExpression(expression, [
           new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-created' }),
           new FakeNode('assistant', 'FINAL', 'FINAL', { 'data-message-id': 'a-created' }),
-        ], false, 'https://chatgpt.com/c/test');
+        ], false, recoveryUrl);
       },
       publish: async (_destination, bytes) => { published = Buffer.from(bytes).toString('utf8'); },
     }));
     assert.equal(result.status, 'ok');
     assert.equal(result.harvested, true);
+    assert.equal(result.cleanup_status, 'confirmed');
+    assert.equal(result.cleanup_target_id, target.id);
     assert.equal(published, 'FINAL');
-    assert.deepEqual({ createCalls, evaluateCalls, closeCalls }, { createCalls: 1, evaluateCalls: 4, closeCalls: 0 });
+    assert.deepEqual({ createCalls, evaluateCalls, closeCalls }, { createCalls: 1, evaluateCalls: 4, closeCalls: 1 });
+    assert.equal(retired, true);
+  });
+});
+
+test('harvest retires an exact newly created empty about:blank after failed navigation', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, output }) => {
+    const target = {
+      id: 'created-blank-failure', type: 'page', url: 'about:blank',
+      title: 'Navigation failed', webSocketDebuggerUrl: 'ws://example/created-blank-failure',
+    };
+    let created = false;
+    let closed = false;
+    let closeCalls = 0;
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [
+          { id: 'foreign-remaining-page', type: 'page', url: 'about:blank' },
+          ...(created && !closed ? [target] : []),
+        ],
+        createPage: async () => {
+          created = true;
+          return target;
+        },
+        closePage: async (_cdp, id) => {
+          assert.equal(id, target.id);
+          closeCalls += 1;
+          closed = true;
+          return 'closed';
+        },
+        evaluate: async (_target, expression) => {
+          if (expression === HARVEST_EXPRESSION) throw new Error('readiness_dom_failed');
+          return {
+            page_url: 'about:blank', user_count: 0, user_texts: [],
+            stop: false, streaming: false, composer_text: null,
+            empty_body: true, fetch_failure: false,
+          };
+        },
+      })),
+      (error: any) => error.status === 'unavailable' && error.reason === 'target_read_unavailable',
+    );
+    assert.equal(created, true);
+    assert.equal(closeCalls, 1);
+    assert.equal(closed, true);
+  });
+});
+
+test('harvest retires its exact created no-editor error Page after failed readiness', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, output }) => {
+    const recoveryUrl = 'https://chatgpt.com/c/test';
+    const target = {
+      id: 'created-no-editor-error', type: 'page', url: recoveryUrl,
+      webSocketDebuggerUrl: 'ws://example/created-no-editor-error',
+    };
+    let created = false;
+    let closed = false;
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [
+          { id: 'foreign-remaining-page', type: 'page', url: 'about:blank' },
+          ...(created && !closed ? [target] : []),
+        ],
+        createPage: async () => {
+          created = true;
+          return { ...target, url: 'about:blank' };
+        },
+        closePage: async (_cdp, id) => {
+          assert.equal(id, target.id);
+          closed = true;
+          return 'closed';
+        },
+        evaluate: async (_target, expression) => {
+          if (expression === HARVEST_EXPRESSION) throw new Error('readiness_dom_failed');
+          return {
+            page_url: recoveryUrl, user_count: 0, user_texts: [],
+            stop: false, streaming: false, composer_text: null,
+            empty_body: false, fetch_failure: true,
+          };
+        },
+      })),
+      (error: any) => error.status === 'unavailable' && error.reason === 'target_read_unavailable',
+    );
+    assert.equal(created, true);
+    assert.equal(closed, true);
+  });
+});
+
+test('harvest leaves a newly created recovery target with active unproven Stop generation', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    const target = {
+      id: 'created-stop-active', type: 'page', url: 'https://chatgpt.com/c/test',
+      title: 'Stop active', webSocketDebuggerUrl: 'ws://example/created-stop-active',
+    };
+    let created = false;
+    let closeCalls = 0;
+    const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      listTargets: async () => created ? [target] : [],
+      createPage: async () => {
+        created = true;
+        return { ...target, url: 'about:blank' };
+      },
+      closePage: async () => { closeCalls += 1; return 'closed'; },
+      evaluate: async (_target, expression) => expression === HARVEST_EXPRESSION
+        ? evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-created-stop' }),
+          new FakeNode('assistant', 'FINAL', 'FINAL', { 'data-message-id': 'a-created-stop' }),
+        ], false, target.url)
+        : { page_url: target.url, user_count: 1,
+          user_texts: [`${marker}\n\nprompt`], stop: true,
+          streaming: true, composer_text: '', fetch_failure: false },
+      publish: async () => undefined,
+    }));
+    assert.equal(result.status, 'ok');
+    assert.equal(result.harvested, true);
+    assert.equal(result.cleanup_status, 'cleanup_unconfirmed');
+    assert.equal(result.cleanup_target_id, target.id);
+    assert.equal(closeCalls, 0);
+  });
+});
+
+test.each(['foreign unsent draft', 'unreadable draft'] as const)(
+  'harvest does not close a marker-owned recovery target with %s', async (draftKind) => {
+    await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+      const target = {
+        id: 'probe-foreign-draft', type: 'page', url: 'https://chatgpt.com/c/test',
+        title: 'Shared original marker', webSocketDebuggerUrl: 'ws://example/probe-foreign-draft',
+      };
+      let created = false;
+      let closeCalls = 0;
+      const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => created ? [target] : [],
+        createPage: async () => {
+          created = true;
+          return { ...target, url: 'about:blank' };
+        },
+        closePage: async () => { closeCalls += 1; return 'closed'; },
+        evaluate: async (_target, expression) => expression === HARVEST_EXPRESSION
+          ? evaluateExpression(expression, [
+            new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`,
+              { 'data-message-id': 'u-foreign-draft' }),
+            new FakeNode('assistant', 'ORIGINAL FINAL', 'ORIGINAL FINAL',
+              { 'data-message-id': 'a-foreign-draft' }),
+          ], false, target.url)
+          : {
+            page_url: target.url, user_count: 1, user_texts: [`${marker}\n\nprompt`],
+            stop: false, streaming: false,
+            composer_text: draftKind === 'foreign unsent draft' ? 'FOREIGN TYPED DRAFT' : null,
+            fetch_failure: false,
+          },
+        publish: async () => undefined,
+      }));
+      assert.equal(result.status, 'ok');
+      assert.equal(result.harvested, true);
+      assert.equal(result.cleanup_status, 'cleanup_unconfirmed');
+      assert.equal(result.cleanup_target_id, target.id);
+      assert.equal(created, true);
+      assert.equal(closeCalls, 0);
+    });
+  },
+);
+
+test.each(['https://chatgpt.com/c/foreign', 'https://example.invalid/c/foreign'])(
+  'harvest refuses to close duplicate CDP ID with a %s route', async (duplicateUrl) => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    const target = {
+      id: 'ambiguous-current-cdp-id', type: 'page', url: 'https://chatgpt.com/c/test',
+      title: 'Original', webSocketDebuggerUrl: 'ws://example/ambiguous-current-cdp-id',
+    };
+    let created = false;
+    let closeCalls = 0;
+    const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      listTargets: async () => created
+        ? [target, { ...target, url: duplicateUrl, title: 'Duplicate target identity' }]
+        : [],
+      createPage: async () => {
+        created = true;
+        return { ...target, url: 'about:blank' };
+      },
+      closePage: async () => { closeCalls += 1; return 'closed'; },
+      evaluate: async (_target, expression) => expression === HARVEST_EXPRESSION
+        ? evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`,
+            { 'data-message-id': 'u-duplicate-cdp-id' }),
+          new FakeNode('assistant', 'ORIGINAL FINAL', 'ORIGINAL FINAL',
+            { 'data-message-id': 'a-duplicate-cdp-id' }),
+        ], false, target.url)
+        : {
+          page_url: target.url, user_count: 1, user_texts: [`${marker}\n\nprompt`],
+          stop: false, streaming: false, composer_text: '', fetch_failure: false,
+        },
+      publish: async () => undefined,
+    }));
+    assert.equal(result.status, 'ok');
+    assert.equal(result.harvested, true);
+    assert.equal(result.cleanup_status, 'cleanup_unconfirmed');
+    assert.equal(result.cleanup_target_id, target.id);
+    assert.equal(created, true);
+    assert.equal(closeCalls, 0);
+  });
+},
+);
+
+test('harvest refuses to retire a Page from an ambiguous create result array', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, output }) => {
+    const target = {
+      id: 'new-array-result', type: 'page', url: 'https://chatgpt.com/c/test',
+      title: 'Incomplete create', webSocketDebuggerUrl: 'ws://example/new-array-result',
+    };
+    let created = false;
+    let retired = false;
+    let closeCalls = 0;
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => created && !retired ? [target] : [],
+        createPage: async () => {
+          created = true;
+          return [{ ...target, url: 'about:blank' }];
+        },
+        closePage: async (_cdp, id) => {
+          assert.equal(id, target.id);
+          closeCalls += 1;
+          retired = true;
+          return 'closed';
+        },
+        evaluate: async (_target, expression) => {
+          assert.notEqual(expression, HARVEST_EXPRESSION);
+          return {
+            page_url: target.url, user_count: 0, user_texts: [], stop: false,
+            streaming: false, composer_text: '', fetch_failure: true,
+          };
+        },
+      })),
+      (error: any) => error.status === 'unavailable' && error.reason === 'create_result_ambiguous',
+    );
+    assert.equal(created, true);
+    // An array result supplies no positive single-target creation identity.
+    // A later target census cannot grant destructive ownership retroactively.
+    assert.equal(closeCalls, 0);
+    assert.equal(retired, false);
+  });
+});
+
+test('harvest keeps a bounded sibling census and never allocates a replacement on timeout', async () => {
+  await withHarvestObservation('sent_unbound', async ({ profile, cdp, invocationId, output }) => {
+    let now = 0;
+    let reads = 0;
+    let creates = 0;
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => ['sibling-a', 'sibling-b', 'sibling-c'].map((id) => ({
+          id, type: 'page', url: 'https://chatgpt.com/c/' + id,
+          title: id, webSocketDebuggerUrl: 'ws://example/' + id,
+        })),
+        now: () => now,
+        evaluate: async () => {
+          reads += 1;
+          now += 6_000;
+          throw new Error('injected_census_unreadable');
+        },
+        createPage: async () => {
+          creates += 1;
+          throw new Error('must_not_allocate_after_census_deadline');
+        },
+      })),
+      (error: any) => error.status === 'surface_unknown'
+        && error.reason === 'harvest_sibling_census_timeout',
+    );
+    assert.equal(reads, 3);
+    assert.equal(creates, 0);
   });
 });
 

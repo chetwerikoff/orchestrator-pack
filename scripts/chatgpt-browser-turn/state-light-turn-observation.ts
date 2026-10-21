@@ -44,7 +44,16 @@ export interface StateLightTurnObservationRecord {
   readonly phase: StateLightTurnObservationPhase;
   readonly send_count?: number;
   readonly send_witness: StateLightTurnSendWitness;
+  /** Set only from a complete unique first-token marker on the original Page. */
+  readonly owned_marker_confirmed?: true;
   readonly conversation_url: string | null;
+  /** CDP-pinned original target, captured at allocation, never a URL-derived claim. */
+  readonly owned_target?: {
+    readonly id: string;
+    readonly created: boolean;
+    readonly cdp_sha256: string;
+    readonly initial_route: string;
+  };
   readonly primary?: StateLightTurnPrimaryBinding;
   readonly transitioned_at: string;
   readonly transition_reason: string;
@@ -132,6 +141,7 @@ function parseRecord(raw: string): StateLightTurnObservationRecord {
     || value.marker.length === 0
     || !(value.phase in LEGAL_NEXT)
     || !['none', 'numeric_send_count', 'owned_marker'].includes(value.send_witness)
+    || (value.owned_marker_confirmed !== undefined && value.owned_marker_confirmed !== true)
     || (value.conversation_url !== null && (typeof value.conversation_url !== 'string' || value.conversation_url.length === 0))
     || typeof value.transitioned_at !== 'string'
     || typeof value.transition_reason !== 'string') {
@@ -142,6 +152,15 @@ function parseRecord(raw: string): StateLightTurnObservationRecord {
   }
   if (value.send_witness === 'numeric_send_count' && value.send_count === undefined) {
     throw new Error('observation_numeric_witness_without_count');
+  }
+  if (value.owned_target) {
+    const target = value.owned_target;
+    if (typeof target.id !== 'string' || !/^[A-Za-z0-9._:-]{1,256}$/u.test(target.id)
+      || typeof target.created !== 'boolean'
+      || typeof target.cdp_sha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(target.cdp_sha256)
+      || typeof target.initial_route !== 'string' || !/^https:\/\/(?:chatgpt\.com|chat\.openai\.com)\//u.test(target.initial_route)) {
+      throw new Error('observation_owned_target_invalid');
+    }
   }
   if (value.primary) {
     if (typeof value.primary.target !== 'string'
@@ -361,11 +380,17 @@ function validateTransition(
     throw new Error('observation_immutable_identity_changed');
   }
   if (!LEGAL_NEXT[current.phase].has(next.phase)) throw new Error('observation_phase_transition_invalid');
+  if (current.owned_target && JSON.stringify(current.owned_target) !== JSON.stringify(next.owned_target)) {
+    throw new Error('observation_owned_target_rebind');
+  }
   if (current.primary && !sameBinding(current.primary, next.primary)) {
     throw new Error('observation_primary_binding_conflict');
   }
   if (current.conversation_url && next.conversation_url !== current.conversation_url) {
     throw new Error('observation_conversation_rebind');
+  }
+  if (current.owned_marker_confirmed && next.owned_marker_confirmed !== true) {
+    throw new Error('observation_owned_marker_regression');
   }
   if (current.send_count !== undefined && next.send_count !== current.send_count) {
     throw new Error('observation_send_count_changed');
@@ -418,6 +443,7 @@ export function transitionStateLightTurnObservation(input: {
   readonly reason: string;
   readonly sendCount?: number;
   readonly sendWitness?: StateLightTurnSendWitness;
+  readonly ownedMarkerConfirmed?: true;
   readonly conversationUrl?: string | null;
 }): StateLightTurnObservationRecord {
   return mutateStateLightTurnObservation(input.profileKey, input.invocationId, (current) => ({
@@ -425,10 +451,39 @@ export function transitionStateLightTurnObservation(input: {
     phase: input.phase,
     ...(input.sendCount !== undefined ? { send_count: input.sendCount } : {}),
     ...(input.sendWitness !== undefined ? { send_witness: input.sendWitness } : {}),
+    ...(input.ownedMarkerConfirmed ? { owned_marker_confirmed: true as const } : {}),
     ...(input.conversationUrl !== undefined ? { conversation_url: input.conversationUrl } : {}),
     transitioned_at: new Date().toISOString(),
     transition_reason: input.reason,
   }));
+}
+
+/** Capture the original exact new/selected target before any Send; no later takeover. */
+export function bindStateLightOwnedTarget(input: {
+  readonly profileKey: string;
+  readonly invocationId: string;
+  readonly targetId: string;
+  readonly created: boolean;
+  readonly cdp: string;
+  readonly initialRoute: string;
+}): StateLightTurnObservationRecord {
+  const witness = {
+    id: input.targetId,
+    created: input.created,
+    cdp_sha256: createHash('sha256').update(input.cdp, 'utf8').digest('hex'),
+    initial_route: input.initialRoute,
+  };
+  return mutateStateLightTurnObservation(input.profileKey, input.invocationId, (current) => {
+    if (current.owned_target && JSON.stringify(current.owned_target) !== JSON.stringify(witness)) {
+      throw new Error('observation_owned_target_conflict');
+    }
+    return {
+      ...current,
+      owned_target: current.owned_target ?? witness,
+      transitioned_at: new Date().toISOString(),
+      transition_reason: 'own_target_pinned_before_send',
+    };
+  });
 }
 
 export function bindPrimaryPublication(input: {
@@ -495,6 +550,33 @@ function inspectExistingPrimary(target: string): {
       try { closeSync(fd); } catch { /* best effort */ }
     }
   }
+}
+
+/**
+ * The independent Page probe can publish this invocation's primary before the
+ * driver finishes its DOM poll. A phase or path alone is never sufficient:
+ * verify the exact identity/binding AND committed ordinary-file bytes.
+ */
+export function readVerifiedStateLightHarvestedPrimary(input: {
+  readonly profileKey: string;
+  readonly invocationId: string;
+  readonly marker: string;
+  readonly target: string;
+}): { readonly byteLength: number; readonly sha256: string; readonly sendWitness: StateLightTurnSendWitness } | null {
+  const record = readStateLightTurnObservation(input.profileKey, input.invocationId);
+  if (record.phase !== 'harvested'
+    || record.marker !== input.marker
+    || record.invocation_id !== input.invocationId
+    || record.profile_key !== input.profileKey
+    || !record.primary || record.primary.target !== resolve(input.target)
+    || (record.send_count !== undefined && record.send_count !== 1)
+    || record.send_witness === 'none') return null;
+  const actual = inspectExistingPrimary(record.primary.target);
+  return actual.state === 'mismatch'
+    && actual.byte_length === record.primary.byte_length
+    && actual.sha256 === record.primary.sha256
+    ? { byteLength: record.primary.byte_length, sha256: record.primary.sha256, sendWitness: record.send_witness }
+    : null;
 }
 
 export async function finalizeStateLightPrimaryPublication(input: {

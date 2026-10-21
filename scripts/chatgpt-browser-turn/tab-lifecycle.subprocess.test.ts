@@ -145,16 +145,20 @@ describe('Issue #2494 executable state-light turn terminal/exit', () => {
     ['hung-close-turn', 'ok', 0],
     ['hung-close-turn', 'no_reply', 11],
     ['reject-close-turn', 'driver_error', 13],
-  ] as const)('bounds an owned %s page-close failure for %s and still exits truthfully', (mode, state, code) => {
+  ] as const)('never calls %s page-close for %s without created-target CDP evidence', (mode, state, code) => {
     const child = spawnStateLightEntryFixture(mode, state);
     expect(child.exitCode, child.stderr).toBe(code);
     expect(child.stdout.endsWith('\n')).toBe(true);
     const records = child.stdout.trimEnd().split('\n');
     expect(records).toHaveLength(1);
-    expect(JSON.parse(records[0]!)).toMatchObject({
-      schema: 'turn-result/v1', state, send_count: 1, cleanup: 'unconfirmed',
-      incidents: expect.arrayContaining(['owned_tab_cleanup_failed']),
+    const result = JSON.parse(records[0]!);
+    expect(result).toMatchObject({
+      schema: 'turn-result/v1', state, send_count: 1, cleanup: 'skipped',
     });
+    // This subprocess fixture deliberately has neither a pinned created
+    // target nor a CDP census. A hung synthetic Page.close is not proof of
+    // current ownership and must never be attempted.
+    expect(result.incidents ?? []).not.toContain('owned_tab_cleanup_failed');
   }, 15_000);
 
   it.each([
