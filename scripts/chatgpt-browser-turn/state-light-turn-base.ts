@@ -7517,7 +7517,7 @@ async function guardedOriginalTargetRetirement(input: {
   const budget = (): number => Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, deadline - Date.now()));
   const routeMatches = (url: string): boolean => {
     const original = pin.initial_route;
-    if (observation.conversation_url && ownedConversationIdentityMatches(url, observation.conversation_url)
+    if (observation.conversation_url && normalizeConversationUrl(url) === normalizeConversationUrl(observation.conversation_url)
       && isSupportedChatGptConversationUrl(url)) return true;
     if (isBlankProjectSurfaceUrl(url, original)
       || matchingFreshProjectLocalUrl(url, original)) return true;
@@ -7591,7 +7591,7 @@ async function guardedOriginalTargetRetirement(input: {
   }
 }
 
-async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult> {
+async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactTurnResult> {
   let cleanup: ResourceCleanupOutcome = 'skipped';
   let journalWriteFailed = outcome.result.journal_write_failed === true;
   let retirementCleanupRequired = outcome.result.retirement_cleanup_required === true;
@@ -7673,26 +7673,13 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     && outcome.result.send_count === 0 && outcome.result.send_attempted !== true
     && ownedPreSendFetch429ExactRoute(outcome.page, outcome.ownedPreSendFetch429Url!),
   );
-  // Only the invocation-owned, reachable Page can be closed. A cleanupAction
-  // of preserve (including an ambiguous Send) is not negative ownership proof;
-  // forfeiture and pre-existing/recovered pages independently prohibit close.
-  let pageAction: PageCleanupAction = cleanupAuthorityProven && !pageLost && outcome.ownershipForfeited !== true
-    ? 'close'
-    : 'skip';
-  // An ambiguous attempted Send with zero count is still possibly delivered.
-  // Never close its Page merely because the invocation originally created it.
-  if (pageAction === 'close' && outcome.result.send_attempted === true
-    && outcome.result.send_count === 0) pageAction = 'preserve';
-  // Only the exact flagged still-owned fresh/local terminal escapes #2510
-  // positive-owned Page close. The public cleanupAction alone grants nothing.
-  if (pageAction === 'close' && outcome.retainOwnedFreshLocalPage
-    && outcome.ownedFreshProjectUrl && outcome.result.send_count >= 1
-    && !outcome.result.conversation_id) {
-    // The already-verified local terminal grants retention for this exact
-    // positively owned Page. Route promotion or an unreadable URL after that
-    // terminal cannot revoke retention and authorize a destructive close.
-    pageAction = 'preserve';
-  }
+  // A created Page is eligible for a fresh safety assessment even after a
+  // possible Send or an unbound local terminal. Neither Send count nor a
+  // cleanupAction flag grants destructive authority on its own.
+  const pinnedOriginal = getOwnTargetInfo(outcome.browser);
+  const positivelyCreatedOriginal = Boolean(pinnedOriginal?.created);
+  let pageAction: PageCleanupAction = cleanupAuthorityProven && !pageLost
+    && outcome.ownershipForfeited !== true && positivelyCreatedOriginal ? 'close' : 'skip';
   if (pageAction === 'close' && outcome.result.send_count === 0
     && outcome.result.send_attempted !== true && outcome.ownedFreshProjectUrl) {
     // The slot was already owner-released. For this proven-created tab, check
@@ -7764,19 +7751,19 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     pageAction = 'preserve';
   }
   if (pageAction === 'close') {
-    cleanup = await boundedResourceCleanup(
-      () => outcome.page.close(),
-      RESOURCE_CLEANUP_BOUND_MS,
-    );
-    if (cleanup !== 'confirmed') {
-      incidents.push('owned_tab_cleanup_failed');
-      const cleanupIncident: BrowserIncident = {
-        eventClass: 'owned_tab_cleanup_failed',
-        symptom: 'owned_tab_close_unconfirmed',
-        action: 'leave_sibling_tabs_untouched',
-      };
-      if (!appendIncident(cleanupIncident, outcome.result.invocation_id)) journalWriteFailed = true;
-    }
+    cleanup = await guardedOriginalTargetRetirement({ outcome, cdp });
+  }
+  if (positivelyCreatedOriginal && cleanup !== 'confirmed') {
+    // Never report a close from an old marker, an old Page reference or a
+    // settled Playwright close promise without physical ID disappearance.
+    if (cleanup === 'skipped') cleanup = 'unconfirmed';
+    incidents.push('owned_tab_cleanup_unconfirmed');
+    const cleanupIncident: BrowserIncident = {
+      eventClass: 'owned_tab_cleanup_unconfirmed',
+      symptom: 'exact_original_target_close_unconfirmed_or_refused',
+      action: 'manual_exact_target_reconciliation_no_stop_no_resend',
+    };
+    if (!appendIncident(cleanupIncident, outcome.result.invocation_id)) journalWriteFailed = true;
   }
 
   // Cleanup requires a positive owned claim/locator, never a zero-match census.
@@ -7832,9 +7819,25 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
       outcome.result.invocation_id,
     );
   }
+  const observedTarget = (() => {
+    try {
+      return readStateLightTurnObservation(
+        outcome.result.configured_profile_key, outcome.result.invocation_id,
+      );
+    } catch { return undefined; }
+  })();
+  const cooldown = readStateLightAccountCooldown(outcome.result.configured_profile_key);
   await releaseCdpBrowser(outcome.browser);
   return {
     ...outcome.result,
+    ...(observedTarget?.owned_target
+      ? { owned_target_id: observedTarget.owned_target.id,
+        owned_target_created: observedTarget.owned_target.created,
+        owned_prompt_marker: observedTarget.marker }
+      : {}),
+    ...(cooldown.active && cooldown.until !== undefined ? { cooldown_until_ms: cooldown.until } : {}),
+    ...(positivelyCreatedOriginal && cleanup !== 'confirmed'
+      ? { cleanup_status: 'cleanup_unconfirmed' as const } : {}),
     cleanup,
     incidents,
     ...(retirementCleanupRequired ? { retirement_cleanup_required: true } : {}),
@@ -7976,7 +7979,7 @@ export async function runStateLightTurn(
         ownedDeadLocalConversationUrl: freshCleanup.ownedDeadLocalConversationUrl,
         ownedDeadLocalTimeoutMs: freshCleanup.ownedDeadLocalTimeoutMs,
       } : {}),
-    }));
+    }), stringOption(args, 'cdp') ?? '');
     // Keep liveness continuous through every pre-emission cleanup await, then
     // stop the scheduler at the terminal publication boundary so no heartbeat
     // can follow turn-result/v1 or keep the subprocess alive.
