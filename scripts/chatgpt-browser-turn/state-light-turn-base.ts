@@ -3969,6 +3969,21 @@ async function runTurnCore(
     const selection = await selectConversationPage(browser, chromium, config, invocationBudget, invocationDeadlineMs);
     browser = selection.browser;
     page = selection.page;
+    const pinOriginalTargetBeforeNavigation = (): void => {
+      const info = getOwnTargetInfo(browser);
+      if (page && info) {
+        bindStateLightOwnedTarget({
+          profileKey, invocationId,
+          targetId: info.targetId,
+          created: info.created,
+          cdp: config.cdp,
+          initialRoute: config.newChat
+            ? projectConversationPrefix(config.projectUrl ?? '')
+            : normalizeConversationUrl(config.chatUrl ?? ''),
+        });
+      }
+    };
+    pinOriginalTargetBeforeNavigation();
     // Created is attachOwnTarget's affirmative target provenance, not a URL
     // match or a cleanupAction hint. Capture only the original existing-chat Page.
     if (!config.newChat && config.chatUrl && page
@@ -3985,6 +4000,7 @@ async function runTurnCore(
     if (!page || getOwnTargetInfo(browser)?.created) {
       if (!page) {
         page = await createDedicatedTurnPage(browser, invocationBudget);
+        pinOriginalTargetBeforeNavigation();
         // Explicit newPage resolution also proves creation, even when the
         // original attach target did not carry a created Page.
         if (!config.newChat && config.chatUrl && !cleanupAuthorityUnprovenPages.has(page)) {
@@ -4011,19 +4027,6 @@ async function runTurnCore(
         }
         await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs, () => { beforeBrowserAction(); held429Witness?.beforeNavigation(); });
       }
-    }
-
-    const originalTarget = getOwnTargetInfo(browser);
-    if (page && originalTarget) {
-      bindStateLightOwnedTarget({
-        profileKey, invocationId,
-        targetId: originalTarget.targetId,
-        created: originalTarget.created,
-        cdp: config.cdp,
-        initialRoute: config.newChat
-          ? projectConversationPrefix(config.projectUrl ?? '')
-          : normalizeConversationUrl(config.chatUrl ?? ''),
-      });
     }
 
     let baselineCount = 0;
