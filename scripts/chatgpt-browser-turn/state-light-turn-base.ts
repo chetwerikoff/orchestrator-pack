@@ -540,6 +540,8 @@ interface FreshComposerCleanupContext {
   markedPayload?: string;
   projectUrl?: string;
   sendAttempted?: boolean;
+  predecessorCleanupStatus?: 'confirmed' | 'cleanup_unconfirmed';
+  predecessorTargetId?: string;
   /** The original, provably created local-ID failure Page, never the recovered Page. */
   ownedDeadLocalPage?: any;
   ownedDeadLocalUrl?: string;
@@ -7523,13 +7525,94 @@ async function runTurnCore(
  * belong to an independent generation; no available current-generation witness
  * makes that active surface closable.
  */
+/**
+ * Optional exact predecessor handoff: the only accepted locator is the
+ * caller-supplied indexed invocation+attempt in the SAME run/task. No
+ * profile-wide sweep, URL selection, newPage, Send, Stop, Retry or harvest.
+ * The driver alone attaches and performs the current destructive-boundary read.
+ */
+async function retireExplicitPredecessor(input: {
+  readonly previousInvocationId: string;
+  readonly previousAttemptIdentity: string;
+  readonly runIdentity: string;
+  readonly ownerTaskId: string;
+  readonly profileKey: string;
+  readonly cdp: string;
+  readonly deadlineMs: number;
+}): Promise<{ status: 'confirmed' | 'cleanup_unconfirmed'; targetId?: string }> {
+  let original: ReturnType<typeof readStateLightTurnObservation>;
+  let originalId: string | undefined;
+  try {
+    const { readInvocationReceiptLocator, readTerminalEnvelope } =
+      await import('../flow-manager-long-running-child.ts');
+    const bound = readInvocationReceiptLocator({
+      invocationId: input.previousInvocationId,
+      runIdentity: input.runIdentity,
+      attemptIdentity: input.previousAttemptIdentity,
+      ownerTaskId: input.ownerTaskId,
+    });
+    const terminal = readTerminalEnvelope(bound.locator.terminal_envelope_path, {
+      runIdentity: input.runIdentity, attemptIdentity: input.previousAttemptIdentity,
+    });
+    if (!terminal || terminal.observed_invocation_id !== input.previousInvocationId
+      || terminal.handoff_receipt_path !== bound.locator.handoff_receipt_path
+      || bound.receipt.owner_task_id !== input.ownerTaskId) return { status: 'cleanup_unconfirmed' };
+    original = readStateLightTurnObservation(input.profileKey, input.previousInvocationId);
+    originalId = original.owned_target?.id;
+    if (!original.owned_target?.created
+      || original.owned_target.cdp_sha256 !== createHash('sha256').update(input.cdp, 'utf8').digest('hex')) {
+      return { status: 'cleanup_unconfirmed', ...(originalId ? { targetId: originalId } : {}) };
+    }
+  } catch {
+    return { status: 'cleanup_unconfirmed', ...(originalId ? { targetId: originalId } : {}) };
+  }
+  const targetId = original.owned_target.id;
+  let browser: any;
+  try {
+    // This census cannot create, navigate to or select a sibling target.
+    const census = await listCdpPageTargets(input.cdp, Math.min(
+      MAX_LOCAL_READ_WAIT_MS, Math.max(1, input.deadlineMs - Date.now()),
+    ));
+    const matches = census.filter((target) => target.id === targetId);
+    if (matches.length === 0) return { status: 'confirmed', targetId };
+    if (matches.length !== 1 || Date.now() >= input.deadlineMs) return { status: 'cleanup_unconfirmed', targetId };
+    const attached = await attachOwnTarget(loadChromium(), {
+      mode: 'own-target', cdp: input.cdp, newChat: false,
+      pinnedTargetId: targetId, deadlineMs: input.deadlineMs,
+      cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
+    });
+    browser = attached.browser;
+    const pages = browser.contexts();
+    const page = pages.length === 1 && pages[0]?.pages().length === 1
+      ? pages[0].pages()[0] : undefined;
+    if (!page || getOwnTargetInfo(browser)?.targetId !== targetId) {
+      return { status: 'cleanup_unconfirmed', targetId };
+    }
+    const result = compactResult(
+      'observation_uncertain', 'invocation', 'predecessor_cleanup_only',
+      input.previousInvocationId, input.profileKey, original.send_count ?? 0, 0,
+      new StateLightNavigationCounter(), [],
+    );
+    const closed = await guardedOriginalTargetRetirement({
+      outcome: { page, browser, result }, cdp: input.cdp, verifiedPredecessor: true,
+    });
+    return { status: closed === 'confirmed' ? 'confirmed' : 'cleanup_unconfirmed', targetId };
+  } catch {
+    return { status: 'cleanup_unconfirmed', targetId };
+  } finally {
+    if (browser) await releaseCdpBrowser(browser, RESOURCE_CLEANUP_BOUND_MS);
+  }
+}
+
 async function guardedOriginalTargetRetirement(input: {
   readonly outcome: TurnRunOutcome;
   readonly cdp: string;
+  readonly verifiedPredecessor?: true;
 }): Promise<'confirmed' | 'unconfirmed'> {
   const { outcome, cdp } = input;
   const targetInfo = getOwnTargetInfo(outcome.browser);
-  if (!targetInfo?.created || !targetInfo.targetId || !outcome.page
+  if (!targetInfo?.targetId || !outcome.page
+    || (!targetInfo.created && input.verifiedPredecessor !== true)
     || !cdp || outcome.ownershipForfeited || cleanupAuthorityUnprovenPages.has(outcome.page)) {
     return 'unconfirmed';
   }
@@ -7583,6 +7666,13 @@ async function guardedOriginalTargetRetirement(input: {
         'terminal_ownership_user_read_timeout',
       );
       if (users.incomplete) return false;
+      const composer = await readLosslessOwnedComposer(
+        outcome.page.locator(COMPOSER_SELECTOR), Date.now() + budget(),
+      );
+      // An unsubmitted foreign draft is not a user-message DOM node. Never
+      // silently destroy it just because the old marker is still the last user.
+      if (composer === undefined || (composer !== ''
+        && composer !== outcome.ownedTypedPayload)) return false;
       const cardinality = recoveryMarkerCardinality(users.messages, observation.marker);
       if (cardinality.matchingUserCarrierCount === 1 && cardinality.exactMarkerTokenCount === 1
         && users.messages.length > 0
@@ -7592,9 +7682,6 @@ async function guardedOriginalTargetRetirement(input: {
       if (users.messages.length !== 0 || cardinality.exactMarkerTokenCount !== 0) return false;
       // An unrendered local/error Page may be retired only when its composer
       // is provably empty or exactly the original still-typed payload.
-      const composer = await readLosslessOwnedComposer(
-        outcome.page.locator(COMPOSER_SELECTOR), Date.now() + budget(),
-      );
       if (composer === '') return currentUrl() !== null;
       return Boolean(outcome.ownedTypedPayload && composer === outcome.ownedTypedPayload
         && ownedPromptMatches(composer, observation.marker) && currentUrl() !== null);
