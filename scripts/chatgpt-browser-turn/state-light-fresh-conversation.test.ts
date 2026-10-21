@@ -79,6 +79,12 @@ vi.mock('./own-target-attach.ts', async (importOriginal) => {
   };
 });
 
+
+vi.mock('./own-target-cdp-proxy.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./own-target-cdp-proxy.ts')>();
+  return { ...actual, probeCdpSiblingEvaluations: vi.fn(actual.probeCdpSiblingEvaluations) };
+});
+
 vi.mock('./browser-session.ts', () => {
   const session = createBrowserSessionModuleMock(mocks);
   return Object.assign(session, {
@@ -138,6 +144,7 @@ import { admitStateLightTurnObservation, finalizeStateLightPrimaryPublication, r
 import { deriveDelivery } from '../flow-manager-long-running-child.ts';
 import { __testBrowserOrPageDefinitelyLost, __testComposerMutation, __testSendDelivery, deriveComposerInsertionBudgetMs, POST_SEND_OBSERVATION_POLL_MS, probePageLiveness } from './state-light-turn-base.ts';
 import { attachOwnTarget, __testAttachOwnTargetFixture } from './own-target-attach.ts';
+import { probeCdpSiblingEvaluations } from './own-target-cdp-proxy.ts';
 import { currentOwnedPromptMarker, wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
   EXPLICIT_CANCELLATION_AUTHORITY,
@@ -834,6 +841,120 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(mocks.nowMs).toBeGreaterThanOrEqual(startedAt + 40_000);
     expect(turn.getSends()).toBe(1);
     expect(turn.page.bringToFront).not.toHaveBeenCalled();
+  });
+
+
+  describe('Issue #2682 bounded frozen-sibling Send extension', () => {
+    const sibling = { id: 'qualified-sibling', url: 'https://chatgpt.com/c/26822682-2682-4682-8682-268226822682' };
+    const positive = () => ({
+      nonresponsive: [sibling], responsive: [], disappearedOrChanged: [], unknown: [],
+    });
+    const empty = () => ({
+      nonresponsive: [], responsive: [], disappearedOrChanged: [], unknown: [],
+    });
+    const journal = () => mocks.appendFileSync.mock.calls
+      .map((args) => {
+        try { return JSON.parse(String(args[1]).trim()) as Record<string, any>; }
+        catch { return {}; }
+      }).filter((row) => row.event_class === 'fresh_send_extended_readiness');
+
+    beforeEach(() => {
+      vi.mocked(probeCdpSiblingEvaluations).mockReset();
+      vi.mocked(probeCdpSiblingEvaluations).mockResolvedValue(empty());
+      mocks.appendFileSync.mockClear();
+    });
+
+    it('leaves the four incumbent 15s windows and zero-click never-enabled cause untouched without evidence', async () => {
+      const prompt = '2682-NEGATIVE-SEND';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      turn.sendButton.isEnabled.mockResolvedValue(false);
+      const started = mocks.nowMs;
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-negative.txt'));
+      expect(outcome.result).toMatchObject({
+        state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
+      });
+      expect(mocks.nowMs - started).toBeGreaterThanOrEqual(60_000);
+      expect(mocks.nowMs - started).toBeLessThan(65_000);
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
+      expect(turn.sendButton.click).not.toHaveBeenCalled();
+      expect(journal()).toHaveLength(0);
+    });
+
+    it('sends the originally marked owned payload once after the 180s recovery, not to the sibling', async () => {
+      const prompt = '2682-SEND-AT-180S';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'RECOVERED');
+      const base = mocks.nowMs;
+      turn.sendButton.isEnabled.mockImplementation(async () => mocks.nowMs >= base + 180_000);
+      vi.mocked(probeCdpSiblingEvaluations).mockResolvedValueOnce(positive());
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-enabled.txt'), '900000');
+      expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+      expect(outcome.result.send_attempted).not.toBe(false);
+      expect(turn.getSends()).toBe(1);
+      expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+      expect(mocks.nowMs - base).toBeGreaterThanOrEqual(180_000);
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
+      expect(journal()).toEqual([expect.objectContaining({
+        entry_nonresponsive_count: 1, outcome: 'enabled',
+      })]);
+      expect(journal()[0]?.terminal_nonresponsive_count).toBeUndefined();
+      expect(JSON.stringify(journal())).not.toContain(sibling.id);
+      expect(JSON.stringify(journal())).not.toContain(sibling.url);
+      expect(JSON.stringify(journal())).not.toContain(prompt);
+    });
+
+    it.each([
+      { result: positive(), cause: 'fresh_send_blocked_by_frozen_sibling', outcome: 'still_frozen', count: 1 },
+      { result: { ...empty(), responsive: [sibling] }, cause: 'fresh_send_button_never_enabled',
+        outcome: 'recovered_but_disabled', count: undefined },
+      { result: { ...empty(), disappearedOrChanged: [sibling] }, cause: 'fresh_send_button_never_enabled',
+        outcome: 'target_disappeared_or_changed', count: undefined },
+      { result: { ...empty(), unknown: [sibling] }, cause: 'fresh_send_button_never_enabled',
+        outcome: 'terminal_unknown', count: undefined },
+    ])('rechecks original ID/URL once and returns zero clicks for $outcome', async ({ result, cause, outcome, count }) => {
+      const prompt = '2682-NO-SEND-' + outcome;
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      turn.sendButton.isEnabled.mockResolvedValue(false);
+      vi.mocked(probeCdpSiblingEvaluations).mockResolvedValueOnce(positive()).mockResolvedValueOnce(result);
+      const started = mocks.nowMs;
+      const resultTurn = await runNewChatTurn(turn.page, join(stateDir, '2682-' + outcome + '.txt'), '900000');
+      expect(resultTurn.result).toMatchObject({ state: 'send_failed', scope: 'invocation', cause, send_count: 0 });
+      expect(resultTurn.result.send_attempted).not.toBe(true);
+      expect(turn.getSends()).toBe(0);
+      expect(turn.sendButton.click).not.toHaveBeenCalled();
+      expect(mocks.nowMs - started).toBeLessThanOrEqual(600_000);
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(probeCdpSiblingEvaluations).mock.calls[1]?.[2]).toEqual([sibling]);
+      expect(journal()).toEqual([expect.objectContaining({
+        entry_nonresponsive_count: 1, outcome,
+      })]);
+      expect(journal()[0]?.terminal_nonresponsive_count).toBe(count);
+      expect(JSON.stringify(journal())).not.toContain(prompt);
+      expect(deriveDelivery({ ...resultTurn.result,
+        resolved_send_count: resultTurn.result.send_count }, false)).toBe('not-sent');
+      expect(resultTurn.result.next_action).toBeUndefined();
+    });
+
+    it('rejects extension when protected dispatch and cleanup reserves leave no time', async () => {
+      const prompt = '2682-EARLY-BUDGET';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      turn.sendButton.isEnabled.mockResolvedValue(false);
+      vi.mocked(probeCdpSiblingEvaluations).mockResolvedValueOnce(positive());
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-budget.txt'), '90000');
+      expect(outcome.result).toMatchObject({
+        state: 'send_failed', cause: 'fresh_send_readiness_budget_exhausted', send_count: 0,
+      });
+      expect(outcome.result.send_attempted).not.toBe(true);
+      expect(turn.sendButton.click).not.toHaveBeenCalled();
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
+      expect(journal()).toEqual([expect.objectContaining({
+        entry_nonresponsive_count: 1, outcome: 'budget_exhausted',
+      })]);
+      expect(journal()[0]?.terminal_nonresponsive_count).toBeUndefined();
+    });
   });
 
   it('closes a proven owned, never-clicked draft only after 60s of disabled Send (#2487)', async () => {
