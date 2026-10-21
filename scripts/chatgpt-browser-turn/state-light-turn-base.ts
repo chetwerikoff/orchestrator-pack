@@ -528,6 +528,8 @@ export interface TurnRunOutcome {
   readonly ownedTypedPayload?: string;
   /** Exact attach-created target retirement after failed Playwright bootstrap. */
   readonly createdAttachFailureCleanup?: 'confirmed' | 'unconfirmed';
+  /** Affirmative newly allocated ID, retained even if observation binding fails. */
+  readonly createdAttachFailureTargetId?: string;
   /** Exact new-chat project surface of a proven created tab; never emitted. */
   readonly ownedFreshProjectUrl?: string;
   /** Process-only positive-recovery cleanup, never a terminal locator. */
@@ -3692,6 +3694,7 @@ async function runTurnCore(
   let refusedCooldownUntil: number | undefined;
   let attachAttempts = 0;
   let createdAttachFailureCleanup: 'confirmed' | 'unconfirmed' | undefined;
+  let createdAttachFailureTargetId: string | undefined;
   let pollCount = 0;
   const navigation = new StateLightNavigationCounter();
   let journalWriteFailed = false;
@@ -3975,6 +3978,7 @@ async function runTurnCore(
       // no raw-ID close or foreign Page attach is permitted.
       const createdTargetId = (error as { createdTargetId?: unknown } | null)?.createdTargetId;
       if (typeof createdTargetId === 'string' && createdTargetId.length > 0) {
+        createdAttachFailureTargetId = createdTargetId;
         createdAttachFailureCleanup = 'unconfirmed';
         try {
           bindStateLightOwnedTarget({
@@ -7579,6 +7583,7 @@ async function runTurnCore(
       ...(page ? { page } : {}),
       ...(browser ? { browser } : {}),
       ...(createdAttachFailureCleanup ? { createdAttachFailureCleanup } : {}),
+      ...(createdAttachFailureTargetId ? { createdAttachFailureTargetId } : {}),
       ...(provenOpenedFetch429 ? {
         ownedPreSendFetch429Page: page,
         ownedPreSendFetch429Url: invocationCreatedExistingChatUrl,
@@ -8126,7 +8131,10 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
       ? { owned_target_id: observedTarget.owned_target.id,
         owned_target_created: observedTarget.owned_target.created,
         owned_prompt_marker: observedTarget.marker }
-      : {}),
+      : outcome.createdAttachFailureTargetId
+        ? { owned_target_id: outcome.createdAttachFailureTargetId,
+          owned_target_created: true }
+        : {}),
     ...(observedTarget?.owned_marker_confirmed ? { owned_marker_confirmed: true as const } : {}),
     ...(observedTarget ? { send_witness: observedTarget.send_witness } : {}),
     ...(outcome.result.cooldown_until_ms !== undefined
