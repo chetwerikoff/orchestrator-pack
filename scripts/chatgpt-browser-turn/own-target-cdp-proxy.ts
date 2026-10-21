@@ -41,6 +41,306 @@ export async function listCdpPageTargets(cdp: string, timeoutMs: number): Promis
   return pages;
 }
 
+
+// Issue #2682: this probe is observational only. A shared CDP endpoint does not
+// attest a Chrome browser context, profile, renderer cause or shared Web Lock.
+export interface SiblingEvaluationTarget {
+  readonly id: string;
+  readonly url: string;
+}
+
+export interface SiblingEvaluationProbe {
+  readonly nonresponsive: readonly SiblingEvaluationTarget[];
+  readonly responsive: readonly SiblingEvaluationTarget[];
+  readonly disappearedOrChanged: readonly SiblingEvaluationTarget[];
+  readonly unknown: readonly SiblingEvaluationTarget[];
+}
+
+interface ProbePageTarget extends SiblingEvaluationTarget {
+  readonly type: string;
+  readonly webSocketDebuggerUrl?: string;
+}
+
+const SIBLING_PROBE_MAX_MS = 5_000;
+const SIBLING_PROBE_MAX_BYTES = 256 * 1024;
+const SIBLING_PROBE_MAX_TARGETS = 4;
+
+// All awaits, including an HTTP reader or a fake/stalled fetch that ignores
+// AbortSignal, must be bounded independently of the invocation clock.
+async function untilProbeDeadline<T>(
+  promise: Promise<T>,
+  remainingMs: number,
+  abort?: AbortSignal,
+): Promise<T | undefined> {
+  if (remainingMs <= 0 || abort?.aborted) return undefined;
+  return await new Promise<T | undefined>((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const finish = (value: T | undefined): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      abort?.removeEventListener('abort', onAbort);
+      resolve(value);
+    };
+    const onAbort = (): void => finish(undefined);
+    timer = setTimeout(() => finish(undefined), Math.max(1, remainingMs));
+    abort?.addEventListener('abort', onAbort, { once: true });
+    promise.then((value) => finish(value), () => finish(undefined));
+  });
+}
+
+async function enumerateSiblingTargets(
+  cdp: string, remaining: () => number, signal: AbortSignal,
+): Promise<ProbePageTarget[] | undefined> {
+  const controller = new AbortController();
+  const onAbort = (): void => controller.abort();
+  signal.addEventListener('abort', onAbort, { once: true });
+  const endpoint = new URL(cdp);
+  endpoint.pathname = '/json/list';
+  endpoint.search = '';
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    const response = await untilProbeDeadline(
+      fetch(endpoint, { signal: controller.signal }), remaining(), signal,
+    );
+    if (!response?.ok || !response.body) return undefined;
+    const statedSize = Number(response.headers.get('content-length'));
+    if (Number.isFinite(statedSize) && statedSize > SIBLING_PROBE_MAX_BYTES) return undefined;
+    reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (true) {
+      const part = await untilProbeDeadline(reader.read(), remaining(), signal);
+      if (!part) return undefined;
+      if (part.done) break;
+      total += part.value.byteLength;
+      if (total > SIBLING_PROBE_MAX_BYTES) return undefined;
+      chunks.push(part.value);
+    }
+    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (!Array.isArray(parsed)) return undefined;
+    const pages: ProbePageTarget[] = [];
+    for (const target of parsed) {
+      if (!target || typeof target !== 'object' || target.type !== 'page') continue;
+      if (typeof target.id !== 'string' || !target.id
+        || typeof target.url !== 'string') return undefined;
+      pages.push(target as ProbePageTarget);
+    }
+    return pages;
+  } catch {
+    return undefined;
+  } finally {
+    controller.abort();
+    signal.removeEventListener('abort', onAbort);
+    if (reader) void reader.cancel().catch(() => undefined);
+  }
+}
+
+function isChatGptProbeTarget(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (parsed.origin === 'https://chatgpt.com' || parsed.origin === 'https://chat.openai.com')
+      && !parsed.username && !parsed.password;
+  } catch {
+    return false;
+  }
+}
+
+async function probeOneTarget(
+  cdp: string, target: ProbePageTarget, remaining: () => number, signal: AbortSignal,
+): Promise<'nonresponsive' | 'responsive' | 'unknown'> {
+  let socket: WebSocket | undefined;
+  let live = true;
+  let protocolError = false;
+  try {
+    const targetSocket = new URL(String(target.webSocketDebuggerUrl ?? ''));
+    const source = new URL(cdp);
+    // /json/list on the selected endpoint is our only source of candidates.
+    // Never follow a debugger socket advertising an unrelated host or port.
+    if (!['ws:', 'wss:'].includes(targetSocket.protocol)
+      || targetSocket.host !== source.host
+      || targetSocket.username || targetSocket.password
+      || !targetSocket.pathname.endsWith('/' + target.id)) return 'unknown';
+    socket = new WebSocket(targetSocket.toString());
+    const direct = socket;
+    const onLoss = (): void => { live = false; };
+    const onProtocol = (event: MessageEvent): void => {
+      try {
+        const reply = JSON.parse(String(event.data)) as { error?: unknown };
+        if (reply.error) protocolError = true;
+      } catch { protocolError = true; }
+    };
+    direct.addEventListener('error', onLoss);
+    direct.addEventListener('close', onLoss);
+    direct.addEventListener('message', onProtocol);
+    try {
+      const opened = await new Promise<boolean>((resolve) => {
+        let done = false;
+        let timer: ReturnType<typeof setTimeout>;
+        const finish = (value: boolean): void => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          signal.removeEventListener('abort', aborted);
+          direct.removeEventListener('open', onOpen);
+          direct.removeEventListener('error', failed);
+          direct.removeEventListener('close', failed);
+          resolve(value);
+        };
+        const onOpen = (): void => finish(true);
+        const failed = (): void => finish(false);
+        const aborted = (): void => finish(false);
+        timer = setTimeout(() => finish(false), Math.max(1, Math.min(1_000, remaining())));
+        signal.addEventListener('abort', aborted, { once: true });
+        direct.addEventListener('open', onOpen, { once: true });
+        direct.addEventListener('error', failed, { once: true });
+        direct.addEventListener('close', failed, { once: true });
+        if (signal.aborted || remaining() <= 0) finish(false);
+      });
+      if (!opened || !live || direct.readyState !== 1) return 'unknown';
+
+      let nextId = 0;
+      const command = async (method: string, params: Record<string, unknown>, timeoutMs: number) =>
+        await new Promise<Record<string, any> | undefined>((resolve) => {
+          if (signal.aborted || !live || protocolError || direct.readyState !== 1) {
+            resolve(undefined);
+            return;
+          }
+          const id = ++nextId;
+          let settled = false;
+          let timer: ReturnType<typeof setTimeout>;
+          const complete = (value?: Record<string, any>): void => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            signal.removeEventListener('abort', aborted);
+            direct.removeEventListener('message', received);
+            direct.removeEventListener('error', lost);
+            direct.removeEventListener('close', lost);
+            resolve(value);
+          };
+          const aborted = (): void => complete();
+          const lost = (): void => complete();
+          const received = (event: MessageEvent): void => {
+            try {
+              const message = JSON.parse(String(event.data)) as Record<string, any>;
+              if (message.id === id) complete(message);
+            } catch { complete(); }
+          };
+          timer = setTimeout(() => complete(), Math.max(1, Math.min(timeoutMs, remaining())));
+          signal.addEventListener('abort', aborted, { once: true });
+          direct.addEventListener('message', received);
+          direct.addEventListener('error', lost);
+          direct.addEventListener('close', lost);
+          try { direct.send(JSON.stringify({ id, method, params })); }
+          catch { complete(); }
+        });
+      const control = async (): Promise<boolean> => {
+        const result = await command('Target.getTargetInfo', { targetId: target.id }, 650);
+        const info = result?.result?.targetInfo;
+        return live && !protocolError && direct.readyState === 1 && !result?.error
+          && info?.targetId === target.id && info?.url === target.url && info?.type === 'page';
+      };
+      if (!await control()) return 'unknown';
+      const evaluated = await command(
+        'Runtime.evaluate', { expression: '1+1', returnByValue: true }, 2_000,
+      );
+      if (!live || protocolError || direct.readyState !== 1) return 'unknown';
+      // A timed-out evaluation alone says nothing about the renderer. The
+      // independent target-control channel must still answer *after* it.
+      if (!await control()) return 'unknown';
+      if (!live || protocolError || signal.aborted || remaining() <= 0) return 'unknown';
+      if (!evaluated) return 'nonresponsive';
+      return !evaluated.error && !evaluated.result?.exceptionDetails
+        && evaluated.result?.result?.value === 2 ? 'responsive' : 'unknown';
+    } finally {
+      direct.removeEventListener('error', onLoss);
+      direct.removeEventListener('close', onLoss);
+      direct.removeEventListener('message', onProtocol);
+    }
+  } catch {
+    return 'unknown';
+  } finally {
+    if (socket) {
+      // This is a read-only socket close, never Target.closeTarget or Page.close.
+      // If a handshake is late, the one-shot open handler disposes it too.
+      if (socket.readyState === 0) {
+        socket.addEventListener('open', () => { try { socket?.close(); } catch { /* disconnected */ } },
+          { once: true });
+      }
+      try { socket.close(); } catch { /* connection still pending or lost */ }
+    }
+  }
+}
+
+/**
+ * One bounded direct-target fanout on the *selected* CDP endpoint. This API
+ * never uses Playwright enumeration, never changes sibling DOM and never
+ * establishes browser-context membership. A lost discriminator is unknown.
+ */
+export async function probeCdpSiblingEvaluations(
+  cdp: string,
+  ownedTargetId: string,
+  originals?: readonly SiblingEvaluationTarget[],
+  budgetMs = SIBLING_PROBE_MAX_MS,
+): Promise<SiblingEvaluationProbe> {
+  const empty = (): SiblingEvaluationProbe => ({
+    nonresponsive: [], responsive: [], disappearedOrChanged: [], unknown: originals ?? [],
+  });
+  if (!ownedTargetId || !Number.isFinite(budgetMs) || budgetMs <= 0) return empty();
+  const end = performance.now() + Math.min(budgetMs, SIBLING_PROBE_MAX_MS);
+  const remaining = (): number => Math.max(0, end - performance.now());
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1, remaining()));
+  try {
+    const pages = await enumerateSiblingTargets(cdp, remaining, controller.signal);
+    if (!pages || controller.signal.aborted) return empty();
+    const own = pages.find((target) => target.id === ownedTargetId
+      && target.type === 'page' && isChatGptProbeTarget(target.url));
+    if (!own) return empty();
+    const selected = originals
+      ? [...originals].sort((a, b) => a.id.localeCompare(b.id)).slice(0, SIBLING_PROBE_MAX_TARGETS)
+      : pages.filter((target) => target.id !== ownedTargetId && isChatGptProbeTarget(target.url))
+        .sort((a, b) => a.id.localeCompare(b.id)).slice(0, SIBLING_PROBE_MAX_TARGETS)
+        .map((target) => ({ id: target.id, url: target.url }));
+    const disappearedOrChanged: SiblingEvaluationTarget[] = [];
+    const candidates: Array<{ identity: SiblingEvaluationTarget; target: ProbePageTarget }> = [];
+    for (const original of selected) {
+      const current = pages.find((target) => target.id === original.id);
+      if (!current || current.type !== 'page' || current.url !== original.url
+        || !isChatGptProbeTarget(current.url)) {
+        disappearedOrChanged.push(original);
+      } else {
+        candidates.push({ identity: original, target: current });
+      }
+    }
+    const [ownHealth, ...observations] = await Promise.all([
+      probeOneTarget(cdp, own, remaining, controller.signal),
+      ...candidates.map(({ target }) => probeOneTarget(cdp, target, remaining, controller.signal)),
+    ]);
+    if (ownHealth !== 'responsive' || controller.signal.aborted) {
+      return { nonresponsive: [], responsive: [],
+        disappearedOrChanged, unknown: candidates.map(({ identity }) => identity) };
+    }
+    const nonresponsive: SiblingEvaluationTarget[] = [];
+    const responsive: SiblingEvaluationTarget[] = [];
+    const unknown: SiblingEvaluationTarget[] = [];
+    candidates.forEach(({ identity }, index) => {
+      const kind = observations[index];
+      if (kind === 'nonresponsive') nonresponsive.push(identity);
+      else if (kind === 'responsive') responsive.push(identity);
+      else unknown.push(identity);
+    });
+    return { nonresponsive, responsive, disappearedOrChanged, unknown };
+  } catch {
+    return empty();
+  } finally {
+    controller.abort();
+    clearTimeout(timer);
+  }
+}
+
 export async function createOwnCdpTarget(cdp: string, timeoutMs: number): Promise<string> {
   const root = new URL(cdp);
   root.pathname = '/json/new';
