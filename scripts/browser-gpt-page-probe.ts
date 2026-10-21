@@ -2435,7 +2435,10 @@ async function retireProbeCreatedRecoveryTarget(
     const targets = toCompatibleTargets(await withTimeout(
       deps.listTargets(args.cdp), remaining(), deps, 'cleanup_census_timeout',
     ));
-    return targets.find((target) => target.target_id === lease.targetId) ?? null;
+    // A duplicate CDP-ID census cannot establish which Page would receive
+    // the destructive close, even if one duplicate matches the old route.
+    const matching = targets.filter((target) => target.target_id === lease.targetId);
+    return matching.length === 1 ? matching[0]! : null;
   };
   const safe = async (): Promise<boolean> => {
     if (clockNow(deps) >= deadline) return false;
