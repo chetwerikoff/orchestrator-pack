@@ -2432,13 +2432,14 @@ async function retireProbeCreatedRecoveryTarget(
   const deadline = clockNow(deps) + PROBE_RECOVERY_CLOSE_BUDGET_MS;
   const remaining = (): number => Math.min(CDP_REQUEST_TIMEOUT_MS, Math.max(1, deadline - clockNow(deps)));
   const currentTarget = async (): Promise<CompatibleTarget | null> => {
-    const targets = toCompatibleTargets(await withTimeout(
+    const census = await withTimeout(
       deps.listTargets(args.cdp), remaining(), deps, 'cleanup_census_timeout',
-    ));
-    // A duplicate CDP-ID census cannot establish which Page would receive
-    // the destructive close, even if one duplicate matches the old route.
-    const matching = targets.filter((target) => target.target_id === lease.targetId);
-    return matching.length === 1 ? matching[0]! : null;
+    );
+    // Check raw identities before the compatibility filter: even a duplicate
+    // foreign-route/non-Page record must invalidate destructive authority.
+    const matching = census.filter((target) => target.id === lease.targetId);
+    if (matching.length !== 1) return null;
+    return toCompatibleTargets(matching)[0] ?? null;
   };
   const safe = async (): Promise<boolean> => {
     if (clockNow(deps) >= deadline) return false;
