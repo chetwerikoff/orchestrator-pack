@@ -7715,7 +7715,11 @@ async function guardedOriginalTargetRetirement(input: {
       if (Date.now() >= deadline) return false;
       const census = await listCdpPageTargets(cdp, budget());
       const selected = census.filter((target) => target.id === pin.id);
+      // A shared Chrome can terminate when its last Page is closed. Never
+      // retire this exact owned tab unless a different live Page remains.
+      // A foreign/keepalive Page is presence evidence only, never a close target.
       return selected.length === 1
+        && census.some((target) => target.type === 'page' && target.id !== pin.id)
         && currentUrl() !== null
         && selected[0]!.url === currentUrl();
     } catch { return false; }
