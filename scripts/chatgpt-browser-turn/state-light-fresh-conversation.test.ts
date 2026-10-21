@@ -5196,6 +5196,10 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     let injected = false;
     const original = makeLoserPage(prompt, 'UNTRUSTED-ORIGINAL', () => { lost = true; }, true);
     original.page.isClosed.mockImplementation(() => lost);
+    const originalLocator = original.page.locator.getMockImplementation()!;
+    original.page.locator.mockImplementation((selector: string) =>
+      lost && selector === USER_MESSAGE_SELECTOR
+        ? collectionLocator([]) : originalLocator(selector));
     const recoveredClose = vi.fn(async () => undefined);
     const recovered: any = {
       __fakeBrowserGptPage: true,
