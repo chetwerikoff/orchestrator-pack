@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -5165,6 +5165,165 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
     expect(original?.journalOutcome?.state).not.toBe('persisted');
     expect(review.posts()).toBe(0);
   });
+
+  describe('Issue #2679 runner-level acquired claims', () => {
+    it('keeps a previously failed supplemental journal fenced without another send or publication', async () => {
+      const prNumber = 260721;
+      const f = await completedRequiredStage(prNumber);
+      const review = reviewTransport(prNumber, 'ambiguous');
+      const source = originalSourceTransport(prNumber);
+      let nativeStarts = 0;
+      const startReview = commandStart2607(f.storeRoot, {
+        ...f.fixture, fixtureGithubReviewTransport: review.transport,
+        fixtureGptSourceCommentTransport: source.transport,
+        fixtureBeforeGptSourceCommentCensus: source.publishOriginal,
+        fixtureAfterNativeInitialArmed: async () => { nativeStarts++; },
+      });
+      const invoke = () => runPackGptReviewCommand({ prNumber, reviewer: 'codex' }, {
+        env: process.env, stderr: { write: () => undefined }, startReview,
+      });
+      const first = await invoke();
+      expect(first.exitCode).toBe(1);
+      const runId = String(first.result.runId);
+      const options = { projectId: 'orchestrator-pack', storeRoot: f.storeRoot };
+      expect(getPackReviewRun(runId, options)).toMatchObject({
+        reviewVerdict: 'clean', journalOutcome: { state: 'persisted' },
+        automaticBudgetDisposition: 'non_consuming_explicit',
+      });
+      expect(nativeStarts).toBe(1);
+      expect(source.sent()).toBe(0);
+      expect(review.posts()).toBe(1);
+      // The original status predates the new claim; its raw failed row is not
+      // proof that the resumed invocation just wrote the terminal.
+      setPackReviewRunTerminal(runId, 'failed', { failureReason: 'prior_invocation_failed' }, options);
+      const old = getPackReviewRun(runId, options);
+      expect(old).toMatchObject({ status: 'failed', latestRunStatus: 'failed' });
+      const dir = process.env.OPK_REVIEW_CLAIM_DIR!;
+      const terminalDir = join(dir, 'terminal'), auditDir = join(dir, 'audit');
+      const beforeTerminals = new Set(readdirSync(terminalDir));
+      const beforeAudits = new Set(readdirSync(auditDir));
+
+      // Deliberately observe the full 15-second visibility fence, not a
+      // shortened visibility budget. Only this slow negative test gets headroom.
+      const resumed = await invoke();
+      expect(resumed).toMatchObject({
+        exitCode: 1, result: { ok: false, created: false, reused: true,
+          reason: 'supplemental_delivery_unverified', runId },
+      });
+      const terminal = readdirSync(terminalDir).filter((name) => !beforeTerminals.has(name))
+        .map((name) => JSON.parse(readFileSync(join(terminalDir, name), 'utf8')));
+      expect(terminal).toContainEqual(expect.objectContaining({
+        state: 'terminal', outcome: 'run_not_visible_fenced', boundRunId: runId,
+        projectNamespace: 'orchestrator-pack', prNumber, headSha: HEAD,
+      }));
+      expect(terminal.some((x) => x.outcome === 'released_after_run_terminalized')).toBe(false);
+      const audit = readdirSync(auditDir).filter((name) => !beforeAudits.has(name))
+        .map((name) => JSON.parse(readFileSync(join(auditDir, name), 'utf8')));
+      expect(audit).toContainEqual(expect.objectContaining({
+        outcome: 'run_not_visible_fenced', decisionSource: 'completion',
+      }));
+      expect(audit.some((x) => x.outcome === 'released_after_run_terminalized')).toBe(false);
+      expect(existsSync(join(dir, 'pr-' + prNumber + '-' + HEAD + '.json'))).toBe(false);
+      expect(getPackReviewRun(runId, options)).toMatchObject({
+        status: 'failed', latestRunStatus: 'failed', journalOutcome: old!.journalOutcome,
+      });
+      expect(nativeStarts).toBe(1);
+      expect(source.sent()).toBe(0);
+      expect(review.posts()).toBe(1);
+      expect(f.statusWrites).toHaveLength(f.statusCount);
+    }, 25_000);
+
+    it('audits a freshly failed harvest claim after review publication, without a repeat send or post', async () => {
+      const prNumber = 260722;
+      const storeRoot = fixtureRoot2607('opk-2679-harvest-');
+      setupHarness(storeRoot);
+      process.env.PACK_REVIEWER = 'gpt';
+      process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
+      const source = originalSourceTransport(prNumber);
+      const review = reviewTransport(prNumber, 'success');
+      const sent: string[] = [];
+      const attempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+      const input: Parameters<typeof startPackReview>[0] = {
+        projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+        prNumber, headSha: HEAD, reviewerOverride: 'gpt',
+        fixtureCurrentPrHeadSha: HEAD, fixturePostReviewHeadSha: HEAD,
+        fixturePrState: 'OPEN', fixtureRepoSlug: repository,
+        fixturePrBody: 'Closes #' + prNumber, fixturePostReviewPrBody: 'Closes #' + prNumber,
+        fixtureIssueNumber: prNumber, fixtureIssueTitle: '[T1] Acquired harvest failure',
+        fixtureIssueBody: issueBody, fixtureReviewStdout: cleanPayload(),
+        fixtureReviewBySourceSlot: attempts,
+        fixtureAfterGptInvocationBound: async ({ slotId, invocationId }) => {
+          sent.push(slotId);
+          const terminal = {
+            schema: 'turn-result/v1', state: 'ok', scope: 'invocation',
+            cause: 'completed_page_only', invocation_id: invocationId, send_count: 1,
+          };
+          attempts[slotId] = slotId === 'source-02'
+            ? [{ exitCode: 1, stdout: JSON.stringify({
+              ...terminal, review_harvest_class: 'harvest_failed',
+              review_evidence: {
+                adapterPromptPath: '/fixture/' + invocationId + '/adapter-prompt.txt',
+                terminalReplyPath: '/fixture/' + invocationId + '/terminal-reply.txt',
+                mappingErrorPath: '/fixture/' + invocationId + '/mapping-error.txt',
+                adapterStdoutPath: '/fixture/' + invocationId + '/adapter-stdout.json',
+              },
+            }) }]
+            : [{ exitCode: 0, stdout: JSON.stringify(terminal) + '\n' + cleanPayload() }];
+        },
+        fixtureGptSourceCommentTransport: source.transport,
+        fixtureBeforeGptSourceCommentCensus: async ({ slotId, identity }) => {
+          if (slotId !== 'source-02') await source.publishOriginal({ identity });
+        },
+        fixtureGithubReviewTransport: review.transport,
+        fixtureRequiredStatusWriter: async () => undefined,
+      };
+      const startedAt = Date.now();
+      const failed = await startPackReview(input);
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+      expect(failed).toMatchObject({
+        ok: false, created: true, reused: false, reason: 'harvest_failed',
+        status: 'failed', githubReviewId: expect.any(Number),
+      });
+      const runId = String(failed.runId);
+      const options = { projectId: 'orchestrator-pack', storeRoot };
+      expect(getPackReviewRun(runId, options)).toMatchObject({
+        id: runId, projectId: 'orchestrator-pack', prNumber, targetSha: HEAD,
+        status: 'failed', latestRunStatus: 'failed', failureReason: 'harvest_failed',
+        githubReviewId: failed.githubReviewId, githubReviewUrl: failed.githubReviewUrl,
+        githubReviewEvent: 'COMMENT',
+      });
+      const dir = process.env.OPK_REVIEW_CLAIM_DIR!;
+      const terminals = readdirSync(join(dir, 'terminal'))
+        .map((name) => JSON.parse(readFileSync(join(dir, 'terminal', name), 'utf8')))
+        .filter((x) => x.prNumber === prNumber && x.headSha === HEAD);
+      expect(terminals.filter((x) => x.outcome === 'released_after_run_terminalized')).toHaveLength(1);
+      expect(terminals).toContainEqual(expect.objectContaining({
+        state: 'terminal', outcome: 'released_after_run_terminalized',
+        projectNamespace: 'orchestrator-pack', prNumber, headSha: HEAD,
+        runId, boundRunId: runId, runStatus: 'failed', latestRunStatus: 'failed',
+        holder: expect.objectContaining({ generation: expect.any(String) }),
+      }));
+      const audit = readdirSync(join(dir, 'audit'))
+        .map((name) => JSON.parse(readFileSync(join(dir, 'audit', name), 'utf8')))
+        .filter((x) => x.prNumber === prNumber && x.headSha === HEAD);
+      expect(audit).toContainEqual(expect.objectContaining({
+        outcome: 'released_after_run_terminalized', decisionSource: 'completion',
+        runId, boundRunId: runId, runStatus: 'failed', latestRunStatus: 'failed',
+      }));
+      expect(existsSync(join(dir, 'pr-' + prNumber + '-' + HEAD + '.json'))).toBe(false);
+      const sentBefore = sent.length, sourcesBefore = source.sent();
+      expect(sentBefore).toBeGreaterThan(0);
+      expect(sourcesBefore).toBeGreaterThan(0);
+      expect(review.posts()).toBe(1);
+      const repeated = await startPackReview(input);
+      expect(repeated.created).not.toBe(true);
+      expect(sent).toHaveLength(sentBefore);
+      expect(source.sent()).toBe(sourcesBefore);
+      expect(review.posts()).toBe(1);
+      expect(getPackReviewRun(runId, options)?.status).toBe('failed');
+    });
+  });
+
 });
 
 
