@@ -579,8 +579,11 @@ describe('Issue #1238 mechanically derived production graph', () => {
       );
       const classifySink = (kind: string, receiver: string): string => {
         if (kind === 'newContext') return 'forbidden-context-create';
-        if (kind === 'contexts' && (receiver === '(activeBrowser as any)' || /(?:^|\.)browser$|state\.browser$|browser as/.test(receiver))) return 'browser-contexts';
-        if (kind === 'pages' && /^(?:ctx|context|contexts\[0\])$|contexts\[0\] as/.test(receiver)) return 'context-pages';
+        if (kind === 'contexts' && (receiver === '(activeBrowser as any)'
+          || receiver === 'attachedBrowser'
+          || /(?:^|\.)browser$|state\.browser$|browser as/.test(receiver))) return 'browser-contexts';
+        if (kind === 'pages' && (receiver === 'pages[0]'
+          || /^(?:ctx|context|contexts\[0\])$|contexts\[0\] as/.test(receiver))) return 'context-pages';
         if (kind === 'newPage' && /^(?:ctx|context|contexts\[0\])$|contexts\[0\] as/.test(receiver)) return 'context-new-page';
         if (kind === 'close' && /browser as/.test(receiver)) return 'browser-release';
         if (kind === 'close' && receiver === 'input.browser') return 'failed-attempt-browser-release';
@@ -674,6 +677,7 @@ describe('Issue #1238 mechanically derived production graph', () => {
       'contexts:browser-contexts:browser:openTurnPage',
       'contexts:browser-contexts:browser:onlyAllowedPage',
       'contexts:browser-contexts:browser:selectConversationPage',
+      'contexts:browser-contexts:attachedBrowser:retireDetachedOriginalTarget',
       'contexts:browser-contexts:(browser as { contexts: () => unknown[] }):probeProfileReady',
       'newPage:context-new-page:contexts[0]:createDedicatedTurnPage',
       'newPage:context-new-page:context:runGateBCharacterization',
@@ -686,6 +690,8 @@ describe('Issue #1238 mechanically derived production graph', () => {
       'pages:context-pages:contexts[0]:selectConversationPage',
       'pages:context-pages:contexts[0]:selectConversationPage',
       'pages:context-pages:context:attachPlaywrightContextCdpObservers',
+      'pages:context-pages:pages[0]:retireExplicitPredecessor',
+      'pages:context-pages:pages[0]:retireExplicitPredecessor',
       'pages:context-pages:contexts[0]:recoverCurrentObservation',
       'pages:context-pages:context:runGateBCharacterization',
       'pages:context-pages:ctx:openGateBCharacterizationPage',
