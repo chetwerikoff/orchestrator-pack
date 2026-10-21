@@ -1064,8 +1064,13 @@ describe('production attempted-send result and durable envelope', () => {
         conversationLocator: chatUrl,
         childCommand: process.execPath, childArgs: ['-e', `process.stdout.write(${JSON.stringify(JSON.stringify(result) + '\n')})`],
       });
+      if (witnessed) {
+        // The exception does not undo the unique original-Page user marker.
+        // Landed proves observed user-message delivery, NOT a completed reply.
+        expect(result.owned_marker_confirmed === true || result.send_witness === 'owned_marker').toBe(true);
+      }
       expect(readTerminalEnvelope(envelopePath)).toMatchObject({
-        delivery: preDispatch ? 'not-sent' : 'POSSIBLY_DELIVERED',
+        delivery: preDispatch ? 'not-sent' : witnessed ? 'landed' : 'POSSIBLY_DELIVERED',
         send_count: witnessed ? 1 : 0, observed_invocation_id: invocationId,
         ...(preDispatch ? {} : { recovery_available: true, conversation_locator: chatUrl }),
       });
