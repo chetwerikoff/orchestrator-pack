@@ -11,9 +11,13 @@ import {
   parseFlagArgv,
   readHandoffReceipt,
   readInvocationReceiptLocator,
+  readTerminalEnvelope,
   type HandoffReceipt,
   unwakeableTerminalEnvelopeHint,
 } from './flow-manager-long-running-child.ts';
+import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
+import { readStateLightTurnObservation } from './chatgpt-browser-turn/state-light-turn-observation.ts';
+import { createHash } from 'node:crypto';
 import {
   inspectManagerCliInvocation,
   type ManagerCliDeclaration,
@@ -43,6 +47,8 @@ const CLI = {
     { flag: '--poll-ms', value: 'ms' },
     { flag: '--chat-url', value: 'url' },
     { flag: '--new-chat' },
+    { flag: '--predecessor-invocation-id', value: 'id' },
+    { flag: '--predecessor-attempt-identity', value: 'id' },
   ],
 } as const satisfies ManagerCliDeclaration;
 
@@ -181,6 +187,39 @@ export async function runBrowserAdapter(
   const cwd = typeof options.get('cwd') === 'string' ? options.get('cwd') as string : repoRoot;
   const ownerTaskId = options.has('owner-task-id') ? requiredOption(options, 'owner-task-id') : undefined;
   const ownerDispatchId = options.has('owner-dispatch-id') ? requiredOption(options, 'owner-dispatch-id') : undefined;
+  const predecessorInvocation = options.get('predecessor-invocation-id');
+  const predecessorAttempt = options.get('predecessor-attempt-identity');
+  const hasPredecessor = typeof predecessorInvocation === 'string' && typeof predecessorAttempt === 'string';
+  if ((predecessorInvocation !== undefined || predecessorAttempt !== undefined)
+    && (!hasPredecessor || !ownerTaskId || predecessorInvocation === invocationId
+      || predecessorAttempt === attemptIdentity)) {
+    return refuse('predecessor_exact_pair_same_task_required');
+  }
+  if (hasPredecessor) {
+    try {
+      const earlier = readInvocationReceiptLocator({
+        invocationId: predecessorInvocation as string,
+        runIdentity,
+        attemptIdentity: predecessorAttempt as string,
+        ownerTaskId: ownerTaskId!,
+      });
+      const settled = readTerminalEnvelope(earlier.locator.terminal_envelope_path, {
+        runIdentity, attemptIdentity: predecessorAttempt as string,
+      });
+      const profileKey = configuredProfileKey(profile, cdp);
+      const state = readStateLightTurnObservation(profileKey, predecessorInvocation as string);
+      if (!settled || settled.observed_invocation_id !== predecessorInvocation
+        || settled.handoff_receipt_path !== earlier.locator.handoff_receipt_path
+        || state.invocation_id !== predecessorInvocation || state.profile_key !== profileKey
+        || !state.owned_target?.created
+        || state.owned_target.cdp_sha256 !== createHash('sha256').update(cdp, 'utf8').digest('hex')) {
+        return refuse('predecessor_terminal_or_original_target_unproven');
+      }
+    } catch (error) {
+      return refuse('predecessor_indexed_provenance_unavailable: '
+        + (error instanceof Error ? error.message : String(error)));
+    }
+  }
 
   const browserArgs = [
     'turn',
@@ -196,6 +235,12 @@ export async function runBrowserAdapter(
   if (typeof options.get('chat-url') === 'string') browserArgs.push('--chat-url', options.get('chat-url') as string);
   if (typeof options.get('project-url') === 'string') browserArgs.push('--project-url', options.get('project-url') as string);
   if (options.get('new-chat') === true) browserArgs.push('--new-chat');
+  if (hasPredecessor) browserArgs.push(
+    '--predecessor-invocation-id', predecessorInvocation as string,
+    '--predecessor-attempt-identity', predecessorAttempt as string,
+    '--predecessor-run-identity', runIdentity,
+    '--predecessor-owner-task-id', ownerTaskId!,
+  );
 
   const launcherArgs = [
     'launch',
