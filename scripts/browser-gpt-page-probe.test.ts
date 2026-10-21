@@ -3050,7 +3050,7 @@ test('harvest refuses to retire a Page from an ambiguous create result array', a
 });
 
 test('harvest keeps a bounded sibling census and never allocates a replacement on timeout', async () => {
-  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, output }) => {
+  await withHarvestObservation('sent_unbound', async ({ profile, cdp, invocationId, output }) => {
     let now = 0;
     let reads = 0;
     let creates = 0;
