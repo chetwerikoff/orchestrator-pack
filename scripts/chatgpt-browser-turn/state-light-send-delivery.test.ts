@@ -1939,7 +1939,7 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
 });
 
 
-describe('conversation fetch HTTP 429 — shared 5-minute cross-process cooldown (#2617)', () => {
+describe('conversation fetch HTTP 429 — shared bounded cross-process cooldown (#2617/#2678)', () => {
   let root: string;
   let profileKey: string;
   let now: number;
@@ -1971,46 +1971,71 @@ process.stdout.write(JSON.stringify(readStateLightAccountCooldown(${JSON.stringi
     return JSON.parse(child.stdout);
   };
 
-  it('records exactly one epoch-ms field, expires at 300000ms and is shared across separate Node processes', () => {
+  it('starts at 60 seconds, preserves one profile record and shares it across Node processes', () => {
     const first = publishWitnessedStateLight429(profileKey, now);
-    expect(first).toEqual({ active: true, until: now + 300_000 });
+    expect(first).toEqual({ active: true, until: now + 60_000 });
     expect(JSON.parse(readFileSync(pathFor(profileKey), 'utf8'))).toEqual({
-      cooldown_until_ms: now + 300_000,
+      cooldown_until_ms: now + 60_000,
+      last_witness_at_ms: now,
+      backoff_step: 1,
     });
-    expect(readStateLightAccountCooldown(profileKey, now + 299_999)).toMatchObject({
-      active: true, until: now + 300_000,
+    expect(readStateLightAccountCooldown(profileKey, now + 59_999)).toMatchObject({
+      active: true, until: now + 60_000,
     });
     expect(readFromOtherNodeProcess(profileKey, now + 1)).toMatchObject({
-      active: true, until: now + 300_000,
+      active: true, until: now + 60_000,
     });
-    expect(readStateLightAccountCooldown(profileKey, now + 300_000).active).toBe(false);
+    expect(readStateLightAccountCooldown(profileKey, now + 60_000).active).toBe(false);
   });
 
-  it('never shortens the previous valid deadline on a separately witnessed 429', () => {
+  it('never shortens an active legacy deadline on a separately witnessed 429', () => {
+    writeFileSync(pathFor(profileKey), JSON.stringify({ cooldown_until_ms: now + 300_000 }));
+    expect(readStateLightAccountCooldown(profileKey, now)).toMatchObject({
+      active: true, until: now + 300_000,
+    });
     expect(publishWitnessedStateLight429(profileKey, now)).toMatchObject({
       until: now + 300_000,
     });
-    expect(publishWitnessedStateLight429(profileKey, now + 1_000)).toMatchObject({
-      until: now + 301_000,
+    expect(readFromOtherNodeProcess(profileKey, now + 1_000)).toMatchObject({
+      active: true, until: now + 300_000,
     });
-    expect(readFromOtherNodeProcess(profileKey, now + 1_100)).toMatchObject({
-      active: true, until: now + 301_000,
+    expect(JSON.parse(readFileSync(pathFor(profileKey), 'utf8'))).toMatchObject({
+      cooldown_until_ms: now + 300_000, last_witness_at_ms: now, backoff_step: 1,
     });
-    expect(JSON.parse(readFileSync(pathFor(profileKey), 'utf8')))
-      .toEqual({ cooldown_until_ms: now + 301_000 });
   });
 
-  it('rejects a +24-hour future deadline and replaces it with only newly witnessed 5-minute authority', () => {
+  it('steps through only new 429 witnesses and resets after 30 minutes without a witness', () => {
+    const ticks = [0, 60_001, 180_002, 420_003] as const;
+    const ends = [60_000, 180_001, 420_002, 720_003] as const;
+    for (let i = 0; i < ticks.length; i++) {
+      expect(publishWitnessedStateLight429(profileKey, ticks[i]!))
+        .toMatchObject({ active: true, until: ends[i]! });
+      expect(readStateLightAccountCooldown(profileKey, ticks[i]!)).toMatchObject({
+        active: true, until: ends[i]!, backoffStep: i + 1,
+      });
+    }
+    expect(readStateLightAccountCooldown(profileKey, 720_003)).toMatchObject({
+      active: false, diagnostic: 'account_cooldown_expired', backoffStep: 4,
+    });
+    expect(publishWitnessedStateLight429(profileKey, 720_004)).toMatchObject({
+      until: 1_020_004,
+    });
+    expect(publishWitnessedStateLight429(profileKey, 720_004 + 1_800_001)).toMatchObject({
+      until: 720_004 + 1_800_001 + 60_000,
+    });
+  });
+
+  it('rejects a +24-hour future deadline and replaces it with a new 60-second witness', () => {
     const path = pathFor(profileKey);
     writeFileSync(path, JSON.stringify({ cooldown_until_ms: now + 86_400_000 }));
     expect(readStateLightAccountCooldown(profileKey, now)).toMatchObject({
       active: false, diagnostic: 'account_cooldown_far_future',
     });
     expect(publishWitnessedStateLight429(profileKey, now)).toEqual({
-      active: true, until: now + 300_000,
+      active: true, until: now + 60_000,
     });
     expect(readFromOtherNodeProcess(profileKey, now + 100)).toMatchObject({
-      active: true, until: now + 300_000,
+      active: true, until: now + 60_000,
     });
   });
 
