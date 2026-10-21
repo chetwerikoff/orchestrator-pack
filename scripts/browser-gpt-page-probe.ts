@@ -2506,7 +2506,7 @@ async function runHarvestCore(
   if (record.send_count !== undefined && record.send_count !== 1) {
     throw new ProbeError('surface_unknown', 'harvest_count_conflicts_with_owned_marker');
   }
-  if (record.send_count === undefined && record.phase !== 'prepared' && record.phase !== 'not_sent') {
+  if (record.send_count === undefined && record.phase !== 'prepared') {
     transitionStateLightTurnObservation({
       profileKey, invocationId: args.invocationId,
       phase: record.phase,
