@@ -2542,10 +2542,11 @@ describe('state-light fresh conversation collision recovery', () => {
     const output = join(stateDir, 'fetch-loss-late-owned-reply.txt');
     const invocationId = randomUUID();
     const fixture = freshLocalFetchLossFixture(prompt, reply);
-    // timeout=90s, and the existing cleanup/terminal reserve makes the
-    // pre-Send unbound cutoff ~68s. This owned reply completes later (~80s).
+    // timeout=90s; the old URL-unbound subwindow ends around 68s.
+    // Complete at 70s, still after that cutoff but with space for the
+    // bounded full-reply stability/revalidation before the original 90s cap.
     const start = mocks.nowMs;
-    const replyReadyAt = start + 80_000;
+    const replyReadyAt = start + 70_000;
     const originalLocator = fixture.serverPage.locator.getMockImplementation()!;
     const working = readyTurnObservationFrames(prompt, reply)[0]!;
     let workingReads = 0;
@@ -2574,11 +2575,11 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(workingReads).toBeGreaterThan(0);
     // Put the terminal result first so a premature failure cannot masquerade
     // as a missing fixture selector/read counter.
-    expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0, result: {
+    expect(outcome, JSON.stringify({ outcome, workingReads, completeReads, elapsed: mocks.nowMs - start })).toMatchObject({ code: 0, result: {
       state: 'ok', send_count: 1, conversation_id: SHARED_CONV,
     } });
     expect(completeReads).toBeGreaterThan(0);
-    expect(mocks.nowMs - start).toBeGreaterThanOrEqual(80_000);
+    expect(mocks.nowMs - start).toBeGreaterThanOrEqual(70_000);
     expect(mocks.nowMs - start).toBeLessThan(180_000);
     expect(readFileSync(output, 'utf8')).toBe(reply);
     expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
@@ -3591,7 +3592,7 @@ describe('state-light fresh conversation collision recovery', () => {
     // or post-Send action may invent a reply binding.
     expect(outcome.code).not.toBe(0);
     expect(outcome.result).toMatchObject({
-      state: 'observation_uncertain', cause: 'fresh_conversation_owner_unproven',
+      state: 'observation_uncertain', cause: 'post_send_absolute_deadline_elapsed',
       send_count: 1,
     });
     expect(state.reloads).toBe(0);
@@ -4221,13 +4222,15 @@ describe('state-light fresh conversation collision recovery', () => {
     };
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const outcome = await runNewChatTurn(page, '/tmp/journal-defer-replay.txt');
+    const output = join(stateDir, 'journal-defer-replay.txt');
+    const outcome = await runNewChatTurn(page, output);
 
-    // A deferred URL that never materializes into a canonical project /c/UUID
-    // cannot become an owned fresh conversation, even if a reply looks ready.
-    expect(outcome.code).not.toBe(0);
-    expect(outcome.result).toMatchObject({ send_count: 1 });
-    expect(outcome.result.state).not.toBe('ok');
+    // A deferred UUID/URL cannot veto a uniquely marker-proven successor
+    // on the original pinned Page. Still publish only its full stable reply.
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(readFileSync(output, 'utf8')).toBe(reply);
     expect(page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), {
       waitUntil: 'commit',
       timeout: expect.any(Number),
@@ -6134,20 +6137,23 @@ describe('Issue #1752 production liveness regressions', () => {
       // r06's original absolute bound shortens this synthetic recovery window.
       expect(heartbeats.length).toBeGreaterThanOrEqual(3);
       expect(heartbeats.some((record) => record.phase === 'post_send_observation')).toBe(true);
+      // Current identity admission refuses a zero-match recovery census
+      // before allocating any successor. The pending fixture creation is
+      // deliberately never invoked; unrelated target(s) remain untouched.
       expect(records.at(-1)).toMatchObject({
         schema: 'turn-result/v1',
-        state: 'driver_error',
-        cause: 'replacement_observation_page_create_failed',
+        state: 'ui_contract_mismatch',
+        cause: 'owned_conversation_recovery_zero_match',
         send_count: 1,
       });
       expect(sends).toBe(1);
-      expect(context.newPage).toHaveBeenCalledTimes(2);
+      expect(context.newPage).toHaveBeenCalledTimes(1);
       expect(initialClose).not.toHaveBeenCalled();
       expect(foreignPage.close).not.toHaveBeenCalled();
 
       resolveLateSuccessor(lateSuccessor);
       await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(lateSuccessor.close).toHaveBeenCalledTimes(1);
+      expect(lateSuccessor.close).not.toHaveBeenCalled();
       expect(lateSuccessor.goto).not.toHaveBeenCalled();
       expect(foreignPage.close).not.toHaveBeenCalled();
     } finally {
