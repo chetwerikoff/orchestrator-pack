@@ -2804,7 +2804,8 @@ test.each(['foreign unsent draft', 'unreadable draft'] as const)(
   },
 );
 
-test('harvest refuses to close a duplicated CDP target ID even when its original marker is complete', async () => {
+test.each(['https://chatgpt.com/c/foreign', 'https://example.invalid/c/foreign'])(
+  'harvest refuses to close duplicate CDP ID with a %s route', async (duplicateUrl) => {
   await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
     const target = {
       id: 'ambiguous-current-cdp-id', type: 'page', url: 'https://chatgpt.com/c/test',
@@ -2814,7 +2815,7 @@ test('harvest refuses to close a duplicated CDP target ID even when its original
     let closeCalls = 0;
     const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
       listTargets: async () => created
-        ? [target, { ...target, url: 'https://chatgpt.com/c/foreign', title: 'Duplicate target identity' }]
+        ? [target, { ...target, url: duplicateUrl, title: 'Duplicate target identity' }]
         : [],
       createPage: async () => {
         created = true;
@@ -2841,7 +2842,8 @@ test('harvest refuses to close a duplicated CDP target ID even when its original
     assert.equal(created, true);
     assert.equal(closeCalls, 0);
   });
-});
+},
+);
 
 test('harvest refuses to retire a Page from an ambiguous create result array', async () => {
   await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, output }) => {
