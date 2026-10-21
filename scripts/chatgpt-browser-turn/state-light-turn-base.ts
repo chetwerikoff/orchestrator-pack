@@ -3621,7 +3621,17 @@ async function runTurn(
         || outcome.result.cause === 'account_cooldown_active')) {
       cleanupAuthorityUnprovenPages.add(outcome.page);
     }
-    return { ...outcome, result: { ...outcome.result, product_wall_diagnostic: diagnostic } };
+    return {
+      ...outcome,
+      result: {
+        ...outcome.result,
+        product_wall_diagnostic: diagnostic,
+        ...(freshCleanup.predecessorCleanupStatus
+          ? { predecessor_cleanup_status: freshCleanup.predecessorCleanupStatus,
+            ...(freshCleanup.predecessorTargetId ? { predecessor_target_id: freshCleanup.predecessorTargetId } : {}) }
+          : {}),
+      },
+    };
   } finally {
     try {
       if (freshCleanup.page && !freshCleanup.sendAttempted
@@ -3663,8 +3673,16 @@ async function runTurnCore(
     'timeout-ms',
     'poll-ms',
     'invocation-id',
+    'predecessor-invocation-id',
+    'predecessor-attempt-identity',
+    'predecessor-run-identity',
+    'predecessor-owner-task-id',
   ]);
   const invocationId = stringOption(args, 'invocation-id') ?? '';
+  const previousInvocation = stringOption(args, 'predecessor-invocation-id');
+  const previousAttempt = stringOption(args, 'predecessor-attempt-identity');
+  const previousRun = stringOption(args, 'predecessor-run-identity');
+  const previousOwnerTask = stringOption(args, 'predecessor-owner-task-id');
   let profileKey = 'profile-unresolved';
   let browser: any;
   let page: any;
@@ -3807,6 +3825,11 @@ async function runTurnCore(
 
   try {
     if (!invocationId) throw new Error('input_invalid:invocation_id_required');
+    if ([previousInvocation, previousAttempt, previousRun, previousOwnerTask].some((value) => Boolean(value))
+      && (!previousInvocation || !previousAttempt || !previousRun || !previousOwnerTask
+        || previousInvocation === invocationId)) {
+      throw new Error('input_invalid:exact_predecessor_selector_required');
+    }
     const baseConfig = browserConfig(args);
     if (baseConfig.timeoutMs > STATE_LIGHT_MAX_TIMEOUT_MS) {
       incident('input_invalid', 'timeout_ms_exceeds_maximum', 'return_local_error');
@@ -3898,6 +3921,21 @@ async function runTurnCore(
           journalWriteFailed,
         ),
       };
+    }
+
+    if (previousInvocation && previousAttempt && previousRun && previousOwnerTask) {
+      const previous = await retireExplicitPredecessor({
+        previousInvocationId: previousInvocation,
+        previousAttemptIdentity: previousAttempt,
+        runIdentity: previousRun, ownerTaskId: previousOwnerTask,
+        profileKey, cdp: config.cdp,
+        deadlineMs: Math.min(invocationDeadlineMs, Date.now() + 20_000),
+      });
+      if (freshCleanup) {
+        freshCleanup.predecessorCleanupStatus = previous.status;
+        freshCleanup.predecessorTargetId = previous.targetId;
+      }
+      if (previous.status !== 'confirmed') throw new Error('predecessor_cleanup_unconfirmed');
     }
 
     // Refuse a new Send against the shared account cooldown before attachOwnTarget:
