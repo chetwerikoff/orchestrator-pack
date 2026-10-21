@@ -472,9 +472,11 @@ describe('Issue #1238 publication boundary', () => {
       });
       const result = JSON.parse(writes.at(-1) ?? '{}') as CompactTurnResult;
       expect(exitCode).toBe(0);
-      expect(result.cleanup).toBe('confirmed');
+      // This injected entrypoint has no CDP-pinned owned target; publication
+      // alone is never permission to close a synthetic Page.
+      expect(result.cleanup).toBe('skipped');
       expect(result.send_count).toBe(1);
-      expect(pageCloseCalls).toBe(1);
+      expect(pageCloseCalls).toBe(0);
       expect(browserCloseCalls).toBe(1);
       expect(readFileSync(output, 'utf8')).toBe(reply);
       expect(readChatBinding(chatUrl)?.worktree).toBe(process.cwd());
@@ -751,13 +753,15 @@ describe('Issue #1377 explicit abandonment authority', () => {
       expect(result).toMatchObject({
         state,
         cause: `post_send_${state}`,
-        cleanup: 'confirmed',
+        cleanup: 'skipped',
       });
       expect(result.incidents).toContain('owned_generation_stop_not_attempted_authority_absent');
     }
 
     expect(stopClick).toHaveBeenCalledTimes(0);
-    expect(close).toHaveBeenCalledTimes(TURN_STATES.length - 1);
+    // No captured CDP target or current Stop-origin proof exists in this
+    // test seam; only the terminal classification is under test here.
+    expect(close).toHaveBeenCalledTimes(0);
   });
 
   it('does not Stop or close an unproven reachable page through runStateLightTurn', async () => {
@@ -806,8 +810,8 @@ describe('Issue #1377 explicit abandonment authority', () => {
       result: nonOkResult(),
     });
     expect(stopClick).toHaveBeenCalledTimes(0);
-    expect(close).toHaveBeenCalledTimes(1);
-    expect(result.cleanup).toBe('confirmed');
+    expect(close).toHaveBeenCalledTimes(0);
+    expect(result.cleanup).toBe('skipped');
     expect(result.incidents).toContain('owned_generation_stop_not_attempted_authority_absent');
   });
 
@@ -1220,12 +1224,12 @@ describe('Issue #1377 production runStateLightTurn recovery integration', () => 
       state: 'no_reply',
       cause: 'observation_exhausted_no_resend',
       send_count: 1,
-      cleanup: 'confirmed',
+      cleanup: 'skipped',
     });
     expect(outcome.result.incidents).toContain('owned_generation_stop_not_attempted_authority_absent');
     expect(sends).toBe(1);
     expect(owned.stopClick).not.toHaveBeenCalled();
-    expect(owned.close).toHaveBeenCalledTimes(1);
+    expect(owned.close).not.toHaveBeenCalled();
     expect(foreign.stopClick).not.toHaveBeenCalled();
     expect(foreign.close).not.toHaveBeenCalled();
   });
@@ -1266,8 +1270,8 @@ describe('Issue #1377 production runStateLightTurn recovery integration', () => 
       }),
     }));
     expect(outcome.code).not.toBe(0);
-    expect(order).toEqual(['page-close', 'capture', 'disconnect']);
-    expect(outcome.result).toMatchObject({ cleanup: 'confirmed', send_count: 1 });
+    expect(order).toEqual(['capture', 'disconnect']);
+    expect(outcome.result).toMatchObject({ cleanup: 'skipped', send_count: 1 });
   });
 });
 
