@@ -479,7 +479,7 @@ describe('Issue #2682 direct-target sibling evaluation (same endpoint, not same 
   const frozen = { id: 'probe-frozen', type: 'page', url: FOREIGN, browserContextId: 'context-two' };
   type ProbeTarget = typeof owner;
   let probePages: ProbeTarget[];
-  let responder: 'stalled-evaluation' | 'responsive' | 'lost' | 'control-stall' | 'control-error';
+  let responder: 'stalled-evaluation' | 'responsive' | 'lost' | 'control-stall' | 'control-error' | 'stall-connect' | 'owner-unhealthy' | 'protocol-error';
   let allSockets: ProbeSocket[];
   let allCommands: Array<{ target: string; method: string }>;
 
@@ -494,7 +494,7 @@ describe('Issue #2682 direct-target sibling evaluation (same endpoint, not same 
       this.id = new URL(url).pathname.split('/').at(-1)!;
       allSockets.push(this);
       queueMicrotask(() => {
-        if (this.readyState !== 0) return;
+        if (this.readyState !== 0 || (this.id === frozen.id && responder === 'stall-connect')) return;
         this.readyState = ProbeSocket.OPEN;
         this.emit('open', {});
       });
@@ -536,7 +536,9 @@ describe('Issue #2682 direct-target sibling evaluation (same endpoint, not same 
         } else if (command.method === 'Runtime.evaluate') {
           if (this.id === frozen.id && responder === 'lost') {
             this.close();
-          } else if (this.id !== frozen.id || responder === 'responsive') {
+          } else if (this.id === frozen.id && responder === 'protocol-error') {
+            emitResponse({ id: command.id, error: { code: -32602, message: 'evaluation-error' } });
+          } else if ((this.id !== frozen.id && responder !== 'owner-unhealthy') || responder === 'responsive') {
             emitResponse({ id: command.id, result: { result: { type: 'number', value: 2 } } });
           } // Frozen evaluation itself remains unanswered without socket loss.
         } else {
@@ -586,7 +588,7 @@ describe('Issue #2682 direct-target sibling evaluation (same endpoint, not same 
     expect(recovery.nonresponsive).toEqual([]);
   }, 12_000);
 
-  it.each(['lost', 'control-stall', 'control-error'] as const)(
+  it.each(['lost', 'control-stall', 'control-error', 'stall-connect', 'protocol-error', 'owner-unhealthy'] as const)(
     'returns unknown, never a frozen assertion, after %s', async (mode) => {
       responder = mode;
       const result = await probeCdpSiblingEvaluations(CDP, owner.id);
@@ -618,9 +620,25 @@ describe('Issue #2682 direct-target sibling evaluation (same endpoint, not same 
     const result = await probeCdpSiblingEvaluations(CDP, owner.id);
     expect(result.nonresponsive).toEqual([]);
     expect(allSockets).toHaveLength(5);
+    expect(result.unknown).toEqual([
+      { id: 'a4', url: FOREIGN + '/4' }, { id: 'a5', url: FOREIGN + '/5' },
+    ]);
     expect(allCommands.filter(({ target }) => target.startsWith('a'))
       .map(({ target }) => target).every((id) => ['a0', 'a1', 'a2', 'a3'].includes(id))).toBe(true);
     expect(allSockets.every((socket) => socket.readyState === ProbeSocket.CLOSED)).toBe(true);
+  });
+
+
+  it('leaves an unresponsive /json/list body without creating a target socket before its global cap', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      const body = new ReadableStream<Uint8Array>({ start() { /* never enqueue */ } });
+      return new Response(body, { status: 200 });
+    }));
+    const started = performance.now();
+    const result = await probeCdpSiblingEvaluations(CDP, owner.id, undefined, 100);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(result.nonresponsive).toEqual([]);
+    expect(allSockets).toHaveLength(0);
   });
 
   it('rejects an oversized /json/list before creating any direct socket', async () => {
