@@ -2763,6 +2763,47 @@ test('harvest leaves a newly created recovery target with active unproven Stop g
   });
 });
 
+test.each(['foreign unsent draft', 'unreadable draft'] as const)(
+  'harvest does not close a marker-owned recovery target with %s', async (draftKind) => {
+    await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+      const target = {
+        id: 'probe-foreign-draft', type: 'page', url: 'https://chatgpt.com/c/test',
+        title: 'Shared original marker', webSocketDebuggerUrl: 'ws://example/probe-foreign-draft',
+      };
+      let created = false;
+      let closeCalls = 0;
+      const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => created ? [target] : [],
+        createPage: async () => {
+          created = true;
+          return { ...target, url: 'about:blank' };
+        },
+        closePage: async () => { closeCalls += 1; return 'closed'; },
+        evaluate: async (_target, expression) => expression === HARVEST_EXPRESSION
+          ? evaluateExpression(expression, [
+            new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`,
+              { 'data-message-id': 'u-foreign-draft' }),
+            new FakeNode('assistant', 'ORIGINAL FINAL', 'ORIGINAL FINAL',
+              { 'data-message-id': 'a-foreign-draft' }),
+          ], false, target.url)
+          : {
+            page_url: target.url, user_count: 1, user_texts: [`${marker}\n\nprompt`],
+            stop: false, streaming: false,
+            composer_text: draftKind === 'foreign unsent draft' ? 'FOREIGN TYPED DRAFT' : null,
+            fetch_failure: false,
+          },
+        publish: async () => undefined,
+      }));
+      assert.equal(result.status, 'ok');
+      assert.equal(result.harvested, true);
+      assert.equal(result.cleanup_status, 'cleanup_unconfirmed');
+      assert.equal(result.cleanup_target_id, target.id);
+      assert.equal(created, true);
+      assert.equal(closeCalls, 0);
+    });
+  },
+);
+
 test('harvest refuses to retire a Page from an ambiguous create result array', async () => {
   await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, output }) => {
     const target = {
