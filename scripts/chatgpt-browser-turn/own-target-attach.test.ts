@@ -363,6 +363,10 @@ describe('Issue #2625 own-target attach isolation', () => {
       newChat: true, cleanupBudgetMs: 2_000,
     }).then(() => undefined, (cause: Error & { attachAttempts?: number }) => cause);
     expect(error?.attachAttempts).toBe(3);
+    // No Browser/Page handle survived the failed attach. The positive new CDP
+    // target identity must still reach the state-light terminal cleanup path.
+    expect((error as typeof error & { createdTargetId?: string })?.createdTargetId).toMatch(/^created-/u);
+    expect(targets.filter((target) => target.id === (error as any)?.createdTargetId)).toHaveLength(1);
     expect(chromium.connectOverCDP).toHaveBeenCalledTimes(3);
     expect(FakeChromeSocket.sockets.every((socket) => socket.readyState === 3)).toBe(true);
   });
@@ -375,6 +379,7 @@ describe('Issue #2625 own-target attach isolation', () => {
       newChat: false, chatUrl: CHAT, pinnedTargetId: 'owned-id', postSend: true,
     }).then(() => undefined, (cause: Error & { attachAttempts?: number }) => cause);
     expect(error?.attachAttempts).toBe(1);
+    expect((error as typeof error & { createdTargetId?: string })?.createdTargetId).toBeUndefined();
     expect(chromium.connectOverCDP).toHaveBeenCalledTimes(1);
     targets = [];
     await expect(attachOwnTarget(chromium, {
