@@ -508,6 +508,35 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(fixture.sendButton.click).not.toHaveBeenCalled();
   });
 
+  it('keeps exact owned GET 429 cooldown but harvests the late stable DOM reply and retires its idle created target (#2678 R2)', async () => {
+    const prompt = 'OWNED-GET-429-LATE';
+    const reply = 'FOURTH-POLL-ASSISTANT-COMPLETE';
+    let reportOwned429: () => void = () => undefined;
+    const fixture = makeLoserPage(prompt, reply, () => reportOwned429(), true);
+    proveCreatedPageCanClose(fixture.page);
+    reportOwned429 = installExistingChatFetch429(fixture.page);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    enqueueBrowserForTurn(mocks, fixture.page);
+    const output = join(stateDir, 'owned-429-late-dom.txt');
+    const invocationId = randomUUID();
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', invocationId,
+      '--output', output,
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '90000',
+      '--poll-ms', '1',
+    ]);
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'ok', send_count: 1, cleanup: 'confirmed',
+    });
+    expect(outcome.result.poll_count).toBeGreaterThanOrEqual(4);
+    expect(fixture.getSends()).toBe(1);
+    expect(fixture.page.close).toHaveBeenCalledTimes(1);
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('harvested');
+  });
+
   it('AC12 preserves a selected pre-existing 429 Page and its sibling', async () => {
     const fixture = makeLoserPage('NO-SEND-EXISTING', 'NEVER-SEND');
     fixture.page.url.mockImplementation(() => SHARED_CONV);
