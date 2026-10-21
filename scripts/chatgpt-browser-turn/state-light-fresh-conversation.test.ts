@@ -3578,10 +3578,16 @@ describe('state-light fresh conversation collision recovery', () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const outcome = await runNewChatTurn(page, output);
 
-    expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0 });
-    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
-    expect(state.reloads).toBe(1);
-    expect(readFileSync(output, 'utf8')).toBe(reply);
+    // Without the first-token original user marker, a completed assistant
+    // alone is not this invocation's success authority. No URL-only reload
+    // or post-Send action may invent a reply binding.
+    expect(outcome.code).not.toBe(0);
+    expect(outcome.result).toMatchObject({
+      state: 'observation_uncertain', cause: 'fresh_conversation_owner_unproven',
+      send_count: 1,
+    });
+    expect(state.reloads).toBe(0);
+    expect(existsSync(output)).toBe(false);
   });
 
   it('reloads at most once and never resends when the owned user message stays unrendered (#2197)', async () => {
@@ -3595,7 +3601,9 @@ describe('state-light fresh conversation collision recovery', () => {
 
     expect(outcome.result.state).not.toBe('ok');
     expect(outcome.result.send_count).toBe(1);
-    expect(state.reloads).toBe(1);
+    // Same pinned Page and a 200/URL alone cannot repair a missing marker.
+    expect(state.reloads).toBe(0);
+    expect(existsSync(output)).toBe(false);
   });
 
   it('does not bind a delayed fresh-chat URL until that surface proves the owned marker', async () => {
@@ -5296,21 +5304,16 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     const outcome = await runProductionNewChat(output, '90000');
 
     expect(outcome.result).toMatchObject({
-      state: 'no_reply',
-      cause: 'observation_exhausted_no_resend',
-      send_count: 1,
-      cleanup: 'confirmed',
+      state: 'observation_uncertain', cause: 'post_send_absolute_deadline_elapsed',
+      send_count: 1, cleanup: 'unconfirmed',
     });
-    expect(outcome.result.incidents).toContain('observation_exhausted');
+    expect(outcome.result.incidents).toContain('post_send_observation_error');
+    expect(outcome.result.incidents).toContain('owned_tab_cleanup_unconfirmed');
     expect(ownedStop, JSON.stringify(outcome)).not.toHaveBeenCalled();
-    expect(outcome.result.incidents).toEqual([
-      'send_observation_deferred',
-      'observation_exhausted',
-      'owned_generation_stop_not_attempted_authority_absent',
-    ]);
+    // Same-last-marker Stop does not prove who owns the current generation.
     expect(sends).toBe(1);
     expect(foreignStop).not.toHaveBeenCalled();
-    expect(ownedClose).toHaveBeenCalledTimes(1);
+    expect(ownedClose).not.toHaveBeenCalled();
     expect(foreignClose).not.toHaveBeenCalled();
   });
 
