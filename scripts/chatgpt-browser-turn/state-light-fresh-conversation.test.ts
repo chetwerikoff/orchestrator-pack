@@ -133,8 +133,8 @@ import {
   type CapturedStateLightTurnResult,
   type StateLightTestSnapshot,
 } from './state-light-turn.test-fixtures.ts';
-import { classifyPageObservation, classifySendLandingEvidence, readPageObservation, runStateLightTurn } from './state-light-turn.ts';
-import { admitStateLightTurnObservation, readStateLightTurnObservation } from './state-light-turn-observation.ts';
+import { classifyPageObservation, classifySendLandingEvidence, publishStateLightReply, readPageObservation, runStateLightTurn } from './state-light-turn.ts';
+import { admitStateLightTurnObservation, finalizeStateLightPrimaryPublication, readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { deriveDelivery } from '../flow-manager-long-running-child.ts';
 import { __testBrowserOrPageDefinitelyLost, __testComposerMutation, __testSendDelivery, deriveComposerInsertionBudgetMs, POST_SEND_OBSERVATION_POLL_MS, probePageLiveness } from './state-light-turn-base.ts';
 import { currentOwnedPromptMarker, wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
@@ -3723,6 +3723,51 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(readFileSync(output, 'utf8')).toBe(reply);
     expect(composerText).toContain(prompt);
+  });
+
+  it('accepts probe primary committed during an in-flight post-Send transcript read', async () => {
+    const prompt = 'POST-SEND-PROBE-RACE';
+    const invocationId = randomUUID();
+    const output = join(stateDir, 'external-harvest-mid-read.txt');
+    const externalReply = 'PROBE PUBLISHED EXACT REPLY';
+    const turn = makeLoserPage(prompt, 'LOCAL-UNTRUSTED', undefined, true);
+    const originalLocator = turn.page.locator.getMockImplementation()!;
+    let injected = false;
+    turn.page.locator.mockImplementation((selector: string) => {
+      const locator = originalLocator(selector);
+      if (selector !== MESSAGE_NODE_SELECTOR || typeof locator.evaluateAll !== 'function') return locator;
+      const observe = locator.evaluateAll.bind(locator);
+      return {
+        ...locator,
+        evaluateAll: async (...args: any[]) => {
+          if (!injected && turn.getSends() === 1) {
+            const record = readStateLightTurnObservation('collision-profile', invocationId);
+            if (record.phase === 'sent_unbound' || record.phase === 'sent_unharvested') {
+              injected = true;
+              const publication = await finalizeStateLightPrimaryPublication({
+                profileKey: 'collision-profile',
+                invocationId,
+                target: output,
+                bytes: Buffer.from(externalReply, 'utf8'),
+                publish: () => publishStateLightReply(output, invocationId, externalReply),
+              });
+              expect(publication.state).toBe('committed_ok');
+              expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('harvested');
+            }
+          }
+          return observe(...args);
+        },
+      };
+    });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(turn.page, output, '90000', invocationId);
+    expect(injected).toBe(true);
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({
+      state: 'ok', cause: 'completed_page_probe_primary', send_count: 1,
+    });
+    expect(readFileSync(output, 'utf8')).toBe(externalReply);
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('harvested');
+    expect(turn.getSends()).toBe(1);
   });
 
   it('surfaces committed post-send observation retirement cleanup without resend', async () => {
