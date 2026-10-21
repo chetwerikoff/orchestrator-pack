@@ -155,7 +155,7 @@ function parseRecord(raw: string): StateLightTurnObservationRecord {
     if (typeof target.id !== 'string' || !/^[A-Za-z0-9._:-]{1,256}$/u.test(target.id)
       || typeof target.created !== 'boolean'
       || typeof target.cdp_sha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(target.cdp_sha256)
-      || typeof target.initial_route !== 'string' || !/^https:\/\/chatgpt\.com\//u.test(target.initial_route)) {
+      || typeof target.initial_route !== 'string' || !/^https:\/\/(?:chatgpt\.com|chat\.openai\.com)\//u.test(target.initial_route)) {
       throw new Error('observation_owned_target_invalid');
     }
   }
