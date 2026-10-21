@@ -1752,6 +1752,23 @@ describe('flow-manager long-running child (#1164)', () => {
     }, false)).toBe('POSSIBLY_DELIVERED');
   });
 
+  it('keeps marker-proven delivery landed during an output conflict without masking that state (#2678 AC8)', () => {
+    const conflict = makeParsedTurnResult({
+      state: 'output_conflict', scope: 'invocation', cause: 'output_conflict:existing_bytes',
+      resolved_send_count: 1, send_attempted: true, owned_marker_confirmed: true,
+      send_witness: 'owned_marker', witness: undefined, conversation_id: undefined,
+    });
+    expect(conflict.state).toBe('output_conflict');
+    expect(deriveDelivery(conflict, false)).toBe('landed');
+    expect(deriveDelivery({
+      ...conflict, owned_marker_confirmed: undefined, send_witness: 'numeric_send_count',
+    }, false)).toBe('POSSIBLY_DELIVERED');
+    expect(deriveDelivery({
+      ...conflict, resolved_send_count: 0, owned_marker_confirmed: undefined,
+      send_witness: 'none',
+    }, false)).toBe('POSSIBLY_DELIVERED');
+  });
+
   it('uses top-level send_count for post-send failure delivery (P1)', () => {
     const parsed = makeParsedTurnResult({
       state: 'foreign_activity',
