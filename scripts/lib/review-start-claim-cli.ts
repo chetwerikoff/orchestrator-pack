@@ -1059,10 +1059,14 @@ export function completeReviewStartClaim(
       ? visibleRun(boundRunId
         ? reviewRuns.filter((entry) => {
           const run = asRecord(entry);
-          return asString(run.id) === boundRunId && asString(run.runId) === boundRunId
-            && asString(run.projectId) === claimRecord.projectNamespace
+          // Older visible-run bindings supply runId/targetSha without the optional
+          // canonical aliases. Reject every present contradictory identity.
+          return asString(run.id ?? run.runId) === boundRunId
+            && asString(run.runId ?? run.id) === boundRunId
+            && (!run.projectId || asString(run.projectId) === claimRecord.projectNamespace)
+            && (!run.project || asString(run.project) === claimRecord.projectNamespace)
             && Number(run.prNumber) === claimRecord.prNumber
-            && asString(run.headSha).toLowerCase() === claimRecord.headSha
+            && (!run.headSha || asString(run.headSha).toLowerCase() === claimRecord.headSha)
             && asString(run.targetSha).toLowerCase() === claimRecord.headSha;
         }) : reviewRuns, claimRecord.prNumber, claimRecord.headSha, claimRecord.projectNamespace)
       : null;
