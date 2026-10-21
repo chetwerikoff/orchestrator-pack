@@ -2324,12 +2324,18 @@ async function resolveHarvestTarget(
     } catch { return false; }
   };
 
+  const boundIdentity = conversationUrl === null ? null : normalizeConversationUrl(conversationUrl);
   if (pinnedId) {
     const original = targets.find((target) => target.target_id === pinnedId);
     if (original?.web_socket_debugger_url) {
       const snapshot = await readHarvestSnapshot(original, deps);
       if (!pinnedRouteAllowed(snapshot.page_url)) {
         throw new ProbeError('surface_unknown', 'pinned_original_route_changed');
+      }
+      // A pinned ID proves the original tab, not that its current contents
+      // still belong to the durable conversation after the user navigates it.
+      if (boundIdentity !== null && snapshot.page_url !== boundIdentity) {
+        throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
       }
       if (ownedHarvestWindow(snapshot, marker)) return { target: original, snapshot };
       // A reachable original Page with no unique owned marker cannot transfer
@@ -2341,7 +2347,6 @@ async function resolveHarvestTarget(
   }
 
   const matched: Array<{ target: CompatibleTarget; snapshot: HarvestSnapshot }> = [];
-  const boundIdentity = conversationUrl === null ? null : normalizeConversationUrl(conversationUrl);
   // A sibling's copied marker cannot override a durable bound conversation.
   // With no bound URL, an invocation whose original Page is pinned to a project
   // may only recover a same-project conversation, never a foreign project/root.
