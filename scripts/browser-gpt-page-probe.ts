@@ -2310,8 +2310,15 @@ async function resolveHarvestTarget(
       if (expected.origin !== actual.origin || actual.search || actual.hash
         || actual.username || actual.password) return false;
       if (actual.pathname === expected.pathname) return true;
-      if (/^\/g\/g-p-[^/]+$/iu.test(expected.pathname)
-        && actual.pathname.startsWith(expected.pathname + '/c/')) return true;
+      // The fresh Page is initially pinned at /g/<project>/project (or
+      // /draft). Its /c/local-chatgpt:<id> route is the same project's Page,
+      // not a new identity. The unique marker must still be proved separately.
+      const projectRoot = /^\/g\/g-p-[^/]+(?:\/(?:project|draft))?$/iu.test(expected.pathname)
+        ? expected.pathname.replace(/\/(?:project|draft)$/iu, '')
+        : null;
+      if (projectRoot && /^\/c\/[^/]+$/iu.test(actual.pathname.slice(projectRoot.length))) {
+        return true;
+      }
       return conversationUrl !== null
         && normalizeConversationUrl(url) === normalizeConversationUrl(conversationUrl);
     } catch { return false; }
@@ -2334,11 +2341,18 @@ async function resolveHarvestTarget(
   }
 
   const matched: Array<{ target: CompatibleTarget; snapshot: HarvestSnapshot }> = [];
+  const boundIdentity = conversationUrl === null ? null : normalizeConversationUrl(conversationUrl);
+  // A sibling's copied marker cannot override a durable bound conversation.
+  // With no bound URL, an invocation whose original Page is pinned to a project
+  // may only recover a same-project conversation, never a foreign project/root.
   // A large sibling census cannot multiply per-target timeouts without bound.
   // This is a read-only recovery budget; it never grants fallback Send.
   const siblingDeadline = clockNow(deps) + LIVENESS_TOTAL_TIMEOUT_MS;
   for (const target of targets) {
     if (target.target_id === pinnedId || !target.web_socket_debugger_url) continue;
+    if (boundIdentity !== null && target.normalized_url !== boundIdentity) continue;
+    if (boundIdentity === null && pinnedOriginal
+      && (!pinnedRouteAllowed(target.normalized_url) || !isConversationUrl(target.normalized_url))) continue;
     const remaining = siblingDeadline - clockNow(deps);
     if (remaining <= 0) throw new ProbeError('surface_unknown', 'harvest_sibling_census_timeout');
     let snapshot: HarvestSnapshot;
@@ -2411,12 +2425,14 @@ const PROBE_RECOVERY_GUARD_EXPRESSION = `(() => {
   const stop = Array.from(document.querySelectorAll(${JSON.stringify(STOP_BUTTON_SELECTOR)})).some(visible);
   const streaming = Array.from(document.querySelectorAll(${JSON.stringify(ASSISTANT_TURN_IN_PROGRESS_SELECTOR)})).some(visible);
   const composer = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
+  const emptyBody = (document.body?.innerText || '').trim() === '';
   const errorText = Array.from(document.querySelectorAll('[role="alert"]'))
     .filter(visible).map(node => (node.textContent || '').trim());
   return { page_url: location.href, user_count: users.length,
     user_texts: users.length <= 100 ? users.map(node => node.innerText) : [],
     stop, streaming,
     composer_text: composer && composer.textContent === composer.innerText ? composer.textContent : null,
+    empty_body: emptyBody,
     fetch_failure: errorText.some(text => text.includes('Failed to fetch')
       || text.includes('Could not load this ChatGPT conversation')) };
 })()`;
@@ -2438,7 +2454,19 @@ async function retireProbeCreatedRecoveryTarget(
     // Check raw identities before the compatibility filter: even a duplicate
     // foreign-route/non-Page record must invalidate destructive authority.
     const matching = census.filter((target) => target.id === lease.targetId);
-    if (matching.length !== 1) return null;
+    // Never retire Chrome's last Page, even if this target was created here.
+    if (matching.length !== 1 || !census.some((target) =>
+      target.type === 'page' && target.id !== lease.targetId)) return null;
+    const target = matching[0]!;
+    // A positively created recovery Page can remain at a truly empty
+    // about:blank after navigation fails. Normal compatible URL filtering
+    // deliberately excludes this route, so recognize only this exact target.
+    if (target.type === 'page' && target.url === 'about:blank'
+      && typeof target.id === 'string' && TARGET_ID_RE.test(target.id)
+      && isDebuggerWebSocketUrl(target.webSocketDebuggerUrl)) {
+      return { target_id: target.id, normalized_url: 'about:blank',
+        title: safeTitle(target.title), web_socket_debugger_url: target.webSocketDebuggerUrl };
+    }
     return toCompatibleTargets(matching)[0] ?? null;
   };
   const safe = async (): Promise<boolean> => {
@@ -2446,7 +2474,8 @@ async function retireProbeCreatedRecoveryTarget(
     let target: CompatibleTarget | null;
     try { target = await currentTarget(); } catch { return false; }
     if (!target?.web_socket_debugger_url) return false;
-    if (target.normalized_url !== lease.requestedUrl) return false;
+    const expectedRoute = target.normalized_url;
+    if (expectedRoute !== lease.requestedUrl && expectedRoute !== 'about:blank') return false;
     try {
       const value = await withTimeout(
         deps.evaluate(target, PROBE_RECOVERY_GUARD_EXPRESSION, remaining()),
@@ -2456,11 +2485,20 @@ async function retireProbeCreatedRecoveryTarget(
         || value.stop !== false || value.streaming !== false
         || value.user_count !== (Array.isArray(value.user_texts) ? value.user_texts.length : -1)
         || typeof value.user_count !== 'number' || value.user_count < 0 || value.user_count > 100
-        || value.page_url !== lease.requestedUrl
-        // Probe-created Pages never own a typed composer. A foreign draft or
-        // unreadable editor is unsafe even when the last user retains our
-        // original unique marker and the current generation is idle.
-        || value.composer_text !== '') return false;
+        || value.page_url !== expectedRoute) return false;
+      // A blank target is closable only while its body is provably empty,
+      // editor absent and user/generation absent. Never treat arbitrary
+      // about:blank content or an unreadable ChatGPT editor as idle.
+      if (expectedRoute === 'about:blank') {
+        if (value.user_count !== 0 || value.composer_text !== null
+          || value.empty_body !== true || value.fetch_failure !== false) return false;
+      } else if (value.composer_text !== '') {
+        // An attributable error-only Page can have no mounted editor. Its
+        // precise error witness and no-user proof distinguish it from an
+        // unreadable editor or a foreign typed draft.
+        if (!(value.composer_text === null && value.user_count === 0
+          && value.fetch_failure === true)) return false;
+      }
       if (value.user_count > 0) {
         const users = value.user_texts as unknown[];
         const owned = users.filter((text) => typeof text === 'string' && ownedPromptMatches(text, marker));
@@ -2472,7 +2510,7 @@ async function retireProbeCreatedRecoveryTarget(
       }
       // A concurrent URL redirect or replacement invalidates the first DOM
       // sample. The next guard and census must reproduce this exact identity.
-      return (await currentTarget())?.normalized_url === lease.requestedUrl;
+      return (await currentTarget())?.normalized_url === expectedRoute;
     } catch { return false; }
   };
   try {
