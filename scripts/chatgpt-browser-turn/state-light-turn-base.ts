@@ -3667,6 +3667,7 @@ async function runTurnCore(
   let browser: any;
   let page: any;
   let sendCount = 0;
+  let refusedCooldownUntil: number | undefined;
   let attachAttempts = 0;
   let pollCount = 0;
   const navigation = new StateLightNavigationCounter();
@@ -3904,7 +3905,10 @@ async function runTurnCore(
     if (admissionCooldown.diagnostic) {
       incident('shared_account_cooldown_diagnostic', admissionCooldown.diagnostic, 'fail_open');
     }
-    if (admissionCooldown.active) throw new Error('account_cooldown_active');
+    if (admissionCooldown.active) {
+      refusedCooldownUntil = admissionCooldown.until;
+      throw new Error('account_cooldown_active');
+    }
 
     // Distinct invocation-owned Pages do not share a profile-wide composer lock.
     // Exact destination claims and the selected Page's own Stop/marker guards
@@ -7494,6 +7498,8 @@ async function runTurnCore(
           pollCount, navigation, incidents,
           {
             ...(sendAttempted ? { send_attempted: true } : {}),
+            ...(isAccountCooldown && refusedCooldownUntil !== undefined
+              ? { cooldown_until_ms: refusedCooldownUntil } : {}),
             ...(!sendAttempted ? { attach_attempts: attachAttempts } : {}),
             ...(page && pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
             ...(holderTimeout ? {
@@ -7861,7 +7867,9 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
       : {}),
     ...(observedTarget?.owned_marker_confirmed ? { owned_marker_confirmed: true as const } : {}),
     ...(observedTarget ? { send_witness: observedTarget.send_witness } : {}),
-    ...(cooldown.active && cooldown.until !== undefined ? { cooldown_until_ms: cooldown.until } : {}),
+    ...(outcome.result.cooldown_until_ms !== undefined
+      ? { cooldown_until_ms: outcome.result.cooldown_until_ms }
+      : cooldown.active && cooldown.until !== undefined ? { cooldown_until_ms: cooldown.until } : {}),
     ...(positivelyCreatedOriginal && cleanup !== 'confirmed'
       ? { cleanup_status: 'cleanup_unconfirmed' as const } : {}),
     cleanup,
