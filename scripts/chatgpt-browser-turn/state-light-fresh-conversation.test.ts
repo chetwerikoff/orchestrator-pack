@@ -354,6 +354,25 @@ function makeLoserPage(
     getComposerText: () => sent ? '' : composerText, getObservationReads: () => observationIndex };
 }
 
+// First-party driver keeps a CDP-pinned ID. Legacy synthetic Page fixtures
+// need actual per-test census/retirement evidence to claim confirmed close.
+function proveCreatedPageCanClose(page: any): void {
+  const keepalive = { id: 'opk-keepalive', type: 'page', url: 'about:blank#opk-keepalive' };
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    if (new URL(String(input)).pathname !== '/json/list') {
+      throw new Error('unexpected CDP operation in exact-created-page fixture');
+    }
+    const closed = (page.close?.mock?.calls?.length ?? 0) > 0;
+    return new Response(JSON.stringify([
+      ...(!closed ? [{
+        id: 'fixture-own-target', type: 'page', url: String(page.url()),
+        webSocketDebuggerUrl: 'ws://example/fixture-own-target',
+      }] : []),
+      keepalive,
+    ]), { status: 200 });
+  });
+}
+
 async function runNewChatTurn(
   page: any,
   outputPath: string,
@@ -417,6 +436,7 @@ describe('state-light fresh conversation collision recovery', () => {
 
   it('AC12 closes only a freshly opened existing-chat Page after a witnessed pre-Send fetch 429', async () => {
     const fixture = makeLoserPage('NO-SEND-429', 'NEVER-SEND');
+    proveCreatedPageCanClose(fixture.page);
     const notify429 = installExistingChatFetch429(fixture.page);
     const goto = fixture.page.goto.getMockImplementation()!;
     fixture.page.goto.mockImplementation(async (target: string) => {
@@ -730,6 +750,7 @@ describe('state-light fresh conversation collision recovery', () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'DO-NOT-SEND');
     turn.sendButton.isEnabled.mockResolvedValue(false);
+    proveCreatedPageCanClose(turn.page);
     const outcome = await runNewChatTurn(turn.page, '/tmp/never-enabled-2487.txt', '90000', invocationId);
     expect(outcome.result).toMatchObject({
       state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
@@ -790,6 +811,7 @@ describe('state-light fresh conversation collision recovery', () => {
       return oldLocator(selector);
     });
     turn.sendButton.isEnabled.mockImplementation(async () => mocks.nowMs >= invocationDeadlineMs + 500);
+    proveCreatedPageCanClose(turn.page);
     const outcome = await runNewChatTurn(
       turn.page, join(stateDir, 'slow-stop-reserve.txt'), '90000', invocationId,
     );
@@ -808,6 +830,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const invocationId = randomUUID();
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'UNREACHED');
+    proveCreatedPageCanClose(turn.page);
     const outcome = await runNewChatTurn(
       turn.page, join(stateDir, 'empty-pre-fill.txt'), '61000', invocationId,
     );
@@ -5302,6 +5325,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
       publicationAtClose = existsSync(output) ? readFileSync(output, 'utf8') : undefined;
       closed = true;
     });
+    proveCreatedPageCanClose(turn.page);
     const browser = browserWithPages(turn.page, [turn.page], () => true);
     mocks.browserQueue.push(browser);
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
