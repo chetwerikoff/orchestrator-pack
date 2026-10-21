@@ -1168,8 +1168,14 @@ describe('Issue #2660 AC12 bounded pre-Send Page cleanup authority', () => {
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
     const { __testFinalizeTurn, __testConversationPageSelection } = await import('./state-light-turn.ts');
-    const { admitStateLightTurnObservation, transitionStateLightTurnObservation } =
-      await import('./state-light-turn-observation.ts');
+    const {
+      admitStateLightTurnObservation, bindStateLightOwnedTarget, transitionStateLightTurnObservation,
+    } = await import('./state-light-turn-observation.ts');
+    const { __testAttachOwnTargetFixture } = await import('./own-target-attach.ts');
+    const {
+      COMPOSER_SELECTOR, RENDERED_STOP_BUTTON_SELECTOR, ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
+    } = await import('./ui-adapter.ts');
+    const { USER_MESSAGE_SELECTOR } = await import('./product-page-selectors.ts');
     const stateDir = mkdtempSync(join(tmpdir(), 'opk-2660-ac12-'));
     const priorDir = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
     process.env.CHATGPT_BROWSER_TURN_STATE_DIR = stateDir;
@@ -1208,12 +1214,70 @@ describe('Issue #2660 AC12 bounded pre-Send Page cleanup authority', () => {
       close: vi.fn(async () => undefined),
     });
     try {
-      const owned = page();
+      // The positive close requires a real exact-ID witness, not just the Page
+      // handle and 429 reason. Keep the production CDP census and physical
+      // disappearance checks active in this synthetic test.
+      const targetId = 'fixture-own-target';
+      const cdp = 'http://127.0.0.1:9222';
+      let stillOpen = true;
+      const owned = {
+        __fakeBrowserGptPage: true,
+        url: () => exact,
+        isClosed: () => !stillOpen,
+        close: vi.fn(async () => { stillOpen = false; }),
+        locator: (selector: string) => {
+          if (selector === COMPOSER_SELECTOR) return {
+            count: async () => 1,
+            evaluate: async () => ({ content: '', visible: '' }),
+          };
+          if (selector === USER_MESSAGE_SELECTOR
+            || selector === RENDERED_STOP_BUTTON_SELECTOR
+            || selector === ASSISTANT_TURN_IN_PROGRESS_SELECTOR) {
+            return { count: async () => 0 };
+          }
+          return { count: async () => 0 };
+        },
+      };
+      const context = {
+        newPage: vi.fn(async () => owned),
+        pages: vi.fn(() => [] as any[]),
+      };
+      const browser = {
+        contexts: vi.fn(() => [context]),
+        close: vi.fn(async () => undefined),
+        isConnected: () => true,
+      };
       const ownedInvocation = randomUUID();
       prepare(ownedInvocation);
-      const closed = await __testFinalizeTurn(makeOutcome(owned, ownedInvocation));
-      expect(closed).toMatchObject({ state: 'rate_limit', cause: 'conversation_fetch_http_429', send_count: 0, cleanup: 'confirmed' });
-      expect(owned.close).toHaveBeenCalledOnce();
+      const attached = await __testAttachOwnTargetFixture({
+        connectOverCDP: vi.fn(async () => browser),
+      }, {
+        mode: 'own-target', cdp, newChat: true,
+        deadlineMs: Date.now() + 15_000,
+      }, true);
+      expect(attached.created).toBe(true);
+      expect(attached.targetId).toBe(targetId);
+      bindStateLightOwnedTarget({
+        profileKey, invocationId: ownedInvocation,
+        targetId, created: true, cdp, initialRoute: exact,
+      });
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+        new Response(JSON.stringify(stillOpen ? [{ id: targetId, type: 'page', url: exact }] : []), {
+          status: 200,
+        }));
+      try {
+        const closed = await __testFinalizeTurn({
+          ...makeOutcome(owned, ownedInvocation), browser,
+        }, cdp);
+        expect(closed).toMatchObject({
+          state: 'rate_limit', cause: 'conversation_fetch_http_429',
+          send_count: 0, cleanup: 'confirmed',
+        });
+        expect(owned.close).toHaveBeenCalledOnce();
+        expect(stillOpen).toBe(false);
+      } finally {
+        fetchSpy.mockRestore();
+      }
 
       const selected = page();
       const selectedInvocation = randomUUID();
@@ -1267,7 +1331,10 @@ describe('Issue #2660 AC12 bounded pre-Send Page cleanup authority', () => {
       prepare(failedInvocation);
       const failed = await __testFinalizeTurn(makeOutcome(failedClose, failedInvocation));
       expect(failed.cleanup).not.toBe('confirmed');
-      expect(failed.incidents).toContain('owned_tab_cleanup_failed');
+      // The detached synthetic handle is deliberately not a proven created
+      // target. It must never reach even a rejecting Page.close().
+      expect(failed.cleanup).toBe('skipped');
+      expect(failedClose.close).not.toHaveBeenCalled();
     } finally {
       if (priorDir === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
       else process.env.CHATGPT_BROWSER_TURN_STATE_DIR = priorDir;
