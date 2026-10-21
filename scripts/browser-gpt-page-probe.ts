@@ -2452,7 +2452,11 @@ async function retireProbeCreatedRecoveryTarget(
         || value.stop !== false || value.streaming !== false
         || value.user_count !== (Array.isArray(value.user_texts) ? value.user_texts.length : -1)
         || typeof value.user_count !== 'number' || value.user_count < 0 || value.user_count > 100
-        || value.page_url !== lease.requestedUrl) return false;
+        || value.page_url !== lease.requestedUrl
+        // Probe-created Pages never own a typed composer. A foreign draft or
+        // unreadable editor is unsafe even when the last user retains our
+        // original unique marker and the current generation is idle.
+        || value.composer_text !== '') return false;
       if (value.user_count > 0) {
         const users = value.user_texts as unknown[];
         const owned = users.filter((text) => typeof text === 'string' && ownedPromptMatches(text, marker));
@@ -2461,8 +2465,6 @@ async function retireProbeCreatedRecoveryTarget(
           users.map((text) => ({ role: 'user' as const, text: String(text) })), marker,
         );
         if (count.matchingUserCarrierCount !== 1 || count.exactMarkerTokenCount !== 1) return false;
-      } else if (value.composer_text !== '' && value.fetch_failure !== true) {
-        return false;
       }
       // A concurrent URL redirect or replacement invalidates the first DOM
       // sample. The next guard and census must reproduce this exact identity.
