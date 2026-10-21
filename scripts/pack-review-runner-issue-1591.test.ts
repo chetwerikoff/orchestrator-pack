@@ -79,6 +79,7 @@ function issueBody(tier: 'T1' | 'T2' = 'T1'): string {
 function harness(storeRoot: string): void {
   process.env.OPK_VITEST_HARNESS = '1';
   process.env.PACK_REVIEWER = 'codex';
+  process.env.PACK_REVIEW_BOUND_REVIEWER = 'codex';
   process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
   process.env.XDG_CONFIG_HOME = join(storeRoot, 'test-config');
   process.env.OPK_BASE_DIR = join(storeRoot, 'base');
@@ -148,6 +149,7 @@ function directOperatorStart(storeRoot: string, headSha = HEAD_A): ReturnType<ty
       ...process.env,
       OPK_VITEST_HARNESS: '1',
       PACK_REVIEWER: 'codex',
+      PACK_REVIEW_BOUND_REVIEWER: 'codex',
       PACK_REVIEW_GITHUB_REVIEW_CAPTURE_FILE: capture,
       PATH: `${binRoot}${delimiter}${process.env.PATH ?? ''}`,
     },
@@ -616,6 +618,7 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
     const storeRoot = tempRoot();
     harness(storeRoot);
     process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/g-p-fixture/project';
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-24T00:00:00.000Z'));
@@ -698,6 +701,7 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
     const storeRoot = tempRoot();
     harness(storeRoot);
     process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/g-p-fixture/project';
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-24T00:00:00.000Z'));
