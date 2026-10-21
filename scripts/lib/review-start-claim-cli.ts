@@ -32,6 +32,7 @@ import {
   resolveBindingProjectNamespace,
 } from '../../docs/review-start-claim-run-binding.mjs';
 import { SUPPORTED_NODE_MAJOR } from '../toolchain/node-runtime-contract.mjs';
+import { getPackReviewRun } from './pack-review-run-store.ts';
 import {
   beginInfraPauseSegment,
   closeInfraPauseSegment,
@@ -65,6 +66,13 @@ export interface ReviewStartClaimRecord extends UnknownRecord {
   projectNamespace: string;
   firstAttemptAtMonotonicMs: number;
   readinessStartMonotonicMs: number;
+}
+
+/** Supplied only by the owning runner immediately after this invocation persisted its terminal run. */
+export interface CurrentInvocationTerminalWrite {
+  runId: string;
+  projectId: string;
+  storeRoot: string;
 }
 
 export interface ClaimResult extends UnknownRecord {
@@ -981,19 +989,101 @@ export function bindReviewStartClaimToVisibleRun(input: ClaimResult, reviewRuns:
   return updated.ok ? { ok: true, boundRunId: runId, claimResult: input } : updated;
 }
 
-export function completeReviewStartClaim(input: ClaimResult, outcome: string, reviewRuns: unknown[] = [], extra: UnknownRecord = {}): UnknownRecord {
+/**
+ * Bind the run owned by this claim even before it is a covering/visible run.
+ * A same-PR/head historical run is not authority: the caller must name its run ID,
+ * and the currently owned claim generation is checked under the existing mutex.
+ */
+export function bindReviewStartClaimToInitiatingRun(
+  input: ClaimResult,
+  runId: string,
+  options: { projectId: string; storeRoot: string },
+): UnknownRecord {
+  const required = requireClaim(input);
+  if (!required.ok) return required.result;
+  if (!asString(runId) || !asString(options.projectId) || !asString(options.storeRoot)) {
+    return { ok: false, reason: 'initiating_run_identity_missing' };
+  }
+  const lock = claimLockDir(required.namespace, required.claim.prNumber, required.claim.headSha);
+  return withMutex(lock, () => {
+    const read = readClaimRecord(required.path);
+    if (!read.ok || !read.record) return { ok: false, reason: 'ambiguous_claim', detail: read.reason };
+    if (read.record.state !== 'active' || !sameGeneration(read.record, required.claim)) {
+      return { ok: false, reason: 'lost_ownership' };
+    }
+    if (read.record.projectNamespace !== options.projectId) return { ok: false, reason: 'project_mismatch' };
+    const bound = asString(read.record.boundRunId);
+    if (bound && bound !== runId) return { ok: false, reason: 'bound_to_other_run', boundRunId: bound };
+    const persisted = getPackReviewRun(runId, { projectId: options.projectId, storeRoot: options.storeRoot });
+    if (!persisted || persisted.id !== runId || persisted.runId !== runId
+      || persisted.projectId !== options.projectId || persisted.prNumber !== read.record.prNumber
+      || persisted.targetSha.toLowerCase() !== read.record.headSha
+      || persisted.headSha.toLowerCase() !== read.record.headSha) {
+      return { ok: false, reason: 'initiating_run_mismatch' };
+    }
+    if (bound === runId) {
+      input.claim = read.record;
+      return { ok: true, boundRunId: runId, claimResult: input };
+    }
+    const updated: ReviewStartClaimRecord = { ...read.record, boundRunId: runId };
+    atomicWriteJson(required.path, updated);
+    input.claim = updated;
+    return { ok: true, boundRunId: runId, claimResult: input };
+  }) as UnknownRecord;
+}
+
+export function completeReviewStartClaim(
+  input: ClaimResult,
+  outcome: string,
+  reviewRuns: unknown[] = [],
+  extra: UnknownRecord = {},
+  currentWrite?: CurrentInvocationTerminalWrite,
+): UnknownRecord {
   const required = requireClaim(input);
   if (!required.ok) return required.result;
   const lock = claimLockDir(required.namespace, required.claim.prNumber, required.claim.headSha);
   return withMutex(lock, () => {
     const read = readClaimRecord(required.path);
     if (!read.ok || !read.record) return { ok: false, reason: 'ambiguous_claim', detail: read.reason };
-    if (!sameGeneration(read.record, required.claim)) return { ok: false, reason: 'lost_ownership', holder: read.record.holder };
-    if (outcome === 'run_started' && !visibleRun(reviewRuns, read.record.prNumber, read.record.headSha, read.record.projectNamespace)) {
+    if (read.record.state !== 'active' || !sameGeneration(read.record, required.claim)) {
+      return { ok: false, reason: 'lost_ownership', holder: read.record.holder };
+    }
+    const covering = outcome === 'run_started'
+      ? visibleRun(reviewRuns, read.record.prNumber, read.record.headSha, read.record.projectNamespace)
+      : null;
+    if (outcome === 'run_started'
+      && (!covering || (read.record.boundRunId && asString(covering.runId) !== read.record.boundRunId))) {
       return { ok: false, reason: 'run_not_visible' };
     }
-    const target = moveToTerminal(required.namespace, required.path, read.record, outcome, extra);
-    const auditPath = writeAudit(required.namespace, read.record, outcome, 'completion', extra);
+    let auditedExtra = extra;
+    if (outcome === 'released_after_run_terminalized') {
+      // The immediate-write capability comes from the owning runner's call chain,
+      // never from a past row, a timestamp, or listPackReviewRuns' stale projection.
+      if (!currentWrite || !asString(currentWrite.runId)
+        || !asString(currentWrite.projectId) || !asString(currentWrite.storeRoot)) {
+        return { ok: false, reason: 'current_terminal_write_required' };
+      }
+      if (currentWrite.projectId !== read.record.projectNamespace
+        || asString(read.record.boundRunId) !== currentWrite.runId) {
+        return { ok: false, reason: 'initiating_run_mismatch' };
+      }
+      const persisted = getPackReviewRun(currentWrite.runId, {
+        projectId: currentWrite.projectId,
+        storeRoot: currentWrite.storeRoot,
+      });
+      if (!persisted || persisted.id !== currentWrite.runId || persisted.runId !== currentWrite.runId
+        || persisted.projectId !== currentWrite.projectId || persisted.prNumber !== read.record.prNumber
+        || persisted.targetSha.toLowerCase() !== read.record.headSha
+        || persisted.headSha.toLowerCase() !== read.record.headSha
+        || !(['failed', 'timed_out', 'cancelled'] as string[]).includes(persisted.status)
+        || persisted.latestRunStatus !== persisted.status) {
+        return { ok: false, reason: 'initiating_terminal_evidence_missing' };
+      }
+      auditedExtra = { ...extra, runId: persisted.id, boundRunId: persisted.id,
+        runStatus: persisted.status, latestRunStatus: persisted.latestRunStatus };
+    }
+    const target = moveToTerminal(required.namespace, required.path, read.record, outcome, auditedExtra);
+    const auditPath = writeAudit(required.namespace, read.record, outcome, 'completion', auditedExtra);
     return { ok: true, terminalPath: target, outcome, auditPath };
   }) as UnknownRecord;
 }
@@ -1039,9 +1129,15 @@ export function confirmReviewStartClaimLaunchGate(input: ClaimResult, reviewRuns
   return update.ok ? { ok: true, claimResult: input } : { ok: false, reason: update.reason === 'lost_ownership' ? 'claim_ownership_lost' : update.reason };
 }
 
-export function completeAfterRunInvoke(input: ClaimResult, reviewRuns: unknown[] = []): UnknownRecord {
+export function completeAfterRunInvoke(input: ClaimResult, reviewRuns: unknown[] = [], currentWrite?: CurrentInvocationTerminalWrite): UnknownRecord {
   const required = requireClaim(input);
   if (!required.ok) return required.result;
+  if (currentWrite) {
+    const immediate = completeReviewStartClaim(input, 'released_after_run_terminalized', [], {}, currentWrite);
+    if (immediate.ok === true || immediate.reason === 'lost_ownership' || immediate.reason === 'ambiguous_claim') {
+      return immediate;
+    }
+  }
   bindReviewStartClaimToVisibleRun(input, reviewRuns);
   const complete = completeReviewStartClaim(input, 'run_started', reviewRuns);
   if (complete.ok) return complete;
@@ -1445,6 +1541,10 @@ export function dispatchReviewStartClaimOperation(operation: string, payload: Un
     case 'Test-ReviewStartClaimOwnership': return testReviewStartClaimOwnership(claim);
     case 'Update-ReviewStartClaimRecordFields': return updateReviewStartClaimRecordFields(claim, asRecord(payload.fields ?? payload.Fields), asArray(payload.clearFields ?? payload.ClearFields).map(asString));
     case 'Bind-ReviewStartClaimToVisibleRun': return bindReviewStartClaimToVisibleRun(claim, asArray(payload.reviewRuns ?? payload.ReviewRuns));
+    case 'Bind-ReviewStartClaimToInitiatingRun': return bindReviewStartClaimToInitiatingRun(
+      claim, asString(payload.runId ?? payload.RunId),
+      { projectId: asString(payload.projectId ?? payload.ProjectId), storeRoot: asString(payload.storeRoot ?? payload.StoreRoot) },
+    );
     case 'Complete-ReviewStartClaim': return completeReviewStartClaim(claim, asString(payload.outcome ?? payload.Outcome), asArray(payload.reviewRuns ?? payload.ReviewRuns), asRecord(payload.extra ?? payload.Extra));
     case 'Release-ReviewStartClaimAfterRunFailure': return releaseAfterRunFailure(claim, asArray(payload.reviewRuns ?? payload.ReviewRuns), asString(payload.failure ?? payload.Failure));
     case 'Complete-ReviewStartClaimPreRunRecheckDenied': {
@@ -1464,7 +1564,7 @@ export function dispatchReviewStartClaimOperation(operation: string, payload: Un
     }
     case 'Get-ReviewStartClaimActiveRecords': return getActiveRecords(asString(payload.namespace ?? payload.Namespace));
     case 'Invoke-ReviewStartClaimReaperSweep': return reaperSweep({ projectId: asString(payload.projectId ?? payload.ProjectId), namespace: asString(payload.namespace ?? payload.Namespace), reviewRuns: asArray(payload.reviewRuns ?? payload.ReviewRuns), reviewerEvidence: asArray(payload.reviewerEvidence ?? payload.ReviewerEvidence) });
-    case 'Complete-ReviewStartClaimAfterRunInvoke': return completeAfterRunInvoke(claim, asArray(payload.reviewRuns ?? payload.ReviewRuns));
+    case 'Complete-ReviewStartClaimAfterRunInvoke': return completeAfterRunInvoke(claim, asArray(payload.reviewRuns ?? payload.ReviewRuns), asRecord(payload.currentWrite ?? payload.CurrentWrite) as unknown as CurrentInvocationTerminalWrite);
     case 'Start-ReviewStartClaimInfraPause': return startInfraPause(claim, positiveInteger(payload.supervisedGhPid ?? payload.SupervisedGhPid, 0));
     case 'Complete-ReviewStartClaimInfraPause': return completeInfraPause(claim, { stderr: asString(payload.stderr ?? payload.Stderr), timedOut: Boolean(payload.timedOut ?? payload.TimedOut), classification: asRecord(payload.classification ?? payload.Classification) });
     case 'Get-ReviewStartClaimLifecycleConfig': return { ok: true, config: resolveClaimLifecycleConfig({}, process.env) };
