@@ -23,6 +23,7 @@ import {
 } from './browser-session.ts';
 import { destinationIdentity } from './coordination.ts';
 import { attachOwnTarget, countUninspectedRecoveryTargets, getOwnTargetInfo } from './own-target-attach.ts';
+import { listCdpPageTargets } from './own-target-cdp-proxy.ts';
 import {
   turnExitCode,
   type ComposerMutationDiagnosticV1,
@@ -62,6 +63,7 @@ import {
 import { atomicJson, configuredProfileKey, profileDirs } from './storage-common.ts';
 import {
   admitStateLightTurnObservation,
+  bindStateLightOwnedTarget,
   finalizeStateLightPrimaryPublication,
   readVerifiedStateLightHarvestedPrimary,
   readStateLightTurnObservation,
@@ -3965,6 +3967,19 @@ async function runTurnCore(
         }
         await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs, () => { beforeBrowserAction(); held429Witness?.beforeNavigation(); });
       }
+    }
+
+    const originalTarget = getOwnTargetInfo(browser);
+    if (page && originalTarget) {
+      bindStateLightOwnedTarget({
+        profileKey, invocationId,
+        targetId: originalTarget.targetId,
+        created: originalTarget.created,
+        cdp: config.cdp,
+        initialRoute: config.newChat
+          ? projectConversationPrefix(config.projectUrl ?? '')
+          : normalizeConversationUrl(config.chatUrl ?? ''),
+      });
     }
 
     let baselineCount = 0;
