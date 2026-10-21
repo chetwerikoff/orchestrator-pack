@@ -299,11 +299,15 @@ export async function probeCdpSiblingEvaluations(
     const own = pages.find((target) => target.id === ownedTargetId
       && target.type === 'page' && isChatGptProbeTarget(target.url));
     if (!own) return empty();
-    const selected = originals
-      ? [...originals].sort((a, b) => a.id.localeCompare(b.id)).slice(0, SIBLING_PROBE_MAX_TARGETS)
+    const eligible = originals
+      ? [...originals].sort((a, b) => a.id.localeCompare(b.id))
       : pages.filter((target) => target.id !== ownedTargetId && isChatGptProbeTarget(target.url))
-        .sort((a, b) => a.id.localeCompare(b.id)).slice(0, SIBLING_PROBE_MAX_TARGETS)
+        .sort((a, b) => a.id.localeCompare(b.id))
         .map((target) => ({ id: target.id, url: target.url }));
+    const selected = eligible.slice(0, SIBLING_PROBE_MAX_TARGETS);
+    // No more than four sockets may be opened; unexamined IDs remain unknown,
+    // never silent evidence of a healthy or a frozen sibling.
+    const overflowUnknown = eligible.slice(SIBLING_PROBE_MAX_TARGETS);
     const disappearedOrChanged: SiblingEvaluationTarget[] = [];
     const candidates: Array<{ identity: SiblingEvaluationTarget; target: ProbePageTarget }> = [];
     for (const original of selected) {
@@ -321,11 +325,11 @@ export async function probeCdpSiblingEvaluations(
     ]);
     if (ownHealth !== 'responsive' || controller.signal.aborted) {
       return { nonresponsive: [], responsive: [],
-        disappearedOrChanged, unknown: candidates.map(({ identity }) => identity) };
+        disappearedOrChanged, unknown: [...overflowUnknown, ...candidates.map(({ identity }) => identity)] };
     }
     const nonresponsive: SiblingEvaluationTarget[] = [];
     const responsive: SiblingEvaluationTarget[] = [];
-    const unknown: SiblingEvaluationTarget[] = [];
+    const unknown: SiblingEvaluationTarget[] = [...overflowUnknown];
     candidates.forEach(({ identity }, index) => {
       const kind = observations[index];
       if (kind === 'nonresponsive') nonresponsive.push(identity);
