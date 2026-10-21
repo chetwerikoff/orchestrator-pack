@@ -11,7 +11,7 @@ import {
   getActiveRecords,
 } from './lib/review-start-claim-store.ts';
 import {
-  createPackReviewRun, setPackReviewRunTerminal, updatePackReviewRun,
+  createPackReviewRun, listPackReviewRuns, setPackReviewRunTerminal, updatePackReviewRun,
 } from './lib/pack-review-run-store.ts';
 
 describe('review-start claim TypeScript authority', () => {
@@ -49,9 +49,12 @@ describe('review-start claim TypeScript authority', () => {
     const projectId = 'orchestrator-pack';
     const prNumber = 267901;
     const headSha = 'e'.repeat(40);
-    const makeRun = () => createPackReviewRun({
+    const makeRun = (logicalRoundOrdinal?: number) => createPackReviewRun({
       projectId, storeRoot, prNumber, headSha,
       trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      ...(logicalRoundOrdinal ? {
+        reviewCycleId: 't3-two-round-claim-fixture', logicalRoundOrdinal, logicalRoundCap: 2,
+      } : {}),
     }).run;
     const acquire = () => acquireReviewStartClaim({
       namespace, projectId, prNumber, headSha, surface: 'unit-owner',
@@ -153,6 +156,102 @@ describe('review-start claim TypeScript authority', () => {
         .toMatchObject({ ok: false, reason: 'lost_ownership' });
       expect(getActiveRecords(fx.namespace)).toHaveLength(1);
       expect(completeReviewStartClaim(claim, 'test_cleanup')).toMatchObject({ ok: true });
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('completes bound T3 round 2 over an older same-head findings terminal A', () => {
+    const fx = currentRunFixture();
+    try {
+      const older = fx.makeRun(1);
+      setPackReviewRunTerminal(older.id, 'changes_requested', {}, fx);
+      const claim = fx.acquire();
+      expect(claim.acquired).toBe(true);
+      const current = fx.makeRun(2);
+      expect(current.id).not.toBe(older.id);
+      expect(bindReviewStartClaimToInitiatingRun(claim, current.id, fx))
+        .toMatchObject({ ok: true, boundRunId: current.id });
+      setPackReviewRunTerminal(current.id, 'up_to_date', {}, fx);
+      const reviewRuns = listPackReviewRuns(fx);
+      expect(reviewRuns.map((run) => run.id)).toEqual([current.id, older.id]);
+      expect(reviewRuns.map((run) => run.logicalRoundOrdinal)).toEqual([2, 1]);
+
+      // Before the fix, the key-only selector chooses older A and returns run_not_visible.
+      const completion = completeReviewStartClaim(claim, 'run_started', reviewRuns);
+      expect(completion).toMatchObject({ ok: true, outcome: 'run_started' });
+      const terminal = JSON.parse(readFileSync(String(completion.terminalPath), 'utf8'));
+      const audit = JSON.parse(readFileSync(String(completion.auditPath), 'utf8'));
+      expect(terminal).toMatchObject({ state: 'terminal', outcome: 'run_started', boundRunId: current.id });
+      expect(audit).toMatchObject({ outcome: 'run_started', decisionSource: 'completion' });
+      expect(getActiveRecords(fx.namespace)).toHaveLength(0);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('finishes bound clean T3 round 2 promptly without a false fence from clean round 1', () => {
+    const fx = currentRunFixture();
+    try {
+      const older = fx.makeRun(1);
+      setPackReviewRunTerminal(older.id, 'up_to_date', {}, fx);
+      const claim = fx.acquire();
+      expect(claim.acquired).toBe(true);
+      const current = fx.makeRun(2);
+      expect(current.id).not.toBe(older.id);
+      expect(bindReviewStartClaimToInitiatingRun(claim, current.id, fx))
+        .toMatchObject({ ok: true, boundRunId: current.id });
+      setPackReviewRunTerminal(current.id, 'up_to_date', {}, fx);
+      const reviewRuns = listPackReviewRuns(fx);
+      expect(reviewRuns.map((run) => run.id)).toEqual([current.id, older.id]);
+      expect(reviewRuns.map((run) => run.logicalRoundOrdinal)).toEqual([2, 1]);
+
+      const start = performance.now();
+      const completion = completeAfterRunInvoke(claim, reviewRuns);
+      expect(performance.now() - start).toBeLessThan(5_000);
+      expect(completion).toMatchObject({ ok: true, outcome: 'run_started' });
+      const terminal = JSON.parse(readFileSync(String(completion.terminalPath), 'utf8'));
+      const audit = JSON.parse(readFileSync(String(completion.auditPath), 'utf8'));
+      expect(terminal).toMatchObject({ state: 'terminal', outcome: 'run_started', boundRunId: current.id });
+      expect(audit).toMatchObject({ outcome: 'run_started', decisionSource: 'completion' });
+      expect(getActiveRecords(fx.namespace)).toHaveLength(0);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects wrong bound run identity/head/project/status and retains unbound selection', () => {
+    const fx = currentRunFixture();
+    try {
+      const older = fx.makeRun(1);
+      setPackReviewRunTerminal(older.id, 'up_to_date', {}, fx);
+      const current = fx.makeRun(2);
+      setPackReviewRunTerminal(current.id, 'up_to_date', {}, fx);
+      const claim = fx.acquire();
+      expect(claim.acquired).toBe(true);
+      expect(bindReviewStartClaimToInitiatingRun(claim, current.id, fx))
+        .toMatchObject({ ok: true, boundRunId: current.id });
+
+      const invalidRows = [
+        { ...current, projectId: 'wrong-project' },
+        { ...current, prNumber: fx.prNumber + 1 },
+        { ...current, targetSha: 'f'.repeat(40) },
+        { ...current, headSha: 'f'.repeat(40) },
+        { ...current, id: older.id },
+        { ...current, runId: older.id },
+        { ...current, status: 'failed', latestRunStatus: 'failed' },
+      ];
+      for (const invalid of invalidRows) {
+        expect(completeReviewStartClaim(claim, 'run_started', [invalid, older]))
+          .toMatchObject({ ok: false, reason: 'run_not_visible' });
+      }
+      expect(getActiveRecords(fx.namespace)).toHaveLength(1);
+      expect(completeReviewStartClaim(claim, 'run_started', listPackReviewRuns(fx)))
+        .toMatchObject({ ok: true, outcome: 'run_started' });
+      const unbound = fx.acquire();
+      expect(unbound.acquired).toBe(true);
+      expect(completeReviewStartClaim(unbound, 'run_started', [older]))
+        .toMatchObject({ ok: true, outcome: 'run_started' });
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }

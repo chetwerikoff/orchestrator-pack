@@ -1053,8 +1053,15 @@ export function completeReviewStartClaim(
     if (read.record.state !== 'active' || !sameGeneration(read.record, required.claim)) {
       return { ok: false, reason: 'lost_ownership', holder: read.record.holder };
     }
+    const boundRunId = asString(read.record.boundRunId);
     const covering = outcome === 'run_started'
-      ? visibleRun(reviewRuns, read.record.prNumber, read.record.headSha, read.record.projectNamespace)
+      ? (boundRunId
+        ? findCoveringRunForKey(reviewRuns.filter((entry) => {
+          const run = asRecord(entry);
+          return asString(run.id) === boundRunId && asString(run.runId) === boundRunId
+            && asString(run.headSha).toLowerCase() === read.record.headSha;
+        }), read.record.prNumber, read.record.headSha, read.record.projectNamespace)
+        : visibleRun(reviewRuns, read.record.prNumber, read.record.headSha, read.record.projectNamespace))
       : null;
     if (outcome === 'run_started'
       && (!covering || (read.record.boundRunId && asString(covering.runId) !== read.record.boundRunId))) {
