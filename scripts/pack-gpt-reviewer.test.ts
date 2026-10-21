@@ -11,6 +11,7 @@ import {
   type GptReviewDependencies,
 } from './lib/pack-gpt-reviewer.ts';
 import { packGptReviewUsage, parsePackGptReviewArgs, runPackGptReviewCommand } from './pack-gpt-review.ts';
+import { writePackReviewerPreference } from './lib/pack-reviewer-preference.ts';
 import {
   normalizePackReviewer,
   packReviewerSelectorErrorMessage,
@@ -45,6 +46,18 @@ describe('PACK_REVIEWER selector (Issue #1031)', () => {
       PACK_REVIEWER: 'gpt',
     })).toBe('gpt');
     expect(resolvePackReviewerFromEnv({}, { preferenceFilePath: missingPreferenceFile })).toBeNull();
+  });
+
+  it('does not let a saved GPT preference override an explicitly bound Codex test reviewer', () => {
+    const saved = join(selectorTestRoot, 'synthetic-saved-reviewer.json');
+    writePackReviewerPreference('gpt', saved);
+    expect(resolvePackReviewerFromEnv({
+      PACK_REVIEWER: 'gpt',
+      PACK_REVIEW_BOUND_REVIEWER: 'codex',
+    }, { preferenceFilePath: saved })).toBe('codex');
+    expect(resolvePackReviewerFromEnv({
+      PACK_REVIEWER: 'codex',
+    }, { preferenceFilePath: saved })).toBe('gpt');
   });
 
   it('honors PACK_REVIEW_BOUND_REVIEWER over stale process layer', () => {
