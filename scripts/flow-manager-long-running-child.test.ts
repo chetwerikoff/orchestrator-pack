@@ -1718,7 +1718,7 @@ describe('flow-manager long-running child (#1164)', () => {
       ['wrong-run', selectors, { runIdentity: 'other-run' }],
       ['wrong-cdp', selectors, { cdp: 'http://127.0.0.1:9333' }],
       ['wrong-prior-attempt',
-        selectors.map((value, index) => index === 8 ? 'foreign-attempt' : value), {}],
+        selectors.map((value, index) => index === 9 ? 'foreign-attempt' : value), {}],
     ] as const) {
       const paths = launchPaths(root, id);
       const code = await runFixtureLaunch(root, currentConfig(id, [...args], override));
