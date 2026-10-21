@@ -2503,6 +2503,19 @@ async function runHarvestCore(
   );
   const window = ownedHarvestWindow(resolved.snapshot, record.marker);
   if (!window) throw new ProbeError('not_found', 'owned_turn_marker_not_found');
+  if (record.send_count !== undefined && record.send_count !== 1) {
+    throw new ProbeError('surface_unknown', 'harvest_count_conflicts_with_owned_marker');
+  }
+  if (record.send_count === undefined && record.phase !== 'prepared' && record.phase !== 'not_sent') {
+    transitionStateLightTurnObservation({
+      profileKey, invocationId: args.invocationId,
+      phase: record.phase,
+      reason: 'harvest_unique_original_marker_send_proven',
+      sendCount: 1,
+      sendWitness: record.send_witness === 'numeric_send_count' ? undefined : 'owned_marker',
+    });
+    record = readStateLightTurnObservation(profileKey, args.invocationId);
+  }
   const classifier = classifyBrowserGptPageTurnStatus(
     resolved.snapshot.generation_in_progress,
     window.assistants.length,
