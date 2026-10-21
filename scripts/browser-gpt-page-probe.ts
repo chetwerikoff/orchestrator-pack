@@ -2387,20 +2387,13 @@ async function resolveHarvestTarget(
     } catch (error) {
       throw new ProbeError('unavailable', 'page_create_failed', boundedDetail(error));
     }
-    // A malformed return must not silently orphan one provably new Page.
-    // An array stays an invalid creation result: identify a cleanup candidate
-    // only when it contains exactly one positively new target and no siblings.
-    const candidates = Array.isArray(created) ? created.length === 1 ? created : []
-      : [created];
-    for (const candidate of candidates) {
-      if (isRecord(candidate) && candidate.type === 'page'
-        && typeof candidate.id === 'string' && TARGET_ID_RE.test(candidate.id)
-        && !preExistingTargetIds.has(candidate.id)) {
-        createdRecovery.targetId = candidate.id;
-        createdRecovery.requestedUrl = normalized;
-      }
-    }
+    // A positive, validated *single* creation result is the sole new-target
+    // ownership witness. A malformed/ambiguous array, missing debugger URL or
+    // pre-existing ID is never close authority, even if a later census finds
+    // an attractive Page at the requested URL.
     const target = validateCreatedTarget(created, normalized, preExistingTargetIds);
+    createdRecovery.targetId = target.target_id;
+    createdRecovery.requestedUrl = normalized;
     createdRecovery.target = target;
     return { target, snapshot: await harvestWithReadiness(target, normalized, marker, deps) };
   }
