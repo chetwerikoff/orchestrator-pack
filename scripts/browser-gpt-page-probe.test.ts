@@ -2804,6 +2804,45 @@ test.each(['foreign unsent draft', 'unreadable draft'] as const)(
   },
 );
 
+test('harvest refuses to close a duplicated CDP target ID even when its original marker is complete', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    const target = {
+      id: 'ambiguous-current-cdp-id', type: 'page', url: 'https://chatgpt.com/c/test',
+      title: 'Original', webSocketDebuggerUrl: 'ws://example/ambiguous-current-cdp-id',
+    };
+    let created = false;
+    let closeCalls = 0;
+    const result = await runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+      listTargets: async () => created
+        ? [target, { ...target, url: 'https://chatgpt.com/c/foreign', title: 'Duplicate target identity' }]
+        : [],
+      createPage: async () => {
+        created = true;
+        return { ...target, url: 'about:blank' };
+      },
+      closePage: async () => { closeCalls += 1; return 'closed'; },
+      evaluate: async (_target, expression) => expression === HARVEST_EXPRESSION
+        ? evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`,
+            { 'data-message-id': 'u-duplicate-cdp-id' }),
+          new FakeNode('assistant', 'ORIGINAL FINAL', 'ORIGINAL FINAL',
+            { 'data-message-id': 'a-duplicate-cdp-id' }),
+        ], false, target.url)
+        : {
+          page_url: target.url, user_count: 1, user_texts: [`${marker}\n\nprompt`],
+          stop: false, streaming: false, composer_text: '', fetch_failure: false,
+        },
+      publish: async () => undefined,
+    }));
+    assert.equal(result.status, 'ok');
+    assert.equal(result.harvested, true);
+    assert.equal(result.cleanup_status, 'cleanup_unconfirmed');
+    assert.equal(result.cleanup_target_id, target.id);
+    assert.equal(created, true);
+    assert.equal(closeCalls, 0);
+  });
+});
+
 test('harvest refuses to retire a Page from an ambiguous create result array', async () => {
   await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, output }) => {
     const target = {
