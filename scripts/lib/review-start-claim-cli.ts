@@ -1014,7 +1014,12 @@ export function bindReviewStartClaimToInitiatingRun(
     if (read.record.projectNamespace !== options.projectId) return { ok: false, reason: 'project_mismatch' };
     const bound = asString(read.record.boundRunId);
     if (bound && bound !== runId) return { ok: false, reason: 'bound_to_other_run', boundRunId: bound };
-    const persisted = getPackReviewRun(runId, { projectId: options.projectId, storeRoot: options.storeRoot });
+    let persisted: ReturnType<typeof getPackReviewRun>;
+    try {
+      persisted = getPackReviewRun(runId, { projectId: options.projectId, storeRoot: options.storeRoot });
+    } catch {
+      return { ok: false, reason: 'initiating_run_mismatch' };
+    }
     if (!persisted || persisted.id !== runId || persisted.runId !== runId
       || persisted.projectId !== options.projectId || persisted.prNumber !== read.record.prNumber
       || persisted.targetSha.toLowerCase() !== read.record.headSha
@@ -1067,10 +1072,15 @@ export function completeReviewStartClaim(
         || asString(read.record.boundRunId) !== currentWrite.runId) {
         return { ok: false, reason: 'initiating_run_mismatch' };
       }
-      const persisted = getPackReviewRun(currentWrite.runId, {
-        projectId: currentWrite.projectId,
-        storeRoot: currentWrite.storeRoot,
-      });
+      let persisted: ReturnType<typeof getPackReviewRun>;
+      try {
+        persisted = getPackReviewRun(currentWrite.runId, {
+          projectId: currentWrite.projectId,
+          storeRoot: currentWrite.storeRoot,
+        });
+      } catch {
+        return { ok: false, reason: 'initiating_terminal_evidence_missing' };
+      }
       if (!persisted || persisted.id !== currentWrite.runId || persisted.runId !== currentWrite.runId
         || persisted.projectId !== currentWrite.projectId || persisted.prNumber !== read.record.prNumber
         || persisted.targetSha.toLowerCase() !== read.record.headSha
