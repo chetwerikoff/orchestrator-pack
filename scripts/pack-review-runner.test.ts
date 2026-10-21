@@ -5274,7 +5274,8 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
             }) }]
             : [{ exitCode: 0, stdout: JSON.stringify(terminal) + '\n' + cleanPayload() }];
         },
-        fixtureGptSourceCommentTransport: source.transport,
+        // The harvest path uses the existing harness source resolution; a
+        // credentialed census transport would divert into early scoped recovery.
         fixtureBeforeGptSourceCommentCensus: async ({ slotId, identity }) => {
           if (slotId !== 'source-02') await source.publishOriginal({ identity });
         },
