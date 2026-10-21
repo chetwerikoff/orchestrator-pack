@@ -2356,7 +2356,7 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
     const path = join(profileDirs(key).locks, 'state-light-account-cooldown.v1.json');
     publishWitnessedStateLight429(key, clock.now);
     const exactExpiry = JSON.parse(readFileSync(path, 'utf8')).cooldown_until_ms as number;
-    expect(exactExpiry).toBe(400_000);
+    expect(exactExpiry).toBe(160_000);
 
     const ownAttach = await import('./own-target-attach.ts');
     const ui = await import('./ui-adapter.ts');
@@ -2476,7 +2476,7 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
       expect(readStateLightAccountCooldown(key, clock.now).active).toBe(eligible);
       if (eligible) {
         expect(JSON.parse(readFileSync(join(profileDirs(key).locks, 'state-light-account-cooldown.v1.json'), 'utf8')))
-          .toEqual({ cooldown_until_ms: 400_000 });
+          .toEqual({ cooldown_until_ms: 160_000, last_witness_at_ms: 100_000, backoff_step: 1 });
         expect(result.product_wall_diagnostic).toMatchObject({ wall_kind: 'rate_limit', http_status: 429 });
       }
     },
