@@ -10,14 +10,9 @@ import {
   isWakeableTerminalEnvelopePath,
   parseFlagArgv,
   readHandoffReceipt,
-  readInvocationReceiptLocator,
-  readTerminalEnvelope,
   type HandoffReceipt,
   unwakeableTerminalEnvelopeHint,
 } from './flow-manager-long-running-child.ts';
-import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
-import { readStateLightTurnObservation } from './chatgpt-browser-turn/state-light-turn-observation.ts';
-import { createHash } from 'node:crypto';
 import {
   inspectManagerCliInvocation,
   type ManagerCliDeclaration,
@@ -195,31 +190,9 @@ export async function runBrowserAdapter(
       || predecessorAttempt === attemptIdentity)) {
     return refuse('predecessor_exact_pair_same_task_required');
   }
-  if (hasPredecessor) {
-    try {
-      const earlier = readInvocationReceiptLocator({
-        invocationId: predecessorInvocation as string,
-        runIdentity,
-        attemptIdentity: predecessorAttempt as string,
-        ownerTaskId: ownerTaskId!,
-      });
-      const settled = readTerminalEnvelope(earlier.locator.terminal_envelope_path, {
-        runIdentity, attemptIdentity: predecessorAttempt as string,
-      });
-      const profileKey = configuredProfileKey(profile, cdp);
-      const state = readStateLightTurnObservation(profileKey, predecessorInvocation as string);
-      if (!settled || settled.observed_invocation_id !== predecessorInvocation
-        || settled.handoff_receipt_path !== earlier.locator.handoff_receipt_path
-        || state.invocation_id !== predecessorInvocation || state.profile_key !== profileKey
-        || !state.owned_target?.created
-        || state.owned_target.cdp_sha256 !== createHash('sha256').update(cdp, 'utf8').digest('hex')) {
-        return refuse('predecessor_terminal_or_original_target_unproven');
-      }
-    } catch (error) {
-      return refuse('predecessor_indexed_provenance_unavailable: '
-        + (error instanceof Error ? error.message : String(error)));
-    }
-  }
+  // Only pass the exact paired selector. The long-running child authenticates
+  // its own handoff against the prior indexed receipt/terminal before spawning
+  // the driver; this wrapper has no target-cleanup authority.
 
   const browserArgs = [
     'turn',
