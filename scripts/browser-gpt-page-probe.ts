@@ -2292,7 +2292,10 @@ async function resolveHarvestTarget(
   const rawTargets = await listTargetCensus(args.cdp, deps);
   const targets = toCompatibleTargets(rawTargets);
   const expectedCdp = createHash('sha256').update(args.cdp, 'utf8').digest('hex');
-  const pinnedId = pinnedOriginal?.cdp_sha256 === expectedCdp ? pinnedOriginal.id : undefined;
+  if (pinnedOriginal && pinnedOriginal.cdp_sha256 !== expectedCdp) {
+    throw new ProbeError('surface_unknown', 'pinned_original_cdp_changed');
+  }
+  const pinnedId = pinnedOriginal?.id;
 
   const pinnedRouteAllowed = (url: string): boolean => {
     if (!pinnedOriginal) return false;
@@ -2317,8 +2320,11 @@ async function resolveHarvestTarget(
         throw new ProbeError('surface_unknown', 'pinned_original_route_changed');
       }
       if (ownedHarvestWindow(snapshot, marker)) return { target: original, snapshot };
-      // A still-live original without a marker is not evidence of a new Send.
-      // Continue only with read-only sibling discovery; never reopen original.
+      // A reachable original Page with no unique owned marker cannot transfer
+      // its live invocation identity to a sibling merely sharing that marker.
+      // Read-only sidebar recovery is available only when the original target
+      // is genuinely unavailable, not when its current transcript is unproven.
+      throw new ProbeError('not_found', 'pinned_original_marker_not_found');
     }
   }
 
@@ -2328,6 +2334,16 @@ async function resolveHarvestTarget(
     let snapshot: HarvestSnapshot;
     try { snapshot = await readHarvestSnapshot(target, deps); }
     catch { continue; }
+    // Census URL is only a selection hint. Navigation between the CDP
+    // census and the DOM read invalidates this candidate even if an old
+    // marker remains visible in the new conversation.
+    if (snapshot.page_url !== target.normalized_url) {
+      if (conversationUrl !== null
+        && target.normalized_url === normalizeConversationUrl(conversationUrl)) {
+        throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+      }
+      continue;
+    }
     if (ownedHarvestWindow(snapshot, marker)) matched.push({ target, snapshot });
   }
   if (matched.length > 1) throw new ProbeError('ambiguous', 'owned_turn_marker_ambiguous');
@@ -2339,7 +2355,11 @@ async function resolveHarvestTarget(
     if (matches.length > 1) throw new ProbeError('ambiguous', 'owned_turn_url_ambiguous');
     if (matches.length === 1) {
       const target = matches[0]!;
-      return { target, snapshot: await harvestWithReadiness(target, normalized, marker, deps) };
+      const snapshot = await harvestWithReadiness(target, normalized, marker, deps);
+      if (snapshot.page_url !== normalized) {
+        throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
+      }
+      return { target, snapshot };
     }
     if (!deps.createPage) throw new ProbeError('unavailable', 'page_create_unavailable');
     const preExistingTargetIds = new Set(rawTargets.flatMap((target) => typeof target.id === 'string' ? [target.id] : []));
