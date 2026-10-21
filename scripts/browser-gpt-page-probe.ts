@@ -2272,57 +2272,96 @@ async function harvestWithReadiness(
   throw new ProbeError('surface_unknown', 'harvest_readiness_timeout');
 }
 
+interface ProbeCreatedRecoveryTarget {
+  targetId?: string;
+  target?: CompatibleTarget;
+  requestedUrl?: string;
+}
+
+/** Exact pinned target and unique visible marker outrank a stale URL locator. */
 async function resolveHarvestTarget(
   args: ParsedHarvestArgs,
   marker: string,
   conversationUrl: string | null,
   deps: ProbeDependencies,
+  createdRecovery: ProbeCreatedRecoveryTarget,
+  pinnedOriginal?: { readonly id: string; readonly created: boolean; readonly cdp_sha256: string; readonly initial_route: string },
 ): Promise<{ target: CompatibleTarget; snapshot: HarvestSnapshot }> {
   const rawTargets = await listTargetCensus(args.cdp, deps);
   const targets = toCompatibleTargets(rawTargets);
+  const expectedCdp = createHash('sha256').update(args.cdp, 'utf8').digest('hex');
+  const pinnedId = pinnedOriginal?.cdp_sha256 === expectedCdp ? pinnedOriginal.id : undefined;
+
+  const pinnedRouteAllowed = (url: string): boolean => {
+    if (!pinnedOriginal) return false;
+    try {
+      const expected = new URL(pinnedOriginal.initial_route);
+      const actual = new URL(url);
+      if (expected.origin !== actual.origin || actual.search || actual.hash
+        || actual.username || actual.password) return false;
+      if (actual.pathname === expected.pathname) return true;
+      if (/^\/g\/g-p-[^/]+$/iu.test(expected.pathname)
+        && actual.pathname.startsWith(expected.pathname + '/c/')) return true;
+      return conversationUrl !== null
+        && normalizeConversationUrl(url) === normalizeConversationUrl(conversationUrl);
+    } catch { return false; }
+  };
+
+  if (pinnedId) {
+    const original = targets.find((target) => target.target_id === pinnedId);
+    if (original?.web_socket_debugger_url) {
+      const snapshot = await readHarvestSnapshot(original, deps);
+      if (!pinnedRouteAllowed(snapshot.page_url)) {
+        throw new ProbeError('surface_unknown', 'pinned_original_route_changed');
+      }
+      if (ownedHarvestWindow(snapshot, marker)) return { target: original, snapshot };
+      // A still-live original without a marker is not evidence of a new Send.
+      // Continue only with read-only sibling discovery; never reopen original.
+    }
+  }
+
+  const matched: Array<{ target: CompatibleTarget; snapshot: HarvestSnapshot }> = [];
+  for (const target of targets) {
+    if (target.target_id === pinnedId || !target.web_socket_debugger_url) continue;
+    let snapshot: HarvestSnapshot;
+    try { snapshot = await readHarvestSnapshot(target, deps); }
+    catch { continue; }
+    if (ownedHarvestWindow(snapshot, marker)) matched.push({ target, snapshot });
+  }
+  if (matched.length > 1) throw new ProbeError('ambiguous', 'owned_turn_marker_ambiguous');
+  if (matched.length === 1) return matched[0]!;
+
   if (conversationUrl) {
     const normalized = normalizeConversationUrl(conversationUrl);
     const matches = targets.filter((target) => target.normalized_url === normalized);
     if (matches.length > 1) throw new ProbeError('ambiguous', 'owned_turn_url_ambiguous');
     if (matches.length === 1) {
       const target = matches[0]!;
-      const snapshot = await readHarvestSnapshot(target, deps);
-      if (snapshot.page_url !== normalized) {
-        throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
-      }
-      return { target, snapshot };
+      return { target, snapshot: await harvestWithReadiness(target, normalized, marker, deps) };
     }
     if (!deps.createPage) throw new ProbeError('unavailable', 'page_create_unavailable');
     const preExistingTargetIds = new Set(rawTargets.flatMap((target) => typeof target.id === 'string' ? [target.id] : []));
     let created: CdpTarget | readonly CdpTarget[];
-    try {
-      created = await deps.createPage(args.cdp, normalized);
-    } catch (error) {
-      throw new ProbeError('unavailable', 'page_create_failed', boundedDetail(error));
+    try { created = await deps.createPage(args.cdp, normalized); }
+    catch (error) { throw new ProbeError('unavailable', 'page_create_failed', boundedDetail(error)); }
+    // Creation alone is insufficient: capture a known new ID even if readiness
+    // or the return shape fails later, but NEVER retire a pre-existing ID.
+    if (!Array.isArray(created) && isRecord(created)
+      && created.type === 'page' && typeof created.id === 'string'
+      && TARGET_ID_RE.test(created.id) && !preExistingTargetIds.has(created.id)) {
+      createdRecovery.targetId = created.id;
+      createdRecovery.requestedUrl = normalized;
     }
     const target = validateCreatedTarget(created, normalized, preExistingTargetIds);
-    // Harvest never derives cleanup authority. A recovery-opened page is left
-    // untouched for the caller/operator after this bounded readiness observation.
+    createdRecovery.target = target;
     return { target, snapshot: await harvestWithReadiness(target, normalized, marker, deps) };
   }
-
-  const candidates: Array<{ target: CompatibleTarget; snapshot: HarvestSnapshot }> = [];
-  for (const target of targets) {
-    if (!target.web_socket_debugger_url) continue;
-    let snapshot: HarvestSnapshot;
-    try {
-      snapshot = await readHarvestSnapshot(target, deps);
-    } catch {
-      continue;
-    }
-    if (ownedHarvestWindow(snapshot, marker)) candidates.push({ target, snapshot });
-  }
-  if (candidates.length === 0) throw new ProbeError('not_found', 'owned_turn_unbound_not_found');
-  if (candidates.length > 1) throw new ProbeError('ambiguous', 'owned_turn_marker_ambiguous');
-  return candidates[0]!;
+  throw new ProbeError('not_found', 'owned_turn_unbound_not_found');
 }
 
-async function runHarvest(args: ParsedHarvestArgs, deps: ProbeDependencies): Promise<ProbeEnvelope> {
+async function runHarvestCore(
+  args: ParsedHarvestArgs, deps: ProbeDependencies, createdRecovery: ProbeCreatedRecoveryTarget,
+): Promise<ProbeEnvelope> {
   const profileKey = configuredProfileKey(args.profile, args.cdp);
   let record;
   try {
@@ -2340,7 +2379,9 @@ async function runHarvest(args: ParsedHarvestArgs, deps: ProbeDependencies): Pro
     });
   }
 
-  const resolved = await resolveHarvestTarget(args, record.marker, record.conversation_url, deps);
+  const resolved = await resolveHarvestTarget(
+    args, record.marker, record.conversation_url, deps, createdRecovery, record.owned_target,
+  );
   const window = ownedHarvestWindow(resolved.snapshot, record.marker);
   if (!window) throw new ProbeError('not_found', 'owned_turn_marker_not_found');
   const classifier = classifyBrowserGptPageTurnStatus(
