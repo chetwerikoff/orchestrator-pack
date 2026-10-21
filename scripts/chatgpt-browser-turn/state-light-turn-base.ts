@@ -5703,7 +5703,7 @@ async function runTurnCore(
         if (recoveryHooks.sleep) {
           await recoveryHooks.sleep(waitMs);
         } else {
-          await sleep(page, waitMs);
+          await postSendSleep(waitMs);
         }
       },
       now: () => Date.now(),
@@ -6184,7 +6184,7 @@ async function runTurnCore(
         );
         if (readErrorExhausted) return readErrorExhausted;
         updateHeartbeatForPoll({ state: 'waiting' });
-        await sleep(page, INITIAL_POLL_MS);
+        await postSendSleep(INITIAL_POLL_MS);
         continue;
       }
 
@@ -6313,7 +6313,7 @@ async function runTurnCore(
         );
         if (incompleteExhausted) return incompleteExhausted;
         updateHeartbeatForPoll({ state: 'waiting' });
-        await sleep(page, INITIAL_POLL_MS);
+        await postSendSleep(INITIAL_POLL_MS);
         continue;
       }
 
@@ -6747,7 +6747,7 @@ async function runTurnCore(
           baselineCount = 0;
           lastMarkerlessSnapshotSignature = '';
           updateHeartbeatForPoll({ state: 'waiting' });
-          await sleep(page, INITIAL_POLL_MS);
+          await postSendSleep(INITIAL_POLL_MS);
           continue;
         }
       } else {
@@ -6802,7 +6802,14 @@ async function runTurnCore(
       const inProgress = !ownedWindowCompletionReady;
       const decision = forcedDecision ?? classifyPageObservation(messages, baselineCount, marker, inProgress);
 
-      if (hasOwnedUserMessage(messages, marker)) {
+      if (markerCardinality.matchingUserCarrierCount === 1
+        && markerCardinality.exactMarkerTokenCount === 1
+        && (config.newChat
+          ? (createdFreshPage && page === originalHeldPage
+            && !ownershipForfeited && Boolean(config.projectUrl)
+            && (matchingFreshProjectLocalUrl(String(page.url()), config.projectUrl!)
+              || isBlankProjectSurfaceUrl(String(page.url()), config.projectUrl!)))
+          : Boolean(targetChatUrl && readOwnedConversationIdentity(page, targetChatUrl).matched))) {
         ownedPromptEverSeen = true;
       }
 
@@ -6883,7 +6890,7 @@ async function runTurnCore(
         );
         if (uncertainWaitingExhausted) return uncertainWaitingExhausted;
         updateHeartbeatForPoll(decision);
-        await sleep(page, INITIAL_POLL_MS);
+        await postSendSleep(INITIAL_POLL_MS);
         continue;
       }
 
@@ -6962,7 +6969,7 @@ async function runTurnCore(
           completionReadySeen = false;
           lastReadyAssistantIdentity = '';
           updateHeartbeatForPoll({ state: 'waiting' });
-          await sleep(page, INITIAL_POLL_MS);
+          await postSendSleep(INITIAL_POLL_MS);
           continue;
         }
       }
@@ -7005,7 +7012,7 @@ async function runTurnCore(
           completionReadySeen = false;
           lastReadyAssistantIdentity = '';
           updateHeartbeatForPoll({ state: 'waiting' });
-          await sleep(page, INITIAL_POLL_MS);
+          await postSendSleep(INITIAL_POLL_MS);
           continue;
         }
         if (decision.reply.length > bestReadyReply.length) bestReadyReply = decision.reply;
@@ -7040,7 +7047,7 @@ async function runTurnCore(
             lastReadyObservedText = '';
             bestReadyReply = '';
             lastReadyAssistantIdentity = '';
-            await sleep(page, INITIAL_POLL_MS);
+            await postSendSleep(INITIAL_POLL_MS);
             continue;
           }
           if (
@@ -7166,7 +7173,7 @@ async function runTurnCore(
             completionReadySeen = false;
             lastReadyAssistantIdentity = '';
             updateHeartbeatForPoll({ state: 'waiting' });
-            await sleep(page, INITIAL_POLL_MS);
+            await postSendSleep(INITIAL_POLL_MS);
             continue;
           }
           const publication = await finalizeStateLightPrimaryPublication({
@@ -7255,7 +7262,7 @@ async function runTurnCore(
         );
         if (readyExhausted) return readyExhausted;
         updateHeartbeatForPoll(decision);
-        await sleep(page, STABILITY_READ_DELAY_MS);
+        await postSendSleep(STABILITY_READ_DELAY_MS);
         continue;
       }
 
@@ -7353,7 +7360,7 @@ async function runTurnCore(
           ? INITIAL_POLL_MS
           : POST_SEND_OBSERVATION_POLL_MS;
       const beforeSoftDeadline = Date.now() < softDeadline;
-      await sleep(page, sendAttempted && sendCount === 0
+      await postSendSleep(sendAttempted && sendCount === 0
         ? Math.min(delay, Math.max(1, zeroCountCutoffMs - Date.now()))
         : config.newChat && !ownedConversationUrl
           ? Math.min(delay, Math.max(1, freshUnboundReturnByMs - Date.now()))
