@@ -439,7 +439,7 @@ export function checkSmokeTestPlan(markdown) {
     // and a contradictory/malformed plan can bypass both smoke gates.
     for (const line of rawSmokePlanFenceRaw.split(/\r?\n/u)) {
       const entry = line.trim();
-      if (entry && !/^(?:not-applicable|na|reason|n\/a-reason):[^\r\n]*$/iu.test(entry)) {
+      if (entry && !entry.startsWith('#') && !/^(?:not-applicable|na|reason|n\/a-reason):[^\r\n]*$/iu.test(entry)) {
         errors.push('smoke-test-plan not-applicable cannot contain scenarios or unsupported entries');
         break;
       }

@@ -921,6 +921,24 @@ describe('Issue #2319 terminal-free publish', () => {
         allowed: true, reason: 'smoke_not_required', smokeRequired: false,
       });
     }
+    const annotatedNotApplicable = [
+      '```smoke-test-plan',
+      'not-applicable: true',
+      '',
+      '# This documentation-only change requires no live smoke.',
+      '  # Indented standalone comment is also valid.',
+      'reason: Documentation changes require no runtime execution.',
+      '```',
+    ].join('\n');
+    expect(checkSmokeTestPlan(annotatedNotApplicable).ok).toBe(true);
+    expect(resolveSmokeRequirement(annotatedNotApplicable)).toMatchObject({
+      requirement: 'not-applicable', scenarios: [],
+    });
+    for (const gate of [evaluateWorkerSmokeGate, evaluateBaseSmokeGate]) {
+      expect(gate({ ...gateInput, issueBody: annotatedNotApplicable })).toMatchObject({
+        allowed: true, reason: 'smoke_not_required', smokeRequired: false,
+      });
+    }
     const grandfathered = [
       '```behavior-kind', 'action-producing', '```',
       '```smoke-plan-floor', 'grandfathered: true', '```',
