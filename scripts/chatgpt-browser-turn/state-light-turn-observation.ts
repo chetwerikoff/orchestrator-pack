@@ -497,6 +497,33 @@ function inspectExistingPrimary(target: string): {
   }
 }
 
+/**
+ * The independent Page probe can publish this invocation's primary before the
+ * driver finishes its DOM poll. A phase or path alone is never sufficient:
+ * verify the exact identity/binding AND committed ordinary-file bytes.
+ */
+export function readVerifiedStateLightHarvestedPrimary(input: {
+  readonly profileKey: string;
+  readonly invocationId: string;
+  readonly marker: string;
+  readonly target: string;
+}): { readonly byteLength: number; readonly sha256: string; readonly sendWitness: StateLightTurnSendWitness } | null {
+  const record = readStateLightTurnObservation(input.profileKey, input.invocationId);
+  if (record.phase !== 'harvested'
+    || record.marker !== input.marker
+    || record.invocation_id !== input.invocationId
+    || record.profile_key !== input.profileKey
+    || !record.primary || record.primary.target !== resolve(input.target)
+    || (record.send_count !== undefined && record.send_count !== 1)
+    || record.send_witness === 'none') return null;
+  const actual = inspectExistingPrimary(record.primary.target);
+  return actual.state === 'mismatch'
+    && actual.byte_length === record.primary.byte_length
+    && actual.sha256 === record.primary.sha256
+    ? { byteLength: record.primary.byte_length, sha256: record.primary.sha256, sendWitness: record.send_witness }
+    : null;
+}
+
 export async function finalizeStateLightPrimaryPublication(input: {
   readonly profileKey: string;
   readonly invocationId: string;
