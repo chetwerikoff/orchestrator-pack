@@ -17,9 +17,16 @@ import { BEFORE_CDP_BROWSER_RELEASE, releaseCdpBrowser } from './browser-session
 import { parsePackReviewPreflightArgs, runPackReviewPreflight, runStateLightEntry } from './state-light-entry.ts';
 import { readChatBinding } from './chat-bindings.ts';
 import { configuredProfileKey } from './storage-common.ts';
-import { admitStateLightTurnObservation, transitionStateLightTurnObservation } from './state-light-turn-observation.ts';
+import {
+  admitStateLightTurnObservation, bindStateLightOwnedTarget, transitionStateLightTurnObservation,
+} from './state-light-turn-observation.ts';
 import { TURN_STATES } from './contracts.ts';
-import { COMPOSER_SELECTOR, loadChromium, SEND_BUTTON_SELECTOR } from './ui-adapter.ts';
+import {
+  COMPOSER_SELECTOR, loadChromium, SEND_BUTTON_SELECTOR,
+  RENDERED_STOP_BUTTON_SELECTOR, ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
+} from './ui-adapter.ts';
+import { USER_MESSAGE_SELECTOR } from './product-page-selectors.ts';
+import { __testAttachOwnTargetFixture } from './own-target-attach.ts';
 import {
   buildBrowserTurnCancellationReceipt,
   cancelOwnedGenerationFromReceipt,
@@ -105,33 +112,109 @@ function makeTurnResult(overrides: Partial<Omit<CompactTurnResult, 'cleanup'>> =
 }
 
 async function observeFinalizer(testCase: FinalizerCase) {
+  // r06: the production finalizer may close ONLY an invocation-created,
+  // currently reverified CDP target. Prove that contract in the fixture rather
+  // than granting old synthetic Page handles implicit cleanup authority.
+  const stateDir = mkdtempSync(join(tmpdir(), 'opk-1238-verified-owner-'));
+  const priorStateDir = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+  process.env.CHATGPT_BROWSER_TURN_STATE_DIR = stateDir;
+  const cdp = 'http://127.0.0.1:9222';
+  const profile = join(stateDir, 'profile');
+  const profileKey = configuredProfileKey(profile, cdp);
+  const invocationId = 'fixture-tab-' + Math.random().toString(16).slice(2);
+  const marker = `OPKTURNV1${'ef'.repeat(16)}`;
+  const chatUrl = 'https://chatgpt.com/c/123e4567-e89b-12d3-a456-426614174099';
+  const targetId = 'fixture-own-target';
   let pageCloseCalls = 0;
   let browserCloseCalls = 0;
   let foreignTargetOpen = true;
+  let physicallyPresent = testCase.pagePresent && !testCase.pageLost;
   const page = testCase.pagePresent
     ? {
+      __fakeBrowserGptPage: true,
       close: async () => {
         testCase.beforePageClose?.();
         pageCloseCalls++;
         if (testCase.closeError) throw new Error('fixture_page_close_failed');
+        physicallyPresent = false;
       },
-      isClosed: () => testCase.pageLost,
+      isClosed: () => testCase.pageLost || !physicallyPresent,
+      url: () => chatUrl,
+      locator: (selector: string) => {
+        if (selector === USER_MESSAGE_SELECTOR) {
+          const texts = testCase.sendCount > 0 ? [`${marker}\n\nprompt`] : [];
+          return { count: async () => texts.length,
+            nth: (index: number) => ({ innerText: async () => texts[index] ?? '' }) };
+        }
+        if (selector === COMPOSER_SELECTOR) return {
+          count: async () => 1,
+          evaluate: async () => ({ content: '', visible: '' }),
+        };
+        if (selector === RENDERED_STOP_BUTTON_SELECTOR
+          || selector === ASSISTANT_TURN_IN_PROGRESS_SELECTOR) {
+          return { count: async () => 0 };
+        }
+        return { count: async () => 0 };
+      },
     }
     : undefined;
+  const context = {
+    newPage: vi.fn(async () => page),
+    pages: vi.fn(() => [] as any[]),
+  };
   const browser = {
+    contexts: vi.fn(() => [context]),
     close: async () => {
       expect(foreignTargetOpen).toBe(true);
       browserCloseCalls++;
     },
     isConnected: () => true,
   };
-  const result = await __testFinalizeTurn({
-    result: makeTurnResult({ send_count: testCase.sendCount }),
-    page,
-    browser,
-    publicationState: testCase.publicationState,
-  });
-  return { result, pageCloseCalls, browserCloseCalls, foreignTargetOpen };
+  const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
+    JSON.stringify(physicallyPresent ? [{
+      id: targetId, type: 'page', url: chatUrl,
+      webSocketDebuggerUrl: 'ws://example/fixture-own-target',
+    }] : []), { status: 200 },
+  ));
+  try {
+    admitStateLightTurnObservation({ profileKey, invocationId, marker });
+    if (testCase.pagePresent && !testCase.pageLost && page) {
+      const attached = await __testAttachOwnTargetFixture({
+        connectOverCDP: vi.fn(async () => browser),
+      }, {
+        mode: 'own-target', cdp, newChat: true,
+        deadlineMs: Date.now() + 15_000,
+      }, true);
+      expect(attached.created).toBe(true);
+      expect(attached.targetId).toBe(targetId);
+      bindStateLightOwnedTarget({
+        profileKey, invocationId, targetId, created: true,
+        cdp, initialRoute: chatUrl,
+      });
+    }
+    transitionStateLightTurnObservation({
+      profileKey, invocationId,
+      phase: testCase.sendCount === 0 ? 'prepared' : 'sent_unharvested',
+      reason: 'verified_1238_fixture',
+      sendCount: testCase.sendCount,
+      ...(testCase.sendCount > 0 ? {
+        sendWitness: 'numeric_send_count' as const, conversationUrl: chatUrl,
+      } : {}),
+    });
+    const result = await __testFinalizeTurn({
+      result: makeTurnResult({
+        invocation_id: invocationId, configured_profile_key: profileKey,
+        send_count: testCase.sendCount,
+      }),
+      page, browser, publicationState: testCase.publicationState,
+    }, cdp);
+    return { result, pageCloseCalls, browserCloseCalls, foreignTargetOpen };
+  } finally {
+    fetchSpy.mockRestore();
+    if (priorStateDir === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    else process.env.CHATGPT_BROWSER_TURN_STATE_DIR = priorStateDir;
+    rmSync(stateDir, { recursive: true, force: true });
+  }
 }
 
 describe('Issue #2625 protected continuation tab bootstrap', () => {
