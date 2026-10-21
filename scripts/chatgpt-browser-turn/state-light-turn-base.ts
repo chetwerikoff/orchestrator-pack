@@ -63,6 +63,7 @@ import { atomicJson, configuredProfileKey, profileDirs } from './storage-common.
 import {
   admitStateLightTurnObservation,
   finalizeStateLightPrimaryPublication,
+  readVerifiedStateLightHarvestedPrimary,
   readStateLightTurnObservation,
   transitionStateLightTurnObservation,
 } from './state-light-turn-observation.ts';
@@ -5472,9 +5473,14 @@ async function runTurnCore(
     }
 
     const startedAt = Date.now();
-    const softDeadline = startedAt + config.timeoutMs;
-    // `2 × timeout-ms` is a post-send decision threshold, not a hard observation ceiling.
-    let hardExhaustionDeadline = startedAt + (config.timeoutMs * 2);
+    // Do not restart the original invocation's post-Send observation clock.
+    const hardAbsoluteDeadline = Math.min(invocationDeadlineMs, invocationStartedAt + STATE_LIGHT_MAX_TIMEOUT_MS);
+    const softDeadline = Math.min(startedAt + config.timeoutMs, hardAbsoluteDeadline);
+    let hardExhaustionDeadline = hardAbsoluteDeadline;
+    const postSendSleep = async (ms: number): Promise<void> => {
+      const remaining = hardExhaustionDeadline - Date.now();
+      if (remaining > 0) await sleep(page, Math.min(ms, remaining));
+    };
     const dispatchDeadline = startedAt + Math.min(DISPATCH_OBSERVATION_MS, config.timeoutMs);
     let lastReadyReply = '';
     let lastReadyObservedText = '';
@@ -5566,7 +5572,7 @@ async function runTurnCore(
           Date.now() + CONFIRMED_OWNED_PAGE_LOSS_RECOVERY_MS,
         );
       }
-      const recoveryDeadlineMs = config.newChat && !ownedConversationUrl
+      const recoveryDeadlineMs = config.newChat && !ownedConversationUrl && !ownedPromptEverSeen
         ? Math.min(hardExhaustionDeadline, freshUnboundReturnByMs)
         : !config.newChat && sendAttempted && sendCount === 0
           ? Math.min(hardExhaustionDeadline, invocationDeadlineMs)
@@ -5865,11 +5871,60 @@ async function runTurnCore(
       );
     };
 
-    // `timeout-ms` is a soft post-send observation threshold for an owned
-    // conversation. A fresh Send still without a proven exact-project owner
-    // must instead return within its pre-Send invocation budget, including
-    // bounded cleanup; the 2 x timeout threshold is not a hard exit.
+    // An independent read-only Page probe may have committed the original
+    // invocation's complete primary while the driver saw an incomplete DOM.
+    // Verify the actual committed output, not merely an observed path or phase.
+    const verifiedExternalPrimary = (): TurnRunOutcome | null => {
+      let verified: ReturnType<typeof readVerifiedStateLightHarvestedPrimary>;
+      try {
+        verified = readVerifiedStateLightHarvestedPrimary({
+          profileKey, invocationId, marker, target: destination.finalPath,
+        });
+      } catch {
+        return null;
+      }
+      if (!verified) return null;
+      sendCount = 1;
+      ownedPromptEverSeen = true;
+      markerDerivedSend = verified.sendWitness === 'owned_marker';
+      return {
+        page, browser,
+        publicationState: 'committed_ok',
+        ...(ownedConversationUrl ? { profileKey, ownedConversationUrl } : {}),
+        ...(ownershipForfeited ? { ownershipForfeited: true } : {}),
+        result: compactResult(
+          'ok', 'none', 'completed_page_probe_primary',
+          invocationId, profileKey, 1, pollCount, navigation, incidents,
+          {
+            ...(sendAttempted ? { send_attempted: true } : {}),
+            ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
+            output: { byte_length: verified.byteLength, sha256: verified.sha256 },
+          },
+          journalWriteFailed,
+        ),
+      };
+    };
+    // Each iteration rechecks a same-invocation committed primary before any
+    // mutable Send-count/late-URL transition or new transcript acquisition.
     while (true) {
+      const independentlyCommitted = verifiedExternalPrimary();
+      if (independentlyCommitted) return independentlyCommitted;
+      if (Date.now() >= hardExhaustionDeadline) {
+        const cause = uncertainCause || 'post_send_absolute_deadline_elapsed';
+        incident('post_send_observation_error', cause, 'terminal_cleanup_no_resend');
+        return {
+          page, browser,
+          result: compactResult(
+            sendCount === 0 && !sendAttempted ? 'no_reply' : 'observation_uncertain',
+            'invocation', cause, invocationId, profileKey,
+            sendCount, pollCount, navigation, incidents,
+            { ...(sendAttempted ? { send_attempted: true } : {}),
+              ...(config.newChat && !ownedConversationUrl
+                ? { next_action: FRESH_LOCAL_POSSIBLY_DELIVERED_NEXT_ACTION } : {}) },
+            journalWriteFailed,
+          ),
+        };
+      }
       bannerPollIteration += 1;
       // A late observed own request is still the original physical Send.
       const zeroCountCutoffMs = config.newChat && !ownedConversationUrl
