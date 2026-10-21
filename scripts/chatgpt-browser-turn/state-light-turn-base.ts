@@ -526,6 +526,8 @@ export interface TurnRunOutcome {
   readonly ownershipForfeited?: boolean;
   /** Private, process-local cleanup value; never emitted as turn-result. */
   readonly ownedTypedPayload?: string;
+  /** Exact attach-created target retirement after failed Playwright bootstrap. */
+  readonly createdAttachFailureCleanup?: 'confirmed' | 'unconfirmed';
   /** Exact new-chat project surface of a proven created tab; never emitted. */
   readonly ownedFreshProjectUrl?: string;
   /** Process-only positive-recovery cleanup, never a terminal locator. */
@@ -3689,6 +3691,7 @@ async function runTurnCore(
   let sendCount = 0;
   let refusedCooldownUntil: number | undefined;
   let attachAttempts = 0;
+  let createdAttachFailureCleanup: 'confirmed' | 'unconfirmed' | undefined;
   let pollCount = 0;
   const navigation = new StateLightNavigationCounter();
   let journalWriteFailed = false;
@@ -3956,14 +3959,44 @@ async function runTurnCore(
     const chromium = loadChromium();
     const connectWaitMs = invocationBudget.clampOperationWaitMs();
     if (connectWaitMs <= 0) throw new BrowserOperationTimeoutError('connect_over_cdp');
-    const initiallyAttached = await attachOwnTarget(chromium, {
-      mode: 'own-target',
-      cdp: config.cdp,
-      deadlineMs: invocationDeadlineMs,
-      cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
-      ...(config.chatUrl ? { chatUrl: config.chatUrl } : {}),
-      newChat: config.newChat,
-    });
+    let initiallyAttached: Awaited<ReturnType<typeof attachOwnTarget>>;
+    try {
+      initiallyAttached = await attachOwnTarget(chromium, {
+        mode: 'own-target',
+        cdp: config.cdp,
+        deadlineMs: invocationDeadlineMs,
+        cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
+        ...(config.chatUrl ? { chatUrl: config.chatUrl } : {}),
+        newChat: config.newChat,
+      });
+    } catch (error) {
+      // CDP may have created an exact new Page before the proxy or Playwright
+      // connection failed. A positive creation ID is carried by that error;
+      // no raw-ID close or foreign Page attach is permitted.
+      const createdTargetId = (error as { createdTargetId?: unknown } | null)?.createdTargetId;
+      if (typeof createdTargetId === 'string' && createdTargetId.length > 0) {
+        createdAttachFailureCleanup = 'unconfirmed';
+        try {
+          bindStateLightOwnedTarget({
+            profileKey, invocationId, targetId: createdTargetId,
+            created: true, cdp: config.cdp,
+            initialRoute: config.newChat
+              ? projectConversationPrefix(config.projectUrl ?? '')
+              : normalizeConversationUrl(config.chatUrl ?? ''),
+          });
+          const retirement = await retireDetachedOriginalTarget({
+            profileKey, invocationId, cdp: config.cdp,
+            deadlineMs: Date.now() + 20_000,
+          });
+          if (retirement.targetId === createdTargetId && retirement.status === 'confirmed') {
+            createdAttachFailureCleanup = 'confirmed';
+          }
+        } catch {
+          // Never fabricate a confirmed close after a failed independent attach.
+        }
+      }
+      throw error;
+    }
     attachAttempts = initiallyAttached.attachAttempts;
     browser = initiallyAttached.browser;
     const selection = await selectConversationPage(browser, chromium, config, invocationBudget, invocationDeadlineMs);
@@ -5967,6 +6000,25 @@ async function runTurnCore(
         ),
       };
     };
+    // A probe can commit while a driver read is awaited. Revalidate the exact
+    // committed bytes before any competing phase mutation, and on only the
+    // harvested-phase race. Unrelated observation errors must still surface.
+    const transitionUnlessProbeCommitted = (
+      input: Parameters<typeof transitionStateLightTurnObservation>[0],
+    ): TurnRunOutcome | null => {
+      const committed = verifiedExternalPrimary();
+      if (committed) return committed;
+      try {
+        transitionStateLightTurnObservation(input);
+      } catch (error) {
+        if (error instanceof Error && error.message === 'observation_phase_transition_invalid') {
+          const raced = verifiedExternalPrimary();
+          if (raced) return raced;
+        }
+        throw error;
+      }
+      return null;
+    };
     // The early unbound cutoff remains valid ONLY while the original owned
     // marker is unproven. A verified marker (including on a local-chatgpt URL)
     // continues through the original absolute deadline for a late full reply.
@@ -6021,27 +6073,30 @@ async function runTurnCore(
         sendCount = 1;
         markerDerivedSend = true;
         ownedPromptEverSeen = true;
-        transitionStateLightTurnObservation({
+        const committed = transitionUnlessProbeCommitted({
           profileKey, invocationId, phase: 'sent_unharvested',
           reason: 'owned_server_user_marker', sendCount, sendWitness: 'owned_marker',
           conversationUrl: targetChatUrl,
         });
+        if (committed) return committed;
         emitCancellationReceipt(targetChatUrl);
       }
       if (sendAttempted && sendCount === 0 && Date.now() < zeroCountCutoffMs
         && held429Witness?.ownSubmissionIssued()) {
         sendCount = 1;
         if (config.newChat) {
-          transitionStateLightTurnObservation({
+          const committed = transitionUnlessProbeCommitted({
             profileKey, invocationId, phase: 'sent_unbound',
             reason: 'own_submission_post_issued', sendCount, sendWitness: 'numeric_send_count',
           });
+          if (committed) return committed;
         } else if (targetChatUrl) {
-          transitionStateLightTurnObservation({
+          const committed = transitionUnlessProbeCommitted({
             profileKey, invocationId, phase: 'sent_unharvested',
             reason: 'own_submission_post_issued', sendCount, sendWitness: 'numeric_send_count',
             conversationUrl: targetChatUrl,
           });
+          if (committed) return committed;
           emitCancellationReceipt(targetChatUrl);
         }
       }
@@ -6156,7 +6211,11 @@ async function runTurnCore(
           hardExhaustionDeadline,
           observeProductWall,
         );
+        const committedDuringRead = verifiedExternalPrimary();
+        if (committedDuringRead) return committedDuringRead;
       } catch (error) {
+        const committedDuringRead = verifiedExternalPrimary();
+        if (committedDuringRead) return committedDuringRead;
         if (browserOrPageDefinitelyLost(page, browser)) {
           const terminal = await recoverCurrentObservation();
           if (terminal) return terminal;
@@ -6381,10 +6440,11 @@ async function runTurnCore(
         ownedPromptEverSeen = true;
         zeroWitnessAccountRecovery = false;
         if (config.newChat) {
-          transitionStateLightTurnObservation({
+          const committed = transitionUnlessProbeCommitted({
             profileKey, invocationId, phase: 'sent_unbound',
             reason: 'fresh_owned_marker_observed', sendCount, sendWitness: 'owned_marker',
           });
+          if (committed) return committed;
         }
       }
       if (
@@ -6404,6 +6464,9 @@ async function runTurnCore(
         const observedConversationUrl = readProjectConversationUrl(page, config.projectUrl ?? '');
         if (observedConversationUrl && isSupportedChatGptConversationUrl(observedConversationUrl)
           && Date.now() < hardExhaustionDeadline) {
+          // A probe's committed result outranks any new URL claim/transition.
+          const committedBeforeBinding = verifiedExternalPrimary();
+          if (committedBeforeBinding) return committedBeforeBinding;
           // A marker on the original pinned Page can validate a later URL
           // even after the initial fresh URL subwindow. The first-claim fence
           // remains mandatory; no new Page, Retry or Send is authorized here.
@@ -6445,7 +6508,7 @@ async function runTurnCore(
               ),
             };
           }
-          transitionStateLightTurnObservation({
+          const committed = transitionUnlessProbeCommitted({
             profileKey,
             invocationId,
             phase: 'sent_unharvested',
@@ -6454,6 +6517,7 @@ async function runTurnCore(
             sendWitness: markerDerivedSend ? 'owned_marker' : 'numeric_send_count',
             conversationUrl: observedConversationUrl,
           });
+          if (committed) return committed;
           ownedConversationUrl = observedConversationUrl;
           if (!held429Witness?.current()) attachHeld429(page, observedConversationUrl);
           recoveryState.immutableConversationUrl = observedConversationUrl;
@@ -6464,7 +6528,7 @@ async function runTurnCore(
       if (durableConversationUrl && sendCount >= 1) {
         const durableRecord = readStateLightTurnObservation(profileKey, invocationId);
         if (durableRecord.phase === 'dispatching' || !durableRecord.conversation_url) {
-          transitionStateLightTurnObservation({
+          const committed = transitionUnlessProbeCommitted({
             profileKey,
             invocationId,
             phase: 'sent_unharvested',
@@ -6473,6 +6537,7 @@ async function runTurnCore(
             sendWitness: markerDerivedSend ? 'owned_marker' : 'numeric_send_count',
             conversationUrl: durableConversationUrl,
           });
+          if (committed) return committed;
         }
       }
       if (
@@ -7513,6 +7578,7 @@ async function runTurnCore(
     return {
       ...(page ? { page } : {}),
       ...(browser ? { browser } : {}),
+      ...(createdAttachFailureCleanup ? { createdAttachFailureCleanup } : {}),
       ...(provenOpenedFetch429 ? {
         ownedPreSendFetch429Page: page,
         ownedPreSendFetch429Url: invocationCreatedExistingChatUrl,
@@ -7766,8 +7832,8 @@ async function guardedOriginalTargetRetirement(input: {
       );
       // An unsubmitted foreign draft is not a user-message DOM node. Never
       // silently destroy it just because the old marker is still the last user.
-      if (composer === undefined || (composer !== ''
-        && composer !== outcome.ownedTypedPayload)) return false;
+      if (composer !== undefined && composer !== ''
+        && composer !== outcome.ownedTypedPayload) return false;
       const cardinality = recoveryMarkerCardinality(users.messages, observation.marker);
       if (cardinality.matchingUserCarrierCount === 1 && cardinality.exactMarkerTokenCount === 1
         && users.messages.length > 0
@@ -7823,7 +7889,7 @@ async function guardedOriginalTargetRetirement(input: {
 }
 
 async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactTurnResult> {
-  let cleanup: ResourceCleanupOutcome = 'skipped';
+  let cleanup: ResourceCleanupOutcome = outcome.createdAttachFailureCleanup ?? 'skipped';
   let journalWriteFailed = outcome.result.journal_write_failed === true;
   let retirementCleanupRequired = outcome.result.retirement_cleanup_required === true;
   const incidents = [...outcome.result.incidents];
@@ -7908,7 +7974,7 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
   // possible Send or an unbound local terminal. Neither Send count nor a
   // cleanupAction flag grants destructive authority on its own.
   const pinnedOriginal = getOwnTargetInfo(outcome.browser);
-  const positivelyCreatedOriginal = Boolean(pinnedOriginal?.created);
+  const positivelyCreatedOriginal = Boolean(pinnedOriginal?.created || outcome.createdAttachFailureCleanup);
   let pageAction: PageCleanupAction = cleanupAuthorityProven && !pageLost
     && outcome.ownershipForfeited !== true && positivelyCreatedOriginal ? 'close' : 'skip';
   if (pageAction === 'close' && outcome.result.send_count === 0
