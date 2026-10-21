@@ -7597,11 +7597,15 @@ async function retireExplicitPredecessor(input: {
     });
     if (!terminal || terminal.observed_invocation_id !== input.previousInvocationId
       || terminal.handoff_receipt_path !== bound.locator.handoff_receipt_path
+      || terminal.cleanup_status !== 'cleanup_unconfirmed'
       || bound.receipt.owner_task_id !== input.ownerTaskId) return { status: 'cleanup_unconfirmed' };
     original = readStateLightTurnObservation(input.profileKey, input.previousInvocationId);
     originalId = original.owned_target?.id;
     if (!original.owned_target?.created
-      || original.owned_target.cdp_sha256 !== createHash('sha256').update(input.cdp, 'utf8').digest('hex')) {
+      || original.owned_target.cdp_sha256 !== createHash('sha256').update(input.cdp, 'utf8').digest('hex')
+      || terminal.owned_target_created !== true
+      || terminal.owned_target_id !== original.owned_target.id
+      || terminal.owned_prompt_marker !== original.marker) {
       return { status: 'cleanup_unconfirmed', ...(originalId ? { targetId: originalId } : {}) };
     }
   } catch {
