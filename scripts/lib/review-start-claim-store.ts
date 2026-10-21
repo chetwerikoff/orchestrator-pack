@@ -155,7 +155,7 @@ function claimRecordValidationReason(value: unknown, pathValue?: fs.PathOrFileDe
   // Pack run records have key/prNumber/headSha too, but are prr-*.json and
   // strictly validated by the pack run store itself. Never reinterpret one
   // as a claim while the claim read guard is scoped over a canonical run read.
-  if (typeof pathValue === 'string' && /^prr-[a-zA-Z0-9._-]+\\.json$/.test(basename(pathValue))) {
+  if (typeof pathValue === 'string' && /^prr-[a-zA-Z0-9._-]+\.json$/.test(basename(pathValue))) {
     return null;
   }
   const record = asRecord(value);
