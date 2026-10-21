@@ -222,6 +222,7 @@ function clearSendSlotDisableEnv(): void {
 function makeLoserPage(
   prompt: string, reply: string, onSend?: () => void, ownedPriorHistory = false,
   rendering?: 'paragraphs' | 'autolink' | 'blank-paragraphs',
+  additionalWaitingFrames = 0,
 ) {
   let sends = 0;
   let sent = false;
@@ -329,7 +330,7 @@ function makeLoserPage(
       }
       if (selector === MESSAGE_NODE_SELECTOR) {
         if (!sent) return ownedPriorHistory ? atomicOwnedHistory(priorHistory) : collectionLocator([]);
-        activeSnapshot = snapshotFrames[Math.min(observationIndex, snapshotFrames.length - 1)]!;
+        activeSnapshot = snapshotFrames[Math.min(Math.max(0, observationIndex - additionalWaitingFrames), snapshotFrames.length - 1)]!;
         observationIndex++;
         return ownedPriorHistory
           ? atomicOwnedHistory(activeSnapshot.messages, activeSnapshot.generating)
@@ -370,6 +371,22 @@ function proveCreatedPageCanClose(page: any): void {
         webSocketDebuggerUrl: 'ws://example/fixture-own-target',
       }] : []),
       keepalive,
+    ]), { status: 200 });
+  });
+}
+
+// Negative fixture: a known original CDP target remains physically live even
+// when its Playwright Page is closed or recovery used a different Page. Absence
+// of a synthetic ID from a real Chrome census is not proof of its retirement.
+function proveCreatedPageRemainsVisibleToCdp(page: any): void {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    if (new URL(String(input)).pathname !== '/json/list') {
+      throw new Error('unexpected CDP operation in live-target negative fixture');
+    }
+    return new Response(JSON.stringify([
+      { id: 'fixture-own-target', type: 'page', url: String(page.url()),
+        webSocketDebuggerUrl: 'ws://example/fixture-own-target' },
+      { id: 'opk-keepalive', type: 'page', url: 'about:blank#opk-keepalive' },
     ]), { status: 200 });
   });
 }
@@ -512,7 +529,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const prompt = 'OWNED-GET-429-LATE';
     const reply = 'FOURTH-POLL-ASSISTANT-COMPLETE';
     let reportOwned429: () => void = () => undefined;
-    const fixture = makeLoserPage(prompt, reply, () => reportOwned429(), true);
+    const fixture = makeLoserPage(prompt, reply, () => reportOwned429(), true, undefined, 2);
     proveCreatedPageCanClose(fixture.page);
     reportOwned429 = installExistingChatFetch429(fixture.page);
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
@@ -2467,6 +2484,7 @@ describe('state-light fresh conversation collision recovery', () => {
   // only already-open canonical server pages using the incumbent recovery path.
   function freshLocalFetchLossFixture(prompt: string, reply?: string) {
     const local = makeLoserPage(prompt, 'NO-LOCAL-ASSISTANT-REPLY');
+    proveCreatedPageRemainsVisibleToCdp(local.page);
     const retryClicks = vi.fn(async () => undefined);
     local.page.url.mockImplementation(() => local.getSends() ? LOCAL_ID_CONVERSATION_URL : PROJECT_URL);
     local.page.getByText.mockImplementation((value: string) => value === 'Failed to fetch'
@@ -5195,7 +5213,20 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     let lost = false;
     let injected = false;
     const original = makeLoserPage(prompt, 'UNTRUSTED-ORIGINAL', () => { lost = true; }, true);
-    original.page.isClosed.mockImplementation(() => lost);
+    proveCreatedPageRemainsVisibleToCdp(original.page);
+    // Admit a lost Page only after the physical Send was recorded. This
+    // specifically exercises a probe commit during recovery, not zero-witness
+    // dispatching recovery while the initial Page is still sending.
+    let admittedLoss = false;
+    original.page.isClosed.mockImplementation(() => {
+      if (admittedLoss) return true;
+      if (!lost) return false;
+      try {
+        admittedLoss = ['sent_unbound', 'sent_unharvested', 'harvested']
+          .includes(readStateLightTurnObservation('collision-profile', invocationId).phase);
+      } catch { /* Observation is not committed yet. */ }
+      return admittedLoss;
+    });
     const originalLocator = original.page.locator.getMockImplementation()!;
     original.page.locator.mockImplementation((selector: string) =>
       lost && selector === USER_MESSAGE_SELECTOR
@@ -5234,14 +5265,16 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     const browser = browserWithPages(original.page, [recovered], () => true);
     mocks.browserQueue.push(browser);
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-    const result = await runProductionNewChat(output, '90000', '1', invocationId);
+    const result = await runProductionNewChat(output, '90000', '1000', invocationId);
     expect(injected).toBe(true);
     expect(result.result, JSON.stringify(result.result)).toMatchObject({
       state: 'ok', cause: 'completed_page_probe_primary', send_count: 1,
+      cleanup: 'unconfirmed',
     });
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('harvested');
     expect(readFileSync(output, 'utf8')).toBe(reply);
     expect(original.getSends()).toBe(1);
+    expect(original.page.close).not.toHaveBeenCalled();
     expect(recoveredClose).not.toHaveBeenCalled();
   });
 
@@ -5583,6 +5616,7 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     let lost = false;
     let lostAt: number | undefined;
     const turn = makeLoserPage(prompt, 'NEVER PUBLISHED');
+    proveCreatedPageRemainsVisibleToCdp(turn.page);
     turn.page.isClosed.mockImplementation(() => lost);
     turn.page.waitForTimeout.mockImplementation(async (ms: number) => {
       mocks.nowMs += Math.max(ms, 5_000);
