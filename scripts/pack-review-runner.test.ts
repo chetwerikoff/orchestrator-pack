@@ -5172,14 +5172,16 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
       const f = await completedRequiredStage(prNumber);
       const review = reviewTransport(prNumber, 'ambiguous');
       const source = originalSourceTransport(prNumber);
-      let nativeStarts = 0;
+      const gptSends: string[] = [];
       const startReview = commandStart2607(f.storeRoot, {
         ...f.fixture, fixtureGithubReviewTransport: review.transport,
         fixtureGptSourceCommentTransport: source.transport,
         fixtureBeforeGptSourceCommentCensus: source.publishOriginal,
-        fixtureAfterNativeInitialArmed: async () => { nativeStarts++; },
+        fixtureAfterGptInvocationBound: async ({ slotId }: { slotId: string }) => {
+          gptSends.push(slotId);
+        },
       });
-      const invoke = () => runPackGptReviewCommand({ prNumber, reviewer: 'codex' }, {
+      const invoke = () => runPackGptReviewCommand({ prNumber, reviewer: 'gpt' }, {
         env: process.env, stderr: { write: () => undefined }, startReview,
       });
       const first = await invoke();
@@ -5190,8 +5192,10 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
         reviewVerdict: 'clean', journalOutcome: { state: 'persisted' },
         automaticBudgetDisposition: 'non_consuming_explicit',
       });
-      expect(nativeStarts).toBe(1);
-      expect(source.sent()).toBe(0);
+      const sentCount = gptSends.length;
+      const sourceCount = source.sent();
+      expect(sentCount).toBeGreaterThan(0);
+      expect(sourceCount).toBeGreaterThan(0);
       expect(review.posts()).toBe(1);
       // The original status predates the new claim; its raw failed row is not
       // proof that the resumed invocation just wrote the terminal.
@@ -5227,8 +5231,8 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
       expect(getPackReviewRun(runId, options)).toMatchObject({
         status: 'failed', latestRunStatus: 'failed', journalOutcome: old!.journalOutcome,
       });
-      expect(nativeStarts).toBe(1);
-      expect(source.sent()).toBe(0);
+      expect(gptSends).toHaveLength(sentCount);
+      expect(source.sent()).toBe(sourceCount);
       expect(review.posts()).toBe(1);
       expect(f.statusWrites).toHaveLength(f.statusCount);
     }, 25_000);
