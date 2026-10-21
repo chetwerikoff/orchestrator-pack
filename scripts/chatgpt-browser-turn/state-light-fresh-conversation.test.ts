@@ -1151,7 +1151,7 @@ describe('state-light fresh conversation collision recovery', () => {
     // failure classification and foreign-Page cleanup refusal, not a pre-Send error.
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch', send_count: 0, send_attempted: true,
-      cause: 'helper_error_after_send_page_retained', cleanup: 'skipped',
+      cause: 'helper_error_after_send_page_retained', cleanup: 'unconfirmed',
     });
     expect(outcome.result.incidents).toContain('helper_failure_after_send');
     expect(outcome.result.incidents).not.toContain('helper_failure_before_send');
@@ -1185,7 +1185,7 @@ describe('state-light fresh conversation collision recovery', () => {
       state: 'ui_contract_mismatch',
       cause: 'owned_conversation_identity_mismatch',
       send_count: 1,
-      cleanup: 'skipped',
+      cleanup: 'unconfirmed',
     });
     expect(turn.getSends()).toBe(1);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
@@ -1268,7 +1268,8 @@ describe('state-light fresh conversation collision recovery', () => {
     expectPossibleEffect(outcome.result);
     expect(outcome.result.cause).not.toBe('fresh_conversation_landing_mismatch');
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
-    expect(turn.page.close).toHaveBeenCalledTimes(1);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(outcome.result.cleanup).toBe('unconfirmed');
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase)
       .toMatch(/sent_unbound|sent_unharvested/);
   });
@@ -1298,7 +1299,8 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result.poll_count).toBeGreaterThan(0);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
     expect(turn.getSends()).toBe(0);
-    expect(turn.page.close).toHaveBeenCalledTimes(1);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(outcome.result.cleanup).toBe('unconfirmed');
     expect(turn.composer.fill).not.toHaveBeenLastCalledWith('', expect.anything());
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase)
       .toMatch(/sent_unbound|sent_unharvested/);
@@ -2755,7 +2757,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(fixture.page, join(stateDir, '2641-alert-' + randomUUID() + '.txt'));
     expect(outcome.result).toMatchObject({
       state: 'recovery_required', scope: 'invocation', cause, product_banner_text: heading,
-      send_count: 1, cleanup: 'skipped',
+      send_count: 1, cleanup: 'unconfirmed',
     });
     expect(outcome.result).not.toHaveProperty('conversation_id');
     expect(outcome.result.next_action).toContain('GitHub effects first');
@@ -2953,11 +2955,11 @@ describe('state-light fresh conversation collision recovery', () => {
       );
       expect(outcome.result).toMatchObject({
         state: terminal, scope: 'invocation', send_count: 1,
-        cleanup: retain ? 'skipped' : 'confirmed',
+        cleanup: 'skipped',
       });
       expect(outcome.result).not.toHaveProperty('conversation_id');
-      if (retain) expect(fixture.page.close).not.toHaveBeenCalled();
-      else expect(fixture.page.close).toHaveBeenCalledTimes(1);
+      // No CDP target provenance exists in this injected finalizer outcome.
+      expect(fixture.page.close).not.toHaveBeenCalled();
       expect(fixture.page.goto).not.toHaveBeenCalled();
     },
   );
@@ -2969,7 +2971,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(fixture.page, join(stateDir, '2641-silent-local.txt'));
     expect(outcome.result).toMatchObject({
       state: 'observation_uncertain', scope: 'invocation',
-      cause: 'fresh_conversation_owner_unproven', send_count: 1, cleanup: 'skipped',
+      cause: 'fresh_conversation_owner_unproven', send_count: 1, cleanup: 'unconfirmed',
     });
     expect(outcome.result).not.toHaveProperty('conversation_id');
     expect(outcome.result.next_action).toContain('POSSIBLY_DELIVERED');
@@ -5427,10 +5429,10 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
       expect(lostAt).toBeUndefined();
       expect(terminal.result).toMatchObject({ state: 'driver_error', cause: 'post_send_target_crashed' });
     }
-    // A definitively closed Page is skipped; a still-reachable owned Page
-    // gets exactly one bounded terminal close even after a read error.
-    expect(turn.page.close).toHaveBeenCalledTimes(closeDuringRead ? 0 : 1);
-    expect(terminal.result.cleanup).toBe(closeDuringRead ? 'skipped' : 'confirmed');
+    // A crash is not a current-generation/physical-CDP close witness. Even a
+    // reachable fake Page must not be closed from the old handle alone.
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(terminal.result.cleanup).toBe('unconfirmed');
     expect(foreignClose).not.toHaveBeenCalled();
   });
 
@@ -5604,8 +5606,8 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
           });
           expect(existsSync(output)).toBe(false);
         }
-        if (closed) expect(turn.page.close).not.toHaveBeenCalled();
-        else expect(turn.page.close).toHaveBeenCalledTimes(1);
+        // A reconnected recovery handle is not an authenticated close handle.
+        expect(turn.page.close).not.toHaveBeenCalled();
         expect(foreignClose).not.toHaveBeenCalled();
         expect(foreignStop).not.toHaveBeenCalled();
       }
@@ -6119,7 +6121,8 @@ describe('Issue #1752 production liveness regressions', () => {
       expect(code).not.toBe(0);
       const records = parseRecords(writes);
       const heartbeats = records.filter((record) => record.schema === 'observation-heartbeat/v1');
-      expect(heartbeats.length).toBeGreaterThan(3);
+      // r06's original absolute bound shortens this synthetic recovery window.
+      expect(heartbeats.length).toBeGreaterThanOrEqual(3);
       expect(heartbeats.some((record) => record.phase === 'post_send_observation')).toBe(true);
       expect(records.at(-1)).toMatchObject({
         schema: 'turn-result/v1',
@@ -6385,8 +6388,9 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     });
     expect(fake.getSends()).toBe(1);
     expect(fake.retryClicks).not.toHaveBeenCalled();
-    expect(fake.close).toHaveBeenCalledTimes(1);
-    expect(outcome.result.cleanup).toBe('confirmed');
+    // An unpinned Page handle alone is not close authority.
+    expect(fake.close).not.toHaveBeenCalled();
+    expect(outcome.result.cleanup).not.toBe('confirmed');
   });
 
   it('continues in an already-open tab of the conversation instead of reloading it', async () => {
@@ -6427,8 +6431,9 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
     });
     expect(fake.getSends()).toBe(1);
     expect(fake.retryClicks).not.toHaveBeenCalled();
-    expect(fake.close).toHaveBeenCalledTimes(1);
-    expect(outcome.result.cleanup).toBe('confirmed');
+    // An unpinned Page handle alone is not close authority.
+    expect(fake.close).not.toHaveBeenCalled();
+    expect(outcome.result.cleanup).not.toBe('confirmed');
   });
 
   it('does not end a turn on a recovery banner before its generation was ever observed', async () => {
