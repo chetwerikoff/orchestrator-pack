@@ -1,6 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { performance } from 'node:perf_hooks';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -15,6 +16,7 @@ import {
 import { startPackReview } from './pack-review-runner.ts';
 import { readPackReviewAuthority } from './pack-review-state.ts';
 import { createPackReviewRun } from './lib/pack-review-run-store.ts';
+import { writePackReviewerPreference } from './lib/pack-reviewer-preference.ts';
 import { resolveBoundIssueSnapshot } from './lib/reverify-bound-issue-snapshot.ts';
 import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 
@@ -40,6 +42,7 @@ function issueBody(tier: 'T1' | 'T2' = 'T2', marker = ''): string {
 function setupHarness(storeRoot: string): void {
   process.env.OPK_VITEST_HARNESS = '1';
   process.env.PACK_REVIEWER = 'codex';
+  process.env.PACK_REVIEW_BOUND_REVIEWER = 'codex';
   process.env.OPK_BASE_DIR = join(storeRoot, 'base');
   process.env.OPK_REVIEW_CLAIM_DIR = join(storeRoot, 'base', 'projects', 'orchestrator-pack', 'review-start-claims');
   process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR = join(storeRoot, 'bound-issue-snapshots');
@@ -291,7 +294,13 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
     const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-1529-issue-drift-post-review-'));
     roots.push(storeRoot);
     setupHarness(storeRoot);
+    // Simulate the operator's valid saved GPT preference without changing the
+    // project-card XDG path or the fixture's explicit Codex review binding.
+    const configPath = join(storeRoot, 'synthetic-xdg', 'orchestrator-pack', 'pack-reviewer.json');
+    writePackReviewerPreference('gpt', configPath);
+    process.env.XDG_CONFIG_HOME = join(storeRoot, 'synthetic-xdg');
 
+    const began = performance.now();
     const result = await startFixture(storeRoot, {
       fixturePrBodyAfterClaim: 'Closes #1529',
       fixturePostReviewPrBody: 'Closes #1530',
@@ -299,6 +308,8 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
 
     expect(result).toMatchObject({ ok: false, created: true, reused: false, httpStatus: 409 });
     expect(String(result.reason)).toContain('review target Issue changed');
+    expect(performance.now() - began).toBeLessThan(5_000);
+    expect(result.resolvedReviewer ?? 'codex').toBe('codex');
   });
 
   it('suppresses a repeated clean same-head model invocation', async () => {
@@ -351,6 +362,7 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
     expect(first.ok).toBe(true);
 
     process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
     const replay: CarryoverReplayResult = {
       kind: 'conflict_free_carryover',
       sourceHeadSha: HEAD_A,
