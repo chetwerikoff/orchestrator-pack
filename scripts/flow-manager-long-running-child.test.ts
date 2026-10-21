@@ -1644,6 +1644,22 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(deriveDelivery(makeParsedTurnResult(), false)).toBe('landed');
   });
 
+  it('distinguishes original unique marker landing from positive POST and unknown attempt (#2678)', () => {
+    const pending = makeParsedTurnResult({
+      state: 'observation_uncertain', scope: 'invocation', cause: 'local_unbound',
+      witness: undefined, conversation_id: undefined,
+      resolved_send_count: 1, send_witness: 'numeric_send_count',
+    });
+    expect(deriveDelivery(pending, false)).toBe('POSSIBLY_DELIVERED');
+    expect(deriveDelivery({ ...pending, owned_marker_confirmed: true }, false)).toBe('landed');
+    expect(deriveDelivery({ ...pending, send_witness: 'owned_marker' }, false)).toBe('landed');
+    expect(deriveDelivery({
+      ...pending, resolved_send_count: 0, send_attempted: true,
+      owned_target_id: 'target-2678', owned_prompt_marker: 'OPKTURNV1abcdef012345',
+      owned_marker_confirmed: undefined,
+    }, false)).toBe('POSSIBLY_DELIVERED');
+  });
+
   it('uses top-level send_count for post-send failure delivery (P1)', () => {
     const parsed = makeParsedTurnResult({
       state: 'foreign_activity',
