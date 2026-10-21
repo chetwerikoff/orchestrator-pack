@@ -2559,6 +2559,33 @@ test('pinned original refuses a marker copied onto a different project route', a
   });
 });
 
+test('durably bound pinned target rejects a copied marker after same-project navigation', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
+    const projectRoot = 'https://chatgpt.com/g/g-p-1234567890abcdef0123456789abcdef-project';
+    const navigatedUrl = projectRoot + '/c/local-chatgpt:unrelated';
+    bindStateLightOwnedTarget({
+      profileKey: configuredProfileKey(profile, cdp), invocationId,
+      targetId: 'bound-pinned-id', created: true, cdp, initialRoute: projectRoot + '/project',
+    });
+    let publications = 0;
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => [{
+          id: 'bound-pinned-id', type: 'page', url: navigatedUrl,
+          webSocketDebuggerUrl: 'ws://example/bound-pinned-id',
+        }],
+        evaluate: async (_target, expression) => evaluateExpression(expression, [
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`),
+          new FakeNode('assistant', 'WRONG CONVERSATION', 'WRONG CONVERSATION'),
+        ], false, navigatedUrl),
+        publish: async () => { publications++; },
+      })),
+      (error: any) => error.status === 'surface_unknown' && error.reason === 'conversation_identity_mismatch',
+    );
+    assert.equal(publications, 0);
+  });
+});
+
 test('a copied marker in a foreign sibling cannot override the bound conversation', async () => {
   await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
     let evaluations = 0;
