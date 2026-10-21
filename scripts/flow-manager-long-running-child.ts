@@ -259,6 +259,8 @@ export interface TerminalEnvelope {
   readonly owned_prompt_marker?: string;
   readonly owned_target_created?: boolean;
   readonly cleanup_status?: 'cleanup_unconfirmed';
+  readonly predecessor_cleanup_status?: 'confirmed' | 'cleanup_unconfirmed';
+  readonly predecessor_target_id?: string;
   readonly cooldown_until_ms?: number;
   readonly send_count?: number;
   readonly observed_invocation_id?: string;
@@ -543,6 +545,13 @@ function parseTurnResult(line: string): ParsedTurnResult | null {
     }
     if (typeof body.owned_target_created === 'boolean') result.owned_target_created = body.owned_target_created;
     if (body.cleanup_status === 'cleanup_unconfirmed') result.cleanup_status = body.cleanup_status;
+    if (body.predecessor_cleanup_status === 'confirmed' || body.predecessor_cleanup_status === 'cleanup_unconfirmed') {
+      result.predecessor_cleanup_status = body.predecessor_cleanup_status;
+    }
+    if (typeof body.predecessor_target_id === 'string'
+      && /^[A-Za-z0-9._:-]{1,256}$/u.test(body.predecessor_target_id)) {
+      result.predecessor_target_id = body.predecessor_target_id;
+    }
     if (typeof body.cooldown_until_ms === 'number' && Number.isSafeInteger(body.cooldown_until_ms)) {
       result.cooldown_until_ms = body.cooldown_until_ms;
     }
@@ -648,10 +657,12 @@ function resolveConversationLocator(
 
 function turnTargetEnvelopeFields(
   candidate?: Pick<ParsedTurnResult, 'owned_target_id' | 'owned_prompt_marker'
-    | 'owned_target_created' | 'cleanup_status' | 'cooldown_until_ms'> | null,
+    | 'owned_target_created' | 'cleanup_status' | 'predecessor_cleanup_status'
+    | 'predecessor_target_id' | 'cooldown_until_ms'> | null,
   record?: StateLightTurnObservationRecord,
 ): Pick<TerminalEnvelope, 'owned_target_id' | 'owned_prompt_marker'
-  | 'owned_target_created' | 'cleanup_status' | 'cooldown_until_ms'> {
+  | 'owned_target_created' | 'cleanup_status' | 'predecessor_cleanup_status'
+  | 'predecessor_target_id' | 'cooldown_until_ms'> {
   return {
     ...(record?.owned_target
       ? { owned_target_id: record.owned_target.id,
@@ -664,6 +675,10 @@ function turnTargetEnvelopeFields(
         : {}),
     ...(candidate?.cleanup_status === 'cleanup_unconfirmed'
       ? { cleanup_status: 'cleanup_unconfirmed' as const } : {}),
+    ...(candidate?.predecessor_cleanup_status
+      ? { predecessor_cleanup_status: candidate.predecessor_cleanup_status,
+        ...(candidate.predecessor_target_id ? { predecessor_target_id: candidate.predecessor_target_id } : {}) }
+      : {}),
     ...(candidate?.cooldown_until_ms !== undefined
       ? { cooldown_until_ms: candidate.cooldown_until_ms } : {}),
   };
