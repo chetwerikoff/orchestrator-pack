@@ -5173,10 +5173,12 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
     };
   }
 
-  function runProductionNewChat(outputPath: string, timeoutMs: string, pollMs = '1') {
+  function runProductionNewChat(
+    outputPath: string, timeoutMs: string, pollMs = '1', invocationId = randomUUID(),
+  ) {
     return runStateLightTurnWithStdoutCapture(runStateLightTurn, [
       ...STATE_LIGHT_TURN_BASE_ARGV,
-      '--invocation-id', randomUUID(),
+      '--invocation-id', invocationId,
       '--output', outputPath,
       '--new-chat',
       '--project-url', PROJECT_URL,
@@ -5184,6 +5186,60 @@ describe('Issue #1283 production runStateLightTurn recovery integration', () => 
       '--poll-ms', pollMs,
     ]);
   }
+
+  it('takes a concurrently harvested probe primary instead of reversing phase after recovery census (#2678 R2)', async () => {
+    const prompt = 'RECOVERY-PROBE-COMMIT-RACE';
+    const reply = 'EXTERNAL-COMMITTED-RECOVERY-REPLY';
+    const invocationId = randomUUID();
+    const output = join(integrationStateDir, 'recovery-probe-committed.txt');
+    let lost = false;
+    let injected = false;
+    const original = makeLoserPage(prompt, 'UNTRUSTED-ORIGINAL', () => { lost = true; }, true);
+    original.page.isClosed.mockImplementation(() => lost);
+    const recoveredClose = vi.fn(async () => undefined);
+    const recovered: any = {
+      __fakeBrowserGptPage: true,
+      url: () => SHARED_CONV,
+      isClosed: () => false,
+      close: recoveredClose,
+      locator: (selector: string) => {
+        if (selector === USER_MESSAGE_SELECTOR) {
+          return {
+            count: async () => 1,
+            nth: () => ({
+              innerText: async () => {
+                if (!injected) {
+                  injected = true;
+                  const before = readStateLightTurnObservation('collision-profile', invocationId);
+                  expect(['sent_unbound', 'sent_unharvested']).toContain(before.phase);
+                  const publication = await finalizeStateLightPrimaryPublication({
+                    profileKey: 'collision-profile', invocationId, target: output,
+                    bytes: Buffer.from(reply, 'utf8'),
+                    publish: () => publishStateLightReply(output, invocationId, reply),
+                  });
+                  expect(publication.state).toBe('committed_ok');
+                }
+                return `${TEST_OWNED_MARKER}\n\n${prompt}`;
+              },
+            }),
+          };
+        }
+        return scalarLocator();
+      },
+    };
+    const browser = browserWithPages(original.page, [recovered], () => true);
+    mocks.browserQueue.push(browser);
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const result = await runProductionNewChat(output, '90000', '1', invocationId);
+    expect(injected).toBe(true);
+    expect(result.result, JSON.stringify(result.result)).toMatchObject({
+      state: 'ok', cause: 'completed_page_probe_primary', send_count: 1,
+    });
+    expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('harvested');
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+    expect(original.getSends()).toBe(1);
+    expect(recoveredClose).not.toHaveBeenCalled();
+  });
 
   it('reconnects after post-send browser loss, claims the exact recovered conversation, and never resends or mutates a foreign page', async () => {
     const prompt = 'PROMPT-RECOVER';
