@@ -15,7 +15,7 @@ import {
 } from '../plugins/codex-pr-reviewer/lib/reviewer_budget.ts';
 import { startPackReview } from './pack-review-runner.ts';
 import { readPackReviewAuthority } from './pack-review-state.ts';
-import { createPackReviewRun } from './lib/pack-review-run-store.ts';
+import { createPackReviewRun, getPackReviewRun } from './lib/pack-review-run-store.ts';
 import { writePackReviewerPreference } from './lib/pack-reviewer-preference.ts';
 import { resolveBoundIssueSnapshot } from './lib/reverify-bound-issue-snapshot.ts';
 import type { CarryoverReplayResult } from './pack-review-carryover.ts';
@@ -48,8 +48,9 @@ function setupHarness(storeRoot: string): void {
   process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR = join(storeRoot, 'bound-issue-snapshots');
 }
 
-function startFixture(storeRoot: string, overrides: Record<string, unknown> = {}) {
-  return startPackReview({
+async function startFixture(storeRoot: string, overrides: Record<string, unknown> = {}) {
+  const startedAt = performance.now();
+  const result = await startPackReview({
     projectId: 'orchestrator-pack',
     storeRoot,
     sourceRepoRoot: process.cwd(),
@@ -68,6 +69,8 @@ function startFixture(storeRoot: string, overrides: Record<string, unknown> = {}
     fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
     ...overrides,
   });
+  expect(performance.now() - startedAt).toBeLessThan(5_000);
+  return result;
 }
 
 afterEach(() => {
@@ -309,7 +312,8 @@ describe('Issue #1529 economical PR-led pack-review starts', () => {
     expect(result).toMatchObject({ ok: false, created: true, reused: false, httpStatus: 409 });
     expect(String(result.reason)).toContain('review target Issue changed');
     expect(performance.now() - began).toBeLessThan(5_000);
-    expect(result.resolvedReviewer ?? 'codex').toBe('codex');
+    expect(getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot }))
+      .toMatchObject({ resolvedReviewer: 'codex', resolvedReviewerSource: 'invocation-bound' });
   });
 
   it('suppresses a repeated clean same-head model invocation', async () => {
