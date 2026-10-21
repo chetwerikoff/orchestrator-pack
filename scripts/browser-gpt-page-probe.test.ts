@@ -2763,6 +2763,74 @@ test('harvest leaves a newly created recovery target with active unproven Stop g
   });
 });
 
+test('harvest tears down a uniquely attributable Page even when create returns an invalid array', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, output }) => {
+    const target = {
+      id: 'new-array-result', type: 'page', url: 'https://chatgpt.com/c/test',
+      title: 'Incomplete create', webSocketDebuggerUrl: 'ws://example/new-array-result',
+    };
+    let created = false;
+    let retired = false;
+    let closeCalls = 0;
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => created && !retired ? [target] : [],
+        createPage: async () => {
+          created = true;
+          return [{ ...target, url: 'about:blank' }];
+        },
+        closePage: async (_cdp, id) => {
+          assert.equal(id, target.id);
+          closeCalls += 1;
+          retired = true;
+          return 'closed';
+        },
+        evaluate: async (_target, expression) => {
+          assert.notEqual(expression, HARVEST_EXPRESSION);
+          return {
+            page_url: target.url, user_count: 0, user_texts: [], stop: false,
+            streaming: false, composer_text: '', fetch_failure: true,
+          };
+        },
+      })),
+      (error: any) => error.status === 'unavailable' && error.reason === 'create_result_ambiguous',
+    );
+    assert.equal(created, true);
+    assert.equal(closeCalls, 1);
+    assert.equal(retired, true);
+  });
+});
+
+test('harvest keeps a bounded sibling census and never allocates a replacement on timeout', async () => {
+  await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, output }) => {
+    let now = 0;
+    let reads = 0;
+    let creates = 0;
+    await assert.rejects(
+      runProbe({ operation: 'harvest', cdp, profile, invocationId, output }, deps({
+        listTargets: async () => ['sibling-a', 'sibling-b', 'sibling-c'].map((id) => ({
+          id, type: 'page', url: 'https://chatgpt.com/c/' + id,
+          title: id, webSocketDebuggerUrl: 'ws://example/' + id,
+        })),
+        now: () => now,
+        evaluate: async () => {
+          reads += 1;
+          now += 6_000;
+          throw new Error('injected_census_unreadable');
+        },
+        createPage: async () => {
+          creates += 1;
+          throw new Error('must_not_allocate_after_census_deadline');
+        },
+      })),
+      (error: any) => error.status === 'surface_unknown'
+        && error.reason === 'harvest_sibling_census_timeout',
+    );
+    assert.equal(reads, 3);
+    assert.equal(creates, 0);
+  });
+});
+
 test('harvest atomic publication leaves no canonical partial and retries the same binding', async () => {
   await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, marker, output }) => {
     const common = {
