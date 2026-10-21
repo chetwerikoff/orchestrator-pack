@@ -1,0 +1,46 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2679,
+  "declared_paths": [
+    "scripts/lib/review-start-claim-cli.ts",
+    "scripts/lib/review-start-claim-store.ts",
+    "scripts/pack-gpt-reviewer.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner-issue-1591.test.ts",
+    "scripts/pack-review-runner-issue-898.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-reviewer-preference.test.ts",
+    "scripts/review-start-claim-lifecycle.test.ts",
+    "scripts/review-start-claim.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "plugins/",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/lib/pack-reviewer-preference.ts",
+    "scripts/lib/resolve-pack-reviewer.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/orchestrator-escalation-router.test.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-live-store-parent-guard.test.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/lib/review-start-claim-cli.ts",
+    "scripts/lib/review-start-claim-store.ts",
+    "scripts/lib/vitest-live-store-harness.mjs",
+    "scripts/pack-gpt-reviewer.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner-issue-1591.test.ts",
+    "scripts/pack-review-runner-issue-898.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-reviewer-preference.test.ts",
+    "scripts/review-start-claim-lifecycle.test.ts",
+    "scripts/review-start-claim.test.ts"
+  ],
+  "source_revision": "fbc764c7a6047a004188bed192924a716289e121"
+}

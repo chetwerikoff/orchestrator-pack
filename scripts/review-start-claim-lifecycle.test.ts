@@ -13,6 +13,7 @@ import {
   evaluateVisibilityFence,
   resolveClaimLifecycleConfig,
 } from '../docs/review-start-claim-lifecycle.mjs';
+import { evaluateLaunchPendingRunBinding } from '../docs/review-start-claim-run-binding.mjs';
 
 const fullSha = 'fd2fdb6600000000000000000000000000000000000';
 
@@ -84,6 +85,38 @@ describe('review-start-claim-lifecycle predicates', () => {
     });
     expect(decision.action).toBe('block');
     expect(decision.reason).toBe('corrupt_run_store_evidence');
+  });
+
+  it('keeps historical same-key timed_out ambiguous for reclaim, sweep and launch binding', () => {
+    const claim = {
+      state: 'active', key: `pr-266-${fullSha}`, prNumber: 266, headSha: fullSha,
+      projectNamespace: 'orchestrator-pack',
+      holder: fakeHolder({ host: 'test-host' }),
+      acquiredAtUtc: '2026-06-24T12:00:00.000Z',
+      holdStartedAtUtc: '2026-06-24T12:00:00.000Z',
+    };
+    const oldTimedOut = {
+      id: 'run-old-A', runId: 'run-old-A', projectId: 'orchestrator-pack',
+      prNumber: 266, targetSha: fullSha, headSha: fullSha,
+      status: 'timed_out', latestRunStatus: 'timed_out',
+    };
+    const evidence = evaluateMatchingRunEvidenceForKey([oldTimedOut], 266, fullSha);
+    expect(evidence).toMatchObject({ corruptEvidence: true });
+    const reclaim = evaluateReclaimDecision({
+      claim, holderLiveness: { outcome: 'provably_not_alive', reason: 'proc_entry_missing' },
+      reviewRuns: [oldTimedOut], nowMs: Date.parse('2026-06-24T12:00:05.000Z'),
+    });
+    expect(reclaim).toMatchObject({ action: 'block', reason: 'corrupt_run_store_evidence' });
+    const sweep = evaluateSweep({
+      activeClaims: [claim], reviewRuns: [oldTimedOut],
+      nowMs: Date.parse('2026-06-24T12:00:05.000Z'), localHost: 'test-host',
+    });
+    expect(sweep.actions[0]?.decision).toMatchObject({ action: 'block', reason: 'corrupt_run_store_evidence' });
+    const launchBinding = evaluateLaunchPendingRunBinding({
+      claim, reviewRuns: [oldTimedOut], projectNamespace: 'orchestrator-pack',
+    });
+    expect(launchBinding.reconcile).toBe(false);
+    expect(launchBinding).not.toHaveProperty('outcome', 'released_after_run_terminalized');
   });
 
   it('treats outdated review runs as known non-covering evidence', () => {

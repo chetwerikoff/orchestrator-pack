@@ -80,6 +80,7 @@ function tempRoot(prefix: string): string {
 function harnessEnv(storeRoot: string, capture: string): void {
   process.env.OPK_VITEST_HARNESS = '1';
   process.env.PACK_REVIEWER = 'gpt';
+  process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
   process.env.PACK_REVIEW_GITHUB_REVIEW_CAPTURE_FILE = capture;
   process.env.OPK_BASE_DIR = path.join(storeRoot, 'ao-base');
   process.env.OPK_REVIEW_CLAIM_DIR = path.join(
@@ -420,6 +421,7 @@ describe('Issue #1417 direct-CLI operator-only pack-review start', () => {
       ...process.env,
       OPK_VITEST_HARNESS: '1',
       PACK_REVIEWER: 'codex',
+      PACK_REVIEW_BOUND_REVIEWER: 'codex',
       PACK_REVIEW_GITHUB_REVIEW_CAPTURE_FILE: explicitCapture,
       PATH: `${commandRoot}${path.delimiter}${process.env.PATH ?? ''}`,
     };
@@ -462,6 +464,7 @@ describe('Issue #1417 direct-CLI operator-only pack-review start', () => {
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
     process.env.PACK_REVIEWER = 'codex';
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'codex';
 
     const forged = {
       projectId: 'orchestrator-pack',
@@ -491,6 +494,7 @@ describe('Issue #1417 direct-CLI operator-only pack-review start', () => {
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
     process.env.PACK_REVIEWER = 'codex';
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'codex';
     const result = runProcessSync({
       command: process.execPath,
       args: [
@@ -524,6 +528,7 @@ describe('Issue #1417 direct-CLI operator-only pack-review start', () => {
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
     process.env.PACK_REVIEWER = 'codex';
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'codex';
     const created = createPackReviewRun({
       projectId: 'orchestrator-pack',
       storeRoot,
@@ -633,6 +638,7 @@ describe('GPT stale-head guard (Issue #1031 AC10)', () => {
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
     process.env.PACK_REVIEWER = 'codex';
+    delete process.env.PACK_REVIEW_BOUND_REVIEWER; // exercise the legacy Win32 User/Process selector
 
     const result = await startPackReview({
       projectId: 'orchestrator-pack',
@@ -1356,6 +1362,7 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     const invocationLog = path.join(storeRoot, 'invocations.jsonl');
     harnessEnv(storeRoot, capture);
     process.env.PACK_REVIEWER = 'codex';
+    delete process.env.PACK_REVIEW_BOUND_REVIEWER; // canonical route must not bind a reviewer
     process.env.XDG_CONFIG_HOME = path.join(storeRoot, 'isolated-reviewer-config');
     process.env.PACK_REVIEW_RUNNER_GPT_ENGAGEMENT_FILE = engagement;
     process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = invocationLog;

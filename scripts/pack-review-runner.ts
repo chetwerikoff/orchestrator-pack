@@ -77,6 +77,7 @@ import {
 } from './pack-review-state.ts';
 import {
   acquireReviewStartClaim,
+  bindReviewStartClaimToInitiatingRun,
   claimKey,
   claimPath,
   readClaimRecord,
@@ -455,7 +456,9 @@ interface ClaimLease {
   directory: string;
   deadForeignRunClaimReclaimed?: boolean;
   owns: () => boolean;
-  release: (action: 'run_started' | 'failure', reviewRuns: PackReviewRunRecord[], detail?: string) => Promise<void>;
+  bindRunId: (runId: string) => void;
+  release: (action: 'run_started' | 'failure', reviewRuns: PackReviewRunRecord[], detail?: string,
+    currentTerminalRunId?: string) => Promise<void>;
 }
 
 interface AuthoritativeReviewContext {
@@ -2117,6 +2120,7 @@ async function acquireClaimLease(options: {
       reason: trim(claim.reason) || 'claimed',
       directory: '',
       owns: () => false,
+      bindRunId: () => undefined,
       release: async () => undefined,
     };
   }
@@ -2127,9 +2131,20 @@ async function acquireClaimLease(options: {
     deadForeignRunClaimReclaimed: Boolean(
       options.takeover && claim.reason === 'dead_foreign_reviewer_reclaimed'),
     owns: () => testReviewStartClaimOwnership(claim),
-    release: async (action, reviewRuns, detail = '') => {
+    bindRunId: (runId) => {
+      const bound = bindReviewStartClaimToInitiatingRun(claim as ClaimResult, runId, {
+        projectId: options.projectId, storeRoot: options.storeRoot,
+      });
+      if (bound.ok !== true) {
+        throw new Error(`review claim initiating run binding failed: ${trim(bound.reason) || 'unknown'}`);
+      }
+    },
+    release: async (action, reviewRuns, detail = '', currentTerminalRunId) => {
       const completion = action === 'run_started'
-        ? completeAfterRunInvoke(claim as ClaimResult, reviewRuns)
+        ? completeAfterRunInvoke(claim as ClaimResult, reviewRuns,
+            currentTerminalRunId
+              ? { runId: currentTerminalRunId, projectId: options.projectId, storeRoot: options.storeRoot }
+              : undefined)
         : releaseAfterRunFailure(claim as ClaimResult, reviewRuns, detail);
       if (completion.ok !== true) {
         throw new Error(`review claim completion failed: ${trim(completion.reason) || 'unknown'}`);
@@ -7996,6 +8011,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
   let terminal = false;
   let retainClaimDirectory = false;
   let terminalPersistenceAttempted = false;
+  let currentInvocationTerminalRunId: string | null = null;
   let carryover: { replay: CarryoverReplayResult; sourceCleanRunId: string } | null = null;
   let carryoverBundlePath = '';
   const recordUnfinishedTerminal = async (
@@ -8004,7 +8020,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     terminalPersistenceAttempted = true;
     const zeroJudgment = options.failureReason?.startsWith('gpt_source_non_complete:') === true;
     const originalWriter = options.writeRequiredStatus;
-    return recordPackReviewUnfinishedTerminalStatus({
+    const written = await recordPackReviewUnfinishedTerminalStatus({
       ...options,
       ...(zeroJudgment ? {
         writeRequiredStatus: async (request: Parameters<PackReviewRequiredStatusWriter>[0]) => {
@@ -8049,6 +8065,10 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         },
       } : {}),
     });
+    // Only a successfully completed terminal write in this invocation permits
+    // the exact-run claim fast path. A prior journaled failure never sets this.
+    currentInvocationTerminalRunId = options.run.id;
+    return written;
   };
   const recordFallbackProcessFailure = async (fallbackResult: ProcessResult): Promise<never> => {
     if (!run) throw new Error('fallback reviewer failure occurred before run creation');
@@ -8092,7 +8112,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     });
     terminal = true;
     const runs = listPackReviewRuns({ projectId, storeRoot });
-    if (claimLease) await claimLease.release('run_started', runs);
+    if (claimLease) await claimLease.release('run_started', runs, '', run.id);
     return {
       ok: false,
       created: true,
@@ -9186,6 +9206,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         prNumber: target.prNumber, headSha: target.headSha, runId: resumeCandidate.id, httpStatus: 409 };
     }
     if (resumeCandidate) {
+      // Identity is bound for visibility fencing too, never proof that this
+      // invocation freshly terminalized a previously failed journaled run.
+      claimLease?.bindRunId(resumeCandidate.id);
       const resumePayload = packReviewJournaledPayload(resumeCandidate);
       if (!resumePayload) {
         throw new Error(`pack review run ${resumeCandidate.id} lost its persisted verdict before recovery`);
@@ -9615,6 +9638,9 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       });
       run = created.run;
     }
+    // Bind the initiating run before the first visibility check, including
+    // failure before any covering status can be observed by the claim.
+    claimLease?.bindRunId(run.id);
     if (!supplementalMode) {
       authority = advancePackReviewAuthority(
         authority,
@@ -9883,7 +9909,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       });
       terminal = true;
       const runs = listPackReviewRuns({ projectId, storeRoot });
-      if (claimLease) await claimLease.release('run_started', runs);
+      if (claimLease) await claimLease.release('run_started', runs, '', run.id);
       return {
         ok: false,
         created: true,
@@ -9993,7 +10019,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       });
       terminal = true;
       const runs = listPackReviewRuns({ projectId, storeRoot });
-      if (claimLease) await claimLease.release('run_started', runs);
+      if (claimLease) await claimLease.release('run_started', runs, '', currentInvocationTerminalRunId ?? undefined);
       return {
         ok: false,
         created: true,
@@ -10297,7 +10323,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         });
         terminal = true;
         const runs = listPackReviewRuns({ projectId, storeRoot });
-        if (claimLease) await claimLease.release('run_started', runs);
+        if (claimLease) await claimLease.release('run_started', runs, '', currentInvocationTerminalRunId ?? undefined);
         return {
           ok: false,
           created: true,
@@ -10382,7 +10408,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           : { state: 'not_applicable' as const, reason: 'no_judgment_census_or_cap_changed' };
         terminal = true;
         const runs = listPackReviewRuns({ projectId, storeRoot });
-        if (claimLease) await claimLease.release('run_started', runs);
+        if (claimLease) await claimLease.release('run_started', runs, '', currentInvocationTerminalRunId ?? undefined);
         return {
           ok: false,
           created: true,
@@ -10686,7 +10712,12 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     }
     if (claimLease?.acquired && !retainClaimDirectory) {
       try {
-        await claimLease.release('failure', listPackReviewRuns({ projectId, storeRoot }), describeError(error));
+        if (currentInvocationTerminalRunId && run?.id === currentInvocationTerminalRunId) {
+          await claimLease.release('run_started', listPackReviewRuns({ projectId, storeRoot }),
+            '', currentInvocationTerminalRunId);
+        } else {
+          await claimLease.release('failure', listPackReviewRuns({ projectId, storeRoot }), describeError(error));
+        }
       } catch {
         // Primary runner failure is more actionable; the stale claim path remains recoverable.
       }
