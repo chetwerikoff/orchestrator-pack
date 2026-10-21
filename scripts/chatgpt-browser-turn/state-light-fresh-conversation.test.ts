@@ -904,6 +904,52 @@ describe('state-light fresh conversation collision recovery', () => {
       expect(JSON.stringify(journal())).not.toContain(prompt);
     });
 
+    it.each([
+      { label: 'last eligible poll with action headroom', offsetMs: -10_000, state: 'ok', sends: 1, probes: 1 },
+      { label: 'at the cutoff', offsetMs: 0, state: 'send_failed', sends: 0, probes: 2 },
+      { label: 'after the cutoff', offsetMs: 1, state: 'send_failed', sends: 0, probes: 2 },
+    ])('applies the same extended cutoff at $label', async ({ offsetMs, state, sends, probes }) => {
+      const prompt = '2682-CUTOFF-' + offsetMs;
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      const base = mocks.nowMs;
+      let entryProbeAt = 0;
+      let movedToCutoff = false;
+      vi.mocked(probeCdpSiblingEvaluations).mockImplementation(async () => {
+        if (!entryProbeAt) entryProbeAt = mocks.nowMs;
+        return positive();
+      });
+      turn.sendButton.isEnabled.mockImplementation(async () => {
+        if (!entryProbeAt || movedToCutoff) return false;
+        movedToCutoff = true;
+        const readinessStartedAt = entryProbeAt - 60_000;
+        // Mirror fresh-unbound return, 30s dispatch observation, two 5s actions,
+        // the final 5s probe and the 600s readiness-start cap from Issue #2682.
+        const cutoff = Math.min(
+          readinessStartedAt + 600_000,
+          base + 900_000 - 22_000 - 30_000 - 4 * 5_000,
+        ) - 5_000;
+        mocks.nowMs = cutoff + offsetMs;
+        return true;
+      });
+      const outcome = await runNewChatTurn(
+        turn.page, join(stateDir, '2682-cutoff-' + offsetMs + '.txt'), '900000',
+      );
+      expect(outcome.result.state).toBe(state);
+      expect(turn.getSends()).toBe(sends);
+      expect(turn.sendButton.click).toHaveBeenCalledTimes(sends);
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(probes);
+      if (sends === 0) {
+        expect(outcome.result).toMatchObject({
+          state: 'send_failed', cause: 'fresh_send_blocked_by_frozen_sibling', send_count: 0,
+        });
+        expect(outcome.result.send_attempted).not.toBe(true);
+        expect(journal()).toEqual([expect.objectContaining({ outcome: 'still_frozen' })]);
+      } else {
+        expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+        expect(journal()).toEqual([expect.objectContaining({ outcome: 'enabled' })]);
+      }
+    });
 
     it('interleaves distinct own targets: B Sends and settles while A waits; A later Sends once', async () => {
       const a = makeLoserPage('PROMPT', 'A-REPLY');
@@ -912,8 +958,16 @@ describe('state-light fresh conversation collision recovery', () => {
       const initialNow = mocks.nowMs;
       let aQualified = false;
       let bClicked = false;
-      b.sendButton.isEnabled.mockImplementation(async () => aQualified);
-      a.sendButton.isEnabled.mockImplementation(async () => bClicked && mocks.nowMs >= initialNow + 180_000);
+      let releaseB!: () => void;
+      let resolveAExtended!: () => void;
+      const bFinished = new Promise<void>((resolve) => { releaseB = resolve; });
+      const aExtendedWaiting = new Promise<void>((resolve) => { resolveAExtended = resolve; });
+      b.sendButton.isEnabled.mockResolvedValue(true);
+      a.sendButton.isEnabled.mockImplementation(async () => {
+        if (aQualified) resolveAExtended();
+        if (aQualified && !bClicked) await bFinished;
+        return bClicked && mocks.nowMs >= initialNow + 180_000;
+      });
       vi.mocked(probeCdpSiblingEvaluations).mockImplementation(async (_endpoint, ownedId) => {
         expect(ownedId).toBe('2682-owned-A');
         aQualified = true;
@@ -961,15 +1015,16 @@ describe('state-light fresh conversation collision recovery', () => {
       try {
         const aId = randomUUID();
         const bId = randomUUID();
-        const [aCode, bCode] = await Promise.all([
-          runStateLightTurn(runArgs(aId)),
-          runStateLightTurn(runArgs(bId)),
-        ]);
+        const aRun = runStateLightTurn(runArgs(aId));
+        await aExtendedWaiting;
+        const bCode = await runStateLightTurn(runArgs(bId));
+        releaseB();
+        const aCode = await aRun;
         const results = written.map((line) => {
           try { return JSON.parse(line) as { schema?: string; state?: string; invocation_id?: string; send_count?: number }; }
           catch { return {}; }
         }).filter((row) => row.schema === 'turn-result/v1');
-        expect([aCode, bCode]).toEqual([0, 0]);
+        expect([aCode, bCode], JSON.stringify(written)).toEqual([0, 0]);
         expect(aQualified).toBe(true);
         expect(bClicked).toBe(true);
         expect(a.getSends()).toBe(1);
@@ -985,6 +1040,7 @@ describe('state-light fresh conversation collision recovery', () => {
         expect(a.page.bringToFront).not.toHaveBeenCalled();
         expect(b.page.bringToFront).not.toHaveBeenCalled();
       } finally {
+        releaseB();
         attach.mockImplementation(__testAttachOwnTargetFixture);
         stdout.mockRestore();
       }
