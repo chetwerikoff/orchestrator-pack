@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { runProcess } from '#opk-kernel/subprocess';
 import { generateCurrentHeadProjection, generatePrechangePopulation, migrationOwnershipDigest, populationDigest, serializeCurrentHeadProjection } from './census-generator.ts';
 import { loadCensus } from './census.ts';
 
@@ -62,6 +63,27 @@ describe('pre-change census generator', () => {
   });
 
   it('batches exact historical candidate reads while preserving the frozen census output', async () => {
+    // A shallow CI checkout may lack the historical candidate. Fetch only that
+    // immutable commit before starting Git Trace2, so setup is not counted.
+    const historicalHead = 'a172e02ddf0a57d4d43d10e16ba59f2b45539bbd';
+    const present = await runProcess({
+      command: 'git',
+      args: ['cat-file', '-e', `${historicalHead}^{commit}`],
+      cwd: repoRoot,
+      inheritParentEnv: true,
+      allowEmptyStdout: true,
+    });
+    if (!present.ok) {
+      const fetched = await runProcess({
+        command: 'git',
+        args: ['fetch', '--no-tags', '--depth=1', 'origin', historicalHead],
+        cwd: repoRoot,
+        inheritParentEnv: true,
+        allowEmptyStdout: true,
+        timeoutMs: 15_000,
+      });
+      if (!fetched.ok) throw new Error(`cannot fetch exact historical census candidate ${historicalHead}: ${fetched.stderr || fetched.error || fetched.outcome}`);
+    }
     const traceRoot = mkdtempSync(resolve(tmpdir(), 'opk-2675-git-trace-'));
     const tracePath = resolve(traceRoot, 'git-trace2.jsonl');
     const previousTrace = process.env.GIT_TRACE2_EVENT;
