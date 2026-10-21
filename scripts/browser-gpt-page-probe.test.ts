@@ -2747,8 +2747,8 @@ test('harvest leaves a newly created recovery target with active unproven Stop g
       closePage: async () => { closeCalls += 1; return 'closed'; },
       evaluate: async (_target, expression) => expression === HARVEST_EXPRESSION
         ? evaluateExpression(expression, [
-          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`),
-          new FakeNode('assistant', 'FINAL', 'FINAL'),
+          new FakeNode('user', `${marker}\n\nprompt`, `${marker}\n\nprompt`, { 'data-message-id': 'u-created-stop' }),
+          new FakeNode('assistant', 'FINAL', 'FINAL', { 'data-message-id': 'a-created-stop' }),
         ], false, target.url)
         : { page_url: target.url, user_count: 1,
           user_texts: [`${marker}\n\nprompt`], stop: true,
@@ -2763,7 +2763,7 @@ test('harvest leaves a newly created recovery target with active unproven Stop g
   });
 });
 
-test('harvest tears down a uniquely attributable Page even when create returns an invalid array', async () => {
+test('harvest refuses to retire a Page from an ambiguous create result array', async () => {
   await withHarvestObservation('sent_unharvested', async ({ profile, cdp, invocationId, output }) => {
     const target = {
       id: 'new-array-result', type: 'page', url: 'https://chatgpt.com/c/test',
@@ -2796,8 +2796,10 @@ test('harvest tears down a uniquely attributable Page even when create returns a
       (error: any) => error.status === 'unavailable' && error.reason === 'create_result_ambiguous',
     );
     assert.equal(created, true);
-    assert.equal(closeCalls, 1);
-    assert.equal(retired, true);
+    // An array result supplies no positive single-target creation identity.
+    // A later target census cannot grant destructive ownership retroactively.
+    assert.equal(closeCalls, 0);
+    assert.equal(retired, false);
   });
 });
 
