@@ -418,7 +418,9 @@ describe('Issue #2596 production recovery caller boundaries', () => {
         expect(selection).toHaveBeenCalledTimes(1);
         expect(foreign.locator).not.toHaveBeenCalled();
         expect(result).toMatchObject({ state: 'ok', conversation_id: url, send_count: 1 });
-        expect(successor.close).toHaveBeenCalledTimes(1);
+        // The read-only successor provided the original reply, but it is
+        // not the invocation's CDP-pinned, originally created close target.
+        expect(successor.close).not.toHaveBeenCalled();
         expect(readFileSync(output, 'utf8')).toBe('RECOVERED-REPLY');
       } else {
         expect(selection).not.toHaveBeenCalled();
@@ -1029,16 +1031,11 @@ describe('production attempted-send result and durable envelope', () => {
       expect(result.send_count).toBe(witnessed ? 1 : 0);
       expect(observation.phase).toBe(preDispatch ? 'not_sent' : witnessed ? 'sent_unharvested' : 'dispatching');
       if (!preDispatch) {
-        // A positively witnessed Send follows the existing close path. An
-        // attempted zero-count Send is still possibly delivered, even when
-        // the Page was originally created by this invocation: retain its draft.
-        if (witnessed) {
-          expect(page.close).toHaveBeenCalledTimes(1);
-          expect(result.cleanup).toBe('confirmed');
-        } else {
-          expect(page.close).not.toHaveBeenCalled();
-          expect(result.cleanup).not.toBe('confirmed');
-        }
+        // This fixture selects a pre-existing exact-chat Page; a numeric
+        // Send witness authenticates delivery, not destructive ownership.
+        // Neither the witnessed nor attempted/unproven path may close it.
+        expect(page.close).not.toHaveBeenCalled();
+        expect(result.cleanup).not.toBe('confirmed');
         if (!witnessed) {
           expect(result.send_attempted).toBe(true);
           expect(observation.send_count).toBeUndefined();
@@ -1049,7 +1046,7 @@ describe('production attempted-send result and durable envelope', () => {
         // The click/Enter exception is a diagnostic, not proof that no Send happened.
         // The original-deadline outcome remains possibly delivered after no witness.
         expect(result).toMatchObject({
-          state: 'observation_uncertain', cause: 'send_delivery_unproven',
+          state: 'observation_uncertain', cause: 'post_send_absolute_deadline_elapsed',
           send_attempted: true, send_count: 0,
         });
         expect(result.incidents).toContain('send_transport_error');
@@ -1445,7 +1442,7 @@ describe('Issue #2636: delayed Send delivery on the original exact owned convers
             state: 'observation_uncertain', send_count: 0,
             send_attempted: true,
             cause: scenario === 'lost-near-deadline'
-              ? 'owned_conversation_recovery_census_failed' : 'send_delivery_unproven',
+              ? 'owned_conversation_recovery_census_failed' : 'post_send_absolute_deadline_elapsed',
           });
           // This is an existing, explicitly selected exact chat. Its URL may
           // remain recorded without constituting a Send or reply witness.
