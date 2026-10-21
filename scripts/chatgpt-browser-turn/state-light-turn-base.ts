@@ -5888,7 +5888,14 @@ async function runTurnCore(
         zeroWitnessAccountRecovery = false;
       }
       if (config.newChat && !ownedConversationUrl) {
-        if (!(await freshProjectMarkerProven(recovered.page, recovered.conversationUrl, recoveryDeadlineMs))) {
+        const recoveredMarkerProven = await freshProjectMarkerProven(
+          recovered.page, recovered.conversationUrl, recoveryDeadlineMs,
+        );
+        // A probe may commit while this final read is awaiting the Page.
+        // Publication truth outranks either marker refusal or phase rollback.
+        const committedAfterRecoveryMarkerRead = verifiedExternalPrimary();
+        if (committedAfterRecoveryMarkerRead) return committedAfterRecoveryMarkerRead;
+        if (!recoveredMarkerProven) {
           incident('post_send_observation_error', 'recovered_fresh_owner_marker_or_project_unproven', 'retain_page_no_resend');
           return {
             page: recovered.page,
