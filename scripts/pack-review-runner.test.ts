@@ -5207,8 +5207,9 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
       const beforeTerminals = new Set(readdirSync(terminalDir));
       const beforeAudits = new Set(readdirSync(auditDir));
 
-      // Deliberately observe the full 15-second visibility fence, not a
-      // shortened visibility budget. Only this slow negative test gets headroom.
+      // Journal delivery may restore a covering verdict after the previous
+      // invocation's failed row. Its ordinary run_started completion is not
+      // the fresh-terminal fast release and never makes this claim retryable.
       const resumed = await invoke();
       // The CLI intentionally maps every created:false failure to review_not_started.
       // runnerReason preserves startPackReview's exact supplemental disposition.
@@ -5219,25 +5220,27 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
       const terminal = readdirSync(terminalDir).filter((name) => !beforeTerminals.has(name))
         .map((name) => JSON.parse(readFileSync(join(terminalDir, name), 'utf8')));
       expect(terminal).toContainEqual(expect.objectContaining({
-        state: 'terminal', outcome: 'run_not_visible_fenced', boundRunId: runId,
+        state: 'terminal', outcome: 'run_started', boundRunId: runId,
         projectNamespace: 'orchestrator-pack', prNumber, headSha: HEAD,
       }));
       expect(terminal.some((x) => x.outcome === 'released_after_run_terminalized')).toBe(false);
       const audit = readdirSync(auditDir).filter((name) => !beforeAudits.has(name))
         .map((name) => JSON.parse(readFileSync(join(auditDir, name), 'utf8')));
       expect(audit).toContainEqual(expect.objectContaining({
-        outcome: 'run_not_visible_fenced', decisionSource: 'completion',
+        outcome: 'run_started', decisionSource: 'completion',
       }));
       expect(audit.some((x) => x.outcome === 'released_after_run_terminalized')).toBe(false);
       expect(existsSync(join(dir, 'pr-' + prNumber + '-' + HEAD + '.json'))).toBe(false);
       expect(getPackReviewRun(runId, options)).toMatchObject({
-        status: 'failed', latestRunStatus: 'failed', journalOutcome: old!.journalOutcome,
+        status: 'up_to_date', latestRunStatus: 'up_to_date',
+        journalOutcome: old!.journalOutcome,
+        deliveryOutcomes: { githubComment: expect.objectContaining({ state: 'failed' }) },
       });
       expect(gptSends).toHaveLength(sentCount);
       expect(source.sent()).toBe(sourceCount);
       expect(review.posts()).toBe(1);
       expect(f.statusWrites).toHaveLength(f.statusCount);
-    }, 25_000);
+    });
 
     it('audits a freshly failed harvest claim after review publication, without a repeat send or post', async () => {
       const prNumber = 260722;
