@@ -8013,7 +8013,13 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
   // Page handle/target. Never close it using the first target's provenance.
   const outcomePageIsOriginal = !outcome.originalCreatedPage
     || outcome.page === outcome.originalCreatedPage;
+  // An in-flight post-Send Target crashed response is not a current idle
+  // Page witness, even when Playwright still reports isClosed() === false.
+  // The held, failed Page cannot be closed under stale creation authority.
+  // A positively lost target may still use the independent exact-ID reattach
+  // path below, which rechecks current owner, route and generation evidence.
   let pageAction: PageCleanupAction = cleanupAuthorityProven && !pageLost
+    && outcome.result.cause !== 'post_send_target_crashed'
     && outcome.ownershipForfeited !== true && positivelyCreatedOriginal
     && outcomePageIsOriginal ? 'close' : 'skip';
   if (pageAction === 'close' && outcome.result.send_count === 0
