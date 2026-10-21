@@ -6077,49 +6077,12 @@ async function runTurnCore(
         if (terminal) return terminal;
         continue;
       }
-      // Count-gated 2x post-Send exits do not bound an unproved attempt.
-      // The original absolute deadline does, without inventing a zero-Send release.
-      if (sendAttempted && sendCount === 0 && Date.now() >= zeroCountCutoffMs
-        && !ownedPromptEverSeen && pollCount > 0) {
-        const cause = config.newChat && !ownedConversationUrl
-          ? 'fresh_conversation_owner_unproven' : 'send_delivery_unproven';
-        incident('post_send_observation_error', cause, 'retain_page_no_resend');
-        return {
-          page, browser,
-          cleanupAction: browserOrPageDefinitelyLost(page, browser) ? 'skip' : 'preserve',
-          result: compactResult(
-            'observation_uncertain', 'invocation', cause,
-            invocationId, profileKey, sendCount, pollCount, navigation, incidents,
-            { send_attempted: true }, journalWriteFailed,
-          ),
-        };
-      }
-      if (config.newChat && !ownedConversationUrl && !ownedPromptEverSeen && pollCount > 0
-        && (sendCount >= 1 || deliveryProofPendingRecovery || zeroWitnessAccountRecovery || sendAttempted)
-        && Date.now() >= freshUnboundReturnByMs) {
-        const retainLocal = ownedFreshLocalPostSendPage();
-        incident('post_send_observation_error', 'fresh_conversation_owner_unproven', 'retain_page_no_resend');
-        return {
-          page,
-          browser,
-          cleanupAction: 'preserve',
-          ...(retainLocal ? { retainOwnedFreshLocalPage: true } : {}),
-          result: compactResult(
-            'observation_uncertain',
-            'invocation',
-            'fresh_conversation_owner_unproven',
-            invocationId,
-            profileKey,
-            sendCount,
-            pollCount,
-            navigation,
-            incidents,
-            { ...(sendAttempted ? { send_attempted: true } : {}),
-              ...(retainLocal ? { next_action: FRESH_LOCAL_POSSIBLY_DELIVERED_NEXT_ACTION } : {}) },
-            journalWriteFailed,
-          ),
-        };
-      }
+      // Never turn the fresh URL subwindow into a terminal Send verdict.
+      // The still-live original Page may expose its unique owned marker and a
+      // completed reply after freshUnboundReturnByMs. The whole post-Send loop
+      // remains bounded by hardExhaustionDeadline (the original invocation
+      // absolute maximum), while confirmed Page loss retains its separate
+      // bounded, read-only recovery deadline below.
       if ((sendCount >= 1 || deliveryProofPendingRecovery || sendAttempted) && browserOrPageDefinitelyLost(page, browser)) {
         const terminal = await recoverCurrentObservation();
         if (terminal) return terminal;
@@ -6388,7 +6351,8 @@ async function runTurnCore(
           ? Boolean(createdFreshPage && page === originalHeldPage
             && !ownershipForfeited && config.projectUrl
             && (matchingFreshProjectLocalUrl(String(page.url()), config.projectUrl)
-              || isBlankProjectSurfaceUrl(String(page.url()), config.projectUrl)))
+              || isBlankProjectSurfaceUrl(String(page.url()), config.projectUrl)
+              || Boolean(readProjectConversationUrl(page, config.projectUrl))))
           : Boolean(targetChatUrl && readOwnedConversationIdentity(page, targetChatUrl).matched))) {
         // The original exact Page's unique owned marker proves the attempted
         // Send even if DOM evidence first appears after the 30s subwindow.
@@ -6419,9 +6383,10 @@ async function runTurnCore(
       ) {
         const observedConversationUrl = readProjectConversationUrl(page, config.projectUrl ?? '');
         if (observedConversationUrl && isSupportedChatGptConversationUrl(observedConversationUrl)
-          && Date.now() < freshUnboundReturnByMs) {
-          // Recheck AFTER the bounded transcript observation, immediately
-          // before the non-recovery first claim; recovery has its own cutoff.
+          && Date.now() < hardExhaustionDeadline) {
+          // A marker on the original pinned Page can validate a later URL
+          // even after the initial fresh URL subwindow. The first-claim fence
+          // remains mandatory; no new Page, Retry or Send is authorized here.
           let claim: ReturnType<typeof tryClaimStateLightFreshConversation>;
           try {
             claim = tryClaimStateLightFreshConversation(
