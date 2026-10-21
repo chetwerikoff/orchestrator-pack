@@ -7834,6 +7834,30 @@ async function guardedOriginalTargetRetirement(input: {
       // silently destroy it just because the old marker is still the last user.
       if (composer !== undefined && composer !== ''
         && composer !== outcome.ownedTypedPayload) return false;
+      if (composer === undefined) {
+        // A failed composer read is NOT proof that the editor is absent.
+        // Require an exact zero-count read, then either a truly blank body
+        // or a named error-only UI, even if the old marker remains last user.
+        if (await locatorCount(
+          outcome.page.locator(COMPOSER_SELECTOR), Date.now() + budget(),
+        ) !== 0) return false;
+        if (currentUrl() === 'about:blank') {
+          const emptyBody = await boundedBrowserRead(
+            outcome.page.locator('body').innerText({ timeout: budget() }), budget(),
+            'empty_about_blank_body_read_timeout',
+          );
+          if (typeof emptyBody !== 'string' || emptyBody.trim() !== '') return false;
+        } else {
+          const errors = ['Message delivery timed out', 'Network issue', 'Failed to fetch'];
+          let recognizedError = false;
+          for (const errorText of errors) {
+            if (await locatorCount(
+              outcome.page.getByText(errorText, { exact: false }), Date.now() + budget(),
+            ) > 0) { recognizedError = true; break; }
+          }
+          if (!recognizedError) return false;
+        }
+      }
       const cardinality = recoveryMarkerCardinality(users.messages, observation.marker);
       if (cardinality.matchingUserCarrierCount === 1 && cardinality.exactMarkerTokenCount === 1
         && users.messages.length > 0
@@ -7842,29 +7866,12 @@ async function guardedOriginalTargetRetirement(input: {
       }
       if (users.messages.length !== 0 || cardinality.exactMarkerTokenCount !== 0) return false;
       // An unrendered local/error Page may be retired only when its composer
-      // is provably empty or exactly the original still-typed payload.
+      // is provably empty, exactly the original typed payload, or truly absent
+      // on a previously verified blank/error-only surface.
       if (composer === '') return currentUrl() !== null;
       if (outcome.ownedTypedPayload && composer === outcome.ownedTypedPayload
         && ownedPromptMatches(composer, observation.marker)) return currentUrl() !== null;
-      if (composer !== undefined || await locatorCount(
-        outcome.page.locator(COMPOSER_SELECTOR), Date.now() + budget(),
-      ) !== 0) return false;
-      if (currentUrl() === 'about:blank') {
-        const emptyBody = await boundedBrowserRead(
-          outcome.page.locator('body').innerText({ timeout: budget() }), budget(),
-          'empty_about_blank_body_read_timeout',
-        );
-        return typeof emptyBody === 'string' && emptyBody.trim() === '';
-      }
-      // Error-only surfaces may legitimately have no editor after the
-      // original attempted Send. Do not treat an unreadable editor as absent.
-      const errors = ['Message delivery timed out', 'Network issue', 'Failed to fetch'];
-      for (const errorText of errors) {
-        if (await locatorCount(
-          outcome.page.getByText(errorText, { exact: false }), Date.now() + budget(),
-        ) > 0) return currentUrl() !== null;
-      }
-      return false;
+      return composer === undefined && currentUrl() !== null;
     } catch { return false; }
   };
 
