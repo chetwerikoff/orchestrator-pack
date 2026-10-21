@@ -7411,9 +7411,9 @@ async function runTurnCore(
           ? INITIAL_POLL_MS
           : POST_SEND_OBSERVATION_POLL_MS;
       const beforeSoftDeadline = Date.now() < softDeadline;
-      await postSendSleep(sendAttempted && sendCount === 0
+      await postSendSleep(sendAttempted && sendCount === 0 && Date.now() < zeroCountCutoffMs
         ? Math.min(delay, Math.max(1, zeroCountCutoffMs - Date.now()))
-        : config.newChat && !ownedConversationUrl
+        : config.newChat && !ownedConversationUrl && Date.now() < freshUnboundReturnByMs
           ? Math.min(delay, Math.max(1, freshUnboundReturnByMs - Date.now()))
         : recoveryState.lossEpoch > 0
           ? Math.min(delay, Math.max(1, hardExhaustionDeadline - Date.now()))
