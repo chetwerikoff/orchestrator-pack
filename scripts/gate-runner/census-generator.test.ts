@@ -1,6 +1,9 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { generatePrechangePopulation, migrationOwnershipDigest, populationDigest } from './census-generator.ts';
+import { runProcess } from '#opk-kernel/subprocess';
+import { generateCurrentHeadProjection, generatePrechangePopulation, migrationOwnershipDigest, populationDigest, serializeCurrentHeadProjection } from './census-generator.ts';
 import { loadCensus } from './census.ts';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
@@ -58,4 +61,56 @@ describe('pre-change census generator', () => {
     expect(census.generation.migrationOwnershipDigest).toMatch(/^[0-9a-f]{64}$/u);
     expect(migrationOwnershipDigest(census.entries)).toBe(census.generation.migrationOwnershipDigest);
   });
+
+  it('batches exact historical candidate reads while preserving the frozen census output', async () => {
+    // A shallow CI checkout may lack the historical candidate. Fetch only that
+    // immutable commit before starting Git Trace2, so setup is not counted.
+    const historicalHead = 'a172e02ddf0a57d4d43d10e16ba59f2b45539bbd';
+    const present = await runProcess({
+      command: 'git',
+      args: ['cat-file', '-e', `${historicalHead}^{commit}`],
+      cwd: repoRoot,
+      inheritParentEnv: true,
+      allowEmptyStdout: true,
+    });
+    if (!present.ok) {
+      const fetched = await runProcess({
+        command: 'git',
+        args: ['fetch', '--no-tags', '--depth=1', 'origin', historicalHead],
+        cwd: repoRoot,
+        inheritParentEnv: true,
+        allowEmptyStdout: true,
+        timeoutMs: 15_000,
+      });
+      if (!fetched.ok) throw new Error(`cannot fetch exact historical census candidate ${historicalHead}: ${fetched.stderr || fetched.error || fetched.outcome}`);
+    }
+    const traceRoot = mkdtempSync(resolve(tmpdir(), 'opk-2675-git-trace-'));
+    const tracePath = resolve(traceRoot, 'git-trace2.jsonl');
+    const previousTrace = process.env.GIT_TRACE2_EVENT;
+    try {
+      process.env.GIT_TRACE2_EVENT = tracePath;
+      const projection = await generateCurrentHeadProjection(repoRoot, 'a172e02ddf0a57d4d43d10e16ba59f2b45539bbd');
+      const serialized = serializeCurrentHeadProjection(projection);
+      expect(projection.measuredHead).toBe('a172e02ddf0a57d4d43d10e16ba59f2b45539bbd');
+      expect(projection.populationCount).toBe(283);
+      expect(projection.populationDigest).toBe('427a91429a56f7236b67ea076f422263fc8ab31f76255e50c03383b910244ab1');
+      expect(serialized.outputDigest).toBe('eb04fa6d61f54001eb2f4d9c4b57c9627107533c9f68f33d97ca43eb597d82a9');
+      expect(Buffer.byteLength(serialized.bytes, 'utf8')).toBe(180852);
+
+      // Real Git Trace2 launch records: the previous path-by-path git show
+      // generated one process per file (2,778 at the historical candidate).
+      const launches = readFileSync(tracePath, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { event?: string; argv?: string[] })
+        .filter((event) => event.event === 'start');
+      expect(launches.length).toBeLessThanOrEqual(6);
+      expect(launches.filter((event) => event.argv?.includes('cat-file') && event.argv?.includes('--batch'))).toHaveLength(1);
+    } finally {
+      if (previousTrace === undefined) delete process.env.GIT_TRACE2_EVENT;
+      else process.env.GIT_TRACE2_EVENT = previousTrace;
+      rmSync(traceRoot, { recursive: true, force: true });
+    }
+  }, 30_000);
+
 });

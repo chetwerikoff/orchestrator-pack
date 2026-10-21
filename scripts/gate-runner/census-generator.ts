@@ -166,10 +166,42 @@ async function treeSnapshot(repoRoot: string, measuredHead: string): Promise<Sou
   const paths = listed.stdout.split(/\r?\n/u).filter(Boolean).map(normalizePath).sort(compareOrdinal);
   const files = new Map<string, string>();
   const unreadable = new Map<string, string>();
-  for (const path of paths) {
-    const text = await readGitFile(repoRoot, measuredHead, path);
-    if (text === null) unreadable.set(path, 'not a readable regular blob at measuredHead');
-    else files.set(path, text);
+  if (paths.length > 0) {
+    // Resolve every path against the same immutable commit in one Git process.
+    // Per-path git show previously spawned a child for each tracked file.
+    const requests = paths.map((path) => measuredHead + ':' + path);
+    const batch = await runProcess({
+      command: 'git',
+      args: ['cat-file', '--batch'],
+      input: requests.join('\n') + '\n',
+      cwd: repoRoot,
+      inheritParentEnv: true,
+      encoding: 'latin1',
+      allowEmptyStdout: false,
+    });
+    if (!batch.ok) throw new Error('cannot read measured tree blobs: ' + (batch.stderr || batch.error || batch.outcome));
+    const bytes = Buffer.from(batch.stdout, 'latin1');
+    let offset = 0;
+    for (const [index, path] of paths.entries()) {
+      const headerEnd = bytes.indexOf(0x0a, offset);
+      if (headerEnd < 0) throw new Error('git cat-file batch header missing for ' + path);
+      const header = bytes.toString('utf8', offset, headerEnd);
+      offset = headerEnd + 1;
+      if (header === requests[index]! + ' missing') {
+        unreadable.set(path, 'not a readable regular blob at measuredHead');
+        continue;
+      }
+      const match = /^([0-9a-f]{40}) (blob|commit|tree|tag) ([0-9]+)$/u.exec(header);
+      if (!match) throw new Error('git cat-file batch header invalid for ' + path + ': ' + header);
+      const size = Number(match[3]);
+      if (!Number.isSafeInteger(size) || size < 0) throw new Error('git cat-file batch size invalid for ' + path);
+      const end = offset + size;
+      if (end >= bytes.length || bytes[end] !== 0x0a) throw new Error('git cat-file batch body truncated for ' + path);
+      if (match[2] === 'blob') files.set(path, bytes.toString('utf8', offset, end));
+      else unreadable.set(path, 'not a readable regular blob at measuredHead');
+      offset = end + 1;
+    }
+    if (offset !== bytes.length) throw new Error('git cat-file batch emitted unexpected trailing bytes');
   }
   return { root: `<git:${measuredHead}>`, paths, files, unreadable };
 }

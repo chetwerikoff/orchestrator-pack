@@ -1,0 +1,26 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2675,
+  "declared_paths": [
+    "scripts/gate-runner/census-generator.test.ts",
+    "scripts/gate-runner/census-generator.ts"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    "credentials, secrets, generated runtime state, operator-local configuration, unrelated files and sibling worktrees",
+    "credentials/",
+    "packages/core/",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest.config.*",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/gate-runner/census-generator.test.ts",
+    "scripts/gate-runner/census-generator.ts",
+    "scripts/port-stage-evidence/producer.test.ts",
+    "scripts/port-stage-evidence/producer.ts"
+  ],
+  "source_revision": "e22a758118ac17d43add5cb47f88e4492b92f1b0"
+}
