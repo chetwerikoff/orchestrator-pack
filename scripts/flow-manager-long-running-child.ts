@@ -829,6 +829,52 @@ function childOption(config: LaunchConfig, flag: string): string | undefined {
   return value && !value.startsWith('--') ? value : undefined;
 }
 
+/**
+ * The launcher verifies the caller-supplied predecessor pair, not browser
+ * ownership. The exact earlier task/run/attempt/terminal and positively created
+ * target must agree before the current child is even spawned. Only the
+ * state-light driver can then reattach and attempt guarded physical retirement.
+ */
+function verifyOptionalPredecessorHandoff(config: LaunchConfig): void {
+  const invocation = childOption(config, '--predecessor-invocation-id');
+  const attempt = childOption(config, '--predecessor-attempt-identity');
+  const run = childOption(config, '--predecessor-run-identity');
+  const task = childOption(config, '--predecessor-owner-task-id');
+  if (![invocation, attempt, run, task].some(Boolean)) return;
+  if (!invocation || !attempt || !run || !task || !config.ownerTaskId
+    || !config.invocationId || !config.profile || !config.cdp
+    || invocation === config.invocationId || attempt === config.attemptIdentity
+    || run !== config.runIdentity || task !== config.ownerTaskId
+    || childOption(config, '--invocation-id') !== config.invocationId
+    || childOption(config, '--profile') !== config.profile
+    || childOption(config, '--cdp') !== config.cdp) {
+    throw new Error('predecessor_exact_owner_and_selector_required');
+  }
+  const bound = readInvocationReceiptLocator({
+    invocationId: invocation, runIdentity: run, attemptIdentity: attempt,
+    ownerTaskId: task, terminalEnvelopeRoot: config.terminalEnvelopeRoot,
+  });
+  const terminal = readTerminalEnvelope(bound.locator.terminal_envelope_path, {
+    runIdentity: run, attemptIdentity: attempt,
+  });
+  const original = readStateLightTurnObservation(
+    configuredProfileKey(config.profile, config.cdp), invocation,
+  );
+  const target = original.owned_target;
+  if (!terminal || terminal.observed_invocation_id !== invocation
+    || terminal.handoff_receipt_path !== bound.locator.handoff_receipt_path
+    || terminal.cleanup_status !== 'cleanup_unconfirmed'
+    || bound.receipt.owner_task_id !== task
+    || original.invocation_id !== invocation
+    || !target?.created
+    || target.cdp_sha256 !== createHash('sha256').update(config.cdp, 'utf8').digest('hex')
+    || terminal.owned_target_id !== target.id
+    || terminal.owned_target_created !== true
+    || terminal.owned_prompt_marker !== original.marker) {
+    throw new Error('predecessor_terminal_cleanup_or_created_target_unproven');
+  }
+}
+
 async function provenOwnedTab(
   config: LaunchConfig, record: StateLightTurnObservationRecord, cdp: string,
 ): Promise<string | undefined> {
@@ -1259,6 +1305,14 @@ async function finalizeCandidatePath(
 
 export async function runLaunch(config: LaunchConfig): Promise<number> {
   const canaries = config.secretCanaries ?? [];
+  try {
+    verifyOptionalPredecessorHandoff(config);
+  } catch (error) {
+    refuse('predecessor_handoff_unproven', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return 2;
+  }
   if (!existsSync(config.cwd) || !statSync(config.cwd).isDirectory()) {
     refuse('invalid_cwd', { cwd: config.cwd });
     return 2;
