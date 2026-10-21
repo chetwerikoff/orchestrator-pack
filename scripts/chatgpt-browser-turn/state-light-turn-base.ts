@@ -7487,6 +7487,110 @@ async function runTurnCore(
   }
 }
 
+/**
+ * Current destructive-boundary authority, not a historical ownership inference.
+ * A same-ID/same-route marker with a visible Stop or in-progress assistant can
+ * belong to an independent generation; no available current-generation witness
+ * makes that active surface closable.
+ */
+async function guardedOriginalTargetRetirement(input: {
+  readonly outcome: TurnRunOutcome;
+  readonly cdp: string;
+}): Promise<'confirmed' | 'unconfirmed'> {
+  const { outcome, cdp } = input;
+  const targetInfo = getOwnTargetInfo(outcome.browser);
+  if (!targetInfo?.created || !targetInfo.targetId || !outcome.page
+    || !cdp || outcome.ownershipForfeited || cleanupAuthorityUnprovenPages.has(outcome.page)) {
+    return 'unconfirmed';
+  }
+  let observation: ReturnType<typeof readStateLightTurnObservation>;
+  try {
+    observation = readStateLightTurnObservation(
+      outcome.result.configured_profile_key, outcome.result.invocation_id,
+    );
+  } catch { return 'unconfirmed'; }
+  const pin = observation.owned_target;
+  if (!pin?.created || pin.id !== targetInfo.targetId
+    || pin.cdp_sha256 !== createHash('sha256').update(cdp, 'utf8').digest('hex')) return 'unconfirmed';
+
+  const deadline = Date.now() + 18_000;
+  const budget = (): number => Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, deadline - Date.now()));
+  const routeMatches = (url: string): boolean => {
+    const original = pin.initial_route;
+    if (observation.conversation_url && ownedConversationIdentityMatches(url, observation.conversation_url)
+      && isSupportedChatGptConversationUrl(url)) return true;
+    if (isBlankProjectSurfaceUrl(url, original)
+      || matchingFreshProjectLocalUrl(url, original)) return true;
+    try { return normalizeConversationUrl(url) === normalizeConversationUrl(original); }
+    catch { return false; }
+  };
+  const currentUrl = (): string | null => {
+    try {
+      if (browserOrPageDefinitelyLost(outcome.page, outcome.browser)) return null;
+      const url = String(outcome.page.url());
+      return routeMatches(url) ? url : null;
+    } catch { return null; }
+  };
+  const pinnedCensus = async (): Promise<boolean> => {
+    try {
+      if (Date.now() >= deadline) return false;
+      const census = await listCdpPageTargets(cdp, budget());
+      const selected = census.filter((target) => target.id === pin.id);
+      return selected.length === 1
+        && currentUrl() !== null
+        && selected[0]!.url === currentUrl();
+    } catch { return false; }
+  };
+  const ownerAndIdle = async (): Promise<boolean> => {
+    if (currentUrl() === null || Date.now() >= deadline) return false;
+    try {
+      // Both Stop and a DOM streaming node are disqualifying. Marker adjacency
+      // alone cannot prove which Send started the current generation.
+      if (await readFreshStopVisible(outcome.page, Date.now() + budget()) !== false) return false;
+      if (await locatorCount(outcome.page.locator(ASSISTANT_TURN_IN_PROGRESS_SELECTOR), Date.now() + budget()) !== 0) return false;
+      const users = await boundedBrowserRead(
+        readRecoveryAuthoritativeUserMessages(outcome.page), budget(),
+        'terminal_ownership_user_read_timeout',
+      );
+      if (users.incomplete) return false;
+      const cardinality = recoveryMarkerCardinality(users.messages, observation.marker);
+      if (cardinality.matchingUserCarrierCount === 1 && cardinality.exactMarkerTokenCount === 1
+        && users.messages.length > 0
+        && ownedPromptMatches(users.messages[users.messages.length - 1]!.text, observation.marker)) {
+        return currentUrl() !== null;
+      }
+      if (users.messages.length !== 0 || cardinality.exactMarkerTokenCount !== 0) return false;
+      // An unrendered local/error Page may be retired only when its composer
+      // is provably empty or exactly the original still-typed payload.
+      const composer = await readLosslessOwnedComposer(
+        outcome.page.locator(COMPOSER_SELECTOR), Date.now() + budget(),
+      );
+      if (composer === '') return currentUrl() !== null;
+      return Boolean(outcome.ownedTypedPayload && composer === outcome.ownedTypedPayload
+        && ownedPromptMatches(composer, observation.marker) && currentUrl() !== null);
+    } catch { return false; }
+  };
+
+  // Reads are awaited: validate again after each of them and immediately
+  // before Page.close(). No atomic exclusion against last-instant UI takeover
+  // is claimed.
+  if (!await pinnedCensus() || !await ownerAndIdle()) return 'unconfirmed';
+  if (!await pinnedCensus() || !await ownerAndIdle()) return 'unconfirmed';
+  if (!await pinnedCensus() || currentUrl() === null || Date.now() >= deadline) return 'unconfirmed';
+  const closed = await boundedResourceCleanup(
+    () => outcome.page.close(),
+    Math.min(RESOURCE_CLEANUP_BOUND_MS, Math.max(1, deadline - Date.now())),
+  );
+  if (closed !== 'confirmed') return 'unconfirmed';
+  try {
+    const census = await listCdpPageTargets(cdp, budget());
+    return census.every((target) => target.id !== pin.id) ? 'confirmed' : 'unconfirmed';
+  } catch {
+    // A close response is not physical target disappearance evidence.
+    return 'unconfirmed';
+  }
+}
+
 async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult> {
   let cleanup: ResourceCleanupOutcome = 'skipped';
   let journalWriteFailed = outcome.result.journal_write_failed === true;
