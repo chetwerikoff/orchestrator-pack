@@ -137,6 +137,7 @@ import { classifyPageObservation, classifySendLandingEvidence, publishStateLight
 import { admitStateLightTurnObservation, finalizeStateLightPrimaryPublication, readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { deriveDelivery } from '../flow-manager-long-running-child.ts';
 import { __testBrowserOrPageDefinitelyLost, __testComposerMutation, __testSendDelivery, deriveComposerInsertionBudgetMs, POST_SEND_OBSERVATION_POLL_MS, probePageLiveness } from './state-light-turn-base.ts';
+import { attachOwnTarget, __testAttachOwnTargetFixture } from './own-target-attach.ts';
 import { currentOwnedPromptMarker, wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
   EXPLICIT_CANCELLATION_AUTHORITY,
@@ -433,6 +434,51 @@ describe('state-light fresh conversation collision recovery', () => {
       events.emit('response', { request: () => request, status: () => 429 });
     };
   }
+
+  it('reports and pins a created tab after Playwright attach fails without closing the foreign survivor', async () => {
+    const invocationId = randomUUID();
+    const createdId = 'created-before-attach-failure';
+    const connectionFailure = Object.assign(new Error('injected_connect_failure'), {
+      attachAttempts: 3, createdTargetId: createdId,
+    });
+    const attach = vi.mocked(attachOwnTarget);
+    attach.mockRejectedValueOnce(connectionFailure);
+    // The exact-target cleanup reconnection also fails: no raw close, and
+    // no replacement target selection is allowed as a fallback.
+    attach.mockRejectedValueOnce(new Error('injected_cleanup_reattach_failure'));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname !== '/json/list') throw new Error('unexpected_destructive_cdp_request');
+      return new Response(JSON.stringify([
+        { id: createdId, type: 'page', url: 'about:blank', webSocketDebuggerUrl: 'ws://example/created-attach-failed' },
+        { id: 'foreign-survivor', type: 'page', url: 'https://chatgpt.com/c/foreign' },
+      ]), { status: 200 });
+    });
+    try {
+      const fixture = makeLoserPage('NO-SEND-AFTER-ATTACH-FAILURE', 'NEVER');
+      const outcome = await runNewChatTurn(
+        fixture.page, join(stateDir, 'attach-failure.txt'), '30000', invocationId,
+      );
+      expect(outcome.result).toMatchObject({
+        state: 'driver_error',
+        send_count: 0,
+        attach_attempts: 3,
+        owned_target_id: createdId,
+        owned_target_created: true,
+        cleanup: 'unconfirmed',
+        cleanup_status: 'cleanup_unconfirmed',
+      });
+      expect(readStateLightTurnObservation('collision-profile', invocationId).owned_target).toMatchObject({
+        id: createdId, created: true,
+      });
+      expect(fixture.getSends()).toBe(0);
+      expect(fixture.page.close).not.toHaveBeenCalled();
+      expect(fetchSpy.mock.calls.every(([input]) => new URL(String(input)).pathname === '/json/list')).toBe(true);
+    } finally {
+      attach.mockImplementation(__testAttachOwnTargetFixture);
+      fetchSpy.mockRestore();
+    }
+  });
 
   it('AC12 closes only a freshly opened existing-chat Page after a witnessed pre-Send fetch 429', async () => {
     const fixture = makeLoserPage('NO-SEND-429', 'NEVER-SEND');
