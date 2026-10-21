@@ -5505,6 +5505,7 @@ async function runTurnCore(
     let uncertainCause = '';
     let observedUserHeads: string[] | undefined;
     let ownedPromptEverSeen = false;
+    let persistedOriginalMarkerProof = false;
     let ownedCarrierKey: string | undefined;
     let lastMarkerlessSnapshotSignature = '';
     let completionReadySeen = false;
@@ -6826,6 +6827,29 @@ async function runTurnCore(
               || isBlankProjectSurfaceUrl(String(page.url()), config.projectUrl!)))
           : Boolean(targetChatUrl && readOwnedConversationIdentity(page, targetChatUrl).matched))) {
         ownedPromptEverSeen = true;
+        if (!persistedOriginalMarkerProof) {
+          try {
+            const beforeProof = readStateLightTurnObservation(profileKey, invocationId);
+            if (beforeProof.phase === 'harvested') {
+              const committed = verifiedExternalPrimary();
+              if (committed) return committed;
+            } else if (!beforeProof.owned_marker_confirmed) {
+              transitionStateLightTurnObservation({
+                profileKey, invocationId,
+                phase: beforeProof.phase,
+                reason: 'unique_original_page_first_token_marker',
+                ownedMarkerConfirmed: true,
+              });
+            }
+            persistedOriginalMarkerProof = true;
+          } catch (error) {
+            if (error instanceof Error && error.message === 'observation_phase_transition_invalid') {
+              const racedCommit = verifiedExternalPrimary();
+              if (racedCommit) return racedCommit;
+            }
+            throw error;
+          }
+        }
       }
 
       if (decision.state === 'uncertain') {
@@ -7835,6 +7859,8 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
         owned_target_created: observedTarget.owned_target.created,
         owned_prompt_marker: observedTarget.marker }
       : {}),
+    ...(observedTarget?.owned_marker_confirmed ? { owned_marker_confirmed: true as const } : {}),
+    ...(observedTarget ? { send_witness: observedTarget.send_witness } : {}),
     ...(cooldown.active && cooldown.until !== undefined ? { cooldown_until_ms: cooldown.until } : {}),
     ...(positivelyCreatedOriginal && cleanup !== 'confirmed'
       ? { cleanup_status: 'cleanup_unconfirmed' as const } : {}),
