@@ -255,6 +255,11 @@ export interface TerminalEnvelope {
   readonly turn_result_state?: string;
   readonly turn_result_cause?: string;
   readonly next_action?: string;
+  readonly owned_target_id?: string;
+  readonly owned_prompt_marker?: string;
+  readonly owned_target_created?: boolean;
+  readonly cleanup_status?: 'cleanup_unconfirmed';
+  readonly cooldown_until_ms?: number;
   readonly send_count?: number;
   readonly observed_invocation_id?: string;
   readonly send_slot_holder_invocation_id?: string;
@@ -528,6 +533,19 @@ function parseTurnResult(line: string): ParsedTurnResult | null {
     };
 
     if (body.send_attempted === true) result.send_attempted = true;
+    if (body.owned_marker_confirmed === true) result.owned_marker_confirmed = true;
+    if (body.send_witness === 'owned_marker' || body.send_witness === 'numeric_send_count'
+      || body.send_witness === 'none') result.send_witness = body.send_witness;
+    if (typeof body.owned_target_id === 'string'
+      && /^[A-Za-z0-9._:-]{1,256}$/u.test(body.owned_target_id)) result.owned_target_id = body.owned_target_id;
+    if (typeof body.owned_prompt_marker === 'string' && /^OPKTURNV1[a-f0-9]+$/u.test(body.owned_prompt_marker)) {
+      result.owned_prompt_marker = body.owned_prompt_marker;
+    }
+    if (typeof body.owned_target_created === 'boolean') result.owned_target_created = body.owned_target_created;
+    if (body.cleanup_status === 'cleanup_unconfirmed') result.cleanup_status = body.cleanup_status;
+    if (typeof body.cooldown_until_ms === 'number' && Number.isSafeInteger(body.cooldown_until_ms)) {
+      result.cooldown_until_ms = body.cooldown_until_ms;
+    }
     if (typeof body.next_action === 'string') result.next_action = body.next_action;
     if (body.cause === 'state_light_new_chat_send_slot_timeout') {
       const validHolder = typeof body.send_slot_holder_invocation_id === 'string'
@@ -628,6 +646,29 @@ function resolveConversationLocator(
   return config.conversationLocator ?? candidate?.conversation_id ?? undefined;
 }
 
+function turnTargetEnvelopeFields(
+  candidate?: Pick<ParsedTurnResult, 'owned_target_id' | 'owned_prompt_marker'
+    | 'owned_target_created' | 'cleanup_status' | 'cooldown_until_ms'> | null,
+  record?: StateLightTurnObservationRecord,
+): Pick<TerminalEnvelope, 'owned_target_id' | 'owned_prompt_marker'
+  | 'owned_target_created' | 'cleanup_status' | 'cooldown_until_ms'> {
+  return {
+    ...(record?.owned_target
+      ? { owned_target_id: record.owned_target.id,
+        owned_prompt_marker: record.marker,
+        owned_target_created: record.owned_target.created }
+      : candidate?.owned_target_id && candidate.owned_prompt_marker
+        ? { owned_target_id: candidate.owned_target_id,
+          owned_prompt_marker: candidate.owned_prompt_marker,
+          owned_target_created: candidate.owned_target_created }
+        : {}),
+    ...(candidate?.cleanup_status === 'cleanup_unconfirmed'
+      ? { cleanup_status: 'cleanup_unconfirmed' as const } : {}),
+    ...(candidate?.cooldown_until_ms !== undefined
+      ? { cooldown_until_ms: candidate.cooldown_until_ms } : {}),
+  };
+}
+
 function conversationLocatorFields(
   config: LaunchConfig,
   candidate?: { conversation_id?: string },
@@ -648,6 +689,8 @@ export function deriveDelivery(result: ParsedTurnResult | null, childStartFailed
     return sendCount === 0 ? 'not-sent' : 'POSSIBLY_DELIVERED';
   }
   if (sendCount === 0) return 'not-sent';
+  if (sendCount === 1 && (result.owned_marker_confirmed === true
+    || result.send_witness === 'owned_marker')) return 'landed';
   if (result.witness?.relation === 'reply_to' && (result.conversation_id || result.observation_uncertainty_diagnostics?.owned_prompt_seen)) {
     return 'landed';
   }
@@ -886,7 +929,9 @@ function finalObservationProjection(
 
   return {
     record, cdp,
-    delivery: harvestedPrimary ? 'landed' : preDispatch ? 'not-sent' : 'POSSIBLY_DELIVERED',
+    delivery: harvestedPrimary || ((record.send_count ?? 0) === 1
+      && (record.owned_marker_confirmed || record.send_witness === 'owned_marker'))
+      ? 'landed' : preDispatch ? 'not-sent' : 'POSSIBLY_DELIVERED',
     ...(replyDiagnostics ? { replyDiagnostics } : {}),
   };
 }
@@ -931,6 +976,8 @@ async function persistedTerminalEvidence(
     delivery: observed.delivery,
     recovery_available: Boolean(locator),
     ...(locator ? { conversation_locator: locator } : {}),
+    ...turnTargetEnvelopeFields(undefined, record),
+    ...(record.owned_target?.created ? { cleanup_status: 'cleanup_unconfirmed' as const } : {}),
     diagnostics: {
       persisted_observation: {
         phase: record.phase, ...(record.send_count !== undefined ? { send_count: record.send_count } : {}),
@@ -1144,6 +1191,7 @@ async function finalizeCandidatePath(
       ? { observed_turn_result_identity: candidate.observed_turn_result_identity }
       : {}),
     ...conversationLocatorFields(config, candidate),
+    ...turnTargetEnvelopeFields(candidate, candidateObservation?.record),
   });
   if (capture.duplicateCandidate) {
     await publishEnvelope(config, incidentEnvelope('child_terminal_result_duplicate'));
@@ -1183,6 +1231,7 @@ async function finalizeCandidatePath(
         ? { observed_turn_result_identity: candidate.observed_turn_result_identity }
         : {}),
       ...conversationLocatorFields(config, candidate),
+      ...turnTargetEnvelopeFields(candidate, candidateObservation?.record),
       ...(diagnostics ? { diagnostics } : {}),
     });
     await abortManagedProcess(controller, runPromise);
