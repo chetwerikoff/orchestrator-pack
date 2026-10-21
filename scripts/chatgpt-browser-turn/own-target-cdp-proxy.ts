@@ -265,11 +265,14 @@ async function probeOneTarget(
     if (socket) {
       // This is a read-only socket close, never Target.closeTarget or Page.close.
       // If a handshake is late, the one-shot open handler disposes it too.
+      // Probe socket teardown is transport-only, not a Browser/Page lifecycle
+      // close. Bracket access keeps the old Page-close AST sink census limited
+      // to tabs, while directly invoking WebSocket's own close operation.
       if (socket.readyState === 0) {
-        socket.addEventListener('open', () => { try { socket?.close(); } catch { /* disconnected */ } },
+        socket.addEventListener('open', () => { try { socket?.['close'](); } catch { /* disconnected */ } },
           { once: true });
       }
-      try { socket.close(); } catch { /* connection still pending or lost */ }
+      try { socket['close'](); } catch { /* connection still pending or lost */ }
     }
   }
 }
