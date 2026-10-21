@@ -353,7 +353,7 @@ describe('Issue #2188 target portability sinks', () => {
       "const cp = require('node:child_process');",
       'const spawnSync = cp.spawnSync;',
       'cp.spawnSync = function(command, args, options) {',
-      "  if (command === process.env.GH_REAL_BINARY && args?.[0] === 'api' && args?.[1] === 'repos/example/alpha/pulls/12') {",
+      "  if (command === process.env.GH_REAL_BINARY && args?.includes('api') && args?.includes('repos/example/alpha/pulls/12')) {",
       "    fs.appendFileSync(process.env.OPK_GH_AUDIT, args.join(' ') + '\\n');",
       "    const stdout = JSON.stringify({ number: 12, head: { ref: 'topic' }, base: { ref: 'trunk' }, draft: false });",
       "    return { pid: 1, output: [null, stdout, ''], stdout, stderr: '', status: 0, signal: null };",
