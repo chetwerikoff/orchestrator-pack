@@ -1162,7 +1162,7 @@ describe('issue 1168 source tooling', () => {
 });
 
 describe('Issue #2660 AC12 bounded pre-Send Page cleanup authority', () => {
-  it('closes only the proven Page after not_sent observation; preserves selected, forfeited and possibly-sent Pages', async () => {
+  it('closes only a proven non-last Page; preserves the sole Page, protected /project and uncertain Pages', async () => {
     const { randomUUID } = await import('node:crypto');
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
@@ -1219,65 +1219,88 @@ describe('Issue #2660 AC12 bounded pre-Send Page cleanup authority', () => {
       // disappearance checks active in this synthetic test.
       const targetId = 'fixture-own-target';
       const cdp = 'http://127.0.0.1:9222';
-      let stillOpen = true;
-      const owned = {
-        __fakeBrowserGptPage: true,
-        url: () => exact,
-        isClosed: () => !stillOpen,
-        close: vi.fn(async () => { stillOpen = false; }),
-        locator: (selector: string) => {
-          if (selector === COMPOSER_SELECTOR) return {
-            count: async () => 1,
-            evaluate: async () => ({ content: '', visible: '' }),
-          };
-          if (selector === USER_MESSAGE_SELECTOR
-            || selector === RENDERED_STOP_BUTTON_SELECTOR
-            || selector === ASSISTANT_TURN_IN_PROGRESS_SELECTOR) {
+      const protectedProjectUrl =
+        'https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/project';
+      const protectedProject = {
+        url: () => protectedProjectUrl,
+        close: vi.fn(async () => { throw new Error('must_not_close_protected_project'); }),
+        goto: vi.fn(async () => { throw new Error('must_not_navigate_protected_project'); }),
+      };
+      const finishCreatedPage = async (withProtectedSibling: boolean) => {
+        let stillOpen = true;
+        const owned = {
+          __fakeBrowserGptPage: true,
+          url: () => exact,
+          isClosed: () => !stillOpen,
+          close: vi.fn(async () => { stillOpen = false; }),
+          locator: (selector: string) => {
+            if (selector === COMPOSER_SELECTOR) return {
+              count: async () => 1,
+              evaluate: async () => ({ content: '', visible: '' }),
+            };
+            if (selector === USER_MESSAGE_SELECTOR
+              || selector === RENDERED_STOP_BUTTON_SELECTOR
+              || selector === ASSISTANT_TURN_IN_PROGRESS_SELECTOR) {
+              return { count: async () => 0 };
+            }
             return { count: async () => 0 };
-          }
-          return { count: async () => 0 };
-        },
-      };
-      const context = {
-        newPage: vi.fn(async () => owned),
-        pages: vi.fn(() => [] as any[]),
-      };
-      const browser = {
-        contexts: vi.fn(() => [context]),
-        close: vi.fn(async () => undefined),
-        isConnected: () => true,
-      };
-      const ownedInvocation = randomUUID();
-      prepare(ownedInvocation);
-      const attached = await __testAttachOwnTargetFixture({
-        connectOverCDP: vi.fn(async () => browser),
-      }, {
-        mode: 'own-target', cdp, newChat: true,
-        deadlineMs: Date.now() + 15_000,
-      }, true);
-      expect(attached.created).toBe(true);
-      expect(attached.targetId).toBe(targetId);
-      bindStateLightOwnedTarget({
-        profileKey, invocationId: ownedInvocation,
-        targetId, created: true, cdp, initialRoute: exact,
-      });
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
-        new Response(JSON.stringify(stillOpen ? [{ id: targetId, type: 'page', url: exact }] : []), {
-          status: 200,
-        }));
-      try {
-        const closed = await __testFinalizeTurn({
-          ...makeOutcome(owned, ownedInvocation), browser,
-        }, cdp);
-        expect(closed).toMatchObject({
-          state: 'rate_limit', cause: 'conversation_fetch_http_429',
-          send_count: 0, cleanup: 'confirmed',
+          },
+        };
+        const context = {
+          newPage: vi.fn(async () => owned),
+          pages: vi.fn(() => withProtectedSibling ? [protectedProject] : [] as any[]),
+        };
+        const browser = {
+          contexts: vi.fn(() => [context]),
+          close: vi.fn(async () => undefined),
+          isConnected: () => true,
+        };
+        const ownedInvocation = randomUUID();
+        prepare(ownedInvocation);
+        const attached = await __testAttachOwnTargetFixture({
+          connectOverCDP: vi.fn(async () => browser),
+        }, {
+          mode: 'own-target', cdp, newChat: true,
+          deadlineMs: Date.now() + 15_000,
+        }, true);
+        expect(attached.created).toBe(true);
+        expect(attached.targetId).toBe(targetId);
+        bindStateLightOwnedTarget({
+          profileKey, invocationId: ownedInvocation,
+          targetId, created: true, cdp, initialRoute: exact,
         });
-        expect(owned.close).toHaveBeenCalledOnce();
-        expect(stillOpen).toBe(false);
-      } finally {
-        fetchSpy.mockRestore();
-      }
+        // The census distinguishes a sole turn Page from one with a separate
+        // protected project tab. The latter is presence evidence, never a close
+        // or navigation target; exact-ID disappearance is still checked.
+        const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+          new Response(JSON.stringify([
+            ...(stillOpen ? [{ id: targetId, type: 'page', url: exact }] : []),
+            ...(withProtectedSibling ? [{
+              id: 'fixture-protected-project', type: 'page', url: protectedProjectUrl,
+            }] : []),
+          ]), { status: 200 }));
+        try {
+          const result = await __testFinalizeTurn({
+            ...makeOutcome(owned, ownedInvocation), browser,
+          }, cdp);
+          expect(result).toMatchObject({
+            state: 'rate_limit', cause: 'conversation_fetch_http_429',
+            send_count: 0, cleanup: withProtectedSibling ? 'confirmed' : 'unconfirmed',
+            ...(!withProtectedSibling ? { cleanup_status: 'cleanup_unconfirmed' } : {}),
+          });
+          expect(owned.close).toHaveBeenCalledTimes(withProtectedSibling ? 1 : 0);
+          expect(stillOpen).toBe(!withProtectedSibling);
+          expect(protectedProject.close).not.toHaveBeenCalled();
+          expect(protectedProject.goto).not.toHaveBeenCalled();
+        } finally {
+          fetchSpy.mockRestore();
+        }
+      };
+      // Regression: never close the shared browser's last Page, even when the
+      // exact invocation-created target and idle route/marker are otherwise proven.
+      await finishCreatedPage(false);
+      // With a non-owned /project sibling, retire only the exact created Page.
+      await finishCreatedPage(true);
 
       const selected = page();
       const selectedInvocation = randomUUID();
