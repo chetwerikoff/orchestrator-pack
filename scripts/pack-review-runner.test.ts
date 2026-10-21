@@ -1026,6 +1026,7 @@ describe('Issue #1826 native fallback pre-spawn binding', () => {
     roots.push(parent);
     const storeRoot = join(parent, 'store');
     setupHarness(storeRoot);
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'claude';
     const prNumber = 1829;
     const head = '5'.repeat(40);
     let armedRunId = '';
