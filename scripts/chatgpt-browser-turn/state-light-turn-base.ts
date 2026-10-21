@@ -139,6 +139,8 @@ const ACCOUNT_COOLDOWN_FILE = 'state-light-account-cooldown.v1.json';
 const ACCOUNT_COOLDOWN_GUARD = 'state-light-account-cooldown.v1.guard';
 const ACCOUNT_COOLDOWN_MS = 300_000;
 const ACCOUNT_COOLDOWN_ACTIONABLE_MS = ACCOUNT_COOLDOWN_MS + 1_000;
+const ACCOUNT_COOLDOWN_QUIET_RESET_MS = 30 * 60_000;
+const ACCOUNT_COOLDOWN_STEPS_MS = [60_000, 120_000, 240_000, ACCOUNT_COOLDOWN_MS] as const;
 
 const FRESH_LOCAL_POSSIBLY_DELIVERED_NEXT_ACTION =
   'No durable ChatGPT conversation URL was bound for this invocation; delivery is POSSIBLY_DELIVERED. '
@@ -168,6 +170,8 @@ export interface StateLightAccountCooldown {
   readonly active: boolean;
   readonly until?: number;
   readonly diagnostic?: string;
+  readonly lastWitnessAt?: number;
+  readonly backoffStep?: number;
 }
 
 export function readStateLightAccountCooldown(
@@ -185,19 +189,32 @@ export function readStateLightAccountCooldown(
     let record: unknown;
     try { record = JSON.parse(raw); }
     catch { return { active: false, diagnostic: 'account_cooldown_malformed' }; }
-    if (!record || typeof record !== 'object' || Array.isArray(record)
-      || Object.keys(record).length !== 1 || !Object.hasOwn(record, 'cooldown_until_ms')) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) {
       return { active: false, diagnostic: 'account_cooldown_wrong_shape' };
     }
+    const keys = Object.keys(record);
+    const legacy = keys.length === 1 && keys[0] === 'cooldown_until_ms';
+    const extended = keys.length === 3
+      && keys.every((key) => ['cooldown_until_ms', 'last_witness_at_ms', 'backoff_step'].includes(key));
+    if (!legacy && !extended) return { active: false, diagnostic: 'account_cooldown_wrong_shape' };
     const until = (record as { cooldown_until_ms?: unknown }).cooldown_until_ms;
     if (typeof until !== 'number' || !Number.isSafeInteger(until) || until < 0) {
       return { active: false, diagnostic: 'account_cooldown_invalid_deadline' };
     }
-    if (until <= nowMs) return { active: false, diagnostic: 'account_cooldown_expired' };
+    const lastWitnessAt = extended ? (record as { last_witness_at_ms?: unknown }).last_witness_at_ms : undefined;
+    const backoffStep = extended ? (record as { backoff_step?: unknown }).backoff_step : undefined;
+    if (extended && (typeof lastWitnessAt !== 'number'
+      || !Number.isSafeInteger(lastWitnessAt) || lastWitnessAt < 0
+      || typeof backoffStep !== 'number' || !Number.isSafeInteger(backoffStep)
+      || backoffStep < 1 || backoffStep > 4)) {
+      return { active: false, diagnostic: 'account_cooldown_invalid_witness' };
+    }
+    const witness = extended ? { lastWitnessAt: lastWitnessAt as number, backoffStep: backoffStep as number } : {};
+    if (until <= nowMs) return { ...witness, active: false, diagnostic: 'account_cooldown_expired' };
     if (until > nowMs + ACCOUNT_COOLDOWN_ACTIONABLE_MS) {
       return { active: false, diagnostic: 'account_cooldown_far_future' };
     }
-    return { active: true, until };
+    return { ...witness, active: true, until };
   } catch {
     // An inaccessible shared store never becomes a physical Send admission failure.
     return { active: false, diagnostic: 'account_cooldown_store_unavailable' };
@@ -215,8 +232,14 @@ export function publishWitnessedStateLight429(
     // Short writer-integrity guard only: no persistent owner, lease, wait or slot.
     guardFd = openSync(guardPath, 'wx', 0o600);
     const previous = readStateLightAccountCooldown(profileKey, nowMs);
-    const until = Math.max(nowMs + ACCOUNT_COOLDOWN_MS, previous.active ? previous.until! : 0);
-    atomicJson(join(locks, ACCOUNT_COOLDOWN_FILE), { cooldown_until_ms: until });
+    const continuous = previous.lastWitnessAt !== undefined
+      && previous.lastWitnessAt <= nowMs
+      && nowMs - previous.lastWitnessAt <= ACCOUNT_COOLDOWN_QUIET_RESET_MS;
+    const step = continuous ? Math.min(4, (previous.backoffStep ?? 0) + 1) : 1;
+    const until = Math.max(nowMs + ACCOUNT_COOLDOWN_STEPS_MS[step - 1]!, previous.active ? previous.until! : 0);
+    atomicJson(join(locks, ACCOUNT_COOLDOWN_FILE), {
+      cooldown_until_ms: until, last_witness_at_ms: nowMs, backoff_step: step,
+    });
     return { active: true, until };
   } catch {
     return { active: false, diagnostic: 'account_cooldown_write_unavailable' };
