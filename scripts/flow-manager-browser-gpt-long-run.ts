@@ -10,6 +10,7 @@ import {
   isWakeableTerminalEnvelopePath,
   parseFlagArgv,
   readHandoffReceipt,
+  readInvocationReceiptLocator,
   type HandoffReceipt,
   unwakeableTerminalEnvelopeHint,
 } from './flow-manager-long-running-child.ts';
