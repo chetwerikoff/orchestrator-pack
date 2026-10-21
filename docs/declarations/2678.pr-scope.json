@@ -5,6 +5,7 @@
     "scripts/browser-gpt-page-probe.test.ts",
     "scripts/browser-gpt-page-probe.ts",
     "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
@@ -42,5 +43,5 @@
     "scripts/flow-manager-long-running-child.test.ts",
     "scripts/flow-manager-long-running-child.ts"
   ],
-  "source_revision": "6a89e5c447e85a87d72d14fba4cb964a84810adf"
+  "source_revision": "335b99fc0565596bccf44120160331d8b4a01836"
 }
