@@ -28,7 +28,7 @@ import {
   countUninspectedRecoveryTargets,
   getOwnTargetInfo,
 } from './own-target-attach.ts';
-import { listCdpPageTargets } from './own-target-cdp-proxy.ts';
+import { listCdpPageTargets, probeCdpSiblingEvaluations } from './own-target-cdp-proxy.ts';
 import {
   turnExitCode,
   type ComposerMutationDiagnosticV1,
@@ -491,12 +491,24 @@ export function classifyBrowserGptPageTurnStatus(
 
 export type PageLiveness = 'live' | 'lost' | 'unknown';
 
+
+type ExtendedReadinessOutcome = 'enabled' | 'still_frozen' | 'recovered_but_disabled'
+  | 'target_disappeared_or_changed' | 'terminal_unknown' | 'budget_exhausted';
+
+interface ExtendedReadinessDiagnostic {
+  readonly entryNonresponsiveCount: number;
+  readonly terminalNonresponsiveCount?: number;
+  readonly elapsedMs: number;
+  readonly outcome: ExtendedReadinessOutcome;
+}
+
 interface BrowserIncident {
   readonly eventClass: string;
   readonly symptom: string;
   readonly action?: string;
   readonly uncertaintyDiagnostics?: ObservationUncertaintyDiagnostics;
   readonly composerMutationDiagnostic?: ComposerMutationDiagnosticV1;
+  readonly extendedReadiness?: ExtendedReadinessDiagnostic;
 }
 
 export interface CompactTurnResult extends TurnResultV1 {
@@ -1758,6 +1770,15 @@ function appendIncident(
       ...(incident.uncertaintyDiagnostics ? {
         observation_uncertainty: incident.uncertaintyDiagnostics,
       } : {}),
+
+      ...(incident.extendedReadiness ? {
+        entry_nonresponsive_count: incident.extendedReadiness.entryNonresponsiveCount,
+        ...(incident.extendedReadiness.terminalNonresponsiveCount !== undefined ? {
+          terminal_nonresponsive_count: incident.extendedReadiness.terminalNonresponsiveCount,
+        } : {}),
+        extended_readiness_elapsed_ms: incident.extendedReadiness.elapsedMs,
+        outcome: incident.extendedReadiness.outcome,
+      } : {}),
       invocation: invocationId,
       agent_runtime: agent,
     })}\n`, 'utf8');
@@ -2787,6 +2808,49 @@ async function dispatchStateLightSendAndObserveDelivery(input: {
 const FRESH_SEND_WINDOW_MS = 15_000;
 const FRESH_SEND_RESERVE_MS = 4 * FRESH_SEND_WINDOW_MS;
 const FRESH_SEND_PREPARE_RESERVE_MS = 3 * MAX_LOCAL_READ_WAIT_MS;
+
+const FRESH_SEND_EXTENDED_TOTAL_MS = 600_000;
+const FRESH_SEND_TERMINAL_PROBE_MS = 5_000;
+const FRESH_SEND_EXTENDED_POLL_MS = 2_000;
+
+async function waitForExtendedFreshSendButton(
+  page: any,
+  sendButton: any,
+  assertOwnerAndPage: () => void,
+  cutoffMs: number,
+): Promise<'enabled' | 'never_enabled' | 'busy'> {
+  while (Date.now() < cutoffMs) {
+    assertOwnerAndPage();
+    if (await readFreshStopVisible(page, cutoffMs) !== false) return 'busy';
+    const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, cutoffMs - Date.now());
+    if (waitMs <= 0) break;
+    try {
+      const count = await boundedBrowserRead(
+        Promise.resolve(sendButton.count()), waitMs, 'fresh_extended_send_count_timeout',
+      );
+      if (count === 1 && typeof sendButton.isVisible === 'function'
+        && typeof sendButton.isEnabled === 'function') {
+        const actionable = await boundedBrowserRead(
+          Promise.all([sendButton.isVisible(), sendButton.isEnabled()]),
+          Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, cutoffMs - Date.now())),
+          'fresh_extended_send_actionability_timeout',
+        );
+        if (actionable[0] === true && actionable[1] === true && Date.now() < cutoffMs) {
+          assertOwnerAndPage();
+          return 'enabled';
+        }
+      }
+    } catch {
+      // Unknown actionability never grants a physical Send.
+      return 'busy';
+    }
+    if (Date.now() < cutoffMs) {
+      await sleep(page, Math.min(FRESH_SEND_EXTENDED_POLL_MS, cutoffMs - Date.now()));
+    }
+  }
+  return 'never_enabled';
+}
+
 
 /** A Stop already present before our click is foreign/busy, not this turn's delivery. */
 async function readFreshStopVisible(page: any, deadlineMs: number): Promise<boolean | null> {
