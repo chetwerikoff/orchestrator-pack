@@ -143,6 +143,23 @@ describe('persistent pack reviewer preference', () => {
     })).toMatchObject({ reviewer: 'gpt', source: 'persistent-preference' });
   });
 
+  it('keeps an explicit fixture reviewer when XDG_CONFIG_HOME is unset and HOME holds saved GPT', () => {
+    const { root } = preferenceFixture();
+    const env = {
+      HOME: root,
+      XDG_CONFIG_HOME: '',
+      PACK_REVIEWER: 'gpt',
+      PACK_REVIEW_BOUND_REVIEWER: 'codex',
+    };
+    const filePath = getPackReviewerPreferencePath(env);
+    writePackReviewerPreference('gpt', filePath);
+    expect(resolvePackReviewerResolution(env)).toMatchObject({
+      reviewer: 'codex', source: 'invocation-bound',
+    });
+    expect(resolvePackReviewerResolution({ ...env, PACK_REVIEW_BOUND_REVIEWER: '' }))
+      .toMatchObject({ reviewer: 'gpt', source: 'persistent-preference' });
+  });
+
   it('uses legacy environment state only when no preference exists', () => {
     const { filePath } = preferenceFixture();
 
