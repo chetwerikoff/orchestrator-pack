@@ -2506,7 +2506,23 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
     }
     expect(deriveDelivery({ ...result, resolved_send_count: result.send_count } as any, false))
       .toBe('POSSIBLY_DELIVERED');
-    expect(readStateLightAccountCooldown(configuredProfileKey(profile, cdp), clock.now).active).toBe(send429 === 'own');
+    const key = configuredProfileKey(profile, cdp);
+    if (send429 === 'own') {
+      // The POST 429 is witnessed at the Send boundary, but this deliberately
+      // uncertain turn may continue read-only observation past its 60s hold.
+      // Expiration must not erase or silently renew the original witness.
+      const record = JSON.parse(readFileSync(
+        join(profileDirs(key).locks, 'state-light-account-cooldown.v1.json'), 'utf8',
+      ));
+      expect(record).toEqual({
+        cooldown_until_ms: 160_000, last_witness_at_ms: 100_000, backoff_step: 1,
+      });
+      expect(readStateLightAccountCooldown(key, 100_000).active).toBe(true);
+      expect(readStateLightAccountCooldown(key, clock.now).active).toBe(clock.now < 160_000);
+    } else {
+      expect(readStateLightAccountCooldown(key, clock.now).active).toBe(false);
+      expect(existsSync(join(profileDirs(key).locks, 'state-light-account-cooldown.v1.json'))).toBe(false);
+    }
   });
 
   it.each([false, true])('three source pages cannot create/refresh a hold or block a fourth unit (seeded: %s)', async (seeded) => {
