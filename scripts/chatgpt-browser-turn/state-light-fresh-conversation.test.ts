@@ -904,6 +904,92 @@ describe('state-light fresh conversation collision recovery', () => {
       expect(JSON.stringify(journal())).not.toContain(prompt);
     });
 
+
+    it('interleaves distinct own targets: B Sends and settles while A waits; A later Sends once', async () => {
+      const a = makeLoserPage('PROMPT', 'A-REPLY');
+      const b = makeLoserPage('PROMPT', 'B-REPLY');
+      b.page.url.mockImplementation(() => b.getSends() > 0 ? LOSER_CONV : PROJECT_URL);
+      const initialNow = mocks.nowMs;
+      let aQualified = false;
+      let bClicked = false;
+      b.sendButton.isEnabled.mockImplementation(async () => aQualified);
+      a.sendButton.isEnabled.mockImplementation(async () => bClicked && mocks.nowMs >= initialNow + 180_000);
+      vi.mocked(probeCdpSiblingEvaluations).mockImplementation(async (_endpoint, ownedId) => {
+        expect(ownedId).toBe('2682-owned-A');
+        aQualified = true;
+        return positive();
+      });
+      const attach = vi.mocked(attachOwnTarget);
+      attach.mockImplementationOnce(async (chromium, options) =>
+        __testAttachOwnTargetFixture(chromium, { ...options, pinnedTargetId: '2682-owned-A' }),
+      ).mockImplementationOnce(async (chromium, options) =>
+        __testAttachOwnTargetFixture(chromium, { ...options, pinnedTargetId: '2682-owned-B' }),
+      );
+      const originalBClick = b.sendButton.click.getMockImplementation()!;
+      b.sendButton.click.mockImplementation(async () => {
+        expect(aQualified).toBe(true);
+        bClicked = true;
+        await originalBClick();
+      });
+      enqueueBrowserForTurn(mocks, a.page);
+      enqueueBrowserForTurn(mocks, b.page);
+      const lastPage = (id: string) => id === '2682-owned-A' ? a.page : b.page;
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        if (new URL(String(input)).pathname !== '/json/list') throw Error('unexpected fixture CDP URL');
+        const active = ['2682-owned-A', '2682-owned-B']
+          .filter((id) => !lastPage(id).close.mock.calls.length)
+          .map((id) => ({
+            id, type: 'page', url: String(lastPage(id).url()),
+            webSocketDebuggerUrl: 'ws://example/' + id,
+          }));
+        return new Response(JSON.stringify([
+          ...active, { id: 'keepalive-2682', type: 'page', url: 'about:blank' },
+        ]), { status: 200 });
+      });
+      const written: string[] = [];
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+        written.push(String(chunk));
+        return true;
+      }) as typeof process.stdout.write);
+      const runArgs = (id: string) => [
+        ...STATE_LIGHT_TURN_BASE_ARGV,
+        '--invocation-id', id,
+        '--output', join(stateDir, '2682-' + id + '.txt'),
+        '--new-chat', '--project-url', PROJECT_URL,
+        '--timeout-ms', '900000', '--poll-ms', '1',
+      ];
+      try {
+        const aId = randomUUID();
+        const bId = randomUUID();
+        const [aCode, bCode] = await Promise.all([
+          runStateLightTurn(runArgs(aId)),
+          runStateLightTurn(runArgs(bId)),
+        ]);
+        const results = written.map((line) => {
+          try { return JSON.parse(line) as { schema?: string; state?: string; invocation_id?: string; send_count?: number }; }
+          catch { return {}; }
+        }).filter((row) => row.schema === 'turn-result/v1');
+        expect([aCode, bCode]).toEqual([0, 0]);
+        expect(aQualified).toBe(true);
+        expect(bClicked).toBe(true);
+        expect(a.getSends()).toBe(1);
+        expect(b.getSends()).toBe(1);
+        expect(results).toHaveLength(2);
+        expect(results).toEqual(expect.arrayContaining([
+          expect.objectContaining({ invocation_id: aId, state: 'ok', send_count: 1 }),
+          expect.objectContaining({ invocation_id: bId, state: 'ok', send_count: 1 }),
+        ]));
+        expect(journal()).toEqual([expect.objectContaining({
+          entry_nonresponsive_count: 1, outcome: 'enabled', invocation: aId,
+        })]);
+        expect(a.page.bringToFront).not.toHaveBeenCalled();
+        expect(b.page.bringToFront).not.toHaveBeenCalled();
+      } finally {
+        attach.mockImplementation(__testAttachOwnTargetFixture);
+        stdout.mockRestore();
+      }
+    });
+
     it.each([
       { result: positive(), cause: 'fresh_send_blocked_by_frozen_sibling', outcome: 'still_frozen', count: 1 },
       { result: { ...empty(), responsive: [sibling] }, cause: 'fresh_send_button_never_enabled',
