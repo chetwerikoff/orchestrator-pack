@@ -7671,6 +7671,9 @@ async function guardedOriginalTargetRetirement(input: {
   const budget = (): number => Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, deadline - Date.now()));
   const routeMatches = (url: string): boolean => {
     const original = pin.initial_route;
+    if (url === 'about:blank' && outcome.result.send_count === 0
+      && outcome.result.send_attempted !== true
+      && (observation.phase === 'prepared' || observation.phase === 'not_sent')) return true;
     if (observation.conversation_url && normalizeConversationUrl(url) === normalizeConversationUrl(observation.conversation_url)
       && isSupportedChatGptConversationUrl(url)) return true;
     if (isBlankProjectSurfaceUrl(url, original)
@@ -7724,8 +7727,27 @@ async function guardedOriginalTargetRetirement(input: {
       // An unrendered local/error Page may be retired only when its composer
       // is provably empty or exactly the original still-typed payload.
       if (composer === '') return currentUrl() !== null;
-      return Boolean(outcome.ownedTypedPayload && composer === outcome.ownedTypedPayload
-        && ownedPromptMatches(composer, observation.marker) && currentUrl() !== null);
+      if (outcome.ownedTypedPayload && composer === outcome.ownedTypedPayload
+        && ownedPromptMatches(composer, observation.marker)) return currentUrl() !== null;
+      if (composer !== undefined || await locatorCount(
+        outcome.page.locator(COMPOSER_SELECTOR), Date.now() + budget(),
+      ) !== 0) return false;
+      if (currentUrl() === 'about:blank') {
+        const emptyBody = await boundedBrowserRead(
+          outcome.page.locator('body').innerText({ timeout: budget() }), budget(),
+          'empty_about_blank_body_read_timeout',
+        );
+        return typeof emptyBody === 'string' && emptyBody.trim() === '';
+      }
+      // Error-only surfaces may legitimately have no editor after the
+      // original attempted Send. Do not treat an unreadable editor as absent.
+      const errors = ['Message delivery timed out', 'Network issue', 'Failed to fetch'];
+      for (const errorText of errors) {
+        if (await locatorCount(
+          outcome.page.getByText(errorText, { exact: false }), Date.now() + budget(),
+        ) > 0) return currentUrl() !== null;
+      }
+      return false;
     } catch { return false; }
   };
 
