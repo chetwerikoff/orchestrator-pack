@@ -91,6 +91,7 @@ type FinalizerCase = {
   readonly pageLost: boolean;
   readonly closeError?: boolean;
   readonly beforePageClose?: () => void;
+  readonly soleSharedChromePage?: boolean;
 };
 
 function makeTurnResult(overrides: Partial<Omit<CompactTurnResult, 'cleanup'>> = {}): Omit<CompactTurnResult, 'cleanup'> {
@@ -170,11 +171,16 @@ async function observeFinalizer(testCase: FinalizerCase) {
     },
     isConnected: () => true,
   };
+  const keepalive = { id: 'opk-keepalive', type: 'page', url: 'about:blank#opk-keepalive' };
+  const ownedTarget = {
+    id: targetId, type: 'page', url: chatUrl,
+    webSocketDebuggerUrl: 'ws://example/fixture-own-target',
+  };
   const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
-    JSON.stringify(physicallyPresent ? [{
-      id: targetId, type: 'page', url: chatUrl,
-      webSocketDebuggerUrl: 'ws://example/fixture-own-target',
-    }] : []), { status: 200 },
+    JSON.stringify([
+      ...(physicallyPresent ? [ownedTarget] : []),
+      ...(!testCase.soleSharedChromePage ? [keepalive] : []),
+    ]), { status: 200 },
   ));
   try {
     admitStateLightTurnObservation({ profileKey, invocationId, marker });
@@ -265,6 +271,18 @@ describe('Issue #2625 protected continuation tab bootstrap', () => {
 });
 
 describe('Issue #1238 page cleanup equivalence', () => {
+  it('does not close the sole owned Page or kill shared Chrome when no keepalive/sibling exists', async () => {
+    const observed = await observeFinalizer({
+      sendCount: 1, pagePresent: true, pageLost: false,
+      publicationState: 'committed_ok', soleSharedChromePage: true,
+    });
+    expect(observed.result.cleanup).toBe('unconfirmed');
+    expect(observed.result.cleanup_status).toBe('cleanup_unconfirmed');
+    expect(observed.pageCloseCalls).toBe(0);
+    expect(observed.browserCloseCalls).toBe(1); // CDP connection release, not a tab close.
+    expect(observed.foreignTargetOpen).toBe(true);
+  });
+
   it.each(cleanupCases)('$id observes the production finalizer', async (testCase) => {
     const observed = await observeFinalizer(testCase);
     expect(observed.result.cleanup).toBe(testCase.expected === 'close' ? 'confirmed' : 'skipped');
