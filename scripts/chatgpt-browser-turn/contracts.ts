@@ -123,6 +123,8 @@ export interface TurnResultV1 {
   owned_target_id?: string;
   owned_target_created?: boolean;
   owned_prompt_marker?: string;
+  owned_marker_confirmed?: true;
+  send_witness?: 'none' | 'numeric_send_count' | 'owned_marker';
   /** Actionable uncertainty: target may still exist; no Stop was attempted. */
   cleanup_status?: 'cleanup_unconfirmed';
   /** Exact selected profile's current witnessed cooldown; passive 429s do not write it. */
