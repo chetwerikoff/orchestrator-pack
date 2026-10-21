@@ -2129,11 +2129,16 @@ function validateHarvestSnapshot(value: unknown, target: CompatibleTarget): Harv
   };
 }
 
-async function readHarvestSnapshot(target: CompatibleTarget, deps: ProbeDependencies): Promise<HarvestSnapshot> {
+async function readHarvestSnapshot(
+  target: CompatibleTarget, deps: ProbeDependencies, budgetMs = CDP_REQUEST_TIMEOUT_MS,
+): Promise<HarvestSnapshot> {
   if (!target.web_socket_debugger_url) throw new ProbeError('unavailable', 'target_attach_unavailable');
   let value: unknown;
   try {
-    value = await deps.evaluate(target, HARVEST_EXPRESSION);
+    value = await withTimeout(
+      deps.evaluate(target, HARVEST_EXPRESSION, budgetMs),
+      Math.max(1, budgetMs), deps, 'harvest_target_read_timeout',
+    );
   } catch (error) {
     throw new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
   }
@@ -2329,11 +2334,21 @@ async function resolveHarvestTarget(
   }
 
   const matched: Array<{ target: CompatibleTarget; snapshot: HarvestSnapshot }> = [];
+  // A large sibling census cannot multiply per-target timeouts without bound.
+  // This is a read-only recovery budget; it never grants fallback Send.
+  const siblingDeadline = clockNow(deps) + LIVENESS_TOTAL_TIMEOUT_MS;
   for (const target of targets) {
     if (target.target_id === pinnedId || !target.web_socket_debugger_url) continue;
+    const remaining = siblingDeadline - clockNow(deps);
+    if (remaining <= 0) throw new ProbeError('surface_unknown', 'harvest_sibling_census_timeout');
     let snapshot: HarvestSnapshot;
-    try { snapshot = await readHarvestSnapshot(target, deps); }
-    catch { continue; }
+    try { snapshot = await readHarvestSnapshot(target, deps, Math.min(CDP_REQUEST_TIMEOUT_MS, remaining)); }
+    catch {
+      if (clockNow(deps) >= siblingDeadline) {
+        throw new ProbeError('surface_unknown', 'harvest_sibling_census_timeout');
+      }
+      continue;
+    }
     // Census URL is only a selection hint. Navigation between the CDP
     // census and the DOM read invalidates this candidate even if an old
     // marker remains visible in the new conversation.
@@ -2364,15 +2379,26 @@ async function resolveHarvestTarget(
     if (!deps.createPage) throw new ProbeError('unavailable', 'page_create_unavailable');
     const preExistingTargetIds = new Set(rawTargets.flatMap((target) => typeof target.id === 'string' ? [target.id] : []));
     let created: CdpTarget | readonly CdpTarget[];
-    try { created = await deps.createPage(args.cdp, normalized); }
-    catch (error) { throw new ProbeError('unavailable', 'page_create_failed', boundedDetail(error)); }
-    // Creation alone is insufficient: capture a known new ID even if readiness
-    // or the return shape fails later, but NEVER retire a pre-existing ID.
-    if (!Array.isArray(created) && isRecord(created)
-      && created.type === 'page' && typeof created.id === 'string'
-      && TARGET_ID_RE.test(created.id) && !preExistingTargetIds.has(created.id)) {
-      createdRecovery.targetId = created.id;
-      createdRecovery.requestedUrl = normalized;
+    try {
+      created = await withTimeout(
+        deps.createPage(args.cdp, normalized), CDP_REQUEST_TIMEOUT_MS,
+        deps, 'harvest_page_create_timeout',
+      );
+    } catch (error) {
+      throw new ProbeError('unavailable', 'page_create_failed', boundedDetail(error));
+    }
+    // A malformed return must not silently orphan one provably new Page.
+    // An array stays an invalid creation result: identify a cleanup candidate
+    // only when it contains exactly one positively new target and no siblings.
+    const candidates = Array.isArray(created) ? created.length === 1 ? created : []
+      : [created];
+    for (const candidate of candidates) {
+      if (isRecord(candidate) && candidate.type === 'page'
+        && typeof candidate.id === 'string' && TARGET_ID_RE.test(candidate.id)
+        && !preExistingTargetIds.has(candidate.id)) {
+        createdRecovery.targetId = candidate.id;
+        createdRecovery.requestedUrl = normalized;
+      }
     }
     const target = validateCreatedTarget(created, normalized, preExistingTargetIds);
     createdRecovery.target = target;
