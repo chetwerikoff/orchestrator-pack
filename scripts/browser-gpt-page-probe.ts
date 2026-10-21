@@ -7,8 +7,10 @@ import { isSupportedChatGptConversationUrl } from './chatgpt-browser-turn/state-
 import {
   ASSISTANT_MESSAGE_SELECTOR,
   ASSISTANT_MESSAGE_STYLE,
+  COMPOSER_SELECTOR,
   ASSISTANT_TURN_ACTION_SELECTOR,
   ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
+  USER_MESSAGE_SELECTOR,
   CONVERSATION_TURN_SECTION_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_ID_ATTR,
@@ -2357,6 +2359,123 @@ async function resolveHarvestTarget(
     return { target, snapshot: await harvestWithReadiness(target, normalized, marker, deps) };
   }
   throw new ProbeError('not_found', 'owned_turn_unbound_not_found');
+}
+
+// Probe-created recovery targets are not transferred to the manager or the
+// original driver. Retire ONLY positively newly allocated target IDs; a failed
+// cleanup must remain visible even when harvest itself succeeded.
+const PROBE_RECOVERY_CLOSE_BUDGET_MS = 15_000;
+const PROBE_RECOVERY_GUARD_EXPRESSION = `(() => {
+  const visible = (node) => node.getBoundingClientRect().height > 0;
+  const users = Array.from(document.querySelectorAll(${JSON.stringify(USER_MESSAGE_SELECTOR)}))
+    .filter(visible);
+  const stop = Array.from(document.querySelectorAll(${JSON.stringify(STOP_BUTTON_SELECTOR)})).some(visible);
+  const streaming = Array.from(document.querySelectorAll(${JSON.stringify(ASSISTANT_TURN_IN_PROGRESS_SELECTOR)})).some(visible);
+  const composer = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
+  const errorText = Array.from(document.querySelectorAll('[role="alert"]'))
+    .filter(visible).map(node => (node.textContent || '').trim());
+  return { page_url: location.href, user_count: users.length,
+    user_texts: users.length <= 100 ? users.map(node => node.innerText) : [],
+    stop, streaming,
+    composer_text: composer && composer.textContent === composer.innerText ? composer.textContent : null,
+    fetch_failure: errorText.some(text => text.includes('Failed to fetch')
+      || text.includes('Could not load this ChatGPT conversation')) };
+})()`;
+
+async function retireProbeCreatedRecoveryTarget(
+  args: ParsedHarvestArgs,
+  deps: ProbeDependencies,
+  marker: string,
+  lease: ProbeCreatedRecoveryTarget,
+): Promise<'confirmed' | 'cleanup_unconfirmed' | 'not_created'> {
+  if (!lease.targetId) return 'not_created';
+  if (!lease.requestedUrl || !deps.closePage) return 'cleanup_unconfirmed';
+  const deadline = clockNow(deps) + PROBE_RECOVERY_CLOSE_BUDGET_MS;
+  const remaining = (): number => Math.min(CDP_REQUEST_TIMEOUT_MS, Math.max(1, deadline - clockNow(deps)));
+  const currentTarget = async (): Promise<CompatibleTarget | null> => {
+    const targets = toCompatibleTargets(await withTimeout(
+      deps.listTargets(args.cdp), remaining(), deps, 'cleanup_census_timeout',
+    ));
+    return targets.find((target) => target.target_id === lease.targetId) ?? null;
+  };
+  const safe = async (): Promise<boolean> => {
+    if (clockNow(deps) >= deadline) return false;
+    let target: CompatibleTarget | null;
+    try { target = await currentTarget(); } catch { return false; }
+    if (!target?.web_socket_debugger_url) return false;
+    if (target.normalized_url !== lease.requestedUrl) return false;
+    try {
+      const value = await withTimeout(
+        deps.evaluate(target, PROBE_RECOVERY_GUARD_EXPRESSION, remaining()),
+        remaining(), deps, 'cleanup_guard_timeout',
+      );
+      if (!isRecord(value)
+        || value.stop !== false || value.streaming !== false
+        || value.user_count !== (Array.isArray(value.user_texts) ? value.user_texts.length : -1)
+        || typeof value.user_count !== 'number' || value.user_count < 0 || value.user_count > 100
+        || value.page_url !== lease.requestedUrl) return false;
+      if (value.user_count > 0) {
+        const users = value.user_texts as unknown[];
+        const owned = users.filter((text) => typeof text === 'string' && ownedPromptMatches(text, marker));
+        if (owned.length !== 1 || users.at(-1) !== owned[0]) return false;
+        const count = recoveryMarkerCardinality(
+          users.map((text) => ({ role: 'user' as const, text: String(text) })), marker,
+        );
+        if (count.matchingUserCarrierCount !== 1 || count.exactMarkerTokenCount !== 1) return false;
+      } else if (value.composer_text !== '' && value.fetch_failure !== true) {
+        return false;
+      }
+      // A concurrent URL redirect or replacement invalidates the first DOM
+      // sample. The next guard and census must reproduce this exact identity.
+      return (await currentTarget())?.normalized_url === lease.requestedUrl;
+    } catch { return false; }
+  };
+  try {
+    if (!await safe() || !await safe() || clockNow(deps) >= deadline) return 'cleanup_unconfirmed';
+    const response = await withTimeout(
+      deps.closePage(args.cdp, lease.targetId), remaining(), deps, 'cleanup_close_timeout',
+    );
+    // HTTP 200/404 only describes a request result; physical disappearance
+    // is the confirmation witness and includes the late-close case.
+    if (response !== 'closed' && response !== 'already_gone') return 'cleanup_unconfirmed';
+    if (clockNow(deps) >= deadline) return 'cleanup_unconfirmed';
+    const post = await withTimeout(deps.listTargets(args.cdp), remaining(), deps, 'cleanup_readback_timeout');
+    return post.every((target) => target.id !== lease.targetId) ? 'confirmed' : 'cleanup_unconfirmed';
+  } catch {
+    return 'cleanup_unconfirmed';
+  }
+}
+
+async function runHarvest(args: ParsedHarvestArgs, deps: ProbeDependencies): Promise<ProbeEnvelope> {
+  const createdRecovery: ProbeCreatedRecoveryTarget = {};
+  let result: ProbeEnvelope | undefined;
+  let failure: unknown;
+  let marker = '';
+  try {
+    const profileKey = configuredProfileKey(args.profile, args.cdp);
+    marker = readStateLightTurnObservation(profileKey, args.invocationId).marker;
+    result = await runHarvestCore(args, deps, createdRecovery);
+  } catch (error) {
+    failure = error;
+  }
+  const cleanup = await retireProbeCreatedRecoveryTarget(args, deps, marker, createdRecovery);
+  if (failure) {
+    if (cleanup === 'cleanup_unconfirmed') {
+      const error = failure instanceof ProbeError ? failure
+        : new ProbeError('unavailable', 'unexpected_failure', boundedDetail(failure));
+      throw new ProbeError(error.status, error.reason, undefined, {
+        ...(error.details ?? {}), cleanup_status: 'cleanup_unconfirmed',
+        cleanup_target_id: createdRecovery.targetId,
+      });
+    }
+    throw failure;
+  }
+  if (!result) throw new ProbeError('unavailable', 'harvest_result_unavailable');
+  return {
+    ...result,
+    ...(createdRecovery.targetId
+      ? { cleanup_status: cleanup, cleanup_target_id: createdRecovery.targetId } : {}),
+  };
 }
 
 async function runHarvestCore(
