@@ -5967,6 +5967,24 @@ async function runTurnCore(
         ),
       };
     };
+    // The early unbound cutoff remains valid ONLY while the original owned
+    // marker is unproven. A verified marker (including on a local-chatgpt URL)
+    // continues through the original absolute deadline for a late full reply.
+    const unprovenFreshCutoff = (): TurnRunOutcome | null => {
+      if (!config.newChat || ownedConversationUrl || ownedPromptEverSeen
+        || (!sendAttempted && sendCount < 1) || Date.now() < freshUnboundReturnByMs) return null;
+      incident('post_send_observation_error', 'fresh_conversation_owner_unproven', 'terminal_cleanup_no_resend');
+      return {
+        page, browser,
+        result: compactResult(
+          'observation_uncertain', 'invocation', 'fresh_conversation_owner_unproven',
+          invocationId, profileKey, sendCount, pollCount, navigation, incidents,
+          { ...(sendAttempted ? { send_attempted: true } : {}),
+            next_action: FRESH_LOCAL_POSSIBLY_DELIVERED_NEXT_ACTION },
+          journalWriteFailed,
+        ),
+      };
+    };
     // Each iteration rechecks a same-invocation committed primary before any
     // mutable Send-count/late-URL transition or new transcript acquisition.
     while (true) {
@@ -6338,6 +6356,8 @@ async function runTurnCore(
           ownedCarrierKey,
         );
         if (incompleteExhausted) return incompleteExhausted;
+        const unproven = unprovenFreshCutoff();
+        if (unproven) return unproven;
         updateHeartbeatForPoll({ state: 'waiting' });
         await postSendSleep(INITIAL_POLL_MS);
         continue;
@@ -6863,6 +6883,11 @@ async function runTurnCore(
           }
         }
       }
+
+      // Check only after this Page's complete marker census. Never use URL
+      // absence alone to reject a uniquely marker-proven late local reply.
+      const unproven = unprovenFreshCutoff();
+      if (unproven) return unproven;
 
       if (decision.state === 'uncertain') {
         uncertainCause = decision.cause === 'owned_prompt_marker_ambiguous'
