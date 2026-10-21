@@ -7645,6 +7645,59 @@ async function retireExplicitPredecessor(input: {
   }
 }
 
+/**
+ * Reconnect read-only to this invocation's original created target after a
+ * separate recovery Page was used. The original pinned ID is necessary but
+ * never sufficient; the normal live destructive-boundary checks still decide.
+ */
+async function retireDetachedOriginalTarget(input: {
+  readonly profileKey: string;
+  readonly invocationId: string;
+  readonly cdp: string;
+  readonly deadlineMs: number;
+}): Promise<{ readonly status: 'confirmed' | 'cleanup_unconfirmed'; readonly targetId?: string }> {
+  let record: ReturnType<typeof readStateLightTurnObservation>;
+  try {
+    record = readStateLightTurnObservation(input.profileKey, input.invocationId);
+  } catch { return { status: 'cleanup_unconfirmed' }; }
+  const pinned = record.owned_target;
+  if (!pinned?.created || pinned.cdp_sha256 !== createHash('sha256').update(input.cdp, 'utf8').digest('hex')) {
+    return { status: 'cleanup_unconfirmed', ...(pinned ? { targetId: pinned.id } : {}) };
+  }
+  const targetId = pinned.id;
+  let attachedBrowser: any;
+  try {
+    const census = await listCdpPageTargets(input.cdp,
+      Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, input.deadlineMs - Date.now())));
+    const selected = census.filter((target) => target.id === targetId);
+    if (selected.length === 0) return { status: 'confirmed', targetId };
+    if (selected.length !== 1 || Date.now() >= input.deadlineMs) {
+      return { status: 'cleanup_unconfirmed', targetId };
+    }
+    const attached = await attachOwnTarget(loadChromium(), {
+      mode: 'own-target', cdp: input.cdp, newChat: false,
+      pinnedTargetId: targetId, deadlineMs: input.deadlineMs,
+      cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
+    });
+    attachedBrowser = attached.browser;
+    const contexts = attachedBrowser.contexts();
+    const page = contexts.length === 1 && contexts[0]?.pages().length === 1
+      ? contexts[0].pages()[0] : undefined;
+    if (!page || getOwnTargetInfo(attachedBrowser)?.targetId !== targetId) {
+      return { status: 'cleanup_unconfirmed', targetId };
+    }
+    const result = compactResult('observation_uncertain', 'invocation',
+      'original_target_retirement_only', input.invocationId, input.profileKey,
+      record.send_count ?? 0, 0, new StateLightNavigationCounter(), []);
+    const cleanup = await guardedOriginalTargetRetirement({
+      outcome: { page, browser: attachedBrowser, result },
+      cdp: input.cdp, verifiedPredecessor: true,
+    });
+    return { status: cleanup === 'confirmed' ? 'confirmed' : 'cleanup_unconfirmed', targetId };
+  } catch { return { status: 'cleanup_unconfirmed', targetId }; }
+  finally { if (attachedBrowser) await releaseCdpBrowser(attachedBrowser, RESOURCE_CLEANUP_BOUND_MS); }
+}
+
 async function guardedOriginalTargetRetirement(input: {
   readonly outcome: TurnRunOutcome;
   readonly cdp: string;
@@ -7946,48 +7999,36 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
     if (!appendIncident(cleanupIncident, outcome.result.invocation_id)) journalWriteFailed = true;
   }
 
-  // Cleanup requires a positive owned claim/locator, never a zero-match census.
-  // A recovered Page is marked cleanup-unproven and is never this close target.
+  // The originally created dead-local Page may now be on a disconnected
+  // browser while a separate read-only recovery Page supplied the reply.
+  // Re-pin its exact original CDP target rather than closing an old Page
+  // reference or trusting a successful Playwright close promise.
+  let detachedOriginalCleanupUnconfirmed = false;
   if (outcome.ownedDeadLocalPage && outcome.ownedDeadLocalUrl
     && outcome.ownedDeadLocalConversationUrl && outcome.ownedFreshProjectUrl
     && outcome.result.send_count === 1
     && !outcome.ownershipForfeited
     && outcome.result.conversation_id === outcome.ownedDeadLocalConversationUrl
     && outcome.page !== outcome.ownedDeadLocalPage
-    && outcome.result.configured_profile_key
     && verifyStateLightFreshClaimOwnerFence(
       outcome.result.configured_profile_key,
       outcome.ownedDeadLocalConversationUrl,
       outcome.result.invocation_id,
       outcome.ownedDeadLocalTimeoutMs ?? STATE_LIGHT_MAX_TIMEOUT_MS,
     ) === 'valid') {
-    try {
-      const dead = outcome.ownedDeadLocalPage;
-      if (!cleanupAuthorityUnprovenPages.has(dead)
-        && !browserOrPageDefinitelyLost(dead, outcome.browser)
-        && await ownedLocalFetchFailureVisibleOnPage(
-          dead, outcome.ownedFreshProjectUrl,
-          Date.now() + MAX_LOCAL_READ_WAIT_MS, outcome.ownedDeadLocalUrl,
-        )) {
-        const deadCleanup = await abandonLatePageHandle(dead, RESOURCE_CLEANUP_BOUND_MS);
-        cleanup = deadCleanup;
-        if (deadCleanup !== 'confirmed') {
-          incidents.push('owned_tab_cleanup_failed');
-          if (!appendIncident({
-            eventClass: 'owned_tab_cleanup_failed',
-            symptom: 'recovered_original_local_tab_close_unconfirmed',
-            action: 'leave_recovered_and_sibling_pages_untouched',
-          }, outcome.result.invocation_id)) journalWriteFailed = true;
-        } else {
-          cleanup = deadCleanup;
-        }
-      }
-    } catch {
-      incidents.push('owned_tab_cleanup_failed');
+    const detached = await retireDetachedOriginalTarget({
+      profileKey: outcome.result.configured_profile_key,
+      invocationId: outcome.result.invocation_id,
+      cdp, deadlineMs: Date.now() + 20_000,
+    });
+    cleanup = detached.status === 'confirmed' ? 'confirmed' : 'unconfirmed';
+    if (detached.status !== 'confirmed') {
+      detachedOriginalCleanupUnconfirmed = true;
+      incidents.push('owned_tab_cleanup_unconfirmed');
       if (!appendIncident({
-        eventClass: 'owned_tab_cleanup_failed',
-        symptom: 'recovered_original_local_tab_close_unconfirmed',
-        action: 'leave_recovered_and_sibling_pages_untouched',
+        eventClass: 'owned_tab_cleanup_unconfirmed',
+        symptom: 'detached_original_target_not_safely_retired',
+        action: 'manual_exact_target_reconciliation_no_stop_no_resend',
       }, outcome.result.invocation_id)) journalWriteFailed = true;
     }
   }
@@ -8020,7 +8061,7 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
     ...(outcome.result.cooldown_until_ms !== undefined
       ? { cooldown_until_ms: outcome.result.cooldown_until_ms }
       : cooldown.active && cooldown.until !== undefined ? { cooldown_until_ms: cooldown.until } : {}),
-    ...(positivelyCreatedOriginal && cleanup !== 'confirmed'
+    ...((positivelyCreatedOriginal || detachedOriginalCleanupUnconfirmed) && cleanup !== 'confirmed'
       ? { cleanup_status: 'cleanup_unconfirmed' as const } : {}),
     cleanup,
     incidents,
