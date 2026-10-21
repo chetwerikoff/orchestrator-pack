@@ -6016,7 +6016,8 @@ async function runTurnCore(
       }
       // Count-gated 2x post-Send exits do not bound an unproved attempt.
       // The original absolute deadline does, without inventing a zero-Send release.
-      if (sendAttempted && sendCount === 0 && Date.now() >= zeroCountCutoffMs) {
+      if (sendAttempted && sendCount === 0 && Date.now() >= zeroCountCutoffMs
+        && !ownedPromptEverSeen && pollCount > 0) {
         const cause = config.newChat && !ownedConversationUrl
           ? 'fresh_conversation_owner_unproven' : 'send_delivery_unproven';
         incident('post_send_observation_error', cause, 'retain_page_no_resend');
@@ -6030,7 +6031,7 @@ async function runTurnCore(
           ),
         };
       }
-      if (config.newChat && !ownedConversationUrl
+      if (config.newChat && !ownedConversationUrl && !ownedPromptEverSeen && pollCount > 0
         && (sendCount >= 1 || deliveryProofPendingRecovery || zeroWitnessAccountRecovery || sendAttempted)
         && Date.now() >= freshUnboundReturnByMs) {
         const retainLocal = ownedFreshLocalPostSendPage();
@@ -6108,11 +6109,7 @@ async function runTurnCore(
           page,
           marker,
           baselineCount,
-          sendAttempted && sendCount === 0
-            ? zeroCountCutoffMs
-            : config.newChat && !ownedConversationUrl
-              ? Math.min(hardExhaustionDeadline, freshUnboundReturnByMs)
-              : hardExhaustionDeadline,
+          hardExhaustionDeadline,
           observeProductWall,
         );
       } catch (error) {
@@ -6321,16 +6318,20 @@ async function runTurnCore(
       }
 
       const markerCardinality = recoveryMarkerCardinality(messages, marker);
-      if (sendAttempted && sendCount === 0 && Date.now() < zeroCountCutoffMs
+      if (sendAttempted && sendCount === 0
         && markerCardinality.matchingUserCarrierCount === 1
         && markerCardinality.exactMarkerTokenCount === 1
         && (config.newChat
-          ? Boolean(readProjectConversationUrl(page, config.projectUrl ?? ''))
+          ? Boolean(createdFreshPage && page === originalHeldPage
+            && !ownershipForfeited && config.projectUrl
+            && (matchingFreshProjectLocalUrl(String(page.url()), config.projectUrl)
+              || isBlankProjectSurfaceUrl(String(page.url()), config.projectUrl)))
           : Boolean(targetChatUrl && readOwnedConversationIdentity(page, targetChatUrl).matched))) {
         // The original exact Page's unique owned marker proves the attempted
         // Send even if DOM evidence first appears after the 30s subwindow.
         sendCount = 1;
         markerDerivedSend = true;
+        ownedPromptEverSeen = true;
         zeroWitnessAccountRecovery = false;
         if (config.newChat) {
           transitionStateLightTurnObservation({
@@ -7016,7 +7017,8 @@ async function runTurnCore(
           stableReads = 1;
         }
         if (stableReads >= 2) {
-          if (config.newChat && !ownedConversationUrl) {
+          if (config.newChat && !ownedConversationUrl
+            && !(createdFreshPage && page === originalHeldPage && ownedPromptEverSeen)) {
             // A ready assistant on a root/foreign/unproven fresh URL does not
             // authenticate the selected conversation. Keep observing within
             // the incumbent deadline; do not publish or close an unbound page.
