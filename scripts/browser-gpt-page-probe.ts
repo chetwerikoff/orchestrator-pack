@@ -2425,7 +2425,10 @@ const PROBE_RECOVERY_GUARD_EXPRESSION = `(() => {
   const stop = Array.from(document.querySelectorAll(${JSON.stringify(STOP_BUTTON_SELECTOR)})).some(visible);
   const streaming = Array.from(document.querySelectorAll(${JSON.stringify(ASSISTANT_TURN_IN_PROGRESS_SELECTOR)})).some(visible);
   const composer = document.querySelector(${JSON.stringify(COMPOSER_SELECTOR)});
-  const emptyBody = (document.body?.innerText || '').trim() === '';
+  // Absence of a mounted body is unknown, not a proved empty tab.
+  const emptyBody = document.body !== null
+    && (document.body.innerText || '').trim() === ''
+    && (document.body.textContent || '').trim() === '';
   const errorText = Array.from(document.querySelectorAll('[role="alert"]'))
     .filter(visible).map(node => (node.textContent || '').trim());
   return { page_url: location.href, user_count: users.length,
