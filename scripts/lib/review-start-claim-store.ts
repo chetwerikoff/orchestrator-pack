@@ -24,8 +24,9 @@ export type {
   ClaimHolder,
   ReviewStartClaimRecord,
   ClaimResult,
+  CurrentInvocationTerminalWrite,
 } from './review-start-claim-cli.ts';
-import type { ClaimResult, UnknownRecord } from './review-start-claim-cli.ts';
+import type { ClaimResult, CurrentInvocationTerminalWrite, UnknownRecord } from './review-start-claim-cli.ts';
 
 const originalRenameSync = fs.renameSync.bind(fs);
 const originalReadFileSync = fs.readFileSync.bind(fs);
@@ -229,8 +230,16 @@ export function updateReviewStartClaimRecordFields(input: ClaimResult, fields: U
 export function bindReviewStartClaimToVisibleRun(input: ClaimResult, reviewRuns: unknown[] = []): UnknownRecord {
   return withClaimReadValidation(() => impl.bindReviewStartClaimToVisibleRun(input, reviewRuns));
 }
-export function completeReviewStartClaim(input: ClaimResult, outcome: string, reviewRuns: unknown[] = [], extra: UnknownRecord = {}): UnknownRecord {
-  return withClaimReadValidation(() => impl.completeReviewStartClaim(input, outcome, reviewRuns, extra));
+export function bindReviewStartClaimToInitiatingRun(
+  input: ClaimResult, runId: string, options: { projectId: string; storeRoot: string },
+): UnknownRecord {
+  return withClaimReadValidation(() => impl.bindReviewStartClaimToInitiatingRun(input, runId, options));
+}
+export function completeReviewStartClaim(
+  input: ClaimResult, outcome: string, reviewRuns: unknown[] = [], extra: UnknownRecord = {},
+  currentWrite?: CurrentInvocationTerminalWrite,
+): UnknownRecord {
+  return withClaimReadValidation(() => impl.completeReviewStartClaim(input, outcome, reviewRuns, extra, currentWrite));
 }
 export function releaseAfterRunFailure(input: ClaimResult, reviewRuns: unknown[] = [], failure = ''): UnknownRecord {
   return withClaimReadValidation(() => impl.releaseAfterRunFailure(input, reviewRuns, failure));
@@ -252,9 +261,17 @@ export function completeInfraPause(input: ClaimResult, options: Parameters<typeo
 }
 export const evaluateLifecycle = impl.evaluateLifecycle;
 
-function completeAfterRunInvokeOnce(input: ClaimResult, reviewRuns: unknown[] = []): UnknownRecord {
+function completeAfterRunInvokeOnce(
+  input: ClaimResult, reviewRuns: unknown[] = [], currentWrite?: CurrentInvocationTerminalWrite,
+): UnknownRecord {
   return withClaimReadValidation(() => {
     if (!input?.acquired || !input.claim || !input.path || !input.namespace) return { ok: false, reason: 'no_claim' };
+    if (currentWrite) {
+      const immediate = asRecord(impl.completeReviewStartClaim(input, 'released_after_run_terminalized', [], {}, currentWrite));
+      if (immediate.ok === true || immediate.reason === 'lost_ownership' || immediate.reason === 'ambiguous_claim') {
+        return immediate;
+      }
+    }
     impl.bindReviewStartClaimToVisibleRun(input, reviewRuns);
     let complete = asRecord(impl.completeReviewStartClaim(input, 'run_started', reviewRuns));
     if (complete.ok === true || asString(complete.reason) !== 'run_not_visible') return complete;
@@ -304,9 +321,9 @@ function completeAfterRunInvokeOnce(input: ClaimResult, reviewRuns: unknown[] = 
   });
 }
 
-export function completeAfterRunInvoke(input: ClaimResult, reviewRuns: unknown[] = []): UnknownRecord {
+export function completeAfterRunInvoke(input: ClaimResult, reviewRuns: unknown[] = [], currentWrite?: CurrentInvocationTerminalWrite): UnknownRecord {
   while (true) {
-    const result = completeAfterRunInvokeOnce(input, reviewRuns);
+    const result = completeAfterRunInvokeOnce(input, reviewRuns, currentWrite);
     if (asString(result.reason) !== 'visibility_pending') return result;
     sleep(positiveInteger(result.waitMs, 1));
   }
@@ -316,9 +333,12 @@ export function dispatchReviewStartClaimOperation(operation: string, payload: Un
   if (operation === 'Complete-ReviewStartClaimAfterRunInvoke') {
     const claim = asRecord(payload.claimResult ?? payload.ClaimResult) as ClaimResult;
     const runs = asArray(payload.reviewRuns ?? payload.ReviewRuns);
+    const currentWrite = payload.currentWrite ?? payload.CurrentWrite;
+    const evidence = currentWrite && typeof currentWrite === 'object' && !Array.isArray(currentWrite)
+      ? currentWrite as CurrentInvocationTerminalWrite : undefined;
     return payload.pollOnce ?? payload.PollOnce
-      ? completeAfterRunInvokeOnce(claim, runs)
-      : completeAfterRunInvoke(claim, runs);
+      ? completeAfterRunInvokeOnce(claim, runs, evidence)
+      : completeAfterRunInvoke(claim, runs, evidence);
   }
   if (operation === 'Invoke-ReviewStartClaimReclaimOrphan') {
     const reason = claimRecordValidationReason(payload.record ?? payload.Record);
