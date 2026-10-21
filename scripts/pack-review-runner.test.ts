@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -157,6 +157,7 @@ describe('Issue #1887 GitHub compare ancestry normalization', () => {
 function setupHarness(storeRoot: string): void {
   process.env.OPK_VITEST_HARNESS = '1';
   process.env.PACK_REVIEWER = 'codex';
+  process.env.PACK_REVIEW_BOUND_REVIEWER = 'codex';
   process.env.XDG_CONFIG_HOME = join(storeRoot, 'test-config');
   const projects = join(process.env.XDG_CONFIG_HOME, 'orchestrator-pack', 'projects');
   mkdirSync(projects, { recursive: true });
@@ -1025,6 +1026,7 @@ describe('Issue #1826 native fallback pre-spawn binding', () => {
     roots.push(parent);
     const storeRoot = join(parent, 'store');
     setupHarness(storeRoot);
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'claude';
     const prNumber = 1829;
     const head = '5'.repeat(40);
     let armedRunId = '';
@@ -3124,6 +3126,7 @@ describe('Issue #2479 frozen reviewer and accepted-verdict provenance', () => {
     roots.push(root);
     const storeRoot = join(root, 'store');
     setupHarness(storeRoot);
+    delete process.env.PACK_REVIEW_BOUND_REVIEWER; // preserve saved-over-legacy precedence
     const config = getPackReviewerPreferencePath(process.env);
     writePackReviewerPreference('claude', config);
     process.env.PACK_REVIEWER = 'gpt';
@@ -3169,6 +3172,7 @@ describe('Issue #2479 frozen reviewer and accepted-verdict provenance', () => {
     roots.push(root);
     const storeRoot = join(root, 'store');
     setupHarness(storeRoot);
+    delete process.env.PACK_REVIEW_BOUND_REVIEWER; // preserve saved-over-legacy precedence
     const config = getPackReviewerPreferencePath(process.env);
     writePackReviewerPreference('claude', config);
     process.env.PACK_REVIEWER = 'gpt';
@@ -3893,6 +3897,7 @@ describe('Issue #2573 complete-slot persisted JSON reconciliation', () => {
     const storeRoot = join(root, 'store');
     setupHarness(storeRoot);
     process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
 
     const mapped = mapGptReplyToReviewPayload(rawPathlessFinding);
     expect(mapped).toMatchObject({ verdict: 'findings', findingCount: 1 });
@@ -4410,6 +4415,7 @@ describe('Issue #2576 owned worktree lifecycle with real disposable Git', () => 
     const f = realGitFixture();
     const prNumber = 257640;
     process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
 
@@ -5159,6 +5165,175 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
     expect(original?.journalOutcome?.state).not.toBe('persisted');
     expect(review.posts()).toBe(0);
   });
+
+  describe('Issue #2679 runner-level acquired claims', () => {
+    it('keeps a previously failed supplemental journal fenced without another send or publication', async () => {
+      const prNumber = 260721;
+      const f = await completedRequiredStage(prNumber);
+      const review = reviewTransport(prNumber, 'ambiguous');
+      const source = originalSourceTransport(prNumber);
+      const gptSends: string[] = [];
+      const startReview = commandStart2607(f.storeRoot, {
+        ...f.fixture, fixtureGithubReviewTransport: review.transport,
+        fixtureGptSourceCommentTransport: source.transport,
+        fixtureBeforeGptSourceCommentCensus: source.publishOriginal,
+        fixtureAfterGptInvocationBound: async ({ slotId }: { slotId: string }) => {
+          gptSends.push(slotId);
+        },
+      });
+      const invoke = () => runPackGptReviewCommand({ prNumber, reviewer: 'gpt' }, {
+        env: process.env, stderr: { write: () => undefined }, startReview,
+      });
+      const first = await invoke();
+      expect(first.exitCode).toBe(1);
+      const runId = String(first.result.runId);
+      const options = { projectId: 'orchestrator-pack', storeRoot: f.storeRoot };
+      expect(getPackReviewRun(runId, options)).toMatchObject({
+        reviewVerdict: 'clean', journalOutcome: { state: 'persisted' },
+        automaticBudgetDisposition: 'non_consuming_explicit',
+      });
+      const sentCount = gptSends.length;
+      const sourceCount = source.sent();
+      expect(sentCount).toBeGreaterThan(0);
+      expect(sourceCount).toBeGreaterThan(0);
+      expect(review.posts()).toBe(1);
+      // The original status predates the new claim; its raw failed row is not
+      // proof that the resumed invocation just wrote the terminal.
+      setPackReviewRunTerminal(runId, 'failed', { failureReason: 'prior_invocation_failed' }, options);
+      const old = getPackReviewRun(runId, options);
+      expect(old).toMatchObject({ status: 'failed', latestRunStatus: 'failed' });
+      const dir = process.env.OPK_REVIEW_CLAIM_DIR!;
+      const terminalDir = join(dir, 'terminal'), auditDir = join(dir, 'audit');
+      const beforeTerminals = new Set(readdirSync(terminalDir));
+      const beforeAudits = new Set(readdirSync(auditDir));
+
+      // Journal delivery may restore a covering verdict after the previous
+      // invocation's failed row. Its ordinary run_started completion is not
+      // the fresh-terminal fast release and never makes this claim retryable.
+      const resumed = await invoke();
+      // The CLI intentionally maps every created:false failure to review_not_started.
+      // runnerReason preserves startPackReview's exact supplemental disposition.
+      expect(resumed).toMatchObject({
+        exitCode: 1, result: { ok: false, created: false, reused: true,
+          reason: 'review_not_started', runnerReason: 'supplemental_delivery_unverified', runId },
+      });
+      const terminal = readdirSync(terminalDir).filter((name) => !beforeTerminals.has(name))
+        .map((name) => JSON.parse(readFileSync(join(terminalDir, name), 'utf8')));
+      expect(terminal).toContainEqual(expect.objectContaining({
+        state: 'terminal', outcome: 'run_started', boundRunId: runId,
+        projectNamespace: 'orchestrator-pack', prNumber, headSha: HEAD,
+      }));
+      expect(terminal.some((x) => x.outcome === 'released_after_run_terminalized')).toBe(false);
+      const audit = readdirSync(auditDir).filter((name) => !beforeAudits.has(name))
+        .map((name) => JSON.parse(readFileSync(join(auditDir, name), 'utf8')));
+      expect(audit).toContainEqual(expect.objectContaining({
+        outcome: 'run_started', decisionSource: 'completion',
+      }));
+      expect(audit.some((x) => x.outcome === 'released_after_run_terminalized')).toBe(false);
+      expect(existsSync(join(dir, 'pr-' + prNumber + '-' + HEAD + '.json'))).toBe(false);
+      expect(getPackReviewRun(runId, options)).toMatchObject({
+        status: 'up_to_date', latestRunStatus: 'up_to_date',
+        journalOutcome: old!.journalOutcome,
+        deliveryOutcomes: { githubComment: expect.objectContaining({ state: 'failed' }) },
+      });
+      expect(gptSends).toHaveLength(sentCount);
+      expect(source.sent()).toBe(sourceCount);
+      expect(review.posts()).toBe(1);
+      expect(f.statusWrites).toHaveLength(f.statusCount);
+    });
+
+    it('audits a freshly failed harvest claim after review publication, without a repeat send or post', async () => {
+      const prNumber = 260722;
+      const storeRoot = fixtureRoot2607('opk-2679-harvest-');
+      setupHarness(storeRoot);
+      process.env.PACK_REVIEWER = 'gpt';
+      process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
+      const source = originalSourceTransport(prNumber);
+      const review = reviewTransport(prNumber, 'success');
+      const sent: string[] = [];
+      const attempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+      const input: Parameters<typeof startPackReview>[0] = {
+        projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+        prNumber, headSha: HEAD, reviewerOverride: 'gpt',
+        fixtureCurrentPrHeadSha: HEAD, fixturePostReviewHeadSha: HEAD,
+        fixturePrState: 'OPEN', fixtureRepoSlug: repository,
+        fixturePrBody: 'Closes #' + prNumber, fixturePostReviewPrBody: 'Closes #' + prNumber,
+        fixtureIssueNumber: prNumber, fixtureIssueTitle: '[T1] Acquired harvest failure',
+        fixtureIssueBody: issueBody, fixtureReviewStdout: cleanPayload(),
+        fixtureReviewBySourceSlot: attempts,
+        fixtureAfterGptInvocationBound: async ({ slotId, invocationId }) => {
+          sent.push(slotId);
+          const terminal = {
+            schema: 'turn-result/v1', state: 'ok', scope: 'invocation',
+            cause: 'completed_page_only', invocation_id: invocationId, send_count: 1,
+          };
+          attempts[slotId] = slotId === 'source-02'
+            ? [{ exitCode: 1, stdout: JSON.stringify({
+              ...terminal, review_harvest_class: 'harvest_failed',
+              review_evidence: {
+                adapterPromptPath: '/fixture/' + invocationId + '/adapter-prompt.txt',
+                terminalReplyPath: '/fixture/' + invocationId + '/terminal-reply.txt',
+                mappingErrorPath: '/fixture/' + invocationId + '/mapping-error.txt',
+                adapterStdoutPath: '/fixture/' + invocationId + '/adapter-stdout.json',
+              },
+            }) }]
+            : [{ exitCode: 0, stdout: JSON.stringify(terminal) + '\n' + cleanPayload() }];
+        },
+        // The harvest path uses the existing harness source resolution; a
+        // credentialed census transport would divert into early scoped recovery.
+        fixtureBeforeGptSourceCommentCensus: async ({ slotId, identity }) => {
+          if (slotId !== 'source-02') await source.publishOriginal({ identity });
+        },
+        fixtureGithubReviewTransport: review.transport,
+        fixtureRequiredStatusWriter: async () => undefined,
+      };
+      const startedAt = Date.now();
+      const failed = await startPackReview(input);
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+      expect(failed).toMatchObject({
+        ok: false, created: true, reused: false, reason: 'harvest_failed',
+        status: 'failed', githubReviewId: expect.any(Number),
+      });
+      const runId = String(failed.runId);
+      const options = { projectId: 'orchestrator-pack', storeRoot };
+      expect(getPackReviewRun(runId, options)).toMatchObject({
+        id: runId, projectId: 'orchestrator-pack', prNumber, targetSha: HEAD,
+        status: 'failed', latestRunStatus: 'failed', failureReason: 'harvest_failed',
+        githubReviewId: failed.githubReviewId, githubReviewUrl: failed.githubReviewUrl,
+        githubReviewEvent: 'COMMENT',
+      });
+      const dir = process.env.OPK_REVIEW_CLAIM_DIR!;
+      const terminals = readdirSync(join(dir, 'terminal'))
+        .map((name) => JSON.parse(readFileSync(join(dir, 'terminal', name), 'utf8')))
+        .filter((x) => x.prNumber === prNumber && x.headSha === HEAD);
+      expect(terminals.filter((x) => x.outcome === 'released_after_run_terminalized')).toHaveLength(1);
+      expect(terminals).toContainEqual(expect.objectContaining({
+        state: 'terminal', outcome: 'released_after_run_terminalized',
+        projectNamespace: 'orchestrator-pack', prNumber, headSha: HEAD,
+        runId, boundRunId: runId, runStatus: 'failed', latestRunStatus: 'failed',
+        holder: expect.objectContaining({ generation: expect.any(String) }),
+      }));
+      const audit = readdirSync(join(dir, 'audit'))
+        .map((name) => JSON.parse(readFileSync(join(dir, 'audit', name), 'utf8')))
+        .filter((x) => x.prNumber === prNumber && x.headSha === HEAD);
+      expect(audit).toContainEqual(expect.objectContaining({
+        outcome: 'released_after_run_terminalized', decisionSource: 'completion',
+        runId, boundRunId: runId, runStatus: 'failed', latestRunStatus: 'failed',
+      }));
+      expect(existsSync(join(dir, 'pr-' + prNumber + '-' + HEAD + '.json'))).toBe(false);
+      const sentBefore = sent.length, sourcesBefore = source.sent();
+      expect(sentBefore).toBeGreaterThan(0);
+      expect(sourcesBefore).toBeGreaterThan(0);
+      expect(review.posts()).toBe(1);
+      const repeated = await startPackReview(input);
+      expect(repeated.created).not.toBe(true);
+      expect(sent).toHaveLength(sentBefore);
+      expect(source.sent()).toBe(sourcesBefore);
+      expect(review.posts()).toBe(1);
+      expect(getPackReviewRun(runId, options)?.status).toBe('failed');
+    });
+  });
+
 });
 
 
@@ -5193,6 +5368,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     }));
     process.env.OPK_PROJECT_ID = projectId;
     process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
     process.env.PACK_GPT_BROWSER_PROFILE = join(root, 'chrome-profile');
     process.env.PACK_GPT_BROWSER_CDP = 'http://127.0.0.1:9222';
     process.env.CHATGPT_BROWSER_TURN_STATE_DIR = join(root, 'browser-state');
