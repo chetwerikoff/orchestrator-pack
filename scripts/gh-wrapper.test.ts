@@ -3043,6 +3043,22 @@ describe('Issue #2658 gh syntax and provenance read parity', () => {
     }
   });
 
+  it('never coerces nondecimal pr-view references into unrelated PR numbers', () => {
+    for (const ref of ['1e2', '1.5', '0', '9007199254740992', 'feature/issue-2658']) {
+      const { parsed, route } = classifyArgv(['pr', 'view', ref, '--json', 'body']);
+      expect(route, ref).toBeNull();
+      expect(isUnsupportedHighLevelRead(parsed), ref).toBe(true);
+    }
+    expect(classifyArgv(['pr', 'view', '42', '--json', 'body']).route)
+      .toMatchObject({ id: 'pr-view', prNumber: 42 });
+    // The full-info shape has an incumbent branch-ref capability; preserve it
+    // without interpreting exponent/fraction/unsafe-number strings as numbers.
+    for (const ref of ['1e2', '1.5', '9007199254740992', 'feature/issue-2658']) {
+      expect(classifyArgv(['pr', 'view', ref, '--json', PR_INFO_FROM_VIEW_JSON]).route)
+        .toEqual({ id: 'pr-view', prRef: ref });
+    }
+  });
+
   it('keeps REST-direct review GET inventoried, POST non-read, and the Bash sed intercept absent', () => {
     const get = 'gh api repos/example/target/pulls/42/reviews';
     expect(classifyArgv(['api', 'repos/example/target/pulls/42/reviews']).route).toBeNull();
@@ -3078,6 +3094,9 @@ describe('Issue #2658 gh syntax and provenance read parity', () => {
       ['pr', 'diff', '42', 'extra', '--name-only'],
       ['repo', 'view', '--json', 'unsupported'],
       ['pr', 'view', '42', '--json', 'headRefName,isDraft,bogus'],
+      ['pr', 'view', '1e2', '--json', 'body'],
+      ['pr', 'view', '1.5', '--json', 'body'],
+      ['pr', 'view', '9007199254740992', '--json', 'body'],
     ];
     for (const args of rejected) {
       const observed = runProcessSync({
@@ -3134,6 +3153,12 @@ describe('Issue #2658 gh syntax and provenance read parity', () => {
       'git@github.com:Acme/Pack.git'], checkout).ok).toBe(true);
     expect(originSlugFromGitConfig(checkout)).toBe('Acme/Pack');
     expect(commandResult('git', ['-C', checkout, 'remote', 'set-url', 'origin',
+      'https://github.com:443/Acme/Pack.git'], checkout).ok).toBe(true);
+    expect(originSlugFromGitConfig(checkout)).toBe('Acme/Pack');
+    expect(commandResult('git', ['-C', checkout, 'remote', 'set-url', 'origin',
+      'ssh://git@github.com:22/Acme/Pack.git'], checkout).ok).toBe(true);
+    expect(originSlugFromGitConfig(checkout)).toBe('Acme/Pack');
+    expect(commandResult('git', ['-C', checkout, 'remote', 'set-url', 'origin',
       'git@other.example:Acme/Pack.git'], checkout).ok).toBe(true);
     expect(originSlugFromGitConfig(checkout)).toBeNull();
   });
@@ -3142,9 +3167,14 @@ describe('Issue #2658 gh syntax and provenance read parity', () => {
     expect(parseRemoteSlug('git@github.com:Acme/Pack.git')).toBe('Acme/Pack');
     expect(parseRemoteSlug('https://github.com/Acme/Pack.git')).toBe('Acme/Pack');
     expect(parseRemoteSlug('ssh://git@github.com/Acme/Pack.git')).toBe('Acme/Pack');
+    expect(parseRemoteSlug('https://github.com:443/Acme/Pack.git')).toBe('Acme/Pack');
+    expect(parseRemoteSlug('ssh://git@github.com:22/Acme/Pack.git')).toBe('Acme/Pack');
     for (const remote of [
       'git@other.example:Acme/Pack.git',
       'https://github.com.evil.example/Acme/Pack',
+      'https://github.com:444/Acme/Pack.git',
+      'ssh://git@github.com:222/Acme/Pack.git',
+      'https://github.com:443.evil.example/Acme/Pack.git',
       'https://other.example/Acme/Pack',
       'Acme/Pack',
       'https://github.com/Acme/../Pack.git',

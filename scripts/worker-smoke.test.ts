@@ -857,6 +857,17 @@ describe('Issue #2319 terminal-free publish', () => {
         '  fixture: unregistered metadata',
       ],
       ['not-applicable: true', 'reason: short'],
+      [
+        'not-applicable: true',
+        'reason: Documentation-only changes do not require runtime execution.',
+        'scenarios:',
+        '  - name: incomplete',
+      ],
+      [
+        'not-applicable: true',
+        'reason: Documentation-only changes do not require runtime execution.',
+        'fixture: unexpected',
+      ],
     ].map((rows) => [
       '```behavior-kind', 'action-producing', '```',
       '```smoke-test-plan', ...rows, '```',

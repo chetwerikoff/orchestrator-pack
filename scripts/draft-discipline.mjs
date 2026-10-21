@@ -434,6 +434,16 @@ export function checkSmokeTestPlan(markdown) {
     if (!plan.reason || plan.reason.length < 8) {
       errors.push('smoke-test-plan not-applicable requires a one-line reason of at least 8 characters');
     }
+    // A waiver is valid only with its recognized scalar fields. Without
+    // checking the raw lines, parseSmokeTestPlan discards scenario entries
+    // and a contradictory/malformed plan can bypass both smoke gates.
+    for (const line of rawSmokePlanFenceRaw.split(/\r?\n/u)) {
+      const entry = line.trim();
+      if (entry && !/^(?:not-applicable|na|reason|n\/a-reason):[^\r\n]*$/iu.test(entry)) {
+        errors.push('smoke-test-plan not-applicable cannot contain scenarios or unsupported entries');
+        break;
+      }
+    }
     return { ok: errors.length === 0, errors, warnings, plan };
   }
 

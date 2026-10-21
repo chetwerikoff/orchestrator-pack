@@ -190,6 +190,8 @@ describe('target context', () => {
       'https://github.com/example/mixedrepo.git',
       'git@github.com:EXAMPLE/MIXEDREPO.git',
       'ssh://git@github.com/Example/MixedRepo',
+      'https://github.com:443/Example/MixedRepo.git',
+      'ssh://git@github.com:22/EXAMPLE/MIXEDREPO.git',
     ]) {
       git(target.primaryRoot, 'remote', 'set-url', 'origin', origin);
       expect(resolveTargetContext({
@@ -200,6 +202,8 @@ describe('target context', () => {
     for (const untrusted of [
       'git@other.example:Example/MixedRepo.git',
       'https://github.com.attacker.example/Example/MixedRepo.git',
+      'https://github.com:444/Example/MixedRepo.git',
+      'ssh://git@github.com:222/Example/MixedRepo.git',
       'https://another.example/Example/MixedRepo',
       'Example/MixedRepo',
     ]) {

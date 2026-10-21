@@ -15,7 +15,7 @@ export function parseRemoteSlug(url) {
   const remote = String(url ?? '').trim();
   // Only GitHub-hosted HTTPS and authenticated git SSH remotes confer
   // repository identity. No generic owner/repo or foreign-host fallback.
-  const match = /^(?:git@github\.com:|https:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/iu.exec(remote);
+  const match = /^(?:git@github\.com:|https:\/\/github\.com(?::443)?\/|ssh:\/\/git@github\.com(?::22)?\/)([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/iu.exec(remote);
   if (!match) return null;
   const owner = match[1];
   const repository = match[2];

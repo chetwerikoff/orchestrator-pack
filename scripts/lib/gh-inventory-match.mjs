@@ -416,8 +416,10 @@ export function matchInventoryRoute(parsed, options = {}) {
       return { id: 'pr-view', prRef };
     }
 
-    const num = Number(prRef);
-    if (!Number.isFinite(num) || num <= 0) {
+    // Other pr-view field sets require a real decimal PR number; the
+    // canonical prInfoFromView route above deliberately permits branch refs.
+    const num = singlePositiveDecimalTarget(parsed);
+    if (num === null) {
       return null;
     }
 
