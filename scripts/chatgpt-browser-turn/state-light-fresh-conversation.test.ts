@@ -2463,9 +2463,11 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(mocks.nowMs - start).toBeLessThan(90_000);
     expect(fixture.local.getSends()).toBe(1);
     expect(fixture.retryClicks).not.toHaveBeenCalled();
-    // One positive same-project claim permits closing only the original
-    // provably invocation-created dead local-ID Page.
-    expect(fixture.local.page.close).toHaveBeenCalledTimes(1);
+    // This legacy recovery fixture has no post-recovery exact CDP re-attach
+    // proof for its original local Page. The reply is real, but cleanup must
+    // remain unconfirmed instead of closing the recovered or original handle.
+    expect(outcome.result.cleanup).toBe('unconfirmed');
+    expect(fixture.local.page.close).not.toHaveBeenCalled();
     expect(fixture.serverPage.close).not.toHaveBeenCalled();
   });
 
@@ -2480,7 +2482,8 @@ describe('state-light fresh conversation collision recovery', () => {
 
     expect(outcome).toMatchObject({ code: 0, result: { state: 'ok', send_count: 1, conversation_id: SHARED_CONV } });
     expect(fixture.local.getSends()).toBe(1);
-    expect(fixture.local.page.close).toHaveBeenCalledTimes(1);
+    expect(outcome.result.cleanup).toBe('unconfirmed'); // no verified exact CDP re-attach
+    expect(fixture.local.page.close).not.toHaveBeenCalled();
     expect(fixture.serverPage.close).not.toHaveBeenCalled();
     expect(fixture.retryClicks).not.toHaveBeenCalled();
   });
@@ -2524,7 +2527,10 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await fixture.run(join(stateDir, 'fetch-error-vanished.txt'), randomUUID());
 
     expect(outcome).toMatchObject({ code: 0, result: { state: 'ok', send_count: 1, conversation_id: SHARED_CONV } });
-    expect(fetchFailureReads).toBeGreaterThanOrEqual(2);
+    // No destructive close is attempted without exact current CDP proof;
+    // the earlier failure may disappear after just the initial observation.
+    expect(fetchFailureReads).toBeGreaterThanOrEqual(1);
+    expect(outcome.result.cleanup).toBe('unconfirmed');
     expect(fixture.local.page.close).not.toHaveBeenCalled();
     expect(fixture.serverPage.close).not.toHaveBeenCalled();
     expect(fixture.retryClicks).not.toHaveBeenCalled();
@@ -2566,12 +2572,14 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await fixture.run(output, invocationId);
 
     expect(workingReads).toBeGreaterThan(0);
+    // Put the terminal result first so a premature failure cannot masquerade
+    // as a missing fixture selector/read counter.
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0, result: {
+      state: 'ok', send_count: 1, conversation_id: SHARED_CONV,
+    } });
     expect(completeReads).toBeGreaterThan(0);
     expect(mocks.nowMs - start).toBeGreaterThanOrEqual(80_000);
     expect(mocks.nowMs - start).toBeLessThan(180_000);
-    expect(outcome).toMatchObject({ code: 0, result: {
-      state: 'ok', send_count: 1, conversation_id: SHARED_CONV,
-    } });
     expect(readFileSync(output, 'utf8')).toBe(reply);
     expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
       phase: 'harvested', conversation_url: SHARED_CONV, send_count: 1,
