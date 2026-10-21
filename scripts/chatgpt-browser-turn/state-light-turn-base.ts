@@ -22,7 +22,12 @@ import {
   type ResourceCleanupOutcome,
 } from './browser-session.ts';
 import { destinationIdentity } from './coordination.ts';
-import { attachOwnTarget, countUninspectedRecoveryTargets, getOwnTargetInfo } from './own-target-attach.ts';
+import {
+  attachOwnTarget,
+  authorizeGuardedHistoricalTargetClose,
+  countUninspectedRecoveryTargets,
+  getOwnTargetInfo,
+} from './own-target-attach.ts';
 import { listCdpPageTargets } from './own-target-cdp-proxy.ts';
 import {
   turnExitCode,
@@ -526,6 +531,8 @@ export interface TurnRunOutcome {
   readonly ownershipForfeited?: boolean;
   /** Private, process-local cleanup value; never emitted as turn-result. */
   readonly ownedTypedPayload?: string;
+  /** Process-local handle of the originally CDP-created Page, not a recovery successor. */
+  readonly originalCreatedPage?: any;
   /** Exact attach-created target retirement after failed Playwright bootstrap. */
   readonly createdAttachFailureCleanup?: 'confirmed' | 'unconfirmed';
   /** Affirmative newly allocated ID, retained even if observation binding fails. */
@@ -541,6 +548,8 @@ export interface TurnRunOutcome {
 
 interface FreshComposerCleanupContext {
   page?: any;
+  /** Original invocation-created handle must not silently become the recovery successor. */
+  originalCreatedPage?: any;
   markedPayload?: string;
   projectUrl?: string;
   sendAttempted?: boolean;
@@ -3613,14 +3622,18 @@ async function runTurn(
       } else if (diagnostic.http_status !== 429 && diagnostic.wall_kind !== 'account_load_error'
         && (value.wall_kind !== 'none' || value.matched_text !== 'none')) diagnostic = value;
     }, freshCleanup);
-    // A named wall cannot close any selected, recovered or unproven Page.
-    // AC12 exempts only the positively invocation-created pre-Send fetch-429
-    // original; finalizeTurn still requires a durable not_sent observation.
+    // A historical 429 is cooldown evidence, not a verdict on the original
+    // positively created target's *current* close ownership. Recovered,
+    // selected-existing and unproven Pages still fail closed.
+    const knownCreatedOriginal = Boolean(outcome.page
+      && outcome.page === freshCleanup.originalCreatedPage
+      && getOwnTargetInfo(outcome.browser)?.created === true);
     const ownNotSentFetch429 = outcome.ownedPreSendFetch429Page === outcome.page
       && outcome.result.state === 'rate_limit'
       && outcome.result.cause === 'conversation_fetch_http_429'
       && outcome.result.send_count === 0 && outcome.result.send_attempted !== true;
     if (outcome.page && typeof outcome.page === 'object' && !ownNotSentFetch429
+      && !knownCreatedOriginal
       && (diagnostic.http_status === 429 || diagnostic.wall_kind === 'conversation_load_error'
         || outcome.result.cause === 'account_cooldown_active')) {
       cleanupAuthorityUnprovenPages.add(outcome.page);
@@ -4002,6 +4015,9 @@ async function runTurnCore(
       throw error;
     }
     attachAttempts = initiallyAttached.attachAttempts;
+    if (initiallyAttached.created && freshCleanup) {
+      freshCleanup.originalCreatedPage = initiallyAttached.page;
+    }
     browser = initiallyAttached.browser;
     const selection = await selectConversationPage(browser, chromium, config, invocationBudget, invocationDeadlineMs);
     browser = selection.browser;
@@ -5603,7 +5619,6 @@ async function runTurnCore(
     let streamRecoveryBannerFirstHeading: string | undefined;
     let streamRecoveryBannerLastIteration = -1;
     let bannerPollIteration = 0;
-    let witnessed429ReadOnlyPolls = 0;
     // Roleless recovery banners outlive the turn that raised them; one ends this
     // turn only after its own Stop was seen or the Stop grace since the send ran out.
     let ownedGenerationSeen = false;
@@ -5813,6 +5828,8 @@ async function runTurnCore(
         // This invocation's local-chatgpt: tab lost the initial Send fetch.
         // Server execution is unknown; use only existing browser census evidence.
         const census = await takeRecoveryCensus(browser, marker, recoveryAdapter);
+        const committedAfterCensus = verifiedExternalPrimary();
+        if (committedAfterCensus) return committedAfterCensus;
         const matches = census.pages.filter((candidate) => candidate.eligible);
         const unbound = (cause: string): TurnRunOutcome => {
           incident('post_send_observation_error', cause, 'retain_page_no_resend');
@@ -5854,6 +5871,8 @@ async function runTurnCore(
       }
 
       browser = recovered.browser;
+      const committedAfterRecovery = verifiedExternalPrimary();
+      if (committedAfterRecovery) return committedAfterRecovery;
       if (recovered.kind === 'failure') return recoveryFailureOutcome(recovered);
       if (deliveryProofPendingRecovery) {
         sendCount = 1;
@@ -5925,7 +5944,7 @@ async function runTurnCore(
         emitCancellationReceipt(recovered.conversationUrl);
       }
       if (config.newChat) emitCancellationReceipt(recovered.conversationUrl);
-      transitionStateLightTurnObservation({
+      const committedBeforeRecoveryBinding = transitionUnlessProbeCommitted({
         profileKey,
         invocationId,
         phase: 'sent_unharvested',
@@ -5934,6 +5953,7 @@ async function runTurnCore(
         sendWitness: markerDerivedSend ? 'owned_marker' : 'numeric_send_count',
         conversationUrl: recovered.conversationUrl,
       });
+      if (committedBeforeRecoveryBinding) return committedBeforeRecoveryBinding;
 
       if (localFetchFailure && createdFreshPage && page === originalHeldPage
         && recovered.page !== page && !cleanupAuthorityUnprovenPages.has(page)
@@ -6103,19 +6123,6 @@ async function runTurnCore(
           if (committed) return committed;
           emitCancellationReceipt(targetChatUrl);
         }
-      }
-      const witnessed429 = held429Witness?.current();
-      if (witnessed429 && ++witnessed429ReadOnlyPolls > 3) {
-        incident('post_send_observation_error', witnessed429.wall_kind, 'retain_owned_page_no_resend');
-        return {
-          page, browser, cleanupAction: 'preserve',
-          result: compactResult(
-            'observation_uncertain', 'invocation', witnessed429.wall_kind,
-            invocationId, profileKey, sendCount, pollCount, navigation, incidents,
-            { ...(sendAttempted ? { send_attempted: true } : {}) },
-            journalWriteFailed,
-          ),
-        };
       }
       if (config.newChat && sendAttempted && sendCount === 0 && !ownedConversationUrl
         && freshPreSendFetchAlertAbsent && createdFreshPage
@@ -7886,6 +7893,12 @@ async function guardedOriginalTargetRetirement(input: {
   if (!await pinnedCensus() || !await ownerAndIdle()) return 'unconfirmed';
   if (!await pinnedCensus() || !await ownerAndIdle()) return 'unconfirmed';
   if (!await pinnedCensus() || currentUrl() === null || Date.now() >= deadline) return 'unconfirmed';
+  // The reattached proxy intentionally sees created:false. Grant its sole
+  // historically created pinned ID close authority only *after* the fresh
+  // exact-ID, route, composer, Stop, generation and foreign-user rechecks.
+  if (!targetInfo.created && !authorizeGuardedHistoricalTargetClose(outcome.browser, pin.id)) {
+    return 'unconfirmed';
+  }
   const closed = await boundedResourceCleanup(
     () => outcome.page.close(),
     Math.min(RESOURCE_CLEANUP_BOUND_MS, Math.max(1, deadline - Date.now())),
@@ -7986,9 +7999,16 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
   // possible Send or an unbound local terminal. Neither Send count nor a
   // cleanupAction flag grants destructive authority on its own.
   const pinnedOriginal = getOwnTargetInfo(outcome.browser);
-  const positivelyCreatedOriginal = Boolean(pinnedOriginal?.created || outcome.createdAttachFailureCleanup);
+  const positivelyCreatedOriginal = Boolean(
+    pinnedOriginal?.created || outcome.createdAttachFailureCleanup || outcome.originalCreatedPage,
+  );
+  // A recovery successor may share the original's URL but has a different
+  // Page handle/target. Never close it using the first target's provenance.
+  const outcomePageIsOriginal = !outcome.originalCreatedPage
+    || outcome.page === outcome.originalCreatedPage;
   let pageAction: PageCleanupAction = cleanupAuthorityProven && !pageLost
-    && outcome.ownershipForfeited !== true && positivelyCreatedOriginal ? 'close' : 'skip';
+    && outcome.ownershipForfeited !== true && positivelyCreatedOriginal
+    && outcomePageIsOriginal ? 'close' : 'skip';
   if (pageAction === 'close' && outcome.result.send_count === 0
     && outcome.result.send_attempted !== true && outcome.ownedFreshProjectUrl) {
     // The slot was already owner-released. For this proven-created tab, check
@@ -8047,13 +8067,6 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
       if (!appendIncident(cleanupIncident, outcome.result.invocation_id)) journalWriteFailed = true;
     }
   }
-  // Recheck the original exact route at the destructive boundary, not merely
-  // at 429 observation. A redirect forfeits the narrow AC12 close authority.
-  if (pageAction === 'close' && outcome.result.state === 'rate_limit'
-    && outcome.result.cause === 'conversation_fetch_http_429'
-    && !ownedPreSendFetch429Close) {
-    pageAction = 'preserve';
-  }
   if (pageAction === 'close' && outcome.ownedPreSendFetch429Page
     && (!ownedPreSendFetch429Close
       || !ownedPreSendFetch429ExactRoute(outcome.page, outcome.ownedPreSendFetch429Url!))) {
@@ -8061,6 +8074,19 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
   }
   if (pageAction === 'close') {
     cleanup = await guardedOriginalTargetRetirement({ outcome, cdp });
+  }
+  // Recovery or an attach reconnect can replace the Playwright Page while
+  // the original CDP target remains. Use only its exact reattach/guard path.
+  let detachedOriginalCleanupUnconfirmed = false;
+  if (outcome.originalCreatedPage && !outcome.ownershipForfeited
+    && (outcome.page !== outcome.originalCreatedPage || pageLost || !pinnedOriginal?.created)) {
+    const detached = await retireDetachedOriginalTarget({
+      profileKey: outcome.result.configured_profile_key,
+      invocationId: outcome.result.invocation_id,
+      cdp, deadlineMs: Date.now() + 20_000,
+    });
+    cleanup = detached.status === 'confirmed' ? 'confirmed' : 'unconfirmed';
+    detachedOriginalCleanupUnconfirmed = detached.status !== 'confirmed';
   }
   if (positivelyCreatedOriginal && cleanup !== 'confirmed') {
     // Never report a close from an old marker, an old Page reference or a
@@ -8079,8 +8105,8 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
   // browser while a separate read-only recovery Page supplied the reply.
   // Re-pin its exact original CDP target rather than closing an old Page
   // reference or trusting a successful Playwright close promise.
-  let detachedOriginalCleanupUnconfirmed = false;
-  if (outcome.ownedDeadLocalPage && outcome.ownedDeadLocalUrl
+  if (!outcome.originalCreatedPage
+    && outcome.ownedDeadLocalPage && outcome.ownedDeadLocalUrl
     && outcome.ownedDeadLocalConversationUrl && outcome.ownedFreshProjectUrl
     && outcome.result.send_count === 1
     && !outcome.ownershipForfeited
@@ -8277,6 +8303,7 @@ export async function runStateLightTurn(
     };
     const result = await finalizeTurn(admitFreshResultConversationId(args, {
       ...augmented,
+      ...(freshCleanup.originalCreatedPage ? { originalCreatedPage: freshCleanup.originalCreatedPage } : {}),
       ...(freshCleanup.ownedDeadLocalPage ? {
         ownedDeadLocalPage: freshCleanup.ownedDeadLocalPage,
         ownedDeadLocalUrl: freshCleanup.ownedDeadLocalUrl,
