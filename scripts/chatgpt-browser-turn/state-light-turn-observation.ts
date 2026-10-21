@@ -44,6 +44,8 @@ export interface StateLightTurnObservationRecord {
   readonly phase: StateLightTurnObservationPhase;
   readonly send_count?: number;
   readonly send_witness: StateLightTurnSendWitness;
+  /** Set only from a complete unique first-token marker on the original Page. */
+  readonly owned_marker_confirmed?: true;
   readonly conversation_url: string | null;
   /** CDP-pinned original target, captured at allocation, never a URL-derived claim. */
   readonly owned_target?: {
@@ -139,6 +141,7 @@ function parseRecord(raw: string): StateLightTurnObservationRecord {
     || value.marker.length === 0
     || !(value.phase in LEGAL_NEXT)
     || !['none', 'numeric_send_count', 'owned_marker'].includes(value.send_witness)
+    || (value.owned_marker_confirmed !== undefined && value.owned_marker_confirmed !== true)
     || (value.conversation_url !== null && (typeof value.conversation_url !== 'string' || value.conversation_url.length === 0))
     || typeof value.transitioned_at !== 'string'
     || typeof value.transition_reason !== 'string') {
@@ -386,6 +389,9 @@ function validateTransition(
   if (current.conversation_url && next.conversation_url !== current.conversation_url) {
     throw new Error('observation_conversation_rebind');
   }
+  if (current.owned_marker_confirmed && next.owned_marker_confirmed !== true) {
+    throw new Error('observation_owned_marker_regression');
+  }
   if (current.send_count !== undefined && next.send_count !== current.send_count) {
     throw new Error('observation_send_count_changed');
   }
@@ -437,6 +443,7 @@ export function transitionStateLightTurnObservation(input: {
   readonly reason: string;
   readonly sendCount?: number;
   readonly sendWitness?: StateLightTurnSendWitness;
+  readonly ownedMarkerConfirmed?: true;
   readonly conversationUrl?: string | null;
 }): StateLightTurnObservationRecord {
   return mutateStateLightTurnObservation(input.profileKey, input.invocationId, (current) => ({
@@ -444,6 +451,7 @@ export function transitionStateLightTurnObservation(input: {
     phase: input.phase,
     ...(input.sendCount !== undefined ? { send_count: input.sendCount } : {}),
     ...(input.sendWitness !== undefined ? { send_witness: input.sendWitness } : {}),
+    ...(input.ownedMarkerConfirmed ? { owned_marker_confirmed: true as const } : {}),
     ...(input.conversationUrl !== undefined ? { conversation_url: input.conversationUrl } : {}),
     transitioned_at: new Date().toISOString(),
     transition_reason: input.reason,
