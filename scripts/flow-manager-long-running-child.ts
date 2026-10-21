@@ -700,12 +700,15 @@ export function deriveDelivery(result: ParsedTurnResult | null, childStartFailed
   if (!result) return 'not-sent';
   const sendCount = result.resolved_send_count;
   if (sendCount === 0 && result.send_attempted === true) return 'POSSIBLY_DELIVERED';
+  // A unique owned marker proves physical Send independently of whether
+  // the assistant output file can be published. Conflict remains the true
+  // turn state; it cannot undo already observed user-message delivery.
+  if (sendCount === 1 && (result.owned_marker_confirmed === true
+    || result.send_witness === 'owned_marker')) return 'landed';
   if (result.state === 'output_conflict') {
     return sendCount === 0 ? 'not-sent' : 'POSSIBLY_DELIVERED';
   }
   if (sendCount === 0) return 'not-sent';
-  if (sendCount === 1 && (result.owned_marker_confirmed === true
-    || result.send_witness === 'owned_marker')) return 'landed';
   if (result.witness?.relation === 'reply_to' && (result.conversation_id || result.observation_uncertainty_diagnostics?.owned_prompt_seen)) {
     return 'landed';
   }
