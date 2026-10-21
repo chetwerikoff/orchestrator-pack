@@ -92,6 +92,10 @@ type FinalizerCase = {
   readonly closeError?: boolean;
   readonly beforePageClose?: () => void;
   readonly soleSharedChromePage?: boolean;
+  readonly absentComposer?: boolean;
+  readonly unreadableComposer?: boolean;
+  readonly errorBanner?: string;
+  readonly blankPage?: boolean;
 };
 
 function makeTurnResult(overrides: Partial<Omit<CompactTurnResult, 'cleanup'>> = {}): Omit<CompactTurnResult, 'cleanup'> {
@@ -140,17 +144,25 @@ async function observeFinalizer(testCase: FinalizerCase) {
         physicallyPresent = false;
       },
       isClosed: () => testCase.pageLost || !physicallyPresent,
-      url: () => chatUrl,
+      url: () => testCase.blankPage ? 'about:blank' : chatUrl,
+      getByText: (text: string) => ({
+        count: async () => testCase.errorBanner === text ? 1 : 0,
+      }),
       locator: (selector: string) => {
         if (selector === USER_MESSAGE_SELECTOR) {
           const texts = testCase.sendCount > 0 ? [`${marker}\n\nprompt`] : [];
           return { count: async () => texts.length,
             nth: (index: number) => ({ innerText: async () => texts[index] ?? '' }) };
         }
-        if (selector === COMPOSER_SELECTOR) return {
-          count: async () => 1,
-          evaluate: async () => ({ content: '', visible: '' }),
-        };
+        if (selector === COMPOSER_SELECTOR) return testCase.absentComposer
+          ? { count: async () => 0 }
+          : {
+            count: async () => 1,
+            evaluate: async () => testCase.unreadableComposer
+              ? { content: 'draft', visible: '' }
+              : { content: '', visible: '' },
+          };
+        if (selector === 'body') return { innerText: async () => '' };
         if (selector === RENDERED_STOP_BUTTON_SELECTOR
           || selector === ASSISTANT_TURN_IN_PROGRESS_SELECTOR) {
           return { count: async () => 0 };
@@ -173,7 +185,7 @@ async function observeFinalizer(testCase: FinalizerCase) {
   };
   const keepalive = { id: 'opk-keepalive', type: 'page', url: 'about:blank#opk-keepalive' };
   const ownedTarget = {
-    id: targetId, type: 'page', url: chatUrl,
+    id: targetId, type: 'page', url: testCase.blankPage ? 'about:blank' : chatUrl,
     webSocketDebuggerUrl: 'ws://example/fixture-own-target',
   };
   const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
@@ -271,6 +283,21 @@ describe('Issue #2625 protected continuation tab bootstrap', () => {
 });
 
 describe('Issue #1238 page cleanup equivalence', () => {
+  it.each([
+    { kind: 'no-editor Network issue', options: { absentComposer: true, errorBanner: 'Network issue' }, close: true },
+    { kind: 'no-editor delivery timeout', options: { absentComposer: true, errorBanner: 'Message delivery timed out' }, close: true },
+    { kind: 'empty attach-created about:blank', options: { absentComposer: true, blankPage: true }, close: true },
+    { kind: 'missing editor without an attributable error', options: { absentComposer: true }, close: false },
+    { kind: 'unreadable mounted composer with an error', options: { unreadableComposer: true, errorBanner: 'Network issue' }, close: false },
+  ] as const)('retirement verifies $kind without closing an unknown draft', async ({ options, close }) => {
+    const observed = await observeFinalizer({
+      sendCount: 0, pagePresent: true, pageLost: false, ...options,
+    });
+    expect(observed.pageCloseCalls).toBe(close ? 1 : 0);
+    expect(observed.result.cleanup).toBe(close ? 'confirmed' : 'unconfirmed');
+    expect(observed.result.cleanup_status).toBe(close ? undefined : 'cleanup_unconfirmed');
+  });
+
   it('does not close the sole owned Page or kill shared Chrome when no keepalive/sibling exists', async () => {
     const observed = await observeFinalizer({
       sendCount: 1, pagePresent: true, pageLost: false,
