@@ -129,6 +129,20 @@ describe('persistent pack reviewer preference', () => {
     expect(resolution.source).toBe('invocation-bound');
   });
 
+  it('isolates the fixture-bound Codex reviewer from a saved synthetic GPT preference', () => {
+    const { filePath } = preferenceFixture();
+    writePackReviewerPreference('gpt', filePath);
+    const bound = resolvePackReviewerResolution(
+      { PACK_REVIEWER: 'gpt', PACK_REVIEW_BOUND_REVIEWER: 'codex' },
+      { preferenceFilePath: filePath },
+    );
+    expect(bound).toMatchObject({ reviewer: 'codex', source: 'invocation-bound', errorMessage: null });
+    // The fixture must not erase or globally override the real precedence.
+    expect(resolvePackReviewerResolution({ PACK_REVIEWER: 'codex' }, {
+      preferenceFilePath: filePath,
+    })).toMatchObject({ reviewer: 'gpt', source: 'persistent-preference' });
+  });
+
   it('uses legacy environment state only when no preference exists', () => {
     const { filePath } = preferenceFixture();
 
