@@ -4768,9 +4768,15 @@ async function runTurnCore(
       };
       // The composer can change during Send readiness polling. Do not send a
       // different draft as though it were the invocation's marked payload.
-      if (!await composerPayloadMatchesBeforeSend(
+      const finalPayloadMatches = await composerPayloadMatchesBeforeSend(
         composer, markedPayload, Math.min(invocationDeadlineMs, preDispatchCutoffMs),
-      )) {
+      );
+      // A qualified extended wait may expire during its last awaited marker
+      // read. No dispatch callback or physical click has run yet.
+      if (extendedEntryCount && Date.now() >= preDispatchCutoffMs) {
+        return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
+      }
+      if (!finalPayloadMatches) {
         return returnComposerMutationFailure(composerPayloadFailureCause(
           Math.min(invocationDeadlineMs, preDispatchCutoffMs),
         ));
@@ -4784,7 +4790,18 @@ async function runTurnCore(
         ownSubmissionIssued: () => held429Witness?.ownSubmissionIssued() === true,
         onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_blind_resend'),
       });
-      let delivery = await sendAction();
+      let delivery: Awaited<ReturnType<typeof dispatchStateLightSendAndObserveDelivery>>;
+      try {
+        delivery = await sendAction();
+      } catch (error) {
+        // onDispatch rejects this deadline before Playwright can click. Only
+        // that exact zero-dispatch rejection is an extended budget terminal.
+        if (extendedEntryCount && !sendAttempted && Date.now() >= preDispatchCutoffMs
+          && error instanceof Error && error.message === 'fresh_send_readiness_deadline_exhausted') {
+          return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
+        }
+        throw error;
+      }
       const firstActionAffirmative = delivery.preDispatchTimeoutProven === true && delivery.sendCount === 0;
       let freshRepeated = false;
       if (delivery.sendCount === 0

@@ -951,6 +951,96 @@ describe('state-light fresh conversation collision recovery', () => {
       }
     });
 
+    it('classifies a last-moment enabled Send whose final marker read crosses the cutoff as not-sent budget exhaustion', async () => {
+      const prompt = '2682-LATE-MARKER';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      const base = mocks.nowMs;
+      let entryProbeAt = 0;
+      let lateEnabled = false;
+      const cutoff = () => Math.min(
+        entryProbeAt - 60_000 + 600_000,
+        base + 900_000 - 22_000 - 30_000 - 4 * 5_000,
+      ) - 5_000;
+      vi.mocked(probeCdpSiblingEvaluations).mockImplementation(async () => {
+        if (!entryProbeAt) entryProbeAt = mocks.nowMs;
+        return positive();
+      });
+      turn.sendButton.isEnabled.mockImplementation(async () => {
+        if (!entryProbeAt || lateEnabled) return false;
+        lateEnabled = true;
+        mocks.nowMs = cutoff() - 1;
+        return true;
+      });
+      const ordinaryInnerText = turn.composer.innerText.getMockImplementation()!;
+      turn.composer.innerText.mockImplementation(async () => {
+        const text = await ordinaryInnerText();
+        if (lateEnabled) mocks.nowMs += 2; // bounded final DOM read outlasts its cutoff
+        return text;
+      });
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-late-marker.txt'), '900000');
+      expect(lateEnabled).toBe(true);
+      expect(outcome.result).toMatchObject({
+        state: 'send_failed', scope: 'invocation',
+        cause: 'fresh_send_readiness_budget_exhausted', send_count: 0,
+      });
+      expect(outcome.result.send_attempted).not.toBe(true);
+      expect(turn.getSends()).toBe(0);
+      expect(turn.sendButton.click).not.toHaveBeenCalled();
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
+      expect(journal()).toEqual([expect.objectContaining({
+        entry_nonresponsive_count: 1, outcome: 'budget_exhausted',
+      })]);
+      expect(journal()[0]?.terminal_nonresponsive_count).toBeUndefined();
+    });
+
+    it('routes a pre-click cutoff crossing through the same zero-dispatch budget terminal', async () => {
+      const prompt = '2682-BEFORE-CLICK-CUTOFF';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      const base = mocks.nowMs;
+      let entryProbeAt = 0;
+      let lateEnabled = false;
+      let crossedInBeforeClick = false;
+      const cutoff = () => Math.min(
+        entryProbeAt - 60_000 + 600_000,
+        base + 900_000 - 22_000 - 30_000 - 4 * 5_000,
+      ) - 5_000;
+      vi.mocked(probeCdpSiblingEvaluations).mockImplementation(async () => {
+        if (!entryProbeAt) entryProbeAt = mocks.nowMs;
+        return positive();
+      });
+      turn.sendButton.isEnabled.mockImplementation(async () => {
+        if (!entryProbeAt || lateEnabled) return false;
+        lateEnabled = true;
+        mocks.nowMs = cutoff() - 1;
+        return true;
+      });
+      // Cross the boundary *inside* onDispatch, after the last successful
+      // marked-payload recheck but before any physical Playwright click.
+      vi.spyOn(Date, 'now').mockImplementation(() => {
+        if (lateEnabled && new Error().stack?.includes('beforeClick')) {
+          crossedInBeforeClick = true;
+          mocks.nowMs = cutoff();
+        }
+        return mocks.nowMs;
+      });
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-before-click-cutoff.txt'), '900000');
+      expect(crossedInBeforeClick).toBe(true);
+      expect(outcome.result).toMatchObject({
+        state: 'send_failed', scope: 'invocation',
+        cause: 'fresh_send_readiness_budget_exhausted', send_count: 0,
+      });
+      expect(outcome.result.send_attempted).not.toBe(true);
+      expect(turn.getSends()).toBe(0);
+      expect(turn.sendButton.click).not.toHaveBeenCalled();
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
+      expect(journal()).toEqual([expect.objectContaining({
+        entry_nonresponsive_count: 1, outcome: 'budget_exhausted',
+      })]);
+      expect(journal()[0]?.terminal_nonresponsive_count).toBeUndefined();
+    });
+
     it('interleaves distinct own targets: B Sends and settles while A waits; A later Sends once', async () => {
       const a = makeLoserPage('PROMPT', 'A-REPLY');
       const b = makeLoserPage('PROMPT', 'B-REPLY');
