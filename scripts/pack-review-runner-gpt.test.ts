@@ -6652,7 +6652,14 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       expect(settled.reviewRound!.sourceSlots[0]).toEqual(completed);
       expect(settled.reviewVerdict).toBe('findings');
       expect(settled.findings).toEqual(expect.arrayContaining([
-        expect.objectContaining({ sourceSlotId: 'source-01', code: 'quality:fixture-2692-source-one' }),
+        expect.objectContaining({
+          sourceSlotId: 'source-01',
+          category: 'quality',
+          title: 'synthetic completed-source finding',
+          severity: 'error',
+          filePath: 'scripts/pack-review-runner.ts',
+          body: expect.stringContaining('code: quality:fixture-2692-source-one'),
+        }),
       ]));
       for (const [index, oldInvocation] of [[1, originalSource02], [2, originalSource03]] as const) {
         const slot = settled.reviewRound!.sourceSlots[index]!;
