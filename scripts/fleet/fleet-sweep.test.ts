@@ -908,8 +908,9 @@ describe('Issue #2687 r04: own park-line observation without expanding r05 class
       expect(row?.state).toBe('STOPPED');
       expect(row?.ownParkObservation).toBeUndefined();
     }
+    // The incumbent last-visible marker takes priority over earlier spinner chrome.
     expect(observed('PARKED on GPT turns inv-a, inv-b, inv-c\nesc interrupt')?.state)
-      .toBe('busy');
+      .toBe('PARKED');
   });
 
   it('F7 reports exact native previously-designated shell only, never a guessed dead child', () => {
