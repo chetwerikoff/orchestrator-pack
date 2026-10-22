@@ -362,7 +362,7 @@ describe('fleet alarm', () => {
 
   it('r05: final park line is accepted without a Task or receipt and stays coordinator-quiet', async () => {
     const store = new MemoryWakeStore();
-    const parked = { coord: 'idle', one: 'work\nPARKED on unknown-event' };
+    const parked = { coord: 'idle', one: 'work\nPARKED on GPT turn unknown-event' };
     const first = await tick({ terminals: [terminals[0]!, terminals[1]!], screens: parked, store });
     expect(first.result.state).toBe('nothing_stopped');
     expect(sends(first.calls)).toHaveLength(0);
@@ -489,7 +489,7 @@ describe('fleet alarm', () => {
 
   it('r05: PARKED does not alarm on an unknown producer or unrelated STOPPED set changes', async () => {
     const store = new MemoryWakeStore();
-    const screens = { coord: 'idle', one: 'working\nesc interrupt', two: 'PARKED on missing-event' };
+    const screens = { coord: 'idle', one: 'working\nesc interrupt', two: 'PARKED on GPT turn missing-event' };
     const first = await tick({ screens, store });
     expect(first.result.state).toBe('nothing_stopped');
     expect(sends(first.calls)).toHaveLength(0);
@@ -589,13 +589,18 @@ describe('fleet alarm', () => {
     expect(sendsTo(repeated.calls, 'one')).toHaveLength(0);
   });
 
-  it('r05: former post-send/generation proof is not a Wake skip gate', async () => {
-    const store = new MemoryWakeStore();
+  it('r05: old post-send/generation proof is not a Wake gate once exact landed GPT evidence exists', async () => {
     const token = '24852485-1111-4111-8111-248524852485';
+    const agent = { ...terminals[1]!, incarnationId: 'r05-owner' };
     const event: TerminalEnvelopeEvent = { path: '/tmp/opencode/r05-' + token + '-terminal.json',
-      invocationId: token, observedInvocationId: token };
-    const parked = await tick({ store, terminals: [terminals[0]!, terminals[1]!],
-      screens: { coord: 'idle', one: 'PARKED on ' + token },
+      invocationId: token, observedInvocationId: token, terminalHandle: 'one',
+      cwd: workerBase + '/two/child', lifecycleOutcome: 'success', turnResultState: 'ok' };
+    const parked = await tick({ terminals: [terminals[0]!, agent],
+      screens: { coord: 'idle', one: 'PARKED on GPT turn ' + token },
+      config: config({ selectedRepository: 'test/project' }),
+      resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
+        primaryRoot: primary, repository: 'test/project' }),
+      readGit: selectedProjectGit, canonicalPath: (path) => path,
       listTerminalEnvelopes: () => [event],
     });
     expect(sendsTo(parked.calls, 'one').filter((call) => call.includes('--text'))).toHaveLength(1);
@@ -615,13 +620,20 @@ describe('fleet alarm', () => {
     expect(bannerOwnerPane({ url }, terminals, config(), () => ({ ...binding, terminal_handle: 'mgr' }))?.handle).toBe('mgr');
   });
 
-  it('r05: no foreign legacy event may veto the matching named PARKED event', async () => {
+  it('r05: unrelated foreign artifact never vetoes an exact witnessed GPT event', async () => {
     const id = 'inv-owned';
-    const matching = { path: '/tmp/opencode/r05-owned-terminal.json', invocationId: id };
-    const foreign = { path: '/tmp/opencode/r05-foreign-terminal.json', invocationId: 'inv-unrelated',
-      terminalHandle: 'one' };
-    const observed = await tick({ terminals: [terminals[0]!, terminals[1]!],
+    const agent = { ...terminals[1]!, incarnationId: 'r05-owner' };
+    const matching: TerminalEnvelopeEvent = { path: '/tmp/opencode/r05-owned-terminal.json',
+      invocationId: id, observedInvocationId: id, terminalHandle: 'one',
+      cwd: workerBase + '/two/child', lifecycleOutcome: 'success', turnResultState: 'ok' };
+    const foreign: TerminalEnvelopeEvent = { path: '/tmp/opencode/r05-foreign-terminal.json',
+      invocationId: 'inv-unrelated', terminalHandle: 'one' };
+    const observed = await tick({ terminals: [terminals[0]!, agent],
       screens: { coord: 'idle', one: 'PARKED on GPT turn ' + id },
+      config: config({ selectedRepository: 'test/project' }),
+      resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
+        primaryRoot: primary, repository: 'test/project' }),
+      readGit: selectedProjectGit, canonicalPath: (path) => path,
       listTerminalEnvelopes: () => [foreign, matching] });
     expect(sendsTo(observed.calls, 'one').filter((call) => call.includes('--text'))).toHaveLength(1);
     expect(sendsTo(observed.calls, 'one')[0]?.join(' ')).toContain(matching.path);
@@ -1054,12 +1066,20 @@ describe('Issue #2463 parked-producer compatibility with r05', () => {
     expect(textTo((await step(1_800_000)).calls)).toHaveLength(0);
     expect(textTo((await step(3_600_000)).calls)[0]).toContain('Reminder: parked 30 min');
   });
-  it('encodes punctuation in terminal paths as shell-inert one-line re-check', async () => {
-    const event = { path: '/tmp/opencode/event;not-a-command-terminal.json', invocationId: 'inv-command' };
-    const result = await tick({ terminals: [terminals[0]!, terminals[1]!],
-      screens: { coord: 'idle', one: 'PARKED on GPT turn inv-command' }, listTerminalEnvelopes: () => [event] });
+  it('encodes punctuation in an exact terminal path as an inert one-line re-check', async () => {
+    const agent = { ...terminals[1]!, incarnationId: 'inc-punctuation' };
+    const event: TerminalEnvelopeEvent = { path: '/tmp/opencode/event;not-a-command-terminal.json',
+      invocationId: 'inv-command', observedInvocationId: 'inv-command', terminalHandle: 'one',
+      cwd: workerBase + '/one', lifecycleOutcome: 'success', turnResultState: 'ok' };
+    const result = await tick({ terminals: [terminals[0]!, agent],
+      config: config({ selectedRepository: 'test/project' }),
+      resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
+        primaryRoot: primary, repository: 'test/project' }),
+      readGit: selectedProjectGit, canonicalPath: (path) => path,
+      screens: { coord: 'idle', one: 'PARKED on GPT turn inv-command' },
+      listTerminalEnvelopes: () => [event] });
     const text = textTo(result.calls)[0] ?? '';
-    expect(text).toBe('');
+    expect(text).toContain('re-check');
     expect(text).toMatch(/^[A-Za-z0-9 _./:%#=+-]+$/u);
     expect(text).not.toMatch(/[;&|$'"()<>*?\\\x00-\x1f\x7f]/u);
   });
@@ -2898,7 +2918,7 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
   });
 
   it('refuses the due 30-minute reminder when the native pane becomes a bare shell', async () => {
-    const parked = 'PARKED on unknown-event', store = new MemoryWakeStore();
+    const parked = 'PARKED on GPT turn unknown-event', store = new MemoryWakeStore();
     const original = executorFor({ [manager.handle]: parked });
     await invoke({ store, screens: { [manager.handle]: parked }, executor: original,
       now: () => 0, listPublishedIssueFacts: () => [] });
