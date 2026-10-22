@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import '../toolchain/native-entrypoint-preflight.ts';
 import { dirname, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath, pathToFileURL } from 'node:url';
