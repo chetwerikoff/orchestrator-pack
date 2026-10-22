@@ -1775,8 +1775,7 @@ async function alarmGoneIssueOwners(
     const key = `gone-issue:${assignment.issueNumber}:${assignment.assignmentId}:${assignment.generation}:${assignment.bindingKey}`;
     const message = `Wake: Issue #${assignment.issueNumber} assigned manager is positively gone with a terminally failed Dispatch - recovery needed, reconcile without replacement guess`;
     await sendMarkedUnitMessage(store, key, coordinator.handle, message, executor, sleepMs, log, counts,
-      () => { try { return listFleetTerminals(executor).filter((row) => terminalsIdentity(row) === terminalsIdentity(coordinator)).length === 1; }
-        catch { return false; } });
+      () => coordinatorStillSelected(coordinator, options.config, executor));
   }
 }
 
@@ -1880,7 +1879,8 @@ async function wakePanesOnEvents(
     if (bareShellHandles.has(pane.handle)) continue;
     const expected = terminalsIdentity(pane);
     const current = (): boolean => {
-      try { return listFleetTerminals(executor).filter((row) => terminalsIdentity(row) === expected).length === 1; }
+      try { return listFleetTerminals(executor).filter((row) => terminalsIdentity(row) === expected).length === 1
+        && (!coordinator || pane.handle !== coordinator.handle || coordinatorStillSelected(coordinator, options.config, executor)); }
       catch { return false; }
     };
     const delivered = await sendMarkedUnitMessage(store, key, pane.handle, message, executor, sleepMs, log, counts, current);
@@ -2084,13 +2084,14 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   let activeChats: ProjectChat[] = [];
   try {
     const coordinator = resolveCoordinatorPane(terminals, config);
+    if (config.coordinatorPinFile && !coordinator) log('coordinator pin missing, malformed or not present; coordinator effects withheld');
     let observations: FleetPaneObservation[];
     try {
       observations = runFleetSweep({
         primary: config.primary,
         projectId: config.projectId,
         workspaceRe: config.workspaceRe,
-        ...(coordinator ? { coordinatorHandle: coordinator.handle } : {}),
+        coordinatorHandle: coordinator?.handle ?? '',
         coordinatorTitleRe: config.orchestratorTitleRe,
         architectHandle: config.architectHandle,
         busyRe: config.busyRe,
@@ -2337,12 +2338,16 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       includeOrdinary ? bareAlerts.map((handle) => 'suspected_bare_shell ' + handle) : [],
       localWarnings, deliverPermission.map((warning) => warning.message), eligibleUnreadRunMessages);
     try {
+      if (!coordinatorStillSelected(coordinator, config, executor)) {
+        log('coordinator pin or native identity changed before ordinary alarm');
+        return { state: 'send_failed', coordinator: coordinator.handle };
+      }
       if (!sendCoordinator(executor, coordinator.handle, message)) {
         log(`${coordinator.handle} send failed`);
         return { state: 'send_failed', coordinator: coordinator.handle };
       }
       await sleepMs(4_000);
-      if ((deliverLocal.length > 0 || deliverPermission.length > 0) && !coordinatorStillSelected(coordinator, config, executor)) {
+      if (!coordinatorStillSelected(coordinator, config, executor)) {
         log(`${coordinator.handle} changed before local chat second Enter`);
         return { state: 'send_failed', coordinator: coordinator.handle };
       }
@@ -2415,6 +2420,13 @@ export function fleetWakeConfigFromEnv(
     throw new Error(`unknown argument: ${token}`);
   }
   const target = resolveTargetContext({ projectId, env });
+  // Discover file backing once; loss of the file never restores inherited pin authority.
+  const pinFile = /^[a-zA-Z0-9_.-]+$/u.test(target.projectId)
+    ? join(env.HOME?.trim() || homedir(), '.config', 'orchestrator-fleet', target.projectId + '.env')
+    : undefined;
+  const inheritedPin = env.ORCH_HANDLE?.trim();
+  const coordinatorPinFile = pinFile && inheritedPin && envHandleFromFile(pinFile) === inheritedPin
+    ? pinFile : undefined;
   const intervalSeconds = env.FLEET_WAKE_INTERVAL?.trim() ? Number(env.FLEET_WAKE_INTERVAL) : 300;
   if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
     throw new Error('FLEET_WAKE_INTERVAL must be a positive number of seconds');
@@ -2424,7 +2436,8 @@ export function fleetWakeConfigFromEnv(
     primary: target.primaryRoot,
     workspaceRe: compileRegex(target.orcaWorkspacePattern, defaultWorkspaceRegex(target.primaryRoot)),
     orchestratorTitleRe: compileRegex(target.orchestratorTitlePattern, DEFAULT_ORCHESTRATOR_TITLE_RE),
-    ...(env.ORCH_HANDLE?.trim() ? { orchestratorHandle: env.ORCH_HANDLE.trim() } : {}),
+    ...(inheritedPin ? { orchestratorHandle: inheritedPin } : {}),
+    ...(coordinatorPinFile ? { coordinatorPinFile } : {}),
     ...(env.ARCHITECT_HANDLE?.trim() ? { architectHandle: env.ARCHITECT_HANDLE.trim() } : {}),
     busyRe: compileRegex(env.BUSY_RE, DEFAULT_BUSY_RE),
     intervalSeconds,
@@ -2454,12 +2467,17 @@ export async function runFleetWakeLoop(
         const selected = resolveCoordinatorPane(listFleetTerminals(executor), config);
         if (selected && selected.status !== 'exited') {
           readFleetScreen(selected.handle, executor);
-          // Consume the process-local attempt before the first effectful send.
-          startupWakePending = false;
-          const submitted = sendCoordinator(executor, selected.handle,
-            'fleet-wake started: run your PROMPT §7 start steps; resume every unit with an open Issue/PR and no live pane')
-            && (await sleepMs(4_000), submitCoordinator(executor, selected.handle));
-          if (!submitted) log('startup wake delivery unverified: ' + selected.handle);
+          if (!coordinatorStillSelected(selected, config, executor)) {
+            log('startup wake exact coordinator changed before text; no delivery');
+          } else {
+            // Consume the process-local attempt before the first effectful send.
+            startupWakePending = false;
+            const submitted = sendCoordinator(executor, selected.handle,
+              'fleet-wake started: run your PROMPT §7 start steps; resume every unit with an open Issue/PR and no live pane')
+              && (await sleepMs(4_000), coordinatorStillSelected(selected, config, executor)
+                && submitCoordinator(executor, selected.handle));
+            if (!submitted) log('startup wake delivery unverified: ' + selected.handle);
+          }
         }
       } catch {
         log('startup wake selection failed or delivery uncertain');
