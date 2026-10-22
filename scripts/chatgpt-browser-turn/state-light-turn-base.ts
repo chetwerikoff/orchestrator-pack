@@ -3651,6 +3651,7 @@ async function conditionalClearOwnedComposerDraft(
           && (doc.querySelectorAll(guarded.selector).length !== 1
             || doc.querySelectorAll(guarded.selector)[0] !== element)) return false;
         const view = doc.defaultView;
+        if (!view) return false;
         const visible = (el: HTMLElement): boolean => {
           if (el.getAttribute?.('hidden') !== null || el.getAttribute?.('aria-hidden') === 'true'
             || el.getAttribute('contenteditable') === 'false') return false;
@@ -8533,6 +8534,134 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
     ...(retirementCleanupRequired ? { retirement_cleanup_required: true } : {}),
     ...(journalWriteFailed ? { journal_write_failed: true } : {}),
   };
+}
+
+export interface GuardedOwnedTabRetirementRequest {
+  readonly profile: string;
+  readonly cdp: string;
+  readonly invocationId: string;
+  readonly targetId: string;
+  readonly runIdentity: string;
+  readonly attemptIdentity: string;
+  readonly ownerTaskId: string;
+}
+export interface GuardedOwnedTabRetirementReport {
+  readonly status: 'confirmed' | 'already_gone' | 'cleanup_unconfirmed';
+  readonly cause: string;
+  readonly target_id?: string;
+  readonly next_action: string;
+}
+
+/**
+ * Only an ACTUAL existing owner recovery/checkpoint wake invokes this narrow
+ * explicit operation after its identity-bound read/GitHub-first reconciliation.
+ * Inspect and manager nextAction remain observation-only. No sweep, Send, Stop,
+ * Retry, new Page, timer or alternate Page-close transport is exposed.
+ */
+export async function runGuardedOwnedTabRetirement(
+  input: GuardedOwnedTabRetirementRequest,
+): Promise<GuardedOwnedTabRetirementReport> {
+  const next = 'Preserve the exact pinned owner; GitHub-first/effect reconciliation and later real owner-wake identity-bound inspect only. Never close a still-frozen/unreadable original, Stop, Retry or resend.';
+  const refused = (cause: string, target_id?: string): GuardedOwnedTabRetirementReport => ({
+    status: 'cleanup_unconfirmed', cause, ...(target_id ? { target_id } : {}), next_action: next,
+  });
+  const profileKey = configuredProfileKey(input.profile, input.cdp);
+  let record: ReturnType<typeof readStateLightTurnObservation>;
+  try {
+    record = readStateLightTurnObservation(profileKey, input.invocationId);
+  } catch { return refused('observation_identity_unproven'); }
+  const pin = record.owned_target;
+  if (!pin?.created || pin.id !== input.targetId
+    || pin.cdp_sha256 !== createHash('sha256').update(input.cdp, 'utf8').digest('hex')) {
+    return refused('created_target_ownership_unproven', pin?.id);
+  }
+  let terminal: import('../flow-manager-long-running-child.ts').TerminalEnvelope | null;
+  try {
+    const { readInvocationReceiptLocator, readTerminalEnvelope } =
+      await import('../flow-manager-long-running-child.ts');
+    const bound = readInvocationReceiptLocator({
+      invocationId: input.invocationId, runIdentity: input.runIdentity,
+      attemptIdentity: input.attemptIdentity, ownerTaskId: input.ownerTaskId,
+    });
+    terminal = readTerminalEnvelope(bound.locator.terminal_envelope_path, {
+      runIdentity: input.runIdentity, attemptIdentity: input.attemptIdentity,
+    });
+    if (!terminal || terminal.observed_invocation_id !== input.invocationId
+      || terminal.handoff_receipt_path !== bound.locator.handoff_receipt_path
+      || bound.receipt.owner_task_id !== input.ownerTaskId
+      || terminal.owned_target_id !== pin.id || terminal.owned_target_created !== true
+      || terminal.owned_prompt_marker !== record.marker
+      || terminal.cleanup_status !== 'cleanup_unconfirmed') return refused('terminal_identity_unproven', pin.id);
+    if (record.phase === 'not_sent'
+      && (record.send_count !== 0 || record.transition_reason !== 'terminal_pre_send'
+        || terminal.delivery !== 'not-sent' || terminal.send_count !== 0)) {
+      return refused('not_sent_dispatch_unproven', pin.id);
+    }
+    if (record.phase === 'harvested'
+      && (terminal.delivery !== 'landed' || terminal.send_count !== 1)) {
+      return refused('harvested_terminal_unverified', pin.id);
+    }
+  } catch { return refused('terminal_identity_unproven', pin.id); }
+
+  let browser: any;
+  try {
+    // The census distinguishes positively absent original ID from an
+    // unreadable/failed census; an absence is not reported as Page.close.
+    const census = await listCdpPageTargets(input.cdp, MAX_LOCAL_READ_WAIT_MS);
+    const found = census.filter((target) => target.id === pin.id && target.type === 'page');
+    if (found.length === 0) return {
+      status: 'already_gone', cause: 'exact_original_id_absent', target_id: pin.id,
+      next_action: 'Continue existing owner recovery; original target ID is absent, no close was issued.',
+    };
+    if (found.length !== 1) return refused('target_census_failed', pin.id);
+    // #2682 is directional. When the original is unreadable, a healthy
+    // ChatGPT-origin sibling is only a read-only probe anchor, NOT an owner.
+    const anchor = census.find((target) => target.id !== pin.id && target.type === 'page'
+      && /^https:\/\/chatgpt\.com(?:\/|$)/iu.test(target.url));
+    if (anchor) {
+      const probe = await probeCdpSiblingEvaluations(
+        input.cdp, anchor.id, [{ id: pin.id, url: found[0]!.url }],
+        Math.min(MAX_LOCAL_READ_WAIT_MS, 3_000),
+      );
+      if (probe.nonresponsive.some((target) => target.id === pin.id)) {
+        return refused('frozen_ownership_unproven', pin.id);
+      }
+      if (probe.disappearedOrChanged.some((target) => target.id === pin.id)) {
+        return refused('route_changed', pin.id);
+      }
+      // Unknown/nonresponsive control is not proof of continuous ownership.
+      // Fresh *readable* ordinary DOM remains the only retirement path.
+    }
+    const deadlineMs = Date.now() + 20_000;
+    const attached = await attachOwnTarget(loadChromium(), {
+      mode: 'own-target', cdp: input.cdp, newChat: false,
+      pinnedTargetId: pin.id, deadlineMs, cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
+    });
+    browser = attached.browser;
+    const contexts = browser.contexts();
+    const page = contexts.length === 1 && contexts[0]?.pages().length === 1
+      ? contexts[0].pages()[0] : undefined;
+    if (!page || getOwnTargetInfo(browser)?.targetId !== pin.id) {
+      return refused('created_target_ownership_unproven', pin.id);
+    }
+    const result = compactResult(
+      'observation_uncertain', 'invocation', 'deferred_original_retirement_only',
+      input.invocationId, profileKey, record.send_count ?? 0, 0,
+      new StateLightNavigationCounter(), [],
+    );
+    const retirement = await guardedOriginalTargetRetirement({
+      outcome: { page, browser, result }, cdp: input.cdp, verifiedPredecessor: true,
+    });
+    return retirement.status === 'confirmed'
+      ? { status: 'confirmed', cause: 'confirmed', target_id: pin.id,
+        next_action: 'Original exact target ID is absent by fresh post-close census; continue owner recovery.' }
+      : refused(retirement.cause, pin.id);
+  } catch {
+    // A renderer that cannot be attached/read is never physically closed.
+    return refused('frozen_ownership_unproven', pin.id);
+  } finally {
+    if (browser) await releaseCdpBrowser(browser, RESOURCE_CLEANUP_BOUND_MS);
+  }
 }
 
 export const __testFinalizeTurn = finalizeTurn;
