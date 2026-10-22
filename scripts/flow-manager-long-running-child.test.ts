@@ -1803,9 +1803,26 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(await next('wrong-previous-id', selectors.map((x, i) =>
       i === 7 ? 'foreign-predecessor' : x))).toBe(2);
     expect(existsSync(childStarted)).toBe(false);
+    // A past not_sent observation cannot turn a contrary terminal delivery
+    // into affirmative proof of zero dispatch at launcher admission.
+    const savedTerminal = readFileSync(previousPaths.envelope, 'utf8');
+    const terminalJson = JSON.parse(savedTerminal) as Record<string, unknown>;
+    writeFileSync(previousPaths.envelope, JSON.stringify({
+      ...terminalJson, delivery: 'POSSIBLY_DELIVERED',
+    }) + '\n');
+    expect(await next('contradictory-delivery', selectors)).toBe(2);
+    expect(existsSync(childStarted)).toBe(false);
+    // Omitted creation metadata is not created:false. No terminal ambiguity
+    // may reach the driver as a positive noncreation handoff.
+    writeFileSync(previousPaths.envelope, JSON.stringify({
+      ...terminalJson, owned_target_created: undefined,
+    }) + '\n');
+    expect(await next('missing-creation-boolean', selectors)).toBe(2);
+    expect(existsSync(childStarted)).toBe(false);
+    writeFileSync(previousPaths.envelope, savedTerminal);
     expect(await next('proven-not-created', selectors)).toBe(1);
     expect(existsSync(childStarted)).toBe(true);
-    // This test does not attach or close any selected existing Page.
+    // This launcher fixture never attaches or closes the selected Page.
   });
 
   it('distinguishes original unique marker landing from positive POST and unknown attempt (#2678)', () => {
