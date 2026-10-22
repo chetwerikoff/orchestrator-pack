@@ -42,7 +42,8 @@ class MemoryWakeStore implements FleetWakeStateStore {
   readonly marks = new Set<string>();
   readonly parkedWakeEvents = new Set<string>();
   readonly eventStatus = new Map<string, 'sent' | 'attempted_unverified'>();
-  readonly epochs = new Map<string, { key: string; since: number }>();
+  readonly epochs = new Map<string, { key: string; since: number; started?: number;
+    liveProcess?: { pid: number; startticks: string; namespace: string } }>();
   signature: string | null = null;
   stalledSeen: string | null = null;
   sentAt: number | undefined;
@@ -57,8 +58,9 @@ class MemoryWakeStore implements FleetWakeStateStore {
   clearLastSentAt(): void { this.sentAt = undefined; }
   readStalledSeen(): string | null { return this.stalledSeen; }
   writeStalledSeen(urls: string): void { this.stalledSeen = urls; }
-  readParkedEpoch(handle: string): { key: string; since: number } | undefined { return this.epochs.get(handle); }
-  writeParkedEpoch(handle: string, epoch: { key: string; since: number }): void { this.epochs.set(handle, epoch); }
+  readParkedEpoch(handle: string) { return this.epochs.get(handle); }
+  writeParkedEpoch(handle: string, epoch: { key: string; since: number; started?: number;
+    liveProcess?: { pid: number; startticks: string; namespace: string } }): void { this.epochs.set(handle, epoch); }
   clearParkedEpoch(handle: string): void { this.epochs.delete(handle); }
   pruneParkedEpochs(keys: ReadonlyMap<string, string>): void {
     for (const [handle, epoch] of this.epochs) if (keys.get(handle) !== epoch.key) this.epochs.delete(handle);
@@ -159,6 +161,8 @@ async function tick(input: {
   readNamedReview?: FleetAlarmTickOptions['readNamedReview'];
   readPackReviewStage?: FleetAlarmTickOptions['readPackReviewStage'];
   resolveSelectedReviewProject?: FleetAlarmTickOptions['resolveSelectedReviewProject'];
+  proveSelectedWorktree?: FleetAlarmTickOptions['proveSelectedWorktree'];
+  probePid?: FleetAlarmTickOptions['probePid'];
   readPackReviewRuns?: FleetAlarmTickOptions['readPackReviewRuns'];
   reconcilePackReview?: FleetAlarmTickOptions['reconcilePackReview'];
   sleepMs?: (ms: number) => void | Promise<void>;
@@ -191,6 +195,8 @@ async function tick(input: {
     ...(input.readNamedReview ? { readNamedReview: input.readNamedReview } : {}),
     ...(input.readPackReviewStage ? { readPackReviewStage: input.readPackReviewStage } : {}),
     ...(input.resolveSelectedReviewProject ? { resolveSelectedReviewProject: input.resolveSelectedReviewProject } : {}),
+    ...(input.proveSelectedWorktree ? { proveSelectedWorktree: input.proveSelectedWorktree } : {}),
+    ...(input.probePid ? { probePid: input.probePid } : {}),
     ...(input.readPackReviewRuns ? { readPackReviewRuns: input.readPackReviewRuns } : {}),
     ...(input.reconcilePackReview ? { reconcilePackReview: input.reconcilePackReview } : {}),
     ...(input.now ? { now: input.now } : {}),
@@ -991,7 +997,7 @@ describe('Issue #2463 parked-producer compatibility with r05', () => {
       screens: { coord: 'idle', one: 'PARKED on terminal producer incarnation inc-x' } });
     expect(textTo(exited.calls)[0]).toContain('terminal-exited');
   });
-  it('plain-matches an arbitrary completed CI result ID without owner or Task witness', async () => {
+  it('intentionally rejects an arbitrary completed CI result ID as a named producer', async () => {
     const id = 'ci:42:' + head + ':17';
     const run = await tick({ config: setting, terminals: [terminals[0]!, terminals[1]!],
       screens: { coord: 'idle', one: 'PARKED on ' + id },
@@ -999,7 +1005,8 @@ describe('Issue #2463 parked-producer compatibility with r05', () => {
       checkRunsFinishedAt: () => 17,
       readPackReviewStage: () => undefined,
     });
-    expect(textTo(run.calls)[0]).toContain('checks-completed');
+    expect(textTo(run.calls)).toHaveLength(0);
+    expect(sendsTo(run.calls, 'coord')[0]?.join(' ')).toContain('unknown parked producer');
   });
 
   it('preserves native merged and submitted-review event re-checks without Task binding', async () => {
@@ -1014,7 +1021,7 @@ describe('Issue #2463 parked-producer compatibility with r05', () => {
   });
 
   it('keeps unmatched PARKED quiet and direct reminders at elapsed 30/60 minutes', async () => {
-    const store = new MemoryWakeStore(), screens = { coord: 'idle', one: 'PARKED on missing-event' };
+    const store = new MemoryWakeStore(), screens = { coord: 'idle', one: 'PARKED on GPT turn missing-event' };
     const step = (now: number) => tick({ store, screens, now: () => now,
       terminals: [terminals[0]!, terminals[1]!] });
     expect(sends((await step(0)).calls)).toHaveLength(0);
@@ -1028,9 +1035,9 @@ describe('Issue #2463 parked-producer compatibility with r05', () => {
   it('encodes punctuation in terminal paths as shell-inert one-line re-check', async () => {
     const event = { path: '/tmp/opencode/event;not-a-command-terminal.json', invocationId: 'inv-command' };
     const result = await tick({ terminals: [terminals[0]!, terminals[1]!],
-      screens: { coord: 'idle', one: 'PARKED on inv-command' }, listTerminalEnvelopes: () => [event] });
+      screens: { coord: 'idle', one: 'PARKED on GPT turn inv-command' }, listTerminalEnvelopes: () => [event] });
     const text = textTo(result.calls)[0] ?? '';
-    expect(text).toContain('re-check');
+    expect(text).toBe('');
     expect(text).toMatch(/^[A-Za-z0-9 _./:%#=+-]+$/u);
     expect(text).not.toMatch(/[;&|$'"()<>*?\\\x00-\x1f\x7f]/u);
   });
