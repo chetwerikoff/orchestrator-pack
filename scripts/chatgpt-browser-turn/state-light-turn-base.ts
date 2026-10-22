@@ -8402,17 +8402,24 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
     // Do not trim, normalize, or clear at this provisional read: a different
     // writer may edit between awaits. The physical close guard must re-read
     // every predicate and perform exact-own compare+clear if needed.
-    const safe = observedNotSent && stillOwnedBlankSurface()
-      && await readFreshStopVisible(outcome.page, Date.now() + MAX_LOCAL_READ_WAIT_MS) === false
-      && ['empty', 'own'].includes(await readRetirementComposer(
-        outcome.page, outcome.ownedTypedPayload, Date.now() + MAX_LOCAL_READ_WAIT_MS,
-      )) && stillOwnedBlankSurface();
+    const selected = observedNotSent && stillOwnedBlankSurface();
+    const stop = selected ? await readFreshStopVisible(
+      outcome.page, Date.now() + MAX_LOCAL_READ_WAIT_MS,
+    ) : null;
+    const draft = selected && stop === false ? await readRetirementComposer(
+      outcome.page, outcome.ownedTypedPayload, Date.now() + MAX_LOCAL_READ_WAIT_MS,
+    ) : 'composer_unknown';
+    const safe = selected && stop === false
+      && (draft === 'empty' || draft === 'own') && stillOwnedBlankSurface();
     if (!safe) {
       pageAction = 'preserve';
-      incidents.push('owned_composer_cleanup_unavailable');
+      const refusal = stop === null || draft === 'frozen_ownership_unproven'
+        ? 'frozen_ownership_unproven' : draft === 'foreign_draft'
+          ? 'foreign_draft' : 'composer_unknown';
+      incidents.push('owned_composer_cleanup_unavailable', refusal);
       if (!appendIncident({
         eventClass: 'owned_composer_cleanup_unavailable',
-        symptom: 'composer_unknown_or_foreign_draft',
+        symptom: refusal,
         action: 'preserve_page_without_modifying_foreign_text',
       }, outcome.result.invocation_id)) journalWriteFailed = true;
     }
