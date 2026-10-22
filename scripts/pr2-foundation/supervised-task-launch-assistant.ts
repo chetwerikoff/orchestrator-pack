@@ -199,6 +199,8 @@ export interface LaunchInput {
   readonly managerBrief?: string;
   readonly worktreeSelector?: string;
   readonly worktreeName?: string;
+  /** Exact native terminal to reuse for a new manager Task, without spawning. */
+  readonly existingTerminal?: string;
   readonly baseBranch?: string;
   readonly defaultBranch?: string;
   readonly env?: Readonly<NodeJS.ProcessEnv>;
@@ -680,6 +682,23 @@ export async function runSupervisedTaskLaunchAssistant(
     }, resources, startedAtMs, timings, deps.now);
   }
 
+  // The reuse route is an explicit native placement, never a title/path/Issue
+  // inference. The existing supervised-start producer remains the only writer.
+  if (input.existingTerminal !== undefined && (
+    !text(input.existingTerminal) || input.existingTerminal !== text(input.existingTerminal)
+    || input.workClass !== 'manager' || !input.issueNumber
+    || !Number.isSafeInteger(input.issueNumber) || input.issueNumber <= 0
+    || !text(input.runId) || !text(input.taskId)
+    || !text(input.worktreeSelector) || Boolean(input.worktreeName)
+    || input.startMode === 'provider_new_top_level'
+  )) {
+    return continued(input, 'executor_profile', {
+      cause: 'existing_terminal_route_invalid', actor: 'orchestrator', evidence: {},
+      nextAction: { kind: 'repair_executor_profile',
+        note: 'existing-terminal reuse requires manager, exact --run/--task, --issue-number and --worktree' },
+    }, resources, startedAtMs, timings, deps.now);
+  }
+
   const command = await checkpoint('command_preflight', timings, deps.now, deps.commandPreflight);
   if (command.status !== 'ok') return continued(input, 'command_preflight', command, resources, startedAtMs, timings, deps.now);
 
@@ -813,7 +832,28 @@ export async function runSupervisedTaskLaunchAssistant(
   }
 
   const providerMode = profile.route === 'provider_new_top_level';
-  const prepared = await checkpoint('worktree_prepare', timings, deps.now, () => deps.prepareWorktree({
+  let reusedIdentity: RuntimeWorkerIdentity | undefined;
+  const prepared = await checkpoint('worktree_prepare', timings, deps.now, () => {
+    if (input.existingTerminal) {
+      const observed = deps.adapter.findWorkerById(input.existingTerminal);
+      if (observed.status !== 'ok' || !observed.value
+        || observed.value.identity.runtime !== deps.adapter.id
+        || observed.value.identity.id !== input.existingTerminal
+        || !text(observed.value.identity.generation)
+        || !isAbsolute(observed.value.workspacePath)) {
+        return Promise.resolve({ status: 'continue' as const,
+          cause: 'existing_terminal_identity_unverified', actor: 'orchestrator' as const,
+          nextAction: { kind: 'remediate_terminal' as const,
+            note: 'prove the exact native terminal/worktree; never select by title or stale pane text' } });
+      }
+      reusedIdentity = observed.value.identity;
+      // Read-only worktree reuse. Supervised start re-proves the native
+      // terminal/worktree placement and publishes only after a ready receipt.
+      return Promise.resolve({ status: 'ok' as const,
+        value: { selector: input.worktreeSelector!, path: observed.value.workspacePath,
+          setupWitness: 'proven_reuse' as const } });
+    }
+    return deps.prepareWorktree({
     repository: resources.repository,
     ...(input.issueNumber ? { issueNumber: input.issueNumber } : {}),
     taskId,
@@ -827,7 +867,8 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(input.workClass === 'manager' && input.taskId?.trim() ? { managerTaskRunId: input.runId?.trim() } : {}),
     ...(input.workClass !== 'merge' && input.worktreeSelector && earlyCurrent
       ? { reuseAssignment: earlyCurrent } : {}),
-  }));
+    });
+  });
   if (prepared.status !== 'ok') return continued(input, 'worktree_prepare', prepared, resources, startedAtMs, timings, deps.now);
   if (input.workClass === 'merge' && (!prepared.value.path || resolve(prepared.value.path) !== resolve(input.primaryRoot!))) {
     return continued(input, 'worktree_prepare', {
@@ -873,7 +914,9 @@ export async function runSupervisedTaskLaunchAssistant(
     const terminalStartedAt = deps.now();
     let terminalCause = '';
     let liveness: ReturnType<RuntimeAdapter['liveness']> | null = null;
-    const spawn = deps.adapter.spawnWorker({
+    const spawn = input.existingTerminal
+      ? deps.adapter.findWorkerById(input.existingTerminal)
+      : deps.adapter.spawnWorker({
       title: `opk-${input.workClass === 'merge' ? 't2-merge' : input.workClass}-${taskId}`,
       command: profile.launchCommand,
       workspace: prepared.value.path,
@@ -886,10 +929,13 @@ export async function runSupervisedTaskLaunchAssistant(
     });
     const spawnNativeError = spawn.status !== 'ok' ? nativeRuntimeError(spawn) : null;
     if (spawn.status !== 'ok') terminalCause = `terminal_spawn_${spawn.status}`;
-    else if (!text(spawn.value.identity.runtime) || !text(spawn.value.identity.id) || !text(spawn.value.identity.generation)) terminalCause = 'terminal_identity_invalid';
+    else if (!spawn.value || !text(spawn.value.identity.runtime)
+      || !text(spawn.value.identity.id) || !text(spawn.value.identity.generation)) terminalCause = 'terminal_identity_invalid';
     else {
       resources = { ...resources, terminal: spawn.value.identity };
-      if (spawn.value.provenance !== 'internal') terminalCause = 'terminal_provenance_external';
+      if (input.existingTerminal && (!reusedIdentity
+        || !sameIdentity(spawn.value.identity, reusedIdentity))) terminalCause = 'terminal_generation_mismatch';
+      else if (!input.existingTerminal && spawn.value.provenance !== 'internal') terminalCause = 'terminal_provenance_external';
       else if (spawn.value.workspacePath !== prepared.value.path) terminalCause = 'terminal_workspace_mismatch';
       else if (spawn.value.identity.runtime !== deps.adapter.id) terminalCause = 'terminal_runtime_mismatch';
       else terminal = spawn.value;
@@ -936,6 +982,19 @@ export async function runSupervisedTaskLaunchAssistant(
     }, { ...resources, ...(final.value.dispatchId ? { dispatchId: final.value.dispatchId } : {}) }, startedAtMs, timings, deps.now);
   }
 
+  if (input.existingTerminal && terminal) {
+    const current = deps.adapter.findWorkerById(terminal.identity.id);
+    if (current.status !== 'ok' || !current.value
+      || !sameIdentity(current.value.identity, terminal.identity)
+      || current.value.workspacePath !== terminal.workspacePath) {
+      return continued(input, 'dispatch_admission_final', {
+        cause: 'existing_terminal_generation_changed', actor: 'orchestrator', evidence: {},
+        nextAction: { kind: 'remediate_terminal',
+          note: 'do not launch the new Task onto a replaced or unresolvable terminal' },
+      }, resources, startedAtMs, timings, deps.now);
+    }
+  }
+
   const startAt = deps.now();
   const supervised = await deps.runSupervisedStart({
     repository: resources.repository,
@@ -964,6 +1023,14 @@ export async function runSupervisedTaskLaunchAssistant(
     outcome: supervised.ok ? 'passed' : 'continued',
   });
 
+  const validExistingAssignment = !input.existingTerminal || !supervised.ok
+    || supervised.reason !== 'ready_and_assignment_bound' || Boolean(
+      supervised.assignment?.issueNumber === input.issueNumber
+      && supervised.assignment?.repository === resources.repository
+      && supervised.assignment?.taskId === taskId
+      && supervised.assignment?.role === 'orchestrator'
+      && supervised.assignment?.bindingKey === supervised.receipt?.dispatchId
+    );
   const validDelegatedAssignment = !delegatedIntegration || !supervised.ok
     || supervised.reason !== 'ready_and_assignment_bound' || Boolean(
     supervised.assignment?.issueNumber === input.issueNumber
@@ -972,8 +1039,10 @@ export async function runSupervisedTaskLaunchAssistant(
     && supervised.assignment?.role === 'worker'
     && sameDelegatedIntegrationMarker(supervised.assignment?.delegatedIntegration, delegatedIntegration)
   );
-  if (!supervised.ok || supervised.reason !== 'ready_and_assignment_bound' || !supervised.assignment || !validDelegatedAssignment) {
-    const startReason = !validDelegatedAssignment ? 'merge_delegated_assignment_unverified' : supervised.reason;
+  if (!supervised.ok || supervised.reason !== 'ready_and_assignment_bound' || !supervised.assignment
+    || !validDelegatedAssignment || !validExistingAssignment) {
+    const startReason = !validExistingAssignment ? 'existing_terminal_issue_assignment_unverified'
+      : !validDelegatedAssignment ? 'merge_delegated_assignment_unverified' : supervised.reason;
     const requestId = supervised.recovery?.requestId;
     const receiptDispatchId = text(supervised.receipt?.dispatchId);
     const safeDispatchId = receiptDispatchId || supervised.recovery?.dispatchId;
@@ -1024,6 +1093,17 @@ export async function runSupervisedTaskLaunchAssistant(
     nextAction: { kind: 'reconcile_supervised_start', note: 'reconcile the provider receipt; setup/terminal liveness alone is never ready' },
   }, resources, startedAtMs, timings, deps.now);
 
+  if (input.existingTerminal) {
+    const worktreeEffect = supervised.receipt?.effects?.find((effect) => record(effect)
+      && text(effect.kind) === 'worktree' && text(effect.action) === 'reused');
+    const worktreeId = record(worktreeEffect) ? text(worktreeEffect.id) : '';
+    if (!worktreeId) return continued(input, 'supervised_start', {
+      cause: 'existing_terminal_worktree_receipt_missing', actor: 'provider', evidence: {},
+      nextAction: { kind: 'reconcile_supervised_start',
+        note: 'reconcile the bound Dispatch; no fresh Task/terminal from a missing placement receipt' },
+    }, resources, startedAtMs, timings, deps.now);
+    resources = { ...resources, worktreeId };
+  }
   if (providerMode) {
     const receipt = supervised.receipt;
     const worktree = receipt && record(receipt.worktree) ? receipt.worktree : null;
@@ -2444,6 +2524,7 @@ const LAUNCH_CLI_OPTIONS = new Set([
   '--manager-brief',
   '--worktree',
   '--worktree-name',
+  '--existing-terminal',
   '--base-branch',
   '--start-mode',
 ]);
@@ -2497,6 +2578,7 @@ export function parseLaunchAssistantCli(
   const managerBrief = options.get('--manager-brief');
   const worktreeSelector = (options.get('--worktree') ?? '').trim();
   const worktreeName = (options.get('--worktree-name') ?? '').trim();
+  const existingTerminal = (options.get('--existing-terminal') ?? '').trim();
   const explicitBaseBranch = (options.get('--base-branch') ?? '').trim();
   const selectedBaseBranch = `origin/${target.defaultBranch}`;
   const baseBranch = explicitBaseBranch || selectedBaseBranch;
@@ -2533,6 +2615,10 @@ export function parseLaunchAssistantCli(
   } else if (hasWorktreeSelector === hasWorktreeName) {
     throw new Error('provide exactly one --worktree or --worktree-name');
   }
+  if (existingTerminal && (workClass !== 'manager' || !issueNumber || !taskId
+    || !worktreeSelector || Boolean(worktreeName) || hasManagerBrief)) {
+    throw new Error('--existing-terminal requires manager, --run, --task, --issue-number and existing --worktree');
+  }
   if (workClass === 'manager') {
     if (!runId) throw new Error('manager requires --run');
     if (hasTask === hasManagerBrief) throw new Error('manager requires exactly one --task or --manager-brief');
@@ -2556,6 +2642,7 @@ export function parseLaunchAssistantCli(
     ...(workClass === 'merge' ? { worktreeSelector: `path:${target.primaryRoot}` }
       : worktreeSelector ? { worktreeSelector } : {}),
     ...(worktreeName ? { worktreeName } : {}),
+    ...(existingTerminal ? { existingTerminal } : {}),
     ...((hasWorktreeSelector || workClass === 'merge')
       ? { startMode: 'exact_terminal_worktree' as const }
       : requestedMode ? { startMode: requestedMode as WorkerStartMode } : {}),

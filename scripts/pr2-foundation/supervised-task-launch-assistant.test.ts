@@ -1179,6 +1179,64 @@ describe('supervised Task launch assistant', () => {
     expect(emittedArgs).not.toContain('--agent');
   });
 
+  it('Issue #2689: canonical next-Task reuse binds its exact existing manager terminal to the explicit Issue', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'issue-2689-existing-terminal-'));
+    const env = profileEnv({ OPK_BASE_DIR: base });
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    const inspect = async (argv: readonly string[]) => ({
+      ok: true, stdout: JSON.stringify({ ok: true, result: argv[0] === 'terminal'
+        ? { terminal: { handle: worker.identity.id, incarnationId: worker.identity.generation, worktreeId: 'repo::exact-worktree' } }
+        : { worktree: { id: 'repo::exact-worktree', path: worker.workspacePath } } }),
+    });
+    const nativeStarts: string[][] = [];
+    const start = async (args: Parameters<typeof runSupervisedWorkerStart>[0]) =>
+      runSupervisedWorkerStart({
+        ...args, inspect,
+        execute: async (argv) => {
+          nativeStarts.push([...argv]);
+          return { ok: true, stdout: JSON.stringify({ ok: true, result: {
+            taskId: argv[1], dispatchId: argv[1] === 'task-old' ? 'dispatch-old' : 'dispatch-new',
+            state: 'ready',
+            effects: [
+              { kind: 'worktree', action: 'reused', id: 'repo::exact-worktree' },
+              { kind: 'terminal', role: 'agent', action: 'reused', id: worker.identity.id },
+              { kind: 'dispatch_input', role: 'agent', action: 'accepted', id: worker.identity.id },
+            ],
+          } }) };
+        },
+      });
+    let spawned = 0;
+    let prepared = 0;
+    try {
+      const previous = await runSupervisedTaskLaunchAssistant({
+        ...launchInput('manager'), issueNumber: undefined, taskId: 'task-old', env,
+      }, { ...deps(), proveManagerTaskMembership: async (_runId, taskId) => ({ status: 'ok', value: { taskId } }), runSupervisedStart: start });
+      expect(previous.outcome).toBe('ready');
+      expect(currentWorkerAssignment(file, 2689)).toBeNull();
+
+      const transition = await runSupervisedTaskLaunchAssistant({
+        ...launchInput('manager'), issueNumber: 2689, taskId: 'task-new', env,
+        existingTerminal: worker.identity.id,
+      } as LaunchInput & { existingTerminal: string }, {
+        ...deps({
+          onWorktree: () => { prepared += 1; },
+          adapter: runtimeAdapter({ onSpawn: () => { spawned += 1; } }),
+        }),
+        proveManagerTaskMembership: async (_runId, taskId) => ({ status: 'ok', value: { taskId } }),
+        runSupervisedStart: start,
+      });
+      expect(transition.outcome).toBe('ready');
+      expect(spawned).toBe(0);
+      expect(prepared).toBe(0);
+      expect(nativeStarts.map((argv) => argv[1])).toEqual(['task-old', 'task-new']);
+      expect(currentWorkerAssignment(file, 2689)).toMatchObject({
+        issueNumber: 2689, role: 'orchestrator', taskId: 'task-new', bindingKey: 'dispatch-new',
+      });
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   it('manager without Issue preserves run/task identity and still reaches ordinary supervised-start', async () => {
     const input = { ...launchInput('manager'), issueNumber: undefined };
     const result = await runSupervisedTaskLaunchAssistant(input, deps());
@@ -4875,3 +4933,4 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       .toBeUndefined();
   });
 });
+
