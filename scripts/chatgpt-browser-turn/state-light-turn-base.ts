@@ -4428,81 +4428,6 @@ async function runTurnCore(
     };
 
     const markedPayload = wrapOwnedPromptPayload(marker, snapshot.text);
-    /** A positive disabled-before-click log for EVERY action is necessary but
-     * not sufficient. Destroy only the original invocation-created exact draft
-     * and close its tab while the incumbent POST witness is still attached.
-     */
-    const finalizeAffirmativeNoDispatch = async (): Promise<TurnRunOutcome | null> => {
-      const stillOwned = (): boolean => {
-        if (ownershipForfeited || page !== originalHeldPage
-          || cleanupAuthorityUnprovenPages.has(page)
-          || browserOrPageDefinitelyLost(page, browser)
-          || getOwnTargetInfo(browser)?.created !== true
-          || held429Witness?.ownSubmissionIssued() === true
-          || held429Witness?.serverMarkerPresent() === true
-          || held429Witness?.current()) return false;
-        try {
-          return config.newChat
-            ? Boolean(config.projectUrl && isBlankProjectSurfaceUrl(String(page.url()), config.projectUrl))
-            : Boolean(originalExactChat
-              && readOwnedConversationIdentity(page, originalExactChat).matched);
-        } catch { return false; }
-      };
-      const uncontradicted = async (): Promise<boolean> => {
-        if (!stillOwned() || Date.now() + 2 * MAX_LOCAL_READ_WAIT_MS >= invocationDeadlineMs
-          || await readFreshStopVisible(page, invocationDeadlineMs) !== false) return false;
-        try {
-          const observed = await readPageObservation(page, undefined, undefined, true, invocationDeadlineMs);
-          const expected = baselineSnapshot?.carriers;
-          if (!expected || observed.transcriptIncomplete || !observed.snapshot?.complete
-            || observed.pageTurnEvidence?.generationInProgress !== false
-            || observed.pageTurnEvidence?.continueGeneratingVisible === true
-            || observed.snapshot.carriers.length !== expected.length) return false;
-          for (let index = 0; index < expected.length; index++) {
-            const baseline = expected[index]!;
-            const now = observed.snapshot.carriers[index]!;
-            if (!baseline.fingerprint || baseline.fingerprint !== now.fingerprint
-              || baseline.role !== now.role || baseline.key !== now.key
-              || now.text.includes(marker)) return false;
-          }
-          return stillOwned() && await readFreshStopVisible(page, invocationDeadlineMs) === false;
-        } catch { return false; }
-      };
-      if (!await uncontradicted()
-        || await readLosslessOwnedComposer(page.locator(COMPOSER_SELECTOR), invocationDeadlineMs) !== markedPayload
-        || !await uncontradicted()) return null;
-      if (!await conditionalClearOwnedComposerDraft(
-        page, markedPayload, invocationDeadlineMs, String(page.url()),
-      )) return null;
-      if (!await uncontradicted()
-        || await readLosslessOwnedComposer(page.locator(COMPOSER_SELECTOR), invocationDeadlineMs) !== ''
-        // The blank read can itself await while Stop, transcript or a foreign
-        // shared draft changes. Revalidate every guard after that await and
-        // finish with another lossless blank check immediately before close.
-        || !await uncontradicted()
-        || await readLosslessOwnedComposer(page.locator(COMPOSER_SELECTOR), invocationDeadlineMs) !== ''
-        || !stillOwned()) return null;
-      const close = await abandonLatePageHandle(page, RESOURCE_CLEANUP_BOUND_MS);
-      // Closing has to be positively observed; a timed-out close is not finalization.
-      if (close !== 'confirmed' || typeof page.isClosed !== 'function' || page.isClosed() !== true
-        || held429Witness?.ownSubmissionIssued() || held429Witness?.serverMarkerPresent()) return null;
-      transitionStateLightTurnObservation({
-        profileKey, invocationId, phase: 'not_sent',
-        reason: 'affirmative_pre_actionability_no_dispatch',
-        sendCount: 0, sendWitness: 'none',
-      });
-      incident('send_observation_affirmative', 'affirmative_pre_actionability_no_dispatch',
-        'exact_owned_composer_cleared_and_created_tab_closed');
-      return {
-        page, browser, cleanupAction: 'skip',
-        result: compactResult(
-          'send_failed', 'invocation', 'affirmative_pre_actionability_no_dispatch',
-          invocationId, profileKey, 0, pollCount, navigation, incidents,
-          { send_attempted: true }, journalWriteFailed,
-        ),
-      };
-    };
-
     const assertFreshOwner = (): void => {
       // Preserve a positively witnessed first wall before diagnosing a redirected fresh URL.
       beforeBrowserAction();
@@ -4870,8 +4795,6 @@ async function runTurnCore(
         }
         throw error;
       }
-      const firstActionAffirmative = delivery.preDispatchTimeoutProven === true && delivery.sendCount === 0;
-      let freshRepeated = false;
       if (delivery.sendCount === 0
         && delivery.witness === 'unproven'
         && delivery.preDispatchTimeoutProven === true
@@ -4887,16 +4810,9 @@ async function runTurnCore(
         )) {
           assertFreshOwner();
           if (Date.now() < preDispatchCutoffMs) {
-            freshRepeated = true;
             delivery = await sendAction();
           }
         }
-      }
-      if (delivery.sendCount === 0 && delivery.preDispatchTimeoutProven === true
-        && (!freshRepeated || firstActionAffirmative)
-        && !held429Witness?.ownSubmissionIssued()) {
-        const affirmed = await finalizeAffirmativeNoDispatch();
-        if (affirmed) return affirmed;
       }
       if (delivery.sendCount === 0) {
         if (browserOrPageDefinitelyLost(page, browser)) {
@@ -5054,7 +4970,6 @@ async function runTurnCore(
           onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_resend'),
         });
       let delivery = await dispatchExisting(sendWaitMs);
-      const firstActionAffirmative = delivery.sendCount === 0 && delivery.preDispatchTimeoutProven === true;
       let repeated = false;
       if (hasSendButton && delivery.sendCount === 0 && delivery.witness === 'unproven'
         && delivery.preDispatchTimeoutProven === true
@@ -5110,12 +5025,6 @@ async function runTurnCore(
             delivery = await dispatchExisting(remaining);
           }
         }
-      }
-      if (delivery.sendCount === 0 && delivery.preDispatchTimeoutProven === true
-        && !held429Witness?.ownSubmissionIssued()
-        && (!repeated || firstActionAffirmative)) {
-        const affirmative = await finalizeAffirmativeNoDispatch();
-        if (affirmative) return affirmative;
       }
       if (delivery.sendCount === 0) {
         if (browserOrPageDefinitelyLost(page, browser)) {
