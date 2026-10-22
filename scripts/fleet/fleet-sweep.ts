@@ -35,6 +35,8 @@ export interface FleetPaneObservation extends FleetTerminal {
   readonly state: FleetPaneState;
   readonly lines: readonly string[];
   readonly wait?: string;
+  /** Positively bounded own final PARKED line; independent of r05 final-visible park authority. */
+  readonly ownParkObservation?: string;
   readonly taskBinding?: string;
   readonly permission?: FleetPermissionObservation;
   // Positive observation of distinguishable own work; ambiguous/empty screens never clear an episode.
@@ -870,6 +872,8 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
       ...(permission ? { permission } : {}),
       ...(permissionCleared ? { permissionCleared: true } : {}),
       ...(wait ? { wait } : {}),
+      ...(wait && outcome.wait === wait && state === 'PARKED'
+        ? { ownParkObservation: nonChromeLines(screen).at(-1) ?? outcome.wait } : {}),
       ...(binding ? { taskBinding: binding } : {}),
       lines: permission || lineCount === 0 ? [] : nonChromeLines(screen).slice(-lineCount),
     }];
