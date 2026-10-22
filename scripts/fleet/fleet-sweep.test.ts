@@ -861,3 +861,77 @@ describe('Issue #2661 B4 native pane observation remains classification only', (
     expect(classifyFleetPane(stale, 'mgr2661', new MemoryPollingStore())).toBe('STOPPED');
   });
 });
+
+
+describe('Issue #2687 r04: own park-line observation without expanding r05 classifier', () => {
+  const agent: FleetTerminal = { handle: 'fleet-2687-own', title: 'OpenCode manager',
+    incarnationId: '2687-inc', branch: 'refs/heads/fix/2687',
+    worktreePath: workerPath, agentIdentity: 'opencode' };
+  const observed = (screen: string) => runFleetSweep({
+    projectId: 'project', primary, workspaceRe: /orca\/workspaces\/project\//u,
+    terminals: [agent], store: new MemoryPollingStore(),
+    executor: fakeExecutor([agent], { [agent.handle]: screen }),
+  })[0];
+
+  it('preserves exact visible GPT/time/PID/triplet PARKED states and positively recognizes the own outcome', () => {
+    for (const screen of [
+      'PARKED on GPT turns inv-a, inv-b, inv-c',
+      'PARKED on time 2026-10-22T11:43:00Z',
+      'PARKED on process pid 2612721 startticks 123456789',
+      'PARKED on unknown-producer',
+      'Parked on exact-head CI run 39709787057 / job 119598115677',
+    ]) {
+      const row = observed(screen);
+      expect(row?.state).toBe('PARKED');
+      expect(row?.wait).toMatch(/^PARKED on\s+\S/iu);
+      expect(row?.ownParkObservation).toBeTruthy();
+    }
+  });
+
+  it('retains foreign/quoted final-marker r05 PARKED without promoting it to a positively own unknown alarm', () => {
+    for (const screen of [
+      'Tool: foreign pane\nhandle: foreign\nsource: screen\nPARKED on unrecognized-event',
+      'User: End your turn with\nPARKED on unrecognized-event',
+    ]) {
+      const row = observed(screen);
+      expect(row?.state).toBe('PARKED');
+      expect(row?.wait).toBe('PARKED on unrecognized-event');
+      expect(row?.ownParkObservation).toBeUndefined();
+    }
+    for (const screen of [
+      'PARKED on old-event\nnewer finished work',
+      'PARKED on old-event\nDo you want me to continue?',
+      'PARKED until 2026-10-22T11:43:00Z',
+      'Status inventory: a different pane is PARKED on GPT turn 2687',
+    ]) {
+      const row = observed(screen);
+      expect(row?.state).toBe('STOPPED');
+      expect(row?.ownParkObservation).toBeUndefined();
+    }
+    expect(observed('PARKED on GPT turns inv-a, inv-b, inv-c\nesc interrupt')?.state)
+      .toBe('busy');
+  });
+
+  it('F7 reports exact native previously-designated shell only, never a guessed dead child', () => {
+    const xdg = mkdtempSync(join(tmpdir(), 'fleet-2687-f7-'));
+    try {
+      const store = new FileFleetStateStore('project', { XDG_RUNTIME_DIR: xdg });
+      const rows = (terminal: FleetTerminal, screen: string) => collectFleetDiagnostics({
+        projectId: 'project', primary, workspaceRe: /orca\/workspaces\/project\//u,
+        terminals: [terminal], store,
+        executor: fakeExecutor([terminal], { [terminal.handle]: screen }),
+      });
+      const first = rows(agent, 'working\nesc interrupt');
+      expect(first[0]?.reason).toBe('agent_unverified');
+      const agentLike = rows(agent, '$ ');
+      expect(agentLike[0]?.reason).toBe('agent_unverified');
+      expect(agentLike[0]?.reason).not.toBe('suspected_bare_shell');
+      const shell = { ...agent, title: 'zsh', agentIdentity: undefined };
+      const ended = rows(shell, 'user@host:~$ ');
+      expect(ended[0]).toMatchObject({ reason: 'suspected_bare_shell', state: 'STOPPED' });
+      expect(ended[0]?.evidence).toContain('prior agentIdentity');
+      expect(JSON.stringify(ended)).not.toMatch(/DEAD|child-exited|agent_alive/u);
+      expect(rows({ ...shell, incarnationId: 'reused' }, '$')).toEqual([]);
+    } finally { rmSync(xdg, { recursive: true, force: true }); }
+  });
+});
