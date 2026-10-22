@@ -117,6 +117,26 @@ function config(overrides: Partial<FleetWakeConfig> = {}): FleetWakeConfig {
   };
 }
 
+/** Synthetic read-only git worktree list/rev-parse/common-dir responses. */
+function selectedProjectGit(
+  cwd: string, args: readonly string[],
+): string | undefined {
+  const worktrees = [primary, workerBase + '/one', workerBase + '/two'];
+  const foreignNested = workerBase + '/two/nested-foreign';
+  const roots = [...worktrees, foreignNested, '/other/project', '/lookalike/project'];
+  const root = roots.filter((entry) => cwd === entry || cwd.startsWith(entry + '/'))
+    .sort((a, b) => b.length - a.length)[0];
+  if (args[0] === 'worktree') {
+    return worktrees.map((entry) => 'worktree ' + entry + '\0HEAD abc\0\0').join('');
+  }
+  if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return root;
+  if (args[0] === 'rev-parse' && args[1] === '--path-format=absolute' && args[2] === '--git-common-dir') {
+    return worktrees.includes(root ?? '') ? '/simulated/common/selected.git'
+      : '/simulated/common/foreign.git';
+  }
+  return undefined;
+}
+
 function fakeOrca(
   screens: Readonly<Record<string, string>>,
   calls: string[][],
@@ -161,7 +181,8 @@ async function tick(input: {
   readNamedReview?: FleetAlarmTickOptions['readNamedReview'];
   readPackReviewStage?: FleetAlarmTickOptions['readPackReviewStage'];
   resolveSelectedReviewProject?: FleetAlarmTickOptions['resolveSelectedReviewProject'];
-  proveSelectedWorktree?: FleetAlarmTickOptions['proveSelectedWorktree'];
+  readGit?: FleetAlarmTickOptions['readGit'];
+  canonicalPath?: FleetAlarmTickOptions['canonicalPath'];
   probePid?: FleetAlarmTickOptions['probePid'];
   readPackReviewRuns?: FleetAlarmTickOptions['readPackReviewRuns'];
   reconcilePackReview?: FleetAlarmTickOptions['reconcilePackReview'];
@@ -195,7 +216,8 @@ async function tick(input: {
     ...(input.readNamedReview ? { readNamedReview: input.readNamedReview } : {}),
     ...(input.readPackReviewStage ? { readPackReviewStage: input.readPackReviewStage } : {}),
     ...(input.resolveSelectedReviewProject ? { resolveSelectedReviewProject: input.resolveSelectedReviewProject } : {}),
-    ...(input.proveSelectedWorktree ? { proveSelectedWorktree: input.proveSelectedWorktree } : {}),
+    ...(input.readGit ? { readGit: input.readGit } : {}),
+    ...(input.canonicalPath ? { canonicalPath: input.canonicalPath } : {}),
     ...(input.probePid ? { probePid: input.probePid } : {}),
     ...(input.readPackReviewRuns ? { readPackReviewRuns: input.readPackReviewRuns } : {}),
     ...(input.reconcilePackReview ? { reconcilePackReview: input.reconcilePackReview } : {}),
@@ -1720,7 +1742,7 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
       config: config({ selectedRepository: 'test/project' }),
       resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack', repository: 'test/project',
         primaryRoot: primary }),
-      proveSelectedWorktree: (cwd) => cwd === workerBase + '/one' || cwd === workerBase + '/two',
+      readGit: selectedProjectGit, canonicalPath: (path) => path,
       listTerminalEnvelopes: () => envelopes });
 
   it.each([
