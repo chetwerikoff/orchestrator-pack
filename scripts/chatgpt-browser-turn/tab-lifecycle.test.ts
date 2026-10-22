@@ -103,6 +103,7 @@ type FinalizerCase = {
   readonly foreignUser?: boolean;
   readonly foreignDraft?: boolean;
   readonly stopVisible?: boolean;
+  readonly continuationVisible?: boolean;
   readonly routeChanged?: boolean;
 };
 
@@ -184,6 +185,12 @@ async function observeFinalizer(testCase: FinalizerCase) {
         }
         if (selector === ASSISTANT_TURN_IN_PROGRESS_SELECTOR) {
           return { count: async () => 0 };
+        }
+        if (selector.includes('Continue generating')) {
+          return {
+            count: async () => testCase.continuationVisible ? 1 : 0,
+            isVisible: async () => Boolean(testCase.continuationVisible),
+          };
         }
         return { count: async () => 0 };
       },
@@ -369,6 +376,7 @@ describe('Issue #1238 page cleanup equivalence', () => {
     { name: 'foreign last user', options: { foreignUser: true }, cause: 'foreign_user_message' },
     { name: 'foreign draft', options: { foreignDraft: true }, cause: 'foreign_draft' },
     { name: 'visible Stop after harvest', options: { stopVisible: true }, cause: 'stop_visible' },
+    { name: 'visible Continue generating after harvest', options: { continuationVisible: true }, cause: 'generation_in_progress' },
     { name: 'changed conversation route', options: { routeChanged: true }, cause: 'route_changed' },
   ] as const)('retains the created target with $name even when the DOM is otherwise quiet', async ({ options, cause }) => {
     const observed = await observeFinalizer({
