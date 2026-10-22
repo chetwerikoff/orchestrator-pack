@@ -36,7 +36,7 @@ import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
 import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
 import { reconcileWorkerAssignments } from '../reconcile-worker-assignments.ts';
 import {
-  resolveExecutorProfile, runSupervisedTaskLaunchAssistant, type LaunchDependencies,
+  resolveLiveExecutorProfile, runSupervisedTaskLaunchAssistant, type LaunchDependencies,
 } from '../pr2-foundation/supervised-task-launch-assistant.ts';
 import { runSupervisedWorkerStart } from '../pr2-foundation/supervised-worker-start.ts';
 import type { ChatErrorBanner, ProjectChat } from './chat-error-banners.ts';
@@ -3165,6 +3165,20 @@ describe('Issue #2689 r03 exact native terminal -> canonical Issue assignment ->
       PACK_EXECUTOR_MANAGER_MODEL: 'fixture-opencode-model',
       PACK_EXECUTOR_MANAGER_EFFORT: 'fixture-opencode-effort',
     };
+    const opencodeProbeResult = (args: readonly string[]) => {
+      if (args[0] === 'opencode' && args[1] === 'models' && args.includes('--verbose')) return {
+        ok: true, stdout: ['fixture-opencode-model', '{', '  "variants": {',
+          '    "fixture-opencode-effort": {}', '  }', '}', ''].join('\n'), stderr: '',
+      };
+      if (args[0] === 'opencode' && args[1] === 'models') return {
+        ok: true, stdout: 'fixture-opencode-model\n', stderr: '',
+      };
+      if (args[0] === 'opencode' && args.includes('--help')) return {
+        ok: true, stdout: '', stderr: 'Usage: opencode --agent AGENT\n',
+      };
+      if (args[0] === process.execPath) return { ok: true, stdout: '', stderr: '' };
+      return { ok: false, stdout: '', stderr: '' };
+    };
     const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
     const effects = [
       { kind: 'worktree', action: 'reused', id: worktreeId },
@@ -3218,8 +3232,8 @@ describe('Issue #2689 r03 exact native terminal -> canonical Issue assignment ->
         adapter,
         commandPreflight: () => ({ status: 'ok', value: true }),
         repositoryPreflight: async () => ({ status: 'ok', value: true }),
-        resolveProfile: (workClass, profileEnv, startMode) =>
-          resolveExecutorProfile(workClass, profileEnv, startMode),
+        resolveProfile: (workClass, profileEnv, startMode) => resolveLiveExecutorProfile(
+          workClass, profileEnv, startMode, async (args) => opencodeProbeResult(args)),
         observeManagerRun: async () => ({ status: 'ok', value: { runId: 'run-2689' } }),
         proveManagerTaskMembership: async () => ({ status: 'ok', value: { taskId } }),
         readManagerBriefTemplate: async () => ({ status: 'ok', value: 'not used' }),
@@ -3243,7 +3257,7 @@ describe('Issue #2689 r03 exact native terminal -> canonical Issue assignment ->
           execute: async (argv) => {
             startCalls += 1;
             expect(argv).toEqual(['--task', taskId, '--terminal', handle,
-              '--worktree', 'path:' + worktreePath]);
+              '--worktree', 'path:' + worktreePath, '--json']);
             return { ok: true, stdout: JSON.stringify({ ok: true, result: {
               taskId, dispatchId, state: 'ready', effects,
             } }) };
