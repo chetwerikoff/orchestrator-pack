@@ -6427,7 +6427,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     orphanedPair?: boolean;
     prelaunchPair?: 'unstarted' | 'hybrid';
     source01Findings?: boolean;
-    unsafePrelaunch?: boolean;
+    unsafePrelaunch?: 'attempted' | 'sent' | 'possible-delivery';
     canonicalRepository?: string;
     sourceRepoRoot?: string;
     snapshotDigest?: string;
@@ -6535,7 +6535,9 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
             : {}),
           terminalClass: 'pre_launch_interrupted',
           terminalResult: { kind: 'stale_pre_launch_interruption', noResend: true,
-            ...(config.unsafePrelaunch ? { send_attempted: true } : {}) },
+            ...(config.unsafePrelaunch === 'attempted' ? { send_attempted: true } : {}),
+            ...(config.unsafePrelaunch === 'sent' ? { send_count: 1 } : {}),
+            ...(config.unsafePrelaunch === 'possible-delivery' ? { delivery: 'POSSIBLY_DELIVERED' } : {}) },
         };
       }
     } else {
@@ -6674,9 +6676,11 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     },
   );
 
-  it('Issue #2692: prelaunch sent/possibly-delivered evidence never grants resend', async () => {
+  it.each(['attempted', 'sent', 'possible-delivery'] as const)(
+    'Issue #2692: prelaunch %s evidence never grants resend',
+    async (mode) => {
     const f = await seedDeadIncumbent({
-      prelaunchPair: 'unstarted', source02Comment: false, unsafePrelaunch: true,
+      prelaunchPair: 'unstarted', source02Comment: false, unsafePrelaunch: mode,
     });
     const originalSlots = structuredClone(getPackReviewRun(f.runId, f.options)!.reviewRound!.sourceSlots);
     const result = await startPackReview({
