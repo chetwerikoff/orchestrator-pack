@@ -1834,13 +1834,14 @@ async function wakePanesOnEvents(
     // global envelopes are not sufficient even for an advisory re-check.
     if (failureTerminalEnvelope(envelope) || !envelope.observedInvocationId
       || !envelope.terminalHandle || !envelope.cwd
-      || !(envelope.lifecycleOutcome === 'success' || envelope.turnResultState === 'ok')
-      || !selectedGitWorktree(envelope.cwd, options.config, options)) continue;
+      || !(envelope.lifecycleOutcome === 'success' || envelope.turnResultState === 'ok')) continue;
     const matched = observations.filter((candidate) => candidate.handle === envelope.terminalHandle
       && candidate.state === 'STOPPED' && Boolean(candidate.incarnationId)
       && candidate.status?.toLowerCase() !== 'exited'
       && !bareShellHandles.has(candidate.handle));
     if (matched.length !== 1) continue;
+    // Historical global envelopes without a current eligible native receiver need no Git census.
+    if (!selectedGitWorktree(envelope.cwd, options.config, options)) continue;
     const pane = matched[0]!;
     const observedId = safeUnitAtom(envelope.observedInvocationId);
     const safePath = safeUnitAtom(envelope.path);
@@ -1979,9 +1980,10 @@ export async function runFleetDiagnosticTick(options: FleetDiagnosticTickOptions
     log('DIAG handle=none incarnation=unknown state=unverified reason=fleet_census_unreadable evidence=terminal list --json: incomplete_or_malformed');
     return;
   }
+  const resolvedCoordinator = resolveCoordinatorPane(terminals, config);
   const rows = collectFleetDiagnostics({
     projectId: config.projectId, primary: config.primary, workspaceRe: config.workspaceRe,
-    coordinatorHandle: config.orchestratorHandle,
+    coordinatorHandle: resolvedCoordinator?.handle,
     coordinatorTitleRe: config.orchestratorTitleRe, architectHandle: config.architectHandle,
     busyRe: config.busyRe, executor, store, terminals,
     ...(options.observations ? { observations: options.observations } : {}),

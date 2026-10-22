@@ -625,6 +625,50 @@ describe('fleet alarm', () => {
     expect(sendsTo(repeated.calls, 'one')).toHaveLength(0);
   });
 
+  it('Issue #2687: skips Git worktree probes for historical envelopes without an eligible STOPPED launcher', async () => {
+    const owner: FleetTerminal = { ...terminals[1]!, incarnationId: 'current-stop-owner', status: 'running' };
+    const history: TerminalEnvelopeEvent[] = Array.from({ length: 12 }, (_, index) => ({
+      path: '/tmp/opencode/history-' + index + '-terminal.json',
+      invocationId: 'history-' + index, observedInvocationId: 'history-' + index,
+      terminalHandle: 'retired-' + index, cwd: workerBase + '/one/scripts',
+      lifecycleOutcome: 'success', turnResultState: 'ok',
+    }));
+    const matching: TerminalEnvelopeEvent = {
+      ...history[0]!, path: '/tmp/opencode/current-stop-terminal.json',
+      invocationId: 'current-id', observedInvocationId: 'current-id', terminalHandle: owner.handle,
+    };
+    let gitReads = 0;
+    let cardReads = 0;
+    const input: Parameters<typeof tick>[0] = {
+      config: config({ selectedRepository: 'test/project' }),
+      terminals: [terminals[0]!, owner], screens: { coord: 'idle', one: 'done' },
+      listTerminalEnvelopes: () => history, listOpenPulls: () => [],
+      readPackReviewRuns: () => [], readCurrentAssignments: () => [],
+      resolveSelectedReviewProject: () => {
+        cardReads += 1;
+        return { projectId: 'orchestrator-pack', repository: 'test/project', primaryRoot: primary };
+      },
+      canonicalPath: (path) => path,
+      readGit: (cwd, args) => { gitReads += 1; return selectedProjectGit(cwd, args); },
+    };
+    const irrelevant = await tick(input);
+    expect(gitReads).toBe(0);
+    expect(cardReads).toBe(0);
+    expect(sendsTo(irrelevant.calls, owner.handle)).toHaveLength(0);
+
+    const busy = await tick({
+      ...input, screens: { coord: 'idle', one: 'working\nesc interrupt' },
+      listTerminalEnvelopes: () => [matching],
+    });
+    expect(gitReads).toBe(0);
+    expect(sendsTo(busy.calls, owner.handle)).toHaveLength(0);
+
+    const positive = await tick({ ...input, listTerminalEnvelopes: () => [...history, matching] });
+    expect(gitReads).toBeGreaterThan(0);
+    expect(cardReads).toBe(1);
+    expect(sendsTo(positive.calls, owner.handle).filter((row) => row.includes('--text'))).toHaveLength(1);
+  });
+
   it('r05: old post-send/generation proof is not a Wake gate once exact landed GPT evidence exists', async () => {
     const token = '24852485-1111-4111-8111-248524852485';
     const agent = { ...terminals[1]!, incarnationId: 'r05-owner' };
@@ -3365,6 +3409,28 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     expect(texts(old.calls, coordinator.handle).join(' ')).not.toContain('unknown parked producer');
   });
 
+  it('F1/F2 keeps blank-separated foreign/tool and User quoted PARKED without an unknown-own alarm', async () => {
+    for (const screen of [
+      'Tool: foreign pane\nhandle: foreign\n\nPARKED on unknown-producer',
+      'Tool: foreign pane\n\nPARKED on unknown-producer',
+      'User: please quote this\n\nPARKED on unknown-producer',
+    ]) {
+      const rows = runFleetSweep({
+        primary, projectId: 'orchestrator-pack', terminals: [coordinator, manager],
+        store: new MemoryWakeStore(),
+        executor: fakeOrca({ coord: 'idle', one: screen }, [], [coordinator, manager]),
+      });
+      expect(rows[0]?.state).toBe('PARKED');
+      expect(rows[0]?.wait).toBe('PARKED on unknown-producer');
+      expect(rows[0]?.ownParkObservation).toBeUndefined();
+      const routed = await scenario(screen);
+      expect(texts(routed.calls, manager.handle)).toHaveLength(0);
+      expect(texts(routed.calls, coordinator.handle).join(' ')).not.toContain('unknown parked producer');
+    }
+    const own = await scenario('PARKED on unknown-producer');
+    expect(texts(own.calls, coordinator.handle).join(' ')).toContain('unknown parked producer');
+  });
+
   it('F3 single and triplet require exact settled observed IDs and allow child cwd in alternate linked worktree', async () => {
     const single = 'PARKED on GPT turn inv-a. (self-wake armed)';
     const one = await scenario(single, { listTerminalEnvelopes: () => [event('inv-a')] });
@@ -3563,6 +3629,19 @@ describe('Issue #2687 r04: file-backed coordinator pin, quotes and startup', () 
       }
       writeFileSync(pinFile, "ORCH_HANDLE='coord-old'\n");
       const settings = makeConfig();
+      const diagnostic = async (rosterForRead: readonly FleetTerminal[]) => {
+        const lines: string[] = [], calls: string[][] = [];
+        await runFleetDiagnosticTick({
+          config: settings, terminals: rosterForRead, store: new MemoryWakeStore(),
+          executor: fakeOrca({ ...frames, 'coord-old': 'idle' }, calls, rosterForRead),
+          log: (line) => lines.push(line),
+        });
+        expect(sends(calls)).toHaveLength(0);
+        return lines;
+      };
+      const initialDiagnostic = await diagnostic(roster);
+      expect(initialDiagnostic.some((line) => line.includes('reason=coordinator_unverified selected=coord-old'))).toBe(true);
+      expect(initialDiagnostic.some((line) => line.startsWith('DIAG handle=coord-old '))).toBe(false);
       const store = new MemoryWakeStore();
       const old = await run(settings, store);
       expect(sendsTo(old.calls, 'coord-old').filter((row) => row.includes('--text'))).toHaveLength(1);
@@ -3570,6 +3649,15 @@ describe('Issue #2687 r04: file-backed coordinator pin, quotes and startup', () 
       const shifted = await run(settings, store);
       expect(sendsTo(shifted.calls, 'coord-old')).toHaveLength(0);
       expect(sendsTo(shifted.calls, 'coord-new').filter((row) => row.includes('--text'))).toHaveLength(1);
+      const repurposedOld: FleetTerminal = { ...oldPane, title: 'OpenCode reused manager',
+        worktreePath: workerBase + '/one', branch: 'refs/heads/reused-agent',
+        incarnationId: 'pin-reused', agentIdentity: 'opencode', status: 'running' };
+      const reusedRoster = [repurposedOld, newPane, manager];
+      const repinnedDiagnostic = await diagnostic(reusedRoster);
+      expect(repinnedDiagnostic.some((line) => line.startsWith('DIAG handle=coord-old ')
+        && line.includes('reason=agent_unverified'))).toBe(true);
+      expect(repinnedDiagnostic.some((line) => line.startsWith('DIAG handle=coord-new '))).toBe(false);
+      expect(repinnedDiagnostic.some((line) => line.includes('reason=coordinator_unverified selected=coord-new'))).toBe(true);
       expect(sends((await run(settings, store)).calls)).toHaveLength(0);
 
       // Startup Wake is a separate process-local effect, but uses the same hot pin.
@@ -3604,6 +3692,10 @@ describe('Issue #2687 r04: file-backed coordinator pin, quotes and startup', () 
         settings)).toBeUndefined();
 
       rmSync(pinFile);
+      const removedPinDiagnostic = await diagnostic(reusedRoster);
+      expect(removedPinDiagnostic.some((line) => line.startsWith('DIAG handle=coord-old ')
+        && line.includes('reason=agent_unverified'))).toBe(true);
+      expect(removedPinDiagnostic.some((line) => line.includes('reason=coordinator_unverified selected=none'))).toBe(true);
       const vanished = await run(settings, new MemoryWakeStore());
       expect(sendsTo(vanished.calls, 'coord-old')).toHaveLength(0);
       expect(sendsTo(vanished.calls, 'coord-new')).toHaveLength(0);
@@ -3627,6 +3719,10 @@ describe('Issue #2687 r04: file-backed coordinator pin, quotes and startup', () 
         const noPin = await run(settings);
         expect(sendsTo(noPin.calls, 'coord-old')).toHaveLength(0);
         expect(sendsTo(noPin.calls, 'coord-new')).toHaveLength(0);
+        const invalidPinDiagnostic = await diagnostic(reusedRoster);
+        expect(invalidPinDiagnostic.some((line) => line.startsWith('DIAG handle=coord-old ')
+          && line.includes('reason=agent_unverified'))).toBe(true);
+        expect(invalidPinDiagnostic.some((line) => line.includes('reason=coordinator_unverified selected=none'))).toBe(true);
       }
       rmSync(pinFile);
       const noFileAtConstruction = makeConfig();

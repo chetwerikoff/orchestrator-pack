@@ -913,6 +913,21 @@ describe('Issue #2687 r04: own park-line observation without expanding r05 class
       .toBe('PARKED');
   });
 
+  it('keeps blank-separated foreign/tool and User final PARKED visible but never positively own', () => {
+    for (const screen of [
+      'Tool: foreign pane\nhandle: foreign\n\nPARKED on unknown-producer',
+      'Tool: foreign pane\n\nPARKED on unknown-producer',
+      'User: quote this text\n\nPARKED on unknown-producer',
+    ]) {
+      const row = observed(screen);
+      expect(row?.state).toBe('PARKED');
+      expect(row?.wait).toBe('PARKED on unknown-producer');
+      expect(row?.ownParkObservation).toBeUndefined();
+    }
+    expect(observed('ordinary own response\n\nPARKED on unknown-producer')?.ownParkObservation)
+      .toBe('PARKED on unknown-producer');
+  });
+
   it('F7 reports exact native previously-designated shell only, never a guessed dead child', () => {
     const xdg = mkdtempSync(join(tmpdir(), 'fleet-2687-f7-'));
     try {
