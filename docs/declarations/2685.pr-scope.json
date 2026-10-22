@@ -1,0 +1,33 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2685,
+  "declared_paths": [
+    "docs/chatgpt-task-execution-runbook.md",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/chatgpt-task-execution-runbook.md",
+    "scripts/browser-gpt-page-probe.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts"
+  ],
+  "source_revision": "47c9db83736d7712b95e2a517a6c6f6801b35f4d"
+}

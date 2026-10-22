@@ -2750,7 +2750,7 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     let appendedLateAssistant = false;
     let injectedWhitespaceMutation = false;
     let observedReusedNegativeGet = false;
-    let injectedAfterClear = false;
+    let injectedLateActivity = false;
     let stopVisible = false;
     let closed = false;
     const pageEvents = new EventEmitter();
@@ -2806,14 +2806,6 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
         if (clickCount === 1 && args === undefined && kind === 'overslept-poll') {
           sawRecoveryLosslessRead = true;
         }
-        // Post-clear census has already passed. Simulate an external change
-        // during the first awaited blank-composer read before Page.close().
-        if ((kind === 'affirmative-late-stop' || kind === 'affirmative-late-draft')
-          && clickCount === 2 && args === undefined && draft === '' && !injectedAfterClear) {
-          injectedAfterClear = true;
-          if (kind === 'affirmative-late-stop') stopVisible = true;
-          else draft = 'FOREIGN SHARED DRAFT AFTER CLEAR';
-        }
         return value;
       }),
     });
@@ -2855,6 +2847,14 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
           await Promise.resolve();
           await Promise.resolve();
           await Promise.resolve();
+        }
+        // A late external Stop or draft after the second disabled-click attempt
+        // must retain the possibly-sent original, never certify not_sent.
+        if ((kind === 'affirmative-late-stop' || kind === 'affirmative-late-draft')
+          && clickCount === 2 && !injectedLateActivity) {
+          injectedLateActivity = true;
+          if (kind === 'affirmative-late-stop') stopVisible = true;
+          else draft = 'FOREIGN SHARED DRAFT AFTER CLEAR';
         }
         if ((kind === 'pre-actionability-budget' && clickCount === 1)
           || kind === 'affirmative-finalized'
@@ -2954,7 +2954,8 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
         ...outcome, click: sendButton.click, evaluate, calls, firstClickAt,
         explicitGetAt, getClock: () => now, getDraft: () => draft,
         injectedNaturalPositive, oversleptPoll, sawTransientGenerationDuringStall,
-        appendedLateAssistant, injectedWhitespaceMutation, injectedAfterClear,
+        appendedLateAssistant, injectedWhitespaceMutation, injectedLateActivity,
+        isStopVisible: () => stopVisible,
         injectedRetryCorruption,
         observedReusedNegativeGet,
         close: page.close,
@@ -3023,29 +3024,30 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     expect(t.close).not.toHaveBeenCalled();
   });
 
-  it('finalizes affirmative all-action non-dispatch only on a created owned blank Page', async () => {
+  it('does not treat affirmative disabled-click timeouts as never-attempted not_sent (#2685 r04)', async () => {
     const t = await connectedTurn('affirmative-finalized');
     expect(t.click).toHaveBeenCalledTimes(2);
     expect(t.calls).toHaveLength(0);
-    expect(t.close).toHaveBeenCalledTimes(1);
-    expect(t.getDraft()).toBe('');
+    // A timed-out attempted click is not the prepared -> not_sent row, even
+    // when Playwright logged only disabled/pre-actionability operations.
+    expect(t.close).not.toHaveBeenCalled();
+    expect(t.getDraft()).toMatch(/^OPKTURNV1[0-9a-f]{32}\n\n/u);
     expect(t.result).toMatchObject({
-      state: 'send_failed', cause: 'affirmative_pre_actionability_no_dispatch',
-      send_count: 0, send_attempted: true,
+      state: 'observation_uncertain', send_count: 0, send_attempted: true,
     });
-    expect(t.observation).toMatchObject({ phase: 'not_sent', send_count: 0,
-      transition_reason: 'affirmative_pre_actionability_no_dispatch' });
+    expect(t.observation.phase).toBe('dispatching');
   });
 
   it.each(['affirmative-late-stop', 'affirmative-late-draft'] as const)(
-    'preserves a created Page when %s appears after post-clear census but before close', async (kind) => {
+    'preserves a created Page when %s arrives after the second attempted action', async (kind) => {
       const t = await connectedTurn(kind);
-      expect(t.injectedAfterClear).toBe(true);
+      expect(t.injectedLateActivity).toBe(true);
       expect(t.click).toHaveBeenCalledTimes(2);
       expect(t.close).not.toHaveBeenCalled();
-      expect(t.observation.phase).toBe('dispatching');
-      expect(t.result).toMatchObject({ state: 'observation_uncertain', send_attempted: true, send_count: 0 });
-      if (kind === 'affirmative-late-draft') expect(t.getDraft()).toBe('FOREIGN SHARED DRAFT AFTER CLEAR');
+      expect(t.observation.phase).not.toBe('not_sent');
+      expect(t.result.send_attempted).toBe(true);
+      if (kind === 'affirmative-late-stop') expect(t.isStopVisible()).toBe(true);
+      else expect(t.getDraft()).toBe('FOREIGN SHARED DRAFT AFTER CLEAR');
     },
   );
 });

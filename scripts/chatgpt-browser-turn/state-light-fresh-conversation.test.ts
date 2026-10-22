@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -140,8 +140,9 @@ import {
   type StateLightTestSnapshot,
 } from './state-light-turn.test-fixtures.ts';
 import { classifyPageObservation, classifySendLandingEvidence, publishStateLightReply, readPageObservation, runStateLightTurn } from './state-light-turn.ts';
-import { admitStateLightTurnObservation, finalizeStateLightPrimaryPublication, readStateLightTurnObservation } from './state-light-turn-observation.ts';
-import { deriveDelivery } from '../flow-manager-long-running-child.ts';
+import { runStateLightEntry } from './state-light-entry.ts';
+import { admitStateLightTurnObservation, bindStateLightOwnedTarget, finalizeStateLightPrimaryPublication, readStateLightTurnObservation, transitionStateLightTurnObservation } from './state-light-turn-observation.ts';
+import { deriveDelivery, COMPLETION_MODE, HANDOFF_SCHEMA, RECEIPT_LOCATOR_SCHEMA, TERMINAL_SCHEMA } from '../flow-manager-long-running-child.ts';
 import { __testBrowserOrPageDefinitelyLost, __testComposerMutation, __testSendDelivery, deriveComposerInsertionBudgetMs, POST_SEND_OBSERVATION_POLL_MS, probePageLiveness } from './state-light-turn-base.ts';
 import { attachOwnTarget, __testAttachOwnTargetFixture } from './own-target-attach.ts';
 import { probeCdpSiblingEvaluations } from './own-target-cdp-proxy.ts';
@@ -286,13 +287,27 @@ function makeLoserPage(
         ...surface,
         isConnected: true,
         isContentEditable: true,
-        ownerDocument: { defaultView: {
-          location: { get href() { return String(page.url()); } },
-          getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
-        } },
-        get textContent() { return surface?.textContent ?? (sent ? '' : composerText); },
-        set textContent(value: string) { composerText = value; },
-        get innerText() { return surface?.innerText ?? (sent ? '' : composerText); },
+        ownerDocument: {
+          querySelectorAll: (selector: string) => selector === COMPOSER_SELECTOR ? [element] : [],
+          defaultView: {
+            location: { get href() { return String(page.url()); } },
+            getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+          },
+        },
+        get textContent() {
+          return (this as any).__domCleared ? '' : editorSurface()?.textContent ?? (sent ? '' : composerText);
+        },
+        set textContent(value: string) {
+          composerText = value;
+          if (surface && value === '') {
+            // A direct DOM clear removes the P/BR nodes in a real browser.
+            (this as any).childNodes = [];
+            (this as any).__domCleared = true;
+          }
+        },
+        get innerText() {
+          return (this as any).__domCleared ? '' : editorSurface()?.innerText ?? (sent ? '' : composerText);
+        },
       };
       return callback(element, arg);
     }),
@@ -442,6 +457,335 @@ describe('state-light fresh conversation collision recovery', () => {
     rmSync(stateDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
+
+  it('clears only exact structurally owned ProseMirror literal with blank paragraphs and an autolink (#2685)', async () => {
+    const literal = 'OPKTURNV1' + 'ab'.repeat(16) + '\n\none\n\nhttps://example.com/a\n';
+    for (const rendering of ['paragraphs', 'autolink'] as const) {
+      const turn = makeLoserPage('PROMPT', 'NOT SENT', undefined, false, rendering);
+      await turn.composer.fill(literal);
+      expect(await __testSendDelivery.conditionalClearOwnedComposerDraft(
+        turn.page, literal, Date.now() + 5_000, PROJECT_URL,
+      ), rendering).toBe(true);
+      expect(turn.getComposerText()).toBe('');
+      await turn.composer.fill('FOREIGN-DRAFT' + literal);
+      expect(await __testSendDelivery.conditionalClearOwnedComposerDraft(
+        turn.page, literal, Date.now() + 5_000, PROJECT_URL,
+      ), rendering).toBe(false);
+      expect(turn.getComposerText()).toBe('FOREIGN-DRAFT' + literal);
+    }
+  });
+
+  it('preserves the original frozen pre-Send Page and names the refused owner check (#2685 r03 P1)', async () => {
+    const prompt = 'PROMPT-FROZEN-OWNED-2685';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'NEVER');
+    turn.sendButton.isEnabled.mockResolvedValue(false);
+    turn.composer.evaluate.mockRejectedValue(new Error('Page renderer unresponsive'));
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, 'original-frozen-2685.txt'), '90000', randomUUID(),
+    );
+    expect(outcome.result.send_count).toBe(0);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(outcome.result.cleanup).not.toBe('confirmed');
+    expect(outcome.result.incidents).toContain('frozen_ownership_unproven');
+  });
+
+
+  // The following cases enter through the real existing state-light CLI and
+  // guarded backend. Only the already-established browser/CDP fixture seams
+  // are mocked; receipt/terminal/observation readers are not mocked.
+  async function deferredRetirementFixture(phase: 'not_sent' | 'sent_unbound' | 'harvested') {
+    const invocationId = randomUUID();
+    const profile = '/tmp/profile';
+    const cdp = 'http://127.0.0.1:9222';
+    const targetId = 'fixture-own-target';
+    const marker = TEST_OWNED_MARKER;
+    const run = 'run-retire-2685';
+    const task = 'task-retire-2685';
+    const attempt = 'attempt-retire-2685';
+    const root = join(stateDir, 'receipt-' + invocationId);
+    const index = join(root, 'browser-gpt-receipts');
+    const receiptPath = join(root, 'handoff.json');
+    const terminalPath = join(root, 'turn-terminal.json');
+    mkdirSync(index, { recursive: true, mode: 0o700 });
+    vi.stubEnv('OPK_FM_LONG_CHILD_TEST_GATE', 'fixture-root-v1');
+    vi.stubEnv('OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT', root);
+    const writePrivate = (path: string, record: object) =>
+      writeFileSync(path, JSON.stringify(record) + '\n', { mode: 0o600 });
+    const turn = makeLoserPage('DEFERRED-OWNED-2685', 'OWNED-COMMITTED-REPLY');
+    if (phase !== 'not_sent') await turn.sendButton.click();
+    admitStateLightTurnObservation({ profileKey: 'collision-profile', invocationId, marker });
+    bindStateLightOwnedTarget({
+      profileKey: 'collision-profile', invocationId, targetId, created: true,
+      cdp, initialRoute: PROJECT_URL,
+    });
+    if (phase === 'not_sent') {
+      transitionStateLightTurnObservation({
+        profileKey: 'collision-profile', invocationId, phase: 'not_sent',
+        reason: 'terminal_pre_send', sendCount: 0, sendWitness: 'numeric_send_count',
+      });
+    } else {
+      transitionStateLightTurnObservation({
+        profileKey: 'collision-profile', invocationId, phase: 'dispatching',
+        reason: 'positive_send_attempt',
+      });
+      transitionStateLightTurnObservation({
+        profileKey: 'collision-profile', invocationId, phase: 'sent_unbound',
+        reason: 'positive_original_send', sendCount: 1, sendWitness: 'numeric_send_count',
+        conversationUrl: SHARED_CONV,
+      });
+    }
+    const publishOwnPrimary = async () => {
+      const target = join(stateDir, 'committed-' + invocationId + '.txt');
+      const bytes = 'OWNED-COMMITTED-REPLY';
+      const committed = await finalizeStateLightPrimaryPublication({
+        profileKey: 'collision-profile', invocationId, target, bytes,
+        publish: () => {
+          writeFileSync(target, bytes);
+          return {
+            state: 'committed_ok' as const,
+            output_bytes: Buffer.byteLength(bytes),
+            output_sha256: createHash('sha256').update(bytes).digest('hex'),
+          };
+        },
+      });
+      expect(committed.state).toBe('committed_ok');
+      // The synthetic Page had not been polled by a driver. Make its rendered
+      // assistant frame genuinely final after committing, as production must.
+      for (let i = 0; i < 4; i++) turn.page.locator(MESSAGE_NODE_SELECTOR);
+    };
+    if (phase === 'harvested') await publishOwnPrimary();
+    writePrivate(receiptPath, {
+      schema: HANDOFF_SCHEMA, run_identity: run, attempt_identity: attempt,
+      launcher_started_at: new Date().toISOString(),
+      handoff_committed_at: new Date().toISOString(),
+      completion_mode: COMPLETION_MODE, invocation_id: invocationId,
+      owner_task_id: task, launcher_pid: process.pid, child_cwd: process.cwd(),
+    });
+    writePrivate(join(index, createHash('sha256').update(invocationId).digest('hex') + '.json'), {
+      schema: RECEIPT_LOCATOR_SCHEMA, invocation_id: invocationId,
+      run_identity: run, attempt_identity: attempt,
+      handoff_receipt_path: receiptPath, terminal_envelope_path: terminalPath,
+    });
+    const writeTerminal = (delivery: 'not-sent' | 'POSSIBLY_DELIVERED' | 'landed', sendCount: number) =>
+      writePrivate(terminalPath, {
+        schema: TERMINAL_SCHEMA, run_identity: run, attempt_identity: attempt,
+        completion_mode: COMPLETION_MODE, handoff_receipt_path: receiptPath,
+        launcher_started_at: new Date().toISOString(),
+        handoff_committed_at: new Date().toISOString(),
+        terminal_at: new Date(0).toISOString(), lifecycle_outcome: 'incident',
+        delivery, send_count: sendCount, observed_invocation_id: invocationId,
+        owned_target_id: targetId, owned_target_created: true,
+        owned_prompt_marker: marker, cleanup_status: 'cleanup_unconfirmed',
+        recovery_available: true,
+      });
+    writeTerminal(phase === 'not_sent' ? 'not-sent' : phase === 'harvested' ? 'landed' : 'POSSIBLY_DELIVERED',
+      phase === 'not_sent' ? 0 : 1);
+    const args = [
+      'retire-owned', '--profile', profile, '--cdp', cdp,
+      '--invocation-id', invocationId, '--target-id', targetId,
+      '--run-identity', run, '--attempt-identity', attempt, '--owner-task-id', task,
+    ];
+    let originalPresent = true;
+    let onlyPage = false;
+    let healthyAnchor = false;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (new URL(String(input)).pathname !== '/json/list') throw new Error('unexpected_destructive_CDP_request');
+      const targets = [
+        ...(originalPresent && turn.page.close.mock.calls.length === 0
+          ? [{ id: targetId, type: 'page', url: String(turn.page.url()),
+            webSocketDebuggerUrl: 'ws://example/fixture-own-target' }] : []),
+        ...(!onlyPage ? [{ id: 'healthy-owner-control', type: 'page',
+          url: healthyAnchor ? 'https://chatgpt.com/c/healthy-control' : 'about:blank#survivor' }] : []),
+      ];
+      return new Response(JSON.stringify(targets), { status: 200 });
+    });
+    const invoke = async (argv: string[] = args) => {
+      mocks.browserQueue.length = 0;
+      enqueueBrowserForTurn(mocks, turn.page);
+      const output: string[] = [];
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+        output.push(String(chunk));
+        return true;
+      }) as typeof process.stdout.write);
+      try {
+        const code = await runStateLightEntry(argv);
+        return { code, report: JSON.parse(output.at(-1) ?? '{}') as {
+          status: string; cause: string; target_id?: string; next_action: string;
+        } };
+      } finally {
+        stdout.mockRestore();
+      }
+    };
+    return {
+      turn, args, invoke, publishOwnPrimary, writeTerminal, fetchSpy, targetId,
+      setGone: () => { originalPresent = false; },
+      setOnlyPage: () => { onlyPage = true; },
+      setHealthyAnchor: () => { healthyAnchor = true; },
+    };
+  }
+
+  it('Issue #2685: retire-owned uses actual receipt, terminal and fresh exact-ID census for zero-user not_sent and committed harvested', async () => {
+    for (const phase of ['not_sent', 'harvested'] as const) {
+      const fixture = await deferredRetirementFixture(phase);
+      try {
+        const invalid = await fixture.invoke(fixture.args.map((value, i) =>
+          i === 8 ? 'foreign-invocation' : value));
+        expect(invalid.report.status).toBe('cleanup_unconfirmed');
+        expect(fixture.turn.page.close).not.toHaveBeenCalled();
+        const valid = await fixture.invoke();
+        expect(valid).toMatchObject({
+          code: 0, report: { status: 'confirmed', cause: 'confirmed', target_id: fixture.targetId },
+        });
+        expect(fixture.turn.page.close).toHaveBeenCalledTimes(1);
+        expect(fixture.turn.getSends()).toBe(phase === 'harvested' ? 1 : 0);
+        expect(fixture.fetchSpy.mock.calls.every(([url]) =>
+          new URL(String(url)).pathname === '/json/list')).toBe(true);
+      } finally {
+        fixture.fetchSpy.mockRestore();
+      }
+    }
+  });
+
+  it('Issue #2685: post-Send frozen original stays pinned beyond 20 minutes, including foreign edit/refreeze; thaw remains outcome-specific', async () => {
+    const fixture = await deferredRetirementFixture('sent_unbound');
+    const probe = vi.mocked(probeCdpSiblingEvaluations);
+    const originalProbe = probe.getMockImplementation()!;
+    let frozen = true;
+    let foreignDraft = false;
+    const originalEvaluate = fixture.turn.composer.evaluate.getMockImplementation()!;
+    const foreignElement: any = {
+      isConnected: true, isContentEditable: true,
+      classList: { contains: () => false },
+      getAttribute: () => null,
+      textContent: 'FOREIGN OPERATOR DRAFT',
+      innerText: 'FOREIGN OPERATOR DRAFT',
+      ownerDocument: { defaultView: { getComputedStyle: () =>
+        ({ display: 'block', visibility: 'visible' }) } },
+    };
+    fixture.turn.composer.evaluate.mockImplementation(async (cb: any, arg: any, options: any) => {
+      if (frozen) throw new Error('test-owned renderer unreadable');
+      return foreignDraft ? cb(foreignElement, arg) : originalEvaluate(cb, arg, options);
+    });
+    fixture.setHealthyAnchor();
+    probe.mockImplementation(async (_cdp, anchorId, originalTargets) => {
+      expect(anchorId).toBe('healthy-owner-control');
+      expect(originalTargets).toEqual([{ id: fixture.targetId, url: SHARED_CONV }]);
+      const original = originalTargets![0]!;
+      return {
+        nonresponsive: frozen ? [original] : [],
+        responsive: frozen ? [] : [original],
+        disappearedOrChanged: [], unknown: [],
+      };
+    });
+    try {
+      mocks.nowMs += 21 * 60_000; // Past effect reconciliation window, not close authority.
+      const frozenFirst = await fixture.invoke();
+      expect(frozenFirst.report).toMatchObject({
+        status: 'cleanup_unconfirmed', cause: 'frozen_ownership_unproven',
+        target_id: fixture.targetId,
+      });
+      expect(frozenFirst.report.next_action).toMatch(/reconciliation|inspect/i);
+      expect(fixture.turn.page.close).not.toHaveBeenCalled();
+      // Model a responsive foreign edit that happened between two identical
+      // ID/URL snapshots. On refreeze, the current qualified probe still
+      // cannot establish continuous exclusive ownership.
+      frozen = false;
+      foreignDraft = true;
+      frozen = true;
+      const frozenAgain = await fixture.invoke();
+      expect(frozenAgain.report.cause).toBe('frozen_ownership_unproven');
+      expect(fixture.turn.page.close).not.toHaveBeenCalled();
+      frozen = false;
+      const unsettledForeign = await fixture.invoke();
+      expect(unsettledForeign.report.status).toBe('cleanup_unconfirmed');
+      expect(['foreign_draft', 'composer_unknown']).toContain(unsettledForeign.report.cause);
+      expect(fixture.turn.page.close).not.toHaveBeenCalled();
+      await fixture.publishOwnPrimary();
+      fixture.writeTerminal('landed', 1);
+      const settledForeign = await fixture.invoke();
+      expect(settledForeign.report.status).toBe('cleanup_unconfirmed');
+      expect(['foreign_draft', 'composer_unknown']).toContain(settledForeign.report.cause);
+      expect(fixture.turn.page.close).not.toHaveBeenCalled();
+      foreignDraft = false;
+      const clean = await fixture.invoke();
+      expect(clean).toMatchObject({
+        code: 0, report: { status: 'confirmed', target_id: fixture.targetId },
+      });
+      expect(fixture.turn.page.close).toHaveBeenCalledTimes(1);
+      expect(fixture.turn.getSends()).toBe(1);
+    } finally {
+      probe.mockImplementation(originalProbe);
+      fixture.fetchSpy.mockRestore();
+    }
+  });
+
+  it('Issue #2685: deferred owner never closes a last Page, and positively gone pinned ID needs no close', async () => {
+    const fixture = await deferredRetirementFixture('not_sent');
+    try {
+      fixture.setOnlyPage();
+      const last = await fixture.invoke();
+      expect(last.report).toMatchObject({ status: 'cleanup_unconfirmed', cause: 'last_page_guard' });
+      expect(fixture.turn.page.close).not.toHaveBeenCalled();
+      fixture.setGone();
+      const absent = await fixture.invoke();
+      expect(absent).toMatchObject({
+        code: 0, report: { status: 'already_gone', target_id: fixture.targetId },
+      });
+      expect(fixture.turn.page.close).not.toHaveBeenCalled();
+    } finally {
+      fixture.fetchSpy.mockRestore();
+    }
+  });
+
+
+  it.each(['settled-unsent-last-page', 'contradictory-delivery'] as const)(
+    'Issue #2685: the actual successor driver %s before any new Page Send',
+    async (scenario) => {
+      const predecessor = await deferredRetirementFixture('not_sent');
+      const attach = vi.mocked(attachOwnTarget);
+      const originalAttach = attach.getMockImplementation()!;
+      predecessor.setOnlyPage();
+      if (scenario === 'contradictory-delivery') predecessor.writeTerminal('POSSIBLY_DELIVERED', 0);
+      const nextId = randomUUID();
+      const nextPrompt = 'NO-REPLAY-NEXT-2685-' + scenario;
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(nextPrompt));
+      mocks.browserQueue.length = 0;
+      enqueueBrowserForTurn(mocks, predecessor.turn.page);
+      if (scenario === 'settled-unsent-last-page') {
+        attach.mockImplementationOnce(originalAttach)
+          .mockRejectedValueOnce(new Error('injected_next_target_allocation_unavailable'));
+      }
+      const previousId = predecessor.args[6]!;
+      const run = [
+        ...STATE_LIGHT_TURN_BASE_ARGV,
+        '--invocation-id', nextId,
+        '--output', join(stateDir, 'successor-' + nextId + '.txt'),
+        '--new-chat', '--project-url', PROJECT_URL,
+        '--timeout-ms', '90000', '--poll-ms', '1',
+        '--predecessor-invocation-id', previousId,
+        '--predecessor-attempt-identity', 'attempt-retire-2685',
+        '--predecessor-run-identity', 'run-retire-2685',
+        '--predecessor-owner-task-id', 'task-retire-2685',
+      ];
+      try {
+        attach.mockClear();
+        const output = await runStateLightTurnWithStdoutCapture(runStateLightTurn, run);
+        expect(output.result.send_count).toBe(0);
+        expect(predecessor.turn.page.close).not.toHaveBeenCalled();
+        if (scenario === 'contradictory-delivery') {
+          expect(output.result.cause).toBe('predecessor_cleanup_unconfirmed:not_sent_dispatch_unproven');
+          expect(attach).not.toHaveBeenCalled();
+        } else {
+          expect(output.result.cause).not.toMatch(/^predecessor_cleanup_unconfirmed/u);
+          expect(attach).toHaveBeenCalledTimes(2);
+        }
+      } finally {
+        attach.mockImplementation(__testAttachOwnTargetFixture);
+        predecessor.fetchSpy.mockRestore();
+      }
+    },
+  );
 
   // Exercise the real held-Page GET witness, wrapper and finalizer (not a
   // fabricated TerminalEnvelope). The request must be from this exact Page.
@@ -1390,13 +1734,20 @@ describe('state-light fresh conversation collision recovery', () => {
     const turn = makeLoserPage(prompt, 'UNREACHED');
     turn.sendButton.isEnabled.mockResolvedValue(false);
     const originalUrl = turn.page.url.getMockImplementation()!;
-    const read = turn.composer.innerText.getMockImplementation()!;
+    const evaluate = turn.composer.evaluate.getMockImplementation()!;
     let repurposed = false;
     turn.page.url.mockImplementation(() => repurposed ? OTHER_PROJECT_CONVERSATION_URL : originalUrl());
-    turn.composer.innerText.mockImplementation(async () => {
-      const text = await read();
+    // Cleanup now reads the actual live editor via evaluate(), not locator.innerText().
+    // Move the same simulated navigation to that awaited DOM-read boundary;
+    // keep the foreign-page no-close/no-fill assertions unchanged.
+    turn.composer.evaluate.mockImplementation(async (
+      callback: (element: unknown, arg?: unknown) => unknown,
+      arg?: unknown,
+      options?: { timeout?: number },
+    ) => {
+      const observed = await evaluate(callback, arg, options);
       if (mocks.nowMs >= 70_000) repurposed = true;
-      return text;
+      return observed;
     });
     const outcome = await runNewChatTurn(turn.page, join(stateDir, 'cleanup-tab-replaced.txt'));
     expect(outcome.result).toMatchObject({
@@ -1675,11 +2026,15 @@ describe('state-light fresh conversation collision recovery', () => {
     const turn = makeLoserPage(prompt, 'UNREACHED');
     turn.sendButton.click.mockImplementationOnce(async () => { throw timeoutError(); });
     turn.sendButton.click.mockImplementationOnce(async () => { throw timeoutError(); });
+    // Even positive original-target CDP ownership and a surviving sibling do not
+    // permit retirement or a not_sent transition after either Send click attempt.
+    proveCreatedPageCanClose(turn.page);
 
     const outcome = await runNewChatTurn(
       turn.page, join(stateDir, invocationId + '-second-final.txt'), '90000', invocationId,
     );
     expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'observation_uncertain' });
+    expect(outcome.result.cleanup).not.toBe('confirmed');
     expectPossibleEffect(outcome.result);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
     expect(turn.getSends()).toBe(0);
