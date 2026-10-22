@@ -1,0 +1,26 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2689,
+  "declared_paths": [
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/lib/worker-assignment-runtime.test.ts",
+    "scripts/lib/worker-assignment-store.test.ts",
+    "scripts/pr2-foundation/scheduler-assignment-lifecycle.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/pr2-foundation/supervised-worker-start.test.ts",
+    "scripts/pr2-foundation/supervised-worker-start.ts"
+  ],
+  "source_revision": "9ad994294b59c4178d3ae0d64b5d572d62700c3b"
+}
