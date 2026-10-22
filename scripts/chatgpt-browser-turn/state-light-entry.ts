@@ -3,6 +3,10 @@ import { dirname, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runStateLightTurn } from './state-light-turn.ts';
+import type {
+  GuardedOwnedTabRetirementReport,
+  GuardedOwnedTabRetirementRequest,
+} from './state-light-turn-base.ts';
 import { settleCliMain } from './cli-main.ts';
 import type { GptBrowserTurnConfig } from '../lib/pack-gpt-reviewer.ts';
 import type { TargetContext } from '../lib/target-context.ts';
@@ -19,6 +23,7 @@ export type PackReviewPreflightDependencies = {
 export type StateLightEntryDependencies = {
   readonly runTurn?: typeof runStateLightTurn;
   readonly preflight?: PackReviewPreflightDependencies;
+  readonly retireOwned?: (input: GuardedOwnedTabRetirementRequest) => Promise<GuardedOwnedTabRetirementReport>;
 };
 
 export type PackReviewPreflightResult = {
@@ -120,6 +125,41 @@ export async function runPackReviewPreflight(
   }
 }
 
+/** Explicit owner wake only. No URL-only/implicit selector and no new-send path. */
+export function parseRetireOwnedArgs(argv: readonly string[]): GuardedOwnedTabRetirementRequest {
+  const allowed = new Map([
+    ['--profile', 'profile'], ['--cdp', 'cdp'],
+    ['--invocation-id', 'invocationId'], ['--target-id', 'targetId'],
+    ['--run-identity', 'runIdentity'], ['--attempt-identity', 'attemptIdentity'],
+    ['--owner-task-id', 'ownerTaskId'],
+  ] as const);
+  if (argv.length !== allowed.size * 2) throw new Error('retire_owned_arguments_unverified');
+  const fields = new Map<string, string>();
+  for (let i = 0; i < argv.length; i += 2) {
+    const key = argv[i] ?? '';
+    const value = argv[i + 1] ?? '';
+    const field = allowed.get(key as '--profile' | '--cdp' | '--invocation-id' | '--target-id' | '--run-identity' | '--attempt-identity' | '--owner-task-id');
+    if (!field || fields.has(field) || !value.trim() || value.startsWith('--')) {
+      throw new Error('retire_owned_arguments_unverified');
+    }
+    fields.set(field, value);
+  }
+  const cdp = fields.get('cdp')!;
+  try {
+    const endpoint = new URL(cdp);
+    if (!['http:', 'https:'].includes(endpoint.protocol) || !endpoint.hostname
+      || endpoint.username || endpoint.password || endpoint.hash || endpoint.search) {
+      throw new Error('retire_owned_arguments_unverified');
+    }
+  } catch { throw new Error('retire_owned_arguments_unverified'); }
+  return {
+    profile: fields.get('profile')!, cdp,
+    invocationId: fields.get('invocationId')!, targetId: fields.get('targetId')!,
+    runIdentity: fields.get('runIdentity')!, attemptIdentity: fields.get('attemptIdentity')!,
+    ownerTaskId: fields.get('ownerTaskId')!,
+  };
+}
+
 export async function runStateLightEntry(
   argv: readonly string[],
   deps: StateLightEntryDependencies = {},
@@ -129,6 +169,22 @@ export async function runStateLightEntry(
     const result = await runPackReviewPreflight(turnArgs, deps.preflight);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return result.outcome === 'pass' ? 0 : 1;
+  }
+  if (command === 'retire-owned') {
+    let request: GuardedOwnedTabRetirementRequest;
+    try { request = parseRetireOwnedArgs(turnArgs); }
+    catch {
+      process.stdout.write(JSON.stringify({
+        status: 'cleanup_unconfirmed', cause: 'retire_owned_arguments_unverified',
+        next_action: 'Preserve pinned Page and reconcile exact owner identity before another real owner wake.',
+      }) + '\n');
+      return 2;
+    }
+    const retireOwned = deps.retireOwned
+      ?? (await import('./state-light-turn-base.ts')).runGuardedOwnedTabRetirement;
+    const report = await retireOwned(request);
+    process.stdout.write(JSON.stringify(report) + '\n');
+    return report.status === 'confirmed' || report.status === 'already_gone' ? 0 : 1;
   }
   const runTurn = deps.runTurn ?? runStateLightTurn;
   const turnOptions = { entryLivenessHeartbeat: true, recordChatBinding: true } as const;
