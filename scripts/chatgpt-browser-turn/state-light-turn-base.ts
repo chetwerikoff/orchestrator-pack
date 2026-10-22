@@ -3627,29 +3627,82 @@ function renderedPayloadMatches(actual: string | undefined, expected: string): b
  * by a separate fill. An unknown ProseMirror representation is not authority
  * to destroy a shared or foreign draft. */
 async function conditionalClearOwnedComposerDraft(
-  page: any,
-  exactPayload: string,
-  deadlineMs: number,
-  expectedPageUrl?: string,
+  page: any, exactPayload: string, deadlineMs: number, expectedPageUrl?: string,
 ): Promise<boolean> {
   const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
   if (!exactPayload || waitMs <= 0) return false;
   const composer = page?.locator?.(COMPOSER_SELECTOR);
   if (typeof composer?.evaluate !== 'function') return false;
-  // A Page can navigate after the pre-clear owner read. Compare its current
-  // browser-side URL and every payload code point in the SAME modifying task.
-  // Direct helper callers without a proved Page route retain the exact-payload
-  // comparison only and do not gain finalization/close authority.
-  const guard: string | { payload: string; pageUrl: string } = expectedPageUrl
-    ? { payload: exactPayload, pageUrl: expectedPageUrl } : exactPayload;
+  // This process-local literal is never reconstructed from the durable marker.
+  // Route and exact DOM contents are rechecked IN the modifying evaluation.
+  const guard: { payload: string; pageUrl?: string; selector: string } = {
+    payload: exactPayload, ...(expectedPageUrl ? { pageUrl: expectedPageUrl } : {}),
+    selector: COMPOSER_SELECTOR,
+  };
   try {
+    if (await locatorCount(composer, deadlineMs) !== 1) return false;
     return await boundedBrowserRead(
       Promise.resolve(composer.evaluate((element: HTMLElement, guarded: typeof guard) => {
-        const expected = typeof guarded === 'string' ? guarded : guarded.payload;
-        if (typeof guarded !== 'string'
+        if (guarded.pageUrl
           && element.ownerDocument?.defaultView?.location?.href !== guarded.pageUrl) return false;
-        if (!element.isConnected || !element.isContentEditable
-          || element.textContent !== expected || element.innerText !== expected) return false;
+        if (!element.isConnected || !element.isContentEditable || !element.ownerDocument?.defaultView) return false;
+        const doc = element.ownerDocument;
+        if (typeof doc.querySelectorAll === 'function'
+          && (doc.querySelectorAll(guarded.selector).length !== 1
+            || doc.querySelectorAll(guarded.selector)[0] !== element)) return false;
+        const view = doc.defaultView;
+        const visible = (el: HTMLElement): boolean => {
+          if (el.getAttribute('hidden') !== null || el.getAttribute('aria-hidden') === 'true'
+            || el.getAttribute('contenteditable') === 'false') return false;
+          const style = view.getComputedStyle(el);
+          return style.display !== 'none' && style.visibility !== 'hidden'
+            && style.visibility !== 'collapse';
+        };
+        if (!visible(element)) return false;
+        let literal: string | undefined;
+        if (element.classList?.contains('ProseMirror')) {
+          const parts: string[] = [];
+          let nodes = 0;
+          let length = 0;
+          const append = (value: string): boolean => {
+            length += value.length;
+            if (length > guarded.payload.length) return false;
+            parts.push(value);
+            return true;
+          };
+          const visit = (node: Node, depth: number, trailing: boolean): boolean => {
+            if (++nodes > 20_000 || depth > 32) return false;
+            if (node.nodeType === 3) return append(node.nodeValue ?? '');
+            if (node.nodeType !== 1) return false;
+            const child = node as HTMLElement;
+            if (!visible(child)) return false;
+            if (child.tagName === 'BR') {
+              if (child.childNodes.length !== 0) return false;
+              return child.classList.contains('ProseMirror-trailingBreak') ? trailing : append('\n');
+            }
+            if (!(child.tagName === 'P' && depth === 1)
+              && !['A', 'SPAN', 'CODE', 'STRONG', 'EM', 'B', 'I', 'S', 'U'].includes(child.tagName)) return false;
+            for (let i = 0; i < child.childNodes.length; i++) {
+              if (!visit(child.childNodes[i]!, depth + 1,
+                child.tagName === 'P' && i === child.childNodes.length - 1)) return false;
+            }
+            return true;
+          };
+          let paragraphs: boolean | undefined;
+          if (element.childNodes.length > 20_000) return false;
+          for (let i = 0; i < element.childNodes.length; i++) {
+            const child = element.childNodes[i]!;
+            const isP = child.nodeType === 1 && (child as HTMLElement).tagName === 'P';
+            paragraphs ??= isP;
+            if (paragraphs !== isP || (isP && i > 0 && !append('\n'))
+              || !visit(child, 1, false)) return false;
+          }
+          literal = parts.join('');
+        } else {
+          literal = element.textContent === element.innerText
+            ? element.textContent ?? undefined : undefined;
+        }
+        if (literal !== guarded.payload) return false;
         element.textContent = '';
         return element.textContent === '' && element.innerText === '';
       }, guard)),
@@ -7833,7 +7886,7 @@ async function retireExplicitPredecessor(input: {
   readonly profileKey: string;
   readonly cdp: string;
   readonly deadlineMs: number;
-}): Promise<{ status: 'confirmed' | 'cleanup_unconfirmed'; targetId?: string }> {
+}): Promise<{ status: 'confirmed' | 'cleanup_unconfirmed'; targetId?: string; cause?: string }> {
   let original: ReturnType<typeof readStateLightTurnObservation>;
   let originalId: string | undefined;
   try {
@@ -7912,7 +7965,7 @@ async function retireDetachedOriginalTarget(input: {
   readonly invocationId: string;
   readonly cdp: string;
   readonly deadlineMs: number;
-}): Promise<{ readonly status: 'confirmed' | 'cleanup_unconfirmed'; readonly targetId?: string }> {
+}): Promise<{ readonly status: 'confirmed' | 'cleanup_unconfirmed'; readonly targetId?: string; readonly cause?: string }> {
   let record: ReturnType<typeof readStateLightTurnObservation>;
   try {
     record = readStateLightTurnObservation(input.profileKey, input.invocationId);
@@ -8282,60 +8335,28 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
     && outcomePageIsOriginal ? 'close' : 'skip';
   if (pageAction === 'close' && outcome.result.send_count === 0
     && outcome.result.send_attempted !== true && outcome.ownedFreshProjectUrl) {
-    // The slot was already owner-released. For this proven-created tab, check
-    // its current blank project identity and no foreign Stop at each destructive
-    // boundary, never only its original creation handle or old composer read.
     const stillOwnedBlankSurface = (): boolean => {
       try {
-        return cleanupAuthorityProven
-          && !browserOrPageDefinitelyLost(outcome.page, outcome.browser)
+        return cleanupAuthorityProven && !browserOrPageDefinitelyLost(outcome.page, outcome.browser)
           && isBlankProjectSurfaceUrl(String(outcome.page.url()), outcome.ownedFreshProjectUrl!);
       } catch { return false; }
     };
-    const safeComposerBoundary = async (): Promise<boolean> => stillOwnedBlankSurface()
+    // Do not trim, normalize, or clear at this provisional read: a different
+    // writer may edit between awaits. The physical close guard must re-read
+    // every predicate and perform exact-own compare+clear if needed.
+    const safe = observedNotSent && stillOwnedBlankSurface()
       && await readFreshStopVisible(outcome.page, Date.now() + MAX_LOCAL_READ_WAIT_MS) === false
-      && stillOwnedBlankSurface();
-    let cleared = false;
-    if (observedNotSent && !pageLost) {
-      try {
-        const composer = outcome.page.locator(COMPOSER_SELECTOR);
-        if (await safeComposerBoundary()) {
-          const text = await readComposerTextForSendDelivery(composer, Date.now() + MAX_LOCAL_READ_WAIT_MS);
-          // Draft clearing happened while holding the fresh-send lock.
-          // After release, never modify a draft belonging to the next sender.
-          if (text === ''
-            && await safeComposerBoundary()
-            && await readComposerTextForSendDelivery(composer, Date.now() + MAX_LOCAL_READ_WAIT_MS) === text
-            && stillOwnedBlankSurface()) {
-            cleared = await safeComposerBoundary()
-              && (await readComposerTextForSendDelivery(composer, Date.now() + MAX_LOCAL_READ_WAIT_MS))?.trim() === ''
-              && await safeComposerBoundary();
-          }
-        }
-      } catch {
-        // Preserve the tab if owner, Stop, content or clearing is uncertain.
-      }
-    }
-    if (!cleared && observedNotSent) {
-      // A blank verified composer needs no destructive cleanup. A changed or
-      // unreadable composer cannot authorize closing a shared-draft Page.
-      try {
-        cleared = await safeComposerBoundary()
-          && await readLosslessOwnedComposer(
-            outcome.page.locator(COMPOSER_SELECTOR), Date.now() + MAX_LOCAL_READ_WAIT_MS,
-          ) === ''
-          && await safeComposerBoundary();
-      } catch { /* Fail closed on uncertain text, Stop or URL. */ }
-    }
-    if (!cleared) {
+      && ['empty', 'own'].includes(await readRetirementComposer(
+        outcome.page, outcome.ownedTypedPayload, Date.now() + MAX_LOCAL_READ_WAIT_MS,
+      )) && stillOwnedBlankSurface();
+    if (!safe) {
       pageAction = 'preserve';
       incidents.push('owned_composer_cleanup_unavailable');
-      const cleanupIncident: BrowserIncident = {
+      if (!appendIncident({
         eventClass: 'owned_composer_cleanup_unavailable',
-        symptom: 'typed_payload_not_proven_cleared',
+        symptom: 'composer_unknown_or_foreign_draft',
         action: 'preserve_page_without_modifying_foreign_text',
-      };
-      if (!appendIncident(cleanupIncident, outcome.result.invocation_id)) journalWriteFailed = true;
+      }, outcome.result.invocation_id)) journalWriteFailed = true;
     }
   }
   if (pageAction === 'close' && outcome.ownedPreSendFetch429Page
