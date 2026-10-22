@@ -864,17 +864,33 @@ function verifyOptionalPredecessorHandoff(config: LaunchConfig): void {
     configuredProfileKey(config.profile, config.cdp), invocation,
   );
   const target = original.owned_target;
+  // #2685: a *positive* noncreation witness admits the driver to continue
+  // without closing the selected existing Page. Missing metadata is not proof.
+  if (!target || typeof target.created !== 'boolean'
+    || typeof terminal?.owned_target_created !== 'boolean') {
+    throw new Error('predecessor_noncreation_unproven');
+  }
+  const notCreatedAndNotSent = target.created === false
+    && terminal.owned_target_created === false
+    && original.phase === 'not_sent'
+    && original.transition_reason === 'terminal_pre_send'
+    && original.send_count === 0
+    && original.send_witness !== 'owned_marker'
+    && original.owned_marker_confirmed !== true
+    && terminal.delivery === 'not-sent'
+    && terminal.send_count === 0;
   if (!terminal || terminal.observed_invocation_id !== invocation
     || terminal.handoff_receipt_path !== bound.locator.handoff_receipt_path
-    || terminal.cleanup_status !== 'cleanup_unconfirmed'
+    || (!notCreatedAndNotSent && terminal.cleanup_status !== 'cleanup_unconfirmed')
     || bound.receipt.owner_task_id !== task
     || original.invocation_id !== invocation
-    || !target?.created
     || target.cdp_sha256 !== createHash('sha256').update(config.cdp, 'utf8').digest('hex')
     || terminal.owned_target_id !== target.id
-    || terminal.owned_target_created !== true
-    || terminal.owned_prompt_marker !== original.marker) {
-    throw new Error('predecessor_terminal_cleanup_or_created_target_unproven');
+    || terminal.owned_target_created !== target.created
+    || terminal.owned_prompt_marker !== original.marker
+    || (!target.created && !notCreatedAndNotSent)) {
+    throw new Error(target.created ? 'predecessor_terminal_cleanup_or_created_target_unproven'
+      : 'predecessor_noncreation_unproven');
   }
 }
 

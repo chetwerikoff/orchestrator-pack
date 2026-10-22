@@ -1736,6 +1736,95 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(existsSync(actualStarted)).toBe(true);
   });
 
+  it('admits an exact never-created predecessor only on positive no-Send v1/terminal proof (#2685)', async () => {
+    const root = tempDir('opk-never-created-2685-');
+    const stateDir = tempDir('opk-never-created-observation-2685-');
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', stateDir);
+    const profile = join(root, 'profile');
+    const cdp = 'http://127.0.0.1:9222';
+    const profileKey = configuredProfileKey(profile, cdp);
+    const run = 'run-never-created-2685';
+    const ownerTask = 'task-never-created-2685';
+    const predecessor = 'previous-never-created-2685';
+    const attempt = 'previous-never-created-attempt-2685';
+    const targetId = 'selected-existing-never-created-2685';
+    const marker = 'OPKTURNV1' + 'dc'.repeat(16);
+    const previousPaths = launchPaths(root, 'positive-noncreated');
+    const result = makeTurnResult({
+      state: 'send_failed', scope: 'invocation', cause: 'terminal_pre_send',
+      invocation_id: predecessor, configured_profile_key: profileKey,
+      conversation_id: undefined, witness: undefined,
+      observation_uncertainty_diagnostics: { cause: 'terminal_pre_send', send_count: 0, owned_prompt_seen: false },
+      send_count: 0, send_attempted: undefined,
+      owned_target_id: targetId, owned_target_created: false, owned_prompt_marker: marker,
+    });
+    const fixture = nodeFixture('process.stdout.write(JSON.stringify('
+      + JSON.stringify(result) + ') + "\\n");');
+    const priorCode = await runFixtureLaunch(root, {
+      runIdentity: run, attemptIdentity: attempt, ownerTaskId: ownerTask,
+      invocationId: predecessor, profile, cdp,
+      handoffReceiptPath: previousPaths.receipt, terminalEnvelopePath: previousPaths.envelope,
+      browserOutputPath: previousPaths.output, cwd: repoRoot,
+      childCommand: fixture.command, childArgs: fixture.args,
+    });
+    expect(priorCode).toBe(1);
+    expect(readTerminalEnvelope(previousPaths.envelope)).toMatchObject({
+      delivery: 'not-sent', send_count: 0, owned_target_created: false,
+      owned_target_id: targetId, owned_prompt_marker: marker,
+    });
+    admitStateLightTurnObservation({ profileKey, invocationId: predecessor, marker });
+    bindStateLightOwnedTarget({
+      profileKey, invocationId: predecessor, targetId, created: false, cdp,
+      initialRoute: 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test',
+    });
+    transitionStateLightTurnObservation({
+      profileKey, invocationId: predecessor, phase: 'not_sent', reason: 'terminal_pre_send',
+      sendCount: 0, sendWitness: 'numeric_send_count',
+    });
+    const childStarted = join(root, 'admitted-child-started');
+    const child = nodeFixture('require("node:fs").writeFileSync('
+      + JSON.stringify(childStarted) + ', "started"); process.exit(0);');
+    const selectors = [
+      '--invocation-id', 'next-invocation-2685', '--profile', profile, '--cdp', cdp,
+      '--predecessor-invocation-id', predecessor,
+      '--predecessor-attempt-identity', attempt,
+      '--predecessor-run-identity', run, '--predecessor-owner-task-id', ownerTask,
+    ];
+    const next = (id: string, values: string[]) => {
+      const paths = launchPaths(root, id);
+      return runFixtureLaunch(root, {
+        runIdentity: run, attemptIdentity: 'next-attempt-2685',
+        ownerTaskId: ownerTask, invocationId: 'next-invocation-2685', profile, cdp,
+        handoffReceiptPath: paths.receipt, terminalEnvelopePath: paths.envelope,
+        browserOutputPath: paths.output, cwd: repoRoot,
+        childCommand: child.command, childArgs: [...child.args, '--', ...values],
+      });
+    };
+    expect(await next('wrong-previous-id', selectors.map((x, i) =>
+      i === 7 ? 'foreign-predecessor' : x))).toBe(2);
+    expect(existsSync(childStarted)).toBe(false);
+    // A past not_sent observation cannot turn a contrary terminal delivery
+    // into affirmative proof of zero dispatch at launcher admission.
+    const savedTerminal = readFileSync(previousPaths.envelope, 'utf8');
+    const terminalJson = JSON.parse(savedTerminal) as Record<string, unknown>;
+    writeFileSync(previousPaths.envelope, JSON.stringify({
+      ...terminalJson, delivery: 'POSSIBLY_DELIVERED',
+    }) + '\n');
+    expect(await next('contradictory-delivery', selectors)).toBe(2);
+    expect(existsSync(childStarted)).toBe(false);
+    // Omitted creation metadata is not created:false. No terminal ambiguity
+    // may reach the driver as a positive noncreation handoff.
+    writeFileSync(previousPaths.envelope, JSON.stringify({
+      ...terminalJson, owned_target_created: undefined,
+    }) + '\n');
+    expect(await next('missing-creation-boolean', selectors)).toBe(2);
+    expect(existsSync(childStarted)).toBe(false);
+    writeFileSync(previousPaths.envelope, savedTerminal);
+    expect(await next('proven-not-created', selectors)).toBe(1);
+    expect(existsSync(childStarted)).toBe(true);
+    // This launcher fixture never attaches or closes the selected Page.
+  });
+
   it('distinguishes original unique marker landing from positive POST and unknown attempt (#2678)', () => {
     const pending = makeParsedTurnResult({
       state: 'observation_uncertain', scope: 'invocation', cause: 'local_unbound',
