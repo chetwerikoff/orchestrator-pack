@@ -127,18 +127,18 @@ export async function runPackReviewPreflight(
 
 /** Explicit owner wake only. No URL-only/implicit selector and no new-send path. */
 export function parseRetireOwnedArgs(argv: readonly string[]): GuardedOwnedTabRetirementRequest {
-  const allowed = new Map([
+  const allowed = new Map<string, string>([
     ['--profile', 'profile'], ['--cdp', 'cdp'],
     ['--invocation-id', 'invocationId'], ['--target-id', 'targetId'],
     ['--run-identity', 'runIdentity'], ['--attempt-identity', 'attemptIdentity'],
     ['--owner-task-id', 'ownerTaskId'],
-  ] as const);
+  ]);
   if (argv.length !== allowed.size * 2) throw new Error('retire_owned_arguments_unverified');
   const fields = new Map<string, string>();
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i] ?? '';
     const value = argv[i + 1] ?? '';
-    const field = allowed.get(key as '--profile' | '--cdp' | '--invocation-id' | '--target-id' | '--run-identity' | '--attempt-identity' | '--owner-task-id');
+    const field = allowed.get(key);
     if (!field || fields.has(field) || !value.trim() || value.startsWith('--')) {
       throw new Error('retire_owned_arguments_unverified');
     }
