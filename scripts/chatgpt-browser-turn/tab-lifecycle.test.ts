@@ -104,6 +104,7 @@ type FinalizerCase = {
   readonly foreignDraft?: boolean;
   readonly stopVisible?: boolean;
   readonly continuationVisible?: boolean;
+  readonly accessibleContinuationOnly?: boolean;
   readonly routeChanged?: boolean;
 };
 
@@ -158,6 +159,10 @@ async function observeFinalizer(testCase: FinalizerCase) {
         : testCase.routeChanged ? 'https://chatgpt.com/c/00000000-0000-4000-8000-000000000005' : chatUrl,
       getByText: (text: string) => ({
         count: async () => testCase.errorBanner === text ? 1 : 0,
+      }),
+      getByRole: (role: string) => ({
+        count: async () => role === 'button' && testCase.accessibleContinuationOnly ? 1 : 0,
+        isVisible: async () => role === 'button' && Boolean(testCase.accessibleContinuationOnly),
       }),
       locator: (selector: string) => {
         if (selector === USER_MESSAGE_SELECTOR) {
@@ -377,6 +382,7 @@ describe('Issue #1238 page cleanup equivalence', () => {
     { name: 'foreign draft', options: { foreignDraft: true }, cause: 'foreign_draft' },
     { name: 'visible Stop after harvest', options: { stopVisible: true }, cause: 'stop_visible' },
     { name: 'visible Continue generating after harvest', options: { continuationVisible: true }, cause: 'generation_in_progress' },
+    { name: 'text-only accessible Continue generating after harvest', options: { accessibleContinuationOnly: true }, cause: 'generation_in_progress' },
     { name: 'changed conversation route', options: { routeChanged: true }, cause: 'route_changed' },
   ] as const)('retains the created target with $name even when the DOM is otherwise quiet', async ({ options, cause }) => {
     const observed = await observeFinalizer({
