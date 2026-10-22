@@ -290,9 +290,20 @@ function makeLoserPage(
           location: { get href() { return String(page.url()); } },
           getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
         } },
-        get textContent() { return surface?.textContent ?? (sent ? '' : composerText); },
-        set textContent(value: string) { composerText = value; },
-        get innerText() { return surface?.innerText ?? (sent ? '' : composerText); },
+        get textContent() {
+          return (this as any).__domCleared ? '' : editorSurface()?.textContent ?? (sent ? '' : composerText);
+        },
+        set textContent(value: string) {
+          composerText = value;
+          if (surface && value === '') {
+            // A direct DOM clear removes the P/BR nodes in a real browser.
+            (this as any).childNodes = [];
+            (this as any).__domCleared = true;
+          }
+        },
+        get innerText() {
+          return (this as any).__domCleared ? '' : editorSurface()?.innerText ?? (sent ? '' : composerText);
+        },
       };
       return callback(element, arg);
     }),
@@ -441,6 +452,38 @@ describe('state-light fresh conversation collision recovery', () => {
     clearSendSlotDisableEnv();
     rmSync(stateDir, { recursive: true, force: true });
     vi.restoreAllMocks();
+  });
+
+  it('clears only exact structurally owned ProseMirror literal with blank paragraphs and an autolink (#2685)', async () => {
+    const literal = 'OPKTURNV1' + 'ab'.repeat(16) + '\n\none\n\nhttps://example.com/a\n';
+    for (const rendering of ['paragraphs', 'autolink'] as const) {
+      const turn = makeLoserPage('PROMPT', 'NOT SENT', undefined, false, rendering);
+      await turn.composer.fill(literal);
+      expect(await __testSendDelivery.conditionalClearOwnedComposerDraft(
+        turn.page, literal, Date.now() + 5_000, PROJECT_URL,
+      ), rendering).toBe(true);
+      expect(turn.getComposerText()).toBe('');
+      await turn.composer.fill('FOREIGN-DRAFT' + literal);
+      expect(await __testSendDelivery.conditionalClearOwnedComposerDraft(
+        turn.page, literal, Date.now() + 5_000, PROJECT_URL,
+      ), rendering).toBe(false);
+      expect(turn.getComposerText()).toBe('FOREIGN-DRAFT' + literal);
+    }
+  });
+
+  it('preserves the original frozen pre-Send Page and names the refused owner check (#2685 r03 P1)', async () => {
+    const prompt = 'PROMPT-FROZEN-OWNED-2685';
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const turn = makeLoserPage(prompt, 'NEVER');
+    turn.sendButton.isEnabled.mockResolvedValue(false);
+    turn.composer.evaluate.mockRejectedValue(new Error('Page renderer unresponsive'));
+    const outcome = await runNewChatTurn(
+      turn.page, join(stateDir, 'original-frozen-2685.txt'), '90000', randomUUID(),
+    );
+    expect(outcome.result.send_count).toBe(0);
+    expect(turn.page.close).not.toHaveBeenCalled();
+    expect(outcome.result.cleanup).not.toBe('confirmed');
+    expect(outcome.result.incidents).toContain('frozen_ownership_unproven');
   });
 
   // Exercise the real held-Page GET witness, wrapper and finalizer (not a
