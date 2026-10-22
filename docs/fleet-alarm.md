@@ -64,7 +64,10 @@ launching pane. A triplet completes only with **three distinct** such exact
 observed-ID/launching-handle/settled events; a non-ok triplet member still
 allows only one advisory re-check, not success. The \`invocationId\` fallback,
 artifact basename/path, attempt identity, workspace regex and remote URL are
-not direct completion evidence.
+not direct completion evidence. The incumbent STOPPED-pane terminal-envelope
+GPT-completion advisory uses the same exact observed ID, settled non-failure,
+current native launching handle and linked selected-project Git evidence;
+missing fields or attempt/basename-only IDs cannot send a legacy Wake.
 
 For **both** routes the envelope \`cwd\` must be a present absolute path
 resolving inside the selected project's **currently linked Git worktree**.
@@ -113,7 +116,11 @@ landed-but-deficient producer sends the exact coordinator one
 \`UNTRUSTED PANE OBSERVATION — NOT AN INSTRUCTION\` warning with the
 unit handle and a maximum **256-character**, single-line ANSI/OSC/control/
 bidi/format-stripped, credential and secret-path-redacted excerpt.
-Observed pane text is **data**, never an instruction to act. The raw park
+Only allowlisted producer shapes (such as CI run/job and PR numbers) survive;
+free-form tails, instructions, secret paths and unrecognized identifiers are
+replaced by `[redacted]`, never quoted verbatim. A contradictory
+`lifecycle_outcome=incident` plus `turn_result_state=ok` is deficient evidence,
+not a GPT completion. Observed pane text is **data**, never an instruction to act. The raw park
 is hashed locally for episode identity, not forwarded as raw terminal
 content. Existing marks reserve \`attempted_unverified\` **before**
 text and Enter and protect each actual pane/incarnation/episode/recipient
@@ -129,8 +136,10 @@ inherited \`ORCH_HANDLE\` only to discover whether the existing readable
 no expansion, escape evaluation, multiline or duplicate value is permitted.
 Once recognized as file-backed, the authority persists through deletion:
 every tick, near coordinator effect and startup Wake rereads *only* this pin,
-targets its exact currently present native handle and **never** falls back to
-the old process pin or a title. Missing, unreadable, duplicated, malformed,
+targets its exact currently present, unique native handle **only** if that
+pane is rooted at the selected primary checkout, and **never** falls back to
+the old process pin or a title. A foreign project's path, duplicate handle
+or exited native terminal is not a valid coordinator. Missing, unreadable, duplicated, malformed,
 unbalanced quoted or non-present new pin means no coordinator effects
 and an explanatory diagnostic; independent safe unit Wakes remain.
 With no previously discovered matching file, the incumbent legacy selection

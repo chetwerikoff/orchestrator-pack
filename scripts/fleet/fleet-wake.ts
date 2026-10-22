@@ -367,13 +367,14 @@ export function resolveCoordinatorPane(
     return resolveCoordinatorPane(terminals, { ...legacy, orchestratorHandle: pin });
   }
   if (config.orchestratorHandle) {
-    const pinned = terminals.find((terminal) => terminal.handle === config.orchestratorHandle);
-    if (!pinned) return undefined;
-    const worktree = pinned.worktreePath.replaceAll('\\', '/');
-    config.workspaceRe.lastIndex = 0;
-    if (!samePath(pinned.worktreePath, config.primary) && config.workspaceRe.test(worktree)) {
-      return undefined;
-    }
+    // The handle is a selector, not proof of project ownership: never route to
+    // a foreign, duplicate or exited native pane even when the hot pin is valid.
+    const matching = terminals.filter((terminal) => terminal.handle === config.orchestratorHandle);
+    if (matching.length !== 1) return undefined;
+    const pinned = matching[0]!;
+    if (!pinned.worktreePath || !isAbsolute(pinned.worktreePath) || !isAbsolute(config.primary)
+      || !samePath(pinned.worktreePath, config.primary)
+      || pinned.status?.toLowerCase() === 'exited') return undefined;
     return pinned;
   }
   return terminals.find((terminal) => {
@@ -1492,7 +1493,8 @@ function gptTerminalResolution(
     const settledOutcome = event.lifecycleOutcome === 'success' || event.lifecycleOutcome === 'incident'
       || (typeof event.turnResultState === 'string' && event.turnResultState.length > 0
         && !/^(?:pending|running|in_progress|unknown|unverified)$/iu.test(event.turnResultState));
-    const contradicts = event.lifecycleOutcome === 'success' && failureTerminalEnvelope(event);
+    const contradicts = (event.lifecycleOutcome === 'success' && failureTerminalEnvelope(event))
+      || (event.lifecycleOutcome === 'incident' && event.turnResultState === 'ok');
     if (!exact || !settledOutcome || contradicts) { deficient = true; continue; }
     // A coherent single non-ok incident is not a success-completion Wake.
     if (producer.kind === 'gpt' && !(event.lifecycleOutcome === 'success' || event.turnResultState === 'ok')
@@ -1509,18 +1511,34 @@ function gptTerminalResolution(
 }
 
 function safeParkExcerpt(observation: string): string {
-  const controlFree = observation
+  // Only project known producer *shapes*, never free-form terminal instructions,
+  // paths, environment values or credential-looking arbitrary identifiers.
+  const normalized = observation
     .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/gu, ' ')
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, ' ')
-    .replace(/\u001b[@-_]/gu, ' ')
-    .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/gu, ' ');
-  const redacted = controlFree
-    .replace(/\b(?:gh[pousr]_[a-zA-Z0-9_]{15,}|github_pat_[a-zA-Z0-9_]{15,}|sk-(?:proj-)?[a-zA-Z0-9_-]{16,}|xox[baprs]-[a-zA-Z0-9-]{10,}|AKIA[A-Z0-9]{16})\b/gu, '[redacted]')
-    .replace(/\b(?:password|passwd|secret|token|api[-_]?key|credentials?|authorization|bearer)\s*[:=]\s*\S+/giu, '[redacted]')
-    .replace(/(?:[~/]|[A-Za-z]:[\\/])\S*\.env(?:\.\S+)?/giu, '[redacted-path]')
-    .replace(/\b(?:ignore (?:all|previous)|run (?:this|these) commands?|execute|paste|send (?:your|the) (?:token|password))\b.*$/iu,
-      '[untrusted instructions redacted]');
-  return redacted.replace(/\s+/gu, ' ').trim().slice(0, 256);
+    .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/gu, ' ')
+    .trim();
+  const prefix = /^PARKED\s+(?:on\s+|:\s*)/iu.exec(normalized);
+  if (!prefix) return 'park-like outcome [redacted]';
+  const source = normalized.slice(prefix[0].length);
+  let label = 'unsupported producer';
+  let consumed = 0;
+  let match: RegExpExecArray | null;
+  if ((match = /^exact-head CI run ([1-9]\d{0,15})\s*\/\s*job ([1-9]\d{0,15})(?=$|[;,\s])/iu.exec(source))) {
+    label = 'exact-head CI run ' + match[1] + ' / job ' + match[2];
+    consumed = match[0].length;
+  } else if ((match = /^PR #([1-9]\d{0,10})(?=$|[;,\s])/iu.exec(source))) {
+    label = 'PR #' + match[1];
+    consumed = match[0].length;
+  } else if ((match = /^process pid ([1-9]\d{0,10})(?=$|[;,\s])/iu.exec(source))) {
+    label = 'process pid ' + match[1];
+    consumed = match[0].length;
+  } else if ((match = /^(?:GPT turns?|CI|pack-review|review|merge|terminal|time|unknown)\b/iu.exec(source))) {
+    label = match[0].toLowerCase();
+    consumed = match[0].length;
+  }
+  // The marker reports omitted text; no byte from the unknown tail is forwarded.
+  return ('PARKED on ' + label + (source.slice(consumed).trim() ? ' [redacted]' : '')).slice(0, 256);
 }
 
 async function alarmParkUncertainty(
@@ -1807,19 +1825,26 @@ async function wakePanesOnEvents(
 ): Promise<number> {
   const wakes: Array<{ pane: FleetTerminal | FleetPaneObservation; key: string; message: string }> = [];
   for (const envelope of (options.listTerminalEnvelopes ?? listTerminalEnvelopes)()) {
-    // Non-ok envelopes require the original receipt/Dispatch/native witness.
-    if (failureTerminalEnvelope(envelope)) continue;
+    // The legacy STOPPED route is also a direct GPT-completion Wake (§5).
+    // Fallback invocation IDs, cwd-only ownership and unsettled/contradictory
+    // global envelopes are not sufficient even for an advisory re-check.
+    if (failureTerminalEnvelope(envelope) || !envelope.observedInvocationId
+      || !envelope.terminalHandle || !envelope.cwd
+      || !(envelope.lifecycleOutcome === 'success' || envelope.turnResultState === 'ok')
+      || !selectedGitWorktree(envelope.cwd, options.config, options)) continue;
+    const matched = observations.filter((candidate) => candidate.handle === envelope.terminalHandle
+      && candidate.state === 'STOPPED' && Boolean(candidate.incarnationId)
+      && candidate.status?.toLowerCase() !== 'exited'
+      && !bareShellHandles.has(candidate.handle));
+    if (matched.length !== 1) continue;
+    const pane = matched[0]!;
+    const observedId = safeUnitAtom(envelope.observedInvocationId);
+    const safePath = safeUnitAtom(envelope.path);
+    if (!observedId || !safePath) continue;
     const eventId = 'terminal:' + envelope.path;
-    const pane = envelope.terminalHandle !== undefined
-      ? observations.find((candidate) =>
-        candidate.handle === envelope.terminalHandle)
-      : envelope.cwd
-        ? envelopeOwner(envelope.cwd, observations)
-        : undefined;
-    if (!pane || pane.state !== 'STOPPED' || bareShellHandles.has(pane.handle)) continue;
     const key = 'event:' + pane.handle + ':' + eventId;
     if (store.hasParkedWakeEvent(key)) continue;
-    wakes.push({ pane, key, message: `Wake: GPT turn ${envelope.invocationId} ended, read ${envelope.path}` });
+    wakes.push({ pane, key, message: 'Wake: GPT turn ' + observedId + ' ended, read ' + safePath });
   }
   const parkedEpisodes = observations.flatMap((pane) => {
     if (!pane.worktreePath) return [];
