@@ -898,7 +898,8 @@ export function parseNamedParkedProducer(wait: string): NamedProducer | undefine
     const text = deadline[1]!;
     const strict = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\dZ$/u.test(text);
     const milliseconds = strict ? Date.parse(text) : NaN;
-    if (Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === text) {
+    if (Number.isFinite(milliseconds)
+      && new Date(milliseconds).toISOString().replace(/\.000Z$/u, 'Z') === text) {
       return { kind: 'time', label: 'UTC-' + text, dueAt: milliseconds };
     }
     return undefined;
