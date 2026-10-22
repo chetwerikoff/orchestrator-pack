@@ -3201,6 +3201,8 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
       repository, primaryRoot: primary }),
     canonicalPath: (path) => path, readGit: selectedProjectGit,
     listOpenPulls: () => [], listTerminalEnvelopes: () => [],
+    checkRunsFinishedAt: () => undefined, readNamedPull: () => undefined,
+    readPackReviewStage: () => undefined, readNamedReview: () => undefined,
     readCurrentAssignments: () => [], readPackReviewRuns: () => [],
     readChats: async () => [],
     ...overrides,
@@ -3360,7 +3362,8 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     for (const observation of [
       missing,
       { state: 'unverified' as const },
-      { state: 'live' as const, startticks: '123456789', namespace: 'pid:[99]' },
+      // A namespace-mismatched read-only /proc probe returns unverified, never a live witness.
+      { state: 'unverified' as const },
     ]) {
       const guard = await scenario(parked, { probePid: () => observation });
       expect(texts(guard.calls, manager.handle)).toHaveLength(0);
