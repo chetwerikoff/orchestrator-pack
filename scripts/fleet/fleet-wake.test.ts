@@ -3371,3 +3371,102 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     }
   });
 });
+
+
+describe('Issue #2687 r04: file-backed coordinator pin, quotes and startup', () => {
+  it('captures matching simple env quotes, hot repins, survives deletion fail-closed and preserves independent Wake', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'fleet-2687-pin-'));
+    const pinDirectory = join(home, '.config', 'orchestrator-fleet');
+    const pinFile = join(pinDirectory, 'pin-fixture.env');
+    mkdirSync(pinDirectory, { recursive: true });
+    const selected = vi.spyOn(targetContext, 'resolveTargetContext').mockReturnValue({
+      projectId: 'pin-fixture', repository: 'test/project', primaryRoot: primary, defaultBranch: 'main',
+      orcaWorkspacePattern: '/orca/workspaces/project/', orchestratorTitlePattern: 'Cursor',
+      browserGpt: { projectUrl: 'https://chatgpt.com/g/g-p/project/test' },
+      packRoot: '/pack', cardPath: '/fixture/card.json',
+    });
+    try {
+      const oldPane: FleetTerminal = { handle: 'coord-old', title: 'Cursor coordinator',
+        worktreePath: primary, incarnationId: 'pin-old' };
+      const newPane: FleetTerminal = { ...oldPane, handle: 'coord-new', incarnationId: 'pin-new' };
+      const manager: FleetTerminal = { ...terminals[1]!, incarnationId: 'pin-worker' };
+      const roster = [oldPane, newPane, manager];
+      const screen = 'PARKED on missing-producer-2687';
+      const frames = { 'coord-old': 'idle', 'coord-new': 'idle', one: screen };
+      const makeConfig = () => fleetWakeConfigFromEnv({
+        HOME: home, ORCH_HANDLE: 'coord-old', FLEET_WAKE_INTERVAL: '300',
+      }, ['--project', 'pin-fixture']);
+      const run = (settings: FleetWakeConfig, store: FleetWakeStateStore = new MemoryWakeStore(),
+        workerScreen = screen) => tick({
+        config: settings, store, terminals: roster,
+        screens: { ...frames, one: workerScreen },
+        listOpenPulls: () => [], readCurrentAssignments: () => [],
+        readPackReviewRuns: () => [], readChats: async () => [],
+      });
+      for (const pin of ['coord-old', "'coord-old'", '"coord-old"']) {
+        writeFileSync(pinFile, 'ORCH_HANDLE=' + pin + '\n');
+        const cfg = makeConfig();
+        expect(cfg.coordinatorPinFile).toBe(pinFile);
+        expect(cfg.orchestratorHandle).toBe('coord-old');
+        const first = await run(cfg);
+        expect(sendsTo(first.calls, 'coord-old').filter((row) => row.includes('--text'))).toHaveLength(1);
+      }
+      writeFileSync(pinFile, "ORCH_HANDLE='coord-old'\n");
+      const settings = makeConfig();
+      const store = new MemoryWakeStore();
+      const old = await run(settings, store);
+      expect(sendsTo(old.calls, 'coord-old').filter((row) => row.includes('--text'))).toHaveLength(1);
+      writeFileSync(pinFile, 'ORCH_HANDLE="coord-new"\n');
+      const shifted = await run(settings, store);
+      expect(sendsTo(shifted.calls, 'coord-old')).toHaveLength(0);
+      expect(sendsTo(shifted.calls, 'coord-new').filter((row) => row.includes('--text'))).toHaveLength(1);
+      expect(sends((await run(settings, store)).calls)).toHaveLength(0);
+
+      // Startup Wake is a separate process-local effect, but uses the same hot pin.
+      const startup = await boundedStartupWake({
+        settings, frames: [{ terminals: [oldPane, newPane],
+          screens: { 'coord-old': 'idle', 'coord-new': 'idle' } }],
+      });
+      expect(startupTextSends(startup.calls)).toEqual([
+        ['terminal', 'send', '--terminal', 'coord-new', '--text', startupWakeText, '--enter'],
+      ]);
+
+      rmSync(pinFile);
+      const vanished = await run(settings, new MemoryWakeStore());
+      expect(sendsTo(vanished.calls, 'coord-old')).toHaveLength(0);
+      expect(sendsTo(vanished.calls, 'coord-new')).toHaveLength(0);
+      expect(vanished.logs.join(' ')).toContain('no orchestrator');
+      const due = await run(settings, new MemoryWakeStore(),
+        'PARKED on time 2026-10-22T11:43:00Z');
+      // This call below uses real now: the historical deadline is already due.
+      expect(sendsTo(due.calls, 'one').filter((row) => row.includes('--text'))).toHaveLength(1);
+
+      for (const invalid of [
+        "ORCH_HANDLE='coord-new'\nORCH_HANDLE=coord-old\n",
+        "ORCH_HANDLE='coord-new\n",
+        'ORCH_HANDLE=coord\\-new\n',
+        'ORCH_HANDLE=missing-coordinator\n',
+      ]) {
+        writeFileSync(pinFile, invalid);
+        const noPin = await run(settings);
+        expect(sendsTo(noPin.calls, 'coord-old')).toHaveLength(0);
+        expect(sendsTo(noPin.calls, 'coord-new')).toHaveLength(0);
+      }
+      rmSync(pinFile);
+      const noFileAtConstruction = makeConfig();
+      expect(noFileAtConstruction.coordinatorPinFile).toBeUndefined();
+      const legacy = await run(noFileAtConstruction);
+      expect(sendsTo(legacy.calls, 'coord-old').filter((row) => row.includes('--text'))).toHaveLength(1);
+
+      writeFileSync(pinFile, 'ORCH_HANDLE=coord-old\n');
+      const deleteBeforeTick = makeConfig();
+      rmSync(pinFile);
+      const removedBeforeTick = await run(deleteBeforeTick);
+      expect(sendsTo(removedBeforeTick.calls, 'coord-old')).toHaveLength(0);
+      expect(sendsTo(removedBeforeTick.calls, 'coord-new')).toHaveLength(0);
+    } finally {
+      selected.mockRestore();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
