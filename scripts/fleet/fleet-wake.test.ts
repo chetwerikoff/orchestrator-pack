@@ -364,11 +364,19 @@ describe('fleet alarm', () => {
       expect(settings.selectedRepository).toBe('test/project');
       expect(settings.chatScope?.repository).toBe('test/project');
       const calls: string[][] = [];
+      // The exact current native launching pane is required for a GPT-completion Wake.
+      const currentArchitect: FleetTerminal = { ...architect, incarnationId: 'fixture-architect-2422' };
       const result = await runFleetAlarmTick({
-        config: settings, executor: fakeOrca({ coord: 'idle', [architectHandle]: 'Ready.\n>' }, calls, [terminals[0]!, architect]),
+        config: settings, executor: fakeOrca({ coord: 'idle', [architectHandle]: 'Ready.\n>' }, calls, [terminals[0]!, currentArchitect]),
         store: new MemoryWakeStore(), sleepMs: async () => {}, log: () => {},
         readChats: async () => [], closeChat: async () => { throw new Error('unexpected close'); },
-        listTerminalEnvelopes: () => [{ path: '/tmp/opencode/architect-terminal.json', invocationId: 'fixture', terminalHandle: architectHandle }],
+        listTerminalEnvelopes: () => [{
+          path: '/tmp/opencode/architect-terminal.json', invocationId: 'fixture',
+          observedInvocationId: 'fixture', terminalHandle: architectHandle, cwd: primary,
+          lifecycleOutcome: 'success', turnResultState: 'ok',
+        }],
+        resolveSelectedReviewProject: () => ({ projectId: 'fixture', repository: 'test/project', primaryRoot: primary }),
+        readGit: selectedProjectGit, canonicalPath: (path) => path,
         listUnreadRunMessages: () => [], listOpenPulls: () => [], readWorktreeHead: () => undefined,
       });
       expect(result.state).toBe(exclude ? 'nothing_stopped' : 'sent');
