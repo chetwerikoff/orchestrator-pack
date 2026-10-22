@@ -306,6 +306,7 @@ describe('fleet alarm', () => {
           lifecycleOutcome: 'success', turnResultState: 'ok' },
       ],
       readGit: selectedProjectGit, canonicalPath: (path) => path,
+      readPackReviewRuns: () => [], readCurrentAssignments: () => [],
       resolveSelectedReviewProject: () => ({
         projectId: 'orchestrator-pack', repository: 'test/project', primaryRoot: primary,
       }),
@@ -587,6 +588,7 @@ describe('fleet alarm', () => {
       terminals: [terminals[0]!, exactPane, terminals[2]!],
       config: config({ selectedRepository: 'test/project' }),
       readGit: selectedProjectGit, canonicalPath: (path: string) => path,
+      readPackReviewRuns: () => [], readCurrentAssignments: () => [], listOpenPulls: () => [],
       resolveSelectedReviewProject: () => ({
         projectId: 'orchestrator-pack', primaryRoot: primary, repository: 'test/project',
       }),
@@ -1739,6 +1741,7 @@ describe('Issue #2441 read-only diagnostic tick non-interference', () => {
         projectId: 'orchestrator-pack', repository: 'test/project', primaryRoot: primary,
       }),
       readGit: selectedProjectGit, canonicalPath: (path) => path,
+      readPackReviewRuns: () => [], readCurrentAssignments: () => [], listOpenPulls: () => [],
       executor: (args) => {
         if (args[1] === 'send') order.push('legacy-send');
         return execute(args);
