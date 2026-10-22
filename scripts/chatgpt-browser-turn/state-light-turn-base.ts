@@ -4078,10 +4078,15 @@ async function runTurnCore(
         deadlineMs: Math.min(invocationDeadlineMs, Date.now() + 20_000),
       });
       if (freshCleanup) {
-        freshCleanup.predecessorCleanupStatus = previous.status;
+        // A surviving idle last Page or selected existing Page is explicitly
+        // nonblocking, but its cleanup has NOT been confirmed by a close.
+        freshCleanup.predecessorCleanupStatus = previous.status === 'nonblocking_open'
+          ? 'cleanup_unconfirmed' : previous.status;
         freshCleanup.predecessorTargetId = previous.targetId;
       }
-      if (previous.status !== 'confirmed') throw new Error('predecessor_cleanup_unconfirmed');
+      if (previous.status !== 'confirmed' && previous.status !== 'nonblocking_open') {
+        throw new Error('predecessor_cleanup_unconfirmed');
+      }
     }
 
     // Refuse a new Send against the shared account cooldown before attachOwnTarget:
@@ -7896,7 +7901,7 @@ async function retireExplicitPredecessor(input: {
   readonly profileKey: string;
   readonly cdp: string;
   readonly deadlineMs: number;
-}): Promise<{ status: 'confirmed' | 'cleanup_unconfirmed'; targetId?: string; cause?: string }> {
+}): Promise<{ status: 'confirmed' | 'nonblocking_open' | 'cleanup_unconfirmed'; targetId?: string; cause?: string }> {
   let original: ReturnType<typeof readStateLightTurnObservation>;
   let targetId: string | undefined;
   const refuse = (cause: string) => ({
@@ -7932,7 +7937,7 @@ async function retireExplicitPredecessor(input: {
         && original.send_count === 0 && original.send_witness !== 'owned_marker'
         && original.owned_marker_confirmed !== true
         && terminal.delivery === 'not-sent' && terminal.send_count === 0) {
-        return { status: 'confirmed', targetId: pin.id, cause: 'noncreated_no_close' };
+        return { status: 'nonblocking_open', targetId: pin.id, cause: 'noncreated_no_close' };
       }
       return refuse('predecessor_noncreation_unproven');
     }
@@ -7973,7 +7978,7 @@ async function retireExplicitPredecessor(input: {
         page, browser, cdp: input.cdp, profileKey: input.profileKey,
         invocationId: input.previousInvocationId, targetId: pinId,
       });
-      if (fresh) return { status: 'confirmed', targetId: pinId, cause: 'settled_idle_last_page_preserved' };
+      if (fresh) return { status: 'nonblocking_open', targetId: pinId, cause: 'settled_idle_last_page_preserved' };
     }
     return refuse(guarded.cause);
   } catch {
@@ -8278,6 +8283,10 @@ async function guardedOriginalTargetRetirement(input: {
   }
   const last = await census();
   if (last) return refuse(last);
+  // The last CDP census is an await: re-read current draft, Stop, stream and
+  // exact route at the physical-close boundary, not only before the census.
+  const finalIdle = await readableAndIdle();
+  if (finalIdle) return refuse(finalIdle);
   if (!eligibleRoute() || Date.now() >= deadline) return refuse('route_changed');
   if (!targetInfo.created && !authorizeGuardedHistoricalTargetClose(outcome.browser, pin.id)) {
     return refuse('created_target_ownership_unproven');
