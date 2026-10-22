@@ -364,17 +364,21 @@ export function resolveCoordinatorPane(
     const pin = envHandleFromFile(config.coordinatorPinFile);
     if (!pin) return undefined; // A former file-backed authority never falls back.
     const { coordinatorPinFile: _fileAuthority, ...legacy } = config;
-    return resolveCoordinatorPane(terminals, { ...legacy, orchestratorHandle: pin });
+    const selected = resolveCoordinatorPane(terminals, { ...legacy, orchestratorHandle: pin });
+    // Only file-backed hot pins require the selected primary checkout as native owner.
+    return selected && isAbsolute(selected.worktreePath) && isAbsolute(config.primary)
+      && samePath(selected.worktreePath, config.primary) ? selected : undefined;
   }
   if (config.orchestratorHandle) {
-    // The handle is a selector, not proof of project ownership: never route to
-    // a foreign, duplicate or exited native pane even when the hot pin is valid.
+    // Legacy explicit pins retain the original non-worker-workspace selection.
+    // Uniqueness and current native liveness apply in both pin modes.
     const matching = terminals.filter((terminal) => terminal.handle === config.orchestratorHandle);
     if (matching.length !== 1) return undefined;
     const pinned = matching[0]!;
-    if (!pinned.worktreePath || !isAbsolute(pinned.worktreePath) || !isAbsolute(config.primary)
-      || !samePath(pinned.worktreePath, config.primary)
-      || pinned.status?.toLowerCase() === 'exited') return undefined;
+    if (!pinned.worktreePath || pinned.status?.toLowerCase() === 'exited') return undefined;
+    config.workspaceRe.lastIndex = 0;
+    if (!samePath(pinned.worktreePath, config.primary)
+      && config.workspaceRe.test(pinned.worktreePath.replaceAll('\\', '/'))) return undefined;
     return pinned;
   }
   return terminals.find((terminal) => {

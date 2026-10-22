@@ -818,19 +818,19 @@ describe('fleet alarm', () => {
   it('honors ORCH_HANDLE, reports no coordinator when unresolved, and skips a failed screen read without throwing', async () => {
     const pinned = await tick({
       config: config({ orchestratorHandle: 'pinned' }),
-      terminals: [...terminals, { handle: 'pinned', title: 'OpenCode', worktreePath: primary }],
+      terminals: [...terminals, { handle: 'pinned', title: 'OpenCode', worktreePath: '/tmp/pinned' }],
       screens: { pinned: 'idle', one: 'done', two: 'working\nesc to interrupt' },
     });
     expect(pinned.result).toMatchObject({ state: 'sent', coordinator: 'pinned' });
     expect(sends(pinned.calls).every((call) => call.includes('pinned'))).toBe(true);
-    const foreignPin = await tick({
+    const workerWorkspacePin = await tick({
       config: config({ orchestratorHandle: 'pinned' }),
       terminals: [...terminals, { handle: 'pinned', title: 'Cursor coordinator',
-        worktreePath: '/other/foreign-repository' }],
+        worktreePath: workerBase + '/foreign-worker' }],
       screens: { pinned: 'idle', one: 'done', two: 'working\nesc interrupt' },
     });
-    expect(foreignPin.result.state).toBe('no_orchestrator');
-    expect(sendsTo(foreignPin.calls, 'pinned')).toHaveLength(0);
+    expect(workerWorkspacePin.result.state).toBe('no_orchestrator');
+    expect(sendsTo(workerWorkspacePin.calls, 'pinned')).toHaveLength(0);
 
     const staleWorkerPin = await tick({
       config: config({ orchestratorHandle: 'one' }),
@@ -2618,6 +2618,32 @@ describe('Issue #2575 process-local startup wake', () => {
   const readable: StartupFrame = { terminals: [coordinator], screens: { coord: 'idle' } };
   const startupTextCommand = ['terminal', 'send', '--terminal', 'coord', '--text', startupWakeText, '--enter'];
   const startupEnterCommand = ['terminal', 'send', '--terminal', 'coord', '--enter'];
+
+  it('preserves off-primary, non-file-backed legacy ORCH_HANDLE for ordinary alarms and pending startup Wake', async () => {
+    const pinned: FleetTerminal = {
+      handle: 'legacy-pinned', title: 'Cursor coordinator',
+      worktreePath: '/tmp/pinned-legacy', incarnationId: 'legacy-coordinator-current',
+    };
+    const settings = config({ orchestratorHandle: pinned.handle });
+    expect(settings.coordinatorPinFile).toBeUndefined();
+    expect(settings.workspaceRe.test(pinned.worktreePath)).toBe(false);
+    const frame: StartupFrame = {
+      terminals: [coordinator, pinned, terminals[1]!],
+      screens: { coord: 'idle', 'legacy-pinned': 'idle', one: 'done' },
+    };
+    const ordinary = await tick({
+      config: settings, terminals: frame.terminals, screens: frame.screens,
+      listUnreadRunMessages: () => [], listOpenPulls: () => [], readPackReviewRuns: () => [],
+    });
+    expect(ordinary.result).toMatchObject({ state: 'sent', coordinator: pinned.handle });
+    expect(sendsTo(ordinary.calls, pinned.handle).filter((call) => call.includes('--text'))).toHaveLength(1);
+    expect(sendsTo(ordinary.calls, coordinator.handle)).toHaveLength(0);
+    const startup = await boundedStartupWake({ settings, frames: [frame, frame] });
+    expect(startupTextSends(startup.calls)).toEqual([
+      ['terminal', 'send', '--terminal', pinned.handle, '--text', startupWakeText, '--enter'],
+    ]);
+    expect(sendsTo(startup.calls, coordinator.handle)).toHaveLength(0);
+  });
 
   it('startup wake immediately after the ordinary tick, once even if coordinator changes', async () => {
     const replacement: FleetTerminal = { handle: 'coord-new', title: 'Cursor coordinator', worktreePath: primary };

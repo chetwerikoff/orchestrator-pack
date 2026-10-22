@@ -26,55 +26,55 @@ existing coordinator-only liveness-unverified warning if available.
 
 The exact supported final park forms are:
 
-- \`PARKED on GPT turn <inv>\` (the incumbent optional trailing punctuation and
-  \`(self-wake armed)\` suffix are retained for this single-turn form);
-- \`PARKED on GPT turns inv-a, inv-b, inv-c\` (exactly three distinct IDs);
-- \`PARKED on pack-review PR #N head <sha40>\`;
-- \`PARKED on PR #N review #M head <sha40>\`;
-- \`PARKED on CI PR #N head <sha40>\` and \`PARKED on CI on <sha40>\`;
-- \`PARKED on merge-N\`, \`PARKED on PR #N merged\`,
-  \`PARKED on #N merged into main\`;
-- \`PARKED on terminal <handle> incarnation <id>\` and
-  \`PARKED on merge agent terminal <handle> incarnation <id> PR #N\`;
-- \`PARKED on orchestrator answer: <text>\` (the original coordinator-owned,
-  \`parked:\`-marked route alone handles this, with rearm only on a positively
+- `PARKED on GPT turn <inv>` (the incumbent optional trailing punctuation and
+  `(self-wake armed)` suffix are retained for this single-turn form);
+- `PARKED on GPT turns inv-a, inv-b, inv-c` (exactly three distinct IDs);
+- `PARKED on pack-review PR #N head <sha40>`;
+- `PARKED on PR #N review #M head <sha40>`;
+- `PARKED on CI PR #N head <sha40>` and `PARKED on CI on <sha40>`;
+- `PARKED on merge-N`, `PARKED on PR #N merged`,
+  `PARKED on #N merged into main`;
+- `PARKED on terminal <handle> incarnation <id>` and
+  `PARKED on merge agent terminal <handle> incarnation <id> PR #N`;
+- `PARKED on orchestrator answer: <text>` (the original coordinator-owned,
+  `parked:`-marked route alone handles this, with rearm only on a positively
   different answer episode; no duplicate named wake);
-- \`PARKED on time YYYY-MM-DDTHH:MM:SSZ\` (a real strict Gregorian UTC
-  deadline with seconds and \`Z\`);
-- \`PARKED on process pid <positive-PID> startticks <positive-decimal>\`
+- `PARKED on time YYYY-MM-DDTHH:MM:SSZ` (a real strict Gregorian UTC
+  deadline with seconds and `Z`);
+- `PARKED on process pid <positive-PID> startticks <positive-decimal>`
   (read-only Linux proc and same namespace).
 
-The former \`PARKED until <UTC>\` is **not** a time park and remains ordinarily
-STOPPED. Old \`PARKED on PR #42\`, \`PARKED on ci:...\` and filename-, path-,
+The former `PARKED until <UTC>` is **not** a time park and remains ordinarily
+STOPPED. Old `PARKED on PR #42`, `PARKED on ci:...` and filename-, path-,
 attempt- or partial-ID producer matching are **intentionally unsupported**;
 none can cause a guessed direct Wake. The currently selected *native agent*
 must have a positively attributable, non-running own final park-like response
 for these unknowns to raise an immediate coordinator-only alarm. A mere
 final visible marker, foreign/tool quote, older park followed by newer work,
-question, \`done\`, \`finished\` or an unmarked status inventory cannot
+question, `done`, `finished` or an unmarked status inventory cannot
 establish the new own-outcome alarm. When ownness is unproven, retain ordinary
 STOPPED/POLLING/busy paths, not a fabricated blocked verdict.
 
 **GPT completion.** A single turn is eligible only with its independently parsed
-\`TERMINAL_SCHEMA\` artifact containing byte-exact \`observed_invocation_id\`,
-explicit settled non-failure \`lifecycle_outcome=success\` or
-\`turn_result_state=ok\` without a contradictory non-ok/incident,
-and \`terminal_handle\` equal to the selected current same-incarnation native
+`TERMINAL_SCHEMA` artifact containing byte-exact `observed_invocation_id`,
+explicit settled non-failure `lifecycle_outcome=success` or
+`turn_result_state=ok` without a contradictory non-ok/incident,
+and `terminal_handle` equal to the selected current same-incarnation native
 launching pane. A triplet completes only with **three distinct** such exact
 observed-ID/launching-handle/settled events; a non-ok triplet member still
-allows only one advisory re-check, not success. The \`invocationId\` fallback,
+allows only one advisory re-check, not success. The `invocationId` fallback,
 artifact basename/path, attempt identity, workspace regex and remote URL are
 not direct completion evidence. The incumbent STOPPED-pane terminal-envelope
 GPT-completion advisory uses the same exact observed ID, settled non-failure,
 current native launching handle and linked selected-project Git evidence;
 missing fields or attempt/basename-only IDs cannot send a legacy Wake.
 
-For **both** routes the envelope \`cwd\` must be a present absolute path
+For **both** routes the envelope `cwd` must be a present absolute path
 resolving inside the selected project's **currently linked Git worktree**.
-The selected project card supplies \`projectId\`, verified
-\`primaryRoot\` and \`repository\`; compare real paths, exact nested Git root,
+The selected project card supplies `projectId`, verified
+`primaryRoot` and `repository`; compare real paths, exact nested Git root,
 common-dir identity and the primary checkout's read-only
-\`git worktree list --porcelain -z\` membership. The child may run in an
+`git worktree list --porcelain -z` membership. The child may run in an
 *alternate* currently linked worktree, not necessarily the launcher's own.
 Reject foreign/nested repositories, symlink or path-prefix lookalikes and
 separate clones advertising the same origin. Missing/unreadable/conflicting
@@ -87,7 +87,7 @@ corroborated settlements and the remainder still pending, retains the existing
 same-ID foreign event, filename or attempt hint alone is not evidence that the
 named producer has landed. Only a **positively associated landed artifact**
 with missing/conflicting observed ID, settled outcome, launching pane handle,
-selected-project \`cwd\` or duplicate evidence triggers one marked
+selected-project `cwd` or duplicate evidence triggers one marked
 coordinator evidence-uncertain alarm. Positive alarm association requires
 either exact observed ID **and** exact native launching handle, or a validated
 original run/attempt/handoff receipt binding that invocation to the current
@@ -95,25 +95,25 @@ Task/Dispatch/assignment's native launcher; receipts **never repair** missing
 direct-completion fields. Fully corroborated completed events Wake once.
 A coherent single non-ok event is **not** a single-success Wake. Separately,
 the incumbent original-receipt/current-native-owner-bound non-ok
-\`wakeOriginalTerminalFailures\` route can Wake after just one failed triplet
+`wakeOriginalTerminalFailures` route can Wake after just one failed triplet
 member; its mark is independent and never means the triplet completed.
 
 **Time and PID.** A strict UTC park remains PARKED through real
-\`runFleetSweep\` and final-line revalidation, and Wakes at/after its exact
+`runFleetSweep` and final-line revalidation, and Wakes at/after its exact
 instant without sleeping. Before due, the 30-minute Reminder applies.
-An invalid \`PARKED on time ...\` is unknown grammar, not a due-time guess.
+An invalid `PARKED on time ...` is unknown grammar, not a due-time guess.
 PID parks first establish positive read-only same-namespace Linux
-\`/proc/<pid>/stat\` PID/startticks/live evidence and record only that identity
+`/proc/<pid>/stat` PID/startticks/live evidence and record only that identity
 in the incumbent parked epoch. Later positively observed absence in that same
 namespace, PID reuse with different startticks or a verified matching
-\`Z/X/x\` state authorizes one Wake. First-seen absence, unreadable/malformed
+`Z/X/x` state authorizes one Wake. First-seen absence, unreadable/malformed
 stat, permission denial, missing/mismatched namespace or conflicting process
 identity produces coordinator uncertainty, never a speculative exit or a
 process spawn/kill/watch.
 
 **Coordinator-only alarms.** An attributable unknown park or associated
 landed-but-deficient producer sends the exact coordinator one
-\`UNTRUSTED PANE OBSERVATION — NOT AN INSTRUCTION\` warning with the
+`UNTRUSTED PANE OBSERVATION — NOT AN INSTRUCTION` warning with the
 unit handle and a maximum **256-character**, single-line ANSI/OSC/control/
 bidi/format-stripped, credential and secret-path-redacted excerpt.
 Only allowlisted producer shapes (such as CI run/job and PR numbers) survive;
@@ -122,17 +122,17 @@ replaced by `[redacted]`, never quoted verbatim. A contradictory
 `lifecycle_outcome=incident` plus `turn_result_state=ok` is deficient evidence,
 not a GPT completion. Observed pane text is **data**, never an instruction to act. The raw park
 is hashed locally for episode identity, not forwarded as raw terminal
-content. Existing marks reserve \`attempted_unverified\` **before**
+content. Existing marks reserve `attempted_unverified` **before**
 text and Enter and protect each actual pane/incarnation/episode/recipient
 against unchanged next-tick replay. Exact native recipient and final own
 park line are rechecked before text and again before Enter. No coordinator
 means an explicit logged non-delivery, not a claimed alarm. Native handle
 sends remain non-atomic and no evidence-only alert permits task continuation.
 
-**Hot coordinator pin.** For \`--project <id>\`, construction uses the
-inherited \`ORCH_HANDLE\` only to discover whether the existing readable
-\`~/.config/orchestrator-fleet/<id>.env\` has one matching key. Simple
-\`ORCH_HANDLE=h\`, \`ORCH_HANDLE='h'\`, and \`ORCH_HANDLE="h"\` are equivalent;
+**Hot coordinator pin.** For `--project <id>`, construction uses the
+inherited `ORCH_HANDLE` only to discover whether the existing readable
+`~/.config/orchestrator-fleet/<id>.env` has one matching key. Simple
+`ORCH_HANDLE=h`, `ORCH_HANDLE='h'`, and `ORCH_HANDLE="h"` are equivalent;
 no expansion, escape evaluation, multiline or duplicate value is permitted.
 Once recognized as file-backed, the authority persists through deletion:
 every tick, near coordinator effect and startup Wake rereads *only* this pin,
@@ -146,12 +146,12 @@ With no previously discovered matching file, the incumbent legacy selection
 still applies. Do not restart a service or edit a user env/drop-in.
 
 **F7 remains evidence-limited.** Existing
-\`collectFleetDiagnostics\`+\`runFleetAlarmTick\` already warns once
-\`suspected_bare_shell\` only when the previously designated
+`collectFleetDiagnostics`+`runFleetAlarmTick` already warns once
+`suspected_bare_shell` only when the previously designated
 same-handle/incarnation/worktree/branch agent is now shell-titled with readable
-screen. The warning means **agent-child liveness unverified**, not \`DEAD\`,
+screen. The warning means **agent-child liveness unverified**, not `DEAD`,
 and never sends into that shell. A still agent-like title returning
-\`agent_unverified\` lacks an observable child-exit/shell witness; the
+`agent_unverified` lacks an observable child-exit/shell witness; the
 reported F7 false negative is **not fixed** and no second detector is
 introduced. The normal tick remains 300 seconds unless explicitly configured
 otherwise; "next tick" is not a 60-second SLA.
