@@ -2,8 +2,9 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 import { createHash } from 'node:crypto';
 import { runProcessSync } from '../kernel/subprocess.ts';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetContext, type TargetContext } from '../lib/target-context.ts';
 import {
@@ -61,6 +62,8 @@ export interface FleetWakeConfig {
   readonly workspaceRe: RegExp;
   readonly orchestratorTitleRe: RegExp;
   readonly orchestratorHandle?: string;
+  /** Captured file-backed authority persists even if the env file disappears. */
+  readonly coordinatorPinFile?: string;
   readonly architectHandle?: string;
   readonly busyRe: RegExp;
   readonly intervalSeconds: number;
@@ -86,10 +89,17 @@ export interface FleetWakeStateStore extends FleetPollingStore {
   readLastSentAt?(): number | undefined;
   writeLastSentAt?(at: number): void;
   clearLastSentAt?(): void;
-  readParkedEpoch?(handle: string): { key: string; since: number; started?: number } | undefined;
-  writeParkedEpoch?(handle: string, epoch: { key: string; since: number; started?: number }): void;
+  readParkedEpoch?(handle: string): ParkedEpoch | undefined;
+  writeParkedEpoch?(handle: string, epoch: ParkedEpoch): void;
   clearParkedEpoch?(handle: string): void;
   pruneParkedEpochs?(keys: ReadonlyMap<string, string>): void;
+}
+
+interface ParkedEpoch {
+  readonly key: string;
+  readonly since: number;
+  readonly started?: number;
+  readonly liveProcess?: { readonly pid: number; readonly startticks: string; readonly namespace: string };
 }
 
 export class FileFleetWakeStateStore extends FileFleetStateStore implements FleetWakeStateStore {
@@ -139,17 +149,24 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
     return join(this.root, `parked-epoch-${digest}.mark`);
   }
 
-  readParkedEpoch(handle: string): { key: string; since: number; started?: number } | undefined {
+  readParkedEpoch(handle: string): ParkedEpoch | undefined {
     try {
       const record = JSON.parse(readFileSync(this.parkedEpochPath(handle), 'utf8')) as
-        { handle?: unknown; key?: unknown; since?: unknown; started?: unknown };
-      return record.handle === handle && typeof record.key === 'string'
-        && typeof record.since === 'number' && Number.isFinite(record.since)
-        ? { key: record.key, since: record.since, ...(typeof record.started === 'number' && Number.isFinite(record.started) ? { started: record.started } : {}) } : undefined;
+        { handle?: unknown; key?: unknown; since?: unknown; started?: unknown; liveProcess?: Partial<ParkedEpoch['liveProcess']> };
+      if (record.handle !== handle || typeof record.key !== 'string'
+        || typeof record.since !== 'number' || !Number.isFinite(record.since)) return undefined;
+      const live = record.liveProcess;
+      const liveProcess = live && Number.isSafeInteger(live.pid) && (live.pid ?? 0) > 0
+        && typeof live.startticks === 'string' && /^[1-9]\d*$/u.test(live.startticks)
+        && typeof live.namespace === 'string' && live.namespace.length > 0
+        ? { pid: live.pid!, startticks: live.startticks, namespace: live.namespace } : undefined;
+      return { key: record.key, since: record.since,
+        ...(typeof record.started === 'number' && Number.isFinite(record.started) ? { started: record.started } : {}),
+        ...(liveProcess ? { liveProcess } : {}) };
     } catch { return undefined; }
   }
 
-  writeParkedEpoch(handle: string, epoch: { key: string; since: number; started?: number }): void {
+  writeParkedEpoch(handle: string, epoch: ParkedEpoch): void {
     mkdirSync(this.root, { recursive: true });
     writeFileSync(this.parkedEpochPath(handle), JSON.stringify({ handle, ...epoch }), 'utf8');
   }
@@ -300,6 +317,10 @@ export interface FleetAlarmTickOptions {
   readonly readPackReviewStage?: (repository: string, sha: string) => PackReviewStageFact | undefined;
   /** Offline fixtures; production revalidates the selected registered card. */
   readonly resolveSelectedReviewProject?: () => Pick<TargetContext, 'projectId' | 'repository' | 'primaryRoot'>;
+  /** Read-only fake Git witness for selected-project membership in the existing test suite. */
+  readonly proveSelectedWorktree?: (cwd: string, config: FleetWakeConfig) => boolean;
+  /** Read-only fake Linux proc/namespace observation; never starts a child. */
+  readonly probePid?: (pid: number) => ProcessObservation;
   readonly readPackReviewRuns?: () => readonly PackReviewRunRecord[];
   readonly reconcilePackReview?: typeof reconcileStalePackReviewRuns;
   readonly now?: () => number;
@@ -313,6 +334,22 @@ export type FleetAlarmTickResult =
   | { readonly state: 'unreadable'; readonly handle: string }
   | { readonly state: 'send_failed'; readonly coordinator: string };
 
+function envHandleFromFile(path: string): string | undefined {
+  let source: string;
+  try { source = readFileSync(path, 'utf8'); }
+  catch { return undefined; }
+  const entries = source.split(/\r?\n/u).filter((line) => /^\s*ORCH_HANDLE\b/u.test(line));
+  if (entries.length !== 1) return undefined;
+  const match = /^\s*ORCH_HANDLE\s*=\s*(.*?)\s*$/u.exec(entries[0]!);
+  if (!match) return undefined;
+  let value = match[1]!.trim();
+  if ((value.startsWith("'") && value.endsWith("'"))
+    || (value.startsWith('"') && value.endsWith('"'))) value = value.slice(1, -1);
+  // EnvironmentFile-style *simple* whole-value quotes, no interpolation or escaping.
+  if (!value || /[\s'"\\\x00-\x1f\x7f]/u.test(value)) return undefined;
+  return value;
+}
+
 function samePath(left: string, right: string): boolean {
   return resolve(left).replaceAll('\\', '/') === resolve(right).replaceAll('\\', '/');
 }
@@ -321,6 +358,13 @@ export function resolveCoordinatorPane(
   terminals: readonly FleetTerminal[],
   config: FleetWakeConfig,
 ): FleetTerminal | undefined {
+  if (config.coordinatorPinFile) {
+    const pin = envHandleFromFile(config.coordinatorPinFile);
+    if (!pin) return undefined; // A former file-backed authority never falls back.
+    return resolveCoordinatorPane(terminals, {
+      ...config, coordinatorPinFile: undefined, orchestratorHandle: pin,
+    });
+  }
   if (config.orchestratorHandle) {
     const pinned = terminals.find((terminal) => terminal.handle === config.orchestratorHandle);
     if (!pinned) return undefined;
@@ -816,11 +860,15 @@ const REMINDER_INTERVAL_MS = 30 * 60 * 1_000;
 const SHA40 = /^[0-9a-f]{40}$/u;
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
-type ProducerKind = 'gpt' | 'pack-review' | 'review' | 'ci' | 'merge' | 'terminal';
+type ProducerKind = 'gpt' | 'gpt-multi' | 'time' | 'process' | 'pack-review' | 'review' | 'ci' | 'merge' | 'terminal';
 interface NamedProducer {
   readonly kind: ProducerKind;
   readonly label: string;
   readonly id?: string;
+  readonly ids?: readonly string[];
+  readonly dueAt?: number;
+  readonly pid?: number;
+  readonly startticks?: string;
   readonly number?: number;
   readonly sha?: string;
   readonly reviewId?: number;
@@ -838,6 +886,26 @@ interface ProducerResolution {
 // GPT invocation names are free-form; punctuation belongs to the park sentence.
 // Other named producer forms retain their exact response syntax.
 export function parseNamedParkedProducer(wait: string): NamedProducer | undefined {
+  const triple = /^PARKED on GPT turns ([A-Za-z0-9_.:-]+), ([A-Za-z0-9_.:-]+), ([A-Za-z0-9_.:-]+)$/u.exec(wait);
+  if (triple) {
+    const ids = triple.slice(1);
+    if (new Set(ids).size !== 3) return undefined;
+    return { kind: 'gpt-multi', label: 'GPT-turns-' + ids.join('-'), ids };
+  }
+  const deadline = /^PARKED on time (\S+)$/u.exec(wait);
+  if (deadline) {
+    const text = deadline[1]!;
+    const strict = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\dZ$/u.test(text);
+    const milliseconds = strict ? Date.parse(text) : NaN;
+    if (Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === text) {
+      return { kind: 'time', label: 'UTC-' + text, dueAt: milliseconds };
+    }
+    return undefined;
+  }
+  const process = /^PARKED on process pid ([1-9]\d*) startticks ([1-9]\d*)$/u.exec(wait);
+  if (process && Number.isSafeInteger(Number(process[1]))) {
+    return { kind: 'process', label: 'process-' + process[1], pid: Number(process[1]), startticks: process[2] };
+  }
   const gptPrefix = 'PARKED on GPT turn ';
   if (wait.startsWith(gptPrefix)) {
     const id = wait.slice(gptPrefix.length)
@@ -1147,8 +1215,71 @@ async function wakeAssignedIssueManagers(
   }
 }
 
-// A park names an event, not a Task owner. Consumer lookups only observe
-// landed events; receipt, process and claimant proof is not part of a wake.
+
+type ProcessObservation =
+  | { readonly state: 'live' | 'exited'; readonly startticks: string; readonly namespace: string }
+  | { readonly state: 'absent' | 'unverified' };
+
+function readLinuxProcess(pid: number): ProcessObservation {
+  if (process.platform !== 'linux' || !Number.isSafeInteger(pid) || pid <= 0) return { state: 'unverified' };
+  try {
+    const selfNs = readlinkSync('/proc/self/ns/pid');
+    if (!/^pid:\[\d+\]$/u.test(selfNs)) return { state: 'unverified' };
+    let stat: string;
+    try { stat = readFileSync('/proc/' + pid + '/stat', 'utf8'); }
+    catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT' ? { state: 'absent' } : { state: 'unverified' };
+    }
+    const end = stat.lastIndexOf(') ');
+    if (end < 0 || !stat.startsWith(String(pid) + ' (')) return { state: 'unverified' };
+    const fields = stat.slice(end + 2).trim().split(/\s+/u);
+    const state = fields[0], startticks = fields[19];
+    if (!state || !startticks || !/^[1-9]\d*$/u.test(startticks)) return { state: 'unverified' };
+    const ns = readlinkSync('/proc/' + pid + '/ns/pid');
+    if (ns !== selfNs) return { state: 'unverified' };
+    return { state: state === 'Z' || state === 'X' || state === 'x' ? 'exited' : 'live',
+      startticks, namespace: ns };
+  } catch { return { state: 'unverified' }; }
+}
+
+function gitRead(cwd: string, args: readonly string[]): string | undefined {
+  try {
+    const result = runProcessSync({ command: 'git', args: [...args], cwd, timeoutMs: 5_000, inheritParentEnv: true });
+    return result.ok ? result.stdout.trim() : undefined;
+  } catch { return undefined; }
+}
+
+function insideRoot(path: string, root: string): boolean {
+  const rel = relative(root, path);
+  return rel === '' || (rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\') && !isAbsolute(rel));
+}
+
+/** One selected project card plus real Git common-dir/worktree roots; remote URL is not sufficient. */
+function selectedGitWorktree(cwd: string, config: FleetWakeConfig, options: FleetAlarmTickOptions): boolean {
+  if (!isAbsolute(cwd) || !config.selectedRepository) return false;
+  try {
+    const card = (options.resolveSelectedReviewProject ?? (() =>
+      resolveTargetContext({ projectId: config.projectId })))();
+    if (card.projectId !== config.projectId
+      || card.repository.toLowerCase() !== config.selectedRepository.toLowerCase()
+      || !samePath(card.primaryRoot, config.primary)) return false;
+    if (options.proveSelectedWorktree) return options.proveSelectedWorktree(cwd, config);
+    const primary = realpathSync(card.primaryRoot);
+    const child = realpathSync(cwd);
+    const rootString = gitRead(child, ['rev-parse', '--show-toplevel']);
+    const baseCommon = gitRead(primary, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    const childCommon = gitRead(child, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    const worktreeList = gitRead(primary, ['worktree', 'list', '--porcelain', '-z']);
+    if (!rootString || !baseCommon || !childCommon || !worktreeList) return false;
+    const root = realpathSync(rootString);
+    if (!insideRoot(child, root) || realpathSync(baseCommon) !== realpathSync(childCommon)) return false;
+    const linked = worktreeList.split('\0').filter((part) => part.startsWith('worktree '))
+      .map((part) => { try { return realpathSync(part.slice('worktree '.length)); } catch { return ''; } });
+    return linked.includes(root) && linked.includes(primary);
+  } catch { return false; }
+}
+
+// Named, exact events alone can authorize a direct re-check; no substring or filename fallback.
 function resolveParkEvent(
   wait: string,
   terminals: readonly FleetTerminal[],
