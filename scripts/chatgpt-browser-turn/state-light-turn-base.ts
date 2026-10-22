@@ -2874,6 +2874,24 @@ async function readFreshStopVisible(page: any, deadlineMs: number): Promise<bool
 
 /** Fail closed when the existing Continue generating control is visible or unreadable.
  * This is an observational guard, never an instruction to click the control. */
+/** Compare only a fresh complete attributed own reply with the exact committed
+ * bytes. It detects a completed foreign replacement even when Stop is gone;
+ * identical-text historical interaction has no current observable witness. */
+async function currentHarvestedAssistantMatchesCommitted(
+  page: any, marker: string, target: string, deadlineMs: number,
+): Promise<boolean> {
+  try {
+    const observed = await readPageObservation(page, marker, undefined, true, deadlineMs);
+    if (observed.transcriptIncomplete || observed.snapshot.complete !== true) return false;
+    const window = resolveOwnedReplyWindow(observed.messages, 0, marker);
+    const assistants = window.replyWindow.filter((row) => row.role === 'assistant');
+    return !window.uncertainCause && assistants.length === 1
+      && assistants[0]!.text === readFileSync(target, 'utf8');
+  } catch {
+    return false;
+  }
+}
+
 async function readFreshContinuationVisible(page: any, deadlineMs: number): Promise<boolean | null> {
   try {
     const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
@@ -7988,7 +8006,10 @@ async function verifySettledIdlePredecessorWithoutClose(input: {
       if (unsent) {
         if (users.messages.length !== 0 || marker.exactMarkerTokenCount !== 0) return false;
       } else if (marker.matchingUserCarrierCount !== 1 || marker.exactMarkerTokenCount !== 1
-        || !ownedPromptMatches(users.messages.at(-1)?.text ?? '', record.marker)) return false;
+        || !ownedPromptMatches(users.messages.at(-1)?.text ?? '', record.marker)
+        || !await currentHarvestedAssistantMatchesCommitted(
+          input.page, record.marker, record.primary!.target, Date.now() + MAX_LOCAL_READ_WAIT_MS,
+        )) return false;
       const targets = await listCdpPageTargets(input.cdp, MAX_LOCAL_READ_WAIT_MS);
       if (targets.filter(t => t.id === input.targetId && t.type === 'page'
         && t.url === String(input.page.url())).length !== 1) return false;
@@ -8239,6 +8260,12 @@ async function guardedOriginalTargetRetirement(input: {
         || !ownedPromptMatches(users.messages[users.messages.length - 1]!.text, observation.marker)) {
         return 'foreign_user_message';
       }
+      // Last user marker and idle controls are insufficient after a completed
+      // foreign regeneration. The current only assistant must still be the
+      // independently committed own response, checked on every close pass.
+      if (!observation.primary || !await currentHarvestedAssistantMatchesCommitted(
+        outcome.page, observation.marker, observation.primary.target, Date.now() + budget(),
+      )) return 'foreign_assistant_turn';
     }
     const beforeUrl = currentUrl();
     const draft = await readRetirementComposer(
