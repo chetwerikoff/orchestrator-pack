@@ -1658,11 +1658,11 @@ async function wakeNamedParkedProducers(
         if (!prior && epoch) store.writeParkedEpoch?.(pane.handle, {
           ...epoch, liveProcess: { pid: producer.pid!, startticks: observation.startticks, namespace: observation.namespace },
         });
-      } else if (observation.state === 'exited' && observation.startticks === producer.startticks
-        || prior?.pid === producer.pid && prior.startticks === producer.startticks
-          && (observation.state === 'absent' && observation.namespace === prior.namespace
-            || (observation.state === 'live' || observation.state === 'exited')
-              && observation.namespace === prior.namespace && observation.startticks !== prior.startticks)) {
+      } else if ((observation.state === 'exited' && observation.startticks === producer.startticks)
+        || (prior !== undefined && prior.pid === producer.pid && prior.startticks === producer.startticks
+          && ((observation.state === 'absent' && observation.namespace === prior.namespace)
+            || ((observation.state === 'live' || observation.state === 'exited')
+              && observation.namespace === prior.namespace && observation.startticks !== prior.startticks)))) {
         match = { label: producer.label, terminalState: 'process-exited',
           evidence: 'pid-' + producer.pid, eventId: 'process-exit:' + pane.wait };
       } else {
