@@ -385,7 +385,7 @@ describe('fleet alarm', () => {
     const screens = {
       coord: 'idle prompt',
       one: 'finished\n>',
-      two: 'PARKED on PR #1 merged; resume step: x',
+      two: 'PARKED on GPT turn pending-coordinator-throttle',
     };
     const first = await tick({ screens, store });
     expect(first.result).toMatchObject({ state: 'sent', coordinatorState: 'idle', count: 1 });
@@ -1949,7 +1949,7 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
       const prior: FleetTerminal = { ...terminals[1]!, incarnationId: 'inc-old' };
       const next: FleetTerminal = { ...prior, incarnationId: 'inc-new' };
       const earlier = await tick({ store, terminals: [terminals[0]!, prior],
-        screens: { coord: 'idle', one: 'PARKED on old-token' } });
+        screens: { coord: 'idle', one: 'PARKED on GPT turn old-token' } });
       expect(sendsTo(earlier.calls, 'one')).toHaveLength(0);
       const changed = await tick({ store, terminals: [terminals[0]!, next],
         screens: { coord: 'idle', one: 'Acknowledged' },
