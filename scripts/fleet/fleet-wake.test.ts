@@ -3474,3 +3474,96 @@ describe('Issue #2687 r04: file-backed coordinator pin, quotes and startup', () 
     }
   });
 });
+
+
+describe('Issue #2687: original receipt association never replaces GPT completion facts', () => {
+  const owner: FleetTerminal = { ...terminals[1]!, incarnationId: 'receipt-inc',
+    branch: 'refs/heads/issue2687', status: 'running', agentIdentity: 'opencode' };
+  const coordinator: FleetTerminal = { ...terminals[0]!, incarnationId: 'receipt-coord' };
+  const assignment: WorkerAssignmentRecord = {
+    schema: 'orchestrator-pack/worker-assignment/v1', projectId: 'orchestrator-pack',
+    repository: 'test/project', issueNumber: 2687,
+    taskId: 'task-r2687', assignmentId: 'assignment-r2687', generation: 1,
+    kind: 'local', provider: 'orca', bindingKey: 'dispatch-r2687', role: 'orchestrator',
+    createdAtUtc: '2026-10-22T00:00:00Z',
+  };
+  const receipt: HandoffReceipt = {
+    schema: HANDOFF_SCHEMA, run_identity: 'run-r2687', attempt_identity: 'attempt-r2687',
+    launcher_started_at: '2026-10-22T00:00:00Z',
+    handoff_committed_at: '2026-10-22T00:00:01Z',
+    completion_mode: COMPLETION_MODE, invocation_id: 'inv-a',
+    owner_task_id: assignment.taskId, owner_dispatch_id: assignment.bindingKey,
+    launching_terminal_handle: owner.handle, child_cwd: workerBase + '/two/child',
+  };
+  const parked = 'PARKED on GPT turns inv-a, inv-b, inv-c';
+  const executor = (): OrcaExecutor => {
+    const terminal = fakeOrca({ coord: 'idle', one: parked }, [], [coordinator, owner]);
+    return (args) => {
+      if (args[0] === 'orchestration' && args[1] === 'worker-show') {
+        return commandResult(JSON.stringify({ ok: true, result: {
+          dispatch: { id: assignment.bindingKey, taskId: assignment.taskId, status: 'dispatched' },
+          terminal: owner, observation: { status: 'live', exactWorker: true },
+        } }));
+      }
+      return terminal(args);
+    };
+  };
+  const event = (updates: Partial<TerminalEnvelopeEvent> = {}): TerminalEnvelopeEvent => ({
+    path: '/tmp/opencode/inv-a-terminal.json', invocationId: 'attempt-r2687',
+    runIdentity: receipt.run_identity, attemptIdentity: receipt.attempt_identity,
+    handoffReceiptPath: '/tmp/opencode/inv-a-handoff.json',
+    lifecycleOutcome: 'success', turnResultState: 'ok',
+    cwd: workerBase + '/two/child', terminalHandle: owner.handle,
+    ...updates,
+  });
+  const perform = (
+    envelope: TerminalEnvelopeEvent, store = new MemoryWakeStore(),
+    overrides: Partial<Parameters<typeof tick>[0]> = {},
+  ) => tick({
+    executor: executor(), screens: { coord: 'idle', one: parked },
+    terminals: [coordinator, owner], store,
+    config: config({ selectedRepository: 'test/project', orchestratorHandle: coordinator.handle }),
+    listOpenPulls: () => [], readCurrentAssignments: () => [assignment],
+    readOriginalHandoffReceipt: () => receipt,
+    listTerminalEnvelopes: () => [envelope], readPackReviewRuns: () => [],
+    resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
+      primaryRoot: primary, repository: 'test/project' }),
+    readGit: selectedProjectGit, canonicalPath: (path) => path,
+    ...overrides,
+  });
+  const textTo = (calls: readonly string[][], handle: string) =>
+    sendsTo(calls, handle).filter((row) => row.includes('--text'));
+
+  it('associates missing observed ID via current native receipt only as an alarm, not GPT completion', async () => {
+    const store = new MemoryWakeStore();
+    const missingObserved = event();
+    const first = await perform(missingObserved, store);
+    expect(textTo(first.calls, owner.handle)).toHaveLength(0);
+    expect(textTo(first.calls, coordinator.handle)[0]?.join(' ')).toContain('GPT producer evidence uncertain');
+    expect(sends((await perform(missingObserved, store)).calls)).toHaveLength(0);
+    const unrelated = await perform(missingObserved, new MemoryWakeStore(), {
+      readOriginalHandoffReceipt: () => ({ ...receipt, invocation_id: 'foreign-invocation' }),
+    });
+    expect(textTo(unrelated.calls, coordinator.handle)).toHaveLength(0);
+  });
+
+  it('allows original-receipt-bound non-ok failure Wake before the unfinished triplet completes', async () => {
+    const store = new MemoryWakeStore();
+    const failure = event({ observedInvocationId: 'inv-a',
+      lifecycleOutcome: 'incident', turnResultState: 'rate_limit' });
+    const first = await perform(failure, store);
+    expect(textTo(first.calls, owner.handle)).toHaveLength(1);
+    expect(textTo(first.calls, coordinator.handle)).toHaveLength(0);
+    const marks = [...store.parkedWakeEvents];
+    expect(marks.filter((key) => key.startsWith('failure:'))).toHaveLength(1);
+    expect(marks.some((key) => key.startsWith('event:'))).toBe(false);
+    expect(sends((await perform(failure, store)).calls)).toHaveLength(0);
+  });
+
+  it('conflicting direct observed handle can be associated by receipt only as uncertainty', async () => {
+    const wrong = await perform(event({ observedInvocationId: 'inv-a',
+      terminalHandle: 'foreign-launch-handle' }));
+    expect(textTo(wrong.calls, owner.handle)).toHaveLength(0);
+    expect(textTo(wrong.calls, coordinator.handle)[0]?.join(' ')).toContain('GPT producer evidence uncertain');
+  });
+});
