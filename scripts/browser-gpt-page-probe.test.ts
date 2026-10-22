@@ -1128,6 +1128,35 @@ test('Issue #2592 reused bound tab keeps foreign ownership and acquires no repla
   });
 });
 
+test('Issue #2685 r03: frozen original never becomes an inspect close target after 20 minutes', async () => {
+  const locator = 'https://chatgpt.com/c/test';
+  await withIdentityBoundInspectObservation('sent_unharvested', locator, async ({ profile, cdp, invocationId }) => {
+    const originalId = 'frozen-original-2685';
+    const closeIds: string[] = [];
+    const createdIds: string[] = [];
+    const original: CdpTarget = {
+      id: originalId, type: 'page', url: locator,
+      title: 'Frozen original', webSocketDebuggerUrl: 'ws://example/frozen-original-2685',
+    };
+    await assert.rejects(runProbe({
+      operation: 'inspect', cdp, profile, invocationId, targetId: originalId,
+    }, deps({
+      // The clock is deliberately past the 20-minute incident horizon. The
+      // probe has no physical-close authority for an acquired existing ID.
+      now: () => 1_210_000,
+      listTargets: async () => [original, {
+        id: 'healthy-foreign-2685', type: 'page', url: 'https://chatgpt.com/c/foreign',
+        title: 'Healthy foreign', webSocketDebuggerUrl: 'ws://example/healthy-foreign',
+      }],
+      createPage: async () => { createdIds.push('unexpected'); throw new Error('unexpected_create'); },
+      evaluate: async () => { throw new Error('renderer_still_frozen'); },
+      closePage: async (_cdp, id) => { closeIds.push(id); return 'closed'; },
+    })), (error: any) => error.status !== 'ok');
+    assert.deepEqual(createdIds, []);
+    assert.deepEqual(closeIds, []);
+  });
+});
+
 test('Issue #2592 acquired bound inspect preserves read failure and failed owned cleanup statuses', async () => {
   await withIdentityBoundInspectObservation('sent_unharvested', 'https://chatgpt.com/c/test', async ({ profile, cdp, invocationId }) => {
     const args = { operation: 'inspect' as const, cdp, profile, invocationId, conversationUrl: 'https://chatgpt.com/c/test' };
