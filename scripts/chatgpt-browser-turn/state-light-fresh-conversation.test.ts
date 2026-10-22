@@ -550,6 +550,9 @@ describe('state-light fresh conversation collision recovery', () => {
         },
       });
       expect(committed.state).toBe('committed_ok');
+      // The synthetic Page had not been polled by a driver. Make its rendered
+      // assistant frame genuinely final after committing, as production must.
+      for (let i = 0; i < 4; i++) turn.page.locator(MESSAGE_NODE_SELECTOR);
     };
     if (phase === 'harvested') await publishOwnPrimary();
     writePrivate(receiptPath, {
