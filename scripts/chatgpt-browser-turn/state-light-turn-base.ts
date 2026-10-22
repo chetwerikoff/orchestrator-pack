@@ -8008,7 +8008,7 @@ async function readRetirementComposer(
       editor, Math.max(65_536, ownedLiteral?.length ?? 0), deadlineMs,
     );
     if (exact === undefined) {
-      exact = await boundedBrowserRead(
+      const rawViews = await boundedBrowserRead(
         Promise.resolve(editor.evaluate((el: HTMLElement) => {
           if (!el.isConnected || !el.isContentEditable || !el.ownerDocument?.defaultView) return undefined;
           const style = el.ownerDocument.defaultView.getComputedStyle(el);
@@ -8023,8 +8023,8 @@ async function readRetirementComposer(
         })),
         budget(), 'retirement_editor_fallback_timeout',
       ) as { content?: unknown; visible?: unknown } | undefined;
-      exact = typeof exact?.content === 'string' && exact.content === exact.visible
-        ? exact.content : undefined;
+      exact = typeof rawViews?.content === 'string' && rawViews.content === rawViews.visible
+        ? rawViews.content : undefined;
     }
     if (typeof exact !== 'string') return 'composer_unknown';
     if (exact === '') return 'empty';
