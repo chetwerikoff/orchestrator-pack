@@ -652,8 +652,11 @@ describe('fleet alarm', () => {
       readGit: (cwd, args) => { gitReads += 1; return selectedProjectGit(cwd, args); },
     };
     const irrelevant = await tick(input);
+    // runFleetAlarmTick independently validates this project card once per tick
+    // for stale pack-review reconciliation, even with an empty run census.
+    // The twelve unrelated envelopes must add neither another card read nor a Git probe.
     expect(gitReads).toBe(0);
-    expect(cardReads).toBe(0);
+    expect(cardReads).toBe(1);
     expect(sendsTo(irrelevant.calls, owner.handle)).toHaveLength(0);
 
     const busy = await tick({
@@ -661,11 +664,14 @@ describe('fleet alarm', () => {
       listTerminalEnvelopes: () => [matching],
     });
     expect(gitReads).toBe(0);
+    expect(cardReads).toBe(2); // Another independent stale-review identity read; no GPT probe.
     expect(sendsTo(busy.calls, owner.handle)).toHaveLength(0);
 
     const positive = await tick({ ...input, listTerminalEnvelopes: () => [...history, matching] });
     expect(gitReads).toBeGreaterThan(0);
-    expect(cardReads).toBe(1);
+    // Three ordinary stale-review identity reads across three ticks plus exactly
+    // one selected-project membership validation for the eligible STOPPED launcher.
+    expect(cardReads).toBe(4);
     expect(sendsTo(positive.calls, owner.handle).filter((row) => row.includes('--text'))).toHaveLength(1);
   });
 
