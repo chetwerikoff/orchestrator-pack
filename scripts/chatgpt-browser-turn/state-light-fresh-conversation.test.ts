@@ -738,6 +738,54 @@ describe('state-light fresh conversation collision recovery', () => {
     }
   });
 
+
+  it.each(['settled-unsent-last-page', 'contradictory-delivery'] as const)(
+    'Issue #2685: the actual successor driver %s before any new Page Send',
+    async (scenario) => {
+      const predecessor = await deferredRetirementFixture('not_sent');
+      const attach = vi.mocked(attachOwnTarget);
+      const originalAttach = attach.getMockImplementation()!;
+      predecessor.setOnlyPage();
+      if (scenario === 'contradictory-delivery') predecessor.writeTerminal('POSSIBLY_DELIVERED', 0);
+      const nextId = randomUUID();
+      const nextPrompt = 'NO-REPLAY-NEXT-2685-' + scenario;
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(nextPrompt));
+      mocks.browserQueue.length = 0;
+      enqueueBrowserForTurn(mocks, predecessor.turn.page);
+      if (scenario === 'settled-unsent-last-page') {
+        attach.mockImplementationOnce(originalAttach)
+          .mockRejectedValueOnce(new Error('injected_next_target_allocation_unavailable'));
+      }
+      const previousId = predecessor.args[6]!;
+      const run = [
+        ...STATE_LIGHT_TURN_BASE_ARGV,
+        '--invocation-id', nextId,
+        '--output', join(stateDir, 'successor-' + nextId + '.txt'),
+        '--new-chat', '--project-url', PROJECT_URL,
+        '--timeout-ms', '90000', '--poll-ms', '1',
+        '--predecessor-invocation-id', previousId,
+        '--predecessor-attempt-identity', 'attempt-retire-2685',
+        '--predecessor-run-identity', 'run-retire-2685',
+        '--predecessor-owner-task-id', 'task-retire-2685',
+      ];
+      try {
+        const output = await runStateLightTurnWithStdoutCapture(runStateLightTurn, run);
+        expect(output.result.send_count).toBe(0);
+        expect(predecessor.turn.page.close).not.toHaveBeenCalled();
+        if (scenario === 'contradictory-delivery') {
+          expect(output.result.cause).toBe('predecessor_cleanup_unconfirmed:not_sent_dispatch_unproven');
+          expect(attach).not.toHaveBeenCalled();
+        } else {
+          expect(output.result.cause).not.toMatch(/^predecessor_cleanup_unconfirmed/u);
+          expect(attach).toHaveBeenCalledTimes(2);
+        }
+      } finally {
+        attach.mockImplementation(__testAttachOwnTargetFixture);
+        predecessor.fetchSpy.mockRestore();
+      }
+    },
+  );
+
   // Exercise the real held-Page GET witness, wrapper and finalizer (not a
   // fabricated TerminalEnvelope). The request must be from this exact Page.
   function installExistingChatFetch429(page: any) {
