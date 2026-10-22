@@ -1858,7 +1858,7 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('plain-matches PR-number substrings of completed CI and pack-review events', async () => {
+  it('rejects PR-number substrings of completed CI and pack-review events', async () => {
     const head = 'a'.repeat(40);
     const params = {
       config: config({ selectedRepository: 'example/repo' }),
@@ -1868,12 +1868,12 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
     };
     const ci = await tick({ ...params, checkRunsFinishedAt: () => 17,
       readPackReviewStage: () => undefined });
-    expect(paneText(ci.calls, 'one')).toHaveLength(1);
-    expect(paneText(ci.calls, 'one')[0]).toContain('checks-completed');
+    expect(paneText(ci.calls, 'one')).toHaveLength(0);
+    expect(paneText(ci.calls, 'coord')[0]).toContain('unknown parked producer');
     const pack = await tick({ ...params, checkRunsFinishedAt: () => undefined,
       readPackReviewStage: () => ({ state: 'success', description: 'done' }) });
-    expect(paneText(pack.calls, 'one')).toHaveLength(1);
-    expect(paneText(pack.calls, 'one')[0]).toContain('stage-success');
+    expect(paneText(pack.calls, 'one')).toHaveLength(0);
+    expect(paneText(pack.calls, 'coord')[0]).toContain('unknown parked producer');
   });
 
   it('delivers one matching named CI completion, never unrelated PR-owner CI, to PARKED', async () => {
@@ -1924,7 +1924,7 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
     expect(first.result).toMatchObject({ state: 'sent', count: 2 });
     const unchanged = await simple({ coord: 'idle', one: 'done', two: 'needs a step' }, store, []);
     expect(unchanged.result.state).toBe('same_stopped_set');
-    const parked = await simple({ coord: 'idle', one: 'PARKED on waiting', two: 'needs a step' }, store, []);
+    const parked = await simple({ coord: 'idle', one: 'PARKED on GPT turn waiting', two: 'needs a step' }, store, []);
     expect(sendsTo(parked.calls, 'coord')).toHaveLength(0);
     const changed = await simple({ coord: 'idle', one: 'done again', two: 'needs a step' }, store, []);
     expect(changed.result).toMatchObject({ state: 'sent', count: 1 });
@@ -1946,13 +1946,12 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
     expect(docs).toContain('per-project');
   });
 
-  it('AC7: long nonrepresentable envelope evidence does not become a Wake skip gate', async () => {
+  it('AC7: long filename/attempt-only event is not a completion witness', async () => {
     const longEvent = { path: '/tmp/opencode/' + 'é'.repeat(200) + '.json', invocationId: 'long-token' };
-    const run = await simple({ coord: 'idle', one: 'PARKED on long-token', two: 'working\nesc interrupt' },
+    const run = await simple({ coord: 'idle', one: 'PARKED on GPT turn long-token', two: 'working\nesc interrupt' },
       new MemoryWakeStore(), [longEvent]);
-    expect(paneText(run.calls, 'one')).toHaveLength(1);
-    expect(paneText(run.calls, 'one')[0]).toContain('re-check');
-    expect(sendsTo(run.calls, 'coord')).toHaveLength(0);
+    expect(paneText(run.calls, 'one')).toHaveLength(0);
+    expect(paneText(run.calls, 'coord')).toHaveLength(0);
   });
 });
 
@@ -2618,7 +2617,7 @@ describe('Issue #2575 process-local startup wake', () => {
     const second = await tick(baselineInput);
     expect(first.result.state).toBe('sent');
     expect(sendsTo(first.calls, 'coord').some((call) => call.some((value) => value.includes('STOPPED one')))).toBe(true);
-    expect(sendsTo(first.calls, 'two').filter((call) => call.includes('--text'))).toHaveLength(1);
+    expect(sendsTo(first.calls, 'two').filter((call) => call.includes('--text'))).toHaveLength(0);
     expect(sends(second.calls)).toHaveLength(0);
 
     const observed = await boundedStartupWake({
