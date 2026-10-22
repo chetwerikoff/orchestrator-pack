@@ -769,6 +769,7 @@ describe('state-light fresh conversation collision recovery', () => {
         '--predecessor-owner-task-id', 'task-retire-2685',
       ];
       try {
+        attach.mockClear();
         const output = await runStateLightTurnWithStdoutCapture(runStateLightTurn, run);
         expect(output.result.send_count).toBe(0);
         expect(predecessor.turn.page.close).not.toHaveBeenCalled();

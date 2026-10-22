@@ -2882,7 +2882,7 @@ async function currentHarvestedAssistantMatchesCommitted(
 ): Promise<boolean> {
   try {
     const observed = await readPageObservation(page, marker, undefined, true, deadlineMs);
-    if (observed.transcriptIncomplete || observed.snapshot.complete !== true) return false;
+    if (observed.transcriptIncomplete || observed.snapshot?.complete !== true) return false;
     const window = resolveOwnedReplyWindow(observed.messages, 0, marker);
     const assistants = window.replyWindow.filter((row) => row.role === 'assistant');
     return !window.uncertainCause && assistants.length === 1
