@@ -7843,7 +7843,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       ((isPackReviewRunStale(candidate) || PACK_REVIEW_ACTIVE_STATUSES.has(candidate.status))
         && candidate.reviewRound?.reviewer === 'gpt'
         && candidate.reviewRound.sourceSlots.some((slot) => (
-          slot.lifecycle === 'invocation_started' && Boolean(trim(slot.invocationId))
+          (slot.lifecycle === 'invocation_started' && Boolean(trim(slot.invocationId)))
+          || (slot.lifecycle === 'terminal' && slot.terminalClass === 'pre_launch_interrupted')
         )))
       || (isPackReviewUnfinishedTerminalRun(candidate)
         && candidate.reviewRound?.reviewer === 'gpt'
