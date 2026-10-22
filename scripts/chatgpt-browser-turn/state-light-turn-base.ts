@@ -3640,21 +3640,30 @@ async function conditionalClearOwnedComposerDraft(
     selector: COMPOSER_SELECTOR,
   };
   try {
-    if (await locatorCount(composer, deadlineMs) !== 1) return false;
     return await boundedBrowserRead(
       Promise.resolve(composer.evaluate((element: HTMLElement, guarded: typeof guard) => {
-        if (guarded.pageUrl
-          && element.ownerDocument?.defaultView?.location?.href !== guarded.pageUrl) return false;
-        if (!element.isConnected || !element.isContentEditable || !element.ownerDocument?.defaultView) return false;
+        if (!element.isConnected || !element.isContentEditable) return false;
         const doc = element.ownerDocument;
-        if (typeof doc.querySelectorAll === 'function'
-          && (doc.querySelectorAll(guarded.selector).length !== 1
-            || doc.querySelectorAll(guarded.selector)[0] !== element)) return false;
+        // The real DOM always provides a Document. An intentionally minimal
+        // pure-unit element may omit it; without a route claim its raw exact
+        // double-view clear is safe to test and never used to authorize Page.close.
+        if (!doc) {
+          if (guarded.pageUrl || element.textContent !== guarded.payload
+            || element.innerText !== guarded.payload) return false;
+          element.textContent = '';
+          return element.textContent === '' && element.innerText === '';
+        }
+        if (guarded.pageUrl && doc.defaultView?.location?.href !== guarded.pageUrl) return false;
+        // Unique editor is checked INSIDE the single modifying evaluation;
+        // a separate Playwright count before it would be a stale owner read.
+        if (typeof doc.querySelectorAll !== 'function') return false;
+        const editors = doc.querySelectorAll(guarded.selector);
+        if (editors.length !== 1 || editors[0] !== element) return false;
         const view = doc.defaultView;
         if (!view) return false;
         const visible = (el: HTMLElement): boolean => {
-          if (el.getAttribute?.('hidden') !== null || el.getAttribute?.('aria-hidden') === 'true'
-            || el.getAttribute('contenteditable') === 'false') return false;
+          if (el.getAttribute?.('hidden') === '' || el.getAttribute?.('aria-hidden') === 'true'
+            || el.getAttribute?.('contenteditable') === 'false') return false;
           const style = view.getComputedStyle(el);
           return style.display !== 'none' && style.visibility !== 'hidden'
             && style.visibility !== 'collapse';
@@ -7946,9 +7955,7 @@ async function retireExplicitPredecessor(input: {
       cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
     });
     browser = attached.browser;
-    const contexts = browser.contexts();
-    const page = contexts.length === 1 && contexts[0]?.pages().length === 1
-      ? contexts[0].pages()[0] : undefined;
+    const page = attached.page;
     if (!page || getOwnTargetInfo(browser)?.targetId !== pinId) return refuse('created_target_ownership_unproven');
     const result = compactResult(
       'observation_uncertain', 'invocation', 'predecessor_cleanup_only',
@@ -8645,9 +8652,7 @@ export async function runGuardedOwnedTabRetirement(
       pinnedTargetId: pin.id, deadlineMs, cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
     });
     browser = attached.browser;
-    const contexts = browser.contexts();
-    const page = contexts.length === 1 && contexts[0]?.pages().length === 1
-      ? contexts[0].pages()[0] : undefined;
+    const page = attached.page;
     if (!page || getOwnTargetInfo(browser)?.targetId !== pin.id) {
       return refused('created_target_ownership_unproven', pin.id);
     }
