@@ -1210,7 +1210,7 @@ describe('supervised Task launch assistant', () => {
     try {
       const previous = await runSupervisedTaskLaunchAssistant({
         ...launchInput('manager'), issueNumber: undefined, taskId: 'task-old', env,
-      }, { ...deps(), runSupervisedStart: start });
+      }, { ...deps(), proveManagerTaskMembership: async (_runId, taskId) => ({ status: 'ok', value: { taskId } }), runSupervisedStart: start });
       expect(previous.outcome).toBe('ready');
       expect(currentWorkerAssignment(file, 2689)).toBeNull();
 
@@ -1222,6 +1222,7 @@ describe('supervised Task launch assistant', () => {
           onWorktree: () => { prepared += 1; },
           adapter: runtimeAdapter({ onSpawn: () => { spawned += 1; } }),
         }),
+        proveManagerTaskMembership: async (_runId, taskId) => ({ status: 'ok', value: { taskId } }),
         runSupervisedStart: start,
       });
       expect(transition.outcome).toBe('ready');
