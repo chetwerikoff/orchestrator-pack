@@ -8104,7 +8104,7 @@ async function readRetirementComposer(
           if (!el.isConnected || !el.isContentEditable || !el.ownerDocument?.defaultView) return undefined;
           const style = el.ownerDocument.defaultView.getComputedStyle(el);
           if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse'
-            || el.getAttribute?.('hidden') !== null || el.getAttribute?.('aria-hidden') === 'true'
+            || el.getAttribute?.('hidden') != null || el.getAttribute?.('aria-hidden') === 'true'
             || el.classList?.contains('ProseMirror')) return undefined;
           return typeof el.textContent === 'string' && el.textContent === el.innerText
             ? el.textContent : undefined;
@@ -8197,8 +8197,16 @@ async function guardedOriginalTargetRetirement(input: {
     || observation.phase === 'sent_unharvested') {
     // A brief responsive interval with a foreign edit and then a freeze is
     // indistinguishable from continuous freeze by CDP; never physically close.
-    if (await readFreshStopVisible(outcome.page, Date.now() + budget()) === null) {
-      return refuse('frozen_ownership_unproven');
+    const stop = await readFreshStopVisible(outcome.page, Date.now() + budget());
+    if (stop === null) return refuse('frozen_ownership_unproven');
+    if (stop) return refuse('stop_visible');
+    // An available Stop control alone is not a readable editor witness. Even
+    // an unsettled row needs a current composer read to report a frozen original
+    // truthfully; no such read upgrades this row into close authority.
+    const composer = await readRetirementComposer(outcome.page, undefined, deadline);
+    if (composer === 'frozen_ownership_unproven'
+      || composer === 'composer_unknown' || composer === 'foreign_draft') {
+      return refuse(composer);
     }
     return refuse(observation.phase === 'sent_unbound'
       ? 'checkpoint_or_settlement_pending' : 'observation_route_only');
