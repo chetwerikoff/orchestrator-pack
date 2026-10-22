@@ -1728,11 +1728,15 @@ describe('state-light fresh conversation collision recovery', () => {
     const turn = makeLoserPage(prompt, 'UNREACHED');
     turn.sendButton.click.mockImplementationOnce(async () => { throw timeoutError(); });
     turn.sendButton.click.mockImplementationOnce(async () => { throw timeoutError(); });
+    // Even positive original-target CDP ownership and a surviving sibling do not
+    // permit retirement or a not_sent transition after either Send click attempt.
+    proveCreatedPageCanClose(turn.page);
 
     const outcome = await runNewChatTurn(
       turn.page, join(stateDir, invocationId + '-second-final.txt'), '90000', invocationId,
     );
     expect(outcome.result).toMatchObject({ send_count: 0, send_attempted: true, state: 'observation_uncertain' });
+    expect(outcome.result.cleanup).not.toBe('confirmed');
     expectPossibleEffect(outcome.result);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
     expect(turn.getSends()).toBe(0);
