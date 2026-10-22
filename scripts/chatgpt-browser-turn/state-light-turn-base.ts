@@ -3652,7 +3652,7 @@ async function conditionalClearOwnedComposerDraft(
             || doc.querySelectorAll(guarded.selector)[0] !== element)) return false;
         const view = doc.defaultView;
         const visible = (el: HTMLElement): boolean => {
-          if (el.getAttribute('hidden') !== null || el.getAttribute('aria-hidden') === 'true'
+          if (el.getAttribute?.('hidden') !== null || el.getAttribute?.('aria-hidden') === 'true'
             || el.getAttribute('contenteditable') === 'false') return false;
           const style = view.getComputedStyle(el);
           return style.display !== 'none' && style.visibility !== 'hidden'
@@ -7888,71 +7888,128 @@ async function retireExplicitPredecessor(input: {
   readonly deadlineMs: number;
 }): Promise<{ status: 'confirmed' | 'cleanup_unconfirmed'; targetId?: string; cause?: string }> {
   let original: ReturnType<typeof readStateLightTurnObservation>;
-  let originalId: string | undefined;
+  let targetId: string | undefined;
+  const refuse = (cause: string) => ({
+    status: 'cleanup_unconfirmed' as const, ...(targetId ? { targetId } : {}), cause,
+  });
   try {
     const { readInvocationReceiptLocator, readTerminalEnvelope } =
       await import('../flow-manager-long-running-child.ts');
     const bound = readInvocationReceiptLocator({
       invocationId: input.previousInvocationId,
-      runIdentity: input.runIdentity,
-      attemptIdentity: input.previousAttemptIdentity,
+      runIdentity: input.runIdentity, attemptIdentity: input.previousAttemptIdentity,
       ownerTaskId: input.ownerTaskId,
     });
     const terminal = readTerminalEnvelope(bound.locator.terminal_envelope_path, {
       runIdentity: input.runIdentity, attemptIdentity: input.previousAttemptIdentity,
     });
+    original = readStateLightTurnObservation(input.profileKey, input.previousInvocationId);
+    targetId = original.owned_target?.id;
+    const pin = original.owned_target;
+    if (!pin || typeof pin.created !== 'boolean'
+      || typeof terminal?.owned_target_created !== 'boolean') return refuse('predecessor_noncreation_unproven');
     if (!terminal || terminal.observed_invocation_id !== input.previousInvocationId
       || terminal.handoff_receipt_path !== bound.locator.handoff_receipt_path
-      || terminal.cleanup_status !== 'cleanup_unconfirmed'
-      || bound.receipt.owner_task_id !== input.ownerTaskId) return { status: 'cleanup_unconfirmed' };
-    original = readStateLightTurnObservation(input.profileKey, input.previousInvocationId);
-    originalId = original.owned_target?.id;
-    if (!original.owned_target?.created
-      || original.owned_target.cdp_sha256 !== createHash('sha256').update(input.cdp, 'utf8').digest('hex')
-      || terminal.owned_target_created !== true
-      || terminal.owned_target_id !== original.owned_target.id
-      || terminal.owned_prompt_marker !== original.marker) {
-      return { status: 'cleanup_unconfirmed', ...(originalId ? { targetId: originalId } : {}) };
+      || bound.receipt.owner_task_id !== input.ownerTaskId
+      || original.invocation_id !== input.previousInvocationId
+      || pin.cdp_sha256 !== createHash('sha256').update(input.cdp, 'utf8').digest('hex')
+      || terminal.owned_target_id !== pin.id || terminal.owned_target_created !== pin.created
+      || terminal.owned_prompt_marker !== original.marker) return refuse('predecessor_identity_unproven');
+    if (pin.created === false) {
+      // Positive selected-existing and never-dispatched: no close, no census,
+      // no new Send authority. The original existing page remains untouched.
+      if (original.phase === 'not_sent' && original.transition_reason === 'terminal_pre_send'
+        && original.send_count === 0 && original.send_witness !== 'owned_marker'
+        && original.owned_marker_confirmed !== true
+        && terminal.delivery === 'not-sent' && terminal.send_count === 0) {
+        return { status: 'confirmed', targetId: pin.id, cause: 'noncreated_no_close' };
+      }
+      return refuse('predecessor_noncreation_unproven');
     }
+    if (terminal.cleanup_status !== 'cleanup_unconfirmed') return refuse('predecessor_cleanup_unconfirmed');
   } catch {
-    return { status: 'cleanup_unconfirmed', ...(originalId ? { targetId: originalId } : {}) };
+    return refuse('predecessor_identity_unproven');
   }
-  const targetId = original.owned_target.id;
+  const pinId = original.owned_target!.id;
   let browser: any;
   try {
-    // This census cannot create, navigate to or select a sibling target.
-    const census = await listCdpPageTargets(input.cdp, Math.min(
-      MAX_LOCAL_READ_WAIT_MS, Math.max(1, input.deadlineMs - Date.now()),
-    ));
-    const matches = census.filter((target) => target.id === targetId);
-    if (matches.length === 0) return { status: 'confirmed', targetId };
-    if (matches.length !== 1 || Date.now() >= input.deadlineMs) return { status: 'cleanup_unconfirmed', targetId };
+    // No sibling Page may become a cleanup target; census is exact ID only.
+    const census = await listCdpPageTargets(input.cdp,
+      Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, input.deadlineMs - Date.now())));
+    const found = census.filter((target) => target.id === pinId);
+    if (found.length === 0) return { status: 'confirmed', targetId: pinId, cause: 'already_gone' };
+    if (found.length !== 1 || Date.now() >= input.deadlineMs) return refuse('target_census_failed');
     const attached = await attachOwnTarget(loadChromium(), {
       mode: 'own-target', cdp: input.cdp, newChat: false,
-      pinnedTargetId: targetId, deadlineMs: input.deadlineMs,
+      pinnedTargetId: pinId, deadlineMs: input.deadlineMs,
       cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
     });
     browser = attached.browser;
-    const pages = browser.contexts();
-    const page = pages.length === 1 && pages[0]?.pages().length === 1
-      ? pages[0].pages()[0] : undefined;
-    if (!page || getOwnTargetInfo(browser)?.targetId !== targetId) {
-      return { status: 'cleanup_unconfirmed', targetId };
-    }
+    const contexts = browser.contexts();
+    const page = contexts.length === 1 && contexts[0]?.pages().length === 1
+      ? contexts[0].pages()[0] : undefined;
+    if (!page || getOwnTargetInfo(browser)?.targetId !== pinId) return refuse('created_target_ownership_unproven');
     const result = compactResult(
       'observation_uncertain', 'invocation', 'predecessor_cleanup_only',
       input.previousInvocationId, input.profileKey, original.send_count ?? 0, 0,
       new StateLightNavigationCounter(), [],
     );
-    const closed = await guardedOriginalTargetRetirement({
+    const guarded = await guardedOriginalTargetRetirement({
       outcome: { page, browser, result }, cdp: input.cdp, verifiedPredecessor: true,
     });
-    return { status: closed.status === 'confirmed' ? 'confirmed' : 'cleanup_unconfirmed', targetId, cause: closed.cause };
+    if (guarded.status === 'confirmed') return { status: 'confirmed', targetId: pinId, cause: 'confirmed' };
+    // Settled/readable idle last-page predecessors are already nonblocking;
+    // the protected last page stays OPEN (never falsely reported closed).
+    if (guarded.cause === 'last_page_guard' && original.phase === 'harvested') {
+      const fresh = await verifySettledIdlePredecessorWithoutClose({
+        page, browser, cdp: input.cdp, profileKey: input.profileKey,
+        invocationId: input.previousInvocationId, targetId: pinId,
+      });
+      if (fresh) return { status: 'confirmed', targetId: pinId, cause: 'settled_idle_last_page_preserved' };
+    }
+    return refuse(guarded.cause);
   } catch {
-    return { status: 'cleanup_unconfirmed', targetId };
+    return refuse('target_census_failed');
   } finally {
     if (browser) await releaseCdpBrowser(browser, RESOURCE_CLEANUP_BOUND_MS);
   }
+}
+
+async function verifySettledIdlePredecessorWithoutClose(input: {
+  readonly page: any; readonly browser: any; readonly cdp: string;
+  readonly profileKey: string; readonly invocationId: string; readonly targetId: string;
+}): Promise<boolean> {
+  try {
+    const record = readStateLightTurnObservation(input.profileKey, input.invocationId);
+    if (record.phase !== 'harvested' || !record.primary || record.owned_target?.id !== input.targetId
+      || !record.owned_target.created || record.send_count !== 1
+      || !readVerifiedStateLightHarvestedPrimary({
+        profileKey: input.profileKey, invocationId: input.invocationId,
+        marker: record.marker, target: record.primary.target,
+      })) return false;
+    const expectedUrl = record.conversation_url;
+    if (!expectedUrl || !isSupportedChatGptConversationUrl(expectedUrl)
+      || normalizeConversationUrl(String(input.page.url())) !== normalizeConversationUrl(expectedUrl)) return false;
+    for (let i = 0; i < 2; i++) {
+      if (await readFreshStopVisible(input.page, Date.now() + MAX_LOCAL_READ_WAIT_MS) !== false
+        || await locatorCount(input.page.locator(ASSISTANT_TURN_IN_PROGRESS_SELECTOR),
+          Date.now() + MAX_LOCAL_READ_WAIT_MS) !== 0
+        || await readRetirementComposer(input.page, undefined,
+          Date.now() + MAX_LOCAL_READ_WAIT_MS) !== 'empty') return false;
+      const users = await boundedBrowserRead(
+        readRecoveryAuthoritativeUserMessages(input.page),
+        MAX_LOCAL_READ_WAIT_MS, 'predecessor_last_page_users_timeout',
+      );
+      if (users.incomplete) return false;
+      const marker = recoveryMarkerCardinality(users.messages, record.marker);
+      if (marker.matchingUserCarrierCount !== 1 || marker.exactMarkerTokenCount !== 1
+        || !ownedPromptMatches(users.messages.at(-1)?.text ?? '', record.marker)) return false;
+      const targets = await listCdpPageTargets(input.cdp, MAX_LOCAL_READ_WAIT_MS);
+      if (targets.filter(t => t.id === input.targetId && t.type === 'page'
+        && t.url === String(input.page.url())).length !== 1) return false;
+    }
+    return true;
+  } catch { return false; }
 }
 
 /**
@@ -8034,7 +8091,7 @@ async function readRetirementComposer(
           if (!el.isConnected || !el.isContentEditable || !el.ownerDocument?.defaultView) return undefined;
           const style = el.ownerDocument.defaultView.getComputedStyle(el);
           if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse'
-            || el.getAttribute('hidden') !== null || el.getAttribute('aria-hidden') === 'true'
+            || el.getAttribute?.('hidden') !== null || el.getAttribute?.('aria-hidden') === 'true'
             || el.classList?.contains('ProseMirror')) return undefined;
           return typeof el.textContent === 'string' && el.textContent === el.innerText
             ? el.textContent : undefined;
