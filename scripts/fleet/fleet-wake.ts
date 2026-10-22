@@ -319,7 +319,8 @@ export interface FleetAlarmTickOptions {
   /** Offline fixtures; production revalidates the selected registered card. */
   readonly resolveSelectedReviewProject?: () => Pick<TargetContext, 'projectId' | 'repository' | 'primaryRoot'>;
   /** Read-only fake Git witness for selected-project membership in the existing test suite. */
-  readonly proveSelectedWorktree?: (cwd: string, config: FleetWakeConfig) => boolean;
+  readonly readGit?: (cwd: string, args: readonly string[]) => string | undefined;
+  readonly canonicalPath?: (path: string) => string;
   /** Read-only fake Linux proc/namespace observation; never starts a child. */
   readonly probePid?: (pid: number) => ProcessObservation;
   readonly readPackReviewRuns?: () => readonly PackReviewRunRecord[];
@@ -1265,18 +1266,19 @@ function selectedGitWorktree(cwd: string, config: FleetWakeConfig, options: Flee
     if (card.projectId !== config.projectId
       || card.repository.toLowerCase() !== config.selectedRepository.toLowerCase()
       || !samePath(card.primaryRoot, config.primary)) return false;
-    if (options.proveSelectedWorktree) return options.proveSelectedWorktree(cwd, config);
-    const primary = realpathSync(card.primaryRoot);
-    const child = realpathSync(cwd);
-    const rootString = gitRead(child, ['rev-parse', '--show-toplevel']);
-    const baseCommon = gitRead(primary, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-    const childCommon = gitRead(child, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-    const worktreeList = gitRead(primary, ['worktree', 'list', '--porcelain', '-z']);
+    const canonical = options.canonicalPath ?? realpathSync;
+    const read = options.readGit ?? gitRead;
+    const primary = canonical(card.primaryRoot);
+    const child = canonical(cwd);
+    const rootString = read(child, ['rev-parse', '--show-toplevel']);
+    const baseCommon = read(primary, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    const childCommon = read(child, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    const worktreeList = read(primary, ['worktree', 'list', '--porcelain', '-z']);
     if (!rootString || !baseCommon || !childCommon || !worktreeList) return false;
-    const root = realpathSync(rootString);
-    if (!insideRoot(child, root) || realpathSync(baseCommon) !== realpathSync(childCommon)) return false;
+    const root = canonical(rootString);
+    if (!insideRoot(child, root) || canonical(baseCommon) !== canonical(childCommon)) return false;
     const linked = worktreeList.split('\0').filter((part) => part.startsWith('worktree '))
-      .map((part) => { try { return realpathSync(part.slice('worktree '.length)); } catch { return ''; } });
+      .map((part) => { try { return canonical(part.slice('worktree '.length)); } catch { return ''; } });
     return linked.includes(root) && linked.includes(primary);
   } catch { return false; }
 }
