@@ -27,7 +27,7 @@ import {
   COMPOSER_SELECTOR, loadChromium, SEND_BUTTON_SELECTOR,
   RENDERED_STOP_BUTTON_SELECTOR, ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
 } from './ui-adapter.ts';
-import { USER_MESSAGE_SELECTOR } from './product-page-selectors.ts';
+import { MESSAGE_AUTHOR_ROLE_ATTR, MESSAGE_NODE_SELECTOR, USER_MESSAGE_SELECTOR } from './product-page-selectors.ts';
 import { __testAttachOwnTargetFixture } from './own-target-attach.ts';
 import {
   buildBrowserTurnCancellationReceipt,
@@ -102,6 +102,7 @@ type FinalizerCase = {
   readonly unsettledSend?: boolean;
   readonly foreignUser?: boolean;
   readonly foreignDraft?: boolean;
+  readonly foreignAssistantReply?: boolean;
   readonly stopVisible?: boolean;
   readonly continuationVisible?: boolean;
   readonly accessibleContinuationOnly?: boolean;
@@ -170,6 +171,22 @@ async function observeFinalizer(testCase: FinalizerCase) {
           if (testCase.foreignUser) texts.push('foreign operator message');
           return { count: async () => texts.length,
             nth: (index: number) => ({ innerText: async () => texts[index] ?? '' }) };
+        }
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          const rows = testCase.sendCount > 0 ? [
+            { role: 'user', text: `${marker}\n\nprompt` },
+            { role: 'assistant', text: testCase.foreignAssistantReply
+              ? 'completed foreign regenerated content' : `independently harvested reply for ${invocationId}` },
+          ] : [];
+          return {
+            count: async () => rows.length,
+            nth: (index: number) => ({
+              getAttribute: async (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR
+                ? rows[index]?.role === 'user' ? 'user-message' : 'assistant-message' : null,
+              innerText: async () => rows[index]?.text ?? '',
+              textContent: async () => rows[index]?.text ?? '',
+            }),
+          };
         }
         if (selector === COMPOSER_SELECTOR) return testCase.absentComposer
           ? { count: async () => 0 }
@@ -383,6 +400,7 @@ describe('Issue #1238 page cleanup equivalence', () => {
     { name: 'visible Stop after harvest', options: { stopVisible: true }, cause: 'stop_visible' },
     { name: 'visible Continue generating after harvest', options: { continuationVisible: true }, cause: 'generation_in_progress' },
     { name: 'text-only accessible Continue generating after harvest', options: { accessibleContinuationOnly: true }, cause: 'generation_in_progress' },
+    { name: 'completed foreign assistant replacement with quiet controls', options: { foreignAssistantReply: true }, cause: 'foreign_assistant_turn' },
     { name: 'changed conversation route', options: { routeChanged: true }, cause: 'route_changed' },
   ] as const)('retains the created target with $name even when the DOM is otherwise quiet', async ({ options, cause }) => {
     const observed = await observeFinalizer({
