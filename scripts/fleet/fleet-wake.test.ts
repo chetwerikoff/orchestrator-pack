@@ -28,7 +28,17 @@ import {
 } from './fleet-wake.ts';
 import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
 import { HANDOFF_SCHEMA, COMPLETION_MODE, TERMINAL_SCHEMA, type HandoffReceipt } from '../flow-manager-long-running-child.ts';
-import type { WorkerAssignmentRecord } from '../lib/worker-assignment-store.ts';
+import {
+  currentWorkerAssignment, listCurrentWorkerAssignmentRecords, resolveWorkerAssignmentStorePath,
+  type WorkerAssignmentRecord,
+} from '../lib/worker-assignment-store.ts';
+import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
+import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
+import { reconcileWorkerAssignments } from '../reconcile-worker-assignments.ts';
+import {
+  resolveLiveExecutorProfile, runSupervisedTaskLaunchAssistant, type LaunchDependencies,
+} from '../pr2-foundation/supervised-task-launch-assistant.ts';
+import { runSupervisedWorkerStart } from '../pr2-foundation/supervised-worker-start.ts';
 import type { ChatErrorBanner, ProjectChat } from './chat-error-banners.ts';
 import { FileFleetStateStore, formatFleetSweep, runFleetSweep, visibleOpenCodePermission, type FleetPaneObservation, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
 import { runLaunch, readTerminalEnvelope } from '../flow-manager-long-running-child.ts';
@@ -3132,3 +3142,185 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
   );
 
 });
+
+describe('Issue #2689 r03 exact native terminal -> canonical Issue assignment -> fleet head-CI', () => {
+  it('publishes from the real transition producer, survives four live reconciles, and wakes only its exact OpenCode manager', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2689-e2e-'));
+    const repository = 'chetwerikoff/orchestrator-pack';
+    const issue = 2689;
+    const taskId = 'task-2689-execution';
+    const dispatchId = 'dispatch-2689-execution';
+    const worktreePath = workerBase + '/issue-2689-manager';
+    const worktreeId = 'repo::issue-2689-manager';
+    const handle = 'fixture_opencode_manager_2689';
+    const incarnationId = 'pty-2689-current';
+    const manager: FleetTerminal = {
+      handle, incarnationId, title: 'OpenCode manager',
+      worktreePath, branch: 'refs/heads/issue-2689-manager', status: 'running',
+      agentIdentity: 'opencode',
+    };
+    const env = {
+      ...process.env, OPK_BASE_DIR: root,
+      PACK_EXECUTOR_MANAGER_AGENT: 'opencode',
+      PACK_EXECUTOR_MANAGER_MODEL: 'fixture-opencode-model',
+      PACK_EXECUTOR_MANAGER_EFFORT: 'fixture-opencode-effort',
+    };
+    const opencodeProbeResult = (args: readonly string[]) => {
+      if (args[0] === 'opencode' && args[1] === 'models' && args.includes('--verbose')) return {
+        ok: true, stdout: ['fixture-opencode-model', '{', '  "variants": {',
+          '    "fixture-opencode-effort": {}', '  }', '}', ''].join('\n'), stderr: '',
+      };
+      if (args[0] === 'opencode' && args[1] === 'models') return {
+        ok: true, stdout: 'fixture-opencode-model\n', stderr: '',
+      };
+      if (args[0] === 'opencode' && args.includes('--help')) return {
+        ok: true, stdout: '', stderr: 'Usage: opencode --agent AGENT\n',
+      };
+      if (args[0] === process.execPath) return { ok: true, stdout: '', stderr: '' };
+      return { ok: false, stdout: '', stderr: '' };
+    };
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    const effects = [
+      { kind: 'worktree', action: 'reused', id: worktreeId },
+      { kind: 'terminal', role: 'agent', action: 'reused', id: handle },
+      { kind: 'dispatch_input', role: 'agent', id: handle, state: 'accepted' },
+    ];
+    let dispatchState: 'dispatched' | 'failed' = 'dispatched';
+    const nativeCalls: string[][] = [];
+    const native = (args: readonly string[]): OrcaJsonResponse => {
+      nativeCalls.push([...args]);
+      switch (args.slice(0, 2).join(' ')) {
+        case 'terminal show':
+          return { ok: true, result: { terminal: {
+            handle, incarnationId, worktreePath, title: manager.title, status: 'running',
+          } } };
+        case 'terminal list':
+          return { ok: true, result: { terminals: [{
+            handle, incarnationId, worktreePath, title: manager.title, status: 'running',
+          }], totalCount: 1, truncated: false } };
+        case 'terminal wait':
+          return { ok: true, result: { wait: { status: 'running', satisfied: true } } };
+        case 'orchestration worker-show':
+          return { ok: true, result: {
+            dispatch: {
+              id: dispatchId, taskId, run_id: 'run-2689', status: dispatchState,
+              last_heartbeat_at: dispatchState === 'dispatched' ? new Date().toISOString() : null,
+            },
+            worker: {
+              agent_terminal_handle: handle, worktree_id: worktreeId,
+              state: dispatchState === 'dispatched' ? 'ready' : 'failed',
+              stage: dispatchState === 'dispatched' ? 'input_accepted' : 'terminal',
+            },
+            terminal: { handle },
+            observation: { exactWorker: true, status: 'live' },
+            terminalResource: {
+              terminalHandle: handle, worktreeId, originDispatchId: dispatchId,
+              ownerDispatchId: dispatchId, releaseState: 'retained',
+            },
+          } };
+        default:
+          return { ok: false, error: { code: 'unexpected_native_fixture_operation',
+            message: args.slice(0, 2).join(' ') } };
+      }
+    };
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: native as never, env });
+    let prepareCalls = 0;
+    let startCalls = 0;
+    try {
+      const deps: LaunchDependencies = {
+        now: () => Date.now(),
+        adapter,
+        commandPreflight: () => ({ status: 'ok', value: true }),
+        repositoryPreflight: async () => ({ status: 'ok', value: true }),
+        resolveProfile: (workClass, profileEnv, startMode) => resolveLiveExecutorProfile(
+          workClass, profileEnv, startMode, async (args) => opencodeProbeResult(args)),
+        observeManagerRun: async () => ({ status: 'ok', value: { runId: 'run-2689' } }),
+        proveManagerTaskMembership: async () => ({ status: 'ok', value: { taskId } }),
+        readManagerBriefTemplate: async () => ({ status: 'ok', value: 'not used' }),
+        readIssueTitle: async () => ({ status: 'ok', value: 'not used' }),
+        createManagerTask: async () => ({ status: 'continue', cause: 'not_requested',
+          actor: 'orchestrator', nextAction: { kind: 'reconcile_manager_task' } }),
+        observeDispatch: async () => ({ status: 'ok', value: { kind: 'absent' } }),
+        readCurrentAssignment: () => currentWorkerAssignment(file, issue),
+        prepareWorktree: async () => {
+          prepareCalls += 1;
+          return { status: 'continue', cause: 'cannot_prepare_existing_terminal',
+            actor: 'orchestrator', nextAction: { kind: 'reconcile_worktree_setup' } };
+        },
+        finalizeProfile: async (profile) => ({ status: 'ok', value: profile }),
+        runSupervisedStart: (args) => runSupervisedWorkerStart({
+          ...args,
+          inspect: async (argv) => ({ ok: true, stdout: JSON.stringify({ ok: true,
+            result: argv[0] === 'terminal'
+              ? { terminal: { handle, incarnationId, worktreeId } }
+              : { worktree: { id: worktreeId, path: worktreePath } } }) }),
+          execute: async (argv) => {
+            startCalls += 1;
+            expect(argv).toEqual(['--task', taskId, '--terminal', handle,
+              '--worktree', 'path:' + worktreePath, '--json']);
+            return { ok: true, stdout: JSON.stringify({ ok: true, result: {
+              taskId, dispatchId, state: 'ready', effects,
+            } }) };
+          },
+        }),
+      };
+      const launched = await runSupervisedTaskLaunchAssistant({
+        repository, projectId: 'orchestrator-pack', workClass: 'manager',
+        runId: 'run-2689', taskId, issueNumber: issue,
+        worktreeSelector: 'path:' + worktreePath, existingTerminal: handle,
+        startMode: 'exact_terminal_worktree', env,
+      }, deps);
+      expect(launched.outcome).toBe('ready');
+      expect(prepareCalls).toBe(0);
+      expect(startCalls).toBe(1);
+      expect(nativeCalls.some((call) => call.join(' ') === 'terminal create')).toBe(false);
+      const bound = currentWorkerAssignment(file, issue);
+      expect(bound).toMatchObject({ issueNumber: issue, role: 'orchestrator',
+        taskId, bindingKey: dispatchId, provider: 'orca', kind: 'local' });
+      for (let tickNumber = 0; tickNumber < 4; tickNumber += 1) {
+        const reconciled = await reconcileWorkerAssignments({ file, repository, adapter });
+        expect(reconciled.status).toBe('ok');
+        expect(reconciled.counts).toMatchObject({ active: 1, retired: 0, gone: 0, terminal: 0 });
+        expect(listCurrentWorkerAssignmentRecords(file)?.filter((row) =>
+          row.issueNumber === issue)).toHaveLength(1);
+        expect(currentWorkerAssignment(file, issue)).toMatchObject({
+          taskId, bindingKey: dispatchId, assignmentId: bound?.assignmentId,
+          generation: bound?.generation,
+        });
+      }
+
+      const screen = 'PARKED on GPT turn inv-2689';
+      const passthrough = fakeOrca({ [handle]: screen }, [], [manager]);
+      const executor: OrcaExecutor = (args) =>
+        args[0] === 'orchestration' && args[1] === 'worker-show'
+          ? commandResult(JSON.stringify({ ok: true, result: {
+            dispatch: { id: dispatchId, taskId, status: dispatchState },
+            terminal: manager, observation: { exactWorker: true, status: 'live' },
+          } }))
+          : passthrough(args);
+      const head = 'a'.repeat(40);
+      const input = {
+        config: config({ selectedRepository: repository }),
+        screens: { [handle]: screen }, terminals: [manager], executor,
+        readCurrentAssignments: () => listCurrentWorkerAssignmentRecords(file),
+        listOpenPulls: () => [{ number: 777, ref: 'issue-2689-e2e', sha: head, issue }],
+        readNamedPull: () => ({ number: 777, headSha: head, state: 'open' as const, merged: false }),
+        listPublishedIssueFacts: () => [{
+          kind: 'head-ci' as const, issueNumber: issue, prNumber: 777,
+          headSha: head, id: 'ci:777:' + head + ':1730000000',
+        }],
+      };
+      const woke = await tick({ ...input, store: new MemoryWakeStore() });
+      expect(sendsTo(woke.calls, handle).filter((row) => row.includes('--text'))).toHaveLength(1);
+      expect(woke.logs.some((line) => line.includes('sent re-check to ' + handle)
+        && line.includes('issue:' + issue + ':'))).toBe(true);
+
+      dispatchState = 'failed'; // Live-looking retained TUI is NOT current Dispatch authority.
+      const forbidden = await tick({ ...input, store: new MemoryWakeStore() });
+      expect(sendsTo(forbidden.calls, handle)).toHaveLength(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
