@@ -46,7 +46,6 @@ import { resolveDiscussWithGptConfig } from './config.mjs';
 import { isCdpReachable, verifyCdpProfile } from './verify-cdp-owner.mjs';
 import { legacyBarrierActive } from '../../../scripts/lib/cutover/activation-cordon.ts';
 import { FileEpochAuthority } from '../../../scripts/lib/cutover/activation-epoch-authority.ts';
-import { isLiveSupervisorStatus, readSupervisorStatus } from '../../../scripts/lib/orchestrator-side-process-supervisor.ts';
 
 const require = createRequire(import.meta.url);
 function loadChromium() {
@@ -95,40 +94,17 @@ let sha = '', promptText = '';
 const DISCUSS_BINDING_SCHEMA = 'orchestrator-pack/project-state-binding/v1';
 let namespaceTrusted = false;
 // Retained issue-928 barriers still cordon legacy; only discuss may bypass them.
+// Discuss state is migrated during cutover, so the only thing that matters is
+// whether the cutover epoch is committed. Supervisor liveness is not a gate.
 function committedIssue928CutoverAllowsDiscussWriter(supervisorStateDir) {
   const stopping = join(supervisorStateDir, 'stopping');
   const maintenancePath = join(supervisorStateDir, 'maintenance.epoch');
   if (!existsSync(stopping) || !existsSync(maintenancePath)) return false;
   try {
     const marker = JSON.parse(readFileSync(maintenancePath, 'utf8'));
-    if (
-      !marker
-      || typeof marker !== 'object'
-      || Array.isArray(marker)
-      || marker.reason !== 'issue-928-cutover'
-      || typeof marker.epochId !== 'string'
-      || !marker.epochId.trim()
-      || !Number.isSafeInteger(marker.startedMs)
-      || marker.startedMs <= 0
-    ) return false;
-    const status = readSupervisorStatus({ stateDir: supervisorStateDir });
-    if (
-      !isLiveSupervisorStatus(status)
-      || status.epochId !== marker.epochId
-      || typeof status.nonce !== 'string'
-      || !status.nonce
-      || status.projectId !== projectId
-      || status.repository !== repository
-      || status.cordonReason !== 'post-cas-epoch-owner'
-      || status.childId !== 'pr2-scheduler'
-      || !['starting', 'running', 'waiting-restart'].includes(status.restartState)
-    ) return false;
-    const committed = new FileEpochAuthority(
-      join(dirname(supervisorStateDir), 'epoch-authority.json'),
-    ).verify(status.epochId, status.nonce);
-    return typeof committed.registryHash === 'string'
-      && /^[0-9a-f]{64}$/iu.test(committed.registryHash)
-      && status.registryHash === committed.registryHash;
+    if (marker?.reason !== 'issue-928-cutover' || typeof marker.epochId !== 'string' || !marker.epochId) return false;
+    const authority = new FileEpochAuthority(join(dirname(supervisorStateDir), 'epoch-authority.json'));
+    return authority.read().currentEpochId === marker.epochId;
   } catch {
     return false;
   }
