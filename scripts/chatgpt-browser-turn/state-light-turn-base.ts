@@ -7894,7 +7894,7 @@ async function retireExplicitPredecessor(input: {
     const closed = await guardedOriginalTargetRetirement({
       outcome: { page, browser, result }, cdp: input.cdp, verifiedPredecessor: true,
     });
-    return { status: closed === 'confirmed' ? 'confirmed' : 'cleanup_unconfirmed', targetId };
+    return { status: closed.status === 'confirmed' ? 'confirmed' : 'cleanup_unconfirmed', targetId, cause: closed.cause };
   } catch {
     return { status: 'cleanup_unconfirmed', targetId };
   } finally {
@@ -7950,151 +7950,231 @@ async function retireDetachedOriginalTarget(input: {
       outcome: { page, browser: attachedBrowser, result },
       cdp: input.cdp, verifiedPredecessor: true,
     });
-    return { status: cleanup === 'confirmed' ? 'confirmed' : 'cleanup_unconfirmed', targetId };
+    return { status: cleanup.status === 'confirmed' ? 'confirmed' : 'cleanup_unconfirmed', targetId, cause: cleanup.cause };
   } catch { return { status: 'cleanup_unconfirmed', targetId }; }
   finally { if (attachedBrowser) await releaseCdpBrowser(attachedBrowser, RESOURCE_CLEANUP_BOUND_MS); }
 }
 
+type GuardedRetirementResult = {
+  readonly status: 'confirmed' | 'unconfirmed';
+  readonly cause: string;
+};
+
+// The cleanup reader is deliberately NOT the existing-chat re-click reader.
+// #2651's raw textContent===innerText retry evidence stays unchanged.
+async function readRetirementComposer(
+  page: any, ownedLiteral: string | undefined, deadlineMs: number,
+): Promise<'empty' | 'own' | 'foreign_draft' | 'composer_unknown' | 'frozen_ownership_unproven'> {
+  const budget = () => Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, deadlineMs - Date.now()));
+  try {
+    const editor = page.locator(COMPOSER_SELECTOR);
+    const count = await boundedBrowserRead(Promise.resolve(editor.count()), budget(), 'retirement_editor_count_timeout');
+    if (count !== 1) return 'composer_unknown';
+    // Supported ProseMirror p/BR/trailingBreak is a document structure, not an
+    // innerText presentation; keep intentional blank lines and every codepoint.
+    let exact = await readStructuredComposerText(
+      editor, Math.max(65_536, ownedLiteral?.length ?? 0), deadlineMs,
+    );
+    if (exact === undefined) {
+      exact = await boundedBrowserRead(
+        Promise.resolve(editor.evaluate((el: HTMLElement) => {
+          if (!el.isConnected || !el.isContentEditable || !el.ownerDocument?.defaultView) return undefined;
+          const style = el.ownerDocument.defaultView.getComputedStyle(el);
+          if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse'
+            || el.getAttribute('hidden') !== null || el.getAttribute('aria-hidden') === 'true'
+            || el.classList?.contains('ProseMirror')) return undefined;
+          return typeof el.textContent === 'string' && el.textContent === el.innerText
+            ? el.textContent : undefined;
+        })),
+        budget(), 'retirement_editor_fallback_timeout',
+      );
+    }
+    if (typeof exact !== 'string') return 'composer_unknown';
+    if (exact === '') return 'empty';
+    return ownedLiteral && exact === ownedLiteral ? 'own' : 'foreign_draft';
+  } catch {
+    // A timed-out/unreadable renderer is never a synthetic empty editor.
+    return 'frozen_ownership_unproven';
+  }
+}
+
+/**
+ * Sole guarded Page.close owner. Historical ID/URL, elapsed effect window and
+ * present CDP nonresponse never waive a live readable DOM or outcome settlement.
+ * A reattached proxy is permitted only for a durable previously-created pin.
+ */
 async function guardedOriginalTargetRetirement(input: {
   readonly outcome: TurnRunOutcome;
   readonly cdp: string;
   readonly verifiedPredecessor?: true;
-}): Promise<'confirmed' | 'unconfirmed'> {
+}): Promise<GuardedRetirementResult> {
   const { outcome, cdp } = input;
+  const refuse = (cause: string): GuardedRetirementResult => ({ status: 'unconfirmed', cause });
   const targetInfo = getOwnTargetInfo(outcome.browser);
-  if (!targetInfo?.targetId || !outcome.page
+  if (!targetInfo?.targetId || !outcome.page || !cdp
     || (!targetInfo.created && input.verifiedPredecessor !== true)
-    || !cdp || outcome.ownershipForfeited || cleanupAuthorityUnprovenPages.has(outcome.page)) {
-    return 'unconfirmed';
+    || outcome.ownershipForfeited || cleanupAuthorityUnprovenPages.has(outcome.page)) {
+    return refuse('created_target_ownership_unproven');
   }
   let observation: ReturnType<typeof readStateLightTurnObservation>;
   try {
     observation = readStateLightTurnObservation(
       outcome.result.configured_profile_key, outcome.result.invocation_id,
     );
-  } catch { return 'unconfirmed'; }
+  } catch { return refuse('observation_identity_unproven'); }
   const pin = observation.owned_target;
   if (!pin?.created || pin.id !== targetInfo.targetId
-    || pin.cdp_sha256 !== createHash('sha256').update(cdp, 'utf8').digest('hex')) return 'unconfirmed';
-
+    || pin.cdp_sha256 !== createHash('sha256').update(cdp, 'utf8').digest('hex')) {
+    return refuse('created_target_ownership_unproven');
+  }
   const deadline = Date.now() + 18_000;
-  const budget = (): number => Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, deadline - Date.now()));
-  const routeMatches = (url: string): boolean => {
-    const original = pin.initial_route;
-    if (url === 'about:blank' && outcome.result.send_count === 0
-      && outcome.result.send_attempted !== true
-      && (observation.phase === 'prepared' || observation.phase === 'not_sent')) return true;
-    if (observation.conversation_url && normalizeConversationUrl(url) === normalizeConversationUrl(observation.conversation_url)
-      && isSupportedChatGptConversationUrl(url)) return true;
-    if (isBlankProjectSurfaceUrl(url, original)
-      || matchingFreshProjectLocalUrl(url, original)) return true;
-    try { return normalizeConversationUrl(url) === normalizeConversationUrl(original); }
-    catch { return false; }
-  };
+  const budget = () => Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, deadline - Date.now()));
   const currentUrl = (): string | null => {
     try {
-      if (browserOrPageDefinitelyLost(outcome.page, outcome.browser)) return null;
-      const url = String(outcome.page.url());
-      return routeMatches(url) ? url : null;
+      return browserOrPageDefinitelyLost(outcome.page, outcome.browser) ? null : String(outcome.page.url());
     } catch { return null; }
   };
-  const pinnedCensus = async (): Promise<boolean> => {
-    try {
-      if (Date.now() >= deadline) return false;
-      const census = await listCdpPageTargets(cdp, budget());
-      const selected = census.filter((target) => target.id === pin.id);
-      // A shared Chrome can terminate when its last Page is closed. Never
-      // retire this exact owned tab unless a different live Page remains.
-      // A foreign/keepalive Page is presence evidence only, never a close target.
-      return selected.length === 1
-        && census.some((target) => target.type === 'page' && target.id !== pin.id)
-        && currentUrl() !== null
-        && selected[0]!.url === currentUrl();
-    } catch { return false; }
-  };
-  const ownerAndIdle = async (): Promise<boolean> => {
-    if (currentUrl() === null || Date.now() >= deadline) return false;
-    try {
-      // Both Stop and a DOM streaming node are disqualifying. Marker adjacency
-      // alone cannot prove which Send started the current generation.
-      if (await readFreshStopVisible(outcome.page, Date.now() + budget()) !== false) return false;
-      if (await locatorCount(outcome.page.locator(ASSISTANT_TURN_IN_PROGRESS_SELECTOR), Date.now() + budget()) !== 0) return false;
-      const users = await boundedBrowserRead(
-        readRecoveryAuthoritativeUserMessages(outcome.page), budget(),
-        'terminal_ownership_user_read_timeout',
-      );
-      if (users.incomplete) return false;
-      const composer = await readLosslessOwnedComposer(
-        outcome.page.locator(COMPOSER_SELECTOR), Date.now() + budget(),
-      );
-      // An unsubmitted foreign draft is not a user-message DOM node. Never
-      // silently destroy it just because the old marker is still the last user.
-      if (composer !== undefined && composer !== ''
-        && composer !== outcome.ownedTypedPayload) return false;
-      if (composer === undefined) {
-        // A failed composer read is NOT proof that the editor is absent.
-        // Require an exact zero-count read, then either a truly blank body
-        // or a named error-only UI, even if the old marker remains last user.
-        if (await locatorCount(
-          outcome.page.locator(COMPOSER_SELECTOR), Date.now() + budget(),
-        ) !== 0) return false;
-        if (currentUrl() === 'about:blank') {
-          const emptyBody = await boundedBrowserRead(
-            outcome.page.locator('body').innerText({ timeout: budget() }), budget(),
-            'empty_about_blank_body_read_timeout',
-          );
-          if (typeof emptyBody !== 'string' || emptyBody.trim() !== '') return false;
-        } else {
-          const errors = ['Message delivery timed out', 'Network issue', 'Failed to fetch'];
-          let recognizedError = false;
-          for (const errorText of errors) {
-            if (await locatorCount(
-              outcome.page.getByText(errorText, { exact: false }), Date.now() + budget(),
-            ) > 0) { recognizedError = true; break; }
-          }
-          if (!recognizedError) return false;
-        }
-      }
-      const cardinality = recoveryMarkerCardinality(users.messages, observation.marker);
-      if (cardinality.matchingUserCarrierCount === 1 && cardinality.exactMarkerTokenCount === 1
-        && users.messages.length > 0
-        && ownedPromptMatches(users.messages[users.messages.length - 1]!.text, observation.marker)) {
-        return currentUrl() !== null;
-      }
-      if (users.messages.length !== 0 || cardinality.exactMarkerTokenCount !== 0) return false;
-      // An unrendered local/error Page may be retired only when its composer
-      // is provably empty, exactly the original typed payload, or truly absent
-      // on a previously verified blank/error-only surface.
-      if (composer === '') return currentUrl() !== null;
-      if (outcome.ownedTypedPayload && composer === outcome.ownedTypedPayload
-        && ownedPromptMatches(composer, observation.marker)) return currentUrl() !== null;
-      return composer === undefined && currentUrl() !== null;
-    } catch { return false; }
+  const eligibleRoute = (): boolean => {
+    const url = currentUrl();
+    if (!url) return false;
+    if (observation.phase === 'harvested') {
+      // A project-prefix/local suffix is not a committed conversation locator.
+      return Boolean(observation.conversation_url && isSupportedChatGptConversationUrl(url)
+        && normalizeConversationUrl(url) === normalizeConversationUrl(observation.conversation_url));
+    }
+    if (observation.phase !== 'not_sent') return false;
+    if (url === 'about:blank') return true;
+    if (isBlankProjectSurfaceUrl(url, pin.initial_route)) return true;
+    return isSupportedChatGptConversationUrl(url)
+      && normalizeConversationUrl(url) === normalizeConversationUrl(pin.initial_route);
   };
 
-  // Reads are awaited: validate again after each of them and immediately
-  // before Page.close(). No atomic exclusion against last-instant UI takeover
-  // is claimed.
-  if (!await pinnedCensus() || !await ownerAndIdle()) return 'unconfirmed';
-  if (!await pinnedCensus() || !await ownerAndIdle()) return 'unconfirmed';
-  if (!await pinnedCensus() || currentUrl() === null || Date.now() >= deadline) return 'unconfirmed';
-  // The reattached proxy intentionally sees created:false. Grant its sole
-  // historically created pinned ID close authority only *after* the fresh
-  // exact-ID, route, composer, Stop, generation and foreign-user rechecks.
+  // Outcome evidence precedes (and is independent of) idle/marker evidence.
+  let row: 'not_sent' | 'harvested';
+  if (observation.phase === 'not_sent'
+    && observation.transition_reason === 'terminal_pre_send'
+    && observation.send_count === 0 && observation.send_witness !== 'owned_marker'
+    && observation.owned_marker_confirmed !== true
+    && outcome.result.send_count === 0 && outcome.result.send_attempted !== true) {
+    row = 'not_sent';
+  } else if (observation.phase === 'harvested'
+    && observation.send_count === 1 && observation.primary
+    && observation.send_witness !== 'none'
+    && (input.verifiedPredecessor === true || outcome.result.send_count === 1)) {
+    try {
+      const primary = readVerifiedStateLightHarvestedPrimary({
+        profileKey: outcome.result.configured_profile_key,
+        invocationId: outcome.result.invocation_id,
+        marker: observation.marker, target: observation.primary.target,
+      });
+      if (!primary) return refuse('harvested_primary_unverified');
+    } catch { return refuse('harvested_primary_unverified'); }
+    row = 'harvested';
+  } else if (observation.phase === 'sent_unbound'
+    || observation.phase === 'sent_unharvested') {
+    // A brief responsive interval with a foreign edit and then a freeze is
+    // indistinguishable from continuous freeze by CDP; never physically close.
+    if (await readFreshStopVisible(outcome.page, Date.now() + budget()) === null) {
+      return refuse('frozen_ownership_unproven');
+    }
+    return refuse(observation.phase === 'sent_unbound'
+      ? 'checkpoint_or_settlement_pending' : 'observation_route_only');
+  } else {
+    return refuse('not_sent_dispatch_unproven');
+  }
+
+  if (!eligibleRoute()) return refuse('route_changed');
+  const census = async (): Promise<string | null> => {
+    if (Date.now() >= deadline || !eligibleRoute()) return 'route_changed';
+    try {
+      const targets = await listCdpPageTargets(cdp, budget());
+      const own = targets.filter((target) => target.id === pin.id && target.type === 'page');
+      if (own.length !== 1) return 'target_census_failed';
+      if (own[0]!.url !== currentUrl()) return 'route_changed';
+      if (!targets.some((target) => target.type === 'page' && target.id !== pin.id)) return 'last_page_guard';
+      return null;
+    } catch { return 'target_census_failed'; }
+  };
+  const readableAndIdle = async (): Promise<string | null> => {
+    if (!eligibleRoute()) return 'route_changed';
+    const stop = await readFreshStopVisible(outcome.page, Date.now() + budget());
+    if (stop === null) return 'frozen_ownership_unproven';
+    if (stop) return 'stop_visible';
+    let stream: number;
+    try {
+      stream = await boundedBrowserRead(
+        Promise.resolve(outcome.page.locator(ASSISTANT_TURN_IN_PROGRESS_SELECTOR).count()),
+        budget(), 'retirement_stream_count_timeout',
+      );
+    } catch { return 'frozen_ownership_unproven'; }
+    if (!Number.isSafeInteger(stream) || stream < 0) return 'frozen_ownership_unproven';
+    if (stream > 0) return 'generation_in_progress';
+    let users: Awaited<ReturnType<typeof readRecoveryAuthoritativeUserMessages>>;
+    try {
+      users = await boundedBrowserRead(
+        readRecoveryAuthoritativeUserMessages(outcome.page),
+        budget(), 'retirement_users_timeout',
+      );
+    } catch { return 'frozen_ownership_unproven'; }
+    if (users.incomplete) return 'foreign_user_message';
+    const cardinality = recoveryMarkerCardinality(users.messages, observation.marker);
+    if (row === 'not_sent') {
+      if (users.messages.length !== 0 || cardinality.exactMarkerTokenCount !== 0) {
+        return 'foreign_user_message';
+      }
+    } else {
+      if (cardinality.matchingUserCarrierCount !== 1 || cardinality.exactMarkerTokenCount !== 1
+        || users.messages.length === 0
+        || !ownedPromptMatches(users.messages[users.messages.length - 1]!.text, observation.marker)) {
+        return 'foreign_user_message';
+      }
+    }
+    const beforeUrl = currentUrl();
+    const draft = await readRetirementComposer(
+      outcome.page, input.verifiedPredecessor ? undefined : outcome.ownedTypedPayload, deadline,
+    );
+    if (draft !== 'empty' && draft !== 'own') return draft;
+    if (draft === 'own') {
+      // A detached/reconnected owner never has the original literal. Only this
+      // live invocation can clear its exact original bytes in one modifying DOM
+      // evaluation with an unchanged route and unique editor.
+      if (!outcome.ownedTypedPayload || !beforeUrl
+        || !await conditionalClearOwnedComposerDraft(
+          outcome.page, outcome.ownedTypedPayload, deadline, beforeUrl,
+        )) return 'composer_unknown';
+      if (await readRetirementComposer(outcome.page, undefined, deadline) !== 'empty') {
+        return 'composer_unknown';
+      }
+    }
+    if (!eligibleRoute() || currentUrl() !== beforeUrl) return 'route_changed';
+    return null;
+  };
+
+  // No real close may proceed on a missing other Page, an unreadable composer,
+  // an unsettled turn, a visible Stop or an unknown CDP census.
+  for (let i = 0; i < 2; i++) {
+    const c = await census();
+    if (c) return refuse(c);
+    const idle = await readableAndIdle();
+    if (idle) return refuse(idle);
+  }
+  const last = await census();
+  if (last) return refuse(last);
+  if (!eligibleRoute() || Date.now() >= deadline) return refuse('route_changed');
   if (!targetInfo.created && !authorizeGuardedHistoricalTargetClose(outcome.browser, pin.id)) {
-    return 'unconfirmed';
+    return refuse('created_target_ownership_unproven');
   }
   const closed = await boundedResourceCleanup(
     () => outcome.page.close(),
     Math.min(RESOURCE_CLEANUP_BOUND_MS, Math.max(1, deadline - Date.now())),
   );
-  if (closed !== 'confirmed') return 'unconfirmed';
+  if (closed !== 'confirmed') return refuse('target_still_present');
   try {
-    const census = await listCdpPageTargets(cdp, budget());
-    return census.every((target) => target.id !== pin.id) ? 'confirmed' : 'unconfirmed';
+    const after = await listCdpPageTargets(cdp, budget());
+    return after.every((target) => target.id !== pin.id)
+      ? { status: 'confirmed', cause: 'confirmed' } : refuse('target_still_present');
   } catch {
-    // A close response is not physical target disappearance evidence.
-    return 'unconfirmed';
+    return refuse('target_census_failed');
   }
 }
 
@@ -8264,7 +8344,18 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
     pageAction = 'preserve';
   }
   if (pageAction === 'close') {
-    cleanup = await guardedOriginalTargetRetirement({ outcome, cdp });
+    const retirement = await guardedOriginalTargetRetirement({ outcome, cdp });
+    cleanup = retirement.status === 'confirmed' ? 'confirmed' : 'unconfirmed';
+    if (retirement.status !== 'confirmed') {
+      incidents.push(retirement.cause);
+      if (!appendIncident({
+        eventClass: 'owned_tab_cleanup_unconfirmed',
+        symptom: retirement.cause,
+        action: retirement.cause === 'frozen_ownership_unproven'
+          ? 'preserve_exact_owner_gitHub_first_reconcile_inspect_on_next_real_wake_no_close_no_resend'
+          : 'retain_original_reconcile_then_reinspect_without_resend',
+      }, outcome.result.invocation_id)) journalWriteFailed = true;
+    }
   }
   // Recovery or an attach reconnect can replace the Playwright Page while
   // the original CDP target remains. Use only its exact reattach/guard path.
