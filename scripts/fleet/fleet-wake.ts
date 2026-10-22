@@ -34,6 +34,7 @@ import {
   defaultWorkspaceRegex,
   isBusyScreen,
   lastFleetParkedLine,
+  ownPaneOutcome,
   listFleetTerminals,
   readFleetScreen,
   runFleetSweep,
@@ -1284,7 +1285,6 @@ function selectedGitWorktree(cwd: string, config: FleetWakeConfig, options: Flee
 function resolveParkEvent(
   wait: string,
   terminals: readonly FleetTerminal[],
-  envelopes: readonly TerminalEnvelopeEvent[],
   options: FleetAlarmTickOptions,
 ): ProducerResolution | undefined {
   const producer = parseNamedParkedProducer(wait);
@@ -1488,7 +1488,8 @@ function gptTerminalResolution(
     const exact = event.observedInvocationId === id && event.terminalHandle === pane.handle
       && typeof event.cwd === 'string' && selectedGitWorktree(event.cwd, options.config, options);
     const settledOutcome = event.lifecycleOutcome === 'success' || event.lifecycleOutcome === 'incident'
-      || (event.turnResultState !== undefined && !/^(?:pending|running|in_progress)$/iu.test(event.turnResultState));
+      || (typeof event.turnResultState === 'string' && event.turnResultState.length > 0
+        && !/^(?:pending|running|in_progress|unknown|unverified)$/iu.test(event.turnResultState));
     const contradicts = event.lifecycleOutcome === 'success' && failureTerminalEnvelope(event);
     if (!exact || !settledOutcome || contradicts) { deficient = true; continue; }
     // A coherent single non-ok incident is not a success-completion Wake.
@@ -1632,7 +1633,9 @@ async function wakeNamedParkedProducers(
         if (terminalsIdentity(current) !== terminalsIdentity(pane)
           || current.title !== pane.title || current.agentIdentity !== pane.agentIdentity
           || current.status?.toLowerCase() === 'exited') return false;
-        return lastFleetParkedLine(readFleetScreen(pane.handle, executor)) === pane.wait;
+        const screen = readFleetScreen(pane.handle, executor);
+        if (pane.ownParkObservation && ownPaneOutcome(screen).wait !== pane.wait) return false;
+        return lastFleetParkedLine(screen) === pane.wait || ownPaneOutcome(screen).wait === pane.wait;
       } catch { return false; }
     };
     const producer = parseNamedParkedProducer(pane.wait);
@@ -1665,7 +1668,7 @@ async function wakeNamedParkedProducers(
         uncertainty = 'process provenance unverified';
       }
     } else if (producer) {
-      match = resolveParkEvent(pane.wait, terminals, envelopes, options);
+      match = resolveParkEvent(pane.wait, terminals, options);
     }
     if (uncertainty) {
       await alarmParkUncertainty(uncertainty, pane, pane.wait, epoch, options, store,
@@ -1682,7 +1685,8 @@ async function wakeNamedParkedProducers(
       continue; // Unknown grammar is not a named 30-minute Reminder.
     }
     if (match) {
-      const eventKey = 'event:' + pane.handle + ':' + match.eventId;
+      const eventKey = 'event:' + pane.handle + ':' + match.eventId
+        + ((producer.kind === 'time' || producer.kind === 'process') ? ':episode:' + (epoch?.started ?? epoch?.since ?? now) : '');
       if (!store.hasParkedWakeEvent(eventKey)) {
         const message = safeUnitWakeText(match.label, match.terminalState, match.evidence)
           ?? 'Wake: matching producer event landed - re-check it yourself before continuing';
