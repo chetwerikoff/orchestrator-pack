@@ -18,14 +18,16 @@ import { parsePackReviewPreflightArgs, runPackReviewPreflight, runStateLightEntr
 import { readChatBinding } from './chat-bindings.ts';
 import { configuredProfileKey } from './storage-common.ts';
 import {
-  admitStateLightTurnObservation, bindStateLightOwnedTarget, transitionStateLightTurnObservation,
+  admitStateLightTurnObservation, bindStateLightOwnedTarget,
+  finalizeStateLightPrimaryPublication, readStateLightTurnObservation,
+  transitionStateLightTurnObservation,
 } from './state-light-turn-observation.ts';
 import { TURN_STATES } from './contracts.ts';
 import {
   COMPOSER_SELECTOR, loadChromium, SEND_BUTTON_SELECTOR,
   RENDERED_STOP_BUTTON_SELECTOR, ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
 } from './ui-adapter.ts';
-import { USER_MESSAGE_SELECTOR } from './product-page-selectors.ts';
+import { MESSAGE_AUTHOR_ROLE_ATTR, MESSAGE_NODE_SELECTOR, USER_MESSAGE_SELECTOR } from './product-page-selectors.ts';
 import { __testAttachOwnTargetFixture } from './own-target-attach.ts';
 import {
   buildBrowserTurnCancellationReceipt,
@@ -97,6 +99,14 @@ type FinalizerCase = {
   readonly errorBanner?: string;
   readonly blankPage?: boolean;
   readonly recoverySuccessor?: boolean;
+  readonly unsettledSend?: boolean;
+  readonly foreignUser?: boolean;
+  readonly foreignDraft?: boolean;
+  readonly foreignAssistantReply?: boolean;
+  readonly stopVisible?: boolean;
+  readonly continuationVisible?: boolean;
+  readonly accessibleContinuationOnly?: boolean;
+  readonly routeChanged?: boolean;
 };
 
 function makeTurnResult(overrides: Partial<Omit<CompactTurnResult, 'cleanup'>> = {}): Omit<CompactTurnResult, 'cleanup'> {
@@ -146,15 +156,37 @@ async function observeFinalizer(testCase: FinalizerCase) {
         physicallyPresent = false;
       },
       isClosed: () => testCase.pageLost || !physicallyPresent,
-      url: () => testCase.blankPage ? 'about:blank' : chatUrl,
+      url: () => testCase.blankPage ? 'about:blank'
+        : testCase.routeChanged ? 'https://chatgpt.com/c/00000000-0000-4000-8000-000000000005' : chatUrl,
       getByText: (text: string) => ({
         count: async () => testCase.errorBanner === text ? 1 : 0,
+      }),
+      getByRole: (role: string) => ({
+        count: async () => role === 'button' && testCase.accessibleContinuationOnly ? 1 : 0,
+        isVisible: async () => role === 'button' && Boolean(testCase.accessibleContinuationOnly),
       }),
       locator: (selector: string) => {
         if (selector === USER_MESSAGE_SELECTOR) {
           const texts = testCase.sendCount > 0 ? [`${marker}\n\nprompt`] : [];
+          if (testCase.foreignUser) texts.push('foreign operator message');
           return { count: async () => texts.length,
             nth: (index: number) => ({ innerText: async () => texts[index] ?? '' }) };
+        }
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          const rows = testCase.sendCount > 0 ? [
+            { role: 'user', text: `${marker}\n\nprompt` },
+            { role: 'assistant', text: testCase.foreignAssistantReply
+              ? 'completed foreign regenerated content' : `independently harvested reply for ${invocationId}` },
+          ] : [];
+          return {
+            count: async () => rows.length,
+            nth: (index: number) => ({
+              getAttribute: async (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR
+                ? rows[index]?.role === 'user' ? 'user-message' : 'assistant-message' : null,
+              innerText: async () => rows[index]?.text ?? '',
+              textContent: async () => rows[index]?.text ?? '',
+            }),
+          };
         }
         if (selector === COMPOSER_SELECTOR) return testCase.absentComposer
           ? { count: async () => 0 }
@@ -162,12 +194,25 @@ async function observeFinalizer(testCase: FinalizerCase) {
             count: async () => 1,
             evaluate: async () => testCase.unreadableComposer
               ? { content: 'draft', visible: '' }
-              : { content: '', visible: '' },
+              : testCase.foreignDraft
+                ? { content: 'foreign operator draft', visible: 'foreign operator draft' }
+                : { content: '', visible: '' },
           };
         if (selector === 'body') return { innerText: async () => '' };
-        if (selector === RENDERED_STOP_BUTTON_SELECTOR
-          || selector === ASSISTANT_TURN_IN_PROGRESS_SELECTOR) {
+        if (selector === RENDERED_STOP_BUTTON_SELECTOR) {
+          return {
+            count: async () => testCase.stopVisible ? 1 : 0,
+            isVisible: async () => Boolean(testCase.stopVisible),
+          };
+        }
+        if (selector === ASSISTANT_TURN_IN_PROGRESS_SELECTOR) {
           return { count: async () => 0 };
+        }
+        if (selector.includes('Continue generating')) {
+          return {
+            count: async () => testCase.continuationVisible ? 1 : 0,
+            isVisible: async () => Boolean(testCase.continuationVisible),
+          };
         }
         return { count: async () => 0 };
       },
@@ -234,6 +279,20 @@ async function observeFinalizer(testCase: FinalizerCase) {
         sendWitness: 'numeric_send_count' as const, conversationUrl: chatUrl,
       } : {}),
     });
+    // A submitted marker on an idle page is not settlement. Close-positive
+    // cases need a real committed, identity-bound primary, independent of the
+    // finalizer's publication-state variants.
+    if (testCase.sendCount > 0 && !testCase.unsettledSend
+      && testCase.pagePresent && !testCase.pageLost) {
+      const target = join(stateDir, 'committed-primary.txt');
+      const bytes = `independently harvested reply for ${invocationId}`;
+      const committed = await finalizeStateLightPrimaryPublication({
+        profileKey, invocationId, target, bytes,
+        publish: () => __testPublishStateLightReply(target, invocationId, bytes),
+      });
+      expect(committed.state).toBe('committed_ok');
+      expect(readStateLightTurnObservation(profileKey, invocationId).phase).toBe('harvested');
+    }
     const result = await __testFinalizeTurn({
       result: makeTurnResult({
         invocation_id: invocationId, configured_profile_key: profileKey,
@@ -293,9 +352,9 @@ describe('Issue #2625 protected continuation tab bootstrap', () => {
 
 describe('Issue #1238 page cleanup equivalence', () => {
   it.each([
-    { kind: 'no-editor Network issue', options: { absentComposer: true, errorBanner: 'Network issue' }, close: true },
-    { kind: 'no-editor delivery timeout', options: { absentComposer: true, errorBanner: 'Message delivery timed out' }, close: true },
-    { kind: 'empty attach-created about:blank', options: { absentComposer: true, blankPage: true }, close: true },
+    { kind: 'no-editor Network issue', options: { absentComposer: true, errorBanner: 'Network issue' }, close: false },
+    { kind: 'no-editor delivery timeout', options: { absentComposer: true, errorBanner: 'Message delivery timed out' }, close: false },
+    { kind: 'empty attach-created about:blank', options: { absentComposer: true, blankPage: true }, close: false },
     { kind: 'missing editor without an attributable error', options: { absentComposer: true }, close: false },
     { kind: 'unreadable mounted composer with an error', options: { unreadableComposer: true, errorBanner: 'Network issue' }, close: false },
   ] as const)('retirement verifies $kind without closing an unknown draft', async ({ options, close }) => {
@@ -305,6 +364,7 @@ describe('Issue #1238 page cleanup equivalence', () => {
     expect(observed.pageCloseCalls).toBe(close ? 1 : 0);
     expect(observed.result.cleanup).toBe(close ? 'confirmed' : 'unconfirmed');
     expect(observed.result.cleanup_status).toBe(close ? undefined : 'cleanup_unconfirmed');
+    if (!close) expect(observed.result.incidents).toContain('composer_unknown');
   });
 
   it('does not close the sole owned Page or kill shared Chrome when no keepalive/sibling exists', async () => {
@@ -330,6 +390,26 @@ describe('Issue #1238 page cleanup equivalence', () => {
     expect(observed.result.cleanup_status).toBe('cleanup_unconfirmed');
     expect(observed.pageCloseCalls).toBe(0);
     expect(observed.successorCloseCalls).toBe(0);
+    expect(observed.foreignTargetOpen).toBe(true);
+  });
+
+  it.each([
+    { name: 'quiet sent_unharvested', options: { unsettledSend: true }, cause: 'observation_route_only' },
+    { name: 'foreign last user', options: { foreignUser: true }, cause: 'foreign_user_message' },
+    { name: 'foreign draft', options: { foreignDraft: true }, cause: 'foreign_draft' },
+    { name: 'visible Stop after harvest', options: { stopVisible: true }, cause: 'stop_visible' },
+    { name: 'visible Continue generating after harvest', options: { continuationVisible: true }, cause: 'generation_in_progress' },
+    { name: 'text-only accessible Continue generating after harvest', options: { accessibleContinuationOnly: true }, cause: 'generation_in_progress' },
+    { name: 'completed foreign assistant replacement with quiet controls', options: { foreignAssistantReply: true }, cause: 'foreign_assistant_turn' },
+    { name: 'changed conversation route', options: { routeChanged: true }, cause: 'route_changed' },
+  ] as const)('retains the created target with $name even when the DOM is otherwise quiet', async ({ options, cause }) => {
+    const observed = await observeFinalizer({
+      sendCount: 1, pagePresent: true, pageLost: false, ...options,
+    });
+    expect(observed.result.cleanup).toBe('unconfirmed');
+    expect(observed.result.cleanup_status).toBe('cleanup_unconfirmed');
+    expect(observed.result.incidents).toContain(cause);
+    expect(observed.pageCloseCalls).toBe(0);
     expect(observed.foreignTargetOpen).toBe(true);
   });
 
@@ -418,7 +498,7 @@ describe('Issue #1238 publication boundary', () => {
     }
   });
 
-  it('does not authorize close when final-link publication conflicts', async () => {
+  it('preserves the foreign final-link winner while an independently committed primary permits retirement', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-1238-conflict-'));
     const output = join(root, 'reply.txt');
     writeFileSync(output, 'foreign winner', 'utf8');
@@ -731,6 +811,17 @@ describe('Issue #1238 mechanically derived production graph', () => {
     expect(files.size).toBeGreaterThan(1);
     expect(unreachableSinks).toEqual([]);
     expect(unknownSinks).toEqual([]);
+    // The original-target physical close remains centralized in one guarded owner.
+    expect(sinks.filter(({ kind, owner, receiver }) => kind === 'close'
+      && owner === 'guardedOriginalTargetRetirement' && receiver === 'outcome.page')).toHaveLength(1);
+    const turnSource = readFileSync(join(repoRoot, 'scripts/chatgpt-browser-turn/state-light-turn-base.ts'), 'utf8');
+    const predecessorStart = turnSource.indexOf('async function retireExplicitPredecessor(');
+    const predecessorEnd = turnSource.indexOf('async function verifySettledIdlePredecessorWithoutClose(', predecessorStart);
+    expect(predecessorStart).toBeGreaterThan(-1);
+    expect(predecessorEnd).toBeGreaterThan(predecessorStart);
+    const predecessor = turnSource.slice(predecessorStart, predecessorEnd);
+    expect(predecessor).toContain('const page = attached.page;');
+    expect(predecessor).not.toMatch(/\.contexts\s*\(|\.pages\s*\(/u);
     expect(sinkInventory).toEqual([
       'close:browser-release:(browser as { close: () => Promise<void> }):releaseCdpBrowser',
       'close:failed-attempt-browser-release:input.browser:abortAttempt',
@@ -753,7 +844,6 @@ describe('Issue #1238 mechanically derived production graph', () => {
       'contexts:browser-contexts:browser:openGateBCharacterizationPage',
       'contexts:browser-contexts:browser:createDedicatedTurnPage',
       'contexts:browser-contexts:browser:openTurnPage',
-      'contexts:browser-contexts:browser:retireExplicitPredecessor',
       'contexts:browser-contexts:browser:onlyAllowedPage',
       'contexts:browser-contexts:browser:selectConversationPage',
       'contexts:browser-contexts:attachedBrowser:retireDetachedOriginalTarget',
@@ -769,8 +859,6 @@ describe('Issue #1238 mechanically derived production graph', () => {
       'pages:context-pages:contexts[0]:selectConversationPage',
       'pages:context-pages:contexts[0]:selectConversationPage',
       'pages:context-pages:context:attachPlaywrightContextCdpObservers',
-      'pages:context-pages:pages[0]:retireExplicitPredecessor',
-      'pages:context-pages:pages[0]:retireExplicitPredecessor',
       'pages:context-pages:contexts[0]:recoverCurrentObservation',
       'pages:context-pages:contexts[0]:retireDetachedOriginalTarget',
       'pages:context-pages:contexts[0]:retireDetachedOriginalTarget',
