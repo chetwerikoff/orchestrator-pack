@@ -2878,18 +2878,26 @@ async function readFreshContinuationVisible(page: any, deadlineMs: number): Prom
   try {
     const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
     if (waitMs <= 0) return null;
-    const controls = page.locator(CONTINUE_GENERATING_SELECTOR);
-    const count = await boundedBrowserRead(
-      Promise.resolve(controls.count()), waitMs, 'fresh_continuation_read_timeout',
-    );
-    if (!Number.isSafeInteger(count) || count < 0 || count > 32) return null;
-    for (let i = 0; i < count; i++) {
-      const control = count === 1 ? controls
-        : typeof controls.nth === 'function' ? controls.nth(i) : null;
-      if (!control || typeof control.isVisible !== 'function') return null;
-      if (await boundedBrowserRead(
-        Promise.resolve(control.isVisible()), waitMs, 'fresh_continuation_visibility_timeout',
-      )) return true;
+    // A text-only accessible button has no aria-label/testid selector. Read
+    // both known surfaces; neither may authorize a click or a destructive act.
+    const surfaces = [
+      page.locator(CONTINUE_GENERATING_SELECTOR),
+      ...(typeof page.getByRole === 'function'
+        ? [page.getByRole('button', { name: CONTINUE_GENERATING_BUTTON_NAME })] : []),
+    ];
+    for (const controls of surfaces) {
+      const count = await boundedBrowserRead(
+        Promise.resolve(controls.count()), waitMs, 'fresh_continuation_read_timeout',
+      );
+      if (!Number.isSafeInteger(count) || count < 0 || count > 32) return null;
+      for (let i = 0; i < count; i++) {
+        const control = count === 1 ? controls
+          : typeof controls.nth === 'function' ? controls.nth(i) : null;
+        if (!control || typeof control.isVisible !== 'function') return null;
+        if (await boundedBrowserRead(
+          Promise.resolve(control.isVisible()), waitMs, 'fresh_continuation_visibility_timeout',
+        )) return true;
+      }
     }
     return false;
   } catch { return null; }
