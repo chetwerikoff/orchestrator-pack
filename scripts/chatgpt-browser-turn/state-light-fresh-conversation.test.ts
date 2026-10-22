@@ -1436,13 +1436,20 @@ describe('state-light fresh conversation collision recovery', () => {
     const turn = makeLoserPage(prompt, 'UNREACHED');
     turn.sendButton.isEnabled.mockResolvedValue(false);
     const originalUrl = turn.page.url.getMockImplementation()!;
-    const read = turn.composer.innerText.getMockImplementation()!;
+    const evaluate = turn.composer.evaluate.getMockImplementation()!;
     let repurposed = false;
     turn.page.url.mockImplementation(() => repurposed ? OTHER_PROJECT_CONVERSATION_URL : originalUrl());
-    turn.composer.innerText.mockImplementation(async () => {
-      const text = await read();
+    // Cleanup now reads the actual live editor via evaluate(), not locator.innerText().
+    // Move the same simulated navigation to that awaited DOM-read boundary;
+    // keep the foreign-page no-close/no-fill assertions unchanged.
+    turn.composer.evaluate.mockImplementation(async (
+      callback: (element: unknown, arg?: unknown) => unknown,
+      arg?: unknown,
+      options?: { timeout?: number },
+    ) => {
+      const observed = await evaluate(callback, arg, options);
       if (mocks.nowMs >= 70_000) repurposed = true;
-      return text;
+      return observed;
     });
     const outcome = await runNewChatTurn(turn.page, join(stateDir, 'cleanup-tab-replaced.txt'));
     expect(outcome.result).toMatchObject({
