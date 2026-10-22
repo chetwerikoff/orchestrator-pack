@@ -881,7 +881,7 @@ function verifyOptionalPredecessorHandoff(config: LaunchConfig): void {
     && terminal.send_count === 0;
   if (!terminal || terminal.observed_invocation_id !== invocation
     || terminal.handoff_receipt_path !== bound.locator.handoff_receipt_path
-    || terminal.cleanup_status !== 'cleanup_unconfirmed'
+    || (!notCreatedAndNotSent && terminal.cleanup_status !== 'cleanup_unconfirmed')
     || bound.receipt.owner_task_id !== task
     || original.invocation_id !== invocation
     || target.cdp_sha256 !== createHash('sha256').update(config.cdp, 'utf8').digest('hex')
