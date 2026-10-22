@@ -2872,6 +2872,29 @@ async function readFreshStopVisible(page: any, deadlineMs: number): Promise<bool
   }
 }
 
+/** Fail closed when the existing Continue generating control is visible or unreadable.
+ * This is an observational guard, never an instruction to click the control. */
+async function readFreshContinuationVisible(page: any, deadlineMs: number): Promise<boolean | null> {
+  try {
+    const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
+    if (waitMs <= 0) return null;
+    const controls = page.locator(CONTINUE_GENERATING_SELECTOR);
+    const count = await boundedBrowserRead(
+      Promise.resolve(controls.count()), waitMs, 'fresh_continuation_read_timeout',
+    );
+    if (!Number.isSafeInteger(count) || count < 0 || count > 32) return null;
+    for (let i = 0; i < count; i++) {
+      const control = count === 1 ? controls
+        : typeof controls.nth === 'function' ? controls.nth(i) : null;
+      if (!control || typeof control.isVisible !== 'function') return null;
+      if (await boundedBrowserRead(
+        Promise.resolve(control.isVisible()), waitMs, 'fresh_continuation_visibility_timeout',
+      )) return true;
+    }
+    return false;
+  } catch { return null; }
+}
+
 async function waitForFreshSendButton(
   page: any,
   sendButton: any,
@@ -4085,7 +4108,9 @@ async function runTurnCore(
         freshCleanup.predecessorTargetId = previous.targetId;
       }
       if (previous.status !== 'confirmed' && previous.status !== 'nonblocking_open') {
-        throw new Error('predecessor_cleanup_unconfirmed');
+        // Keep the incumbent failure channel, but expose the first guard that
+        // actually refused retirement to the owner deciding its next safe read.
+        throw new Error(`predecessor_cleanup_unconfirmed:${previous.cause ?? 'unknown'}`);
       }
     }
 
@@ -7813,6 +7838,8 @@ async function retireExplicitPredecessor(input: {
 }): Promise<{ status: 'confirmed' | 'nonblocking_open' | 'cleanup_unconfirmed'; targetId?: string; cause?: string }> {
   let original: ReturnType<typeof readStateLightTurnObservation>;
   let targetId: string | undefined;
+  let terminalDelivery: string | undefined;
+  let terminalSendCount: number | undefined;
   const refuse = (cause: string) => ({
     status: 'cleanup_unconfirmed' as const, ...(targetId ? { targetId } : {}), cause,
   });
@@ -7851,6 +7878,8 @@ async function retireExplicitPredecessor(input: {
       return refuse('predecessor_noncreation_unproven');
     }
     if (terminal.cleanup_status !== 'cleanup_unconfirmed') return refuse('predecessor_cleanup_unconfirmed');
+    terminalDelivery = terminal.delivery;
+    terminalSendCount = terminal.send_count;
   } catch {
     return refuse('predecessor_identity_unproven');
   }
@@ -7863,6 +7892,16 @@ async function retireExplicitPredecessor(input: {
     const found = census.filter((target) => target.id === pinId);
     if (found.length === 0) return { status: 'confirmed', targetId: pinId, cause: 'already_gone' };
     if (found.length !== 1 || Date.now() >= input.deadlineMs) return refuse('target_census_failed');
+    // A synthesized cleanup-only result carries no Send attempt witness.
+    // Never use that default to override contrary terminal delivery evidence.
+    if (original.phase === 'not_sent'
+      && (terminalDelivery !== 'not-sent' || terminalSendCount !== 0)) {
+      return refuse('not_sent_dispatch_unproven');
+    }
+    if (original.phase === 'harvested'
+      && (terminalDelivery !== 'landed' || terminalSendCount !== 1)) {
+      return refuse('harvested_terminal_unverified');
+    }
     const attached = await attachOwnTarget(loadChromium(), {
       mode: 'own-target', cdp: input.cdp, newChat: false,
       pinnedTargetId: pinId, deadlineMs: input.deadlineMs,
@@ -7882,7 +7921,8 @@ async function retireExplicitPredecessor(input: {
     if (guarded.status === 'confirmed') return { status: 'confirmed', targetId: pinId, cause: 'confirmed' };
     // Settled/readable idle last-page predecessors are already nonblocking;
     // the protected last page stays OPEN (never falsely reported closed).
-    if (guarded.cause === 'last_page_guard' && original.phase === 'harvested') {
+    if (guarded.cause === 'last_page_guard'
+      && (original.phase === 'harvested' || original.phase === 'not_sent')) {
       const fresh = await verifySettledIdlePredecessorWithoutClose({
         page, browser, cdp: input.cdp, profileKey: input.profileKey,
         invocationId: input.previousInvocationId, targetId: pinId,
@@ -7903,17 +7943,30 @@ async function verifySettledIdlePredecessorWithoutClose(input: {
 }): Promise<boolean> {
   try {
     const record = readStateLightTurnObservation(input.profileKey, input.invocationId);
-    if (record.phase !== 'harvested' || !record.primary || record.owned_target?.id !== input.targetId
-      || !record.owned_target.created || record.send_count !== 1
-      || !readVerifiedStateLightHarvestedPrimary({
+    if (record.owned_target?.id !== input.targetId || !record.owned_target.created) return false;
+    const harvested = record.phase === 'harvested' && record.send_count === 1
+      && record.primary && readVerifiedStateLightHarvestedPrimary({
         profileKey: input.profileKey, invocationId: input.invocationId,
         marker: record.marker, target: record.primary.target,
-      })) return false;
-    const expectedUrl = record.conversation_url;
-    if (!expectedUrl || !isSupportedChatGptConversationUrl(expectedUrl)
-      || normalizeConversationUrl(String(input.page.url())) !== normalizeConversationUrl(expectedUrl)) return false;
+      });
+    const unsent = record.phase === 'not_sent' && record.transition_reason === 'terminal_pre_send'
+      && record.send_count === 0 && record.send_witness !== 'owned_marker'
+      && record.owned_marker_confirmed !== true;
+    if (!harvested && !unsent) return false;
+    const url = String(input.page.url());
+    if (harvested) {
+      const expectedUrl = record.conversation_url;
+      if (!expectedUrl || !isSupportedChatGptConversationUrl(expectedUrl)
+        || normalizeConversationUrl(url) !== normalizeConversationUrl(expectedUrl)) return false;
+    } else if (url !== 'about:blank'
+      && !isBlankProjectSurfaceUrl(url, record.owned_target.initial_route)
+      && !(isSupportedChatGptConversationUrl(url)
+        && normalizeConversationUrl(url) === normalizeConversationUrl(record.owned_target.initial_route))) {
+      return false;
+    }
     for (let i = 0; i < 2; i++) {
       if (await readFreshStopVisible(input.page, Date.now() + MAX_LOCAL_READ_WAIT_MS) !== false
+        || await readFreshContinuationVisible(input.page, Date.now() + MAX_LOCAL_READ_WAIT_MS) !== false
         || await locatorCount(input.page.locator(ASSISTANT_TURN_IN_PROGRESS_SELECTOR),
           Date.now() + MAX_LOCAL_READ_WAIT_MS) !== 0
         || await readRetirementComposer(input.page, undefined,
@@ -7924,7 +7977,9 @@ async function verifySettledIdlePredecessorWithoutClose(input: {
       );
       if (users.incomplete) return false;
       const marker = recoveryMarkerCardinality(users.messages, record.marker);
-      if (marker.matchingUserCarrierCount !== 1 || marker.exactMarkerTokenCount !== 1
+      if (unsent) {
+        if (users.messages.length !== 0 || marker.exactMarkerTokenCount !== 0) return false;
+      } else if (marker.matchingUserCarrierCount !== 1 || marker.exactMarkerTokenCount !== 1
         || !ownedPromptMatches(users.messages.at(-1)?.text ?? '', record.marker)) return false;
       const targets = await listCdpPageTargets(input.cdp, MAX_LOCAL_READ_WAIT_MS);
       if (targets.filter(t => t.id === input.targetId && t.type === 'page'
@@ -8145,6 +8200,9 @@ async function guardedOriginalTargetRetirement(input: {
     const stop = await readFreshStopVisible(outcome.page, Date.now() + budget());
     if (stop === null) return 'frozen_ownership_unproven';
     if (stop) return 'stop_visible';
+    const continuation = await readFreshContinuationVisible(outcome.page, Date.now() + budget());
+    if (continuation === null) return 'frozen_ownership_unproven';
+    if (continuation) return 'generation_in_progress';
     let stream: number;
     try {
       stream = await boundedBrowserRead(
