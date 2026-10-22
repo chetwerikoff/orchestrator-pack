@@ -8015,11 +8015,16 @@ async function readRetirementComposer(
           if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse'
             || el.getAttribute?.('hidden') != null || el.getAttribute?.('aria-hidden') === 'true'
             || el.classList?.contains('ProseMirror')) return undefined;
-          return typeof el.textContent === 'string' && el.textContent === el.innerText
-            ? el.textContent : undefined;
+          // Non-ProseMirror contenteditable is readable only when both raw DOM
+          // views reproduce the same literal. Retain the paired observation
+          // shape used by the incumbent lossless reader; the live callback
+          // independently checks connection, visibility and supported markup.
+          return { content: el.textContent, visible: el.innerText };
         })),
         budget(), 'retirement_editor_fallback_timeout',
-      );
+      ) as { content?: unknown; visible?: unknown } | undefined;
+      exact = typeof exact?.content === 'string' && exact.content === exact.visible
+        ? exact.content : undefined;
     }
     if (typeof exact !== 'string') return 'composer_unknown';
     if (exact === '') return 'empty';
