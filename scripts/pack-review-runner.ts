@@ -2339,7 +2339,9 @@ export async function observeGptPackReviewAttempt(
   sourceSlotLoop:
   for (const slot of unresolved) {
     if (!slot.invocationId) {
-      if (slot.lifecycle === 'planned' || (slot.lifecycle === 'terminal' && slot.terminalClass === 'pre_launch_interrupted')) {
+      if (slot.lifecycle === 'planned'
+        || (slot.lifecycle === 'terminal' && slot.terminalClass === 'pre_launch_interrupted'
+          && authoritativePreSend(slot))) {
         initialLaunchSlotIds.push(slot.slotId);
         continue;
       }
@@ -7841,7 +7843,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
       ((isPackReviewRunStale(candidate) || PACK_REVIEW_ACTIVE_STATUSES.has(candidate.status))
         && candidate.reviewRound?.reviewer === 'gpt'
         && candidate.reviewRound.sourceSlots.some((slot) => (
-          slot.lifecycle === 'invocation_started' && Boolean(trim(slot.invocationId))
+          (slot.lifecycle === 'invocation_started' && Boolean(trim(slot.invocationId)))
+          || (slot.lifecycle === 'terminal' && slot.terminalClass === 'pre_launch_interrupted')
         )))
       || (isPackReviewUnfinishedTerminalRun(candidate)
         && candidate.reviewRound?.reviewer === 'gpt'
@@ -9106,7 +9109,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           priorSameRound.reviewRound?.sourceSlots.some((slot) => (
             slot.slotId === slotId
             && (slot.lifecycle === 'planned'
-              || (slot.lifecycle === 'terminal' && slot.terminalClass === 'pre_launch_interrupted'))
+              || (slot.lifecycle === 'terminal' && slot.terminalClass === 'pre_launch_interrupted'
+                && authoritativePreSend(slot)))
           ))
         ));
         // The browser observer's generating-timeout/empty-reply hint is not

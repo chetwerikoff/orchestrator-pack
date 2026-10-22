@@ -6425,6 +6425,9 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
   async function seedDeadIncumbent(config: {
     source02Comment?: boolean;
     orphanedPair?: boolean;
+    prelaunchPair?: 'unstarted' | 'hybrid';
+    source01Findings?: boolean;
+    unsafePrelaunch?: 'attempted' | 'sent' | 'possible-delivery';
     canonicalRepository?: string;
     sourceRepoRoot?: string;
     snapshotDigest?: string;
@@ -6467,7 +6470,14 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
         repository, prNumber, headSha: HEAD_A, runId, slotId, invocationId,
       };
       return {
-        id, body: formatPackGptSourceCommentEnvelope(identity, 'NO_FINDINGS'),
+        id, body: formatPackGptSourceCommentEnvelope(identity,
+          slotId === 'source-01' && config.source01Findings
+            ? JSON.stringify({ findings: [{
+                type: 'quality', code: 'quality:fixture-2692-source-one',
+                severity: 'blocking', path: 'scripts/pack-review-runner.ts',
+                summary: 'synthetic completed-source finding', source: 'gpt-browser',
+              }] })
+            : 'NO_FINDINGS'),
         actorLogin: 'browser-gpt-bot',
         createdAt: '2026-10-12T00:01:00.000Z',
         updatedAt: '2026-10-12T00:01:00.000Z',
@@ -6504,7 +6514,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       invocationId: originalSource01,
       attemptOrdinal: 1,
       admissionStartedAtUtc: staleAt,
-      terminalClass: 'complete_clean',
+      terminalClass: firstSource.payload.verdict === 'findings' ? 'complete_findings' : 'complete_clean',
       terminalResult: {
         schema: 'turn-result/v1',
         state: 'ok', scope: 'none', cause: 'github_source_comment_credentialed',
@@ -6515,34 +6525,53 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       payload: firstSource.payload,
     };
     round.sourceSlots[0] = firstSlot;
-    round.sourceSlots[1] = {
-      ...round.sourceSlots[1]!,
-      lifecycle: 'invocation_started',
-      invocationId: originalSource02,
-      attemptOrdinal: config.orphanedPair ? 2 : 1,
-      admissionStartedAtUtc: '2026-10-12T00:00:30.000Z',
-      launchProfileKey: 'profile-' + 'a'.repeat(32),
-      launchCdpUrl: 'http://127.0.0.1:9222',
-    };
-    if (config.orphanedPair) {
-      round.sourceSlots[2] = {
-        ...round.sourceSlots[2]!,
+    if (config.prelaunchPair) {
+      for (const [index, oldInvocation] of [[1, originalSource02], [2, originalSource03]] as const) {
+        round.sourceSlots[index] = {
+          ...round.sourceSlots[index]!,
+          lifecycle: 'terminal',
+          ...(config.prelaunchPair === 'hybrid'
+            ? { invocationId: oldInvocation, attemptOrdinal: 1, admissionStartedAtUtc: staleAt }
+            : {}),
+          terminalClass: 'pre_launch_interrupted',
+          terminalResult: { kind: 'stale_pre_launch_interruption', noResend: true,
+            ...(config.unsafePrelaunch === 'attempted' ? { send_attempted: true } : {}),
+            ...(config.unsafePrelaunch === 'sent' ? { send_count: 1 } : {}),
+            ...(config.unsafePrelaunch === 'possible-delivery' ? { delivery: 'POSSIBLY_DELIVERED' } : {}) },
+        };
+      }
+    } else {
+      round.sourceSlots[1] = {
+        ...round.sourceSlots[1]!,
         lifecycle: 'invocation_started',
-        invocationId: originalSource03,
-        attemptOrdinal: 2,
-        admissionStartedAtUtc: '2026-10-12T00:00:45.000Z',
-        launchProfileKey: 'profile-' + 'b'.repeat(32),
+        invocationId: originalSource02,
+        attemptOrdinal: config.orphanedPair ? 2 : 1,
+        admissionStartedAtUtc: '2026-10-12T00:00:30.000Z',
+        launchProfileKey: 'profile-' + 'a'.repeat(32),
         launchCdpUrl: 'http://127.0.0.1:9222',
       };
+      if (config.orphanedPair) {
+        round.sourceSlots[2] = {
+          ...round.sourceSlots[2]!,
+          lifecycle: 'invocation_started',
+          invocationId: originalSource03,
+          attemptOrdinal: 2,
+          admissionStartedAtUtc: '2026-10-12T00:00:45.000Z',
+          launchProfileKey: 'profile-' + 'b'.repeat(32),
+          launchCdpUrl: 'http://127.0.0.1:9222',
+        };
+      }
     }
     updatePackReviewRun(runId, {
       reviewRound: round, status: 'preparing', latestRunStatus: 'preparing',
       runnerPid: oldPid,
     }, options);
     const firstSnapshot = getPackReviewRun(runId, options)!.reviewRound!.sourceSlots[0]!;
-    expect(firstSnapshot.terminalClass).toBe('complete_clean');
+    expect(firstSnapshot.terminalClass).toBe(config.source01Findings ? 'complete_findings' : 'complete_clean');
     expect(getPackReviewRun(runId, options)!.reviewRound!.sourceSlots.map((slot) => slot.lifecycle))
-      .toEqual(['terminal', 'invocation_started', config.orphanedPair ? 'invocation_started' : 'planned']);
+      .toEqual(config.prelaunchPair
+        ? ['terminal', 'terminal', 'terminal']
+        : ['terminal', 'invocation_started', config.orphanedPair ? 'invocation_started' : 'planned']);
     vi.setSystemTime(new Date(restartAt));
 
     const statusStates: string[] = [];
@@ -6570,6 +6599,109 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     return { runId, options, input, launches, originalFirst: firstSnapshot, statusStates,
       sourceTransport, addSource02Comment, comments, makeComment };
   }
+
+  it.each(['unstarted', 'hybrid'] as const)(
+    'Issue #2692: public resume rotates %s prelaunch slots atomically without losing source-01 findings',
+    async (mode) => {
+      const f = await seedDeadIncumbent({
+        prelaunchPair: mode, source01Findings: true, source02Comment: false,
+      });
+      const initial = getPackReviewRun(f.runId, f.options)!;
+      const completed = structuredClone(initial.reviewRound!.sourceSlots[0]!);
+      expect(completed.terminalClass).toBe('complete_findings');
+      expect(completed.terminalResult).toMatchObject({ source_comment_authority: 'credentialed_github' });
+      const originalBind = f.input.fixtureAfterGptInvocationBound;
+      const admissions: Array<{ slotId: string; invocationId: string }> = [];
+      const resumeInput: Parameters<typeof startPackReview>[0] = {
+        ...f.input, claimMode: 'acquire', fixtureGptAdmissionReadObservation: undefined,
+        fixtureGptAttemptObserver: (run) => observeGptPackReviewAttempt(run, Date.now(), {
+          resolveSourceComment: (identity) => resolvePackGptSourceComment({
+            identity, transport: f.sourceTransport,
+          }),
+        }),
+        fixtureAfterGptInvocationBound: (binding) => {
+          const stored = getPackReviewRun(f.runId, f.options)!.reviewRound!;
+          const slot = stored.sourceSlots.find((candidate) => candidate.slotId === binding.slotId)!;
+          expect(slot).toMatchObject({
+            lifecycle: 'invocation_started', invocationId: binding.invocationId,
+            attemptOrdinal: mode === 'hybrid' ? 2 : 1,
+            admissionStartedAtUtc: expect.any(String),
+          });
+          expect(slot.terminalClass).toBeUndefined();
+          expect(slot.terminalResult).toBeUndefined();
+          expect(slot.payload).toBeUndefined();
+          expect(stored.sourceSlots[0]).toEqual(completed);
+          admissions.push({ slotId: binding.slotId, invocationId: binding.invocationId });
+          return originalBind?.(binding);
+        },
+        fixtureBeforeGptSourceCommentCensus: ({ slotId, invocationId }) => {
+          if (slotId === 'source-02' || slotId === 'source-03') {
+            f.comments.push(f.makeComment(slotId, invocationId, 2692000 + Number(slotId.slice(-2))));
+          }
+        },
+      };
+      const result = await startPackReview(resumeInput);
+      expect(result, JSON.stringify(result)).toMatchObject({
+        ok: true, runId: f.runId,
+        coverage: { kind: 'complete', completedSourceCount: 3, cardinality: 3 },
+      });
+      expect(f.launches.map(({ slotId }) => slotId).sort()).toEqual(['source-02', 'source-03']);
+      expect(admissions.map(({ slotId }) => slotId).sort()).toEqual(['source-02', 'source-03']);
+      const settled = getPackReviewRun(f.runId, f.options)!;
+      expect(settled.reviewRound?.settledSourceCount).toBe(3);
+      expect(settled.reviewRound!.sourceSlots[0]).toEqual(completed);
+      expect(settled.reviewVerdict).toBe('findings');
+      expect(settled.findings).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          sourceSlotId: 'source-01',
+          category: 'quality',
+          title: 'synthetic completed-source finding',
+          severity: 'error',
+          filePath: 'scripts/pack-review-runner.ts',
+          body: expect.stringContaining('code: quality:fixture-2692-source-one'),
+        }),
+      ]));
+      for (const [index, oldInvocation] of [[1, originalSource02], [2, originalSource03]] as const) {
+        const slot = settled.reviewRound!.sourceSlots[index]!;
+        expect(slot).toMatchObject({
+          lifecycle: 'terminal', terminalClass: 'complete_clean',
+          attemptOrdinal: mode === 'hybrid' ? 2 : 1,
+          invocationId: admissions.find(({ slotId }) => slotId === slot.slotId)!.invocationId,
+          terminalResult: { source_comment_authority: 'credentialed_github' },
+        });
+        expect(slot.attemptHistory).toEqual(mode === 'hybrid'
+          ? [{ invocationId: oldInvocation, attemptOrdinal: 1, terminalClass: 'pre_launch_interrupted' }]
+          : undefined);
+      }
+      const settledSlots = structuredClone(settled.reviewRound!.sourceSlots);
+      await startPackReview(resumeInput);
+      expect(f.launches).toHaveLength(2);
+      expect(getPackReviewRun(f.runId, f.options)!.reviewRound!.sourceSlots).toEqual(settledSlots);
+      expect(listPackReviewRuns(f.options)).toHaveLength(1);
+      expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals)
+        .toEqual([1]);
+    },
+  );
+
+  it.each(['attempted', 'sent', 'possible-delivery'] as const)(
+    'Issue #2692: prelaunch %s evidence never grants resend',
+    async (mode) => {
+    const f = await seedDeadIncumbent({
+      prelaunchPair: 'unstarted', source02Comment: false, unsafePrelaunch: mode,
+    });
+    const originalSlots = structuredClone(getPackReviewRun(f.runId, f.options)!.reviewRound!.sourceSlots);
+    const result = await startPackReview({
+      ...f.input, claimMode: 'acquire', fixtureGptAdmissionReadObservation: undefined,
+      fixtureGptAttemptObserver: (run) => observeGptPackReviewAttempt(run, Date.now(), {
+        resolveSourceComment: (identity) => resolvePackGptSourceComment({
+          identity, transport: f.sourceTransport,
+        }),
+      }),
+    });
+    expect(result.ok).toBe(false);
+    expect(f.launches).toEqual([]);
+    expect(getPackReviewRun(f.runId, f.options)!.reviewRound!.sourceSlots).toEqual(originalSlots);
+  });
 
   it('Issue #2635: reclaims dead post-grace runner with two attempt-2 invocation_started orphans', async () => {
     const f = await seedDeadIncumbent({ source02Comment: false, orphanedPair: true });
