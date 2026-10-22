@@ -3436,9 +3436,13 @@ describe('Issue #2687 r04: file-backed coordinator pin, quotes and startup', () 
       expect(sendsTo(vanished.calls, 'coord-old')).toHaveLength(0);
       expect(sendsTo(vanished.calls, 'coord-new')).toHaveLength(0);
       expect(vanished.logs.join(' ')).toContain('no orchestrator');
-      const due = await run(settings, new MemoryWakeStore(),
-        'PARKED on time 2026-10-22T11:43:00Z');
-      // This call below uses real now: the historical deadline is already due.
+      const due = await tick({
+        config: settings, store: new MemoryWakeStore(), terminals: roster,
+        screens: { ...frames, one: 'PARKED on time 2026-10-22T11:43:00Z' },
+        now: () => Date.parse('2026-10-22T11:43:00Z'),
+        listOpenPulls: () => [], readCurrentAssignments: () => [],
+        readPackReviewRuns: () => [], readChats: async () => [],
+      });
       expect(sendsTo(due.calls, 'one').filter((row) => row.includes('--text'))).toHaveLength(1);
 
       for (const invalid of [
