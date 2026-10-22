@@ -399,6 +399,67 @@ For every submitted execution turn:
    enters harvest, and a failed or unobserved turn enters GitHub-first recovery.
    Do not infer completion from helper/launcher PID, shell state, or a missing envelope.
 
+**Original invocation-created tab retirement (#2685, r03).** The
+browser-gpt-page-probe inspect action remains read-only with respect to
+**pre-existing/original/foreign** tabs. Its bounded temporary diagnostic
+Page lifecycle is unchanged. It cannot close a frozen/unreadable original
+target even when the original Send/attempt was over 20 minutes ago.
+
+The execution owner follows two distinct *existing* wake paths, not a new
+timer or manager nextAction:
+
+- **No authoritative terminal at minute 30:** use the exact identity-bound
+  inspect above; preserve generation or resume exact-owned observation,
+  GitHub-first reconciliation or harvest as already specified. A
+  workflow_authority:none read never proves non-delivery or settlement.
+- **An early authoritative failed/unobserved terminal:** go immediately
+  into existing GitHub-first reconciliation/owned recovery. There is
+  **no automatic 30-minute re-inspection** for this terminal. If a later
+  legitimate owner wake actually occurs, make a fresh identity-bound
+  inspect and reconcile the exact original invocation before requesting
+  optional physical retirement. If no such wake/read occurs, retain
+  the original target with cleanup_pending_owner_wake; no automatic
+  eventual-close promise.
+
+Only after the above real owner-side read/reconciliation, where the
+original Task/Run/attempt, configured profile, CDP endpoint, invocation
+and positively created original target ID are still retained, the owner
+may separately request the *bounded guarded* state-light helper:
+
+    node --experimental-strip-types scripts/chatgpt-browser-turn/state-light-entry.ts retire-owned
+      --profile <retained configured profile>
+      --cdp <retained CDP endpoint>
+      --invocation-id <exact retained invocation>
+      --target-id <exact original created target ID>
+      --run-identity <exact retained run>
+      --attempt-identity <exact retained attempt>
+      --owner-task-id <exact retained Task>
+
+The helper authenticates the indexed receipt, terminal envelope, durable
+v1 observation and original created target; only the existing guarded
+Browser-GPT Page.close() may close that *same exact ID*. A new invocation
+may proceed past an affirmatively never-created predecessor without any
+physical close; missing target metadata never proves noncreation. For a
+present original, outcome settlement precedes fresh DOM, exact route,
+Stop/stream, foreign user and composer reads, repeat pinned-ID census and
+independent surviving-Page checks. A positively settled idle final Page
+may be nonblocking for a successor but stays open. A historical project
+prefix cannot prove an unchanged local-chatgpt suffix.
+
+An unresolved sent_unharvested or sent_unbound possible delivery, absent
+alternative exact same-invocation observation route, incomplete checkpoint,
+foreign draft, Stop/stream, unreadable editor, or uncertain/changed original
+route **must remain pinned**. Specifically, a frozen/unreadable original
+returns frozen_ownership_unproven and is **not closed**; the 20-minute
+POSSIBLY_DELIVERED horizon is an observation/recovery decision boundary,
+not a tab-closing permission. A known healthy sibling can be only a
+read-only CDP probe anchor, never an alternative owner or close target.
+A cleanup_unconfirmed/cleanup_pending_owner_wake report is not
+cleanup:confirmed; preserve the retained exact owner for later
+GitHub-first/effect and identity-bound inspect/harvest, with **no Send,
+Retry, Stop, guessed URL or fresh-chat authority**. An exact-ID census
+showing already_gone likewise does not mean this helper closed it.
+
 **Unavailable probe is not dead-page evidence.** A
 `not_found/target_not_found` probe proves missing CDP target only. Try a
 *different* available exact-owned observation/harvest, existing GitHub-first
