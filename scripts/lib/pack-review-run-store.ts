@@ -929,10 +929,29 @@ function mergeFrozenGptSlot(
   // A published complete source slot is first-writer immutable. A duplicate,
   // delayed or conflicting result from another attempt cannot poison that run.
   if (existingComplete) return existing;
+  // The stale-run terminalizer can mark a never-invoked planned slot
+  // pre_launch_interrupted. Its exact no-send marker permits the first
+  // invocation to supersede that terminal in one locked store write.
+  // Do not extend this exception to contradictory or ambiguous evidence.
+  const preLaunchTerminal = existing.terminalResult;
+  const firstPreLaunchAttempt = existing.lifecycle === 'terminal'
+    && existing.terminalClass === 'pre_launch_interrupted'
+    && preLaunchTerminal !== null && typeof preLaunchTerminal === 'object'
+    && !Array.isArray(preLaunchTerminal)
+    && (preLaunchTerminal as Record<string, unknown>).kind === 'stale_pre_launch_interruption'
+    && (preLaunchTerminal as Record<string, unknown>).noResend === true
+    && Object.keys(preLaunchTerminal).length === 2
+    && existing.invocationId === undefined
+    && existingAttempt === undefined
+    && incoming.lifecycle === 'invocation_started'
+    && incomingAttempt === 1
+    && incoming.terminalClass === undefined
+    && incoming.terminalResult === undefined
+    && incoming.payload === undefined;
   const legalAttemptIdentityRotation = !existingComplete
     && incomingAttempt !== undefined
     && incomingAttempt > (existingAttempt ?? 0)
-    && existing.invocationId !== undefined
+    && (existing.invocationId !== undefined || firstPreLaunchAttempt)
     && incoming.invocationId !== undefined
     && existing.invocationId !== incoming.invocationId;
   let invocationId = legalAttemptIdentityRotation
