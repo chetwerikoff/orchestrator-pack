@@ -363,9 +363,8 @@ export function resolveCoordinatorPane(
   if (config.coordinatorPinFile) {
     const pin = envHandleFromFile(config.coordinatorPinFile);
     if (!pin) return undefined; // A former file-backed authority never falls back.
-    return resolveCoordinatorPane(terminals, {
-      ...config, coordinatorPinFile: undefined, orchestratorHandle: pin,
-    });
+    const { coordinatorPinFile: _fileAuthority, ...legacy } = config;
+    return resolveCoordinatorPane(terminals, { ...legacy, orchestratorHandle: pin });
   }
   if (config.orchestratorHandle) {
     const pinned = terminals.find((terminal) => terminal.handle === config.orchestratorHandle);
