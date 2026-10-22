@@ -286,10 +286,13 @@ function makeLoserPage(
         ...surface,
         isConnected: true,
         isContentEditable: true,
-        ownerDocument: { defaultView: {
-          location: { get href() { return String(page.url()); } },
-          getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
-        } },
+        ownerDocument: {
+          querySelectorAll: (selector: string) => selector === COMPOSER_SELECTOR ? [element] : [],
+          defaultView: {
+            location: { get href() { return String(page.url()); } },
+            getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+          },
+        },
         get textContent() {
           return (this as any).__domCleared ? '' : editorSurface()?.textContent ?? (sent ? '' : composerText);
         },
