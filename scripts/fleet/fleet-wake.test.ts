@@ -1702,15 +1702,25 @@ describe('Issue #2441 read-only diagnostic tick non-interference', () => {
 });
 
 
-describe('Issue #2485 r05: plain event wake, no proof gates and pane-local alarms', () => {
+describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', () => {
   const id = '24852485-1111-4111-8111-248524852485';
-  const event = { path: '/tmp/opencode/2485-r05-terminal.json', invocationId: id, observedInvocationId: id };
+  const event: TerminalEnvelopeEvent = { path: '/tmp/opencode/2485-r05-terminal.json',
+    invocationId: id, observedInvocationId: id, terminalHandle: 'one',
+    cwd: workerBase + '/one', lifecycleOutcome: 'success', turnResultState: 'ok' };
+  const otherPaneEvent: TerminalEnvelopeEvent = { ...event, path: '/tmp/opencode/2485-r05-other-terminal.json',
+    terminalHandle: 'two' };
   const parked = 'PARKED on GPT turn ' + id;
   const paneText = (calls: readonly string[][], handle: string) => sendsTo(calls, handle)
     .filter((row) => row.includes('--text')).map((row) => row[row.indexOf('--text') + 1]!);
+  const one = { ...terminals[1]!, incarnationId: 'inc-one' };
+  const two = { ...terminals[2]!, incarnationId: 'inc-two' };
   const simple = (screens: Record<string,string>, store?: FleetWakeStateStore,
-    envelopes: readonly TerminalEnvelopeEvent[] = [event]) =>
-    tick({ screens, store, terminals: [terminals[0]!, terminals[1]!, terminals[2]!],
+    envelopes: readonly TerminalEnvelopeEvent[] = [event, otherPaneEvent]) =>
+    tick({ screens, store, terminals: [terminals[0]!, one, two],
+      config: config({ selectedRepository: 'test/project' }),
+      resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack', repository: 'test/project',
+        primaryRoot: primary }),
+      proveSelectedWorktree: (cwd) => cwd === workerBase + '/one' || cwd === workerBase + '/two',
       listTerminalEnvelopes: () => envelopes });
 
   it.each([
@@ -1723,27 +1733,34 @@ describe('Issue #2485 r05: plain event wake, no proof gates and pane-local alarm
     ['batch1011-c2-author-r02', '...  '],
     [id, ''],
     ['inv-owned', ''],
-  ])('Issue #2498: parses and wakes GPT turn %s%s by envelope path substring', async (token, suffix) => {
+  ])('Issue #2498: retains GPT spelling %s%s but rejects path substring', async (token, suffix) => {
     const wait = 'PARKED on GPT turn ' + token + suffix;
     expect(parseNamedParkedProducer(wait)).toEqual({ kind: 'gpt', label: 'GPT-turn-' + token, id: token });
-    const matching = { path: '/tmp/opencode/issue-2498-' + token + '-terminal.json', invocationId: 'unrelated' };
-    const first = await simple({ coord: 'idle', one: wait, two: 'working\nesc interrupt' },
+    const matching: TerminalEnvelopeEvent = { path: '/tmp/opencode/issue-2498-' + token + '-terminal.json',
+      invocationId: 'unrelated' };
+    const weak = await simple({ coord: 'idle', one: wait, two: 'working\nesc interrupt' },
       new MemoryWakeStore(), [matching]);
-    expect(paneText(first.calls, 'one')).toHaveLength(1);
-    expect(paneText(first.calls, 'one')[0]).toContain(matching.path);
-    const foreign = await simple({ coord: 'idle', one: wait, two: 'working\nesc interrupt' },
-      new MemoryWakeStore(), [{ path: '/tmp/opencode/foreign-terminal.json', invocationId: 'unrelated' }]);
-    expect(paneText(foreign.calls, 'one')).toHaveLength(0);
+    expect(paneText(weak.calls, 'one')).toHaveLength(0);
+    expect(paneText(weak.calls, 'coord')).toHaveLength(0);
+    const exact: TerminalEnvelopeEvent = { ...matching, observedInvocationId: token,
+      terminalHandle: 'one', cwd: workerBase + '/two', lifecycleOutcome: 'success', turnResultState: 'ok' };
+    const strong = await simple({ coord: 'idle', one: wait, two: 'working\nesc interrupt' },
+      new MemoryWakeStore(), [exact]);
+    expect(paneText(strong.calls, 'one')).toHaveLength(1);
+    expect(paneText(strong.calls, 'one')[0]).toContain('re-check');
   });
 
-  it('Issue #2498: leaves empty GPT ids unresolved and other named forms unchanged', () => {
+  it('keeps empty single IDs unresolved, but recognizes exact named existing and triplet forms', () => {
     expect(parseNamedParkedProducer('PARKED on GPT turn ...  ')).toBeUndefined();
+    expect(parseNamedParkedProducer('PARKED on GPT turns inv-a, inv-b, inv-c')).toMatchObject({
+      kind: 'gpt-multi', ids: ['inv-a', 'inv-b', 'inv-c'] });
+    expect(parseNamedParkedProducer('PARKED on GPT turns inv-a, inv-a, inv-c')).toBeUndefined();
     const sha = 'a'.repeat(40);
     for (const wait of [
-      `PARKED on pack-review PR #42 head ${sha}`,
-      `PARKED on PR #42 review #7 head ${sha}`,
-      `PARKED on CI PR #42 head ${sha}`,
-      `PARKED on CI on ${sha}`,
+      'PARKED on pack-review PR #42 head ' + sha,
+      'PARKED on PR #42 review #7 head ' + sha,
+      'PARKED on CI PR #42 head ' + sha,
+      'PARKED on CI on ' + sha,
       'PARKED on merge-42',
       'PARKED on PR #42 merged',
       'PARKED on #42 merged into main',
@@ -1757,23 +1774,22 @@ describe('Issue #2485 r05: plain event wake, no proof gates and pane-local alarm
     }
   });
 
-  it('AC1/2: matches a terminal envelope filename or ID with no Task, receipt, index or process identity', async () => {
-    const first = await simple({ coord: 'idle', one: parked, two: 'working\nesc interrupt' });
-    expect(paneText(first.calls, 'one')).toHaveLength(1);
-    expect(paneText(first.calls, 'one')[0]).toContain('re-check');
-    expect(sendsTo(first.calls, 'coord')).toHaveLength(0);
+  it('rejects filename-only, fallback invocation and missing owner completion without guessed Wake', async () => {
+    const loose = await simple({ coord: 'idle', one: parked, two: 'working\nesc interrupt' },
+      new MemoryWakeStore(), [{ path: event.path, invocationId: id }]);
+    expect(paneText(loose.calls, 'one')).toHaveLength(0);
+    expect(paneText(loose.calls, 'coord')).toHaveLength(0);
     const byName = await simple({ coord: 'idle', one: 'PARKED on 2485-r05-terminal.json',
       two: 'working\nesc interrupt' });
-    expect(paneText(byName.calls, 'one')).toHaveLength(1);
-    expect(paneText(byName.calls, 'one')[0]).toContain(event.path);
-    const noProof = byName.calls.filter((row) => row[0] === 'orchestration' && row[1] === 'worker-show');
-    expect(noProof).toHaveLength(0);
-    const foreign = await simple({ coord: 'idle', one: parked, two: 'working\nesc interrupt' },
-      new MemoryWakeStore(), [{ path: '/tmp/opencode/foreign-terminal.json', invocationId: 'different-id' }]);
-    expect(paneText(foreign.calls, 'one')).toHaveLength(0);
+    expect(paneText(byName.calls, 'one')).toHaveLength(0);
+    expect(paneText(byName.calls, 'coord')[0]).toContain('unknown parked producer');
+    const unrelated = await simple({ coord: 'idle', one: parked, two: 'working\nesc interrupt' },
+      new MemoryWakeStore(), [{ ...event, observedInvocationId: 'foreign', terminalHandle: 'other' }]);
+    expect(paneText(unrelated.calls, 'one')).toHaveLength(0);
+    expect(paneText(unrelated.calls, 'coord')).toHaveLength(0);
   });
 
-  it('AC3: ignores legacy global mark, owner/generation conflict and stale claimant order', async () => {
+  it('keeps independent per-pane event marks after an exact dual-pane settlement', async () => {
     const store = new MemoryWakeStore();
     store.markParkedWakeEvent('gpt:' + event.path);
     const first = await simple({ coord: 'idle', one: parked, two: parked }, store);
@@ -1783,20 +1799,19 @@ describe('Issue #2485 r05: plain event wake, no proof gates and pane-local alarm
     expect(paneText(repeated.calls, 'one')).toHaveLength(0);
     expect(paneText(repeated.calls, 'two')).toHaveLength(0);
     expect([...store.parkedWakeEvents].filter((key) => key.startsWith('event:'))).toHaveLength(2);
-    expect(first.logs.join(' ')).not.toContain('owner_generation_unproven');
   });
 
-  it('AC4: sent marker is per-(pane,event), so changed X wakes only its parked pane', async () => {
+  it('a different completed exact GPT fact wakes only its new parked pane', async () => {
     const store = new MemoryWakeStore();
-    const old = await simple({ coord: 'idle', one: parked, two: parked }, store);
-    expect(paneText(old.calls, 'one')).toHaveLength(1);
-    expect(paneText(old.calls, 'two')).toHaveLength(1);
-    const other = { path: '/tmp/opencode/other-terminal.json', invocationId: 'other-token' };
-    const changed = await simple({ coord: 'idle', one: 'PARKED on other-token', two: parked },
-      store, [event, other]);
-    expect(paneText(changed.calls, 'one')).toHaveLength(1);
-    expect(paneText(changed.calls, 'one')[0]).toContain('other-terminal');
-    expect(paneText(changed.calls, 'two')).toHaveLength(0);
+    const first = await simple({ coord: 'idle', one: parked, two: parked }, store);
+    expect(paneText(first.calls, 'one')).toHaveLength(1);
+    expect(paneText(first.calls, 'two')).toHaveLength(1);
+    const changed: TerminalEnvelopeEvent = { ...event, path: '/tmp/opencode/other-terminal.json',
+      invocationId: 'other-token', observedInvocationId: 'other-token' };
+    const next = await simple({ coord: 'idle', one: 'PARKED on GPT turn other-token', two: parked },
+      store, [event, otherPaneEvent, changed]);
+    expect(paneText(next.calls, 'one')).toHaveLength(1);
+    expect(paneText(next.calls, 'two')).toHaveLength(0);
   });
 
   it('AC5: bare-shell suspicion is the only Wake veto and raises one coordinator alarm', async () => {
