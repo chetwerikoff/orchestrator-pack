@@ -2779,7 +2779,8 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
   });
 
   async function connectedTurn(kind: Case, corruption?: {
-    content: 'joined-marker' | 'marker-content' | 'middle-content' | 'truncated-tail';
+    content: 'joined-marker' | 'marker-content' | 'middle-content' | 'truncated-tail'
+      | 'extra-space' | 'inserted-tab' | 'blank-paragraph' | 'line-boundary';
     when: 'after-click' | 'after-proof-read';
   }) {
     if (corruption) {
@@ -2796,7 +2797,12 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     const corruptDraft = () => {
       draft = corruption?.content === 'joined-marker' ? draft.replace('\n\n', '')
         : corruption?.content === 'marker-content' ? draft.replace('OPKTURNV1', 'OTHER-TURN')
-          : corruption?.content === 'middle-content' ? draft.replace('indented', 'different') : draft.slice(0, -1);
+          : corruption?.content === 'middle-content' ? draft.replace('indented', 'different')
+            : corruption?.content === 'extra-space' ? draft.replace('separate words', 'separate  words')
+              : corruption?.content === 'inserted-tab' ? draft.replace('separate words', 'separate\twords')
+                : corruption?.content === 'blank-paragraph' ? draft.replace('\n  indented', '\n\n  indented')
+                  : corruption?.content === 'line-boundary' ? draft.replace('words\n', 'words \n')
+                    : draft.slice(0, -1);
       injectedRetryCorruption = true;
     };
     let firstClickAt = -1;
@@ -3091,6 +3097,19 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     expect(t.calls).toHaveLength(0);
     expect(t.close).not.toHaveBeenCalled();
   });
+
+  it.each((['extra-space', 'inserted-tab', 'blank-paragraph', 'line-boundary'] as const)
+    .map((content) => ({ content, when: 'after-click' as const })))(
+    'rejects $content after positive first-click non-dispatch despite intact marker and normalized draft (#2694)',
+    async (corruption) => {
+      const t = await connectedTurn('pre-actionability-budget', corruption);
+      expect(t.injectedRetryCorruption).toBe(true);
+      expect(t.click).toHaveBeenCalledTimes(1);
+      expect(t.result.send_count).toBe(0);
+      expect(t.calls).toHaveLength(0);
+      expect(t.close).not.toHaveBeenCalled();
+    },
+  );
 
   it('does not treat affirmative disabled-click timeouts as never-attempted not_sent (#2685 r04)', async () => {
     const t = await connectedTurn('affirmative-finalized');
