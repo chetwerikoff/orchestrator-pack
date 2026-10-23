@@ -235,6 +235,7 @@ function makeLoserPage(
   let sends = 0;
   let sent = false;
   let composerText = '';
+  let composerAncestorHidden = false;
   let url = PROJECT_URL;
   let observationIndex = 0;
   const priorHistory: StateLightTestMessage[] = ownedPriorHistory
@@ -285,8 +286,16 @@ function makeLoserPage(
       const surface = editorSurface();
       const element = {
         ...surface,
+        classList: surface?.classList ?? { contains: () => false },
+        getAttribute: surface?.getAttribute ?? (() => null),
         isConnected: true,
         isContentEditable: true,
+        getClientRects: () => [{}],
+        getBoundingClientRect: () => ({ width: 280, height: 30 }),
+        parentElement: composerAncestorHidden
+          ? { parentElement: null, getAttribute: (name: string) => name === 'aria-hidden' ? 'true' : null,
+            hasAttribute: () => false }
+          : null,
         ownerDocument: {
           querySelectorAll: (selector: string) => selector === COMPOSER_SELECTOR ? [element] : [],
           defaultView: {
@@ -375,6 +384,7 @@ function makeLoserPage(
   };
 
   return { page, composer, sendButton, getSends: () => sends,
+    setComposerAncestorHidden: (hidden: boolean) => { composerAncestorHidden = hidden; },
     getComposerText: () => sent ? '' : composerText, getObservationReads: () => observationIndex };
 }
 
@@ -1781,30 +1791,40 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
   });
 
-  it.each((['joined-marker', 'marker-content', 'middle-content', 'truncated-tail'] as const).flatMap((content) =>
+  it.each((['joined-marker', 'marker-content', 'middle-content', 'truncated-tail',
+    'extra-space', 'inserted-tab', 'blank-paragraph', 'line-boundary'] as const).flatMap((content) =>
     (['after-click', 'after-proof-read'] as const).map((when) => ({ content, when })),
-  ))('vetoes a fresh retry with $content corruption $when (#2669)', async ({ content, when }) => {
+  ))('vetoes a fresh retry with $content corruption $when (#2669/#2694)', async ({ content, when }) => {
     const prompt = 'keep separate words\n  indented line';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'UNREACHED');
     const corrupt = (text: string) => content === 'joined-marker' ? text.replace('\n\n', '')
       : content === 'marker-content' ? text.replace('OPKTURNV1', 'OTHER-TURN')
-        : content === 'middle-content' ? text.replace('indented', 'different') : text.slice(0, -1);
+        : content === 'middle-content' ? text.replace('indented', 'different')
+        : content === 'extra-space' ? text.replace('separate words', 'separate  words')
+          : content === 'inserted-tab' ? text.replace('separate words', 'separate\twords')
+            : content === 'blank-paragraph' ? text.replace('\n  indented', '\n\n  indented')
+              : content === 'line-boundary' ? text.replace('words\n', 'words \n')
+                : text.slice(0, -1);
     let firstClickAt: number | undefined;
     let tailReads = 0;
     let injected = false;
-    const read = turn.composer.innerText.getMockImplementation()!;
-    turn.composer.innerText.mockImplementation(async () => {
-      const visible = await read();
-      // At the end of delivery probing, first comes its final composer read,
-      // then the retry guard's read. Mutate after that read captures old text
-      // to require a fresh payload check immediately before the physical retry.
+    const read = turn.composer.evaluate.getMockImplementation()!;
+    turn.composer.evaluate.mockImplementation(async (
+      callback: (element: unknown, arg?: unknown) => unknown,
+      arg?: unknown,
+      options?: { timeout?: number },
+    ) => {
+      const observed = await read(callback, arg, options);
+      // Inject after a completed *exact DOM* sample, rather than relying
+      // on now-irrelevant normalized innerText read counts.
       if (when === 'after-proof-read' && firstClickAt !== undefined
-        && mocks.nowMs >= firstClickAt + 5_000 && ++tailReads === 2 && !injected) {
-        await turn.composer.fill(corrupt(visible));
+        && mocks.nowMs >= firstClickAt + 5_000 && options?.timeout === undefined
+        && ++tailReads === 2 && !injected) {
+        await turn.composer.fill(corrupt(turn.getComposerText()));
         injected = true;
       }
-      return visible;
+      return observed;
     });
     turn.sendButton.click.mockImplementationOnce(async () => {
       firstClickAt = mocks.nowMs;
@@ -1819,6 +1839,20 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.getSends()).toBe(0);
     expect(outcome.result.send_count).toBe(0);
+    expect(turn.page.close).not.toHaveBeenCalled();
+  });
+
+  it('refuses a fresh second click when the unique exact composer becomes ancestor-hidden (#2694)', async () => {
+    const turn = makeLoserPage('owned prompt', 'NEVER SENT');
+    turn.sendButton.click.mockImplementationOnce(async () => {
+      turn.setComposerAncestorHidden(true);
+      throw timeoutError();
+    });
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, randomUUID() + '-hidden-composer.txt'));
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.getSends()).toBe(0);
+    expect(outcome.result.send_count).toBe(0);
+    expect(outcome.result.send_attempted).toBe(true);
     expect(turn.page.close).not.toHaveBeenCalled();
   });
 

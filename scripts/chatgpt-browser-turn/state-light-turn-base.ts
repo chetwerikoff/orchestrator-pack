@@ -305,7 +305,6 @@ const MESSAGE_NODE_READ_RETRY_TIMEOUT_MS = 400;
 const MESSAGE_NODE_READ_ATTEMPTS = 2;
 /** Exact generation selector already owned by browser-gpt-page-probe; do not widen it here. */
 const BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR = '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]';
-const ASSISTANT_CONTENT_ROOT_SELECTOR = '.markdown';
 const CONTINUE_GENERATING_SELECTOR = 'button[aria-label*="Continue generating" i], button[data-testid*="continue-generating"], button[data-testid*="continue_generating"]';
 /** Post-send wall probes must not block transcript reads or the confirm loop. */
 const POST_SEND_PRODUCT_WALL_PROBE_MS = 2_000;
@@ -799,7 +798,6 @@ export async function revalidateKeyedHarvest(
         userMessageStyle: string;
         unitKeyAttribute: string;
         assistantMessageStyle: string;
-          contentRootSelector: string;
         assistantKey: string;
         turnSelector: string;
         inProgressSelector: string;
@@ -824,24 +822,131 @@ export async function revalidateKeyedHarvest(
           const wholeRow = () => ({ text: (message as HTMLElement).innerText, complete: true });
           const unsupported = () => selected ? { text: '', complete: false } : wholeRow();
           if (message.querySelectorAll('pre').length === 0) return wholeRow();
-          const roots = Array.from(message.querySelectorAll(args.contentRootSelector));
-          if (roots.length !== 1) return unsupported();
-          const root = roots[0]!;
-          const view = root.ownerDocument?.defaultView;
+          const view = message.ownerDocument?.defaultView;
           if (!view || typeof view.getComputedStyle !== 'function') return unsupported();
           const visible = (node: Element): boolean => {
             for (let current: Element | null = node; current; current = current.parentElement) {
               if (current.tagName === 'BUTTON' || current.getAttribute('role') === 'button'
                 || current.getAttribute('aria-hidden') === 'true' || current.hasAttribute('inert')
-                || typeof current.getClientRects !== 'function' || current.getClientRects().length === 0) return false;
+                || /(?:^|\s)sr-only(?:\s|$)/u.test(current.getAttribute('class') ?? '')) return false;
               const style = view.getComputedStyle(current);
               if (!style || style.display === 'none' || style.visibility === 'hidden'
-                || style.visibility === 'collapse') return false;
+                || style.visibility === 'collapse' || typeof current.getClientRects !== 'function'
+                || (style.display !== 'contents' && current.getClientRects().length === 0)) return false;
               if (current === message) return true;
             }
             return false;
           };
+          const semantic: Element[] = [];
+          const scan = (node: Element): void => {
+            for (const child of Array.from(node.children)) {
+              if (/^(?:P|PRE|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)
+                && visible(child)) semantic.push(child);
+              scan(child);
+            }
+          };
+          scan(message);
+          const allCodeBlocks = Array.from(message.querySelectorAll('pre'));
+          if (allCodeBlocks.length === 0 || allCodeBlocks.some((pre) => !visible(pre))
+            || semantic.length === 0) return unsupported();
+          const within = (child: Element, candidate: Element): boolean => {
+            for (let current: Element | null = child; current; current = current.parentElement) {
+              if (current === candidate) return true;
+              if (current === message) return false;
+            }
+            return false;
+          };
+          // Resolve the smallest ancestor of every visible semantic content block.
+          // Neither .markdown nor a CSS-module hash grants content-root authority.
+          let root: Element | null = semantic[0]?.parentElement ?? null;
+          while (root && root !== message && !semantic.every((block) => within(block, root!))) {
+            root = root.parentElement;
+          }
+          // A single code shell needs its parent's header/PRE boundary, but
+          // an existing content root with direct prose/PRE siblings must stay put.
+          if (root && root !== message && root.tagName === 'DIV'
+            && root.parentElement && root.parentElement !== message
+            && Array.from(root.children).some((child) => child.tagName === 'PRE')
+            && !Array.from(root.children).some((child) => /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName))) {
+            root = root.parentElement;
+          }
+          // If an unrelated status paragraph widens the common ancestor,
+          // prefer one contained subtree with direct prose and every code block.
+          while (root && root !== message) {
+            const candidates = Array.from(root.children).filter((child) =>
+              Array.from(child.children).some((item) => item.tagName === 'PRE')
+              && Array.from(child.children).some((item) => /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(item.tagName))
+              && allCodeBlocks.every((pre) => within(pre, child)));
+            if (candidates.length !== 1) break;
+            root = candidates[0]!;
+          }
+          if (!root || root === message || allCodeBlocks.some((pre) => !within(pre, root!))) {
+            return unsupported();
+          }
+          const rootChildren = Array.from(root!.children);
+          const directPreIndex = rootChildren.findIndex((child) => child.tagName === 'PRE');
+          if (root!.tagName === 'BLOCKQUOTE' || (directPreIndex > 0
+            && rootChildren.slice(0, directPreIndex).some((child) => child.tagName === 'P')
+            && !rootChildren.slice(directPreIndex + 1).some((child) => /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)))) {
+            // P + PRE with no subsequent semantic block could be an interleaved
+            // code shell rather than separate reply prose: refuse ambiguity.
+            return unsupported();
+          }
+          const outsideText = (node: Element): boolean => {
+            if (node.tagName === 'BUTTON' || node.getAttribute('role') === 'button'
+              || node.getAttribute('aria-hidden') === 'true' || node.hasAttribute('inert')
+              || !visible(node)) return false;
+            // Visible non-text media outside the inferred answer root cannot be
+            // discarded as an empty text leaf: its reply boundary is unproven.
+            if (/^(?:IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|MATH|HR)$/iu.test(node.tagName)) return true;
+            const nodes = Array.from(node.childNodes);
+            if (nodes.length === 0) return Boolean((node as HTMLElement).innerText?.trim());
+            return nodes.some((item) => item.nodeType === 3
+              ? Boolean(item.textContent?.trim())
+              : item.nodeType === 1 && outsideText(item as Element));
+          };
+          // Refuse a plausible-looking partial reply when visible prose is outside
+          // the derived content container, across either selected-message read site.
+          for (let current: Element = root; current !== message;) {
+            const parent = current.parentElement;
+            if (!parent || Array.from(parent.childNodes).some((sibling) =>
+              sibling !== current && (sibling.nodeType === 3
+                ? Boolean(sibling.textContent?.trim())
+                : sibling.nodeType === 1 && outsideText(sibling as Element)),
+            )) return unsupported();
+            current = parent;
+          }
           if (!visible(root)) return unsupported();
+          // The captured code surface embeds a non-answer action bar, including
+          // display:contents around a button. Ignore ONLY control/SVG-only markup
+          // outside the PRE within the same uniquely selected code wrapper.
+          const isPureCodeActionBar = (node: Element): boolean => {
+            if (node.getAttribute('contenteditable') !== 'false') return false;
+            const ownedByCodeWrapper = Array.from(root!.children).some((child) => {
+              const pres = [
+                ...(child.tagName === 'PRE' ? [child] : []),
+                ...Array.from(child.querySelectorAll('pre')),
+              ];
+              return pres.length === 1 && within(node, child) && !within(node, pres[0]!);
+            });
+            if (!ownedByCodeWrapper) return false;
+            let sawButton = false;
+            const controlsOnly = (element: Element): boolean => {
+              if (element.tagName === 'BUTTON' || element.getAttribute('role') === 'button') {
+                sawButton = true;
+                return true;
+              }
+              if (/^SVG$/iu.test(element.tagName)) return true;
+              if (element.tagName !== 'DIV' && element.tagName !== 'SPAN') return false;
+              return Array.from(element.childNodes).every((item) =>
+                item.nodeType === 3 ? !item.textContent?.trim()
+                  : item.nodeType === 1 && controlsOnly(item as Element));
+            };
+            return controlsOnly(node) && sawButton;
+          };
+          const contentsDescendant = (node: Element): boolean => Array.from(node.children).some((child) =>
+            !isPureCodeActionBar(child) && (view.getComputedStyle(child)?.display === 'contents' || contentsDescendant(child)));
+          if (view.getComputedStyle(root!)?.display === 'contents' || contentsDescendant(root!)) return unsupported();
           // root.children omits direct Text nodes; do not certify a lossy rich reply.
           if (Array.from(root.childNodes).some((node) => node.nodeType === 3 && Boolean(node.textContent?.trim()))) {
             return unsupported();
@@ -858,6 +963,7 @@ export async function revalidateKeyedHarvest(
               continue;
             }
             if (pres.length === 0) {
+              if (!/^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)) return unsupported();
               // Whole innerText preserves browser whitespace for prose,
               // headings, tables and lists. Ambiguous nested controls fail.
               if (child.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
@@ -923,7 +1029,7 @@ export async function revalidateKeyedHarvest(
                   }
                 } else if (item.nodeType === 1) {
                   const element = item as Element;
-                  if (element === code || element.tagName === 'BUTTON'
+                  if (element === code || isPureCodeActionBar(element) || element.tagName === 'BUTTON'
                     || element.getAttribute('role') === 'button'
                     || element.getAttribute('aria-hidden') === 'true'
                     || element.hasAttribute('inert') || !visible(element)) continue;
@@ -996,7 +1102,6 @@ export async function revalidateKeyedHarvest(
         userMessageStyle: USER_MESSAGE_STYLE,
         unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
         assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
-        contentRootSelector: ASSISTANT_CONTENT_ROOT_SELECTOR,
         assistantKey: expected.assistantKey,
         turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
         inProgressSelector: ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
@@ -1978,7 +2083,6 @@ export async function readPageObservation(
           userMessageStyle: string;
           unitKeyAttribute: string;
           assistantMessageStyle: string;
-          contentRootSelector: string;
           ownedMarker?: string;
           historicalBaseline: boolean;
           generationSelector: string;
@@ -2005,24 +2109,131 @@ export async function readPageObservation(
             const wholeRow = () => ({ text: (message as HTMLElement).innerText, complete: true });
             const unsupported = () => selected ? { text: '', complete: false } : wholeRow();
             if (message.querySelectorAll('pre').length === 0) return wholeRow();
-            const roots = Array.from(message.querySelectorAll(args.contentRootSelector));
-            if (roots.length !== 1) return unsupported();
-            const root = roots[0]!;
-            const view = root.ownerDocument?.defaultView;
+            const view = message.ownerDocument?.defaultView;
             if (!view || typeof view.getComputedStyle !== 'function') return unsupported();
             const visible = (node: Element): boolean => {
               for (let current: Element | null = node; current; current = current.parentElement) {
                 if (current.tagName === 'BUTTON' || current.getAttribute('role') === 'button'
                   || current.getAttribute('aria-hidden') === 'true' || current.hasAttribute('inert')
-                  || typeof current.getClientRects !== 'function' || current.getClientRects().length === 0) return false;
+                || /(?:^|\s)sr-only(?:\s|$)/u.test(current.getAttribute('class') ?? '')) return false;
                 const style = view.getComputedStyle(current);
                 if (!style || style.display === 'none' || style.visibility === 'hidden'
-                  || style.visibility === 'collapse') return false;
+                  || style.visibility === 'collapse' || typeof current.getClientRects !== 'function'
+                || (style.display !== 'contents' && current.getClientRects().length === 0)) return false;
                 if (current === message) return true;
               }
               return false;
             };
+            const semantic: Element[] = [];
+            const scan = (node: Element): void => {
+              for (const child of Array.from(node.children)) {
+                if (/^(?:P|PRE|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)
+                  && visible(child)) semantic.push(child);
+                scan(child);
+              }
+            };
+            scan(message);
+            const allCodeBlocks = Array.from(message.querySelectorAll('pre'));
+            if (allCodeBlocks.length === 0 || allCodeBlocks.some((pre) => !visible(pre))
+              || semantic.length === 0) return unsupported();
+            const within = (child: Element, candidate: Element): boolean => {
+              for (let current: Element | null = child; current; current = current.parentElement) {
+                if (current === candidate) return true;
+                if (current === message) return false;
+              }
+              return false;
+            };
+            // Resolve the smallest ancestor of every visible semantic content block.
+            // Neither .markdown nor a CSS-module hash grants content-root authority.
+            let root: Element | null = semantic[0]?.parentElement ?? null;
+            while (root && root !== message && !semantic.every((block) => within(block, root!))) {
+              root = root.parentElement;
+            }
+            // A single code shell needs its parent's header/PRE boundary, but
+            // an existing content root with direct prose/PRE siblings must stay put.
+            if (root && root !== message && root.tagName === 'DIV'
+              && root.parentElement && root.parentElement !== message
+              && Array.from(root.children).some((child) => child.tagName === 'PRE')
+              && !Array.from(root.children).some((child) => /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName))) {
+              root = root.parentElement;
+            }
+            // If an unrelated status paragraph widens the common ancestor,
+            // prefer one contained subtree with direct prose and every code block.
+            while (root && root !== message) {
+              const candidates = Array.from(root.children).filter((child) =>
+                Array.from(child.children).some((item) => item.tagName === 'PRE')
+                && Array.from(child.children).some((item) => /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(item.tagName))
+                && allCodeBlocks.every((pre) => within(pre, child)));
+              if (candidates.length !== 1) break;
+              root = candidates[0]!;
+            }
+            if (!root || root === message || allCodeBlocks.some((pre) => !within(pre, root!))) {
+              return unsupported();
+            }
+            const rootChildren = Array.from(root!.children);
+            const directPreIndex = rootChildren.findIndex((child) => child.tagName === 'PRE');
+            if (root!.tagName === 'BLOCKQUOTE' || (directPreIndex > 0
+              && rootChildren.slice(0, directPreIndex).some((child) => child.tagName === 'P')
+              && !rootChildren.slice(directPreIndex + 1).some((child) => /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)))) {
+              // P + PRE with no subsequent semantic block could be an interleaved
+              // code shell rather than separate reply prose: refuse ambiguity.
+              return unsupported();
+            }
+            const outsideText = (node: Element): boolean => {
+              if (node.tagName === 'BUTTON' || node.getAttribute('role') === 'button'
+                || node.getAttribute('aria-hidden') === 'true' || node.hasAttribute('inert')
+                || !visible(node)) return false;
+              // Visible non-text media outside the inferred answer root cannot be
+              // discarded as an empty text leaf: its reply boundary is unproven.
+              if (/^(?:IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|MATH|HR)$/iu.test(node.tagName)) return true;
+              const nodes = Array.from(node.childNodes);
+              if (nodes.length === 0) return Boolean((node as HTMLElement).innerText?.trim());
+              return nodes.some((item) => item.nodeType === 3
+                ? Boolean(item.textContent?.trim())
+                : item.nodeType === 1 && outsideText(item as Element));
+            };
+            // Refuse a plausible-looking partial reply when visible prose is outside
+            // the derived content container, across either selected-message read site.
+            for (let current: Element = root; current !== message;) {
+              const parent = current.parentElement;
+              if (!parent || Array.from(parent.childNodes).some((sibling) =>
+              sibling !== current && (sibling.nodeType === 3
+                ? Boolean(sibling.textContent?.trim())
+                : sibling.nodeType === 1 && outsideText(sibling as Element)),
+            )) return unsupported();
+              current = parent;
+            }
             if (!visible(root)) return unsupported();
+            // The captured code surface embeds a non-answer action bar, including
+            // display:contents around a button. Ignore ONLY control/SVG-only markup
+            // outside the PRE within the same uniquely selected code wrapper.
+            const isPureCodeActionBar = (node: Element): boolean => {
+              if (node.getAttribute('contenteditable') !== 'false') return false;
+              const ownedByCodeWrapper = Array.from(root!.children).some((child) => {
+                const pres = [
+                  ...(child.tagName === 'PRE' ? [child] : []),
+                  ...Array.from(child.querySelectorAll('pre')),
+                ];
+                return pres.length === 1 && within(node, child) && !within(node, pres[0]!);
+              });
+              if (!ownedByCodeWrapper) return false;
+              let sawButton = false;
+              const controlsOnly = (element: Element): boolean => {
+                if (element.tagName === 'BUTTON' || element.getAttribute('role') === 'button') {
+                  sawButton = true;
+                  return true;
+                }
+                if (/^SVG$/iu.test(element.tagName)) return true;
+                if (element.tagName !== 'DIV' && element.tagName !== 'SPAN') return false;
+                return Array.from(element.childNodes).every((item) =>
+                  item.nodeType === 3 ? !item.textContent?.trim()
+                    : item.nodeType === 1 && controlsOnly(item as Element));
+              };
+              return controlsOnly(node) && sawButton;
+            };
+            const contentsDescendant = (node: Element): boolean => Array.from(node.children).some((child) =>
+              !isPureCodeActionBar(child) && (view.getComputedStyle(child)?.display === 'contents' || contentsDescendant(child)));
+            if (view.getComputedStyle(root!)?.display === 'contents' || contentsDescendant(root!)) return unsupported();
             // root.children omits direct Text nodes; do not certify a lossy rich reply.
             if (Array.from(root.childNodes).some((node) => node.nodeType === 3 && Boolean(node.textContent?.trim()))) {
               return unsupported();
@@ -2039,6 +2250,7 @@ export async function readPageObservation(
                 continue;
               }
               if (pres.length === 0) {
+                if (!/^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)) return unsupported();
                 // Whole innerText preserves browser whitespace for prose,
                 // headings, tables and lists. Ambiguous nested controls fail.
                 if (child.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
@@ -2104,7 +2316,7 @@ export async function readPageObservation(
                     }
                   } else if (item.nodeType === 1) {
                     const element = item as Element;
-                    if (element === code || element.tagName === 'BUTTON'
+                    if (element === code || isPureCodeActionBar(element) || element.tagName === 'BUTTON'
                       || element.getAttribute('role') === 'button'
                       || element.getAttribute('aria-hidden') === 'true'
                       || element.hasAttribute('inert') || !visible(element)) continue;
@@ -2232,7 +2444,6 @@ export async function readPageObservation(
           userMessageStyle: USER_MESSAGE_STYLE,
           unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
           assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
-        contentRootSelector: ASSISTANT_CONTENT_ROOT_SELECTOR,
           ownedMarker: expectedMarker,
           historicalBaseline,
           generationSelector: BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR,
@@ -2626,35 +2837,53 @@ function composerPayloadFailureCause(deadlineMs: number): PreSendComposerFailure
 }
 
 async function readStructuredComposerText(
-  composer: any, expectedLength: number, deadlineMs: number,
+  composer: any, expectedLength: number, deadlineMs: number, requireUniqueEditor = false,
 ): Promise<string | undefined> {
   const waitMs = deadlineMs - Date.now();
   if (waitMs <= 0 || typeof composer?.evaluate !== 'function') return undefined;
   try {
     const text = await boundedBrowserRead(
-      Promise.resolve(composer.evaluate((element: HTMLElement, maxChars: number) => {
-        // ProseMirror paragraphs encode document newlines independently of
-        // CSS innerText spacing. Text nodes (including spaces/tabs) are literal.
+      Promise.resolve(composer.evaluate((element: HTMLElement, args: {
+        maxChars: number; unique: boolean; selector: string;
+      }) => {
+        // A complete ProseMirror paragraph tree is the only supported exact
+        // structural representation. Presentation innerText is not literal text.
         if (!element.isConnected || !element.isContentEditable
-          || !element.classList.contains('ProseMirror')) return undefined;
-        const view = element.ownerDocument.defaultView;
+          || !element.classList?.contains('ProseMirror')) return undefined;
+        const doc = element.ownerDocument;
+        const view = doc?.defaultView;
         if (!view) return undefined;
+        if (args.unique) {
+          if (typeof doc.querySelectorAll !== 'function') return undefined;
+          const editors = doc.querySelectorAll(args.selector);
+          if (editors.length !== 1 || editors[0] !== element) return undefined;
+        }
         const parts: string[] = [];
-        const maxNodes = Math.min(20_000, maxChars * 2 + 256);
+        const maxNodes = Math.min(20_000, args.maxChars * 2 + 256);
         let nodes = 0;
         let chars = 0;
         const append = (value: string): boolean => {
           chars += value.length;
-          if (chars > maxChars) return false;
+          if (chars > args.maxChars) return false;
           parts.push(value);
           return true;
         };
         const readable = (node: HTMLElement): boolean => {
           if (node.getAttribute('hidden') !== null || node.getAttribute('aria-hidden') === 'true'
-            || node.getAttribute('contenteditable') === 'false') return false;
+            || node.getAttribute('contenteditable') === 'false'
+            || node.hasAttribute?.('inert') || node.getAttribute('inert') !== null) return false;
           const style = view.getComputedStyle(node);
-          return style.display !== 'none' && style.visibility !== 'hidden' && style.visibility !== 'collapse';
+          return Boolean(style) && style.display !== 'none'
+            && style.visibility !== 'hidden' && style.visibility !== 'collapse';
         };
+        if (args.unique) {
+          for (let ancestor: HTMLElement | null = element; ancestor; ancestor = ancestor.parentElement) {
+            if (!readable(ancestor) || ancestor.hasAttribute?.('inert')) return undefined;
+          }
+          const box = element.getBoundingClientRect?.();
+          if (!box || !(box.width > 0 && box.height > 0)
+            || !element.getClientRects?.().length) return undefined;
+        }
         const walk = (node: Node, depth: number, trailingBreak: boolean): boolean => {
           if (++nodes > maxNodes || depth > 32) return false;
           if (node.nodeType === 3) return append(node.nodeValue ?? '');
@@ -2663,7 +2892,8 @@ async function readStructuredComposerText(
           if (!readable(child)) return false;
           if (child.tagName === 'BR') {
             if (child.childNodes.length !== 0) return false;
-            return child.classList.contains('ProseMirror-trailingBreak') ? trailingBreak : append('\n');
+            return child.classList.contains('ProseMirror-trailingBreak')
+              ? trailingBreak : append('\n');
           }
           if (!(child.tagName === 'P' && depth === 1)
             && !['A', 'SPAN', 'CODE', 'STRONG', 'EM', 'B', 'I', 'S', 'U'].includes(child.tagName)) return false;
@@ -2673,17 +2903,17 @@ async function readStructuredComposerText(
           }
           return true;
         };
-        if (!readable(element) || element.childNodes.length > maxNodes) return undefined;
-        let paragraphs: boolean | undefined;
+        if (!readable(element) || element.childNodes.length < 1
+          || element.childNodes.length > maxNodes) return undefined;
         for (let i = 0; i < element.childNodes.length; i++) {
           const child = element.childNodes[i]!;
-          const isParagraph = child.nodeType === 1 && (child as HTMLElement).tagName === 'P';
-          paragraphs ??= isParagraph;
-          if (paragraphs !== isParagraph || (isParagraph && i > 0 && !append('\n'))
-            || !walk(child, 1, false)) return undefined;
+          // A sole empty p is an empty draft; interior empty p siblings
+          // always contribute a newline, including data-empty-paragraph ones.
+          if (child.nodeType !== 1 || (child as HTMLElement).tagName !== 'P'
+            || (i > 0 && !append('\n')) || !walk(child, 1, false)) return undefined;
         }
         return parts.join('');
-      }, expectedLength)),
+      }, { maxChars: expectedLength, unique: requireUniqueEditor, selector: COMPOSER_SELECTOR })),
       waitMs, 'send_composer_structure_timeout',
     );
     return typeof text === 'string' ? text : undefined;
@@ -2995,6 +3225,8 @@ async function freshRetryDomGuards(input: {
   if (browserOrPageDefinitelyLost(input.page, input.browser)) return false;
   try {
     if (await readFreshStopVisible(input.page, input.deadlineMs) !== false) return false;
+    if (await readLosslessOwnedComposer(input.composer, input.deadlineMs, false,
+      input.markerPayload.length) !== input.markerPayload) return false;
     if (!await composerPayloadMatchesBeforeSend(
       input.composer, input.markerPayload, input.deadlineMs,
     )) return false;
@@ -3002,7 +3234,10 @@ async function freshRetryDomGuards(input: {
       input.page, undefined, undefined, true, input.deadlineMs,
     );
     return !observed.transcriptIncomplete && observed.snapshot?.complete === true
-      && observed.messages.filter((message) => message.role === 'user').length === input.baselineUserNodeCount;
+      && observed.messages.filter((message) => message.role === 'user').length === input.baselineUserNodeCount
+      && await readFreshStopVisible(input.page, input.deadlineMs) === false
+      && await readLosslessOwnedComposer(input.composer, input.deadlineMs, false,
+        input.markerPayload.length) === input.markerPayload;
   } catch {
     return false;
   }
@@ -3018,20 +3253,49 @@ async function readLosslessOwnedComposer(
   composer: any,
   deadlineMs: number,
   useInvocationDeadline = false,
+  maxChars = 262_144,
 ): Promise<string | undefined> {
   const waitMs = useInvocationDeadline ? deadlineMs - Date.now()
     : Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
   if (waitMs <= 0 || typeof composer?.evaluate !== 'function') return undefined;
+  // Both structural and fallback reads share one bounded budget, never two
+  // separate five-second windows and never the whole remaining invocation.
+  const readDeadlineMs = Date.now() + waitMs;
   try {
+    // Use the same paragraph interpretation as retirement and atomic clear,
+    // but demand an entire unique, visible editor for retry authority.
+    const structural = await readStructuredComposerText(composer, maxChars, readDeadlineMs, true);
+    if (structural !== undefined) return structural;
+    const remainingMs = readDeadlineMs - Date.now();
+    if (remainingMs <= 0) return undefined;
     const result = await boundedBrowserRead(
-      Promise.resolve(composer.evaluate((element: HTMLElement) => ({
-        content: element.textContent,
-        visible: element.innerText,
-      }))),
-      waitMs, 'recovery_lossless_composer_timeout',
-    ) as { content?: unknown; visible?: unknown };
-    return typeof result.content === 'string' && result.content === result.visible
-      ? result.content : undefined;
+      Promise.resolve(composer.evaluate((element: HTMLElement, selector: string) => {
+        if (!element.isConnected || !element.isContentEditable
+          || element.classList?.contains('ProseMirror')) return undefined;
+        const doc = element.ownerDocument;
+        const view = doc?.defaultView;
+        if (!view || typeof doc.querySelectorAll !== 'function') return undefined;
+        const editors = doc.querySelectorAll(selector);
+        if (editors.length !== 1 || editors[0] !== element) return undefined;
+        for (let ancestor: HTMLElement | null = element; ancestor; ancestor = ancestor.parentElement) {
+          if (ancestor.getAttribute?.('hidden') != null || ancestor.getAttribute?.('aria-hidden') === 'true'
+            || ancestor.hasAttribute?.('inert') || ancestor.getAttribute?.('contenteditable') === 'false') return undefined;
+          const ancestorStyle = view.getComputedStyle(ancestor);
+          if (!ancestorStyle || ancestorStyle.display === 'none' || ancestorStyle.visibility === 'hidden'
+            || ancestorStyle.visibility === 'collapse') return undefined;
+        }
+        const box = element.getBoundingClientRect?.();
+        if (!box || !(box.width > 0 && box.height > 0) || !element.getClientRects?.().length) return undefined;
+        if (element.getAttribute('hidden') !== null || element.getAttribute('aria-hidden') === 'true') return undefined;
+        const style = view.getComputedStyle(element);
+        if (!style || style.display === 'none' || style.visibility === 'hidden'
+          || style.visibility === 'collapse') return undefined;
+        return { content: element.textContent, visible: element.innerText };
+      }, COMPOSER_SELECTOR)),
+      remainingMs, 'recovery_lossless_composer_timeout',
+    ) as { content?: unknown; visible?: unknown } | undefined;
+    return typeof result?.content === 'string' && result.content.length <= maxChars
+      && result.content === result.visible ? result.content : undefined;
   } catch {
     return undefined;
   }
@@ -3059,6 +3323,8 @@ async function existingRetryDomGuards(input: {
     && Date.now() < input.deadlineMs;
   if (!samePage()) return false;
   try {
+    if (await readLosslessOwnedComposer(input.composer, input.deadlineMs, false,
+      input.markedPayload.length) !== input.markedPayload) return false;
     if (!await composerPayloadMatchesBeforeSend(
       input.composer, input.markedPayload, input.deadlineMs,
     )) return false;
@@ -3084,7 +3350,9 @@ async function existingRetryDomGuards(input: {
     if (current.length !== baseline.carriers.length) return false;
     // The final Stop/liveness/URL check follows the transcript read so a late
     // generation or redirect cannot turn a stale census into a second click.
-    return await readFreshStopVisible(input.page, input.deadlineMs) === false && samePage();
+    return await readFreshStopVisible(input.page, input.deadlineMs) === false && samePage()
+      && await readLosslessOwnedComposer(input.composer, input.deadlineMs, false,
+        input.markedPayload.length) === input.markedPayload && samePage();
   } catch {
     return false;
   }
@@ -3711,13 +3979,18 @@ async function conditionalClearOwnedComposerDraft(
         const view = doc.defaultView;
         if (!view) return false;
         const visible = (el: HTMLElement): boolean => {
-          if (el.getAttribute?.('hidden') === '' || el.getAttribute?.('aria-hidden') === 'true'
-            || el.getAttribute?.('contenteditable') === 'false') return false;
-          const style = view.getComputedStyle(el);
-          return style.display !== 'none' && style.visibility !== 'hidden'
-            && style.visibility !== 'collapse';
+          for (let ancestor: HTMLElement | null = el; ancestor; ancestor = ancestor.parentElement) {
+            if (ancestor.getAttribute?.('hidden') != null || ancestor.getAttribute?.('aria-hidden') === 'true'
+              || ancestor.hasAttribute?.('inert') || ancestor.getAttribute?.('contenteditable') === 'false') return false;
+            const style = view.getComputedStyle(ancestor);
+            if (!style || style.display === 'none' || style.visibility === 'hidden'
+              || style.visibility === 'collapse') return false;
+          }
+          return true;
         };
         if (!visible(element)) return false;
+        const box = element.getBoundingClientRect?.();
+        if (!box || !(box.width > 0 && box.height > 0) || !element.getClientRects?.().length) return false;
         let literal: string | undefined;
         if (element.classList?.contains('ProseMirror')) {
           const parts: string[] = [];
@@ -3747,14 +4020,11 @@ async function conditionalClearOwnedComposerDraft(
             }
             return true;
           };
-          let paragraphs: boolean | undefined;
-          if (element.childNodes.length > 20_000) return false;
+          if (element.childNodes.length === 0 || element.childNodes.length > 20_000) return false;
           for (let i = 0; i < element.childNodes.length; i++) {
             const child = element.childNodes[i]!;
-            const isP = child.nodeType === 1 && (child as HTMLElement).tagName === 'P';
-            paragraphs ??= isP;
-            if (paragraphs !== isP || (isP && i > 0 && !append('\n'))
-              || !visit(child, 1, false)) return false;
+            if (child.nodeType !== 1 || (child as HTMLElement).tagName !== 'P'
+              || (i > 0 && !append('\n')) || !visit(child, 1, false)) return false;
           }
           literal = parts.join('');
         } else {
@@ -4858,7 +5128,8 @@ async function runTurnCore(
         // DOM/owner checks are required; no third attempt after this second call.
         if (await composerPayloadMatchesBeforeSend(
           composer, markedPayload, Math.min(invocationDeadlineMs, preDispatchCutoffMs),
-        )) {
+        ) && await readLosslessOwnedComposer(composer, Math.min(invocationDeadlineMs, preDispatchCutoffMs),
+          false, markedPayload.length) === markedPayload) {
           assertFreshOwner();
           if (Date.now() < preDispatchCutoffMs) {
             delivery = await sendAction();
@@ -5031,6 +5302,8 @@ async function runTurnCore(
         // Only the first click's actual positive non-dispatch action result grants
         // this one optional repeat; an uncertain first action or Enter never does.
         if (await composerPayloadMatchesBeforeSend(composer, markedPayload, invocationDeadlineMs)
+          && await readLosslessOwnedComposer(composer, invocationDeadlineMs, false,
+            markedPayload.length) === markedPayload
           && originalExactChat && !browserOrPageDefinitelyLost(page, browser)
           && normalizeConversationUrl(String(page.url())) === originalExactChat
           && readOwnedConversationIdentity(page, originalExactChat).matched) {
@@ -8076,8 +8349,8 @@ type GuardedRetirementResult = {
   readonly cause: string;
 };
 
-// The cleanup reader is deliberately NOT the existing-chat re-click reader.
-// #2651's raw textContent===innerText retry evidence stays unchanged.
+// Retirement and retries share total ProseMirror paragraph reconstruction.
+// Non-ProseMirror fallback is exact-only; unknown drafts never grant close.
 async function readRetirementComposer(
   page: any, ownedLiteral: string | undefined, deadlineMs: number,
 ): Promise<'empty' | 'own' | 'foreign_draft' | 'composer_unknown' | 'frozen_ownership_unproven'> {
@@ -8089,13 +8362,26 @@ async function readRetirementComposer(
     // Supported ProseMirror p/BR/trailingBreak is a document structure, not an
     // innerText presentation; keep intentional blank lines and every codepoint.
     let exact = await readStructuredComposerText(
-      editor, Math.max(65_536, ownedLiteral?.length ?? 0), deadlineMs,
+      editor, Math.max(65_536, ownedLiteral?.length ?? 0), deadlineMs, true,
     );
     if (exact === undefined) {
       const rawViews = await boundedBrowserRead(
-        Promise.resolve(editor.evaluate((el: HTMLElement) => {
-          if (!el.isConnected || !el.isContentEditable || !el.ownerDocument?.defaultView) return undefined;
-          const style = el.ownerDocument.defaultView.getComputedStyle(el);
+        Promise.resolve(editor.evaluate((el: HTMLElement, selector: string) => {
+          const doc = el.ownerDocument;
+          if (!el.isConnected || !el.isContentEditable || !doc?.defaultView
+            || typeof doc.querySelectorAll !== 'function') return undefined;
+          const editors = doc.querySelectorAll(selector);
+          if (editors.length !== 1 || editors[0] !== el) return undefined;
+          for (let ancestor: HTMLElement | null = el; ancestor; ancestor = ancestor.parentElement) {
+            if (ancestor.getAttribute?.('hidden') != null || ancestor.getAttribute?.('aria-hidden') === 'true'
+              || ancestor.hasAttribute?.('inert') || ancestor.getAttribute?.('contenteditable') === 'false') return undefined;
+            const ancestorStyle = doc.defaultView.getComputedStyle(ancestor);
+            if (!ancestorStyle || ancestorStyle.display === 'none' || ancestorStyle.visibility === 'hidden'
+              || ancestorStyle.visibility === 'collapse') return undefined;
+          }
+          const box = el.getBoundingClientRect?.();
+          if (!box || !(box.width > 0 && box.height > 0) || !el.getClientRects?.().length) return undefined;
+          const style = doc.defaultView.getComputedStyle(el);
           if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse'
             || el.getAttribute?.('hidden') != null || el.getAttribute?.('aria-hidden') === 'true'
             || el.classList?.contains('ProseMirror')) return undefined;
@@ -8104,7 +8390,7 @@ async function readRetirementComposer(
           // shape used by the incumbent lossless reader; the live callback
           // independently checks connection, visibility and supported markup.
           return { content: el.textContent, visible: el.innerText };
-        })),
+        }, COMPOSER_SELECTOR)),
         budget(), 'retirement_editor_fallback_timeout',
       ) as { content?: unknown; visible?: unknown } | undefined;
       exact = typeof rawViews?.content === 'string' && rawViews.content === rawViews.visible
@@ -8725,6 +9011,7 @@ export const __testSendDelivery = {
   readLosslessOwnedComposer,
   composerPayloadMatchesBeforeSend,
   conditionalClearOwnedComposerDraft,
+  readRetirementComposer,
   observeExistingServerCheckedRecovery,
 };
 

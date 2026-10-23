@@ -343,7 +343,7 @@ describe('DOM observation boundary', () => {
   type RichBlock = { prose: string; tag?: string; displayContents?: boolean } | { directText: string } | {
     code: string; label?: string; extraLabel?: string; nested?: boolean;
     divHeader?: boolean; headerClass?: boolean;
-    hidden?: boolean; copyControl?: boolean; interleavedProse?: string; spanProse?: string;
+    hidden?: boolean; copyControl?: boolean; directPre?: boolean; interleavedProse?: string; spanProse?: string;
     excludedCodeDescendant?: 'aria-hidden' | 'inert' | 'role-button' | 'button';
   };
   function richNode(
@@ -357,7 +357,7 @@ describe('DOM observation boundary', () => {
       ownerDocument: {
         defaultView: {
           getComputedStyle: (element: any) => ({
-            display: element.displayContents ? 'contents' : element.shown ? 'block' : 'none', visibility: 'visible',
+            display: element.displayContents ? 'contents' : !element.shown ? 'none' : (element.computedDisplay ?? 'block'), visibility: 'visible',
           }),
         },
       },
@@ -376,19 +376,30 @@ describe('DOM observation boundary', () => {
         return node;
       },
       querySelectorAll(selector: string): any[] {
-        const match = (candidate: any) => {
-          if (selector === '.markdown') return candidate.getAttribute('class') === 'markdown';
-          if (selector === 'pre') return candidate.tagName === 'PRE';
-          if (selector === 'code') return candidate.tagName === 'CODE';
-          if (selector === 'pre code') return candidate.tagName === 'CODE' && candidate.parentElement?.tagName === 'PRE';
-          if (selector.includes('button') || selector.includes('inert') || selector.includes('aria-hidden')) {
-            return candidate.tagName === 'BUTTON' || candidate.getAttribute('role') === 'button'
-              || candidate.hasAttribute('inert') || candidate.getAttribute('aria-hidden') === 'true';
-          }
+        // Small generic-tree selector interpreter: membership follows tags,
+        // classes, attributes and ancestry, not the renderer selector string.
+        const simple = (candidate: any, token: string): boolean => {
+          if (/^[a-z][a-z0-9-]*$/iu.test(token)) return candidate.tagName === token.toUpperCase();
+          if (/^\.[a-z][a-z0-9_-]*$/iu.test(token))
+            return (candidate.getAttribute('class') ?? '').split(/\s+/u).includes(token.slice(1));
+          const attr = /^\[([\w-]+)(?:="([^"]*)")?\]$/u.exec(token);
+          if (attr) return candidate.hasAttribute(attr[1]!) && (attr[2] === undefined
+            || candidate.getAttribute(attr[1]!) === attr[2]);
           return false;
         };
+        const matches = (candidate: any): boolean => selector.split(/,\s*/u).some((group) => {
+          const chain = group.trim().split(/\s+/u);
+          if (!simple(candidate, chain.pop() ?? '')) return false;
+          let ancestor = candidate.parentElement;
+          for (let i = chain.length - 1; i >= 0; i--) {
+            while (ancestor && !simple(ancestor, chain[i]!)) ancestor = ancestor.parentElement;
+            if (!ancestor) return false;
+            ancestor = ancestor.parentElement;
+          }
+          return true;
+        });
         const walk = (parent: any): any[] => parent.children.flatMap((child: any) =>
-          [...(match(child) ? [child] : []), ...walk(child)]);
+          [...(matches(child) ? [child] : []), ...walk(child)]);
         return walk(node);
       },
       querySelector(selector: string): any { return node.querySelectorAll(selector)[0] ?? null; },
@@ -398,7 +409,8 @@ describe('DOM observation boundary', () => {
 
   function richAssistantNode(outerText: string, blocks: RichBlock[], key = 'assistant-rich-12345678') {
     const outer = richNode('ARTICLE', outerText);
-    const root = richNode('DIV', '', { class: 'markdown' });
+    // Explicitly derived hashed root shape; no authenticated live CDP capture is claimed.
+    const root = richNode('DIV', '', { class: 'MarkdownRoot_boundedFixture__7Zd9' });
     outer.append(root);
     for (const block of blocks) {
       if ('directText' in block) {
@@ -439,8 +451,8 @@ describe('DOM observation boundary', () => {
         code.append(richNode(kind === 'button' ? 'BUTTON' : 'SPAN', 'UI', attrs));
       }
       pre.append(code);
-      container.append(pre);
-      root.append(container);
+      if (block.directPre) root.append(pre);
+      else { container.append(pre); root.append(container); }
     }
     const baseQuery = outer.querySelector.bind(outer);
     Object.assign(outer, {
@@ -743,10 +755,293 @@ describe('DOM observation boundary', () => {
     });
     return {
       page: { locator: (selector: string) => selector === MESSAGE_NODE_SELECTOR ? nodes : scalarLocator() },
+      current,
       setLateContinue: (value: boolean) => { lateContinue = value; },
       setHistoricalOnly: (value: boolean) => { historicalOnly = value; },
     };
   }
+
+
+  // Explicitly derived UI structures, not current authenticated CDP specimens.
+  // Keep the content root's original children and real ancestor relationships:
+  // selectors in richNode walk the generic element tree, not a copied selector.
+  function wrapRichContent(current: any) {
+    const content = current.children[0]!;
+    current.children.splice(0, 1);
+    current.childNodes.splice(current.childNodes.indexOf(content), 1);
+    const layout = richNode('DIV');
+    current.append(layout);
+    layout.append(content);
+    return { layout, content };
+  }
+
+
+  it('replays the redacted owned rich-code hierarchy without code action UI in the reply (#2694)', async () => {
+    // Bounded live structural provenance (not a new capture or a code-language witness):
+    // invocation inv_issue2694_capture_r04_20261024_6196313751cf
+    // UTC 2026-10-23T20:17:58.986Z; owned NEW project-chat conversation (URL redacted).
+    // Read-only Playwright Page.evaluate through exact-owned attachOwnTarget/CDP.
+    // state-light-turn-observation/v1, unique marker, source project/URL, profile
+    // key/CDP fingerprint and pinned target 4F3CDE8EF469545BBD3449B4BDC26859
+    // were checked on the same Page before/after; user/assistant subtree stable.
+    // Exact-bound harvest: completed, 419 output bytes, SHA-256
+    // 1f2e4a9e595b5b1f67c5b20b42c5e684e43b284634e7335608aa9f4475a19a29.
+    // The supplied redacted minimum specifies tag hierarchy, retained classes,
+    // attribute/display boundaries, six inline prose spans and highlighted CODE
+    // spans, but omits individual masks and measured whitespace positions.
+    // The text masks/whitespace below are REDACTED NON-SEMANTIC stand-ins, not
+    // reconstructed source bytes; their literal equality is a regression oracle
+    // for this tree only, not a claim of equality to the 419-byte harvested reply.
+    // This is reply evidence only: not composer, floating, active or causal proof.
+    const fixture = richPage([]);
+    const assistant = fixture.current;
+    assistant.tagName = 'DIV';
+    assistant.children.length = 0;
+    assistant.childNodes.length = 0;
+    const append = (
+      parent: any, tag: string, literal = '', attrs: Record<string, string> = {},
+      shown = true, displayContents = false,
+    ): any => {
+      const node = richNode(tag, literal, attrs, shown, displayContents);
+      parent.append(node);
+      return node;
+    };
+
+    const srOnly = append(assistant, 'H4', 'z'.repeat(13), { class: 'sr-only' });
+    const shell = append(assistant, 'DIV');
+    const group = append(shell, 'DIV', '', { class: 'group flex min-w-0 flex-col' });
+    const markdown = append(group, 'DIV', '', {
+      class: 'MarkdownRoot-rZKhxa', 'data-markdown-text-style': 'assistant-message',
+    });
+    const margin = append(markdown, 'DIV', '', { class: 'my-4' });
+    const inset = append(margin, 'DIV', '', { style: '--entity-prose-inset:0px' });
+    const hiddenChild = append(inset, 'DIV', '', {}, false);
+    const portal = append(inset, 'DIV', '', {
+      class: 'relative PortalBoundary-TFj9W2 Renderer-ojZscX',
+    });
+    const renderer = append(portal, 'DIV', '', {
+      class: 'DilRenderer-tB76Jj DilResponseRoot-HfQrEh Reveal-k2IWvM',
+    });
+    renderer.computedDisplay = 'flex';
+
+    const proseParts = ['xxx', ' ', 'xxxx', '  ', 'xxxxx', '.'];
+    const proseText = proseParts.join('');
+    const prose = append(renderer, 'P', proseText, { class: 'TextBase-hXhSqg Text-lIMP0_' });
+    for (const part of proseParts) append(prose, 'SPAN', part);
+
+    const codeOuter = append(renderer, 'DIV');
+    const codeBlock = append(codeOuter, 'DIV', '', { class: 'CodeBlock-zu1QM3' });
+    const surface = append(codeBlock, 'DIV', '', {
+      class: 'Root-iW7ipz CodeSurface-UAMd1A Surface-BCuIs1',
+    });
+    const uiOne = 'q'.repeat(7);
+    const uiTwo = 'q'.repeat(9);
+    const actionBar = append(surface, 'DIV', uiOne + uiTwo, {
+      class: 'ActionBar-KWWAct', contenteditable: 'false',
+    });
+    append(actionBar, 'SVG');
+    append(actionBar, 'BUTTON', uiOne);
+    const transparent = append(actionBar, 'SPAN', '', { class: 'contents' }, false, true);
+    append(transparent, 'BUTTON', uiTwo);
+
+    const relative = append(surface, 'DIV', '', { class: 'relative' });
+    const codePane = append(relative, 'DIV', '', { class: 'InlineCodePane-EYx4bd' });
+    const viewer = append(codePane, 'DIV', '', { class: 'Viewer-ALA646' });
+    const scrollport = append(viewer, 'DIV', '', { class: 'chatgpt-code-scrollport' });
+    const pre = append(scrollport, 'PRE', '', {
+      class: 'ViewerContent-Cg8AgN whitespace-pre',
+    });
+    const codeParts = ['xxx', '  ', 'xxxx', '\n    ', 'xx', '\n'];
+    const codeText = codeParts.join('');
+    const code = append(pre, 'CODE', codeText);
+    append(code, 'SPAN', codeParts[0]!);
+    code.appendText(codeParts[1]!);
+    append(code, 'SPAN', codeParts[2]!);
+    code.appendText(codeParts[3]!);
+    append(code, 'SPAN', codeParts[4]!);
+    code.appendText(codeParts[5]!);
+
+    const footerParts = ['yyyy', ' ', 'yyyyy'];
+    const footerText = footerParts.join('');
+    const footer = append(renderer, 'P', footerText, { class: 'TextBase-hXhSqg Text-lIMP0_' });
+    for (const part of footerParts) append(footer, 'SPAN', part);
+    const trailingAction = append(portal, 'BUTTON', 'q'.repeat(11), {
+      'aria-hidden': 'true', class: 'opacity-0 pointer-events-none',
+    });
+    assistant.innerText = srOnly.innerText + proseText + actionBar.innerText
+      + codeText + footerText + trailingAction.innerText;
+    assistant.textContent = assistant.innerText;
+
+    expect(assistant.querySelectorAll('pre code')).toHaveLength(1);
+    expect(assistant.querySelectorAll('.contents button')).toHaveLength(1);
+    expect(assistant.querySelectorAll('[data-markdown-text-style="assistant-message"]')).toHaveLength(1);
+    expect(renderer.children.map((item: any) => item.tagName)).toEqual(['P', 'DIV', 'P']);
+    expect(renderer.ownerDocument.defaultView.getComputedStyle(renderer).display).toBe('flex');
+    expect(hiddenChild.ownerDocument.defaultView.getComputedStyle(hiddenChild).display).toBe('none');
+    expect(transparent.ownerDocument.defaultView.getComputedStyle(transparent).display).toBe('contents');
+    expect(actionBar.getAttribute('contenteditable')).toBe('false');
+    expect(code.innerText).toBe(codeText);
+    expect(code.textContent).toBe(codeText);
+
+    const fence = String.fromCharCode(96).repeat(3);
+    const expected = [proseText, fence + '\n' + codeText + fence, footerText].join('\n\n');
+    const observed = await readPageObservation(fixture.page, marker, 0);
+    expect(observed.transcriptIncomplete).toBe(false);
+    expect(observed.snapshot?.complete).toBe(true);
+    expect(observed.snapshot?.carriers.filter((row) => row.role === 'assistant')).toHaveLength(1);
+    expect(observed.snapshot?.carriers.at(-1)?.text).toBe(expected);
+    expect(observed.messages.at(-1)?.text).toBe(expected);
+    for (const uiOnly of [srOnly.innerText, uiOne, uiTwo, trailingAction.innerText]) {
+      expect(expected).not.toContain(uiOnly);
+      expect(observed.messages.at(-1)?.text).not.toContain(uiOnly);
+    }
+
+    const previous = { complete: true, carriers: [] } as const;
+    const ownKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    const candidate = keyedHarvestCandidate(observed.snapshot!, previous, ownKey);
+    expect(candidate).toMatchObject({ state: 'ready', reply: expected });
+    if (candidate.state !== 'ready') throw new Error('captured_structure_not_ready');
+    await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
+      ...candidate, snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+    })).resolves.toEqual({ state: 'ready', reply: expected });
+
+    // Derived negative only: visible non-control action-bar text is NOT in the
+    // captured witness and must revoke completeness rather than be dropped.
+    actionBar.appendText('UNACCOUNTED_NON_CONTROL_TEXT');
+    const changed = await readPageObservation(fixture.page, marker, 0);
+    expect(changed.transcriptIncomplete).toBe(true);
+    expect(changed.snapshot?.complete).toBe(false);
+    await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
+      ...candidate, snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+    })).resolves.toEqual({ state: 'continuity-unproven' });
+  });
+
+  it('preserves complete ordered prose + direct PRE + trailing prose under a layout wrapper at both reads (#2694)', async () => {
+    const code = 'literal  spaces\n  leading tab\t\n';
+    const fixture = richPage([
+      { prose: 'Before code' }, { code, directPre: true }, { prose: 'After code\nEXECUTION_STATUS: complete' },
+    ]);
+    wrapRichContent(fixture.current);
+    const expected = ['Before code', '```\n' + code + '```', 'After code\nEXECUTION_STATUS: complete'].join('\n\n');
+    const observed = await readPageObservation(fixture.page, marker, 0);
+    expect(observed.transcriptIncomplete).toBe(false);
+    expect(observed.snapshot?.carriers.at(-1)?.text).toBe(expected);
+    const previous = { complete: true, carriers: [] } as const;
+    const ownKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    const candidate = keyedHarvestCandidate(observed.snapshot!, previous, ownKey);
+    expect(candidate).toMatchObject({ state: 'ready', reply: expected });
+    if (candidate.state !== 'ready') throw new Error('nested_root_not_ready');
+    await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
+      ...candidate, snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+    })).resolves.toEqual({ state: 'ready', reply: expected });
+  });
+
+  it.each(['outer-span-status', 'outer-p-status', 'nested-prose-wrapper', 'nested-code-status'] as const)(
+    'refuses unexplained rich-root wrapper/status text (%s) at observation and keyed revalidation (#2694)',
+    async (variant) => {
+      const fixture = richPage([
+        { prose: 'Before code' }, { code: 'example\n', directPre: true }, { prose: 'After code' },
+      ]);
+      const { layout, content } = wrapRichContent(fixture.current);
+      if (variant === 'outer-span-status') layout.append(richNode('DIV').append(richNode('SPAN', 'Copied')));
+      if (variant === 'outer-p-status') layout.append(richNode('DIV').append(richNode('P', 'Copied')));
+      if (variant === 'nested-prose-wrapper') content.append(richNode('DIV').append(richNode('SPAN', 'Copied')));
+      if (variant === 'nested-code-status') {
+        const extra = richNode('DIV');
+        extra.append(richNode('SPAN', 'Copied'));
+        extra.append(richNode('PRE').append(richNode('CODE', 'non-answer code')));
+        content.append(extra);
+      }
+      const observed = await readPageObservation(fixture.page, marker, 0);
+      expect(observed.transcriptIncomplete).toBe(true);
+      expect(observed.snapshot?.complete).toBe(false);
+      const previous = { complete: true, carriers: [] } as const;
+      const ownKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+      expect(keyedHarvestCandidate(observed.snapshot!, previous, ownKey).state).not.toBe('ready');
+      await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
+        reply: 'untrusted', assistantKey: 'data-message-id:assistant-rich-12345678',
+        snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+      })).resolves.toEqual({ state: 'continuity-unproven' });
+    },
+  );
+
+  it.each(['article-span-sibling', 'nested-layout-paragraph-sibling'] as const)(
+    'rejects rendered prose inside rectless display:contents %s outside code root at both reads (#2694)',
+    async (placement) => {
+      const fixture = richPage([{ code: 'safe code\n' }]);
+      const transparent = richNode('DIV', '', {}, false, true);
+      transparent.append(richNode(placement === 'article-span-sibling' ? 'SPAN' : 'P',
+        'TRAILING PROSE NOT INSIDE CODE'));
+      if (placement === 'article-span-sibling') fixture.current.append(transparent);
+      else wrapRichContent(fixture.current).layout.append(transparent);
+    const observed = await readPageObservation(fixture.page, marker, 0);
+    expect(observed.transcriptIncomplete).toBe(true);
+    expect(observed.snapshot?.complete).toBe(false);
+    const previous = { complete: true, carriers: [] } as const;
+    const ownKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    expect(keyedHarvestCandidate(observed.snapshot!, previous, ownKey).state).not.toBe('ready');
+    await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
+      reply: '```\nsafe code\n```',
+      assistantKey: 'data-message-id:assistant-rich-12345678',
+      snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+    })).resolves.toEqual({ state: 'continuity-unproven' });
+    },
+  );
+
+  it.each([
+    ['IMG', false], ['SVG', true], ['svg', true], ['math', false],
+    ['CANVAS', false], ['VIDEO', true],
+  ] as const)(
+    'refuses a visible unsupported non-text %s sibling of the selected rich reply at both reads (#2694)',
+    async (tag, nested) => {
+      // Derived generic DOM tree: media has no innerText, but is visible and
+      // cannot be omitted from a supposedly complete assistant reply.
+      const fixture = richPage([
+        { prose: 'Before code' }, { code: 'literal code\n' }, { prose: 'After code' },
+      ]);
+      if (nested) {
+        const { layout } = wrapRichContent(fixture.current);
+        layout.append(richNode('DIV').append(richNode(tag)));
+      } else fixture.current.append(richNode(tag));
+      const observed = await readPageObservation(fixture.page, marker, 0);
+      expect(observed.transcriptIncomplete).toBe(true);
+      expect(observed.snapshot?.complete).toBe(false);
+      const previous = { complete: true, carriers: [] } as const;
+      const ownKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+      expect(keyedHarvestCandidate(observed.snapshot!, previous, ownKey).state).not.toBe('ready');
+      await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
+        reply: 'Before code\n\n```\nliteral code\n```\n\nAfter code',
+        assistantKey: 'data-message-id:assistant-rich-12345678',
+        snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+      })).resolves.toEqual({ state: 'continuity-unproven' });
+    },
+  );
+
+  it('refuses a selected answer whose visible direct text lies outside the derived root (#2694)', async () => {
+    const fixture = richPage([{ code: 'diff --git a/a b/a\n' }]);
+    fixture.current.appendText('DO_NOT_LOSE_OUTSIDE_ROOT');
+    const observed = await readPageObservation(fixture.page, marker, 0);
+    expect(observed.transcriptIncomplete).toBe(true);
+    expect(observed.snapshot?.complete).toBe(false);
+    expect(observed.messages.some((row) => row.role === 'assistant'
+      && row.text.includes('OUTER MISLEADING'))).toBe(false);
+  });
+
+  it('fails loudly when the selected rich root structure is missing (#2694, derived canary)', async () => {
+    // Derived negative: malformed selected content cannot acquire a plausible
+    // complete response from outer-row text or an unrelated control.
+    const fixture = richPage([{ prose: 'Before' }, { code: 'inside\n' }, { prose: 'After' }]);
+    const baseline = await readPageObservation(fixture.page, marker, 0);
+    expect(baseline.transcriptIncomplete).toBe(false);
+    // Rebind the selected root as an unsupported compound structure while
+    // leaving the status/control witnesses unchanged.
+    const impossible = richPage([{ code: 'inside', nested: true }]);
+    const observed = await readPageObservation(impossible.page, marker, 0);
+    expect(observed.transcriptIncomplete).toBe(true);
+    expect(observed.snapshot?.complete).toBe(false);
+    expect(observed.messages.some((message) => message.role === 'assistant'
+      && message.text.includes('OUTER MISLEADING'))).toBe(false);
+  });
 
   it('serializes two complete visible diff blocks into one literal UTF-8 keyed and final reply', async () => {
     const diffOne = 'diff --git a/alpha b/alpha\n--- a/alpha\n+++ b/alpha\n@@ -1 +1 @@\n old\n-foo\n+bar\n';

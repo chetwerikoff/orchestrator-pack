@@ -786,6 +786,28 @@ describe('production attempted-send result and durable envelope', () => {
       count: async () => 1,
       fill: async (value: string) => { composerText = value; },
       innerText: async () => composerText,
+      // Readiness remains the incumbent presence-only probe; once the first
+      // action was attempted the retry reader sees a coherent unique editor.
+      evaluate: async (
+        callback: (element: unknown, arg?: unknown) => unknown,
+        arg?: unknown,
+        options?: { timeout?: number },
+      ) => {
+        if (options?.timeout !== undefined || firstAction.mock.calls.length === 0) return true;
+        const element: any = {
+          isConnected: true, isContentEditable: true,
+          classList: { contains: () => false }, getAttribute: () => null,
+          getClientRects: () => [{}],
+          getBoundingClientRect: () => ({ width: 280, height: 30 }),
+          get textContent() { return composerText; },
+          get innerText() { return composerText; },
+        };
+        element.ownerDocument = {
+          querySelectorAll: (selector: string) => selector === COMPOSER_SELECTOR ? [element] : [],
+          defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible' }) },
+        };
+        return callback(element, arg);
+      },
       press: firstAction,
     });
     const click = vi.fn(async () => { await firstAction(); });
@@ -2622,19 +2644,51 @@ process.stdout.write(JSON.stringify(readStateLightAccountCooldown(${JSON.stringi
 });
 
 
+// Derived generic ProseMirror subtree; no live DOM capture is claimed.
+function inertInlineProseMirrorSurface(text: string): any {
+  const editor: any = proseMirrorEditorSurface(text);
+  const paragraph = editor.childNodes[0];
+  const textLeaf = paragraph?.childNodes[0];
+  if (textLeaf?.nodeType !== 3) throw new Error('expected_text_leaf');
+  paragraph.childNodes.splice(0, 1, {
+    nodeType: 1, tagName: 'SPAN', childNodes: [textLeaf],
+    getAttribute: (name: string) => name === 'inert' ? '' : null,
+    hasAttribute: (name: string) => name === 'inert',
+    get textContent() { return textLeaf.nodeValue; },
+  });
+  editor.getClientRects = () => [{}];
+  editor.getBoundingClientRect = () => ({ width: 280, height: 30 });
+  return editor;
+}
+
 describe('Issue #2651 lossless composer and one-operation owned-draft clearing', () => {
   function editorFixture(initial: string, editable = true) {
     let content = initial;
-    const element = {
+    const element: any = {
       isConnected: true, isContentEditable: editable,
+      classList: { contains: () => false },
+      getAttribute: () => null,
+      getClientRects: () => [{}],
+      getBoundingClientRect: () => ({ width: 280, height: 30 }),
       get textContent() { return content; },
       set textContent(value: string) { content = value; },
       get innerText() { return content; },
     };
+    element.ownerDocument = {
+      defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible' }) },
+      querySelectorAll: (selector: string) => selector === COMPOSER_SELECTOR ? [element] : [],
+    };
     const evaluate = vi.fn(async (callback: (element: unknown, payload?: string) => unknown, payload?: string) =>
       callback(element, payload));
     const page = { locator: () => ({ evaluate }) };
-    return { page, evaluate, current: () => content, mutate: (value: string) => { content = value; } };
+    return { page, evaluate, element, current: () => content, mutate: (value: string) => { content = value; } };
+  }
+
+  function visibleProseMirror(text: string) {
+    const element: any = proseMirrorEditorSurface(text);
+    element.getClientRects = () => [{}];
+    element.getBoundingClientRect = () => ({ width: 280, height: 30 });
+    return element;
   }
 
   it('compares every code point and clears only that exact content inside one browser operation', async () => {
@@ -2647,7 +2701,7 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
       editor.page, payload, Date.now() + 2000,
     )).toBe(true);
     expect(editor.current()).toBe('');
-    expect(editor.evaluate).toHaveBeenCalledTimes(2);
+    expect(editor.evaluate).toHaveBeenCalledTimes(3);
   });
 
   it.each(['foreign-draft', 'changed-whitespace', 'non-editable'] as const)(
@@ -2679,6 +2733,129 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
     )).not.toBe(MARKED_PROMPT);
   });
 
+  // Derived structural replay of the reported empty-p/trailingBreak shape.
+  // No authenticated exact-invocation CDP capture is asserted by this fixture.
+  it('reconstructs a unique empty ProseMirror p as empty despite innerText newline (#2694)', async () => {
+    const element: any = visibleProseMirror('');
+    element.childNodes[0].getAttribute = (name: string) => name === 'data-empty-paragraph' ? '' : null;
+    element.ownerDocument.querySelectorAll = (selector: string) =>
+      selector === COMPOSER_SELECTOR ? [element] : [];
+    const composer = { evaluate: async (callback: (element: unknown, arg?: unknown) => unknown, arg?: unknown) =>
+      callback(element, arg) };
+    expect(element.textContent).toBe('');
+    expect(element.innerText).toBe('\n');
+    expect(await __testSendDelivery.readLosslessOwnedComposer(composer, Date.now() + 2000)).toBe('');
+  });
+
+  it('preserves every interior blank paragraph, space and tab with misleading empty attributes (#2694)', async () => {
+    const exact = MARKED_PROMPT + '\n \t\n\nlast';
+    const element: any = visibleProseMirror(exact);
+    element.childNodes[3].getAttribute = (name: string) => name === 'data-empty-paragraph' ? '' : null;
+    element.ownerDocument.querySelectorAll = (selector: string) =>
+      selector === COMPOSER_SELECTOR ? [element] : [];
+    const composer = { evaluate: async (callback: (element: unknown, arg?: unknown) => unknown, arg?: unknown) =>
+      callback(element, arg) };
+    expect(await __testSendDelivery.readLosslessOwnedComposer(
+      composer, Date.now() + 2000, false, exact.length,
+    )).toBe(exact);
+    expect(await __testSendDelivery.readLosslessOwnedComposer(
+      composer, Date.now() + 2000, false, exact.length - 1,
+    )).toBeUndefined();
+  });
+
+  it('refuses nested inert ProseMirror bytes for retry, retirement and atomic clear (#2694)', async () => {
+    const original = MARKED_PROMPT;
+    const editor = inertInlineProseMirrorSurface(original);
+    editor.ownerDocument.querySelectorAll = (selector: string) =>
+      selector === COMPOSER_SELECTOR ? [editor] : [];
+    const composer = {
+      count: async () => 1,
+      evaluate: async (callback: (element: unknown, argument?: unknown) => unknown, argument?: unknown) =>
+        callback(editor, argument),
+    };
+    const page = { locator: () => composer };
+    const deadline = Date.now() + 5_000;
+    // Raw DOM textContent joins paragraphs without their structural newlines.
+    const beforeDomText = editor.textContent;
+    expect(beforeDomText).toBe(original.replace(/\n/gu, ''));
+    expect(await __testSendDelivery.readLosslessOwnedComposer(
+      composer, deadline, false, original.length,
+    )).toBeUndefined();
+    expect(await __testSendDelivery.readRetirementComposer(
+      page, original, deadline,
+    )).toBe('composer_unknown');
+    expect(await __testSendDelivery.conditionalClearOwnedComposerDraft(
+      page, original, deadline,
+    )).toBe(false);
+    expect(editor.textContent).toBe(beforeDomText);
+  });
+
+  it.each(['unknown-child', 'hidden', 'duplicate-editor', 'mixed-root'] as const)(
+    'refuses structurally unproven owned ProseMirror subtree: %s (#2694)', async (kind) => {
+      const element: any = visibleProseMirror(MARKED_PROMPT);
+      if (kind === 'unknown-child') element.childNodes[0].childNodes.push({
+        nodeType: 1, tagName: 'SCRIPT', childNodes: [], getAttribute: () => null,
+      });
+      if (kind === 'hidden') {
+        const original = element.childNodes[0].getAttribute;
+        element.childNodes[0].getAttribute = (name: string) =>
+          name === 'aria-hidden' ? 'true' : original(name);
+      }
+      if (kind === 'mixed-root') element.childNodes.push({ nodeType: 3, nodeValue: 'foreign' });
+      element.ownerDocument.querySelectorAll = (selector: string) =>
+        selector === COMPOSER_SELECTOR ? kind === 'duplicate-editor' ? [element, {}] : [element] : [];
+      const composer = { evaluate: async (callback: (element: unknown, arg?: unknown) => unknown, arg?: unknown) =>
+        callback(element, arg) };
+      expect(await __testSendDelivery.readLosslessOwnedComposer(
+        composer, Date.now() + 2000, false, MARKED_PROMPT.length + 100,
+      )).toBeUndefined();
+    },
+  );
+
+  it.each(['aria-hidden', 'inert', 'display-none', 'hidden-attribute', 'zero-rect', 'zero-width', 'zero-height'] as const)(
+    'refuses exact owned draft under %s ancestor or unusable editor box (#2694)',
+    async (kind) => {
+      const owned = MARKED_PROMPT;
+      const structured = visibleProseMirror(owned);
+      const fallback = editorFixture(owned);
+      const ancestors = (element: any) => {
+        const ancestor: any = {
+          parentElement: null,
+          getAttribute: (name: string) => kind === 'aria-hidden' && name === 'aria-hidden' ? 'true'
+            : kind === 'hidden-attribute' && name === 'hidden' ? '' : null,
+          hasAttribute: (name: string) => kind === 'inert' && name === 'inert',
+        };
+        element.parentElement = ancestor;
+        element.getClientRects = () => kind === 'zero-rect' ? [] : [{}];
+        element.getBoundingClientRect = () => ({
+          width: kind === 'zero-width' ? 0 : 280, height: kind === 'zero-height' ? 0 : 30,
+        });
+        element.ownerDocument.defaultView.getComputedStyle = (node: any) => ({
+          display: node === ancestor && kind === 'display-none' ? 'none' : 'block',
+          visibility: 'visible',
+        });
+      };
+      ancestors(structured);
+      ancestors(fallback.element);
+      structured.ownerDocument.querySelectorAll = (selector: string) =>
+        selector === COMPOSER_SELECTOR ? [structured] : [];
+      const composer = {
+        evaluate: async (cb: (element: unknown, args?: unknown) => unknown, args?: unknown) =>
+          cb(structured, args),
+      };
+      expect(await __testSendDelivery.readLosslessOwnedComposer(
+        composer, Date.now() + 2_000, false, owned.length,
+      )).toBeUndefined();
+      expect(await __testSendDelivery.readLosslessOwnedComposer(
+        fallback.page.locator(), Date.now() + 2_000, false, owned.length,
+      )).toBeUndefined();
+      expect(await __testSendDelivery.conditionalClearOwnedComposerDraft(
+        fallback.page, owned, Date.now() + 2_000,
+      )).toBe(false);
+      expect(fallback.current()).toBe(owned);
+    },
+  );
+
   it('never performs a server check without an exact held owned URL and complete baseline', async () => {
     const get = vi.fn();
     const page = {
@@ -2703,8 +2880,9 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
   const uuid = '26512651-2651-4651-8651-265126512651';
   const chatUrl = 'https://chatgpt.com/c/' + uuid;
   type Case = 'negative' | 'positive' | 'incomplete' | 'paginated' | 'get429'
-    | 'changed-composer' | 'pre-actionability-budget' | 'late-positive'
+    | 'changed-composer' | 'hidden-parent' | 'inert-inline' | 'pre-actionability-budget' | 'late-positive'
     | 'overslept-poll' | 'reused-page' | 'late-assistant' | 'post-guard-whitespace'
+    | 'post-guard-space' | 'post-guard-tab' | 'post-guard-blank' | 'post-guard-boundary'
     | 'affirmative-finalized' | 'affirmative-late-stop' | 'affirmative-late-draft';
   let root: string;
 
@@ -2721,7 +2899,8 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
   });
 
   async function connectedTurn(kind: Case, corruption?: {
-    content: 'joined-marker' | 'marker-content' | 'middle-content' | 'truncated-tail';
+    content: 'joined-marker' | 'marker-content' | 'middle-content' | 'truncated-tail'
+      | 'extra-space' | 'inserted-tab' | 'blank-paragraph' | 'line-boundary';
     when: 'after-click' | 'after-proof-read';
   }) {
     if (corruption) {
@@ -2738,7 +2917,12 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     const corruptDraft = () => {
       draft = corruption?.content === 'joined-marker' ? draft.replace('\n\n', '')
         : corruption?.content === 'marker-content' ? draft.replace('OPKTURNV1', 'OTHER-TURN')
-          : corruption?.content === 'middle-content' ? draft.replace('indented', 'different') : draft.slice(0, -1);
+          : corruption?.content === 'middle-content' ? draft.replace('indented', 'different')
+            : corruption?.content === 'extra-space' ? draft.replace('separate words', 'separate  words')
+              : corruption?.content === 'inserted-tab' ? draft.replace('separate words', 'separate\twords')
+                : corruption?.content === 'blank-paragraph' ? draft.replace('\n  indented', '\n\n  indented')
+                  : corruption?.content === 'line-boundary' ? draft.replace('words\n', 'words \n')
+                    : draft.slice(0, -1);
       injectedRetryCorruption = true;
     };
     let firstClickAt = -1;
@@ -2780,10 +2964,14 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       innerText: vi.fn(async () => {
         // The final normalized guard runs after the successful GET, after the
         // preceding lossless read. Mutation here must veto a second click.
-        if (kind === 'post-guard-whitespace' && calls.length === 1
+        if (kind.startsWith('post-guard-') && calls.length === 1
           && clickCount === 1 && !injectedWhitespaceMutation) {
           injectedWhitespaceMutation = true;
-          draft = draft.replace('\n\n', '\n');
+          const rewrittenBoundary = kind === 'post-guard-whitespace' ? '\n'
+            : kind === 'post-guard-space' ? '\n\n '
+              : kind === 'post-guard-tab' ? '\n\n\t'
+                : kind === 'post-guard-blank' ? '\n\n\n' : ' \n';
+          draft = draft.replace('\n\n', rewrittenBoundary);
         }
         const visible = draft;
         if (corruption?.when === 'after-proof-read' && clickCount === 1
@@ -2795,15 +2983,40 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       textContent: vi.fn(async () => draft),
       evaluate: vi.fn(async (callback: (element: unknown, arg?: unknown) => unknown, args?: unknown, options?: { timeout?: number }) => {
         if (options?.timeout !== undefined) return true; // Older readiness adapter.
-        const element = {
+        const element: any = {
           get textContent() { return draft; },
           set textContent(value: string) { draft = value; },
           get innerText() { return draft; },
-          ownerDocument: { defaultView: { location: { get href() { return chatUrl; } } } },
           isConnected: true, isContentEditable: true,
+          getAttribute: () => null,
+          classList: { contains: () => false },
+          getClientRects: () => [{}],
+          getBoundingClientRect: () => ({ width: 280, height: 30 }),
+          parentElement: clickCount === 1 && kind === 'hidden-parent'
+            ? { parentElement: null, getAttribute: (name: string) => name === 'aria-hidden' ? 'true' : null,
+              hasAttribute: () => false }
+            : null,
         };
-        const value = callback(element, args);
-        if (clickCount === 1 && args === undefined && kind === 'overslept-poll') {
+        element.ownerDocument = {
+          defaultView: {
+            location: { get href() { return chatUrl; } },
+            getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+          },
+          querySelectorAll: (selector: string) => selector === COMPOSER_SELECTOR ? [element] : [],
+        };
+        // After the first attempted action, an inert inline wrapper must not
+        // become exact retry authority despite unchanged marked literal bytes.
+        const activeEditor = clickCount === 1 && kind === 'inert-inline'
+          ? inertInlineProseMirrorSurface(draft) : element;
+        if (activeEditor !== element) {
+          activeEditor.ownerDocument = element.ownerDocument;
+          activeEditor.ownerDocument.querySelectorAll = (selector: string) =>
+            selector === COMPOSER_SELECTOR ? [activeEditor] : [];
+        }
+        const value = callback(activeEditor, args);
+        if (clickCount === 1 && kind === 'overslept-poll'
+          && (args === undefined || args === COMPOSER_SELECTOR
+            || (typeof args === 'object' && args !== null && 'maxChars' in args))) {
           sawRecoveryLosslessRead = true;
         }
         return value;
@@ -2969,9 +3182,12 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
   it.each([
     ['negative', 2, 1], ['positive', 1, 1], ['incomplete', 1, 1],
     ['paginated', 1, 1], ['get429', 1, 1], ['changed-composer', 1, 0],
+    ['hidden-parent', 1, 0], ['inert-inline', 1, 0],
     ['pre-actionability-budget', 2, 0], ['late-positive', 2, 1],
     ['overslept-poll', 1, 0], ['reused-page', 1, 0],
     ['late-assistant', 1, 0], ['post-guard-whitespace', 1, 1],
+    ['post-guard-space', 1, 1], ['post-guard-tab', 1, 1],
+    ['post-guard-blank', 1, 1], ['post-guard-boundary', 1, 1],
   ] as const)('guards full held-Page GET and one shared repeat: %s', async (kind, clicks, explicitGets) => {
     const t = await connectedTurn(kind);
     expect(t.click).toHaveBeenCalledTimes(clicks);
@@ -3005,9 +3221,9 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     }
     if (kind === 'late-assistant') expect(t.appendedLateAssistant).toBe(true);
     if (kind === 'reused-page') expect(t.observedReusedNegativeGet).toBe(true);
-    if (kind === 'post-guard-whitespace') expect(t.injectedWhitespaceMutation).toBe(true);
-    if (kind === 'reused-page' || kind === 'late-assistant'
-      || kind === 'overslept-poll' || kind === 'post-guard-whitespace') {
+    if (kind.startsWith('post-guard-')) expect(t.injectedWhitespaceMutation).toBe(true);
+    if (kind === 'inert-inline' || kind === 'reused-page' || kind === 'late-assistant'
+      || kind === 'overslept-poll' || kind.startsWith('post-guard-')) {
       expect(t.close).not.toHaveBeenCalled();
       expect(t.observation.phase).not.toBe('not_sent');
     }
@@ -3023,6 +3239,19 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     expect(t.calls).toHaveLength(0);
     expect(t.close).not.toHaveBeenCalled();
   });
+
+  it.each((['extra-space', 'inserted-tab', 'blank-paragraph', 'line-boundary'] as const)
+    .map((content) => ({ content, when: 'after-click' as const })))(
+    'rejects $content after positive first-click non-dispatch despite intact marker and normalized draft (#2694)',
+    async (corruption) => {
+      const t = await connectedTurn('pre-actionability-budget', corruption);
+      expect(t.injectedRetryCorruption).toBe(true);
+      expect(t.click).toHaveBeenCalledTimes(1);
+      expect(t.result.send_count).toBe(0);
+      expect(t.calls).toHaveLength(0);
+      expect(t.close).not.toHaveBeenCalled();
+    },
+  );
 
   it('does not treat affirmative disabled-click timeouts as never-attempted not_sent (#2685 r04)', async () => {
     const t = await connectedTurn('affirmative-finalized');
