@@ -858,10 +858,17 @@ export async function revalidateKeyedHarvest(
           // Resolve the smallest ancestor of every visible semantic content block.
           // Neither .markdown nor a CSS-module hash grants content-root authority.
           let root: Element | null = semantic[0]?.parentElement ?? null;
-          while (root && root !== message && !semantic.every((block) => within(block, root!))) {
-            root = root.parentElement;
-          }
-          if (!root || root === message || allCodeBlocks.some((pre) => !within(pre, root!))) {
+                  while (root && root !== message && !semantic.every((block) => within(block, root!))) {
+          root = root.parentElement;
+        }
+        // Include the enclosing content boundary for a direct PRE code wrapper.
+        // This keeps interleaved prose and code headers from being omitted.
+        if (root && root !== message && root.parentElement
+          && root.parentElement !== message
+          && Array.from(root.children).some((child) => child.tagName === 'PRE')) {
+          root = root.parentElement;
+        }
+        if (!root || root === message || allCodeBlocks.some((pre) => !within(pre, root!))) {
             return unsupported();
           }
           const outsideText = (node: Element): boolean => {
@@ -2081,10 +2088,17 @@ export async function readPageObservation(
             // Resolve the smallest ancestor of every visible semantic content block.
             // Neither .markdown nor a CSS-module hash grants content-root authority.
             let root: Element | null = semantic[0]?.parentElement ?? null;
-            while (root && root !== message && !semantic.every((block) => within(block, root!))) {
-              root = root.parentElement;
-            }
-            if (!root || root === message || allCodeBlocks.some((pre) => !within(pre, root!))) {
+                      while (root && root !== message && !semantic.every((block) => within(block, root!))) {
+            root = root.parentElement;
+          }
+          // Include the enclosing content boundary for a direct PRE code wrapper.
+          // This keeps interleaved prose and code headers from being omitted.
+          if (root && root !== message && root.parentElement
+            && root.parentElement !== message
+            && Array.from(root.children).some((child) => child.tagName === 'PRE')) {
+            root = root.parentElement;
+          }
+          if (!root || root === message || allCodeBlocks.some((pre) => !within(pre, root!))) {
               return unsupported();
             }
             const outsideText = (node: Element): boolean => {
