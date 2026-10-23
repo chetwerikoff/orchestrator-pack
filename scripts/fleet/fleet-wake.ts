@@ -35,6 +35,7 @@ import {
   isBusyScreen,
   lastFleetParkedLine,
   ownPaneOutcome,
+  visibleOpenCodePermission,
   listFleetTerminals,
   readFleetScreen,
   runFleetSweep,
@@ -1159,11 +1160,13 @@ function freshSendSafePane(
       },
     });
     if (fresh.length !== 1) {
-      // Missing title is not a refusal; a busy or newly parked screen still is.
-      if (expected.state !== 'STOPPED' || native.title.trim()) return false;
+      // The native selector cannot classify an unknown/missing title. That
+      // absence is not positive non-agent evidence: use the actual screen.
+      if (expected.state !== 'STOPPED') return false;
       const screen = readFleetScreen(expected.handle, executor);
       return !isBusyScreen(screen, options.config.busyRe)
-        && !lastFleetParkedLine(screen) && !ownPaneOutcome(screen).wait;
+        && !lastFleetParkedLine(screen) && !ownPaneOutcome(screen).wait
+        && !visibleOpenCodePermission(screen);
     }
     const pane = fresh[0]!;
     if (terminalsIdentity(pane) !== terminalsIdentity(expected) || pane.state !== expected.state) return false;
@@ -2413,9 +2416,16 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       includeOrdinary ? pendingRouted : [],
       includeOrdinary ? bareAlerts.map((handle) => 'suspected_bare_shell ' + handle) : [],
       localWarnings, deliverPermission.map((warning) => warning.message), eligibleUnreadRunMessages);
+    const clearRefusedCoordinatorMarks = () => {
+      for (const banner of deliverLocal) store.clearParkedWakeEvent?.(banner.key);
+      for (const warning of deliverPermission) store.clearParkedWakeEvent?.(warning.key);
+    };
     try {
       if (!coordinatorStillSelected(coordinator, config, executor)
         || !freshSendSafePane(coordinator, listFleetTerminals(executor), options, executor)) {
+        // A proven safety refusal happens before effect; pre-effect local and
+        // permission marks are queued, not delivered or attempted ambiguously.
+        clearRefusedCoordinatorMarks();
         log('coordinator pin, native identity or screen unsafe before ordinary alarm');
         return { state: 'send_failed', coordinator: coordinator.handle };
       }
@@ -2426,7 +2436,8 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       await sleepMs(4_000);
       if (!coordinatorStillSelected(coordinator, config, executor)
         || !freshSendSafePane(coordinator, listFleetTerminals(executor), options, executor)) {
-        log(`${coordinator.handle} unsafe before local chat second Enter`);
+        clearRefusedCoordinatorMarks();
+        log(`${coordinator.handle} unsafe before local chat second Enter; queued`);
         return { state: 'send_failed', coordinator: coordinator.handle };
       }
       if (!submitCoordinator(executor, coordinator.handle)) {
