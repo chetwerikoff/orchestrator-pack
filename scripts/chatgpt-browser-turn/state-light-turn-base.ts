@@ -897,7 +897,7 @@ export async function revalidateKeyedHarvest(
               || !visible(node)) return false;
             // Visible non-text media outside the inferred answer root cannot be
             // discarded as an empty text leaf: its reply boundary is unproven.
-            if (/^(?:IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|MATH|HR)$/u.test(node.tagName)) return true;
+            if (/^(?:IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|MATH|HR)$/iu.test(node.tagName)) return true;
             const nodes = Array.from(node.childNodes);
             if (nodes.length === 0) return Boolean((node as HTMLElement).innerText?.trim());
             return nodes.some((item) => item.nodeType === 3
@@ -2156,7 +2156,7 @@ export async function readPageObservation(
                 || !visible(node)) return false;
               // Visible non-text media outside the inferred answer root cannot be
               // discarded as an empty text leaf: its reply boundary is unproven.
-              if (/^(?:IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|MATH|HR)$/u.test(node.tagName)) return true;
+              if (/^(?:IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|MATH|HR)$/iu.test(node.tagName)) return true;
               const nodes = Array.from(node.childNodes);
               if (nodes.length === 0) return Boolean((node as HTMLElement).innerText?.trim());
               return nodes.some((item) => item.nodeType === 3
