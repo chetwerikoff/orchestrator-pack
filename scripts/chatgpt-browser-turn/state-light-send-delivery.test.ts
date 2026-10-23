@@ -2775,7 +2775,9 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
     };
     const page = { locator: () => composer };
     const deadline = Date.now() + 5_000;
-    expect(editor.textContent).toBe(original);
+    // Raw DOM textContent joins paragraphs without their structural newlines.
+    const beforeDomText = editor.textContent;
+    expect(beforeDomText).toBe(original.replace(/\n/gu, ''));
     expect(await __testSendDelivery.readLosslessOwnedComposer(
       composer, deadline, false, original.length,
     )).toBeUndefined();
@@ -2785,7 +2787,7 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
     expect(await __testSendDelivery.conditionalClearOwnedComposerDraft(
       page, original, deadline,
     )).toBe(false);
-    expect(editor.textContent).toBe(original);
+    expect(editor.textContent).toBe(beforeDomText);
   });
 
   it.each(['unknown-child', 'hidden', 'duplicate-editor', 'mixed-root'] as const)(
