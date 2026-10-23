@@ -305,7 +305,6 @@ const MESSAGE_NODE_READ_RETRY_TIMEOUT_MS = 400;
 const MESSAGE_NODE_READ_ATTEMPTS = 2;
 /** Exact generation selector already owned by browser-gpt-page-probe; do not widen it here. */
 const BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR = '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]';
-const ASSISTANT_CONTENT_ROOT_SELECTOR = '.markdown';
 const CONTINUE_GENERATING_SELECTOR = 'button[aria-label*="Continue generating" i], button[data-testid*="continue-generating"], button[data-testid*="continue_generating"]';
 /** Post-send wall probes must not block transcript reads or the confirm loop. */
 const POST_SEND_PRODUCT_WALL_PROBE_MS = 2_000;
@@ -799,8 +798,7 @@ export async function revalidateKeyedHarvest(
         userMessageStyle: string;
         unitKeyAttribute: string;
         assistantMessageStyle: string;
-          contentRootSelector: string;
-        assistantKey: string;
+                  assistantKey: string;
         turnSelector: string;
         inProgressSelector: string;
         actionSelector: string;
@@ -824,10 +822,7 @@ export async function revalidateKeyedHarvest(
           const wholeRow = () => ({ text: (message as HTMLElement).innerText, complete: true });
           const unsupported = () => selected ? { text: '', complete: false } : wholeRow();
           if (message.querySelectorAll('pre').length === 0) return wholeRow();
-          const roots = Array.from(message.querySelectorAll(args.contentRootSelector));
-          if (roots.length !== 1) return unsupported();
-          const root = roots[0]!;
-          const view = root.ownerDocument?.defaultView;
+          const view = message.ownerDocument?.defaultView;
           if (!view || typeof view.getComputedStyle !== 'function') return unsupported();
           const visible = (node: Element): boolean => {
             for (let current: Element | null = node; current; current = current.parentElement) {
@@ -841,6 +836,53 @@ export async function revalidateKeyedHarvest(
             }
             return false;
           };
+          const semantic: Element[] = [];
+          const scan = (node: Element): void => {
+            for (const child of Array.from(node.children)) {
+              if (/^(?:P|PRE|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)
+                && visible(child)) semantic.push(child);
+              scan(child);
+            }
+          };
+          scan(message);
+          const allCodeBlocks = Array.from(message.querySelectorAll('pre'));
+          if (allCodeBlocks.length === 0 || allCodeBlocks.some((pre) => !visible(pre))
+            || semantic.length === 0) return unsupported();
+          const within = (child: Element, candidate: Element): boolean => {
+            for (let current: Element | null = child; current; current = current.parentElement) {
+              if (current === candidate) return true;
+              if (current === message) return false;
+            }
+            return false;
+          };
+          // Resolve the smallest ancestor of every visible semantic content block.
+          // Neither .markdown nor a CSS-module hash grants content-root authority.
+          let root: Element | null = semantic[0]?.parentElement ?? null;
+          while (root && root !== message && !semantic.every((block) => within(block, root!))) {
+            root = root.parentElement;
+          }
+          if (!root || root === message || allCodeBlocks.some((pre) => !within(pre, root!))) {
+            return unsupported();
+          }
+          const outsideText = (node: Element): boolean => {
+            if (node.tagName === 'BUTTON' || node.getAttribute('role') === 'button'
+              || node.getAttribute('aria-hidden') === 'true' || node.hasAttribute('inert')
+              || !visible(node)) return false;
+            const nodes = Array.from(node.childNodes);
+            if (nodes.length === 0) return Boolean((node as HTMLElement).innerText?.trim());
+            return nodes.some((item) => item.nodeType === 3
+              ? Boolean(item.textContent?.trim())
+              : item.nodeType === 1 && outsideText(item as Element));
+          };
+          // Refuse a plausible-looking partial reply when visible prose is outside
+          // the derived content container, across either selected-message read site.
+          for (let current: Element = root; current !== message;) {
+            const parent = current.parentElement;
+            if (!parent || Array.from(parent.children).some(
+              (sibling) => sibling !== current && outsideText(sibling),
+            )) return unsupported();
+            current = parent;
+          }
           if (!visible(root)) return unsupported();
           // root.children omits direct Text nodes; do not certify a lossy rich reply.
           if (Array.from(root.childNodes).some((node) => node.nodeType === 3 && Boolean(node.textContent?.trim()))) {
@@ -996,8 +1038,7 @@ export async function revalidateKeyedHarvest(
         userMessageStyle: USER_MESSAGE_STYLE,
         unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
         assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
-        contentRootSelector: ASSISTANT_CONTENT_ROOT_SELECTOR,
-        assistantKey: expected.assistantKey,
+                assistantKey: expected.assistantKey,
         turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
         inProgressSelector: ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
         actionSelector: ASSISTANT_TURN_ACTION_SELECTOR,
@@ -1978,8 +2019,7 @@ export async function readPageObservation(
           userMessageStyle: string;
           unitKeyAttribute: string;
           assistantMessageStyle: string;
-          contentRootSelector: string;
-          ownedMarker?: string;
+                    ownedMarker?: string;
           historicalBaseline: boolean;
           generationSelector: string;
           continuationSelector: string;
@@ -2005,10 +2045,7 @@ export async function readPageObservation(
             const wholeRow = () => ({ text: (message as HTMLElement).innerText, complete: true });
             const unsupported = () => selected ? { text: '', complete: false } : wholeRow();
             if (message.querySelectorAll('pre').length === 0) return wholeRow();
-            const roots = Array.from(message.querySelectorAll(args.contentRootSelector));
-            if (roots.length !== 1) return unsupported();
-            const root = roots[0]!;
-            const view = root.ownerDocument?.defaultView;
+            const view = message.ownerDocument?.defaultView;
             if (!view || typeof view.getComputedStyle !== 'function') return unsupported();
             const visible = (node: Element): boolean => {
               for (let current: Element | null = node; current; current = current.parentElement) {
@@ -2022,6 +2059,53 @@ export async function readPageObservation(
               }
               return false;
             };
+            const semantic: Element[] = [];
+            const scan = (node: Element): void => {
+              for (const child of Array.from(node.children)) {
+                if (/^(?:P|PRE|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)
+                  && visible(child)) semantic.push(child);
+                scan(child);
+              }
+            };
+            scan(message);
+            const allCodeBlocks = Array.from(message.querySelectorAll('pre'));
+            if (allCodeBlocks.length === 0 || allCodeBlocks.some((pre) => !visible(pre))
+              || semantic.length === 0) return unsupported();
+            const within = (child: Element, candidate: Element): boolean => {
+              for (let current: Element | null = child; current; current = current.parentElement) {
+                if (current === candidate) return true;
+                if (current === message) return false;
+              }
+              return false;
+            };
+            // Resolve the smallest ancestor of every visible semantic content block.
+            // Neither .markdown nor a CSS-module hash grants content-root authority.
+            let root: Element | null = semantic[0]?.parentElement ?? null;
+            while (root && root !== message && !semantic.every((block) => within(block, root!))) {
+              root = root.parentElement;
+            }
+            if (!root || root === message || allCodeBlocks.some((pre) => !within(pre, root!))) {
+              return unsupported();
+            }
+            const outsideText = (node: Element): boolean => {
+              if (node.tagName === 'BUTTON' || node.getAttribute('role') === 'button'
+                || node.getAttribute('aria-hidden') === 'true' || node.hasAttribute('inert')
+                || !visible(node)) return false;
+              const nodes = Array.from(node.childNodes);
+              if (nodes.length === 0) return Boolean((node as HTMLElement).innerText?.trim());
+              return nodes.some((item) => item.nodeType === 3
+                ? Boolean(item.textContent?.trim())
+                : item.nodeType === 1 && outsideText(item as Element));
+            };
+            // Refuse a plausible-looking partial reply when visible prose is outside
+            // the derived content container, across either selected-message read site.
+            for (let current: Element = root; current !== message;) {
+              const parent = current.parentElement;
+              if (!parent || Array.from(parent.children).some(
+                (sibling) => sibling !== current && outsideText(sibling),
+              )) return unsupported();
+              current = parent;
+            }
             if (!visible(root)) return unsupported();
             // root.children omits direct Text nodes; do not certify a lossy rich reply.
             if (Array.from(root.childNodes).some((node) => node.nodeType === 3 && Boolean(node.textContent?.trim()))) {
@@ -2232,8 +2316,7 @@ export async function readPageObservation(
           userMessageStyle: USER_MESSAGE_STYLE,
           unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
           assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
-        contentRootSelector: ASSISTANT_CONTENT_ROOT_SELECTOR,
-          ownedMarker: expectedMarker,
+                  ownedMarker: expectedMarker,
           historicalBaseline,
           generationSelector: BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR,
           continuationSelector: CONTINUE_GENERATING_SELECTOR,
