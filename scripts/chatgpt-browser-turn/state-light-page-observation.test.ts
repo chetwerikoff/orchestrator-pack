@@ -755,10 +755,21 @@ describe('DOM observation boundary', () => {
     });
     return {
       page: { locator: (selector: string) => selector === MESSAGE_NODE_SELECTOR ? nodes : scalarLocator() },
+      current,
       setLateContinue: (value: boolean) => { lateContinue = value; },
       setHistoricalOnly: (value: boolean) => { historicalOnly = value; },
     };
   }
+
+  it('refuses a selected answer whose visible direct text lies outside the derived root (#2694)', async () => {
+    const fixture = richPage([{ code: 'diff --git a/a b/a\n' }]);
+    fixture.current.appendText('DO_NOT_LOSE_OUTSIDE_ROOT');
+    const observed = await readPageObservation(fixture.page, marker, 0);
+    expect(observed.transcriptIncomplete).toBe(true);
+    expect(observed.snapshot?.complete).toBe(false);
+    expect(observed.messages.some((row) => row.role === 'assistant'
+      && row.text.includes('OUTER MISLEADING'))).toBe(false);
+  });
 
   it('fails loudly when the selected rich root structure is missing (#2694, derived canary)', async () => {
     // Derived negative: malformed selected content cannot acquire a plausible
