@@ -855,7 +855,7 @@ describe('DOM observation boundary', () => {
       // Derived generic DOM tree: media has no innerText, but is visible and
       // cannot be omitted from a supposedly complete assistant reply.
       const fixture = richPage([
-        { prose: 'Before code' }, { code: 'literal code\\n' }, { prose: 'After code' },
+        { prose: 'Before code' }, { code: 'literal code\n' }, { prose: 'After code' },
       ]);
       if (nested) {
         const { layout } = wrapRichContent(fixture.current);
@@ -868,7 +868,7 @@ describe('DOM observation boundary', () => {
       const ownKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
       expect(keyedHarvestCandidate(observed.snapshot!, previous, ownKey).state).not.toBe('ready');
       await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
-        reply: 'Before code\\n\\n```\\nliteral code\\n```\\n\\nAfter code',
+        reply: 'Before code\n\n```\nliteral code\n```\n\nAfter code',
         assistantKey: 'data-message-id:assistant-rich-12345678',
         snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
       })).resolves.toEqual({ state: 'continuity-unproven' });
