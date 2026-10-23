@@ -35,6 +35,8 @@ export interface FleetPaneObservation extends FleetTerminal {
   readonly state: FleetPaneState;
   readonly lines: readonly string[];
   readonly wait?: string;
+  /** Positively bounded own final PARKED line; independent of r05 final-visible park authority. */
+  readonly ownParkObservation?: string;
   readonly taskBinding?: string;
   readonly permission?: FleetPermissionObservation;
   // Positive observation of distinguishable own work; ambiguous/empty screens never clear an episode.
@@ -548,7 +550,17 @@ export function ownPaneOutcome(screen: string): { wait?: string; acknowledgment:
   const response = own.slice(Math.max(0, start)).join(' ').trim();
   const context = own.slice(0, Math.max(0, start));
   const newOutcome = /\?\s*$|\b(?:STOPPED|done|finished|handed[- ]off|worker_done|error)\b/iu;
-  const foreign = (boundary >= 0 && /^User:/iu.test(lines[boundary]!)) || context.some((line) => toolLine.test(line));
+  // A blank paragraph does not terminate a foreign tool or incoming User boundary.
+  // Only an explicit Assistant: header can positively reset that provenance.
+  const preceding = paragraphs.slice(0, -1).flat();
+  const precedingBoundary = preceding.reduce((last, line, index) =>
+    (/^(?:>\s+|User:|Assistant:)/iu.test(line) || toolLine.test(line)) ? index : last, -1);
+  const precedingForeign = precedingBoundary >= 0
+    && !/^Assistant:/iu.test(preceding[precedingBoundary]!);
+  const explicitOwn = boundary >= 0 && /^Assistant:/iu.test(lines[boundary]!);
+  const foreign = (boundary >= 0 && /^User:/iu.test(lines[boundary]!))
+    || context.some((line) => toolLine.test(line))
+    || (precedingForeign && !explicitOwn);
   const superseded = own.slice(Math.max(0, start) + 1).some((line) => toolLine.test(line) || newOutcome.test(line));
   const lastContent = contentLines(screen).at(-1);
   const inFlightPark = lastContent?.running && /^PARKED(?:\s+on\b|:)/iu.test(lastContent.text);
@@ -870,6 +882,8 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
       ...(permission ? { permission } : {}),
       ...(permissionCleared ? { permissionCleared: true } : {}),
       ...(wait ? { wait } : {}),
+      ...(wait && outcome.wait === wait && state === 'PARKED'
+        ? { ownParkObservation: nonChromeLines(screen).at(-1) ?? outcome.wait } : {}),
       ...(binding ? { taskBinding: binding } : {}),
       lines: permission || lineCount === 0 ? [] : nonChromeLines(screen).slice(-lineCount),
     }];
