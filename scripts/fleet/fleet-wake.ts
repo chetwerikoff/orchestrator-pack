@@ -1141,8 +1141,11 @@ function freshSendSafePane(
       && expected.agentIdentity !== native.agentIdentity)) return false;
   try {
     if (!('state' in expected)) {
-      // The coordinator may be busy; an actual readable screen is sufficient.
-      readFleetScreen(expected.handle, executor);
+      // A coordinator may be busy or have no readable screen. Neither is
+      // positive shell/non-agent evidence; the fresh native designation above
+      // remains the safety veto for coordinator-directed notifications.
+      try { readFleetScreen(expected.handle, executor); }
+      catch { /* An absent screen is not a positive shell designation. */ }
       return true;
     }
     if (!store || (expected.state !== 'PARKED' && expected.state !== 'STOPPED')) return false;
@@ -1171,8 +1174,10 @@ function freshSendSafePane(
     const pane = fresh[0]!;
     if (terminalsIdentity(pane) !== terminalsIdentity(expected) || pane.state !== expected.state) return false;
     if (expected.state === 'STOPPED') {
-      // Compare state rather than the byte-for-byte tail: only positive drift vetoes.
-      return pane.wait === undefined;
+      // A changed own screen can no longer corroborate the originally STOPPED
+      // event recipient, even when both snapshots classify as idle.
+      return pane.wait === undefined && pane.lines.length > 0
+        && JSON.stringify(pane.lines) === JSON.stringify(expected.lines);
     }
     return pane.wait === expected.wait
       && lastFleetParkedLine(readFleetScreen(expected.handle, executor)) === expected.wait;
@@ -2436,8 +2441,9 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       await sleepMs(4_000);
       if (!coordinatorStillSelected(coordinator, config, executor)
         || !freshSendSafePane(coordinator, listFleetTerminals(executor), options, executor)) {
-        clearRefusedCoordinatorMarks();
-        log(`${coordinator.handle} unsafe before local chat second Enter; queued`);
+        // Unlike a newly queued event Wake, local-chat text has already been
+        // submitted. Keep its attempted_unverified mark to avoid blind replay.
+        log(`${coordinator.handle} unsafe before local chat second Enter; delivery unverified`);
         return { state: 'send_failed', coordinator: coordinator.handle };
       }
       if (!submitCoordinator(executor, coordinator.handle)) {
