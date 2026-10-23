@@ -1,0 +1,21 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2696,
+  "declared_paths": [
+    "docs/declarations/2696.pr-scope.json",
+    "scripts/pr2-foundation/supervised-worker-start.test.ts",
+    "scripts/pr2-foundation/supervised-worker-start.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/pr2-foundation/supervised-worker-start.test.ts",
+    "scripts/pr2-foundation/supervised-worker-start.ts"
+  ],
+  "source_revision": "ba23f56cf11300eb5978822f799c8225f697cc51"
+}
