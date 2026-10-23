@@ -3176,7 +3176,10 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
       state: 'open' | 'closed' = 'open',
       hasCoordinator = true,
     ) => {
-      const native = fakeOrca({}, [], hasCoordinator ? [coordinator] : []);
+      // A live, busy coordinator has readable native screen evidence. The
+      // missing manager, not a failed coordinator read, is the recovery trigger.
+      const native = fakeOrca({ [coordinator.handle]: 'working\nesc interrupt' },
+        [], hasCoordinator ? [coordinator] : []);
       const executor: OrcaExecutor = (args) => {
         if (args[0] === 'terminal' && args[1] === 'list') return commandResult(JSON.stringify({
           ok: true, result: {
