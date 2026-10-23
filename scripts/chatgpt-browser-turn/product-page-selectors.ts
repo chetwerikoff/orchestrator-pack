@@ -2,7 +2,8 @@
 // Re-exported from ui-adapter.ts for transport callers; tests/fixtures import here
 // directly to avoid vi.mock cycles on the full ui-adapter module.
 
-export const COMPOSER_SELECTOR = '#prompt-textarea, [contenteditable="true"][role="textbox"]';
+// Message code editors (CodeMirror `.cm-content`, role=textbox) are not the composer.
+export const COMPOSER_SELECTOR = '#prompt-textarea, [contenteditable="true"][role="textbox"]:not(.cm-content):not([data-code-block] *):not([data-chatgpt-search-unit-key] *)';
 export const SEND_BUTTON_SELECTOR = '[data-testid="send-button"], button[type="submit"][aria-label="Send"]';
 export const MESSAGE_AUTHOR_ROLE_ATTR = 'data-markdown-text-style';
 export const MESSAGE_ID_ATTR = 'data-chatgpt-selection-message-id';
