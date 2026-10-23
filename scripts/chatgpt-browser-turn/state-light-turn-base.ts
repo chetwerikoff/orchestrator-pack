@@ -827,11 +827,11 @@ export async function revalidateKeyedHarvest(
           const visible = (node: Element): boolean => {
             for (let current: Element | null = node; current; current = current.parentElement) {
               if (current.tagName === 'BUTTON' || current.getAttribute('role') === 'button'
-                || current.getAttribute('aria-hidden') === 'true' || current.hasAttribute('inert')
-                || typeof current.getClientRects !== 'function' || current.getClientRects().length === 0) return false;
+                || current.getAttribute('aria-hidden') === 'true' || current.hasAttribute('inert')) return false;
               const style = view.getComputedStyle(current);
               if (!style || style.display === 'none' || style.visibility === 'hidden'
-                || style.visibility === 'collapse') return false;
+                || style.visibility === 'collapse' || typeof current.getClientRects !== 'function'
+                || (style.display !== 'contents' && current.getClientRects().length === 0)) return false;
               if (current === message) return true;
             }
             return false;
@@ -861,14 +861,34 @@ export async function revalidateKeyedHarvest(
           while (root && root !== message && !semantic.every((block) => within(block, root!))) {
             root = root.parentElement;
           }
-          // Include the code-header's enclosing content boundary so an
-          // interleaved prose sibling is never mistaken for a separate root.
-          if (root && root !== message && root.parentElement
-            && root.parentElement !== message
-            && Array.from(root.children).some((child) => child.tagName === 'PRE')) {
+          // A single code shell needs its parent's header/PRE boundary, but
+          // an existing content root with direct prose/PRE siblings must stay put.
+          if (root && root !== message && root.tagName === 'DIV'
+            && root.parentElement && root.parentElement !== message
+            && Array.from(root.children).some((child) => child.tagName === 'PRE')
+            && !Array.from(root.children).some((child) => /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName))) {
             root = root.parentElement;
           }
+          // If an unrelated status paragraph widens the common ancestor,
+          // prefer one contained subtree with direct prose and every code block.
+          while (root && root !== message) {
+            const candidates = Array.from(root.children).filter((child) =>
+              Array.from(child.children).some((item) => item.tagName === 'PRE')
+              && Array.from(child.children).some((item) => /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(item.tagName))
+              && allCodeBlocks.every((pre) => within(pre, child)));
+            if (candidates.length !== 1) break;
+            root = candidates[0]!;
+          }
           if (!root || root === message || allCodeBlocks.some((pre) => !within(pre, root!))) {
+            return unsupported();
+          }
+          const rootChildren = Array.from(root!.children);
+          const directPreIndex = rootChildren.findIndex((child) => child.tagName === 'PRE');
+          if (root!.tagName === 'BLOCKQUOTE' || (directPreIndex > 0
+            && rootChildren.slice(0, directPreIndex).some((child) => child.tagName === 'P')
+            && !rootChildren.slice(directPreIndex + 1).some((child) => /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)))) {
+            // P + PRE with no subsequent semantic block could be an interleaved
+            // code shell rather than separate reply prose: refuse ambiguity.
             return unsupported();
           }
           const outsideText = (node: Element): boolean => {
@@ -893,6 +913,9 @@ export async function revalidateKeyedHarvest(
             current = parent;
           }
           if (!visible(root)) return unsupported();
+          const contentsDescendant = (node: Element): boolean => Array.from(node.children).some((child) =>
+            view.getComputedStyle(child)?.display === 'contents' || contentsDescendant(child));
+          if (view.getComputedStyle(root!)?.display === 'contents' || contentsDescendant(root!)) return unsupported();
           // root.children omits direct Text nodes; do not certify a lossy rich reply.
           if (Array.from(root.childNodes).some((node) => node.nodeType === 3 && Boolean(node.textContent?.trim()))) {
             return unsupported();
@@ -909,6 +932,7 @@ export async function revalidateKeyedHarvest(
               continue;
             }
             if (pres.length === 0) {
+              if (!/^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)) return unsupported();
               // Whole innerText preserves browser whitespace for prose,
               // headings, tables and lists. Ambiguous nested controls fail.
               if (child.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
@@ -2059,11 +2083,11 @@ export async function readPageObservation(
             const visible = (node: Element): boolean => {
               for (let current: Element | null = node; current; current = current.parentElement) {
                 if (current.tagName === 'BUTTON' || current.getAttribute('role') === 'button'
-                  || current.getAttribute('aria-hidden') === 'true' || current.hasAttribute('inert')
-                  || typeof current.getClientRects !== 'function' || current.getClientRects().length === 0) return false;
+                  || current.getAttribute('aria-hidden') === 'true' || current.hasAttribute('inert')) return false;
                 const style = view.getComputedStyle(current);
                 if (!style || style.display === 'none' || style.visibility === 'hidden'
-                  || style.visibility === 'collapse') return false;
+                  || style.visibility === 'collapse' || typeof current.getClientRects !== 'function'
+                || (style.display !== 'contents' && current.getClientRects().length === 0)) return false;
                 if (current === message) return true;
               }
               return false;
@@ -2093,14 +2117,34 @@ export async function readPageObservation(
             while (root && root !== message && !semantic.every((block) => within(block, root!))) {
               root = root.parentElement;
             }
-            // Include the code-header's enclosing content boundary so an
-            // interleaved prose sibling is never mistaken for a separate root.
-            if (root && root !== message && root.parentElement
-              && root.parentElement !== message
-              && Array.from(root.children).some((child) => child.tagName === 'PRE')) {
+            // A single code shell needs its parent's header/PRE boundary, but
+            // an existing content root with direct prose/PRE siblings must stay put.
+            if (root && root !== message && root.tagName === 'DIV'
+              && root.parentElement && root.parentElement !== message
+              && Array.from(root.children).some((child) => child.tagName === 'PRE')
+              && !Array.from(root.children).some((child) => /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName))) {
               root = root.parentElement;
             }
+            // If an unrelated status paragraph widens the common ancestor,
+            // prefer one contained subtree with direct prose and every code block.
+            while (root && root !== message) {
+              const candidates = Array.from(root.children).filter((child) =>
+                Array.from(child.children).some((item) => item.tagName === 'PRE')
+                && Array.from(child.children).some((item) => /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(item.tagName))
+                && allCodeBlocks.every((pre) => within(pre, child)));
+              if (candidates.length !== 1) break;
+              root = candidates[0]!;
+            }
             if (!root || root === message || allCodeBlocks.some((pre) => !within(pre, root!))) {
+              return unsupported();
+            }
+            const rootChildren = Array.from(root!.children);
+            const directPreIndex = rootChildren.findIndex((child) => child.tagName === 'PRE');
+            if (root!.tagName === 'BLOCKQUOTE' || (directPreIndex > 0
+              && rootChildren.slice(0, directPreIndex).some((child) => child.tagName === 'P')
+              && !rootChildren.slice(directPreIndex + 1).some((child) => /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)))) {
+              // P + PRE with no subsequent semantic block could be an interleaved
+              // code shell rather than separate reply prose: refuse ambiguity.
               return unsupported();
             }
             const outsideText = (node: Element): boolean => {
@@ -2125,6 +2169,9 @@ export async function readPageObservation(
               current = parent;
             }
             if (!visible(root)) return unsupported();
+            const contentsDescendant = (node: Element): boolean => Array.from(node.children).some((child) =>
+              view.getComputedStyle(child)?.display === 'contents' || contentsDescendant(child));
+            if (view.getComputedStyle(root!)?.display === 'contents' || contentsDescendant(root!)) return unsupported();
             // root.children omits direct Text nodes; do not certify a lossy rich reply.
             if (Array.from(root.childNodes).some((node) => node.nodeType === 3 && Boolean(node.textContent?.trim()))) {
               return unsupported();
@@ -2141,6 +2188,7 @@ export async function readPageObservation(
                 continue;
               }
               if (pres.length === 0) {
+                if (!/^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)) return unsupported();
                 // Whole innerText preserves browser whitespace for prose,
                 // headings, tables and lists. Ambiguous nested controls fail.
                 if (child.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
@@ -2765,6 +2813,14 @@ async function readStructuredComposerText(
           return Boolean(style) && style.display !== 'none'
             && style.visibility !== 'hidden' && style.visibility !== 'collapse';
         };
+        if (args.unique) {
+          for (let ancestor: HTMLElement | null = element; ancestor; ancestor = ancestor.parentElement) {
+            if (!readable(ancestor) || ancestor.hasAttribute?.('inert')) return undefined;
+          }
+          const box = element.getBoundingClientRect?.();
+          if (!box || !(box.width > 0 && box.height > 0)
+            || !element.getClientRects?.().length) return undefined;
+        }
         const walk = (node: Node, depth: number, trailingBreak: boolean): boolean => {
           if (++nodes > maxNodes || depth > 32) return false;
           if (node.nodeType === 3) return append(node.nodeValue ?? '');
@@ -3158,6 +3214,15 @@ async function readLosslessOwnedComposer(
         if (!view || typeof doc.querySelectorAll !== 'function') return undefined;
         const editors = doc.querySelectorAll(selector);
         if (editors.length !== 1 || editors[0] !== element) return undefined;
+        for (let ancestor: HTMLElement | null = element; ancestor; ancestor = ancestor.parentElement) {
+          if (ancestor.getAttribute?.('hidden') != null || ancestor.getAttribute?.('aria-hidden') === 'true'
+            || ancestor.hasAttribute?.('inert') || ancestor.getAttribute?.('contenteditable') === 'false') return undefined;
+          const ancestorStyle = view.getComputedStyle(ancestor);
+          if (!ancestorStyle || ancestorStyle.display === 'none' || ancestorStyle.visibility === 'hidden'
+            || ancestorStyle.visibility === 'collapse') return undefined;
+        }
+        const box = element.getBoundingClientRect?.();
+        if (!box || !(box.width > 0 && box.height > 0) || !element.getClientRects?.().length) return undefined;
         if (element.getAttribute('hidden') !== null || element.getAttribute('aria-hidden') === 'true') return undefined;
         const style = view.getComputedStyle(element);
         if (!style || style.display === 'none' || style.visibility === 'hidden'
@@ -3851,13 +3916,18 @@ async function conditionalClearOwnedComposerDraft(
         const view = doc.defaultView;
         if (!view) return false;
         const visible = (el: HTMLElement): boolean => {
-          if (el.getAttribute?.('hidden') === '' || el.getAttribute?.('aria-hidden') === 'true'
-            || el.getAttribute?.('contenteditable') === 'false') return false;
-          const style = view.getComputedStyle(el);
-          return style.display !== 'none' && style.visibility !== 'hidden'
-            && style.visibility !== 'collapse';
+          for (let ancestor: HTMLElement | null = el; ancestor; ancestor = ancestor.parentElement) {
+            if (ancestor.getAttribute?.('hidden') != null || ancestor.getAttribute?.('aria-hidden') === 'true'
+              || ancestor.hasAttribute?.('inert') || ancestor.getAttribute?.('contenteditable') === 'false') return false;
+            const style = view.getComputedStyle(ancestor);
+            if (!style || style.display === 'none' || style.visibility === 'hidden'
+              || style.visibility === 'collapse') return false;
+          }
+          return true;
         };
         if (!visible(element)) return false;
+        const box = element.getBoundingClientRect?.();
+        if (!box || !(box.width > 0 && box.height > 0) || !element.getClientRects?.().length) return false;
         let literal: string | undefined;
         if (element.classList?.contains('ProseMirror')) {
           const parts: string[] = [];
@@ -8239,6 +8309,15 @@ async function readRetirementComposer(
             || typeof doc.querySelectorAll !== 'function') return undefined;
           const editors = doc.querySelectorAll(selector);
           if (editors.length !== 1 || editors[0] !== el) return undefined;
+          for (let ancestor: HTMLElement | null = el; ancestor; ancestor = ancestor.parentElement) {
+            if (ancestor.getAttribute?.('hidden') != null || ancestor.getAttribute?.('aria-hidden') === 'true'
+              || ancestor.hasAttribute?.('inert') || ancestor.getAttribute?.('contenteditable') === 'false') return undefined;
+            const ancestorStyle = doc.defaultView.getComputedStyle(ancestor);
+            if (!ancestorStyle || ancestorStyle.display === 'none' || ancestorStyle.visibility === 'hidden'
+              || ancestorStyle.visibility === 'collapse') return undefined;
+          }
+          const box = el.getBoundingClientRect?.();
+          if (!box || !(box.width > 0 && box.height > 0) || !el.getClientRects?.().length) return undefined;
           const style = doc.defaultView.getComputedStyle(el);
           if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse'
             || el.getAttribute?.('hidden') != null || el.getAttribute?.('aria-hidden') === 'true'
