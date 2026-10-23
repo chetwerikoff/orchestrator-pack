@@ -1783,15 +1783,21 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.sendButton.click).toHaveBeenCalledTimes(2);
   });
 
-  it.each((['joined-marker', 'marker-content', 'middle-content', 'truncated-tail'] as const).flatMap((content) =>
+  it.each((['joined-marker', 'marker-content', 'middle-content', 'truncated-tail',
+    'extra-space', 'inserted-tab', 'blank-paragraph', 'line-boundary'] as const).flatMap((content) =>
     (['after-click', 'after-proof-read'] as const).map((when) => ({ content, when })),
-  ))('vetoes a fresh retry with $content corruption $when (#2669)', async ({ content, when }) => {
+  ))('vetoes a fresh retry with $content corruption $when (#2669/#2694)', async ({ content, when }) => {
     const prompt = 'keep separate words\n  indented line';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'UNREACHED');
     const corrupt = (text: string) => content === 'joined-marker' ? text.replace('\n\n', '')
       : content === 'marker-content' ? text.replace('OPKTURNV1', 'OTHER-TURN')
-        : content === 'middle-content' ? text.replace('indented', 'different') : text.slice(0, -1);
+        : content === 'middle-content' ? text.replace('indented', 'different')
+        : content === 'extra-space' ? text.replace('separate words', 'separate  words')
+          : content === 'inserted-tab' ? text.replace('separate words', 'separate\twords')
+            : content === 'blank-paragraph' ? text.replace('\n  indented', '\n\n  indented')
+              : content === 'line-boundary' ? text.replace('words\n', 'words \n')
+                : text.slice(0, -1);
     let firstClickAt: number | undefined;
     let tailReads = 0;
     let injected = false;
