@@ -235,6 +235,7 @@ function makeLoserPage(
   let sends = 0;
   let sent = false;
   let composerText = '';
+  let composerAncestorHidden = false;
   let url = PROJECT_URL;
   let observationIndex = 0;
   const priorHistory: StateLightTestMessage[] = ownedPriorHistory
@@ -289,6 +290,12 @@ function makeLoserPage(
         getAttribute: surface?.getAttribute ?? (() => null),
         isConnected: true,
         isContentEditable: true,
+        getClientRects: () => [{}],
+        getBoundingClientRect: () => ({ width: 280, height: 30 }),
+        parentElement: composerAncestorHidden
+          ? { parentElement: null, getAttribute: (name: string) => name === 'aria-hidden' ? 'true' : null,
+            hasAttribute: () => false }
+          : null,
         ownerDocument: {
           querySelectorAll: (selector: string) => selector === COMPOSER_SELECTOR ? [element] : [],
           defaultView: {
@@ -377,6 +384,7 @@ function makeLoserPage(
   };
 
   return { page, composer, sendButton, getSends: () => sends,
+    setComposerAncestorHidden: (hidden: boolean) => { composerAncestorHidden = hidden; },
     getComposerText: () => sent ? '' : composerText, getObservationReads: () => observationIndex };
 }
 
@@ -1831,6 +1839,20 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.getSends()).toBe(0);
     expect(outcome.result.send_count).toBe(0);
+    expect(turn.page.close).not.toHaveBeenCalled();
+  });
+
+  it('refuses a fresh second click when the unique exact composer becomes ancestor-hidden (#2694)', async () => {
+    const turn = makeLoserPage('owned prompt', 'NEVER SENT');
+    turn.sendButton.click.mockImplementationOnce(async () => {
+      turn.setComposerAncestorHidden(true);
+      throw timeoutError();
+    });
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, randomUUID() + '-hidden-composer.txt'));
+    expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+    expect(turn.getSends()).toBe(0);
+    expect(outcome.result.send_count).toBe(0);
+    expect(outcome.result.send_attempted).toBe(true);
     expect(turn.page.close).not.toHaveBeenCalled();
   });
 
