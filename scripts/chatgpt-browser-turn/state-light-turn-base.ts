@@ -885,8 +885,10 @@ export async function revalidateKeyedHarvest(
           // the derived content container, across either selected-message read site.
           for (let current: Element = root; current !== message;) {
             const parent = current.parentElement;
-            if (!parent || Array.from(parent.children).some(
-              (sibling) => sibling !== current && outsideText(sibling),
+            if (!parent || Array.from(parent.childNodes).some((sibling) =>
+              sibling !== current && (sibling.nodeType === 3
+                ? Boolean(sibling.textContent?.trim())
+                : sibling.nodeType === 1 && outsideText(sibling as Element)),
             )) return unsupported();
             current = parent;
           }
@@ -2115,9 +2117,11 @@ export async function readPageObservation(
             // the derived content container, across either selected-message read site.
             for (let current: Element = root; current !== message;) {
               const parent = current.parentElement;
-              if (!parent || Array.from(parent.children).some(
-                (sibling) => sibling !== current && outsideText(sibling),
-              )) return unsupported();
+              if (!parent || Array.from(parent.childNodes).some((sibling) =>
+              sibling !== current && (sibling.nodeType === 3
+                ? Boolean(sibling.textContent?.trim())
+                : sibling.nodeType === 1 && outsideText(sibling as Element)),
+            )) return unsupported();
               current = parent;
             }
             if (!visible(root)) return unsupported();
