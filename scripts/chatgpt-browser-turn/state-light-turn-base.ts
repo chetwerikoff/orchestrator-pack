@@ -3135,11 +3135,16 @@ async function readLosslessOwnedComposer(
   const waitMs = useInvocationDeadline ? deadlineMs - Date.now()
     : Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
   if (waitMs <= 0 || typeof composer?.evaluate !== 'function') return undefined;
+  // Both structural and fallback reads share one bounded budget, never two
+  // separate five-second windows and never the whole remaining invocation.
+  const readDeadlineMs = Date.now() + waitMs;
   try {
     // Use the same paragraph interpretation as retirement and atomic clear,
     // but demand an entire unique, visible editor for retry authority.
-    const structural = await readStructuredComposerText(composer, maxChars, deadlineMs, true);
+    const structural = await readStructuredComposerText(composer, maxChars, readDeadlineMs, true);
     if (structural !== undefined) return structural;
+    const remainingMs = readDeadlineMs - Date.now();
+    if (remainingMs <= 0) return undefined;
     const result = await boundedBrowserRead(
       Promise.resolve(composer.evaluate((element: HTMLElement, selector: string) => {
         if (!element.isConnected || !element.isContentEditable
@@ -3155,10 +3160,10 @@ async function readLosslessOwnedComposer(
           || style.visibility === 'collapse') return undefined;
         return { content: element.textContent, visible: element.innerText };
       }, COMPOSER_SELECTOR)),
-      waitMs, 'recovery_lossless_composer_timeout',
+      remainingMs, 'recovery_lossless_composer_timeout',
     ) as { content?: unknown; visible?: unknown } | undefined;
-    return typeof result?.content === 'string' && result.content === result.visible
-      ? result.content : undefined;
+    return typeof result?.content === 'string' && result.content.length <= maxChars
+      && result.content === result.visible ? result.content : undefined;
   } catch {
     return undefined;
   }
