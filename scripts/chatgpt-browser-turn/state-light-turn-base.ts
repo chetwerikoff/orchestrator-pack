@@ -8229,13 +8229,17 @@ async function readRetirementComposer(
     // Supported ProseMirror p/BR/trailingBreak is a document structure, not an
     // innerText presentation; keep intentional blank lines and every codepoint.
     let exact = await readStructuredComposerText(
-      editor, Math.max(65_536, ownedLiteral?.length ?? 0), deadlineMs,
+      editor, Math.max(65_536, ownedLiteral?.length ?? 0), deadlineMs, true,
     );
     if (exact === undefined) {
       const rawViews = await boundedBrowserRead(
-        Promise.resolve(editor.evaluate((el: HTMLElement) => {
-          if (!el.isConnected || !el.isContentEditable || !el.ownerDocument?.defaultView) return undefined;
-          const style = el.ownerDocument.defaultView.getComputedStyle(el);
+        Promise.resolve(editor.evaluate((el: HTMLElement, selector: string) => {
+          const doc = el.ownerDocument;
+          if (!el.isConnected || !el.isContentEditable || !doc?.defaultView
+            || typeof doc.querySelectorAll !== 'function') return undefined;
+          const editors = doc.querySelectorAll(selector);
+          if (editors.length !== 1 || editors[0] !== el) return undefined;
+          const style = doc.defaultView.getComputedStyle(el);
           if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse'
             || el.getAttribute?.('hidden') != null || el.getAttribute?.('aria-hidden') === 'true'
             || el.classList?.contains('ProseMirror')) return undefined;
@@ -8244,7 +8248,7 @@ async function readRetirementComposer(
           // shape used by the incumbent lossless reader; the live callback
           // independently checks connection, visibility and supported markup.
           return { content: el.textContent, visible: el.innerText };
-        })),
+        }, COMPOSER_SELECTOR)),
         budget(), 'retirement_editor_fallback_timeout',
       ) as { content?: unknown; visible?: unknown } | undefined;
       exact = typeof rawViews?.content === 'string' && rawViews.content === rawViews.visible
