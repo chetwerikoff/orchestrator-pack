@@ -848,7 +848,8 @@ describe('DOM observation boundary', () => {
   );
 
   it.each([
-    ['IMG', false], ['SVG', true], ['CANVAS', false], ['VIDEO', true],
+    ['IMG', false], ['SVG', true], ['svg', true], ['math', false],
+    ['CANVAS', false], ['VIDEO', true],
   ] as const)(
     'refuses a visible unsupported non-text %s sibling of the selected rich reply at both reads (#2694)',
     async (tag, nested) => {
