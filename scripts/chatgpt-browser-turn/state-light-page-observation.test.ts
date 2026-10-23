@@ -376,19 +376,30 @@ describe('DOM observation boundary', () => {
         return node;
       },
       querySelectorAll(selector: string): any[] {
-        const match = (candidate: any) => {
-          if (selector === '.markdown') return candidate.getAttribute('class') === 'markdown';
-          if (selector === 'pre') return candidate.tagName === 'PRE';
-          if (selector === 'code') return candidate.tagName === 'CODE';
-          if (selector === 'pre code') return candidate.tagName === 'CODE' && candidate.parentElement?.tagName === 'PRE';
-          if (selector.includes('button') || selector.includes('inert') || selector.includes('aria-hidden')) {
-            return candidate.tagName === 'BUTTON' || candidate.getAttribute('role') === 'button'
-              || candidate.hasAttribute('inert') || candidate.getAttribute('aria-hidden') === 'true';
-          }
+        // Small generic-tree selector interpreter: membership follows tags,
+        // classes, attributes and ancestry, not the renderer selector string.
+        const simple = (candidate: any, token: string): boolean => {
+          if (/^[a-z][a-z0-9-]*$/iu.test(token)) return candidate.tagName === token.toUpperCase();
+          if (/^\.[a-z][a-z0-9_-]*$/iu.test(token))
+            return (candidate.getAttribute('class') ?? '').split(/\s+/u).includes(token.slice(1));
+          const attr = /^\[([\w-]+)(?:="([^"]*)")?\]$/u.exec(token);
+          if (attr) return candidate.hasAttribute(attr[1]!) && (attr[2] === undefined
+            || candidate.getAttribute(attr[1]!) === attr[2]);
           return false;
         };
+        const matches = (candidate: any): boolean => selector.split(/,\s*/u).some((group) => {
+          const chain = group.trim().split(/\s+/u);
+          if (!simple(candidate, chain.pop() ?? '')) return false;
+          let ancestor = candidate.parentElement;
+          for (let i = chain.length - 1; i >= 0; i--) {
+            while (ancestor && !simple(ancestor, chain[i]!)) ancestor = ancestor.parentElement;
+            if (!ancestor) return false;
+            ancestor = ancestor.parentElement;
+          }
+          return true;
+        });
         const walk = (parent: any): any[] => parent.children.flatMap((child: any) =>
-          [...(match(child) ? [child] : []), ...walk(child)]);
+          [...(matches(child) ? [child] : []), ...walk(child)]);
         return walk(node);
       },
       querySelector(selector: string): any { return node.querySelectorAll(selector)[0] ?? null; },
@@ -398,7 +409,8 @@ describe('DOM observation boundary', () => {
 
   function richAssistantNode(outerText: string, blocks: RichBlock[], key = 'assistant-rich-12345678') {
     const outer = richNode('ARTICLE', outerText);
-    const root = richNode('DIV', '', { class: 'markdown' });
+    // Explicitly derived hashed root shape; no authenticated live CDP capture is claimed.
+    const root = richNode('DIV', '', { class: 'MarkdownRoot_boundedFixture__7Zd9' });
     outer.append(root);
     for (const block of blocks) {
       if ('directText' in block) {
@@ -747,6 +759,22 @@ describe('DOM observation boundary', () => {
       setHistoricalOnly: (value: boolean) => { historicalOnly = value; },
     };
   }
+
+  it('fails loudly when the selected rich root structure is missing (#2694, derived canary)', async () => {
+    // Derived negative: malformed selected content cannot acquire a plausible
+    // complete response from outer-row text or an unrelated control.
+    const fixture = richPage([{ prose: 'Before' }, { code: 'inside\n' }, { prose: 'After' }]);
+    const baseline = await readPageObservation(fixture.page, marker, 0);
+    expect(baseline.transcriptIncomplete).toBe(false);
+    // Rebind the selected root as an unsupported compound structure while
+    // leaving the status/control witnesses unchanged.
+    const impossible = richPage([{ code: 'inside', nested: true }]);
+    const observed = await readPageObservation(impossible.page, marker, 0);
+    expect(observed.transcriptIncomplete).toBe(true);
+    expect(observed.snapshot?.complete).toBe(false);
+    expect(observed.messages.some((message) => message.role === 'assistant'
+      && message.text.includes('OUTER MISLEADING'))).toBe(false);
+  });
 
   it('serializes two complete visible diff blocks into one literal UTF-8 keyed and final reply', async () => {
     const diffOne = 'diff --git a/alpha b/alpha\n--- a/alpha\n+++ b/alpha\n@@ -1 +1 @@\n old\n-foo\n+bar\n';
