@@ -824,11 +824,15 @@ describe('DOM observation boundary', () => {
     },
   );
 
-  it('rejects rendered prose inside a rectless display:contents sibling OUTSIDE code root at both reads (#2694)', async () => {
-    const fixture = richPage([{ code: 'safe code\n' }]);
-    const transparent = richNode('DIV', '', {}, false, true);
-    transparent.append(richNode('SPAN', 'TRAILING PROSE NOT INSIDE CODE'));
-    fixture.current.append(transparent);
+  it.each(['article-span-sibling', 'nested-layout-paragraph-sibling'] as const)(
+    'rejects rendered prose inside rectless display:contents %s outside code root at both reads (#2694)',
+    async (placement) => {
+      const fixture = richPage([{ code: 'safe code\n' }]);
+      const transparent = richNode('DIV', '', {}, false, true);
+      transparent.append(richNode(placement === 'article-span-sibling' ? 'SPAN' : 'P',
+        'TRAILING PROSE NOT INSIDE CODE'));
+      if (placement === 'article-span-sibling') fixture.current.append(transparent);
+      else wrapRichContent(fixture.current).layout.append(transparent);
     const observed = await readPageObservation(fixture.page, marker, 0);
     expect(observed.transcriptIncomplete).toBe(true);
     expect(observed.snapshot?.complete).toBe(false);
@@ -840,7 +844,8 @@ describe('DOM observation boundary', () => {
       assistantKey: 'data-message-id:assistant-rich-12345678',
       snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
     })).resolves.toEqual({ state: 'continuity-unproven' });
-  });
+    },
+  );
 
   it('refuses a selected answer whose visible direct text lies outside the derived root (#2694)', async () => {
     const fixture = richPage([{ code: 'diff --git a/a b/a\n' }]);
