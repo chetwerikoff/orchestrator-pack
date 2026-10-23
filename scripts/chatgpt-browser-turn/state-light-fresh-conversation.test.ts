@@ -285,6 +285,8 @@ function makeLoserPage(
       const surface = editorSurface();
       const element = {
         ...surface,
+        classList: surface?.classList ?? { contains: () => false },
+        getAttribute: surface?.getAttribute ?? (() => null),
         isConnected: true,
         isContentEditable: true,
         ownerDocument: {
@@ -1793,18 +1795,22 @@ describe('state-light fresh conversation collision recovery', () => {
     let firstClickAt: number | undefined;
     let tailReads = 0;
     let injected = false;
-    const read = turn.composer.innerText.getMockImplementation()!;
-    turn.composer.innerText.mockImplementation(async () => {
-      const visible = await read();
-      // At the end of delivery probing, first comes its final composer read,
-      // then the retry guard's read. Mutate after that read captures old text
-      // to require a fresh payload check immediately before the physical retry.
+    const read = turn.composer.evaluate.getMockImplementation()!;
+    turn.composer.evaluate.mockImplementation(async (
+      callback: (element: unknown, arg?: unknown) => unknown,
+      arg?: unknown,
+      options?: { timeout?: number },
+    ) => {
+      const observed = await read(callback, arg, options);
+      // Inject after a completed *exact DOM* sample, rather than relying
+      // on now-irrelevant normalized innerText read counts.
       if (when === 'after-proof-read' && firstClickAt !== undefined
-        && mocks.nowMs >= firstClickAt + 5_000 && ++tailReads === 2 && !injected) {
-        await turn.composer.fill(corrupt(visible));
+        && mocks.nowMs >= firstClickAt + 5_000 && options?.timeout === undefined
+        && ++tailReads === 2 && !injected) {
+        await turn.composer.fill(corrupt(turn.getComposerText()));
         injected = true;
       }
-      return visible;
+      return observed;
     });
     turn.sendButton.click.mockImplementationOnce(async () => {
       firstClickAt = mocks.nowMs;
