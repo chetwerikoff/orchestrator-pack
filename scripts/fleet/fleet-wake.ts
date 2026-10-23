@@ -1141,11 +1141,9 @@ function freshSendSafePane(
       && expected.agentIdentity !== native.agentIdentity)) return false;
   try {
     if (!('state' in expected)) {
-      // A coordinator may be busy or have no readable screen. Neither is
-      // positive shell/non-agent evidence; the fresh native designation above
-      // remains the safety veto for coordinator-directed notifications.
-      try { readFleetScreen(expected.handle, executor); }
-      catch { /* An absent screen is not a positive shell designation. */ }
+      // Coordinator busyness never vetoes an advisory Wake. Preserve the
+      // existing readable-screen requirement and positive native shell veto.
+      readFleetScreen(expected.handle, executor);
       return true;
     }
     if (!store || (expected.state !== 'PARKED' && expected.state !== 'STOPPED')) return false;
