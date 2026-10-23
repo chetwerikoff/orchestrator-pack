@@ -2644,6 +2644,23 @@ process.stdout.write(JSON.stringify(readStateLightAccountCooldown(${JSON.stringi
 });
 
 
+// Derived generic ProseMirror subtree; no live DOM capture is claimed.
+function inertInlineProseMirrorSurface(text: string): any {
+  const editor: any = proseMirrorEditorSurface(text);
+  const paragraph = editor.childNodes[0];
+  const textLeaf = paragraph?.childNodes[0];
+  if (textLeaf?.nodeType !== 3) throw new Error('expected_text_leaf');
+  paragraph.childNodes.splice(0, 1, {
+    nodeType: 1, tagName: 'SPAN', childNodes: [textLeaf],
+    getAttribute: (name: string) => name === 'inert' ? '' : null,
+    hasAttribute: (name: string) => name === 'inert',
+    get textContent() { return textLeaf.nodeValue; },
+  });
+  editor.getClientRects = () => [{}];
+  editor.getBoundingClientRect = () => ({ width: 280, height: 30 });
+  return editor;
+}
+
 describe('Issue #2651 lossless composer and one-operation owned-draft clearing', () => {
   function editorFixture(initial: string, editable = true) {
     let content = initial;
@@ -2746,6 +2763,31 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
     )).toBeUndefined();
   });
 
+  it('refuses nested inert ProseMirror bytes for retry, retirement and atomic clear (#2694)', async () => {
+    const original = MARKED_PROMPT;
+    const editor = inertInlineProseMirrorSurface(original);
+    editor.ownerDocument.querySelectorAll = (selector: string) =>
+      selector === COMPOSER_SELECTOR ? [editor] : [];
+    const composer = {
+      count: async () => 1,
+      evaluate: async (callback: (element: unknown, argument?: unknown) => unknown, argument?: unknown) =>
+        callback(editor, argument),
+    };
+    const page = { locator: () => composer };
+    const deadline = Date.now() + 5_000;
+    expect(editor.textContent).toBe(original);
+    expect(await __testSendDelivery.readLosslessOwnedComposer(
+      composer, deadline, false, original.length,
+    )).toBeUndefined();
+    expect(await __testSendDelivery.readRetirementComposer(
+      page, original, deadline,
+    )).toBe('composer_unknown');
+    expect(await __testSendDelivery.conditionalClearOwnedComposerDraft(
+      page, original, deadline,
+    )).toBe(false);
+    expect(editor.textContent).toBe(original);
+  });
+
   it.each(['unknown-child', 'hidden', 'duplicate-editor', 'mixed-root'] as const)(
     'refuses structurally unproven owned ProseMirror subtree: %s (#2694)', async (kind) => {
       const element: any = visibleProseMirror(MARKED_PROMPT);
@@ -2836,7 +2878,7 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
   const uuid = '26512651-2651-4651-8651-265126512651';
   const chatUrl = 'https://chatgpt.com/c/' + uuid;
   type Case = 'negative' | 'positive' | 'incomplete' | 'paginated' | 'get429'
-    | 'changed-composer' | 'hidden-parent' | 'pre-actionability-budget' | 'late-positive'
+    | 'changed-composer' | 'hidden-parent' | 'inert-inline' | 'pre-actionability-budget' | 'late-positive'
     | 'overslept-poll' | 'reused-page' | 'late-assistant' | 'post-guard-whitespace'
     | 'post-guard-space' | 'post-guard-tab' | 'post-guard-blank' | 'post-guard-boundary'
     | 'affirmative-finalized' | 'affirmative-late-stop' | 'affirmative-late-draft';
@@ -2960,7 +3002,16 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
           },
           querySelectorAll: (selector: string) => selector === COMPOSER_SELECTOR ? [element] : [],
         };
-        const value = callback(element, args);
+        // After the first attempted action, an inert inline wrapper must not
+        // become exact retry authority despite unchanged marked literal bytes.
+        const activeEditor = clickCount === 1 && kind === 'inert-inline'
+          ? inertInlineProseMirrorSurface(draft) : element;
+        if (activeEditor !== element) {
+          activeEditor.ownerDocument = element.ownerDocument;
+          activeEditor.ownerDocument.querySelectorAll = (selector: string) =>
+            selector === COMPOSER_SELECTOR ? [activeEditor] : [];
+        }
+        const value = callback(activeEditor, args);
         if (clickCount === 1 && kind === 'overslept-poll'
           && (args === undefined || args === COMPOSER_SELECTOR
             || (typeof args === 'object' && args !== null && 'maxChars' in args))) {
@@ -3129,7 +3180,8 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
   it.each([
     ['negative', 2, 1], ['positive', 1, 1], ['incomplete', 1, 1],
     ['paginated', 1, 1], ['get429', 1, 1], ['changed-composer', 1, 0],
-    ['hidden-parent', 1, 0], ['pre-actionability-budget', 2, 0], ['late-positive', 2, 1],
+    ['hidden-parent', 1, 0], ['inert-inline', 1, 0],
+    ['pre-actionability-budget', 2, 0], ['late-positive', 2, 1],
     ['overslept-poll', 1, 0], ['reused-page', 1, 0],
     ['late-assistant', 1, 0], ['post-guard-whitespace', 1, 1],
     ['post-guard-space', 1, 1], ['post-guard-tab', 1, 1],
@@ -3168,7 +3220,7 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     if (kind === 'late-assistant') expect(t.appendedLateAssistant).toBe(true);
     if (kind === 'reused-page') expect(t.observedReusedNegativeGet).toBe(true);
     if (kind.startsWith('post-guard-')) expect(t.injectedWhitespaceMutation).toBe(true);
-    if (kind === 'reused-page' || kind === 'late-assistant'
+    if (kind === 'inert-inline' || kind === 'reused-page' || kind === 'late-assistant'
       || kind === 'overslept-poll' || kind.startsWith('post-guard-')) {
       expect(t.close).not.toHaveBeenCalled();
       expect(t.observation.phase).not.toBe('not_sent');
