@@ -847,6 +847,34 @@ describe('DOM observation boundary', () => {
     },
   );
 
+  it.each([
+    ['IMG', false], ['SVG', true], ['CANVAS', false], ['VIDEO', true],
+  ] as const)(
+    'refuses a visible unsupported non-text %s sibling of the selected rich reply at both reads (#2694)',
+    async (tag, nested) => {
+      // Derived generic DOM tree: media has no innerText, but is visible and
+      // cannot be omitted from a supposedly complete assistant reply.
+      const fixture = richPage([
+        { prose: 'Before code' }, { code: 'literal code\\n' }, { prose: 'After code' },
+      ]);
+      if (nested) {
+        const { layout } = wrapRichContent(fixture.current);
+        layout.append(richNode('DIV').append(richNode(tag)));
+      } else fixture.current.append(richNode(tag));
+      const observed = await readPageObservation(fixture.page, marker, 0);
+      expect(observed.transcriptIncomplete).toBe(true);
+      expect(observed.snapshot?.complete).toBe(false);
+      const previous = { complete: true, carriers: [] } as const;
+      const ownKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+      expect(keyedHarvestCandidate(observed.snapshot!, previous, ownKey).state).not.toBe('ready');
+      await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
+        reply: 'Before code\\n\\n```\\nliteral code\\n```\\n\\nAfter code',
+        assistantKey: 'data-message-id:assistant-rich-12345678',
+        snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+      })).resolves.toEqual({ state: 'continuity-unproven' });
+    },
+  );
+
   it('refuses a selected answer whose visible direct text lies outside the derived root (#2694)', async () => {
     const fixture = richPage([{ code: 'diff --git a/a b/a\n' }]);
     fixture.current.appendText('DO_NOT_LOSE_OUTSIDE_ROOT');
