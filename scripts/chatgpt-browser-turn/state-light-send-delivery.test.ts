@@ -797,6 +797,8 @@ describe('production attempted-send result and durable envelope', () => {
         const element: any = {
           isConnected: true, isContentEditable: true,
           classList: { contains: () => false }, getAttribute: () => null,
+          getClientRects: () => [{}],
+          getBoundingClientRect: () => ({ width: 280, height: 30 }),
           get textContent() { return composerText; },
           get innerText() { return composerText; },
         };
@@ -2649,6 +2651,8 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
       isConnected: true, isContentEditable: editable,
       classList: { contains: () => false },
       getAttribute: () => null,
+      getClientRects: () => [{}],
+      getBoundingClientRect: () => ({ width: 280, height: 30 }),
       get textContent() { return content; },
       set textContent(value: string) { content = value; },
       get innerText() { return content; },
@@ -2660,7 +2664,14 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
     const evaluate = vi.fn(async (callback: (element: unknown, payload?: string) => unknown, payload?: string) =>
       callback(element, payload));
     const page = { locator: () => ({ evaluate }) };
-    return { page, evaluate, current: () => content, mutate: (value: string) => { content = value; } };
+    return { page, evaluate, element, current: () => content, mutate: (value: string) => { content = value; } };
+  }
+
+  function visibleProseMirror(text: string) {
+    const element: any = proseMirrorEditorSurface(text);
+    element.getClientRects = () => [{}];
+    element.getBoundingClientRect = () => ({ width: 280, height: 30 });
+    return element;
   }
 
   it('compares every code point and clears only that exact content inside one browser operation', async () => {
@@ -2708,7 +2719,7 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
   // Derived structural replay of the reported empty-p/trailingBreak shape.
   // No authenticated exact-invocation CDP capture is asserted by this fixture.
   it('reconstructs a unique empty ProseMirror p as empty despite innerText newline (#2694)', async () => {
-    const element: any = proseMirrorEditorSurface('');
+    const element: any = visibleProseMirror('');
     element.childNodes[0].getAttribute = (name: string) => name === 'data-empty-paragraph' ? '' : null;
     element.ownerDocument.querySelectorAll = (selector: string) =>
       selector === COMPOSER_SELECTOR ? [element] : [];
@@ -2721,7 +2732,7 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
 
   it('preserves every interior blank paragraph, space and tab with misleading empty attributes (#2694)', async () => {
     const exact = MARKED_PROMPT + '\n \t\n\nlast';
-    const element: any = proseMirrorEditorSurface(exact);
+    const element: any = visibleProseMirror(exact);
     element.childNodes[3].getAttribute = (name: string) => name === 'data-empty-paragraph' ? '' : null;
     element.ownerDocument.querySelectorAll = (selector: string) =>
       selector === COMPOSER_SELECTOR ? [element] : [];
@@ -2737,7 +2748,7 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
 
   it.each(['unknown-child', 'hidden', 'duplicate-editor', 'mixed-root'] as const)(
     'refuses structurally unproven owned ProseMirror subtree: %s (#2694)', async (kind) => {
-      const element: any = proseMirrorEditorSurface(MARKED_PROMPT);
+      const element: any = visibleProseMirror(MARKED_PROMPT);
       if (kind === 'unknown-child') element.childNodes[0].childNodes.push({
         nodeType: 1, tagName: 'SCRIPT', childNodes: [], getAttribute: () => null,
       });
@@ -2754,6 +2765,50 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
       expect(await __testSendDelivery.readLosslessOwnedComposer(
         composer, Date.now() + 2000, false, MARKED_PROMPT.length + 100,
       )).toBeUndefined();
+    },
+  );
+
+  it.each(['aria-hidden', 'inert', 'display-none', 'hidden-attribute', 'zero-rect', 'zero-width', 'zero-height'] as const)(
+    'refuses exact owned draft under %s ancestor or unusable editor box (#2694)',
+    async (kind) => {
+      const owned = MARKED_PROMPT;
+      const structured = visibleProseMirror(owned);
+      const fallback = editorFixture(owned);
+      const ancestors = (element: any) => {
+        const ancestor: any = {
+          parentElement: null,
+          getAttribute: (name: string) => kind === 'aria-hidden' && name === 'aria-hidden' ? 'true'
+            : kind === 'hidden-attribute' && name === 'hidden' ? '' : null,
+          hasAttribute: (name: string) => kind === 'inert' && name === 'inert',
+        };
+        element.parentElement = ancestor;
+        element.getClientRects = () => kind === 'zero-rect' ? [] : [{}];
+        element.getBoundingClientRect = () => ({
+          width: kind === 'zero-width' ? 0 : 280, height: kind === 'zero-height' ? 0 : 30,
+        });
+        element.ownerDocument.defaultView.getComputedStyle = (node: any) => ({
+          display: node === ancestor && kind === 'display-none' ? 'none' : 'block',
+          visibility: 'visible',
+        });
+      };
+      ancestors(structured);
+      ancestors(fallback.element);
+      structured.ownerDocument.querySelectorAll = (selector: string) =>
+        selector === COMPOSER_SELECTOR ? [structured] : [];
+      const composer = {
+        evaluate: async (cb: (element: unknown, args?: unknown) => unknown, args?: unknown) =>
+          cb(structured, args),
+      };
+      expect(await __testSendDelivery.readLosslessOwnedComposer(
+        composer, Date.now() + 2_000, false, owned.length,
+      )).toBeUndefined();
+      expect(await __testSendDelivery.readLosslessOwnedComposer(
+        fallback.page.locator(), Date.now() + 2_000, false, owned.length,
+      )).toBeUndefined();
+      expect(await __testSendDelivery.conditionalClearOwnedComposerDraft(
+        fallback.page, owned, Date.now() + 2_000,
+      )).toBe(false);
+      expect(fallback.current()).toBe(owned);
     },
   );
 
@@ -2781,7 +2836,7 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
   const uuid = '26512651-2651-4651-8651-265126512651';
   const chatUrl = 'https://chatgpt.com/c/' + uuid;
   type Case = 'negative' | 'positive' | 'incomplete' | 'paginated' | 'get429'
-    | 'changed-composer' | 'pre-actionability-budget' | 'late-positive'
+    | 'changed-composer' | 'hidden-parent' | 'pre-actionability-budget' | 'late-positive'
     | 'overslept-poll' | 'reused-page' | 'late-assistant' | 'post-guard-whitespace'
     | 'post-guard-space' | 'post-guard-tab' | 'post-guard-blank' | 'post-guard-boundary'
     | 'affirmative-finalized' | 'affirmative-late-stop' | 'affirmative-late-draft';
@@ -2891,6 +2946,12 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
           isConnected: true, isContentEditable: true,
           getAttribute: () => null,
           classList: { contains: () => false },
+          getClientRects: () => [{}],
+          getBoundingClientRect: () => ({ width: 280, height: 30 }),
+          parentElement: clickCount === 1 && kind === 'hidden-parent'
+            ? { parentElement: null, getAttribute: (name: string) => name === 'aria-hidden' ? 'true' : null,
+              hasAttribute: () => false }
+            : null,
         };
         element.ownerDocument = {
           defaultView: {
@@ -3068,7 +3129,7 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
   it.each([
     ['negative', 2, 1], ['positive', 1, 1], ['incomplete', 1, 1],
     ['paginated', 1, 1], ['get429', 1, 1], ['changed-composer', 1, 0],
-    ['pre-actionability-budget', 2, 0], ['late-positive', 2, 1],
+    ['hidden-parent', 1, 0], ['pre-actionability-budget', 2, 0], ['late-positive', 2, 1],
     ['overslept-poll', 1, 0], ['reused-page', 1, 0],
     ['late-assistant', 1, 0], ['post-guard-whitespace', 1, 1],
     ['post-guard-space', 1, 1], ['post-guard-tab', 1, 1],
