@@ -4074,10 +4074,10 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
     for (const phase of ['before-text', 'between-text-enter'] as const) {
       const store = new MemoryWakeStore();
       let shell = false;
+      let listReads = 0;
       const executor: OrcaExecutor = (args) => {
-        const isCoordinatorRead = args[0] === 'terminal' && args[1] === 'read'
-          && args.includes(coordinator.handle);
-        if (phase === 'before-text' && isCoordinatorRead) shell = true;
+        if (phase === 'before-text' && args[0] === 'terminal' && args[1] === 'list'
+          && ++listReads >= 2) shell = true;
         const isCoordinatorText = args[0] === 'terminal' && args[1] === 'send'
           && args.includes(coordinator.handle) && args.includes('--text');
         if (phase === 'between-text-enter' && isCoordinatorText) shell = true;
@@ -4169,19 +4169,21 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
           expect(sendsTo(repeat.calls, worker.handle)).toHaveLength(0);
         }
       }
-      // A title/agent identity absent only at the fresh census is not shell proof.
-      let readInitial = false;
-      const unknownTitle: OrcaExecutor = (args) => {
-        if (args[0] === 'terminal' && args[1] === 'read' && args.includes(worker.handle)) readInitial = true;
-        const later = args[0] === 'terminal' && args[1] === 'list' && readInitial;
-        return fakeOrca({ coord: 'working\nesc interrupt', one: 'done' }, [],
-          [coordinator, later ? { ...worker, title: '', agentIdentity: undefined } : worker])(args);
-      };
-      const allowed = await tick({
-        terminals: [coordinator, worker], screens: { coord: 'working\nesc interrupt', one: 'done' },
-        ...emptyFacts, ...extra, executor: unknownTitle,
-      });
-      expect(sendsTo(allowed.calls, worker.handle)).toHaveLength(2);
+      // Neither missing nor unfamiliar titles are affirmative shell evidence.
+      for (const uncertainTitle of ['', 'unidentified terminal']) {
+        let readInitial = false;
+        const unknownTitle: OrcaExecutor = (args) => {
+          if (args[0] === 'terminal' && args[1] === 'read' && args.includes(worker.handle)) readInitial = true;
+          const later = args[0] === 'terminal' && args[1] === 'list' && readInitial;
+          return fakeOrca({ coord: 'working\nesc interrupt', one: 'done' }, [],
+            [coordinator, later ? { ...worker, title: uncertainTitle, agentIdentity: undefined } : worker])(args);
+        };
+        const allowed = await tick({
+          terminals: [coordinator, worker], screens: { coord: 'working\nesc interrupt', one: 'done' },
+          ...emptyFacts, ...extra, executor: unknownTitle,
+        });
+        expect(sendsTo(allowed.calls, worker.handle)).toHaveLength(2);
+      }
     },
   );
 
@@ -4217,7 +4219,7 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
       };
       const gpt = await run(new MemoryWakeStore(), 'done', event);
       expect(sendsTo(gpt.calls, old.handle)).toHaveLength(2);
-      expect(sendsTo(gpt.calls, latest.handle).some((row) => row.includes('--text'))).toBe(true);
+      expect(sendsTo(gpt.calls, old.handle).filter((row) => row.includes('--text'))).toHaveLength(1);
       rmSync(file);
       const noCoordinator = await run(new MemoryWakeStore(), dueScreen);
       expect(noCoordinator.result.state).toBe('no_orchestrator');
