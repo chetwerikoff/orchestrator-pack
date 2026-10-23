@@ -2625,11 +2625,17 @@ process.stdout.write(JSON.stringify(readStateLightAccountCooldown(${JSON.stringi
 describe('Issue #2651 lossless composer and one-operation owned-draft clearing', () => {
   function editorFixture(initial: string, editable = true) {
     let content = initial;
-    const element = {
+    const element: any = {
       isConnected: true, isContentEditable: editable,
+      classList: { contains: () => false },
+      getAttribute: () => null,
       get textContent() { return content; },
       set textContent(value: string) { content = value; },
       get innerText() { return content; },
+    };
+    element.ownerDocument = {
+      defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible' }) },
+      querySelectorAll: (selector: string) => selector === COMPOSER_SELECTOR ? [element] : [],
     };
     const evaluate = vi.fn(async (callback: (element: unknown, payload?: string) => unknown, payload?: string) =>
       callback(element, payload));
@@ -2647,7 +2653,7 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
       editor.page, payload, Date.now() + 2000,
     )).toBe(true);
     expect(editor.current()).toBe('');
-    expect(editor.evaluate).toHaveBeenCalledTimes(2);
+    expect(editor.evaluate).toHaveBeenCalledTimes(3);
   });
 
   it.each(['foreign-draft', 'changed-whitespace', 'non-editable'] as const)(
@@ -2678,6 +2684,58 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
       editor.page.locator(), Date.now() + 2000,
     )).not.toBe(MARKED_PROMPT);
   });
+
+  // Derived structural replay of the reported empty-p/trailingBreak shape.
+  // No authenticated exact-invocation CDP capture is asserted by this fixture.
+  it('reconstructs a unique empty ProseMirror p as empty despite innerText newline (#2694)', async () => {
+    const element: any = proseMirrorEditorSurface('');
+    element.childNodes[0].getAttribute = (name: string) => name === 'data-empty-paragraph' ? '' : null;
+    element.ownerDocument.querySelectorAll = (selector: string) =>
+      selector === COMPOSER_SELECTOR ? [element] : [];
+    const composer = { evaluate: async (callback: (element: unknown, arg?: unknown) => unknown, arg?: unknown) =>
+      callback(element, arg) };
+    expect(element.textContent).toBe('');
+    expect(element.innerText).toBe('\n');
+    expect(await __testSendDelivery.readLosslessOwnedComposer(composer, Date.now() + 2000)).toBe('');
+  });
+
+  it('preserves every interior blank paragraph, space and tab with misleading empty attributes (#2694)', async () => {
+    const exact = MARKED_PROMPT + '\n \t\n\nlast';
+    const element: any = proseMirrorEditorSurface(exact);
+    element.childNodes[3].getAttribute = (name: string) => name === 'data-empty-paragraph' ? '' : null;
+    element.ownerDocument.querySelectorAll = (selector: string) =>
+      selector === COMPOSER_SELECTOR ? [element] : [];
+    const composer = { evaluate: async (callback: (element: unknown, arg?: unknown) => unknown, arg?: unknown) =>
+      callback(element, arg) };
+    expect(await __testSendDelivery.readLosslessOwnedComposer(
+      composer, Date.now() + 2000, false, exact.length,
+    )).toBe(exact);
+    expect(await __testSendDelivery.readLosslessOwnedComposer(
+      composer, Date.now() + 2000, false, exact.length - 1,
+    )).toBeUndefined();
+  });
+
+  it.each(['unknown-child', 'hidden', 'duplicate-editor', 'mixed-root'] as const)(
+    'refuses structurally unproven owned ProseMirror subtree: %s (#2694)', async (kind) => {
+      const element: any = proseMirrorEditorSurface(MARKED_PROMPT);
+      if (kind === 'unknown-child') element.childNodes[0].childNodes.push({
+        nodeType: 1, tagName: 'SCRIPT', childNodes: [], getAttribute: () => null,
+      });
+      if (kind === 'hidden') {
+        const original = element.childNodes[0].getAttribute;
+        element.childNodes[0].getAttribute = (name: string) =>
+          name === 'aria-hidden' ? 'true' : original(name);
+      }
+      if (kind === 'mixed-root') element.childNodes.push({ nodeType: 3, nodeValue: 'foreign' });
+      element.ownerDocument.querySelectorAll = (selector: string) =>
+        selector === COMPOSER_SELECTOR ? kind === 'duplicate-editor' ? [element, {}] : [element] : [];
+      const composer = { evaluate: async (callback: (element: unknown, arg?: unknown) => unknown, arg?: unknown) =>
+        callback(element, arg) };
+      expect(await __testSendDelivery.readLosslessOwnedComposer(
+        composer, Date.now() + 2000, false, MARKED_PROMPT.length + 100,
+      )).toBeUndefined();
+    },
+  );
 
   it('never performs a server check without an exact held owned URL and complete baseline', async () => {
     const get = vi.fn();
@@ -2795,15 +2853,25 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       textContent: vi.fn(async () => draft),
       evaluate: vi.fn(async (callback: (element: unknown, arg?: unknown) => unknown, args?: unknown, options?: { timeout?: number }) => {
         if (options?.timeout !== undefined) return true; // Older readiness adapter.
-        const element = {
+        const element: any = {
           get textContent() { return draft; },
           set textContent(value: string) { draft = value; },
           get innerText() { return draft; },
-          ownerDocument: { defaultView: { location: { get href() { return chatUrl; } } } },
           isConnected: true, isContentEditable: true,
+          getAttribute: () => null,
+          classList: { contains: () => false },
+        };
+        element.ownerDocument = {
+          defaultView: {
+            location: { get href() { return chatUrl; } },
+            getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+          },
+          querySelectorAll: (selector: string) => selector === COMPOSER_SELECTOR ? [element] : [],
         };
         const value = callback(element, args);
-        if (clickCount === 1 && args === undefined && kind === 'overslept-poll') {
+        if (clickCount === 1 && kind === 'overslept-poll'
+          && (args === undefined || args === COMPOSER_SELECTOR
+            || (typeof args === 'object' && args !== null && 'maxChars' in args))) {
           sawRecoveryLosslessRead = true;
         }
         return value;
