@@ -798,7 +798,7 @@ export async function revalidateKeyedHarvest(
         userMessageStyle: string;
         unitKeyAttribute: string;
         assistantMessageStyle: string;
-                  assistantKey: string;
+        assistantKey: string;
         turnSelector: string;
         inProgressSelector: string;
         actionSelector: string;
@@ -858,17 +858,17 @@ export async function revalidateKeyedHarvest(
           // Resolve the smallest ancestor of every visible semantic content block.
           // Neither .markdown nor a CSS-module hash grants content-root authority.
           let root: Element | null = semantic[0]?.parentElement ?? null;
-                  while (root && root !== message && !semantic.every((block) => within(block, root!))) {
-          root = root.parentElement;
-        }
-        // Include the enclosing content boundary for a direct PRE code wrapper.
-        // This keeps interleaved prose and code headers from being omitted.
-        if (root && root !== message && root.parentElement
-          && root.parentElement !== message
-          && Array.from(root.children).some((child) => child.tagName === 'PRE')) {
-          root = root.parentElement;
-        }
-        if (!root || root === message || allCodeBlocks.some((pre) => !within(pre, root!))) {
+          while (root && root !== message && !semantic.every((block) => within(block, root!))) {
+            root = root.parentElement;
+          }
+          // Include the code-header's enclosing content boundary so an
+          // interleaved prose sibling is never mistaken for a separate root.
+          if (root && root !== message && root.parentElement
+            && root.parentElement !== message
+            && Array.from(root.children).some((child) => child.tagName === 'PRE')) {
+            root = root.parentElement;
+          }
+          if (!root || root === message || allCodeBlocks.some((pre) => !within(pre, root!))) {
             return unsupported();
           }
           const outsideText = (node: Element): boolean => {
@@ -1045,7 +1045,7 @@ export async function revalidateKeyedHarvest(
         userMessageStyle: USER_MESSAGE_STYLE,
         unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
         assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
-                assistantKey: expected.assistantKey,
+        assistantKey: expected.assistantKey,
         turnSelector: CONVERSATION_TURN_SECTION_SELECTOR,
         inProgressSelector: ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
         actionSelector: ASSISTANT_TURN_ACTION_SELECTOR,
@@ -2026,7 +2026,7 @@ export async function readPageObservation(
           userMessageStyle: string;
           unitKeyAttribute: string;
           assistantMessageStyle: string;
-                    ownedMarker?: string;
+          ownedMarker?: string;
           historicalBaseline: boolean;
           generationSelector: string;
           continuationSelector: string;
@@ -2088,17 +2088,17 @@ export async function readPageObservation(
             // Resolve the smallest ancestor of every visible semantic content block.
             // Neither .markdown nor a CSS-module hash grants content-root authority.
             let root: Element | null = semantic[0]?.parentElement ?? null;
-                      while (root && root !== message && !semantic.every((block) => within(block, root!))) {
-            root = root.parentElement;
-          }
-          // Include the enclosing content boundary for a direct PRE code wrapper.
-          // This keeps interleaved prose and code headers from being omitted.
-          if (root && root !== message && root.parentElement
-            && root.parentElement !== message
-            && Array.from(root.children).some((child) => child.tagName === 'PRE')) {
-            root = root.parentElement;
-          }
-          if (!root || root === message || allCodeBlocks.some((pre) => !within(pre, root!))) {
+            while (root && root !== message && !semantic.every((block) => within(block, root!))) {
+              root = root.parentElement;
+            }
+            // Include the code-header's enclosing content boundary so an
+            // interleaved prose sibling is never mistaken for a separate root.
+            if (root && root !== message && root.parentElement
+              && root.parentElement !== message
+              && Array.from(root.children).some((child) => child.tagName === 'PRE')) {
+              root = root.parentElement;
+            }
+            if (!root || root === message || allCodeBlocks.some((pre) => !within(pre, root!))) {
               return unsupported();
             }
             const outsideText = (node: Element): boolean => {
@@ -2330,7 +2330,7 @@ export async function readPageObservation(
           userMessageStyle: USER_MESSAGE_STYLE,
           unitKeyAttribute: MESSAGE_UNIT_KEY_ATTR,
           assistantMessageStyle: ASSISTANT_MESSAGE_STYLE,
-                  ownedMarker: expectedMarker,
+          ownedMarker: expectedMarker,
           historicalBaseline,
           generationSelector: BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR,
           continuationSelector: CONTINUE_GENERATING_SELECTOR,
