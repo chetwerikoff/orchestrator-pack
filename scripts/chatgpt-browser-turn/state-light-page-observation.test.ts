@@ -916,13 +916,9 @@ describe('DOM observation boundary', () => {
     })).resolves.toEqual({ state: 'continuity-unproven' });
   });
 
-  it('replays the live canary reply: PRE>CODE sql block + CodeMirror python block, labelled action bars (#2694 follow-up)', async () => {
-    // Structure from a live capture of a synthetic canary reply (2026-10-23T21:33Z,
-    // new chat in the orchestrator-pack project): ChatGPT marks code roots
-    // data-code-block=true and each action bar data-markdown-copy=exclude. The bar
-    // holds an SVG, a visible language label and display:contents tooltip wrappers
-    // around buttons ("Run" has text). The runnable python block has no PRE: it is a
-    // CodeMirror .cm-content textbox.
+  // Live ChatGPT reply scaffold (#2694 follow-up captures): assistant markdown root,
+  // DilRenderer content root, labelled code-block action bars.
+  const liveReplyFixture = () => {
     const fixture = richPage([]);
     const assistant = fixture.current;
     assistant.tagName = 'DIV';
@@ -970,6 +966,17 @@ describe('DOM observation boundary', () => {
       body(relative);
       append(relative, 'BUTTON', '', { 'aria-hidden': 'true', 'aria-label': 'Scroll to bottom' });
     };
+    return { fixture, assistant, append, prose, codeBlock };
+  };
+
+  it('replays the live canary reply: PRE>CODE sql block + CodeMirror python block, labelled action bars (#2694 follow-up)', async () => {
+    // Structure from a live capture of a synthetic canary reply (2026-10-23T21:33Z,
+    // new chat in the orchestrator-pack project): ChatGPT marks code roots
+    // data-code-block=true and each action bar data-markdown-copy=exclude. The bar
+    // holds an SVG, a visible language label and display:contents tooltip wrappers
+    // around buttons ("Run" has text). The runnable python block has no PRE: it is a
+    // CodeMirror .cm-content textbox.
+    const { fixture, assistant, append, prose, codeBlock } = liveReplyFixture();
     const sql = 'SELECT\n    1 AS result\nFROM dual;';
     const python = 'def canary():\n    return True';
     prose('The canary check is ready.');
@@ -1029,6 +1036,36 @@ describe('DOM observation boundary', () => {
     const changed = await readPageObservation(fixture.page, marker, 0);
     expect(changed.transcriptIncomplete).toBe(true);
     expect(changed.snapshot?.complete).toBe(false);
+  });
+
+  it('replays a live code-only reply: one labelled JSON block and no prose (#2694 follow-up)', async () => {
+    // Live LeoPoker turns (2026-10-23T23:03Z/23:17Z) answered with a single JSON code
+    // block. The common semantic ancestor then sits inside the code block root, so its
+    // labelled action bar ("JSON") was outside the root and the read never completed.
+    const { fixture, assistant, append, codeBlock } = liveReplyFixture();
+    const json = '{\n  "findings": []\n}';
+    codeBlock('JSON', false, (relative) => {
+      append(append(relative, 'DIV'), 'PRE').append(richNode('CODE', json));
+    });
+    assistant.innerText = 'JSON\n' + json;
+    assistant.textContent = assistant.innerText;
+
+    const fence = String.fromCharCode(96).repeat(3);
+    const expected = fence + 'json\n' + json + '\n' + fence;
+    const observed = await readPageObservation(fixture.page, marker, 0);
+    expect(observed.transcriptIncomplete).toBe(false);
+    expect(observed.snapshot?.complete).toBe(true);
+    expect(observed.snapshot?.carriers.at(-1)?.text).toBe(expected);
+    expect(observed.messages.at(-1)?.text).toBe(expected);
+
+    const previous = { complete: true, carriers: [] } as const;
+    const ownKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    const candidate = keyedHarvestCandidate(observed.snapshot!, previous, ownKey);
+    expect(candidate).toMatchObject({ state: 'ready', reply: expected });
+    if (candidate.state !== 'ready') throw new Error('live_code_only_not_ready');
+    await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
+      ...candidate, snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+    })).resolves.toEqual({ state: 'ready', reply: expected });
   });
 
   it('preserves complete ordered prose + direct PRE + trailing prose under a layout wrapper at both reads (#2694)', async () => {

@@ -875,6 +875,11 @@ export async function revalidateKeyedHarvest(
             && !Array.from(root.children).some((child) => /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName))) {
             root = root.parentElement;
           }
+          // A code-only reply resolves inside one live code block root: lift
+          // to its parent so the block's action bar stays inside the root.
+          for (let current: Element | null = root; current && current !== message; current = current.parentElement) {
+            if (current.getAttribute('data-code-block') === 'true') { root = current.parentElement; break; }
+          }
           // If an unrelated status paragraph widens the common ancestor,
           // prefer one contained subtree with direct prose and every code block.
           while (root && root !== message) {
@@ -2223,6 +2228,11 @@ export async function readPageObservation(
               && Array.from(root.children).some((child) => child.tagName === 'PRE')
               && !Array.from(root.children).some((child) => /^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName))) {
               root = root.parentElement;
+            }
+            // A code-only reply resolves inside one live code block root: lift
+            // to its parent so the block's action bar stays inside the root.
+            for (let current: Element | null = root; current && current !== message; current = current.parentElement) {
+              if (current.getAttribute('data-code-block') === 'true') { root = current.parentElement; break; }
             }
             // If an unrelated status paragraph widens the common ancestor,
             // prefer one contained subtree with direct prose and every code block.
