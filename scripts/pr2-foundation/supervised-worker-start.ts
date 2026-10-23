@@ -382,11 +382,21 @@ export async function readTerminalGoneDispatch(
   const resourceTerminalId = providerText(resource?.terminalHandle);
   const workerWorktreeId = providerText(worker?.worktree_id);
   const resourceWorktreeId = providerText(resource?.worktreeId);
+  const terminal = isRecord(shown?.terminal) ? shown.terminal : null;
+  const terminalHandle = providerText(terminal?.handle);
+  const missingTerminal = observation?.exactWorker === false
+    && ['missing', 'terminal_missing'].includes(providerText(observation?.status).toLowerCase())
+    && shown?.terminal === null;
+  const exitedOrphanedTerminal = observation?.exactWorker === true
+    && providerText(observation?.status) === 'exited'
+    && terminal?.orphaned === true
+    && Boolean(terminalHandle)
+    && Boolean(workerTerminalId || resourceTerminalId)
+    && (!workerTerminalId || terminalHandle === workerTerminalId)
+    && (!resourceTerminalId || terminalHandle === resourceTerminalId);
   if ((observedId && observedId !== expected.bindingKey)
     || providerText(dispatch?.status).toLowerCase() !== status
-    || observation?.exactWorker !== false
-    || !['missing', 'terminal_missing'].includes(providerText(observation?.status).toLowerCase())
-    || shown?.terminal !== null
+    || (!missingTerminal && !exitedOrphanedTerminal)
     || (shown?.worker !== null && shown?.worker !== undefined && !isRecord(shown.worker))
     || (shown?.terminalResource !== null && shown?.terminalResource !== undefined && !isRecord(shown.terminalResource))
     || (workerTerminalId && resourceTerminalId && workerTerminalId !== resourceTerminalId)
@@ -396,7 +406,7 @@ export async function readTerminalGoneDispatch(
       || providerText(resource.ownerDispatchId) !== expected.bindingKey
     ))) return null;
 
-  const priorTerminalId = workerTerminalId || resourceTerminalId;
+  const priorTerminalId = workerTerminalId || resourceTerminalId || (exitedOrphanedTerminal ? terminalHandle : '');
   const worktreeId = workerWorktreeId || resourceWorktreeId;
   return {
     taskId: expected.taskId,
