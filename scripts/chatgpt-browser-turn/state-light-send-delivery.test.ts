@@ -2783,6 +2783,7 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
   type Case = 'negative' | 'positive' | 'incomplete' | 'paginated' | 'get429'
     | 'changed-composer' | 'pre-actionability-budget' | 'late-positive'
     | 'overslept-poll' | 'reused-page' | 'late-assistant' | 'post-guard-whitespace'
+    | 'post-guard-space' | 'post-guard-tab' | 'post-guard-blank' | 'post-guard-boundary'
     | 'affirmative-finalized' | 'affirmative-late-stop' | 'affirmative-late-draft';
   let root: string;
 
@@ -2864,10 +2865,14 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
       innerText: vi.fn(async () => {
         // The final normalized guard runs after the successful GET, after the
         // preceding lossless read. Mutation here must veto a second click.
-        if (kind === 'post-guard-whitespace' && calls.length === 1
+        if (kind.startsWith('post-guard-') && calls.length === 1
           && clickCount === 1 && !injectedWhitespaceMutation) {
           injectedWhitespaceMutation = true;
-          draft = draft.replace('\n\n', '\n');
+          const rewrittenBoundary = kind === 'post-guard-whitespace' ? '\n'
+            : kind === 'post-guard-space' ? '\n\n '
+              : kind === 'post-guard-tab' ? '\n\n\t'
+                : kind === 'post-guard-blank' ? '\n\n\n' : ' \n';
+          draft = draft.replace('\n\n', rewrittenBoundary);
         }
         const visible = draft;
         if (corruption?.when === 'after-proof-read' && clickCount === 1
@@ -3066,6 +3071,8 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     ['pre-actionability-budget', 2, 0], ['late-positive', 2, 1],
     ['overslept-poll', 1, 0], ['reused-page', 1, 0],
     ['late-assistant', 1, 0], ['post-guard-whitespace', 1, 1],
+    ['post-guard-space', 1, 1], ['post-guard-tab', 1, 1],
+    ['post-guard-blank', 1, 1], ['post-guard-boundary', 1, 1],
   ] as const)('guards full held-Page GET and one shared repeat: %s', async (kind, clicks, explicitGets) => {
     const t = await connectedTurn(kind);
     expect(t.click).toHaveBeenCalledTimes(clicks);
@@ -3099,9 +3106,9 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     }
     if (kind === 'late-assistant') expect(t.appendedLateAssistant).toBe(true);
     if (kind === 'reused-page') expect(t.observedReusedNegativeGet).toBe(true);
-    if (kind === 'post-guard-whitespace') expect(t.injectedWhitespaceMutation).toBe(true);
+    if (kind.startsWith('post-guard-')) expect(t.injectedWhitespaceMutation).toBe(true);
     if (kind === 'reused-page' || kind === 'late-assistant'
-      || kind === 'overslept-poll' || kind === 'post-guard-whitespace') {
+      || kind === 'overslept-poll' || kind.startsWith('post-guard-')) {
       expect(t.close).not.toHaveBeenCalled();
       expect(t.observation.phase).not.toBe('not_sent');
     }
