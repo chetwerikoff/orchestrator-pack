@@ -19,7 +19,7 @@ import {
 } from '../lib/worker-assignment-store.ts';
 import { evaluateReadiness } from './readiness-evaluator.ts';
 import { withCrashRecoverableFileLock } from './journal-lock.ts';
-import { runSupervisedWorkerStart } from './supervised-worker-start.ts';
+import { readTerminalGoneDispatch, runSupervisedWorkerStart } from './supervised-worker-start.ts';
 
 const roots: string[] = [];
 const canonicalTerminal = 'term_operator_owned';
@@ -1244,5 +1244,182 @@ describe('Issue #2655 reboot terminal retirement at supervised start', () => {
     expect(outcome.ok).toBe(false);
     expect(starts).toBe(0);
     expect(currentWorkerAssignment(file, 1416)).toEqual(previous.assignment);
+  });
+});
+
+describe('Issue #2696 exact native exited orphaned terminal proof', () => {
+  const taskId = 'task_4081bd3bbb04';
+  const dispatchId = 'ctx_a5f5a38c2f00';
+  const retainedHandle = 'term_20305996-730e-480c-92cc-f2b400a98e04';
+
+  function nativeWorkerShow(): Record<string, unknown> {
+    return {
+      dispatch: { id: dispatchId, taskId, status: 'failed' },
+      worker: { agent_terminal_handle: retainedHandle, worktree_id: canonicalWorktree },
+      terminal: { handle: retainedHandle, orphaned: true, connected: false, writable: false },
+      observation: { status: 'exited', exactWorker: true },
+      terminalResource: {
+        kind: 'external_terminal', releaseState: 'retained', terminalHandle: retainedHandle,
+        worktreeId: canonicalWorktree, originDispatchId: dispatchId, ownerDispatchId: dispatchId,
+      },
+    };
+  }
+
+  function nativeInspect(
+    shown: Record<string, unknown>,
+    selectedStatus = 'failed',
+    selectedId = dispatchId,
+  ) {
+    const placement = inspectPlacement({ terminal: 'term-fresh' });
+    return async (argv: readonly string[]) => {
+      if (argv[0] === 'orchestration' && argv[1] === 'dispatch-show') {
+        expect(argv).toEqual(['orchestration', 'dispatch-show', '--task', taskId, '--json']);
+        return { ok: true, stdout: envelope({ dispatch: { id: selectedId, status: selectedStatus } }) };
+      }
+      if (argv[0] === 'orchestration' && argv[1] === 'worker-show') {
+        expect(argv).toEqual(['orchestration', 'worker-show', '--dispatch', dispatchId, '--json']);
+        return { ok: true, stdout: envelope(shown) };
+      }
+      return placement(argv);
+    };
+  }
+
+  async function priorManager() {
+    const base = root();
+    const env = { ...process.env, OPK_BASE_DIR: base };
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    const published = await publishCurrentWorkerAssignment({
+      file, repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2696,
+      taskId, kind: 'local', provider: 'orca', bindingKey: dispatchId, role: 'orchestrator',
+    });
+    if (!published.ok) throw new Error(published.reason);
+    return { env, file, previous: published.assignment };
+  }
+
+  it('admits the native exited/exactWorker orphaned manager on the same Task', async () => {
+    const { env, file, previous } = await priorManager();
+    const inspect = nativeInspect(nativeWorkerShow());
+    expect(await readTerminalGoneDispatch(previous, inspect)).toEqual({
+      taskId, dispatchId, dispatchState: 'failed', priorTerminalId: retainedHandle,
+      worktreeId: canonicalWorktree, workerAbsent: true,
+    });
+
+    // The adapter cannot resolve the old process; only the exact native proof permits replacement.
+    const unavailableAdapter = new OrcaTaskRuntimeAdapter({
+      runJson: vi.fn((): OrcaJsonResponse => ({
+        ok: false, error: { code: 'native_unavailable', message: 'adapter cannot resolve old worker' },
+      })) as never,
+      env,
+    });
+    const execute = vi.fn(async () => ({
+      ok: true, stdout: envelope({
+        taskId, dispatchId: 'ctx_new_manager_2696', state: 'ready',
+        effects: producerEffects({ terminal: 'term-fresh' }),
+      }),
+    }));
+    const result = await runSupervisedWorkerStart({
+      mode: 'exact_terminal_worktree', role: 'orchestrator', issueNumber: 2696,
+      repository: 'chetwerikoff/orchestrator-pack', env, adapter: unavailableAdapter,
+      orcaArgs: argsForTerminal('terminal:fresh', taskId), inspect, execute,
+    });
+    expect(result).toMatchObject({
+      ok: true, reason: 'ready_and_assignment_bound',
+      assignment: { taskId, bindingKey: 'ctx_new_manager_2696', generation: 2, role: 'orchestrator' },
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(currentWorkerAssignment(file, 2696)?.assignmentId).not.toBe(previous.assignmentId);
+  });
+
+  const refusals: {
+    name: string;
+    change: (shown: Record<string, unknown>) => void;
+    selectedStatus?: string;
+    selectedId?: string;
+  }[] = [
+    { name: 'non-orphaned live terminal', change: (shown) => {
+      (shown.terminal as Record<string, unknown>).orphaned = false;
+    } },
+    { name: 'orphaned flag absent', change: (shown) => {
+      delete (shown.terminal as Record<string, unknown>).orphaned;
+    } },
+    { name: 'running observation', change: (shown) => {
+      (shown.observation as Record<string, unknown>).status = 'running';
+    } },
+    { name: 'active observation', change: (shown) => {
+      (shown.observation as Record<string, unknown>).status = 'active';
+    } },
+    { name: 'exited without exactWorker true', change: (shown) => {
+      (shown.observation as Record<string, unknown>).exactWorker = false;
+    } },
+    { name: 'exited without terminal record', change: (shown) => {
+      shown.terminal = null;
+    } },
+    { name: 'missing retained terminal handle', change: (shown) => {
+      (shown.terminal as Record<string, unknown>).handle = '';
+    } },
+    { name: 'uncorroborated retained handle', change: (shown) => {
+      (shown.worker as Record<string, unknown>).agent_terminal_handle = null;
+      (shown.terminalResource as Record<string, unknown>).terminalHandle = null;
+    } },
+    { name: 'worker versus terminal handle mismatch', change: (shown) => {
+      (shown.worker as Record<string, unknown>).agent_terminal_handle = 'term_foreign';
+    } },
+    { name: 'resource versus terminal handle mismatch', change: (shown) => {
+      (shown.terminalResource as Record<string, unknown>).terminalHandle = 'term_foreign';
+    } },
+    { name: 'nonterminal selected Dispatch', selectedStatus: 'dispatched', change: (shown) => {
+      (shown.dispatch as Record<string, unknown>).status = 'dispatched';
+    } },
+    { name: 'contradictory worker-show Dispatch id', change: (shown) => {
+      (shown.dispatch as Record<string, unknown>).id = 'ctx_foreign';
+    } },
+    { name: 'abbreviated worker-show Dispatch id', change: (shown) => {
+      (shown.dispatch as Record<string, unknown>).id = 'ctx_a5f5a38c2f0';
+    } },
+    { name: 'contradictory dispatch-show Dispatch id', selectedId: 'ctx_foreign', change: () => {} },
+    { name: 'mismatched Dispatch status', change: (shown) => {
+      (shown.dispatch as Record<string, unknown>).status = 'completed';
+    } },
+    { name: 'foreign origin Dispatch', change: (shown) => {
+      (shown.terminalResource as Record<string, unknown>).originDispatchId = 'ctx_foreign';
+    } },
+    { name: 'foreign owner Dispatch', change: (shown) => {
+      (shown.terminalResource as Record<string, unknown>).ownerDispatchId = 'ctx_foreign';
+    } },
+    { name: 'mismatched worktree identity', change: (shown) => {
+      (shown.worker as Record<string, unknown>).worktree_id = 'repo::foreign-worktree';
+    } },
+  ];
+
+  it.each(refusals)('refuses $name from the native exited/orphaned fixture', async ({
+    change, selectedStatus, selectedId,
+  }) => {
+    const { previous } = await priorManager();
+    const shown = nativeWorkerShow();
+    change(shown);
+    expect(await readTerminalGoneDispatch(previous, nativeInspect(
+      shown, selectedStatus, selectedId,
+    ))).toBeNull();
+  });
+
+  it('keeps the previous manager assignment when exited proof lacks orphaned state', async () => {
+    const { env, file, previous } = await priorManager();
+    const shown = nativeWorkerShow();
+    (shown.terminal as Record<string, unknown>).orphaned = false;
+    const unavailableAdapter = new OrcaTaskRuntimeAdapter({
+      runJson: vi.fn((): OrcaJsonResponse => ({
+        ok: false, error: { code: 'native_unavailable', message: 'adapter cannot resolve old worker' },
+      })) as never,
+      env,
+    });
+    const execute = vi.fn(async () => ({ ok: true, stdout: '' }));
+    const result = await runSupervisedWorkerStart({
+      role: 'orchestrator', issueNumber: 2696, repository: 'chetwerikoff/orchestrator-pack',
+      env, adapter: unavailableAdapter, inspect: nativeInspect(shown),
+      orcaArgs: argsForTerminal('terminal:fresh', taskId), execute,
+    });
+    expect(result.ok).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
+    expect(currentWorkerAssignment(file, 2696)).toEqual(previous);
   });
 });
