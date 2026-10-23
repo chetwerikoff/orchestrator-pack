@@ -895,6 +895,9 @@ export async function revalidateKeyedHarvest(
             if (node.tagName === 'BUTTON' || node.getAttribute('role') === 'button'
               || node.getAttribute('aria-hidden') === 'true' || node.hasAttribute('inert')
               || !visible(node)) return false;
+            // Visible non-text media outside the inferred answer root cannot be
+            // discarded as an empty text leaf: its reply boundary is unproven.
+            if (/^(?:IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|MATH|HR)$/u.test(node.tagName)) return true;
             const nodes = Array.from(node.childNodes);
             if (nodes.length === 0) return Boolean((node as HTMLElement).innerText?.trim());
             return nodes.some((item) => item.nodeType === 3
@@ -2151,6 +2154,9 @@ export async function readPageObservation(
               if (node.tagName === 'BUTTON' || node.getAttribute('role') === 'button'
                 || node.getAttribute('aria-hidden') === 'true' || node.hasAttribute('inert')
                 || !visible(node)) return false;
+              // Visible non-text media outside the inferred answer root cannot be
+              // discarded as an empty text leaf: its reply boundary is unproven.
+              if (/^(?:IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|MATH|HR)$/u.test(node.tagName)) return true;
               const nodes = Array.from(node.childNodes);
               if (nodes.length === 0) return Boolean((node as HTMLElement).innerText?.trim());
               return nodes.some((item) => item.nodeType === 3
@@ -2808,7 +2814,8 @@ async function readStructuredComposerText(
         };
         const readable = (node: HTMLElement): boolean => {
           if (node.getAttribute('hidden') !== null || node.getAttribute('aria-hidden') === 'true'
-            || node.getAttribute('contenteditable') === 'false') return false;
+            || node.getAttribute('contenteditable') === 'false'
+            || node.hasAttribute?.('inert') || node.getAttribute('inert') !== null) return false;
           const style = view.getComputedStyle(node);
           return Boolean(style) && style.display !== 'none'
             && style.visibility !== 'hidden' && style.visibility !== 'collapse';
@@ -8948,6 +8955,7 @@ export const __testSendDelivery = {
   readLosslessOwnedComposer,
   composerPayloadMatchesBeforeSend,
   conditionalClearOwnedComposerDraft,
+  readRetirementComposer,
   observeExistingServerCheckedRecovery,
 };
 
