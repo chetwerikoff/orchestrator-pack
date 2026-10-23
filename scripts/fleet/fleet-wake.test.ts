@@ -4099,6 +4099,55 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
     }
   });
 
+
+  it('ordinary STOPPED coordinator alarm refuses a shell and sends exactly once when safe', async () => {
+    const store = new MemoryWakeStore();
+    const first = await tick({
+      config: wakeConfig, store, terminals: [{ ...coordinator, title: 'bash - login' }, worker],
+      screens: { coord: 'idle', one: 'done' }, ...emptyFacts,
+    });
+    expect(sendsTo(first.calls, coordinator.handle)).toHaveLength(0);
+    const safe = await tick({
+      config: wakeConfig, store, terminals: [coordinator, worker],
+      screens: { coord: 'working\nesc interrupt', one: 'done' }, ...emptyFacts,
+    });
+    expect(sendsTo(safe.calls, coordinator.handle)).toHaveLength(2);
+    const repeated = await tick({
+      config: wakeConfig, store, terminals: [coordinator, worker],
+      screens: { coord: 'working\nesc interrupt', one: 'done' }, ...emptyFacts,
+    });
+    expect(sendsTo(repeated.calls, coordinator.handle)).toHaveLength(0);
+  });
+
+  it('startup rechecks between text and Enter and retries only a positively refused Enter', async () => {
+    const calls: string[][] = [];
+    const logs: string[] = [];
+    const store = new MemoryWakeStore();
+    let tickNumber = 0;
+    let becameShell = false;
+    const executor: OrcaExecutor = (args) => {
+      calls.push([...args]);
+      if (tickNumber === 0 && args[0] === 'terminal' && args[1] === 'send'
+        && args.includes('--text') && args.includes(startupWakeText)) becameShell = true;
+      return fakeOrca({ coord: 'idle' }, [],
+        [{ ...coordinator, ...(becameShell ? { title: 'zsh' } : {}) }])(args);
+    };
+    await expect(runFleetWakeLoop(wakeConfig, {
+      executor, store, log: (line) => logs.push(line),
+      listTerminalEnvelopes: () => [], listUnreadRunMessages: () => [],
+      listOpenPulls: () => [], readPackReviewRuns: () => [],
+      sleepMs: async (ms) => {
+        if (ms !== wakeConfig.intervalSeconds * 1_000) return;
+        tickNumber += 1;
+        becameShell = false;
+        if (tickNumber >= 3) throw new Error('bounded correction startup');
+      },
+    })).rejects.toThrow('bounded correction startup');
+    expect(startupTextSends(calls)).toHaveLength(2);
+    expect(sendsTo(calls, coordinator.handle).filter((row) => !row.includes('--text'))).toHaveLength(1);
+    expect(logs.join(' ')).toContain('unsafe before Enter; queued');
+  });
+
   it('startup Wake skips a shell pin, then sends on a later safe tick exactly once', async () => {
     const observed = await boundedStartupWake({
       settings: wakeConfig,
