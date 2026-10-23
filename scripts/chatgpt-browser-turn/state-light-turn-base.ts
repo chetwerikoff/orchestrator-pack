@@ -2626,26 +2626,34 @@ function composerPayloadFailureCause(deadlineMs: number): PreSendComposerFailure
 }
 
 async function readStructuredComposerText(
-  composer: any, expectedLength: number, deadlineMs: number,
+  composer: any, expectedLength: number, deadlineMs: number, requireUniqueEditor = false,
 ): Promise<string | undefined> {
   const waitMs = deadlineMs - Date.now();
   if (waitMs <= 0 || typeof composer?.evaluate !== 'function') return undefined;
   try {
     const text = await boundedBrowserRead(
-      Promise.resolve(composer.evaluate((element: HTMLElement, maxChars: number) => {
-        // ProseMirror paragraphs encode document newlines independently of
-        // CSS innerText spacing. Text nodes (including spaces/tabs) are literal.
+      Promise.resolve(composer.evaluate((element: HTMLElement, args: {
+        maxChars: number; unique: boolean; selector: string;
+      }) => {
+        // A complete ProseMirror paragraph tree is the only supported exact
+        // structural representation. Presentation innerText is not literal text.
         if (!element.isConnected || !element.isContentEditable
-          || !element.classList.contains('ProseMirror')) return undefined;
-        const view = element.ownerDocument.defaultView;
+          || !element.classList?.contains('ProseMirror')) return undefined;
+        const doc = element.ownerDocument;
+        const view = doc?.defaultView;
         if (!view) return undefined;
+        if (args.unique) {
+          if (typeof doc.querySelectorAll !== 'function') return undefined;
+          const editors = doc.querySelectorAll(args.selector);
+          if (editors.length !== 1 || editors[0] !== element) return undefined;
+        }
         const parts: string[] = [];
-        const maxNodes = Math.min(20_000, maxChars * 2 + 256);
+        const maxNodes = Math.min(20_000, args.maxChars * 2 + 256);
         let nodes = 0;
         let chars = 0;
         const append = (value: string): boolean => {
           chars += value.length;
-          if (chars > maxChars) return false;
+          if (chars > args.maxChars) return false;
           parts.push(value);
           return true;
         };
@@ -2653,7 +2661,8 @@ async function readStructuredComposerText(
           if (node.getAttribute('hidden') !== null || node.getAttribute('aria-hidden') === 'true'
             || node.getAttribute('contenteditable') === 'false') return false;
           const style = view.getComputedStyle(node);
-          return style.display !== 'none' && style.visibility !== 'hidden' && style.visibility !== 'collapse';
+          return Boolean(style) && style.display !== 'none'
+            && style.visibility !== 'hidden' && style.visibility !== 'collapse';
         };
         const walk = (node: Node, depth: number, trailingBreak: boolean): boolean => {
           if (++nodes > maxNodes || depth > 32) return false;
@@ -2663,7 +2672,8 @@ async function readStructuredComposerText(
           if (!readable(child)) return false;
           if (child.tagName === 'BR') {
             if (child.childNodes.length !== 0) return false;
-            return child.classList.contains('ProseMirror-trailingBreak') ? trailingBreak : append('\n');
+            return child.classList.contains('ProseMirror-trailingBreak')
+              ? trailingBreak : append('\n');
           }
           if (!(child.tagName === 'P' && depth === 1)
             && !['A', 'SPAN', 'CODE', 'STRONG', 'EM', 'B', 'I', 'S', 'U'].includes(child.tagName)) return false;
@@ -2673,17 +2683,17 @@ async function readStructuredComposerText(
           }
           return true;
         };
-        if (!readable(element) || element.childNodes.length > maxNodes) return undefined;
-        let paragraphs: boolean | undefined;
+        if (!readable(element) || element.childNodes.length < 1
+          || element.childNodes.length > maxNodes) return undefined;
         for (let i = 0; i < element.childNodes.length; i++) {
           const child = element.childNodes[i]!;
-          const isParagraph = child.nodeType === 1 && (child as HTMLElement).tagName === 'P';
-          paragraphs ??= isParagraph;
-          if (paragraphs !== isParagraph || (isParagraph && i > 0 && !append('\n'))
-            || !walk(child, 1, false)) return undefined;
+          // A sole empty p is an empty draft; interior empty p siblings
+          // always contribute a newline, including data-empty-paragraph ones.
+          if (child.nodeType !== 1 || (child as HTMLElement).tagName !== 'P'
+            || (i > 0 && !append('\n')) || !walk(child, 1, false)) return undefined;
         }
         return parts.join('');
-      }, expectedLength)),
+      }, { maxChars: expectedLength, unique: requireUniqueEditor, selector: COMPOSER_SELECTOR })),
       waitMs, 'send_composer_structure_timeout',
     );
     return typeof text === 'string' ? text : undefined;
@@ -2995,6 +3005,8 @@ async function freshRetryDomGuards(input: {
   if (browserOrPageDefinitelyLost(input.page, input.browser)) return false;
   try {
     if (await readFreshStopVisible(input.page, input.deadlineMs) !== false) return false;
+    if (await readLosslessOwnedComposer(input.composer, input.deadlineMs, false,
+      input.markerPayload.length) !== input.markerPayload) return false;
     if (!await composerPayloadMatchesBeforeSend(
       input.composer, input.markerPayload, input.deadlineMs,
     )) return false;
@@ -3002,7 +3014,10 @@ async function freshRetryDomGuards(input: {
       input.page, undefined, undefined, true, input.deadlineMs,
     );
     return !observed.transcriptIncomplete && observed.snapshot?.complete === true
-      && observed.messages.filter((message) => message.role === 'user').length === input.baselineUserNodeCount;
+      && observed.messages.filter((message) => message.role === 'user').length === input.baselineUserNodeCount
+      && await readFreshStopVisible(input.page, input.deadlineMs) === false
+      && await readLosslessOwnedComposer(input.composer, input.deadlineMs, false,
+        input.markerPayload.length) === input.markerPayload;
   } catch {
     return false;
   }
@@ -3018,19 +3033,34 @@ async function readLosslessOwnedComposer(
   composer: any,
   deadlineMs: number,
   useInvocationDeadline = false,
+  maxChars = 262_144,
 ): Promise<string | undefined> {
   const waitMs = useInvocationDeadline ? deadlineMs - Date.now()
     : Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
   if (waitMs <= 0 || typeof composer?.evaluate !== 'function') return undefined;
   try {
+    // Use the same paragraph interpretation as retirement and atomic clear,
+    // but demand an entire unique, visible editor for retry authority.
+    const structural = await readStructuredComposerText(composer, maxChars, deadlineMs, true);
+    if (structural !== undefined) return structural;
     const result = await boundedBrowserRead(
-      Promise.resolve(composer.evaluate((element: HTMLElement) => ({
-        content: element.textContent,
-        visible: element.innerText,
-      }))),
+      Promise.resolve(composer.evaluate((element: HTMLElement, selector: string) => {
+        if (!element.isConnected || !element.isContentEditable
+          || element.classList?.contains('ProseMirror')) return undefined;
+        const doc = element.ownerDocument;
+        const view = doc?.defaultView;
+        if (!view || typeof doc.querySelectorAll !== 'function') return undefined;
+        const editors = doc.querySelectorAll(selector);
+        if (editors.length !== 1 || editors[0] !== element) return undefined;
+        if (element.getAttribute('hidden') !== null || element.getAttribute('aria-hidden') === 'true') return undefined;
+        const style = view.getComputedStyle(element);
+        if (!style || style.display === 'none' || style.visibility === 'hidden'
+          || style.visibility === 'collapse') return undefined;
+        return { content: element.textContent, visible: element.innerText };
+      }, COMPOSER_SELECTOR)),
       waitMs, 'recovery_lossless_composer_timeout',
-    ) as { content?: unknown; visible?: unknown };
-    return typeof result.content === 'string' && result.content === result.visible
+    ) as { content?: unknown; visible?: unknown } | undefined;
+    return typeof result?.content === 'string' && result.content === result.visible
       ? result.content : undefined;
   } catch {
     return undefined;
@@ -3059,6 +3089,8 @@ async function existingRetryDomGuards(input: {
     && Date.now() < input.deadlineMs;
   if (!samePage()) return false;
   try {
+    if (await readLosslessOwnedComposer(input.composer, input.deadlineMs, false,
+      input.markedPayload.length) !== input.markedPayload) return false;
     if (!await composerPayloadMatchesBeforeSend(
       input.composer, input.markedPayload, input.deadlineMs,
     )) return false;
@@ -3084,7 +3116,9 @@ async function existingRetryDomGuards(input: {
     if (current.length !== baseline.carriers.length) return false;
     // The final Stop/liveness/URL check follows the transcript read so a late
     // generation or redirect cannot turn a stale census into a second click.
-    return await readFreshStopVisible(input.page, input.deadlineMs) === false && samePage();
+    return await readFreshStopVisible(input.page, input.deadlineMs) === false && samePage()
+      && await readLosslessOwnedComposer(input.composer, input.deadlineMs, false,
+        input.markedPayload.length) === input.markedPayload && samePage();
   } catch {
     return false;
   }
@@ -3747,14 +3781,11 @@ async function conditionalClearOwnedComposerDraft(
             }
             return true;
           };
-          let paragraphs: boolean | undefined;
-          if (element.childNodes.length > 20_000) return false;
+          if (element.childNodes.length === 0 || element.childNodes.length > 20_000) return false;
           for (let i = 0; i < element.childNodes.length; i++) {
             const child = element.childNodes[i]!;
-            const isP = child.nodeType === 1 && (child as HTMLElement).tagName === 'P';
-            paragraphs ??= isP;
-            if (paragraphs !== isP || (isP && i > 0 && !append('\n'))
-              || !visit(child, 1, false)) return false;
+            if (child.nodeType !== 1 || (child as HTMLElement).tagName !== 'P'
+              || (i > 0 && !append('\n')) || !visit(child, 1, false)) return false;
           }
           literal = parts.join('');
         } else {
@@ -4858,7 +4889,8 @@ async function runTurnCore(
         // DOM/owner checks are required; no third attempt after this second call.
         if (await composerPayloadMatchesBeforeSend(
           composer, markedPayload, Math.min(invocationDeadlineMs, preDispatchCutoffMs),
-        )) {
+        ) && await readLosslessOwnedComposer(composer, Math.min(invocationDeadlineMs, preDispatchCutoffMs),
+          false, markedPayload.length) === markedPayload) {
           assertFreshOwner();
           if (Date.now() < preDispatchCutoffMs) {
             delivery = await sendAction();
@@ -5031,6 +5063,8 @@ async function runTurnCore(
         // Only the first click's actual positive non-dispatch action result grants
         // this one optional repeat; an uncertain first action or Enter never does.
         if (await composerPayloadMatchesBeforeSend(composer, markedPayload, invocationDeadlineMs)
+          && await readLosslessOwnedComposer(composer, invocationDeadlineMs, false,
+            markedPayload.length) === markedPayload
           && originalExactChat && !browserOrPageDefinitelyLost(page, browser)
           && normalizeConversationUrl(String(page.url())) === originalExactChat
           && readOwnedConversationIdentity(page, originalExactChat).matched) {
@@ -8076,8 +8110,8 @@ type GuardedRetirementResult = {
   readonly cause: string;
 };
 
-// The cleanup reader is deliberately NOT the existing-chat re-click reader.
-// #2651's raw textContent===innerText retry evidence stays unchanged.
+// Retirement and retries share total ProseMirror paragraph reconstruction.
+// Non-ProseMirror fallback is exact-only; unknown drafts never grant close.
 async function readRetirementComposer(
   page: any, ownedLiteral: string | undefined, deadlineMs: number,
 ): Promise<'empty' | 'own' | 'foreign_draft' | 'composer_unknown' | 'frozen_ownership_unproven'> {
