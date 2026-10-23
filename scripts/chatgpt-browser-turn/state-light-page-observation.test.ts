@@ -776,12 +776,12 @@ describe('DOM observation boundary', () => {
   }
 
   it('preserves complete ordered prose + direct PRE + trailing prose under a layout wrapper at both reads (#2694)', async () => {
-    const code = 'literal  spaces\\n  leading tab\\t\\n';
+    const code = 'literal  spaces\n  leading tab\t\n';
     const fixture = richPage([
-      { prose: 'Before code' }, { code, directPre: true }, { prose: 'After code\\nEXECUTION_STATUS: complete' },
+      { prose: 'Before code' }, { code, directPre: true }, { prose: 'After code\nEXECUTION_STATUS: complete' },
     ]);
     wrapRichContent(fixture.current);
-    const expected = ['Before code', '```\\n' + code + '```', 'After code\\nEXECUTION_STATUS: complete'].join('\\n\\n');
+    const expected = ['Before code', '```\n' + code + '```', 'After code\nEXECUTION_STATUS: complete'].join('\n\n');
     const observed = await readPageObservation(fixture.page, marker, 0);
     expect(observed.transcriptIncomplete).toBe(false);
     expect(observed.snapshot?.carriers.at(-1)?.text).toBe(expected);
@@ -799,7 +799,7 @@ describe('DOM observation boundary', () => {
     'refuses unexplained rich-root wrapper/status text (%s) at observation and keyed revalidation (#2694)',
     async (variant) => {
       const fixture = richPage([
-        { prose: 'Before code' }, { code: 'example\\n', directPre: true }, { prose: 'After code' },
+        { prose: 'Before code' }, { code: 'example\n', directPre: true }, { prose: 'After code' },
       ]);
       const { layout, content } = wrapRichContent(fixture.current);
       if (variant === 'outer-span-status') layout.append(richNode('DIV').append(richNode('SPAN', 'Copied')));
@@ -825,7 +825,7 @@ describe('DOM observation boundary', () => {
   );
 
   it('rejects rendered prose inside a rectless display:contents sibling OUTSIDE code root at both reads (#2694)', async () => {
-    const fixture = richPage([{ code: 'safe code\\n' }]);
+    const fixture = richPage([{ code: 'safe code\n' }]);
     const transparent = richNode('DIV', '', {}, false, true);
     transparent.append(richNode('SPAN', 'TRAILING PROSE NOT INSIDE CODE'));
     fixture.current.append(transparent);
@@ -836,7 +836,7 @@ describe('DOM observation boundary', () => {
     const ownKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
     expect(keyedHarvestCandidate(observed.snapshot!, previous, ownKey).state).not.toBe('ready');
     await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
-      reply: '```\\nsafe code\\n```',
+      reply: '```\nsafe code\n```',
       assistantKey: 'data-message-id:assistant-rich-12345678',
       snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
     })).resolves.toEqual({ state: 'continuity-unproven' });
