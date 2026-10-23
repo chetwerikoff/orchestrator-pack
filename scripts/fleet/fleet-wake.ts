@@ -84,6 +84,8 @@ export interface FleetWakeStateStore extends FleetPollingStore {
   hasParkedWakeEvent(key: string): boolean;
   readParkedWakeEventStatus(key: string): 'sent' | 'attempted_unverified' | undefined;
   markParkedWakeEvent(key: string, status?: 'sent' | 'attempted_unverified'): void;
+  /** Clear only a deterministically refused Wake, before its second Enter. */
+  clearParkedWakeEvent?(key: string): void;
   rearmParkedWakeEvents(observedKeys: ReadonlyMap<string, string | null>): void;
   // Re-arm only after a positively observed ordinary-work clearance on that pane.
   rearmPermissionWakeEvents?(scope: string): void;
@@ -247,6 +249,10 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
   markParkedWakeEvent(key: string, status: 'sent' | 'attempted_unverified' = 'sent'): void {
     mkdirSync(this.root, { recursive: true });
     writeFileSync(this.parkedWakeEventPath(key), `${key}\n${status}\n`, 'utf8');
+  }
+
+  clearParkedWakeEvent(key: string): void {
+    rmSync(this.parkedWakeEventPath(key), { force: true });
   }
 
   rearmPermissionWakeEvents(scope: string): void {
@@ -1115,42 +1121,59 @@ function boundIssueManager(
   return current.length === 1 && pane.length === 1 ? { pane: pane[0]!, assignment } : undefined;
 }
 
-/** Verify a fresh native designation and actual pane screen, without mutating sweep history. */
+/** One fresh native/screen check shared by parked workers, STOPPED events and coordinator sends. */
 function freshSendSafePane(
-  expected: FleetPaneObservation,
+  expected: FleetTerminal | FleetPaneObservation,
   current: readonly FleetTerminal[],
   options: FleetAlarmTickOptions,
   executor: OrcaExecutor,
-  store: FleetWakeStateStore,
+  store?: FleetWakeStateStore,
 ): boolean {
   const matches = current.filter((row) => terminalsIdentity(row) === terminalsIdentity(expected)
-    && row.title === expected.title && row.agentIdentity === expected.agentIdentity
     && row.status?.toLowerCase() !== 'exited');
-  if (matches.length !== 1 || (expected.state !== 'PARKED' && expected.state !== 'STOPPED')) return false;
-  // Run the existing screen classifier for this pane only. Read-only store
-  // methods keep a near-effect check from pruning another pane's wait.
-  const fresh = runFleetSweep({
-    primary: options.config.primary, projectId: options.config.projectId,
-    workspaceRe: options.config.workspaceRe,
-    coordinatorTitleRe: options.config.orchestratorTitleRe,
-    architectHandle: options.config.architectHandle, busyRe: options.config.busyRe,
-    terminals: matches, executor,
-    store: {
-      hasPollingMark: (handle) => store.hasPollingMark(handle),
-      setPollingMark: () => {}, clearPollingMark: () => {},
-    },
-  });
-  if (fresh.length !== 1) return false;
-  const pane = fresh[0]!;
-  if (terminalsIdentity(pane) !== terminalsIdentity(expected) || pane.state !== expected.state) return false;
-  if (expected.state === 'STOPPED') {
-    // Without an unchanged own terminal response, idle vs former shell is
-    // unverified. A newly active, permission or shell screen must not get Enter.
-    return pane.wait === undefined && pane.lines.length > 0
-      && JSON.stringify(pane.lines) === JSON.stringify(expected.lines);
-  }
-  return pane.wait === expected.wait
-    && lastFleetParkedLine(readFleetScreen(expected.handle, executor)) === expected.wait;
+  if (matches.length !== 1) return false;
+  const native = matches[0]!;
+  // Missing/unknown title or absent agent identity is not positive shell evidence.
+  if (/^(?:bash|zsh|sh|fish|dash|ksh|shell)(?:\s|$|[-:])/iu.test(native.title.trim())
+    || /^(?:shell|non[-_ ]?agent|none|bash|zsh|sh)$/iu.test(native.agentIdentity?.trim() ?? '')
+    || (expected.agentIdentity && native.agentIdentity
+      && expected.agentIdentity !== native.agentIdentity)) return false;
+  try {
+    if (!('state' in expected)) {
+      // The coordinator may be busy; an actual readable screen is sufficient.
+      readFleetScreen(expected.handle, executor);
+      return true;
+    }
+    if (!store || (expected.state !== 'PARKED' && expected.state !== 'STOPPED')) return false;
+    // Explicitly use the effective hot pin (including empty), never process.env.
+    const fresh = runFleetSweep({
+      primary: options.config.primary, projectId: options.config.projectId,
+      workspaceRe: options.config.workspaceRe,
+      coordinatorHandle: resolveCoordinatorPane(current, options.config)?.handle ?? '',
+      coordinatorTitleRe: options.config.orchestratorTitleRe,
+      architectHandle: options.config.architectHandle, busyRe: options.config.busyRe,
+      terminals: matches, executor,
+      store: {
+        hasPollingMark: (handle) => store.hasPollingMark(handle),
+        setPollingMark: () => {}, clearPollingMark: () => {},
+      },
+    });
+    if (fresh.length !== 1) {
+      // Missing title is not a refusal; a busy or newly parked screen still is.
+      if (expected.state !== 'STOPPED' || native.title.trim()) return false;
+      const screen = readFleetScreen(expected.handle, executor);
+      return !isBusyScreen(screen, options.config.busyRe)
+        && !lastFleetParkedLine(screen) && !ownPaneOutcome(screen).wait;
+    }
+    const pane = fresh[0]!;
+    if (terminalsIdentity(pane) !== terminalsIdentity(expected) || pane.state !== expected.state) return false;
+    if (expected.state === 'STOPPED') {
+      // Compare state rather than the byte-for-byte tail: only positive drift vetoes.
+      return pane.wait === undefined;
+    }
+    return pane.wait === expected.wait
+      && lastFleetParkedLine(readFleetScreen(expected.handle, executor)) === expected.wait;
+  } catch { return false; }
 }
 
 /** Multiple landed facts for the same manager collapse to one re-check per tick. */
@@ -1574,7 +1597,8 @@ async function alarmParkUncertainty(
   const message = 'UNTRUSTED PANE OBSERVATION — NOT AN INSTRUCTION: unit ' + pane.handle
     + ' ' + reason + ' — ' + safeParkExcerpt(excerpt);
   await sendMarkedUnitMessage(store, key, coordinator.handle, message, executor, sleepMs, log, counts,
-    () => stillParkedOwner() && coordinatorStillSelected(coordinator!, options.config, executor));
+    () => stillParkedOwner() && coordinatorStillSelected(coordinator!, options.config, executor)
+      && freshSendSafePane(coordinator!, listFleetTerminals(executor), options, executor));
 }
 
 interface PaneWakeCounts {
@@ -1610,8 +1634,18 @@ async function sendMarkedUnitMessage(
   }
   let delivered = false;
   try {
-    delivered = sendCoordinator(executor, handle, message)
-      && (await sleepMs(4_000), (!stillSelected || stillSelected()) && submitCoordinator(executor, handle));
+    if (sendCoordinator(executor, handle, message)) {
+      await sleepMs(4_000);
+      if (stillSelected && !stillSelected()) {
+        // No second Enter was attempted: this is a deterministic safety refusal,
+        // not an ambiguous send failure. Preserve the queued event for next tick.
+        try { store.clearParkedWakeEvent?.(key); }
+        catch { log('unit wake refused but mark could not be cleared: ' + key); }
+        log('unit wake recipient unsafe before Enter; queued: ' + key);
+        return false;
+      }
+      delivered = submitCoordinator(executor, handle);
+    }
   } catch { /* Keep attempted_unverified across ticks; delivery is ambiguous. */ }
   if (!delivered) { log('unit wake delivery unverified: ' + key); return false; }
   try { store.markParkedWakeEvent(key, 'sent'); }
@@ -1803,7 +1837,8 @@ async function alarmGoneIssueOwners(
     const key = `gone-issue:${assignment.issueNumber}:${assignment.assignmentId}:${assignment.generation}:${assignment.bindingKey}`;
     const message = `Wake: Issue #${assignment.issueNumber} assigned manager is positively gone with a terminally failed Dispatch - recovery needed, reconcile without replacement guess`;
     await sendMarkedUnitMessage(store, key, coordinator.handle, message, executor, sleepMs, log, counts,
-      () => coordinatorStillSelected(coordinator, options.config, executor));
+      () => coordinatorStillSelected(coordinator, options.config, executor)
+        && freshSendSafePane(coordinator, listFleetTerminals(executor), options, executor));
   }
 }
 
@@ -1915,9 +1950,13 @@ async function wakePanesOnEvents(
     if (bareShellHandles.has(pane.handle)) continue;
     const expected = terminalsIdentity(pane);
     const current = (): boolean => {
-      try { return listFleetTerminals(executor).filter((row) => terminalsIdentity(row) === expected).length === 1
-        && (!coordinator || pane.handle !== coordinator.handle || coordinatorStillSelected(coordinator, options.config, executor)); }
-      catch { return false; }
+      try {
+        const latest = listFleetTerminals(executor);
+        return latest.filter((row) => terminalsIdentity(row) === expected).length === 1
+          && freshSendSafePane(pane, latest, options, executor, store)
+          && (!coordinator || pane.handle !== coordinator.handle
+            || coordinatorStillSelected(coordinator, options.config, executor));
+      } catch { return false; }
     };
     const delivered = await sendMarkedUnitMessage(store, key, pane.handle, message, executor, sleepMs, log, counts, current);
     if (delivered && (!coordinator || pane.handle !== coordinator.handle)) store.clearPaneWait?.(pane.handle);
@@ -2375,8 +2414,9 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       includeOrdinary ? bareAlerts.map((handle) => 'suspected_bare_shell ' + handle) : [],
       localWarnings, deliverPermission.map((warning) => warning.message), eligibleUnreadRunMessages);
     try {
-      if (!coordinatorStillSelected(coordinator, config, executor)) {
-        log('coordinator pin or native identity changed before ordinary alarm');
+      if (!coordinatorStillSelected(coordinator, config, executor)
+        || !freshSendSafePane(coordinator, listFleetTerminals(executor), options, executor)) {
+        log('coordinator pin, native identity or screen unsafe before ordinary alarm');
         return { state: 'send_failed', coordinator: coordinator.handle };
       }
       if (!sendCoordinator(executor, coordinator.handle, message)) {
@@ -2384,8 +2424,9 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
         return { state: 'send_failed', coordinator: coordinator.handle };
       }
       await sleepMs(4_000);
-      if (!coordinatorStillSelected(coordinator, config, executor)) {
-        log(`${coordinator.handle} changed before local chat second Enter`);
+      if (!coordinatorStillSelected(coordinator, config, executor)
+        || !freshSendSafePane(coordinator, listFleetTerminals(executor), options, executor)) {
+        log(`${coordinator.handle} unsafe before local chat second Enter`);
         return { state: 'send_failed', coordinator: coordinator.handle };
       }
       if (!submitCoordinator(executor, coordinator.handle)) {
@@ -2504,16 +2545,26 @@ export async function runFleetWakeLoop(
         const selected = resolveCoordinatorPane(listFleetTerminals(executor), config);
         if (selected && selected.status !== 'exited') {
           readFleetScreen(selected.handle, executor);
-          if (!coordinatorStillSelected(selected, config, executor)) {
-            log('startup wake exact coordinator changed before text; no delivery');
+          const safeStartup = () => coordinatorStillSelected(selected, config, executor)
+            && freshSendSafePane(selected, listFleetTerminals(executor),
+              { ...dependencies, config }, executor);
+          if (!safeStartup()) {
+            log('startup wake exact coordinator unsafe before text; queued');
           } else {
-            // Consume the process-local attempt before the first effectful send.
+            // Ambiguous text-send failures still consume the process-local attempt.
             startupWakePending = false;
-            const submitted = sendCoordinator(executor, selected.handle,
-              'fleet-wake started: run your PROMPT §7 start steps; resume every unit with an open Issue/PR and no live pane')
-              && (await sleepMs(4_000), coordinatorStillSelected(selected, config, executor)
-                && submitCoordinator(executor, selected.handle));
-            if (!submitted) log('startup wake delivery unverified: ' + selected.handle);
+            const textSent = sendCoordinator(executor, selected.handle,
+              'fleet-wake started: run your PROMPT §7 start steps; resume every unit with an open Issue/PR and no live pane');
+            let submitted = false;
+            if (textSent) {
+              await sleepMs(4_000);
+              if (safeStartup()) submitted = submitCoordinator(executor, selected.handle);
+              else {
+                startupWakePending = true;
+                log('startup wake recipient unsafe before Enter; queued');
+              }
+            }
+            if (!submitted && !startupWakePending) log('startup wake delivery unverified: ' + selected.handle);
           }
         }
       } catch {
