@@ -3317,7 +3317,7 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
   });
 
   it.each(['issue', 'envelope'] as const)(
-    'a screen switching to shell after text blocks Enter and retains the uncertain event mark: %s',
+    'a known safety refusal between text and Enter stays queued, unlike an ambiguous send failure: %s',
     async (route) => {
       const initial = route === 'issue' ? 'PARKED on GPT turn inv-mgr334' : 'done';
       const base = executorFor({ [manager.handle]: initial });
@@ -3339,8 +3339,24 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
       expect(first.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 0, paneWakeNotConfirmed: 1 });
       const marks = [...store.parkedWakeEvents].filter((key) =>
         key.startsWith(route === 'issue' ? 'issue:' : 'failure:'));
-      expect(marks).toHaveLength(1);
-      expect(store.readParkedWakeEventStatus(marks[0]!)).toBe('attempted_unverified');
+      expect(marks).toHaveLength(0); // Enter was withheld on positive safety evidence.
+      const safe = await invoke({
+        store, screens: { [manager.handle]: initial },
+        executor: executorFor({ [manager.handle]: initial }),
+        listPublishedIssueFacts: () => route === 'issue' ? [githubFact('new')] : [],
+        listTerminalEnvelopes: () => route === 'envelope' ? [event] : [],
+        readOriginalHandoffReceipt: () => receipt,
+      });
+      expect(texts(safe.calls)).toHaveLength(1);
+      expect(sendsTo(safe.calls, manager.handle)).toHaveLength(2);
+      const repeated = await invoke({
+        store, screens: { [manager.handle]: initial },
+        executor: executorFor({ [manager.handle]: initial }),
+        listPublishedIssueFacts: () => route === 'issue' ? [githubFact('new')] : [],
+        listTerminalEnvelopes: () => route === 'envelope' ? [event] : [],
+        readOriginalHandoffReceipt: () => receipt,
+      });
+      expect(texts(repeated.calls)).toHaveLength(0);
     },
   );
 
