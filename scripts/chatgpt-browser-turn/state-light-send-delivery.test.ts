@@ -786,6 +786,26 @@ describe('production attempted-send result and durable envelope', () => {
       count: async () => 1,
       fill: async (value: string) => { composerText = value; },
       innerText: async () => composerText,
+      // Readiness remains the incumbent presence-only probe; once the first
+      // action was attempted the retry reader sees a coherent unique editor.
+      evaluate: async (
+        callback: (element: unknown, arg?: unknown) => unknown,
+        arg?: unknown,
+        options?: { timeout?: number },
+      ) => {
+        if (options?.timeout !== undefined || firstAction.mock.calls.length === 0) return true;
+        const element: any = {
+          isConnected: true, isContentEditable: true,
+          classList: { contains: () => false }, getAttribute: () => null,
+          get textContent() { return composerText; },
+          get innerText() { return composerText; },
+        };
+        element.ownerDocument = {
+          querySelectorAll: (selector: string) => selector === COMPOSER_SELECTOR ? [element] : [],
+          defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible' }) },
+        };
+        return callback(element, arg);
+      },
       press: firstAction,
     });
     const click = vi.fn(async () => { await firstAction(); });
