@@ -821,7 +821,12 @@ export async function revalidateKeyedHarvest(
         const serializeAssistant = (message: Element, selected: boolean): { text: string; complete: boolean } => {
           const wholeRow = () => ({ text: (message as HTMLElement).innerText, complete: true });
           const unsupported = () => selected ? { text: '', complete: false } : wholeRow();
-          if (message.querySelectorAll('pre').length === 0) return wholeRow();
+          const codeBodySelector = 'pre, .cm-content';
+          // A runnable code block renders as CodeMirror, with no PRE.
+          const isCodeMirror = (node: Element): boolean => node.tagName === 'DIV'
+            && node.getAttribute('role') === 'textbox'
+            && /(?:^|\s)cm-content(?:\s|$)/u.test(node.getAttribute('class') ?? '');
+          if (message.querySelectorAll(codeBodySelector).length === 0) return wholeRow();
           const view = message.ownerDocument?.defaultView;
           if (!view || typeof view.getComputedStyle !== 'function') return unsupported();
           const visible = (node: Element): boolean => {
@@ -840,13 +845,13 @@ export async function revalidateKeyedHarvest(
           const semantic: Element[] = [];
           const scan = (node: Element): void => {
             for (const child of Array.from(node.children)) {
-              if (/^(?:P|PRE|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)
+              if ((/^(?:P|PRE|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName) || isCodeMirror(child))
                 && visible(child)) semantic.push(child);
               scan(child);
             }
           };
           scan(message);
-          const allCodeBlocks = Array.from(message.querySelectorAll('pre'));
+          const allCodeBlocks = Array.from(message.querySelectorAll(codeBodySelector));
           if (allCodeBlocks.length === 0 || allCodeBlocks.some((pre) => !visible(pre))
             || semantic.length === 0) return unsupported();
           const within = (child: Element, candidate: Element): boolean => {
@@ -924,8 +929,8 @@ export async function revalidateKeyedHarvest(
             if (node.getAttribute('contenteditable') !== 'false') return false;
             const ownedByCodeWrapper = Array.from(root!.children).some((child) => {
               const pres = [
-                ...(child.tagName === 'PRE' ? [child] : []),
-                ...Array.from(child.querySelectorAll('pre')),
+                ...(child.tagName === 'PRE' || isCodeMirror(child) ? [child] : []),
+                ...Array.from(child.querySelectorAll(codeBodySelector)),
               ];
               return pres.length === 1 && within(node, child) && !within(node, pres[0]!);
             });
@@ -944,8 +949,14 @@ export async function revalidateKeyedHarvest(
             };
             return controlsOnly(node) && sawButton;
           };
+          // Live ChatGPT marks each code block root and its excluded action bar
+          // (language label, display:contents tooltip wrappers, controls).
+          const isCodeBlockActionBar = (node: Element): boolean =>
+            node.getAttribute('contenteditable') === 'false'
+            && node.getAttribute('data-markdown-copy') === 'exclude'
+            && node.parentElement?.getAttribute('data-code-block') === 'true';
           const contentsDescendant = (node: Element): boolean => Array.from(node.children).some((child) =>
-            !isPureCodeActionBar(child) && (view.getComputedStyle(child)?.display === 'contents' || contentsDescendant(child)));
+            !isPureCodeActionBar(child) && !isCodeBlockActionBar(child) && (view.getComputedStyle(child)?.display === 'contents' || contentsDescendant(child)));
           if (view.getComputedStyle(root!)?.display === 'contents' || contentsDescendant(root!)) return unsupported();
           // root.children omits direct Text nodes; do not certify a lossy rich reply.
           if (Array.from(root.childNodes).some((node) => node.nodeType === 3 && Boolean(node.textContent?.trim()))) {
@@ -954,8 +965,8 @@ export async function revalidateKeyedHarvest(
           const blocks: string[] = [];
           for (const child of Array.from(root.children)) {
             const pres = [
-              ...(child.tagName === 'PRE' ? [child] : []),
-              ...Array.from(child.querySelectorAll('pre')),
+              ...(child.tagName === 'PRE' || isCodeMirror(child) ? [child] : []),
+              ...Array.from(child.querySelectorAll(codeBodySelector)),
             ];
             if (!visible(child)) {
               // A display:contents wrapper has no rectangle but may render prose children.
@@ -975,82 +986,133 @@ export async function revalidateKeyedHarvest(
               return unsupported();
             }
             const pre = pres[0]!;
-            const directCodes = Array.from(pre.children).filter((node) => node.tagName === 'CODE');
-            if (!visible(pre) || directCodes.length !== 1 || pre.querySelectorAll('code').length !== 1) {
-              return unsupported();
+            let codeBlockRoot: Element | null = null;
+            for (let current: Element | null = pre; current; current = current.parentElement) {
+              if (current.getAttribute('data-code-block') === 'true') { codeBlockRoot = current; break; }
+              if (current === child) break;
             }
-            const code = directCodes[0]!;
-            if (!visible(code)) return unsupported();
-            // code.innerText includes some aria-hidden/inert/control descendant text.
-            if (code.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
-            // Language comes exclusively from unique visible non-control
-            // text outside CODE in this one header-and-pre wrapper.
-            const headerSiblings = pre.parentElement === child
-              ? Array.from(child.children).filter((candidate) => candidate !== pre
-                && candidate.tagName !== 'BUTTON' && candidate.getAttribute('role') !== 'button'
-                && visible(candidate))
-              : [];
-            const header = headerSiblings.length === 1
-              && Array.from(child.children).indexOf(headerSiblings[0]!) < Array.from(child.children).indexOf(pre)
-              && (headerSiblings[0]!.tagName === 'HEADER'
-                || (headerSiblings[0]!.tagName === 'DIV'
-                  && (/(?:^|\s)header(?:\s|$)/u.test(headerSiblings[0]!.getAttribute('class') ?? '')
-                    || Boolean(headerSiblings[0]!.querySelector('button, [role="button"]')))))
-              ? headerSiblings[0]! : null;
-            const labels: string[] = [];
-            let invalidLabel = false;
-            let sawPre = false;
-            const visitLabel = (node: Element): void => {
-              if (node === code) return;
-              // Prose is not a language label: allow only inline header labels
-              // outside PRE, or visible language text within this same PRE.
-              if (node !== child && node !== pre && !/^(?:SPAN|LABEL|DIV|HEADER)$/u.test(node.tagName)) {
-                invalidLabel = true;
-                return;
+            let codeEl: Element;
+            let language: string | undefined;
+            if (codeBlockRoot) {
+              // Code root is the structural boundary: code text from its one
+              // body, language from the single label in its excluded action bar.
+              const bars = Array.from(codeBlockRoot.children).filter(isCodeBlockActionBar);
+              if (bars.length !== 1 || !visible(pre)) return unsupported();
+              if (isCodeMirror(pre)) {
+                // CodeMirror virtualizes long documents (.cm-gap placeholders):
+                // accept only a fully rendered body of plain .cm-line rows.
+                if (Array.from(pre.children).some((line) => line.tagName !== 'DIV'
+                  || !/(?:^|\s)cm-line(?:\s|$)/u.test(line.getAttribute('class') ?? ''))) return unsupported();
+                codeEl = pre;
+              } else {
+                const directCodes = Array.from(pre.children).filter((node) => node.tagName === 'CODE');
+                if (directCodes.length !== 1 || pre.querySelectorAll('code').length !== 1
+                  || !visible(directCodes[0]!)) return unsupported();
+                codeEl = directCodes[0]!;
               }
-              if (node === pre) sawPre = true;
-              const children = Array.from(node.childNodes);
-              if (children.length === 0 && node !== child) {
-                const leaf = (node as HTMLElement).innerText?.trim();
-                if (leaf) {
-                  if (node === pre || node.parentElement === pre || (header !== null
-                    && (node === header || node.parentElement === header))) labels.push(leaf);
-                  else invalidLabel = true;
+              if (codeEl.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
+              const barLabels: string[] = [];
+              let invalidBar = false;
+              const visitBar = (node: Element): void => {
+                for (const item of Array.from(node.childNodes)) {
+                  if (item.nodeType === 3) {
+                    const label = item.textContent?.trim();
+                    if (label) barLabels.push(label);
+                  } else if (item.nodeType === 1) {
+                    const element = item as Element;
+                    if (element.tagName === 'BUTTON' || element.getAttribute('role') === 'button'
+                      || /^SVG$/iu.test(element.tagName)) continue;
+                    if (element.tagName !== 'DIV' && element.tagName !== 'SPAN') invalidBar = true;
+                    else visitBar(element);
+                  }
                 }
-                return;
+              };
+              visitBar(bars[0]!);
+              if (invalidBar || barLabels.length > 1
+                || barLabels.some((label) => !/^[A-Za-z][A-Za-z0-9_+#.-]{0,31}$/u.test(label))) return unsupported();
+              language = barLabels[0]?.toLowerCase();
+            } else {
+              if (isCodeMirror(pre)) return unsupported();
+              const directCodes = Array.from(pre.children).filter((node) => node.tagName === 'CODE');
+              if (!visible(pre) || directCodes.length !== 1 || pre.querySelectorAll('code').length !== 1) {
+                return unsupported();
               }
-              for (const item of children) {
-                if (item.nodeType === 3) {
-                  const label = item.textContent?.trim();
-                  if (label) {
+              const code = directCodes[0]!;
+                codeEl = code;
+              if (!visible(code)) return unsupported();
+              // code.innerText includes some aria-hidden/inert/control descendant text.
+              if (code.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
+              // Language comes exclusively from unique visible non-control
+              // text outside CODE in this one header-and-pre wrapper.
+              const headerSiblings = pre.parentElement === child
+                ? Array.from(child.children).filter((candidate) => candidate !== pre
+                  && candidate.tagName !== 'BUTTON' && candidate.getAttribute('role') !== 'button'
+                  && visible(candidate))
+                : [];
+              const header = headerSiblings.length === 1
+                && Array.from(child.children).indexOf(headerSiblings[0]!) < Array.from(child.children).indexOf(pre)
+                && (headerSiblings[0]!.tagName === 'HEADER'
+                  || (headerSiblings[0]!.tagName === 'DIV'
+                    && (/(?:^|\s)header(?:\s|$)/u.test(headerSiblings[0]!.getAttribute('class') ?? '')
+                      || Boolean(headerSiblings[0]!.querySelector('button, [role="button"]')))))
+                ? headerSiblings[0]! : null;
+              const labels: string[] = [];
+              let invalidLabel = false;
+              let sawPre = false;
+              const visitLabel = (node: Element): void => {
+                if (node === code) return;
+                // Prose is not a language label: allow only inline header labels
+                // outside PRE, or visible language text within this same PRE.
+                if (node !== child && node !== pre && !/^(?:SPAN|LABEL|DIV|HEADER)$/u.test(node.tagName)) {
+                  invalidLabel = true;
+                  return;
+                }
+                if (node === pre) sawPre = true;
+                const children = Array.from(node.childNodes);
+                if (children.length === 0 && node !== child) {
+                  const leaf = (node as HTMLElement).innerText?.trim();
+                  if (leaf) {
                     if (node === pre || node.parentElement === pre || (header !== null
-                      && (node === header || node.parentElement === header))) labels.push(label);
+                      && (node === header || node.parentElement === header))) labels.push(leaf);
                     else invalidLabel = true;
                   }
-                } else if (item.nodeType === 1) {
-                  const element = item as Element;
-                  if (element === code || isPureCodeActionBar(element) || element.tagName === 'BUTTON'
-                    || element.getAttribute('role') === 'button'
-                    || element.getAttribute('aria-hidden') === 'true'
-                    || element.hasAttribute('inert') || !visible(element)) continue;
-                  if (node === child && child !== pre && sawPre && element !== pre) {
-                    invalidLabel = true;
-                    continue;
-                  }
-                  visitLabel(element);
+                  return;
                 }
+                for (const item of children) {
+                  if (item.nodeType === 3) {
+                    const label = item.textContent?.trim();
+                    if (label) {
+                      if (node === pre || node.parentElement === pre || (header !== null
+                        && (node === header || node.parentElement === header))) labels.push(label);
+                      else invalidLabel = true;
+                    }
+                  } else if (item.nodeType === 1) {
+                    const element = item as Element;
+                    if (element === code || isPureCodeActionBar(element) || element.tagName === 'BUTTON'
+                      || element.getAttribute('role') === 'button'
+                      || element.getAttribute('aria-hidden') === 'true'
+                      || element.hasAttribute('inert') || !visible(element)) continue;
+                    if (node === child && child !== pre && sawPre && element !== pre) {
+                      invalidLabel = true;
+                      continue;
+                    }
+                    visitLabel(element);
+                  }
+                }
+              };
+              visitLabel(child);
+              if (invalidLabel) return unsupported();
+              if (labels.length > 1 || labels.some((label) => !/^[A-Za-z][A-Za-z0-9_+#.-]{0,31}$/u.test(label))) {
+                return unsupported();
               }
-            };
-            visitLabel(child);
-            if (invalidLabel) return unsupported();
-            if (labels.length > 1 || labels.some((label) => !/^[A-Za-z][A-Za-z0-9_+#.-]{0,31}$/u.test(label))) {
-              return unsupported();
+
+              language = labels[0];
             }
-            const codeText = (code as HTMLElement).innerText;
+            const codeText = (codeEl as HTMLElement).innerText;
             if (typeof codeText !== 'string') return unsupported();
             const backtickRuns = codeText.match(/\x60+/gu) ?? [];
             const fence = String.fromCharCode(96).repeat(Math.max(3, ...backtickRuns.map((run) => run.length + 1)));
-            blocks.push(fence + (labels[0] ?? '') + '\n' + codeText
+            blocks.push(fence + (language ?? '') + '\n' + codeText
               + (codeText.endsWith('\n') ? '' : '\n') + fence);
           }
           return blocks.length > 0 ? { text: blocks.join('\n\n'), complete: true } : unsupported();
@@ -2108,18 +2170,23 @@ export async function readPageObservation(
           const serializeAssistant = (message: Element, selected: boolean): { text: string; complete: boolean } => {
             const wholeRow = () => ({ text: (message as HTMLElement).innerText, complete: true });
             const unsupported = () => selected ? { text: '', complete: false } : wholeRow();
-            if (message.querySelectorAll('pre').length === 0) return wholeRow();
+            const codeBodySelector = 'pre, .cm-content';
+            // A runnable code block renders as CodeMirror, with no PRE.
+            const isCodeMirror = (node: Element): boolean => node.tagName === 'DIV'
+              && node.getAttribute('role') === 'textbox'
+              && /(?:^|\s)cm-content(?:\s|$)/u.test(node.getAttribute('class') ?? '');
+            if (message.querySelectorAll(codeBodySelector).length === 0) return wholeRow();
             const view = message.ownerDocument?.defaultView;
             if (!view || typeof view.getComputedStyle !== 'function') return unsupported();
             const visible = (node: Element): boolean => {
               for (let current: Element | null = node; current; current = current.parentElement) {
                 if (current.tagName === 'BUTTON' || current.getAttribute('role') === 'button'
                   || current.getAttribute('aria-hidden') === 'true' || current.hasAttribute('inert')
-                || /(?:^|\s)sr-only(?:\s|$)/u.test(current.getAttribute('class') ?? '')) return false;
+                  || /(?:^|\s)sr-only(?:\s|$)/u.test(current.getAttribute('class') ?? '')) return false;
                 const style = view.getComputedStyle(current);
                 if (!style || style.display === 'none' || style.visibility === 'hidden'
                   || style.visibility === 'collapse' || typeof current.getClientRects !== 'function'
-                || (style.display !== 'contents' && current.getClientRects().length === 0)) return false;
+                  || (style.display !== 'contents' && current.getClientRects().length === 0)) return false;
                 if (current === message) return true;
               }
               return false;
@@ -2127,13 +2194,13 @@ export async function readPageObservation(
             const semantic: Element[] = [];
             const scan = (node: Element): void => {
               for (const child of Array.from(node.children)) {
-                if (/^(?:P|PRE|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)
+                if ((/^(?:P|PRE|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName) || isCodeMirror(child))
                   && visible(child)) semantic.push(child);
                 scan(child);
               }
             };
             scan(message);
-            const allCodeBlocks = Array.from(message.querySelectorAll('pre'));
+            const allCodeBlocks = Array.from(message.querySelectorAll(codeBodySelector));
             if (allCodeBlocks.length === 0 || allCodeBlocks.some((pre) => !visible(pre))
               || semantic.length === 0) return unsupported();
             const within = (child: Element, candidate: Element): boolean => {
@@ -2197,10 +2264,10 @@ export async function readPageObservation(
             for (let current: Element = root; current !== message;) {
               const parent = current.parentElement;
               if (!parent || Array.from(parent.childNodes).some((sibling) =>
-              sibling !== current && (sibling.nodeType === 3
-                ? Boolean(sibling.textContent?.trim())
-                : sibling.nodeType === 1 && outsideText(sibling as Element)),
-            )) return unsupported();
+                sibling !== current && (sibling.nodeType === 3
+                  ? Boolean(sibling.textContent?.trim())
+                  : sibling.nodeType === 1 && outsideText(sibling as Element)),
+              )) return unsupported();
               current = parent;
             }
             if (!visible(root)) return unsupported();
@@ -2211,8 +2278,8 @@ export async function readPageObservation(
               if (node.getAttribute('contenteditable') !== 'false') return false;
               const ownedByCodeWrapper = Array.from(root!.children).some((child) => {
                 const pres = [
-                  ...(child.tagName === 'PRE' ? [child] : []),
-                  ...Array.from(child.querySelectorAll('pre')),
+                  ...(child.tagName === 'PRE' || isCodeMirror(child) ? [child] : []),
+                  ...Array.from(child.querySelectorAll(codeBodySelector)),
                 ];
                 return pres.length === 1 && within(node, child) && !within(node, pres[0]!);
               });
@@ -2231,8 +2298,14 @@ export async function readPageObservation(
               };
               return controlsOnly(node) && sawButton;
             };
+            // Live ChatGPT marks each code block root and its excluded action bar
+            // (language label, display:contents tooltip wrappers, controls).
+            const isCodeBlockActionBar = (node: Element): boolean =>
+              node.getAttribute('contenteditable') === 'false'
+              && node.getAttribute('data-markdown-copy') === 'exclude'
+              && node.parentElement?.getAttribute('data-code-block') === 'true';
             const contentsDescendant = (node: Element): boolean => Array.from(node.children).some((child) =>
-              !isPureCodeActionBar(child) && (view.getComputedStyle(child)?.display === 'contents' || contentsDescendant(child)));
+              !isPureCodeActionBar(child) && !isCodeBlockActionBar(child) && (view.getComputedStyle(child)?.display === 'contents' || contentsDescendant(child)));
             if (view.getComputedStyle(root!)?.display === 'contents' || contentsDescendant(root!)) return unsupported();
             // root.children omits direct Text nodes; do not certify a lossy rich reply.
             if (Array.from(root.childNodes).some((node) => node.nodeType === 3 && Boolean(node.textContent?.trim()))) {
@@ -2241,8 +2314,8 @@ export async function readPageObservation(
             const blocks: string[] = [];
             for (const child of Array.from(root.children)) {
               const pres = [
-                ...(child.tagName === 'PRE' ? [child] : []),
-                ...Array.from(child.querySelectorAll('pre')),
+                ...(child.tagName === 'PRE' || isCodeMirror(child) ? [child] : []),
+                ...Array.from(child.querySelectorAll(codeBodySelector)),
               ];
               if (!visible(child)) {
                 // A display:contents wrapper has no rectangle but may render prose children.
@@ -2262,82 +2335,133 @@ export async function readPageObservation(
                 return unsupported();
               }
               const pre = pres[0]!;
-              const directCodes = Array.from(pre.children).filter((node) => node.tagName === 'CODE');
-              if (!visible(pre) || directCodes.length !== 1 || pre.querySelectorAll('code').length !== 1) {
-                return unsupported();
+              let codeBlockRoot: Element | null = null;
+              for (let current: Element | null = pre; current; current = current.parentElement) {
+                if (current.getAttribute('data-code-block') === 'true') { codeBlockRoot = current; break; }
+                if (current === child) break;
               }
-              const code = directCodes[0]!;
-              if (!visible(code)) return unsupported();
-              // code.innerText includes some aria-hidden/inert/control descendant text.
-              if (code.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
-              // Language comes exclusively from unique visible non-control
-              // text outside CODE in this one header-and-pre wrapper.
-              const headerSiblings = pre.parentElement === child
-                ? Array.from(child.children).filter((candidate) => candidate !== pre
-                  && candidate.tagName !== 'BUTTON' && candidate.getAttribute('role') !== 'button'
-                  && visible(candidate))
-                : [];
-              const header = headerSiblings.length === 1
-                && Array.from(child.children).indexOf(headerSiblings[0]!) < Array.from(child.children).indexOf(pre)
-                && (headerSiblings[0]!.tagName === 'HEADER'
-                  || (headerSiblings[0]!.tagName === 'DIV'
-                    && (/(?:^|\s)header(?:\s|$)/u.test(headerSiblings[0]!.getAttribute('class') ?? '')
-                      || Boolean(headerSiblings[0]!.querySelector('button, [role="button"]')))))
-                ? headerSiblings[0]! : null;
-              const labels: string[] = [];
-              let invalidLabel = false;
-              let sawPre = false;
-              const visitLabel = (node: Element): void => {
-                if (node === code) return;
-                // Prose is not a language label: allow only inline header labels
-                // outside PRE, or visible language text within this same PRE.
-                if (node !== child && node !== pre && !/^(?:SPAN|LABEL|DIV|HEADER)$/u.test(node.tagName)) {
-                  invalidLabel = true;
-                  return;
+              let codeEl: Element;
+              let language: string | undefined;
+              if (codeBlockRoot) {
+                // Code root is the structural boundary: code text from its one
+                // body, language from the single label in its excluded action bar.
+                const bars = Array.from(codeBlockRoot.children).filter(isCodeBlockActionBar);
+                if (bars.length !== 1 || !visible(pre)) return unsupported();
+                if (isCodeMirror(pre)) {
+                  // CodeMirror virtualizes long documents (.cm-gap placeholders):
+                  // accept only a fully rendered body of plain .cm-line rows.
+                  if (Array.from(pre.children).some((line) => line.tagName !== 'DIV'
+                    || !/(?:^|\s)cm-line(?:\s|$)/u.test(line.getAttribute('class') ?? ''))) return unsupported();
+                  codeEl = pre;
+                } else {
+                  const directCodes = Array.from(pre.children).filter((node) => node.tagName === 'CODE');
+                  if (directCodes.length !== 1 || pre.querySelectorAll('code').length !== 1
+                    || !visible(directCodes[0]!)) return unsupported();
+                  codeEl = directCodes[0]!;
                 }
-                if (node === pre) sawPre = true;
-                const children = Array.from(node.childNodes);
-                if (children.length === 0 && node !== child) {
-                  const leaf = (node as HTMLElement).innerText?.trim();
-                  if (leaf) {
-                    if (node === pre || node.parentElement === pre || (header !== null
-                      && (node === header || node.parentElement === header))) labels.push(leaf);
-                    else invalidLabel = true;
+                if (codeEl.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
+                const barLabels: string[] = [];
+                let invalidBar = false;
+                const visitBar = (node: Element): void => {
+                  for (const item of Array.from(node.childNodes)) {
+                    if (item.nodeType === 3) {
+                      const label = item.textContent?.trim();
+                      if (label) barLabels.push(label);
+                    } else if (item.nodeType === 1) {
+                      const element = item as Element;
+                      if (element.tagName === 'BUTTON' || element.getAttribute('role') === 'button'
+                        || /^SVG$/iu.test(element.tagName)) continue;
+                      if (element.tagName !== 'DIV' && element.tagName !== 'SPAN') invalidBar = true;
+                      else visitBar(element);
+                    }
                   }
-                  return;
+                };
+                visitBar(bars[0]!);
+                if (invalidBar || barLabels.length > 1
+                  || barLabels.some((label) => !/^[A-Za-z][A-Za-z0-9_+#.-]{0,31}$/u.test(label))) return unsupported();
+                language = barLabels[0]?.toLowerCase();
+              } else {
+                if (isCodeMirror(pre)) return unsupported();
+                const directCodes = Array.from(pre.children).filter((node) => node.tagName === 'CODE');
+                if (!visible(pre) || directCodes.length !== 1 || pre.querySelectorAll('code').length !== 1) {
+                  return unsupported();
                 }
-                for (const item of children) {
-                  if (item.nodeType === 3) {
-                    const label = item.textContent?.trim();
-                    if (label) {
+                const code = directCodes[0]!;
+                  codeEl = code;
+                if (!visible(code)) return unsupported();
+                // code.innerText includes some aria-hidden/inert/control descendant text.
+                if (code.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
+                // Language comes exclusively from unique visible non-control
+                // text outside CODE in this one header-and-pre wrapper.
+                const headerSiblings = pre.parentElement === child
+                  ? Array.from(child.children).filter((candidate) => candidate !== pre
+                    && candidate.tagName !== 'BUTTON' && candidate.getAttribute('role') !== 'button'
+                    && visible(candidate))
+                  : [];
+                const header = headerSiblings.length === 1
+                  && Array.from(child.children).indexOf(headerSiblings[0]!) < Array.from(child.children).indexOf(pre)
+                  && (headerSiblings[0]!.tagName === 'HEADER'
+                    || (headerSiblings[0]!.tagName === 'DIV'
+                      && (/(?:^|\s)header(?:\s|$)/u.test(headerSiblings[0]!.getAttribute('class') ?? '')
+                        || Boolean(headerSiblings[0]!.querySelector('button, [role="button"]')))))
+                  ? headerSiblings[0]! : null;
+                const labels: string[] = [];
+                let invalidLabel = false;
+                let sawPre = false;
+                const visitLabel = (node: Element): void => {
+                  if (node === code) return;
+                  // Prose is not a language label: allow only inline header labels
+                  // outside PRE, or visible language text within this same PRE.
+                  if (node !== child && node !== pre && !/^(?:SPAN|LABEL|DIV|HEADER)$/u.test(node.tagName)) {
+                    invalidLabel = true;
+                    return;
+                  }
+                  if (node === pre) sawPre = true;
+                  const children = Array.from(node.childNodes);
+                  if (children.length === 0 && node !== child) {
+                    const leaf = (node as HTMLElement).innerText?.trim();
+                    if (leaf) {
                       if (node === pre || node.parentElement === pre || (header !== null
-                        && (node === header || node.parentElement === header))) labels.push(label);
+                        && (node === header || node.parentElement === header))) labels.push(leaf);
                       else invalidLabel = true;
                     }
-                  } else if (item.nodeType === 1) {
-                    const element = item as Element;
-                    if (element === code || isPureCodeActionBar(element) || element.tagName === 'BUTTON'
-                      || element.getAttribute('role') === 'button'
-                      || element.getAttribute('aria-hidden') === 'true'
-                      || element.hasAttribute('inert') || !visible(element)) continue;
-                    if (node === child && child !== pre && sawPre && element !== pre) {
-                      invalidLabel = true;
-                      continue;
-                    }
-                    visitLabel(element);
+                    return;
                   }
+                  for (const item of children) {
+                    if (item.nodeType === 3) {
+                      const label = item.textContent?.trim();
+                      if (label) {
+                        if (node === pre || node.parentElement === pre || (header !== null
+                          && (node === header || node.parentElement === header))) labels.push(label);
+                        else invalidLabel = true;
+                      }
+                    } else if (item.nodeType === 1) {
+                      const element = item as Element;
+                      if (element === code || isPureCodeActionBar(element) || element.tagName === 'BUTTON'
+                        || element.getAttribute('role') === 'button'
+                        || element.getAttribute('aria-hidden') === 'true'
+                        || element.hasAttribute('inert') || !visible(element)) continue;
+                      if (node === child && child !== pre && sawPre && element !== pre) {
+                        invalidLabel = true;
+                        continue;
+                      }
+                      visitLabel(element);
+                    }
+                  }
+                };
+                visitLabel(child);
+                if (invalidLabel) return unsupported();
+                if (labels.length > 1 || labels.some((label) => !/^[A-Za-z][A-Za-z0-9_+#.-]{0,31}$/u.test(label))) {
+                  return unsupported();
                 }
-              };
-              visitLabel(child);
-              if (invalidLabel) return unsupported();
-              if (labels.length > 1 || labels.some((label) => !/^[A-Za-z][A-Za-z0-9_+#.-]{0,31}$/u.test(label))) {
-                return unsupported();
+
+                language = labels[0];
               }
-              const codeText = (code as HTMLElement).innerText;
+              const codeText = (codeEl as HTMLElement).innerText;
               if (typeof codeText !== 'string') return unsupported();
               const backtickRuns = codeText.match(/\x60+/gu) ?? [];
               const fence = String.fromCharCode(96).repeat(Math.max(3, ...backtickRuns.map((run) => run.length + 1)));
-              blocks.push(fence + (labels[0] ?? '') + '\n' + codeText
+              blocks.push(fence + (language ?? '') + '\n' + codeText
                 + (codeText.endsWith('\n') ? '' : '\n') + fence);
             }
             return blocks.length > 0 ? { text: blocks.join('\n\n'), complete: true } : unsupported();

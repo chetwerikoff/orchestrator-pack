@@ -916,6 +916,121 @@ describe('DOM observation boundary', () => {
     })).resolves.toEqual({ state: 'continuity-unproven' });
   });
 
+  it('replays the live canary reply: PRE>CODE sql block + CodeMirror python block, labelled action bars (#2694 follow-up)', async () => {
+    // Structure from a live capture of a synthetic canary reply (2026-10-23T21:33Z,
+    // new chat in the orchestrator-pack project): ChatGPT marks code roots
+    // data-code-block=true and each action bar data-markdown-copy=exclude. The bar
+    // holds an SVG, a visible language label and display:contents tooltip wrappers
+    // around buttons ("Run" has text). The runnable python block has no PRE: it is a
+    // CodeMirror .cm-content textbox.
+    const fixture = richPage([]);
+    const assistant = fixture.current;
+    assistant.tagName = 'DIV';
+    assistant.children.length = 0;
+    assistant.childNodes.length = 0;
+    const append = (
+      parent: any, tag: string, literal = '', attrs: Record<string, string> = {},
+      shown = true, displayContents = false,
+    ): any => {
+      const node = richNode(tag, literal, attrs, shown, displayContents);
+      parent.append(node);
+      return node;
+    };
+    append(assistant, 'H4', 'ChatGPT said:', { class: 'sr-only' });
+    const group = append(append(assistant, 'DIV'), 'DIV', '', { class: 'group flex min-w-0 flex-col' });
+    const markdown = append(group, 'DIV', '', {
+      class: 'MarkdownRoot-rZKhxa', 'data-markdown-text-style': 'assistant-message',
+    });
+    const copyRoot = append(markdown, 'DIV', '', { 'data-markdown-copy': 'contents' });
+    const inset = append(copyRoot, 'DIV');
+    append(inset, 'DIV', '', { hidden: '' }, false);
+    const portal = append(inset, 'DIV', '', { class: 'PortalBoundary-TFj9W2' });
+    const renderer = append(portal, 'DIV', '', { class: 'DilRenderer-tB76Jj' });
+    renderer.computedDisplay = 'flex';
+    const prose = (text: string) => {
+      const p = append(renderer, 'P', text, { class: 'TextBase-hXhSqg' });
+      for (const word of text.split(/(?<= )/u)) append(p, 'SPAN', word);
+    };
+    const codeBlock = (label: string, run: boolean, body: (surface: any) => void) => {
+      const wrapper = append(append(renderer, 'DIV'), 'DIV', '', { class: 'CodeBlock-zu1QM3' });
+      const root = append(wrapper, 'DIV', '', { 'data-code-block': 'true', 'data-markdown-copy': 'code-block' });
+      const bar = append(root, 'DIV', label + (run ? 'Run' : ''), {
+        'data-markdown-copy': 'exclude', contenteditable: 'false', class: 'ActionBar-KWWAct',
+      });
+      append(bar, 'SVG');
+      append(bar, 'DIV', label).appendText(label);
+      const controls = append(append(bar, 'DIV'), 'DIV', '', {
+        'data-code-block-controls': 'true', role: 'presentation',
+      });
+      const tooltip = append(controls, 'SPAN', '', { 'data-state': 'closed', class: 'contents' }, false, true);
+      append(tooltip, 'BUTTON', '', { 'aria-label': 'Enable word wrap' });
+      append(controls, 'BUTTON', '', { 'aria-label': 'Copy code' });
+      if (run) append(controls, 'BUTTON', 'Run', { 'aria-label': 'Run code' });
+      const relative = append(root, 'DIV', '', { class: 'relative' });
+      body(relative);
+      append(relative, 'BUTTON', '', { 'aria-hidden': 'true', 'aria-label': 'Scroll to bottom' });
+    };
+    const sql = 'SELECT\n    1 AS result\nFROM dual;';
+    const python = 'def canary():\n    return True';
+    prose('The canary check is ready.');
+    codeBlock('SQL', false, (relative) => {
+      const pre = append(append(relative, 'DIV'), 'PRE');
+      const code = append(pre, 'CODE', sql);
+      append(code, 'SPAN', 'SELECT');
+    });
+    prose('The Python function follows.');
+    let cmContent: any;
+    codeBlock('Python', true, (relative) => {
+      const scroller = append(append(append(relative, 'DIV'), 'DIV', '', { class: 'cm-editor' }), 'DIV', '', {
+        class: 'cm-scroller',
+      });
+      cmContent = append(scroller, 'DIV', python, {
+        contenteditable: 'true', role: 'textbox', 'aria-label': 'Edit code',
+        'data-language': 'python', class: 'cm-content',
+      });
+      for (const line of python.split('\n')) append(cmContent, 'DIV', line, { class: 'cm-line' });
+    });
+    prose('CANARY-DONE');
+    assistant.innerText = 'The canary check is ready.\n\nSQL\n' + sql + '\n\nThe Python function follows.\n\nPython\nRun\n'
+      + python + '\n\nCANARY-DONE';
+    assistant.textContent = assistant.innerText;
+
+    const fence = String.fromCharCode(96).repeat(3);
+    // Fence labels are the rendered bar labels lower-cased.
+    const expected = 'The canary check is ready.\n\n' + fence + 'sql\n' + sql + '\n' + fence
+      + '\n\nThe Python function follows.\n\n' + fence + 'python\n' + python + '\n' + fence + '\n\nCANARY-DONE';
+    const observed = await readPageObservation(fixture.page, marker, 0);
+    expect(observed.transcriptIncomplete).toBe(false);
+    expect(observed.snapshot?.complete).toBe(true);
+    expect(observed.snapshot?.carriers.at(-1)?.text).toBe(expected);
+    expect(observed.messages.at(-1)?.text).toBe(expected);
+    expect(expected).not.toMatch(/Run|Copy code|word wrap/u);
+
+    const previous = { complete: true, carriers: [] } as const;
+    const ownKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    const candidate = keyedHarvestCandidate(observed.snapshot!, previous, ownKey);
+    expect(candidate).toMatchObject({ state: 'ready', reply: expected });
+    if (candidate.state !== 'ready') throw new Error('live_canary_not_ready');
+    await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
+      ...candidate, snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+    })).resolves.toEqual({ state: 'ready', reply: expected });
+
+    // A virtualized CodeMirror body (.cm-gap instead of rendered lines) is partial code.
+    append(cmContent, 'DIV', '', { class: 'cm-gap' });
+    const virtualized = await readPageObservation(fixture.page, marker, 0);
+    expect(virtualized.transcriptIncomplete).toBe(true);
+    expect(virtualized.snapshot?.complete).toBe(false);
+    cmContent.children.pop();
+    cmContent.childNodes.pop();
+    expect((await readPageObservation(fixture.page, marker, 0)).snapshot?.complete).toBe(true);
+
+    // Unknown visible text in a labelled bar stays refused.
+    append(assistant.querySelectorAll('[data-markdown-copy="exclude"]')[1], 'DIV', 'EXTRA').appendText('EXTRA');
+    const changed = await readPageObservation(fixture.page, marker, 0);
+    expect(changed.transcriptIncomplete).toBe(true);
+    expect(changed.snapshot?.complete).toBe(false);
+  });
+
   it('preserves complete ordered prose + direct PRE + trailing prose under a layout wrapper at both reads (#2694)', async () => {
     const code = 'literal  spaces\n  leading tab\t\n';
     const fixture = richPage([

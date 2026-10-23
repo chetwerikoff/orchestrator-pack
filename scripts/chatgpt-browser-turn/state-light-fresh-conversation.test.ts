@@ -3037,6 +3037,7 @@ describe('state-light fresh conversation collision recovery', () => {
                   hasAttribute: (name: string) => Object.hasOwn(attrs, name),
                   querySelectorAll(selector: string): any[] {
                     const matches = (child: any) => selector === 'pre' ? child.tagName === 'PRE'
+                      : selector === 'pre, .cm-content' ? child.tagName === 'PRE' || child.getAttribute('class') === 'cm-content'
                       : selector === 'code' ? child.tagName === 'CODE'
                         : selector === '.markdown' ? child.getAttribute('class') === 'markdown'
                           : selector === 'pre code' ? child.tagName === 'CODE' && child.parentElement?.tagName === 'PRE'
@@ -3094,7 +3095,7 @@ describe('state-light fresh conversation collision recovery', () => {
               outer.querySelector = (selector: string) => selector === '.markdown'
                 ? root : originalQuerySelector(selector);
               outer.querySelectorAll = (selector: string) => selector === '.markdown'
-                ? [root] : selector === 'pre' ? [pre, ...(secondPre ? [secondPre] : [])]
+                ? [root] : selector === 'pre' || selector === 'pre, .cm-content' ? [pre, ...(secondPre ? [secondPre] : [])]
                   : selector === 'pre code' ? [pre, ...(secondPre ? [secondPre] : [])]
                     .flatMap((item) => item.querySelectorAll('code')) : [];
             }

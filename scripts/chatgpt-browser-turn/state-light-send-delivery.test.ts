@@ -3280,3 +3280,43 @@ describe('Issue #2651 integrated held-Page server-checked recovery and delivery 
     },
   );
 });
+
+describe('composer selector scope (#2694 follow-up)', () => {
+  // Tiny generic matcher for the selector's own grammar: comma groups of
+  // `#id` or `[attr="v"]` compounds with `:not(.cls)` / `:not([attr] *)` clauses.
+  type FakeEl = { id?: string; attrs: Record<string, string>; parent?: FakeEl };
+  const hasAttr = (el: FakeEl, token: string) => {
+    const m = /^\[([\w-]+)(?:="([^"]*)")?\]$/u.exec(token)!;
+    return m[1]! in el.attrs && (m[2] === undefined || el.attrs[m[1]!] === m[2]);
+  };
+  const matches = (el: FakeEl, selector: string): boolean => selector.split(/,\s*/u).some((group) => {
+    const nots = [...group.matchAll(/:not\(([^()]*(?:\([^()]*\))?[^()]*)\)/gu)].map((m) => m[1]!);
+    const base = group.replace(/:not\(([^()]*(?:\([^()]*\))?[^()]*)\)/gu, '').trim();
+    const idMatch = /^#([\w-]+)$/u.exec(base);
+    const positive = idMatch ? el.id === idMatch[1] : (base.match(/\[[^\]]+\]/gu) ?? []).every((t) => hasAttr(el, t));
+    if (!positive) return false;
+    return nots.every((clause) => {
+      if (clause.startsWith('.')) return !(el.attrs.class ?? '').split(/\s+/u).includes(clause.slice(1));
+      const ancestorToken = clause.replace(/\s*\*$/u, '');
+      for (let a = el.parent; a; a = a.parent) if (hasAttr(a, ancestorToken)) return false;
+      return true;
+    });
+  });
+
+  it('matches the real composer but not a CodeMirror code editor inside a message', () => {
+    const unit: FakeEl = { attrs: { 'data-chatgpt-search-unit-key': 'fallback-turn-0:2:assistant' } };
+    const block: FakeEl = { attrs: { 'data-code-block': 'true' }, parent: unit };
+    const cm: FakeEl = {
+      attrs: { contenteditable: 'true', role: 'textbox', class: 'cm-content', 'aria-label': 'Edit code' },
+      parent: block,
+    };
+    const composer: FakeEl = {
+      attrs: { contenteditable: 'true', role: 'textbox', class: 'ProseMirror', 'aria-label': 'Ask ChatGPT' },
+    };
+    const promptTextarea: FakeEl = { id: 'prompt-textarea', attrs: {} };
+    expect(matches(cm, COMPOSER_SELECTOR)).toBe(false);
+    expect(matches({ ...cm, attrs: { ...cm.attrs, class: '' } }, COMPOSER_SELECTOR)).toBe(false);
+    expect(matches(composer, COMPOSER_SELECTOR)).toBe(true);
+    expect(matches(promptTextarea, COMPOSER_SELECTOR)).toBe(true);
+  });
+});
