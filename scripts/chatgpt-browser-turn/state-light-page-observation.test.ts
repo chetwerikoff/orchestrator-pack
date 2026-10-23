@@ -357,7 +357,7 @@ describe('DOM observation boundary', () => {
       ownerDocument: {
         defaultView: {
           getComputedStyle: (element: any) => ({
-            display: element.displayContents ? 'contents' : element.shown ? 'block' : 'none', visibility: 'visible',
+            display: element.displayContents ? 'contents' : !element.shown ? 'none' : (element.computedDisplay ?? 'block'), visibility: 'visible',
           }),
         },
       },
@@ -774,6 +774,147 @@ describe('DOM observation boundary', () => {
     layout.append(content);
     return { layout, content };
   }
+
+
+  it('replays the redacted owned rich-code hierarchy without code action UI in the reply (#2694)', async () => {
+    // Bounded live structural provenance (not a new capture or a code-language witness):
+    // invocation inv_issue2694_capture_r04_20261024_6196313751cf
+    // UTC 2026-10-23T20:17:58.986Z; owned NEW project-chat conversation (URL redacted).
+    // Read-only Playwright Page.evaluate through exact-owned attachOwnTarget/CDP.
+    // state-light-turn-observation/v1, unique marker, source project/URL, profile
+    // key/CDP fingerprint and pinned target 4F3CDE8EF469545BBD3449B4BDC26859
+    // were checked on the same Page before/after; user/assistant subtree stable.
+    // Exact-bound harvest: completed, 419 output bytes, SHA-256
+    // 1f2e4a9e595b5b1f67c5b20b42c5e684e43b284634e7335608aa9f4475a19a29.
+    // The supplied redacted minimum specifies tag hierarchy, retained classes,
+    // attribute/display boundaries, six inline prose spans and highlighted CODE
+    // spans, but omits individual masks and measured whitespace positions.
+    // The text masks/whitespace below are REDACTED NON-SEMANTIC stand-ins, not
+    // reconstructed source bytes; their literal equality is a regression oracle
+    // for this tree only, not a claim of equality to the 419-byte harvested reply.
+    // This is reply evidence only: not composer, floating, active or causal proof.
+    const fixture = richPage([]);
+    const assistant = fixture.current;
+    assistant.tagName = 'DIV';
+    assistant.children.length = 0;
+    assistant.childNodes.length = 0;
+    const append = (
+      parent: any, tag: string, literal = '', attrs: Record<string, string> = {},
+      shown = true, displayContents = false,
+    ): any => {
+      const node = richNode(tag, literal, attrs, shown, displayContents);
+      parent.append(node);
+      return node;
+    };
+
+    const srOnly = append(assistant, 'H4', 'z'.repeat(13), { class: 'sr-only' });
+    const shell = append(assistant, 'DIV');
+    const group = append(shell, 'DIV', '', { class: 'group flex min-w-0 flex-col' });
+    const markdown = append(group, 'DIV', '', {
+      class: 'MarkdownRoot-rZKhxa', 'data-markdown-text-style': 'assistant-message',
+    });
+    const margin = append(markdown, 'DIV', '', { class: 'my-4' });
+    const inset = append(margin, 'DIV', '', { style: '--entity-prose-inset:0px' });
+    const hiddenChild = append(inset, 'DIV', '', {}, false);
+    const portal = append(inset, 'DIV', '', {
+      class: 'relative PortalBoundary-TFj9W2 Renderer-ojZscX',
+    });
+    const renderer = append(portal, 'DIV', '', {
+      class: 'DilRenderer-tB76Jj DilResponseRoot-HfQrEh Reveal-k2IWvM',
+    });
+    renderer.computedDisplay = 'flex';
+
+    const proseParts = ['xxx', ' ', 'xxxx', '  ', 'xxxxx', '.'];
+    const proseText = proseParts.join('');
+    const prose = append(renderer, 'P', proseText, { class: 'TextBase-hXhSqg Text-lIMP0_' });
+    for (const part of proseParts) append(prose, 'SPAN', part);
+
+    const codeOuter = append(renderer, 'DIV');
+    const codeBlock = append(codeOuter, 'DIV', '', { class: 'CodeBlock-zu1QM3' });
+    const surface = append(codeBlock, 'DIV', '', {
+      class: 'Root-iW7ipz CodeSurface-UAMd1A Surface-BCuIs1',
+    });
+    const uiOne = 'q'.repeat(7);
+    const uiTwo = 'q'.repeat(9);
+    const actionBar = append(surface, 'DIV', uiOne + uiTwo, {
+      class: 'ActionBar-KWWAct', contenteditable: 'false',
+    });
+    append(actionBar, 'SVG');
+    append(actionBar, 'BUTTON', uiOne);
+    const transparent = append(actionBar, 'SPAN', '', { class: 'contents' }, false, true);
+    append(transparent, 'BUTTON', uiTwo);
+
+    const relative = append(surface, 'DIV', '', { class: 'relative' });
+    const codePane = append(relative, 'DIV', '', { class: 'InlineCodePane-EYx4bd' });
+    const viewer = append(codePane, 'DIV', '', { class: 'Viewer-ALA646' });
+    const scrollport = append(viewer, 'DIV', '', { class: 'chatgpt-code-scrollport' });
+    const pre = append(scrollport, 'PRE', '', {
+      class: 'ViewerContent-Cg8AgN whitespace-pre',
+    });
+    const codeParts = ['xxx', '  ', 'xxxx', '\n    ', 'xx', '\n'];
+    const codeText = codeParts.join('');
+    const code = append(pre, 'CODE', codeText);
+    append(code, 'SPAN', codeParts[0]!);
+    code.appendText(codeParts[1]!);
+    append(code, 'SPAN', codeParts[2]!);
+    code.appendText(codeParts[3]!);
+    append(code, 'SPAN', codeParts[4]!);
+    code.appendText(codeParts[5]!);
+
+    const footerParts = ['yyyy', ' ', 'yyyyy'];
+    const footerText = footerParts.join('');
+    const footer = append(renderer, 'P', footerText, { class: 'TextBase-hXhSqg Text-lIMP0_' });
+    for (const part of footerParts) append(footer, 'SPAN', part);
+    const trailingAction = append(portal, 'BUTTON', 'q'.repeat(11), {
+      'aria-hidden': 'true', class: 'opacity-0 pointer-events-none',
+    });
+    assistant.innerText = srOnly.innerText + proseText + actionBar.innerText
+      + codeText + footerText + trailingAction.innerText;
+    assistant.textContent = assistant.innerText;
+
+    expect(assistant.querySelectorAll('pre code')).toHaveLength(1);
+    expect(assistant.querySelectorAll('.contents button')).toHaveLength(1);
+    expect(assistant.querySelectorAll('[data-markdown-text-style="assistant-message"]')).toHaveLength(1);
+    expect(renderer.children.map((item: any) => item.tagName)).toEqual(['P', 'DIV', 'P']);
+    expect(renderer.ownerDocument.defaultView.getComputedStyle(renderer).display).toBe('flex');
+    expect(hiddenChild.ownerDocument.defaultView.getComputedStyle(hiddenChild).display).toBe('none');
+    expect(transparent.ownerDocument.defaultView.getComputedStyle(transparent).display).toBe('contents');
+    expect(actionBar.getAttribute('contenteditable')).toBe('false');
+    expect(code.innerText).toBe(codeText);
+    expect(code.textContent).toBe(codeText);
+
+    const fence = String.fromCharCode(96).repeat(3);
+    const expected = [proseText, fence + '\n' + codeText + fence, footerText].join('\n\n');
+    const observed = await readPageObservation(fixture.page, marker, 0);
+    expect(observed.transcriptIncomplete).toBe(false);
+    expect(observed.snapshot?.complete).toBe(true);
+    expect(observed.snapshot?.carriers.filter((row) => row.role === 'assistant')).toHaveLength(1);
+    expect(observed.snapshot?.carriers.at(-1)?.text).toBe(expected);
+    expect(observed.messages.at(-1)?.text).toBe(expected);
+    for (const uiOnly of [srOnly.innerText, uiOne, uiTwo, trailingAction.innerText]) {
+      expect(expected).not.toContain(uiOnly);
+      expect(observed.messages.at(-1)?.text).not.toContain(uiOnly);
+    }
+
+    const previous = { complete: true, carriers: [] } as const;
+    const ownKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    const candidate = keyedHarvestCandidate(observed.snapshot!, previous, ownKey);
+    expect(candidate).toMatchObject({ state: 'ready', reply: expected });
+    if (candidate.state !== 'ready') throw new Error('captured_structure_not_ready');
+    await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
+      ...candidate, snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+    })).resolves.toEqual({ state: 'ready', reply: expected });
+
+    // Derived negative only: visible non-control action-bar text is NOT in the
+    // captured witness and must revoke completeness rather than be dropped.
+    actionBar.appendText('UNACCOUNTED_NON_CONTROL_TEXT');
+    const changed = await readPageObservation(fixture.page, marker, 0);
+    expect(changed.transcriptIncomplete).toBe(true);
+    expect(changed.snapshot?.complete).toBe(false);
+    await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
+      ...candidate, snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+    })).resolves.toEqual({ state: 'continuity-unproven' });
+  });
 
   it('preserves complete ordered prose + direct PRE + trailing prose under a layout wrapper at both reads (#2694)', async () => {
     const code = 'literal  spaces\n  leading tab\t\n';

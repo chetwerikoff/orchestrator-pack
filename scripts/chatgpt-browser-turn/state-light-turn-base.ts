@@ -827,7 +827,8 @@ export async function revalidateKeyedHarvest(
           const visible = (node: Element): boolean => {
             for (let current: Element | null = node; current; current = current.parentElement) {
               if (current.tagName === 'BUTTON' || current.getAttribute('role') === 'button'
-                || current.getAttribute('aria-hidden') === 'true' || current.hasAttribute('inert')) return false;
+                || current.getAttribute('aria-hidden') === 'true' || current.hasAttribute('inert')
+                || /(?:^|\s)sr-only(?:\s|$)/u.test(current.getAttribute('class') ?? '')) return false;
               const style = view.getComputedStyle(current);
               if (!style || style.display === 'none' || style.visibility === 'hidden'
                 || style.visibility === 'collapse' || typeof current.getClientRects !== 'function'
@@ -916,8 +917,35 @@ export async function revalidateKeyedHarvest(
             current = parent;
           }
           if (!visible(root)) return unsupported();
+          // The captured code surface embeds a non-answer action bar, including
+          // display:contents around a button. Ignore ONLY control/SVG-only markup
+          // outside the PRE within the same uniquely selected code wrapper.
+          const isPureCodeActionBar = (node: Element): boolean => {
+            if (node.getAttribute('contenteditable') !== 'false') return false;
+            const ownedByCodeWrapper = Array.from(root!.children).some((child) => {
+              const pres = [
+                ...(child.tagName === 'PRE' ? [child] : []),
+                ...Array.from(child.querySelectorAll('pre')),
+              ];
+              return pres.length === 1 && within(node, child) && !within(node, pres[0]!);
+            });
+            if (!ownedByCodeWrapper) return false;
+            let sawButton = false;
+            const controlsOnly = (element: Element): boolean => {
+              if (element.tagName === 'BUTTON' || element.getAttribute('role') === 'button') {
+                sawButton = true;
+                return true;
+              }
+              if (/^SVG$/iu.test(element.tagName)) return true;
+              if (element.tagName !== 'DIV' && element.tagName !== 'SPAN') return false;
+              return Array.from(element.childNodes).every((item) =>
+                item.nodeType === 3 ? !item.textContent?.trim()
+                  : item.nodeType === 1 && controlsOnly(item as Element));
+            };
+            return controlsOnly(node) && sawButton;
+          };
           const contentsDescendant = (node: Element): boolean => Array.from(node.children).some((child) =>
-            view.getComputedStyle(child)?.display === 'contents' || contentsDescendant(child));
+            !isPureCodeActionBar(child) && (view.getComputedStyle(child)?.display === 'contents' || contentsDescendant(child)));
           if (view.getComputedStyle(root!)?.display === 'contents' || contentsDescendant(root!)) return unsupported();
           // root.children omits direct Text nodes; do not certify a lossy rich reply.
           if (Array.from(root.childNodes).some((node) => node.nodeType === 3 && Boolean(node.textContent?.trim()))) {
@@ -1001,7 +1029,7 @@ export async function revalidateKeyedHarvest(
                   }
                 } else if (item.nodeType === 1) {
                   const element = item as Element;
-                  if (element === code || element.tagName === 'BUTTON'
+                  if (element === code || isPureCodeActionBar(element) || element.tagName === 'BUTTON'
                     || element.getAttribute('role') === 'button'
                     || element.getAttribute('aria-hidden') === 'true'
                     || element.hasAttribute('inert') || !visible(element)) continue;
@@ -2086,7 +2114,8 @@ export async function readPageObservation(
             const visible = (node: Element): boolean => {
               for (let current: Element | null = node; current; current = current.parentElement) {
                 if (current.tagName === 'BUTTON' || current.getAttribute('role') === 'button'
-                  || current.getAttribute('aria-hidden') === 'true' || current.hasAttribute('inert')) return false;
+                  || current.getAttribute('aria-hidden') === 'true' || current.hasAttribute('inert')
+                || /(?:^|\s)sr-only(?:\s|$)/u.test(current.getAttribute('class') ?? '')) return false;
                 const style = view.getComputedStyle(current);
                 if (!style || style.display === 'none' || style.visibility === 'hidden'
                   || style.visibility === 'collapse' || typeof current.getClientRects !== 'function'
@@ -2175,8 +2204,35 @@ export async function readPageObservation(
               current = parent;
             }
             if (!visible(root)) return unsupported();
+            // The captured code surface embeds a non-answer action bar, including
+            // display:contents around a button. Ignore ONLY control/SVG-only markup
+            // outside the PRE within the same uniquely selected code wrapper.
+            const isPureCodeActionBar = (node: Element): boolean => {
+              if (node.getAttribute('contenteditable') !== 'false') return false;
+              const ownedByCodeWrapper = Array.from(root!.children).some((child) => {
+                const pres = [
+                  ...(child.tagName === 'PRE' ? [child] : []),
+                  ...Array.from(child.querySelectorAll('pre')),
+                ];
+                return pres.length === 1 && within(node, child) && !within(node, pres[0]!);
+              });
+              if (!ownedByCodeWrapper) return false;
+              let sawButton = false;
+              const controlsOnly = (element: Element): boolean => {
+                if (element.tagName === 'BUTTON' || element.getAttribute('role') === 'button') {
+                  sawButton = true;
+                  return true;
+                }
+                if (/^SVG$/iu.test(element.tagName)) return true;
+                if (element.tagName !== 'DIV' && element.tagName !== 'SPAN') return false;
+                return Array.from(element.childNodes).every((item) =>
+                  item.nodeType === 3 ? !item.textContent?.trim()
+                    : item.nodeType === 1 && controlsOnly(item as Element));
+              };
+              return controlsOnly(node) && sawButton;
+            };
             const contentsDescendant = (node: Element): boolean => Array.from(node.children).some((child) =>
-              view.getComputedStyle(child)?.display === 'contents' || contentsDescendant(child));
+              !isPureCodeActionBar(child) && (view.getComputedStyle(child)?.display === 'contents' || contentsDescendant(child)));
             if (view.getComputedStyle(root!)?.display === 'contents' || contentsDescendant(root!)) return unsupported();
             // root.children omits direct Text nodes; do not certify a lossy rich reply.
             if (Array.from(root.childNodes).some((node) => node.nodeType === 3 && Boolean(node.textContent?.trim()))) {
@@ -2260,7 +2316,7 @@ export async function readPageObservation(
                     }
                   } else if (item.nodeType === 1) {
                     const element = item as Element;
-                    if (element === code || element.tagName === 'BUTTON'
+                    if (element === code || isPureCodeActionBar(element) || element.tagName === 'BUTTON'
                       || element.getAttribute('role') === 'button'
                       || element.getAttribute('aria-hidden') === 'true'
                       || element.hasAttribute('inert') || !visible(element)) continue;
