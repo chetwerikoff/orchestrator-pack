@@ -84,6 +84,10 @@ class MemoryWakeStore implements FleetWakeStateStore {
     this.parkedWakeEvents.add(key);
     this.eventStatus.set(key, status);
   }
+  clearParkedWakeEvent(key: string): void {
+    this.parkedWakeEvents.delete(key);
+    this.eventStatus.delete(key);
+  }
   rearmPermissionWakeEvents(scope: string): void {
     for (const key of this.parkedWakeEvents) {
       if (key.startsWith(scope)) {
@@ -3055,7 +3059,12 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
       executor: executorFor({ [manager.handle]: parked }), listPublishedIssueFacts: () => [],
       listTerminalEnvelopes: () => [verifiedGptCompletion],
         ...selectedProjectEvidence });
-    expect(texts(retry.calls)).toHaveLength(0);
+    expect(texts(retry.calls)).toHaveLength(1);
+    expect(sendsTo(retry.calls, manager.handle)).toHaveLength(2);
+    expect(texts((await invoke({ store, screens: { [manager.handle]: parked },
+      executor: executorFor({ [manager.handle]: parked }), listPublishedIssueFacts: () => [],
+      listTerminalEnvelopes: () => [verifiedGptCompletion],
+        ...selectedProjectEvidence })).calls)).toHaveLength(0);
   });
 
   it('refuses the due 30-minute reminder when the native pane becomes a bare shell', async () => {
@@ -4023,3 +4032,200 @@ describe('Issue #2689 r03 exact native terminal -> canonical Issue assignment ->
   });
 });
 
+
+
+describe('Issue #2687 authorized review correction: one fresh recipient check', () => {
+  const coordinator: FleetTerminal = { ...terminals[0]!, incarnationId: 'corrected-coord', status: 'running' };
+  const worker: FleetTerminal = { ...terminals[1]!, incarnationId: 'corrected-worker',
+    branch: 'refs/heads/review-correction', status: 'running', agentIdentity: 'opencode' };
+  const wakeConfig = config({ orchestratorHandle: coordinator.handle });
+  const unknownPark = 'PARKED on unknown-recipient-check';
+  const emptyFacts = { listOpenPulls: () => [], readCurrentAssignments: () => [],
+    readPackReviewRuns: () => [], readChats: async () => [] };
+
+  it.each([
+    { title: 'zsh', agentIdentity: undefined },
+    { title: 'bash - login', agentIdentity: undefined },
+    { title: 'Cursor coordinator', agentIdentity: 'shell' },
+  ])('vetoes positively shell/non-agent coordinator alarm before text: $title/$agentIdentity', async (change) => {
+    const store = new MemoryWakeStore();
+    const unsafe: FleetTerminal = { ...coordinator, ...change };
+    const first = await tick({ config: wakeConfig, terminals: [unsafe, worker],
+      screens: { coord: 'idle', one: unknownPark }, store, ...emptyFacts });
+    expect(sendsTo(first.calls, coordinator.handle)).toHaveLength(0);
+    expect([...store.parkedWakeEvents].filter((key) => key.startsWith('park-uncertain:'))).toHaveLength(0);
+    const safe = await tick({ config: wakeConfig, terminals: [coordinator, worker],
+      screens: { coord: 'idle', one: unknownPark }, store, ...emptyFacts });
+    expect(sendsTo(safe.calls, coordinator.handle)).toHaveLength(2);
+    const repeated = await tick({ config: wakeConfig, terminals: [coordinator, worker],
+      screens: { coord: 'idle', one: unknownPark }, store, ...emptyFacts });
+    expect(sendsTo(repeated.calls, coordinator.handle)).toHaveLength(0);
+  });
+
+  it('allows missing-title/identity evidence and busy coordinator for an event/unknown-park alarm', async () => {
+    const unverified: FleetTerminal = { ...coordinator, title: '', agentIdentity: undefined };
+    const first = await tick({ config: wakeConfig, terminals: [unverified, worker],
+      screens: { coord: 'working\nesc interrupt', one: unknownPark }, ...emptyFacts });
+    expect(sendsTo(first.calls, coordinator.handle)).toHaveLength(2);
+    expect(sendsTo(first.calls, coordinator.handle)[0]?.join(' ')).toContain('unknown parked producer');
+  });
+
+  it('refuses coordinator alarm on native shell transition before text or Enter, then delivers once safely', async () => {
+    for (const phase of ['before-text', 'between-text-enter'] as const) {
+      const store = new MemoryWakeStore();
+      let shell = false;
+      const executor: OrcaExecutor = (args) => {
+        const isCoordinatorRead = args[0] === 'terminal' && args[1] === 'read'
+          && args.includes(coordinator.handle);
+        if (phase === 'before-text' && isCoordinatorRead) shell = true;
+        const isCoordinatorText = args[0] === 'terminal' && args[1] === 'send'
+          && args.includes(coordinator.handle) && args.includes('--text');
+        if (phase === 'between-text-enter' && isCoordinatorText) shell = true;
+        return fakeOrca({ coord: 'idle', one: unknownPark }, [],
+          [{ ...coordinator, ...(shell ? { title: 'zsh' } : {}) }, worker])(args);
+      };
+      const first = await tick({ config: wakeConfig, terminals: [coordinator, worker],
+        screens: { coord: 'idle', one: unknownPark }, executor, store, ...emptyFacts });
+      expect(sendsTo(first.calls, coordinator.handle).filter((row) => !row.includes('--text'))).toHaveLength(0);
+      expect(sendsTo(first.calls, coordinator.handle).filter((row) => row.includes('--text')))
+        .toHaveLength(phase === 'before-text' ? 0 : 1);
+      expect([...store.parkedWakeEvents].filter((key) => key.startsWith('park-uncertain:'))).toHaveLength(0);
+      const safe = await tick({ config: wakeConfig, terminals: [coordinator, worker],
+        screens: { coord: 'idle', one: unknownPark }, store, ...emptyFacts });
+      expect(sendsTo(safe.calls, coordinator.handle)).toHaveLength(2);
+      const repeated = await tick({ config: wakeConfig, terminals: [coordinator, worker],
+        screens: { coord: 'idle', one: unknownPark }, store, ...emptyFacts });
+      expect(sendsTo(repeated.calls, coordinator.handle)).toHaveLength(0);
+    }
+  });
+
+  it('startup Wake skips a shell pin, then sends on a later safe tick exactly once', async () => {
+    const observed = await boundedStartupWake({
+      settings: wakeConfig,
+      frames: [
+        { terminals: [{ ...coordinator, title: 'zsh' }], screens: { coord: 'idle' } },
+        { terminals: [coordinator], screens: { coord: 'working\nesc interrupt' } },
+        { terminals: [coordinator], screens: { coord: 'idle' } },
+      ],
+    });
+    expect(startupTextSends(observed.calls)).toHaveLength(1);
+    expect(sendsTo(observed.calls, coordinator.handle).filter((row) => !row.includes('--text'))).toHaveLength(1);
+    expect(observed.logs.join(' ')).toContain('queued');
+  });
+
+  it.each(['gpt', 'ci'] as const)(
+    'STOPPED %s revalidates before both sends, queues refusals, and permits unknown titles', async (kind) => {
+      const id = 'review-correction-event-' + kind;
+      const sha = 'b'.repeat(40);
+      const envelope: TerminalEnvelopeEvent = {
+        path: '/tmp/opencode/' + id + '-terminal.json',
+        invocationId: id, observedInvocationId: id,
+        terminalHandle: worker.handle, cwd: workerBase + '/two/child',
+        lifecycleOutcome: 'success', turnResultState: 'ok',
+      };
+      const extra: Partial<Parameters<typeof tick>[0]> = kind === 'gpt' ? {
+        config: config({ ...wakeConfig, selectedRepository: 'test/project' }),
+        listTerminalEnvelopes: () => [envelope],
+        resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
+          primaryRoot: primary, repository: 'test/project' }),
+        readGit: selectedProjectGit, canonicalPath: (path) => path,
+        listOpenPulls: () => [],
+      } : {
+        config: config({ ...wakeConfig, selectedRepository: 'test/project' }),
+        listOpenPulls: () => [{ number: 2691, ref: 'review-correction', sha, issue: 2687 }],
+        checkRunsFinishedAt: () => 123_456,
+        supervisedPullOwner: (_pull, panes) => panes.find((pane) => pane.handle === worker.handle),
+      };
+      for (const phase of ['before-text', 'between-text-enter'] as const) {
+        for (const change of ['shell', 'busy'] as const) {
+          const store = new MemoryWakeStore();
+          let seenInitialScreen = false;
+          let changed = false;
+          const executor: OrcaExecutor = (args) => {
+            const readsWorker = args[0] === 'terminal' && args[1] === 'read'
+              && args.includes(worker.handle);
+            if (readsWorker) seenInitialScreen = true;
+            const secondList = args[0] === 'terminal' && args[1] === 'list' && seenInitialScreen;
+            if (phase === 'before-text' && secondList) changed = true;
+            if (phase === 'between-text-enter' && args[0] === 'terminal'
+              && args[1] === 'send' && args.includes(worker.handle) && args.includes('--text')) changed = true;
+            const recipient: FleetTerminal = changed && change === 'shell'
+              ? { ...worker, title: 'zsh', agentIdentity: 'shell' } : worker;
+            const screen = changed && change === 'busy' ? 'working\nesc interrupt' : 'done';
+            return fakeOrca({ coord: 'working\nesc interrupt', one: screen },
+              [], [coordinator, recipient])(args);
+          };
+          const base = { terminals: [coordinator, worker], store,
+            screens: { coord: 'working\nesc interrupt', one: 'done' }, ...emptyFacts, ...extra };
+          const first = await tick({ ...base, executor });
+          const initialSends = sendsTo(first.calls, worker.handle);
+          expect(initialSends.filter((row) => !row.includes('--text'))).toHaveLength(0);
+          expect(initialSends.filter((row) => row.includes('--text')))
+            .toHaveLength(phase === 'before-text' ? 0 : 1);
+          expect([...store.parkedWakeEvents].filter((key) => key.startsWith('event:'))).toHaveLength(0);
+          const safe = await tick(base);
+          expect(sendsTo(safe.calls, worker.handle)).toHaveLength(2);
+          const repeat = await tick(base);
+          expect(sendsTo(repeat.calls, worker.handle)).toHaveLength(0);
+        }
+      }
+      // A title/agent identity absent only at the fresh census is not shell proof.
+      let readInitial = false;
+      const unknownTitle: OrcaExecutor = (args) => {
+        if (args[0] === 'terminal' && args[1] === 'read' && args.includes(worker.handle)) readInitial = true;
+        const later = args[0] === 'terminal' && args[1] === 'list' && readInitial;
+        return fakeOrca({ coord: 'working\nesc interrupt', one: 'done' }, [],
+          [coordinator, later ? { ...worker, title: '', agentIdentity: undefined } : worker])(args);
+      };
+      const allowed = await tick({
+        terminals: [coordinator, worker], screens: { coord: 'working\nesc interrupt', one: 'done' },
+        ...emptyFacts, ...extra, executor: unknownTitle,
+      });
+      expect(sendsTo(allowed.calls, worker.handle)).toHaveLength(2);
+    },
+  );
+
+  it('uses effective hot pin and explicit empty override after stale inherited handle becomes a worker', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-2687-fresh-repin-'));
+    const file = join(root, 'authority.env');
+    const old: FleetTerminal = { ...worker, handle: 'coord-old', title: 'OpenCode reused coordinator',
+      worktreePath: workerBase + '/one', incarnationId: 'reused-worker' };
+    const latest: FleetTerminal = { ...coordinator, handle: 'coord-new', incarnationId: 'repinned-coordinator' };
+    const settings = config({ orchestratorHandle: 'coord-old', coordinatorPinFile: file,
+      selectedRepository: 'test/project' });
+    const dueScreen = 'PARKED on time 2026-10-22T11:43:00Z';
+    const run = (store: MemoryWakeStore, screen: string, event?: TerminalEnvelopeEvent) => tick({
+      config: settings, store, terminals: [old, latest],
+      screens: { 'coord-old': screen, 'coord-new': 'idle' },
+      listTerminalEnvelopes: () => event ? [event] : [],
+      now: () => Date.parse('2026-10-22T11:43:00Z'),
+      resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
+        primaryRoot: primary, repository: 'test/project' }),
+      canonicalPath: (path) => path, readGit: selectedProjectGit,
+      ...emptyFacts,
+    });
+    vi.stubEnv('ORCH_HANDLE', 'coord-old');
+    try {
+      writeFileSync(file, 'ORCH_HANDLE=coord-new\n');
+      const parked = await run(new MemoryWakeStore(), dueScreen);
+      expect(sendsTo(parked.calls, old.handle)).toHaveLength(2);
+      const event: TerminalEnvelopeEvent = {
+        path: '/tmp/opencode/repinned-old-worker-terminal.json',
+        invocationId: 'repinned-invocation', observedInvocationId: 'repinned-invocation',
+        terminalHandle: old.handle, cwd: workerBase + '/one/scripts',
+        lifecycleOutcome: 'success', turnResultState: 'ok',
+      };
+      const gpt = await run(new MemoryWakeStore(), 'done', event);
+      expect(sendsTo(gpt.calls, old.handle)).toHaveLength(2);
+      expect(sendsTo(gpt.calls, latest.handle).some((row) => row.includes('--text'))).toBe(true);
+      rmSync(file);
+      const noCoordinator = await run(new MemoryWakeStore(), dueScreen);
+      expect(noCoordinator.result.state).toBe('no_orchestrator');
+      expect(sendsTo(noCoordinator.calls, old.handle)).toHaveLength(2);
+      expect(sendsTo(noCoordinator.calls, latest.handle)).toHaveLength(0);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
