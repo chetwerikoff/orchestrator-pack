@@ -343,7 +343,7 @@ describe('DOM observation boundary', () => {
   type RichBlock = { prose: string; tag?: string; displayContents?: boolean } | { directText: string } | {
     code: string; label?: string; extraLabel?: string; nested?: boolean;
     divHeader?: boolean; headerClass?: boolean;
-    hidden?: boolean; copyControl?: boolean; interleavedProse?: string; spanProse?: string;
+    hidden?: boolean; copyControl?: boolean; directPre?: boolean; interleavedProse?: string; spanProse?: string;
     excludedCodeDescendant?: 'aria-hidden' | 'inert' | 'role-button' | 'button';
   };
   function richNode(
@@ -451,8 +451,8 @@ describe('DOM observation boundary', () => {
         code.append(richNode(kind === 'button' ? 'BUTTON' : 'SPAN', 'UI', attrs));
       }
       pre.append(code);
-      container.append(pre);
-      root.append(container);
+      if (block.directPre) root.append(pre);
+      else { container.append(pre); root.append(container); }
     }
     const baseQuery = outer.querySelector.bind(outer);
     Object.assign(outer, {
@@ -760,6 +760,87 @@ describe('DOM observation boundary', () => {
       setHistoricalOnly: (value: boolean) => { historicalOnly = value; },
     };
   }
+
+
+  // Explicitly derived UI structures, not current authenticated CDP specimens.
+  // Keep the content root's original children and real ancestor relationships:
+  // selectors in richNode walk the generic element tree, not a copied selector.
+  function wrapRichContent(current: any) {
+    const content = current.children[0]!;
+    current.children.splice(0, 1);
+    current.childNodes.splice(current.childNodes.indexOf(content), 1);
+    const layout = richNode('DIV');
+    current.append(layout);
+    layout.append(content);
+    return { layout, content };
+  }
+
+  it('preserves complete ordered prose + direct PRE + trailing prose under a layout wrapper at both reads (#2694)', async () => {
+    const code = 'literal  spaces\\n  leading tab\\t\\n';
+    const fixture = richPage([
+      { prose: 'Before code' }, { code, directPre: true }, { prose: 'After code\\nEXECUTION_STATUS: complete' },
+    ]);
+    wrapRichContent(fixture.current);
+    const expected = ['Before code', '```\\n' + code + '```', 'After code\\nEXECUTION_STATUS: complete'].join('\\n\\n');
+    const observed = await readPageObservation(fixture.page, marker, 0);
+    expect(observed.transcriptIncomplete).toBe(false);
+    expect(observed.snapshot?.carriers.at(-1)?.text).toBe(expected);
+    const previous = { complete: true, carriers: [] } as const;
+    const ownKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    const candidate = keyedHarvestCandidate(observed.snapshot!, previous, ownKey);
+    expect(candidate).toMatchObject({ state: 'ready', reply: expected });
+    if (candidate.state !== 'ready') throw new Error('nested_root_not_ready');
+    await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
+      ...candidate, snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+    })).resolves.toEqual({ state: 'ready', reply: expected });
+  });
+
+  it.each(['outer-span-status', 'outer-p-status', 'nested-prose-wrapper', 'nested-code-status'] as const)(
+    'refuses unexplained rich-root wrapper/status text (%s) at observation and keyed revalidation (#2694)',
+    async (variant) => {
+      const fixture = richPage([
+        { prose: 'Before code' }, { code: 'example\\n', directPre: true }, { prose: 'After code' },
+      ]);
+      const { layout, content } = wrapRichContent(fixture.current);
+      if (variant === 'outer-span-status') layout.append(richNode('DIV').append(richNode('SPAN', 'Copied')));
+      if (variant === 'outer-p-status') layout.append(richNode('DIV').append(richNode('P', 'Copied')));
+      if (variant === 'nested-prose-wrapper') content.append(richNode('DIV').append(richNode('SPAN', 'Copied')));
+      if (variant === 'nested-code-status') {
+        const extra = richNode('DIV');
+        extra.append(richNode('SPAN', 'Copied'));
+        extra.append(richNode('PRE').append(richNode('CODE', 'non-answer code')));
+        content.append(extra);
+      }
+      const observed = await readPageObservation(fixture.page, marker, 0);
+      expect(observed.transcriptIncomplete).toBe(true);
+      expect(observed.snapshot?.complete).toBe(false);
+      const previous = { complete: true, carriers: [] } as const;
+      const ownKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+      expect(keyedHarvestCandidate(observed.snapshot!, previous, ownKey).state).not.toBe('ready');
+      await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
+        reply: 'untrusted', assistantKey: 'data-message-id:assistant-rich-12345678',
+        snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+      })).resolves.toEqual({ state: 'continuity-unproven' });
+    },
+  );
+
+  it('rejects rendered prose inside a rectless display:contents sibling OUTSIDE code root at both reads (#2694)', async () => {
+    const fixture = richPage([{ code: 'safe code\\n' }]);
+    const transparent = richNode('DIV', '', {}, false, true);
+    transparent.append(richNode('SPAN', 'TRAILING PROSE NOT INSIDE CODE'));
+    fixture.current.append(transparent);
+    const observed = await readPageObservation(fixture.page, marker, 0);
+    expect(observed.transcriptIncomplete).toBe(true);
+    expect(observed.snapshot?.complete).toBe(false);
+    const previous = { complete: true, carriers: [] } as const;
+    const ownKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    expect(keyedHarvestCandidate(observed.snapshot!, previous, ownKey).state).not.toBe('ready');
+    await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
+      reply: '```\\nsafe code\\n```',
+      assistantKey: 'data-message-id:assistant-rich-12345678',
+      snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+    })).resolves.toEqual({ state: 'continuity-unproven' });
+  });
 
   it('refuses a selected answer whose visible direct text lies outside the derived root (#2694)', async () => {
     const fixture = richPage([{ code: 'diff --git a/a b/a\n' }]);
