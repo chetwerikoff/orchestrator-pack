@@ -998,8 +998,13 @@ export async function revalidateKeyedHarvest(
               // body, language from the single label in its excluded action bar.
               const bars = Array.from(codeBlockRoot.children).filter(isCodeBlockActionBar);
               if (bars.length !== 1 || !visible(pre)) return unsupported();
-              if (isCodeMirror(pre)) codeEl = pre;
-              else {
+              if (isCodeMirror(pre)) {
+                // CodeMirror virtualizes long documents (.cm-gap placeholders):
+                // accept only a fully rendered body of plain .cm-line rows.
+                if (Array.from(pre.children).some((line) => line.tagName !== 'DIV'
+                  || !/(?:^|\s)cm-line(?:\s|$)/u.test(line.getAttribute('class') ?? ''))) return unsupported();
+                codeEl = pre;
+              } else {
                 const directCodes = Array.from(pre.children).filter((node) => node.tagName === 'CODE');
                 if (directCodes.length !== 1 || pre.querySelectorAll('code').length !== 1
                   || !visible(directCodes[0]!)) return unsupported();
@@ -2342,8 +2347,13 @@ export async function readPageObservation(
                 // body, language from the single label in its excluded action bar.
                 const bars = Array.from(codeBlockRoot.children).filter(isCodeBlockActionBar);
                 if (bars.length !== 1 || !visible(pre)) return unsupported();
-                if (isCodeMirror(pre)) codeEl = pre;
-                else {
+                if (isCodeMirror(pre)) {
+                  // CodeMirror virtualizes long documents (.cm-gap placeholders):
+                  // accept only a fully rendered body of plain .cm-line rows.
+                  if (Array.from(pre.children).some((line) => line.tagName !== 'DIV'
+                    || !/(?:^|\s)cm-line(?:\s|$)/u.test(line.getAttribute('class') ?? ''))) return unsupported();
+                  codeEl = pre;
+                } else {
                   const directCodes = Array.from(pre.children).filter((node) => node.tagName === 'CODE');
                   if (directCodes.length !== 1 || pre.querySelectorAll('code').length !== 1
                     || !visible(directCodes[0]!)) return unsupported();

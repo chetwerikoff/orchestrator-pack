@@ -979,14 +979,16 @@ describe('DOM observation boundary', () => {
       append(code, 'SPAN', 'SELECT');
     });
     prose('The Python function follows.');
+    let cmContent: any;
     codeBlock('Python', true, (relative) => {
       const scroller = append(append(append(relative, 'DIV'), 'DIV', '', { class: 'cm-editor' }), 'DIV', '', {
         class: 'cm-scroller',
       });
-      append(scroller, 'DIV', python, {
+      cmContent = append(scroller, 'DIV', python, {
         contenteditable: 'true', role: 'textbox', 'aria-label': 'Edit code',
         'data-language': 'python', class: 'cm-content',
       });
+      for (const line of python.split('\n')) append(cmContent, 'DIV', line, { class: 'cm-line' });
     });
     prose('CANARY-DONE');
     assistant.innerText = 'The canary check is ready.\n\nSQL\n' + sql + '\n\nThe Python function follows.\n\nPython\nRun\n'
@@ -1012,6 +1014,15 @@ describe('DOM observation boundary', () => {
     await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
       ...candidate, snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
     })).resolves.toEqual({ state: 'ready', reply: expected });
+
+    // A virtualized CodeMirror body (.cm-gap instead of rendered lines) is partial code.
+    append(cmContent, 'DIV', '', { class: 'cm-gap' });
+    const virtualized = await readPageObservation(fixture.page, marker, 0);
+    expect(virtualized.transcriptIncomplete).toBe(true);
+    expect(virtualized.snapshot?.complete).toBe(false);
+    cmContent.children.pop();
+    cmContent.childNodes.pop();
+    expect((await readPageObservation(fixture.page, marker, 0)).snapshot?.complete).toBe(true);
 
     // Unknown visible text in a labelled bar stays refused.
     append(assistant.querySelectorAll('[data-markdown-copy="exclude"]')[1], 'DIV', 'EXTRA').appendText('EXTRA');
