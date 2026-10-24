@@ -478,26 +478,34 @@ describe('Issue #1238 page cleanup equivalence', () => {
     expect(observed.result.cleanup).toBe('confirmed');
   });
 
-  it('journals which in-progress node kept a harvested page busy through every settle pass (#2704)', async () => {
+  it.each([
     // Live 6adc9faa: generation_in_progress outlasted 6 x 5 s with no record of the node.
+    { issue: '#2704', options: { inProgressNode: true }, cause: 'generation_in_progress',
+      detail: 'div:fixture-tool:page:visible' },
+    // Live 6adcc45d: foreign_user_message outlasted 12 x 5 s with no record of the predicate.
+    { issue: '#2710', options: { foreignUser: true }, cause: 'foreign_user_message',
+      detail: 'users=2:carriers=1:markers=1:last_own=false' },
+  ] as const)('journals why a harvested page stayed $cause through every settle pass ($issue)', async (
+    { options, cause, detail },
+  ) => {
     const home = mkdtempSync(join(tmpdir(), 'opk-2704-home-'));
     const priorHome = process.env.HOME;
     process.env.HOME = home;
     try {
       const observed = await observeFinalizer({
         sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false,
-        inProgressNode: true,
+        ...options,
       });
       expect(observed.settleWaits).toBe(12);
       expect(observed.pageCloseCalls).toBe(0);
-      expect(observed.result.incidents).toContain('generation_in_progress');
+      expect(observed.result.incidents).toContain(cause);
       const journals = (readdirSync(home, { recursive: true }) as string[])
         .filter((name) => name.endsWith('browser-turn-recurrence.jsonl'));
       const records = journals.flatMap((name) => readFileSync(join(home, name), 'utf8').trim().split('\n'))
         .map((line) => JSON.parse(line) as Record<string, unknown>)
         .filter((record) => record.event_class === 'owned_tab_cleanup_unconfirmed');
       expect(records).toContainEqual(expect.objectContaining({
-        observed_symptom: 'generation_in_progress', retirement_detail: 'div:fixture-tool:page:visible',
+        observed_symptom: cause, retirement_detail: detail,
       }));
     } finally {
       if (priorHome === undefined) delete process.env.HOME;

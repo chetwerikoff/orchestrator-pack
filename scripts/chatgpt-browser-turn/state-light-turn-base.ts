@@ -8809,17 +8809,27 @@ async function guardedOriginalTargetRetirement(input: {
         budget(), 'retirement_users_timeout',
       );
     } catch { return 'frozen_ownership_unproven'; }
-    if (users.incomplete) return 'foreign_user_message';
+    if (users.incomplete) {
+      busyDetail = 'users_incomplete';
+      return 'foreign_user_message';
+    }
     const cardinality = recoveryMarkerCardinality(users.messages, observation.marker);
+    const lastOwn = users.messages.length !== 0
+      && ownedPromptMatches(users.messages[users.messages.length - 1]!.text, observation.marker);
+    // Diagnostic only: which user-row predicate refused, never a close input.
+    const userDetail = (): string => `users=${users.messages.length}`
+      + `:carriers=${cardinality.matchingUserCarrierCount}`
+      + `:markers=${cardinality.exactMarkerTokenCount}:last_own=${lastOwn}`;
     if (row === 'not_sent') {
       if ((users.messages.length !== 0 && !existingConversationRoute)
         || cardinality.exactMarkerTokenCount !== 0) {
+        busyDetail = userDetail();
         return 'foreign_user_message';
       }
     } else {
       if (cardinality.matchingUserCarrierCount !== 1 || cardinality.exactMarkerTokenCount !== 1
-        || users.messages.length === 0
-        || !ownedPromptMatches(users.messages[users.messages.length - 1]!.text, observation.marker)) {
+        || users.messages.length === 0 || !lastOwn) {
+        busyDetail = userDetail();
         return 'foreign_user_message';
       }
       // Last user marker and idle controls are insufficient after a completed
@@ -8853,7 +8863,8 @@ async function guardedOriginalTargetRetirement(input: {
   const refuseIdle = (cause: string): GuardedRetirementResult => ({
     ...refuse(cause),
     ...(RETIREMENT_SETTLE_CAUSES.has(cause) ? { settling: true as const } : {}),
-    ...(cause === 'generation_in_progress' && busyDetail ? { detail: busyDetail } : {}),
+    ...((cause === 'generation_in_progress' || cause === 'foreign_user_message') && busyDetail
+      ? { detail: busyDetail } : {}),
   });
   // No real close may proceed on a missing other Page, an unreadable composer,
   // an unsettled turn, a visible Stop or an unknown CDP census.
