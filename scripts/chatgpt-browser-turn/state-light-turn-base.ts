@@ -819,7 +819,12 @@ export async function revalidateKeyedHarvest(
         };
         // Canonical notation for visible DOM only, not reconstructed Markdown.
         const serializeAssistant = (message: Element, selected: boolean): { text: string; complete: boolean } => {
-          const wholeRow = () => ({ text: (message as HTMLElement).innerText, complete: true });
+          // A live unit also holds a screen-reader heading ("ChatGPT said:"):
+          // read the text of its one assistant markdown root when present.
+          const wholeRow = () => {
+            const roots = message.querySelectorAll(`[${args.roleAttribute}="${args.assistantMessageStyle}"]`);
+            return { text: ((roots.length === 1 ? roots[0] : message) as HTMLElement).innerText, complete: true };
+          };
           const unsupported = () => selected ? { text: '', complete: false } : wholeRow();
           const codeBodySelector = 'pre, .cm-content';
           // A runnable code block renders as CodeMirror, with no PRE.
@@ -2173,7 +2178,12 @@ export async function readPageObservation(
           };
           // Canonical notation for visible DOM only, not reconstructed Markdown.
           const serializeAssistant = (message: Element, selected: boolean): { text: string; complete: boolean } => {
-            const wholeRow = () => ({ text: (message as HTMLElement).innerText, complete: true });
+            // A live unit also holds a screen-reader heading ("ChatGPT said:"):
+            // read the text of its one assistant markdown root when present.
+            const wholeRow = () => {
+              const roots = message.querySelectorAll(`[${args.roleAttribute}="${args.assistantMessageStyle}"]`);
+              return { text: ((roots.length === 1 ? roots[0] : message) as HTMLElement).innerText, complete: true };
+            };
             const unsupported = () => selected ? { text: '', complete: false } : wholeRow();
             const codeBodySelector = 'pre, .cm-content';
             // A runnable code block renders as CodeMirror, with no PRE.
