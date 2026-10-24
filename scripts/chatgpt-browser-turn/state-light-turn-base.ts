@@ -8781,6 +8781,12 @@ async function guardedOriginalTargetRetirement(input: {
   const finalIdle = await readableAndIdle();
   if (finalIdle) return refuseIdle(finalIdle);
   if (!eligibleRoute() || Date.now() >= deadline) return refuse('route_changed');
+  // Another invocation may bind this existing tab while this pass settles;
+  // re-prove at the physical-close boundary that every peer record is terminal.
+  if (input.adoptedPackTarget && !packCreatedTerminalTarget({
+    profileKey: outcome.result.configured_profile_key, targetId: pin.id,
+    cdpSha256: pin.cdp_sha256, currentInvocationId: outcome.result.invocation_id,
+  })) return refuse('adopted_target_peer_unsettled');
   if (!targetInfo.created && !authorizeGuardedHistoricalTargetClose(outcome.browser, pin.id)) {
     return refuse('created_target_ownership_unproven');
   }

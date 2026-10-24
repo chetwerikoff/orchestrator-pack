@@ -112,6 +112,8 @@ type FinalizerCase = {
   readonly earlierUserText?: string;
   /** Same-chat follow-up selects this existing target (created:false). */
   readonly adoptedFrom?: 'not_sent' | 'sent_unharvested' | 'none';
+  /** A peer invocation binds the same target while the guard settles. */
+  readonly peerBindsDuringSettle?: boolean;
 };
 
 function makeTurnResult(overrides: Partial<Omit<CompactTurnResult, 'cleanup'>> = {}): Omit<CompactTurnResult, 'cleanup'> {
@@ -156,7 +158,18 @@ async function observeFinalizer(testCase: FinalizerCase) {
   const page = testCase.pagePresent
     ? {
       __fakeBrowserGptPage: true,
-      waitForTimeout: async () => { settleWaits++; },
+      waitForTimeout: async () => {
+        settleWaits++;
+        if (!testCase.peerBindsDuringSettle || settleWaits !== 1) return;
+        const peer = invocationId + '-peer';
+        admitStateLightTurnObservation({ profileKey, invocationId: peer, marker: `OPKTURNV1${'cd'.repeat(16)}` });
+        bindStateLightOwnedTarget({
+          profileKey, invocationId: peer, targetId, created: false, cdp, initialRoute: chatUrl,
+        });
+        transitionStateLightTurnObservation({
+          profileKey, invocationId: peer, phase: 'dispatching', reason: 'fixture_peer_dispatching',
+        });
+      },
       close: async () => {
         testCase.beforePageClose?.();
         pageCloseCalls++;
@@ -462,6 +475,18 @@ describe('Issue #1238 page cleanup equivalence', () => {
     expect(observed.pageCloseCalls).toBe(closes);
     expect(observed.result.cleanup).toBe(expected);
     expect(observed.foreignTargetOpen).toBe(true);
+  });
+
+  it('re-proves adopted ownership on every pass and keeps a tab a peer bound while settling (#2702)', async () => {
+    const observed = await observeFinalizer({
+      sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false,
+      adoptedFrom: 'not_sent', earlierUserText: 'predecessor turn',
+      unreadableComposerReads: 2, peerBindsDuringSettle: true,
+    });
+    expect(observed.settleWaits).toBe(1);
+    expect(observed.pageCloseCalls).toBe(0);
+    expect(observed.result.cleanup).toBe('unconfirmed');
+    expect(observed.result.incidents).toContain('adopted_target_peer_unsettled');
   });
 
   it('does not close the sole owned Page or kill shared Chrome when no keepalive/sibling exists', async () => {
