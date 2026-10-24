@@ -966,7 +966,7 @@ describe('DOM observation boundary', () => {
       body(relative);
       append(relative, 'BUTTON', '', { 'aria-hidden': 'true', 'aria-label': 'Scroll to bottom' });
     };
-    return { fixture, assistant, append, prose, codeBlock };
+    return { fixture, assistant, markdown, append, prose, codeBlock };
   };
 
   it('replays the live canary reply: PRE>CODE sql block + CodeMirror python block, labelled action bars (#2694 follow-up)', async () => {
@@ -1036,6 +1036,33 @@ describe('DOM observation boundary', () => {
     const changed = await readPageObservation(fixture.page, marker, 0);
     expect(changed.transcriptIncomplete).toBe(true);
     expect(changed.snapshot?.complete).toBe(false);
+  });
+
+  it('reads a live code-free reply without the unit screen-reader heading (#2694 follow-up)', async () => {
+    // Live LeoPoker review replies (2026-10-23) rendered pretty JSON as prose. The unit
+    // innerText starts with the sr-only "ChatGPT said:" heading, which the review
+    // parser rejected as free-form prose.
+    const { fixture, assistant, markdown, prose } = liveReplyFixture();
+    const reply = '{\n"findings": []\n}';
+    prose(reply);
+    markdown.innerText = reply;
+    assistant.innerText = 'ChatGPT said:\n\n' + reply;
+    assistant.textContent = assistant.innerText;
+
+    const observed = await readPageObservation(fixture.page, marker, 0);
+    expect(observed.transcriptIncomplete).toBe(false);
+    expect(observed.snapshot?.complete).toBe(true);
+    expect(observed.snapshot?.carriers.at(-1)?.text).toBe(reply);
+    expect(observed.messages.at(-1)?.text).toBe(reply);
+
+    const previous = { complete: true, carriers: [] } as const;
+    const ownKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    const candidate = keyedHarvestCandidate(observed.snapshot!, previous, ownKey);
+    expect(candidate).toMatchObject({ state: 'ready', reply });
+    if (candidate.state !== 'ready') throw new Error('live_code_free_not_ready');
+    await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
+      ...candidate, snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+    })).resolves.toEqual({ state: 'ready', reply });
   });
 
   it('replays a live code-only reply: one labelled JSON block and no prose (#2694 follow-up)', async () => {
