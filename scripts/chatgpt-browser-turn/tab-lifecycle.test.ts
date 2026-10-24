@@ -116,6 +116,8 @@ type FinalizerCase = {
   readonly earlierUserText?: string;
   /** Same-chat follow-up selects this existing target (created:false). */
   readonly adoptedFrom?: 'not_sent' | 'sent_unharvested' | 'none';
+  /** The adopted page later lost cleanup authority (429/load wall, unowned recovery). */
+  readonly adoptedRevoked?: boolean;
   /** A peer invocation binds the same target while the guard settles. */
   readonly peerBindsDuringSettle?: boolean;
 };
@@ -331,6 +333,9 @@ async function observeFinalizer(testCase: FinalizerCase) {
         profileKey, invocationId, targetId, created,
         cdp, initialRoute: chatUrl,
       });
+      // Live URL selection marks every pre-existing tab cleanup-unproven.
+      if (!created) __testConversationPageSelection.markSelectedPageUnowned(page);
+      if (testCase.adoptedRevoked) __testConversationPageSelection.revokePageCleanupAuthority(page);
     }
     if (testCase.sendCount > 0) {
       // A delivered turn must first enter dispatching; never weaken the
@@ -528,6 +533,15 @@ describe('Issue #1238 page cleanup equivalence', () => {
     expect(observed.pageCloseCalls).toBe(closes);
     expect(observed.result.cleanup).toBe(expected);
     expect(observed.foreignTargetOpen).toBe(true);
+  });
+
+  it('keeps an adopted target whose page later lost cleanup authority (#2708)', async () => {
+    const observed = await observeFinalizer({
+      sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false,
+      adoptedFrom: 'not_sent', earlierUserText: 'predecessor turn', adoptedRevoked: true,
+    });
+    expect(observed.pageCloseCalls).toBe(0);
+    expect(observed.result.cleanup).toBe('unconfirmed');
   });
 
   it('re-proves adopted ownership on every pass and keeps a tab a peer bound while settling (#2702)', async () => {
