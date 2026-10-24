@@ -990,7 +990,9 @@ export async function revalidateKeyedHarvest(
               // wraps each table in a DIV beside a decorative aria-hidden sibling.
               const component = child.tagName === 'DIV' ? child.getAttribute('data-d-component') : null;
               if (component === 'divider') {
-                if ((child as HTMLElement).innerText?.trim() || child.children.length !== 0) return unsupported();
+                if ((child as HTMLElement).innerText?.trim() || child.textContent?.trim() || child.children.length !== 0) {
+                  return unsupported();
+                }
                 blocks.push('---');
                 continue;
               }
@@ -2366,7 +2368,9 @@ export async function readPageObservation(
                 // wraps each table in a DIV beside a decorative aria-hidden sibling.
                 const component = child.tagName === 'DIV' ? child.getAttribute('data-d-component') : null;
                 if (component === 'divider') {
-                  if ((child as HTMLElement).innerText?.trim() || child.children.length !== 0) return unsupported();
+                  if ((child as HTMLElement).innerText?.trim() || child.textContent?.trim() || child.children.length !== 0) {
+                    return unsupported();
+                  }
                   blocks.push('---');
                   continue;
                 }

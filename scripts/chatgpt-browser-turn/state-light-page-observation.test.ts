@@ -1088,6 +1088,10 @@ describe('DOM observation boundary', () => {
     divider.innerText = 'RULE';
     await refused();
     divider.innerText = '';
+    // CSS-hidden content leaves innerText empty but is still not an empty rule.
+    divider.textContent = 'HIDDEN-BY-CSS';
+    await refused();
+    divider.textContent = '';
     expect((await readPageObservation(fixture.page, marker, 0)).snapshot?.carriers.at(-1)?.text).toBe(expected);
     expect(table.tagName).toBe('TABLE');
   });
