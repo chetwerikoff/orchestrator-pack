@@ -509,6 +509,7 @@ interface BrowserIncident {
   readonly uncertaintyDiagnostics?: ObservationUncertaintyDiagnostics;
   readonly composerMutationDiagnostic?: ComposerMutationDiagnosticV1;
   readonly extendedReadiness?: ExtendedReadinessDiagnostic;
+  readonly retirementDetail?: string;
 }
 
 export interface CompactTurnResult extends TurnResultV1 {
@@ -985,11 +986,27 @@ export async function revalidateKeyedHarvest(
               continue;
             }
             if (pres.length === 0) {
-              if (!/^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)) return unsupported();
+              // Live ChatGPT renders a markdown rule as an empty divider DIV and
+              // wraps each table in a DIV beside a decorative aria-hidden sibling.
+              const component = child.tagName === 'DIV' ? child.getAttribute('data-d-component') : null;
+              if (component === 'divider') {
+                if ((child as HTMLElement).innerText?.trim() || child.children.length !== 0) return unsupported();
+                blocks.push('---');
+                continue;
+              }
+              let prose: Element = child;
+              if (component === 'table') {
+                const tables = child.querySelectorAll('table');
+                if (tables.length !== 1 || !visible(tables[0]!)
+                  || (child as HTMLElement).innerText?.trim() !== (tables[0] as HTMLElement).innerText?.trim()) {
+                  return unsupported();
+                }
+                prose = tables[0]!;
+              } else if (!/^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)) return unsupported();
               // Whole innerText preserves browser whitespace for prose,
               // headings, tables and lists. Ambiguous nested controls fail.
-              if (child.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
-              const block = (child as HTMLElement).innerText;
+              if (prose.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
+              const block = (prose as HTMLElement).innerText;
               if (block) blocks.push(block);
               continue;
             }
@@ -1948,6 +1965,7 @@ function appendIncident(
       ...(incident.uncertaintyDiagnostics ? {
         observation_uncertainty: incident.uncertaintyDiagnostics,
       } : {}),
+      ...(incident.retirementDetail ? { retirement_detail: incident.retirementDetail } : {}),
 
       ...(incident.extendedReadiness ? {
         entry_nonresponsive_count: incident.extendedReadiness.entryNonresponsiveCount,
@@ -2344,11 +2362,27 @@ export async function readPageObservation(
                 continue;
               }
               if (pres.length === 0) {
-                if (!/^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)) return unsupported();
+                // Live ChatGPT renders a markdown rule as an empty divider DIV and
+                // wraps each table in a DIV beside a decorative aria-hidden sibling.
+                const component = child.tagName === 'DIV' ? child.getAttribute('data-d-component') : null;
+                if (component === 'divider') {
+                  if ((child as HTMLElement).innerText?.trim() || child.children.length !== 0) return unsupported();
+                  blocks.push('---');
+                  continue;
+                }
+                let prose: Element = child;
+                if (component === 'table') {
+                  const tables = child.querySelectorAll('table');
+                  if (tables.length !== 1 || !visible(tables[0]!)
+                    || (child as HTMLElement).innerText?.trim() !== (tables[0] as HTMLElement).innerText?.trim()) {
+                    return unsupported();
+                  }
+                  prose = tables[0]!;
+                } else if (!/^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)) return unsupported();
                 // Whole innerText preserves browser whitespace for prose,
                 // headings, tables and lists. Ambiguous nested controls fail.
-                if (child.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
-                const block = (child as HTMLElement).innerText;
+                if (prose.querySelector('button, [role="button"], [aria-hidden="true"], [inert]')) return unsupported();
+                const block = (prose as HTMLElement).innerText;
                 if (block) blocks.push(block);
                 continue;
               }
@@ -8511,14 +8545,34 @@ type GuardedRetirementResult = {
   readonly cause: string;
   /** Refused by a settled-row idle read that a later pass may clear. */
   readonly settling?: true;
+  /** What kept the page busy, for the cleanup journal record. */
+  readonly detail?: string;
 };
 
 const RETIREMENT_SETTLE_CAUSES: ReadonlySet<string> = new Set([
   'composer_unknown', 'generation_in_progress', 'stop_visible',
   'foreign_user_message', 'foreign_assistant_turn',
 ]);
-const RETIREMENT_SETTLE_RETRIES = 6;
+const RETIREMENT_SETTLE_RETRIES = 12;
 const RETIREMENT_SETTLE_DELAY_MS = 5_000;
+
+/** Diagnostic only: name up to three in-progress nodes; never a close input. */
+async function describeInProgressNodes(page: any, waitMs: number): Promise<string> {
+  try {
+    const nodes = page.locator(ASSISTANT_TURN_IN_PROGRESS_SELECTOR);
+    if (typeof nodes?.evaluateAll !== 'function') return 'in_progress_nodes_unread';
+    const described = await boundedBrowserRead(
+      Promise.resolve(nodes.evaluateAll((elements: Element[]) => elements.slice(0, 3).map((node) => [
+        node.tagName.toLowerCase(),
+        node.getAttribute('data-testid') ?? '',
+        node.closest('[data-chatgpt-search-unit-key]') ? 'unit' : node.closest('nav, aside') ? 'nav' : 'page',
+        node.getBoundingClientRect().height > 0 ? 'visible' : 'hidden',
+      ].join(':')).join(','))),
+      waitMs, 'retirement_in_progress_describe_timeout',
+    );
+    return typeof described === 'string' && described ? described.slice(0, 200) : 'in_progress_nodes_unread';
+  } catch { return 'in_progress_nodes_unread'; }
+}
 
 // Retirement and retries share total ProseMirror paragraph reconstruction.
 // Non-ProseMirror fallback is exact-only; unknown drafts never grant close.
@@ -8603,6 +8657,7 @@ async function guardedOriginalTargetRetirement(input: {
 }): Promise<GuardedRetirementResult> {
   const { outcome, cdp } = input;
   const refuse = (cause: string): GuardedRetirementResult => ({ status: 'unconfirmed', cause });
+  let busyDetail: string | undefined;
   const targetInfo = getOwnTargetInfo(outcome.browser);
   if (!targetInfo?.targetId || !outcome.page || !cdp
     || (!targetInfo.created && input.verifiedPredecessor !== true && input.adoptedPackTarget !== true)
@@ -8706,7 +8761,10 @@ async function guardedOriginalTargetRetirement(input: {
     if (stop) return 'stop_visible';
     const continuation = await readFreshContinuationVisible(outcome.page, Date.now() + budget());
     if (continuation === null) return 'frozen_ownership_unproven';
-    if (continuation) return 'generation_in_progress';
+    if (continuation) {
+      busyDetail = 'continuation_control_visible';
+      return 'generation_in_progress';
+    }
     let stream: number;
     try {
       stream = await boundedBrowserRead(
@@ -8715,7 +8773,10 @@ async function guardedOriginalTargetRetirement(input: {
       );
     } catch { return 'frozen_ownership_unproven'; }
     if (!Number.isSafeInteger(stream) || stream < 0) return 'frozen_ownership_unproven';
-    if (stream > 0) return 'generation_in_progress';
+    if (stream > 0) {
+      busyDetail = await describeInProgressNodes(outcome.page, budget());
+      return 'generation_in_progress';
+    }
     let users: Awaited<ReturnType<typeof readRecoveryAuthoritativeUserMessages>>;
     try {
       users = await boundedBrowserRead(
@@ -8764,8 +8825,11 @@ async function guardedOriginalTargetRetirement(input: {
     return null;
   };
 
-  const refuseIdle = (cause: string): GuardedRetirementResult => (
-    RETIREMENT_SETTLE_CAUSES.has(cause) ? { ...refuse(cause), settling: true } : refuse(cause));
+  const refuseIdle = (cause: string): GuardedRetirementResult => ({
+    ...refuse(cause),
+    ...(RETIREMENT_SETTLE_CAUSES.has(cause) ? { settling: true as const } : {}),
+    ...(cause === 'generation_in_progress' && busyDetail ? { detail: busyDetail } : {}),
+  });
   // No real close may proceed on a missing other Page, an unreadable composer,
   // an unsettled turn, a visible Stop or an unknown CDP census.
   for (let i = 0; i < 2; i++) {
@@ -8979,6 +9043,7 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
         action: retirement.cause === 'frozen_ownership_unproven'
           ? 'preserve_exact_owner_gitHub_first_reconcile_inspect_on_next_real_wake_no_close_no_resend'
           : 'retain_original_reconcile_then_reinspect_without_resend',
+        ...(retirement.detail ? { retirementDetail: retirement.detail } : {}),
       }, outcome.result.invocation_id)) journalWriteFailed = true;
     }
   }

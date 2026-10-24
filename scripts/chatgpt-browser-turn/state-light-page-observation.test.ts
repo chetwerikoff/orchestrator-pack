@@ -1038,6 +1038,60 @@ describe('DOM observation boundary', () => {
     expect(changed.snapshot?.complete).toBe(false);
   });
 
+  it('serializes live data-d divider and table blocks beside a code block (#2704)', async () => {
+    // Live LeoPoker 6adc9be1 and AppliedIn 6adc8ac5 (2026-10-24): a markdown rule is an
+    // empty DIV[data-d-component=divider]; a table is DIV[data-d-component=table] > DIV >
+    // TABLE beside an aria-hidden DIV. Both refused the whole reply before #2704.
+    const { fixture, assistant, append, prose, codeBlock } = liveReplyFixture();
+    const renderer = assistant.querySelector('.DilRenderer-tB76Jj');
+    const python = 'assert ok';
+    const tableText = 'Check\tResult\nNode\tPassed';
+    prose('Status follows.');
+    codeBlock('Python', false, (relative) => {
+      const pre = append(append(relative, 'DIV'), 'PRE');
+      append(pre, 'CODE', python);
+    });
+    const divider = append(renderer, 'DIV', '', { 'data-d-component': 'divider' });
+    const tableWrap = append(renderer, 'DIV', tableText, { 'data-d-component': 'table' });
+    const table = append(append(tableWrap, 'DIV', tableText), 'TABLE', tableText);
+    append(tableWrap, 'DIV', '', { 'aria-hidden': 'true' });
+    prose('DONE');
+
+    const fence = String.fromCharCode(96).repeat(3);
+    const expected = 'Status follows.\n\n' + fence + 'python\n' + python + '\n' + fence
+      + '\n\n---\n\n' + tableText + '\n\nDONE';
+    const observed = await readPageObservation(fixture.page, marker, 0);
+    expect(observed.transcriptIncomplete).toBe(false);
+    expect(observed.snapshot?.carriers.at(-1)?.text).toBe(expected);
+    const previous = { complete: true, carriers: [] } as const;
+    const ownKey = observed.snapshot!.carriers.find((row) => row.role === 'user')!.key!;
+    const candidate = keyedHarvestCandidate(observed.snapshot!, previous, ownKey);
+    expect(candidate).toMatchObject({ state: 'ready', reply: expected });
+    if (candidate.state !== 'ready') throw new Error('data_d_blocks_not_ready');
+    await expect(revalidateKeyedHarvest(fixture.page, previous, ownKey, {
+      ...candidate, snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
+    })).resolves.toEqual({ state: 'ready', reply: expected });
+
+    // Visible text outside the TABLE, a second TABLE, or a non-empty divider stays refused.
+    const refused = async () => {
+      const read = await readPageObservation(fixture.page, marker, 0);
+      expect(read.transcriptIncomplete).toBe(true);
+      expect(read.snapshot?.complete).toBe(false);
+    };
+    tableWrap.innerText = tableText + '\nCAPTION';
+    await refused();
+    tableWrap.innerText = tableText;
+    append(tableWrap.children[0], 'TABLE', '');
+    await refused();
+    tableWrap.children[0].children.pop();
+    tableWrap.children[0].childNodes.pop();
+    divider.innerText = 'RULE';
+    await refused();
+    divider.innerText = '';
+    expect((await readPageObservation(fixture.page, marker, 0)).snapshot?.carriers.at(-1)?.text).toBe(expected);
+    expect(table.tagName).toBe('TABLE');
+  });
+
   it('reads a live code-free reply without the unit screen-reader heading (#2694 follow-up)', async () => {
     // Live LeoPoker review replies (2026-10-23) rendered pretty JSON as prose. The unit
     // innerText starts with the sr-only "ChatGPT said:" heading, which the review

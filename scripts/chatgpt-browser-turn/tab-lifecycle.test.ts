@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import * as ts from 'typescript';
@@ -106,6 +106,8 @@ type FinalizerCase = {
   readonly foreignAssistantReply?: boolean;
   readonly stopVisible?: boolean;
   readonly continuationVisible?: boolean;
+  /** A page-level in-progress node stays matched through every settle pass. */
+  readonly inProgressNode?: boolean;
   readonly accessibleContinuationOnly?: boolean;
   readonly routeChanged?: boolean;
   /** Earlier user turn on the pinned existing conversation. */
@@ -237,7 +239,14 @@ async function observeFinalizer(testCase: FinalizerCase) {
           };
         }
         if (selector === ASSISTANT_TURN_IN_PROGRESS_SELECTOR) {
-          return { count: async () => 0 };
+          const nodes = testCase.inProgressNode ? [{
+            tagName: 'DIV', getAttribute: (name: string) => name === 'data-testid' ? 'fixture-tool' : null,
+            closest: () => null, getBoundingClientRect: () => ({ height: 1 }),
+          }] : [];
+          return {
+            count: async () => nodes.length,
+            evaluateAll: async (fn: (elements: unknown[]) => unknown) => fn(nodes),
+          };
         }
         if (selector.includes('Continue generating')) {
           return {
@@ -442,10 +451,38 @@ describe('Issue #1238 page cleanup equivalence', () => {
       sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false,
       unreadableComposer: true,
     });
-    expect(observed.settleWaits).toBe(6);
+    expect(observed.settleWaits).toBe(12);
     expect(observed.pageCloseCalls).toBe(0);
     expect(observed.result.cleanup).toBe('unconfirmed');
     expect(observed.result.incidents).toContain('composer_unknown');
+  });
+
+  it('journals which in-progress node kept a harvested page busy through every settle pass (#2704)', async () => {
+    // Live 6adc9faa: generation_in_progress outlasted 6 x 5 s with no record of the node.
+    const home = mkdtempSync(join(tmpdir(), 'opk-2704-home-'));
+    const priorHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const observed = await observeFinalizer({
+        sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false,
+        inProgressNode: true,
+      });
+      expect(observed.settleWaits).toBe(12);
+      expect(observed.pageCloseCalls).toBe(0);
+      expect(observed.result.incidents).toContain('generation_in_progress');
+      const journals = (readdirSync(home, { recursive: true }) as string[])
+        .filter((name) => name.endsWith('browser-turn-recurrence.jsonl'));
+      const records = journals.flatMap((name) => readFileSync(join(home, name), 'utf8').trim().split('\n'))
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((record) => record.event_class === 'owned_tab_cleanup_unconfirmed');
+      expect(records).toContainEqual(expect.objectContaining({
+        observed_symptom: 'generation_in_progress', retirement_detail: 'div:fixture-tool:page:visible',
+      }));
+    } finally {
+      if (priorHome === undefined) delete process.env.HOME;
+      else process.env.HOME = priorHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it.each([
