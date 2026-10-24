@@ -2793,12 +2793,22 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
   // Live LeoPoker 6adc007a: ChatGPT kept a second conversation workspace
   // mounted under display:none with its own empty editor after the reply.
   it.each([
-    { peer: 'unrendered empty', rects: 0, text: '', expected: 'empty' },
-    { peer: 'unrendered draft', rects: 0, text: 'hidden draft', expected: 'composer_unknown' },
-    { peer: 'rendered empty', rects: 1, text: '', expected: 'composer_unknown' },
-  ] as const)('retirement reads past an $peer peer editor as $expected (#2694 follow-up)', async ({ rects, text, expected }) => {
+    { peer: 'unrendered empty', rects: 0, child: 'trailing-break', expected: 'empty' },
+    { peer: 'unrendered draft', rects: 0, child: 'text', expected: 'composer_unknown' },
+    { peer: 'unrendered image', rects: 0, child: 'image', expected: 'composer_unknown' },
+    { peer: 'rendered empty', rects: 1, child: 'trailing-break', expected: 'composer_unknown' },
+  ] as const)('retirement reads past an $peer peer editor as $expected (#2694 follow-up)', async ({ rects, child, expected }) => {
     const element: any = visibleProseMirror('');
-    const peer = { textContent: text, getClientRects: () => Array.from({ length: rects }, () => ({})) };
+    const node = (tagName: string, classes: string[] = []) => ({
+      nodeType: 1, tagName, childNodes: [] as unknown[], classList: { contains: (name: string) => classes.includes(name) },
+    });
+    const paragraph = node('P');
+    paragraph.childNodes.push(child === 'text' ? { nodeType: 3, nodeValue: 'hidden draft', childNodes: [] }
+      : child === 'image' ? node('IMG') : node('BR', ['ProseMirror-trailingBreak']));
+    const peer = {
+      ...node('DIV', ['ProseMirror']), childNodes: [paragraph],
+      getClientRects: () => Array.from({ length: rects }, () => ({})),
+    };
     element.ownerDocument.querySelectorAll = (selector: string) =>
       selector === COMPOSER_SELECTOR ? [peer, element] : [];
     const nth = (index: number) => ({
