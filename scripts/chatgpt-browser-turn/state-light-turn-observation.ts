@@ -194,6 +194,37 @@ export function readStateLightTurnObservation(
   return record;
 }
 
+/**
+ * True only when this profile's own records prove that a different invocation
+ * created `targetId` on the same CDP endpoint and every other record bound to
+ * that exact target is terminal. URL/route evidence never enters this proof.
+ */
+export function packCreatedTerminalTarget(input: {
+  readonly profileKey: string;
+  readonly targetId: string;
+  readonly cdpSha256: string;
+  readonly currentInvocationId: string;
+}): boolean {
+  const root = join(profileStatePaths(input.profileKey).root, 'observations');
+  let created = false;
+  try {
+    for (const name of readdirSync(root)) {
+      if (!name.endsWith('.json')) continue;
+      const raw = readFileSync(join(root, name), 'utf8');
+      if (!raw.includes(input.targetId)) continue;
+      const record = parseRecord(raw);
+      if (record.owned_target?.id !== input.targetId
+        || record.invocation_id === input.currentInvocationId) continue;
+      if (record.profile_key !== input.profileKey
+        || observationRecordKey(record.invocation_id) !== basename(name, '.json')
+        || record.owned_target.cdp_sha256 !== input.cdpSha256
+        || (record.phase !== 'harvested' && record.phase !== 'not_sent')) return false;
+      if (record.owned_target.created) created = true;
+    }
+  } catch { return false; }
+  return created;
+}
+
 export function admitStateLightTurnObservation(input: {
   readonly profileKey: string;
   readonly invocationId: string;

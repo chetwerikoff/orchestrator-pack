@@ -431,10 +431,13 @@ export function getOwnTargetInfo(browser: unknown): {
  * its persisted exact target and fresh idle/foreign-activity evidence before
  * calling this. A reattach is intentionally marked created:false, so grant
  * only that one pinned target a proxy close command at the last safe boundary.
- * Ordinary selected existing Pages never enter this path.
+ * A selected existing Page enters only after the driver proved, from durable
+ * observation records, that a terminal pack invocation created that exact target.
  */
 export function authorizeGuardedHistoricalTargetClose(browser: unknown, targetId: string): boolean {
   if (!browser || typeof browser !== 'object' || !targetId) return false;
+  const fixture = fixtureConnections.get(browser);
+  if (fixture) return !fixture.created && fixture.targetId === targetId;
   const attached = connections.get(browser);
   if (!attached || attached.created || attached.initialTargetId !== targetId
     || !attached.proxy.allowedTargetIds.has(targetId)) return false;

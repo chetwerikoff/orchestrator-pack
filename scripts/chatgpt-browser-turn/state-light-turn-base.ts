@@ -70,6 +70,7 @@ import {
   admitStateLightTurnObservation,
   bindStateLightOwnedTarget,
   finalizeStateLightPrimaryPublication,
+  packCreatedTerminalTarget,
   readVerifiedStateLightHarvestedPrimary,
   readStateLightTurnObservation,
   transitionStateLightTurnObservation,
@@ -8508,7 +8509,16 @@ async function retireDetachedOriginalTarget(input: {
 type GuardedRetirementResult = {
   readonly status: 'confirmed' | 'unconfirmed';
   readonly cause: string;
+  /** Refused by a settled-row idle read that a later pass may clear. */
+  readonly settling?: true;
 };
+
+const RETIREMENT_SETTLE_CAUSES: ReadonlySet<string> = new Set([
+  'composer_unknown', 'generation_in_progress', 'stop_visible',
+  'foreign_user_message', 'foreign_assistant_turn',
+]);
+const RETIREMENT_SETTLE_RETRIES = 6;
+const RETIREMENT_SETTLE_DELAY_MS = 5_000;
 
 // Retirement and retries share total ProseMirror paragraph reconstruction.
 // Non-ProseMirror fallback is exact-only; unknown drafts never grant close.
@@ -8588,12 +8598,14 @@ async function guardedOriginalTargetRetirement(input: {
   readonly outcome: TurnRunOutcome;
   readonly cdp: string;
   readonly verifiedPredecessor?: true;
+  /** Selected existing target proven pack-created by a terminal predecessor. */
+  readonly adoptedPackTarget?: true;
 }): Promise<GuardedRetirementResult> {
   const { outcome, cdp } = input;
   const refuse = (cause: string): GuardedRetirementResult => ({ status: 'unconfirmed', cause });
   const targetInfo = getOwnTargetInfo(outcome.browser);
   if (!targetInfo?.targetId || !outcome.page || !cdp
-    || (!targetInfo.created && input.verifiedPredecessor !== true)
+    || (!targetInfo.created && input.verifiedPredecessor !== true && input.adoptedPackTarget !== true)
     || outcome.ownershipForfeited || cleanupAuthorityUnprovenPages.has(outcome.page)) {
     return refuse('created_target_ownership_unproven');
   }
@@ -8604,10 +8616,13 @@ async function guardedOriginalTargetRetirement(input: {
     );
   } catch { return refuse('observation_identity_unproven'); }
   const pin = observation.owned_target;
-  if (!pin?.created || pin.id !== targetInfo.targetId
+  if (!pin || (!pin.created && input.adoptedPackTarget !== true) || pin.id !== targetInfo.targetId
     || pin.cdp_sha256 !== createHash('sha256').update(cdp, 'utf8').digest('hex')) {
     return refuse('created_target_ownership_unproven');
   }
+  // A pinned existing conversation already holds earlier user turns; an
+  // unsent row there proves only that its own marker never landed.
+  const existingConversationRoute = isSupportedChatGptConversationUrl(pin.initial_route);
   const deadline = Date.now() + 18_000;
   const budget = () => Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, deadline - Date.now()));
   const currentUrl = (): string | null => {
@@ -8711,7 +8726,8 @@ async function guardedOriginalTargetRetirement(input: {
     if (users.incomplete) return 'foreign_user_message';
     const cardinality = recoveryMarkerCardinality(users.messages, observation.marker);
     if (row === 'not_sent') {
-      if (users.messages.length !== 0 || cardinality.exactMarkerTokenCount !== 0) {
+      if ((users.messages.length !== 0 && !existingConversationRoute)
+        || cardinality.exactMarkerTokenCount !== 0) {
         return 'foreign_user_message';
       }
     } else {
@@ -8748,20 +8764,22 @@ async function guardedOriginalTargetRetirement(input: {
     return null;
   };
 
+  const refuseIdle = (cause: string): GuardedRetirementResult => (
+    RETIREMENT_SETTLE_CAUSES.has(cause) ? { ...refuse(cause), settling: true } : refuse(cause));
   // No real close may proceed on a missing other Page, an unreadable composer,
   // an unsettled turn, a visible Stop or an unknown CDP census.
   for (let i = 0; i < 2; i++) {
     const c = await census();
     if (c) return refuse(c);
     const idle = await readableAndIdle();
-    if (idle) return refuse(idle);
+    if (idle) return refuseIdle(idle);
   }
   const last = await census();
   if (last) return refuse(last);
   // The last CDP census is an await: re-read current draft, Stop, stream and
   // exact route at the physical-close boundary, not only before the census.
   const finalIdle = await readableAndIdle();
-  if (finalIdle) return refuse(finalIdle);
+  if (finalIdle) return refuseIdle(finalIdle);
   if (!eligibleRoute() || Date.now() >= deadline) return refuse('route_changed');
   if (!targetInfo.created && !authorizeGuardedHistoricalTargetClose(outcome.browser, pin.id)) {
     return refuse('created_target_ownership_unproven');
@@ -8866,8 +8884,22 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
   // possible Send or an unbound local terminal. Neither Send count nor a
   // cleanupAction flag grants destructive authority on its own.
   const pinnedOriginal = getOwnTargetInfo(outcome.browser);
+  // A same-chat follow-up selects the predecessor's open tab as created:false.
+  // Only that exact target, created by a now-terminal pack invocation on this
+  // endpoint, may enter the guarded close; operator tabs have no such record.
+  const adoptedPackTarget = Boolean(
+    pinnedOriginal?.targetId && pinnedOriginal.created === false && cdp
+    && !outcome.createdAttachFailureCleanup && !outcome.originalCreatedPage
+    && packCreatedTerminalTarget({
+      profileKey: outcome.result.configured_profile_key,
+      targetId: pinnedOriginal.targetId,
+      cdpSha256: createHash('sha256').update(cdp, 'utf8').digest('hex'),
+      currentInvocationId: outcome.result.invocation_id,
+    }),
+  );
   const positivelyCreatedOriginal = Boolean(
-    pinnedOriginal?.created || outcome.createdAttachFailureCleanup || outcome.originalCreatedPage,
+    pinnedOriginal?.created || outcome.createdAttachFailureCleanup || outcome.originalCreatedPage
+    || adoptedPackTarget,
   );
   // A recovery successor may share the original's URL but has a different
   // Page handle/target. Never close it using the first target's provenance.
@@ -8921,7 +8953,17 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
     pageAction = 'preserve';
   }
   if (pageAction === 'close') {
-    const retirement = await guardedOriginalTargetRetirement({ outcome, cdp });
+    // The guard runs within ~50ms of harvest, while the page still settles
+    // (second composer, in-progress row, partial user list). Re-run the whole
+    // guard on these settled-row refusals; each pass keeps every close predicate.
+    const guard = () => guardedOriginalTargetRetirement({
+      outcome, cdp, ...(adoptedPackTarget ? { adoptedPackTarget: true as const } : {}),
+    });
+    let retirement = await guard();
+    for (let attempt = 1; attempt <= RETIREMENT_SETTLE_RETRIES && retirement.settling; attempt++) {
+      await sleep(outcome.page, RETIREMENT_SETTLE_DELAY_MS);
+      retirement = await guard();
+    }
     cleanup = retirement.status === 'confirmed' ? 'confirmed' : 'unconfirmed';
     if (retirement.status !== 'confirmed') {
       incidents.push(retirement.cause);

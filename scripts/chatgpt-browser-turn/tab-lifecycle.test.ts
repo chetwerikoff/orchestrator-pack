@@ -96,6 +96,7 @@ type FinalizerCase = {
   readonly soleSharedChromePage?: boolean;
   readonly absentComposer?: boolean;
   readonly unreadableComposer?: boolean;
+  readonly unreadableComposerReads?: number;
   readonly errorBanner?: string;
   readonly blankPage?: boolean;
   readonly recoverySuccessor?: boolean;
@@ -107,6 +108,10 @@ type FinalizerCase = {
   readonly continuationVisible?: boolean;
   readonly accessibleContinuationOnly?: boolean;
   readonly routeChanged?: boolean;
+  /** Earlier user turn on the pinned existing conversation. */
+  readonly earlierUserText?: string;
+  /** Same-chat follow-up selects this existing target (created:false). */
+  readonly adoptedFrom?: 'not_sent' | 'sent_unharvested' | 'none';
 };
 
 function makeTurnResult(overrides: Partial<Omit<CompactTurnResult, 'cleanup'>> = {}): Omit<CompactTurnResult, 'cleanup'> {
@@ -143,12 +148,15 @@ async function observeFinalizer(testCase: FinalizerCase) {
   const targetId = 'fixture-own-target';
   let pageCloseCalls = 0;
   let browserCloseCalls = 0;
+  let settleWaits = 0;
+  let composerReads = 0;
   let successorCloseCalls = 0;
   let foreignTargetOpen = true;
   let physicallyPresent = testCase.pagePresent && !testCase.pageLost;
   const page = testCase.pagePresent
     ? {
       __fakeBrowserGptPage: true,
+      waitForTimeout: async () => { settleWaits++; },
       close: async () => {
         testCase.beforePageClose?.();
         pageCloseCalls++;
@@ -167,17 +175,26 @@ async function observeFinalizer(testCase: FinalizerCase) {
       }),
       locator: (selector: string) => {
         if (selector === USER_MESSAGE_SELECTOR) {
-          const texts = testCase.sendCount > 0 ? [`${marker}\n\nprompt`] : [];
+          const texts = [
+            ...(testCase.earlierUserText ? [testCase.earlierUserText] : []),
+            ...(testCase.sendCount > 0 ? [`${marker}\n\nprompt`] : []),
+          ];
           if (testCase.foreignUser) texts.push('foreign operator message');
           return { count: async () => texts.length,
             nth: (index: number) => ({ innerText: async () => texts[index] ?? '' }) };
         }
         if (selector === MESSAGE_NODE_SELECTOR) {
-          const rows = testCase.sendCount > 0 ? [
-            { role: 'user', text: `${marker}\n\nprompt` },
-            { role: 'assistant', text: testCase.foreignAssistantReply
-              ? 'completed foreign regenerated content' : `independently harvested reply for ${invocationId}` },
-          ] : [];
+          const rows = [
+            ...(testCase.earlierUserText ? [
+              { role: 'user', text: testCase.earlierUserText },
+              { role: 'assistant', text: 'earlier assistant reply' },
+            ] : []),
+            ...(testCase.sendCount > 0 ? [
+              { role: 'user', text: `${marker}\n\nprompt` },
+              { role: 'assistant', text: testCase.foreignAssistantReply
+                ? 'completed foreign regenerated content' : `independently harvested reply for ${invocationId}` },
+            ] : []),
+          ];
           return {
             count: async () => rows.length,
             nth: (index: number) => ({
@@ -193,6 +210,7 @@ async function observeFinalizer(testCase: FinalizerCase) {
           : {
             count: async () => 1,
             evaluate: async () => testCase.unreadableComposer
+              || composerReads++ < (testCase.unreadableComposerReads ?? 0)
               ? { content: 'draft', visible: '' }
               : testCase.foreignDraft
                 ? { content: 'foreign operator draft', visible: 'foreign operator draft' }
@@ -225,7 +243,7 @@ async function observeFinalizer(testCase: FinalizerCase) {
     : undefined;
   const context = {
     newPage: vi.fn(async () => page),
-    pages: vi.fn(() => [] as any[]),
+    pages: vi.fn(() => (testCase.adoptedFrom && page ? [page] : []) as any[]),
   };
   const browser = {
     contexts: vi.fn(() => [context]),
@@ -247,18 +265,44 @@ async function observeFinalizer(testCase: FinalizerCase) {
     ]), { status: 200 },
   ));
   try {
+    if (testCase.adoptedFrom && testCase.adoptedFrom !== 'none') {
+      // The predecessor that created this exact target, left in its own phase.
+      const predecessor = invocationId + '-predecessor';
+      admitStateLightTurnObservation({
+        profileKey, invocationId: predecessor, marker: `OPKTURNV1${'ab'.repeat(16)}`,
+      });
+      bindStateLightOwnedTarget({
+        profileKey, invocationId: predecessor, targetId, created: true, cdp, initialRoute: chatUrl,
+      });
+      if (testCase.adoptedFrom === 'not_sent') {
+        transitionStateLightTurnObservation({
+          profileKey, invocationId: predecessor, phase: 'not_sent', reason: 'terminal_pre_send',
+          sendCount: 0, sendWitness: 'numeric_send_count',
+        });
+      } else {
+        transitionStateLightTurnObservation({
+          profileKey, invocationId: predecessor, phase: 'dispatching', reason: 'fixture_dispatching',
+        });
+        transitionStateLightTurnObservation({
+          profileKey, invocationId: predecessor, phase: 'sent_unharvested', reason: 'fixture_pending',
+          sendCount: 1, sendWitness: 'numeric_send_count', conversationUrl: chatUrl,
+        });
+      }
+    }
     admitStateLightTurnObservation({ profileKey, invocationId, marker });
     if (testCase.pagePresent && !testCase.pageLost && page) {
+      const created = !testCase.adoptedFrom;
       const attached = await __testAttachOwnTargetFixture({
         connectOverCDP: vi.fn(async () => browser),
       }, {
-        mode: 'own-target', cdp, newChat: true,
+        mode: 'own-target', cdp, newChat: created,
+        ...(created ? {} : { chatUrl }),
         deadlineMs: Date.now() + 15_000,
       }, true);
-      expect(attached.created).toBe(true);
+      expect(attached.created).toBe(created);
       expect(attached.targetId).toBe(targetId);
       bindStateLightOwnedTarget({
-        profileKey, invocationId, targetId, created: true,
+        profileKey, invocationId, targetId, created,
         cdp, initialRoute: chatUrl,
       });
     }
@@ -302,7 +346,7 @@ async function observeFinalizer(testCase: FinalizerCase) {
       ...(recoverySuccessorPage ? { originalCreatedPage: page } : {}),
       publicationState: testCase.publicationState,
     }, cdp);
-    return { result, pageCloseCalls, successorCloseCalls, browserCloseCalls, foreignTargetOpen };
+    return { result, pageCloseCalls, successorCloseCalls, browserCloseCalls, foreignTargetOpen, settleWaits };
   } finally {
     fetchSpy.mockRestore();
     if (priorStateDir === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
@@ -365,6 +409,59 @@ describe('Issue #1238 page cleanup equivalence', () => {
     expect(observed.result.cleanup).toBe(close ? 'confirmed' : 'unconfirmed');
     expect(observed.result.cleanup_status).toBe(close ? undefined : 'cleanup_unconfirmed');
     if (!close) expect(observed.result.incidents).toContain('composer_unknown');
+  });
+
+  it('re-runs the whole guard while a harvested page settles, then closes (#2702)', async () => {
+    // Live: the first guard pass ran ~50ms after harvest and saw an unsettled
+    // page; the same page read clean seconds later and stayed open forever.
+    const observed = await observeFinalizer({
+      sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false,
+      unreadableComposerReads: 2,
+    });
+    expect(observed.settleWaits).toBe(1);
+    expect(observed.pageCloseCalls).toBe(1);
+    expect(observed.result.cleanup).toBe('confirmed');
+    expect(observed.result.incidents).not.toContain('composer_unknown');
+  });
+
+  it('keeps a persistently unreadable composer open after bounded settle retries (#2702)', async () => {
+    const observed = await observeFinalizer({
+      sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false,
+      unreadableComposer: true,
+    });
+    expect(observed.settleWaits).toBe(6);
+    expect(observed.pageCloseCalls).toBe(0);
+    expect(observed.result.cleanup).toBe('unconfirmed');
+    expect(observed.result.incidents).toContain('composer_unknown');
+  });
+
+  it.each([
+    { name: 'earlier user turns only', earlierUserText: 'earlier operator question', close: true },
+    { name: 'its own marker already in the transcript', earlierUserText: `OPKTURNV1${'ef'.repeat(16)}\n\nprompt`, close: false },
+  ])('retires an unsent tab on an existing conversation with $name (#2702)', async ({ earlierUserText, close }) => {
+    const observed = await observeFinalizer({
+      sendCount: 0, pagePresent: true, pageLost: false, earlierUserText,
+    });
+    expect(observed.pageCloseCalls).toBe(close ? 1 : 0);
+    expect(observed.result.cleanup).toBe(close ? 'confirmed' : 'unconfirmed');
+    if (!close) expect(observed.result.incidents).toContain('foreign_user_message');
+  });
+
+  it.each([
+    { adoptedFrom: 'not_sent', sendCount: 1, expected: 'confirmed', closes: 1 },
+    { adoptedFrom: 'not_sent', sendCount: 0, expected: 'confirmed', closes: 1 },
+    { adoptedFrom: 'sent_unharvested', sendCount: 1, expected: 'skipped', closes: 0 },
+    { adoptedFrom: 'none', sendCount: 1, expected: 'skipped', closes: 0 },
+  ] as const)('adopted target with a $adoptedFrom creator and send count $sendCount ends $expected (#2702)', async (
+    { adoptedFrom, sendCount, expected, closes },
+  ) => {
+    const observed = await observeFinalizer({
+      sendCount, publicationState: 'committed_ok', pagePresent: true, pageLost: false,
+      adoptedFrom, earlierUserText: 'predecessor turn',
+    });
+    expect(observed.pageCloseCalls).toBe(closes);
+    expect(observed.result.cleanup).toBe(expected);
+    expect(observed.foreignTargetOpen).toBe(true);
   });
 
   it('does not close the sole owned Page or kill shared Chrome when no keepalive/sibling exists', async () => {
