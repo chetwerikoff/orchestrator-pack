@@ -3008,7 +3008,7 @@ async function readStructuredComposerText(
             const p = other.childNodes[0] as HTMLElement | undefined;
             return other.getClientRects().length === 0 && other.classList?.contains('ProseMirror')
               && other.childNodes.length === 1 && p?.nodeType === 1 && p.tagName === 'P'
-              && [...p.childNodes].every((node) => node.nodeType === 1 && (node as HTMLElement).tagName === 'BR'
+              && p.childNodes.length <= 1 && [...p.childNodes].every((node) => node.nodeType === 1 && (node as HTMLElement).tagName === 'BR'
                 && (node as HTMLElement).classList.contains('ProseMirror-trailingBreak')
                 && node.childNodes.length === 0);
           };

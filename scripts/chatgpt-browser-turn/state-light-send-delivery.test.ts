@@ -2803,6 +2803,7 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
     { peer: 'captured unrendered empty', rects: 0, child: 'trailing-break', expected: 'empty' },
     { peer: 'unrendered draft', rects: 0, child: 'text', expected: 'composer_unknown' },
     { peer: 'unrendered image', rects: 0, child: 'image', expected: 'composer_unknown' },
+    { peer: 'unrendered double break', rects: 0, child: 'double-break', expected: 'composer_unknown' },
     { peer: 'rendered empty', rects: 1, child: 'trailing-break', expected: 'composer_unknown' },
   ] as const)('retirement reads past a $peer peer editor as $expected (#2694 follow-up)', async ({ rects, child, expected }) => {
     const node = (tagName: string, childNodes: any[], attributes: Record<string, string> = {}): any => ({
@@ -2816,8 +2817,10 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
     const editorAttributes = { contenteditable: 'true', role: 'textbox', class: 'ProseMirror' };
     const element: any = visibleProseMirror('');
     element.getAttribute = (name: string) => (editorAttributes as Record<string, string>)[name] ?? null;
-    const peer = node('DIV', [node('P', [child === 'text' ? { nodeType: 3, nodeValue: 'hidden draft' }
-      : child === 'image' ? node('IMG', [], { src: 'data:,' }) : node('BR', [], { class: 'ProseMirror-trailingBreak' })],
+    const trailingBreak = () => node('BR', [], { class: 'ProseMirror-trailingBreak' });
+    const peer = node('DIV', [node('P', child === 'text' ? [{ nodeType: 3, nodeValue: 'hidden draft' }]
+      : child === 'image' ? [node('IMG', [], { src: 'data:,' })]
+        : child === 'double-break' ? [trailingBreak(), trailingBreak()] : [trailingBreak()],
     { 'data-empty-paragraph': 'true', 'data-placeholder': 'Ask ChatGPT', class: 'placeholder' })], editorAttributes);
     peer.getClientRects = () => Array.from({ length: rects }, () => ({}));
     // The attribute part of COMPOSER_SELECTOR, evaluated per node instead of
