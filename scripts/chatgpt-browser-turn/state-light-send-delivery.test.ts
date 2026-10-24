@@ -2790,6 +2790,25 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
     expect(editor.textContent).toBe(beforeDomText);
   });
 
+  // Live LeoPoker 6adc007a: ChatGPT kept a second conversation workspace
+  // mounted under display:none with its own empty editor after the reply.
+  it.each([
+    { peer: 'unrendered empty', rects: 0, text: '', expected: 'empty' },
+    { peer: 'unrendered draft', rects: 0, text: 'hidden draft', expected: 'composer_unknown' },
+    { peer: 'rendered empty', rects: 1, text: '', expected: 'composer_unknown' },
+  ] as const)('retirement reads past an $peer peer editor as $expected (#2694 follow-up)', async ({ rects, text, expected }) => {
+    const element: any = visibleProseMirror('');
+    const peer = { textContent: text, getClientRects: () => Array.from({ length: rects }, () => ({})) };
+    element.ownerDocument.querySelectorAll = (selector: string) =>
+      selector === COMPOSER_SELECTOR ? [peer, element] : [];
+    const nth = (index: number) => ({
+      evaluate: async (callback: (element: unknown, arg?: unknown) => unknown, arg?: unknown) =>
+        callback(index === 0 ? peer : element, arg),
+    });
+    const page = { locator: () => ({ count: async () => 2, nth }) };
+    expect(await __testSendDelivery.readRetirementComposer(page, undefined, Date.now() + 2000)).toBe(expected);
+  });
+
   it.each(['unknown-child', 'hidden', 'duplicate-editor', 'mixed-root'] as const)(
     'refuses structurally unproven owned ProseMirror subtree: %s (#2694)', async (kind) => {
       const element: any = visibleProseMirror(MARKED_PROMPT);
