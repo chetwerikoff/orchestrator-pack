@@ -8771,8 +8771,14 @@ async function guardedOriginalTargetRetirement(input: {
     }
     let stream: number;
     try {
+      // Live ChatGPT keeps an unrendered "responding" status mounted after the
+      // reply completes. Count rendered nodes only, like the Stop read above.
+      const inProgress = outcome.page.locator(ASSISTANT_TURN_IN_PROGRESS_SELECTOR);
       stream = await boundedBrowserRead(
-        Promise.resolve(outcome.page.locator(ASSISTANT_TURN_IN_PROGRESS_SELECTOR).count()),
+        Promise.resolve(typeof inProgress.evaluateAll === 'function'
+          ? inProgress.evaluateAll((nodes: Element[]) =>
+            nodes.filter((node) => node.getClientRects().length > 0).length)
+          : inProgress.count()),
         budget(), 'retirement_stream_count_timeout',
       );
     } catch { return 'frozen_ownership_unproven'; }

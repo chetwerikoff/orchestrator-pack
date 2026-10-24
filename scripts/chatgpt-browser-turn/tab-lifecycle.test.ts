@@ -108,6 +108,8 @@ type FinalizerCase = {
   readonly continuationVisible?: boolean;
   /** A page-level in-progress node stays matched through every settle pass. */
   readonly inProgressNode?: boolean;
+  /** The in-progress node is mounted but not rendered (no client rects). */
+  readonly inProgressHidden?: boolean;
   readonly accessibleContinuationOnly?: boolean;
   readonly routeChanged?: boolean;
   /** Earlier user turn on the pinned existing conversation. */
@@ -239,9 +241,11 @@ async function observeFinalizer(testCase: FinalizerCase) {
           };
         }
         if (selector === ASSISTANT_TURN_IN_PROGRESS_SELECTOR) {
+          const rendered = !testCase.inProgressHidden;
           const nodes = testCase.inProgressNode ? [{
             tagName: 'DIV', getAttribute: (name: string) => name === 'data-testid' ? 'fixture-tool' : null,
-            closest: () => null, getBoundingClientRect: () => ({ height: 1 }),
+            closest: () => null, getBoundingClientRect: () => ({ height: rendered ? 1 : 0 }),
+            getClientRects: () => rendered ? [{}] : [],
           }] : [];
           return {
             count: async () => nodes.length,
@@ -455,6 +459,18 @@ describe('Issue #1238 page cleanup equivalence', () => {
     expect(observed.pageCloseCalls).toBe(0);
     expect(observed.result.cleanup).toBe('unconfirmed');
     expect(observed.result.incidents).toContain('composer_unknown');
+  });
+
+  it('closes a harvested page whose only in-progress node is unrendered (#2706)', async () => {
+    // Live 6adcaf4a: a mounted, unrendered "ChatGPT is responding" status span stayed
+    // aria-busy for minutes after the reply completed.
+    const observed = await observeFinalizer({
+      sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false,
+      inProgressNode: true, inProgressHidden: true,
+    });
+    expect(observed.settleWaits).toBe(0);
+    expect(observed.pageCloseCalls).toBe(1);
+    expect(observed.result.cleanup).toBe('confirmed');
   });
 
   it('journals which in-progress node kept a harvested page busy through every settle pass (#2704)', async () => {
