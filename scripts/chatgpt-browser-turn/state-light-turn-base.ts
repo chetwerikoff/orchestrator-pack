@@ -590,6 +590,21 @@ interface StateLightPublicationHooks {
 export type PageCleanupAction = 'close' | 'preserve' | 'skip';
 
 const cleanupAuthorityUnprovenPages = new WeakSet<object>();
+// A selected pre-existing tab lands in the unproven set at selection. Pages
+// revoked for a later cause (429/load wall, unbound loss, unowned recovery)
+// also land here, so a terminal pack predecessor's adopted tab regains close
+// authority only while it was never revoked.
+const cleanupAuthorityRevokedPages = new WeakSet<object>();
+
+function revokeCleanupAuthority(page: object): void {
+  cleanupAuthorityUnprovenPages.add(page);
+  cleanupAuthorityRevokedPages.add(page);
+}
+
+function pageCleanupAuthority(page: object, adoptedPackTarget: boolean): boolean {
+  return !cleanupAuthorityUnprovenPages.has(page)
+    || (adoptedPackTarget && !cleanupAuthorityRevokedPages.has(page));
+}
 
 export interface StateLightRecoveryHooks {
   readonly observer?: (event: RecoveryObserverEvent) => void;
@@ -4282,7 +4297,7 @@ async function runTurn(
       && !knownCreatedOriginal
       && (diagnostic.http_status === 429 || diagnostic.wall_kind === 'conversation_load_error'
         || outcome.result.cause === 'account_cooldown_active')) {
-      cleanupAuthorityUnprovenPages.add(outcome.page);
+      revokeCleanupAuthority(outcome.page);
     }
     return {
       ...outcome,
@@ -6512,7 +6527,7 @@ async function runTurnCore(
         const matches = census.pages.filter((candidate) => candidate.eligible);
         const unbound = (cause: string): TurnRunOutcome => {
           incident('post_send_observation_error', cause, 'retain_page_no_resend');
-          cleanupAuthorityUnprovenPages.add(page);
+          revokeCleanupAuthority(page);
           return {
             page, browser, cleanupAction: 'preserve',
             result: compactResult(
@@ -6657,7 +6672,7 @@ async function runTurnCore(
         attachHeld429(page, recovered.conversationUrl);
       }
       if (!recovered.cleanupOwned && page && typeof page === 'object') {
-        cleanupAuthorityUnprovenPages.add(page);
+        revokeCleanupAuthority(page);
       }
       recoveryState.immutableConversationUrl = recovered.conversationUrl;
       // Issue #1283 owns recovered-page integration. Do not fabricate a new
@@ -8665,7 +8680,7 @@ async function guardedOriginalTargetRetirement(input: {
   const targetInfo = getOwnTargetInfo(outcome.browser);
   if (!targetInfo?.targetId || !outcome.page || !cdp
     || (!targetInfo.created && input.verifiedPredecessor !== true && input.adoptedPackTarget !== true)
-    || outcome.ownershipForfeited || cleanupAuthorityUnprovenPages.has(outcome.page)) {
+    || outcome.ownershipForfeited || !pageCleanupAuthority(outcome.page, input.adoptedPackTarget === true)) {
     return refuse('created_target_ownership_unproven');
   }
   let observation: ReturnType<typeof readStateLightTurnObservation>;
@@ -8977,6 +8992,8 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
       currentInvocationId: outcome.result.invocation_id,
     }),
   );
+  const adoptedCleanupAuthority = adoptedPackTarget && Boolean(outcome.page)
+    && typeof outcome.page === 'object' && pageCleanupAuthority(outcome.page, true);
   const positivelyCreatedOriginal = Boolean(
     pinnedOriginal?.created || outcome.createdAttachFailureCleanup || outcome.originalCreatedPage
     || adoptedPackTarget,
@@ -8990,7 +9007,7 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
   // The held, failed Page cannot be closed under stale creation authority.
   // A positively lost target may still use the independent exact-ID reattach
   // path below, which rechecks current owner, route and generation evidence.
-  let pageAction: PageCleanupAction = cleanupAuthorityProven && !pageLost
+  let pageAction: PageCleanupAction = (cleanupAuthorityProven || adoptedCleanupAuthority) && !pageLost
     && outcome.result.cause !== 'post_send_target_crashed'
     && outcome.ownershipForfeited !== true && positivelyCreatedOriginal
     && outcomePageIsOriginal ? 'close' : 'skip';
@@ -9291,6 +9308,7 @@ export const __testConversationPageSelection = {
   // Only a test affordance: mark an already-supplied Page as pre-existing so
   // cleanup tests can assert the no-close boundary without importing it by CDP.
   markSelectedPageUnowned(page: object): void { cleanupAuthorityUnprovenPages.add(page); },
+  revokePageCleanupAuthority(page: object): void { revokeCleanupAuthority(page); },
 };
 
 export const __testComposerMutation = {
