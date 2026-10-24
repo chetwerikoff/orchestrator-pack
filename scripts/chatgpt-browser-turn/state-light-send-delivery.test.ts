@@ -2790,6 +2790,56 @@ describe('Issue #2651 lossless composer and one-operation owned-draft clearing',
     expect(editor.textContent).toBe(beforeDomText);
   });
 
+  // Captured 2026-10-24T00:56:54Z from the pinned original Page (target
+  // 53FA1BE4, LeoPoker conversation 6adc007a, invocation
+  // issue402-fix-remaining-20261024-042fb419-ae01-4dfd-93c8-c8a6da734513), 16s
+  // after its composer_unknown cleanup refusal. Both editors matched
+  // COMPOSER_SELECTOR; the second sat in a Workspace-* subtree under
+  // display:none (box 0x0) with this sanitized outerHTML:
+  //   <div contenteditable="true" role="textbox" class="ProseMirror">
+  //     <p data-empty-paragraph="true" data-placeholder="Ask ChatGPT" class="placeholder">
+  //       <br class="ProseMirror-trailingBreak"></p></div>
+  it.each([
+    { peer: 'captured unrendered empty', rects: 0, child: 'trailing-break', expected: 'empty' },
+    { peer: 'unrendered draft', rects: 0, child: 'text', expected: 'composer_unknown' },
+    { peer: 'unrendered image', rects: 0, child: 'image', expected: 'composer_unknown' },
+    { peer: 'unrendered double break', rects: 0, child: 'double-break', expected: 'composer_unknown' },
+    { peer: 'rendered empty', rects: 1, child: 'trailing-break', expected: 'composer_unknown' },
+  ] as const)('retirement reads past a $peer peer editor as $expected (#2694 follow-up)', async ({ rects, child, expected }) => {
+    const node = (tagName: string, childNodes: any[], attributes: Record<string, string> = {}): any => ({
+      nodeType: 1, tagName, childNodes,
+      classList: { contains: (name: string) => (attributes.class ?? '').split(' ').includes(name) },
+      getAttribute: (name: string) => attributes[name] ?? null,
+      get textContent(): string {
+        return childNodes.map((item) => item.nodeType === 3 ? item.nodeValue : item.textContent).join('');
+      },
+    });
+    const editorAttributes = { contenteditable: 'true', role: 'textbox', class: 'ProseMirror' };
+    const element: any = visibleProseMirror('');
+    element.getAttribute = (name: string) => (editorAttributes as Record<string, string>)[name] ?? null;
+    const trailingBreak = () => node('BR', [], { class: 'ProseMirror-trailingBreak' });
+    const peer = node('DIV', [node('P', child === 'text' ? [{ nodeType: 3, nodeValue: 'hidden draft' }]
+      : child === 'image' ? [node('IMG', [], { src: 'data:,' })]
+        : child === 'double-break' ? [trailingBreak(), trailingBreak()] : [trailingBreak()],
+    { 'data-empty-paragraph': 'true', 'data-placeholder': 'Ask ChatGPT', class: 'placeholder' })], editorAttributes);
+    peer.getClientRects = () => Array.from({ length: rects }, () => ({}));
+    // The attribute part of COMPOSER_SELECTOR, evaluated per node instead of
+    // returning both editors unconditionally.
+    const matchesComposer = (candidate: any) => candidate.getAttribute('id') === 'prompt-textarea'
+      || (candidate.getAttribute('contenteditable') === 'true' && candidate.getAttribute('role') === 'textbox'
+        && !candidate.classList.contains('cm-content'));
+    expect(COMPOSER_SELECTOR).toContain('[contenteditable="true"][role="textbox"]');
+    const matched = [peer, element].filter(matchesComposer);
+    expect(matched).toHaveLength(2);
+    element.ownerDocument.querySelectorAll = (selector: string) => selector === COMPOSER_SELECTOR ? matched : [];
+    const nth = (index: number) => ({
+      evaluate: async (callback: (element: unknown, arg?: unknown) => unknown, arg?: unknown) =>
+        callback(matched[index], arg),
+    });
+    const page = { locator: () => ({ count: async () => matched.length, nth }) };
+    expect(await __testSendDelivery.readRetirementComposer(page, undefined, Date.now() + 2000)).toBe(expected);
+  });
+
   it.each(['unknown-child', 'hidden', 'duplicate-editor', 'mixed-root'] as const)(
     'refuses structurally unproven owned ProseMirror subtree: %s (#2694)', async (kind) => {
       const element: any = visibleProseMirror(MARKED_PROMPT);

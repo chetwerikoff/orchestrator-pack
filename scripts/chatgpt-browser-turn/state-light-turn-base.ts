@@ -2981,14 +2981,15 @@ function composerPayloadFailureCause(deadlineMs: number): PreSendComposerFailure
 }
 
 async function readStructuredComposerText(
-  composer: any, expectedLength: number, deadlineMs: number, requireUniqueEditor = false,
+  composer: any, expectedLength: number, deadlineMs: number,
+  requireUniqueEditor: boolean | 'rendered' = false,
 ): Promise<string | undefined> {
   const waitMs = deadlineMs - Date.now();
   if (waitMs <= 0 || typeof composer?.evaluate !== 'function') return undefined;
   try {
     const text = await boundedBrowserRead(
       Promise.resolve(composer.evaluate((element: HTMLElement, args: {
-        maxChars: number; unique: boolean; selector: string;
+        maxChars: number; unique: boolean; renderedOnly: boolean; selector: string;
       }) => {
         // A complete ProseMirror paragraph tree is the only supported exact
         // structural representation. Presentation innerText is not literal text.
@@ -2999,8 +3000,21 @@ async function readStructuredComposerText(
         if (!view) return undefined;
         if (args.unique) {
           if (typeof doc.querySelectorAll !== 'function') return undefined;
-          const editors = doc.querySelectorAll(args.selector);
-          if (editors.length !== 1 || editors[0] !== element) return undefined;
+          const editors = [...doc.querySelectorAll(args.selector)];
+          // ChatGPT keeps another conversation workspace mounted under
+          // display:none. Its editor is not a peer only when unrendered and
+          // structurally one empty p holding at most a trailing break.
+          const emptyUnrendered = (other: Element): boolean => {
+            const p = other.childNodes[0] as HTMLElement | undefined;
+            return other.getClientRects().length === 0 && other.classList?.contains('ProseMirror')
+              && other.childNodes.length === 1 && p?.nodeType === 1 && p.tagName === 'P'
+              && p.childNodes.length <= 1 && [...p.childNodes].every((node) => node.nodeType === 1 && (node as HTMLElement).tagName === 'BR'
+                && (node as HTMLElement).classList.contains('ProseMirror-trailingBreak')
+                && node.childNodes.length === 0);
+          };
+          const peers = editors.filter((other) => other !== element
+            && !(args.renderedOnly && emptyUnrendered(other)));
+          if (!editors.includes(element) || peers.length !== 0) return undefined;
         }
         const parts: string[] = [];
         const maxNodes = Math.min(20_000, args.maxChars * 2 + 256);
@@ -3057,7 +3071,10 @@ async function readStructuredComposerText(
             || (i > 0 && !append('\n')) || !walk(child, 1, false)) return undefined;
         }
         return parts.join('');
-      }, { maxChars: expectedLength, unique: requireUniqueEditor, selector: COMPOSER_SELECTOR })),
+      }, {
+        maxChars: expectedLength, unique: requireUniqueEditor !== false,
+        renderedOnly: requireUniqueEditor === 'rendered', selector: COMPOSER_SELECTOR,
+      })),
       waitMs, 'send_composer_structure_timeout',
     );
     return typeof text === 'string' ? text : undefined;
@@ -8500,13 +8517,26 @@ async function readRetirementComposer(
 ): Promise<'empty' | 'own' | 'foreign_draft' | 'composer_unknown' | 'frozen_ownership_unproven'> {
   const budget = () => Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, deadlineMs - Date.now()));
   try {
-    const editor = page.locator(COMPOSER_SELECTOR);
-    const count = await boundedBrowserRead(Promise.resolve(editor.count()), budget(), 'retirement_editor_count_timeout');
-    if (count !== 1) return 'composer_unknown';
+    const editors = page.locator(COMPOSER_SELECTOR);
+    const count = await boundedBrowserRead(Promise.resolve(editors.count()), budget(), 'retirement_editor_count_timeout');
+    let editor = editors;
+    if (count > 1) {
+      // A hidden conversation workspace adds an unrendered editor: select the
+      // one rendered editor; the structured read proves every peer is empty.
+      const rendered: number[] = [];
+      for (let i = 0; i < count; i++) {
+        if (await boundedBrowserRead(
+          Promise.resolve(editors.nth(i).evaluate((el: HTMLElement) => el.getClientRects().length > 0)),
+          budget(), 'retirement_editor_rendered_timeout',
+        )) rendered.push(i);
+      }
+      if (rendered.length !== 1) return 'composer_unknown';
+      editor = editors.nth(rendered[0]!);
+    } else if (count !== 1) return 'composer_unknown';
     // Supported ProseMirror p/BR/trailingBreak is a document structure, not an
     // innerText presentation; keep intentional blank lines and every codepoint.
     let exact = await readStructuredComposerText(
-      editor, Math.max(65_536, ownedLiteral?.length ?? 0), deadlineMs, true,
+      editor, Math.max(65_536, ownedLiteral?.length ?? 0), deadlineMs, 'rendered',
     );
     if (exact === undefined) {
       const rawViews = await boundedBrowserRead(
