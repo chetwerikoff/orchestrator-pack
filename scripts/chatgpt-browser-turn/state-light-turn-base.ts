@@ -8491,7 +8491,16 @@ async function retireDetachedOriginalTarget(input: {
 type GuardedRetirementResult = {
   readonly status: 'confirmed' | 'unconfirmed';
   readonly cause: string;
+  /** Refused by a settled-row idle read that a later pass may clear. */
+  readonly settling?: true;
 };
+
+const RETIREMENT_SETTLE_CAUSES: ReadonlySet<string> = new Set([
+  'composer_unknown', 'generation_in_progress', 'stop_visible',
+  'foreign_user_message', 'foreign_assistant_turn',
+]);
+const RETIREMENT_SETTLE_RETRIES = 6;
+const RETIREMENT_SETTLE_DELAY_MS = 5_000;
 
 // Retirement and retries share total ProseMirror paragraph reconstruction.
 // Non-ProseMirror fallback is exact-only; unknown drafts never grant close.
@@ -8718,20 +8727,22 @@ async function guardedOriginalTargetRetirement(input: {
     return null;
   };
 
+  const refuseIdle = (cause: string): GuardedRetirementResult => (
+    RETIREMENT_SETTLE_CAUSES.has(cause) ? { ...refuse(cause), settling: true } : refuse(cause));
   // No real close may proceed on a missing other Page, an unreadable composer,
   // an unsettled turn, a visible Stop or an unknown CDP census.
   for (let i = 0; i < 2; i++) {
     const c = await census();
     if (c) return refuse(c);
     const idle = await readableAndIdle();
-    if (idle) return refuse(idle);
+    if (idle) return refuseIdle(idle);
   }
   const last = await census();
   if (last) return refuse(last);
   // The last CDP census is an await: re-read current draft, Stop, stream and
   // exact route at the physical-close boundary, not only before the census.
   const finalIdle = await readableAndIdle();
-  if (finalIdle) return refuse(finalIdle);
+  if (finalIdle) return refuseIdle(finalIdle);
   if (!eligibleRoute() || Date.now() >= deadline) return refuse('route_changed');
   if (!targetInfo.created && !authorizeGuardedHistoricalTargetClose(outcome.browser, pin.id)) {
     return refuse('created_target_ownership_unproven');
@@ -8891,7 +8902,14 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
     pageAction = 'preserve';
   }
   if (pageAction === 'close') {
-    const retirement = await guardedOriginalTargetRetirement({ outcome, cdp });
+    // The guard runs within ~50ms of harvest, while the page still settles
+    // (second composer, in-progress row, partial user list). Re-run the whole
+    // guard on these settled-row refusals; each pass keeps every close predicate.
+    let retirement = await guardedOriginalTargetRetirement({ outcome, cdp });
+    for (let attempt = 1; attempt <= RETIREMENT_SETTLE_RETRIES && retirement.settling; attempt++) {
+      await sleep(outcome.page, RETIREMENT_SETTLE_DELAY_MS);
+      retirement = await guardedOriginalTargetRetirement({ outcome, cdp });
+    }
     cleanup = retirement.status === 'confirmed' ? 'confirmed' : 'unconfirmed';
     if (retirement.status !== 'confirmed') {
       incidents.push(retirement.cause);

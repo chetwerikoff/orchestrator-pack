@@ -96,6 +96,7 @@ type FinalizerCase = {
   readonly soleSharedChromePage?: boolean;
   readonly absentComposer?: boolean;
   readonly unreadableComposer?: boolean;
+  readonly unreadableComposerReads?: number;
   readonly errorBanner?: string;
   readonly blankPage?: boolean;
   readonly recoverySuccessor?: boolean;
@@ -143,12 +144,15 @@ async function observeFinalizer(testCase: FinalizerCase) {
   const targetId = 'fixture-own-target';
   let pageCloseCalls = 0;
   let browserCloseCalls = 0;
+  let settleWaits = 0;
+  let composerReads = 0;
   let successorCloseCalls = 0;
   let foreignTargetOpen = true;
   let physicallyPresent = testCase.pagePresent && !testCase.pageLost;
   const page = testCase.pagePresent
     ? {
       __fakeBrowserGptPage: true,
+      waitForTimeout: async () => { settleWaits++; },
       close: async () => {
         testCase.beforePageClose?.();
         pageCloseCalls++;
@@ -193,6 +197,7 @@ async function observeFinalizer(testCase: FinalizerCase) {
           : {
             count: async () => 1,
             evaluate: async () => testCase.unreadableComposer
+              || composerReads++ < (testCase.unreadableComposerReads ?? 0)
               ? { content: 'draft', visible: '' }
               : testCase.foreignDraft
                 ? { content: 'foreign operator draft', visible: 'foreign operator draft' }
@@ -302,7 +307,7 @@ async function observeFinalizer(testCase: FinalizerCase) {
       ...(recoverySuccessorPage ? { originalCreatedPage: page } : {}),
       publicationState: testCase.publicationState,
     }, cdp);
-    return { result, pageCloseCalls, successorCloseCalls, browserCloseCalls, foreignTargetOpen };
+    return { result, pageCloseCalls, successorCloseCalls, browserCloseCalls, foreignTargetOpen, settleWaits };
   } finally {
     fetchSpy.mockRestore();
     if (priorStateDir === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
@@ -365,6 +370,30 @@ describe('Issue #1238 page cleanup equivalence', () => {
     expect(observed.result.cleanup).toBe(close ? 'confirmed' : 'unconfirmed');
     expect(observed.result.cleanup_status).toBe(close ? undefined : 'cleanup_unconfirmed');
     if (!close) expect(observed.result.incidents).toContain('composer_unknown');
+  });
+
+  it('re-runs the whole guard while a harvested page settles, then closes (#2694 follow-up)', async () => {
+    // Live: the first guard pass ran ~50ms after harvest and saw an unreadable
+    // composer; the same page read clean seconds later and stayed open forever.
+    const observed = await observeFinalizer({
+      sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false,
+      unreadableComposerReads: 2,
+    });
+    expect(observed.settleWaits).toBe(1);
+    expect(observed.pageCloseCalls).toBe(1);
+    expect(observed.result.cleanup).toBe('confirmed');
+    expect(observed.result.incidents).not.toContain('composer_unknown');
+  });
+
+  it('keeps a persistently unreadable composer open after bounded settle retries (#2694 follow-up)', async () => {
+    const observed = await observeFinalizer({
+      sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false,
+      unreadableComposer: true,
+    });
+    expect(observed.settleWaits).toBe(6);
+    expect(observed.pageCloseCalls).toBe(0);
+    expect(observed.result.cleanup).toBe('unconfirmed');
+    expect(observed.result.incidents).toContain('composer_unknown');
   });
 
   it('does not close the sole owned Page or kill shared Chrome when no keepalive/sibling exists', async () => {
