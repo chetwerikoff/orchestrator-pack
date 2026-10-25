@@ -1019,6 +1019,10 @@ export async function revalidateKeyedHarvest(
                   return unsupported();
                 }
                 prose = tables[0]!;
+              } else if (component === 'badge') {
+                // A status pill is a text-only DIV; any nested or hidden text fails.
+                if (child.children.length !== 0
+                  || (child as HTMLElement).innerText?.trim() !== child.textContent?.trim()) return unsupported();
               } else if (!/^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)) return unsupported();
               // Whole innerText preserves browser whitespace for prose,
               // headings, tables and lists. Ambiguous nested controls fail.
@@ -2397,6 +2401,10 @@ export async function readPageObservation(
                     return unsupported();
                   }
                   prose = tables[0]!;
+                } else if (component === 'badge') {
+                  // A status pill is a text-only DIV; any nested or hidden text fails.
+                  if (child.children.length !== 0
+                    || (child as HTMLElement).innerText?.trim() !== child.textContent?.trim()) return unsupported();
                 } else if (!/^(?:P|UL|OL|LI|BLOCKQUOTE|TABLE|H[1-6])$/u.test(child.tagName)) return unsupported();
                 // Whole innerText preserves browser whitespace for prose,
                 // headings, tables and lists. Ambiguous nested controls fail.
