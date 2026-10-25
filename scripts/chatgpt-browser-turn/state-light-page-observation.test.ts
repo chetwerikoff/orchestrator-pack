@@ -1038,10 +1038,12 @@ describe('DOM observation boundary', () => {
     expect(changed.snapshot?.complete).toBe(false);
   });
 
-  it('serializes live data-d divider and table blocks beside a code block (#2704)', async () => {
+  it('serializes live data-d divider, table and badge blocks beside a code block (#2704, #2712)', async () => {
     // Live LeoPoker 6adc9be1 and AppliedIn 6adc8ac5 (2026-10-24): a markdown rule is an
     // empty DIV[data-d-component=divider]; a table is DIV[data-d-component=table] > DIV >
     // TABLE beside an aria-hidden DIV. Both refused the whole reply before #2704.
+    // AppliedIn 6add61b6 and LeoPoker 6add6360 (2026-10-25): a status pill is a
+    // text-only DIV[data-d-component=badge]; it refused the whole reply before #2712.
     const { fixture, assistant, append, prose, codeBlock } = liveReplyFixture();
     const renderer = assistant.querySelector('.DilRenderer-tB76Jj');
     const python = 'assert ok';
@@ -1055,11 +1057,13 @@ describe('DOM observation boundary', () => {
     const tableWrap = append(renderer, 'DIV', tableText, { 'data-d-component': 'table' });
     const table = append(append(tableWrap, 'DIV', tableText), 'TABLE', tableText);
     append(tableWrap, 'DIV', '', { 'aria-hidden': 'true' });
+    const badgeText = 'Commit published';
+    const badge = append(renderer, 'DIV', badgeText, { 'data-d-component': 'badge' });
     prose('DONE');
 
     const fence = String.fromCharCode(96).repeat(3);
     const expected = 'Status follows.\n\n' + fence + 'python\n' + python + '\n' + fence
-      + '\n\n---\n\n' + tableText + '\n\nDONE';
+      + '\n\n---\n\n' + tableText + '\n\n' + badgeText + '\n\nDONE';
     const observed = await readPageObservation(fixture.page, marker, 0);
     expect(observed.transcriptIncomplete).toBe(false);
     expect(observed.snapshot?.carriers.at(-1)?.text).toBe(expected);
@@ -1092,6 +1096,14 @@ describe('DOM observation boundary', () => {
     divider.textContent = 'HIDDEN-BY-CSS';
     await refused();
     divider.textContent = '';
+    // A badge with nested markup or CSS-hidden text is not a plain status pill.
+    append(badge, 'SPAN', badgeText);
+    await refused();
+    badge.children.pop();
+    badge.childNodes.pop();
+    badge.textContent = badgeText + 'HIDDEN-BY-CSS';
+    await refused();
+    badge.textContent = badgeText;
     expect((await readPageObservation(fixture.page, marker, 0)).snapshot?.carriers.at(-1)?.text).toBe(expected);
     expect(table.tagName).toBe('TABLE');
   });
