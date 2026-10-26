@@ -14,6 +14,18 @@ import {
   type HandoffReceipt,
   unwakeableTerminalEnvelopeHint,
 } from './flow-manager-long-running-child.ts';
+import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
+import {
+  parsePrAuthorBindingPair,
+  prAuthorHeadMismatch,
+  prelaunchPrAuthorOccupant,
+  readPrAuthorHeadViaPackGh,
+  readWorktreeBranch,
+  PR_AUTHOR_OCCUPIED_NEXT_ACTION,
+  type PrAuthorHeadReader,
+  type PrAuthorProcessReader,
+} from './chatgpt-browser-turn/state-light-turn-base.ts';
+import { resolveTargetContext } from './lib/target-context.ts';
 import {
   inspectManagerCliInvocation,
   type ManagerCliDeclaration,
@@ -45,6 +57,8 @@ const CLI = {
     { flag: '--new-chat' },
     { flag: '--predecessor-invocation-id', value: 'id' },
     { flag: '--predecessor-attempt-identity', value: 'id' },
+    { flag: '--repo', value: 'owner/repo' },
+    { flag: '--pr', value: 'number' },
   ],
 } as const satisfies ManagerCliDeclaration;
 
@@ -135,7 +149,14 @@ export async function spawnDetachedLauncher(launcherArgs: readonly string[]): Pr
 
 export interface BrowserAdapterDependencies {
   spawnLauncher?: typeof spawnDetachedLauncher;
+  /** PR-author (#2718) prelaunch seams; production uses the pack card, scripts/gh and /proc. */
+  selectedRepository?: () => string;
+  readPrAuthorHead?: PrAuthorHeadReader;
+  readWorktreeBranch?: (cwd: string) => Promise<string | undefined>;
+  processReader?: PrAuthorProcessReader;
 }
+
+const PR_AUTHOR_PAIR_NEXT_STEP = 'pass both --repo <owner/repo> and --pr <number> (PR author) or neither (Issue author, reviewer)';
 
 export async function runBrowserAdapter(
   argv: readonly string[],
@@ -191,6 +212,49 @@ export async function runBrowserAdapter(
       || predecessorAttempt === attemptIdentity)) {
     return refuse('predecessor_exact_pair_same_task_required');
   }
+  // #2718: --repo/--pr is an atomic optional pair. Absent = unbound (unchanged);
+  // present = PR AUTHOR, admitted only for an explicit worktree whose branch is
+  // the head of the OPEN bound PR in the selected card repository.
+  const prAuthorPair = parsePrAuthorBindingPair(
+    typeof options.get('repo') === 'string' ? options.get('repo') as string : undefined,
+    typeof options.get('pr') === 'string' ? options.get('pr') as string : undefined,
+  );
+  if (prAuthorPair.error) return refuse(prAuthorPair.error + '; nextStep: ' + PR_AUTHOR_PAIR_NEXT_STEP);
+  const prAuthor = prAuthorPair.binding;
+  if (prAuthor) {
+    if (typeof options.get('cwd') !== 'string') {
+      return refuse('pr_author_cwd_required; nextStep: pass --cwd <worktree> whose branch is the PR head ref');
+    }
+    let selectedRepository: string;
+    try {
+      selectedRepository = (deps.selectedRepository ?? (() => resolveTargetContext().repository))().toLowerCase();
+    } catch (error) {
+      return refuse('pr_author_target_card_unavailable: ' + (error instanceof Error ? error.message : String(error))
+        + '; nextStep: set OPK_PROJECT_ID to the project whose card repository owns the PR');
+    }
+    if (selectedRepository !== prAuthor.repo) {
+      return refuse('pr_author_repository_not_selected_card; nextStep: --repo must equal the selected card repository '
+        + selectedRepository);
+    }
+    const head = await (deps.readPrAuthorHead ?? readPrAuthorHeadViaPackGh)(prAuthor).catch(() => undefined);
+    const branch = await (deps.readWorktreeBranch ?? readWorktreeBranch)(cwd).catch(() => undefined);
+    const mismatch = prAuthorHeadMismatch(head, prAuthor, branch);
+    if (mismatch) {
+      return refuse(mismatch + '; nextStep: bind an OPEN PR of ' + prAuthor.repo
+        + ' whose head ref is the --cwd worktree branch');
+    }
+    // Zero-tab fast path only; the decisive check is the child's PRE-SEND scan.
+    const occupant = prelaunchPrAuthorOccupant({
+      binding: prAuthor,
+      profileKey: configuredProfileKey(profile, cdp),
+      worktree: cwd,
+      ...(deps.processReader ? { reader: deps.processReader } : {}),
+    });
+    if (occupant) {
+      return refuse('pr_author_occupied: conversation_busy by invocation ' + occupant
+        + '; nextStep: ' + PR_AUTHOR_OCCUPIED_NEXT_ACTION);
+    }
+  }
   // Only pass the exact paired selector. The long-running child authenticates
   // its own handoff against the prior indexed receipt/terminal before spawning
   // the driver; this wrapper has no target-cleanup authority.
@@ -209,6 +273,7 @@ export async function runBrowserAdapter(
   if (typeof options.get('chat-url') === 'string') browserArgs.push('--chat-url', options.get('chat-url') as string);
   if (typeof options.get('project-url') === 'string') browserArgs.push('--project-url', options.get('project-url') as string);
   if (options.get('new-chat') === true) browserArgs.push('--new-chat');
+  if (prAuthor) browserArgs.push('--repo', prAuthor.repo, '--pr', String(prAuthor.pr));
   if (hasPredecessor) browserArgs.push(
     '--predecessor-invocation-id', predecessorInvocation as string,
     '--predecessor-attempt-identity', predecessorAttempt as string,

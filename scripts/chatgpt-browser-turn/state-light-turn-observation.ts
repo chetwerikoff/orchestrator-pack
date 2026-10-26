@@ -21,6 +21,8 @@ import { atomicJson, fsyncDirectory, profileDirs, profileStatePaths } from './st
 export const STATE_LIGHT_TURN_OBSERVATION_SCHEMA = 'state-light-turn-observation/v1' as const;
 export type StateLightTurnObservationPhase =
   | 'prepared'
+  // #2718: a bound PR author's persisted pre-SEND claim; never a dispatch.
+  | 'sending'
   | 'dispatching'
   | 'not_sent'
   | 'sent_unbound'
@@ -86,7 +88,8 @@ export interface ObservationPrimaryFinalizationResult extends ObservationPrimary
 }
 
 const LEGAL_NEXT: Readonly<Record<StateLightTurnObservationPhase, ReadonlySet<StateLightTurnObservationPhase>>> = {
-  prepared: new Set(['prepared', 'dispatching', 'not_sent']),
+  prepared: new Set(['prepared', 'sending', 'dispatching', 'not_sent']),
+  sending: new Set(['sending', 'dispatching', 'not_sent']),
   dispatching: new Set(['dispatching', 'not_sent', 'sent_unbound', 'sent_unharvested']),
   not_sent: new Set(['not_sent']),
   sent_unbound: new Set(['sent_unbound', 'sent_unharvested', 'harvested']),
