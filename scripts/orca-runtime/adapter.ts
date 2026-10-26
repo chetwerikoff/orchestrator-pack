@@ -62,34 +62,35 @@ const OPEN_CODE_HTTP_SCRIPT = [
 // Serialized `NAME=value ` assignments the pack prepends to an OpenCode spawn.
 const ENV_ASSIGNMENT_PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:'(?:[^']|'\\'')*'|"[^"]*"|[^\s'"]*)\s+)*/u;
 const ABSOLUTE_OPENCODE_BASENAME = /^\/(?:[^\s'"/]+\/)*opencode$/u;
-const NATIVE_OPENCODE_START = / (?:opencode|\/(?:[^\s'"/]+\/)*opencode) --hostname /gu;
 
 /**
- * True for the bare `opencode` token or an absolute executable whose basename is
- * exactly `opencode`. An absolute first command word with any other basename is
- * never OpenCode, and incidental `opencode` text in env/config is not a witness.
+ * The argv after the leading serialized environment assignments, when its first
+ * word is the bare `opencode` token or an absolute path whose basename is exactly
+ * `opencode`. Text inside assignment values or later words is never evidence, so
+ * any other executable (or an unparsable prefix) yields undefined.
  */
-function hasOpenCodeExecutable(command: string): boolean {
+function nativeOpenCodeArgv(command: string): string | undefined {
   const trimmed = command.trim();
-  const rest = trimmed.slice(ENV_ASSIGNMENT_PREFIX.exec(trimmed)?.[0].length ?? 0);
-  const word = rest.split(/\s/u, 1)[0] ?? '';
-  if (word.startsWith('/')) return ABSOLUTE_OPENCODE_BASENAME.test(word);
-  return /(?:^|\s)opencode(?:\s|$)/iu.test(command);
+  const native = trimmed.slice(ENV_ASSIGNMENT_PREFIX.exec(trimmed)?.[0].length ?? 0);
+  const word = native.split(/\s/u, 1)[0] ?? '';
+  return word === 'opencode' || ABSOLUTE_OPENCODE_BASENAME.test(word) ? native : undefined;
 }
 
-function openCodeUrlFromCommand(command: string): string | undefined {
-  if (!hasOpenCodeExecutable(command)) return undefined;
-  const hostname = command.match(/--hostname\s+(?:'([^']+)'|"([^"]+)"|(\S+))/iu);
-  const port = command.match(/--port\s+(?:'([1-9]\d*)'|"([1-9]\d*)"|([1-9]\d*))/iu);
+function hasOpenCodeExecutable(command: string): boolean {
+  return nativeOpenCodeArgv(command) !== undefined;
+}
+
+function openCodeUrlFromNativeArgv(native: string): string | undefined {
+  const hostname = native.match(/--hostname\s+(?:'([^']+)'|"([^"]+)"|(\S+))/iu);
+  const port = native.match(/--port\s+(?:'([1-9]\d*)'|"([1-9]\d*)"|([1-9]\d*))/iu);
   const host = hostname?.[1] ?? hostname?.[2] ?? hostname?.[3];
   const number = port?.[1] ?? port?.[2] ?? port?.[3];
   if (host !== '127.0.0.1' || !number) return undefined;
   return `http://${host}:${number}`;
 }
 
-function openCodeAgentFromCommand(command: string): string | undefined {
-  if (!hasOpenCodeExecutable(command)) return undefined;
-  const match = command.match(/--agent(?:=|\s+)(?:'([^']+)'|"([^"]+)"|(\S+))/iu);
+function openCodeAgentFromNativeArgv(native: string): string | undefined {
+  const match = native.match(/--agent(?:=|\s+)(?:'([^']+)'|"([^"]+)"|(\S+))/iu);
   const agent = match?.[1] ?? match?.[2] ?? match?.[3];
   return agent?.trim() || undefined;
 }
@@ -102,19 +103,18 @@ export interface OpenCodeControlBinding {
 }
 
 export function openCodeControlFromCommand(command: string): OpenCodeControlBinding | undefined {
-  // Quoted XDG homes may contain flag-shaped text; inspect only the actual
-  // native OpenCode argv after the pack's serialized environment assignments.
-  const nativeStart = command.startsWith('OPENCODE_CONFIG_CONTENT=')
-    ? Math.max(-1, ...[...command.matchAll(NATIVE_OPENCODE_START)].map((match) => match.index)) : -1;
-  const nativeCommand = nativeStart >= 0 ? command.slice(nativeStart + 1) : command;
-  const url = openCodeUrlFromCommand(nativeCommand);
+  // Quoted XDG homes and inline config may contain flag-shaped text; inspect only
+  // the actual native OpenCode argv after the serialized environment assignments.
+  const nativeCommand = nativeOpenCodeArgv(command);
+  if (nativeCommand === undefined) return undefined;
+  const url = openCodeUrlFromNativeArgv(nativeCommand);
   if (!url) return undefined;
   const sessionArgs = [...nativeCommand.matchAll(/(?:^|\s)--session(?:=|\s+)(?:'([^']+)'|"([^"]+)"|(\S+))/gu)];
   const hasSessionToken = /(?:^|\s)--session(?:=|\s|$)/u.test(nativeCommand);
   if ((hasSessionToken && sessionArgs.length !== 1) || sessionArgs.length > 1) return undefined;
   const session = sessionArgs[0]?.[1] ?? sessionArgs[0]?.[2] ?? sessionArgs[0]?.[3];
   if (hasSessionToken && (!session || !validOpenCodeResumeSession(session))) return undefined;
-  const agent = openCodeAgentFromCommand(nativeCommand);
+  const agent = openCodeAgentFromNativeArgv(nativeCommand);
   return { url, ...(agent ? { agent } : {}), ...(session ? { session } : {}) };
 }
 

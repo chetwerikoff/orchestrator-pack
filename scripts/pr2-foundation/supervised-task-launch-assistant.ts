@@ -194,7 +194,21 @@ function sameTaskTerminalDispatch(
       && ['failed', 'abandoned', 'cancelled', 'done', 'completed'].includes(observed.status ?? ''));
 }
 
-const FIRST_START_COMMAND = 'node --experimental-strip-types scripts/pr2-foundation/supervised-task-launch-assistant.ts --project "$PROJECT_ID"';
+const FIRST_START_COMMAND = 'node --experimental-strip-types scripts/pr2-foundation/supervised-task-launch-assistant.ts';
+
+/**
+ * Coordinator-owned first-start command for a new Task. Every option is one the
+ * launch CLI requires for this work class; `$...` words are values the coordinator
+ * supplies (new Task id or manager brief, fresh worktree name).
+ */
+function newTaskStartCommand(input: LaunchInput): string {
+  const project = input.projectId?.trim() ? input.projectId.trim() : '"$PROJECT_ID"';
+  const issue = input.issueNumber ? ` --issue-number ${input.issueNumber}` : '';
+  const route = input.workClass === 'manager'
+    ? '--work-class manager --run "$RUN_ID" --manager-brief "$MANAGER_BRIEF"'
+    : `--work-class ${input.workClass} --task "$NEW_TASK_ID"`;
+  return `${FIRST_START_COMMAND} --project ${project}${issue} ${route} --worktree-name "$NEW_WORKTREE_NAME"`;
+}
 
 /**
  * A present Dispatch with no current assignment for this Task is never resumed by
@@ -220,15 +234,12 @@ function freshDispatchNotAbsent(
       nextAction: { kind: 'reconcile_dispatch', note: reconcileNote },
     };
   }
-  const route = input.workClass === 'manager'
-    ? '--work-class manager --run "$RUN_ID" --manager-brief "$MANAGER_BRIEF"'
-    : `--work-class ${input.workClass} --task "$NEW_TASK_ID"`;
   return {
     cause: 'fresh_dispatch_not_absent', actor: 'orchestrator',
     evidence: { ...evidence, assignment: 'absent' },
     nextAction: {
       kind: 'start_new_task',
-      command: `${FIRST_START_COMMAND} ${route}`,
+      command: newTaskStartCommand(input),
       note: `no current assignment owns Task ${taskId}, so no same-Task successor starts; the coordinator starts a new Task through the authorized first-start route`,
     },
   };
@@ -2875,7 +2886,9 @@ export async function runExistingOpenCodeResume(
       ...result('resume_manager_run_task_ownership_unproven', 0),
       nextAction: {
         kind: 'start_new_task',
-        command: `${FIRST_START_COMMAND} --work-class manager --run "$RUN_ID" --manager-brief "$MANAGER_BRIEF"`,
+        command: newTaskStartCommand({
+          repository: input.repository, projectId: input.projectId, workClass: 'manager',
+        }),
         note: `session ${input.session} has no proven manager Run/Task owner, so no --session terminal starts; the coordinator starts a new Task through the authorized first-start route`,
       },
     };

@@ -1480,7 +1480,7 @@ describe('supervised Task launch assistant', () => {
     })).toThrow('opencode_executable_invalid');
   });
 
-  it.each(['opencode', './opencode', '/usr/local/bin/wrapper-opencode', '/opt/opencode/bin/opencode-wrapper', '/a b/opencode'])(
+  it.each(['', '   ', 'opencode', './opencode', '/usr/local/bin/wrapper-opencode', '/opt/opencode/bin/opencode-wrapper', '/a b/opencode'])(
     '#2717 C3 rejects pin %s as malformed instead of falling back to a PATH search', async (pin) => {
       const calls: string[][] = [];
       const resolved = await resolveLiveExecutorProfile('t2', {
@@ -2503,31 +2503,71 @@ The words Firefighter universal appear here only as prose.`;
     expect(spawns).toBe(0); expect(starts).toBe(0);
   });
 
+  /** Substitute the coordinator-supplied `$...` words and tokenize the emitted command like a shell would. */
+  function emittedLaunchArgv(command: string, values: Record<string, string>): string[] {
+    const filled = command.replace(/"\$([A-Z_]+)"/gu, (_m, name: string) => values[name] ?? `UNSET_${name}`);
+    const [runner, flags, script, ...argv] = filled.split(/\s+/u);
+    expect([runner, flags]).toEqual(['node', '--experimental-strip-types']);
+    expect(script).toBe('scripts/pr2-foundation/supervised-task-launch-assistant.ts');
+    return argv;
+  }
+  const c1Target = () => ({
+    projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+    primaryRoot: '/tmp/opk-2717-primary', defaultBranch: 'main',
+  } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>);
+
   it.each([
     ['early', [{ kind: 'present', dispatchId: 'dispatch-old', status: 'completed' }] as DispatchObservation[], 'dispatch_admission_early'],
     ['final', [{ kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-old', status: 'completed' }] as DispatchObservation[], 'dispatch_admission_final'],
-  ] as const)('#2717 C1 %s absent-assignment same-Task successor refuses and names the new-Task route', async (_when, dispatch, stage) => {
+  ] as const)('#2717 C1 %s absent-assignment same-Task successor refuses and names a runnable new-Task route', async (_when, dispatch, stage) => {
     let spawns = 0; let starts = 0;
-    const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ dispatch: [...dispatch],
+    const result = await runSupervisedTaskLaunchAssistant({ ...launchInput(), projectId: 'orchestrator-pack' }, deps({ dispatch: [...dispatch],
       adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }), onSupervised: () => { starts += 1; } }));
     expect(result).toMatchObject({
       outcome: 'continue', stage, observedCause: 'fresh_dispatch_not_absent',
       nextAction: { kind: 'start_new_task' }, resources: { dispatchId: 'dispatch-old' },
     });
-    if (result.outcome === 'continue') {
-      expect(result.nextAction.note).toMatch(/starts a new Task through the authorized first-start route/u);
-      expect(result.nextAction.command).toContain('--work-class t2');
-      expect(result.nextAction.command).not.toContain('--task "task-1"');
-    }
     expect(spawns).toBe(0); expect(starts).toBe(0);
+    if (result.outcome !== 'continue') throw new Error('expected refusal');
+    expect(result.nextAction.note).toMatch(/starts a new Task through the authorized first-start route/u);
+    const command = result.nextAction.command!;
+    expect(command).toContain('--worktree-name');
+    expect(command).not.toContain('--task "task-1"');
+    // The emitted command itself must pass the launch CLI's own validation.
+    const parsed = parseLaunchAssistantCli(
+      emittedLaunchArgv(command, { NEW_TASK_ID: 'task-new', NEW_WORKTREE_NAME: 'issue-1479-new' }),
+      process.env, c1Target,
+    );
+    expect(parsed).toMatchObject({ workClass: 't2', taskId: 'task-new', worktreeName: 'issue-1479-new', issueNumber: 1479 });
+    expect(parsed.worktreeSelector).toBeUndefined();
   });
 
-  it('#2717 C1 the named new-Task route starts on realistic input after the refusal', async () => {
-    const refused = await runSupervisedTaskLaunchAssistant(launchInput(), deps({
-      dispatch: [{ kind: 'present', dispatchId: 'dispatch-old', status: 'completed' }] }));
+  it('#2717 C1 the emitted manager new-Task command passes the CLI and the parsed input starts', async () => {
+    let starts = 0;
+    const refused = await runSupervisedTaskLaunchAssistant(
+      { ...launchInput('manager'), projectId: 'orchestrator-pack' },
+      deps({ dispatch: [{ kind: 'present', dispatchId: 'dispatch-old', status: 'completed' }] }));
     expect(refused).toMatchObject({ outcome: 'continue', nextAction: { kind: 'start_new_task' } });
+    if (refused.outcome !== 'continue') throw new Error('expected refusal');
+    const parsed = parseLaunchAssistantCli(emittedLaunchArgv(refused.nextAction.command!, {
+      RUN_ID: 'run-1', MANAGER_BRIEF: 'fresh-brief', NEW_WORKTREE_NAME: 'manager-new',
+    }), process.env, c1Target);
+    expect(parsed).toMatchObject({ workClass: 'manager', runId: 'run-1', managerBrief: 'fresh-brief', worktreeName: 'manager-new' });
+    expect(parsed.taskId).toBeUndefined();
+    const started = await runSupervisedTaskLaunchAssistant({ ...parsed, env: profileEnv() }, deps({
+      managerIssueTitle: { status: 'ok', value: 'repair launch' }, onSupervised: () => { starts += 1; } }));
+    expect(started.outcome).toBe('ready');
+    expect(starts).toBe(1);
+  });
+
+  it('#2717 C1 the emitted worker new-Task command passes the CLI and the parsed input starts', async () => {
     let spawns = 0; let starts = 0;
-    const started = await runSupervisedTaskLaunchAssistant({ ...launchInput(), taskId: 'task-new' }, deps({
+    const refused = await runSupervisedTaskLaunchAssistant({ ...launchInput(), projectId: 'orchestrator-pack' }, deps({
+      dispatch: [{ kind: 'present', dispatchId: 'dispatch-old', status: 'completed' }] }));
+    if (refused.outcome !== 'continue') throw new Error('expected refusal');
+    const parsed = parseLaunchAssistantCli(emittedLaunchArgv(refused.nextAction.command!, {
+      NEW_TASK_ID: 'task-new', NEW_WORKTREE_NAME: 'issue-1479-new' }), process.env, c1Target);
+    const started = await runSupervisedTaskLaunchAssistant({ ...parsed, env: profileEnv() }, deps({
       adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }), onSupervised: () => { starts += 1; } }));
     expect(started.outcome).toBe('ready');
     expect(spawns).toBe(1); expect(starts).toBe(1);

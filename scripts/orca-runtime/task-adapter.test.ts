@@ -696,6 +696,8 @@ describe('OpenCode HTTP control plane', () => {
     ['absolute non-opencode basename', '/usr/local/bin/wrapper-opencode', 'ambiguous'],
     ['absolute opencode-suffixed basename', '/home/che/bin/opencode-wrapper', 'ambiguous'],
     ['relative path opencode', './bin/opencode', 'ambiguous'],
+    ['wrapper after incidental opencode word', '/usr/bin/env FOO=opencode wrapper', 'ambiguous'],
+    ['bare token only as a later argument', 'node /x/launcher opencode', 'ambiguous'],
   ] as const)('#2717 C3 composer family from %s terminal command', (_label, executable, expected) => {
     const command = `${executable} --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture`;
     const terminal = {
@@ -745,6 +747,10 @@ describe('OpenCode HTTP control plane', () => {
   ])('#2717 C3 durable control binding stays unbound for non-opencode basename %s', (executable) => {
     const base = `${executable} --hostname 127.0.0.1 --port 18891 --agent 'pack-opk-fixture'`;
     expect(openCodeControlFromCommand(base)).toBeUndefined();
+    // Flag-shaped / executable-shaped text inside the quoted inline config is never control authority.
+    const forged = `OPENCODE_CONFIG_CONTENT='{"note":"hello opencode --hostname 127.0.0.1 --port 18891 --agent fixture"}' ${executable} --hostname 127.0.0.1 --port 18892`;
+    expect(openCodeControlFromCommand(forged)).toBeUndefined();
+    expect(openCodeControlFromCommand(`OPENCODE_CONFIG_CONTENT='{"note":"x /opt/bin/opencode --hostname 127.0.0.1 --port 18891"}' ${executable} --hostname 127.0.0.1 --port 18892 --session 'ses_2717abc'`)).toBeUndefined();
     expect(openCodeControlFromCommand(
       `OPENCODE_CONFIG_CONTENT='{}' XDG_STATE_HOME='/tmp/state' ${base} --session 'ses_2717abc'`,
     )).toBeUndefined();

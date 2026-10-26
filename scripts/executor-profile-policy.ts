@@ -276,7 +276,9 @@ export function resolveSemanticExecutorProfile(input: {
   const rawOpenCodeExecutable = descriptor.family === 'opencode' && input.surface === 'task'
     ? input.env[OPENCODE_EXECUTABLE_VARIABLE]
     : undefined;
-  const opencodeExecutable = rawOpenCodeExecutable?.trim() || undefined;
+  // Only a genuinely absent variable keeps the legacy bare token; a supplied blank
+  // or malformed pin is refused, never reinterpreted as PATH lookup.
+  const opencodeExecutable = rawOpenCodeExecutable;
   if (opencodeExecutable !== undefined && !validOpenCodeExecutablePath(opencodeExecutable)) {
     return { ok: false, code: 'executor_profile_malformed', variables: [OPENCODE_EXECUTABLE_VARIABLE] };
   }
