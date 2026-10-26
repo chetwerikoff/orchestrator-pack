@@ -3903,8 +3903,9 @@ describe('state-light fresh conversation collision recovery', () => {
     const prompt = 'SYNTHETIC-UNBOUND-CANDIDATE';
     const output = join(stateDir, 'unowned-candidate-must-not-publish.txt');
     const invocationId = randomUUID();
+    // Two assistant rows without any user row is not the #2721 own-page shape.
     const { page, state } = unrenderedOwnedMessagePage(
-      prompt, 'VISIBLE-BUT-UNATTRIBUTABLE', false, false, false,
+      prompt, 'VISIBLE-BUT-UNATTRIBUTABLE', false, true, false,
       ['VISIBLE-BUT-UNATTRIBUTABLE'], [], { neverMarkerProof: true },
     );
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
@@ -3977,7 +3978,9 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(existsSync(output)).toBe(false);
   });
 
-  it('never publishes a newly discovered fresh assistant-only reply without a proven marker', async () => {
+  // Issue #2721 (revisits #2533 AC3/AC4): live ChatGPT left created tabs with no
+  // user row after the reply finished, so the fresh turn never bound or harvested.
+  it('binds and harvests the created fresh page when ChatGPT never renders the owned user row (#2721)', async () => {
     const prompt = 'PROMPT-FRESH-UNRENDERED';
     const reply = 'FRESH-UNRENDERED-OK';
     const output = join(stateDir, 'fresh-unrendered-owned-message.txt');
@@ -3987,13 +3990,34 @@ describe('state-light fresh conversation collision recovery', () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const outcome = await runNewChatTurn(page, output, '90000', invocationId);
 
-    expect(outcome.code).not.toBe(0);
-    expect(outcome.result).toMatchObject({ send_count: 1 });
-    expect(outcome.result.state).not.toBe('ok');
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ code: 0 });
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1, conversation_id: SHARED_CONV });
     expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
-      phase: 'sent_unbound',
-      conversation_url: null,
+      phase: 'harvested',
+      conversation_url: SHARED_CONV,
       send_count: 1,
+    });
+    expect(state.reloads).toBe(0);
+    expect(readFileSync(output, 'utf8')).toBe(reply);
+  });
+
+  it('keeps an unfinished reply on a created page without user rows unbound (#2721)', async () => {
+    const prompt = 'PROMPT-FRESH-UNRENDERED-UNFINISHED';
+    const reply = 'FRESH-UNRENDERED-UNFINISHED';
+    const output = join(stateDir, 'fresh-unrendered-unfinished.txt');
+    const { page, state } = unrenderedOwnedMessagePage(
+      prompt, reply, false, false, false, [reply], [], { neverMarkerProof: true, nonFinalFromRead: 3 },
+    );
+    const invocationId = randomUUID();
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output, '90000', invocationId);
+
+    expect(outcome.code).not.toBe(0);
+    expect(outcome.result.state).not.toBe('ok');
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'sent_unbound', conversation_url: null, send_count: 1,
     });
     expect(state.reloads).toBe(0);
     expect(existsSync(output)).toBe(false);

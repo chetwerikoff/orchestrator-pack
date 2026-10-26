@@ -3345,6 +3345,22 @@ async function currentHarvestedAssistantMatchesCommitted(
   }
 }
 
+/** Issue #2721: a created fresh page ChatGPT left without any user row holds
+ * only the committed reply when its one complete assistant row has its bytes. */
+async function currentUnrenderedOwnAssistantMatchesCommitted(
+  page: any, marker: string, target: string, deadlineMs: number,
+): Promise<boolean> {
+  try {
+    const observed = await readPageObservation(page, marker, undefined, true, deadlineMs);
+    if (observed.transcriptIncomplete || observed.snapshot?.complete !== true) return false;
+    const assistants = observed.messages.filter((row) => row.role === 'assistant');
+    return observed.messages.every((row) => row.role !== 'user') && assistants.length === 1
+      && assistants[0]!.text === readFileSync(target, 'utf8');
+  } catch {
+    return false;
+  }
+}
+
 async function readFreshContinuationVisible(page: any, deadlineMs: number): Promise<boolean | null> {
   try {
     const waitMs = Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
@@ -7174,12 +7190,28 @@ async function runTurnCore(
       ) {
         completionReadySeen = true;
       }
+      // Issue #2721 revisits #2533 AC3/AC4 for one shape: ChatGPT can leave the
+      // created tab without any user row after the reply finished (history 429
+      // blocks hydration). The still-held page this invocation created and sent
+      // on, now on an exact-project conversation with one finished assistant
+      // reply and no user row, holds no other turn. Bind it under the same claim
+      // fence; the #2202 markerless harvest below then publishes it.
+      const unrenderedOwnFreshPage = config.newChat
+        && Date.now() >= dispatchDeadline
+        && Boolean(createdFreshPage && page === originalHeldPage && !ownershipForfeited)
+        && markerCardinality.matchingUserCarrierCount === 0
+        && markerCardinality.exactMarkerTokenCount === 0
+        && messages.every((message) => message.role !== 'user')
+        && messages.filter((message) => message.role === 'assistant').length === 1
+        && transcriptSnapshot.carriers.length === 1
+        && transcriptSnapshot.carriers[0]!.role === 'assistant'
+        && (ownedWindowCompletionReady || transcriptSnapshot.carriers[0]!.completionReady === true);
       if (
         config.newChat
         && sendCount >= 1
         && !ownedConversationUrl
-        && markerCardinality.matchingUserCarrierCount === 1
-        && markerCardinality.exactMarkerTokenCount === 1
+        && (unrenderedOwnFreshPage || (markerCardinality.matchingUserCarrierCount === 1
+          && markerCardinality.exactMarkerTokenCount === 1))
       ) {
         const observedConversationUrl = readProjectConversationUrl(page, config.projectUrl ?? '');
         if (observedConversationUrl && isSupportedChatGptConversationUrl(observedConversationUrl)
@@ -7232,7 +7264,9 @@ async function runTurnCore(
             profileKey,
             invocationId,
             phase: 'sent_unharvested',
-            reason: 'fresh_conversation_url_observed_owned_marker',
+            reason: unrenderedOwnFreshPage
+              ? 'fresh_conversation_url_observed_unrendered_own_page'
+              : 'fresh_conversation_url_observed_owned_marker',
             sendCount,
             sendWitness: markerDerivedSend ? 'owned_marker' : 'numeric_send_count',
             conversationUrl: observedConversationUrl,
@@ -8834,6 +8868,12 @@ async function guardedOriginalTargetRetirement(input: {
         busyDetail = userDetail();
         return 'foreign_user_message';
       }
+    } else if (users.messages.length === 0 && pin.created && !existingConversationRoute) {
+      // Issue #2721: ChatGPT never rendered the owned user row on this created
+      // fresh page; its only content must be the committed reply.
+      if (!observation.primary || !await currentUnrenderedOwnAssistantMatchesCommitted(
+        outcome.page, observation.marker, observation.primary.target, Date.now() + budget(),
+      )) return 'foreign_assistant_turn';
     } else {
       if (cardinality.matchingUserCarrierCount !== 1 || cardinality.exactMarkerTokenCount !== 1
         || users.messages.length === 0 || !lastOwn) {
