@@ -2091,6 +2091,53 @@ describe('Issue #1430 deterministic observation admission crash recovery', () =>
   });
 });
 
+describe('Issue #2726 observation owner pid', () => {
+  it('records the binding pid, keeps it across transitions and validates it', async () => {
+    const { randomUUID } = await import('node:crypto');
+    const { mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    vi.resetModules();
+    const root = mkdtempSync(join(tmpdir(), 'opk-2726-owner-pid-'));
+    const priorStateDir = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = join(root, 'state');
+    const profileKey = 'owner-pid-profile';
+    const invocationId = randomUUID();
+    try {
+      const observation = await import('./state-light-turn-observation.ts');
+      const admitted = observation.admitStateLightTurnObservation({
+        profileKey, invocationId, marker: `OPKTURNV1${'EF'.repeat(16)}`,
+      });
+      expect(admitted.owner_pid).toBeUndefined();
+      const bound = observation.bindStateLightOwnedTarget({
+        profileKey, invocationId, targetId: 'TARGET-2726', created: true,
+        cdp: 'http://127.0.0.1:9222', initialRoute: 'https://chatgpt.com/g/g-p-x/project',
+      });
+      expect(bound.owner_pid).toBe(process.pid);
+      const sent = observation.transitionStateLightTurnObservation({
+        profileKey, invocationId, phase: 'dispatching', reason: 'test_dispatch',
+      });
+      expect(sent.owner_pid).toBe(process.pid);
+
+      const path = observation.observationRecordPath(profileKey, invocationId);
+      const raw = JSON.parse(readFileSync(path, 'utf8'));
+      for (const invalid of [0, -1, 1.5, '7']) {
+        writeFileSync(path, `${JSON.stringify({ ...raw, owner_pid: invalid })}\n`);
+        expect(() => observation.readStateLightTurnObservation(profileKey, invocationId))
+          .toThrow('observation_owner_pid_invalid');
+      }
+      const { owner_pid: _ignored, ...legacy } = raw;
+      writeFileSync(path, `${JSON.stringify(legacy)}\n`);
+      expect(observation.readStateLightTurnObservation(profileKey, invocationId).owner_pid).toBeUndefined();
+    } finally {
+      if (priorStateDir === undefined) delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+      else process.env.CHATGPT_BROWSER_TURN_STATE_DIR = priorStateDir;
+      rmSync(root, { recursive: true, force: true });
+      vi.resetModules();
+    }
+  });
+});
+
 describe('Issue #2457 unproven terminal locator', () => {
   it('sends through the fake page as unowned and omits the handle from the chat binding', async () => {
     const { randomUUID } = await import('node:crypto');

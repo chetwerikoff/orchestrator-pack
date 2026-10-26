@@ -1633,6 +1633,8 @@ export interface HeldPage429Witness {
   readonly latestSuccessfulGet: () => HeldPageSuccessfulConversationGet | undefined;
   /** Sticky current-epoch server-visible user marker, independent of GET order. */
   readonly serverMarkerPresent: () => boolean;
+  /** Promote a held query-GET 429 once the full-page load failure is visible. */
+  readonly confirmLoadFailure?: () => void;
   readonly beforeNavigation: () => void;
   readonly markDispatch: (marker: string, exactSubmittedText?: string) => void;
   readonly dispose: () => void;
@@ -1651,6 +1653,9 @@ export function observeHeldPageConversation429(
   } catch { /* No owned exact-chat ID on a fresh-chat Page. */ }
   let epoch = 0;
   let observed: HeldPage429Observation | undefined;
+  // Issue #2723: ChatGPT polls a loaded conversation with num_turns queries; a
+  // 429 there is background noise until the page shows its load failure.
+  let unconfirmedQuery429: HeldPage429Observation | undefined;
   let dispatchMarker: string | undefined;
   let dispatchText: string | undefined;
   let ownSubmissionIssuedEpoch: number | undefined;
@@ -1710,9 +1715,14 @@ export function observeHeldPageConversation429(
       if (!kind) return;
       const status = response.status();
       if (status === 429 && !observed) {
-        // Preserve D45's first-429 sticky publication exactly.
-        observed = { wall_kind: kind, http_status: 429, status_source: 'owned_page_response' };
-        onFirst429?.(observed);
+        const evidence: HeldPage429Observation = { wall_kind: kind, http_status: 429, status_source: 'owned_page_response' };
+        if (kind === 'conversation_fetch_http_429' && new URL(String(request.url())).search) {
+          unconfirmedQuery429 ??= evidence;
+        } else {
+          // Preserve D45's first-429 sticky publication exactly.
+          observed = evidence;
+          onFirst429?.(observed);
+        }
       }
       if (kind !== 'conversation_fetch_http_429' || status !== 200
         || !dispatchMarker || !dispatchText) return;
@@ -1767,8 +1777,14 @@ export function observeHeldPageConversation429(
     latestSuccessfulGet: () => latestSuccessfulGet?.epoch === epoch ? latestSuccessfulGet : undefined,
     serverMarkerPresent: () => serverMarkerPresentEpoch === epoch && Boolean(dispatchMarker)
       && serverMarker === dispatchMarker,
+    confirmLoadFailure: () => {
+      if (observed || !unconfirmedQuery429) return;
+      observed = unconfirmedQuery429;
+      onFirst429?.(observed);
+    },
     beforeNavigation: () => {
       epoch++;
+      unconfirmedQuery429 = undefined;
       dispatchMarker = undefined;
       dispatchText = undefined;
       latestSuccessfulGet = undefined;
@@ -1874,11 +1890,14 @@ export async function probeConversationLoadError(
       const text = String(await boundedPlaywrightOperation(
         remaining(), () => headings.nth(i).innerText({ timeout: remaining() }),
       ));
-      if (CONVERSATION_LOAD_ERROR_HEADING_RE.test(text)) return {
-        wall_kind: 'conversation_load_error',
-        matched_text: text.slice(0, 500),
-        matched_selector: CONVERSATION_LOAD_ERROR_HEADING_SELECTOR,
-      };
+      if (CONVERSATION_LOAD_ERROR_HEADING_RE.test(text)) {
+        if (page && typeof page === 'object') heldPage429Witnesses.get(page)?.confirmLoadFailure?.();
+        return {
+          wall_kind: 'conversation_load_error',
+          matched_text: text.slice(0, 500),
+          matched_selector: CONVERSATION_LOAD_ERROR_HEADING_SELECTOR,
+        };
+      }
     }
   } catch { /* An unreadable heading never authorizes retry or inferred HTTP status. */ }
   return null;
