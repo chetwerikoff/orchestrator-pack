@@ -1,0 +1,27 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2716,
+  "declared_paths": [
+    "docs/orchestration-runbook.md",
+    "scripts/executor-profile-policy.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+  ],
+  "denylist": [
+    "credentials, secrets and .env files",
+    "credentials/",
+    "generated runtime state and worker assignment records",
+    "operator-local configuration and executor profile stores",
+    "packages/core/",
+    "secrets/",
+    "unrelated executor/runtime redesign",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/orchestration-runbook.md",
+    "scripts/executor-profile-policy.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+  ],
+  "source_revision": "1e5d74383f41ae32e65a23a6828a1f57407e0e6b"
+}
