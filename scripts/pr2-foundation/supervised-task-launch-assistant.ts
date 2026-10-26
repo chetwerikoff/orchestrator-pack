@@ -988,10 +988,8 @@ export async function runSupervisedTaskLaunchAssistant(
   const prepared = await checkpoint('worktree_prepare', timings, deps.now, async (): Promise<EdgeResult<PreparedWorktree>> => {
     const placed = await prepareStep();
     if (placed.status !== 'ok' || input.workClass !== 'manager' || !deps.installManagerPushGuard) return placed;
-    const defaultBranch = managerDefaultBranch({
-      ...(input.defaultBranch ? { defaultBranch: input.defaultBranch } : {}),
-      ...(input.baseBranch ? { baseBranch: input.baseBranch } : {}),
-    });
+    // The selected project's default only: a PR-head base branch must never stand in for it.
+    const defaultBranch = text(input.defaultBranch);
     const guard = placed.value.path && defaultBranch
       ? await deps.installManagerPushGuard({
         repository: resources.repository, worktreePath: placed.value.path, defaultBranch,

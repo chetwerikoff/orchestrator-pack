@@ -144,9 +144,9 @@ function verifiedFetchRemotes(cwd: string, pushEndpoint: string): string[] {
   if (!names.ok) return [];
   const verified: string[] = [];
   for (const name of names.stdout.split('\n').map(trimmed).filter(Boolean)) {
-    const urls = git(cwd, ['remote', 'get-url', '--all', name]);
-    if (urls.ok && urls.stdout.split('\n').map(trimmed).filter(Boolean)
-      .some((url) => normalizeEndpoint(url, cwd) === pushEndpoint)) verified.push(name);
+    // Git fetches only from the first configured URL; later `url` entries never supply tracking refs.
+    const fetchUrl = git(cwd, ['remote', 'get-url', name]);
+    if (fetchUrl.ok && normalizeEndpoint(trimmed(fetchUrl.stdout), cwd) === pushEndpoint) verified.push(name);
   }
   return verified;
 }
@@ -180,9 +180,23 @@ function resolveTrackingRef(cwd: string, remotes: readonly string[], remoteRef: 
   return { kind: 'ok', tracking: [...candidates][0]! };
 }
 
-/** Commit OIDs reachable evidence: every local tracking ref the same-endpoint remotes map. */
+/** Source ref a tracking ref would come from under one positive refspec, or null. */
+function reverseMap(spec: Refspec, tracking: string): string | null {
+  const star = spec.dst.indexOf('*');
+  if (star < 0) return spec.dst === tracking ? spec.src : null;
+  const prefix = spec.dst.slice(0, star);
+  const suffix = spec.dst.slice(star + 1);
+  if (!tracking.startsWith(prefix) || !tracking.endsWith(suffix) || tracking.length < prefix.length + suffix.length) return null;
+  return spec.src.replace('*', tracking.slice(prefix.length, tracking.length - suffix.length));
+}
+
+/**
+ * Commit tips evidenced as published on this endpoint: local tracking refs whose source ref maps back to the
+ * same tracking ref through the unique positive, non-negated fetch mapping of a same-endpoint remote.
+ */
 function publishedCommitOids(cwd: string, remotes: readonly string[]): string[] {
   const oids = new Set<string>();
+  const seen = new Set<string>();
   for (const remote of remotes) {
     for (const spec of parseRefspecs(cwd, remote)) {
       if (spec.negative) continue;
@@ -192,9 +206,12 @@ function publishedCommitOids(cwd: string, remotes: readonly string[]): string[] 
       if (!listed.ok) continue;
       for (const line of listed.stdout.split('\n').map(trimmed).filter(Boolean)) {
         const [oid, type, name] = line.split(' ');
-        if (!oid || type !== 'commit' || !name) continue;
-        if (star < 0 ? name !== spec.dst : !(name.startsWith(prefix) && name.endsWith(spec.dst.slice(star + 1)))) continue;
-        oids.add(oid);
+        if (!oid || type !== 'commit' || !name || seen.has(name)) continue;
+        const source = reverseMap(spec, name);
+        if (source === null) continue;
+        seen.add(name);
+        const resolved = resolveTrackingRef(cwd, remotes, source);
+        if (resolved.kind === 'ok' && resolved.tracking === name) oids.add(oid);
       }
     }
   }
@@ -345,23 +362,22 @@ function publishedPatchFailure(cwd: string, parent: string, commit: string, publ
   });
 }
 
-const RUFF_LOCK_FILES = ['uv.lock', 'poetry.lock'] as const;
 const RUFF_PIN = /\[\[package\]\]\s*\n\s*name\s*=\s*"ruff"\s*\n\s*version\s*=\s*"([^"]+)"/gu;
 
-/** Positive 3: `ruff format` then `ruff check --fix`, version/config taken from the already-published parent. */
+/**
+ * Positive 3: `ruff format` then `ruff check --fix`. Version, hashes and config come from the already-published
+ * parent. Ruff is never taken from PATH: uv installs exactly the parent's `uv.lock` requirement (with its recorded
+ * artifact hashes) from its offline cache into an isolated environment, so a same-version shim cannot stand in.
+ */
 function ruffReproductionFailure(cwd: string, parent: string, commit: string, published: readonly string[],
   changedPaths: readonly string[]): string | null {
   if (changedPaths.length === 0 || !changedPaths.every((path) => path.endsWith('.py'))) return 'the commit is not .py-only';
   const parentPublished = published.some((tip) => git(cwd, ['merge-base', '--is-ancestor', parent, tip]).ok);
   if (!parentPublished) return 'parent commit is not proven published on this endpoint';
-  let pin: string | null = null;
-  for (const lock of RUFF_LOCK_FILES) {
-    const text = git(cwd, ['cat-file', 'blob', `${parent}:${lock}`]);
-    if (!text.ok) continue;
-    const versions = [...text.stdout.matchAll(RUFF_PIN)].map((match) => match[1]!);
-    if (versions.length === 1) { pin = versions[0]!; break; }
-  }
-  if (!pin) return 'parent commit has no single lock-pinned ruff version (uv.lock or poetry.lock)';
+  const lock = git(cwd, ['cat-file', 'blob', `${parent}:uv.lock`]);
+  const versions = lock.ok ? [...lock.stdout.matchAll(RUFF_PIN)].map((match) => match[1]!) : [];
+  if (versions.length !== 1) return 'parent commit has no single lock-pinned ruff version in uv.lock';
+  const pin = versions[0]!;
   const gitDir = trimmed(git(cwd, ['rev-parse', '--absolute-git-dir']).stdout);
   const wanted = trimmed(git(cwd, ['rev-parse', `${commit}^{tree}`]).stdout);
   return withScratchDir((dir) => {
@@ -374,12 +390,31 @@ function ruffReproductionFailure(cwd: string, parent: string, commit: string, pu
       || !git(cwd, [...PROOF_GIT, 'checkout-index', '-a', '-f', `--prefix=${work}/`], undefined, env).ok) {
       return 'the parent tree cannot be materialized for the isolated Ruff run';
     }
-    const tool = { PATH: process.env.PATH ?? '', HOME: home, XDG_CONFIG_HOME: home, RUFF_NO_CACHE: 'true' };
-    const run = (args: string[]) => runProcessSync({ command: 'ruff', args, cwd: work, env: tool });
+    const cache = runProcessSync({ command: 'uv', args: ['cache', 'dir'], cwd: work, inheritParentEnv: true });
+    if (!cache.ok || !trimmed(cache.stdout)) return 'uv is unavailable, so the lock-pinned Ruff cannot be resolved';
+    const tool = {
+      PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? home, XDG_CONFIG_HOME: home,
+      UV_CACHE_DIR: trimmed(cache.stdout), UV_NO_CONFIG: '1', RUFF_NO_CACHE: 'true',
+    };
+    const exported = runProcessSync({
+      command: 'uv', cwd: work, env: tool,
+      args: ['export', '--frozen', '--offline', '--no-emit-project', '--all-groups', '--format', 'requirements-txt', '--no-header'],
+    });
+    const requirement = new RegExp(`^ruff==${pin.replace(/\./gu, '\\.')}[^\\n]*(?:\\n[ \\t]+--hash=[^\\n]*)+`, 'mu')
+      .exec(exported.stdout.replaceAll('\\\n', '\n'));
+    if (!exported.ok || !requirement || !requirement[0].includes('--hash=sha256:')) {
+      return `uv.lock has no hash-pinned ruff==${pin} requirement for the parent`;
+    }
+    const requirements = join(dir, 'ruff-requirements.txt');
+    writeFileSync(requirements, `${requirement[0].replaceAll('\n', ' \\\n')}\n`);
+    const run = (args: string[]) => runProcessSync({
+      command: 'uv', cwd: work, env: tool,
+      args: ['run', '--offline', '--no-project', '--no-config', '--isolated', '--with-requirements', requirements, '--', 'ruff', ...args],
+    });
     const version = run(['--version']);
     const reported = /^ruff (\S+)/u.exec(trimmed(version.stdout))?.[1];
     if (!version.ok || reported !== pin) {
-      return `ruff executable ${reported ?? 'not found'} does not match the parent lock pin ${pin}`;
+      return `locked ruff ${pin} is unavailable from the offline uv cache (${reported ?? 'not runnable'})`;
     }
     if (!run(['format', '--no-cache', '.']).ok) return 'ruff format failed on the parent tree';
     const fixed = run(['check', '--fix', '--no-cache', '.']);
@@ -573,9 +608,9 @@ function delegateOriginalHook(args: readonly string[], stdin: Buffer): number {
   const original = process.env[ORIGINAL_HOOK_ENV];
   if (!original) return 0;
   const { [ORIGINAL_HOOK_ENV]: _own, ...env } = process.env;
-  const result = runProcessSync({
-    command: original, args, input: stdin, env, forwardOutputToStderr: true,
-  });
+  const result = runProcessSync({ command: original, args, input: stdin, env });
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
   if (result.error) {
     process.stderr.write(`[manager-push-guard] inherited pre-push hook could not run: ${result.error}\n`);
     return 1;
@@ -773,6 +808,12 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
       `repair write access to ${hooksDir}, then rerun the supervised launch (${error instanceof Error ? error.message : String(error)})`, evidence);
   }
 
+  const recordedDefault = worktreeConfig(worktree, KEY.defaultBranch);
+  if (recordedDefault !== null && recordedDefault !== defaultBranch) {
+    rollbackExtension();
+    return refuse('manager_push_guard_default_branch_changed',
+      `this manager worktree is bound to default branch ${recordedDefault}, not ${defaultBranch}; do not rebind it silently. Recreate the manager worktree for the selected project, then rerun the supervised launch`, evidence);
+  }
   const writes: Array<[string, string]> = [
     ['core.hooksPath', hooksDir], [KEY.installed, 'true'], [KEY.defaultBranch, defaultBranch],
   ];

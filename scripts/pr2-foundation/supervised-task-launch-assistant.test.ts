@@ -1218,7 +1218,7 @@ describe('supervised Task launch assistant', () => {
       expect(currentWorkerAssignment(file, 2689)).toBeNull();
 
       const transition = await runSupervisedTaskLaunchAssistant({
-        ...launchInput('manager'), issueNumber: 2689, taskId: 'task-new', env,
+        ...launchInput('manager'), issueNumber: 2689, taskId: 'task-new', env, defaultBranch: 'main',
         existingTerminal: worker.identity.id,
       } as LaunchInput & { existingTerminal: string }, {
         ...deps({
@@ -5593,7 +5593,7 @@ function installGuard(world: Pick<PushWorld, 'manager'>, seed?: string) {
   });
 }
 
-function pushWorld(options: { prePush?: string; preCommit?: string; hooksPath?: string; install?: boolean | 'unseeded'; python?: boolean } = {}): PushWorld {
+function pushWorld(options: { prePush?: string; preCommit?: string; hooksPath?: string; install?: boolean | 'unseeded'; python?: boolean | { pyproject: string; uvLock: string; legacy: string } } = {}): PushWorld {
   const base = mkdtempSync(join(tmpdir(), 'opk-b5-'));
   const bare = join(base, 'remote.git');
   const primary = join(base, 'primary');
@@ -5608,9 +5608,10 @@ function pushWorld(options: { prePush?: string; preCommit?: string; hooksPath?: 
   write(primary, 'tool.py', 'def f():\n    return 1\n');
   write(primary, 'README.md', 'readme\n');
   if (options.python) {
-    write(primary, 'pyproject.toml', '[tool.ruff]\nline-length = 88\n');
-    write(primary, 'uv.lock', '[[package]]\nname = "ruff"\nversion = "0.5.0"\n');
-    write(primary, 'legacy.py', 'x = 1  \nif x == None:\n    pass\n');
+    const real = typeof options.python === 'object' ? options.python : null;
+    write(primary, 'pyproject.toml', real?.pyproject ?? '[tool.ruff]\nline-length = 88\n');
+    write(primary, 'uv.lock', real?.uvLock ?? '[[package]]\nname = "ruff"\nversion = "0.5.0"\n');
+    write(primary, 'legacy.py', real?.legacy ?? 'x = 1  \nif x == None:\n    pass\n');
   }
   git(primary, 'remote', 'add', 'origin', bare);
   commit(primary, 'initial');
@@ -5658,7 +5659,7 @@ function hookStub(world: PushWorld): string {
 
 function runHook(world: PushWorld, url: string, line: string) {
   const result = runProcessSync({ command: hookStub(world), args: ['origin', url], cwd: world.manager, env: gitEnv(), input: `${line}\n` });
-  return { status: result.exitCode ?? 1, out: `${result.stdout}${result.stderr}` };
+  return { status: result.exitCode ?? 1, out: `${result.stdout}${result.stderr}`, stdout: result.stdout, stderr: result.stderr };
 }
 
 function withWorld(options: Parameters<typeof pushWorld>[0], body: (world: PushWorld) => void | Promise<void>): () => Promise<void> {
@@ -6049,23 +6050,49 @@ describe('Issue #2732 AC5 single-endpoint all-or-nothing', () => {
 // Issue #2732 r04: verified published patch.diff and parent-pinned Ruff proofs.
 // ---------------------------------------------------------------------------
 
-function fakeRuff(base: string, version: string): string {
-  const dir = join(base, `bin-${version}`);
+interface FakeUvOptions { readonly lock: string; readonly ruff: string }
+
+/** Directory whose `uv` stands in for the real tool: `export` prints the lock pin, `run` execs a private fake ruff. */
+function fakeUv(base: string, name: string, options: FakeUvOptions): string {
+  const dir = join(base, `uv-${name}`);
   mkdirSync(dir, { recursive: true });
-  const script = join(dir, 'ruff');
-  writeFileSync(script, `#!/bin/sh
+  writeFileSync(join(dir, 'ruff-real'), `#!/bin/sh
 case "$1" in
-  --version) echo "ruff ${version}" ;;
+  --version) echo "ruff ${options.ruff}" ;;
   format) find . -name '*.py' -exec sed -i 's/[ ]*$//' {} + ;;
   check) find . -name '*.py' -exec sed -i 's/ == None/ is None/' {} + ;;
 esac
 exit 0
 `);
-  chmodSync(script, 0o755);
+  writeFileSync(join(dir, 'uv'), String.raw`#!/bin/sh
+case "$1" in
+  cache) echo "${dir}/cache" ;;
+  export) printf 'ruff==${options.lock} \\\n    --hash=sha256:abcd\n' ;;
+  run) while [ "$1" != "--" ]; do shift; done; shift; shift; exec "${dir}/ruff-real" "$@" ;;
+esac
+`);
+  chmodSync(join(dir, 'uv'), 0o755);
+  chmodSync(join(dir, 'ruff-real'), 0o755);
   return dir;
 }
 
 const RUFF_FIXED = 'x = 1\nif x is None:\n    pass\n';
+
+function realRuffFixture(): { pyproject: string; uvLock: string } | null {
+  const dir = mkdtempSync(join(tmpdir(), 'opk-b5-uv-'));
+  try {
+    const pyproject = '[project]\nname = "demo"\nversion = "0.1.0"\nrequires-python = ">=3.9"\ndependencies = []\n[dependency-groups]\ndev = ["ruff==0.5.7"]\n';
+    writeFileSync(join(dir, 'pyproject.toml'), pyproject);
+    const locked = runProcessSync({ command: 'uv', args: ['lock', '--offline'], cwd: dir, inheritParentEnv: true });
+    if (!locked.ok) return null;
+    const probe = runProcessSync({ command: 'uv', args: ['run', '--offline', '--no-project', '--no-config', '--isolated', '--with', 'ruff==0.5.7', '--', 'ruff', '--version'], cwd: dir, inheritParentEnv: true });
+    return probe.ok && probe.stdout.includes('0.5.7') ? { pyproject, uvLock: readFileSync(join(dir, 'uv.lock'), 'utf8') } : null;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const REAL_RUFF = realRuffFixture();
 
 describe('Issue #2732 r04 AC2 verified published patch.diff application', () => {
   it('passes the exact fetched same-endpoint patch and fails altered, local-only and wrong-endpoint patches', withWorld({}, (world) => {
@@ -6142,10 +6169,14 @@ describe('Issue #2732 r04 AC2 verified published patch.diff application', () => 
 });
 
 describe('Issue #2732 r04 AC2 parent-pinned Python Ruff reproduction', () => {
-  it('passes exact ruff format then check --fix output and fails near-misses', withWorld({ python: true }, (world) => {
-    const pinned = fakeRuff(world.base, '0.5.0');
-    const drifted = fakeRuff(world.base, '0.6.0');
-    toolPath = pinned;
+  it('passes exact ruff format then check --fix output, ignores PATH ruff shims, and fails near-misses', withWorld({ python: true }, (world) => {
+    const pinned = fakeUv(world.base, 'pinned', { lock: '0.5.0', ruff: '0.5.0' });
+    const drifted = fakeUv(world.base, 'drifted', { lock: '0.5.0', ruff: '0.6.0' });
+    const evil = join(world.base, 'evil');
+    mkdirSync(evil, { recursive: true });
+    writeFileSync(join(evil, 'ruff'), '#!/bin/sh\n[ "$1" = "--version" ] && echo "ruff 0.5.0"\nfind . -name \'*.py\' -exec sed -i \'s/.*/x = 9/\' {} +\nexit 0\n');
+    chmodSync(join(evil, 'ruff'), 0o755);
+    toolPath = `${evil}:${pinned}`;
     try {
       managerOn(world, 'ruff-ok', world.seed);
       write(world.manager, 'legacy.py', RUFF_FIXED);
@@ -6165,15 +6196,17 @@ describe('Issue #2732 r04 AC2 parent-pinned Python Ruff reproduction', () => {
       write(world.manager, 'legacy.py', RUFF_FIXED);
       write(world.manager, 'uv.lock', '[[package]]\nname = "ruff"\nversion = "0.6.0"\n');
       commit(world.manager, 'mixed lock edit');
-      const mixed = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-mixed');
-      expect(mixed.out).toContain('Ruff proof: the commit is not .py-only');
-      // Installed Ruff differs from the parent's lock pin.
-      toolPath = drifted;
+      expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-mixed').out).toContain('Ruff proof: the commit is not .py-only');
+      // The locked artifact that uv resolves reports another version than the parent's lock pin.
+      toolPath = `${evil}:${drifted}`;
       managerOn(world, 'ruff-drift', world.seed);
       write(world.manager, 'legacy.py', RUFF_FIXED);
       commit(world.manager, 'drifted tool');
-      expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-drift').out).toContain('does not match the parent lock pin 0.5.0');
-      toolPath = pinned;
+      expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-drift').out).toContain('locked ruff 0.5.0 is unavailable');
+      // Without uv there is no lock-bound Ruff: a bare PATH ruff is never used.
+      toolPath = evil;
+      expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-nouv').out).toContain('AC2');
+      toolPath = `${evil}:${pinned}`;
       // Parent not proven published: an unpublished (but formatter-clean) commit sits below the Ruff commit.
       managerOn(world, 'ruff-parent', world.seed);
       write(world.manager, 'src/app.ts', TS_AFTER);
@@ -6181,9 +6214,97 @@ describe('Issue #2732 r04 AC2 parent-pinned Python Ruff reproduction', () => {
       write(world.manager, 'legacy.py', RUFF_FIXED);
       commit(world.manager, 'ruff atop unpublished parent');
       expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-parent').out).toContain('parent commit is not proven published');
-      for (const name of ['ruff-alt', 'ruff-mixed', 'ruff-drift', 'ruff-parent']) expect(remoteRef(world, `refs/heads/${name}`)).toBe('');
+      for (const name of ['ruff-alt', 'ruff-mixed', 'ruff-drift', 'ruff-nouv', 'ruff-parent']) expect(remoteRef(world, `refs/heads/${name}`)).toBe('');
     } finally {
       toolPath = '';
     }
+  }));
+
+  it.skipIf(!REAL_RUFF)('reproduces authentic hash-locked Ruff 0.5.7 output through uv and refuses a one-line alteration', withWorld({
+    python: REAL_RUFF ? { ...REAL_RUFF, legacy: 'import os\nx = 1  \n' } : false,
+  }, (world) => {
+    managerOn(world, 'real-ok', world.seed);
+    write(world.manager, 'legacy.py', '\nx = 1\n');
+    const head = commit(world.manager, 'authentic ruff output');
+    const pushed = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/real-ok');
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(remoteRef(world, 'refs/heads/real-ok')).toBe(head);
+    managerOn(world, 'real-alt', world.seed);
+    write(world.manager, 'legacy.py', 'x = 2\n');
+    commit(world.manager, 'one-line alteration');
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/real-alt').out).toContain('AC2');
+  }));
+});
+
+describe('Issue #2732 r04 review fixes: endpoint provenance, default binding, hook streams', () => {
+  it('uses only the first fetch URL and honors negative refspecs for the published set', withWorld({}, (world) => {
+    const elsewhere = join(world.base, 'elsewhere.git');
+    git(world.base, 'init', '-q', '--bare', '-b', 'trunk', elsewhere);
+    git(world.primary, 'push', '-q', elsewhere, 'trunk');
+    const other = join(world.base, 'other-a');
+    git(world.base, 'clone', '-q', elsewhere, other);
+    git(other, 'checkout', '-q', '-b', 'x');
+    write(other, 'src/app.ts', TS_SUBSTANTIVE);
+    commit(other, 'substantive published only on endpoint A');
+    git(other, 'push', '-q', 'origin', 'x');
+    // Fetch reads the first URL (A); pushes go to B (world.bare).
+    git(world.manager, 'config', 'remote.origin.url', elsewhere);
+    git(world.manager, 'config', '--add', 'remote.origin.url', world.bare);
+    git(world.manager, 'config', 'remote.origin.pushurl', world.bare);
+    git(world.manager, 'fetch', '-q', 'origin');
+    managerOn(world, 'nu', 'origin/x');
+    const multi = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/nu');
+    expect(multi.status).not.toBe(0);
+    expect(multi.out).toContain('AC2');
+    expect(remoteRef(world, 'refs/heads/nu')).toBe('');
+    // A tracking ref excluded by a negative refspec is not publication evidence.
+    git(world.manager, 'config', '--unset-all', 'remote.origin.url');
+    git(world.manager, 'config', 'remote.origin.url', world.bare);
+    git(world.manager, 'config', '--unset', 'remote.origin.pushurl');
+    git(world.manager, 'update-ref', '-d', 'refs/remotes/origin/x');
+    const otherB = otherClone(world);
+    git(otherB, 'checkout', '-q', '-b', 'private');
+    write(otherB, 'src/app.ts', TS_SUBSTANTIVE);
+    const secret = commit(otherB, 'substantive private');
+    git(otherB, 'push', '-q', 'origin', 'private');
+    git(world.manager, 'fetch', '-q', world.bare, 'refs/heads/private:refs/remotes/origin/private');
+    expect(git(world.manager, 'rev-parse', 'refs/remotes/origin/private')).toBe(secret);
+    git(world.manager, 'config', '--add', 'remote.origin.fetch', '^refs/heads/private');
+    managerOn(world, 'nu2', 'origin/private');
+    const negative = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/nu2');
+    expect(negative.status).not.toBe(0);
+    expect(negative.out).toContain('AC2');
+    git(world.manager, 'config', '--unset-all', 'remote.origin.fetch', '\\^');
+    git(world.manager, 'fetch', '-q', 'origin');
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/nu2').status).toBe(0);
+  }));
+
+  it('binds the selected default, not the PR base, and refuses silent rebinding', withWorld({}, async (world) => {
+    const rebind = installManagerPushGuard({
+      worktreePath: world.manager, defaultBranch: 'feature', endpointMatchesRepository: () => true,
+    });
+    expect(rebind.ok).toBe(false);
+    if (!rebind.ok) expect(rebind.cause).toBe('manager_push_guard_default_branch_changed');
+    expect(git(world.manager, 'config', '--worktree', '--get', 'opkManagerPushGuard.defaultBranch')).toBe('trunk');
+    const installs: string[] = [];
+    const prBase = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('manager'), issueNumber: undefined, baseBranch: 'origin/feature',
+    }, {
+      ...deps(),
+      installManagerPushGuard: (request) => { installs.push(request.defaultBranch); return { status: 'ok', value: true }; },
+    });
+    expect(installs).toEqual([]);
+    expect(prBase.outcome).toBe('continue');
+    if (prBase.outcome === 'continue') expect(prBase.observedCause).toBe('manager_push_guard_unobserved');
+  }));
+
+  it('keeps inherited pre-push stdout and stderr on separate streams', withWorld({
+    prePush: '#!/bin/sh\necho hook-stdout\necho hook-stderr >&2\nexit 0\n',
+  }, (world) => {
+    const head = git(world.manager, 'rev-parse', 'HEAD');
+    const result = runHook(world, world.bare, `refs/heads/mgr ${head} refs/heads/brand-new ${ZERO}`);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('hook-stdout\n');
+    expect(result.stderr).toBe('hook-stderr\n');
   }));
 });
