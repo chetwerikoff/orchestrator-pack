@@ -144,11 +144,31 @@ function delay(milliseconds: number): Promise<void> {
 
 async function terminateProcessTree(pid: number, killGraceMs: number): Promise<void> {
   signalTree(pid, 'SIGTERM');
-  await delay(killGraceMs);
+  if (process.platform === 'win32') {
+    await delay(killGraceMs);
+    return;
+  }
+  // A cooperative group may stop before the grace ends; escalate otherwise.
+  const deadline = Date.now() + killGraceMs;
+  while (Date.now() < deadline) {
+    if (observePosixProcessGroup(pid) === 'stopped') return;
+    await delay(Math.min(10, Math.max(1, deadline - Date.now())));
+  }
   if (groupExists(pid)) {
     signalTree(pid, 'SIGKILL');
     await delay(20);
   }
+}
+
+// Confirms the POSIX group is gone before the result returns. Reparented
+// SIGKILLed members can stay visible briefly until their new parent reaps them.
+async function confirmPosixGroupStopped(pid: number, deadline: number): Promise<PosixProcessGroupObservation> {
+  let observation = observePosixProcessGroup(pid);
+  while (observation === 'running' && Date.now() < deadline) {
+    await delay(Math.min(10, Math.max(1, deadline - Date.now())));
+    observation = observePosixProcessGroup(pid);
+  }
+  return observation;
 }
 
 function describeError(error: unknown): string {
@@ -160,6 +180,10 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
   if (options.args && !Array.isArray(options.args)) throw new TypeError('args must be an argument array');
   if (options.timeoutMs !== undefined && options.timeoutMs < 0) {
     throw new RangeError('timeoutMs must be non-negative');
+  }
+  if (options.killGraceMs !== undefined
+    && (!Number.isFinite(options.killGraceMs) || options.killGraceMs < 0)) {
+    throw new RangeError('killGraceMs must be a finite non-negative number');
   }
 
   if (options.signal?.aborted) {
@@ -229,20 +253,22 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
   let consumerChain = Promise.resolve();
   let processTerminalObserved = false;
 
+  // Cleanup uncertainty is reported alongside, never instead of, an earlier error.
+  const appendCleanupError = (detail: string): void => {
+    const currentIntent = intent;
+    if (!currentIntent) return;
+    intent = {
+      outcome: currentIntent.outcome,
+      error: currentIntent.error ? `${currentIntent.error}; ${detail}` : detail,
+    };
+  };
+
   const requestTermination = (nextIntent: TerminalIntent): void => {
     if (intent) return;
     if (processTerminalObserved && nextIntent.outcome !== 'consumer-error') return;
     intent = nextIntent;
     cleanupPromise = terminateProcessTree(pid, options.killGraceMs ?? DEFAULT_KILL_GRACE_MS).catch(
-      (error: unknown) => {
-        const currentIntent = intent;
-        if (currentIntent && !currentIntent.error) {
-          intent = {
-            outcome: currentIntent.outcome,
-            error: `process-tree cleanup failed: ${describeError(error)}`,
-          };
-        }
-      },
+      (error: unknown) => appendCleanupError(`process-tree cleanup failed: ${describeError(error)}`),
     );
   };
 
@@ -310,7 +336,14 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
   await consumerChain;
 
   if (cleanupPromise !== undefined) {
+    const deadline = Date.now() + FINAL_CLOSE_GRACE_MS;
     await Promise.race([cleanupPromise, delay(FINAL_CLOSE_GRACE_MS)]);
+    if (process.platform !== 'win32') {
+      const group = await confirmPosixGroupStopped(pid, deadline);
+      if (group !== 'stopped' && !intent?.error?.includes('process-tree cleanup')) {
+        appendCleanupError(`process-tree cleanup unverified: process group ${group}`);
+      }
+    }
   }
 
   const stdoutText = Buffer.concat(stdout).toString(encoding);
