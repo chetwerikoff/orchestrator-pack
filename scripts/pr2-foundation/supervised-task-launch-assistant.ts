@@ -990,8 +990,17 @@ export async function runSupervisedTaskLaunchAssistant(
       liveness = deps.adapter.liveness({ worker: terminal.identity, observationWindowMs: LAUNCH_STARTUP_OBSERVATION_WINDOW_MS });
       if (!sameIdentity(liveness.worker, terminal.identity)) terminalCause = 'terminal_generation_mismatch';
       else if (liveness.status !== 'idle') terminalCause = `terminal_liveness_${liveness.status}`;
-      else if (profile.family === 'claude' && !(await claudePaneProfileObserved(profile, terminal, deps.adapter))) {
-        terminalCause = 'executor_effort_channel_unavailable';
+      else if (profile.family === 'claude') {
+        // Idle liveness can precede Claude's footer. Read only the same
+        // bound pane, within the launch's existing startup window.
+        let profileObserved = false;
+        while (deps.now() - terminalStartedAt < LAUNCH_STARTUP_OBSERVATION_WINDOW_MS) {
+          if (await claudePaneProfileObserved(profile, terminal, deps.adapter)) {
+            profileObserved = deps.now() - terminalStartedAt <= LAUNCH_STARTUP_OBSERVATION_WINDOW_MS;
+            break;
+          }
+        }
+        if (!profileObserved) terminalCause = 'executor_effort_channel_unavailable';
       }
     }
     const terminalFinishedAt = deps.now();

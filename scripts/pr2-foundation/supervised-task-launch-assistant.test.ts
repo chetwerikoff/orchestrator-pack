@@ -4966,9 +4966,12 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       readonly state?: 'running' | 'exited';
       readonly generation?: string;
       readonly onSpawn?: () => void;
-      readonly onRead?: () => void;
+      readonly footerAfterRead?: number;
+      readonly hideFooter?: boolean;
+      readonly onRead?: (identity: RuntimeWorker['identity']) => void;
     } = {},
   ): RuntimeAdapter {
+    let readCount = 0;
     return {
       ...runtimeAdapter({ onSpawn: options.onSpawn }),
       observeComposerFamily: () => ({
@@ -4976,7 +4979,8 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
         command: options.commandOverride ?? command,
       }),
       readBoundedOutputAsync: async ({ worker: identity, screen }) => {
-        options.onRead?.();
+        readCount += 1;
+        options.onRead?.(identity);
         expect(screen).toBe(true);
         return { status: 'ok', value: {
           worker: options.generation ? { ...identity, generation: options.generation } : identity,
@@ -4984,7 +4988,8 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
             '✻ Welcome to Claude Code!',
             '❯',
             '──────────────────────────────────',
-            'Claude ' + (options.modelOverride ?? family) + ' 5.5 · effort: ' + (options.effortOverride ?? effort),
+            ...(options.hideFooter || readCount < (options.footerAfterRead ?? 1)
+              ? [] : ['Claude ' + (options.modelOverride ?? family) + ' 5.5 · effort: ' + (options.effortOverride ?? effort)]),
           ],
           source: options.source ?? 'screen',
           terminalState: options.state ?? 'running',
@@ -5179,6 +5184,93 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     expect(supervised).toBe(1);
   });
 
+
+  it('admits a late correct footer within the existing startup window on the same bound pane', async () => {
+    const env = claudeEnv('claude-sonnet-5-5', 'high');
+    const command = "claude --model 'claude-sonnet-5-5' --effort 'high'";
+    const observedIdentities: RuntimeWorker['identity'][] = [];
+    let elapsedMs = 0;
+    let starts = 0;
+    const adapter = observedClaudeAdapter(command, 'Sonnet', 'high', {
+      footerAfterRead: 3,
+      onRead: (identity) => {
+        observedIdentities.push(identity);
+        elapsedMs += LAUNCH_STARTUP_OBSERVATION_WINDOW_MS / 5;
+      },
+    });
+    const result = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('manager'), env, issueNumber: 2716,
+    }, {
+      ...deps({ adapter, onSupervised: () => { starts += 1; } }),
+      now: () => elapsedMs,
+    });
+    expect(result).toMatchObject({ outcome: 'ready', resources: { terminal: worker.identity } });
+    expect(observedIdentities).toEqual([worker.identity, worker.identity, worker.identity]);
+    expect(elapsedMs).toBeLessThan(LAUNCH_STARTUP_OBSERVATION_WINDOW_MS);
+    expect(starts).toBe(1);
+  });
+
+  it('refuses without a footer after the full existing startup window', async () => {
+    const env = claudeEnv('claude-sonnet-5-5', 'high');
+    const command = "claude --model 'claude-sonnet-5-5' --effort 'high'";
+    let elapsedMs = 0;
+    let reads = 0;
+    let starts = 0;
+    const adapter = observedClaudeAdapter(command, 'Sonnet', 'high', {
+      hideFooter: true,
+      onRead: () => {
+        reads += 1;
+        elapsedMs += LAUNCH_STARTUP_OBSERVATION_WINDOW_MS / 4;
+      },
+    });
+    const result = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('manager'), env, issueNumber: 2716,
+    }, {
+      ...deps({ adapter, onSupervised: () => { starts += 1; } }),
+      now: () => elapsedMs,
+    });
+    expect(result).toMatchObject({
+      outcome: 'continue', stage: 'terminal_prepare',
+      observedCause: 'executor_effort_channel_unavailable',
+      nextAction: { kind: 'repair_executor_profile' },
+    });
+    expect(reads).toBe(4);
+    expect(elapsedMs).toBe(LAUNCH_STARTUP_OBSERVATION_WINDOW_MS);
+    expect(starts).toBe(0);
+  });
+
+  it.each([
+    ['wrong model', { modelOverride: 'Opus' }],
+    ['wrong effort', { effortOverride: 'medium' }],
+    ['foreign generation', { generation: 'other-pty' }],
+  ] as const)('never admits %s across the full Claude footer observation window', async (_name, overrides) => {
+    const env = claudeEnv('claude-sonnet-5-5', 'high');
+    const command = "claude --model 'claude-sonnet-5-5' --effort 'high'";
+    let elapsedMs = 0;
+    let reads = 0;
+    let starts = 0;
+    const adapter = observedClaudeAdapter(command, 'Sonnet', 'high', {
+      ...overrides,
+      onRead: () => {
+        reads += 1;
+        elapsedMs += LAUNCH_STARTUP_OBSERVATION_WINDOW_MS / 4;
+      },
+    });
+    const result = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('manager'), env, issueNumber: 2716,
+    }, {
+      ...deps({ adapter, onSupervised: () => { starts += 1; } }),
+      now: () => elapsedMs,
+    });
+    expect(result).toMatchObject({
+      outcome: 'continue', stage: 'terminal_prepare',
+      observedCause: 'executor_effort_channel_unavailable',
+    });
+    expect(reads).toBe(4);
+    expect(elapsedMs).toBe(LAUNCH_STARTUP_OBSERVATION_WINDOW_MS);
+    expect(starts).toBe(0);
+  });
+
   it('refuses missing or stale native Claude screen/command/model/effort before Dispatch', async () => {
     const env = claudeEnv('claude-opus-5-5', 'medium');
     const result = resolveExecutorProfile('manager', env, 'exact_terminal_worktree');
@@ -5196,12 +5288,18 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       expect(await claudePaneProfileObserved(result.value, worker, adapter)).toBe(false);
     }
     let starts = 0;
+    let elapsedMs = 0;
     const failed = await runSupervisedTaskLaunchAssistant({
       ...launchInput('manager'), env, issueNumber: 2716,
-    }, deps({
-      adapter: observedClaudeAdapter(command, 'Opus', 'high'),
-      onSupervised: () => { starts += 1; },
-    }));
+    }, {
+      ...deps({
+        adapter: observedClaudeAdapter(command, 'Opus', 'high', {
+          onRead: () => { elapsedMs += LAUNCH_STARTUP_OBSERVATION_WINDOW_MS / 4; },
+        }),
+        onSupervised: () => { starts += 1; },
+      }),
+      now: () => elapsedMs,
+    });
     expect(failed).toMatchObject({
       outcome: 'continue', stage: 'terminal_prepare',
       observedCause: 'executor_effort_channel_unavailable',
