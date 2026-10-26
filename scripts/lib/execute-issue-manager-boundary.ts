@@ -858,6 +858,10 @@ function reviewRunnerExternalCause(reason: string): ManagerExternalPauseCause | 
 
 const PACK_REVIEW_PRODUCER_SCRIPTS = ['scripts/pack-gpt-review.ts', 'scripts/pack-review-runner.ts'];
 
+const NODE_VALUE_FREE_FLAGS: ReadonlySet<string> = new Set([
+  '--experimental-strip-types', '--experimental-transform-types', '--no-warnings', '--enable-source-maps',
+]);
+
 function commandName(part: string | undefined): string {
   return (part ?? '').split('/').pop() ?? '';
 }
@@ -872,7 +876,9 @@ function trustedPackReviewContext(context: ExecuteIssueManagerBoundaryContext): 
   let index = 1;
   let packReviewCommand = false;
   if (commandName(argv[0]) === 'node') {
-    while (argv[index]?.startsWith('--')) index += 1;
+    // Only value-free flags may precede the entrypoint; an option operand such
+    // as --import/--require would otherwise be mistaken for the executed script.
+    while (NODE_VALUE_FREE_FLAGS.has(argv[index] ?? '')) index += 1;
     const entrypoint = argv[index] ?? '';
     packReviewCommand = PACK_REVIEW_PRODUCER_SCRIPTS
       .some((script) => entrypoint === script || entrypoint.endsWith('/' + script));
@@ -984,6 +990,11 @@ export function classifyExecuteIssueManagerRecord(
   if (value.schema === 'turn-result/v1') return classifyTurn(value, context);
   if (value.schema === 'browser-gpt-page-probe/v1') return classifyProbe(value, context);
   if (isWorkerSmokeRecord(value)) return classifyWorkerSmoke(value, context);
+  // Genuine pack-review output carries no producer/marker identity; any explicit
+  // one names a foreign producer even under trusted review argv.
+  if (value.producer !== undefined || value.marker !== undefined) {
+    return defect(context, 'execute-issue-manager-boundary', 'review-shaped record names a foreign producer or marker');
+  }
   if (!trustedPackReviewContext(context)) {
     return defect(context, 'execute-issue-manager-boundary', 'review-shaped record lacks trusted pack-review phase and production argv');
   }

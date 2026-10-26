@@ -833,6 +833,9 @@ describe('execute-Issue manager boundary', () => {
         { ...reviewContext, productionArgv: ['node', 'scripts/flow-manager-long-running-child.ts', '--child', 'scripts/pack-gpt-review.ts', '--pr-number', '2083'] },
         { ...reviewContext, productionArgv: ['npm', 'run', 'foreign-review', '--', 'pack-gpt-review', '--pr-number', '2083'] },
         { ...reviewContext, productionArgv: ['bash', '-c', 'npm run pack-gpt-review -- --pr-number 2083'] },
+        { ...reviewContext, productionArgv: ['node', '--experimental-strip-types', '--import', 'scripts/pack-gpt-review.ts', 'scripts/foreign-wrapper.ts', '--pr-number', '2083'] },
+        { ...reviewContext, productionArgv: ['node', '--require', 'scripts/pack-gpt-review.ts', 'scripts/foreign-wrapper.ts', '--pr-number', '2083'] },
+        { ...reviewContext, productionArgv: ['node', '-r', 'scripts/pack-gpt-review.ts', 'scripts/foreign-wrapper.ts', '--pr-number', '2083'] },
       ]) {
         for (const schema of [{}, { schema: PACK_GPT_REVIEW_RESULT_SCHEMA }]) {
           expect(classifyExecuteIssueManagerRecord({ ...settled, ...schema }, untrusted)).toMatchObject(contractDefect);
@@ -851,6 +854,10 @@ describe('execute-Issue manager boundary', () => {
         { ...turn('ok'), marker: 'pack-worker-smoke-report/v1', producer: 'orchestrator-pack/worker-smoke-run/v1' },
         { ...turn('ok'), producer: 'orchestrator-pack/worker-smoke-run/v1' },
         { ...probe('not_found'), marker: 'pack-worker-smoke-report/v1' },
+        { ...settled, producer: 'flow-manager-long-running-child-terminal/v1' },
+        { ...settled, schema: PACK_GPT_REVIEW_RESULT_SCHEMA, producer: 'flow-manager-long-running-child-terminal/v1' },
+        { ...settled, marker: 'foreign-marker/v1' },
+        { ...settled, schema: PACK_GPT_REVIEW_RESULT_SCHEMA, marker: 'foreign-marker/v1' },
       ]) {
         for (const trusted of [context, reviewContext]) {
           expect(classifyExecuteIssueManagerRecord(record, trusted)).toMatchObject(contractDefect);

@@ -257,6 +257,36 @@ describe('sanctioned subprocess kernel', () => {
     }
   });
 
+  it('reports unverified cleanup alongside an earlier consumer error', async () => {
+    if (process.platform === 'win32') return;
+    let parentPid = 0;
+    const originalKill = process.kill.bind(process);
+    const spy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
+      if (parentPid && pid === -parentPid && signal === 0) {
+        throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+      }
+      return originalKill(pid, signal);
+    }) as typeof process.kill);
+    try {
+      const result = await runProcess({
+        command: process.execPath,
+        args: nodeArgs('setInterval(() => {}, 1000)'),
+        killGraceMs: 50,
+        onSpawn(pid) {
+          parentPid = pid;
+          cleanupPids.add(pid);
+          throw new Error('spawn consumer failed');
+        },
+      });
+      expect(result).toMatchObject({ outcome: 'consumer-error', ok: false, timedOut: false });
+      expect(result.error).toBe(
+        'onSpawn failed: spawn consumer failed; process-tree cleanup unverified: process group running',
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('leaves an unrelated sibling process alive during tree termination', async () => {
     const sibling = spawn(process.execPath, nodeArgs('setInterval(() => {}, 1000)'), {
       detached: true,

@@ -253,20 +253,22 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
   let consumerChain = Promise.resolve();
   let processTerminalObserved = false;
 
+  // Cleanup uncertainty is reported alongside, never instead of, an earlier error.
+  const appendCleanupError = (detail: string): void => {
+    const currentIntent = intent;
+    if (!currentIntent) return;
+    intent = {
+      outcome: currentIntent.outcome,
+      error: currentIntent.error ? `${currentIntent.error}; ${detail}` : detail,
+    };
+  };
+
   const requestTermination = (nextIntent: TerminalIntent): void => {
     if (intent) return;
     if (processTerminalObserved && nextIntent.outcome !== 'consumer-error') return;
     intent = nextIntent;
     cleanupPromise = terminateProcessTree(pid, options.killGraceMs ?? DEFAULT_KILL_GRACE_MS).catch(
-      (error: unknown) => {
-        const currentIntent = intent;
-        if (currentIntent && !currentIntent.error) {
-          intent = {
-            outcome: currentIntent.outcome,
-            error: `process-tree cleanup failed: ${describeError(error)}`,
-          };
-        }
-      },
+      (error: unknown) => appendCleanupError(`process-tree cleanup failed: ${describeError(error)}`),
     );
   };
 
@@ -338,12 +340,8 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
     await Promise.race([cleanupPromise, delay(FINAL_CLOSE_GRACE_MS)]);
     if (process.platform !== 'win32') {
       const group = await confirmPosixGroupStopped(pid, deadline);
-      const currentIntent = intent;
-      if (group !== 'stopped' && currentIntent && !currentIntent.error) {
-        intent = {
-          outcome: currentIntent.outcome,
-          error: `process-tree cleanup unverified: process group ${group}`,
-        };
+      if (group !== 'stopped' && !intent?.error?.includes('process-tree cleanup')) {
+        appendCleanupError(`process-tree cleanup unverified: process group ${group}`);
       }
     }
   }

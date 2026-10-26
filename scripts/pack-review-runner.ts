@@ -10816,7 +10816,8 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
           await claimLease.release('run_started', listPackReviewRuns({ projectId, storeRoot }),
             '', currentInvocationTerminalRunId);
         } else {
-          await claimLease.release('failure', listPackReviewRuns({ projectId, storeRoot }), describeError(error));
+          // Report the actual secondary completion beside the primary failure.
+          await releaseEarlyClaim(describeError(error));
         }
       } catch {
         // Primary runner failure is more actionable; the stale claim path remains recoverable.
