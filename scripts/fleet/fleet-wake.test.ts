@@ -3515,6 +3515,22 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     expect(sends((await run()).calls)).toHaveLength(0);
   });
 
+  it('F3 triplet is suppressed only when every member path was already woken (#2731)', async () => {
+    const parked = 'PARKED on GPT turns inv-a, inv-b, inv-c';
+    const envelopes = [event('inv-a'), event('inv-b'), event('inv-c')];
+    const marked = (paths: readonly string[]) => {
+      const store = new MemoryWakeStore();
+      for (const path of paths) store.markParkedWakeEvent(`terminal-path:${manager.handle}:${path}`);
+      return store;
+    };
+    const all = await scenario(parked, { listTerminalEnvelopes: () => envelopes },
+      marked(envelopes.map((row) => row.path)));
+    expect(texts(all.calls, manager.handle)).toHaveLength(0);
+    const partly = await scenario(parked, { listTerminalEnvelopes: () => envelopes },
+      marked([envelopes[0]!.path]));
+    expect(texts(partly.calls, manager.handle)).toHaveLength(1);
+  });
+
   it('F3 unassociated foreign/filename-only are pending; associated incomplete or conflicting events alarm once', async () => {
     const parked = 'PARKED on GPT turns inv-a, inv-b, inv-c';
     const unrelated = await scenario(parked, { listTerminalEnvelopes: () => [
@@ -4437,11 +4453,23 @@ describe('Issue #2731 B4: CI assignment precedence, per-effect recheck and unrea
     expect(observed.result).toMatchObject({ state: 'unreadable', handle: 'peer' });
   });
 
+  it('vetoes a readable owner when an unreadable pane on another branch is on, or cannot prove it is off, the PR head', async () => {
+    const bad: FleetTerminal = { ...terminals[2]!, branch: 'refs/heads/elsewhere' };
+    const run = (readWorktreeHead: (worktreePath: string) => string | undefined) => invoke({
+      terminals: [terminals[0]!, mgr, bad], screens: { coord: 'idle', mgr: 'done' }, readWorktreeHead,
+    });
+    expect(text((await run((wt) => wt === bad.worktreePath ? head : undefined)).calls)).toHaveLength(0);
+    expect(text((await run(() => undefined)).calls)).toHaveLength(0);
+    const unowned = await run(() => undefined);
+    expect(unowned.logs.some((line) => line.startsWith(`no owner pane for PR #${pull.number}`))).toBe(true);
+  });
+
   it('isolates one unreadable pane: an independent recipient still gets its CI Wake', async () => {
     const bad: FleetTerminal = { ...terminals[2]!, branch: 'refs/heads/elsewhere' };
     const observed = await invoke({
       terminals: [terminals[0]!, mgr, bad],
       screens: { coord: 'idle', mgr: 'done' },
+      readWorktreeHead: (worktreePath) => worktreePath === bad.worktreePath ? 'd'.repeat(40) : undefined,
     });
     expect(text(observed.calls)).toHaveLength(1);
     expect(observed.result).toMatchObject({ state: 'unreadable', handle: 'two' });

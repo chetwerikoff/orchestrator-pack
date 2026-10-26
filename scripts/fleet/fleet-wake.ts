@@ -775,18 +775,23 @@ export function readWorktreeHead(worktreePath: string): string | undefined {
 }
 
 // A branch pushed under another name still owns the PR when its worktree sits on the PR head.
-// Selected native panes whose screen could not be read still count: an unknown matching
-// candidate vetoes the step it could match, and cannot be bypassed through the HEAD step.
+// Selected native panes whose screen could not be read still count: one that is on the PR ref,
+// sits on the PR head, or whose HEAD cannot be read is an unknown candidate and vetoes both steps.
 function pullOwner(
   pull: OpenPullHead,
   panes: readonly FleetPaneObservation[],
   headOf: (worktreePath: string) => string | undefined,
   unreadable: readonly FleetTerminal[] = [],
 ): FleetPaneObservation | undefined {
-  if (unreadable.some((pane) => pane.branch === `refs/heads/${pull.ref}`)) return undefined;
+  const unknownCandidate = unreadable.some((pane) => {
+    if (pane.branch === `refs/heads/${pull.ref}`) return true;
+    if (!pane.worktreePath) return false;
+    const head = headOf(pane.worktreePath);
+    return head === undefined || head === pull.sha;
+  });
+  if (unknownCandidate) return undefined;
   const onBranch = onlyPane(panes.filter((pane) => pane.branch === `refs/heads/${pull.ref}`));
   if (onBranch) return onBranch;
-  if (unreadable.some((pane) => pane.worktreePath && headOf(pane.worktreePath) === pull.sha)) return undefined;
   return onlyPane(panes.filter((pane) => pane.worktreePath && headOf(pane.worktreePath) === pull.sha));
 }
 
@@ -1832,12 +1837,15 @@ async function wakeNamedParkedProducers(
     if (match) {
       const eventKey = 'event:' + pane.handle + ':' + match.eventId
         + ((producer.kind === 'time' || producer.kind === 'process') ? ':episode:' + (epoch?.started ?? epoch?.since ?? now) : '');
-      if (!store.hasParkedWakeEvent(eventKey)) {
+      // A terminal-envelope event also owns the shared (handle, path) mark; a gpt-multi
+      // group reserves every member path so no member is later woken again as a single.
+      // A group whose every member path was already woken elsewhere has nothing new to say.
+      const sharedMarks = (match.paths ?? []).map((path) => sharedTerminalMark(pane.handle, path));
+      const covered = producer.kind === 'gpt-multi' && sharedMarks.length > 0
+        && sharedMarks.every((mark) => store.hasParkedWakeEvent(mark));
+      if (!store.hasParkedWakeEvent(eventKey) && !covered) {
         const message = safeUnitWakeText(match.label, match.terminalState, match.evidence)
           ?? 'Wake: matching producer event landed - re-check it yourself before continuing';
-        // A terminal-envelope event also owns the shared (handle, path) mark; a gpt-multi
-        // group reserves every member path so no member is later woken again as a single.
-        const sharedMarks = (match.paths ?? []).map((path) => sharedTerminalMark(pane.handle, path));
         const shared: SharedWakeMarks | undefined = sharedMarks.length > 0
           ? { reserve: sharedMarks, ...(producer.kind === 'gpt' ? { suppressIfMarked: sharedMarks } : {}) }
           : undefined;
