@@ -20,6 +20,8 @@ import {
 import {
   buildExecutorCommand,
   buildProviderInvocation,
+  CLAUDE_TASK_ROUTE_CAPABILITIES,
+  claudeHelpEdgeCapabilities,
   CURSOR_TASK_ROUTE_CAPABILITIES,
   evaluateExecutorRouteAdmission,
   EXECUTOR_FAMILY_DESCRIPTORS,
@@ -134,6 +136,9 @@ export interface ExecutorProfile {
   readonly family: ExecutorFamily;
   readonly route: ExecutorRoute;
   readonly launchCommand: string;
+  /** Closed native Claude selection; verified again from the bound pane's footer. */
+  readonly model?: string;
+  readonly effort?: string;
   readonly agentName?: string;
   readonly inlineConfigJson?: string;
   readonly providerArgs?: readonly string[];
@@ -460,15 +465,21 @@ function profileResolutionEdge(
   const resolved = resolveSemanticExecutorProfile({ surface: 'task', names, env });
   if (resolved.ok) return { status: 'ok', value: resolved.profile };
   const variableKey = resolved.code === 'executor_profile_missing' ? 'missingVariables'
-    : resolved.code === 'executor_profile_malformed' ? 'malformedVariables' : 'agentVariable';
-  const evidence = resolved.code === 'executor_profile_agent_unsupported'
-    ? { [variableKey]: resolved.variables[0] }
-    : { [variableKey]: resolved.variables };
+    : resolved.code === 'executor_profile_malformed' ? 'malformedVariables'
+      : resolved.code === 'executor_route_unavailable' ? 'modelVariable'
+        : resolved.code === 'executor_effort_channel_unavailable' ? 'effortVariable' : 'agentVariable';
+  const evidence = resolved.code === 'executor_profile_missing' || resolved.code === 'executor_profile_malformed'
+    ? { [variableKey]: resolved.variables }
+    : { [variableKey]: resolved.variables[0] };
   const note = resolved.code === 'executor_profile_missing'
     ? `export the required stable profile variables: ${resolved.variables.join(',')}`
     : resolved.code === 'executor_profile_malformed'
       ? `repair malformed stable profile variables: ${resolved.variables.join(',')}`
-      : `select a supported executor family through ${resolved.variables[0]}`;
+      : resolved.code === 'executor_route_unavailable'
+        ? `select one of the closed Claude Code model IDs through ${resolved.variables[0]}`
+        : resolved.code === 'executor_effort_channel_unavailable'
+          ? `select a supported Claude Code effort level through ${resolved.variables[0]}`
+          : `select a supported executor family through ${resolved.variables[0]}`;
   return {
     status: 'continue', cause: resolved.code, actor: 'operator', evidence,
     nextAction: { kind: 'repair_executor_profile', note },
@@ -492,6 +503,7 @@ function admittedProfile(
       family: semantic.family,
       route,
       launchCommand: invocation.command,
+      ...(semantic.family === 'claude' ? { model: semantic.model, effort: semantic.effort } : {}),
       ...(invocation.agentName ? { agentName: invocation.agentName } : {}),
       ...(invocation.inlineConfigJson ? { inlineConfigJson: invocation.inlineConfigJson } : {}),
       ...(provider ? { providerArgs: provider.argv } : {}),
@@ -514,7 +526,8 @@ export function resolveExecutorProfile(
   };
   const capabilities = semanticEdge.value.family === 'cursor'
     ? CURSOR_TASK_ROUTE_CAPABILITIES
-    : openCodeEdgeCapabilities([]);
+    : semanticEdge.value.family === 'claude'
+      ? CLAUDE_TASK_ROUTE_CAPABILITIES : openCodeEdgeCapabilities([]);
   const verdict = evaluateExecutorRouteAdmission({
     profile: semanticEdge.value,
     ...(startMode ? { startMode } : {}),
@@ -658,6 +671,36 @@ async function checkpoint<T>(
 
 function retryProviderArgs(profile: ExecutorProfile): string[] {
   return (profile.providerArgs ?? []).map((arg) => arg.startsWith('--') ? arg : quote(arg));
+}
+
+/**
+ * Claude readiness is observed on the exact native pane, not inferred from
+ * argv, a terminal title, or generic idle liveness. The native terminal-show
+ * command proves the selected launch command and a screen snapshot must show
+ * Claude Code with both selected model and effort in the footer.
+ */
+export function claudePaneProfileObserved(
+  profile: ExecutorProfile,
+  worker: RuntimeWorker,
+  adapter: RuntimeAdapter,
+): boolean {
+  if (profile.family !== 'claude' || !profile.model || !profile.effort) return false;
+  const observed = adapter.observeComposerFamily?.(worker.identity);
+  if (!observed || observed.status !== 'known' || observed.family !== 'non-opencode'
+    || observed.command !== profile.launchCommand) return false;
+  const screen = adapter.readBoundedOutput({ worker: worker.identity, screen: true, limit: 120 });
+  if (screen.status !== 'ok' || screen.value.source !== 'screen'
+    || screen.value.terminalState !== 'running'
+    || !sameIdentity(screen.value.worker, worker.identity)) return false;
+  const lines = screen.value.lines.map((line) => line.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/gu, ''));
+  if (!lines.some((line) => /\bClaude Code\b/iu.test(line))) return false;
+  const footer = lines.slice(-20).join('\n');
+  const family = profile.model === 'claude-opus-5-5' ? 'Opus'
+    : profile.model === 'claude-sonnet-5-5' ? 'Sonnet' : '';
+  if (!family) return false;
+  const modelLine = new RegExp(`\\b${family}(?:[- .]?5[- .]?5)\\b`, 'iu');
+  const effortLine = new RegExp(`\\beffort\\s*[:=]\\s*${profile.effort}\\b|\\b${profile.effort}\\s+effort\\b`, 'iu');
+  return modelLine.test(footer) && effortLine.test(footer);
 }
 
 export async function runSupervisedTaskLaunchAssistant(
@@ -944,20 +987,30 @@ export async function runSupervisedTaskLaunchAssistant(
       liveness = deps.adapter.liveness({ worker: terminal.identity, observationWindowMs: LAUNCH_STARTUP_OBSERVATION_WINDOW_MS });
       if (!sameIdentity(liveness.worker, terminal.identity)) terminalCause = 'terminal_generation_mismatch';
       else if (liveness.status !== 'idle') terminalCause = `terminal_liveness_${liveness.status}`;
+      else if (profile.family === 'claude' && !claudePaneProfileObserved(profile, terminal, deps.adapter)) {
+        terminalCause = 'executor_effort_channel_unavailable';
+      }
     }
     const terminalFinishedAt = deps.now();
     timings.push({ stage: 'terminal_prepare', startedAtMs: terminalStartedAt, finishedAtMs: terminalFinishedAt,
       elapsedMs: Math.max(0, terminalFinishedAt - terminalStartedAt), outcome: terminalCause ? 'continued' : 'passed' });
     if (terminalCause || !terminal) return continued(input, 'terminal_prepare', {
-      cause: terminalCause || 'terminal_unavailable', actor: 'orchestrator', evidence: {
+      cause: terminalCause || 'terminal_unavailable',
+      actor: terminalCause === 'executor_effort_channel_unavailable' ? 'operator' : 'orchestrator',
+      evidence: {
         liveness: liveness?.status ?? 'not_observed',
+        ...(profile.family === 'claude' ? { executorFamily: 'claude', route: profile.route } : {}),
         ...(spawn.status !== 'ok' ? {
           spawnReason: spawn.reason,
           spawnError: spawnNativeError?.message || spawnNativeError?.code || spawn.reason,
           ...(spawnNativeError?.code ? { spawnErrorCode: spawnNativeError.code } : {}),
         } : {}),
       },
-      nextAction: { kind: 'remediate_terminal', note: 'reuse only the exact owned terminal identity after a bounded startup refusal; never reuse a foreign, replaced, or mismatched target' },
+      nextAction: terminalCause === 'executor_effort_channel_unavailable'
+        ? { kind: 'repair_executor_profile',
+          note: 'read the exact Claude Code pane footer and native command; restore the selected model/effort on this Task-owned terminal before supervised start, or select another admitted profile' }
+        : { kind: 'remediate_terminal',
+          note: 'reuse only the exact owned terminal identity after a bounded startup refusal; never reuse a foreign, replaced, or mismatched target' },
     }, resources, startedAtMs, timings, deps.now);
   }
 
@@ -1328,19 +1381,26 @@ export async function resolveLiveExecutorProfile(
   if (!supportedStartMode(startMode)) return routeRefusalEdge(profile, 'executor_route_mismatch');
 
   const descriptor = EXECUTOR_FAMILY_DESCRIPTORS[profile.family];
-  const listed = await execute(descriptor.catalogCommand);
-  if (!listed.ok) return {
-    status: 'continue', cause: 'executor_profile_applicability_unproven', actor: 'operator',
-    evidence: { executorFamily: profile.family, profileVariables: profile.names },
-    nextAction: { kind: 'repair_executor_profile', note: 'make the selected executor model catalog observable and select an available model' },
-  };
-  if (!executorCatalogContains(profile, listed.stdout)) return {
-    status: 'continue', cause: 'executor_profile_model_unavailable', actor: 'operator',
-    evidence: { executorFamily: profile.family, profileVariables: profile.names },
-    nextAction: { kind: 'repair_executor_profile', note: 'select a model present in the selected executor model catalog' },
-  };
-
   let capabilities = CURSOR_TASK_ROUTE_CAPABILITIES;
+  if (profile.family === 'claude') {
+    // There is no Claude model catalog. The model IDs and effort levels are
+    // closed by the policy, and the installed CLI must expose both channels.
+    const nativeHelp = await execute(descriptor.capabilityProbeCommands[0]!);
+    if (!nativeHelp.ok) return routeRefusalEdge(profile, 'executor_route_unavailable');
+    capabilities = claudeHelpEdgeCapabilities(`${nativeHelp.stdout}\n${nativeHelp.stderr ?? ''}`);
+  } else {
+    const listed = await execute(descriptor.catalogCommand);
+    if (!listed.ok) return {
+      status: 'continue', cause: 'executor_profile_applicability_unproven', actor: 'operator',
+      evidence: { executorFamily: profile.family, profileVariables: profile.names },
+      nextAction: { kind: 'repair_executor_profile', note: 'make the selected executor model catalog observable and select an available model' },
+    };
+    if (!executorCatalogContains(profile, listed.stdout)) return {
+      status: 'continue', cause: 'executor_profile_model_unavailable', actor: 'operator',
+      evidence: { executorFamily: profile.family, profileVariables: profile.names },
+      nextAction: { kind: 'repair_executor_profile', note: 'select a model present in the selected executor model catalog' },
+    };
+  }
   if (profile.family === 'opencode') {
     const probeOutputs: string[] = [];
     const inlineConfig = JSON.stringify({ agent: { [OPENCODE_PACK_AGENT]: { model: profile.model, variant: profile.effort } } });
