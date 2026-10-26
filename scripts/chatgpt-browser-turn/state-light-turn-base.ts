@@ -7255,7 +7255,8 @@ async function runTurnCore(
                 pollCount,
                 navigation,
                 incidents,
-                { conversation_id: observedConversationUrl },
+                // A markerless page never proves the contended URL is ours (#2721).
+                unrenderedOwnFreshPage ? {} : { conversation_id: observedConversationUrl },
                 journalWriteFailed,
               ),
             };

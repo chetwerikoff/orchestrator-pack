@@ -4023,6 +4023,28 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(existsSync(output)).toBe(false);
   });
 
+  it('never exposes a contended conversation as the locator of a markerless fresh reply (#2721)', async () => {
+    const prompt = 'PROMPT-FRESH-UNRENDERED-CONTENDED';
+    const reply = 'FRESH-UNRENDERED-CONTENDED';
+    const output = join(stateDir, 'fresh-unrendered-contended.txt');
+    expect(tryClaimStateLightFreshConversation('collision-profile', SHARED_CONV, 'other-invocation')).toBe('claimed');
+    const { page } = unrenderedOwnedMessagePage(prompt, reply, false, false, false, [reply], [], { neverMarkerProof: true });
+    const invocationId = randomUUID();
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, output, '90000', invocationId);
+
+    expect(outcome.result.cause).toBe('state_light_observed_conversation_claim_contended');
+    expect(outcome.code).not.toBe(0);
+    expect(outcome.result.state).not.toBe('ok');
+    expect(outcome.result).not.toHaveProperty('conversation_id');
+    expect(readStateLightTurnObservation('collision-profile', invocationId)).toMatchObject({
+      phase: 'sent_unbound', conversation_url: null, send_count: 1,
+    });
+    expect(existsSync(output)).toBe(false);
+    releaseStateLightFreshConversationClaim('collision-profile', SHARED_CONV, 'other-invocation');
+  });
+
 
   it.each([
     { mode: 'marker-visible', options: { includeOwnedUser: true } },
