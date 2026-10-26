@@ -8705,6 +8705,8 @@ async function retireDetachedOriginalTarget(input: {
   readonly invocationId: string;
   readonly cdp: string;
   readonly deadlineMs: number;
+  /** Re-run the unchanged guard on a settle refusal until deadlineMs. */
+  readonly settleUntilDeadline?: true;
 }): Promise<{ readonly status: 'confirmed' | 'cleanup_unconfirmed'; readonly targetId?: string; readonly cause?: string }> {
   let record: ReturnType<typeof readStateLightTurnObservation>;
   try {
@@ -8739,10 +8741,18 @@ async function retireDetachedOriginalTarget(input: {
     const result = compactResult('observation_uncertain', 'invocation',
       'original_target_retirement_only', input.invocationId, input.profileKey,
       record.send_count ?? 0, 0, new StateLightNavigationCounter(), []);
-    const cleanup = await guardedOriginalTargetRetirement({
+    const retire = () => guardedOriginalTargetRetirement({
       outcome: { page, browser: attachedBrowser, result },
       cdp: input.cdp, verifiedPredecessor: true,
     });
+    let cleanup = await retire();
+    // A page SIGTERMed before its composer rendered refuses composer_unknown;
+    // every pass is the full guard, so a later pass only closes a proven page.
+    while (input.settleUntilDeadline && cleanup.settling
+      && Date.now() + SIGNAL_RETIREMENT_SETTLE_POLL_MS < input.deadlineMs) {
+      await new Promise((settle) => setTimeout(settle, SIGNAL_RETIREMENT_SETTLE_POLL_MS));
+      cleanup = await retire();
+    }
     return { status: cleanup.status === 'confirmed' ? 'confirmed' : 'cleanup_unconfirmed', targetId, cause: cleanup.cause };
   } catch (error) {
     // Diagnostic only: a bounded token of the reattach/close failure.
@@ -8767,6 +8777,7 @@ const RETIREMENT_SETTLE_CAUSES: ReadonlySet<string> = new Set([
 ]);
 const RETIREMENT_SETTLE_RETRIES = 12;
 const RETIREMENT_SETTLE_DELAY_MS = 5_000;
+const SIGNAL_RETIREMENT_SETTLE_POLL_MS = 250;
 
 /** Diagnostic only: name up to three in-progress nodes; never a close input. */
 async function describeInProgressNodes(page: any, waitMs: number): Promise<string> {
@@ -10150,7 +10161,7 @@ async function finalizeOnSigterm(args: ParsedTurnArgs, finalizer: StateLightSign
   }
   const retirement = safe
     ? await withinBound(retireDetachedOriginalTarget({
-        profileKey, invocationId, cdp, deadlineMs,
+        profileKey, invocationId, cdp, deadlineMs, settleUntilDeadline: true,
       }), deadlineMs)
     : undefined;
   const confirmed = retirement?.status === 'confirmed';

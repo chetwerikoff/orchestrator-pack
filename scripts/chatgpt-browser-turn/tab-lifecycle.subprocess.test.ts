@@ -228,11 +228,30 @@ const sigtermFixture = [
 
 const PROJECT_URL = 'https://chatgpt.com/g/g-p-0123456789abcdef0123456789abcdef-fixture/project';
 // A blank project surface with one empty ProseMirror composer.
-const BLANK_PROJECT_HTML = '<!doctype html><title>project</title><main>'
-  + '<div id="prompt-textarea" contenteditable="true" role="textbox" class="ProseMirror">'
-  + '<p><br class="ProseMirror-trailingBreak"></p></div></main>';
+const COMPOSER_HTML = '<div id="prompt-textarea" contenteditable="true" role="textbox" class="ProseMirror">'
+  + '<p><br class="ProseMirror-trailingBreak"></p></div>';
+const BLANK_PROJECT_HTML = '<!doctype html><title>project</title><main>' + COMPOSER_HTML + '</main>';
+// The same surface before ChatGPT has rendered its composer.
+const LOADING_PROJECT_HTML = '<!doctype html><title>project</title><main></main>';
 
-async function sigtermAtPhase(phase: string, target: { cdp: string; targetId?: string; realHome?: true }) {
+// An independent page-level CDP client renders the composer late.
+async function renderComposerLater(endpoint: string, targetId: string, delayMs: number): Promise<void> {
+  await new Promise((done) => setTimeout(done, delayMs));
+  const listed = await (await fetch(endpoint + '/json/list')).json() as Array<{ id: string; webSocketDebuggerUrl: string }>;
+  const socket = new WebSocket(listed.find((entry) => entry.id === targetId)!.webSocketDebuggerUrl);
+  await new Promise((done, fail) => { socket.onopen = done; socket.onerror = fail; });
+  await new Promise((done) => {
+    socket.onmessage = done;
+    socket.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: {
+      expression: 'document.querySelector("main").innerHTML = ' + JSON.stringify(COMPOSER_HTML),
+    } }));
+  });
+  socket.close();
+}
+
+async function sigtermAtPhase(phase: string, target: {
+  cdp: string; targetId?: string; realHome?: true; afterSigterm?: () => Promise<void>;
+}) {
   const root = mkdtempSync(join(tmpdir(), 'opk-2718-sigterm-'));
   const stateDir = join(root, 'state');
   let pid: number | undefined;
@@ -259,9 +278,11 @@ async function sigtermAtPhase(phase: string, target: { cdp: string; targetId?: s
       await new Promise((done) => setTimeout(done, 10));
     }
     process.kill(pid!, 'SIGTERM');
+    const sideEffect = target.afterSigterm?.();
     await new Promise((done) => setTimeout(done, 20));
     try { process.kill(pid!, 'SIGTERM'); } catch { /* already exited */ }
     const result = await child;
+    await sideEffect;
     const previous = process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
     process.env.CHATGPT_BROWSER_TURN_STATE_DIR = stateDir;
     let persistedPhase: string | undefined;
@@ -309,7 +330,10 @@ async function pageIds(endpoint: string): Promise<string[]> {
 
 // A fresh isolated Chrome with one foreign blank page and one owned page on
 // the blank project surface; the owned page's target id is the pinned target.
-async function withDisposableChrome(work: (chrome: { endpoint: string; ownedId: string; foreignIds: string[] }) => Promise<void>) {
+async function withDisposableChrome(
+  work: (chrome: { endpoint: string; ownedId: string; foreignIds: string[] }) => Promise<void>,
+  html = BLANK_PROJECT_HTML,
+) {
   if (!liveChromium || !chromeExecutable) throw new Error('real CDP SIGTERM test requires installed playwright-core and Chrome');
   const profile = mkdtempSync(join(tmpdir(), 'opk-2718-chrome-'));
   const chromeAbort = new AbortController();
@@ -338,7 +362,7 @@ async function withDisposableChrome(work: (chrome: { endpoint: string; ownedId: 
     const context = client.contexts()[0];
     const owned = await context.newPage();
     await owned.route('https://chatgpt.com/**', (route: any) =>
-      route.fulfill({ status: 200, contentType: 'text/html', body: BLANK_PROJECT_HTML }));
+      route.fulfill({ status: 200, contentType: 'text/html', body: html }));
     await owned.goto(PROJECT_URL);
     const session = await context.newCDPSession(owned);
     const ownedId = (await session.send('Target.getTargetInfo')).targetInfo.targetId as string;
@@ -380,6 +404,45 @@ describe('Issue #2718 real state-light SIGTERM finalizer', () => {
         } finally { rmSync(root, { recursive: true, force: true }); }
       });
     }, 90_000);
+
+  it.skipIf(!realCdp)('prepared before the composer renders: a later guarded pass closes the project page', async () => {
+    await withDisposableChrome(async ({ endpoint, ownedId, foreignIds }) => {
+      const { result, persistedPhase, root } = await sigtermAtPhase('prepared', {
+        cdp: endpoint, targetId: ownedId, realHome: true,
+        afterSigterm: () => renderComposerLater(endpoint, ownedId, 1_500),
+      });
+      try {
+        expect(result.outcome, result.stderr).toBe('exit');
+        const record = JSON.parse(result.stdout.trimEnd());
+        expect(record).toMatchObject({
+          cause: 'terminated_by_sigterm', send_count: 0, cleanup: 'confirmed',
+          cleanup_attempted: true, cleanup_cause: 'confirmed',
+        });
+        expect(persistedPhase).toBe('not_sent');
+        expect(await pageIds(endpoint)).toEqual(foreignIds);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    }, LOADING_PROJECT_HTML);
+  }, 90_000);
+
+  it.skipIf(!realCdp)('prepared whose composer never renders: preserves the project page within the bound', async () => {
+    await withDisposableChrome(async ({ endpoint, ownedId, foreignIds }) => {
+      const { result, elapsedMs, root } = await sigtermAtPhase('prepared', {
+        cdp: endpoint, targetId: ownedId, realHome: true,
+      });
+      try {
+        expect(result.outcome, result.stderr).toBe('exit');
+        expect(JSON.parse(result.stdout.trimEnd())).toMatchObject({
+          cause: 'terminated_by_sigterm', cleanup: 'unconfirmed', cleanup_status: 'cleanup_unconfirmed',
+          cleanup_attempted: true,
+        });
+        // The last settle pass is either refused or cut by the cleanup bound.
+        expect(['composer_unknown', 'retirement_bound_elapsed'])
+          .toContain(JSON.parse(result.stdout.trimEnd()).cleanup_cause);
+        expect(await pageIds(endpoint)).toEqual([...foreignIds, ownedId].sort());
+        expect(elapsedMs).toBeLessThan(30_000);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    }, LOADING_PROJECT_HTML);
+  }, 90_000);
 
   it.skipIf(!realCdp)('issued sending: preserves the live owned target with cleanup_unconfirmed', async () => {
     await withDisposableChrome(async ({ endpoint, ownedId, foreignIds }) => {
