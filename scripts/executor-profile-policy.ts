@@ -12,7 +12,18 @@ export const EXECUTOR_PROFILE_REFUSAL = {
 } as const;
 
 export type ExecutorProfileRefusal = (typeof EXECUTOR_PROFILE_REFUSALS)[number];
-export type ExecutorFamily = 'cursor' | 'opencode';
+export type ExecutorFamily = 'cursor' | 'opencode' | 'claude';
+
+export const CLAUDE_MODEL_IDS = ['claude-opus-5-5', 'claude-sonnet-5-5'] as const;
+export const CLAUDE_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+function claudeModelSupported(value: string): boolean {
+  return (CLAUDE_MODEL_IDS as readonly string[]).includes(value);
+}
+
+function claudeEffortSupported(value: string): boolean {
+  return (CLAUDE_EFFORT_LEVELS as readonly string[]).includes(value);
+}
 export type ExecutorProfileSurface = 'task' | 'smoke';
 export type ExecutorRoute = 'provider_new_top_level' | 'exact_terminal_worktree';
 export type TaskProfileClass = 'manager' | 't1' | 't2' | 't3';
@@ -47,7 +58,8 @@ export type SemanticProfileResolution =
   | { readonly ok: true; readonly profile: SemanticExecutorProfile }
   | {
       readonly ok: false;
-      readonly code: 'executor_profile_missing' | 'executor_profile_malformed' | 'executor_profile_agent_unsupported';
+      readonly code: 'executor_profile_missing' | 'executor_profile_malformed' | 'executor_profile_agent_unsupported'
+        | 'executor_route_unavailable' | 'executor_effort_channel_unavailable';
       readonly variables: readonly string[];
     };
 
@@ -133,6 +145,19 @@ export const EXECUTOR_FAMILY_DESCRIPTORS: Readonly<Record<ExecutorFamily, Execut
       ['opencode', 'debug', 'paths'],
     ],
   },
+  claude: {
+    family: 'claude',
+    taskAgentToken: 'claude',
+    smokeAgentToken: 'claude',
+    taskExecutable: 'claude',
+    smokeExecutable: 'claude',
+    orcaAgent: 'claude',
+    // Claude Code has no model catalog command. Its closed IDs are defined above.
+    catalogCommand: [],
+    capabilityProbeCommands: [['claude', '--help']],
+    smokeCapabilityProbeCommands: [['claude', '--help']],
+    contextualProbeCommands: [],
+  },
 };
 
 export const CURSOR_TASK_ROUTE_CAPABILITIES: ExecutorEdgeCapabilities = {
@@ -145,6 +170,26 @@ export const CURSOR_SMOKE_CAPABILITY: RouteCapability = {
   supportsModel: true,
   supportsEffort: true,
 };
+
+// This shape supports pure/fixture admission only. Production verifies --model
+// and --effort on the installed native claude --help before admitting the route.
+export const CLAUDE_TASK_ROUTE_CAPABILITIES: ExecutorEdgeCapabilities = {
+  provider: { available: false, supportsModel: false, supportsEffort: false },
+  exactTerminal: { available: true, supportsModel: true, supportsEffort: true },
+};
+
+export function claudeHelpEdgeCapabilities(help: string): ExecutorEdgeCapabilities {
+  const supportsModel = /(?:^|\s)--model(?:[=\s,]|$)/mu.test(help);
+  const supportsEffort = /(?:^|\s)--effort(?:[=\s,]|$)/mu.test(help);
+  return {
+    provider: { available: false, supportsModel: false, supportsEffort: false },
+    exactTerminal: {
+      available: supportsModel,
+      supportsModel,
+      supportsEffort: supportsModel && supportsEffort,
+    },
+  };
+}
 
 const PROFILE_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/u;
 const MODEL_TOKEN_CLASS = 'A-Za-z0-9._:/+-';
@@ -191,6 +236,14 @@ export function resolveSemanticExecutorProfile(input: {
 
   const descriptor = descriptorForToken(input.surface, values[0]);
   if (!descriptor) return { ok: false, code: 'executor_profile_agent_unsupported', variables: [input.names[0]] };
+  if (descriptor.family === 'claude') {
+    if (!claudeModelSupported(values[1])) {
+      return { ok: false, code: EXECUTOR_PROFILE_REFUSAL.routeUnavailable, variables: [input.names[1]] };
+    }
+    if (!claudeEffortSupported(values[2])) {
+      return { ok: false, code: EXECUTOR_PROFILE_REFUSAL.effortChannelUnavailable, variables: [input.names[2]] };
+    }
+  }
 
   const rawCursorContext = input.env.PACK_EXECUTOR_CURSOR_CONTEXT;
   const cursorContext = descriptor.family === 'cursor' && rawCursorContext !== undefined
@@ -231,6 +284,7 @@ function cursorSpawnModelId(profile: SemanticExecutorProfile): string {
 }
 
 export function executorCatalogContains(profile: SemanticExecutorProfile, output: string): boolean {
+  if (profile.family === 'claude') return false; // Claude never uses a catalog.
   const identity = catalogIdentityForProfile(profile);
   if (!identity || !PROFILE_VALUE_PATTERN.test(identity)) return false;
   const pattern = new RegExp(`(^|[^${MODEL_TOKEN_CLASS}])${regexEscape(identity)}(?=$|[^${MODEL_TOKEN_CLASS}])`, 'mu');
@@ -433,6 +487,17 @@ export function buildExecutorCommand(profile: SemanticExecutorProfile, resumeSes
       executable,
       modelArgument,
       command: `${executable} --model ${quote(modelArgument)}`,
+    };
+  }
+  if (profile.family === 'claude') {
+    if (!claudeModelSupported(profile.model)) throw new Error('executor_route_unavailable');
+    if (!claudeEffortSupported(profile.effort)) throw new Error('executor_effort_channel_unavailable');
+    const executable = profile.surface === 'task' ? descriptor.taskExecutable : descriptor.smokeExecutable;
+    return {
+      executable,
+      modelArgument: profile.model,
+      effortArgument: profile.effort,
+      command: `${executable} --model ${quote(profile.model)} --effort ${quote(profile.effort)}`,
     };
   }
 

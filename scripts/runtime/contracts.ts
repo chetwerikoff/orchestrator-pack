@@ -160,6 +160,7 @@ export type RuntimeComposerFamilyObservation =
       readonly status: 'known';
       readonly family: 'opencode' | 'non-opencode';
       readonly command: string;
+      readonly agentIdentity?: string;
       readonly provenance: 'orca-terminal-show';
     }
   | {

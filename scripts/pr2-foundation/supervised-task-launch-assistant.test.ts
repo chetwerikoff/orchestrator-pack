@@ -19,6 +19,7 @@ import {
 import {
   createManagerTaskWithOrca,
   createProductionLaunchDependencies,
+  claudePaneProfileObserved,
   readManagerBriefTemplateFromDisk,
   parseLaunchAssistantCli,
   prepareWorktreeWithOrca,
@@ -4934,3 +4935,412 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
   });
 });
 
+
+
+describe('Issue #2716 Claude Code canonical executor and supervised readiness', () => {
+  const models = [
+    ['claude-opus-5-5', 'medium', 'Opus'],
+    ['claude-sonnet-5-5', 'high', 'Sonnet'],
+  ] as const;
+  const nativeHelp = 'Claude Code\n  --model <model>  Select model\n  --effort <level>  Select effort\n';
+
+  function claudeEnv(model: string, effort: string, workClass: 'manager' | 't2' = 'manager'): NodeJS.ProcessEnv {
+    const prefix = workClass === 'manager' ? 'MANAGER' : 'T2';
+    return profileEnv({
+      ['PACK_EXECUTOR_' + prefix + '_AGENT']: 'claude',
+      ['PACK_EXECUTOR_' + prefix + '_MODEL']: model,
+      ['PACK_EXECUTOR_' + prefix + '_EFFORT']: effort,
+      PACK_EXECUTOR_CURSOR_CONTEXT: '272k',
+    });
+  }
+
+  function observedClaudeAdapter(
+    command: string,
+    family: string,
+    effort: string,
+    options: {
+      readonly commandOverride?: string;
+      readonly commandObserved?: boolean;
+      readonly agentIdentity?: string | null;
+      readonly modelOverride?: string;
+      readonly effortOverride?: string;
+      readonly source?: 'screen' | 'stream';
+      readonly state?: 'running' | 'exited';
+      readonly generation?: string;
+      readonly onSpawn?: () => void;
+      readonly footerAfterRead?: number;
+      readonly hideFooter?: boolean;
+      readonly onRead?: (identity: RuntimeWorker['identity']) => void;
+    } = {},
+  ): RuntimeAdapter {
+    let readCount = 0;
+    return {
+      ...runtimeAdapter({ onSpawn: options.onSpawn }),
+      observeComposerFamily: () => ({
+        status: 'known', family: 'non-opencode', provenance: 'orca-terminal-show',
+        command: options.commandOverride ?? (options.commandObserved ? command : ''),
+        ...(options.agentIdentity === null ? {} : { agentIdentity: options.agentIdentity ?? 'claude' }),
+      }),
+      readBoundedOutputAsync: async ({ worker: identity, screen }) => {
+        readCount += 1;
+        options.onRead?.(identity);
+        expect(screen).toBe(true);
+        return { status: 'ok', value: {
+          worker: options.generation ? { ...identity, generation: options.generation } : identity,
+          lines: [
+            '✻ Welcome to Claude Code!',
+            '❯',
+            '──────────────────────────────────',
+            ...(options.hideFooter || readCount < (options.footerAfterRead ?? 1)
+              ? [] : ['Claude ' + (options.modelOverride ?? family) + ' 5.5 · effort: ' + (options.effortOverride ?? effort)]),
+          ],
+          source: options.source ?? 'screen',
+          terminalState: options.state ?? 'running',
+          observationToken: { opaque: 'claude-pane-screen' },
+          changed: true,
+        } };
+      },
+    };
+  }
+
+  it.each(models)('closes task and smoke argv for %s %s without a context selector', (model, effort) => {
+    const task = resolveSemanticExecutorProfile({
+      surface: 'task', names: profileNamesForTask('manager'), env: claudeEnv(model, effort),
+    });
+    const smokeNames = profileNamesForSmoke('routine');
+    const smoke = resolveSemanticExecutorProfile({
+      surface: 'smoke', names: smokeNames,
+      env: { [smokeNames[0]]: 'claude', [smokeNames[1]]: model, [smokeNames[2]]: effort,
+        PACK_EXECUTOR_CURSOR_CONTEXT: '272k' },
+    });
+    expect(task.ok).toBe(true);
+    expect(smoke.ok).toBe(true);
+    if (!task.ok || !smoke.ok) throw new Error('supported Claude profile refused');
+    expect(task.profile.cursorContext).toBeUndefined();
+    expect(smoke.profile.cursorContext).toBeUndefined();
+    for (const profile of [task.profile, smoke.profile]) {
+      const invocation = buildExecutorCommand(profile);
+      expect(invocation).toMatchObject({
+        executable: 'claude', modelArgument: model, effortArgument: effort,
+        command: "claude --model '" + model + "' --effort '" + effort + "'",
+      });
+      expect(invocation.command).not.toMatch(/context|OPENCODE_CONFIG_CONTENT|--agent/iu);
+      expect(buildProviderInvocation(profile)).toBeNull();
+    }
+    expect(EXECUTOR_FAMILY_DESCRIPTORS.claude.catalogCommand).toEqual([]);
+    expect(EXECUTOR_FAMILY_DESCRIPTORS.claude.capabilityProbeCommands).toEqual([['claude', '--help']]);
+    expect(EXECUTOR_FAMILY_DESCRIPTORS.claude.smokeCapabilityProbeCommands).toEqual([['claude', '--help']]);
+    expect(resolveExecutorProfile('manager', claudeEnv(model, effort), 'exact_terminal_worktree')).toMatchObject({
+      status: 'ok', value: { family: 'claude', route: 'exact_terminal_worktree',
+        model, effort, launchCommand: "claude --model '" + model + "' --effort '" + effort + "'" },
+    });
+  });
+
+  it.each(models)('admits %s %s using only native help and verified child inheritance', async (model, effort) => {
+    const calls: string[][] = [];
+    const output = await resolveLiveExecutorProfile('manager', claudeEnv(model, effort),
+      'exact_terminal_worktree', async (argv) => {
+        calls.push([...argv]);
+        if (argv[0] === 'claude' && argv[1] === '--help') return { ok: true, stdout: nativeHelp, stderr: '' };
+        if (argv[0] === process.execPath) return { ok: true, stdout: '', stderr: '' };
+        return { ok: false, stdout: '', stderr: '' };
+      });
+    expect(output).toMatchObject({
+      status: 'ok', value: { family: 'claude', route: 'exact_terminal_worktree', model, effort },
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toEqual(['claude', '--help']);
+    expect(calls[1]?.[0]).toBe(process.execPath);
+    expect(calls[1]).toContain('PACK_EXECUTOR_MANAGER_MODEL');
+    expect(calls[1]).toContain('PACK_EXECUTOR_MANAGER_EFFORT');
+    expect(calls.some((argv) => argv.includes('models') || argv.includes('--list-models'))).toBe(false);
+  });
+
+  it('refuses unknown model, effort and route using the closed vocabulary and a repair action', async () => {
+    for (const [env, cause] of [
+      [claudeEnv('claude-opus-5-6', 'medium'), 'executor_route_unavailable'],
+      [claudeEnv('claude-sonnet-5-5', 'ultra'), 'executor_effort_channel_unavailable'],
+    ] as const) {
+      const staticResult = resolveExecutorProfile('manager', env, 'exact_terminal_worktree');
+      expect(staticResult).toMatchObject({
+        status: 'continue', cause, nextAction: { kind: 'repair_executor_profile', note: expect.any(String) },
+      });
+      const calls: string[][] = [];
+      const live = await resolveLiveExecutorProfile('manager', env, 'exact_terminal_worktree', async (argv) => {
+        calls.push([...argv]);
+        return { ok: true, stdout: nativeHelp, stderr: '' };
+      });
+      expect(live).toMatchObject({ status: 'continue', cause, nextAction: { kind: 'repair_executor_profile' } });
+      expect(calls).toEqual([]);
+    }
+    const env = claudeEnv('claude-opus-5-5', 'medium');
+    const unsupported = resolveExecutorProfile('manager', env, 'provider_new_top_level');
+    expect(unsupported).toMatchObject({
+      status: 'continue', cause: 'executor_route_mismatch',
+      nextAction: { kind: 'repair_executor_profile', note: expect.any(String) },
+    });
+    for (const [help, cause] of [
+      ['Claude Code\n  --model <model>', 'executor_effort_channel_unavailable'],
+      ['Claude Code\n  --effort <level>', 'executor_route_unavailable'],
+      ['', 'executor_route_unavailable'],
+    ] as const) {
+      const calls: string[][] = [];
+      const result = await resolveLiveExecutorProfile('manager', env, 'exact_terminal_worktree',
+        async (argv) => { calls.push([...argv]); return { ok: true, stdout: help, stderr: '' }; });
+      expect(result).toMatchObject({
+        status: 'continue', cause, nextAction: { kind: 'repair_executor_profile' },
+      });
+      expect(calls).toEqual([['claude', '--help']]);
+    }
+    const failedHelp = await resolveLiveExecutorProfile('manager', env, 'exact_terminal_worktree',
+      async () => ({ ok: false, stdout: '', stderr: 'unavailable' }));
+    expect(failedHelp).toMatchObject({ status: 'continue', cause: 'executor_route_unavailable' });
+  });
+
+  it('preserves explicit Claude manager overrides above local store without touching Cursor/OpenCode', () => {
+    const env = claudeEnv('claude-sonnet-5-5', 'high');
+    const effective = overlayExecutorProfileEnv(env, {
+      storePath: '/operator/executor-profiles.env',
+      readFile: () => [
+        'PACK_EXECUTOR_MANAGER_AGENT=cursor-agent',
+        'PACK_EXECUTOR_MANAGER_MODEL=grok-4.7',
+        'PACK_EXECUTOR_MANAGER_EFFORT=medium',
+      ].join('\n'),
+    });
+    expect(effective.PACK_EXECUTOR_MANAGER_AGENT).toBe('claude');
+    expect(effective.PACK_EXECUTOR_MANAGER_MODEL).toBe('claude-sonnet-5-5');
+    expect(effective.PACK_EXECUTOR_MANAGER_EFFORT).toBe('high');
+    expect(resolveExecutorProfile('manager', effective, 'exact_terminal_worktree')).toMatchObject({
+      status: 'ok', value: { family: 'claude', model: 'claude-sonnet-5-5', effort: 'high' },
+    });
+    expect(resolveExecutorProfile('manager', profileEnv(), 'exact_terminal_worktree')).toMatchObject({
+      status: 'ok', value: { family: 'cursor', launchCommand: "cursor-agent --model 'model-medium'" },
+    });
+    expect(resolveExecutorProfile('t2', opencodeProfileEnv('t2'), 'exact_terminal_worktree')).toMatchObject({
+      status: 'continue', cause: 'executor_route_unavailable',
+    });
+  });
+
+  it.each(models)('launches a new Claude Code manager terminal for %s %s after screen proof', async (model, effort, family) => {
+    const env = claudeEnv(model, effort);
+    const command = "claude --model '" + model + "' --effort '" + effort + "'";
+    let spawns = 0;
+    let reads = 0;
+    let supervised = 0;
+    const adapter = observedClaudeAdapter(command, family, effort, {
+      onSpawn: () => { spawns += 1; },
+      onRead: () => { reads += 1; },
+    });
+    const result = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('manager'), env, issueNumber: 2716,
+      taskId: undefined, managerBrief: 'Implement Issue #2716', worktreeSelector: undefined,
+      worktreeName: 'claude-manager-2716',
+    }, deps({
+      adapter, onSupervised: () => { supervised += 1; },
+      managerIssueTitle: { status: 'ok', value: 'firefighter: admit Claude Code executor family' },
+    }));
+    expect(result).toMatchObject({
+      outcome: 'ready', resources: { taskId: 'task-created', terminal: worker.identity },
+    });
+    expect(spawns).toBe(1);
+    expect(reads).toBe(1);
+    expect(supervised).toBe(1);
+  });
+
+  it.each(models)('reuses the exact Claude manager terminal for %s %s without spawn or profile loss', async (model, effort, family) => {
+    const env = claudeEnv(model, effort);
+    const command = "claude --model '" + model + "' --effort '" + effort + "'";
+    const target = () => ({
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: '/tmp/primary', defaultBranch: 'main',
+    } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>);
+    const parsed = parseLaunchAssistantCli([
+      '--project', 'orchestrator-pack', '--work-class', 'manager',
+      '--run', 'run-1', '--task', 'task-1', '--issue-number', '2716',
+      '--worktree', 'id:manager-worktree', '--existing-terminal', worker.identity.id,
+    ], env, target);
+    expect(parsed.existingTerminal).toBe(worker.identity.id);
+    expect(parsed.startMode).toBe('exact_terminal_worktree');
+    let spawns = 0;
+    let prepared = 0;
+    let supervised = 0;
+    const adapter = observedClaudeAdapter(command, family, effort, { onSpawn: () => { spawns += 1; } });
+    const base = readyStart('task-1');
+    if (!base.assignment || !base.receipt) throw new Error('missing fixture receipt');
+    const start: SupervisedWorkerStartResult = {
+      ...base,
+      assignment: { ...base.assignment, issueNumber: 2716, role: 'orchestrator' },
+      receipt: { ...base.receipt, effects: [{ kind: 'worktree', action: 'reused', id: 'repo::exact-worktree' }] },
+    };
+    const result = await runSupervisedTaskLaunchAssistant({
+      ...parsed, env,
+    }, {
+      ...deps({ adapter, supervised: start, onWorktree: () => { prepared += 1; },
+        onSupervised: () => { supervised += 1; } }),
+    });
+    expect(result).toMatchObject({
+      outcome: 'ready',
+      resources: { taskId: 'task-1', worktreeId: 'repo::exact-worktree', terminal: worker.identity },
+    });
+    expect(spawns).toBe(0);
+    expect(prepared).toBe(0);
+    expect(supervised).toBe(1);
+  });
+
+
+  it('admits a late correct footer within the existing startup window on the same bound pane', async () => {
+    const env = claudeEnv('claude-sonnet-5-5', 'high');
+    const command = "claude --model 'claude-sonnet-5-5' --effort 'high'";
+    const observedIdentities: RuntimeWorker['identity'][] = [];
+    let elapsedMs = 0;
+    let starts = 0;
+    const adapter = observedClaudeAdapter(command, 'Sonnet', 'high', {
+      footerAfterRead: 3,
+      onRead: (identity) => {
+        observedIdentities.push(identity);
+        elapsedMs += LAUNCH_STARTUP_OBSERVATION_WINDOW_MS / 5;
+      },
+    });
+    const result = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('manager'), env, issueNumber: 2716,
+    }, {
+      ...deps({ adapter, onSupervised: () => { starts += 1; } }),
+      now: () => elapsedMs,
+    });
+    expect(result).toMatchObject({ outcome: 'ready', resources: { terminal: worker.identity } });
+    expect(observedIdentities).toEqual([worker.identity, worker.identity, worker.identity]);
+    expect(elapsedMs).toBeLessThan(LAUNCH_STARTUP_OBSERVATION_WINDOW_MS);
+    expect(starts).toBe(1);
+  });
+
+  it('refuses without a footer after the full existing startup window', async () => {
+    const env = claudeEnv('claude-sonnet-5-5', 'high');
+    const command = "claude --model 'claude-sonnet-5-5' --effort 'high'";
+    let elapsedMs = 0;
+    let reads = 0;
+    let starts = 0;
+    const adapter = observedClaudeAdapter(command, 'Sonnet', 'high', {
+      hideFooter: true,
+      onRead: () => {
+        reads += 1;
+        elapsedMs += LAUNCH_STARTUP_OBSERVATION_WINDOW_MS / 4;
+      },
+    });
+    const result = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('manager'), env, issueNumber: 2716,
+    }, {
+      ...deps({ adapter, onSupervised: () => { starts += 1; } }),
+      now: () => elapsedMs,
+    });
+    expect(result).toMatchObject({
+      outcome: 'continue', stage: 'terminal_prepare',
+      observedCause: 'executor_effort_channel_unavailable',
+      nextAction: { kind: 'repair_executor_profile' },
+    });
+    expect(reads).toBe(4);
+    expect(elapsedMs).toBe(LAUNCH_STARTUP_OBSERVATION_WINDOW_MS);
+    expect(starts).toBe(0);
+  });
+
+  it.each([
+    ['wrong model', { modelOverride: 'Opus' }],
+    ['wrong effort', { effortOverride: 'medium' }],
+    ['foreign generation', { generation: 'other-pty' }],
+  ] as const)('never admits %s across the full Claude footer observation window', async (_name, overrides) => {
+    const env = claudeEnv('claude-sonnet-5-5', 'high');
+    const command = "claude --model 'claude-sonnet-5-5' --effort 'high'";
+    let elapsedMs = 0;
+    let reads = 0;
+    let starts = 0;
+    const adapter = observedClaudeAdapter(command, 'Sonnet', 'high', {
+      ...overrides,
+      onRead: () => {
+        reads += 1;
+        elapsedMs += LAUNCH_STARTUP_OBSERVATION_WINDOW_MS / 4;
+      },
+    });
+    const result = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('manager'), env, issueNumber: 2716,
+    }, {
+      ...deps({ adapter, onSupervised: () => { starts += 1; } }),
+      now: () => elapsedMs,
+    });
+    expect(result).toMatchObject({
+      outcome: 'continue', stage: 'terminal_prepare',
+      observedCause: 'executor_effort_channel_unavailable',
+    });
+    expect(reads).toBe(4);
+    expect(elapsedMs).toBe(LAUNCH_STARTUP_OBSERVATION_WINDOW_MS);
+    expect(starts).toBe(0);
+  });
+
+  it('admits exact native Claude identity without a command, but refuses foreign or missing identity', async () => {
+    const env = claudeEnv('claude-opus-5-5', 'medium');
+    const profile = resolveExecutorProfile('manager', env, 'exact_terminal_worktree');
+    if (profile.status !== 'ok') throw new Error('Claude fixture profile refused');
+    const command = profile.value.launchCommand;
+    const native = observedClaudeAdapter(command, 'Opus', 'medium');
+    expect(native.observeComposerFamily?.(worker.identity)).toMatchObject({
+      status: 'known', command: '', agentIdentity: 'claude',
+    });
+    expect(await claudePaneProfileObserved(profile.value, worker, native)).toBe(true);
+    for (const agentIdentity of ['cursor', 'opencode', 'Claude', ' claude', null] as const) {
+      let reads = 0;
+      const adapter = observedClaudeAdapter(command, 'Opus', 'medium', {
+        agentIdentity, onRead: () => { reads += 1; },
+      });
+      expect(await claudePaneProfileObserved(profile.value, worker, adapter)).toBe(false);
+      expect(reads).toBe(0);
+    }
+  });
+
+  it('preserves command-present equality without requiring native agentIdentity', async () => {
+    const env = claudeEnv('claude-opus-5-5', 'medium');
+    const profile = resolveExecutorProfile('manager', env, 'exact_terminal_worktree');
+    if (profile.status !== 'ok') throw new Error('Claude fixture profile refused');
+    const command = profile.value.launchCommand;
+    expect(await claudePaneProfileObserved(profile.value, worker,
+      observedClaudeAdapter(command, 'Opus', 'medium', { commandObserved: true, agentIdentity: null }))).toBe(true);
+    expect(await claudePaneProfileObserved(profile.value, worker,
+      observedClaudeAdapter(command, 'Opus', 'medium', {
+        commandOverride: 'claude --model wrong --effort medium', agentIdentity: 'claude',
+      }))).toBe(false);
+  });
+
+  it('refuses missing or stale native Claude screen/command/model/effort before Dispatch', async () => {
+    const env = claudeEnv('claude-opus-5-5', 'medium');
+    const result = resolveExecutorProfile('manager', env, 'exact_terminal_worktree');
+    if (result.status !== 'ok') throw new Error('Claude fixture profile refused');
+    const command = result.value.launchCommand;
+    for (const options of [
+      { commandOverride: 'claude --model wrong --effort medium' },
+      { modelOverride: 'Sonnet' },
+      { effortOverride: 'high' },
+      { source: 'stream' as const },
+      { state: 'exited' as const },
+      { generation: 'other-pty' },
+    ]) {
+      const adapter = observedClaudeAdapter(command, 'Opus', 'medium', options);
+      expect(await claudePaneProfileObserved(result.value, worker, adapter)).toBe(false);
+    }
+    let starts = 0;
+    let elapsedMs = 0;
+    const failed = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('manager'), env, issueNumber: 2716,
+    }, {
+      ...deps({
+        adapter: observedClaudeAdapter(command, 'Opus', 'high', {
+          onRead: () => { elapsedMs += LAUNCH_STARTUP_OBSERVATION_WINDOW_MS / 4; },
+        }),
+        onSupervised: () => { starts += 1; },
+      }),
+      now: () => elapsedMs,
+    });
+    expect(failed).toMatchObject({
+      outcome: 'continue', stage: 'terminal_prepare',
+      observedCause: 'executor_effort_channel_unavailable',
+      nextAction: { kind: 'repair_executor_profile', note: expect.any(String) },
+    });
+    expect(starts).toBe(0);
+  });
+});

@@ -1066,27 +1066,28 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (!sameRuntimeWorker(current.value.identity, worker)) {
       return { status: 'unbound', reason: 'worker_generation_not_found', provenance };
     }
+    const rawAgentIdentity = (terminal as OrcaTerminalSummary & { agentIdentity?: unknown }).agentIdentity;
+    const identityEvidence = typeof rawAgentIdentity === 'string'
+      ? { agentIdentity: rawAgentIdentity } : {};
     const command = typeof terminal.command === 'string' ? terminal.command.trim() : '';
     if (!command) {
-      const rawAgentIdentity = (terminal as OrcaTerminalSummary & { agentIdentity?: unknown }).agentIdentity;
       const agentIdentity = typeof rawAgentIdentity === 'string'
-        ? rawAgentIdentity.trim().toLowerCase()
-        : '';
+        ? rawAgentIdentity.trim().toLowerCase() : '';
       if (agentIdentity === 'opencode') {
-        return { status: 'known', family: 'opencode', command, provenance };
+        return { status: 'known', family: 'opencode', command, provenance, ...identityEvidence };
       }
       if (agentIdentity === 'cursor' || agentIdentity === 'claude') {
-        return { status: 'known', family: 'non-opencode', command, provenance };
+        return { status: 'known', family: 'non-opencode', command, provenance, ...identityEvidence };
       }
       return { status: 'unbound', reason: 'runtime_composer_command_unbound', provenance };
     }
     if (/(?:^|\s)opencode(?:\s|$)/iu.test(command)) {
-      return { status: 'known', family: 'opencode', command, provenance };
+      return { status: 'known', family: 'opencode', command, provenance, ...identityEvidence };
     }
     if (/opencode/iu.test(command)) {
       return { status: 'unbound', reason: 'runtime_composer_family_ambiguous', command, provenance };
     }
-    return { status: 'known', family: 'non-opencode', command, provenance };
+    return { status: 'known', family: 'non-opencode', command, provenance, ...identityEvidence };
   }
 
   composerControl(
