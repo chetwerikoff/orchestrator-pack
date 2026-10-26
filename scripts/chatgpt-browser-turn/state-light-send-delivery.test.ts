@@ -3661,16 +3661,23 @@ describe('Issue #2718 PR-author SENDING claim and final same-PR scan', () => {
     expect(fixture.sends()).toBe(1);
   });
 
-  it('orphan child releases at its own start plus its --timeout-ms (short timeout), not a later transition', () => {
+  it('delayed-startup orphan: a live bound child holds past any start-derived bound until it exits', () => {
     const start = Date.now() - 5_000;
-    const a = fixture.launch('inv-a', { timeoutMs: 60_000, startedAt: start });
+    const a = fixture.launch('inv-a', { timeoutMs: 60_000, startedAt: start, childCwd: fixture.worktree });
     fixture.launch('inv-b');
+    // The child started late: its real deadline is unknowable from /proc start + timeout.
     a.survivingChild(start);
     fixture.claim('inv-a');
     a.killLauncher();
     fixture.claim('inv-b');
-    expect(fixture.finalScan('inv-b', start + 60_000 + 30_000 - 1)).toMatchObject({ invocationId: 'inv-a' });
-    expect(fixture.finalScan('inv-b', start + 60_000 + 30_000)).toBeUndefined();
+    expect(fixture.finalScan('inv-b', start + 60_000 + 45_000)).toMatchObject({ invocationId: 'inv-a', phase: 'sending' });
+    fixture.refuse('inv-b');
+    fixture.physicalSend('inv-a');
+    // Once the child is gone too, the claim falls back to the immutable launcher-start bound.
+    fixture.procs.delete(process.pid);
+    expect(fixture.finalScan('inv-b', a.startedAt + 1_800_000 + 30_000 - 1)).toMatchObject({ invocationId: 'inv-a' });
+    expect(fixture.finalScan('inv-b', a.startedAt + 1_800_000 + 30_000)).toBeUndefined();
+    expect(fixture.sends()).toBe(1);
   });
 
   it('already-sent author with both processes dead and no terminal holds before its deadline across profiles', () => {
@@ -3731,6 +3738,10 @@ describe('Issue #2718 PR head admission and in-flight author effect', () => {
     expect(prAuthorHeadEffect(send, { ...send, sha: 'b'.repeat(40), headRef: 'retargeted' })).toBe(false);
     expect(prAuthorHeadEffect(send, { ...send, sha: 'b'.repeat(40), headRepo: 'fork/widgets' })).toBe(false);
     expect(prAuthorHeadEffect(send, { ...send, sha: 'b'.repeat(40), baseRepo: 'other/widgets' })).toBe(false);
+    // Same-repository base-branch retarget is excluded too.
+    const based = { ...send, baseRef: 'main' };
+    expect(prAuthorHeadEffect(based, { ...based, sha: 'b'.repeat(40) })).toBe(true);
+    expect(prAuthorHeadEffect(based, { ...based, sha: 'b'.repeat(40), baseRef: 'release' })).toBe(false);
     expect(PR_AUTHOR_HEAD_POLL_FLOOR_MS).toBeGreaterThan(0);
   });
 });
@@ -3822,6 +3833,26 @@ describe('Issue #2718 PR-author PRE-SEND gate in the production turn', () => {
     ]);
     return { result, press, click, fill, page };
   }
+
+  it('never classifies an author effect whose head poll returns after the absolute deadline', async () => {
+    fixture.launch('inv-late', { admit: false });
+    const head = (sha: string): PrAuthorHeadObservation => ({
+      state: 'open', sha, headRepo: 'acme/widgets', headRef: 'feature', baseRepo: 'acme/widgets', baseRef: 'main',
+    });
+    let reads = 0;
+    const readHead = vi.fn(async () => {
+      reads += 1;
+      if (reads <= 2) return head('c'.repeat(40));
+      // The slow post-SEND poll resolves only after the absolute deadline.
+      const late = Date.now() + 10_000_000;
+      vi.spyOn(Date, 'now').mockImplementation(() => late);
+      return head('d'.repeat(40));
+    });
+    const { result, press } = await runBoundTurn('inv-late', readHead, true);
+    expect(press).toHaveBeenCalledTimes(1);
+    expect(result.cause).not.toBe('author_effect_pr_head_changed');
+    expect(result.state).not.toBe('ok');
+  });
 
   it('reports ok/author_effect_pr_head_changed without output when the bound PR head moves after SEND', async () => {
     fixture.launch('inv-effect', { admit: false });

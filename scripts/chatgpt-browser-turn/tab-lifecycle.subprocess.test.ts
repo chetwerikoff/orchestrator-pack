@@ -204,8 +204,10 @@ const sigtermFixture = [
   'const [phase, retire, root] = process.argv.slice(1);',
   'const profile = join(root, "profile"); const cdp = "http://127.0.0.1:9222"; const invocationId = "inv-2718-sigterm";',
   'const profileKey = configuredProfileKey(profile, cdp);',
-  'admitStateLightTurnObservation({ profileKey, invocationId, marker: "OPKTURNV1sigterm" });',
-  'bindStateLightOwnedTarget({ profileKey, invocationId, targetId: "target-2718", created: true, cdp, initialRoute: "https://chatgpt.com/" });',
+  'if (phase !== "missing") {',
+  '  admitStateLightTurnObservation({ profileKey, invocationId, marker: "OPKTURNV1sigterm" });',
+  '  bindStateLightOwnedTarget({ profileKey, invocationId, targetId: "target-2718", created: true, cdp, initialRoute: "https://chatgpt.com/" });',
+  '}',
   'if (phase === "not_sent") transitionStateLightTurnObservation({ profileKey, invocationId, phase: "not_sent", reason: "terminal_pre_send", sendCount: 0, sendWitness: "numeric_send_count" });',
   'if (phase === "dispatching" || phase === "sent_unharvested") transitionStateLightTurnObservation({ profileKey, invocationId, phase: "dispatching", reason: "dispatch_boundary_entered" });',
   'if (phase === "sent_unharvested") transitionStateLightTurnObservation({ profileKey, invocationId, phase: "sent_unharvested", reason: "owned_marker_observed", sendCount: 1, sendWitness: "numeric_send_count" });',
@@ -290,6 +292,17 @@ describe('Issue #2718 real state-light SIGTERM finalizer', () => {
         else expect(record.send_attempted).toBe(true);
       } finally { rmSync(root, { recursive: true, force: true }); }
     }, 30_000);
+
+  it('a missing observation record is unknown delivery, never an affirmative pre-Send claim', async () => {
+    const { result, closes, root } = await sigtermAtPhase('missing', 'confirm');
+    try {
+      expect(result.outcome, result.stderr).toBe('exit');
+      expect(closes).toBe(0);
+      const record = JSON.parse(result.stdout.trimEnd());
+      expect(record).toMatchObject({ cause: 'terminated_by_sigterm', send_attempted: true });
+      expect(record.next_action).toContain('never resend blindly');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }, 30_000);
 
   it('a hung guarded close still exits within the cleanup bound as cleanup_unconfirmed', async () => {
     const { result, closes, elapsedMs, root } = await sigtermAtPhase('not_sent', 'hung');

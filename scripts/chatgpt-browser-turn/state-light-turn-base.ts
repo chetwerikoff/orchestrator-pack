@@ -6903,8 +6903,12 @@ async function runTurnCore(
       if (!prAuthorBinding || !prAuthorSendHead || (!sendAttempted && sendCount === 0)) return null;
       if (Date.now() < prAuthorNextHeadPollAt) return null;
       prAuthorNextHeadPollAt = Date.now() + Math.max(config.pollMs, PR_AUTHOR_HEAD_POLL_FLOOR_MS);
+      if (Date.now() >= hardExhaustionDeadline) return null;
       const live = await (prAuthorTurnHooks.readHead ?? readPrAuthorHeadViaPackGh)(prAuthorBinding)
         .catch(() => undefined);
+      // An effect observed only after the absolute deadline is not in flight:
+      // the incumbent deadline result stands.
+      if (Date.now() >= hardExhaustionDeadline) return null;
       if (!prAuthorHeadEffect(prAuthorSendHead, live)) return null;
       // A genuine reply already published for this invocation stays the result.
       const committed = verifiedExternalPrimary();
@@ -9610,6 +9614,8 @@ export interface PrAuthorHeadObservation {
   readonly headRef: string;
   /** `base.repo.full_name`, lower-cased. */
   readonly baseRepo: string;
+  /** `base.ref`; a retarget to another base branch is never an author effect. */
+  readonly baseRef?: string;
 }
 
 export interface PrAuthorProcessReader {
@@ -9752,9 +9758,9 @@ export interface PrAuthorCandidate {
   /** Profile whose observation record holds this invocation; undefined when none is found. */
   readonly profileKey?: string;
   /**
-   * Absolute release time for a candidate without a live launcher, grounded
-   * in an immutable start witness (child /proc start or receipt
-   * `launcher_started_at`), never in the mutable `transitioned_at`.
+   * Absolute release time for a candidate without a live launcher: unbounded
+   * while its bound child lives, else grounded in the immutable receipt
+   * `launcher_started_at`, never in the mutable `transitioned_at`.
    */
   readonly deadlineMs: number;
 }
@@ -9775,10 +9781,7 @@ export function prAuthorClaimReason(binding: PrAuthorBinding): string {
   return `${PR_AUTHOR_CLAIM_REASON_PREFIX}${binding.repo}#${binding.pr}`;
 }
 
-/**
- * Covers the child's own start-to-`invocationStartedAt` gap, so a deadline
- * derived from a process start never releases before the real one.
- */
+/** Covers the launcher-start-to-`invocationStartedAt` gap of a dead invocation. */
 const PR_AUTHOR_DEADLINE_GRACE_MS = 30_000;
 
 /**
@@ -9876,13 +9879,11 @@ export function scanPrAuthorCandidates(input: {
     if (!resolved) continue; // nothing persisted: no claim was ever made
     const ownerPid = resolved.record.owner_pid;
     if (ownerPid !== undefined && isLivePrAuthorChild({ pid: ownerPid, invocationId, binding: input.binding, reader })) {
-      const childArgv = reader.cmdline(ownerPid);
-      const childStart = reader.startTimeMs(ownerPid) ?? launcherStartedAt;
+      // Its real deadline counts from an in-process start no record carries,
+      // and only this live child can still SEND: hold while it lives.
       candidates.push({
         invocationId, launcherPid, launcherLive: false, orphanChildLive: true, profileKey: resolved.profileKey,
-        deadlineMs: Number.isFinite(childStart)
-          ? childStart + argvTimeoutMs(childArgv) + PR_AUTHOR_DEADLINE_GRACE_MS
-          : Number.POSITIVE_INFINITY,
+        deadlineMs: Number.POSITIVE_INFINITY,
       });
       continue;
     }
@@ -9995,19 +9996,21 @@ export const readPrAuthorHeadViaPackGh: PrAuthorHeadReader = async (binding) => 
   try {
     const body = JSON.parse(result.stdout) as {
       state?: unknown; head?: { sha?: unknown; ref?: unknown; repo?: { full_name?: unknown } | null };
-      base?: { repo?: { full_name?: unknown } | null };
+      base?: { ref?: unknown; repo?: { full_name?: unknown } | null };
     };
     const sha = body.head?.sha;
     const headRef = body.head?.ref;
     const headRepo = body.head?.repo?.full_name;
     const baseRepo = body.base?.repo?.full_name;
+    const baseRef = body.base?.ref;
     if (typeof body.state !== 'string' || typeof sha !== 'string' || !/^[0-9a-f]{40}$/u.test(sha)
-      || typeof headRef !== 'string' || typeof headRepo !== 'string' || typeof baseRepo !== 'string') {
+      || typeof headRef !== 'string' || typeof headRepo !== 'string' || typeof baseRepo !== 'string'
+      || typeof baseRef !== 'string') {
       return undefined;
     }
     return {
       state: body.state, sha, headRef,
-      headRepo: headRepo.toLowerCase(), baseRepo: baseRepo.toLowerCase(),
+      headRepo: headRepo.toLowerCase(), baseRepo: baseRepo.toLowerCase(), baseRef,
     };
   } catch { return undefined; }
 };
@@ -10048,6 +10051,7 @@ export function prAuthorHeadEffect(
   return Boolean(live)
     && live!.state === 'open'
     && live!.baseRepo === sendHead.baseRepo
+    && live!.baseRef === sendHead.baseRef
     && live!.headRepo === sendHead.headRepo
     && live!.headRef === sendHead.headRef
     && live!.sha !== sendHead.sha;
@@ -10128,7 +10132,9 @@ async function finalizeOnSigterm(args: ParsedTurnArgs, finalizer: StateLightSign
       }), deadlineMs)
     : undefined;
   const confirmed = retirement?.status === 'confirmed';
-  const unsent = !record || record.phase === 'prepared' || record.phase === 'sending' || record.phase === 'not_sent';
+  // A missing or unreadable record is unknown delivery, never proof of no Send.
+  const unsent = record !== undefined
+    && (record.phase === 'prepared' || record.phase === 'sending' || record.phase === 'not_sent');
   if (!finalizer.emitted) {
     finalizer.emitted = true;
     emit({
@@ -10154,6 +10160,8 @@ async function finalizeOnSigterm(args: ParsedTurnArgs, finalizer: StateLightSign
       incidents: ['terminated_by_sigterm', ...(record?.owned_target?.created && !confirmed ? ['owned_tab_cleanup_unconfirmed'] : [])],
     });
   }
+  // Same exit discipline as the executable: let the result line drain first.
+  await withinBound(new Promise<void>((done) => { process.stdout.write('', () => done()); }), deadlineMs + 1_000);
   process.exit(turnExitCode('driver_error'));
 }
 
