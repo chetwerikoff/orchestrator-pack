@@ -1,9 +1,9 @@
 #!/usr/bin/env -S node --experimental-strip-types
 
 import '../toolchain/native-entrypoint-preflight.ts';
-import { constants as osConstants } from 'node:os';
+import { constants as osConstants, tmpdir } from 'node:os';
 import { runProcessSync } from '../kernel/subprocess.ts';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -34,6 +34,8 @@ const KEY = {
 const GUARD_DIR_NAME = 'opk-manager-push-guard';
 const ORIGINAL_HOOK_ENV = 'OPK_B5_ORIGINAL_HOOK';
 const MAX_NEW_COMMITS = 500;
+const MAX_PATCH_SOURCES = 64;
+const PROOF_GIT = ['-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false', '-c', 'core.fsmonitor=false'] as const;
 const ZERO_OID = /^0+$/u;
 const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
 const SOURCE_EXTENSION = /\.(?:ts|tsx|js|jsx)$/u;
@@ -51,10 +53,11 @@ interface GitResult {
   readonly stderr: string;
 }
 
-function git(cwd: string, args: readonly string[], input?: string): GitResult {
+function git(cwd: string, args: readonly string[], input?: string | Uint8Array, env?: Readonly<NodeJS.ProcessEnv>,
+  encoding?: BufferEncoding): GitResult {
   const result = runProcessSync({
-    command: 'git', args, cwd, ...(input === undefined ? {} : { input }),
-    env: { GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }, inheritParentEnv: true,
+    command: 'git', args, cwd, ...(input === undefined ? {} : { input }), ...(encoding ? { encoding } : {}),
+    env: { GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', ...env }, inheritParentEnv: true,
   });
   return { ok: result.ok, stdout: result.stdout, stderr: result.stderr };
 }
@@ -294,7 +297,7 @@ function parseRawDiff(output: string): Array<{ oldMode: string; newMode: string;
   return entries;
 }
 
-async function classifyOrdinaryCommit(cwd: string, parent: string, commit: string): Promise<string | null> {
+async function typescriptFormatterFailure(cwd: string, parent: string, commit: string): Promise<string | null> {
   const diff = git(cwd, ['diff-tree', '-r', '--raw', '--no-renames', '--no-abbrev', '-z', parent, commit]);
   if (!diff.ok) return 'the commit delta against its parent is unreadable';
   for (const entry of parseRawDiff(diff.stdout)) {
@@ -311,6 +314,95 @@ async function classifyOrdinaryCommit(cwd: string, parent: string, commit: strin
     }
   }
   return null;
+}
+
+function withScratchDir<T>(body: (dir: string) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), 'opk-b5-proof-'));
+  try { return body(dir); } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+/** Positive 2: exact `patch.diff` bytes from a verified same-endpoint fetched ref, applied unchanged to the exact parent tree. */
+function publishedPatchFailure(cwd: string, parent: string, commit: string, published: readonly string[]): string | null {
+  const wanted = trimmed(git(cwd, ['rev-parse', `${commit}^{tree}`]).stdout);
+  const blobs = new Set<string>();
+  for (const tip of published.slice(0, MAX_PATCH_SOURCES)) {
+    const found = git(cwd, ['rev-parse', '--verify', '--quiet', `${tip}:patch.diff`]);
+    const oid = trimmed(found.stdout);
+    if (found.ok && OID.test(oid) && trimmed(git(cwd, ['cat-file', '-t', oid]).stdout) === 'blob') blobs.add(oid);
+  }
+  if (blobs.size === 0) return 'no verified same-endpoint published patch.diff exists';
+  return withScratchDir((dir) => {
+    let counter = 0;
+    for (const blob of blobs) {
+      const env = { GIT_INDEX_FILE: join(dir, `index-${counter += 1}`) };
+      const bytes = git(cwd, ['cat-file', 'blob', blob], undefined, undefined, 'latin1');
+      if (!bytes.ok || !git(cwd, ['read-tree', parent], undefined, env).ok) continue;
+      const applied = git(cwd, [...PROOF_GIT, 'apply', '--cached', '--whitespace=nowarn'],
+        Buffer.from(bytes.stdout, 'latin1'), env);
+      if (applied.ok && trimmed(git(cwd, ['write-tree'], undefined, env).stdout) === wanted) return null;
+    }
+    return 'the proposed tree is not the exact application of any verified published patch.diff to its parent';
+  });
+}
+
+const RUFF_LOCK_FILES = ['uv.lock', 'poetry.lock'] as const;
+const RUFF_PIN = /\[\[package\]\]\s*\n\s*name\s*=\s*"ruff"\s*\n\s*version\s*=\s*"([^"]+)"/gu;
+
+/** Positive 3: `ruff format` then `ruff check --fix`, version/config taken from the already-published parent. */
+function ruffReproductionFailure(cwd: string, parent: string, commit: string, published: readonly string[],
+  changedPaths: readonly string[]): string | null {
+  if (changedPaths.length === 0 || !changedPaths.every((path) => path.endsWith('.py'))) return 'the commit is not .py-only';
+  const parentPublished = published.some((tip) => git(cwd, ['merge-base', '--is-ancestor', parent, tip]).ok);
+  if (!parentPublished) return 'parent commit is not proven published on this endpoint';
+  let pin: string | null = null;
+  for (const lock of RUFF_LOCK_FILES) {
+    const text = git(cwd, ['cat-file', 'blob', `${parent}:${lock}`]);
+    if (!text.ok) continue;
+    const versions = [...text.stdout.matchAll(RUFF_PIN)].map((match) => match[1]!);
+    if (versions.length === 1) { pin = versions[0]!; break; }
+  }
+  if (!pin) return 'parent commit has no single lock-pinned ruff version (uv.lock or poetry.lock)';
+  const gitDir = trimmed(git(cwd, ['rev-parse', '--absolute-git-dir']).stdout);
+  const wanted = trimmed(git(cwd, ['rev-parse', `${commit}^{tree}`]).stdout);
+  return withScratchDir((dir) => {
+    const work = join(dir, 'work');
+    const home = join(dir, 'home');
+    mkdirSync(work, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    const env = { GIT_INDEX_FILE: join(dir, 'parent-index') };
+    if (!git(cwd, ['read-tree', parent], undefined, env).ok
+      || !git(cwd, [...PROOF_GIT, 'checkout-index', '-a', '-f', `--prefix=${work}/`], undefined, env).ok) {
+      return 'the parent tree cannot be materialized for the isolated Ruff run';
+    }
+    const tool = { PATH: process.env.PATH ?? '', HOME: home, XDG_CONFIG_HOME: home, RUFF_NO_CACHE: 'true' };
+    const run = (args: string[]) => runProcessSync({ command: 'ruff', args, cwd: work, env: tool });
+    const version = run(['--version']);
+    const reported = /^ruff (\S+)/u.exec(trimmed(version.stdout))?.[1];
+    if (!version.ok || reported !== pin) {
+      return `ruff executable ${reported ?? 'not found'} does not match the parent lock pin ${pin}`;
+    }
+    if (!run(['format', '--no-cache', '.']).ok) return 'ruff format failed on the parent tree';
+    const fixed = run(['check', '--fix', '--no-cache', '.']);
+    if (fixed.exitCode === null || fixed.exitCode > 1) return 'ruff check --fix failed on the parent tree';
+    const outEnv = { GIT_DIR: gitDir, GIT_WORK_TREE: work, GIT_INDEX_FILE: join(dir, 'result-index') };
+    const added = git(work, [...PROOF_GIT, 'add', '-A', '-f', '.'], undefined, outEnv);
+    const tree = trimmed(git(work, ['write-tree'], undefined, outEnv).stdout);
+    if (!added.ok || tree !== wanted) return 'the proposed tree is not the exact pinned Ruff output on the parent tree';
+    return null;
+  });
+}
+
+async function classifyOrdinaryCommit(cwd: string, parent: string, commit: string,
+  published: readonly string[]): Promise<string | null> {
+  const typescript = await typescriptFormatterFailure(cwd, parent, commit);
+  if (typescript === null) return null;
+  const patch = publishedPatchFailure(cwd, parent, commit, published);
+  if (patch === null) return null;
+  const changed = parseRawDiff(git(cwd, ['diff-tree', '-r', '--raw', '--no-renames', '--no-abbrev', '-z', parent, commit]).stdout)
+    .map((entry) => entry.path);
+  const ruff = ruffReproductionFailure(cwd, parent, commit, published, changed);
+  if (ruff === null) return null;
+  return `${typescript}; patch.diff proof: ${patch}; Ruff proof: ${ruff}`;
 }
 
 function mergeDriverConfigured(cwd: string): boolean {
@@ -347,7 +439,7 @@ async function newCommitFailure(input: AccountingInput): Promise<string | null> 
     const short = commit.slice(0, 12);
     let failure: string | null;
     if (parents.length === 0) failure = 'root commit has no parent to compare';
-    else if (parents.length === 1) failure = await classifyOrdinaryCommit(input.cwd, parents[0]!, commit);
+    else if (parents.length === 1) failure = await classifyOrdinaryCommit(input.cwd, parents[0]!, commit, input.published);
     else failure = classifyMergeCommit(input.cwd, commit, parents);
     if (failure) return `unpublished manager-local commit ${short}: ${failure}`;
   }
@@ -367,7 +459,7 @@ interface Denial {
   readonly nextStep: string;
 }
 
-const AC2_NEXT = 'send the hand fix to GPT as author; publish it through an authorized non-manager GPT/worker Issue/PR route (GPT patch.diff, conflict resolution and Python formatter/autofix included) rather than pushing the same substantive commit again from this manager worktree';
+const AC2_NEXT = 'send the hand fix to GPT as author; fetch its published same-endpoint scratch patch.diff and apply it verbatim (exact tree proof), or reproduce the parent lock-pinned Python Ruff output (ruff format, then ruff check --fix) on an already-published parent, or publish through an authorized non-manager GPT/worker Issue/PR route (for a conflict ask GPT for a published two-parent merge, else report to the orchestrator for the merge agent); never push the same unproved substantive commit again from this manager worktree';
 
 interface Tuple {
   readonly localRef: string;

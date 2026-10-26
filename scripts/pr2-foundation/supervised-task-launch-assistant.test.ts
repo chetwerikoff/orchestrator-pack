@@ -5556,8 +5556,14 @@ function git(cwd: string, ...args: string[]): string {
   return result.stdout.trim();
 }
 
+let toolPath = '';
+
+function gitEnv(): NodeJS.ProcessEnv {
+  return toolPath ? { ...GIT_ENV, PATH: `${toolPath}:${GIT_ENV.PATH ?? ''}` } : GIT_ENV;
+}
+
 function gitTry(cwd: string, ...args: string[]): { status: number; out: string } {
-  const result = runProcessSync({ command: 'git', args, cwd, env: GIT_ENV });
+  const result = runProcessSync({ command: 'git', args, cwd, env: gitEnv() });
   return { status: result.exitCode ?? 1, out: `${result.stdout}${result.stderr}` };
 }
 
@@ -5587,7 +5593,7 @@ function installGuard(world: Pick<PushWorld, 'manager'>, seed?: string) {
   });
 }
 
-function pushWorld(options: { prePush?: string; preCommit?: string; hooksPath?: string; install?: boolean | 'unseeded' } = {}): PushWorld {
+function pushWorld(options: { prePush?: string; preCommit?: string; hooksPath?: string; install?: boolean | 'unseeded'; python?: boolean } = {}): PushWorld {
   const base = mkdtempSync(join(tmpdir(), 'opk-b5-'));
   const bare = join(base, 'remote.git');
   const primary = join(base, 'primary');
@@ -5601,6 +5607,11 @@ function pushWorld(options: { prePush?: string; preCommit?: string; hooksPath?: 
   write(primary, 'src/view.tsx', 'export const v = <p>x  y</p>;\n');
   write(primary, 'tool.py', 'def f():\n    return 1\n');
   write(primary, 'README.md', 'readme\n');
+  if (options.python) {
+    write(primary, 'pyproject.toml', '[tool.ruff]\nline-length = 88\n');
+    write(primary, 'uv.lock', '[[package]]\nname = "ruff"\nversion = "0.5.0"\n');
+    write(primary, 'legacy.py', 'x = 1  \nif x == None:\n    pass\n');
+  }
   git(primary, 'remote', 'add', 'origin', bare);
   commit(primary, 'initial');
   git(primary, 'push', '-q', 'origin', 'trunk');
@@ -5646,7 +5657,7 @@ function hookStub(world: PushWorld): string {
 }
 
 function runHook(world: PushWorld, url: string, line: string) {
-  const result = runProcessSync({ command: hookStub(world), args: ['origin', url], cwd: world.manager, env: GIT_ENV, input: `${line}\n` });
+  const result = runProcessSync({ command: hookStub(world), args: ['origin', url], cwd: world.manager, env: gitEnv(), input: `${line}\n` });
   return { status: result.exitCode ?? 1, out: `${result.stdout}${result.stderr}` };
 }
 
@@ -6031,5 +6042,148 @@ describe('Issue #2732 AC5 single-endpoint all-or-nothing', () => {
     expect(partial.out).toContain('AC2');
     expect(remoteRef(world, 'refs/heads/multi')).not.toBe('');
     expect(remoteRef(world, 'refs/heads/multi', second)).toBe('');
+  }));
+});
+
+// ---------------------------------------------------------------------------
+// Issue #2732 r04: verified published patch.diff and parent-pinned Ruff proofs.
+// ---------------------------------------------------------------------------
+
+function fakeRuff(base: string, version: string): string {
+  const dir = join(base, `bin-${version}`);
+  mkdirSync(dir, { recursive: true });
+  const script = join(dir, 'ruff');
+  writeFileSync(script, `#!/bin/sh
+case "$1" in
+  --version) echo "ruff ${version}" ;;
+  format) find . -name '*.py' -exec sed -i 's/[ ]*$//' {} + ;;
+  check) find . -name '*.py' -exec sed -i 's/ == None/ is None/' {} + ;;
+esac
+exit 0
+`);
+  chmodSync(script, 0o755);
+  return dir;
+}
+
+const RUFF_FIXED = 'x = 1\nif x is None:\n    pass\n';
+
+describe('Issue #2732 r04 AC2 verified published patch.diff application', () => {
+  it('passes the exact fetched same-endpoint patch and fails altered, local-only and wrong-endpoint patches', withWorld({}, (world) => {
+    const other = otherClone(world);
+    git(other, 'checkout', '-q', '-b', 'gpt-scratch', 'origin/trunk');
+    write(other, 'src/util.ts', 'export const one = 1;\nexport const two = 2;\nexport const three = 3;\n');
+    git(other, 'diff', '--output=patch.diff');
+    git(other, 'checkout', '--', 'src/util.ts');
+    commit(other, 'scratch patch');
+    git(other, 'push', '-q', 'origin', 'gpt-scratch');
+    const patchFile = join(world.base, 'published.patch');
+    const patchBytes = readFileSync(join(other, 'patch.diff'), 'utf8');
+    writeFileSync(patchFile, patchBytes);
+    git(world.manager, 'fetch', '-q', 'origin');
+    // Verbatim application of the verified published patch succeeds.
+    managerOn(world, 'patched', world.seed);
+    git(world.manager, 'apply', patchFile);
+    const head = commit(world.manager, 'apply patch');
+    const pushed = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/patched');
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(remoteRef(world, 'refs/heads/patched')).toBe(head);
+    // One altered hunk fails.
+    managerOn(world, 'altered', world.seed);
+    const alteredFile = join(world.base, 'altered.patch');
+    writeFileSync(alteredFile, patchBytes.replace('three = 3', 'three = 33').replace('+export const three = 3', '+export const three = 33'));
+    git(world.manager, 'apply', alteredFile);
+    commit(world.manager, 'altered patch');
+    const altered = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/altered');
+    expect(altered.status).not.toBe(0);
+    expect(altered.out).toContain('AC2');
+    expect(altered.out).toContain('patch.diff proof');
+    // Verbatim patch plus an extra manager edit fails.
+    managerOn(world, 'extra', world.seed);
+    git(world.manager, 'apply', patchFile);
+    write(world.manager, 'README.md', 'extra manager edit\n');
+    commit(world.manager, 'patch plus edit');
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/extra').out).toContain('AC2');
+    // A scratch ref that exists only locally is not evidence.
+    managerOn(world, 'local-scratch', world.seed);
+    write(world.manager, 'src/asi.ts', 'export function f() {\n  return 2;\n}\n');
+    git(world.manager, 'diff', '--output', join(world.base, 'local.patch'));
+    git(world.manager, 'checkout', '--', 'src/asi.ts');
+    write(world.manager, 'patch.diff', readFileSync(join(world.base, 'local.patch'), 'utf8'));
+    commit(world.manager, 'local scratch patch, never pushed');
+    managerOn(world, 'local-only-apply', world.seed);
+    git(world.manager, 'apply', join(world.base, 'local.patch'));
+    commit(world.manager, 'apply local patch');
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/local-only-apply').out).toContain('AC2');
+    // A patch published on a different endpoint is not evidence for this endpoint.
+    const elsewhere = join(world.base, 'elsewhere.git');
+    git(world.base, 'init', '-q', '--bare', '-b', 'trunk', elsewhere);
+    git(other, 'checkout', '-q', '-b', 'gpt-two', 'origin/trunk');
+    write(other, 'src/asi.ts', 'export function f() {\n  return 3;\n}\n');
+    git(other, 'diff', '--output=patch.diff');
+    git(other, 'checkout', '--', 'src/asi.ts');
+    commit(other, 'wrong endpoint patch');
+    git(other, 'push', '-q', elsewhere, 'gpt-two');
+    git(world.manager, 'remote', 'add', 'elsewhere', elsewhere);
+    git(world.manager, 'fetch', '-q', 'elsewhere');
+    managerOn(world, 'wrong-endpoint', world.seed);
+    git(world.manager, 'apply', join(other, 'patch.diff'));
+    commit(world.manager, 'apply foreign patch');
+    const foreign = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/wrong-endpoint');
+    expect(foreign.status).not.toBe(0);
+    expect(foreign.out).toContain('AC2');
+    // No project Ruff lock on the published parent: the Ruff route is unavailable.
+    managerOn(world, 'no-lock', world.seed);
+    write(world.manager, 'tool.py', 'def f():\n    return 1  \n');
+    commit(world.manager, 'py edit');
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/no-lock').out).toContain('Ruff proof: parent commit has no single lock-pinned');
+    expect(remoteRef(world, 'refs/heads/altered')).toBe('');
+    expect(remoteRef(world, 'refs/heads/wrong-endpoint')).toBe('');
+  }));
+});
+
+describe('Issue #2732 r04 AC2 parent-pinned Python Ruff reproduction', () => {
+  it('passes exact ruff format then check --fix output and fails near-misses', withWorld({ python: true }, (world) => {
+    const pinned = fakeRuff(world.base, '0.5.0');
+    const drifted = fakeRuff(world.base, '0.6.0');
+    toolPath = pinned;
+    try {
+      managerOn(world, 'ruff-ok', world.seed);
+      write(world.manager, 'legacy.py', RUFF_FIXED);
+      const head = commit(world.manager, 'ruff output');
+      const pushed = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-ok');
+      expect(pushed.status, pushed.out).toBe(0);
+      expect(remoteRef(world, 'refs/heads/ruff-ok')).toBe(head);
+      // One-line alteration beyond the pinned output.
+      managerOn(world, 'ruff-alt', world.seed);
+      write(world.manager, 'legacy.py', 'x = 2\nif x is None:\n    pass\n');
+      commit(world.manager, 'altered');
+      const altered = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-alt');
+      expect(altered.status).not.toBe(0);
+      expect(altered.out).toContain('Ruff proof: the proposed tree is not the exact pinned Ruff output');
+      // Mixed paths, including a proposed-branch lock/config edit.
+      managerOn(world, 'ruff-mixed', world.seed);
+      write(world.manager, 'legacy.py', RUFF_FIXED);
+      write(world.manager, 'uv.lock', '[[package]]\nname = "ruff"\nversion = "0.6.0"\n');
+      commit(world.manager, 'mixed lock edit');
+      const mixed = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-mixed');
+      expect(mixed.out).toContain('Ruff proof: the commit is not .py-only');
+      // Installed Ruff differs from the parent's lock pin.
+      toolPath = drifted;
+      managerOn(world, 'ruff-drift', world.seed);
+      write(world.manager, 'legacy.py', RUFF_FIXED);
+      commit(world.manager, 'drifted tool');
+      expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-drift').out).toContain('does not match the parent lock pin 0.5.0');
+      toolPath = pinned;
+      // Parent not proven published: an unpublished (but formatter-clean) commit sits below the Ruff commit.
+      managerOn(world, 'ruff-parent', world.seed);
+      write(world.manager, 'src/app.ts', TS_AFTER);
+      commit(world.manager, 'ts format');
+      write(world.manager, 'legacy.py', RUFF_FIXED);
+      commit(world.manager, 'ruff atop unpublished parent');
+      expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-parent').out).toContain('parent commit is not proven published');
+      for (const name of ['ruff-alt', 'ruff-mixed', 'ruff-drift', 'ruff-parent']) expect(remoteRef(world, `refs/heads/${name}`)).toBe('');
+    } finally {
+      toolPath = '';
+    }
   }));
 });
