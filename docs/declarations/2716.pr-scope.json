@@ -4,8 +4,11 @@
   "declared_paths": [
     "docs/orchestration-runbook.md",
     "scripts/executor-profile-policy.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
-    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/runtime/contracts.ts"
   ],
   "denylist": [
     "credentials, secrets and .env files",
@@ -20,8 +23,11 @@
   "allowed_roots": [
     "docs/orchestration-runbook.md",
     "scripts/executor-profile-policy.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
-    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/runtime/contracts.ts"
   ],
-  "source_revision": "1e5d74383f41ae32e65a23a6828a1f57407e0e6b"
+  "source_revision": "2a72e3d0b8118b47fdb61981d92e42d7eac2667d"
 }
