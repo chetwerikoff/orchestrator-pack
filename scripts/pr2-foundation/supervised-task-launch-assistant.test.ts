@@ -5745,6 +5745,24 @@ describe('Issue #2732 manager-only pre-push guard installation', () => {
     expect(gitTry(world.manager, 'config', '--worktree', '--get', 'core.hooksPath').status).not.toBe(0);
   }));
 
+  it('refuses to activate a dormant config.worktree hooksPath in the manager or a sibling', withWorld({ install: false }, (world) => {
+    const managerAdmin = git(world.manager, 'rev-parse', '--absolute-git-dir');
+    const dormantDir = join(world.base, 'dormant-hooks');
+    mkdirSync(dormantDir, { recursive: true });
+    for (const holder of [join(managerAdmin, 'config.worktree'), join(git(world.primary, 'rev-parse', '--absolute-git-dir'), 'config.worktree')]) {
+      git(world.primary, 'config', '--file', holder, 'core.hooksPath', dormantDir);
+      const before = git(world.manager, 'rev-parse', '--git-path', 'hooks');
+      const result = installGuard(world, world.seed);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.cause).toBe('manager_push_guard_dormant_worktree_hooks');
+      expect(gitTry(world.primary, 'config', '--get', 'extensions.worktreeConfig').out.trim()).toBe('');
+      expect(git(world.manager, 'rev-parse', '--git-path', 'hooks')).toBe(before);
+      expect(git(world.primary, 'config', '--file', holder, '--get', 'core.hooksPath')).toBe(dormantDir);
+      git(world.primary, 'config', '--file', holder, '--unset', 'core.hooksPath');
+    }
+    expect(installGuard(world, world.seed).ok).toBe(true);
+  }));
+
   it('installs on fresh manager placement and surfaces a missing observation', withWorld({ install: false }, async (world) => {
     const installs: string[] = [];
     const real: LaunchDependencies['installManagerPushGuard'] = (request) => {

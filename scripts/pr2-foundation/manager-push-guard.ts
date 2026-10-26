@@ -34,7 +34,6 @@ const KEY = {
 const GUARD_DIR_NAME = 'opk-manager-push-guard';
 const ORIGINAL_HOOK_ENV = 'OPK_B5_ORIGINAL_HOOK';
 const MAX_NEW_COMMITS = 500;
-const MAX_PATCH_SOURCES = 64;
 const PROOF_GIT = ['-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false', '-c', 'core.fsmonitor=false'] as const;
 const ZERO_OID = /^0+$/u;
 const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
@@ -342,7 +341,7 @@ function withScratchDir<T>(body: (dir: string) => T): T {
 function publishedPatchFailure(cwd: string, parent: string, commit: string, published: readonly string[]): string | null {
   const wanted = trimmed(git(cwd, ['rev-parse', `${commit}^{tree}`]).stdout);
   const blobs = new Set<string>();
-  for (const tip of published.slice(0, MAX_PATCH_SOURCES)) {
+  for (const tip of published) {
     const found = git(cwd, ['rev-parse', '--verify', '--quiet', `${tip}:patch.diff`]);
     const oid = trimmed(found.stdout);
     if (found.ok && OID.test(oid) && trimmed(git(cwd, ['cat-file', '-t', oid]).stdout) === 'blob') blobs.add(oid);
@@ -706,6 +705,15 @@ function effectiveHooksDir(root: string): string | null {
   try { return realpathSync(absolute); } catch { return absolute; }
 }
 
+/** Existing per-worktree config files (main and linked) that set core.hooksPath. */
+function dormantHooksPathFiles(common: string): string[] {
+  const files = [join(common, 'config.worktree')];
+  try {
+    for (const entry of readdirSync(join(common, 'worktrees'))) files.push(join(common, 'worktrees', entry, 'config.worktree'));
+  } catch { /* no linked worktree registry */ }
+  return files.filter((file) => existsSync(file) && git(common, ['config', '--file', file, '--get', 'core.hooksPath']).ok);
+}
+
 function snapshotHooks(roots: readonly string[]): Map<string, string | null> {
   return new Map(roots.map((root) => [safeReal(root), effectiveHooksDir(root)]));
 }
@@ -751,6 +759,14 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
   const extension = git(worktree, ['config', '--file', commonConfig, '--get', 'extensions.worktreeConfig']);
   const extensionWasOn = extension.ok && trimmed(extension.stdout) === 'true';
   if (!extensionWasOn) {
+    // Git ignores config.worktree until the extension is on; enabling it would silently activate any dormant hooksPath
+    // there and change which hooks the manager or a sibling already runs.
+    const dormant = dormantHooksPathFiles(common);
+    if (dormant.length > 0) {
+      return refuse('manager_push_guard_dormant_worktree_hooks',
+        `config.worktree already sets core.hooksPath in ${dormant.join(', ')} while extensions.worktreeConfig is off; enabling per-worktree config would activate it and change effective hooks. Move that setting into the shared config or remove it, then rerun the supervised launch`,
+        { ...evidence, dormant });
+    }
     if (!git(worktree, ['config', '--file', commonConfig, 'extensions.worktreeConfig', 'true']).ok) {
       return refuse('manager_push_guard_worktree_config_unavailable',
         'enable extensions.worktreeConfig manually (git config extensions.worktreeConfig true) after checking tooling compatibility, then rerun the supervised launch', evidence);
@@ -862,6 +878,7 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
   if (!effective) {
     git(worktree, ['config', '--worktree', '--unset', 'core.hooksPath']);
     git(worktree, ['config', '--worktree', '--unset', KEY.installed]);
+    rollbackExtension();
     return refuse('manager_push_guard_unobserved',
       'the guard hook is not effective for this manager only (hooksPath not selected from config.worktree, probe failed, or another worktree changed); the selection was reverted. Fix the worktree config or Node runtime and rerun the supervised launch; do not rely on push protection until it is observed',
       { ...evidence, effectiveHooksDir: observed, othersUnchanged });
