@@ -679,16 +679,19 @@ function retryProviderArgs(profile: ExecutorProfile): string[] {
  * command proves the selected launch command and a screen snapshot must show
  * Claude Code with both selected model and effort in the footer.
  */
-export function claudePaneProfileObserved(
+export async function claudePaneProfileObserved(
   profile: ExecutorProfile,
   worker: RuntimeWorker,
   adapter: RuntimeAdapter,
-): boolean {
+): Promise<boolean> {
   if (profile.family !== 'claude' || !profile.model || !profile.effort) return false;
   const observed = adapter.observeComposerFamily?.(worker.identity);
   if (!observed || observed.status !== 'known' || observed.family !== 'non-opencode'
     || observed.command !== profile.launchCommand) return false;
-  const screen = adapter.readBoundedOutput({ worker: worker.identity, screen: true, limit: 120 });
+  // The existing Orca async screen-read seam revalidates this composite
+  // generation while keeping this supervised launch path non-blocking.
+  if (!adapter.readBoundedOutputAsync) return false;
+  const screen = await adapter.readBoundedOutputAsync({ worker: worker.identity, screen: true, limit: 120 });
   if (screen.status !== 'ok' || screen.value.source !== 'screen'
     || screen.value.terminalState !== 'running'
     || !sameIdentity(screen.value.worker, worker.identity)) return false;
@@ -987,7 +990,7 @@ export async function runSupervisedTaskLaunchAssistant(
       liveness = deps.adapter.liveness({ worker: terminal.identity, observationWindowMs: LAUNCH_STARTUP_OBSERVATION_WINDOW_MS });
       if (!sameIdentity(liveness.worker, terminal.identity)) terminalCause = 'terminal_generation_mismatch';
       else if (liveness.status !== 'idle') terminalCause = `terminal_liveness_${liveness.status}`;
-      else if (profile.family === 'claude' && !claudePaneProfileObserved(profile, terminal, deps.adapter)) {
+      else if (profile.family === 'claude' && !(await claudePaneProfileObserved(profile, terminal, deps.adapter))) {
         terminalCause = 'executor_effort_channel_unavailable';
       }
     }
