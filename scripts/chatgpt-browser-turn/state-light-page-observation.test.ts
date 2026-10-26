@@ -2617,3 +2617,53 @@ describe('Issue #2669 coherent structured composer verification', () => {
     expect(await matches(composer)).toBe(true);
   });
 });
+
+describe('Issue #2718 SENDING phase in the existing observation grammar', () => {
+  it('adds prepared -> sending -> dispatching|not_sent through the existing writer only', async () => {
+    const { mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const observation = await import('./state-light-turn-observation.ts');
+    const root = mkdtempSync(join(tmpdir(), 'issue-2718-sending-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    try {
+      const profileKey = 'profile-2718';
+      const admit = (invocationId: string) => observation.admitStateLightTurnObservation({
+        profileKey, invocationId, marker: 'OPKTURNV1' + invocationId,
+      });
+      const move = (invocationId: string, phase: Parameters<typeof observation.transitionStateLightTurnObservation>[0]['phase']) =>
+        observation.transitionStateLightTurnObservation({ profileKey, invocationId, phase, reason: 'pr_author_send_claim:acme/widgets#7' });
+
+      admit('claim-dispatch');
+      expect(move('claim-dispatch', 'sending')).toMatchObject({
+        schema: 'state-light-turn-observation/v1', phase: 'sending', transition_reason: 'pr_author_send_claim:acme/widgets#7',
+      });
+      expect(move('claim-dispatch', 'sending').phase).toBe('sending');
+      expect(move('claim-dispatch', 'dispatching').phase).toBe('dispatching');
+
+      admit('claim-refused');
+      move('claim-refused', 'sending');
+      expect(move('claim-refused', 'not_sent').phase).toBe('not_sent');
+      expect(() => move('claim-refused', 'sending')).toThrow('observation_phase_transition_invalid');
+
+      // SENDING never stands for a dispatch or a delivery witness.
+      admit('claim-skip');
+      move('claim-skip', 'sending');
+      for (const phase of ['sent_unbound', 'sent_unharvested', 'harvested', 'prepared'] as const) {
+        expect(() => move('claim-skip', phase)).toThrow('observation_phase_transition_invalid');
+      }
+      expect(observation.readStateLightTurnObservation(profileKey, 'claim-skip').phase).toBe('sending');
+
+      // Per-invocation read of a persisted SENDING record; older phases keep their meaning.
+      const path = observation.observationRecordPath(profileKey, 'claim-skip');
+      expect(JSON.parse(readFileSync(path, 'utf8')).phase).toBe('sending');
+      admit('legacy');
+      expect(move('legacy', 'dispatching').phase).toBe('dispatching');
+      writeFileSync(path, readFileSync(path, 'utf8').replace('"phase":"sending"', '"phase":"claiming"'));
+      expect(() => observation.readStateLightTurnObservation(profileKey, 'claim-skip')).toThrow('observation_record_malformed');
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

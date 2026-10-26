@@ -9,11 +9,14 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runProcess } from '../kernel/subprocess.ts';
 import {
   abandonLatePageHandle,
   boundedResourceCleanup,
@@ -65,15 +68,17 @@ import {
   verifyStateLightFreshClaimOwnerFence,
   waitForConversationUrlAfterSend,
 } from './state-light-fresh-conversation.ts';
-import { atomicJson, configuredProfileKey, profileDirs } from './storage-common.ts';
+import { atomicJson, configuredProfileKey, profileDirs, profileStoreRoot } from './storage-common.ts';
 import {
   admitStateLightTurnObservation,
   bindStateLightOwnedTarget,
   finalizeStateLightPrimaryPublication,
   packCreatedTerminalTarget,
   readVerifiedStateLightHarvestedPrimary,
+  observationRecordPath,
   readStateLightTurnObservation,
   transitionStateLightTurnObservation,
+  type StateLightTurnObservationRecord,
 } from './state-light-turn-observation.ts';
 import {
   ASSISTANT_MESSAGE_STYLE,
@@ -4380,6 +4385,8 @@ async function runTurnCore(
     'predecessor-attempt-identity',
     'predecessor-run-identity',
     'predecessor-owner-task-id',
+    'repo',
+    'pr',
   ]);
   const invocationId = stringOption(args, 'invocation-id') ?? '';
   const previousInvocation = stringOption(args, 'predecessor-invocation-id');
@@ -4412,6 +4419,11 @@ async function runTurnCore(
   let heartbeatStableReads = 0;
   let heartbeatCompletionReady = false;
   let heartbeatLastReply = '';
+  let prAuthorBinding: PrAuthorBinding | undefined;
+  /** Fresh REST head captured immediately before this invocation's dispatch (in memory only). */
+  let prAuthorSendHead: PrAuthorHeadObservation | undefined;
+  let prAuthorClaimPassed = false;
+  let prAuthorNextHeadPollAt = 0;
 
   const setHeartbeatPhase = (phase: BrowserTurnLivenessPhase, pulse = true): void => {
     heartbeatPhase = phase;
@@ -4442,6 +4454,9 @@ async function runTurnCore(
   let observedProductErrorText = '';
   let held429Witness: HeldPage429Witness | undefined;
   let held429Page: any;
+  let ownSubmissionEverIssued = false;
+  signalSubmissionWitness = () => ownSubmissionEverIssued
+    || (held429Witness ? held429Witness.ownSubmissionIssued() : undefined);
   const preSendPageRoute = (): string => {
     try {
       const url = new URL(String(page.url()));
@@ -4478,6 +4493,7 @@ async function runTurnCore(
     }
   };
   const attachHeld429 = (heldPage: any, ownedChatUrl?: string): void => {
+    ownSubmissionEverIssued ||= held429Witness?.ownSubmissionIssued() === true;
     held429Witness?.dispose();
     held429Page = heldPage;
     held429Witness = observeHeldPageConversation429(heldPage, ownedChatUrl, (observed) => {
@@ -4555,6 +4571,19 @@ async function runTurnCore(
       };
     }
     profileKey = configuredProfileKey(baseConfig.profile, baseConfig.cdp);
+    const prAuthorPair = parsePrAuthorBindingPair(stringOption(args, 'repo'), stringOption(args, 'pr'));
+    if (prAuthorPair.error) {
+      incident('input_invalid', prAuthorPair.error, 'return_local_error');
+      return {
+        result: compactResult(
+          'input_invalid', 'invocation', prAuthorPair.error,
+          invocationId, profileKey, 0, pollCount, navigation, incidents,
+          { next_action: 'Pass both --repo <owner/repo> and --pr <number> for a PR author, or neither for Issue-author and reviewer turns.' },
+          journalWriteFailed,
+        ),
+      };
+    }
+    prAuthorBinding = prAuthorPair.binding;
     if (!baseConfig.newChat && baseConfig.chatUrl
       && definitelyMalformedChatTarget(baseConfig.chatUrl)) {
       incident('invocation_blocker', 'chat_not_found', 'return_local_error');
@@ -5118,6 +5147,76 @@ async function runTurnCore(
       }
     };
 
+    const prAuthorRefusal = (
+      state: TurnState, cause: string, extra: Partial<TurnResultV1>,
+    ): TurnRunOutcome => {
+      incident('invocation_blocker', cause, 'return_local_error_zero_send');
+      return {
+        page, browser,
+        result: compactResult(
+          state, 'invocation', cause, invocationId, profileKey, sendCount, pollCount,
+          navigation, incidents, { send_attempted: false, ...extra }, journalWriteFailed,
+        ),
+      };
+    };
+    // Fresh authenticated REST OPEN/repo/head-ref/worktree-branch check; the SEND
+    // SHA is (re)captured here immediately before dispatch, never by the adapter.
+    const capturePrAuthorSendHead = async (): Promise<TurnRunOutcome | null> => {
+      if (!prAuthorBinding) return null;
+      const binding = prAuthorBinding;
+      const head = await (prAuthorTurnHooks.readHead ?? readPrAuthorHeadViaPackGh)(binding).catch(() => undefined);
+      const branch = await (prAuthorTurnHooks.readBranch ?? readWorktreeBranch)(process.cwd()).catch(() => undefined);
+      const mismatch = prAuthorHeadMismatch(head, binding, branch);
+      if (mismatch) {
+        return prAuthorRefusal(mismatch === 'pr_author_pr_unreadable' ? 'send_failed' : 'input_invalid', mismatch, {
+          next_action: 'Nothing was sent. Verify the bound PR is OPEN, its head repository is the bound repository and '
+            + 'its head ref equals this worktree branch, then relaunch with a fresh invocation ID.',
+        });
+      }
+      prAuthorSendHead = head;
+      return null;
+    };
+    // Decisive PRE-SEND (#2718): own locator visible -> persist the claim phase
+    // through the existing observation writer -> one final same-repo+PR scan.
+    const prAuthorPreSendGate = async (): Promise<TurnRunOutcome | null> => {
+      if (!prAuthorBinding || prAuthorClaimPassed) return null;
+      const binding = prAuthorBinding;
+      const reader = prAuthorTurnHooks.reader;
+      const headFailure = await capturePrAuthorSendHead();
+      if (headFailure) return headFailure;
+      const own = scanPrAuthorCandidates({ binding, profileKey, ...(reader ? { reader } : {}) })
+        .some((candidate) => candidate.invocationId === invocationId && candidate.launcherLive);
+      if (!own) {
+        return prAuthorRefusal('driver_error', 'pr_author_self_record_not_visible', {
+          next_action: 'Nothing was sent. This invocation\'s own launcher locator/receipt is not visible in the same-PR '
+            + 'run-record scan; relaunch through flow-manager-browser-gpt-long-run with --repo/--pr and a fresh invocation ID.',
+        });
+      }
+      try {
+        transitionStateLightTurnObservation({
+          profileKey, invocationId, phase: 'sending', reason: prAuthorClaimReason(binding),
+        });
+      } catch {
+        return prAuthorRefusal('driver_error', 'pr_author_send_claim_not_persisted', {
+          next_action: 'Nothing was sent. The SENDING claim could not be persisted; relaunch with a fresh invocation ID.',
+        });
+      }
+      await prAuthorTurnHooks.beforeFinalScan?.(invocationId);
+      const holder = findOtherPrAuthorHolder({
+        binding, profileKey, ownInvocationId: invocationId, worktree: process.cwd(), ...(reader ? { reader } : {}),
+      });
+      await prAuthorTurnHooks.afterFinalScan?.(invocationId);
+      if (holder) {
+        return prAuthorRefusal('conversation_busy', 'pr_author_occupied', {
+          next_action: PR_AUTHOR_OCCUPIED_NEXT_ACTION,
+          send_slot_holder_invocation_id: holder.invocationId,
+          send_slot_holder_phase: holder.phase,
+        });
+      }
+      prAuthorClaimPassed = true;
+      return null;
+    };
+
     const sendOwnedFreshPrompt = async (): Promise<TurnRunOutcome | null> => {
       setHeartbeatPhase('composer_dispatch');
       if (freshCleanup) freshCleanup.markedPayload = markedPayload;
@@ -5349,6 +5448,9 @@ async function runTurnCore(
         onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_blind_resend'),
       });
       let delivery: Awaited<ReturnType<typeof dispatchStateLightSendAndObserveDelivery>>;
+      // Recapture S only while no Send was attempted; later retries keep the first SEND SHA.
+      const freshSendHeadFailure = sendCount === 0 && !sendAttempted ? await capturePrAuthorSendHead() : null;
+      if (freshSendHeadFailure) return freshSendHeadFailure;
       try {
         delivery = await sendAction();
       } catch (error) {
@@ -5412,6 +5514,8 @@ async function runTurnCore(
     };
 
     const sendOwnedPrompt = async (): Promise<TurnRunOutcome | null> => {
+      const prAuthorGateFailure = await prAuthorPreSendGate();
+      if (prAuthorGateFailure) return prAuthorGateFailure;
       if (config.newChat) return await sendOwnedFreshPrompt();
       setHeartbeatPhase('composer_dispatch');
       // Initial and reopened continuations share the incumbent complete-history guard.
@@ -5535,6 +5639,9 @@ async function runTurnCore(
           ownSubmissionIssued: () => held429Witness?.ownSubmissionIssued() === true,
           onActionError: (diagnostic) => incident('send_transport_error', diagnostic, 'observe_delivery_no_resend'),
         });
+      // Recapture S only while no Send was attempted; later retries keep the first SEND SHA.
+      const existingSendHeadFailure = sendCount === 0 && !sendAttempted ? await capturePrAuthorSendHead() : null;
+      if (existingSendHeadFailure) return existingSendHeadFailure;
       let delivery = await dispatchExisting(sendWaitMs);
       let repeated = false;
       if (hasSendButton && delivery.sendCount === 0 && delivery.witness === 'unproven'
@@ -6793,9 +6900,43 @@ async function runTurnCore(
     };
     // Each iteration rechecks a same-invocation committed primary before any
     // mutable Send-count/late-URL transition or new transcript acquisition.
+    // #2718 AUTHOR EFFECT: the same bound OPEN PR/ref moved past the SEND SHA
+    // while this invocation is in flight. Truthful `ok` without reply bytes;
+    // the original Page is preserved (no Stop/close; later guarded retire-owned).
+    const prAuthorEffect = async (): Promise<TurnRunOutcome | null> => {
+      if (!prAuthorBinding || !prAuthorSendHead || (!sendAttempted && sendCount === 0)) return null;
+      if (Date.now() < prAuthorNextHeadPollAt) return null;
+      prAuthorNextHeadPollAt = Date.now() + Math.max(config.pollMs, PR_AUTHOR_HEAD_POLL_FLOOR_MS);
+      if (Date.now() >= hardExhaustionDeadline) return null;
+      const live = await (prAuthorTurnHooks.readHead ?? readPrAuthorHeadViaPackGh)(prAuthorBinding)
+        .catch(() => undefined);
+      // An effect observed only after the absolute deadline is not in flight:
+      // the incumbent deadline result stands.
+      if (Date.now() >= hardExhaustionDeadline) return null;
+      if (!prAuthorHeadEffect(prAuthorSendHead, live)) return null;
+      // A genuine reply already published for this invocation stays the result.
+      const committed = verifiedExternalPrimary();
+      if (committed) return committed;
+      incident('author_effect', 'author_effect_pr_head_changed', 'retain_page_no_stop_no_close');
+      return {
+        page, browser, cleanupAction: 'preserve',
+        result: compactResult(
+          'ok', 'none', 'author_effect_pr_head_changed',
+          invocationId, profileKey, sendCount, pollCount, navigation, incidents,
+          {
+            send_attempted: true,
+            next_action: PR_AUTHOR_EFFECT_NEXT_ACTION,
+            ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
+          },
+          journalWriteFailed,
+        ),
+      };
+    };
     while (true) {
       const independentlyCommitted = verifiedExternalPrimary();
       if (independentlyCommitted) return independentlyCommitted;
+      const authorEffect = await prAuthorEffect();
+      if (authorEffect) return authorEffect;
       if (Date.now() >= hardExhaustionDeadline) {
         const cause = uncertainCause || 'post_send_absolute_deadline_elapsed';
         incident('post_send_observation_error', cause, 'terminal_cleanup_no_resend');
@@ -8564,14 +8705,16 @@ async function retireDetachedOriginalTarget(input: {
   readonly invocationId: string;
   readonly cdp: string;
   readonly deadlineMs: number;
+  /** Re-run the unchanged guard on a settle refusal until deadlineMs. */
+  readonly settleUntilDeadline?: true;
 }): Promise<{ readonly status: 'confirmed' | 'cleanup_unconfirmed'; readonly targetId?: string; readonly cause?: string }> {
   let record: ReturnType<typeof readStateLightTurnObservation>;
   try {
     record = readStateLightTurnObservation(input.profileKey, input.invocationId);
-  } catch { return { status: 'cleanup_unconfirmed' }; }
+  } catch { return { status: 'cleanup_unconfirmed', cause: 'observation_unreadable' }; }
   const pinned = record.owned_target;
   if (!pinned?.created || pinned.cdp_sha256 !== createHash('sha256').update(input.cdp, 'utf8').digest('hex')) {
-    return { status: 'cleanup_unconfirmed', ...(pinned ? { targetId: pinned.id } : {}) };
+    return { status: 'cleanup_unconfirmed', cause: 'pin_unproven', ...(pinned ? { targetId: pinned.id } : {}) };
   }
   const targetId = pinned.id;
   let attachedBrowser: any;
@@ -8579,9 +8722,9 @@ async function retireDetachedOriginalTarget(input: {
     const census = await listCdpPageTargets(input.cdp,
       Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, input.deadlineMs - Date.now())));
     const selected = census.filter((target) => target.id === targetId);
-    if (selected.length === 0) return { status: 'confirmed', targetId };
+    if (selected.length === 0) return { status: 'confirmed', targetId, cause: 'target_absent' };
     if (selected.length !== 1 || Date.now() >= input.deadlineMs) {
-      return { status: 'cleanup_unconfirmed', targetId };
+      return { status: 'cleanup_unconfirmed', targetId, cause: 'target_census_ambiguous' };
     }
     const attached = await attachOwnTarget(loadChromium(), {
       mode: 'own-target', cdp: input.cdp, newChat: false,
@@ -8593,17 +8736,29 @@ async function retireDetachedOriginalTarget(input: {
     const page = contexts.length === 1 && contexts[0]?.pages().length === 1
       ? contexts[0].pages()[0] : undefined;
     if (!page || getOwnTargetInfo(attachedBrowser)?.targetId !== targetId) {
-      return { status: 'cleanup_unconfirmed', targetId };
+      return { status: 'cleanup_unconfirmed', targetId, cause: 'reattach_page_unproven' };
     }
     const result = compactResult('observation_uncertain', 'invocation',
       'original_target_retirement_only', input.invocationId, input.profileKey,
       record.send_count ?? 0, 0, new StateLightNavigationCounter(), []);
-    const cleanup = await guardedOriginalTargetRetirement({
+    const retire = () => guardedOriginalTargetRetirement({
       outcome: { page, browser: attachedBrowser, result },
       cdp: input.cdp, verifiedPredecessor: true,
     });
+    let cleanup = await retire();
+    // A page SIGTERMed before its composer rendered refuses composer_unknown;
+    // every pass is the full guard, so a later pass only closes a proven page.
+    while (input.settleUntilDeadline && cleanup.settling
+      && Date.now() + SIGNAL_RETIREMENT_SETTLE_POLL_MS < input.deadlineMs) {
+      await new Promise((settle) => setTimeout(settle, SIGNAL_RETIREMENT_SETTLE_POLL_MS));
+      cleanup = await retire();
+    }
     return { status: cleanup.status === 'confirmed' ? 'confirmed' : 'cleanup_unconfirmed', targetId, cause: cleanup.cause };
-  } catch { return { status: 'cleanup_unconfirmed', targetId }; }
+  } catch (error) {
+    // Diagnostic only: a bounded token of the reattach/close failure.
+    const detail = (error instanceof Error ? error.message : String(error)).replace(/[^A-Za-z0-9._:-]/gu, '_');
+    return { status: 'cleanup_unconfirmed', targetId, cause: ('retirement_error:' + detail).slice(0, 128) };
+  }
   finally { if (attachedBrowser) await releaseCdpBrowser(attachedBrowser, RESOURCE_CLEANUP_BOUND_MS); }
 }
 
@@ -8622,6 +8777,7 @@ const RETIREMENT_SETTLE_CAUSES: ReadonlySet<string> = new Set([
 ]);
 const RETIREMENT_SETTLE_RETRIES = 12;
 const RETIREMENT_SETTLE_DELAY_MS = 5_000;
+const SIGNAL_RETIREMENT_SETTLE_POLL_MS = 250;
 
 /** Diagnostic only: name up to three in-progress nodes; never a close input. */
 async function describeInProgressNodes(page: any, waitMs: number): Promise<string> {
@@ -8966,8 +9122,9 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
   const pageLost = browserOrPageDefinitelyLost(outcome.page, outcome.browser);
   let observedNotSent = false;
 
-  // Only prepared state proves no dispatch. A dispatching record is possible
-  // delivery even with a zero observed count; preserve its recovery identity.
+  // Only prepared (or the pre-dispatch PR-author sending claim) proves no
+  // dispatch. A dispatching record is possible delivery even with a zero
+  // observed count; preserve its recovery identity.
   if (
     outcome.result.send_count === 0
     && outcome.result.invocation_id.length > 0
@@ -8978,7 +9135,8 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
         outcome.result.configured_profile_key,
         outcome.result.invocation_id,
       );
-      if (observation.phase === 'prepared' && outcome.result.send_attempted !== true) {
+      if ((observation.phase === 'prepared' || observation.phase === 'sending')
+        && outcome.result.send_attempted !== true) {
         transitionStateLightTurnObservation({
           profileKey: outcome.result.configured_profile_key,
           invocationId: outcome.result.invocation_id,
@@ -9074,6 +9232,8 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
   // path below, which rechecks current owner, route and generation evidence.
   let pageAction: PageCleanupAction = (cleanupAuthorityProven || adoptedCleanupAuthority) && !pageLost
     && outcome.result.cause !== 'post_send_target_crashed'
+    // #2718: an author effect keeps the possibly streaming original Page (no Stop/close).
+    && outcome.result.cause !== 'author_effect_pr_head_changed'
     && outcome.ownershipForfeited !== true && positivelyCreatedOriginal
     && outcomePageIsOriginal ? 'close' : 'skip';
   if (pageAction === 'close' && outcome.result.send_count === 0
@@ -9143,6 +9303,7 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
   // the original CDP target remains. Use only its exact reattach/guard path.
   let detachedOriginalCleanupUnconfirmed = false;
   if (outcome.originalCreatedPage && !outcome.ownershipForfeited
+    && outcome.result.cause !== 'author_effect_pr_head_changed'
     && (outcome.page !== outcome.originalCreatedPage || pageLost || !pinnedOriginal?.created)) {
     const detached = await retireDetachedOriginalTarget({
       profileKey: outcome.result.configured_profile_key,
@@ -9395,6 +9556,669 @@ export const __testSendDelivery = {
   observeExistingServerCheckedRecovery,
 };
 
+// Issue #2718 (B1): explicit PR-author binding. Both --repo and --pr absent keep
+// the unbound Issue-author/reviewer route; both present designate a PR AUTHOR.
+// Occupancy is derived from the existing invocation locators, handoff receipts,
+// terminal envelopes and per-invocation observation records only; repo/PR come
+// from the exact live launcher (or surviving state-light child) argv.
+
+export interface PrAuthorBinding {
+  /** Lower-cased `owner/name`. */
+  readonly repo: string;
+  readonly pr: number;
+}
+
+const PR_AUTHOR_REPOSITORY_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
+/** Positive lower bound for the post-SEND same-PR head poll; `--poll-ms` may only raise it. */
+export const PR_AUTHOR_HEAD_POLL_FLOOR_MS = 5_000;
+export const PR_AUTHOR_OCCUPIED_NEXT_ACTION = 'retry only after that turn ends';
+export const PR_AUTHOR_EFFECT_NEXT_ACTION =
+  'The bound PR head changed while this author turn was in flight (author effect); no assistant reply was '
+  + 'harvested. Inspect the PR state (head commit, diff, CI) on GitHub; there is no --output file to read.';
+// The pack root is fixed by this module location: scripts/chatgpt-browser-turn/.
+const PR_AUTHOR_PACK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+export const PR_AUTHOR_CANONICAL_LAUNCHER = join(PR_AUTHOR_PACK_ROOT, 'scripts/flow-manager-long-running-child.ts');
+export const PR_AUTHOR_CANONICAL_ENTRY = join(PR_AUTHOR_PACK_ROOT, 'scripts/chatgpt-browser-turn/state-light-entry.ts');
+const PR_AUTHOR_PACK_GH = join(PR_AUTHOR_PACK_ROOT, 'scripts/gh');
+// Read-only mirrors of the existing launcher record shapes. The launcher module
+// itself stays outside this browser-driver import graph.
+const PR_AUTHOR_LOCATOR_SCHEMA = 'flow-manager-long-running-child-locator/v1';
+const PR_AUTHOR_HANDOFF_SCHEMA = 'flow-manager-long-running-child-handoff/v1';
+const PR_AUTHOR_TERMINAL_SCHEMA = 'flow-manager-long-running-child-terminal/v1';
+
+/** The launcher's locator directory, honoring only its existing two-part fixture gate. */
+function prAuthorLocatorRoot(): string {
+  const fixtureRoot = process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT;
+  const terminalRoot = process.env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
+    && typeof fixtureRoot === 'string' && fixtureRoot.startsWith('/')
+    ? resolve(fixtureRoot)
+    : '/tmp/opencode';
+  return join(terminalRoot, 'browser-gpt-receipts');
+}
+
+function readPrAuthorJson(path: string): Record<string, unknown> | undefined {
+  try {
+    const value = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  } catch { return undefined; }
+}
+
+/** Same run/attempt record of `schema`; undefined when absent, foreign or malformed. */
+function readPrAuthorRunRecord(
+  path: string, schema: string, identity: { runIdentity: string; attemptIdentity: string },
+): Record<string, unknown> | undefined {
+  const value = readPrAuthorJson(path);
+  return value?.schema === schema && value.run_identity === identity.runIdentity
+    && value.attempt_identity === identity.attemptIdentity ? value : undefined;
+}
+
+/** Atomic optional pair: neither, or both valid; exactly one is a refusal. */
+export function parsePrAuthorBindingPair(
+  repo: string | undefined,
+  pr: string | undefined,
+): { readonly binding?: PrAuthorBinding; readonly error?: string } {
+  if (repo === undefined && pr === undefined) return {};
+  if (repo === undefined || pr === undefined) return { error: 'pr_author_binding_pair_partial' };
+  if (!PR_AUTHOR_REPOSITORY_RE.test(repo) || !/^[1-9][0-9]*$/u.test(pr) || !Number.isSafeInteger(Number(pr))) {
+    return { error: 'pr_author_binding_invalid' };
+  }
+  return { binding: { repo: repo.toLowerCase(), pr: Number(pr) } };
+}
+
+export interface PrAuthorHeadObservation {
+  readonly state: string;
+  readonly sha: string;
+  /** `head.repo.full_name`, lower-cased. */
+  readonly headRepo: string;
+  readonly headRef: string;
+  /** `base.repo.full_name`, lower-cased. */
+  readonly baseRepo: string;
+  /** `base.ref`; a retarget to another base branch is never an author effect. */
+  readonly baseRef?: string;
+}
+
+export interface PrAuthorProcessReader {
+  /** NUL-split `/proc/<pid>/cmdline`; undefined when dead or unreadable. */
+  readonly cmdline: (pid: number) => readonly string[] | undefined;
+  /** Process start as epoch ms from `/proc/<pid>/stat` starttime and `/proc/stat` btime. */
+  readonly startTimeMs: (pid: number) => number | undefined;
+}
+
+/** USER_HZ: the kernel's fixed /proc clock-tick unit (100 on every Linux ABI). */
+const PROC_USER_HZ = 100;
+
+export const linuxPrAuthorProcessReader: PrAuthorProcessReader = {
+  cmdline: (pid) => {
+    if (!Number.isSafeInteger(pid) || pid <= 1) return undefined;
+    try {
+      const raw = readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+      if (!raw) return undefined;
+      const argv = raw.split('\0');
+      if (argv[argv.length - 1] === '') argv.pop();
+      return argv;
+    } catch { return undefined; }
+  },
+  startTimeMs: (pid) => {
+    if (!Number.isSafeInteger(pid) || pid <= 1) return undefined;
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      // comm may contain spaces/parentheses: fields resume after the last ')'.
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      const ticks = Number(fields[19]);
+      const btime = /^btime (\d+)$/mu.exec(readFileSync('/proc/stat', 'utf8'))?.[1];
+      if (!Number.isSafeInteger(ticks) || ticks < 0 || !btime) return undefined;
+      return Number(btime) * 1_000 + Math.floor((ticks * 1_000) / PROC_USER_HZ);
+    } catch { return undefined; }
+  },
+};
+
+function argvValues(argv: readonly string[], from: number, flag: string): string[] {
+  const values: string[] = [];
+  for (let i = from; i < argv.length; i++) {
+    if (argv[i] === flag) values.push(argv[i + 1] ?? '');
+  }
+  return values;
+}
+
+/** Exactly one occurrence of `flag` after `from`, with exactly this value. */
+function argvExactPair(argv: readonly string[], from: number, flag: string, value: string, fold = false): boolean {
+  const values = argvValues(argv, from, flag);
+  return values.length === 1 && (fold ? values[0]!.toLowerCase() === value : values[0] === value);
+}
+
+function entryTurnIndex(argv: readonly string[], from = 0): number {
+  for (let i = from; i < argv.length; i++) {
+    if (argv[i] === PR_AUTHOR_CANONICAL_ENTRY && argv[i + 1] === 'turn') return i;
+  }
+  return -1;
+}
+
+function argvBindsPr(argv: readonly string[], entry: number, invocationId: string, binding: PrAuthorBinding): boolean {
+  return argvExactPair(argv, entry, '--invocation-id', invocationId)
+    && argvExactPair(argv, entry, '--repo', binding.repo, true)
+    && argvExactPair(argv, entry, '--pr', String(binding.pr));
+}
+
+/** Launcher process start may precede the receipt's wall clock by bootstrap time only. */
+const LAUNCHER_START_SKEW_AFTER_MS = 2_000;
+const LAUNCHER_START_BOOTSTRAP_MAX_MS = 120_000;
+
+/**
+ * ARCH17:40 exact live launcher: canonical launcher argv carrying this
+ * invocation and the explicit same --repo/--pr pair, whose normalized /proc
+ * starttime is consistent with the receipt `launcher_started_at`. A dead,
+ * recycled, unreadable or mismatched PID is not this launcher.
+ */
+export function isExactLivePrAuthorLauncher(input: {
+  readonly pid: number;
+  readonly invocationId: string;
+  readonly launcherStartedAt: string;
+  readonly binding: PrAuthorBinding;
+  readonly reader?: PrAuthorProcessReader;
+}): boolean {
+  const reader = input.reader ?? linuxPrAuthorProcessReader;
+  const argv = reader.cmdline(input.pid);
+  if (!argv) return false;
+  const launcher = argv.findIndex((token) => token === PR_AUTHOR_CANONICAL_LAUNCHER);
+  if (launcher < 0 || argv[launcher + 1] !== 'launch') return false;
+  const entry = entryTurnIndex(argv, launcher);
+  if (entry < 0) return false;
+  if (!argvExactPair(argv.slice(0, entry), launcher, '--invocation-id', input.invocationId)) return false;
+  if (!argvBindsPr(argv, entry, input.invocationId, input.binding)) return false;
+  const startedAt = Date.parse(input.launcherStartedAt);
+  const processStart = reader.startTimeMs(input.pid);
+  return Number.isFinite(startedAt) && processStart !== undefined
+    && processStart <= startedAt + LAUNCHER_START_SKEW_AFTER_MS
+    && startedAt - processStart <= LAUNCHER_START_BOOTSTRAP_MAX_MS;
+}
+
+/** A surviving detached state-light child of the same invocation and bound pair. */
+export function isLivePrAuthorChild(input: {
+  readonly pid: number;
+  readonly invocationId: string;
+  readonly binding: PrAuthorBinding;
+  readonly reader?: PrAuthorProcessReader;
+}): boolean {
+  const argv = (input.reader ?? linuxPrAuthorProcessReader).cmdline(input.pid);
+  if (!argv) return false;
+  const entry = entryTurnIndex(argv);
+  return entry >= 0 && argvBindsPr(argv, entry, input.invocationId, input.binding);
+}
+
+function argvTimeoutMs(argv: readonly string[] | undefined): number {
+  const entry = argv ? entryTurnIndex(argv) : -1;
+  const values = entry >= 0 ? argvValues(argv!, entry, '--timeout-ms') : [];
+  const parsed = values.length === 1 && /^[1-9][0-9]*$/u.test(values[0]!) ? Number(values[0]) : DEFAULT_TIMEOUT_MS;
+  return Math.min(parsed, STATE_LIGHT_MAX_TIMEOUT_MS);
+}
+
+function argvProfileKey(argv: readonly string[] | undefined): string | undefined {
+  const entry = argv ? entryTurnIndex(argv) : -1;
+  if (entry < 0) return undefined;
+  const profile = argvValues(argv!, entry, '--profile');
+  const cdp = argvValues(argv!, entry, '--cdp');
+  if (profile.length !== 1 || cdp.length !== 1) return undefined;
+  try { return configuredProfileKey(profile[0]!, cdp[0]!); } catch { return undefined; }
+}
+
+export interface PrAuthorCandidate {
+  readonly invocationId: string;
+  readonly launcherPid: number;
+  /** Exact live launcher of this bound invocation (ARCH17:40). */
+  readonly launcherLive: boolean;
+  /** Launcher not live, but the same invocation's bound state-light child survives. */
+  readonly orphanChildLive: boolean;
+  /**
+   * Neither process is attributable, but the persisted record is: its SENDING
+   * claim names this binding, or the receipt's child worktree is this PR's
+   * worktree (git checks a branch out in one worktree only).
+   */
+  readonly claimOnly?: true;
+  /** Profile whose observation record holds this invocation; undefined when none is found. */
+  readonly profileKey?: string;
+  /**
+   * Absolute release time for a candidate without a live launcher: unbounded
+   * while its bound child lives, else grounded in the immutable receipt
+   * `launcher_started_at`, never in the mutable `transitioned_at`.
+   */
+  readonly deadlineMs: number;
+}
+
+interface LocatorShape {
+  readonly schema?: unknown;
+  readonly invocation_id?: unknown;
+  readonly handoff_receipt_path?: unknown;
+  readonly terminal_envelope_path?: unknown;
+  readonly run_identity?: unknown;
+  readonly attempt_identity?: unknown;
+}
+
+const PR_AUTHOR_CLAIM_REASON_PREFIX = 'pr_author_send_claim:';
+
+/** The persisted SENDING transition reason; it names the binding the claim was made for. */
+export function prAuthorClaimReason(binding: PrAuthorBinding): string {
+  return `${PR_AUTHOR_CLAIM_REASON_PREFIX}${binding.repo}#${binding.pr}`;
+}
+
+/** Covers the launcher-start-to-`invocationStartedAt` gap of a dead invocation. */
+const PR_AUTHOR_DEADLINE_GRACE_MS = 30_000;
+
+/**
+ * Reads one invocation's existing observation record by invocation ID. The
+ * record lives under the candidate's own profile, which may differ from the
+ * scanning author's: try the known keys, then every profile directory of the
+ * existing state store that holds this invocation's record file.
+ */
+function resolvePrAuthorObservation(
+  invocationId: string,
+  preferred: readonly (string | undefined)[],
+): { readonly profileKey: string; readonly record: StateLightTurnObservationRecord } | undefined {
+  const tried = new Set<string>();
+  const attempt = (profileKey: string | undefined) => {
+    if (!profileKey || tried.has(profileKey)) return undefined;
+    tried.add(profileKey);
+    try {
+      return { profileKey, record: readStateLightTurnObservation(profileKey, invocationId) };
+    } catch { return undefined; }
+  };
+  for (const key of preferred) {
+    const hit = attempt(key);
+    if (hit) return hit;
+  }
+  const store = dirname(profileStoreRoot('probe'));
+  const file = basename(observationRecordPath('probe', invocationId));
+  let profiles: string[];
+  try { profiles = readdirSync(store); } catch { return undefined; }
+  for (const profileKey of profiles.sort()) {
+    if (!existsSync(join(store, profileKey, 'observations', file))) continue;
+    const hit = attempt(profileKey);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+function realpathOrUndefined(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  try { return realpathSync(path); } catch { return undefined; }
+}
+
+/**
+ * Same-repo+PR candidates without a terminal envelope, discovered only through
+ * the existing global invocation locators and their handoff receipts. Without
+ * an exact live launcher, repo/PR come from a surviving bound state-light child
+ * (observation `owner_pid`), from the still-SENDING claim's own recorded
+ * binding, or, after later phases overwrote that reason, from the receipt's
+ * child worktree being this PR's worktree; anything else is not attributable.
+ */
+export function scanPrAuthorCandidates(input: {
+  readonly binding: PrAuthorBinding;
+  /** The scanning author's profile: the first place an orphan's record is looked up. */
+  readonly profileKey: string;
+  /** The bound worktree (`--cwd`), whose branch is this PR's head ref. */
+  readonly worktree?: string;
+  readonly reader?: PrAuthorProcessReader;
+}): PrAuthorCandidate[] {
+  const reader = input.reader ?? linuxPrAuthorProcessReader;
+  const root = prAuthorLocatorRoot();
+  const worktree = realpathOrUndefined(input.worktree);
+  const ownClaim = prAuthorClaimReason(input.binding);
+  let names: string[];
+  try { names = readdirSync(root); } catch { return []; }
+  const candidates: PrAuthorCandidate[] = [];
+  for (const name of names.sort()) {
+    if (!/^[a-f0-9]{64}\.json$/u.test(name)) continue;
+    const locator = readPrAuthorJson(join(root, name)) as LocatorShape | undefined;
+    if (!locator || locator.schema !== PR_AUTHOR_LOCATOR_SCHEMA || typeof locator.invocation_id !== 'string'
+      || typeof locator.handoff_receipt_path !== 'string' || typeof locator.terminal_envelope_path !== 'string'
+      || typeof locator.run_identity !== 'string' || typeof locator.attempt_identity !== 'string') continue;
+    const invocationId = locator.invocation_id;
+    const identity = { runIdentity: locator.run_identity, attemptIdentity: locator.attempt_identity };
+    const receipt = readPrAuthorRunRecord(locator.handoff_receipt_path, PR_AUTHOR_HANDOFF_SCHEMA, identity);
+    const launcherPid = receipt?.launcher_pid;
+    if (!receipt || receipt.invocation_id !== invocationId || typeof launcherPid !== 'number'
+      || !Number.isSafeInteger(launcherPid) || launcherPid <= 1
+      || typeof receipt.launcher_started_at !== 'string') continue;
+    // A terminal envelope ends every claim of this invocation.
+    if (readPrAuthorRunRecord(locator.terminal_envelope_path, PR_AUTHOR_TERMINAL_SCHEMA, identity)) continue;
+    const launcherStartedAt = Date.parse(receipt.launcher_started_at);
+    if (isExactLivePrAuthorLauncher({
+      pid: launcherPid, invocationId, launcherStartedAt: receipt.launcher_started_at,
+      binding: input.binding, reader,
+    })) {
+      const argvKey = argvProfileKey(reader.cmdline(launcherPid));
+      const resolved = resolvePrAuthorObservation(invocationId, [argvKey, input.profileKey]);
+      candidates.push({
+        invocationId, launcherPid, launcherLive: true, orphanChildLive: false,
+        ...(resolved ? { profileKey: resolved.profileKey } : argvKey ? { profileKey: argvKey } : {}),
+        deadlineMs: Number.POSITIVE_INFINITY,
+      });
+      continue;
+    }
+    const resolved = resolvePrAuthorObservation(invocationId, [input.profileKey]);
+    if (!resolved) continue; // nothing persisted: no claim was ever made
+    const ownerPid = resolved.record.owner_pid;
+    if (ownerPid !== undefined && isLivePrAuthorChild({ pid: ownerPid, invocationId, binding: input.binding, reader })) {
+      // Its real deadline counts from an in-process start no record carries,
+      // and only this live child can still SEND: hold while it lives.
+      candidates.push({
+        invocationId, launcherPid, launcherLive: false, orphanChildLive: true, profileKey: resolved.profileKey,
+        deadlineMs: Number.POSITIVE_INFINITY,
+      });
+      continue;
+    }
+    const reason = resolved.record.transition_reason;
+    const childCwd = typeof receipt.child_cwd === 'string' ? receipt.child_cwd : undefined;
+    const attributable = reason === ownClaim
+      || (!reason.startsWith(PR_AUTHOR_CLAIM_REASON_PREFIX) && worktree !== undefined && childCwd === worktree);
+    // Both processes are gone, so the turn's own --timeout-ms is unknowable:
+    // hold to the largest admissible turn timeout from the immutable launcher
+    // start (a bounded, deliberately conservative overhold).
+    if (attributable) {
+      candidates.push({
+        invocationId, launcherPid, launcherLive: false, orphanChildLive: false, claimOnly: true,
+        profileKey: resolved.profileKey,
+        deadlineMs: Number.isFinite(launcherStartedAt)
+          ? launcherStartedAt + STATE_LIGHT_MAX_TIMEOUT_MS + PR_AUTHOR_DEADLINE_GRACE_MS
+          : Number.POSITIVE_INFINITY,
+      });
+    }
+  }
+  return candidates;
+}
+
+export type PrAuthorHolding =
+  | { readonly holding: false }
+  | { readonly holding: true; readonly invocationId: string; readonly phase: string };
+
+/** Phases at or after the pre-SEND claim (the claim phase itself and every post-claim phase). */
+const PR_AUTHOR_CLAIMED_PHASES: ReadonlySet<string> = new Set([
+  'sending', 'dispatching', 'sent_unbound', 'sent_unharvested', 'harvested',
+]);
+
+/**
+ * Whether one candidate holds the same-PR SENDING claim (final scan). The
+ * observation record is read by the candidate's invocation ID only.
+ * - exact live launcher: missing/unreadable record HOLDS; `prepared` has not
+ *   claimed; every later phase (including a refuser's `not_sent`) holds until
+ *   its terminal envelope.
+ * - launcher dead/mismatched (bound child alive, or a record attributable to
+ *   this PR): a claimed phase HOLDS until the candidate's original deadline.
+ */
+export function prAuthorCandidateHolding(candidate: PrAuthorCandidate, nowMs = Date.now()): PrAuthorHolding {
+  let phase: string;
+  try {
+    if (!candidate.profileKey) throw new Error('observation_profile_unresolved');
+    phase = readStateLightTurnObservation(candidate.profileKey, candidate.invocationId).phase;
+  } catch {
+    return candidate.launcherLive
+      ? { holding: true, invocationId: candidate.invocationId, phase: 'observation_unreadable' }
+      : { holding: false };
+  }
+  if (candidate.launcherLive) {
+    return phase === 'prepared' ? { holding: false } : { holding: true, invocationId: candidate.invocationId, phase };
+  }
+  if (!(candidate.orphanChildLive || candidate.claimOnly) || !PR_AUTHOR_CLAIMED_PHASES.has(phase)) {
+    return { holding: false };
+  }
+  return nowMs < candidate.deadlineMs ? { holding: true, invocationId: candidate.invocationId, phase } : { holding: false };
+}
+
+/** First OTHER candidate holding the same-PR claim, if any. */
+export function findOtherPrAuthorHolder(input: {
+  readonly binding: PrAuthorBinding;
+  readonly profileKey: string;
+  readonly worktree?: string;
+  readonly ownInvocationId: string;
+  readonly reader?: PrAuthorProcessReader;
+  readonly nowMs?: number;
+}): Extract<PrAuthorHolding, { holding: true }> | undefined {
+  for (const candidate of scanPrAuthorCandidates(input)) {
+    if (candidate.invocationId === input.ownInvocationId) continue;
+    const holding = prAuthorCandidateHolding(candidate, input.nowMs);
+    if (holding.holding) return holding;
+  }
+  return undefined;
+}
+
+/**
+ * Cheap zero-tab prelaunch fast path: any exact live same-PR launcher, or an
+ * orphan still holding its claim, occupies the PR. Not the decisive check.
+ */
+export function prelaunchPrAuthorOccupant(input: {
+  readonly binding: PrAuthorBinding;
+  readonly profileKey: string;
+  readonly worktree?: string;
+  readonly reader?: PrAuthorProcessReader;
+  readonly nowMs?: number;
+}): string | undefined {
+  for (const candidate of scanPrAuthorCandidates(input)) {
+    if (candidate.launcherLive || prAuthorCandidateHolding(candidate, input.nowMs).holding) {
+      return candidate.invocationId;
+    }
+  }
+  return undefined;
+}
+
+export type PrAuthorHeadReader = (binding: PrAuthorBinding) => Promise<PrAuthorHeadObservation | undefined>;
+
+/** Authenticated pack `scripts/gh` REST read; undefined when unreadable. */
+export const readPrAuthorHeadViaPackGh: PrAuthorHeadReader = async (binding) => {
+  const result = await runProcess({
+    command: PR_AUTHOR_PACK_GH,
+    args: ['api', `repos/${binding.repo}/pulls/${binding.pr}`],
+    cwd: PR_AUTHOR_PACK_ROOT,
+    inheritParentEnv: true,
+    allowEmptyStdout: false,
+    timeoutMs: 30_000,
+  });
+  if (!result.ok) return undefined;
+  try {
+    const body = JSON.parse(result.stdout) as {
+      state?: unknown; head?: { sha?: unknown; ref?: unknown; repo?: { full_name?: unknown } | null };
+      base?: { ref?: unknown; repo?: { full_name?: unknown } | null };
+    };
+    const sha = body.head?.sha;
+    const headRef = body.head?.ref;
+    const headRepo = body.head?.repo?.full_name;
+    const baseRepo = body.base?.repo?.full_name;
+    const baseRef = body.base?.ref;
+    if (typeof body.state !== 'string' || typeof sha !== 'string' || !/^[0-9a-f]{40}$/u.test(sha)
+      || typeof headRef !== 'string' || typeof headRepo !== 'string' || typeof baseRepo !== 'string'
+      || typeof baseRef !== 'string') {
+      return undefined;
+    }
+    return {
+      state: body.state, sha, headRef,
+      headRepo: headRepo.toLowerCase(), baseRepo: baseRepo.toLowerCase(), baseRef,
+    };
+  } catch { return undefined; }
+};
+
+/** Current branch of a worktree (`git symbolic-ref`); undefined when detached/unreadable. */
+export async function readWorktreeBranch(cwd: string): Promise<string | undefined> {
+  const result = await runProcess({
+    command: 'git', args: ['-C', cwd, 'symbolic-ref', '--quiet', '--short', 'HEAD'],
+    cwd, inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 15_000,
+  });
+  const branch = result.ok ? result.stdout.trim() : '';
+  return branch || undefined;
+}
+
+/** OPEN bound PR whose head repository/ref is exactly the selected worktree branch. */
+export function prAuthorHeadMismatch(
+  head: PrAuthorHeadObservation | undefined,
+  binding: PrAuthorBinding,
+  worktreeBranch: string | undefined,
+): string | undefined {
+  if (!head) return 'pr_author_pr_unreadable';
+  if (head.state !== 'open') return 'pr_author_pr_not_open';
+  if (head.baseRepo !== binding.repo) return 'pr_author_pr_repository_mismatch';
+  if (head.headRepo !== binding.repo) return 'pr_author_head_repository_mismatch';
+  if (!worktreeBranch || head.headRef !== worktreeBranch) return 'pr_author_head_ref_mismatch';
+  return undefined;
+}
+
+/**
+ * In-flight AUTHOR EFFECT: the still-OPEN bound PR, with unchanged head
+ * repository and ref, has a live head SHA different from the SEND SHA. Any
+ * unreadable, closed, retargeted or re-referenced observation is no effect.
+ */
+export function prAuthorHeadEffect(
+  sendHead: PrAuthorHeadObservation,
+  live: PrAuthorHeadObservation | undefined,
+): boolean {
+  return Boolean(live)
+    && live!.state === 'open'
+    && live!.baseRepo === sendHead.baseRepo
+    && live!.baseRef === sendHead.baseRef
+    && live!.headRepo === sendHead.headRepo
+    && live!.headRef === sendHead.headRef
+    && live!.sha !== sendHead.sha;
+}
+
+export interface PrAuthorTurnHooks {
+  readHead?: PrAuthorHeadReader;
+  readBranch?: (cwd: string) => Promise<string | undefined>;
+  reader?: PrAuthorProcessReader;
+  /** Deterministic barrier hooks for the bounded race fixtures. */
+  beforeFinalScan?: (invocationId: string) => Promise<void> | void;
+  afterFinalScan?: (invocationId: string) => Promise<void> | void;
+}
+
+const prAuthorTurnHooks: PrAuthorTurnHooks = {};
+
+export function __setStateLightPrAuthorHooksForTest(hooks: PrAuthorTurnHooks | undefined): void {
+  for (const key of Object.keys(prAuthorTurnHooks) as (keyof PrAuthorTurnHooks)[]) delete prAuthorTurnHooks[key];
+  if (hooks) Object.assign(prAuthorTurnHooks, hooks);
+}
+
+// #2718 AC5/6: OS SIGTERM finalizer. Only a proven pre-dispatch phase
+// (prepared, unissued sending, not_sent) or harvested with its primary
+// publication may retire the exact original target, once, through the
+// existing guarded reattach path.
+// Every other phase preserves the Page and reports cleanup_unconfirmed. A
+// repeated SIGTERM never starts a second close; an ordinary finalizer already
+// running keeps its own single guarded close and is awaited within the bound.
+
+// The running invocation's existing own-submission issuance witness: true
+// issued, false witnessed as not issued, undefined no witness (never evidence).
+let signalSubmissionWitness: (() => boolean | undefined) | undefined;
+export function __setStateLightSignalSubmissionWitnessForTest(witness: (() => boolean | undefined) | undefined): void {
+  signalSubmissionWitness = witness;
+}
+
+interface StateLightSignalFinalizer {
+  signalled: boolean;
+  finalizing?: Promise<unknown>;
+  emitted: boolean;
+  exitCode?: number;
+  /** Settles only by process exit; ordinary emission waits on it once signalled. */
+  done?: Promise<never>;
+}
+
+function withinBound<T>(work: Promise<T>, deadlineMs: number): Promise<T | undefined> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    work.catch(() => undefined),
+    new Promise<undefined>((resolveBound) => {
+      timer = setTimeout(() => resolveBound(undefined), Math.max(0, deadlineMs - Date.now()));
+    }),
+  ]).finally(() => { if (timer) clearTimeout(timer); });
+}
+
+async function finalizeOnSigterm(args: ParsedTurnArgs, finalizer: StateLightSignalFinalizer): Promise<never> {
+  const deadlineMs = Date.now() + RESOURCE_CLEANUP_BOUND_MS;
+  const invocationId = stringOption(args, 'invocation-id') ?? '';
+  const cdp = stringOption(args, 'cdp') ?? '';
+  if (finalizer.finalizing) {
+    await withinBound(finalizer.finalizing, deadlineMs);
+    if (finalizer.emitted) process.exit(finalizer.exitCode ?? 0);
+  }
+  let profileKey = 'profile-unresolved';
+  let record: StateLightTurnObservationRecord | undefined;
+  try {
+    profileKey = configuredProfileKey(requireOption(args, 'profile'), cdp);
+    record = readStateLightTurnObservation(profileKey, invocationId);
+  } catch { record = undefined; }
+  // prepared never dispatched; sending spans the physical send, so it is
+  // pre-dispatch only with a zero send count and a witnessed unissued submission.
+  const submissionIssued = signalSubmissionWitness?.();
+  const unsentSending = record?.phase === 'sending' && (record.send_count ?? 0) === 0 && submissionIssued === false;
+  const preDispatch = record?.phase === 'prepared' || unsentSending;
+  let safe = !finalizer.finalizing && Boolean(record?.owned_target?.created)
+    && (preDispatch || record?.phase === 'not_sent'
+      || (record?.phase === 'harvested' && Boolean(record.primary)));
+  if (safe && preDispatch) {
+    // The ordinary finalizer's own pre-Send transition, so the unchanged guarded
+    // retirement reads not_sent. not_sent is terminal: the still-running turn
+    // can no longer enter dispatching, so no click follows this record.
+    try {
+      transitionStateLightTurnObservation({
+        profileKey, invocationId, phase: 'not_sent',
+        reason: 'terminal_pre_send', sendCount: 0, sendWitness: 'numeric_send_count',
+      });
+    } catch { safe = false; }
+  }
+  const retirement = safe
+    ? await withinBound(retireDetachedOriginalTarget({
+        profileKey, invocationId, cdp, deadlineMs, settleUntilDeadline: true,
+      }), deadlineMs)
+    : undefined;
+  const confirmed = retirement?.status === 'confirmed';
+  // Diagnostic only: whether the guarded retirement ran and why it ended.
+  const cleanupCause = safe ? retirement?.cause ?? (retirement ? undefined : 'retirement_bound_elapsed') : undefined;
+  // A missing or unreadable record is unknown delivery, never proof of no Send.
+  const unsent = record !== undefined
+    && (record.phase === 'prepared' || (record.phase === 'sending' && submissionIssued !== true)
+      || record.phase === 'not_sent');
+  if (!finalizer.emitted) {
+    finalizer.emitted = true;
+    emit({
+      schema: 'turn-result/v1',
+      state: 'driver_error',
+      scope: 'invocation',
+      cause: 'terminated_by_sigterm',
+      invocation_id: invocationId,
+      configured_profile_key: profileKey,
+      send_count: record?.send_count ?? 0,
+      ...(unsent ? {} : { send_attempted: true }),
+      poll_count: 0, goto_count: 0, new_chat_click_count: 0, navigation_count: 0,
+      ...(record?.owned_target ? {
+        owned_target_id: record.owned_target.id,
+        owned_target_created: record.owned_target.created,
+        owned_prompt_marker: record.marker,
+      } : {}),
+      cleanup: confirmed ? 'confirmed' : record?.owned_target?.created ? 'unconfirmed' : 'skipped',
+      ...(record?.owned_target?.created && !confirmed ? { cleanup_status: 'cleanup_unconfirmed' } : {}),
+      ...(safe ? { cleanup_attempted: true } : {}),
+      ...(cleanupCause ? { cleanup_cause: cleanupCause } : {}),
+      // The envelope projects next_action unchanged; repeat the diagnostic there.
+      next_action: (unsent
+        ? 'Terminated before any Send; the original Page is retired or preserved as reported. A retry needs a fresh invocation ID.'
+        : 'Terminated after a possible Send: never resend blindly. Reconcile GitHub effects and the preserved original Page first.')
+        + (safe ? ' Cleanup diagnostic: attempted, cause ' + (cleanupCause ?? 'none') + '.' : ''),
+      incidents: ['terminated_by_sigterm', ...(record?.owned_target?.created && !confirmed ? ['owned_tab_cleanup_unconfirmed'] : [])],
+    });
+  }
+  // Same exit discipline as the executable: let the result line drain first.
+  await withinBound(new Promise<void>((done) => { process.stdout.write('', () => done()); }), deadlineMs + 1_000);
+  process.exit(turnExitCode('driver_error'));
+}
+
+function installStateLightSigtermFinalizer(args: ParsedTurnArgs): {
+  readonly finalizer: StateLightSignalFinalizer;
+  readonly dispose: () => void;
+} {
+  const finalizer: StateLightSignalFinalizer = { signalled: false, emitted: false };
+  const onSigterm = (): void => {
+    if (finalizer.signalled) return; // repeated SIGTERM: the first finalizer owns the single close
+    finalizer.signalled = true;
+    finalizer.done = finalizeOnSigterm(args, finalizer);
+  };
+  process.on('SIGTERM', onSigterm);
+  return { finalizer, dispose: () => { process.off('SIGTERM', onSigterm); } };
+}
+
 export type StateLightTurnDependencies = {
   readonly runTurn?: (args: ParsedTurnArgs) => Promise<TurnRunOutcome>;
   readonly recoveryHooks?: StateLightRecoveryHooks;
@@ -9467,6 +10291,8 @@ export async function runStateLightTurn(
 
   let heartbeatScheduler: TurnScopedHeartbeatScheduler | undefined;
   const freshCleanup: FreshComposerCleanupContext = {};
+  const signal = installStateLightSigtermFinalizer(args);
+  try {
   const outcome = dependencies.runTurn
     ? await dependencies.runTurn(args)
     : await runTurn(
@@ -9476,6 +10302,9 @@ export async function runStateLightTurn(
         (scheduler) => { heartbeatScheduler = scheduler; },
         freshCleanup,
       );
+  // A signal finalizer that started before ordinary finalization owns the
+  // terminal result; never race it with a second cleanup or emission.
+  if (signal.finalizer.signalled && signal.finalizer.done) return await signal.finalizer.done;
   try {
     const augmented: TurnRunOutcome = {
       ...outcome,
@@ -9493,7 +10322,7 @@ export async function runStateLightTurn(
         && freshCleanup.projectUrl
         ? { ownedFreshProjectUrl: freshCleanup.projectUrl } : {}),
     };
-    const result = await finalizeTurn(admitFreshResultConversationId(args, {
+    const finalizing = finalizeTurn(admitFreshResultConversationId(args, {
       ...augmented,
       ...(freshCleanup.originalCreatedPage ? { originalCreatedPage: freshCleanup.originalCreatedPage } : {}),
       ...(freshCleanup.ownedDeadLocalPage ? {
@@ -9503,13 +10332,21 @@ export async function runStateLightTurn(
         ownedDeadLocalTimeoutMs: freshCleanup.ownedDeadLocalTimeoutMs,
       } : {}),
     }), stringOption(args, 'cdp') ?? '');
+    signal.finalizer.finalizing = finalizing;
+    const result = await finalizing;
+    if (signal.finalizer.emitted) return await signal.finalizer.done!;
     // Keep liveness continuous through every pre-emission cleanup await, then
     // stop the scheduler at the terminal publication boundary so no heartbeat
     // can follow turn-result/v1 or keep the subprocess alive.
     heartbeatScheduler?.dispose();
+    signal.finalizer.emitted = true;
+    signal.finalizer.exitCode = turnExitCode(result.state);
     emit(result);
     return turnExitCode(result.state);
   } finally {
     heartbeatScheduler?.dispose();
+  }
+  } finally {
+    signal.dispose();
   }
 }

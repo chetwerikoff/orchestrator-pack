@@ -3404,3 +3404,139 @@ describe('Issue #2524: final persisted no-result terminal projection', () => {
     }
   });
 });
+describe('Issue #2718 PR-author --repo/--pr adapter admission', () => {
+  const openHead = {
+    state: 'open', sha: 'e'.repeat(40), headRepo: 'acme/widgets', headRef: 'feature', baseRepo: 'acme/widgets',
+  };
+
+  function adapterCase(extra: string[], options: { cwd?: boolean } = {}) {
+    const root = tempDir('opk-2718-adapter-');
+    const paths = launchPaths(root, 'bound');
+    for (const [key, value] of Object.entries(cliFixtureEnv(root))) vi.stubEnv(key, value);
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+    const args = [
+      '--run-identity', 'run-2718', '--attempt-identity', 'attempt-2718', '--invocation-id', 'inv-2718-' + randomSuffix(),
+      '--handoff-receipt', paths.receipt, '--terminal-envelope', paths.envelope, '--output', paths.output,
+      '--profile', join(root, 'profile'), '--cdp', 'http://127.0.0.1:9222', '--input', join(root, 'prompt.txt'),
+      ...(options.cwd === false ? [] : ['--cwd', root]), ...extra,
+    ];
+    const launched: (readonly string[])[] = [];
+    // Capture the forwarded argv only; never start a launcher.
+    const spawnLauncher = vi.fn(async (launcherArgs: readonly string[]) => {
+      launched.push(launcherArgs);
+      throw new Error('fixture_no_spawn');
+    });
+    return { root, args, launched, spawnLauncher };
+  }
+
+  let suffix = 0;
+  function randomSuffix(): string { suffix += 1; return String(suffix); }
+
+  async function run(args: string[], deps: Parameters<typeof runBrowserAdapter>[1]) {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const code = await runBrowserAdapter(args, deps);
+      return { code, stderr: stderr.mock.calls.map((call) => String(call[0])).join('') };
+    } finally {
+      stderr.mockRestore();
+    }
+  }
+
+  const boundDeps = (spawnLauncher: any, overrides: Record<string, unknown> = {}) => ({
+    spawnLauncher,
+    selectedRepository: () => 'acme/widgets',
+    readPrAuthorHead: async () => openHead,
+    readWorktreeBranch: async () => 'feature',
+    processReader: { cmdline: () => undefined, startTimeMs: () => undefined },
+    ...overrides,
+  });
+
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('leaves the unbound route unchanged: no PR admission and no pair forwarded', async () => {
+    const fixture = adapterCase([]);
+    const readPrAuthorHead = vi.fn(async () => openHead);
+    const result = await run(fixture.args, { spawnLauncher: fixture.spawnLauncher, readPrAuthorHead });
+    expect(result.stderr).toContain('launcher_start_failed');
+    expect(readPrAuthorHead).not.toHaveBeenCalled();
+    expect(fixture.launched[0]).not.toContain('--repo');
+    expect(fixture.launched[0]).not.toContain('--pr');
+  });
+
+  it.each([
+    [['--repo', 'acme/widgets']],
+    [['--pr', '7']],
+  ])('refuses a partial pair %j with an actionable nextStep and no launch', async (extra) => {
+    const fixture = adapterCase(extra);
+    const result = await run(fixture.args, boundDeps(fixture.spawnLauncher));
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('pr_author_binding_pair_partial; nextStep:');
+    expect(fixture.spawnLauncher).not.toHaveBeenCalled();
+  });
+
+  it('forwards the exact bound pair on the turn argv for an OPEN PR whose head ref is the --cwd branch', async () => {
+    const fixture = adapterCase(['--repo', 'Acme/Widgets', '--pr', '7']);
+    const result = await run(fixture.args, boundDeps(fixture.spawnLauncher));
+    expect(result.stderr).toContain('launcher_start_failed');
+    const argv = fixture.launched[0]!;
+    const turn = argv.indexOf('turn');
+    expect(turn).toBeGreaterThan(argv.indexOf('--child-command'));
+    expect(argv.slice(turn)).toEqual(expect.arrayContaining(['--repo', 'acme/widgets', '--pr', '7']));
+    expect(argv[argv.indexOf('--cwd') + 1]).toBe(fixture.root);
+  });
+
+  it.each([
+    ['explicit --cwd', { cwd: false }, {}, 'pr_author_cwd_required'],
+    ['card repository', {}, { selectedRepository: () => 'other/repo' }, 'pr_author_repository_not_selected_card'],
+    ['unreadable PR', {}, { readPrAuthorHead: async () => undefined }, 'pr_author_pr_unreadable'],
+    ['closed PR', {}, { readPrAuthorHead: async () => ({ ...openHead, state: 'closed' }) }, 'pr_author_pr_not_open'],
+    ['fork head', {}, { readPrAuthorHead: async () => ({ ...openHead, headRepo: 'fork/widgets' }) }, 'pr_author_head_repository_mismatch'],
+    ['other branch', {}, { readWorktreeBranch: async () => 'main' }, 'pr_author_head_ref_mismatch'],
+  ] as const)('refuses a bound author without %s before launch', async (_label, caseOptions, overrides, reason) => {
+    const fixture = adapterCase(['--repo', 'acme/widgets', '--pr', '7'], caseOptions);
+    const result = await run(fixture.args, boundDeps(fixture.spawnLauncher, overrides));
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain(reason);
+    expect(fixture.spawnLauncher).not.toHaveBeenCalled();
+  });
+
+  it('refuses a live same-PR launcher at the zero-tab prelaunch scan, naming it', async () => {
+    const fixture = adapterCase(['--repo', 'acme/widgets', '--pr', '7']);
+    const terminalRoot = fixture.root;
+    const live = 'inv-2718-live';
+    const receipt = join(terminalRoot, 'live-receipt.json');
+    const startedAt = Date.now();
+    writeFileSync(receipt, JSON.stringify({
+      schema: HANDOFF_SCHEMA, run_identity: 'run-live', attempt_identity: 'attempt-live',
+      launcher_started_at: new Date(startedAt).toISOString(), handoff_committed_at: new Date(startedAt).toISOString(),
+      completion_mode: COMPLETION_MODE, invocation_id: live, launcher_pid: 4242,
+    }));
+    mkdirSync(dirname(invocationReceiptLocatorPath(live)), { recursive: true, mode: 0o700 });
+    writeFileSync(invocationReceiptLocatorPath(live), JSON.stringify({
+      schema: 'flow-manager-long-running-child-locator/v1', invocation_id: live,
+      run_identity: 'run-live', attempt_identity: 'attempt-live',
+      handoff_receipt_path: receipt, terminal_envelope_path: join(terminalRoot, 'live-terminal.json'),
+    }));
+    const entry = join(repoRoot, 'scripts/chatgpt-browser-turn/state-light-entry.ts');
+    const processReader = {
+      cmdline: (pid: number) => pid === 4242 ? ['node', '--experimental-strip-types', launcherPath, 'launch',
+        '--invocation-id', live, '--child-command', 'node', '--', '--experimental-strip-types', entry, 'turn',
+        '--invocation-id', live, '--repo', 'acme/widgets', '--pr', '7'] : undefined,
+      startTimeMs: (pid: number) => pid === 4242 ? startedAt - 100 : undefined,
+    };
+    const result = await run(fixture.args, boundDeps(fixture.spawnLauncher, { processReader }));
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('pr_author_occupied: conversation_busy by invocation ' + live);
+    expect(result.stderr).toContain('retry only after that turn ends');
+    expect(fixture.spawnLauncher).not.toHaveBeenCalled();
+  });
+
+  it('keeps the generic line-72 runbook command byte-for-byte and adds one labelled PR-author variant', () => {
+    const runbook = readFileSync(join(repoRoot, 'docs/browser-gpt-turn-runbook.md'), 'utf8').split('\n');
+    expect(runbook[71]).toBe('npm run --silent flow-manager-browser-gpt-long-run --   --run-identity <run>   --attempt-identity <attempt>   --handoff-receipt <path>   --invocation-id <id>   --terminal-envelope <path-ending-in-terminal.json>   --output <path>   --profile <profile>   --cdp <url>   --input <prompt-file>   --cwd <worktree>   [--project-url <url> --new-chat | --chat-url <url>]');
+    const bound = runbook.filter((line) => line.includes('flow-manager-browser-gpt-long-run --') && line.includes('--repo <owner/repo> --pr <number>'));
+    expect(bound).toHaveLength(1);
+    expect(bound[0]).toContain('--cwd <worktree>');
+    expect(runbook.some((line) => line.startsWith('PR-author-only variant'))).toBe(true);
+  });
+});
