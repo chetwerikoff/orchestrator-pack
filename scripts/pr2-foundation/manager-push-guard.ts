@@ -608,7 +608,15 @@ function delegateOriginalHook(args: readonly string[], stdin: Buffer): number {
   const original = process.env[ORIGINAL_HOOK_ENV];
   if (!original) return 0;
   const { [ORIGINAL_HOOK_ENV]: _own, ...env } = process.env;
-  const result = runProcessSync({ command: original, args, input: stdin, env });
+  // Feed the ref tuples from a file: a pipe write to a hook that never reads stdin races into EPIPE and drops its exit status.
+  const feed = mkdtempSync(join(tmpdir(), 'opk-b5-stdin-'));
+  const tupleFile = join(feed, 'tuples');
+  writeFileSync(tupleFile, stdin);
+  const result = runProcessSync({
+    command: '/bin/sh', args: ['-c', 'exec "$0" "$@" < "$OPK_B5_TUPLES"', original, ...args],
+    env: { ...env, OPK_B5_TUPLES: tupleFile },
+  });
+  rmSync(feed, { recursive: true, force: true });
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   if (result.error) {
