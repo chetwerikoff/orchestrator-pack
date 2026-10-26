@@ -54,6 +54,8 @@ export interface StateLightTurnObservationRecord {
     readonly cdp_sha256: string;
     readonly initial_route: string;
   };
+  /** Process that pinned owned_target; lets an external sweeper prove a dead owner (#2726). */
+  readonly owner_pid?: number;
   readonly primary?: StateLightTurnPrimaryBinding;
   readonly transitioned_at: string;
   readonly transition_reason: string;
@@ -161,6 +163,9 @@ function parseRecord(raw: string): StateLightTurnObservationRecord {
       || typeof target.initial_route !== 'string' || !/^https:\/\/(?:chatgpt\.com|chat\.openai\.com)\//u.test(target.initial_route)) {
       throw new Error('observation_owned_target_invalid');
     }
+  }
+  if (value.owner_pid !== undefined && (!Number.isSafeInteger(value.owner_pid) || value.owner_pid <= 0)) {
+    throw new Error('observation_owner_pid_invalid');
   }
   if (value.primary) {
     if (typeof value.primary.target !== 'string'
@@ -511,6 +516,7 @@ export function bindStateLightOwnedTarget(input: {
     return {
       ...current,
       owned_target: current.owned_target ?? witness,
+      owner_pid: process.pid,
       transitioned_at: new Date().toISOString(),
       transition_reason: 'own_target_pinned_before_send',
     };
