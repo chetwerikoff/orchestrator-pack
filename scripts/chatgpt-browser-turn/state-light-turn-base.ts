@@ -9,6 +9,7 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -67,13 +68,14 @@ import {
   verifyStateLightFreshClaimOwnerFence,
   waitForConversationUrlAfterSend,
 } from './state-light-fresh-conversation.ts';
-import { atomicJson, configuredProfileKey, profileDirs } from './storage-common.ts';
+import { atomicJson, configuredProfileKey, profileDirs, profileStoreRoot } from './storage-common.ts';
 import {
   admitStateLightTurnObservation,
   bindStateLightOwnedTarget,
   finalizeStateLightPrimaryPublication,
   packCreatedTerminalTarget,
   readVerifiedStateLightHarvestedPrimary,
+  observationRecordPath,
   readStateLightTurnObservation,
   transitionStateLightTurnObservation,
   type StateLightTurnObservationRecord,
@@ -5197,7 +5199,7 @@ async function runTurnCore(
       }
       await prAuthorTurnHooks.beforeFinalScan?.(invocationId);
       const holder = findOtherPrAuthorHolder({
-        binding, profileKey, ownInvocationId: invocationId, ...(reader ? { reader } : {}),
+        binding, profileKey, ownInvocationId: invocationId, worktree: process.cwd(), ...(reader ? { reader } : {}),
       });
       await prAuthorTurnHooks.afterFinalScan?.(invocationId);
       if (holder) {
@@ -9741,12 +9743,20 @@ export interface PrAuthorCandidate {
   readonly launcherLive: boolean;
   /** Launcher not live, but the same invocation's bound state-light child survives. */
   readonly orphanChildLive: boolean;
-  /** Neither process is attributable, but its persisted SENDING claim names this binding. */
+  /**
+   * Neither process is attributable, but the persisted record is: its SENDING
+   * claim names this binding, or the receipt's child worktree is this PR's
+   * worktree (git checks a branch out in one worktree only).
+   */
   readonly claimOnly?: true;
-  /** Profile whose per-invocation observation record belongs to this candidate. */
-  readonly profileKey: string;
-  /** The candidate's existing turn timeout (its `--timeout-ms`, else the default). */
-  readonly timeoutMs: number;
+  /** Profile whose observation record holds this invocation; undefined when none is found. */
+  readonly profileKey?: string;
+  /**
+   * Absolute release time for a candidate without a live launcher, grounded
+   * in an immutable start witness (child /proc start or receipt
+   * `launcher_started_at`), never in the mutable `transitioned_at`.
+   */
+  readonly deadlineMs: number;
 }
 
 interface LocatorShape {
@@ -9758,26 +9768,78 @@ interface LocatorShape {
   readonly attempt_identity?: unknown;
 }
 
+const PR_AUTHOR_CLAIM_REASON_PREFIX = 'pr_author_send_claim:';
+
 /** The persisted SENDING transition reason; it names the binding the claim was made for. */
 export function prAuthorClaimReason(binding: PrAuthorBinding): string {
-  return `pr_author_send_claim:${binding.repo}#${binding.pr}`;
+  return `${PR_AUTHOR_CLAIM_REASON_PREFIX}${binding.repo}#${binding.pr}`;
+}
+
+/**
+ * Covers the child's own start-to-`invocationStartedAt` gap, so a deadline
+ * derived from a process start never releases before the real one.
+ */
+const PR_AUTHOR_DEADLINE_GRACE_MS = 30_000;
+
+/**
+ * Reads one invocation's existing observation record by invocation ID. The
+ * record lives under the candidate's own profile, which may differ from the
+ * scanning author's: try the known keys, then every profile directory of the
+ * existing state store that holds this invocation's record file.
+ */
+function resolvePrAuthorObservation(
+  invocationId: string,
+  preferred: readonly (string | undefined)[],
+): { readonly profileKey: string; readonly record: StateLightTurnObservationRecord } | undefined {
+  const tried = new Set<string>();
+  const attempt = (profileKey: string | undefined) => {
+    if (!profileKey || tried.has(profileKey)) return undefined;
+    tried.add(profileKey);
+    try {
+      return { profileKey, record: readStateLightTurnObservation(profileKey, invocationId) };
+    } catch { return undefined; }
+  };
+  for (const key of preferred) {
+    const hit = attempt(key);
+    if (hit) return hit;
+  }
+  const store = dirname(profileStoreRoot('probe'));
+  const file = basename(observationRecordPath('probe', invocationId));
+  let profiles: string[];
+  try { profiles = readdirSync(store); } catch { return undefined; }
+  for (const profileKey of profiles.sort()) {
+    if (!existsSync(join(store, profileKey, 'observations', file))) continue;
+    const hit = attempt(profileKey);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+function realpathOrUndefined(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  try { return realpathSync(path); } catch { return undefined; }
 }
 
 /**
  * Same-repo+PR candidates without a terminal envelope, discovered only through
  * the existing global invocation locators and their handoff receipts. Without
  * an exact live launcher, repo/PR come from a surviving bound state-light child
- * (observation `owner_pid`) or, failing that, from the still-SENDING claim's
- * own recorded binding; anything else is not attributable to this PR.
+ * (observation `owner_pid`), from the still-SENDING claim's own recorded
+ * binding, or, after later phases overwrote that reason, from the receipt's
+ * child worktree being this PR's worktree; anything else is not attributable.
  */
 export function scanPrAuthorCandidates(input: {
   readonly binding: PrAuthorBinding;
-  /** Profile used to read an orphan's observation when its launcher argv is gone. */
+  /** The scanning author's profile: the first place an orphan's record is looked up. */
   readonly profileKey: string;
+  /** The bound worktree (`--cwd`), whose branch is this PR's head ref. */
+  readonly worktree?: string;
   readonly reader?: PrAuthorProcessReader;
 }): PrAuthorCandidate[] {
   const reader = input.reader ?? linuxPrAuthorProcessReader;
   const root = prAuthorLocatorRoot();
+  const worktree = realpathOrUndefined(input.worktree);
+  const ownClaim = prAuthorClaimReason(input.binding);
   let names: string[];
   try { names = readdirSync(root); } catch { return []; }
   const candidates: PrAuthorCandidate[] = [];
@@ -9796,39 +9858,48 @@ export function scanPrAuthorCandidates(input: {
       || typeof receipt.launcher_started_at !== 'string') continue;
     // A terminal envelope ends every claim of this invocation.
     if (readPrAuthorRunRecord(locator.terminal_envelope_path, PR_AUTHOR_TERMINAL_SCHEMA, identity)) continue;
+    const launcherStartedAt = Date.parse(receipt.launcher_started_at);
     if (isExactLivePrAuthorLauncher({
       pid: launcherPid, invocationId, launcherStartedAt: receipt.launcher_started_at,
       binding: input.binding, reader,
     })) {
-      const argv = reader.cmdline(launcherPid);
+      const argvKey = argvProfileKey(reader.cmdline(launcherPid));
+      const resolved = resolvePrAuthorObservation(invocationId, [argvKey, input.profileKey]);
       candidates.push({
         invocationId, launcherPid, launcherLive: true, orphanChildLive: false,
-        profileKey: argvProfileKey(argv) ?? input.profileKey, timeoutMs: argvTimeoutMs(argv),
+        ...(resolved ? { profileKey: resolved.profileKey } : argvKey ? { profileKey: argvKey } : {}),
+        deadlineMs: Number.POSITIVE_INFINITY,
       });
       continue;
     }
-    let ownerPid: number | undefined;
-    try {
-      ownerPid = readStateLightTurnObservation(input.profileKey, invocationId).owner_pid;
-    } catch { ownerPid = undefined; }
+    const resolved = resolvePrAuthorObservation(invocationId, [input.profileKey]);
+    if (!resolved) continue; // nothing persisted: no claim was ever made
+    const ownerPid = resolved.record.owner_pid;
     if (ownerPid !== undefined && isLivePrAuthorChild({ pid: ownerPid, invocationId, binding: input.binding, reader })) {
+      const childArgv = reader.cmdline(ownerPid);
+      const childStart = reader.startTimeMs(ownerPid) ?? launcherStartedAt;
       candidates.push({
-        invocationId, launcherPid, launcherLive: false, orphanChildLive: true,
-        profileKey: argvProfileKey(reader.cmdline(ownerPid)) ?? input.profileKey,
-        timeoutMs: argvTimeoutMs(reader.cmdline(ownerPid)),
+        invocationId, launcherPid, launcherLive: false, orphanChildLive: true, profileKey: resolved.profileKey,
+        deadlineMs: Number.isFinite(childStart)
+          ? childStart + argvTimeoutMs(childArgv) + PR_AUTHOR_DEADLINE_GRACE_MS
+          : Number.POSITIVE_INFINITY,
       });
       continue;
     }
-    let claimed = false;
-    try {
-      const record = readStateLightTurnObservation(input.profileKey, invocationId);
-      claimed = record.phase === 'sending' && record.transition_reason === prAuthorClaimReason(input.binding);
-    } catch { claimed = false; }
-    // Its argv is gone, so its own --timeout-ms is unknown: use the largest admissible turn timeout.
-    if (claimed) {
+    const reason = resolved.record.transition_reason;
+    const childCwd = typeof receipt.child_cwd === 'string' ? receipt.child_cwd : undefined;
+    const attributable = reason === ownClaim
+      || (!reason.startsWith(PR_AUTHOR_CLAIM_REASON_PREFIX) && worktree !== undefined && childCwd === worktree);
+    // Both processes are gone, so the turn's own --timeout-ms is unknowable:
+    // hold to the largest admissible turn timeout from the immutable launcher
+    // start (a bounded, deliberately conservative overhold).
+    if (attributable) {
       candidates.push({
         invocationId, launcherPid, launcherLive: false, orphanChildLive: false, claimOnly: true,
-        profileKey: input.profileKey, timeoutMs: STATE_LIGHT_MAX_TIMEOUT_MS,
+        profileKey: resolved.profileKey,
+        deadlineMs: Number.isFinite(launcherStartedAt)
+          ? launcherStartedAt + STATE_LIGHT_MAX_TIMEOUT_MS + PR_AUTHOR_DEADLINE_GRACE_MS
+          : Number.POSITIVE_INFINITY,
       });
     }
   }
@@ -9850,18 +9921,14 @@ const PR_AUTHOR_CLAIMED_PHASES: ReadonlySet<string> = new Set([
  * - exact live launcher: missing/unreadable record HOLDS; `prepared` has not
  *   claimed; every later phase (including a refuser's `not_sent`) holds until
  *   its terminal envelope.
- * - launcher dead/mismatched (bound child alive, or SENDING claim for this
- *   binding): a claimed phase HOLDS until the same invocation's existing
- *   absolute turn deadline. The record's last transition happened after the
- *   invocation start, so `transitioned_at + timeout` never precedes it.
+ * - launcher dead/mismatched (bound child alive, or a record attributable to
+ *   this PR): a claimed phase HOLDS until the candidate's original deadline.
  */
 export function prAuthorCandidateHolding(candidate: PrAuthorCandidate, nowMs = Date.now()): PrAuthorHolding {
   let phase: string;
-  let transitionedAt: number;
   try {
-    const record = readStateLightTurnObservation(candidate.profileKey, candidate.invocationId);
-    phase = record.phase;
-    transitionedAt = Date.parse(record.transitioned_at);
+    if (!candidate.profileKey) throw new Error('observation_profile_unresolved');
+    phase = readStateLightTurnObservation(candidate.profileKey, candidate.invocationId).phase;
   } catch {
     return candidate.launcherLive
       ? { holding: true, invocationId: candidate.invocationId, phase: 'observation_unreadable' }
@@ -9873,14 +9940,14 @@ export function prAuthorCandidateHolding(candidate: PrAuthorCandidate, nowMs = D
   if (!(candidate.orphanChildLive || candidate.claimOnly) || !PR_AUTHOR_CLAIMED_PHASES.has(phase)) {
     return { holding: false };
   }
-  const deadline = Number.isFinite(transitionedAt) ? transitionedAt + candidate.timeoutMs : Number.POSITIVE_INFINITY;
-  return nowMs < deadline ? { holding: true, invocationId: candidate.invocationId, phase } : { holding: false };
+  return nowMs < candidate.deadlineMs ? { holding: true, invocationId: candidate.invocationId, phase } : { holding: false };
 }
 
 /** First OTHER candidate holding the same-PR claim, if any. */
 export function findOtherPrAuthorHolder(input: {
   readonly binding: PrAuthorBinding;
   readonly profileKey: string;
+  readonly worktree?: string;
   readonly ownInvocationId: string;
   readonly reader?: PrAuthorProcessReader;
   readonly nowMs?: number;
@@ -9900,6 +9967,7 @@ export function findOtherPrAuthorHolder(input: {
 export function prelaunchPrAuthorOccupant(input: {
   readonly binding: PrAuthorBinding;
   readonly profileKey: string;
+  readonly worktree?: string;
   readonly reader?: PrAuthorProcessReader;
   readonly nowMs?: number;
 }): string | undefined {

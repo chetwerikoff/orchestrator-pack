@@ -247,6 +247,7 @@ export async function runBrowserAdapter(
     const occupant = prelaunchPrAuthorOccupant({
       binding: prAuthor,
       profileKey: configuredProfileKey(profile, cdp),
+      worktree: cwd,
       ...(deps.processReader ? { reader: deps.processReader } : {}),
     });
     if (occupant) {

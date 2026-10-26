@@ -3409,20 +3409,26 @@ function prAuthorRaceFixture() {
   };
   let nextPid = 40_000;
   let physicalSends = 0;
-  const turnArgv = (id: string, bound: PrAuthorBinding | undefined) => [
-    PR_AUTHOR_CANONICAL_ENTRY, 'turn', '--invocation-id', id, '--profile', profile, '--cdp', cdp,
-    '--timeout-ms', '600000', ...(bound ? ['--repo', bound.repo, '--pr', String(bound.pr)] : []),
+  const worktree = join(root, 'worktree');
+  mkdirSync(worktree);
+  const turnArgv = (id: string, bound: PrAuthorBinding | undefined, turnProfile: string, timeoutMs: number) => [
+    PR_AUTHOR_CANONICAL_ENTRY, 'turn', '--invocation-id', id, '--profile', turnProfile, '--cdp', cdp,
+    '--timeout-ms', String(timeoutMs), ...(bound ? ['--repo', bound.repo, '--pr', String(bound.pr)] : []),
   ];
   const launch = (id: string, options: {
     startedAt?: number; processStartMs?: number; binding?: PrAuthorBinding | null; admit?: boolean;
+    profile?: string; childCwd?: string; timeoutMs?: number;
   } = {}) => {
     const launcherPid = nextPid++;
     const startedAt = options.startedAt ?? Date.now();
     const bound = options.binding === null ? undefined : options.binding ?? binding;
+    const turnProfile = options.profile ?? profile;
+    const turnProfileKey = configuredProfileKey(turnProfile, cdp);
+    const timeoutMs = options.timeoutMs ?? 600_000;
     procs.set(launcherPid, {
       argv: ['node', '--experimental-strip-types', PR_AUTHOR_CANONICAL_LAUNCHER, 'launch',
-        '--invocation-id', id, '--profile', profile, '--cdp', cdp,
-        '--child-command', 'node', '--', '--experimental-strip-types', ...turnArgv(id, bound)],
+        '--invocation-id', id, '--profile', turnProfile, '--cdp', cdp,
+        '--child-command', 'node', '--', '--experimental-strip-types', ...turnArgv(id, bound, turnProfile, timeoutMs)],
       startMs: options.processStartMs ?? startedAt - 250,
     });
     const receipt = join(terminalRoot, id + '.receipt.json');
@@ -3433,51 +3439,58 @@ function prAuthorRaceFixture() {
       launcher_started_at: new Date(startedAt).toISOString(),
       handoff_committed_at: new Date(startedAt).toISOString(),
       completion_mode: 'browser-turn-result-v1', invocation_id: id, launcher_pid: launcherPid,
+      ...(options.childCwd ? { child_cwd: options.childCwd } : {}),
     }));
     writeFileSync(join(terminalRoot, 'browser-gpt-receipts',
       createHash('sha256').update(id, 'utf8').digest('hex') + '.json'), JSON.stringify({
       schema: 'flow-manager-long-running-child-locator/v1', invocation_id: id, ...identity,
       handoff_receipt_path: receipt, terminal_envelope_path: envelope,
     }));
-    if (options.admit !== false) admitStateLightTurnObservation({ profileKey, invocationId: id, marker: 'OPKTURNV1' + id });
+    if (options.admit !== false) {
+      admitStateLightTurnObservation({ profileKey: turnProfileKey, invocationId: id, marker: 'OPKTURNV1' + id });
+    }
     return {
       id,
       launcherPid,
+      profileKey: turnProfileKey,
+      startedAt,
       terminate: () => writeFileSync(envelope, JSON.stringify({
         schema: 'flow-manager-long-running-child-terminal/v1', ...identity,
       })),
       killLauncher: () => { procs.delete(launcherPid); },
       /** The surviving detached child is this test process (bind records owner_pid). */
-      survivingChild: () => {
-        procs.set(process.pid, { argv: ['node', '--experimental-strip-types', ...turnArgv(id, bound)], startMs: Date.now() });
+      survivingChild: (startMs = Date.now()) => {
+        procs.set(process.pid, {
+          argv: ['node', '--experimental-strip-types', ...turnArgv(id, bound, turnProfile, timeoutMs)], startMs,
+        });
         bindStateLightOwnedTarget({
-          profileKey, invocationId: id, targetId: 'target-' + id, created: true, cdp,
+          profileKey: turnProfileKey, invocationId: id, targetId: 'target-' + id, created: true, cdp,
           initialRoute: 'https://chatgpt.com/',
         });
       },
     };
   };
   // The PRE-SEND order of the production gate: persist SENDING, then final scan.
-  const claim = (id: string) => transitionStateLightTurnObservation({
-    profileKey, invocationId: id, phase: 'sending', reason: 'pr_author_send_claim:acme/widgets#7',
+  const claim = (id: string, key = profileKey) => transitionStateLightTurnObservation({
+    profileKey: key, invocationId: id, phase: 'sending', reason: 'pr_author_send_claim:acme/widgets#7',
   });
-  const finalScan = (id: string, nowMs?: number) => findOtherPrAuthorHolder({
-    binding, profileKey, ownInvocationId: id, reader, ...(nowMs !== undefined ? { nowMs } : {}),
+  const finalScan = (id: string, nowMs?: number, key = profileKey) => findOtherPrAuthorHolder({
+    binding, profileKey: key, ownInvocationId: id, worktree, reader, ...(nowMs !== undefined ? { nowMs } : {}),
   });
-  const physicalSend = (id: string) => {
+  const physicalSend = (id: string, key = profileKey) => {
     physicalSends += 1;
-    transitionStateLightTurnObservation({ profileKey, invocationId: id, phase: 'dispatching', reason: 'dispatch_boundary_entered' });
+    transitionStateLightTurnObservation({ profileKey: key, invocationId: id, phase: 'dispatching', reason: 'dispatch_boundary_entered' });
     transitionStateLightTurnObservation({
-      profileKey, invocationId: id, phase: 'sent_unharvested', reason: 'owned_marker_observed',
+      profileKey: key, invocationId: id, phase: 'sent_unharvested', reason: 'owned_marker_observed',
       sendCount: 1, sendWitness: 'numeric_send_count',
     });
   };
-  const refuse = (id: string) => transitionStateLightTurnObservation({
-    profileKey, invocationId: id, phase: 'not_sent', reason: 'terminal_pre_send',
+  const refuse = (id: string, key = profileKey) => transitionStateLightTurnObservation({
+    profileKey: key, invocationId: id, phase: 'not_sent', reason: 'terminal_pre_send',
     sendCount: 0, sendWitness: 'numeric_send_count',
   });
   return {
-    root, profile, cdp, profileKey, binding, procs, reader, launch, claim, finalScan, physicalSend, refuse,
+    root, profile, cdp, profileKey, binding, procs, reader, worktree, launch, claim, finalScan, physicalSend, refuse,
     sends: () => physicalSends,
     cleanup: () => { rmSync(root, { recursive: true, force: true }); },
   };
@@ -3613,22 +3626,78 @@ describe('Issue #2718 PR-author SENDING claim and final same-PR scan', () => {
     expect(fixture.sends()).toBe(1);
   });
 
-  it('dead PID SENDING holds before the original deadline and releases only after it elapsed', () => {
-    const b = fixture.launch('inv-b');
+  it('dead PID SENDING holds until the immutable launcher start plus the largest admissible timeout', () => {
+    const b = fixture.launch('inv-b', { startedAt: Date.now() - 60_000 });
     fixture.launch('inv-a');
     fixture.claim('inv-b');
     b.killLauncher();
     fixture.claim('inv-a');
     expect(fixture.finalScan('inv-a')).toMatchObject({ invocationId: 'inv-b', phase: 'sending' });
-    const claimedAt = Date.parse(readStateLightTurnObservation(fixture.profileKey, 'inv-b').transitioned_at);
-    expect(fixture.finalScan('inv-a', claimedAt + 7_200_001)).toBeUndefined();
+    // Released from the original launcher start, not from the later SENDING transition.
+    const release = b.startedAt + 1_800_000 + 30_000;
+    expect(fixture.finalScan('inv-a', release - 1)).toMatchObject({ invocationId: 'inv-b' });
+    expect(fixture.finalScan('inv-a', release)).toBeUndefined();
     // A SENDING claim recorded for a different PR is not attributable here.
-    const c = fixture.launch('inv-c');
+    const c = fixture.launch('inv-c', { childCwd: fixture.worktree });
     transitionStateLightTurnObservation({
       profileKey: fixture.profileKey, invocationId: 'inv-c', phase: 'sending', reason: 'pr_author_send_claim:acme/widgets#8',
     });
     c.killLauncher();
-    expect(fixture.finalScan('inv-a', claimedAt + 7_200_001)).toBeUndefined();
+    expect(fixture.finalScan('inv-a', release)).toBeUndefined();
+  });
+
+  it('cross-profile orphan: SIGKILLed launcher with a surviving child in another profile still holds; one SEND', () => {
+    const otherProfile = join(fixture.root, 'profile-other');
+    const a = fixture.launch('inv-a', { profile: otherProfile });
+    fixture.launch('inv-b');
+    a.survivingChild();
+    fixture.claim('inv-a', a.profileKey);
+    expect(fixture.finalScan('inv-a', undefined, a.profileKey)).toBeUndefined();
+    a.killLauncher();
+    fixture.claim('inv-b');
+    expect(fixture.finalScan('inv-b')).toMatchObject({ holding: true, invocationId: 'inv-a', phase: 'sending' });
+    fixture.refuse('inv-b');
+    fixture.physicalSend('inv-a', a.profileKey);
+    expect(fixture.sends()).toBe(1);
+  });
+
+  it('orphan child releases at its own start plus its --timeout-ms (short timeout), not a later transition', () => {
+    const start = Date.now() - 5_000;
+    const a = fixture.launch('inv-a', { timeoutMs: 60_000, startedAt: start });
+    fixture.launch('inv-b');
+    a.survivingChild(start);
+    fixture.claim('inv-a');
+    a.killLauncher();
+    fixture.claim('inv-b');
+    expect(fixture.finalScan('inv-b', start + 60_000 + 30_000 - 1)).toMatchObject({ invocationId: 'inv-a' });
+    expect(fixture.finalScan('inv-b', start + 60_000 + 30_000)).toBeUndefined();
+  });
+
+  it('already-sent author with both processes dead and no terminal holds before its deadline across profiles', () => {
+    const otherProfile = join(fixture.root, 'profile-other');
+    const a = fixture.launch('inv-a', { profile: otherProfile, childCwd: fixture.worktree });
+    fixture.launch('inv-b');
+    fixture.claim('inv-a', a.profileKey);
+    expect(fixture.finalScan('inv-a', undefined, a.profileKey)).toBeUndefined();
+    fixture.physicalSend('inv-a', a.profileKey);
+    a.killLauncher();
+    fixture.claim('inv-b');
+    // The SENDING reason was overwritten by later phases; the receipt's worktree attributes it.
+    expect(fixture.finalScan('inv-b')).toMatchObject({ invocationId: 'inv-a', phase: 'sent_unharvested' });
+    fixture.refuse('inv-b');
+    expect(fixture.finalScan('inv-b', a.startedAt + 1_800_000 + 30_000)).toBeUndefined();
+    expect(fixture.sends()).toBe(1);
+  });
+
+  it('a dead post-dispatch turn of another worktree is not attributable to this PR', () => {
+    const elsewhere = join(fixture.root, 'elsewhere');
+    mkdirSync(elsewhere);
+    const a = fixture.launch('inv-a', { childCwd: elsewhere, binding: null });
+    fixture.launch('inv-b');
+    fixture.physicalSend('inv-a');
+    a.killLauncher();
+    fixture.claim('inv-b');
+    expect(fixture.finalScan('inv-b')).toBeUndefined();
   });
 
   it('prelaunch zero-tab fast path reports any live same-PR launcher', () => {
