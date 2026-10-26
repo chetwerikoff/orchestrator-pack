@@ -59,8 +59,26 @@ const OPEN_CODE_HTTP_SCRIPT = [
   "}",
 ].join('\n');
 
+// Serialized `NAME=value ` assignments the pack prepends to an OpenCode spawn.
+const ENV_ASSIGNMENT_PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:'(?:[^']|'\\'')*'|"[^"]*"|[^\s'"]*)\s+)*/u;
+const ABSOLUTE_OPENCODE_BASENAME = /^\/(?:[^\s'"/]+\/)*opencode$/u;
+const NATIVE_OPENCODE_START = / (?:opencode|\/(?:[^\s'"/]+\/)*opencode) --hostname /gu;
+
+/**
+ * True for the bare `opencode` token or an absolute executable whose basename is
+ * exactly `opencode`. An absolute first command word with any other basename is
+ * never OpenCode, and incidental `opencode` text in env/config is not a witness.
+ */
+function hasOpenCodeExecutable(command: string): boolean {
+  const trimmed = command.trim();
+  const rest = trimmed.slice(ENV_ASSIGNMENT_PREFIX.exec(trimmed)?.[0].length ?? 0);
+  const word = rest.split(/\s/u, 1)[0] ?? '';
+  if (word.startsWith('/')) return ABSOLUTE_OPENCODE_BASENAME.test(word);
+  return /(?:^|\s)opencode(?:\s|$)/iu.test(command);
+}
+
 function openCodeUrlFromCommand(command: string): string | undefined {
-  if (!/(?:^|\s)opencode(?:\s|$)/iu.test(command)) return undefined;
+  if (!hasOpenCodeExecutable(command)) return undefined;
   const hostname = command.match(/--hostname\s+(?:'([^']+)'|"([^"]+)"|(\S+))/iu);
   const port = command.match(/--port\s+(?:'([1-9]\d*)'|"([1-9]\d*)"|([1-9]\d*))/iu);
   const host = hostname?.[1] ?? hostname?.[2] ?? hostname?.[3];
@@ -70,7 +88,7 @@ function openCodeUrlFromCommand(command: string): string | undefined {
 }
 
 function openCodeAgentFromCommand(command: string): string | undefined {
-  if (!/(?:^|\s)opencode(?:\s|$)/iu.test(command)) return undefined;
+  if (!hasOpenCodeExecutable(command)) return undefined;
   const match = command.match(/--agent(?:=|\s+)(?:'([^']+)'|"([^"]+)"|(\S+))/iu);
   const agent = match?.[1] ?? match?.[2] ?? match?.[3];
   return agent?.trim() || undefined;
@@ -87,7 +105,7 @@ export function openCodeControlFromCommand(command: string): OpenCodeControlBind
   // Quoted XDG homes may contain flag-shaped text; inspect only the actual
   // native OpenCode argv after the pack's serialized environment assignments.
   const nativeStart = command.startsWith('OPENCODE_CONFIG_CONTENT=')
-    ? command.lastIndexOf(' opencode --hostname ') : -1;
+    ? Math.max(-1, ...[...command.matchAll(NATIVE_OPENCODE_START)].map((match) => match.index)) : -1;
   const nativeCommand = nativeStart >= 0 ? command.slice(nativeStart + 1) : command;
   const url = openCodeUrlFromCommand(nativeCommand);
   if (!url) return undefined;
@@ -1081,7 +1099,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       }
       return { status: 'unbound', reason: 'runtime_composer_command_unbound', provenance };
     }
-    if (/(?:^|\s)opencode(?:\s|$)/iu.test(command)) {
+    if (hasOpenCodeExecutable(command)) {
       return { status: 'known', family: 'opencode', command, provenance, ...identityEvidence };
     }
     if (/opencode/iu.test(command)) {

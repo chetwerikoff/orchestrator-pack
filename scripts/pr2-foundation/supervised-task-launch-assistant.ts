@@ -28,6 +28,8 @@ import {
   executorCatalogContains,
   OPENCODE_PACK_AGENT,
   buildOpenCodeAgentOverlay,
+  OPENCODE_EXECUTABLE_VARIABLE,
+  pinnedProbeCommand,
   openCodeAgentConfigFromInfo,
   openCodeAgentSemantics,
   openCodeFleetBrowserDenyRulesAreTerminal,
@@ -79,7 +81,7 @@ export interface LaunchResources {
 export interface NextAction {
   readonly kind: 'repair_preflight' | 'repair_executor_profile' | 'reconcile_manager_run'
     | 'reconcile_manager_task' | 'reconcile_dispatch' | 'reconcile_worktree_setup' | 'remediate_terminal'
-    | 'retry_supervised_start' | 'reconcile_supervised_start';
+    | 'retry_supervised_start' | 'reconcile_supervised_start' | 'start_new_task';
   readonly requestId?: string;
   readonly command?: string;
   readonly note?: string;
@@ -141,6 +143,8 @@ export interface ExecutorProfile {
   readonly effort?: string;
   readonly agentName?: string;
   readonly inlineConfigJson?: string;
+  /** Profile-pinned absolute OpenCode binary spawned and probed; absent means bare `opencode`. */
+  readonly executable?: string;
   readonly providerArgs?: readonly string[];
   readonly names: readonly [string, string, string];
 }
@@ -188,6 +192,46 @@ function sameTaskTerminalDispatch(
       && assignment.kind === 'local'
       && assignment.provider === adapterId
       && ['failed', 'abandoned', 'cancelled', 'done', 'completed'].includes(observed.status ?? ''));
+}
+
+const FIRST_START_COMMAND = 'node --experimental-strip-types scripts/pr2-foundation/supervised-task-launch-assistant.ts --project "$PROJECT_ID"';
+
+/**
+ * A present Dispatch with no current assignment for this Task is never resumed by
+ * a same-Task successor. The lawful next step is a coordinator-authorized new
+ * Task through the existing first-start route.
+ */
+function freshDispatchNotAbsent(
+  input: LaunchInput,
+  taskId: string,
+  observed: Extract<DispatchObservation, { kind: 'present' }>,
+  current: WorkerAssignment | null,
+  reconcileNote: string,
+): Omit<Extract<EdgeResult<never>, { status: 'continue' }>, 'status'> {
+  const evidence = {
+    dispatchState: 'present',
+    ...(observed.status ? { dispatchStatus: observed.status } : {}),
+    taskId,
+    ...(input.runId?.trim() ? { runId: input.runId.trim() } : {}),
+  };
+  if (input.workClass === 'merge' || current?.taskId === taskId) {
+    return {
+      cause: 'fresh_dispatch_not_absent', actor: 'orchestrator', evidence,
+      nextAction: { kind: 'reconcile_dispatch', note: reconcileNote },
+    };
+  }
+  const route = input.workClass === 'manager'
+    ? '--work-class manager --run "$RUN_ID" --manager-brief "$MANAGER_BRIEF"'
+    : `--work-class ${input.workClass} --task "$NEW_TASK_ID"`;
+  return {
+    cause: 'fresh_dispatch_not_absent', actor: 'orchestrator',
+    evidence: { ...evidence, assignment: 'absent' },
+    nextAction: {
+      kind: 'start_new_task',
+      command: `${FIRST_START_COMMAND} ${route}`,
+      note: `no current assignment owns Task ${taskId}, so no same-Task successor starts; the coordinator starts a new Task through the authorized first-start route`,
+    },
+  };
 }
 
 export type ManagerBriefTemplateName = 'manager-preamble.md' | 'ff-prompt-universal.md';
@@ -506,6 +550,7 @@ function admittedProfile(
       ...(semantic.family === 'claude' ? { model: semantic.model, effort: semantic.effort } : {}),
       ...(invocation.agentName ? { agentName: invocation.agentName } : {}),
       ...(invocation.inlineConfigJson ? { inlineConfigJson: invocation.inlineConfigJson } : {}),
+      ...(semantic.family === 'opencode' && semantic.opencodeExecutable ? { executable: semantic.opencodeExecutable } : {}),
       ...(provider ? { providerArgs: provider.argv } : {}),
       names: semantic.names,
     },
@@ -790,7 +835,7 @@ export async function runSupervisedTaskLaunchAssistant(
       || !input.primaryRoot || input.worktreeSelector !== `path:${input.primaryRoot}`)) {
     return continued(input, 'executor_profile', openCodeLaunchRefusal(input.workClass), resources, startedAtMs, timings, deps.now);
   }
-  if (profile.family === 'opencode' && !openCodeLaunchHasFleetBrowserDenies({ command: profile.launchCommand, agentName: profile.agentName, inlineConfigJson: profile.inlineConfigJson })) {
+  if (profile.family === 'opencode' && !openCodeLaunchHasFleetBrowserDenies({ command: profile.launchCommand, agentName: profile.agentName, inlineConfigJson: profile.inlineConfigJson, ...(profile.executable ? { executable: profile.executable } : {}) })) {
     return continued(input, 'executor_profile', openCodeLaunchRefusal(input.workClass), resources, startedAtMs, timings, deps.now);
   }
 
@@ -873,10 +918,10 @@ export async function runSupervisedTaskLaunchAssistant(
   if (early.value.kind === 'present'
     && !earlyTerminal
     && (!delegatedIntegration || early.value.dispatchId !== predecessor?.bindingKey)) {
-    return continued(input, 'dispatch_admission_early', {
-      cause: 'fresh_dispatch_not_absent', actor: 'orchestrator', evidence: { dispatchState: 'present' },
-      nextAction: { kind: 'reconcile_dispatch', note: 'reconcile the existing Dispatch; create no new worktree terminal/start' },
-    }, { ...resources, ...(early.value.dispatchId ? { dispatchId: early.value.dispatchId } : {}) }, startedAtMs, timings, deps.now);
+    return continued(input, 'dispatch_admission_early', freshDispatchNotAbsent(
+      input, taskId, early.value, earlyCurrent,
+      'reconcile the existing Dispatch; create no new worktree terminal/start',
+    ), { ...resources, ...(early.value.dispatchId ? { dispatchId: early.value.dispatchId } : {}) }, startedAtMs, timings, deps.now);
   }
 
   const providerMode = profile.route === 'provider_new_top_level';
@@ -944,8 +989,31 @@ export async function runSupervisedTaskLaunchAssistant(
   }
   // The post-probe command is the actual spawn command; never trust the pre-probe
   // profile if a finalized OpenCode command silently dropped its deny overlay.
-  if (profile.family === 'opencode' && !openCodeLaunchHasFleetBrowserDenies({ command: profile.launchCommand, agentName: profile.agentName, inlineConfigJson: profile.inlineConfigJson })) {
+  if (profile.family === 'opencode' && !openCodeLaunchHasFleetBrowserDenies({ command: profile.launchCommand, agentName: profile.agentName, inlineConfigJson: profile.inlineConfigJson, ...(profile.executable ? { executable: profile.executable } : {}) })) {
     return continued(input, 'terminal_prepare', openCodeLaunchRefusal(input.workClass), resources, startedAtMs, timings, deps.now);
+  }
+
+  // The final Dispatch observation precedes the terminal spawn: a Dispatch that
+  // appears after the early read must not leave a successor worktree terminal.
+  const finalPredecessor = delegatedIntegration ? deps.readCurrentAssignment(input.issueNumber!) : null;
+  if (delegatedIntegration && (!matchesMergePredecessor(finalPredecessor, input, taskId, delegatedIntegration)
+    || finalPredecessor?.bindingKey !== predecessor?.bindingKey)) {
+    return continued(input, 'dispatch_admission_final', mergePredecessorMismatch(), resources, startedAtMs, timings, deps.now);
+  }
+  const final = await checkpoint('dispatch_admission_final', timings, deps.now, () => deps.observeDispatch(taskId));
+  if (final.status !== 'ok') return continued(input, 'dispatch_admission_final', final, resources, startedAtMs, timings, deps.now);
+  const finalCurrent = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
+  const finalTerminal = earlyTerminal
+    && sameTaskTerminalDispatch(final.value, finalCurrent, taskId, deps.adapter.id)
+    && earlyCurrent?.assignmentId === finalCurrent?.assignmentId
+    && earlyCurrent?.generation === finalCurrent?.generation;
+  if (final.value.kind === 'present'
+    && !finalTerminal
+    && (!delegatedIntegration || final.value.dispatchId !== finalPredecessor?.bindingKey)) {
+    return continued(input, 'dispatch_admission_final', freshDispatchNotAbsent(
+      input, taskId, final.value, finalCurrent,
+      'reconcile the competing Dispatch; do not call worker-start on this terminal',
+    ), { ...resources, ...(final.value.dispatchId ? { dispatchId: final.value.dispatchId } : {}) }, startedAtMs, timings, deps.now);
   }
 
   let terminal: RuntimeWorker | undefined;
@@ -1026,27 +1094,6 @@ export async function runSupervisedTaskLaunchAssistant(
         : { kind: 'remediate_terminal',
           note: 'reuse only the exact owned terminal identity after a bounded startup refusal; never reuse a foreign, replaced, or mismatched target' },
     }, resources, startedAtMs, timings, deps.now);
-  }
-
-  const finalPredecessor = delegatedIntegration ? deps.readCurrentAssignment(input.issueNumber!) : null;
-  if (delegatedIntegration && (!matchesMergePredecessor(finalPredecessor, input, taskId, delegatedIntegration)
-    || finalPredecessor?.bindingKey !== predecessor?.bindingKey)) {
-    return continued(input, 'dispatch_admission_final', mergePredecessorMismatch(), resources, startedAtMs, timings, deps.now);
-  }
-  const final = await checkpoint('dispatch_admission_final', timings, deps.now, () => deps.observeDispatch(taskId));
-  if (final.status !== 'ok') return continued(input, 'dispatch_admission_final', final, resources, startedAtMs, timings, deps.now);
-  const finalCurrent = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
-  const finalTerminal = earlyTerminal
-    && sameTaskTerminalDispatch(final.value, finalCurrent, taskId, deps.adapter.id)
-    && earlyCurrent?.assignmentId === finalCurrent?.assignmentId
-    && earlyCurrent?.generation === finalCurrent?.generation;
-  if (final.value.kind === 'present'
-    && !finalTerminal
-    && (!delegatedIntegration || final.value.dispatchId !== finalPredecessor?.bindingKey)) {
-    return continued(input, 'dispatch_admission_final', {
-      cause: 'fresh_dispatch_not_absent', actor: 'orchestrator', evidence: { dispatchState: 'present' },
-      nextAction: { kind: 'reconcile_dispatch', note: 'reconcile the competing Dispatch; do not call worker-start on this terminal' },
-    }, { ...resources, ...(final.value.dispatchId ? { dispatchId: final.value.dispatchId } : {}) }, startedAtMs, timings, deps.now);
   }
 
   if (input.existingTerminal && terminal) {
@@ -1301,13 +1348,14 @@ export async function finalizeOpenCodeExecutorProfile(
   // proof until an installed-version exact-context mode is established.
   if (!proveNoWrite || !(await proveNoWrite(worktreePath))) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const before = configState(worktreePath);
+  const executable = profile.executable ?? 'opencode';
   const stateRoot = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
   const isolatedEnv = { XDG_STATE_HOME: stateRoot };
-  const config = await execute(['opencode', 'debug', 'config'], 15_000, isolatedEnv, worktreePath);
+  const config = await execute([executable, 'debug', 'config'], 15_000, isolatedEnv, worktreePath);
   if (!config.ok || before !== configState(worktreePath)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const baselineName = explicitDefaultAgent(config.stdout);
   if (!baselineName) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
-  const baseline = await execute(['opencode', 'debug', 'agent', baselineName], 15_000, isolatedEnv, worktreePath);
+  const baseline = await execute([executable, 'debug', 'agent', baselineName], 15_000, isolatedEnv, worktreePath);
   if (!baseline.ok || before !== configState(worktreePath)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const baselineValue = resolvedAgent(baseline.stdout);
   if (!baselineValue) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
@@ -1315,7 +1363,7 @@ export async function finalizeOpenCodeExecutorProfile(
   const effortMatch = profile.launchCommand.match(/"variant":"([^"]+)"/u);
   if (!modelMatch?.[1] || !effortMatch?.[1]) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
-  const overlay = buildOpenCodeAgentOverlay({ agentName, baseline: baselineValue, model: modelMatch[1], effort: effortMatch[1], stateRoot,
+  const overlay = buildOpenCodeAgentOverlay({ ...(profile.executable ? { executable: profile.executable } : {}), agentName, baseline: baselineValue, model: modelMatch[1], effort: effortMatch[1], stateRoot,
     ...(dataRoot !== undefined ? { dataRoot } : {}), ...(resumeSession ? { resumeSession } : {}) });
   // OpenCode 1.18.35 appends its runtime tool-output allow after the overlay rules.
   // Leave every other permission's ordered semantics unchanged.
@@ -1365,7 +1413,7 @@ export async function finalizeOpenCodeExecutorProfile(
       ]
       : narrowedPermission,
   };
-  const resolved = await execute(['opencode', 'debug', 'agent', agentName], 15_000, { ...isolatedEnv, OPENCODE_CONFIG_CONTENT: overlay.inlineConfigJson! }, worktreePath);
+  const resolved = await execute([executable, 'debug', 'agent', agentName], 15_000, { ...isolatedEnv, OPENCODE_CONFIG_CONTENT: overlay.inlineConfigJson! }, worktreePath);
   const resolvedValue = resolvedAgent(resolved.stdout);
   const model = resolvedValue && record(resolvedValue.model) ? resolvedValue.model : null;
   if (!resolved.ok || before !== configState(worktreePath) || !resolvedValue || !model
@@ -1373,12 +1421,12 @@ export async function finalizeOpenCodeExecutorProfile(
     || !openCodeFleetBrowserDenyRulesAreTerminal(resolvedValue.permission)
     || openCodeAgentSemantics(resolvedValue) !== openCodeAgentSemantics(expected)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   for (const childAgent of ['general', 'explore']) {
-    const child = await execute(['opencode', 'debug', 'agent', childAgent], 15_000, { ...isolatedEnv, OPENCODE_CONFIG_CONTENT: overlay.inlineConfigJson! }, worktreePath);
+    const child = await execute([executable, 'debug', 'agent', childAgent], 15_000, { ...isolatedEnv, OPENCODE_CONFIG_CONTENT: overlay.inlineConfigJson! }, worktreePath);
     const childValue = resolvedAgent(child.stdout);
     if (!child.ok || before !== configState(worktreePath) || !childValue
       || !openCodeFleetBrowserDenyRulesAreTerminal(childValue.permission)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   }
-  const paths = await execute(['opencode', 'debug', 'paths'], 15_000, isolatedEnv, worktreePath);
+  const paths = await execute([executable, 'debug', 'paths'], 15_000, isolatedEnv, worktreePath);
   if (!paths.ok || !paths.stdout.includes(stateRoot)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   return { status: 'ok', value: { ...profile, launchCommand: overlay.command, agentName: overlay.agentName, inlineConfigJson: overlay.inlineConfigJson }, evidence: { executorFamily: 'opencode', route: profile.route, exactContext: true } };
 }
@@ -1399,15 +1447,17 @@ export async function resolveLiveExecutorProfile(
   if (profile.family === 'claude') {
     // There is no Claude model catalog. The model IDs and effort levels are
     // closed by the policy, and the installed CLI must expose both channels.
-    const nativeHelp = await execute(descriptor.capabilityProbeCommands[0]!);
+    const nativeHelp = await execute(pinnedProbeCommand(profile, descriptor.capabilityProbeCommands[0]!));
     if (!nativeHelp.ok) return routeRefusalEdge(profile, 'executor_route_unavailable');
     capabilities = claudeHelpEdgeCapabilities(`${nativeHelp.stdout}\n${nativeHelp.stderr ?? ''}`);
   } else {
-    const listed = await execute(descriptor.catalogCommand);
+    const listed = await execute(pinnedProbeCommand(profile, descriptor.catalogCommand));
     if (!listed.ok) return {
       status: 'continue', cause: 'executor_profile_applicability_unproven', actor: 'operator',
       evidence: { executorFamily: profile.family, profileVariables: profile.names },
-      nextAction: { kind: 'repair_executor_profile', note: 'make the selected executor model catalog observable and select an available model' },
+      nextAction: { kind: 'repair_executor_profile', note: profile.opencodeExecutable
+        ? `the profile-pinned absolute opencode binary did not run; repair ${OPENCODE_EXECUTABLE_VARIABLE} to an installed executable named opencode`
+        : 'make the selected executor model catalog observable and select an available model' },
     };
     if (!executorCatalogContains(profile, listed.stdout)) return {
       status: 'continue', cause: 'executor_profile_model_unavailable', actor: 'operator',
@@ -1421,8 +1471,8 @@ export async function resolveLiveExecutorProfile(
     for (const probe of descriptor.capabilityProbeCommands.slice(0, 2)) {
       const isDebugProbe = probe[0] === 'opencode' && probe[1] === 'debug';
       const observation = isDebugProbe
-        ? await execute(probe, undefined, { OPENCODE_CONFIG_CONTENT: inlineConfig })
-        : await execute(probe);
+        ? await execute(pinnedProbeCommand(profile, probe), undefined, { OPENCODE_CONFIG_CONTENT: inlineConfig })
+        : await execute(pinnedProbeCommand(profile, probe));
       if (!observation.ok) return routeRefusalEdge(profile, 'executor_route_unavailable');
       probeOutputs.push(`${observation.stdout}\n${observation.stderr}`);
     }
@@ -2513,7 +2563,7 @@ export async function runOpenCodePrimaryProbe(
     // Only state/cache roots are disposable; keep the selected real config/home/card.
     const diagnosticEnv = { ...env, XDG_STATE_HOME: join(scratch, 'state'), XDG_CACHE_HOME: join(scratch, 'cache') };
     const execute: ChildExecutor = async (argv, requestedMs, extraEnv, cwd) => {
-      if (argv[0] !== 'opencode' && argv[0] !== process.execPath) {
+      if (argv[0] !== 'opencode' && argv[0] !== semantic.value.opencodeExecutable && argv[0] !== process.execPath) {
         throw new Error('probe_command_out_of_scope');
       }
       if (cwd && resolve(cwd) !== resolve(targetRoot!)) {
@@ -2735,6 +2785,17 @@ export interface OpenCodeResumeDependencies {
   readonly finalizeProfile: NonNullable<LaunchDependencies['finalizeProfile']>;
   readonly listAssignments: () => readonly WorkerAssignmentRecord[] | null;
   readonly assignmentWorkspace: (assignment: WorkerAssignmentRecord) => Promise<string | null>;
+  /**
+   * Exact manager Run/Task that owns this OpenCode session. No pack producer
+   * exists today, so production omits it; catalog membership is never ownership.
+   */
+  readonly managerSessionOwner?: (session: string) => Promise<ManagerSessionOwner | null>;
+}
+
+export interface ManagerSessionOwner {
+  readonly session: string;
+  readonly runId: string;
+  readonly taskId: string;
 }
 
 export interface OpenCodeResumeResult {
@@ -2747,6 +2808,8 @@ export interface OpenCodeResumeResult {
   readonly activeSelectionVerified: false;
   readonly listenerOwnershipVerified: false;
   readonly terminal?: RuntimeWorkerIdentity;
+  /** Present on a no-effect ownership refusal: the lawful next step. */
+  readonly nextAction?: NextAction;
 }
 
 /**
@@ -2804,6 +2867,19 @@ export async function runExistingOpenCodeResume(
   });
   if (!validOpenCodeResumeSession(input.session) || !input.projectId || !input.repository
     || !isAbsolute(input.workspace)) return result('resume_input_invalid', 0);
+  // A session in the OpenCode directory catalog is not Run/Task authority. Refuse
+  // before any terminal, profile or input effect unless a manager owner is proven.
+  const owner = await deps.managerSessionOwner?.(input.session) ?? null;
+  if (!owner || owner.session !== input.session || !owner.runId.trim() || !owner.taskId.trim()) {
+    return {
+      ...result('resume_manager_run_task_ownership_unproven', 0),
+      nextAction: {
+        kind: 'start_new_task',
+        command: `${FIRST_START_COMMAND} --work-class manager --run "$RUN_ID" --manager-brief "$MANAGER_BRIEF"`,
+        note: `session ${input.session} has no proven manager Run/Task owner, so no --session terminal starts; the coordinator starts a new Task through the authorized first-start route`,
+      },
+    };
+  }
   const command = await deps.commandPreflight();
   if (command.status !== 'ok') return result('resume_command_preflight_unavailable', 0);
   const repository = await deps.repositoryPreflight(input.repository);
@@ -2821,6 +2897,7 @@ export async function runExistingOpenCodeResume(
     || !selected.launchCommand.endsWith(` --session '${input.session}'`)
     || !openCodeLaunchHasFleetBrowserDenies({
       command: selected.launchCommand, agentName: selected.agentName, inlineConfigJson: selected.inlineConfigJson,
+      ...(selected.executable ? { executable: selected.executable } : {}),
     })) return result('resume_profile_overlay_unverified', 0);
 
   for (let attempt = 1; attempt <= 2; attempt++) {
