@@ -1199,6 +1199,31 @@ async function publishEnvelope(config: LaunchConfig, envelope: TerminalEnvelope)
   }
 }
 
+type CallerPublication =
+  | { readonly state: 'published' }
+  | { readonly state: 'occupied_exact'; readonly occupant: TerminalEnvelope }
+  | { readonly state: 'not_published' };
+
+/**
+ * Settled, child-start and watchdog-timeout callers only. `publishEnvelope` stays unchanged and returns
+ * false both for a genuinely failed write and for an occupied O_EXCL target. An occupant carrying this
+ * launch's schema, run and attempt is already the authoritative event; a wrong or unreadable occupant,
+ * or a failed creation, proves no event. The detached launcher discards stderr, so the line below is
+ * a truthful in-band diagnostic only: recovery stays the original caller's `wait`/manual re-check.
+ */
+async function publishEnvelopeAtCaller(config: LaunchConfig, envelope: TerminalEnvelope): Promise<CallerPublication> {
+  if (await publishEnvelope(config, envelope)) return { state: 'published' };
+  const occupant = readTerminalEnvelope(config.terminalEnvelopePath, {
+    runIdentity: config.runIdentity, attemptIdentity: config.attemptIdentity,
+  });
+  if (occupant) {
+    process.stderr.write('flow-manager-long-running-child: terminal_envelope_occupied_by_exact_event\n');
+    return { state: 'occupied_exact', occupant };
+  }
+  process.stderr.write('flow-manager-long-running-child: terminal_envelope_not_published: no event exists for this launch\n');
+  return { state: 'not_published' };
+}
+
 interface CandidateCapture {
   firstCandidate: ParsedTurnResult | null;
   duplicateCandidate: boolean;
@@ -1274,7 +1299,7 @@ async function finalizeCandidatePath(
     ...turnTargetEnvelopeFields(candidate, candidateObservation?.record),
   });
   if (capture.duplicateCandidate) {
-    await publishEnvelope(config, incidentEnvelope('child_terminal_result_duplicate'));
+    await publishEnvelopeAtCaller(config, incidentEnvelope('child_terminal_result_duplicate'));
     await abortManagedProcess(controller, runPromise);
     await delay(100);
     return 1;
@@ -1288,7 +1313,7 @@ async function finalizeCandidatePath(
       : resultDelivery === 'POSSIBLY_DELIVERED' || observedDelivery === 'POSSIBLY_DELIVERED'
         ? 'POSSIBLY_DELIVERED' : resultDelivery;
     const diagnostics = observed ? observed.replyDiagnostics : heartbeatDiagnostics;
-    await publishEnvelope(config, {
+    const publication = await publishEnvelopeAtCaller(config, {
       schema: TERMINAL_SCHEMA,
       run_identity: config.runIdentity,
       attempt_identity: config.attemptIdentity,
@@ -1315,9 +1340,10 @@ async function finalizeCandidatePath(
       ...(diagnostics ? { diagnostics } : {}),
     });
     await abortManagedProcess(controller, runPromise);
-    return 0;
+    // An exact occupant is the authoritative event; this launch's success must not outrank its incident.
+    return publication.state === 'occupied_exact' && publication.occupant.lifecycle_outcome !== 'success' ? 1 : 0;
   }
-  await publishEnvelope(config, incidentEnvelope(`child_turn_state:${candidate.state}`));
+  await publishEnvelopeAtCaller(config, incidentEnvelope(`child_turn_state:${candidate.state}`));
   await abortManagedProcess(controller, runPromise);
   return 1;
 }
@@ -1626,7 +1652,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     delay(spawnProbeWaitMs).then(() => ({ kind: 'pending' as const })),
   ]);
   if (spawnProbe.kind === 'done' && spawnProbe.result.outcome === 'spawn-failure') {
-    await publishEnvelope(config, {
+    await publishEnvelopeAtCaller(config, {
       schema: TERMINAL_SCHEMA,
       run_identity: config.runIdentity,
       attempt_identity: config.attemptIdentity,
@@ -1681,7 +1707,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     await abortManagedProcess(controller, runPromise);
     capture.drainStdoutBuffer();
     ingestTrailingCandidate();
-    await publishEnvelope(config, {
+    await publishEnvelopeAtCaller(config, {
       schema: TERMINAL_SCHEMA,
       run_identity: config.runIdentity,
       attempt_identity: config.attemptIdentity,
@@ -1731,7 +1757,7 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     const evidence = spawnFailed
       ? { delivery: deliveryWithoutTurnResult(true), ...conversationLocatorFields(config) }
       : await terminalNoResultEvidence(config, capture, 'child_terminal_result_missing', false, lastHeartbeatDiagnostics);
-    await publishEnvelope(config, {
+    await publishEnvelopeAtCaller(config, {
       schema: TERMINAL_SCHEMA,
       run_identity: config.runIdentity,
       attempt_identity: config.attemptIdentity,

@@ -317,6 +317,7 @@ describe('fleet alarm', () => {
       listOpenPulls: () => [{ number: 1, ref: 'fix/architect', sha: 'b'.repeat(40), issue: 2422 }, { number: 2, ref: 'fix/worker', sha: head }],
       supervisedPullOwner: (_pull, panes) => panes.find((pane) => pane.handle === architectHandle),
       readWorktreeHead: () => head,
+      readNamedPull: (_repository, number) => ({ number, headSha: number === 1 ? 'b'.repeat(40) : head, state: 'open', merged: false }),
       checkRunsFinishedAt: () => 1,
     });
     expect(sendsTo(observed.calls, architectHandle)).toHaveLength(0);
@@ -766,18 +767,22 @@ describe('fleet alarm', () => {
     const screens = { coord: 'idle', one: 'done', mgr: 'done for now' };
     const supervisedPullOwner = (pull: OpenPullHead, panes: readonly FleetPaneObservation[]): FleetPaneObservation | undefined =>
       pull.issue === 2317 ? panes.find((pane) => pane.handle === 'mgr') : undefined;
+    const readNamedPull = (_repository: string, number: number) => {
+      const pull = listOpenPulls().find((row) => row.number === number)!;
+      return { number, headSha: pull.sha, state: 'open' as const, merged: false };
+    };
 
-    const first = await tick({ screens, store, config: wakeConfig, terminals: owned, listOpenPulls, supervisedPullOwner,
+    const first = await tick({ screens, store, config: wakeConfig, terminals: owned, listOpenPulls, supervisedPullOwner, readNamedPull,
       checkRunsFinishedAt: (_repository, sha) => sha === headA ? now - 60_000 : undefined });
     expect(sendsTo(first.calls, 'one')[0]).toContain(`Wake: CI on ${headA} finished for PR #7`);
     expect(sendsTo(first.calls, 'mgr')).toHaveLength(0);
 
-    const second = await tick({ screens, store, config: wakeConfig, terminals: owned, listOpenPulls, supervisedPullOwner,
+    const second = await tick({ screens, store, config: wakeConfig, terminals: owned, listOpenPulls, supervisedPullOwner, readNamedPull,
       checkRunsFinishedAt: () => now - 60_000 });
     expect(sendsTo(second.calls, 'one')).toHaveLength(0);
     expect(sendsTo(second.calls, 'mgr')[0]).toContain(`Wake: CI on ${headB} finished for PR #8`);
 
-    const rerun = await tick({ screens, store, config: wakeConfig, terminals: owned, listOpenPulls, supervisedPullOwner,
+    const rerun = await tick({ screens, store, config: wakeConfig, terminals: owned, listOpenPulls, supervisedPullOwner, readNamedPull,
       checkRunsFinishedAt: (_repository, sha) => sha === headA ? now : now - 60_000 });
     expect(sendsTo(rerun.calls, 'one')[0]).toContain(`Wake: CI on ${headA} finished for PR #7`);
     expect(sendsTo(rerun.calls, 'mgr')).toHaveLength(0);
@@ -818,22 +823,28 @@ describe('fleet alarm', () => {
     expect(observed.calls).not.toContainEqual(['orchestration', 'dispatch-show', '--task', 'task-145', '--json']);
   });
 
-  it('falls back to the pane on the PR head when no supervised dispatch owns the Issue', async () => {
+  it('falls back to the pane on the PR head, as an advisory, only when the Issue census is readable with no rows', async () => {
     const head = 'e'.repeat(40);
     const manager: FleetTerminal = {
       handle: 'mgr', title: 'OpenCode manager', worktreePath: `${workerBase}/leopoker-mgr-148`,
       branch: 'refs/heads/chetwerikoff/leopoker-mgr-148', agentIdentity: 'opencode',
     };
-    const observed = await tick({
+    const run = (census: () => readonly WorkerAssignmentRecord[] | null) => tick({
       terminals: [terminals[0]!, manager],
       screens: { coord: 'idle', mgr: 'done' },
       config: config({ chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'chetwerikoff/LeoPoker' } }),
       listOpenPulls: () => [{ number: 153, ref: 'leopoker-mgr-148', sha: head, issue: 148 }],
+      readNamedPull: () => ({ number: 153, headSha: head, state: 'open', merged: false }),
       checkRunsFinishedAt: () => Date.parse('2026-10-04T13:21:06Z'),
       supervisedPullOwner: () => undefined,
+      readCurrentAssignments: census,
       readWorktreeHead: (worktreePath) => worktreePath === manager.worktreePath ? head : undefined,
     });
-    expect(sendsTo(observed.calls, 'mgr')).toHaveLength(0); // An Issue-linked PR cannot fall back to branch/head alone.
+    const sent = await run(() => []);
+    expect(sendsTo(sent.calls, 'mgr')).toHaveLength(2);
+    expect(sendsTo(sent.calls, 'mgr')[0]).toContain(
+      `Advisory: CI on ${head} finished for PR #153 - re-check only if you own this PR; no new Task authority`);
+    expect(sendsTo((await run(() => null)).calls, 'mgr')).toHaveLength(0);
   });
 
   it('logs a finished-CI PR without an owner pane once per CI event', async () => {
@@ -2032,6 +2043,7 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
       config: config({ selectedRepository: 'example/repo' }),
       terminals: [terminals[0]!, owner],
       listOpenPulls: () => [{ number: 42, ref: 'ci-owner', sha }],
+      readNamedPull: () => ({ number: 42, headSha: sha, state: 'open' as const, merged: false }),
       checkRunsFinishedAt: () => 17,
       readPackReviewStage: () => undefined,
     };
@@ -2933,6 +2945,17 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
     expect(texts(stale.calls)).toHaveLength(0);
     const noAssignments = await invoke({ readCurrentAssignments: () => null });
     expect(texts(noAssignments.calls)).toHaveLength(0);
+  });
+
+  it('matches the repository case-insensitively for the Issue census while the STOPPED worker gets no Wake', async () => {
+    const variant = { ...assignment, repository: 'EXAMPLE/Repo' };
+    const woken = await invoke({ readCurrentAssignments: () => [variant] });
+    expect(texts(woken.calls)).toHaveLength(1);
+    const stopped = await invoke({
+      screens: { [manager.handle]: 'done' }, executor: executorFor({ [manager.handle]: 'done' }),
+      readCurrentAssignments: () => [variant],
+    });
+    expect(texts(stopped.calls)).toHaveLength(0);
   });
 
   it.each(['done', 'PARKED on GPT turn inv-mgr334'])(
@@ -3862,6 +3885,33 @@ describe('Issue #2687: original receipt association never replaces GPT completio
     expect(sends((await perform(failure, store)).calls)).toHaveLength(0);
   });
 
+  it('names the delivery state, shares one terminal-path mark and logs an unbindable owner once (#2731)', async () => {
+    const failure = event({ observedInvocationId: 'inv-a', lifecycleOutcome: 'incident',
+      turnResultState: 'rate_limit', delivery: 'POSSIBLY_DELIVERED' });
+    const store = new MemoryWakeStore();
+    const first = await perform(failure, store);
+    expect(textTo(first.calls, owner.handle)).toHaveLength(1);
+    expect(textTo(first.calls, owner.handle)[0]?.join(' ')).toMatch(/rate_limit\/delivery-/u);
+    const shared = `terminal-path:${owner.handle}:${failure.path}`;
+    expect(store.readParkedWakeEventStatus(shared)).toBe('sent');
+    expect([...store.parkedWakeEvents].filter((key) => key.startsWith('failure:'))).toHaveLength(1);
+    // A pre-existing shared mark suppresses the route even though its own key is new.
+    const prior = new MemoryWakeStore();
+    prior.markParkedWakeEvent(shared);
+    expect(sends((await perform(failure, prior)).calls)).toHaveLength(0);
+    // A later distinct path is still eligible.
+    const later = await perform({ ...failure, path: '/tmp/opencode/inv-later-terminal.json' }, prior);
+    expect(textTo(later.calls, owner.handle)).toHaveLength(1);
+
+    const unowned = new MemoryWakeStore();
+    const noRow = { readCurrentAssignments: () => [] as WorkerAssignmentRecord[] };
+    const one = await perform(failure, unowned, noRow);
+    expect(sends(one.calls)).toHaveLength(0);
+    expect(one.logs.filter((line) => line.startsWith('no bindable owner for terminal envelope'))).toHaveLength(1);
+    const again = await perform(failure, unowned, noRow);
+    expect(again.logs.filter((line) => line.startsWith('no bindable owner'))).toHaveLength(0);
+  });
+
   it('conflicting direct observed handle can be associated by receipt only as uncertainty', async () => {
     const wrong = await perform(event({ observedInvocationId: 'inv-a',
       terminalHandle: 'foreign-launch-handle' }));
@@ -4202,6 +4252,7 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
         config: config({ ...wakeConfig, selectedRepository: 'test/project' }),
         listOpenPulls: () => [{ number: 2691, ref: 'review-correction', sha, issue: 2687 }],
         checkRunsFinishedAt: () => 123_456,
+        readNamedPull: () => ({ number: 2691, headSha: sha, state: 'open', merged: false }),
         supervisedPullOwner: (_pull, panes) => panes.find((pane) => pane.handle === worker.handle),
       };
       for (const phase of ['before-text', 'between-text-enter'] as const) {
@@ -4297,5 +4348,111 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
       vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('Issue #2731 B4: CI assignment precedence, per-effect recheck and unreadable peers', () => {
+  const repository = 'chetwerikoff/orchestrator-pack';
+  const head = 'c'.repeat(40);
+  const mgr: FleetTerminal = {
+    handle: 'mgr', title: 'OpenCode manager', worktreePath: `${workerBase}/issue-2731-mgr`,
+    branch: 'refs/heads/issue-2731-mgr', agentIdentity: 'opencode', incarnationId: 'mgr-inc', status: 'running',
+  };
+  const pull = { number: 2740, ref: 'issue-2731-mgr', sha: head, issue: 2731 };
+  const row = (updates: Partial<WorkerAssignmentRecord> = {}): WorkerAssignmentRecord => ({
+    schema: 'orchestrator-pack/worker-assignment/v1', projectId: 'orchestrator-pack', repository,
+    issueNumber: 2731, taskId: 'task-b4', assignmentId: 'assignment-b4', generation: 1,
+    kind: 'local', provider: 'orca', bindingKey: 'dispatch-b4', role: 'orchestrator',
+    createdAtUtc: '2026-10-27T00:00:00Z', ...updates,
+  });
+  const openAt = (sha = head) => () => ({ number: pull.number, headSha: sha, state: 'open' as const, merged: false });
+  const invoke = (overrides: Partial<Parameters<typeof tick>[0]> = {}) => tick({
+    terminals: [terminals[0]!, mgr], screens: { coord: 'idle', mgr: 'done' },
+    config: config({ chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository } }),
+    listOpenPulls: () => [pull], readNamedPull: openAt(), checkRunsFinishedAt: () => 99,
+    supervisedPullOwner: () => undefined, readCurrentAssignments: () => [],
+    readWorktreeHead: () => undefined, store: new MemoryWakeStore(),
+    ...overrides,
+  });
+  const text = (calls: readonly string[][], handle = 'mgr') =>
+    sendsTo(calls, handle).filter((call) => call.includes('--text'));
+
+  it('lets any assignment row, including a case-variant repository, veto the fallback', async () => {
+    expect(text((await invoke()).calls)).toHaveLength(1);
+    for (const census of [[row()], [row({ repository: repository.toUpperCase() })],
+      [row({ bindingKey: undefined } as Partial<WorkerAssignmentRecord>)]]) {
+      expect(sendsTo((await invoke({ readCurrentAssignments: () => census })).calls, 'mgr')).toHaveLength(0);
+    }
+    expect(sendsTo((await invoke({ readCurrentAssignments: () => null })).calls, 'mgr')).toHaveLength(0);
+  });
+
+  it('wakes an Issue-less PR pane with the plain CI text', async () => {
+    const observed = await invoke({ listOpenPulls: () => [{ ...pull, issue: undefined }] });
+    expect(text(observed.calls)[0]?.join(' ')).toContain(`Wake: CI on ${head} finished for PR #${pull.number}`);
+  });
+
+  it('rechecks the assignment census and the PR head before each native effect', async () => {
+    // A row appearing before the first send withholds both the text and the Enter.
+    for (const phase of ['before-text', 'before-enter'] as const) {
+      let rows: WorkerAssignmentRecord[] = [];
+      let seen = false;
+      const inner = fakeOrca({ coord: 'idle', mgr: 'done' }, [], [terminals[0]!, mgr]);
+      const executor: OrcaExecutor = (args) => {
+        if (args[0] === 'terminal' && args[1] === 'read' && args.includes('mgr')) seen = true;
+        if (phase === 'before-text' && args[0] === 'terminal' && args[1] === 'list' && seen) rows = [row()];
+        const result = inner(args);
+        if (phase === 'before-enter' && args[0] === 'terminal' && args[1] === 'send' && args.includes('--text')) rows = [row()];
+        return result;
+      };
+      const observed = await invoke({ executor, readCurrentAssignments: () => rows });
+      expect(text(observed.calls)).toHaveLength(phase === 'before-text' ? 0 : 1);
+      expect(sendsTo(observed.calls, 'mgr').filter((call) => !call.includes('--text'))).toHaveLength(0);
+    }
+    // A head flip at either effect cannot send further.
+    for (const phase of ['before-text', 'before-enter'] as const) {
+      let flipped = false;
+      const inner = fakeOrca({ coord: 'idle', mgr: 'done' }, [], [terminals[0]!, mgr]);
+      const executor: OrcaExecutor = (args) => {
+        if (phase === 'before-text' && args[0] === 'terminal' && args[1] === 'read' && args.includes('mgr')) flipped = true;
+        const result = inner(args);
+        if (phase === 'before-enter' && args[0] === 'terminal' && args[1] === 'send' && args.includes('--text')) flipped = true;
+        return result;
+      };
+      const observed = await invoke({ executor, readNamedPull: () => openAt(flipped ? 'd'.repeat(40) : head)() });
+      expect(text(observed.calls)).toHaveLength(phase === 'before-text' ? 0 : 1);
+      expect(sendsTo(observed.calls, 'mgr').filter((call) => !call.includes('--text'))).toHaveLength(0);
+    }
+    expect(sendsTo((await invoke({ readNamedPull: () => undefined })).calls, 'mgr')).toHaveLength(0);
+  });
+
+  it('does not fall back when a matching PR-ref pane is unreadable, and no HEAD step bypasses it', async () => {
+    const peer: FleetTerminal = { ...mgr, handle: 'peer', incarnationId: 'peer-inc' };
+    const observed = await invoke({
+      terminals: [terminals[0]!, mgr, peer],
+      screens: { coord: 'idle', mgr: 'done' }, // `peer` has no screen: its read fails
+      readWorktreeHead: () => head,
+    });
+    expect(sendsTo(observed.calls, 'mgr')).toHaveLength(0);
+    expect(observed.logs.some((line) => line.includes('peer unreadable'))).toBe(true);
+    expect(observed.result).toMatchObject({ state: 'unreadable', handle: 'peer' });
+  });
+
+  it('isolates one unreadable pane: an independent recipient still gets its CI Wake', async () => {
+    const bad: FleetTerminal = { ...terminals[2]!, branch: 'refs/heads/elsewhere' };
+    const observed = await invoke({
+      terminals: [terminals[0]!, mgr, bad],
+      screens: { coord: 'idle', mgr: 'done' },
+    });
+    expect(text(observed.calls)).toHaveLength(1);
+    expect(observed.result).toMatchObject({ state: 'unreadable', handle: 'two' });
+  });
+
+  it('keeps an unreadable pane saved PARKED epoch and prunes an absent one', async () => {
+    const store = new MemoryWakeStore();
+    store.writeParkedEpoch('two', { key: 'PARKED on GPT turn x', since: 1 });
+    store.writeParkedEpoch('gone', { key: 'PARKED on GPT turn y', since: 1 });
+    await invoke({ store, terminals: [terminals[0]!, mgr, terminals[2]!], screens: { coord: 'idle', mgr: 'done' } });
+    expect(store.readParkedEpoch('two')).toBeDefined();
+    expect(store.readParkedEpoch('gone')).toBeUndefined();
   });
 });

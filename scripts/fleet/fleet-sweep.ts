@@ -125,6 +125,11 @@ export interface FleetSweepOptions {
   readonly executor?: OrcaExecutor;
   readonly store?: FleetPollingStore;
   readonly terminals?: readonly FleetTerminal[];
+  /**
+   * Opt-in isolation: a selected non-primary pane whose screen cannot be read is reported here and
+   * left out of the observations instead of failing the whole sweep. Without it the read error throws.
+   */
+  readonly onUnreadable?: (terminal: FleetTerminal, error: FleetScreenReadError) => void;
 }
 
 const DEFAULT_AGENT_TITLE_RE = /(?:\bOpenCode\b|\bCursor\b|\bClaude\b|\bOC\s*\||✳|…\s*Agent|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏])/iu;
@@ -840,6 +845,10 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
       if (primaryBinding) {
         store.clearPaneWait?.(terminal.handle);
         return []; // No inferred state for an unreadable primary pane; preserve readable peers.
+      }
+      if (options.onUnreadable && error instanceof FleetScreenReadError) {
+        options.onUnreadable(terminal, error);
+        return []; // Diagnosed separately; no state, and never a Wake recipient.
       }
       throw error;
     }

@@ -369,6 +369,20 @@ describe('fleet sweep pane selection and reads', () => {
     }
   });
 
+  it('isolates one unreadable pane through onUnreadable and still throws by default (#2731)', () => {
+    const terminals = [pane('a', 'OpenCode worker'), pane('b', 'OpenCode peer')];
+    const executor = fakeExecutor(terminals, { b: 'done\nline-b' });
+    expect(() => runFleetSweep({ primary, executor, store: new MemoryPollingStore() }))
+      .toThrow(/a unreadable/u);
+    const seen: string[] = [];
+    const observed = runFleetSweep({
+      primary, executor, store: new MemoryPollingStore(),
+      onUnreadable: (terminal) => { seen.push(terminal.handle); },
+    });
+    expect(seen).toEqual(['a']);
+    expect(observed.map((row) => row.handle)).toEqual(['b']);
+  });
+
   it('returns no pane lines when --lines is zero', () => {
     const observed = runFleetSweep({
       projectId: 'orchestrator-pack',

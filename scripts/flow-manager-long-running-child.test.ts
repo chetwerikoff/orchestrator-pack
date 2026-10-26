@@ -1639,6 +1639,63 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(existsSync(paths.envelope)).toBe(false);
   });
 
+  it('treats an exact-run occupant as the authoritative event and a wrong or unreadable one as no event (#2731)', async () => {
+    const result = makeTurnResult();
+    const occupant = (run: string) => JSON.stringify({
+      schema: TERMINAL_SCHEMA, run_identity: run, attempt_identity: 'attempt-occ', lifecycle_outcome: 'incident',
+    });
+    // Launch refuses a pre-existing envelope, so a racing writer is the child itself.
+    const launch = async (name: string, body: string) => {
+      const root = tempDir();
+      const paths = launchPaths(root, name);
+      const fixture = nodeFixture(`
+        require('node:fs').writeFileSync(${JSON.stringify(paths.envelope)}, ${JSON.stringify(body)});
+        process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n');
+        process.exit(0);
+      `);
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        const code = await runFixtureLaunch(root, {
+          runIdentity: 'run-occ', attemptIdentity: 'attempt-occ',
+          handoffReceiptPath: paths.receipt, terminalEnvelopePath: paths.envelope,
+          browserOutputPath: paths.output, cwd: repoRoot,
+          childCommand: fixture.command, childArgs: fixture.args,
+        });
+        const lines = stderr.mock.calls.map((call) => String(call[0])).join('');
+        return { code, lines, envelope: readFileSync(paths.envelope, 'utf8') };
+      } finally { stderr.mockRestore(); }
+    };
+    const exact = await launch('occupied-exact', occupant('run-occ'));
+    expect(exact.code).toBe(1); // the incident that already owns the path outranks this launch's success
+    expect(exact.lines).toContain('terminal_envelope_occupied_by_exact_event');
+    expect(exact.envelope).toBe(occupant('run-occ'));
+    for (const [name, body] of [['occupied-wrong', occupant('other-run')], ['occupied-garbage', '{not json']] as const) {
+      const wrong = await launch(name, body);
+      expect(wrong.code).toBe(0);
+      expect(wrong.lines).toContain('terminal_envelope_not_published');
+      expect(wrong.lines).not.toContain('occupied_by_exact_event');
+      expect(wrong.envelope).toBe(body); // never overwritten
+    }
+  });
+
+  it('reports a failed child-start publication as no event (#2731)', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'start-fail');
+    process.env.OPK_FM_LONG_CHILD_FORCE_ENVELOPE_CREATE_FAIL = '1';
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const code = await runFixtureLaunch(root, {
+        runIdentity: 'run-start', attemptIdentity: 'attempt-start',
+        handoffReceiptPath: paths.receipt, terminalEnvelopePath: paths.envelope,
+        browserOutputPath: paths.output, cwd: repoRoot,
+        childCommand: join(root, 'missing-child-binary'), childArgs: [],
+      });
+      expect(code).toBe(1);
+      expect(stderr.mock.calls.map((call) => String(call[0])).join('')).toContain('terminal_envelope_not_published');
+      expect(existsSync(paths.envelope)).toBe(false);
+    } finally { stderr.mockRestore(); }
+  });
+
   it('derives three-state delivery semantics', () => {
     expect(deriveDelivery(makeParsedTurnResult({ state: 'output_conflict', observation_uncertainty_diagnostics: { cause: 'output_conflict:exists', send_count: 0, owned_prompt_seen: false }, resolved_send_count: 0 }), false)).toBe('not-sent');
     expect(deriveDelivery(makeParsedTurnResult({ observation_uncertainty_diagnostics: { cause: 'sent', send_count: 1, owned_prompt_seen: false }, witness: undefined }), false)).toBe('POSSIBLY_DELIVERED');
