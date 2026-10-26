@@ -97,6 +97,7 @@ import {
   normalizeConversationUrl,
   probeAccountLoadError,
   productStatusText,
+  probeConversationLoadError,
   projectConversationUrlMatchesProject,
   CONTINUE_GENERATING_BUTTON_NAME,
   locateContinueGeneratingControl,
@@ -5108,6 +5109,10 @@ async function runTurnCore(
             pollCount, navigation, incidents, journalWriteFailed, incident, false,
           );
         }
+        // #2723: a held query-GET 429 becomes the wall once the load failure shows.
+        const probeMs = Math.min(MAX_LOCAL_READ_WAIT_MS, invocationDeadlineMs - Date.now());
+        if (probeMs > 0) await probeConversationLoadError(page, probeMs);
+        beforeBrowserAction();
         const remainingMs = invocationDeadlineMs - Date.now();
         if (remainingMs > 0) await sleep(page, Math.min(INITIAL_POLL_MS, remainingMs));
       }
