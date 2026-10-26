@@ -368,10 +368,11 @@ describe('Issue #2718 real state-light SIGTERM finalizer', () => {
           const record = JSON.parse(records[0]!);
           expect(record).toMatchObject({
             schema: 'turn-result/v1', cause: 'terminated_by_sigterm', send_count: 0, cleanup: 'confirmed',
-            owned_target_id: ownedId,
+            owned_target_id: ownedId, cleanup_attempted: true, cleanup_cause: 'confirmed',
           });
           expect(record).not.toHaveProperty('cleanup_status');
           expect(record).not.toHaveProperty('send_attempted');
+          expect(record.next_action).toContain('Cleanup diagnostic: attempted, cause confirmed.');
           expect(persistedPhase).toBe('not_sent');
           // Own target gone; every other page id unchanged.
           expect(await pageIds(endpoint)).toEqual(foreignIds);
@@ -390,6 +391,7 @@ describe('Issue #2718 real state-light SIGTERM finalizer', () => {
           cause: 'terminated_by_sigterm', cleanup: 'unconfirmed', cleanup_status: 'cleanup_unconfirmed',
           owned_target_id: ownedId, send_attempted: true,
         });
+        expect(record).not.toHaveProperty('cleanup_attempted');
         expect(persistedPhase).toBe('sending');
         expect(await pageIds(endpoint)).toEqual([...foreignIds, ownedId].sort());
       } finally { rmSync(root, { recursive: true, force: true }); }
@@ -426,6 +428,7 @@ describe('Issue #2718 real state-light SIGTERM finalizer', () => {
             owned_target_id: 'target-2718',
           });
           expect(record.send_attempted).toBe(true);
+          expect(record).not.toHaveProperty('cleanup_attempted');
           expect(persistedPhase).toBe(phase);
         } finally { rmSync(root, { recursive: true, force: true }); }
       });
@@ -451,7 +454,8 @@ describe('Issue #2718 real state-light SIGTERM finalizer', () => {
         expect(result.outcome, result.stderr).toBe('exit');
         expect(requests()).toBeGreaterThan(0);
         expect(JSON.parse(result.stdout.trimEnd())).toMatchObject({
-          cleanup: 'unconfirmed', cleanup_status: 'cleanup_unconfirmed',
+          cleanup: 'unconfirmed', cleanup_status: 'cleanup_unconfirmed', cleanup_attempted: true,
+          cleanup_cause: expect.stringMatching(/^[A-Za-z0-9._:-]{1,128}$/u),
         });
         expect(elapsedMs).toBeLessThan(15_000);
       } finally { rmSync(root, { recursive: true, force: true }); }

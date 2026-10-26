@@ -8709,10 +8709,10 @@ async function retireDetachedOriginalTarget(input: {
   let record: ReturnType<typeof readStateLightTurnObservation>;
   try {
     record = readStateLightTurnObservation(input.profileKey, input.invocationId);
-  } catch { return { status: 'cleanup_unconfirmed' }; }
+  } catch { return { status: 'cleanup_unconfirmed', cause: 'observation_unreadable' }; }
   const pinned = record.owned_target;
   if (!pinned?.created || pinned.cdp_sha256 !== createHash('sha256').update(input.cdp, 'utf8').digest('hex')) {
-    return { status: 'cleanup_unconfirmed', ...(pinned ? { targetId: pinned.id } : {}) };
+    return { status: 'cleanup_unconfirmed', cause: 'pin_unproven', ...(pinned ? { targetId: pinned.id } : {}) };
   }
   const targetId = pinned.id;
   let attachedBrowser: any;
@@ -8720,9 +8720,9 @@ async function retireDetachedOriginalTarget(input: {
     const census = await listCdpPageTargets(input.cdp,
       Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, input.deadlineMs - Date.now())));
     const selected = census.filter((target) => target.id === targetId);
-    if (selected.length === 0) return { status: 'confirmed', targetId };
+    if (selected.length === 0) return { status: 'confirmed', targetId, cause: 'target_absent' };
     if (selected.length !== 1 || Date.now() >= input.deadlineMs) {
-      return { status: 'cleanup_unconfirmed', targetId };
+      return { status: 'cleanup_unconfirmed', targetId, cause: 'target_census_ambiguous' };
     }
     const attached = await attachOwnTarget(loadChromium(), {
       mode: 'own-target', cdp: input.cdp, newChat: false,
@@ -8734,7 +8734,7 @@ async function retireDetachedOriginalTarget(input: {
     const page = contexts.length === 1 && contexts[0]?.pages().length === 1
       ? contexts[0].pages()[0] : undefined;
     if (!page || getOwnTargetInfo(attachedBrowser)?.targetId !== targetId) {
-      return { status: 'cleanup_unconfirmed', targetId };
+      return { status: 'cleanup_unconfirmed', targetId, cause: 'reattach_page_unproven' };
     }
     const result = compactResult('observation_uncertain', 'invocation',
       'original_target_retirement_only', input.invocationId, input.profileKey,
@@ -8744,7 +8744,11 @@ async function retireDetachedOriginalTarget(input: {
       cdp: input.cdp, verifiedPredecessor: true,
     });
     return { status: cleanup.status === 'confirmed' ? 'confirmed' : 'cleanup_unconfirmed', targetId, cause: cleanup.cause };
-  } catch { return { status: 'cleanup_unconfirmed', targetId }; }
+  } catch (error) {
+    // Diagnostic only: a bounded token of the reattach/close failure.
+    const detail = (error instanceof Error ? error.message : String(error)).replace(/[^A-Za-z0-9._:-]/gu, '_');
+    return { status: 'cleanup_unconfirmed', targetId, cause: ('retirement_error:' + detail).slice(0, 128) };
+  }
   finally { if (attachedBrowser) await releaseCdpBrowser(attachedBrowser, RESOURCE_CLEANUP_BOUND_MS); }
 }
 
@@ -10150,6 +10154,8 @@ async function finalizeOnSigterm(args: ParsedTurnArgs, finalizer: StateLightSign
       }), deadlineMs)
     : undefined;
   const confirmed = retirement?.status === 'confirmed';
+  // Diagnostic only: whether the guarded retirement ran and why it ended.
+  const cleanupCause = safe ? retirement?.cause ?? (retirement ? undefined : 'retirement_bound_elapsed') : undefined;
   // A missing or unreadable record is unknown delivery, never proof of no Send.
   const unsent = record !== undefined
     && (record.phase === 'prepared' || (record.phase === 'sending' && submissionIssued !== true)
@@ -10173,9 +10179,13 @@ async function finalizeOnSigterm(args: ParsedTurnArgs, finalizer: StateLightSign
       } : {}),
       cleanup: confirmed ? 'confirmed' : record?.owned_target?.created ? 'unconfirmed' : 'skipped',
       ...(record?.owned_target?.created && !confirmed ? { cleanup_status: 'cleanup_unconfirmed' } : {}),
-      next_action: unsent
+      ...(safe ? { cleanup_attempted: true } : {}),
+      ...(cleanupCause ? { cleanup_cause: cleanupCause } : {}),
+      // The envelope projects next_action unchanged; repeat the diagnostic there.
+      next_action: (unsent
         ? 'Terminated before any Send; the original Page is retired or preserved as reported. A retry needs a fresh invocation ID.'
-        : 'Terminated after a possible Send: never resend blindly. Reconcile GitHub effects and the preserved original Page first.',
+        : 'Terminated after a possible Send: never resend blindly. Reconcile GitHub effects and the preserved original Page first.')
+        + (safe ? ' Cleanup diagnostic: attempted, cause ' + (cleanupCause ?? 'none') + '.' : ''),
       incidents: ['terminated_by_sigterm', ...(record?.owned_target?.created && !confirmed ? ['owned_tab_cleanup_unconfirmed'] : [])],
     });
   }
