@@ -129,7 +129,7 @@ export interface FleetSweepOptions {
    * Opt-in isolation: a selected non-primary pane whose screen cannot be read is reported here and
    * left out of the observations instead of failing the whole sweep. Without it the read error throws.
    */
-  readonly onUnreadable?: (terminal: FleetTerminal, error: FleetScreenReadError) => void;
+  readonly onUnreadable?: (terminal: FleetTerminal, error: FleetScreenReadError, primaryBound?: boolean) => void;
 }
 
 const DEFAULT_AGENT_TITLE_RE = /(?:\bOpenCode\b|\bCursor\b|\bClaude\b|\bOC\s*\||✳|…\s*Agent|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏])/iu;
@@ -844,6 +844,8 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
       store.clearPollingMark(terminal.handle);
       if (primaryBinding) {
         store.clearPaneWait?.(terminal.handle);
+        // Still a selected native contender: reported so callers never treat it as absent.
+        if (options.onUnreadable && error instanceof FleetScreenReadError) options.onUnreadable(terminal, error, true);
         return []; // No inferred state for an unreadable primary pane; preserve readable peers.
       }
       if (options.onUnreadable && error instanceof FleetScreenReadError) {

@@ -455,6 +455,18 @@ describe('Issue #2585 supervised primary-root admission', () => {
       : args[0] === 'orchestration' && ['worker-list', 'worker-show', 'run-show'].includes(args[1]!))).toBe(true);
   });
 
+  it('reports an unreadable primary-bound pane through onUnreadable without observing it (#2731)', () => {
+    const complete = primaryTerminal('native-merge');
+    const terminals = [currentCoordinator, { ...complete, branch: undefined }];
+    const workers: PrimaryWorkerFixture[] = [{ terminal: complete, runId: 'run-main', coordinator: 'coordinator' }];
+    const executor = primaryOrcaExecutor(terminals, {}, workers, [], { 'native-merge': complete });
+    const seen: Array<[string, boolean | undefined]> = [];
+    const observed = runFleetSweep({ ...opts, terminals, executor,
+      onUnreadable: (terminal, _error, primaryBound) => { seen.push([terminal.handle, primaryBound]); } });
+    expect(observed).toEqual([]);
+    expect(seen).toEqual([['native-merge', true]]);
+  });
+
   it('primary-root branchless native census: rejects absent, mismatched and conflicting show evidence', () => {
     const complete = primaryTerminal('native-merge');
     const listed = { ...complete, branch: undefined };

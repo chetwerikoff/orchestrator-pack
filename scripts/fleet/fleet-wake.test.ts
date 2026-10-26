@@ -4450,7 +4450,7 @@ describe('Issue #2731 B4: CI assignment precedence, per-effect recheck and unrea
     });
     expect(sendsTo(observed.calls, 'mgr')).toHaveLength(0);
     expect(observed.logs.some((line) => line.includes('peer unreadable'))).toBe(true);
-    expect(observed.result).toMatchObject({ state: 'unreadable', handle: 'peer' });
+    expect(observed.logs).toContain('peer unreadable');
   });
 
   it('vetoes a readable owner when an unreadable pane on another branch is on, or cannot prove it is off, the PR head', async () => {
@@ -4472,7 +4472,9 @@ describe('Issue #2731 B4: CI assignment precedence, per-effect recheck and unrea
       readWorktreeHead: (worktreePath) => worktreePath === bad.worktreePath ? 'd'.repeat(40) : undefined,
     });
     expect(text(observed.calls)).toHaveLength(1);
-    expect(observed.result).toMatchObject({ state: 'unreadable', handle: 'two' });
+    expect(observed.logs).toContain('two unreadable');
+    // The unrelated bad peer does not strand the coordinator's ordinary alarm for the readable pane.
+    expect(sendsTo(observed.calls, 'coord').filter((call) => call.includes('--text')).join(' ')).toContain('mgr');
   });
 
   it('keeps an unreadable pane saved PARKED epoch and prunes an absent one', async () => {

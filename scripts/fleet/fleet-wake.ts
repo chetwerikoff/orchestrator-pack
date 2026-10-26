@@ -2290,6 +2290,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
 
   // Keep legacy fleet effects first: stale recovery belongs to this same
   // already-scheduled tick, but must not delay coordinator/banner delivery.
+  let unreadablePeer: string | undefined;
   const operationalTick = async (): Promise<FleetAlarmTickResult> => {
   const wakeCounts: PaneWakeCounts = { attempts: 0, confirmed: 0, attemptedProducerFacts: new Set() };
   let terminals: FleetTerminal[];
@@ -2314,7 +2315,11 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     const unreadableSelected: FleetTerminal[] = [];
     try {
       observations = runFleetSweep({
-        onUnreadable: (terminal) => { unreadableSelected.push(terminal); },
+        onUnreadable: (terminal, _error, primaryBound) => {
+          unreadableSelected.push(terminal);
+          // A primary-bound pane keeps its legacy silent treatment; only others are reported.
+          if (!primaryBound) unreadablePeer ??= terminal.handle;
+        },
         primary: config.primary,
         projectId: config.projectId,
         workspaceRe: config.workspaceRe,
@@ -2357,11 +2362,9 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     await wakeAssignedIssueManagers(tickOptions, observations, terminals, executor, store, sleepMs, log, bareShellHandles, wakeCounts);
     await alarmGoneIssueOwners(tickOptions, coordinator, terminals, executor, store, sleepMs, log, wakeCounts);
     const eligibleUnreadRunMessages = await wakePanesOnEvents(tickOptions, coordinator, observations, executor, store, log, sleepMs, bareShellHandles, wakeCounts, unreadableSelected);
-    if (unreadableSelected.length > 0) {
-      // Independent Wake routes above already ran; the ordinary coordinator alarm stays withheld.
-      log(`${unreadableSelected[0]!.handle} unreadable`);
-      return { state: 'unreadable', handle: unreadableSelected[0]!.handle };
-    }
+    // Independent routes (permission, banners, ordinary alarm for readable panes) keep running;
+    // the unreadable peer is only logged here and reported when the tick had nothing else to say.
+    if (unreadablePeer) log(`${unreadablePeer} unreadable`);
     if (!coordinator) {
       // Coordinator-only STOPPED/POLLING/PERMISSION/Run-mail alarms are withheld,
       // but exact URL-bound direct banner warnings remain eligible.
@@ -2635,7 +2638,9 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   }
   };
   try {
-    return await operationalTick();
+    const result = await operationalTick();
+    return unreadablePeer && (result.state === 'nothing_stopped' || result.state === 'same_stopped_set')
+      ? { state: 'unreadable', handle: unreadablePeer } : result;
   } finally {
     // Covers missing/unreadable coordinator and every early return, without
     // introducing a separate scheduler or an ahead-of-events network wait.
