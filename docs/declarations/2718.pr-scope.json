@@ -1,0 +1,42 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2718,
+  "declared_paths": [
+    "docs/browser-gpt-turn-runbook.md",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-observation.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.subprocess.test.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/flow-manager-long-running-child.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/kernel/subprocess.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/pack-gpt-review.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/browser-gpt-turn-runbook.md",
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-observation.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.subprocess.test.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/flow-manager-long-running-child.test.ts"
+  ],
+  "source_revision": "b31eb89d8b67443ad5a4658de28ffd8890495e30"
+}
