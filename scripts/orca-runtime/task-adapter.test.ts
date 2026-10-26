@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DeterministicRuntimeAdapter } from '../runtime/test-adapter.ts';
 import { executeRuntimeTaskLifecycle } from '../runtime/task-lifecycle.ts';
 import { parseOrcaJsonOutput, type OrcaJsonResponse } from './native.ts';
-import { isOpenCodeComposerEmpty, OrcaRuntimeAdapter } from './adapter.ts';
+import { isOpenCodeComposerEmpty, openCodeControlFromCommand, OrcaRuntimeAdapter } from './adapter.ts';
 import { readOrcaTerminal } from './compat.ts';
 import { hasExecutorStartupBanner } from '../lib/worker-smoke-bounded-create.ts';
 import { OrcaTaskRuntimeAdapter } from './task-adapter.ts';
@@ -687,6 +687,73 @@ describe('OpenCode HTTP control plane', () => {
       id: terminal.handle,
       generation: terminal.incarnationId,
     })).toEqual({ status: 'known', family, command: '', agentIdentity, provenance: 'orca-terminal-show' });
+  });
+
+  it.each([
+    ['bare opencode', 'opencode', 'known'],
+    ['absolute opencode', '/home/che/.local/bin/opencode', 'known'],
+    ['absolute opencode under a versioned prefix', '/opt/opencode-1.18/bin/opencode', 'known'],
+    ['absolute non-opencode basename', '/usr/local/bin/wrapper-opencode', 'ambiguous'],
+    ['absolute opencode-suffixed basename', '/home/che/bin/opencode-wrapper', 'ambiguous'],
+    ['relative path opencode', './bin/opencode', 'ambiguous'],
+    ['wrapper after incidental opencode word', '/usr/bin/env FOO=opencode wrapper', 'ambiguous'],
+    ['bare token only as a later argument', 'node /x/launcher opencode', 'ambiguous'],
+  ] as const)('#2717 C3 composer family from %s terminal command', (_label, executable, expected) => {
+    const command = `${executable} --hostname 127.0.0.1 --port 18891 --agent pack-opk-fixture`;
+    const terminal = {
+      handle: 'term-family-absolute',
+      incarnationId: 'generation-family-absolute',
+      worktreePath: process.cwd(),
+      title: 'family-absolute',
+      command,
+      status: 'running' as const,
+    };
+    const adapter = new OrcaTaskRuntimeAdapter({
+      runJson: vi.fn((args: readonly string[]): OrcaJsonResponse =>
+        args[0] === 'terminal' && args[1] === 'show'
+          ? { ok: true, result: { terminal } }
+          : { ok: false, error: { code: 'unexpected_operation', message: args.join(' ') } }) as never,
+    });
+    const observed = adapter.observeComposerFamily?.({
+      runtime: 'orca', id: terminal.handle, generation: terminal.incarnationId,
+    });
+    if (expected === 'known') {
+      expect(observed).toEqual({ status: 'known', family: 'opencode', command, provenance: 'orca-terminal-show' });
+    } else {
+      expect(observed).toMatchObject({
+        status: 'unbound', reason: 'runtime_composer_family_ambiguous', provenance: 'orca-terminal-show',
+      });
+    }
+  });
+
+  it.each([
+    ['bare', 'opencode'],
+    ['absolute', '/home/che/.local/bin/opencode'],
+  ] as const)('#2717 C3 durable control binding treats %s opencode identically', (_label, executable) => {
+    const inline = `OPENCODE_CONFIG_CONTENT='{"agent":{"pack-opk-fixture":{}}}'`;
+    const base = `${executable} --hostname 127.0.0.1 --port 18891 --agent 'pack-opk-fixture'`;
+    expect(openCodeControlFromCommand(`${inline} XDG_STATE_HOME='/tmp/state' ${base}`))
+      .toMatchObject({ url: 'http://127.0.0.1:18891', agent: 'pack-opk-fixture' });
+    expect(openCodeControlFromCommand(`${inline} XDG_STATE_HOME='/tmp/state' ${base} --session 'ses_2717abc'`))
+      .toMatchObject({ url: 'http://127.0.0.1:18891', agent: 'pack-opk-fixture', session: 'ses_2717abc' });
+    expect(openCodeControlFromCommand(base))
+      .toMatchObject({ url: 'http://127.0.0.1:18891', agent: 'pack-opk-fixture' });
+  });
+
+  it.each([
+    '/usr/local/bin/wrapper-opencode',
+    '/home/che/bin/opencode-wrapper',
+    '/home/che/bin/notopencode',
+  ])('#2717 C3 durable control binding stays unbound for non-opencode basename %s', (executable) => {
+    const base = `${executable} --hostname 127.0.0.1 --port 18891 --agent 'pack-opk-fixture'`;
+    expect(openCodeControlFromCommand(base)).toBeUndefined();
+    // Flag-shaped / executable-shaped text inside the quoted inline config is never control authority.
+    const forged = `OPENCODE_CONFIG_CONTENT='{"note":"hello opencode --hostname 127.0.0.1 --port 18891 --agent fixture"}' ${executable} --hostname 127.0.0.1 --port 18892`;
+    expect(openCodeControlFromCommand(forged)).toBeUndefined();
+    expect(openCodeControlFromCommand(`OPENCODE_CONFIG_CONTENT='{"note":"x /opt/bin/opencode --hostname 127.0.0.1 --port 18891"}' ${executable} --hostname 127.0.0.1 --port 18892 --session 'ses_2717abc'`)).toBeUndefined();
+    expect(openCodeControlFromCommand(
+      `OPENCODE_CONFIG_CONTENT='{}' XDG_STATE_HOME='/tmp/state' ${base} --session 'ses_2717abc'`,
+    )).toBeUndefined();
   });
 
   it('rejects stale terminal-show generation evidence', () => {

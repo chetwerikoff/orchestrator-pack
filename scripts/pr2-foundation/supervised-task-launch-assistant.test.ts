@@ -1445,6 +1445,51 @@ describe('supervised Task launch assistant', () => {
     expect(mismatch).toMatchObject({ status: 'continue', cause: 'executor_route_mismatch' });
   });
 
+  it('#2717 C3 profile-pinned absolute opencode binary is probed, spawned, admitted and parsed as OpenCode', async () => {
+    const pinned = '/home/che/.local/share/mise/installs/opencode/1.18.35/bin/opencode';
+    const calls: string[][] = [];
+    const resolved = await resolveLiveExecutorProfile('t2', {
+      ...opencodeProfileEnv('t2'), PACK_EXECUTOR_OPENCODE_BIN: pinned,
+    }, undefined, async (args) => {
+      calls.push([...args]);
+      return opencodeProbeResult(args[0] === pinned ? ['opencode', ...args.slice(1)] : args, true);
+    });
+    expect(resolved).toMatchObject({ status: 'ok', value: { family: 'opencode', executable: pinned } });
+    expect(calls.length).toBeGreaterThan(0);
+    // Only the node env-variable presence check is not an opencode invocation.
+    expect(calls.filter((args) => args[0] !== pinned && args[0] !== process.execPath)).toEqual([]);
+    expect(calls.filter((args) => args[0] === pinned).length).toBeGreaterThanOrEqual(3);
+
+    const overlay = buildOpenCodeAgentOverlay({
+      executable: pinned, agentName: 'pack-opk-c3', model: 'fixture-opencode-model', effort: 'fixture-opencode-effort',
+      baseline: { name: 'build', mode: 'primary', prompt: 'synthetic benign task', permission: [] },
+      stateRoot: '/tmp/opk-2717-state',
+    });
+    expect(overlay.executable).toBe(pinned);
+    expect(overlay.command).toContain(` ${pinned} --hostname 127.0.0.1 --port `);
+    expect(overlay.command).not.toMatch(/ opencode --hostname /u);
+    const admission = { command: overlay.command, agentName: overlay.agentName, inlineConfigJson: overlay.inlineConfigJson };
+    expect(openCodeLaunchHasFleetBrowserDenies({ ...admission, executable: pinned })).toBe(true);
+    expect(openCodeLaunchHasFleetBrowserDenies(admission)).toBe(false);
+    expect(openCodeLaunchHasFleetBrowserDenies({ ...admission, executable: '/tmp/other/opencode' })).toBe(false);
+    expect(openCodeControlFromCommand(overlay.command)).toMatchObject({ agent: 'pack-opk-c3' });
+
+    expect(() => buildOpenCodeAgentOverlay({
+      executable: '/usr/local/bin/wrapper-opencode', agentName: 'pack-opk-c3', model: 'm', effort: 'e',
+      baseline: { name: 'build', mode: 'primary', prompt: 'p', permission: [] }, stateRoot: '/tmp/opk-2717-state',
+    })).toThrow('opencode_executable_invalid');
+  });
+
+  it.each(['', '   ', 'opencode', './opencode', '/usr/local/bin/wrapper-opencode', '/opt/opencode/bin/opencode-wrapper', '/a b/opencode'])(
+    '#2717 C3 rejects pin %s as malformed instead of falling back to a PATH search', async (pin) => {
+      const calls: string[][] = [];
+      const resolved = await resolveLiveExecutorProfile('t2', {
+        ...opencodeProfileEnv('t2'), PACK_EXECUTOR_OPENCODE_BIN: pin,
+      }, undefined, async (args) => { calls.push([...args]); return opencodeProbeResult(args, true); });
+      expect(resolved.status).toBe('continue');
+      expect(calls).toEqual([]);
+    });
+
   it('refuses contextual Config/Agent probes before any no-write proof', async () => {
     const resolved = await resolveLiveExecutorProfile('t2', opencodeProfileEnv('t2'), undefined, async (args) => opencodeProbeResult(args, true));
     if (resolved.status !== 'ok') throw new Error('fixture profile should resolve');
@@ -2447,7 +2492,7 @@ The words Firefighter universal appear here only as prose.`;
     expect(worktrees).toBe(0); expect(spawns).toBe(0); expect(starts).toBe(0);
   });
 
-  it('immediate pre-start Dispatch race is fenced after one fresh terminal and before worker-start', async () => {
+  it('immediate pre-start Dispatch race is fenced before any terminal spawn and before worker-start', async () => {
     let spawns = 0; let starts = 0;
     const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({ dispatch: [{ kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-race' }],
       adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }), onSupervised: () => { starts += 1; } }));
@@ -2455,7 +2500,81 @@ The words Firefighter universal appear here only as prose.`;
     if (result.outcome === 'continue') {
       expect(result.timings.at(-1)).toMatchObject({ stage: 'dispatch_admission_final', outcome: 'continued' });
     }
-    expect(spawns).toBe(1); expect(starts).toBe(0);
+    expect(spawns).toBe(0); expect(starts).toBe(0);
+  });
+
+  /** Substitute the coordinator-supplied `$...` words and tokenize the emitted command like a shell would. */
+  function emittedLaunchArgv(command: string, values: Record<string, string>): string[] {
+    const filled = command.replace(/"\$([A-Z_]+)"/gu, (_m, name: string) => values[name] ?? `UNSET_${name}`);
+    const [runner, flags, script, ...argv] = filled.split(/\s+/u);
+    expect([runner, flags]).toEqual(['node', '--experimental-strip-types']);
+    expect(script).toBe('scripts/pr2-foundation/supervised-task-launch-assistant.ts');
+    return argv;
+  }
+  const c1Target = () => ({
+    projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+    primaryRoot: '/tmp/opk-2717-primary', defaultBranch: 'main',
+  } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>);
+
+  it.each([
+    ['early', [{ kind: 'present', dispatchId: 'dispatch-old', status: 'completed' }] as DispatchObservation[], 'dispatch_admission_early'],
+    ['final', [{ kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-old', status: 'completed' }] as DispatchObservation[], 'dispatch_admission_final'],
+  ] as const)('#2717 C1 %s absent-assignment same-Task successor refuses and names a runnable new-Task route', async (_when, dispatch, stage) => {
+    let spawns = 0; let starts = 0;
+    const result = await runSupervisedTaskLaunchAssistant({ ...launchInput(), projectId: 'orchestrator-pack' }, deps({ dispatch: [...dispatch],
+      adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }), onSupervised: () => { starts += 1; } }));
+    expect(result).toMatchObject({
+      outcome: 'continue', stage, observedCause: 'fresh_dispatch_not_absent',
+      nextAction: { kind: 'start_new_task' }, resources: { dispatchId: 'dispatch-old' },
+    });
+    expect(spawns).toBe(0); expect(starts).toBe(0);
+    if (result.outcome !== 'continue') throw new Error('expected refusal');
+    expect(result.nextAction.note).toMatch(/starts a new Task through the authorized first-start route/u);
+    const command = result.nextAction.command!;
+    expect(command).toContain('--worktree-name');
+    expect(command).not.toContain('--task "task-1"');
+    // The emitted command itself must pass the launch CLI's own validation.
+    const parsed = parseLaunchAssistantCli(
+      emittedLaunchArgv(command, { NEW_TASK_ID: 'task-new', NEW_WORKTREE_NAME: 'issue-1479-new' }),
+      process.env, c1Target,
+    );
+    expect(parsed).toMatchObject({ workClass: 't2', taskId: 'task-new', worktreeName: 'issue-1479-new', issueNumber: 1479 });
+    expect(parsed.worktreeSelector).toBeUndefined();
+  });
+
+  it('#2717 C1 the emitted manager new-Task command passes the CLI and the parsed input starts', async () => {
+    let starts = 0;
+    const refused = await runSupervisedTaskLaunchAssistant(
+      { ...launchInput('manager'), projectId: 'orchestrator-pack' },
+      deps({ dispatch: [{ kind: 'present', dispatchId: 'dispatch-old', status: 'completed' }] }));
+    expect(refused).toMatchObject({ outcome: 'continue', nextAction: { kind: 'start_new_task' } });
+    if (refused.outcome !== 'continue') throw new Error('expected refusal');
+    const parsed = parseLaunchAssistantCli(emittedLaunchArgv(refused.nextAction.command!, {
+      RUN_ID: 'run-1', MANAGER_BRIEF: 'fresh-brief', NEW_WORKTREE_NAME: 'manager-new',
+    }), process.env, c1Target);
+    expect(parsed).toMatchObject({ workClass: 'manager', runId: 'run-1', managerBrief: 'fresh-brief', worktreeName: 'manager-new' });
+    expect(parsed.taskId).toBeUndefined();
+    const started = await runSupervisedTaskLaunchAssistant({ ...parsed, env: profileEnv() }, deps({
+      managerIssueTitle: { status: 'ok', value: 'repair launch' }, onSupervised: () => { starts += 1; } }));
+    expect(started.outcome).toBe('ready');
+    expect(starts).toBe(1);
+  });
+
+  it('#2717 C1 the emitted worker new-Task command passes the CLI and the parsed input starts', async () => {
+    let spawns = 0; let starts = 0;
+    const refused = await runSupervisedTaskLaunchAssistant({ ...launchInput(), projectId: 'orchestrator-pack' }, deps({
+      dispatch: [{ kind: 'present', dispatchId: 'dispatch-old', status: 'completed' }] }));
+    if (refused.outcome !== 'continue') throw new Error('expected refusal');
+    const parsed = parseLaunchAssistantCli(emittedLaunchArgv(refused.nextAction.command!, {
+      NEW_TASK_ID: 'task-new', NEW_WORKTREE_NAME: 'issue-1479-new' }), process.env, c1Target);
+    const started = await runSupervisedTaskLaunchAssistant({ ...parsed, env: profileEnv() }, deps({
+      adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }), onSupervised: () => { starts += 1; } }));
+    expect(started.outcome).toBe('ready');
+    expect(spawns).toBe(1); expect(starts).toBe(1);
+    if (started.outcome === 'ready') {
+      expect(started.supervisedStart.reason).toBe('ready_and_assignment_bound');
+      expect(started.resources).toMatchObject({ taskId: 'task-new' });
+    }
   });
 
   it.each([
@@ -3615,6 +3734,40 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
     expect(starts).toBe(0);
   });
 
+  it.each([
+    ['assignment retired', null, 'start_new_task'],
+    ['assignment still present', 'owned', 'reconcile_dispatch'],
+  ] as const)('#2717 C1 refuses before any spawn when the final Dispatch is absent after an owned terminal early proof: %s', async (_label, finalRow, nextKind) => {
+    let spawns = 0; let starts = 0; let reads = 0;
+    const base = deps({
+      currentAssignment: owned(), dispatch: [terminal('failed'), { kind: 'absent' }],
+      proveTerminalGone: nativeGone('failed'),
+      adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }),
+      onSupervised: () => { starts += 1; },
+    });
+    const launched = await runSupervisedTaskLaunchAssistant({ ...launchInput('t2'), projectId: 'orchestrator-pack' }, {
+      ...base,
+      readCurrentAssignment: () => { reads += 1; return reads === 1 || finalRow === 'owned' ? owned() : null; },
+    });
+    expect(launched).toMatchObject({
+      outcome: 'continue', stage: 'dispatch_admission_final', observedCause: 'fresh_dispatch_not_absent',
+      nextAction: { kind: nextKind },
+    });
+    expect(spawns).toBe(0);
+    expect(starts).toBe(0);
+  });
+
+  it('#2717 C1 keeps the ordinary first start when both Dispatch reads are absent', async () => {
+    let spawns = 0; let starts = 0;
+    const launched = await runSupervisedTaskLaunchAssistant(launchInput('t2'), deps({
+      dispatch: [{ kind: 'absent' }, { kind: 'absent' }],
+      adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }),
+      onSupervised: () => { starts += 1; },
+    }));
+    expect(launched.outcome).toBe('ready');
+    expect(spawns).toBe(1); expect(starts).toBe(1);
+  });
+
   it('recovers dirty manager without an existing PR only from exact native Run/Task and old worktree', async () => {
     const fixture = managerReuseFixture({ noPr: true, status: ' M tests/test_database_guard.py\n' });
     const expected = {
@@ -4437,6 +4590,7 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       extraPane: NativePane | null;
       refuseProfile: boolean;
       assignmentsReadable: boolean;
+      sessionOwned: boolean;
       unknownIncumbent: boolean;
       goneIncumbent: boolean;
       workerShowUnknown: boolean;
@@ -4447,7 +4601,7 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       assignments: [], catalog: [session], unreadableList: false,
       rosterMode: 'complete', truncateAfterStop: false, catalogRequestFails: false,
       extraPane: null,
-      refuseProfile: false, assignmentsReadable: true,
+      refuseProfile: false, assignmentsReadable: true, sessionOwned: true,
       unknownIncumbent: false, goneIncumbent: false,
       workerShowUnknown: false, catalogShape: 'normal',
       injectAssignmentAfterStop: false, stopReturned: false,
@@ -4594,6 +4748,8 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
           inlineConfigJson: overlay.inlineConfigJson,
         } };
       },
+      managerSessionOwner: async (requested) => state.sessionOwned
+        ? { session: requested, runId: 'run_2717_owner', taskId: 'task_2717_owner' } : null,
       listAssignments: () => state.assignmentsReadable ? state.assignments : null,
       assignmentWorkspace: async (row) => {
         const result = native(['orchestration', 'worker-show', '--dispatch', row.bindingKey, '--json']);
@@ -4922,6 +5078,36 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       env: opencodeProfileEnv('manager'),
     }, invalid.deps)).toMatchObject({ cause: 'resume_input_invalid', attempts: 0 });
     expect(invalid.spawnedCommands).toHaveLength(0);
+  });
+
+  it('#2717 C1 catalog membership alone never spawns a --session terminal and names the new-Task step', async () => {
+    const f = resumeFixture();
+    f.state.sessionOwned = false;
+    const refused = await f.run();
+    expect(refused).toMatchObject({
+      outcome: 'continue', cause: 'resume_manager_run_task_ownership_unproven', attempts: 0,
+      nextAction: { kind: 'start_new_task' },
+    });
+    expect(refused.nextAction?.note).toMatch(/new Task through the authorized first-start route/u);
+    expect(refused.nextAction?.command).toContain('--work-class manager');
+    expect(f.spawnedCommands).toHaveLength(0);
+    expect(f.nativePanes).toHaveLength(0);
+    expect(f.queriedUrls).toEqual([]);
+    expect(f.events.filter((event) => /terminal (?:create|close)|closed:/u.test(event))).toEqual([]);
+    const mismatched = resumeFixture();
+    const owned = mismatched.deps.managerSessionOwner;
+    expect(owned).toBeDefined();
+    expect(await runExistingOpenCodeResume({
+      session, projectId, repository, workspace, env: opencodeProfileEnv('manager'),
+    }, { ...mismatched.deps, managerSessionOwner: async () => ({ session: 'ses_other', runId: 'r', taskId: 't' }) }))
+      .toMatchObject({ cause: 'resume_manager_run_task_ownership_unproven', attempts: 0 });
+    expect(mismatched.spawnedCommands).toHaveLength(0);
+    const production = resumeFixture();
+    const { managerSessionOwner: _omitted, ...withoutOwner } = production.deps;
+    expect(await runExistingOpenCodeResume({
+      session, projectId, repository, workspace, env: opencodeProfileEnv('manager'),
+    }, withoutOwner)).toMatchObject({ cause: 'resume_manager_run_task_ownership_unproven', attempts: 0 });
+    expect(production.spawnedCommands).toHaveLength(0);
   });
 
   it('B4 own-last-line synthetic GPT PARKED excludes an in-flight spinner', () => {

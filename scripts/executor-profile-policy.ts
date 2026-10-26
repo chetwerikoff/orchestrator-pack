@@ -51,6 +51,8 @@ export interface SemanticExecutorProfile {
   readonly model: string;
   readonly effort: string;
   readonly cursorContext?: string;
+  /** Absolute OpenCode binary the profile pins; absent means the bare `opencode` token. */
+  readonly opencodeExecutable?: string;
   readonly names: ExecutorProfileNames;
 }
 
@@ -191,6 +193,24 @@ export function claudeHelpEdgeCapabilities(help: string): ExecutorEdgeCapabiliti
   };
 }
 
+/** Selected-profile pin for the OpenCode direct CLI; read from the profile environment/store. */
+export const OPENCODE_EXECUTABLE_VARIABLE = 'PACK_EXECUTOR_OPENCODE_BIN' as const;
+const OPENCODE_EXECUTABLE_PATTERN = /^\/(?:[A-Za-z0-9._+-]+\/)*opencode$/u;
+
+/** Absolute path whose basename is exactly `opencode`; symbolic/bare tokens never qualify. */
+export function validOpenCodeExecutablePath(value: string): boolean {
+  return OPENCODE_EXECUTABLE_PATTERN.test(value);
+}
+
+/** Replace the family token of a probe argv with the profile's pinned binary, if any. */
+export function pinnedProbeCommand(
+  profile: Pick<SemanticExecutorProfile, 'family' | 'opencodeExecutable'>,
+  command: readonly string[],
+): readonly string[] {
+  return profile.family === 'opencode' && profile.opencodeExecutable && command[0] === 'opencode'
+    ? [profile.opencodeExecutable, ...command.slice(1)] : command;
+}
+
 const PROFILE_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/u;
 const MODEL_TOKEN_CLASS = 'A-Za-z0-9._:/+-';
 const CURSOR_CONTEXT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/u;
@@ -253,6 +273,16 @@ export function resolveSemanticExecutorProfile(input: {
     return { ok: false, code: 'executor_profile_malformed', variables: ['PACK_EXECUTOR_CURSOR_CONTEXT'] };
   }
 
+  const rawOpenCodeExecutable = descriptor.family === 'opencode' && input.surface === 'task'
+    ? input.env[OPENCODE_EXECUTABLE_VARIABLE]
+    : undefined;
+  // Only a genuinely absent variable keeps the legacy bare token; a supplied blank
+  // or malformed pin is refused, never reinterpreted as PATH lookup.
+  const opencodeExecutable = rawOpenCodeExecutable;
+  if (opencodeExecutable !== undefined && !validOpenCodeExecutablePath(opencodeExecutable)) {
+    return { ok: false, code: 'executor_profile_malformed', variables: [OPENCODE_EXECUTABLE_VARIABLE] };
+  }
+
   return {
     ok: true,
     profile: {
@@ -261,6 +291,7 @@ export function resolveSemanticExecutorProfile(input: {
       model: values[1],
       effort: values[2],
       ...(cursorContext !== undefined ? { cursorContext } : {}),
+      ...(opencodeExecutable !== undefined ? { opencodeExecutable } : {}),
       names: input.names,
     },
   };
@@ -501,7 +532,8 @@ export function buildExecutorCommand(profile: SemanticExecutorProfile, resumeSes
     };
   }
 
-  const executable = profile.surface === 'task' ? descriptor.taskExecutable : descriptor.smokeExecutable;
+  const executable = profile.surface === 'task'
+    ? profile.opencodeExecutable ?? descriptor.taskExecutable : descriptor.smokeExecutable;
   const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
   const permission = withOpenCodeFleetBrowserDenies(undefined);
   const agent = {
@@ -520,6 +552,8 @@ export function buildExecutorCommand(profile: SemanticExecutorProfile, resumeSes
 }
 
 export interface OpenCodeAgentOverlay {
+  /** Profile-pinned absolute binary; defaults to the bare `opencode` token. */
+  readonly executable?: string;
   readonly agentName: string;
   readonly baseline: Readonly<Record<string, unknown>>;
   readonly model: string;
@@ -683,6 +717,8 @@ export function openCodeControlPort(agentName: string): number {
 
 export function buildOpenCodeAgentOverlay(input: OpenCodeAgentOverlay): ExecutorInvocationShape {
   if (input.resumeSession !== undefined && !validOpenCodeResumeSession(input.resumeSession)) throw new Error('opencode_resume_session_invalid');
+  const executable = input.executable ?? 'opencode';
+  if (executable !== 'opencode' && !validOpenCodeExecutablePath(executable)) throw new Error('opencode_executable_invalid');
   const baseline = openCodeAgentConfigFromInfo(input.baseline);
   const permission = withOpenCodeFleetBrowserDenies(undefined);
   const agent = {
@@ -698,9 +734,9 @@ export function buildOpenCodeAgentOverlay(input: OpenCodeAgentOverlay): Executor
   const inlineConfig = JSON.stringify({ permission, agent });
   const state = input.stateRoot ? ` XDG_STATE_HOME=${quote(input.stateRoot)}` : '';
   const data = input.dataRoot !== undefined ? ` XDG_DATA_HOME=${quote(input.dataRoot)}` : '';
-  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)}${state}${data} opencode --hostname 127.0.0.1 --port ${openCodeControlPort(input.agentName)} --agent ${quote(input.agentName)}${input.resumeSession ? ` --session ${quote(input.resumeSession)}` : ''}`;
+  const command = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfig)}${state}${data} ${executable} --hostname 127.0.0.1 --port ${openCodeControlPort(input.agentName)} --agent ${quote(input.agentName)}${input.resumeSession ? ` --session ${quote(input.resumeSession)}` : ''}`;
   return {
-    executable: 'opencode',
+    executable,
     command,
     agentName: input.agentName,
     inlineConfigJson: inlineConfig,
@@ -712,15 +748,19 @@ export function buildOpenCodeAgentOverlay(input: OpenCodeAgentOverlay): Executor
  * fleet deny overlay; checking the profile selection alone misses bare starts.
  */
 export function openCodeLaunchHasFleetBrowserDenies(
-  invocation: Pick<ExecutorInvocationShape, 'command' | 'inlineConfigJson' | 'agentName'>,
+  invocation: Pick<ExecutorInvocationShape, 'command' | 'inlineConfigJson' | 'agentName'>
+    & { readonly executable?: string },
 ): boolean {
   const { command, inlineConfigJson, agentName } = invocation;
+  // A pinned profile admits only its exact absolute binary, never a bare fallback.
+  const binary = invocation.executable ?? 'opencode';
+  if (binary !== 'opencode' && !validOpenCodeExecutablePath(binary)) return false;
   if (!inlineConfigJson || !agentName) return false;
   const assignment = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfigJson)} `;
   if (!command.startsWith(assignment)) return false;
   const rest = command.slice(assignment.length);
   if (rest.includes('OPENCODE_CONFIG_CONTENT=')) return false;
-  const executable = `opencode --hostname 127.0.0.1 --port ${openCodeControlPort(agentName)} --agent ${quote(agentName)}`;
+  const executable = `${binary} --hostname 127.0.0.1 --port ${openCodeControlPort(agentName)} --agent ${quote(agentName)}`;
   const sessionMatch = / --session '([^']+)'$/u.exec(rest);
   if (sessionMatch && !validOpenCodeResumeSession(sessionMatch[1]!)) return false;
   const finalExecutable = executable + (sessionMatch ? sessionMatch[0] : '');
