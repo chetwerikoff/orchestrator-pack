@@ -10084,17 +10084,6 @@ export function __setStateLightPrAuthorHooksForTest(hooks: PrAuthorTurnHooks | u
 // Every other phase preserves the Page and reports cleanup_unconfirmed. A
 // repeated SIGTERM never starts a second close; an ordinary finalizer already
 // running keeps its own single guarded close and is awaited within the bound.
-type SignalRetirement = (input: {
-  readonly profileKey: string;
-  readonly invocationId: string;
-  readonly cdp: string;
-  readonly deadlineMs: number;
-}) => Promise<{ readonly status: 'confirmed' | 'cleanup_unconfirmed'; readonly targetId?: string; readonly cause?: string }>;
-
-let signalRetirementForTest: SignalRetirement | undefined;
-export function __setStateLightSignalRetirementForTest(retire: SignalRetirement | undefined): void {
-  signalRetirementForTest = retire;
-}
 
 // The running invocation's existing own-submission issuance witness: true
 // issued, false witnessed as not issued, undefined no witness (never evidence).
@@ -10140,11 +10129,23 @@ async function finalizeOnSigterm(args: ParsedTurnArgs, finalizer: StateLightSign
   // pre-dispatch only with a zero send count and a witnessed unissued submission.
   const submissionIssued = signalSubmissionWitness?.();
   const unsentSending = record?.phase === 'sending' && (record.send_count ?? 0) === 0 && submissionIssued === false;
-  const safe = !finalizer.finalizing && Boolean(record?.owned_target?.created)
-    && (record?.phase === 'prepared' || unsentSending || record?.phase === 'not_sent'
+  const preDispatch = record?.phase === 'prepared' || unsentSending;
+  let safe = !finalizer.finalizing && Boolean(record?.owned_target?.created)
+    && (preDispatch || record?.phase === 'not_sent'
       || (record?.phase === 'harvested' && Boolean(record.primary)));
+  if (safe && preDispatch) {
+    // The ordinary finalizer's own pre-Send transition, so the unchanged guarded
+    // retirement reads not_sent. not_sent is terminal: the still-running turn
+    // can no longer enter dispatching, so no click follows this record.
+    try {
+      transitionStateLightTurnObservation({
+        profileKey, invocationId, phase: 'not_sent',
+        reason: 'terminal_pre_send', sendCount: 0, sendWitness: 'numeric_send_count',
+      });
+    } catch { safe = false; }
+  }
   const retirement = safe
-    ? await withinBound((signalRetirementForTest ?? retireDetachedOriginalTarget)({
+    ? await withinBound(retireDetachedOriginalTarget({
         profileKey, invocationId, cdp, deadlineMs,
       }), deadlineMs)
     : undefined;
