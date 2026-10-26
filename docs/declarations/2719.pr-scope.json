@@ -1,0 +1,32 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2719,
+  "declared_paths": [
+    "scripts/kernel/subprocess.test.ts",
+    "scripts/kernel/subprocess.ts",
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/execute-issue-manager-boundary.ts",
+    "scripts/pack-gpt-review.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/kernel/subprocess.test.ts",
+    "scripts/kernel/subprocess.ts",
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/execute-issue-manager-boundary.ts",
+    "scripts/lib/review-start-claim-cli.ts",
+    "scripts/pack-gpt-review.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts"
+  ],
+  "source_revision": "89c9069d756fe72d553b9493bd7b33ab6c43c3d4"
+}
