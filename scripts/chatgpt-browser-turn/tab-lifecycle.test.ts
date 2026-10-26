@@ -112,6 +112,10 @@ type FinalizerCase = {
   readonly inProgressHidden?: boolean;
   /** An unrendered user row: the Workspace mirror of the owned prompt, or a distinct text. */
   readonly hiddenUserRow?: 'mirror' | 'distinct';
+  /** ChatGPT never rendered the owned user row (#2721). */
+  readonly unrenderedOwnUser?: boolean;
+  /** The created target started on the project surface, as a fresh chat does. */
+  readonly freshProjectRoute?: boolean;
   readonly accessibleContinuationOnly?: boolean;
   readonly routeChanged?: boolean;
   /** Earlier user turn on the pinned existing conversation. */
@@ -198,7 +202,7 @@ async function observeFinalizer(testCase: FinalizerCase) {
         if (selector === USER_MESSAGE_SELECTOR) {
           const texts = [
             ...(testCase.earlierUserText ? [testCase.earlierUserText] : []),
-            ...(testCase.sendCount > 0 ? [`${marker}\n\nprompt`] : []),
+            ...(testCase.sendCount > 0 && !testCase.unrenderedOwnUser ? [`${marker}\n\nprompt`] : []),
           ];
           if (testCase.foreignUser) texts.push('foreign operator message');
           const rows = texts.map((text) => ({ text, rendered: true }));
@@ -223,7 +227,7 @@ async function observeFinalizer(testCase: FinalizerCase) {
               { role: 'assistant', text: 'earlier assistant reply' },
             ] : []),
             ...(testCase.sendCount > 0 ? [
-              { role: 'user', text: `${marker}\n\nprompt` },
+              ...(testCase.unrenderedOwnUser ? [] : [{ role: 'user', text: `${marker}\n\nprompt` }]),
               { role: 'assistant', text: testCase.foreignAssistantReply
                 ? 'completed foreign regenerated content' : `independently harvested reply for ${invocationId}` },
             ] : []),
@@ -345,7 +349,8 @@ async function observeFinalizer(testCase: FinalizerCase) {
       expect(attached.targetId).toBe(targetId);
       bindStateLightOwnedTarget({
         profileKey, invocationId, targetId, created,
-        cdp, initialRoute: chatUrl,
+        cdp, initialRoute: testCase.freshProjectRoute
+          ? 'https://chatgpt.com/g/g-p-fixture-project/project' : chatUrl,
       });
       // Live URL selection marks every pre-existing tab cleanup-unproven.
       if (!created) __testConversationPageSelection.markSelectedPageUnowned(page);
@@ -504,6 +509,22 @@ describe('Issue #1238 page cleanup equivalence', () => {
     expect(observed.pageCloseCalls).toBe(close ? 1 : 0);
     if (close) expect(observed.result.cleanup).toBe('confirmed');
     else expect(observed.result.incidents).toContain('foreign_user_message');
+  });
+
+  it.each([
+    // Live CF0962FD: harvested fresh tab with users=0:carriers=0:markers=0 stayed open.
+    { kind: 'committed reply on a fresh created page', options: { freshProjectRoute: true }, close: true },
+    { kind: 'foreign reply on a fresh created page',
+      options: { freshProjectRoute: true, foreignAssistantReply: true }, close: false, cause: 'foreign_assistant_turn' },
+    { kind: 'committed reply on a pinned existing conversation', options: {}, close: false, cause: 'foreign_user_message' },
+  ] as const)('handles a harvested page without any user row: $kind (#2721)', async ({ options, close, ...rest }) => {
+    const observed = await observeFinalizer({
+      sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false,
+      unrenderedOwnUser: true, ...options,
+    });
+    expect(observed.pageCloseCalls).toBe(close ? 1 : 0);
+    if (close) expect(observed.result.cleanup).toBe('confirmed');
+    else expect(observed.result.incidents).toContain('cause' in rest ? rest.cause : '');
   });
 
   it.each([
