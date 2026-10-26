@@ -110,6 +110,8 @@ type FinalizerCase = {
   readonly inProgressNode?: boolean;
   /** The in-progress node is mounted but not rendered (no client rects). */
   readonly inProgressHidden?: boolean;
+  /** An unrendered user row: the Workspace mirror of the owned prompt, or a distinct text. */
+  readonly hiddenUserRow?: 'mirror' | 'distinct';
   readonly accessibleContinuationOnly?: boolean;
   readonly routeChanged?: boolean;
   /** Earlier user turn on the pinned existing conversation. */
@@ -199,8 +201,20 @@ async function observeFinalizer(testCase: FinalizerCase) {
             ...(testCase.sendCount > 0 ? [`${marker}\n\nprompt`] : []),
           ];
           if (testCase.foreignUser) texts.push('foreign operator message');
-          return { count: async () => texts.length,
-            nth: (index: number) => ({ innerText: async () => texts[index] ?? '' }) };
+          const rows = texts.map((text) => ({ text, rendered: true }));
+          if (testCase.hiddenUserRow) {
+            rows.push({ rendered: false, text: testCase.hiddenUserRow === 'mirror'
+              ? `${marker}\n\nprompt` : 'foreign operator message' });
+          }
+          const nodes = rows.map((row) => ({
+            textContent: row.text,
+            getAttribute: (name: string) => name === 'data-chatgpt-search-unit-key'
+              ? 'fallback-turn-0:0:user' : null,
+            getClientRects: () => row.rendered ? [{}] : [],
+          }));
+          return { count: async () => rows.length,
+            evaluateAll: async (fn: (elements: unknown[]) => unknown) => fn(nodes),
+            nth: (index: number) => ({ innerText: async () => rows[index]?.text ?? '' }) };
         }
         if (selector === MESSAGE_NODE_SELECTOR) {
           const rows = [
@@ -476,6 +490,20 @@ describe('Issue #1238 page cleanup equivalence', () => {
     expect(observed.settleWaits).toBe(0);
     expect(observed.pageCloseCalls).toBe(1);
     expect(observed.result.cleanup).toBe('confirmed');
+  });
+
+  it.each([
+    // Live 6adee033: a display:none Workspace copy doubled the owned prompt for 60 s.
+    { row: 'mirror' as const, close: true },
+    { row: 'distinct' as const, close: false },
+  ])('treats an unrendered $row user row by unit key and text (#2714)', async ({ row, close }) => {
+    const observed = await observeFinalizer({
+      sendCount: 1, publicationState: 'committed_ok', pagePresent: true, pageLost: false,
+      hiddenUserRow: row,
+    });
+    expect(observed.pageCloseCalls).toBe(close ? 1 : 0);
+    if (close) expect(observed.result.cleanup).toBe('confirmed');
+    else expect(observed.result.incidents).toContain('foreign_user_message');
   });
 
   it.each([
