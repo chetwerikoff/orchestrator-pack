@@ -383,6 +383,8 @@ describe('Issue #2541 invocation-owned fresh composer without a profile lock', (
 
 const CONVERSATION_2617 = 'https://chatgpt.com/c/26172617-2617-4617-8617-261726172617';
 const FETCH_2617 = 'https://chatgpt.com/backend-api/conversations/26172617-2617-4617-8617-261726172617?num_turns=20';
+const EXACT_FETCH_2617 = 'https://chatgpt.com/backend-api/conversations/26172617-2617-4617-8617-261726172617';
+const POLL_2723 = EXACT_FETCH_2617 + '?num_turns=10&include_has_versions=true';
 
 function held429PageFixture() {
   const listeners = new Map<string, Set<(arg: any) => void>>();
@@ -421,22 +423,58 @@ function held429PageFixture() {
 }
 
 describe('conversation fetch HTTP 429 — exact held-page source and generic full-page wall (#2617)', () => {
-  it('retains numeric target status/source with matched_text none and first 429 -> 200 stickiness', async () => {
+  // Architect decision #2723 reverses the former no-heading case: a query-GET
+  // 429 is the wall only once the full-page load failure is visible.
+  it('retains numeric target status/source with the load heading and first 429 -> 200 stickiness', async () => {
     const fixture = held429PageFixture();
     const first = vi.fn();
     const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617, first);
     const target = fixture.request(FETCH_2617);
     fixture.dispatch(target, 429);
     fixture.dispatch(fixture.request(FETCH_2617), 200);
+    expect(first).not.toHaveBeenCalled();
+    fixture.setHeading('Could not load this ChatGPT conversation');
     const classified = classifyConversationProductWall(await productStatusText(fixture.page, 500));
     expect(classified).toEqual({
       wall_kind: 'conversation_fetch_http_429', http_status: 429, status_source: 'owned_page_response',
-      matched_text: 'none', matched_selector: 'none',
+      matched_text: 'Could not load this ChatGPT conversation',
+      matched_selector: CONVERSATION_LOAD_ERROR_HEADING_SELECTOR,
     });
     expect(first).toHaveBeenCalledTimes(1);
-    expect(heldPage429Diagnostic(fixture.page)).toEqual(classified);
+    expect(heldPage429Diagnostic(fixture.page)).toEqual({
+      ...classified, matched_text: 'none', matched_selector: 'none',
+    });
     witness.dispose();
     expect(heldPage429Diagnostic(fixture.page)).toBeUndefined();
+  });
+
+  it('ignores a client num_turns poll 429 on a loaded page (#2723)', async () => {
+    const fixture = held429PageFixture();
+    fixture.setComposer(true);
+    fixture.setMessages(true);
+    const first = vi.fn();
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617, first);
+    fixture.dispatch(fixture.request(POLL_2723), 429);
+    expect(classifyConversationProductWall(await productStatusText(fixture.page, 500)))
+      .toMatchObject({ wall_kind: 'none' });
+    expect(witness.current()).toBeUndefined();
+    expect(heldPage429Diagnostic(fixture.page)).toBeUndefined();
+    expect(first).not.toHaveBeenCalled();
+    fixture.dispatch(fixture.request(EXACT_FETCH_2617), 429);
+    expect(witness.current()).toMatchObject({ wall_kind: 'conversation_fetch_http_429', http_status: 429 });
+    expect(first).toHaveBeenCalledTimes(1);
+    witness.dispose();
+  });
+
+  it('drops an unconfirmed poll 429 at navigation (#2723)', async () => {
+    const fixture = held429PageFixture();
+    const witness = observeHeldPageConversation429(fixture.page, CONVERSATION_2617);
+    fixture.dispatch(fixture.request(POLL_2723), 429);
+    witness.beforeNavigation();
+    fixture.setHeading('Could not load this ChatGPT conversation');
+    await productStatusText(fixture.page, 500);
+    expect(witness.current()).toBeUndefined();
+    witness.dispose();
   });
 
   it('accepts a late active-epoch 429 after target 200, without inferring status from /conversation/init 200', () => {
@@ -445,7 +483,7 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
     fixture.dispatch(fixture.request(FETCH_2617), 200);
     fixture.dispatch(fixture.request('https://chatgpt.com/backend-api/conversation/init'), 200);
     expect(witness.current()).toBeUndefined();
-    fixture.dispatch(fixture.request(FETCH_2617), 429);
+    fixture.dispatch(fixture.request(EXACT_FETCH_2617), 429);
     expect(witness.current()).toMatchObject({ wall_kind: 'conversation_fetch_http_429', http_status: 429 });
     witness.dispose();
   });
@@ -488,7 +526,7 @@ describe('conversation fetch HTTP 429 — exact held-page source and generic ful
         { selector: '[data-testid="sidebar"]', text: 'Recents: Unable to load history' },
       ],
     })).toMatchObject({ wall_kind: 'none' });
-    fixture.dispatch(fixture.request(FETCH_2617), 429);
+    fixture.dispatch(fixture.request(EXACT_FETCH_2617), 429);
     expect(witness.current()).toMatchObject({ wall_kind: 'conversation_fetch_http_429', http_status: 429 });
     witness.dispose();
   });

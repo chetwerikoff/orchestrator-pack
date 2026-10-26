@@ -51,7 +51,7 @@ import {
 } from './product-page-selectors.ts';
 import { publishWitnessedStateLight429, readStateLightAccountCooldown, __testComposerMutation, __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
-import { heldPage429Diagnostic, observeHeldPageConversation429 } from './ui-adapter-base.ts';
+import { CONVERSATION_LOAD_ERROR_HEADING_SELECTOR, heldPage429Diagnostic, observeHeldPageConversation429 } from './ui-adapter-base.ts';
 import { runPostSendRecovery, takeRecoveryCensus, type PostSendRecoveryAdapter, type PostSendRecoveryState } from './state-light-turn-recovery.ts';
 import * as recoveryModule from './state-light-turn-recovery.ts';
 import { configuredProfileKey, profileDirs } from './storage-common.ts';
@@ -1563,11 +1563,13 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     const events = new EventEmitter();
     let postReopenComposerProbes = 0;
     let composerTextReads = 0;
-    const usableComposer = () => ['ready', 'slow-fill', 'partial-fill', 'expired-fill', 'failed-fill',
+    // The held 429 counts once ChatGPT shows its full-page load failure (#2723).
+    let loadFailed = false;
+    const usableComposer = () => !loadFailed && (['ready', 'slow-fill', 'partial-fill', 'expired-fill', 'failed-fill',
       'changed-marker-fill', 'changed-marker-before-send', 'rendered-blank-lines',
       'joined-marker-fill', 'joined-marker-before-send'].includes(scenario)
       || (scenario === 'late-hydration' && now - startedAt >= 20_000)
-      || (reopened && !['composer-still-absent', 'late-redirect', 'late-close'].includes(scenario));
+      || (reopened && !['composer-still-absent', 'late-redirect', 'late-close'].includes(scenario)));
     const fill = vi.fn(async (value: string, { timeout }: { timeout: number }) => {
       if (scenario === 'failed-fill') throw new Error('fill failed');
       const costMs = ['slow-fill', 'partial-fill', 'changed-marker-fill', 'changed-marker-before-send']
@@ -1670,6 +1672,7 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     };
     const nodes = {
       ...collectionLocator([{ role: 'user', text: 'historical user' }]),
+      count: vi.fn(async () => loadFailed ? 0 : 1),
       evaluateAll: vi.fn(async () => {
         if (reopened) afterReopenReads++;
         if (reopened && scenario === 'post-fetch-429' && afterReopenReads === 2) {
@@ -1677,6 +1680,7 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
             url: () => 'https://chatgpt.com/backend-api/conversations/25602560-2560-4560-8560-256025602560?num_turns=20' };
           events.emit('request', request);
           events.emit('response', { request: () => request, status: () => 429 });
+          loadFailed = true;
         }
         const generationInProgress: boolean | 'unknown' =
           (!reopened && scenario === 'initial-unknown')
@@ -1731,6 +1735,9 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => 1, click: send });
         if (selector === MESSAGE_NODE_SELECTOR) return nodes;
+        if (selector === CONVERSATION_LOAD_ERROR_HEADING_SELECTOR && loadFailed) return scalarLocator({
+          count: async () => 1, innerText: async () => 'Could not load this ChatGPT conversation',
+        });
         if (selector === RENDERED_CONVERSATION_TURN_SECTION_SELECTOR) return scalarLocator({
           last: () => scalarLocator({ turnActionButtons: scenario === 'finished-setup' }),
         });
@@ -2116,7 +2123,7 @@ describe('conversation fetch HTTP 429 — physical Send and recovery gates (#261
   it('blocks physical Send and composer fill on a witnessed pre-insertion conversation fetch HTTP 429', async () => {
     const url = 'https://chatgpt.com/c/26172617-2617-4617-8617-261726172617';
     const request = { method: () => 'GET',
-      url: () => 'https://chatgpt.com/backend-api/conversations/26172617-2617-4617-8617-261726172617?num_turns=20' };
+      url: () => 'https://chatgpt.com/backend-api/conversations/26172617-2617-4617-8617-261726172617' };
     const events = new EventEmitter();
     const fill = vi.fn(async () => undefined);
     const click = vi.fn(async () => undefined);
@@ -2214,7 +2221,8 @@ describe('conversation fetch HTTP 429 — fresh preparation and same-Page owners
   const projectUrl = projectRoot + '/project';
   const conversationUuid = '26172617-2617-4617-8617-261726172617';
   const conversationUrl = projectRoot + '/c/' + conversationUuid;
-  const exactRequestUrl = 'https://chatgpt.com/backend-api/conversations/' + conversationUuid + '?num_turns=20';
+  // A query-less GET is the owned load fetch; query polls need the load heading (#2723).
+  const exactRequestUrl = 'https://chatgpt.com/backend-api/conversations/' + conversationUuid;
   const listRequestUrl = 'https://chatgpt.com/backend-api/conversations?limit=20';
 
   beforeEach(() => {
