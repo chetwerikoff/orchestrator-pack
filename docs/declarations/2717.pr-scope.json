@@ -1,0 +1,36 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2717,
+  "declared_paths": [
+    "scripts/executor-profile-policy.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+  ],
+  "denylist": [
+    ".config/",
+    ".env",
+    ".env.*",
+    ".local/",
+    "credentials/",
+    "packages/core/",
+    "runtime-state/",
+    "secrets/",
+    "state/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/orchestration-runbook.md",
+    "scripts/executor-profile-policy.ts",
+    "scripts/lib/worker-assignment-runtime.test.ts",
+    "scripts/lib/worker-assignment-runtime.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/pr2-foundation/supervised-worker-start.test.ts",
+    "scripts/pr2-foundation/supervised-worker-start.ts"
+  ],
+  "source_revision": "0345cd0037c13a1d879650ce3aaf794f13f08210"
+}
