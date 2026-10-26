@@ -458,8 +458,29 @@ interface ClaimLease {
   owns: () => boolean;
   bindRunId: (runId: string) => void;
   release: (action: 'run_started' | 'failure', reviewRuns: PackReviewRunRecord[], detail?: string,
-    currentTerminalRunId?: string) => Promise<void>;
+    currentTerminalRunId?: string) => Promise<{ ok: true; outcome: string } | undefined>;
 }
+
+class ClaimCompletionError extends Error {
+  readonly completionReason: string;
+  constructor(completionReason: string) {
+    super(`review claim completion failed: ${completionReason}`);
+    this.completionReason = completionReason;
+  }
+}
+
+// Secondary claim-terminal observation on an acquired-claim early return. It
+// never replaces the primary operation's ok/reason/httpStatus/nextAction.
+export interface ClaimReleaseObservation {
+  ok: boolean;
+  outcome: string | null;
+  reason?: string;
+  nextAction?: string;
+}
+
+// Early-return claim terminals keyed by the invocation input; attached to the
+// primary result by startPackReviewImpl after the body returns.
+const earlyClaimReleases = new WeakMap<object, ClaimReleaseObservation>();
 
 interface AuthoritativeReviewContext {
   tier: PackReviewTier;
@@ -2147,8 +2168,9 @@ async function acquireClaimLease(options: {
               : undefined)
         : releaseAfterRunFailure(claim as ClaimResult, reviewRuns, detail);
       if (completion.ok !== true) {
-        throw new Error(`review claim completion failed: ${trim(completion.reason) || 'unknown'}`);
+        throw new ClaimCompletionError(trim(completion.reason) || 'unknown');
       }
+      return { ok: true, outcome: trim(completion.outcome) || 'unknown' };
     },
   };
 }
@@ -2239,6 +2261,9 @@ async function findJournaledDeliveryResumeCandidate(options: {
 
 const GPT_REPLACEMENT_GENERATION_MAX_MS = 15 * 60 * 1_000;
 const NATIVE_REPLACEMENT_MAX_MS = 15 * 60 * 1_000;
+// Budget-timed reviewer TERM grace: above the 250 ms kernel default, and with
+// SIGKILL confirmation inside the kernel's 1,000 ms post-close limit.
+export const PACK_REVIEW_REVIEWER_KILL_GRACE_MS = 500;
 const NATIVE_CHILD_FRAME_PREFIX = 'OPK_NATIVE_CHILD_V1 ';
 
 export type PackReviewGptSurfaceClass =
@@ -2270,6 +2295,7 @@ export interface PackReviewGptAttemptObservation {
   replacementEligibleSlotIds?: string[];
   initialLaunchSlotIds?: string[];
   elapsedMs?: number;
+  generationAgeCeilingExceeded?: boolean;
   diagnostics?: PackReviewGptTargetDiagnostic[];
 }
 
@@ -2454,8 +2480,10 @@ export async function observeGptPackReviewAttempt(
     const startedAtMs = Date.parse(slot.admissionStartedAtUtc ?? observation.transitioned_at);
     const elapsedMs = Number.isFinite(startedAtMs) ? Math.max(0, nowMs - startedAtMs) : 0;
     if (generation === true) {
-      if (elapsedMs >= GPT_REPLACEMENT_GENERATION_MAX_MS) replacementEligibleSlotIds.push(slot.slotId);
-      else rememberBlocked({ state: 'generating', replacementEligible: false, slotId: slot.slotId, elapsedMs });
+      // A still-generating possibly delivered source is never proved zero-send:
+      // elapsed time past the ceiling is evidence only, not replacement authority.
+      rememberBlocked({ state: 'generating', replacementEligible: false, slotId: slot.slotId, elapsedMs,
+        ...(elapsedMs >= GPT_REPLACEMENT_GENERATION_MAX_MS ? { generationAgeCeilingExceeded: true } : {}) });
       continue;
     }
     if (generation !== false) { rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId, elapsedMs }); continue; }
@@ -2718,6 +2746,7 @@ let nativeStderrBuffer = '';
     env,
     allowEmptyStdout: true,
     timeoutMs: options.budgetLedger.runnerTimeoutMs,
+    killGraceMs: PACK_REVIEW_REVIEWER_KILL_GRACE_MS,
     onStderrChunk: consumeNativeChildFrames,
     onSpawn: (pid) => {
       const persisted = getPackReviewRun(options.runId, {
@@ -7699,6 +7728,28 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
 }
 
 async function startPackReviewImpl(input: StartInput): Promise<Record<string, unknown>> {
+  try {
+    const result = await startPackReviewBody(input);
+    const claimRelease = earlyClaimReleases.get(input);
+    if (!claimRelease) return result;
+    // The runless claim terminal and an H2 settlement have no production
+    // Task/Dispatch owner binding (the claim holder is process identity and an
+    // H1 run binding cannot prove the H2 owner), so no wake is claimed.
+    return {
+      ...result,
+      claimRelease,
+      ownerNotification: {
+        state: 'notification_unbound',
+        reason: 'no_current_owner_dispatch_binding',
+        nextAction: 'owner or coordinator: read the exact PR head, review status and claim read-only before any resend',
+      },
+    };
+  } finally {
+    earlyClaimReleases.delete(input);
+  }
+}
+
+async function startPackReviewBody(input: StartInput): Promise<Record<string, unknown>> {
   const operatorStart = directCliOperatorStarts.get(input);
   const harnessWithoutSelectedProject = process.env.OPK_VITEST_HARNESS === '1'
     && !trim(process.env.OPK_PROJECT_ID);
@@ -8197,9 +8248,26 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
   }
 
   const releaseEarlyClaim = async (reason: string): Promise<void> => {
-    if (claimLease?.acquired) {
-      await claimLease.release('failure', listPackReviewRuns({ projectId, storeRoot }), reason);
+    if (!claimLease?.acquired) return;
+    // Claim cleanup is secondary: a lost, ambiguous or throwing completion is
+    // reported beside the primary result and never masks or inverts it.
+    let observation: ClaimReleaseObservation;
+    try {
+      const completed = await claimLease.release('failure', listPackReviewRuns({ projectId, storeRoot }), reason);
+      observation = completed?.outcome === 'released_for_retry'
+        ? { ok: true, outcome: completed.outcome }
+        : { ok: false, outcome: completed?.outcome ?? null, reason: 'claim_release_not_released_for_retry',
+            nextAction: readOnlyClaimObservationAction() };
+    } catch (error) {
+      observation = {
+        ok: false, outcome: null,
+        reason: error instanceof ClaimCompletionError
+          ? error.completionReason
+          : `claim_release_threw:${describeError(error)}`,
+        nextAction: readOnlyClaimObservationAction(),
+      };
     }
+    earlyClaimReleases.set(input, observation);
   };
 
   try {
@@ -8515,10 +8583,15 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
       }, { projectId, storeRoot, repoSlug: target.repoSlug });
       await releaseEarlyClaim(result?.settled === true ? 'final_cap_descendant_settled' : 'final_cap_settlement_refused');
+      // reconcileFinalCapSettlement settles only after current-head required
+      // status success readback; keep that exact publication head visible.
       return result?.settled === true
         ? { ok: true, created: false, reused: true, prNumber: target.prNumber,
             headSha: target.headSha, reason: result.reason,
-            statusPublished: true, publicationVerified: true, httpStatus: 200 }
+            statusPublished: true, publicationVerified: true,
+            publicationHeadSha: result.publicationHeadSha, requiredStatusState: 'success',
+            ...(target.issueNumber ? { issueNumber: target.issueNumber } : {}),
+            httpStatus: 200 }
         : { ok: false, created: false, reused: false, prNumber: target.prNumber,
             headSha: target.headSha, reason: result?.reason ?? 'final_cap_settlement_unverified',
             ...(result?.detail ? { detail: result.detail } : {}),
@@ -8895,6 +8968,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
     let sameRoundGptEligibleSlotIds: ReadonlySet<string> | undefined;
     let sameRoundGptOrphanSlotIds: ReadonlySet<string> | undefined;
     let sameRoundGptDiagnostics: PackReviewGptTargetDiagnostic[] | undefined;
+    // Visible evidence for a still-generating original source; never replacement authority.
+    let sameRoundGptGenerating: Record<string, unknown> = {};
     const ownsStartClaim = () => claimMode === 'preacquired'
       ? preacquiredClaimOwned()
       : claimLease?.owns() === true;
@@ -8960,7 +9035,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
             ...candidate, status: 'reviewing', heartbeatAtUtc: original.heartbeatAtUtc,
           }));
     };
-    const rejectIncumbent = async (candidate: PackReviewRunRecord, reason: string, nextAction: string) => {
+    const rejectIncumbent = async (candidate: PackReviewRunRecord, reason: string, nextAction: string,
+      extra: Record<string, unknown> = {}) => {
       await releaseEarlyClaim(reason);
       // Every incumbent refusal exposes an immediately runnable, PR-scoped
       // read/reconciliation command rather than an unexecutable "observe".
@@ -8978,6 +9054,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
         prNumber: target.prNumber, headSha: target.headSha,
         runId: candidate.id, status: candidate.status,
         coverage: derivePackReviewGptCoverage(candidate.reviewRound),
+        ...extra,
         httpStatus: 409,
       };
     };
@@ -9104,6 +9181,14 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           const observeAttempt = input.fixtureGptAttemptObserver ?? observeGptPackReviewAttempt;
         const observation = await observeAttempt(priorSameRound);
         sameRoundGptDiagnostics = observation?.diagnostics;
+        if (observation?.state === 'generating') {
+          sameRoundGptGenerating = {
+            observationState: 'generating', replacementEligible: false,
+            elapsedMs: observation.elapsedMs ?? 0,
+            ...(observation.slotId ? { generatingSlotId: observation.slotId } : {}),
+            ...(observation.generationAgeCeilingExceeded ? { generationAgeCeilingExceeded: true } : {}),
+          };
+        }
         const originalLaunchIds = observation?.initialLaunchSlotIds ?? [];
         const initialLaunchSlotIds = originalLaunchIds.filter((slotId) => (
           priorSameRound.reviewRound?.sourceSlots.some((slot) => (
@@ -9139,16 +9224,25 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           const unresolved = priorSameRound.reviewRound!.sourceSlots.find((slot) => (
             slot.lifecycle === 'invocation_started' && slot.invocationId
           ));
+          // A still-generating source stays a visible incumbent non-success with
+          // its elapsed-time evidence, whatever its age; it is never zero-send.
+          const generating = observation?.state === 'generating';
           return rejectIncumbent(priorSameRound,
             observation?.state === 'reply_recovery_required'
               ? 'reply_recovery_required'
-              : unresolved
-                ? 'gpt_original_invocation_recovery_required'
-                : observation?.state ?? 'gpt_observation_unavailable',
+              : generating
+                ? 'generating'
+                : unresolved
+                  ? 'gpt_original_invocation_recovery_required'
+                  : observation?.state ?? 'gpt_observation_unavailable',
           unresolved
             ? 'recover the original chat and credentialed GitHub source for '
               + unresolved.slotId + ' invocation ' + unresolved.invocationId + '; do not resend'
-            : 'observe the original run and recover its source evidence before any eligible retry');
+            : 'observe the original run and recover its source evidence before any eligible retry',
+          generating ? {
+            observationState: 'generating', elapsedMs: observation?.elapsedMs ?? 0,
+            ...(observation?.generationAgeCeilingExceeded ? { generationAgeCeilingExceeded: true } : {}),
+          } : {});
         }
         allowSameRoundReplacement = true;
         sameRoundGptRun = priorSameRound;
@@ -10216,6 +10310,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
                       + ' through its existing chat/transport and exact credentialed GitHub comment; do not resend'
                     : String(reconciliationResult?.nextAction
                       ?? 'repair the exact incumbent GitHub source/status evidence and rerun scoped reconcile; do not resend uncertain sources'),
+                  ...(stillPendingOriginal ? sameRoundGptGenerating : {}),
                 }),
               }),
           prNumber: target.prNumber, headSha: target.headSha, runId: run.id,
@@ -10253,6 +10348,7 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
             + pendingSource.invocationId
             + ' through its existing chat/transport and exact credentialed GitHub comment; do not resend',
           publicationVerified: false,
+          ...sameRoundGptGenerating,
           prNumber: target.prNumber, headSha: target.headSha,
           runId: run.id, status: latest?.status ?? 'reviewing',
           coverage: derivePackReviewGptCoverage(latest?.reviewRound),
@@ -10720,7 +10816,8 @@ async function startPackReviewImpl(input: StartInput): Promise<Record<string, un
           await claimLease.release('run_started', listPackReviewRuns({ projectId, storeRoot }),
             '', currentInvocationTerminalRunId);
         } else {
-          await claimLease.release('failure', listPackReviewRuns({ projectId, storeRoot }), describeError(error));
+          // Report the actual secondary completion beside the primary failure.
+          await releaseEarlyClaim(describeError(error));
         }
       } catch {
         // Primary runner failure is more actionable; the stale claim path remains recoverable.

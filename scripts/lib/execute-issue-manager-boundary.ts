@@ -28,6 +28,12 @@ import {
 } from './worker-smoke-core-base.ts';
 
 export const EXECUTE_ISSUE_PHASES = ['implementation', 'review', 'fixer', 'smoke'] as const;
+// Mirrors PACK_GPT_REVIEW_RESULT_SCHEMA in scripts/pack-gpt-review.ts without
+// importing the review runtime into this classifier.
+export const PACK_GPT_REVIEW_RESULT_SCHEMA = 'pack-gpt-review-result/v1';
+const SUPPORTED_PRODUCER_SCHEMAS: ReadonlySet<unknown> = new Set([
+  'turn-result/v1', 'browser-gpt-page-probe/v1', PACK_GPT_REVIEW_RESULT_SCHEMA, SMOKE_REPORT_MARKER,
+]);
 export type ExecuteIssuePhase = typeof EXECUTE_ISSUE_PHASES[number];
 
 type ClassificationClass = 'completed' | 'recoverable' | 'external_pause' | 'contract_defect' | 'conditional';
@@ -681,6 +687,13 @@ function isWorkerSmokeRecord(value: JsonRecord): boolean {
     || value.producer === SMOKE_REPORT_PRODUCER;
 }
 
+// Every smoke identity field that is present must name worker-smoke.
+function consistentWorkerSmokeRecord(value: JsonRecord): boolean {
+  return (value.schema === undefined || value.schema === SMOKE_REPORT_MARKER)
+    && (value.marker === undefined || value.marker === SMOKE_REPORT_MARKER)
+    && (value.producer === undefined || value.producer === SMOKE_REPORT_PRODUCER);
+}
+
 function workerSmokeStructuredEvidence(value: JsonRecord): JsonRecord {
   return {
     marker: SMOKE_REPORT_MARKER,
@@ -843,6 +856,42 @@ function reviewRunnerExternalCause(reason: string): ManagerExternalPauseCause | 
   return null;
 }
 
+const PACK_REVIEW_PRODUCER_SCRIPTS = ['scripts/pack-gpt-review.ts', 'scripts/pack-review-runner.ts'];
+
+const NODE_VALUE_FREE_FLAGS: ReadonlySet<string> = new Set([
+  '--experimental-strip-types', '--experimental-transform-types', '--no-warnings', '--enable-source-maps',
+]);
+
+function commandName(part: string | undefined): string {
+  return (part ?? '').split('/').pop() ?? '';
+}
+
+// Review authority comes from the manager's trusted phase and the argv it ran,
+// never from the producer record shape. The pack command must be the invoked
+// entrypoint (direct Node script or `npm run pack-gpt-review`), not an operand
+// of another command, and must name exactly the trusted manager PR.
+function trustedPackReviewContext(context: ExecuteIssueManagerBoundaryContext): boolean {
+  if (context.phase !== 'review') return false;
+  const argv = context.productionArgv.map(normalizeCommandToken);
+  let index = 1;
+  let packReviewCommand = false;
+  if (commandName(argv[0]) === 'node') {
+    // Only value-free flags may precede the entrypoint; an option operand such
+    // as --import/--require would otherwise be mistaken for the executed script.
+    while (NODE_VALUE_FREE_FLAGS.has(argv[index] ?? '')) index += 1;
+    const entrypoint = argv[index] ?? '';
+    packReviewCommand = PACK_REVIEW_PRODUCER_SCRIPTS
+      .some((script) => entrypoint === script || entrypoint.endsWith('/' + script));
+  } else if (commandName(argv[0]) === 'npm' && argv[1] === 'run') {
+    index = 2;
+    while (argv[index]?.startsWith('--')) index += 1;
+    packReviewCommand = argv[index] === 'pack-gpt-review';
+  }
+  if (!packReviewCommand) return false;
+  const prFlags = argv.flatMap((part, at) => (part === '--pr-number' ? [at] : []));
+  return prFlags.length === 1 && argv[prFlags[0]! + 1] === String(context.prNumber);
+}
+
 function classifyReviewRunner(
   value: JsonRecord,
   context: ExecuteIssueManagerBoundaryContext,
@@ -854,6 +903,9 @@ function classifyReviewRunner(
   }
   if (value.prNumber !== undefined && value.prNumber !== context.prNumber) {
     return defect(context, producer, 'review runner producer PR contradicts the trusted manager PR');
+  }
+  if (value.issueNumber !== undefined && value.issueNumber !== context.issueNumber) {
+    return defect(context, producer, 'review runner producer Issue contradicts the trusted manager Issue');
   }
   const reason = text(value.runnerReason) || text(value.reason);
   const stageReuse = value.created === false && value.reused === true
@@ -868,6 +920,18 @@ function classifyReviewRunner(
   const verifiedHead = /^[0-9a-f]{40}$/u.test(boundHead)
     && text(value.headSha).toLowerCase() === boundHead
     && text(value.publicationHeadSha).toLowerCase() === boundHead;
+  // An already complete review stage settled on the trusted strict descendant
+  // head with a success required status. Secondary claim release and owner
+  // notification fields never decide this; they stay visible diagnostics.
+  const settledDescendant = value.created === false && value.reused === true
+    && value.reason === 'final_cap_descendant_settled'
+    && value.statusPublished === true
+    && value.publicationVerified === true
+    && value.requiredStatusState === 'success'
+    && value.issueNumber === context.issueNumber;
+  if (value.ok === true && verifiedHead && settledDescendant) {
+    return completed(context, producer, 'execute_review_runner_completed');
+  }
   if (value.ok === true && verifiedHead && (stageReuse || deliveredRound)
     && value.status !== 'reviewing' && value.reason !== 'journal_write_failed'
     && value.reason !== 'completed_with_delivery_failures') {
@@ -913,8 +977,26 @@ export function classifyExecuteIssueManagerRecord(
     || !Number.isSafeInteger(context.issueNumber) || context.issueNumber <= 0) {
     return defect(context, 'execute-issue-manager-boundary', 'selected repository/Issue binding invalid');
   }
+  // Closed positive discrimination: an explicit foreign or unknown schema is
+  // rejected before any smoke marker/producer or review-like shape is read.
+  if (value.schema !== undefined && !SUPPORTED_PRODUCER_SCHEMAS.has(value.schema)) {
+    return defect(context, 'execute-issue-manager-boundary', 'foreign or unknown producer schema: ' + text(value.schema));
+  }
+  // Any worker-smoke identity field must agree with every other one before a
+  // schema-specific route (turn, probe, smoke or review) may see the record.
+  if (isWorkerSmokeRecord(value) && !consistentWorkerSmokeRecord(value)) {
+    return defect(context, 'execute-issue-manager-boundary', 'worker-smoke schema/marker/producer contradict each other');
+  }
   if (value.schema === 'turn-result/v1') return classifyTurn(value, context);
   if (value.schema === 'browser-gpt-page-probe/v1') return classifyProbe(value, context);
   if (isWorkerSmokeRecord(value)) return classifyWorkerSmoke(value, context);
+  // Genuine pack-review output carries no producer/marker identity; any explicit
+  // one names a foreign producer even under trusted review argv.
+  if (value.producer !== undefined || value.marker !== undefined) {
+    return defect(context, 'execute-issue-manager-boundary', 'review-shaped record names a foreign producer or marker');
+  }
+  if (!trustedPackReviewContext(context)) {
+    return defect(context, 'execute-issue-manager-boundary', 'review-shaped record lacks trusted pack-review phase and production argv');
+  }
   return classifyReviewRunner(value, context);
 }
