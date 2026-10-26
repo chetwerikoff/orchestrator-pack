@@ -99,9 +99,9 @@ Tracked profile names follow one pattern:
 Concrete model/effort values remain operator-local and never enter tracked task or
 PR metadata.
 
-Supported executor families are Cursor and OpenCode. Admission must prove the
-selected model/effort route through the policy owner and fail closed with the closed
-vocabulary:
+Supported executor families are Cursor, OpenCode, and Claude Code. Admission
+must prove the selected model/effort route through the policy owner and fail
+closed with the closed vocabulary:
 
 ```text
 executor_route_unavailable
@@ -161,10 +161,17 @@ Explicit provider-mode requests without a native pre-dispatch clean witness
 fail closed; a post-start receipt is not an equivalent witness.
 
 The calling shell first exports the matching stable profile names. The profile
-checkpoint validates the closed executor family, executor-specific model catalog,
-model/effort request channel, caller `startMode` when present, and child inheritance
-before any manager Task or runtime effect. The returned admitted route is attempt
-state: later recovery reuses it and never re-reads mutable live profile values.
+checkpoint validates the closed executor family, the Cursor/OpenCode model catalog
+or Claude Code's closed model IDs, model/effort request channels, caller `startMode`
+when present, and child inheritance before any manager Task or runtime effect.
+Claude Code uses native `claude --help` to prove `--model` and `--effort` on the
+installed CLI; it has no model catalog command or context selector. The assistant
+admits Claude only on the exact-terminal route and, before supervised start,
+reads the bound native terminal command and screen footer to confirm the running
+Claude Code model and effort against the requested profile. Neither a constructed
+argv nor generic terminal liveness suffices. New and `--existing-terminal` manager
+routes apply the same check. The returned admitted route is attempt state: later
+recovery reuses it and never re-reads mutable live profile values.
 
 Invoke through the canonical wrapper under the Node major declared in `scripts/toolchain/node-version.json`. Exactly one of `--worktree` (a
 supported proven-reuse target) or `--worktree-name` (a fresh setup path) is
