@@ -7435,6 +7435,11 @@ describe('Issue #2719 CLI and manager interpretation of primary and secondary re
     expect(execution.result).toMatchObject({
       ok: false, schema: PACK_GPT_REVIEW_RESULT_SCHEMA, claimRelease: { ok: true, outcome: 'released_for_retry' },
     });
+    if (row.ok === false) {
+      expect(execution.result).toMatchObject({
+        reason: 'head drifted after claim', runnerReason: 'head drifted after claim', httpStatus: 409,
+      });
+    }
     expect(classifyExecuteIssueManagerRecord(execution.result, reviewContext).exitCode).not.toBe(0);
   });
 

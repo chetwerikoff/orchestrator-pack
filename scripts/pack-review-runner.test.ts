@@ -1562,7 +1562,7 @@ describe('Issue #2719 primary start result with secondary claim release', () => 
     expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toEqual([]);
     const { execution, boundary } = await cliAndBoundary(first, { prNumber: 2719, issueNumber: 2719, headSha: HEAD });
     expect(execution).toMatchObject({ exitCode: 1, result: {
-      ok: false, runnerReason: first.reason, httpStatus: 409,
+      ok: false, outcome: 'review_not_started', reason: first.reason, runnerReason: first.reason, httpStatus: 409,
       claimRelease: { ok: true, outcome: 'released_for_retry' },
     } });
     expect(boundary.exitCode).toBe(3);

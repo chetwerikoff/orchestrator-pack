@@ -827,6 +827,12 @@ describe('execute-Issue manager boundary', () => {
         { ...reviewContext, productionArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'] },
         { ...reviewContext, productionArgv: ['node', 'scripts/flow-manager-long-running-child.ts', 'wait'] },
         { ...reviewContext, productionArgv: ['node', 'scripts/pack-gpt-review.ts', '--pr-number', '2099'] },
+        { ...reviewContext, productionArgv: ['node', 'scripts/pack-gpt-review.ts'] },
+        { ...reviewContext, productionArgv: ['node', 'scripts/pack-gpt-review.ts', '--pr-number', '2083', '--pr-number', '2099'] },
+        { ...reviewContext, productionArgv: ['node', 'scripts/foreign-wrapper.ts', 'scripts/pack-gpt-review.ts', '--pr-number', '2083'] },
+        { ...reviewContext, productionArgv: ['node', 'scripts/flow-manager-long-running-child.ts', '--child', 'scripts/pack-gpt-review.ts', '--pr-number', '2083'] },
+        { ...reviewContext, productionArgv: ['npm', 'run', 'foreign-review', '--', 'pack-gpt-review', '--pr-number', '2083'] },
+        { ...reviewContext, productionArgv: ['bash', '-c', 'npm run pack-gpt-review -- --pr-number 2083'] },
       ]) {
         for (const schema of [{}, { schema: PACK_GPT_REVIEW_RESULT_SCHEMA }]) {
           expect(classifyExecuteIssueManagerRecord({ ...settled, ...schema }, untrusted)).toMatchObject(contractDefect);
@@ -842,6 +848,9 @@ describe('execute-Issue manager boundary', () => {
         { ...smoke('PASS'), schema: TERMINAL_SCHEMA },
         { ...smoke('PASS'), schema: undefined, marker: 'pack-worker-smoke-report/v1', producer: 'foreign-producer/v1' },
         { ...settled, schema: PACK_GPT_REVIEW_RESULT_SCHEMA, producer: 'orchestrator-pack/worker-smoke-run/v1' },
+        { ...turn('ok'), marker: 'pack-worker-smoke-report/v1', producer: 'orchestrator-pack/worker-smoke-run/v1' },
+        { ...turn('ok'), producer: 'orchestrator-pack/worker-smoke-run/v1' },
+        { ...probe('not_found'), marker: 'pack-worker-smoke-report/v1' },
       ]) {
         for (const trusted of [context, reviewContext]) {
           expect(classifyExecuteIssueManagerRecord(record, trusted)).toMatchObject(contractDefect);

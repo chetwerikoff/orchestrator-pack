@@ -267,7 +267,11 @@ export async function runPackGptReviewCommand(
         created: result.created === true,
         reused: Boolean(result.reused),
         outcome: result.created === true ? 'review_not_settled' : 'review_not_started',
-        reason: result.created === true ? (publicationReason || runnerReason) : 'review_not_started',
+        // An acquired-claim refusal keeps its primary runner reason; the
+        // generic no-start classification stays in outcome.
+        reason: result.created === true
+          ? (publicationReason || runnerReason)
+          : result.claimRelease !== undefined ? runnerReason : 'review_not_started',
         runnerReason,
         prNumber,
         ...(trim(result.headSha) ? { headSha: trim(result.headSha) } : {}),

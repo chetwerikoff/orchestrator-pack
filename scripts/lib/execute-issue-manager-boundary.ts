@@ -856,21 +856,34 @@ function reviewRunnerExternalCause(reason: string): ManagerExternalPauseCause | 
   return null;
 }
 
-const PACK_REVIEW_PRODUCER_SCRIPTS = new Set(['scripts/pack-gpt-review.ts', 'scripts/pack-review-runner.ts']);
+const PACK_REVIEW_PRODUCER_SCRIPTS = ['scripts/pack-gpt-review.ts', 'scripts/pack-review-runner.ts'];
+
+function commandName(part: string | undefined): string {
+  return (part ?? '').split('/').pop() ?? '';
+}
 
 // Review authority comes from the manager's trusted phase and the argv it ran,
-// never from the producer record shape. A PR named in that argv must be the
-// trusted manager PR.
+// never from the producer record shape. The pack command must be the invoked
+// entrypoint (direct Node script or `npm run pack-gpt-review`), not an operand
+// of another command, and must name exactly the trusted manager PR.
 function trustedPackReviewContext(context: ExecuteIssueManagerBoundaryContext): boolean {
   if (context.phase !== 'review') return false;
   const argv = context.productionArgv.map(normalizeCommandToken);
-  const run = argv.indexOf('run');
-  const packReviewCommand = argv.some((part) => [...PACK_REVIEW_PRODUCER_SCRIPTS]
-    .some((script) => part === script || part.endsWith('/' + script)))
-    || (run > 0 && /(?:^|\/)npm$/u.test(argv[run - 1]!) && argv.slice(run + 1).includes('pack-gpt-review'));
+  let index = 1;
+  let packReviewCommand = false;
+  if (commandName(argv[0]) === 'node') {
+    while (argv[index]?.startsWith('--')) index += 1;
+    const entrypoint = argv[index] ?? '';
+    packReviewCommand = PACK_REVIEW_PRODUCER_SCRIPTS
+      .some((script) => entrypoint === script || entrypoint.endsWith('/' + script));
+  } else if (commandName(argv[0]) === 'npm' && argv[1] === 'run') {
+    index = 2;
+    while (argv[index]?.startsWith('--')) index += 1;
+    packReviewCommand = argv[index] === 'pack-gpt-review';
+  }
   if (!packReviewCommand) return false;
-  const prFlag = argv.indexOf('--pr-number');
-  return prFlag < 0 || argv[prFlag + 1] === String(context.prNumber);
+  const prFlags = argv.flatMap((part, at) => (part === '--pr-number' ? [at] : []));
+  return prFlags.length === 1 && argv[prFlags[0]! + 1] === String(context.prNumber);
 }
 
 function classifyReviewRunner(
@@ -963,13 +976,14 @@ export function classifyExecuteIssueManagerRecord(
   if (value.schema !== undefined && !SUPPORTED_PRODUCER_SCHEMAS.has(value.schema)) {
     return defect(context, 'execute-issue-manager-boundary', 'foreign or unknown producer schema: ' + text(value.schema));
   }
+  // Any worker-smoke identity field must agree with every other one before a
+  // schema-specific route (turn, probe, smoke or review) may see the record.
+  if (isWorkerSmokeRecord(value) && !consistentWorkerSmokeRecord(value)) {
+    return defect(context, 'execute-issue-manager-boundary', 'worker-smoke schema/marker/producer contradict each other');
+  }
   if (value.schema === 'turn-result/v1') return classifyTurn(value, context);
   if (value.schema === 'browser-gpt-page-probe/v1') return classifyProbe(value, context);
-  if (isWorkerSmokeRecord(value)) {
-    return consistentWorkerSmokeRecord(value)
-      ? classifyWorkerSmoke(value, context)
-      : defect(context, 'execute-issue-manager-boundary', 'worker-smoke schema/marker/producer contradict each other');
-  }
+  if (isWorkerSmokeRecord(value)) return classifyWorkerSmoke(value, context);
   if (!trustedPackReviewContext(context)) {
     return defect(context, 'execute-issue-manager-boundary', 'review-shaped record lacks trusted pack-review phase and production argv');
   }
