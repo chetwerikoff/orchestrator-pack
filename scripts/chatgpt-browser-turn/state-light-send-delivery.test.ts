@@ -3,7 +3,7 @@
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -50,7 +50,16 @@ import {
   RENDERED_STOP_BUTTON_SELECTOR,
 } from './product-page-selectors.ts';
 import { publishWitnessedStateLight429, readStateLightAccountCooldown, __testComposerMutation, __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
-import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
+import {
+  admitStateLightTurnObservation, bindStateLightOwnedTarget, readStateLightTurnObservation,
+  transitionStateLightTurnObservation,
+} from './state-light-turn-observation.ts';
+import {
+  __setStateLightPrAuthorHooksForTest, findOtherPrAuthorHolder, isExactLivePrAuthorLauncher,
+  prAuthorHeadEffect, prAuthorHeadMismatch, prelaunchPrAuthorOccupant, PR_AUTHOR_CANONICAL_ENTRY,
+  PR_AUTHOR_CANONICAL_LAUNCHER, PR_AUTHOR_HEAD_POLL_FLOOR_MS, scanPrAuthorCandidates,
+  type PrAuthorBinding, type PrAuthorHeadObservation, type PrAuthorProcessReader,
+} from './state-light-turn-base.ts';
 import { CONVERSATION_LOAD_ERROR_HEADING_SELECTOR, heldPage429Diagnostic, observeHeldPageConversation429 } from './ui-adapter-base.ts';
 import { runPostSendRecovery, takeRecoveryCensus, type PostSendRecoveryAdapter, type PostSendRecoveryState } from './state-light-turn-recovery.ts';
 import * as recoveryModule from './state-light-turn-recovery.ts';
@@ -3376,5 +3385,436 @@ describe('composer selector scope (#2694 follow-up)', () => {
     expect(matches({ ...cm, attrs: { ...cm.attrs, class: '' } }, COMPOSER_SELECTOR)).toBe(false);
     expect(matches(composer, COMPOSER_SELECTOR)).toBe(true);
     expect(matches(promptTextarea, COMPOSER_SELECTOR)).toBe(true);
+  });
+});
+
+// Issue #2718: PR-author SENDING claim, final same-PR scan and author effect.
+// A fake /proc reader stands in for Linux process identity; locators, receipts,
+// terminal envelopes and observation records are the real on-disk shapes.
+function prAuthorRaceFixture() {
+  const root = mkdtempSync(join(tmpdir(), 'opk-2718-'));
+  const terminalRoot = join(root, 'term');
+  vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+  vi.stubEnv('OPK_FM_LONG_CHILD_TEST_GATE', 'fixture-root-v1');
+  vi.stubEnv('OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT', terminalRoot);
+  mkdirSync(join(terminalRoot, 'browser-gpt-receipts'), { recursive: true, mode: 0o700 });
+  const profile = join(root, 'profile');
+  const cdp = 'http://127.0.0.1:9222';
+  const profileKey = configuredProfileKey(profile, cdp);
+  const binding: PrAuthorBinding = { repo: 'acme/widgets', pr: 7 };
+  const procs = new Map<number, { argv: string[]; startMs: number }>();
+  const reader: PrAuthorProcessReader = {
+    cmdline: (pid) => procs.get(pid)?.argv,
+    startTimeMs: (pid) => procs.get(pid)?.startMs,
+  };
+  let nextPid = 40_000;
+  let physicalSends = 0;
+  const turnArgv = (id: string, bound: PrAuthorBinding | undefined) => [
+    PR_AUTHOR_CANONICAL_ENTRY, 'turn', '--invocation-id', id, '--profile', profile, '--cdp', cdp,
+    '--timeout-ms', '600000', ...(bound ? ['--repo', bound.repo, '--pr', String(bound.pr)] : []),
+  ];
+  const launch = (id: string, options: {
+    startedAt?: number; processStartMs?: number; binding?: PrAuthorBinding | null; admit?: boolean;
+  } = {}) => {
+    const launcherPid = nextPid++;
+    const startedAt = options.startedAt ?? Date.now();
+    const bound = options.binding === null ? undefined : options.binding ?? binding;
+    procs.set(launcherPid, {
+      argv: ['node', '--experimental-strip-types', PR_AUTHOR_CANONICAL_LAUNCHER, 'launch',
+        '--invocation-id', id, '--profile', profile, '--cdp', cdp,
+        '--child-command', 'node', '--', '--experimental-strip-types', ...turnArgv(id, bound)],
+      startMs: options.processStartMs ?? startedAt - 250,
+    });
+    const receipt = join(terminalRoot, id + '.receipt.json');
+    const envelope = join(terminalRoot, id + '.terminal.json');
+    const identity = { run_identity: 'run-' + id, attempt_identity: 'attempt-' + id };
+    writeFileSync(receipt, JSON.stringify({
+      schema: 'flow-manager-long-running-child-handoff/v1', ...identity,
+      launcher_started_at: new Date(startedAt).toISOString(),
+      handoff_committed_at: new Date(startedAt).toISOString(),
+      completion_mode: 'browser-turn-result-v1', invocation_id: id, launcher_pid: launcherPid,
+    }));
+    writeFileSync(join(terminalRoot, 'browser-gpt-receipts',
+      createHash('sha256').update(id, 'utf8').digest('hex') + '.json'), JSON.stringify({
+      schema: 'flow-manager-long-running-child-locator/v1', invocation_id: id, ...identity,
+      handoff_receipt_path: receipt, terminal_envelope_path: envelope,
+    }));
+    if (options.admit !== false) admitStateLightTurnObservation({ profileKey, invocationId: id, marker: 'OPKTURNV1' + id });
+    return {
+      id,
+      launcherPid,
+      terminate: () => writeFileSync(envelope, JSON.stringify({
+        schema: 'flow-manager-long-running-child-terminal/v1', ...identity,
+      })),
+      killLauncher: () => { procs.delete(launcherPid); },
+      /** The surviving detached child is this test process (bind records owner_pid). */
+      survivingChild: () => {
+        procs.set(process.pid, { argv: ['node', '--experimental-strip-types', ...turnArgv(id, bound)], startMs: Date.now() });
+        bindStateLightOwnedTarget({
+          profileKey, invocationId: id, targetId: 'target-' + id, created: true, cdp,
+          initialRoute: 'https://chatgpt.com/',
+        });
+      },
+    };
+  };
+  // The PRE-SEND order of the production gate: persist SENDING, then final scan.
+  const claim = (id: string) => transitionStateLightTurnObservation({
+    profileKey, invocationId: id, phase: 'sending', reason: 'pr_author_send_claim:acme/widgets#7',
+  });
+  const finalScan = (id: string, nowMs?: number) => findOtherPrAuthorHolder({
+    binding, profileKey, ownInvocationId: id, reader, ...(nowMs !== undefined ? { nowMs } : {}),
+  });
+  const physicalSend = (id: string) => {
+    physicalSends += 1;
+    transitionStateLightTurnObservation({ profileKey, invocationId: id, phase: 'dispatching', reason: 'dispatch_boundary_entered' });
+    transitionStateLightTurnObservation({
+      profileKey, invocationId: id, phase: 'sent_unharvested', reason: 'owned_marker_observed',
+      sendCount: 1, sendWitness: 'numeric_send_count',
+    });
+  };
+  const refuse = (id: string) => transitionStateLightTurnObservation({
+    profileKey, invocationId: id, phase: 'not_sent', reason: 'terminal_pre_send',
+    sendCount: 0, sendWitness: 'numeric_send_count',
+  });
+  return {
+    root, profile, cdp, profileKey, binding, procs, reader, launch, claim, finalScan, physicalSend, refuse,
+    sends: () => physicalSends,
+    cleanup: () => { rmSync(root, { recursive: true, force: true }); },
+  };
+}
+
+describe('Issue #2718 PR-author SENDING claim and final same-PR scan', () => {
+  let fixture: ReturnType<typeof prAuthorRaceFixture>;
+  beforeEach(() => { fixture = prAuthorRaceFixture(); });
+  afterEach(() => {
+    fixture.cleanup();
+    vi.unstubAllEnvs();
+  });
+
+  it('identifies only the exact live launcher by canonical argv, invocation, pair and normalized starttime', () => {
+    const a = fixture.launch('inv-a', { startedAt: 1_000_000_000 });
+    const exact = { pid: a.launcherPid, invocationId: 'inv-a', launcherStartedAt: new Date(1_000_000_000).toISOString(), binding: fixture.binding, reader: fixture.reader };
+    expect(isExactLivePrAuthorLauncher(exact)).toBe(true);
+    expect(isExactLivePrAuthorLauncher({ ...exact, binding: { repo: 'acme/widgets', pr: 8 } })).toBe(false);
+    expect(isExactLivePrAuthorLauncher({ ...exact, binding: { repo: 'other/widgets', pr: 7 } })).toBe(false);
+    expect(isExactLivePrAuthorLauncher({ ...exact, invocationId: 'inv-other' })).toBe(false);
+    // PID reuse: a process started long before (or after) the receipt is not this launcher.
+    fixture.procs.get(a.launcherPid)!.startMs = 1_000_000_000 - 600_000;
+    expect(isExactLivePrAuthorLauncher(exact)).toBe(false);
+    fixture.procs.get(a.launcherPid)!.startMs = 1_000_000_000 + 30_000;
+    expect(isExactLivePrAuthorLauncher(exact)).toBe(false);
+    a.killLauncher();
+    expect(isExactLivePrAuthorLauncher(exact)).toBe(false);
+  });
+
+  it('ignores unbound, other-PR and other-repository launchers and terminal invocations', () => {
+    fixture.launch('inv-unbound', { binding: null });
+    fixture.launch('inv-other-pr', { binding: { repo: 'acme/widgets', pr: 8 } });
+    fixture.launch('inv-other-repo', { binding: { repo: 'other/widgets', pr: 7 } });
+    const done = fixture.launch('inv-done');
+    // Other bindings record their own claim reason; an unbound turn never claims.
+    fixture.physicalSend('inv-unbound');
+    for (const [id, reason] of [['inv-other-pr', 'acme/widgets#8'], ['inv-other-repo', 'other/widgets#7']] as const) {
+      transitionStateLightTurnObservation({
+        profileKey: fixture.profileKey, invocationId: id, phase: 'sending', reason: 'pr_author_send_claim:' + reason,
+      });
+    }
+    fixture.claim('inv-done');
+    done.terminate();
+    fixture.launch('inv-a');
+    fixture.claim('inv-a');
+    expect(scanPrAuthorCandidates({ binding: fixture.binding, profileKey: fixture.profileKey, reader: fixture.reader })
+      .map((candidate) => candidate.invocationId)).toEqual(['inv-a']);
+    expect(fixture.finalScan('inv-a')).toBeUndefined();
+  });
+
+  it('F3: both exact launchers live with no terminal through both final scans => both refuse, zero SEND', () => {
+    fixture.launch('inv-a');
+    fixture.launch('inv-b');
+    fixture.claim('inv-a');
+    fixture.claim('inv-b');
+    expect(fixture.finalScan('inv-a')).toMatchObject({ holding: true, invocationId: 'inv-b', phase: 'sending' });
+    fixture.refuse('inv-a');
+    // A refused but stays live without its terminal envelope: its claim still holds.
+    expect(fixture.finalScan('inv-b')).toMatchObject({ holding: true, invocationId: 'inv-a', phase: 'not_sent' });
+    fixture.refuse('inv-b');
+    expect(fixture.sends()).toBe(0);
+  });
+
+  it('A terminal before B final scan => B may SEND exactly once', () => {
+    const a = fixture.launch('inv-a');
+    fixture.launch('inv-b');
+    fixture.claim('inv-a');
+    fixture.claim('inv-b');
+    expect(fixture.finalScan('inv-a')?.invocationId).toBe('inv-b');
+    fixture.refuse('inv-a');
+    a.terminate();
+    expect(fixture.finalScan('inv-b')).toBeUndefined();
+    fixture.physicalSend('inv-b');
+    expect(fixture.sends()).toBe(1);
+  });
+
+  it('Z/A: Z passes its scan and pauses; A claims later and refuses naming Z; Z sends once', () => {
+    fixture.launch('inv-z');
+    fixture.launch('inv-a');
+    fixture.claim('inv-z');
+    // A is live but only prepared: not a claim.
+    expect(fixture.finalScan('inv-z')).toBeUndefined();
+    fixture.claim('inv-a');
+    expect(fixture.finalScan('inv-a')).toMatchObject({ invocationId: 'inv-z', phase: 'sending' });
+    fixture.refuse('inv-a');
+    fixture.physicalSend('inv-z');
+    expect(fixture.sends()).toBe(1);
+  });
+
+  it('B-already-sent and coherent two-visible: a live sender retains its claim until its terminal', () => {
+    const b = fixture.launch('inv-b');
+    fixture.launch('inv-a');
+    fixture.claim('inv-b');
+    expect(fixture.finalScan('inv-b')).toBeUndefined();
+    fixture.physicalSend('inv-b');
+    fixture.claim('inv-a');
+    expect(fixture.finalScan('inv-a')).toMatchObject({ invocationId: 'inv-b', phase: 'sent_unharvested' });
+    fixture.refuse('inv-a');
+    b.terminate();
+    expect(fixture.sends()).toBe(1);
+  });
+
+  it('earlier-start A with late publication refuses on later-start B that already claimed and sent', () => {
+    const now = Date.now();
+    fixture.launch('inv-b', { startedAt: now });
+    fixture.claim('inv-b');
+    expect(fixture.finalScan('inv-b')).toBeUndefined();
+    fixture.physicalSend('inv-b');
+    fixture.launch('inv-a', { startedAt: now - 20_000 });
+    fixture.claim('inv-a');
+    expect(fixture.finalScan('inv-a')).toMatchObject({ invocationId: 'inv-b' });
+    expect(fixture.sends()).toBe(1);
+  });
+
+  it('a missing or unreadable observation of an exact live candidate refuses', () => {
+    fixture.launch('inv-b', { admit: false });
+    fixture.launch('inv-a');
+    fixture.claim('inv-a');
+    expect(fixture.finalScan('inv-a')).toMatchObject({ invocationId: 'inv-b', phase: 'observation_unreadable' });
+  });
+
+  it('orphan SIGKILL: dead launcher with surviving child holds before deadline; orphan sends once', () => {
+    const a = fixture.launch('inv-a');
+    fixture.launch('inv-b');
+    a.survivingChild();
+    fixture.claim('inv-a');
+    expect(fixture.finalScan('inv-a')).toBeUndefined();
+    a.killLauncher();
+    fixture.claim('inv-b');
+    expect(fixture.finalScan('inv-b')).toMatchObject({ holding: true, invocationId: 'inv-a', phase: 'sending' });
+    fixture.refuse('inv-b');
+    fixture.physicalSend('inv-a');
+    expect(fixture.sends()).toBe(1);
+  });
+
+  it('dead PID SENDING holds before the original deadline and releases only after it elapsed', () => {
+    const b = fixture.launch('inv-b');
+    fixture.launch('inv-a');
+    fixture.claim('inv-b');
+    b.killLauncher();
+    fixture.claim('inv-a');
+    expect(fixture.finalScan('inv-a')).toMatchObject({ invocationId: 'inv-b', phase: 'sending' });
+    const claimedAt = Date.parse(readStateLightTurnObservation(fixture.profileKey, 'inv-b').transitioned_at);
+    expect(fixture.finalScan('inv-a', claimedAt + 7_200_001)).toBeUndefined();
+    // A SENDING claim recorded for a different PR is not attributable here.
+    const c = fixture.launch('inv-c');
+    transitionStateLightTurnObservation({
+      profileKey: fixture.profileKey, invocationId: 'inv-c', phase: 'sending', reason: 'pr_author_send_claim:acme/widgets#8',
+    });
+    c.killLauncher();
+    expect(fixture.finalScan('inv-a', claimedAt + 7_200_001)).toBeUndefined();
+  });
+
+  it('prelaunch zero-tab fast path reports any live same-PR launcher', () => {
+    expect(prelaunchPrAuthorOccupant({ binding: fixture.binding, profileKey: fixture.profileKey, reader: fixture.reader })).toBeUndefined();
+    fixture.launch('inv-b');
+    expect(prelaunchPrAuthorOccupant({ binding: fixture.binding, profileKey: fixture.profileKey, reader: fixture.reader })).toBe('inv-b');
+  });
+});
+
+describe('Issue #2718 PR head admission and in-flight author effect', () => {
+  const send: PrAuthorHeadObservation = {
+    state: 'open', sha: 'a'.repeat(40), headRepo: 'acme/widgets', headRef: 'feature', baseRepo: 'acme/widgets',
+  };
+  const binding: PrAuthorBinding = { repo: 'acme/widgets', pr: 7 };
+
+  it('admits only an OPEN PR whose head repository/ref is the worktree branch', () => {
+    expect(prAuthorHeadMismatch(send, binding, 'feature')).toBeUndefined();
+    expect(prAuthorHeadMismatch(undefined, binding, 'feature')).toBe('pr_author_pr_unreadable');
+    expect(prAuthorHeadMismatch({ ...send, state: 'closed' }, binding, 'feature')).toBe('pr_author_pr_not_open');
+    expect(prAuthorHeadMismatch({ ...send, baseRepo: 'other/widgets' }, binding, 'feature')).toBe('pr_author_pr_repository_mismatch');
+    expect(prAuthorHeadMismatch({ ...send, headRepo: 'fork/widgets' }, binding, 'feature')).toBe('pr_author_head_repository_mismatch');
+    expect(prAuthorHeadMismatch(send, binding, 'other-branch')).toBe('pr_author_head_ref_mismatch');
+    expect(prAuthorHeadMismatch(send, binding, undefined)).toBe('pr_author_head_ref_mismatch');
+  });
+
+  it('qualifies only same OPEN PR, repo and ref head movement; failures are no effect', () => {
+    expect(prAuthorHeadEffect(send, { ...send, sha: 'b'.repeat(40) })).toBe(true);
+    expect(prAuthorHeadEffect(send, send)).toBe(false);
+    expect(prAuthorHeadEffect(send, undefined)).toBe(false);
+    expect(prAuthorHeadEffect(send, { ...send, sha: 'b'.repeat(40), state: 'closed' })).toBe(false);
+    expect(prAuthorHeadEffect(send, { ...send, sha: 'b'.repeat(40), headRef: 'retargeted' })).toBe(false);
+    expect(prAuthorHeadEffect(send, { ...send, sha: 'b'.repeat(40), headRepo: 'fork/widgets' })).toBe(false);
+    expect(prAuthorHeadEffect(send, { ...send, sha: 'b'.repeat(40), baseRepo: 'other/widgets' })).toBe(false);
+    expect(PR_AUTHOR_HEAD_POLL_FLOOR_MS).toBeGreaterThan(0);
+  });
+});
+
+describe('Issue #2718 PR-author PRE-SEND gate in the production turn', () => {
+  let fixture: ReturnType<typeof prAuthorRaceFixture>;
+  beforeEach(() => { fixture = prAuthorRaceFixture(); });
+  afterEach(() => {
+    __setStateLightPrAuthorHooksForTest(undefined);
+    fixture.cleanup();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    mocks.browserQueue.length = 0;
+  });
+
+  async function runBoundTurn(invocationId: string, readHead = async () => ({
+    state: 'open', sha: 'c'.repeat(40), headRepo: 'acme/widgets', headRef: 'feature', baseRepo: 'acme/widgets',
+  } as PrAuthorHeadObservation | undefined), deliverOnEnter = false) {
+    const chatUrl = 'https://chatgpt.com/c/27182718-2718-4718-8718-271827182718';
+    let now = Date.now();
+    let composerText = '';
+    const messages = [
+      { role: 'user', text: 'historical user', key: 'user-key-2718' },
+      { role: 'assistant', text: 'historical reply', key: 'assistant-key-2718' },
+    ];
+    const press = vi.fn(async () => {
+      if (!deliverOnEnter) return;
+      messages.push({ role: 'user', text: composerText, key: 'user-key-2718-own' });
+      composerText = '';
+    });
+    const click = vi.fn(async () => undefined);
+    const fill = vi.fn(async (value: string) => { composerText = value; });
+    const composer = scalarLocator({
+      count: async () => 1,
+      fill,
+      innerText: async () => composerText,
+      evaluate: async (
+        callback: (element: unknown, arg?: unknown) => unknown, arg?: unknown, options?: { timeout?: number },
+      ) => {
+        if (options?.timeout !== undefined) return true;
+        const element: any = {
+          isConnected: true, isContentEditable: true,
+          classList: { contains: () => false }, getAttribute: () => null,
+          getClientRects: () => [{}],
+          getBoundingClientRect: () => ({ width: 280, height: 30 }),
+          get textContent() { return composerText; },
+          get innerText() { return composerText; },
+        };
+        element.ownerDocument = {
+          querySelectorAll: (selector: string) => selector === COMPOSER_SELECTOR ? [element] : [],
+          defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible' }) },
+        };
+        return callback(element, arg);
+      },
+      press,
+    });
+    const messageNodes = {
+      ...collectionLocator(messages as any[]),
+      evaluateAll: vi.fn(async () => ({
+        rows: messages.map((message, domIndex) => ({
+          role: message.role, text: message.text, key: message.key, domIndex,
+          complete: true, completionReady: false, continuationVisible: false,
+        })),
+        pageTurnEvidence: { generationInProgress: false, observedAssistantNodes: 1, continueGeneratingVisible: false },
+      })),
+    };
+    const page = {
+      __fakeBrowserGptPage: true,
+      url: () => chatUrl,
+      isClosed: () => false,
+      goto: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      waitForTimeout: vi.fn(async (ms: number) => { now += ms; }),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => 0, click });
+        if (selector === MESSAGE_NODE_SELECTOR) return messageNodes;
+        return scalarLocator();
+      }),
+    };
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const browserFixture = enqueueBrowserForTurn(mocks, page);
+    Object.assign(browserFixture.context, { pages: () => [page] });
+    __setStateLightPrAuthorHooksForTest({ readHead, readBranch: async () => 'feature', reader: fixture.reader });
+    const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      '--profile', fixture.profile, '--cdp', fixture.cdp, '--input', join(fixture.root, 'synthetic-input'),
+      '--output', join(fixture.root, invocationId + '.txt'), '--chat-url', chatUrl,
+      '--invocation-id', invocationId, '--timeout-ms', '180000', '--repo', 'acme/widgets', '--pr', '7',
+    ]);
+    return { result, press, click, fill, page };
+  }
+
+  it('reports ok/author_effect_pr_head_changed without output when the bound PR head moves after SEND', async () => {
+    fixture.launch('inv-effect', { admit: false });
+    const head = (sha: string): PrAuthorHeadObservation => ({
+      state: 'open', sha, headRepo: 'acme/widgets', headRef: 'feature', baseRepo: 'acme/widgets',
+    });
+    let reads = 0;
+    // Gate and dispatch read S; the first post-SEND poll fails (no effect); later polls see T.
+    const readHead = vi.fn(async () => {
+      reads += 1;
+      if (reads <= 2) return head('c'.repeat(40));
+      if (reads === 3) return undefined;
+      return head('d'.repeat(40));
+    });
+    const { result, press, page } = await runBoundTurn('inv-effect', readHead, true);
+    expect(press).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      state: 'ok', cause: 'author_effect_pr_head_changed', send_attempted: true, send_count: 1,
+    });
+    expect(result.next_action).toContain('Inspect the PR');
+    expect(result).not.toHaveProperty('output');
+    expect(existsSync(join(fixture.root, 'inv-effect.txt'))).toBe(false);
+    expect(page.close).not.toHaveBeenCalled();
+    expect(reads).toBeGreaterThanOrEqual(4);
+  });
+
+  it('refuses conversation_busy/pr_author_occupied naming the holder, with zero composer mutation or SEND', async () => {
+    fixture.launch('inv-holder');
+    fixture.claim('inv-holder');
+    fixture.launch('inv-self', { admit: false });
+    const { result, press, click, fill } = await runBoundTurn('inv-self');
+    expect(result).toMatchObject({
+      state: 'conversation_busy', cause: 'pr_author_occupied', send_count: 0, send_attempted: false,
+      send_slot_holder_invocation_id: 'inv-holder', next_action: 'retry only after that turn ends',
+    });
+    expect(click).not.toHaveBeenCalled();
+    expect(press).not.toHaveBeenCalled();
+    expect(fill).not.toHaveBeenCalled();
+    expect(readStateLightTurnObservation(fixture.profileKey, 'inv-self').phase).toBe('not_sent');
+  });
+
+  it('refuses pr_author_self_record_not_visible when its own locator/receipt is absent', async () => {
+    const { result, click, press } = await runBoundTurn('inv-invisible');
+    expect(result).toMatchObject({ cause: 'pr_author_self_record_not_visible', send_count: 0, send_attempted: false });
+    expect(click).not.toHaveBeenCalled();
+    expect(press).not.toHaveBeenCalled();
+  });
+
+  it('refuses before dispatch when the fresh PRE-SEND REST read is unreadable', async () => {
+    fixture.launch('inv-rest', { admit: false });
+    const { result, click, press } = await runBoundTurn('inv-rest', async () => undefined);
+    expect(result).toMatchObject({ cause: 'pr_author_pr_unreadable', send_count: 0, send_attempted: false });
+    expect(click).not.toHaveBeenCalled();
+    expect(press).not.toHaveBeenCalled();
+  });
+
+  it('rejects a partial --repo/--pr pair as input_invalid before any browser work', async () => {
+    const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      '--profile', fixture.profile, '--cdp', fixture.cdp, '--input', join(fixture.root, 'synthetic-input'),
+      '--output', join(fixture.root, 'partial.txt'), '--chat-url', 'https://chatgpt.com/c/27182718-2718-4718-8718-271827182718',
+      '--invocation-id', 'inv-partial', '--repo', 'acme/widgets',
+    ]);
+    expect(result).toMatchObject({ state: 'input_invalid', cause: 'pr_author_binding_pair_partial', send_count: 0 });
   });
 });

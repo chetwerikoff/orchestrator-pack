@@ -188,3 +188,118 @@ describe('Issue #2494 executable state-light turn terminal/exit', () => {
     },
   );
 });
+
+// #2718 AC5/6: a real running state-light turn child receives OS SIGTERM at a
+// deterministic observation phase. The exact-target retirement seam counts
+// guarded close attempts; its CDP guard itself is covered in tab-lifecycle.test.ts.
+const baseUrl = pathToFileURL(join(import.meta.dirname, 'state-light-turn-base.ts')).href;
+const observationUrl = pathToFileURL(join(import.meta.dirname, 'state-light-turn-observation.ts')).href;
+const storageUrl = pathToFileURL(join(import.meta.dirname, 'storage-common.ts')).href;
+const sigtermFixture = [
+  'import { appendFileSync, writeFileSync } from "node:fs";',
+  'import { join } from "node:path";',
+  'import { runStateLightTurn, __setStateLightSignalRetirementForTest } from ' + JSON.stringify(baseUrl) + ';',
+  'import { admitStateLightTurnObservation, bindStateLightOwnedTarget, transitionStateLightTurnObservation } from ' + JSON.stringify(observationUrl) + ';',
+  'import { configuredProfileKey } from ' + JSON.stringify(storageUrl) + ';',
+  'const [phase, retire, root] = process.argv.slice(1);',
+  'const profile = join(root, "profile"); const cdp = "http://127.0.0.1:9222"; const invocationId = "inv-2718-sigterm";',
+  'const profileKey = configuredProfileKey(profile, cdp);',
+  'admitStateLightTurnObservation({ profileKey, invocationId, marker: "OPKTURNV1sigterm" });',
+  'bindStateLightOwnedTarget({ profileKey, invocationId, targetId: "target-2718", created: true, cdp, initialRoute: "https://chatgpt.com/" });',
+  'if (phase === "not_sent") transitionStateLightTurnObservation({ profileKey, invocationId, phase: "not_sent", reason: "terminal_pre_send", sendCount: 0, sendWitness: "numeric_send_count" });',
+  'if (phase === "dispatching" || phase === "sent_unharvested") transitionStateLightTurnObservation({ profileKey, invocationId, phase: "dispatching", reason: "dispatch_boundary_entered" });',
+  'if (phase === "sent_unharvested") transitionStateLightTurnObservation({ profileKey, invocationId, phase: "sent_unharvested", reason: "owned_marker_observed", sendCount: 1, sendWitness: "numeric_send_count" });',
+  '__setStateLightSignalRetirementForTest(async () => {',
+  '  appendFileSync(join(root, "close-attempts"), "close\\n");',
+  '  if (retire === "hung") return new Promise(() => {});',
+  '  return { status: "confirmed", targetId: "target-2718" };',
+  '});',
+  'const code = await runStateLightTurn(["--profile", profile, "--cdp", cdp, "--invocation-id", invocationId], {',
+  // Keep the event loop alive like a real browser turn; only SIGTERM ends it.
+  '  runTurn: async () => { setInterval(() => {}, 1000); writeFileSync(join(root, "barrier"), "running"); return new Promise(() => {}); },',
+  '});',
+  'process.exit(code);',
+].join('\n');
+
+async function sigtermAtPhase(phase: string, retire: 'confirm' | 'hung') {
+  const root = mkdtempSync(join(tmpdir(), 'opk-2718-sigterm-'));
+  let pid: number | undefined;
+  const began = Date.now();
+  const child = runProcess({
+    command: process.execPath,
+    args: ['--experimental-strip-types', '--input-type=module', '--eval', sigtermFixture, phase, retire, root],
+    cwd: resolve(import.meta.dirname, '../..'),
+    env: { ...process.env, CHATGPT_BROWSER_TURN_STATE_DIR: join(root, 'state'), ORCA_TERMINAL_HANDLE: '', NODE_OPTIONS: '' },
+    inheritParentEnv: false,
+    timeoutMs: 20_000,
+    onSpawn: (spawned) => { pid = spawned; },
+  });
+  try {
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(join(root, 'barrier'))) {
+      if (Date.now() >= deadline) throw new Error('fixture_barrier_timeout');
+      await new Promise((done) => setTimeout(done, 10));
+    }
+    process.kill(pid!, 'SIGTERM');
+    await new Promise((done) => setTimeout(done, 20));
+    try { process.kill(pid!, 'SIGTERM'); } catch { /* already exited */ }
+    const result = await child;
+    const closes = existsSync(join(root, 'close-attempts'))
+      ? readFileSync(join(root, 'close-attempts'), 'utf8').trim().split('\n').length : 0;
+    return { result, closes, elapsedMs: Date.now() - began, root };
+  } catch (error) {
+    if (pid) try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+    await child.catch(() => undefined);
+    rmSync(root, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+describe('Issue #2718 real state-light SIGTERM finalizer', () => {
+  it('safe not_sent: repeated SIGTERM performs exactly one guarded close and exits bounded', async () => {
+    const { result, closes, elapsedMs, root } = await sigtermAtPhase('not_sent', 'confirm');
+    try {
+      expect(result.outcome, result.stderr).toBe('exit');
+      expect(result.exitCode).toBe(13);
+      expect(closes).toBe(1);
+      const records = result.stdout.trimEnd().split('\n');
+      expect(records).toHaveLength(1);
+      expect(JSON.parse(records[0]!)).toMatchObject({
+        schema: 'turn-result/v1', cause: 'terminated_by_sigterm', send_count: 0, cleanup: 'confirmed',
+        owned_target_id: 'target-2718',
+      });
+      expect(JSON.parse(records[0]!)).not.toHaveProperty('cleanup_status');
+      expect(elapsedMs).toBeLessThan(15_000);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }, 30_000);
+
+  it.each(['prepared', 'dispatching', 'sent_unharvested'])(
+    'unsafe %s: preserves the Page with cleanup_unconfirmed and no close attempt', async (phase) => {
+      const { result, closes, root } = await sigtermAtPhase(phase, 'confirm');
+      try {
+        expect(result.outcome, result.stderr).toBe('exit');
+        expect(closes).toBe(0);
+        const records = result.stdout.trimEnd().split('\n');
+        expect(records).toHaveLength(1);
+        const record = JSON.parse(records[0]!);
+        expect(record).toMatchObject({
+          cause: 'terminated_by_sigterm', cleanup: 'unconfirmed', cleanup_status: 'cleanup_unconfirmed',
+          owned_target_id: 'target-2718',
+        });
+        if (phase === 'prepared') expect(record).not.toHaveProperty('send_attempted');
+        else expect(record.send_attempted).toBe(true);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    }, 30_000);
+
+  it('a hung guarded close still exits within the cleanup bound as cleanup_unconfirmed', async () => {
+    const { result, closes, elapsedMs, root } = await sigtermAtPhase('not_sent', 'hung');
+    try {
+      expect(result.outcome, result.stderr).toBe('exit');
+      expect(closes).toBe(1);
+      expect(JSON.parse(result.stdout.trimEnd())).toMatchObject({
+        cleanup: 'unconfirmed', cleanup_status: 'cleanup_unconfirmed',
+      });
+      expect(elapsedMs).toBeLessThan(15_000);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }, 30_000);
+});

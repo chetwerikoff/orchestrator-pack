@@ -72,6 +72,22 @@ Normal manager adapter:
 npm run --silent flow-manager-browser-gpt-long-run --   --run-identity <run>   --attempt-identity <attempt>   --handoff-receipt <path>   --invocation-id <id>   --terminal-envelope <path-ending-in-terminal.json>   --output <path>   --profile <profile>   --cdp <url>   --input <prompt-file>   --cwd <worktree>   [--project-url <url> --new-chat | --chat-url <url>]
 ```
 
+PR-author-only variant (a PR author whose turn may push to an existing OPEN PR;
+Issue authors and reviewers keep the normal command above):
+
+```text
+npm run --silent flow-manager-browser-gpt-long-run --   --run-identity <run>   --attempt-identity <attempt>   --handoff-receipt <path>   --invocation-id <id>   --terminal-envelope <path-ending-in-terminal.json>   --output <path>   --profile <profile>   --cdp <url>   --input <prompt-file>   --cwd <worktree>   --repo <owner/repo> --pr <number>   [--project-url <url> --new-chat | --chat-url <url>]
+```
+
+`--repo` and `--pr` are one pair: pass both or neither. With the pair, the
+explicit `--cwd <worktree>` branch must be the head ref of the OPEN PR in the
+selected project card repository. A second author of the same PR is refused
+with `conversation_busy` / `pr_author_occupied` and nothing is sent; retry only
+after that turn ends. When the PR head changes during the turn, the result is
+`ok` with `cause: author_effect_pr_head_changed` and no `--output` reply:
+inspect the PR. One project card per repository is assumed; a SEND by an
+orphaned child after its turn deadline is a named residual, not prevented.
+
 The adapter returns after launcher handoff is proven; that is not proof of a
 model reply or workflow-level completion.
 
