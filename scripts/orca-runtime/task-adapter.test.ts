@@ -666,6 +666,7 @@ describe('OpenCode HTTP control plane', () => {
     ['opencode', 'opencode'],
     ['cursor', 'non-opencode'],
     ['claude', 'non-opencode'],
+    ['Claude', 'non-opencode'],
   ] as const)('uses terminal agentIdentity %s when command metadata is absent', (agentIdentity, family) => {
     const terminal = {
       handle: 'term-family-agent-identity',
@@ -685,7 +686,7 @@ describe('OpenCode HTTP control plane', () => {
       runtime: 'orca',
       id: terminal.handle,
       generation: terminal.incarnationId,
-    })).toMatchObject({ status: 'known', family, provenance: 'orca-terminal-show' });
+    })).toEqual({ status: 'known', family, command: '', agentIdentity, provenance: 'orca-terminal-show' });
   });
 
   it('rejects stale terminal-show generation evidence', () => {
@@ -717,6 +718,7 @@ describe('OpenCode HTTP control plane', () => {
       incarnationId: 'generation-family-cursor',
       worktreePath: process.cwd(),
       title: 'cursor',
+      agentIdentity: 'cursor',
       command: 'cursor-agent --resume fixture',
       status: 'running' as const,
     };
@@ -731,6 +733,7 @@ describe('OpenCode HTTP control plane', () => {
       status: 'known',
       family: 'non-opencode',
       command: terminal.command,
+      agentIdentity: terminal.agentIdentity,
       provenance: 'orca-terminal-show',
     });
   });

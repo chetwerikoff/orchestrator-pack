@@ -4960,6 +4960,8 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     effort: string,
     options: {
       readonly commandOverride?: string;
+      readonly commandObserved?: boolean;
+      readonly agentIdentity?: string | null;
       readonly modelOverride?: string;
       readonly effortOverride?: string;
       readonly source?: 'screen' | 'stream';
@@ -4976,7 +4978,8 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       ...runtimeAdapter({ onSpawn: options.onSpawn }),
       observeComposerFamily: () => ({
         status: 'known', family: 'non-opencode', provenance: 'orca-terminal-show',
-        command: options.commandOverride ?? command,
+        command: options.commandOverride ?? (options.commandObserved ? command : ''),
+        ...(options.agentIdentity === null ? {} : { agentIdentity: options.agentIdentity ?? 'claude' }),
       }),
       readBoundedOutputAsync: async ({ worker: identity, screen }) => {
         readCount += 1;
@@ -5269,6 +5272,39 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     expect(reads).toBe(4);
     expect(elapsedMs).toBe(LAUNCH_STARTUP_OBSERVATION_WINDOW_MS);
     expect(starts).toBe(0);
+  });
+
+  it('admits exact native Claude identity without a command, but refuses foreign or missing identity', async () => {
+    const env = claudeEnv('claude-opus-5-5', 'medium');
+    const profile = resolveExecutorProfile('manager', env, 'exact_terminal_worktree');
+    if (profile.status !== 'ok') throw new Error('Claude fixture profile refused');
+    const command = profile.value.launchCommand;
+    const native = observedClaudeAdapter(command, 'Opus', 'medium');
+    expect(native.observeComposerFamily?.(worker.identity)).toMatchObject({
+      status: 'known', command: '', agentIdentity: 'claude',
+    });
+    expect(await claudePaneProfileObserved(profile.value, worker, native)).toBe(true);
+    for (const agentIdentity of ['cursor', 'opencode', 'Claude', ' claude', null] as const) {
+      let reads = 0;
+      const adapter = observedClaudeAdapter(command, 'Opus', 'medium', {
+        agentIdentity, onRead: () => { reads += 1; },
+      });
+      expect(await claudePaneProfileObserved(profile.value, worker, adapter)).toBe(false);
+      expect(reads).toBe(0);
+    }
+  });
+
+  it('preserves command-present equality without requiring native agentIdentity', async () => {
+    const env = claudeEnv('claude-opus-5-5', 'medium');
+    const profile = resolveExecutorProfile('manager', env, 'exact_terminal_worktree');
+    if (profile.status !== 'ok') throw new Error('Claude fixture profile refused');
+    const command = profile.value.launchCommand;
+    expect(await claudePaneProfileObserved(profile.value, worker,
+      observedClaudeAdapter(command, 'Opus', 'medium', { commandObserved: true, agentIdentity: null }))).toBe(true);
+    expect(await claudePaneProfileObserved(profile.value, worker,
+      observedClaudeAdapter(command, 'Opus', 'medium', {
+        commandOverride: 'claude --model wrong --effort medium', agentIdentity: 'claude',
+      }))).toBe(false);
   });
 
   it('refuses missing or stale native Claude screen/command/model/effort before Dispatch', async () => {

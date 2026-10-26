@@ -675,9 +675,9 @@ function retryProviderArgs(profile: ExecutorProfile): string[] {
 
 /**
  * Claude readiness is observed on the exact native pane, not inferred from
- * argv, a terminal title, or generic idle liveness. The native terminal-show
- * command proves the selected launch command and a screen snapshot must show
- * Claude Code with both selected model and effort in the footer.
+ * argv, a terminal title, or generic idle liveness. A present terminal-show
+ * command must match the launch command; without it, the native agentIdentity
+ * must be exactly claude. Model and effort are proven only by the screen footer.
  */
 export async function claudePaneProfileObserved(
   profile: ExecutorProfile,
@@ -687,7 +687,9 @@ export async function claudePaneProfileObserved(
   if (profile.family !== 'claude' || !profile.model || !profile.effort) return false;
   const observed = adapter.observeComposerFamily?.(worker.identity);
   if (!observed || observed.status !== 'known' || observed.family !== 'non-opencode'
-    || observed.command !== profile.launchCommand) return false;
+    || (observed.command
+      ? observed.command !== profile.launchCommand
+      : observed.agentIdentity !== 'claude')) return false;
   // The existing Orca async screen-read seam revalidates this composite
   // generation while keeping this supervised launch path non-blocking.
   if (!adapter.readBoundedOutputAsync) return false;
