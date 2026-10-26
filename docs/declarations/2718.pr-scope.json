@@ -38,5 +38,5 @@
     "scripts/flow-manager-browser-gpt-long-run.ts",
     "scripts/flow-manager-long-running-child.test.ts"
   ],
-  "source_revision": "8fa126400ff6fbc33ac29da6957ccfcb103b8146"
+  "source_revision": "fccb0e3b9f74e579ef0c3b5f9c7b9db9794f4355"
 }
