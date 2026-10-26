@@ -131,9 +131,32 @@ export async function readRecoveryAuthoritativeUserMessages(
     return { messages: [], incomplete: true };
   }
 
+  // ChatGPT keeps a display:none Workspace copy of the open conversation. An
+  // unrendered row is that copy only when a rendered row has its unit key and
+  // exact textContent; any other hidden row still counts.
+  let mirrors: unknown;
+  if (typeof users.evaluateAll === 'function') {
+    try {
+      mirrors = await users.evaluateAll((nodes: Element[]) => nodes.map((node) => {
+        if (node.getClientRects().length > 0) return false;
+        const key = node.getAttribute('data-chatgpt-search-unit-key');
+        return key !== null && nodes.some((peer) => peer !== node
+          && peer.getClientRects().length > 0
+          && peer.getAttribute('data-chatgpt-search-unit-key') === key
+          && peer.textContent === node.textContent);
+      }));
+    } catch {
+      return { messages: [], incomplete: true };
+    }
+    if (!Array.isArray(mirrors) || mirrors.length !== count) {
+      return { messages: [], incomplete: true };
+    }
+  }
+
   const messages: RecoveryAuthoritativeMessage[] = [];
   let incomplete = false;
   for (let index = 0; index < count; index += 1) {
+    if (Array.isArray(mirrors) && mirrors[index] === true) continue;
     try {
       const text = String(await users.nth(index).innerText({
         timeout: USER_MESSAGE_READ_WAIT_MS,
