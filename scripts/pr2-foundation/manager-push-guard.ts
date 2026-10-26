@@ -533,7 +533,7 @@ function stubHeader(name: string): string {
 own_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P) || exit 1
 orig=$(git config --worktree --get ${KEY.originalHooksPath} 2>/dev/null)
 if [ -z "$orig" ]; then orig="$(git rev-parse --path-format=absolute --git-common-dir)/hooks"; fi
-case "$orig" in /*) ;; *) orig="$(git rev-parse --show-toplevel)/$orig" ;; esac
+case "$orig" in /*) ;; *) orig="$PWD/$orig" ;; esac
 orig_dir=$(CDPATH= cd -- "$orig" 2>/dev/null && pwd -P) || orig_dir=
 if [ "$orig_dir" = "$own_dir" ]; then
   echo "manager-push-guard: original hooks path resolves to the guard hooks directory (self-chain); reinstall through the supervised launch" >&2
@@ -645,7 +645,8 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
         'core.hooksPath already selects the guard directory without a recorded original; restore the original core.hooksPath and rerun the supervised launch', evidence);
     }
     if (currentValue === null) git(worktree, ['config', '--worktree', '--unset', KEY.originalHooksPath]);
-    else if (!git(worktree, ['config', '--worktree', KEY.originalHooksPath, currentValue]).ok) {
+    else if (!git(worktree, ['config', '--worktree', KEY.originalHooksPath,
+      isAbsolute(currentValue) ? currentValue : resolve(worktree, currentValue)]).ok) {
       rollbackExtension();
       return refuse('manager_push_guard_config_write_failed', 'repair the manager worktree config file, then rerun the supervised launch', evidence);
     }

@@ -5716,7 +5716,7 @@ describe('Issue #2732 manager-only pre-push guard installation', () => {
   }, (world) => {
     git(world.manager, 'commit', '-q', '--allow-empty', '-m', 'no content');
     const relPush = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/feat');
-    expect(relPush.status).toBe(0);
+    expect(relPush.status, relPush.out).toBe(0);
     expect(readFileSync(join(world.manager, 'ran-marker'), 'utf8').trim()).toBe('manager-root-hook');
     expect(existsSync(join(world.primary, 'ran-marker'))).toBe(false);
   }));
