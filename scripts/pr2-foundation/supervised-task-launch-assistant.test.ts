@@ -5142,7 +5142,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
   it.each(models)('reuses the exact Claude manager terminal for %s %s without spawn or profile loss', async (model, effort, family) => {
     const env = claudeEnv(model, effort);
     const command = "claude --model '" + model + "' --effort '" + effort + "'";
-    const target = (args: readonly string[]) => ({
+    const target = () => ({
       projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
       primaryRoot: '/tmp/primary', defaultBranch: 'main',
     } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>);
