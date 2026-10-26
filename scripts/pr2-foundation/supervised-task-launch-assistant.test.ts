@@ -3734,6 +3734,40 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
     expect(starts).toBe(0);
   });
 
+  it.each([
+    ['assignment retired', null, 'start_new_task'],
+    ['assignment still present', 'owned', 'reconcile_dispatch'],
+  ] as const)('#2717 C1 refuses before any spawn when the final Dispatch is absent after an owned terminal early proof: %s', async (_label, finalRow, nextKind) => {
+    let spawns = 0; let starts = 0; let reads = 0;
+    const base = deps({
+      currentAssignment: owned(), dispatch: [terminal('failed'), { kind: 'absent' }],
+      proveTerminalGone: nativeGone('failed'),
+      adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }),
+      onSupervised: () => { starts += 1; },
+    });
+    const launched = await runSupervisedTaskLaunchAssistant({ ...launchInput('t2'), projectId: 'orchestrator-pack' }, {
+      ...base,
+      readCurrentAssignment: () => { reads += 1; return reads === 1 || finalRow === 'owned' ? owned() : null; },
+    });
+    expect(launched).toMatchObject({
+      outcome: 'continue', stage: 'dispatch_admission_final', observedCause: 'fresh_dispatch_not_absent',
+      nextAction: { kind: nextKind },
+    });
+    expect(spawns).toBe(0);
+    expect(starts).toBe(0);
+  });
+
+  it('#2717 C1 keeps the ordinary first start when both Dispatch reads are absent', async () => {
+    let spawns = 0; let starts = 0;
+    const launched = await runSupervisedTaskLaunchAssistant(launchInput('t2'), deps({
+      dispatch: [{ kind: 'absent' }, { kind: 'absent' }],
+      adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }),
+      onSupervised: () => { starts += 1; },
+    }));
+    expect(launched.outcome).toBe('ready');
+    expect(spawns).toBe(1); expect(starts).toBe(1);
+  });
+
   it('recovers dirty manager without an existing PR only from exact native Run/Task and old worktree', async () => {
     const fixture = managerReuseFixture({ noPr: true, status: ' M tests/test_database_guard.py\n' });
     const expected = {

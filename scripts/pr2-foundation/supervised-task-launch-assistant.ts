@@ -1026,6 +1026,16 @@ export async function runSupervisedTaskLaunchAssistant(
       'reconcile the competing Dispatch; do not call worker-start on this terminal',
     ), { ...resources, ...(final.value.dispatchId ? { dispatchId: final.value.dispatchId } : {}) }, startedAtMs, timings, deps.now);
   }
+  // Early admission rested on an owned terminal predecessor. If the final read no
+  // longer shows that same exact proof (including an absent Dispatch after the
+  // assignment was retired), no same-Task successor spawns or starts.
+  if (earlyTerminal && !finalTerminal) {
+    return continued(input, 'dispatch_admission_final', freshDispatchNotAbsent(
+      input, taskId, { kind: 'present', ...(early.value.kind === 'present' && early.value.dispatchId ? { dispatchId: early.value.dispatchId } : {}),
+        ...(early.value.kind === 'present' && early.value.status ? { status: early.value.status } : {}) },
+      finalCurrent, 'the predecessor proof changed before start; reconcile it, do not call worker-start on this Task',
+    ), resources, startedAtMs, timings, deps.now);
+  }
 
   let terminal: RuntimeWorker | undefined;
   if (providerMode) {
