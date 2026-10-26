@@ -6,7 +6,24 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mapGptReplyToReviewPayload } from './lib/pack-gpt-reviewer.ts';
-import { runPackGptReviewCommand } from './pack-gpt-review.ts';
+import { PACK_GPT_REVIEW_RESULT_SCHEMA, runPackGptReviewCommand } from './pack-gpt-review.ts';
+import { classifyExecuteIssueManagerRecord } from './lib/execute-issue-manager-boundary.ts';
+
+// Carries an actual runner result through the CLI and the manager boundary.
+async function cliAndBoundary(
+  outcome: Awaited<ReturnType<typeof startPackReview>>,
+  binding: { prNumber: number; issueNumber: number; headSha: string },
+) {
+  const execution = await runPackGptReviewCommand({ prNumber: binding.prNumber }, {
+    env: {}, stderr: { write: () => undefined }, startReview: async () => outcome,
+  });
+  const boundary = classifyExecuteIssueManagerRecord(execution.result, {
+    repository: 'chetwerikoff/orchestrator-pack', issueNumber: binding.issueNumber, sourceRevision: 'r03',
+    phase: 'review', prNumber: binding.prNumber, headSha: binding.headSha,
+    productionArgv: ['npm', 'run', '--silent', 'pack-gpt-review', '--', '--pr-number', String(binding.prNumber)],
+  });
+  return { execution, boundary };
+}
 import {
   GithubReviewPostError,
   type GithubReviewSummary,
@@ -30,6 +47,7 @@ import {
   parseArgs,
   resolveGithubCommitIsStrictDescendant,
   startPackReview,
+  PACK_REVIEW_REVIEWER_KILL_GRACE_MS,
 } from './pack-review-runner.ts';
 import {
   createPackReviewRun,
@@ -51,10 +69,18 @@ import {
 } from './lib/pack-review-delivery.ts';
 import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 import { runProcess, runProcessSync } from './kernel/subprocess.ts';
+
+// Behavior-preserving spy: lets a test read the reviewer child's real options.
+vi.mock('./kernel/subprocess.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./kernel/subprocess.ts')>();
+  return { ...actual, runProcess: vi.fn(actual.runProcess) };
+});
 import { getPackReviewerPreferencePath, writePackReviewerPreference } from './lib/pack-reviewer-preference.ts';
 import { configuredProfileKey, profileDirs } from './chatgpt-browser-turn/storage-common.ts';
 import { observationRecordPath } from './chatgpt-browser-turn/state-light-turn-observation.ts';
-import { acquireReviewStartClaim, completeAfterRunInvoke } from './lib/review-start-claim-store.ts';
+import {
+  acquireReviewStartClaim, claimPath, completeAfterRunInvoke, resolveReviewStartClaimNamespace,
+} from './lib/review-start-claim-store.ts';
 import {
   boundIssueSnapshotArtifactPaths,
   captureBoundIssueSnapshot,
@@ -529,17 +555,20 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
     expect(observed).toMatchObject({ state: 'generating', replacementEligible: false });
   });
 
-  it('permits Browser GPT replacement after 15 minutes of confirmed generation and GitHub absence', async () => {
+  it('Issue #2719: keeps a Browser GPT turn still generating after 15 minutes visible and non-replaceable', async () => {
     const start = Date.parse('2026-08-30T00:00:00.000Z');
     const observed = await observeGptPackReviewAttempt(
       gptRun(new Date(start).toISOString()),
       start + 15 * 60_000,
       gptObservationDeps({ markerPresent: true, generating: true }),
     );
-    expect(observed).toMatchObject({ state: 'replacement_eligible', replacementEligible: true });
+    // Elapsed time alone never proves zero-send; a possibly delivered source stays observed.
+    expect(observed).toMatchObject({
+      state: 'generating', replacementEligible: false, generationAgeCeilingExceeded: true, elapsedMs: 15 * 60_000,
+    });
   });
 
-  it('admits only GPT source slots whose own live turn crossed the replacement ceiling', async () => {
+  it('Issue #2719: never admits a still-generating GPT source slot on its age alone', async () => {
     const now = Date.parse('2026-08-30T00:15:10.000Z');
     const run = gptRun('2026-08-30T00:00:00.000Z');
     run.reviewRound!.sourceSlots = [
@@ -630,12 +659,8 @@ describe('Issue #1826 reviewer-native replacement observation', () => {
       })) as never,
     });
 
-    expect(observed).toMatchObject({
-      state: 'replacement_eligible',
-      replacementEligible: true,
-      slotId: 'slot-01',
-      replacementEligibleSlotIds: ['slot-01'],
-    });
+    expect(observed).toMatchObject({ state: 'generating', replacementEligible: false });
+    expect(observed?.replacementEligibleSlotIds ?? []).toEqual([]);
   });
 
   it('continues never-sent GPT slots as initial-launch work after a stagger crash', async () => {
@@ -1497,6 +1522,94 @@ describe('Issue #1647 authoritative tier resolution', () => {
   });
 });
 
+
+describe('Issue #2719 primary start result with secondary claim release', () => {
+  function driftInput(storeRoot: string) {
+    return {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: process.cwd(),
+      prNumber: 2719,
+      headSha: HEAD,
+      fixtureCurrentPrHeadSha: HEAD,
+      fixturePrState: 'OPEN',
+      fixturePrBody: 'Closes #2719',
+      fixturePrBodyAfterClaim: 'Closes #9999',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixturePostReviewHeadSha: HEAD,
+      fixturePostReviewPrBody: 'Closes #2719',
+      fixtureIssueTitle: 'Drift', fixtureIssueBody: '# Drift\n',
+      fixtureReviewStdout: cleanPayload(),
+      fixtureGithubReviewId: 2719,
+      fixtureRequiredStatusWriter: async () => {},
+    };
+  }
+
+  it('keeps head/Issue drift HTTP 409 primary while the runless claim release is secondary', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'pack-review-2719-drift-'));
+    roots.push(parent);
+    const storeRoot = join(parent, 'store');
+    setupHarness(storeRoot);
+
+    const first = await startPackReview(driftInput(storeRoot));
+    expect(first).toMatchObject({
+      ok: false, created: false, reused: false, httpStatus: 409,
+      reason: expect.stringContaining('9999'),
+      claimRelease: { ok: true, outcome: 'released_for_retry' },
+      ownerNotification: { state: 'notification_unbound', reason: 'no_current_owner_dispatch_binding' },
+    });
+    expect(first.reason).not.toBe('released_for_retry');
+    expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toEqual([]);
+    const { execution, boundary } = await cliAndBoundary(first, { prNumber: 2719, issueNumber: 2719, headSha: HEAD });
+    expect(execution).toMatchObject({ exitCode: 1, result: {
+      ok: false, runnerReason: first.reason, httpStatus: 409,
+      claimRelease: { ok: true, outcome: 'released_for_retry' },
+    } });
+    expect(boundary.exitCode).toBe(3);
+
+    // Repeated observation re-acquires and releases the same claim without a run.
+    const repeated = await startPackReview(driftInput(storeRoot));
+    expect(repeated).toMatchObject({
+      ok: false, httpStatus: 409, reason: first.reason,
+      claimRelease: { ok: true, outcome: 'released_for_retry' },
+    });
+  });
+
+  it('runs the budget-timed reviewer with a bounded TERM grace', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'pack-review-2719-grace-'));
+    roots.push(parent);
+    const storeRoot = join(parent, 'store');
+    setupHarness(storeRoot);
+    const spawned = vi.mocked(runProcess);
+    const actual = spawned.getMockImplementation()!;
+    const reviewerCalls: Array<Parameters<typeof runProcess>[0]> = [];
+    // Record the real reviewer options and stand in a timed-out child result.
+    spawned.mockImplementation(async (options) => {
+      if (!options.args?.includes('--script')) return actual(options);
+      reviewerCalls.push(options);
+      return { outcome: 'timeout', ok: false, exitCode: null, signal: null,
+        stdout: '', stderr: '', timedOut: true, cancelled: false };
+    });
+    try {
+      const realHead = runProcessSync({ command: 'git', args: ['rev-parse', 'HEAD'], inheritParentEnv: true }).stdout.trim();
+      await startPackReview({
+        ...driftInput(storeRoot), fixturePrBodyAfterClaim: undefined, fixtureReviewStdout: undefined,
+        headSha: realHead, fixtureCurrentPrHeadSha: realHead, fixturePostReviewHeadSha: realHead,
+        fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+      }).catch(() => undefined);
+    } finally {
+      spawned.mockImplementation(actual);
+    }
+    expect(reviewerCalls.length).toBeGreaterThan(0);
+    for (const options of reviewerCalls) {
+      expect(options.timeoutMs).toBeGreaterThan(0);
+      expect(Number.isFinite(options.killGraceMs)).toBe(true);
+      expect(options.killGraceMs).toBe(PACK_REVIEW_REVIEWER_KILL_GRACE_MS);
+      expect(options.killGraceMs).toBeGreaterThan(250);
+      expect(options.killGraceMs).toBeLessThanOrEqual(750);
+    }
+  });
+});
 
 describe('Issue #1887 immediate final-cap descendant reconciliation', () => {
   it('observes a live strict descendant and settles without prior smoke or review-start observation', async () => {
@@ -2708,6 +2821,86 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       expect(getPackReviewRun(f.run.id, f.options)?.reviewVerdict).toBe('findings');
     },
   );
+
+  it.each(['released', 'lost', 'notification-failed'] as const)(
+    'Issue #2719: PR-led start keeps verified H2 settlement primary with %s secondary claim cleanup',
+    async (variation) => {
+      const f = unchangedDescendantFixture();
+      const statusesByHead = new Map<string, string>();
+      const activeClaim = claimPath(resolveReviewStartClaimNamespace({ projectId: 'orchestrator-pack' }), prNumber, HEAD);
+      f.input.fixtureRequiredStatusReader = async (head) => statusesByHead.get(head);
+      f.input.fixtureRequiredStatusWriter = async (request) => {
+        f.statuses.push(request);
+        statusesByHead.set(HEAD, request.state);
+        // Secondary claim completion then reads no active claim: lost ownership.
+        if (variation === 'lost') rmSync(activeClaim, { force: true });
+      };
+      const before = readPackReviewAuthority(prNumber, f.options);
+      const outcome = await startPackReview({
+        ...f.input, headSha: HEAD, immediate: undefined, claimMode: 'acquire',
+        fixtureCurrentPrHeadSha: HEAD, fixtureReviewCompareStatus: 'ahead',
+        fixtureRepoSlug: repository,
+        fixturePostReviewHeadSha: HEAD,
+        fixturePostReviewPrBody: 'Closes #' + issueNumber,
+        ...(variation === 'notification-failed' ? {
+          fixtureWorkerNotifier: async () => { throw new Error('notification transport offline'); },
+        } : {}),
+      });
+      expect(outcome).toMatchObject({
+        ok: true, created: false, reused: true, reason: 'final_cap_descendant_settled',
+        statusPublished: true, publicationVerified: true,
+        headSha: HEAD, publicationHeadSha: HEAD, requiredStatusState: 'success',
+        issueNumber, httpStatus: 200,
+        ownerNotification: { state: 'notification_unbound' },
+      });
+      expect(outcome.claimRelease).toEqual(variation === 'lost'
+        ? expect.objectContaining({ ok: false, outcome: null, reason: 'ambiguous_claim',
+            nextAction: expect.stringContaining('Read-ReviewStartClaimRecord') })
+        : { ok: true, outcome: 'released_for_retry' });
+      expect(outcome.nextAction).toBeUndefined();
+      expect(statusesByHead.get(HEAD)).toBe('success');
+      const after = readPackReviewAuthority(prNumber, f.options);
+      expect(after?.cycle).toMatchObject({ state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1, 2] });
+      expect(after?.terminal).toEqual(before?.terminal);
+      expect(getPackReviewRun(f.run.id, f.options)?.reviewVerdict).toBe('findings');
+      const { execution, boundary } = await cliAndBoundary(outcome, { prNumber, issueNumber, headSha: HEAD });
+      expect(execution).toMatchObject({ exitCode: 0, result: {
+        ok: true, reason: 'final_cap_descendant_settled', publicationHeadSha: HEAD,
+        schema: PACK_GPT_REVIEW_RESULT_SCHEMA, claimRelease: outcome.claimRelease,
+      } });
+      expect(boundary).toMatchObject({ exitCode: 0, result: { ok: true, cause: 'execute_review_runner_completed' } });
+      // A wrong trusted Issue or head never completes through the release outcome.
+      for (const binding of [
+        { prNumber, issueNumber: issueNumber + 1, headSha: HEAD },
+        { prNumber, issueNumber, headSha: reviewedHead },
+      ]) {
+        expect((await cliAndBoundary(outcome, binding)).boundary.exitCode).not.toBe(0);
+      }
+    },
+  );
+
+  it('Issue #2719: an unverified H2 settlement stays primary non-success despite a released claim', async () => {
+    const f = unchangedDescendantFixture();
+    f.input.fixtureRequiredStatusReader = async () => undefined;
+    f.input.fixtureRequiredStatusWriter = async (request) => { f.statuses.push(request); };
+    const outcome = await startPackReview({
+      ...f.input, headSha: HEAD, immediate: undefined, claimMode: 'acquire',
+      fixtureCurrentPrHeadSha: HEAD, fixtureReviewCompareStatus: 'ahead',
+      fixtureRepoSlug: repository,
+      fixturePostReviewHeadSha: HEAD,
+      fixturePostReviewPrBody: 'Closes #' + issueNumber,
+    });
+    expect(outcome).toMatchObject({
+      ok: false, httpStatus: 409, reason: 'status_not_published',
+      claimRelease: { ok: true, outcome: 'released_for_retry' },
+      ownerNotification: { state: 'notification_unbound' },
+    });
+    expect(outcome.publicationHeadSha).toBeUndefined();
+    expect(String(outcome.nextAction)).not.toBe('');
+    const { execution, boundary } = await cliAndBoundary(outcome, { prNumber, issueNumber, headSha: HEAD });
+    expect(execution).toMatchObject({ exitCode: 1, result: { ok: false, runnerReason: 'status_not_published' } });
+    expect(boundary.exitCode).not.toBe(0);
+  });
 
   it('R1 findings regression: accepts the observed raw type scope source through mapping and production reconcile', async () => {
     const f = fixture();

@@ -29,6 +29,10 @@ export interface PackGptReviewDependencies {
   startReview?: StartReview;
 }
 
+// Explicit producer marker on every result object this CLI emits; consumers
+// discriminate genuine pack-gpt-review output from foreign lookalikes by it.
+export const PACK_GPT_REVIEW_RESULT_SCHEMA = 'pack-gpt-review-result/v1';
+
 export interface PackGptReviewExecution {
   exitCode: number;
   result: Record<string, unknown>;
@@ -187,6 +191,13 @@ export async function runPackGptReviewCommand(
     const stageCompleteReuse = result.created === false && result.reused === true
       && result.statusPublished === true && currentHeadPublication
       && (result.reason === 'review_stage_complete' || result.reason === 'terminal_run_exists');
+    // An already completed review stage settled on a verified strict descendant:
+    // no new source, verdict, run or ordinal. A secondary claim-release result
+    // or notification state never decides this primary success.
+    const finalCapDescendantSettled = result.created === false && result.reused === true
+      && result.reason === 'final_cap_descendant_settled'
+      && result.statusPublished === true && currentHeadPublication
+      && result.requiredStatusState === 'success';
     // The route name does not select GPT. Native reviewer delivery retains its
     // incumbent acknowledgement contract; only GPT uses exact-head observation.
     const nativeDeliveredRound = (result.resolvedReviewer === 'claude' || result.resolvedReviewer === 'codex')
@@ -238,9 +249,10 @@ export async function runPackGptReviewCommand(
         && (supplementalDelivered || (
           result.outcome !== 'supplemental_review_delivered'
           && (deliveredRound || recoveredRound || nativeDeliveredRound || nativeRecoveredRound)))
-      : (deliveredRound || recoveredRound || stageCompleteReuse || nativeDeliveredRound || nativeRecoveredRound);
+      : (deliveredRound || recoveredRound || stageCompleteReuse || finalCapDescendantSettled
+        || nativeDeliveredRound || nativeRecoveredRound);
     if (result.ok === true && settled) {
-      return { exitCode: 0, result };
+      return { exitCode: 0, result: { ...result, schema: PACK_GPT_REVIEW_RESULT_SCHEMA } };
     }
 
     const prNumber = Number.isSafeInteger(result.prNumber) && Number(result.prNumber) > 0
@@ -262,6 +274,7 @@ export async function runPackGptReviewCommand(
         ...(trim(result.runId) ? { runId: trim(result.runId) } : {}),
         ...(trim(result.status) ? { status: trim(result.status) } : {}),
         nextAction: reviewNextStep(result, prNumber),
+        schema: PACK_GPT_REVIEW_RESULT_SCHEMA,
       },
     };
   } catch (error) {
@@ -276,6 +289,7 @@ export async function runPackGptReviewCommand(
         runnerReason: describeError(error),
         prNumber: options.prNumber,
         nextAction: `verify the arguments and selected PR #${options.prNumber}; if the remote target is unavailable, restore GitHub and inspect that PR before retrying`,
+        schema: PACK_GPT_REVIEW_RESULT_SCHEMA,
       },
     };
   }

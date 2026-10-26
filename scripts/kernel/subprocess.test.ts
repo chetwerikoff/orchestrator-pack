@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { observePosixProcessGroup, runProcess, runProcessSync } from '#opk-kernel/subprocess';
 
 const cleanupPids = new Set<number>();
@@ -181,6 +181,80 @@ describe('sanctioned subprocess kernel', () => {
     });
     expect(result.outcome).toBe('timeout');
     await waitForDead(firstPid(result.stdout));
+  });
+
+  it('rejects a nonfinite or negative kill grace before spawning', async () => {
+    for (const killGraceMs of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      let spawned = false;
+      await expect(runProcess({
+        command: process.execPath,
+        args: nodeArgs("console.log('never')"),
+        killGraceMs,
+        onSpawn() {
+          spawned = true;
+        },
+      })).rejects.toThrow(RangeError);
+      expect(spawned).toBe(false);
+    }
+  });
+
+  it.each([
+    ['parent exits first on SIGTERM', 0],
+    ['slow cooperative parent', 120],
+  ] as const)('stops the whole POSIX group at return: %s with a TERM-ignoring stdio-free grandchild', async (_name, exitDelayMs) => {
+    if (process.platform === 'win32') return;
+    let parentPid = 0;
+    const result = await runProcess({
+      command: process.execPath,
+      args: nodeArgs(`
+        const { spawn } = require('node:child_process');
+        const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: 'ignore' });
+        console.log(child.pid);
+        process.on('SIGTERM', () => setTimeout(() => process.exit(0), ${exitDelayMs}));
+        setInterval(() => {}, 1000);
+      `),
+      timeoutMs: 300,
+      killGraceMs: 400,
+      onSpawn(pid) {
+        parentPid = pid;
+        cleanupPids.add(pid);
+      },
+    });
+    const grandchild = firstPid(result.stdout);
+    cleanupPids.add(grandchild);
+    // Observed synchronously at return: no delayed poll may mask a survivor.
+    expect(observePosixProcessGroup(parentPid)).toBe('stopped');
+    expect(isAlive(grandchild)).toBe(false);
+    expect(result).toMatchObject({ outcome: 'timeout', timedOut: true, ok: false });
+    expect(result.error).toBeUndefined();
+  });
+
+  it('reports unverified cleanup instead of success when the group stays observable', async () => {
+    if (process.platform === 'win32') return;
+    let parentPid = 0;
+    const originalKill = process.kill.bind(process);
+    const spy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
+      if (parentPid && pid === -parentPid && signal === 0) {
+        throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+      }
+      return originalKill(pid, signal);
+    }) as typeof process.kill);
+    try {
+      const result = await runProcess({
+        command: process.execPath,
+        args: nodeArgs('setInterval(() => {}, 1000)'),
+        timeoutMs: 30,
+        killGraceMs: 50,
+        onSpawn(pid) {
+          parentPid = pid;
+          cleanupPids.add(pid);
+        },
+      });
+      expect(result).toMatchObject({ outcome: 'timeout', timedOut: true, ok: false });
+      expect(result.error).toBe('process-tree cleanup unverified: process group running');
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('leaves an unrelated sibling process alive during tree termination', async () => {

@@ -28,6 +28,12 @@ import {
 } from './worker-smoke-core-base.ts';
 
 export const EXECUTE_ISSUE_PHASES = ['implementation', 'review', 'fixer', 'smoke'] as const;
+// Mirrors PACK_GPT_REVIEW_RESULT_SCHEMA in scripts/pack-gpt-review.ts without
+// importing the review runtime into this classifier.
+export const PACK_GPT_REVIEW_RESULT_SCHEMA = 'pack-gpt-review-result/v1';
+const SUPPORTED_PRODUCER_SCHEMAS: ReadonlySet<unknown> = new Set([
+  'turn-result/v1', 'browser-gpt-page-probe/v1', PACK_GPT_REVIEW_RESULT_SCHEMA, SMOKE_REPORT_MARKER,
+]);
 export type ExecuteIssuePhase = typeof EXECUTE_ISSUE_PHASES[number];
 
 type ClassificationClass = 'completed' | 'recoverable' | 'external_pause' | 'contract_defect' | 'conditional';
@@ -681,6 +687,13 @@ function isWorkerSmokeRecord(value: JsonRecord): boolean {
     || value.producer === SMOKE_REPORT_PRODUCER;
 }
 
+// Every smoke identity field that is present must name worker-smoke.
+function consistentWorkerSmokeRecord(value: JsonRecord): boolean {
+  return (value.schema === undefined || value.schema === SMOKE_REPORT_MARKER)
+    && (value.marker === undefined || value.marker === SMOKE_REPORT_MARKER)
+    && (value.producer === undefined || value.producer === SMOKE_REPORT_PRODUCER);
+}
+
 function workerSmokeStructuredEvidence(value: JsonRecord): JsonRecord {
   return {
     marker: SMOKE_REPORT_MARKER,
@@ -843,6 +856,23 @@ function reviewRunnerExternalCause(reason: string): ManagerExternalPauseCause | 
   return null;
 }
 
+const PACK_REVIEW_PRODUCER_SCRIPTS = new Set(['scripts/pack-gpt-review.ts', 'scripts/pack-review-runner.ts']);
+
+// Review authority comes from the manager's trusted phase and the argv it ran,
+// never from the producer record shape. A PR named in that argv must be the
+// trusted manager PR.
+function trustedPackReviewContext(context: ExecuteIssueManagerBoundaryContext): boolean {
+  if (context.phase !== 'review') return false;
+  const argv = context.productionArgv.map(normalizeCommandToken);
+  const run = argv.indexOf('run');
+  const packReviewCommand = argv.some((part) => [...PACK_REVIEW_PRODUCER_SCRIPTS]
+    .some((script) => part === script || part.endsWith('/' + script)))
+    || (run > 0 && /(?:^|\/)npm$/u.test(argv[run - 1]!) && argv.slice(run + 1).includes('pack-gpt-review'));
+  if (!packReviewCommand) return false;
+  const prFlag = argv.indexOf('--pr-number');
+  return prFlag < 0 || argv[prFlag + 1] === String(context.prNumber);
+}
+
 function classifyReviewRunner(
   value: JsonRecord,
   context: ExecuteIssueManagerBoundaryContext,
@@ -854,6 +884,9 @@ function classifyReviewRunner(
   }
   if (value.prNumber !== undefined && value.prNumber !== context.prNumber) {
     return defect(context, producer, 'review runner producer PR contradicts the trusted manager PR');
+  }
+  if (value.issueNumber !== undefined && value.issueNumber !== context.issueNumber) {
+    return defect(context, producer, 'review runner producer Issue contradicts the trusted manager Issue');
   }
   const reason = text(value.runnerReason) || text(value.reason);
   const stageReuse = value.created === false && value.reused === true
@@ -868,6 +901,18 @@ function classifyReviewRunner(
   const verifiedHead = /^[0-9a-f]{40}$/u.test(boundHead)
     && text(value.headSha).toLowerCase() === boundHead
     && text(value.publicationHeadSha).toLowerCase() === boundHead;
+  // An already complete review stage settled on the trusted strict descendant
+  // head with a success required status. Secondary claim release and owner
+  // notification fields never decide this; they stay visible diagnostics.
+  const settledDescendant = value.created === false && value.reused === true
+    && value.reason === 'final_cap_descendant_settled'
+    && value.statusPublished === true
+    && value.publicationVerified === true
+    && value.requiredStatusState === 'success'
+    && value.issueNumber === context.issueNumber;
+  if (value.ok === true && verifiedHead && settledDescendant) {
+    return completed(context, producer, 'execute_review_runner_completed');
+  }
   if (value.ok === true && verifiedHead && (stageReuse || deliveredRound)
     && value.status !== 'reviewing' && value.reason !== 'journal_write_failed'
     && value.reason !== 'completed_with_delivery_failures') {
@@ -913,8 +958,20 @@ export function classifyExecuteIssueManagerRecord(
     || !Number.isSafeInteger(context.issueNumber) || context.issueNumber <= 0) {
     return defect(context, 'execute-issue-manager-boundary', 'selected repository/Issue binding invalid');
   }
+  // Closed positive discrimination: an explicit foreign or unknown schema is
+  // rejected before any smoke marker/producer or review-like shape is read.
+  if (value.schema !== undefined && !SUPPORTED_PRODUCER_SCHEMAS.has(value.schema)) {
+    return defect(context, 'execute-issue-manager-boundary', 'foreign or unknown producer schema: ' + text(value.schema));
+  }
   if (value.schema === 'turn-result/v1') return classifyTurn(value, context);
   if (value.schema === 'browser-gpt-page-probe/v1') return classifyProbe(value, context);
-  if (isWorkerSmokeRecord(value)) return classifyWorkerSmoke(value, context);
+  if (isWorkerSmokeRecord(value)) {
+    return consistentWorkerSmokeRecord(value)
+      ? classifyWorkerSmoke(value, context)
+      : defect(context, 'execute-issue-manager-boundary', 'worker-smoke schema/marker/producer contradict each other');
+  }
+  if (!trustedPackReviewContext(context)) {
+    return defect(context, 'execute-issue-manager-boundary', 'review-shaped record lacks trusted pack-review phase and production argv');
+  }
   return classifyReviewRunner(value, context);
 }

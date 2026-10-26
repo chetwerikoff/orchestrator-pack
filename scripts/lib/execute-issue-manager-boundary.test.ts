@@ -14,6 +14,7 @@ import {
 import {
   EXECUTE_ISSUE_PROBE_CLASSIFICATION,
   EXECUTE_ISSUE_TURN_CLASSIFICATION,
+  PACK_GPT_REVIEW_RESULT_SCHEMA,
   classifyExecuteIssueManagerRecord,
   isExecuteIssueReadOnlyArgv,
   type ExecuteIssueManagerBoundaryContext,
@@ -30,6 +31,10 @@ const context: ExecuteIssueManagerBoundaryContext = {
   productionArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'],
   cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/owned-2081', prNumber: 2083,
   headSha: 'a'.repeat(40),
+};
+const reviewContext: ExecuteIssueManagerBoundaryContext = {
+  ...context, phase: 'review',
+  productionArgv: ['node', '--experimental-strip-types', 'scripts/pack-gpt-review.ts', '--pr-number', '2083'],
 };
 function turn(state: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return { schema: 'turn-result/v1', state, scope: 'invocation', cause: state, invocation_id: 'invocation-2081', configured_profile_key: 'profile-2081', conversation_id: 'owned-2081', ...overrides };
@@ -376,12 +381,12 @@ describe('execute-Issue manager boundary', () => {
   });
 
   it('projects review runner success, read-only pass-through, and external failure', () => {
-    expect(classifyExecuteIssueManagerRecord({ ok: true, created: true, publicationVerified: true, headSha: context.headSha, publicationHeadSha: context.headSha, prNumber: 2083 }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 0 });
+    expect(classifyExecuteIssueManagerRecord({ ok: true, created: true, publicationVerified: true, headSha: context.headSha, publicationHeadSha: context.headSha, prNumber: 2083 }, reviewContext)).toMatchObject({ exitCode: 0 });
     const action = managerNextAction({ kind: 'execute-review-runner-read-only', binding: { ...context, stage: 'execute:review' }, argv: ['scripts/gh', 'pr', 'view', '2083', '--json', 'state'] });
-    expect(classifyExecuteIssueManagerRecord({ ok: false, nextAction: action }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 3, result: { nextAction: action } });
-    const send = classifyExecuteIssueManagerRecord({ ok: false, nextAction: { schema: 'manager-next-action/v1', kind: 'execute-send-replacement', binding: { ...context, stage: 'execute:review' }, argv: ['node', 'scripts/chatgpt-browser-turn.ts', '--new-chat'] } }, { ...context, phase: 'review' });
+    expect(classifyExecuteIssueManagerRecord({ ok: false, nextAction: action }, reviewContext)).toMatchObject({ exitCode: 3, result: { nextAction: action } });
+    const send = classifyExecuteIssueManagerRecord({ ok: false, nextAction: { schema: 'manager-next-action/v1', kind: 'execute-send-replacement', binding: { ...context, stage: 'execute:review' }, argv: ['node', 'scripts/chatgpt-browser-turn.ts', '--new-chat'] } }, reviewContext);
     expect(expectReadOnly(send).kind).toBe('execute-review-runner-read-only');
-    expect(classifyExecuteIssueManagerRecord({ ok: false, outcome: 'review_target_unavailable', reason: 'GitHub HTTP 503', prNumber: 2083 }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 4, result: { cause: 'external:github_unavailable' } });
+    expect(classifyExecuteIssueManagerRecord({ ok: false, outcome: 'review_target_unavailable', reason: 'GitHub HTTP 503', prNumber: 2083 }, reviewContext)).toMatchObject({ exitCode: 4, result: { cause: 'external:github_unavailable' } });
   });
 
   it('projects worker-smoke through the four manager outcomes without prose inference', () => {
@@ -709,7 +714,7 @@ describe('execute-Issue manager boundary', () => {
   it('legacy-missing-next-action-bound-pr-read-only', () => {
     const evaluated = classifyExecuteIssueManagerRecord(
       { ok: false, reason: 'harvest_failed', runId: 'fixture-run' },
-      { ...context, phase: 'review' },
+      reviewContext,
     );
     expect(evaluated.exitCode).toBe(3);
     const action = expectReadOnly(evaluated);
@@ -721,7 +726,7 @@ describe('execute-Issue manager boundary', () => {
     for (const ok of [false, true]) {
       const evaluated = classifyExecuteIssueManagerRecord(
         { ok, created: true, publicationVerified: true, prNumber: 2099, headSha: context.headSha },
-        { ...context, phase: 'review' },
+        reviewContext,
       );
       expect(evaluated).toMatchObject({ exitCode: 5, result: { cause: 'producer_contract_defect', nextAction: null } });
     }
@@ -731,7 +736,7 @@ describe('execute-Issue manager boundary', () => {
     for (const prNumber of [undefined, 2099]) {
       const evaluated = classifyExecuteIssueManagerRecord(
         { ok: false, prNumber, reason: 'review failed' },
-        { ...context, phase: 'review', prNumber: undefined },
+        { ...reviewContext, prNumber: undefined },
       );
       expect(evaluated).toMatchObject({ exitCode: 5, result: { cause: 'producer_contract_defect', nextAction: null } });
     }
@@ -745,7 +750,7 @@ describe('execute-Issue manager boundary', () => {
       { ok: true, created: true, publicationVerified: false, reason: 'status_unverified' },
       { ok: true, created: false, reused: true, reason: 'terminal_run_exists' },
     ]) {
-      const evaluated = classifyExecuteIssueManagerRecord({ prNumber: 2083, ...row }, { ...context, phase: 'review' });
+      const evaluated = classifyExecuteIssueManagerRecord({ prNumber: 2083, ...row }, reviewContext);
       expect(evaluated.exitCode).toBe(3);
       expectReadOnly(evaluated);
     }
@@ -753,24 +758,124 @@ describe('execute-Issue manager boundary', () => {
     expect(classifyExecuteIssueManagerRecord({
       ok: true, created: true, publicationVerified: true,
       prNumber: 2083, headSha: context.headSha, publicationHeadSha: context.headSha, requiredStatusState: 'pending',
-    }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 0 });
+    }, reviewContext)).toMatchObject({ exitCode: 0 });
+  });
+
+  describe('Issue #2719 settlement and closed producer discrimination', () => {
+    const settled = {
+      ok: true, created: false, reused: true, reason: 'final_cap_descendant_settled',
+      statusPublished: true, publicationVerified: true,
+      prNumber: 2083, issueNumber: 2081, headSha: context.headSha,
+      publicationHeadSha: context.headSha, requiredStatusState: 'success', httpStatus: 200,
+    };
+    const contractDefect = { exitCode: 5, result: { cause: 'producer_contract_defect', nextAction: null } };
+
+    it('completes verified H2 settlement regardless of the secondary claim and notification axes', () => {
+      for (const secondary of [
+        { claimRelease: { ok: true, outcome: 'released_for_retry' } },
+        { claimRelease: { ok: false, outcome: null, reason: 'lost_ownership' } },
+        { claimRelease: { ok: false, outcome: null, reason: 'claim_release_threw:EIO' } },
+        { claimRelease: { ok: true, outcome: 'released_for_retry' }, ownerNotification: { state: 'notification_unbound' } },
+        { ownerNotification: { state: 'failed' } },
+      ]) {
+        for (const schema of [{}, { schema: PACK_GPT_REVIEW_RESULT_SCHEMA }]) {
+          expect(classifyExecuteIssueManagerRecord({ ...settled, ...secondary, ...schema }, reviewContext))
+            .toMatchObject({ exitCode: 0, result: { ok: true, cause: 'execute_review_runner_completed' } });
+        }
+      }
+    });
+
+    it('never completes an unverified or contradictory settlement through its claim release', () => {
+      const released = { claimRelease: { ok: true, outcome: 'released_for_retry' } };
+      for (const row of [
+        { requiredStatusState: undefined },
+        { requiredStatusState: 'pending' },
+        { publicationVerified: false },
+        { publicationHeadSha: 'b'.repeat(40) },
+        { headSha: 'b'.repeat(40), publicationHeadSha: 'b'.repeat(40) },
+        { issueNumber: undefined },
+      ]) {
+        const evaluated = classifyExecuteIssueManagerRecord({ ...settled, ...released, ...row }, reviewContext);
+        expect(evaluated.exitCode).toBe(3);
+        expect(expectReadOnly(evaluated).kind).toBe('execute-review-runner-read-only');
+      }
+      for (const row of [{ prNumber: 2099 }, { issueNumber: 2099 }]) {
+        expect(classifyExecuteIssueManagerRecord({ ...settled, ...released, ...row }, reviewContext))
+          .toMatchObject(contractDefect);
+      }
+      // Primary 409 refusal stays noncompleted even with a proven claim release.
+      const refusal = classifyExecuteIssueManagerRecord({
+        ok: false, created: false, reused: false, httpStatus: 409, prNumber: 2083,
+        reason: 'PR body Issue changed after claim', ...released,
+        ownerNotification: { state: 'notification_unbound' },
+      }, reviewContext);
+      expect(refusal.exitCode).toBe(3);
+      expectReadOnly(refusal);
+    });
+
+    it('requires trusted review phase and pack-review argv for any pack-review record', () => {
+      for (const trusted of [
+        reviewContext,
+        { ...reviewContext, productionArgv: ['npm', 'run', '--silent', 'pack-gpt-review', '--', '--pr-number', '2083'] },
+        { ...reviewContext, productionArgv: ['node', '--experimental-strip-types', './scripts/pack-review-runner.ts', 'reconcile', '--pr-number', '2083'] },
+      ]) {
+        expect(classifyExecuteIssueManagerRecord(settled, trusted)).toMatchObject({ exitCode: 0 });
+      }
+      for (const untrusted of [
+        { ...reviewContext, phase: 'smoke' as const },
+        { ...reviewContext, phase: 'implementation' as const },
+        { ...reviewContext, productionArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'] },
+        { ...reviewContext, productionArgv: ['node', 'scripts/flow-manager-long-running-child.ts', 'wait'] },
+        { ...reviewContext, productionArgv: ['node', 'scripts/pack-gpt-review.ts', '--pr-number', '2099'] },
+      ]) {
+        for (const schema of [{}, { schema: PACK_GPT_REVIEW_RESULT_SCHEMA }]) {
+          expect(classifyExecuteIssueManagerRecord({ ...settled, ...schema }, untrusted)).toMatchObject(contractDefect);
+        }
+      }
+    });
+
+    it('rejects explicit foreign or unknown schemas before smoke or review shapes', () => {
+      for (const record of [
+        { ...settled, schema: TERMINAL_SCHEMA },
+        { ...settled, schema: 'foreign-review-result/v1' },
+        { ...smoke('PASS'), schema: 'unknown-smoke/v9' },
+        { ...smoke('PASS'), schema: TERMINAL_SCHEMA },
+        { ...smoke('PASS'), schema: undefined, marker: 'pack-worker-smoke-report/v1', producer: 'foreign-producer/v1' },
+        { ...settled, schema: PACK_GPT_REVIEW_RESULT_SCHEMA, producer: 'orchestrator-pack/worker-smoke-run/v1' },
+      ]) {
+        for (const trusted of [context, reviewContext]) {
+          expect(classifyExecuteIssueManagerRecord(record, trusted)).toMatchObject(contractDefect);
+        }
+      }
+      // A schema-less foreign review lookalike has no trusted review authority.
+      expect(classifyExecuteIssueManagerRecord(settled, context)).toMatchObject(contractDefect);
+    });
+
+    it('preserves genuine turn, probe and smoke records', () => {
+      expect(classifyExecuteIssueManagerRecord(turn('ok'), context).exitCode).toBe(0);
+      expect(classifyExecuteIssueManagerRecord(probe('not_found'), context).exitCode).toBe(3);
+      expect(classifyExecuteIssueManagerRecord(smoke('PASS'), context)).toMatchObject({ exitCode: 0 });
+      const { schema: _schema, ...markerOnly } = smoke('PASS');
+      expect(classifyExecuteIssueManagerRecord({ ...markerOnly, marker: 'pack-worker-smoke-report/v1' }, context))
+        .toMatchObject({ exitCode: 0 });
+    });
   });
 
   it('external-outage-vs-local-exception', () => {
     expect(classifyExecuteIssueManagerRecord({
       ok: false, outcome: 'review_target_unavailable', reason: 'GitHub HTTP 503', prNumber: 2083,
-    }, { ...context, phase: 'review' })).toMatchObject({ exitCode: 4, result: { cause: 'external:github_unavailable' } });
+    }, reviewContext)).toMatchObject({ exitCode: 4, result: { cause: 'external:github_unavailable' } });
     const local = classifyExecuteIssueManagerRecord({
       ok: false, outcome: 'review_target_unavailable',
       reason: 'invalid GitHub configuration argument', prNumber: 2083,
-    }, { ...context, phase: 'review' });
+    }, reviewContext);
     expect(local.exitCode).toBe(3);
     expectReadOnly(local);
   });
 
 
   it('stage-reuse-unverified-status-advances-manager: ACK is never verified delivery', () => {
-    const trusted = { ...context, phase: 'review' as const };
+    const trusted = reviewContext;
     for (const reason of ['terminal_run_exists', 'review_stage_complete']) {
       for (const publicationVerified of [undefined, false]) {
         const result = classifyExecuteIssueManagerRecord({
@@ -799,7 +904,7 @@ describe('execute-Issue manager boundary', () => {
       publicationHeadSha: context.headSha, publicationVerified: true, statusPublished: true,
     };
     for (const headSha of [undefined, 'b'.repeat(40)]) {
-      const result = classifyExecuteIssueManagerRecord(record, { ...context, phase: 'review', headSha });
+      const result = classifyExecuteIssueManagerRecord(record, { ...reviewContext, headSha });
       expect(result.exitCode).toBe(3);
       expectReadOnly(result);
     }
@@ -810,7 +915,7 @@ describe('execute-Issue manager boundary', () => {
       const result = classifyExecuteIssueManagerRecord({
         ok: false, created: false, outcome: 'review_target_unavailable',
         prNumber: 2083, reason: `GitHub HTTP ${status}`,
-      }, { ...context, phase: 'review' });
+      }, reviewContext);
       expect(result.exitCode).toBe(3);
       expect(expectReadOnly(result).argv).toContain('2083');
     }
@@ -824,14 +929,14 @@ describe('execute-Issue manager boundary', () => {
       expect(classifyExecuteIssueManagerRecord({
         ok: false, created: false, outcome: 'review_target_unavailable',
         prNumber: 2083, reason: `GitHub HTTP ${status}`,
-      }, { ...context, phase: 'review' })).toMatchObject({
+      }, reviewContext)).toMatchObject({
         exitCode: 4, result: { cause, nextAction: null },
       });
     }
   });
 
   it('readonly-pr-target-check-bypassed-by-normalized-gh-path', () => {
-    const trusted = { ...context, phase: 'review' as const };
+    const trusted = reviewContext;
     const binding = {
       repository: context.repository, issueNumber: context.issueNumber,
       sourceRevision: context.sourceRevision, stage: 'execute:review' as const,

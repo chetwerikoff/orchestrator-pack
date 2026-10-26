@@ -13,9 +13,11 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runProcessSync } from './kernel/subprocess.js';
 import {
+  PACK_GPT_REVIEW_RESULT_SCHEMA,
   parsePackGptReviewArgs,
   runPackGptReviewCommand,
 } from './pack-gpt-review.js';
+import { classifyExecuteIssueManagerRecord } from './lib/execute-issue-manager-boundary.js';
 import {
   applyCliTargetProject,
   bindReviewerProjectSelection,
@@ -7144,7 +7146,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     };
   }
 
-  it.each(['generating', 'empty-reply', 'sent_unbound'] as const)(
+  it.each(['empty-reply', 'sent_unbound'] as const)(
     'retries an orphaned invocation only after real observer %s replacement eligibility', async (mode) => {
       const f = await seedDeadIncumbent({ source02Comment: false });
       const observations: Array<{ replacementEligible: boolean; state: string }> = [];
@@ -7189,6 +7191,50 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       });
     },
   );
+
+  it('keeps a still-generating possibly delivered source past the age ceiling as visible non-success', async () => {
+    const f = await seedDeadIncumbent({ source02Comment: false });
+    const observations: Array<{ replacementEligible: boolean; state: string; elapsedMs?: number }> = [];
+    const result = await startPackReview({
+      ...f.input, claimMode: 'acquire',
+      fixtureGptAdmissionReadObservation: undefined,
+      fixtureGptAttemptObserver: async (run) => {
+        const observation = await observeGptPackReviewAttempt(run, Date.now(), {
+          readObservation: () => source02Observation('sent_unbound'),
+          resolveSourceComment: (identity) => resolvePackGptSourceComment({
+            identity, transport: f.sourceTransport,
+          }),
+          listTargets: async () => [{
+            id: 'synthetic-source-02-tab', type: 'page',
+            url: 'https://chatgpt.com/c/00000000-0000-4000-8000-000000000002',
+            title: 'Synthetic GPT source',
+          }],
+          evaluate: async () => ({
+            status: 'ok', nodes_truncated: false, generation_in_progress: true,
+            nodes: [{ role: 'user', document_ordinal: 0, innerText: { head: 'OPKTURNV1fixture-owned-2532' } }],
+          }),
+        });
+        if (observation) observations.push(observation);
+        return observation;
+      },
+    });
+    expect(observations).toEqual([expect.objectContaining({
+      replacementEligible: false, state: 'generating', generationAgeCeilingExceeded: true,
+    })]);
+    expect(observations[0]!.elapsedMs).toBeGreaterThanOrEqual(15 * 60 * 1_000);
+    expect(result).toMatchObject({
+      ok: false, runId: f.runId, reason: 'gpt_original_invocation_recovery_required',
+      observationState: 'generating', replacementEligible: false, generationAgeCeilingExceeded: true,
+      generatingSlotId: 'source-02',
+    });
+    expect(Number(result.elapsedMs)).toBeGreaterThanOrEqual(15 * 60 * 1_000);
+    expect(String(result.nextAction)).toContain('do not resend');
+    expect(f.launches.map((launch) => launch.slotId)).not.toContain('source-02');
+    expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[1]).toMatchObject({
+      lifecycle: 'invocation_started', invocationId: originalSource02, attemptOrdinal: 1,
+    });
+    expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
+  });
 
   it('returns promptly when source-02 predecessor send observation stays unreadable', async () => {
     const f = await seedDeadIncumbent({ source02Comment: false });
@@ -7342,5 +7388,68 @@ describe('Issue #2537 GPT delayed no-judgment error cannot restore cap-one succe
     expect(authority.cycle?.reviewStageComplete).not.toBe(true);
     const historical = listPackReviewRuns(opts)[0]!;
     expect(historical).toMatchObject({ logicalRoundCap: 1, logicalRoundOrdinal: 1 });
+  });
+});
+
+describe('Issue #2719 CLI and manager interpretation of primary and secondary results', () => {
+  const head = 'c'.repeat(40);
+  const settled = {
+    ok: true, created: false, reused: true, reason: 'final_cap_descendant_settled',
+    statusPublished: true, publicationVerified: true, prNumber: 2719, issueNumber: 2700,
+    headSha: head, publicationHeadSha: head, requiredStatusState: 'success', httpStatus: 200,
+  };
+  const reviewContext = {
+    repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2700, sourceRevision: 'r03',
+    phase: 'review' as const, prNumber: 2719, headSha: head,
+    productionArgv: ['node', '--experimental-strip-types', 'scripts/pack-gpt-review.ts', '--pr-number', '2719'],
+  };
+  async function run(result: Record<string, unknown>) {
+    return runPackGptReviewCommand({ prNumber: 2719 }, {
+      env: {}, stderr: { write: () => undefined }, startReview: async () => result as never,
+    });
+  }
+
+  it.each([
+    ['released', { claimRelease: { ok: true, outcome: 'released_for_retry' } }],
+    ['lost', { claimRelease: { ok: false, outcome: null, reason: 'lost_ownership' } }],
+    ['throwing', { claimRelease: { ok: false, outcome: null, reason: 'claim_release_threw:EIO' } }],
+    ['notification failed', { ownerNotification: { state: 'notification_unbound' } }],
+  ] as const)('settles the verified H2 stage with %s secondary diagnostics', async (_label, secondary) => {
+    const execution = await run({ ...settled, ...secondary });
+    expect(execution).toMatchObject({ exitCode: 0, result: {
+      ...secondary, ok: true, reason: 'final_cap_descendant_settled', schema: PACK_GPT_REVIEW_RESULT_SCHEMA,
+    } });
+    expect(classifyExecuteIssueManagerRecord(execution.result, reviewContext))
+      .toMatchObject({ exitCode: 0, result: { cause: 'execute_review_runner_completed' } });
+  });
+
+  it.each([
+    ['missing status', { requiredStatusState: undefined }],
+    ['pending status', { requiredStatusState: 'pending' }],
+    ['wrong publication head', { publicationHeadSha: 'd'.repeat(40) }],
+    ['unverified publication', { publicationVerified: false }],
+    ['primary refusal', { ok: false, httpStatus: 409, reason: 'head drifted after claim' }],
+  ] as const)('keeps %s nonzero despite a released claim', async (_label, row) => {
+    const execution = await run({ ...settled, claimRelease: { ok: true, outcome: 'released_for_retry' }, ...row });
+    expect(execution.exitCode).toBe(1);
+    expect(execution.result).toMatchObject({
+      ok: false, schema: PACK_GPT_REVIEW_RESULT_SCHEMA, claimRelease: { ok: true, outcome: 'released_for_retry' },
+    });
+    expect(classifyExecuteIssueManagerRecord(execution.result, reviewContext).exitCode).not.toBe(0);
+  });
+
+  it('gives a foreign schema or untrusted phase no review authority', () => {
+    const contractDefect = { exitCode: 5, result: { cause: 'producer_contract_defect', nextAction: null } };
+    for (const schema of ['flow-manager-long-running-child-terminal/v1', 'foreign-review-result/v1']) {
+      expect(classifyExecuteIssueManagerRecord({ ...settled, schema }, reviewContext)).toMatchObject(contractDefect);
+    }
+    expect(classifyExecuteIssueManagerRecord(settled, { ...reviewContext, phase: 'smoke' })).toMatchObject(contractDefect);
+    expect(classifyExecuteIssueManagerRecord(settled, {
+      ...reviewContext, productionArgv: ['node', 'scripts/foreign-reviewer.ts', '--pr-number', '2719'],
+    })).toMatchObject(contractDefect);
+    // Genuine legacy schema-less and current schema-tagged records stay accepted.
+    for (const record of [settled, { ...settled, schema: PACK_GPT_REVIEW_RESULT_SCHEMA }]) {
+      expect(classifyExecuteIssueManagerRecord(record, reviewContext)).toMatchObject({ exitCode: 0 });
+    }
   });
 });
