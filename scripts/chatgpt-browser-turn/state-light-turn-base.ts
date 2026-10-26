@@ -4454,6 +4454,9 @@ async function runTurnCore(
   let observedProductErrorText = '';
   let held429Witness: HeldPage429Witness | undefined;
   let held429Page: any;
+  let ownSubmissionEverIssued = false;
+  signalSubmissionWitness = () => ownSubmissionEverIssued
+    || (held429Witness ? held429Witness.ownSubmissionIssued() : undefined);
   const preSendPageRoute = (): string => {
     try {
       const url = new URL(String(page.url()));
@@ -4490,6 +4493,7 @@ async function runTurnCore(
     }
   };
   const attachHeld429 = (heldPage: any, ownedChatUrl?: string): void => {
+    ownSubmissionEverIssued ||= held429Witness?.ownSubmissionIssued() === true;
     held429Witness?.dispose();
     held429Page = heldPage;
     held429Witness = observeHeldPageConversation429(heldPage, ownedChatUrl, (observed) => {
@@ -10073,9 +10077,10 @@ export function __setStateLightPrAuthorHooksForTest(hooks: PrAuthorTurnHooks | u
   if (hooks) Object.assign(prAuthorTurnHooks, hooks);
 }
 
-// #2718 AC5/6: OS SIGTERM finalizer. Only a deterministic safe terminal
-// phase (not_sent, or harvested with its primary publication) may retire the
-// exact original target, once, through the existing guarded reattach path.
+// #2718 AC5/6: OS SIGTERM finalizer. Only a proven pre-dispatch phase
+// (prepared, unissued sending, not_sent) or harvested with its primary
+// publication may retire the exact original target, once, through the
+// existing guarded reattach path.
 // Every other phase preserves the Page and reports cleanup_unconfirmed. A
 // repeated SIGTERM never starts a second close; an ordinary finalizer already
 // running keeps its own single guarded close and is awaited within the bound.
@@ -10089,6 +10094,13 @@ type SignalRetirement = (input: {
 let signalRetirementForTest: SignalRetirement | undefined;
 export function __setStateLightSignalRetirementForTest(retire: SignalRetirement | undefined): void {
   signalRetirementForTest = retire;
+}
+
+// The running invocation's existing own-submission issuance witness: true
+// issued, false witnessed as not issued, undefined no witness (never evidence).
+let signalSubmissionWitness: (() => boolean | undefined) | undefined;
+export function __setStateLightSignalSubmissionWitnessForTest(witness: (() => boolean | undefined) | undefined): void {
+  signalSubmissionWitness = witness;
 }
 
 interface StateLightSignalFinalizer {
@@ -10124,8 +10136,13 @@ async function finalizeOnSigterm(args: ParsedTurnArgs, finalizer: StateLightSign
     profileKey = configuredProfileKey(requireOption(args, 'profile'), cdp);
     record = readStateLightTurnObservation(profileKey, invocationId);
   } catch { record = undefined; }
+  // prepared never dispatched; sending spans the physical send, so it is
+  // pre-dispatch only with a zero send count and a witnessed unissued submission.
+  const submissionIssued = signalSubmissionWitness?.();
+  const unsentSending = record?.phase === 'sending' && (record.send_count ?? 0) === 0 && submissionIssued === false;
   const safe = !finalizer.finalizing && Boolean(record?.owned_target?.created)
-    && (record?.phase === 'not_sent' || (record?.phase === 'harvested' && Boolean(record.primary)));
+    && (record?.phase === 'prepared' || unsentSending || record?.phase === 'not_sent'
+      || (record?.phase === 'harvested' && Boolean(record.primary)));
   const retirement = safe
     ? await withinBound((signalRetirementForTest ?? retireDetachedOriginalTarget)({
         profileKey, invocationId, cdp, deadlineMs,
@@ -10134,7 +10151,8 @@ async function finalizeOnSigterm(args: ParsedTurnArgs, finalizer: StateLightSign
   const confirmed = retirement?.status === 'confirmed';
   // A missing or unreadable record is unknown delivery, never proof of no Send.
   const unsent = record !== undefined
-    && (record.phase === 'prepared' || record.phase === 'sending' || record.phase === 'not_sent');
+    && (record.phase === 'prepared' || (record.phase === 'sending' && submissionIssued !== true)
+      || record.phase === 'not_sent');
   if (!finalizer.emitted) {
     finalizer.emitted = true;
     emit({

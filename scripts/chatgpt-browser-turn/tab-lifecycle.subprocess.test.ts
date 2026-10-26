@@ -198,7 +198,7 @@ const storageUrl = pathToFileURL(join(import.meta.dirname, 'storage-common.ts'))
 const sigtermFixture = [
   'import { appendFileSync, writeFileSync } from "node:fs";',
   'import { join } from "node:path";',
-  'import { runStateLightTurn, __setStateLightSignalRetirementForTest } from ' + JSON.stringify(baseUrl) + ';',
+  'import { runStateLightTurn, __setStateLightSignalRetirementForTest, __setStateLightSignalSubmissionWitnessForTest } from ' + JSON.stringify(baseUrl) + ';',
   'import { admitStateLightTurnObservation, bindStateLightOwnedTarget, transitionStateLightTurnObservation } from ' + JSON.stringify(observationUrl) + ';',
   'import { configuredProfileKey } from ' + JSON.stringify(storageUrl) + ';',
   'const [phase, retire, root] = process.argv.slice(1);',
@@ -211,6 +211,8 @@ const sigtermFixture = [
   'if (phase === "not_sent") transitionStateLightTurnObservation({ profileKey, invocationId, phase: "not_sent", reason: "terminal_pre_send", sendCount: 0, sendWitness: "numeric_send_count" });',
   'if (phase === "dispatching" || phase === "sent_unharvested") transitionStateLightTurnObservation({ profileKey, invocationId, phase: "dispatching", reason: "dispatch_boundary_entered" });',
   'if (phase === "sent_unharvested") transitionStateLightTurnObservation({ profileKey, invocationId, phase: "sent_unharvested", reason: "owned_marker_observed", sendCount: 1, sendWitness: "numeric_send_count" });',
+  'if (phase.startsWith("sending_")) transitionStateLightTurnObservation({ profileKey, invocationId, phase: "sending", reason: "pr_author_send_claim:acme/widgets#7" });',
+  'if (phase.startsWith("sending_")) __setStateLightSignalSubmissionWitnessForTest(() => phase === "sending_issued");',
   '__setStateLightSignalRetirementForTest(async () => {',
   '  appendFileSync(join(root, "close-attempts"), "close\\n");',
   '  if (retire === "hung") return new Promise(() => {});',
@@ -275,7 +277,22 @@ describe('Issue #2718 real state-light SIGTERM finalizer', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   }, 30_000);
 
-  it.each(['prepared', 'dispatching', 'sent_unharvested'])(
+  it.each(['prepared', 'sending_unissued'])(
+    'pre-dispatch %s: one guarded close, no send attempt', async (phase) => {
+      const { result, closes, root } = await sigtermAtPhase(phase, 'confirm');
+      try {
+        expect(result.outcome, result.stderr).toBe('exit');
+        expect(closes).toBe(1);
+        const record = JSON.parse(result.stdout.trimEnd());
+        expect(record).toMatchObject({
+          cause: 'terminated_by_sigterm', send_count: 0, cleanup: 'confirmed', owned_target_id: 'target-2718',
+        });
+        expect(record).not.toHaveProperty('cleanup_status');
+        expect(record).not.toHaveProperty('send_attempted');
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    }, 30_000);
+
+  it.each(['sending_issued', 'dispatching', 'sent_unharvested'])(
     'unsafe %s: preserves the Page with cleanup_unconfirmed and no close attempt', async (phase) => {
       const { result, closes, root } = await sigtermAtPhase(phase, 'confirm');
       try {
@@ -288,8 +305,7 @@ describe('Issue #2718 real state-light SIGTERM finalizer', () => {
           cause: 'terminated_by_sigterm', cleanup: 'unconfirmed', cleanup_status: 'cleanup_unconfirmed',
           owned_target_id: 'target-2718',
         });
-        if (phase === 'prepared') expect(record).not.toHaveProperty('send_attempted');
-        else expect(record.send_attempted).toBe(true);
+        expect(record.send_attempted).toBe(true);
       } finally { rmSync(root, { recursive: true, force: true }); }
     }, 30_000);
 
