@@ -4975,7 +4975,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
         status: 'known', family: 'non-opencode', provenance: 'orca-terminal-show',
         command: options.commandOverride ?? command,
       }),
-      readBoundedOutput: ({ worker: identity, screen }) => {
+      readBoundedOutputAsync: async ({ worker: identity, screen }) => {
         options.onRead?.();
         expect(screen).toBe(true);
         return { status: 'ok', value: {
@@ -5193,7 +5193,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       { generation: 'other-pty' },
     ]) {
       const adapter = observedClaudeAdapter(command, 'Opus', 'medium', options);
-      expect(claudePaneProfileObserved(result.value, worker, adapter)).toBe(false);
+      expect(await claudePaneProfileObserved(result.value, worker, adapter)).toBe(false);
     }
     let starts = 0;
     const failed = await runSupervisedTaskLaunchAssistant({
