@@ -30,6 +30,7 @@ const KEY = {
   originalHooksPath: `${CONFIG_SECTION}.originalHooksPath`,
   seedOid: `${CONFIG_SECTION}.seedOid`,
   seedEndpoint: `${CONFIG_SECTION}.seedEndpoint`,
+  boundEndpoint: `${CONFIG_SECTION}.boundEndpoint`,
 } as const;
 const GUARD_DIR_NAME = 'opk-manager-push-guard';
 const ORIGINAL_HOOK_ENV = 'OPK_B5_ORIGINAL_HOOK';
@@ -92,6 +93,14 @@ export function normalizeEndpoint(url: string, cwd: string): string {
   return value.replace(/\/+$/u, '').replace(/\.git$/u, '');
 }
 
+/** Display-only endpoint: strips userinfo, query and fragment so a refusal never prints a credential. */
+export function redactEndpoint(url: string): string {
+  const value = trimmed(url);
+  const match = /^([a-z][a-z0-9+.-]*:\/\/)(?:[^/@?#]*@)?([^/?#]*)([^?#]*)/iu.exec(value);
+  if (match) return `${match[1]}${match[2]}${match[3]}`;
+  return value.replace(/[?#].*$/u, '').replace(/^[^/@\s]+@(?=[^/\s]+:)/u, '');
+}
+
 // ---------------------------------------------------------------------------
 // Runtime: endpoint-to-tracking-ref resolution
 // ---------------------------------------------------------------------------
@@ -137,8 +146,22 @@ function negativeMatches(spec: Refspec, ref: string): boolean {
   return mapThroughRefspec({ negative: false, src: spec.src, dst: spec.src.includes('*') ? '*' : 'x' }, ref) !== null;
 }
 
-/** Remotes whose effective fetch URL is exactly the actual push endpoint. */
+/** Locally authored namespaces: a fetch destination there is not independent evidence of publication. */
+function aliasesLocalRefs(dst: string): boolean {
+  const star = dst.indexOf('*');
+  const prefix = star < 0 ? dst : dst.slice(0, star);
+  return ['refs/heads/', 'refs/tags/'].some((ns) => ns.startsWith(prefix) || prefix.startsWith(ns));
+}
+
+/**
+ * Remotes whose effective fetch URL is exactly the actual push endpoint. Tracking refs are inherited from the endpoint
+ * the manager was installed against: a repointed origin never relabels them as published on the new endpoint.
+ */
 function verifiedFetchRemotes(cwd: string, pushEndpoint: string): string[] {
+  for (const key of [KEY.boundEndpoint, KEY.seedEndpoint]) {
+    const recorded = worktreeConfig(cwd, key);
+    if (recorded !== null && normalizeEndpoint(recorded, cwd) !== pushEndpoint) return [];
+  }
   const names = git(cwd, ['remote']);
   if (!names.ok) return [];
   const verified: string[] = [];
@@ -167,7 +190,7 @@ function resolveTrackingRef(cwd: string, remotes: readonly string[], remoteRef: 
     for (const spec of specs) {
       if (spec.negative) continue;
       const mapped = mapThroughRefspec(spec, remoteRef);
-      if (mapped) candidates.add(mapped);
+      if (mapped && !aliasesLocalRefs(mapped)) candidates.add(mapped);
     }
   }
   if (candidates.size === 0) {
@@ -198,7 +221,7 @@ function publishedCommitOids(cwd: string, remotes: readonly string[]): string[] 
   const seen = new Set<string>();
   for (const remote of remotes) {
     for (const spec of parseRefspecs(cwd, remote)) {
-      if (spec.negative) continue;
+      if (spec.negative || aliasesLocalRefs(spec.dst)) continue;
       const star = spec.dst.indexOf('*');
       const prefix = star < 0 ? spec.dst : spec.dst.slice(0, star);
       const listed = git(cwd, ['for-each-ref', '--format=%(objectname) %(objecttype) %(refname)', prefix]);
@@ -515,6 +538,7 @@ function objectType(cwd: string, oid: string): string {
 
 async function evaluateTuples(cwd: string, endpointUrl: string, stdin: string): Promise<Denial[]> {
   const endpoint = normalizeEndpoint(endpointUrl, cwd);
+  const shownEndpoint = redactEndpoint(endpointUrl);
   const defaultBranch = worktreeConfig(cwd, KEY.defaultBranch);
   const remotes = verifiedFetchRemotes(cwd, endpoint);
   const published = publishedCommitOids(cwd, remotes);
@@ -538,11 +562,11 @@ async function evaluateTuples(cwd: string, endpointUrl: string, stdin: string): 
     }
     if (!creating) {
       const tracking = resolveTrackingRef(cwd, remotes, tuple.remoteRef);
-      const fetchStep = `fetch ${endpointUrl} (the actual push endpoint) into its matching tracking ref, integrate ${tuple.remoteRef} without destructive history rewrite (merge, never rebase or reset a shared ref), then push again`;
+      const fetchStep = `fetch ${shownEndpoint} (the actual push endpoint) into its matching tracking ref, integrate ${tuple.remoteRef} without destructive history rewrite (merge, never rebase or reset a shared ref), then push again`;
       if (tracking.kind === 'unverified') {
         denials.push({
           cls: 'AC4', ref: tuple.remoteRef, reason: `freshness unverified: ${tracking.reason}`,
-          nextStep: `${fetchStep}; configure a remote whose fetch URL is ${endpointUrl} with a positive fetch refspec if none maps it`,
+          nextStep: `${fetchStep}; configure a remote whose fetch URL is ${shownEndpoint} with a positive fetch refspec if none maps it`,
         });
         continue;
       }
@@ -628,13 +652,14 @@ function delegateOriginalHook(args: readonly string[], stdin: Buffer): number {
 
 export async function runPrePush(args: readonly string[], stdin: Buffer, cwd: string): Promise<number> {
   const endpointUrl = args[1] ?? '';
+  const shown = redactEndpoint(endpointUrl);
   const denials = await evaluateTuples(cwd, endpointUrl, stdin.toString('utf8'));
   if (denials.length > 0) {
     for (const denial of denials) {
-      process.stderr.write(`[manager-push-guard] ${denial.cls} denied ${denial.ref} -> ${endpointUrl}: ${denial.reason}\n`
+      process.stderr.write(`[manager-push-guard] ${denial.cls} denied ${denial.ref} -> ${shown}: ${denial.reason}\n`
         + `  next: ${denial.nextStep}\n`);
     }
-    process.stderr.write(`[manager-push-guard] push to ${endpointUrl} aborted for every ref update of this invocation (${denials.map((d) => d.cls).join(', ')}).\n`);
+    process.stderr.write(`[manager-push-guard] push to ${shown} aborted for every ref update of this invocation (${denials.map((d) => d.cls).join(', ')}).\n`);
     return 1;
   }
   return delegateOriginalHook(args, stdin);
@@ -705,13 +730,13 @@ function effectiveHooksDir(root: string): string | null {
   try { return realpathSync(absolute); } catch { return absolute; }
 }
 
-/** Existing per-worktree config files (main and linked) that set core.hooksPath. */
-function dormantHooksPathFiles(common: string): string[] {
+/** Existing per-worktree config files (main and linked) that set anything: enabling the extension would activate every entry. */
+function dormantWorktreeConfigFiles(common: string): string[] {
   const files = [join(common, 'config.worktree')];
   try {
     for (const entry of readdirSync(join(common, 'worktrees'))) files.push(join(common, 'worktrees', entry, 'config.worktree'));
   } catch { /* no linked worktree registry */ }
-  return files.filter((file) => existsSync(file) && git(common, ['config', '--file', file, '--get', 'core.hooksPath']).ok);
+  return files.filter((file) => existsSync(file) && trimmed(git(common, ['config', '--file', file, '--list']).stdout) !== '');
 }
 
 function snapshotHooks(roots: readonly string[]): Map<string, string | null> {
@@ -759,12 +784,12 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
   const extension = git(worktree, ['config', '--file', commonConfig, '--get', 'extensions.worktreeConfig']);
   const extensionWasOn = extension.ok && trimmed(extension.stdout) === 'true';
   if (!extensionWasOn) {
-    // Git ignores config.worktree until the extension is on; enabling it would silently activate any dormant hooksPath
-    // there and change which hooks the manager or a sibling already runs.
-    const dormant = dormantHooksPathFiles(common);
+    // Git ignores config.worktree until the extension is on; enabling it would silently activate any dormant setting
+    // there and change which hooks the manager or a sibling runs, or where it pushes.
+    const dormant = dormantWorktreeConfigFiles(common);
     if (dormant.length > 0) {
-      return refuse('manager_push_guard_dormant_worktree_hooks',
-        `config.worktree already sets core.hooksPath in ${dormant.join(', ')} while extensions.worktreeConfig is off; enabling per-worktree config would activate it and change effective hooks. Move that setting into the shared config or remove it, then rerun the supervised launch`,
+      return refuse('manager_push_guard_dormant_worktree_config',
+        `config.worktree already holds settings (hooks, push URL or others) in ${dormant.join(', ')} while extensions.worktreeConfig is off; enabling per-worktree config would activate them and change what the manager or a sibling runs or pushes to. Move those settings into the shared config or remove them, then rerun the supervised launch`,
         { ...evidence, dormant });
     }
     if (!git(worktree, ['config', '--file', commonConfig, 'extensions.worktreeConfig', 'true']).ok) {
@@ -772,7 +797,15 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
         'enable extensions.worktreeConfig manually (git config extensions.worktreeConfig true) after checking tooling compatibility, then rerun the supervised launch', evidence);
     }
   }
+  // Every config key this install may write, as it stood before: a failed install restores them exactly (never a blind unset).
+  const priorConfig = new Map<string, string | null>(
+    ['core.hooksPath', ...Object.values(KEY)].map((key) => [key, worktreeConfig(worktree, key)]));
   const rollbackExtension = (): void => {
+    for (const [key, value] of priorConfig) {
+      if (worktreeConfig(worktree, key) === value) continue;
+      if (value === null) git(worktree, ['config', '--worktree', '--unset', key]);
+      else git(worktree, ['config', '--worktree', key, value]);
+    }
     if (!extensionWasOn) git(worktree, ['config', '--file', commonConfig, '--unset', 'extensions.worktreeConfig']);
   };
   const opens = roots.every((root) => git(root, ['rev-parse', '--show-toplevel']).ok && git(root, ['rev-parse', '--git-dir']).ok);
@@ -841,11 +874,19 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
   const writes: Array<[string, string]> = [
     ['core.hooksPath', hooksDir], [KEY.installed, 'true'], [KEY.defaultBranch, defaultBranch],
   ];
+  const fetchUrl = git(worktree, ['remote', 'get-url', 'origin']);
+  const pushUrl = git(worktree, ['remote', 'get-url', '--push', 'origin']);
+  const fetchEndpoint = fetchUrl.ok ? normalizeEndpoint(trimmed(fetchUrl.stdout), worktree) : '';
+  const pushEndpoint = pushUrl.ok ? normalizeEndpoint(trimmed(pushUrl.stdout), worktree) : '';
+  // Tracking refs are fetched from the endpoint present at first install; a later repoint must not relabel them.
+  const recordedBound = worktreeConfig(worktree, KEY.boundEndpoint);
+  if (recordedBound !== null && recordedBound !== fetchEndpoint) {
+    rollbackExtension();
+    return refuse('manager_push_guard_endpoint_changed',
+      'origin now resolves to a different endpoint than the one this manager worktree was installed against, so its fetched tracking refs cannot be trusted. Recreate the manager worktree for the selected project (or restore the original origin URL), then rerun the supervised launch', evidence);
+  }
+  if (recordedBound === null && fetchEndpoint && fetchEndpoint === pushEndpoint) writes.push([KEY.boundEndpoint, fetchEndpoint]);
   if (worktreeConfig(worktree, KEY.seedOid) === null && request.placementSeedOid && OID.test(request.placementSeedOid)) {
-    const fetchUrl = git(worktree, ['remote', 'get-url', 'origin']);
-    const pushUrl = git(worktree, ['remote', 'get-url', '--push', 'origin']);
-    const fetchEndpoint = fetchUrl.ok ? normalizeEndpoint(trimmed(fetchUrl.stdout), worktree) : '';
-    const pushEndpoint = pushUrl.ok ? normalizeEndpoint(trimmed(pushUrl.stdout), worktree) : '';
     if (fetchEndpoint && fetchEndpoint === pushEndpoint
       && request.endpointMatchesRepository(trimmed(fetchUrl.stdout)) && request.endpointMatchesRepository(trimmed(pushUrl.stdout))
       && objectType(worktree, request.placementSeedOid) === 'commit') {
@@ -876,11 +917,9 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
     && existsSync(prePush)
     && trimmed(probe.stdout) === 'manager-push-guard-ok' && othersUnchanged;
   if (!effective) {
-    git(worktree, ['config', '--worktree', '--unset', 'core.hooksPath']);
-    git(worktree, ['config', '--worktree', '--unset', KEY.installed]);
     rollbackExtension();
     return refuse('manager_push_guard_unobserved',
-      'the guard hook is not effective for this manager only (hooksPath not selected from config.worktree, probe failed, or another worktree changed); the selection was reverted. Fix the worktree config or Node runtime and rerun the supervised launch; do not rely on push protection until it is observed',
+      'the guard hook is not effective for this manager only (hooksPath not selected from config.worktree, probe failed, or another worktree changed); the previous worktree config was restored. Fix the worktree config or Node runtime and rerun the supervised launch; do not rely on push protection until it is observed',
       { ...evidence, effectiveHooksDir: observed, othersUnchanged });
   }
   return { ok: true, evidence: { ...evidence, hooksDir: ownReal(), reinstall: marked, extensionEnabledHere: !extensionWasOn } };

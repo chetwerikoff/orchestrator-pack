@@ -5754,7 +5754,7 @@ describe('Issue #2732 manager-only pre-push guard installation', () => {
       const before = git(world.manager, 'rev-parse', '--git-path', 'hooks');
       const result = installGuard(world, world.seed);
       expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.cause).toBe('manager_push_guard_dormant_worktree_hooks');
+      if (!result.ok) expect(result.cause).toBe('manager_push_guard_dormant_worktree_config');
       expect(gitTry(world.primary, 'config', '--get', 'extensions.worktreeConfig').out.trim()).toBe('');
       expect(git(world.manager, 'rev-parse', '--git-path', 'hooks')).toBe(before);
       expect(git(world.primary, 'config', '--file', holder, '--get', 'core.hooksPath')).toBe(dormantDir);
@@ -6324,5 +6324,100 @@ describe('Issue #2732 r04 review fixes: endpoint provenance, default binding, ho
     expect(result.status).toBe(0);
     expect(result.stdout).toBe('hook-stdout\n');
     expect(result.stderr).toBe('hook-stderr\n');
+  }));
+});
+
+describe('Issue #2732 r02 review fixes: repoint, dormant sibling config, redaction, local aliases, rollback', () => {
+  it('does not relabel refs fetched from endpoint A as published on a repointed endpoint B', withWorld({}, (world) => {
+    const feature = (() => {
+      const clone = otherClone(world);
+      git(clone, 'checkout', '-q', '-b', 'feature');
+      write(clone, 'README.md', 'feature\n');
+      const tip = commit(clone, 'feature tip');
+      git(clone, 'push', '-q', 'origin', 'feature');
+      return { clone, tip };
+    })();
+    const endpointB = join(world.base, 'endpoint-b.git');
+    git(world.base, 'clone', '-q', '--bare', world.bare, endpointB);
+    // A-only private tip Y: a substantive descendant of feature=X, never published on B.
+    git(feature.clone, 'checkout', '-q', '-b', 'private');
+    write(feature.clone, 'src/app.ts', TS_SUBSTANTIVE);
+    const privateTip = commit(feature.clone, 'A-only substantive');
+    git(feature.clone, 'push', '-q', 'origin', 'private');
+    git(world.manager, 'fetch', '-q', 'origin');
+    expect(git(world.manager, 'rev-parse', 'origin/private')).toBe(privateTip);
+    managerOn(world, 'mgr2', privateTip);
+    git(world.manager, 'config', 'remote.origin.url', endpointB);
+    const pushed = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/feature');
+    expect(pushed.status).not.toBe(0);
+    expect(pushed.out).toContain('AC4');
+    expect(remoteRef(world, 'refs/heads/feature', endpointB)).toBe(feature.tip);
+    const reinstall = installGuard(world, world.seed);
+    expect(reinstall.ok).toBe(false);
+    if (!reinstall.ok) expect(reinstall.cause).toBe('manager_push_guard_endpoint_changed');
+  }));
+
+  it('refuses to enable per-worktree config over a dormant sibling pushurl and changes nothing', withWorld({ install: false }, (world) => {
+    const worker = join(world.base, 'worker-dormant');
+    git(world.primary, 'worktree', 'add', '-q', '--no-track', '-b', 'wrk-dormant', worker, 'origin/trunk');
+    const elsewhere = join(world.base, 'elsewhere-push.git');
+    git(world.base, 'init', '-q', '--bare', '-b', 'trunk', elsewhere);
+    git(world.primary, 'config', '--file', join(git(worker, 'rev-parse', '--absolute-git-dir'), 'config.worktree'), 'remote.origin.pushurl', elsewhere);
+    const result = installGuard(world, world.seed);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.cause).toBe('manager_push_guard_dormant_worktree_config');
+    expect(gitTry(world.primary, 'config', '--get', 'extensions.worktreeConfig').out.trim()).toBe('');
+    expect(git(worker, 'remote', 'get-url', '--push', 'origin')).toBe(world.bare);
+  }));
+
+  it('never prints a credential-bearing push URL in a refusal', withWorld({}, (world) => {
+    const head = git(world.manager, 'rev-parse', 'HEAD');
+    for (const url of ['https://user:ghp_secret-token@example.test/org/repo.git?access_token=qs-secret#frag', 'user:pw-secret@example.test:org/repo.git']) {
+      const denied = runHook(world, url, `refs/heads/mgr ${head} refs/heads/trunk ${head}`);
+      expect(denied.status).not.toBe(0);
+      expect(denied.out).toContain('AC3');
+      expect(denied.out).not.toMatch(/ghp_secret-token|qs-secret|pw-secret|frag/u);
+      expect(denied.out).toContain('example.test');
+      const stale = runHook(world, url, `refs/heads/mgr ${head} refs/heads/feat ${head}`);
+      expect(stale.out).not.toMatch(/ghp_secret-token|qs-secret|pw-secret|frag/u);
+    }
+  }));
+
+  it('does not treat a locally writable fetch destination as published evidence', withWorld({}, (world) => {
+    git(world.manager, 'config', '--unset-all', 'remote.origin.fetch');
+    git(world.manager, 'config', 'remote.origin.fetch', '+refs/heads/*:refs/heads/*');
+    managerOn(world, 'manager', world.seed);
+    write(world.manager, 'src/app.ts', TS_SUBSTANTIVE);
+    commit(world.manager, 'unpublished hand edit');
+    const pushed = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/feat');
+    expect(pushed.status).not.toBe(0);
+    expect(pushed.out).toContain('AC2');
+    expect(remoteRef(world, 'refs/heads/feat')).toBe('');
+  }));
+
+  it('restores the prior worktree hooksPath and original record when the observation fails, so a retry keeps delegating', withWorld({ install: false }, (world) => {
+    const custom = join(world.base, 'custom-hooks');
+    mkdirSync(custom, { recursive: true });
+    writeFileSync(join(custom, 'pre-push'), '#!/bin/sh\necho custom-ran > "$(dirname "$0")/ran"\nexit 0\n');
+    chmodSync(join(custom, 'pre-push'), 0o755);
+    git(world.primary, 'config', 'extensions.worktreeConfig', 'true');
+    git(world.manager, 'config', '--worktree', 'core.hooksPath', custom);
+    const previousOptions = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = '--no-such-node-flag-for-probe';
+    let failed: ReturnType<typeof installGuard>;
+    try { failed = installGuard(world, world.seed); } finally {
+      if (previousOptions === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previousOptions;
+    }
+    expect(failed.ok).toBe(false);
+    if (!failed.ok) expect(failed.cause).toBe('manager_push_guard_unobserved');
+    expect(git(world.manager, 'config', '--worktree', '--get', 'core.hooksPath')).toBe(custom);
+    for (const key of ['installed', 'originalHooksPath', 'defaultBranch', 'seedOid', 'boundEndpoint']) {
+      expect(gitTry(world.manager, 'config', '--worktree', '--get', `opkManagerPushGuard.${key}`).status).not.toBe(0);
+    }
+    expect(installGuard(world, world.seed).ok).toBe(true);
+    expect(git(world.manager, 'config', '--worktree', '--get', 'opkManagerPushGuard.originalHooksPath')).toBe(custom);
+    commit(world.manager, 'no content', ['--allow-empty']);
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/feat').status).toBe(0);
+    expect(existsSync(join(custom, 'ran'))).toBe(true);
   }));
 });
