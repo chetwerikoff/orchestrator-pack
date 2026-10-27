@@ -44,6 +44,7 @@ import {
   type ExecutorRoute,
   type SemanticExecutorProfile,
 } from '../executor-profile-policy.ts';
+import { installManagerPushGuard } from './manager-push-guard.ts';
 import { runSupervisedWorkerStart, readTerminalGoneDispatch, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
 import type { TerminalGoneAssignmentEvidence } from '../lib/worker-assignment-runtime.ts';
 
@@ -155,6 +156,8 @@ export interface PreparedWorktree {
   readonly path?: string;
   readonly repositorySelector?: string;
   readonly setupWitness: 'same_invocation_complete' | 'proven_reuse' | 'provider_top_level';
+  /** Clean same-invocation manager placement tip (fetched selected default or verified PR head); never captured on reuse. */
+  readonly placementSeedOid?: string;
 }
 
 export interface WorktreePreparationRequest {
@@ -268,6 +271,13 @@ export interface LaunchInput {
   readonly startMode?: WorkerStartMode;
 }
 
+export interface ManagerPushGuardRequest {
+  readonly repository: string;
+  readonly worktreePath: string;
+  readonly defaultBranch: string;
+  readonly placementSeedOid?: string;
+}
+
 export interface LaunchDependencies {
   readonly commandPreflight: () => Promise<EdgeResult<true>> | EdgeResult<true>;
   readonly repositoryPreflight: (repository: string) => Promise<EdgeResult<true>>;
@@ -286,6 +296,8 @@ export interface LaunchDependencies {
   /** Native exact-Dispatch/worker-absent witness, not an assignment/store guess. */
   readonly proveTerminalGone?: (assignment: WorkerAssignment) => Promise<TerminalGoneAssignmentEvidence | null>;
   readonly prepareWorktree: (input: WorktreePreparationRequest) => Promise<EdgeResult<PreparedWorktree>>;
+  /** Manager-only pre-push guard (Issue #2732); installed and observed on fresh and `--existing-terminal` placement. */
+  readonly installManagerPushGuard?: (input: ManagerPushGuardRequest) => Promise<EdgeResult<true>> | EdgeResult<true>;
   readonly finalizeProfile?: (profile: ExecutorProfile, worktreePath: string, resumeSession?: string, dataRoot?: string) => Promise<EdgeResult<ExecutorProfile>>;
   readonly adapter: RuntimeAdapter;
   readonly runSupervisedStart: typeof runSupervisedWorkerStart;
@@ -937,7 +949,7 @@ export async function runSupervisedTaskLaunchAssistant(
 
   const providerMode = profile.route === 'provider_new_top_level';
   let reusedIdentity: RuntimeWorkerIdentity | undefined;
-  const prepared = await checkpoint('worktree_prepare', timings, deps.now, () => {
+  const prepareStep = (): Promise<EdgeResult<PreparedWorktree>> => {
     if (input.existingTerminal) {
       const observed = deps.adapter.findWorkerById(input.existingTerminal);
       if (observed.status !== 'ok' || !observed.value
@@ -972,6 +984,25 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(input.workClass !== 'merge' && input.worktreeSelector && earlyCurrent
       ? { reuseAssignment: earlyCurrent } : {}),
     });
+  };
+  const prepared = await checkpoint('worktree_prepare', timings, deps.now, async (): Promise<EdgeResult<PreparedWorktree>> => {
+    const placed = await prepareStep();
+    if (placed.status !== 'ok' || input.workClass !== 'manager' || !deps.installManagerPushGuard) return placed;
+    // The selected project's default only: a PR-head base branch must never stand in for it.
+    const defaultBranch = text(input.defaultBranch);
+    const guard = placed.value.path && defaultBranch
+      ? await deps.installManagerPushGuard({
+        repository: resources.repository, worktreePath: placed.value.path, defaultBranch,
+        ...(placed.value.placementSeedOid ? { placementSeedOid: placed.value.placementSeedOid } : {}),
+      })
+      : null;
+    if (guard?.status === 'ok') return placed;
+    return guard ?? {
+      status: 'continue', cause: 'manager_push_guard_unobserved', actor: 'operator',
+      evidence: { worktreePath: placed.value.path ?? 'missing', defaultBranch: defaultBranch || 'missing' },
+      nextAction: { kind: 'reconcile_worktree_setup',
+        note: 'the manager worktree path and selected default branch must be observed before the push guard can be installed; make no protection claim for this worktree until the guard is observed' },
+    };
   });
   if (prepared.status !== 'ok') return continued(input, 'worktree_prepare', prepared, resources, startedAtMs, timings, deps.now);
   if (input.workClass === 'merge' && (!prepared.value.path || resolve(prepared.value.path) !== resolve(input.primaryRoot!))) {
@@ -2305,9 +2336,16 @@ export async function prepareWorktreeWithOrca(
       if (!freshStatus.ok) return worktreeContinue('manager_worktree_status_unavailable', baseEvidence);
       if (freshStatus.stdout.trim()) return worktreeContinue('manager_worktree_dirty', baseEvidence,
         'keep newly created manager worktree bytes unchanged and refuse launch until setup leaves it clean');
+      // Clean same-invocation placement: the seed is the verified PR head, or HEAD only when it equals the fetched selected-default tip.
+      const placedHead = text((await execute(['git', 'rev-parse', '--verify', 'HEAD^{commit}'], undefined, undefined, path)).stdout);
+      const defaultTip = text((await execute(['git', 'rev-parse', '--verify', '--quiet',
+        `refs/remotes/origin/${selectedDefaultBranch}^{commit}`], undefined, undefined, path)).stdout);
+      const placementSeedOid = /^[0-9a-f]{40}$/iu.test(placedHead)
+        && (prBase?.status === 'ok' ? placedHead === prBase.value.head : placedHead === defaultTip) ? placedHead : '';
       return {
         status: 'ok',
-        value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete' },
+        value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete',
+          ...(placementSeedOid ? { placementSeedOid } : {}) },
         evidence: { ...baseEvidence, ...setupEvidence, branch: identity.value.branch },
       };
     }
@@ -2489,6 +2527,18 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
     observeDispatch: async (taskId) => dispatchEdge(envelope(await child([
       'orca', 'orchestration', 'dispatch-show', '--task', taskId, '--json',
     ], cwd, env))),
+    installManagerPushGuard: (request) => {
+      const installed = installManagerPushGuard({
+        worktreePath: request.worktreePath,
+        defaultBranch: request.defaultBranch,
+        endpointMatchesRepository: (url) => matchesGithubRepository(url, request.repository),
+        ...(request.placementSeedOid ? { placementSeedOid: request.placementSeedOid } : {}),
+      });
+      return installed.ok ? { status: 'ok', value: true, evidence: installed.evidence } : {
+        status: 'continue', cause: installed.cause, actor: 'operator', evidence: installed.evidence,
+        nextAction: { kind: 'reconcile_worktree_setup', note: installed.note },
+      };
+    },
     prepareWorktree: async (request) => prepareWorktreeWithOrca(
       input.workClass === 'merge' ? { ...request, primaryReuseRoot: target.primaryRoot } : request,
       (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),

@@ -1,17 +1,18 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import * as subprocess from '../kernel/subprocess.ts';
-import { runProcess } from '../kernel/subprocess.ts';
+import { runProcess, runProcessSync } from '../kernel/subprocess.ts';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
 import { openCodeControlFromCommand } from '../orca-runtime/adapter.ts';
 import { lastFleetParkedLine, ownPaneOutcome } from '../fleet/fleet-sweep.ts';
 import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import { runSupervisedWorkerStart, type SupervisedWorkerStartResult } from './supervised-worker-start.ts';
+import { installManagerPushGuard } from './manager-push-guard.ts';
 import {
   currentWorkerAssignment, publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath,
   type DelegatedIntegrationMarker, type WorkerAssignment,
@@ -1208,6 +1209,7 @@ describe('supervised Task launch assistant', () => {
       });
     let spawned = 0;
     let prepared = 0;
+    const guardInstalls: string[] = [];
     try {
       const previous = await runSupervisedTaskLaunchAssistant({
         ...launchInput('manager'), issueNumber: undefined, taskId: 'task-old', env,
@@ -1216,19 +1218,21 @@ describe('supervised Task launch assistant', () => {
       expect(currentWorkerAssignment(file, 2689)).toBeNull();
 
       const transition = await runSupervisedTaskLaunchAssistant({
-        ...launchInput('manager'), issueNumber: 2689, taskId: 'task-new', env,
+        ...launchInput('manager'), issueNumber: 2689, taskId: 'task-new', env, defaultBranch: 'main',
         existingTerminal: worker.identity.id,
       } as LaunchInput & { existingTerminal: string }, {
         ...deps({
           onWorktree: () => { prepared += 1; },
           adapter: runtimeAdapter({ onSpawn: () => { spawned += 1; } }),
         }),
+        installManagerPushGuard: (request) => { guardInstalls.push(request.worktreePath); return { status: 'ok', value: true }; },
         proveManagerTaskMembership: async (_runId, taskId) => ({ status: 'ok', value: { taskId } }),
         runSupervisedStart: start,
       });
       expect(transition.outcome).toBe('ready');
       expect(spawned).toBe(0);
       expect(prepared).toBe(0);
+      expect(guardInstalls).toEqual([worker.workspacePath]);
       expect(nativeStarts.map((argv) => argv[1])).toEqual(['task-old', 'task-new']);
       expect(currentWorkerAssignment(file, 2689)).toMatchObject({
         issueNumber: 2689, role: 'orchestrator', taskId: 'task-new', bindingKey: 'dispatch-new',
@@ -5529,4 +5533,891 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     });
     expect(starts).toBe(0);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #2732 (B5): manager-only pre-push guard, real disposable Git fixtures.
+// ---------------------------------------------------------------------------
+
+const GIT_ENV: NodeJS.ProcessEnv = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+  GIT_AUTHOR_NAME: 'fixture', GIT_AUTHOR_EMAIL: 'fixture@example.test',
+  GIT_COMMITTER_NAME: 'fixture', GIT_COMMITTER_EMAIL: 'fixture@example.test',
+};
+const ZERO = '0'.repeat(40);
+const TS_BEFORE = 'export function add(a: number,b: number) {\nreturn a+b;\n}\n';
+const TS_AFTER = 'export function add(a: number, b: number) {\n  return a + b;\n}\n';
+const TS_SUBSTANTIVE = 'export function add(a: number, b: number) {\n  return a + b + 1;\n}\n';
+
+function git(cwd: string, ...args: string[]): string {
+  const result = runProcessSync({ command: 'git', args, cwd, env: GIT_ENV });
+  if (!result.ok) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}${result.error ?? ''}`);
+  return result.stdout.trim();
+}
+
+let toolPath = '';
+
+function gitEnv(): NodeJS.ProcessEnv {
+  return toolPath ? { ...GIT_ENV, PATH: `${toolPath}:${GIT_ENV.PATH ?? ''}` } : GIT_ENV;
+}
+
+function gitTry(cwd: string, ...args: string[]): { status: number; out: string } {
+  const result = runProcessSync({ command: 'git', args, cwd, env: gitEnv() });
+  return { status: result.exitCode ?? 1, out: `${result.stdout}${result.stderr}` };
+}
+
+function write(dir: string, path: string, content: string): void {
+  mkdirSync(join(dir, path, '..'), { recursive: true });
+  writeFileSync(join(dir, path), content);
+}
+
+function commit(dir: string, message: string, extra: string[] = []): string {
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-q', '-m', message, ...extra);
+  return git(dir, 'rev-parse', 'HEAD');
+}
+
+interface PushWorld {
+  readonly base: string;
+  readonly bare: string;
+  readonly primary: string;
+  readonly manager: string;
+  readonly seed: string;
+}
+
+function installGuard(world: Pick<PushWorld, 'manager'>, seed?: string) {
+  return installManagerPushGuard({
+    worktreePath: world.manager, defaultBranch: 'trunk', endpointMatchesRepository: () => true,
+    ...(seed ? { placementSeedOid: seed } : {}),
+  });
+}
+
+function pushWorld(options: { prePush?: string; preCommit?: string; hooksPath?: string; install?: boolean | 'unseeded'; python?: boolean | { pyproject: string; uvLock: string; legacy: string } } = {}): PushWorld {
+  const base = mkdtempSync(join(tmpdir(), 'opk-b5-'));
+  const bare = join(base, 'remote.git');
+  const primary = join(base, 'primary');
+  const manager = join(base, 'manager');
+  git(base, 'init', '-q', '--bare', '-b', 'trunk', bare);
+  git(base, 'init', '-q', '-b', 'trunk', primary);
+  write(primary, 'src/app.ts', TS_BEFORE);
+  write(primary, 'src/util.ts', 'export const one = 1;\nexport const two = 2;\n');
+  write(primary, 'src/asi.ts', 'export function f() {\n  return\n  1;\n}\n');
+  write(primary, 'src/tpl.ts', 'export const t = `a  b`;\n');
+  write(primary, 'src/view.tsx', 'export const v = <p>x  y</p>;\n');
+  write(primary, 'tool.py', 'def f():\n    return 1\n');
+  write(primary, 'README.md', 'readme\n');
+  if (options.python) {
+    const real = typeof options.python === 'object' ? options.python : null;
+    write(primary, 'pyproject.toml', real?.pyproject ?? '[tool.ruff]\nline-length = 88\n');
+    write(primary, 'uv.lock', real?.uvLock ?? '[[package]]\nname = "ruff"\nversion = "0.5.0"\n');
+    write(primary, 'legacy.py', real?.legacy ?? 'x = 1  \nif x == None:\n    pass\n');
+  }
+  git(primary, 'remote', 'add', 'origin', bare);
+  commit(primary, 'initial');
+  git(primary, 'push', '-q', 'origin', 'trunk');
+  git(primary, 'fetch', '-q', 'origin');
+  for (const [name, body] of [['pre-push', options.prePush], ['pre-commit', options.preCommit]] as const) {
+    if (!body) continue;
+    const dir = options.hooksPath ? join(manager, options.hooksPath) : join(primary, '.git', 'hooks');
+    if (!options.hooksPath) { writeFileSync(join(dir, name), body); chmodSync(join(dir, name), 0o755); }
+  }
+  git(primary, 'worktree', 'add', '-q', '--no-track', '-b', 'mgr', manager, 'origin/trunk');
+  if (options.hooksPath) {
+    git(primary, 'config', 'core.hooksPath', options.hooksPath);
+    for (const [name, body] of [['pre-push', options.prePush], ['pre-commit', options.preCommit]] as const) {
+      if (!body) continue;
+      mkdirSync(join(manager, options.hooksPath), { recursive: true });
+      writeFileSync(join(manager, options.hooksPath, name), body);
+      chmodSync(join(manager, options.hooksPath, name), 0o755);
+    }
+  }
+  const seed = git(primary, 'rev-parse', 'origin/trunk');
+  const world = { base, bare, primary, manager, seed };
+  if (options.install !== false) expect(installGuard(world, options.install === 'unseeded' ? undefined : seed).ok).toBe(true);
+  return world;
+}
+
+function otherClone(world: PushWorld): string {
+  const dir = join(world.base, `other-${randomUUID().slice(0, 6)}`);
+  git(world.base, 'clone', '-q', world.bare, dir);
+  return dir;
+}
+
+function remoteRef(world: PushWorld, ref: string, bare = world.bare): string {
+  const result = gitTry(bare, 'rev-parse', '--verify', '--quiet', ref);
+  return result.status === 0 ? result.out.trim() : '';
+}
+
+function managerOn(world: PushWorld, branch: string, from: string): void {
+  git(world.manager, 'checkout', '-q', '-B', branch, from);
+}
+
+function hookStub(world: PushWorld): string {
+  return join(git(world.manager, 'rev-parse', '--absolute-git-dir'), 'opk-manager-push-guard', 'hooks', 'pre-push');
+}
+
+function runHook(world: PushWorld, url: string, line: string) {
+  const result = runProcessSync({ command: hookStub(world), args: ['origin', url], cwd: world.manager, env: gitEnv(), input: `${line}\n` });
+  return { status: result.exitCode ?? 1, out: `${result.stdout}${result.stderr}`, stdout: result.stdout, stderr: result.stderr };
+}
+
+function withWorld(options: Parameters<typeof pushWorld>[0], body: (world: PushWorld) => void | Promise<void>): () => Promise<void> {
+  return async () => {
+    const world = pushWorld(options);
+    try { await body(world); } finally { rmSync(world.base, { recursive: true, force: true }); }
+  };
+}
+
+describe('Issue #2732 manager-only pre-push guard installation', () => {
+  it('selects the guard for the manager worktree only and keeps primary/worker hooks and pushes', withWorld({
+    prePush: '#!/bin/sh\necho "$@" > "$(dirname "$0")/../hook-ran"\nexit 0\n',
+  }, (world) => {
+    const worker = join(world.base, 'worker');
+    git(world.primary, 'worktree', 'add', '-q', '--no-track', '-b', 'wrk', worker, 'origin/trunk');
+    const guardDir = join(git(world.manager, 'rev-parse', '--absolute-git-dir'), 'opk-manager-push-guard', 'hooks');
+    expect(git(world.manager, 'config', '--worktree', '--get', 'core.hooksPath')).toBe(guardDir);
+    expect(gitTry(world.primary, 'config', '--get', 'core.hooksPath').status).not.toBe(0);
+    expect(gitTry(worker, 'config', '--get', 'core.hooksPath').status).not.toBe(0);
+    expect(git(worker, 'rev-parse', '--git-path', 'hooks')).not.toContain('opk-manager-push-guard');
+    expect(git(world.manager, 'config', '--worktree', '--get', 'opkManagerPushGuard.seedOid')).toBe(world.seed);
+    expect(git(world.manager, 'config', '--worktree', '--get', 'opkManagerPushGuard.seedEndpoint')).toBe(realpathSync(world.bare));
+    expect(git(world.manager, 'config', '--worktree', '--get', 'opkManagerPushGuard.defaultBranch')).toBe('trunk');
+    for (const root of [world.primary, worker, world.manager]) expect(git(root, 'rev-parse', '--show-toplevel')).toBeTruthy();
+    // A legitimate worker push still runs only the common hook, never B5.
+    write(worker, 'src/util.ts', 'export const one = 1;\nexport const two = 22;\n');
+    commit(worker, 'worker edit');
+    const pushed = gitTry(worker, 'push', 'origin', 'HEAD:refs/heads/worker-feature');
+    expect(pushed.status).toBe(0);
+    expect(pushed.out).not.toContain('manager-push-guard');
+    expect(existsSync(join(world.primary, '.git', 'hook-ran'))).toBe(true);
+  }));
+
+  it('delegates inherited pre-push and pre-commit with original argv/stdin and survives reinstall', withWorld({
+    prePush: '#!/bin/sh\necho "$@" > "$(dirname "$0")/../orig-args"\ncat > "$(dirname "$0")/../orig-stdin"\nexit 0\n',
+    preCommit: '#!/bin/sh\necho ran > "$(dirname "$0")/../orig-precommit"\n',
+  }, (world) => {
+    const head = commit(world.manager, 'no content', ['--allow-empty']);
+    expect(existsSync(join(world.primary, '.git', 'orig-precommit'))).toBe(true);
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/feat').status).toBe(0);
+    expect(remoteRef(world, 'refs/heads/feat')).toBe(head);
+    expect(readFileSync(join(world.primary, '.git', 'orig-args'), 'utf8').trim()).toBe(`origin ${world.bare}`);
+    expect(readFileSync(join(world.primary, '.git', 'orig-stdin'), 'utf8')).toBe(`HEAD ${head} refs/heads/feat ${ZERO}\n`);
+    // Reinstall keeps the recorded original and the immutable seed, never today's HEAD.
+    expect(installGuard(world, head).ok).toBe(true);
+    expect(git(world.manager, 'config', '--worktree', '--get', 'opkManagerPushGuard.seedOid')).toBe(world.seed);
+    const second = commit(world.manager, 'second', ['--allow-empty']);
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/feat').status).toBe(0);
+    expect(remoteRef(world, 'refs/heads/feat')).toBe(second);
+  }));
+
+  it('lets an inherited pre-push veto B5-legal content without relabeling it', withWorld({
+    prePush: '#!/bin/sh\necho INHERITED-VERIFIER-REFUSAL >&2\nexit 7\n',
+  }, (world) => {
+    commit(world.manager, 'no content', ['--allow-empty']);
+    const pushed = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/feat');
+    expect(pushed.status).not.toBe(0);
+    expect(pushed.out).toContain('INHERITED-VERIFIER-REFUSAL');
+    expect(pushed.out).not.toMatch(/AC[234]/u);
+    expect(remoteRef(world, 'refs/heads/feat')).toBe('');
+  }));
+
+  it('resolves a relative original core.hooksPath at the manager worktree root', withWorld({
+    hooksPath: '.githooks',
+    prePush: '#!/bin/sh\necho manager-root-hook > ran-marker\nexit 0\n',
+  }, (world) => {
+    git(world.manager, 'commit', '-q', '--allow-empty', '-m', 'no content');
+    const relPush = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/feat');
+    expect(relPush.status, relPush.out).toBe(0);
+    expect(readFileSync(join(world.manager, 'ran-marker'), 'utf8').trim()).toBe('manager-root-hook');
+    expect(existsSync(join(world.primary, 'ran-marker'))).toBe(false);
+  }));
+
+  it('refuses unsafe shared config with a repair step and changes nothing', withWorld({ install: false }, (world) => {
+    git(world.primary, 'config', 'core.bare', 'true');
+    const result = installGuard(world, world.seed);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.cause).toBe('manager_push_guard_shared_config_unsafe');
+      expect(result.note).toContain('core.bare');
+    }
+    expect(gitTry(world.primary, 'config', '--get', 'extensions.worktreeConfig').out.trim()).toBe('');
+    expect(gitTry(world.manager, 'config', '--worktree', '--get', 'core.hooksPath').status).not.toBe(0);
+  }));
+
+  it('refuses to activate a dormant config.worktree hooksPath in the manager or a sibling', withWorld({ install: false }, (world) => {
+    const managerAdmin = git(world.manager, 'rev-parse', '--absolute-git-dir');
+    const dormantDir = join(world.base, 'dormant-hooks');
+    mkdirSync(dormantDir, { recursive: true });
+    for (const holder of [join(managerAdmin, 'config.worktree'), join(git(world.primary, 'rev-parse', '--absolute-git-dir'), 'config.worktree')]) {
+      git(world.primary, 'config', '--file', holder, 'core.hooksPath', dormantDir);
+      const before = git(world.manager, 'rev-parse', '--git-path', 'hooks');
+      const result = installGuard(world, world.seed);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.cause).toBe('manager_push_guard_dormant_worktree_config');
+      expect(gitTry(world.primary, 'config', '--get', 'extensions.worktreeConfig').out.trim()).toBe('');
+      expect(git(world.manager, 'rev-parse', '--git-path', 'hooks')).toBe(before);
+      expect(git(world.primary, 'config', '--file', holder, '--get', 'core.hooksPath')).toBe(dormantDir);
+      git(world.primary, 'config', '--file', holder, '--unset', 'core.hooksPath');
+    }
+    expect(installGuard(world, world.seed).ok).toBe(true);
+  }));
+
+  it('installs on fresh manager placement and surfaces a missing observation', withWorld({ install: false }, async (world) => {
+    const installs: string[] = [];
+    const real: LaunchDependencies['installManagerPushGuard'] = (request) => {
+      installs.push(request.worktreePath);
+      const installed = installManagerPushGuard({
+        worktreePath: request.worktreePath, defaultBranch: request.defaultBranch,
+        endpointMatchesRepository: () => true,
+        ...(request.placementSeedOid ? { placementSeedOid: request.placementSeedOid } : {}),
+      });
+      return installed.ok ? { status: 'ok', value: true } : {
+        status: 'continue', cause: installed.cause, actor: 'operator', evidence: installed.evidence,
+        nextAction: { kind: 'reconcile_worktree_setup', note: installed.note },
+      };
+    };
+    const fresh = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), issueNumber: undefined, defaultBranch: 'trunk' }, {
+      ...deps(), installManagerPushGuard: real,
+      prepareWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::manager', selector: 'id:repo::manager', path: world.manager, setupWitness: 'same_invocation_complete',
+        placementSeedOid: world.seed,
+      } }),
+    });
+    expect(fresh.outcome === 'continue' && fresh.observedCause === 'manager_push_guard_unobserved').toBe(false);
+    expect(git(world.manager, 'config', '--worktree', '--get', 'opkManagerPushGuard.seedOid')).toBe(world.seed);
+    expect(installs).toEqual([world.manager]);
+    // A guard that cannot be observed refuses the launch instead of claiming protection.
+    const refused = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), issueNumber: undefined, defaultBranch: 'trunk' }, {
+      ...deps(), installManagerPushGuard: () => ({ status: 'continue', cause: 'manager_push_guard_unobserved', actor: 'operator',
+        nextAction: { kind: 'reconcile_worktree_setup', note: 'repair' } }),
+    });
+    expect(refused.outcome).toBe('continue');
+    if (refused.outcome === 'continue') expect(refused.observedCause).toBe('manager_push_guard_unobserved');
+  }));
+});
+
+describe('Issue #2732 AC2 manager-new commit accounting', () => {
+  it('denies unpublished substantive edits regardless of author, with the non-manager route', withWorld({}, (world) => {
+    write(world.manager, 'src/app.ts', TS_SUBSTANTIVE);
+    commit(world.manager, 'hand edit');
+    const human = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/feat');
+    expect(human.status).not.toBe(0);
+    expect(human.out).toContain('AC2');
+    expect(human.out).toContain('send the hand fix to GPT as author');
+    expect(human.out).toContain('non-manager');
+    expect(remoteRef(world, 'refs/heads/feat')).toBe('');
+    managerOn(world, 'gpt-claim', world.seed);
+    write(world.manager, 'src/app.ts', TS_SUBSTANTIVE);
+    commit(world.manager, 'GPT patch', ['--author', 'GPT <gpt@example.test>']);
+    const gpt = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/feat2');
+    expect(gpt.status).not.toBe(0);
+    expect(gpt.out).toContain('AC2');
+    // Python autofix, annotated tags and substantive-B/revert-C/format-D are denied as well.
+    managerOn(world, 'py', world.seed);
+    write(world.manager, 'tool.py', 'def f():\n    return 2\n');
+    commit(world.manager, 'ruff');
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/py').out).toContain('AC2');
+    managerOn(world, 'hidden', world.seed);
+    write(world.manager, 'src/app.ts', TS_SUBSTANTIVE);
+    commit(world.manager, 'B');
+    git(world.manager, 'revert', '--no-edit', 'HEAD');
+    write(world.manager, 'src/app.ts', TS_AFTER);
+    commit(world.manager, 'D format');
+    const hidden = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/hidden');
+    expect(hidden.status).not.toBe(0);
+    expect(hidden.out).toContain('AC2');
+    expect(remoteRef(world, 'refs/heads/hidden')).toBe('');
+    managerOn(world, 'tagged', world.seed);
+    git(world.manager, 'tag', '-a', 'v1', '-m', 'annotated');
+    expect(gitTry(world.manager, 'push', 'origin', 'refs/tags/v1').out).toContain('AC2');
+  }));
+
+  it('permits a proven typescript formatter-only commit and ignores dirty/untracked bytes', withWorld({}, (world) => {
+    write(world.manager, 'src/app.ts', TS_AFTER);
+    const head = commit(world.manager, 'format');
+    write(world.manager, 'README.md', 'dirty tracked change\n');
+    write(world.manager, 'scratch/untracked.txt', 'untracked\n');
+    const pushed = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/fmt');
+    expect(pushed.out).not.toContain('AC2');
+    expect(pushed.status).toBe(0);
+    expect(remoteRef(world, 'refs/heads/fmt')).toBe(head);
+  }));
+
+  it.each([
+    ['ASI-changing newline removal', 'src/asi.ts', 'export function f() {\n  return 1;\n}\n'],
+    ['template literal whitespace', 'src/tpl.ts', 'export const t = `a b`;\n'],
+    ['JSX text whitespace', 'src/view.tsx', 'export const v = <p>x y</p>;\n'],
+    ['added semicolon-free token change', 'src/util.ts', 'export const one = 1;\nexport const two = 3;\n'],
+  ])('denies the whitespace/token-significant edit: %s', (_name, path, content) => withWorld({}, (world) => {
+    write(world.manager, path, content);
+    commit(world.manager, 'edit');
+    const pushed = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/sig');
+    expect(pushed.status).not.toBe(0);
+    expect(pushed.out).toContain('AC2');
+    expect(remoteRef(world, 'refs/heads/sig')).toBe('');
+  })());
+
+  it('excludes verified published content and judges merges against the automatic merge', withWorld({}, (world) => {
+    const other = otherClone(world);
+    git(other, 'checkout', '-q', '-b', 'worker-b');
+    write(other, 'src/util.ts', 'export const one = 1;\nexport const two = 2;\nexport const three = 3;\n');
+    commit(other, 'published substantive');
+    git(other, 'push', '-q', 'origin', 'worker-b');
+    git(other, 'checkout', '-q', '-b', 'worker-c', 'origin/trunk');
+    write(other, 'src/app.ts', TS_SUBSTANTIVE);
+    commit(other, 'published conflicting');
+    git(other, 'push', '-q', 'origin', 'worker-c');
+    git(world.manager, 'fetch', '-q', 'origin');
+    // Clean automatic merge of published sibling content passes.
+    managerOn(world, 'clean-merge', world.seed);
+    git(world.manager, 'merge', '-q', '--no-ff', '-m', 'merge worker-b', 'origin/worker-b');
+    const merged = git(world.manager, 'rev-parse', 'HEAD');
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/clean-merge').status).toBe(0);
+    expect(remoteRef(world, 'refs/heads/clean-merge')).toBe(merged);
+    // A merge that introduces its own edit fails.
+    managerOn(world, 'edited-merge', world.seed);
+    git(world.manager, 'merge', '-q', '--no-ff', '--no-commit', 'origin/worker-b');
+    write(world.manager, 'README.md', 'merge-introduced edit\n');
+    commit(world.manager, 'merge with edit');
+    const edited = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/edited-merge');
+    expect(edited.status).not.toBe(0);
+    expect(edited.out).toContain('AC2');
+    // A hand-resolved conflict fails even though both sides are individually fine.
+    managerOn(world, 'conflict', world.seed);
+    write(world.manager, 'src/app.ts', 'export function add(a: number, b: number) {\n  return a + b + 2;\n}\n');
+    commit(world.manager, 'local conflicting edit');
+    gitTry(world.manager, 'merge', '--no-ff', 'origin/worker-c');
+    write(world.manager, 'src/app.ts', TS_SUBSTANTIVE);
+    git(world.manager, 'add', '-A');
+    git(world.manager, 'commit', '-q', '--no-edit');
+    const conflicted = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/conflict');
+    expect(conflicted.status).not.toBe(0);
+    expect(conflicted.out).toContain('AC2');
+    expect(remoteRef(world, 'refs/heads/conflict')).toBe('');
+  }));
+
+  it('proves new refs from a default seed and a verified published PR-head seed', withWorld({}, (world) => {
+    const other = otherClone(world);
+    git(other, 'checkout', '-q', '-b', 'pr-head');
+    write(other, 'src/util.ts', 'export const one = 1;\nexport const two = 2;\nexport const three = 3;\n');
+    const prHead = commit(other, 'PR substantive history');
+    git(other, 'push', '-q', 'origin', 'pr-head');
+    git(world.primary, 'fetch', '-q', 'origin');
+    const prManager = join(world.base, 'manager-pr');
+    git(world.primary, 'worktree', 'add', '-q', '--no-track', '-b', 'mgr-pr', prManager, 'origin/pr-head');
+    expect(installManagerPushGuard({
+      worktreePath: prManager, defaultBranch: 'trunk', endpointMatchesRepository: () => true, placementSeedOid: prHead,
+    }).ok).toBe(true);
+    write(prManager, 'src/app.ts', TS_AFTER);
+    const fmt = commit(prManager, 'format');
+    expect(gitTry(prManager, 'push', 'origin', 'HEAD:refs/heads/pr-fmt').status).toBe(0);
+    expect(remoteRef(world, 'refs/heads/pr-fmt')).toBe(fmt);
+    write(prManager, 'src/app.ts', TS_SUBSTANTIVE);
+    commit(prManager, 'substantive');
+    const denied = gitTry(prManager, 'push', 'origin', 'HEAD:refs/heads/pr-sub');
+    expect(denied.status).not.toBe(0);
+    expect(denied.out).toContain('AC2');
+    expect(denied.out).not.toContain('AC4');
+    // A newer default published after the seed, merged cleanly, stays provable.
+    write(other, 'README.md', 'newer default\n');
+    git(other, 'checkout', '-q', 'trunk');
+    write(other, 'README.md', 'newer default\n');
+    commit(other, 'newer default');
+    git(other, 'push', '-q', 'origin', 'trunk');
+    git(world.manager, 'fetch', '-q', 'origin');
+    write(world.manager, 'src/app.ts', TS_AFTER);
+    commit(world.manager, 'format');
+    git(world.manager, 'merge', '-q', '--no-ff', '-m', 'merge newer default', 'origin/trunk');
+    const head = git(world.manager, 'rev-parse', 'HEAD');
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/after-default').status).toBe(0);
+    expect(remoteRef(world, 'refs/heads/after-default')).toBe(head);
+  }));
+
+  it('treats a new ref without a verified seed as AC2-unprovable, not AC4', withWorld({ install: 'unseeded' }, (world) => {
+    write(world.manager, 'src/app.ts', TS_AFTER);
+    commit(world.manager, 'format');
+    const pushed = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/legacy');
+    expect(pushed.status).not.toBe(0);
+    expect(pushed.out).toContain('AC2');
+    expect(pushed.out).not.toContain('AC4');
+  }));
+});
+
+describe('Issue #2732 AC3 selected default branch (not named main)', () => {
+  it('denies implicit, explicit, deleting and multi-ref default updates and leaves every ref unchanged', withWorld({}, (world) => {
+    write(world.manager, 'src/app.ts', TS_AFTER);
+    commit(world.manager, 'format');
+    git(world.manager, 'branch', '-q', '-u', 'origin/trunk');
+    const trunk = remoteRef(world, 'refs/heads/trunk');
+    const attempts = [
+      ['-c', 'push.default=upstream', 'push', 'origin'],
+      ['push', 'origin', 'HEAD:trunk'],
+      ['push', 'origin', 'HEAD:refs/heads/trunk'],
+      ['push', '--force', 'origin', ':trunk'],
+      ['push', 'origin', 'HEAD:refs/heads/side', 'HEAD:refs/heads/trunk'],
+    ];
+    for (const args of attempts) {
+      const result = gitTry(world.manager, ...args);
+      expect(result.status, args.join(' ')).not.toBe(0);
+      expect(result.out).toContain('AC3');
+      expect(result.out).toContain('nondefault branch and PR');
+    }
+    expect(remoteRef(world, 'refs/heads/trunk')).toBe(trunk);
+    expect(remoteRef(world, 'refs/heads/side')).toBe('');
+  }));
+});
+
+describe('Issue #2732 AC4 same-endpoint freshness', () => {
+  it('blocks stale and sibling-fetched forced overwrites, then allows clean reconciliation', withWorld({}, (world) => {
+    const other = otherClone(world);
+    git(other, 'push', '-q', 'origin', 'HEAD:refs/heads/feat');
+    git(world.manager, 'fetch', '-q', 'origin');
+    managerOn(world, 'work', 'origin/feat');
+    write(world.manager, 'src/app.ts', TS_AFTER);
+    commit(world.manager, 'format');
+    git(other, 'checkout', '-q', '-b', 'advance');
+    write(other, 'src/util.ts', 'export const one = 1;\nexport const two = 2;\nexport const three = 3;\n');
+    const y = commit(other, 'advance feat');
+    git(other, 'push', '-q', 'origin', 'advance:refs/heads/feat');
+    const stale = gitTry(world.manager, 'push', '--force', 'origin', 'HEAD:refs/heads/feat');
+    expect(stale.status).not.toBe(0);
+    expect(stale.out).toContain('AC4');
+    expect(stale.out).toContain(world.bare);
+    expect(remoteRef(world, 'refs/heads/feat')).toBe(y);
+    // A sibling linked worktree fetches Y into the shared tracking ref: advertised == tracking == Y.
+    git(world.primary, 'fetch', '-q', 'origin');
+    expect(git(world.manager, 'rev-parse', 'refs/remotes/origin/feat')).toBe(y);
+    const sibling = gitTry(world.manager, 'push', '--force', 'origin', 'HEAD:refs/heads/feat');
+    expect(sibling.status).not.toBe(0);
+    expect(sibling.out).toContain('AC4');
+    expect(sibling.out).toContain('not contained');
+    expect(remoteRef(world, 'refs/heads/feat')).toBe(y);
+    // Reconcile without history rewrite: a clean merge of Y then a plain push.
+    git(world.manager, 'merge', '-q', '--no-ff', '-m', 'merge Y', 'origin/feat');
+    const merged = git(world.manager, 'rev-parse', 'HEAD');
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/feat').status).toBe(0);
+    expect(remoteRef(world, 'refs/heads/feat')).toBe(merged);
+  }));
+
+  it('resolves the actual push endpoint, rewrites, custom mappings and unverifiable mappings', withWorld({}, (world) => {
+    const other = otherClone(world);
+    git(other, 'push', '-q', 'origin', 'HEAD:refs/heads/feat');
+    git(world.manager, 'fetch', '-q', 'origin');
+    const x = remoteRef(world, 'refs/heads/feat');
+    managerOn(world, 'work', 'origin/feat');
+    const head = commit(world.manager, 'no content', ['--allow-empty']);
+    const tuple = `refs/heads/work ${head} refs/heads/feat ${x}`;
+    expect(runHook(world, world.bare, tuple).status).toBe(0);
+    // A different push endpoint has no verified fetch baseline.
+    const second = join(world.base, 'second.git');
+    git(world.base, 'init', '-q', '--bare', second);
+    expect(runHook(world, second, tuple).out).toContain('AC4');
+    // SSH vs HTTPS spelling is never equivalence by itself.
+    git(world.manager, 'remote', 'set-url', 'origin', 'https://example.invalid/o/r.git');
+    const https = runHook(world, 'ssh://git@example.invalid/o/r.git', tuple);
+    expect(https.out).toContain('AC4');
+    expect(https.out).toContain('no configured remote');
+    git(world.manager, 'remote', 'set-url', 'origin', world.bare);
+    // Effective URL rewriting: the fetch URL is compared after insteadOf.
+    git(world.manager, 'config', `url.${world.base}/.insteadOf`, 'mirror:');
+    git(world.manager, 'remote', 'set-url', 'origin', 'mirror:remote.git');
+    expect(runHook(world, world.bare, tuple).status).toBe(0);
+    git(world.manager, 'remote', 'set-url', 'origin', world.bare);
+    git(world.manager, 'config', '--unset', `url.${world.base}/.insteadOf`);
+    // One valid custom unique mapping works; ambiguous and negative ones fail closed.
+    git(world.manager, 'config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/custom/*');
+    git(world.manager, 'fetch', '-q', 'origin');
+    expect(runHook(world, world.bare, tuple).status).toBe(0);
+    git(world.manager, 'config', '--add', 'remote.origin.fetch', '+refs/heads/feat:refs/remotes/dup/feat');
+    expect(runHook(world, world.bare, tuple).out).toContain('ambiguous');
+    git(world.manager, 'config', '--unset', 'remote.origin.fetch', 'dup');
+    git(world.manager, 'config', '--add', 'remote.origin.fetch', '^refs/heads/feat');
+    expect(runHook(world, world.bare, tuple).out).toContain('negative');
+    // A genuinely new ref is never called stale by AC4.
+    git(world.manager, 'config', '--unset-all', 'remote.origin.fetch');
+    git(world.manager, 'config', '--add', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*');
+    const created = runHook(world, world.bare, `refs/heads/work ${head} refs/heads/brand-new ${ZERO}`);
+    expect(created.out).not.toContain('AC4');
+  }));
+});
+
+describe('Issue #2732 AC5 single-endpoint all-or-nothing', () => {
+  it('aborts every tuple of a denied endpoint and admits multi-pushurl sequential partiality', withWorld({}, (world) => {
+    commit(world.manager, 'no content', ['--allow-empty']);
+    write(world.manager, 'src/app.ts', TS_SUBSTANTIVE);
+    commit(world.manager, 'substantive');
+    const mixed = gitTry(world.manager, 'push', 'origin', 'HEAD~1:refs/heads/ok-ref', 'HEAD:refs/heads/bad-ref');
+    expect(mixed.status).not.toBe(0);
+    expect(remoteRef(world, 'refs/heads/ok-ref')).toBe('');
+    expect(remoteRef(world, 'refs/heads/bad-ref')).toBe('');
+    const second = join(world.base, 'second.git');
+    git(world.base, 'init', '-q', '--bare', '-b', 'trunk', second);
+    git(world.primary, 'push', '-q', second, 'trunk');
+    git(world.manager, 'config', '--add', 'remote.origin.pushurl', world.bare);
+    git(world.manager, 'config', '--add', 'remote.origin.pushurl', second);
+    const partial = gitTry(world.manager, 'push', 'origin', 'HEAD~1:refs/heads/multi');
+    expect(partial.status).not.toBe(0);
+    expect(partial.out).toContain('AC2');
+    expect(remoteRef(world, 'refs/heads/multi')).not.toBe('');
+    expect(remoteRef(world, 'refs/heads/multi', second)).toBe('');
+  }));
+});
+
+// ---------------------------------------------------------------------------
+// Issue #2732 r04: verified published patch.diff and parent-pinned Ruff proofs.
+// ---------------------------------------------------------------------------
+
+interface FakeUvOptions { readonly lock: string; readonly ruff: string }
+
+/** Directory whose `uv` stands in for the real tool: `export` prints the lock pin, `run` execs a private fake ruff. */
+function fakeUv(base: string, name: string, options: FakeUvOptions): string {
+  const dir = join(base, `uv-${name}`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'ruff-real'), `#!/bin/sh
+case "$1" in
+  --version) echo "ruff ${options.ruff}" ;;
+  format) find . -name '*.py' -exec sed -i 's/[ ]*$//' {} + ;;
+  check) find . -name '*.py' -exec sed -i 's/ == None/ is None/' {} + ;;
+esac
+exit 0
+`);
+  writeFileSync(join(dir, 'uv'), String.raw`#!/bin/sh
+case "$1" in
+  cache) echo "${dir}/cache" ;;
+  export) printf 'ruff==${options.lock} \\\n    --hash=sha256:abcd\n' ;;
+  run) while [ "$1" != "--" ]; do shift; done; shift; shift; exec "${dir}/ruff-real" "$@" ;;
+esac
+`);
+  chmodSync(join(dir, 'uv'), 0o755);
+  chmodSync(join(dir, 'ruff-real'), 0o755);
+  return dir;
+}
+
+const RUFF_FIXED = 'x = 1\nif x is None:\n    pass\n';
+
+function realRuffFixture(): { pyproject: string; uvLock: string } | null {
+  const dir = mkdtempSync(join(tmpdir(), 'opk-b5-uv-'));
+  try {
+    const pyproject = '[project]\nname = "demo"\nversion = "0.1.0"\nrequires-python = ">=3.9"\ndependencies = []\n[dependency-groups]\ndev = ["ruff==0.5.7"]\n';
+    writeFileSync(join(dir, 'pyproject.toml'), pyproject);
+    const locked = runProcessSync({ command: 'uv', args: ['lock', '--offline'], cwd: dir, inheritParentEnv: true });
+    if (!locked.ok) return null;
+    const probe = runProcessSync({ command: 'uv', args: ['run', '--offline', '--no-project', '--no-config', '--isolated', '--with', 'ruff==0.5.7', '--', 'ruff', '--version'], cwd: dir, inheritParentEnv: true });
+    return probe.ok && probe.stdout.includes('0.5.7') ? { pyproject, uvLock: readFileSync(join(dir, 'uv.lock'), 'utf8') } : null;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const REAL_RUFF = realRuffFixture();
+
+describe('Issue #2732 r04 AC2 verified published patch.diff application', () => {
+  it('passes the exact fetched same-endpoint patch and fails altered, local-only and wrong-endpoint patches', withWorld({}, (world) => {
+    const other = otherClone(world);
+    git(other, 'checkout', '-q', '-b', 'gpt-scratch', 'origin/trunk');
+    write(other, 'src/util.ts', 'export const one = 1;\nexport const two = 2;\nexport const three = 3;\n');
+    git(other, 'diff', '--output=patch.diff');
+    git(other, 'checkout', '--', 'src/util.ts');
+    commit(other, 'scratch patch');
+    git(other, 'push', '-q', 'origin', 'gpt-scratch');
+    const patchFile = join(world.base, 'published.patch');
+    const patchBytes = readFileSync(join(other, 'patch.diff'), 'utf8');
+    writeFileSync(patchFile, patchBytes);
+    git(world.manager, 'fetch', '-q', 'origin');
+    // Verbatim application of the verified published patch succeeds.
+    managerOn(world, 'patched', world.seed);
+    git(world.manager, 'apply', patchFile);
+    const head = commit(world.manager, 'apply patch');
+    const pushed = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/patched');
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(remoteRef(world, 'refs/heads/patched')).toBe(head);
+    // One altered hunk fails.
+    managerOn(world, 'altered', world.seed);
+    const alteredFile = join(world.base, 'altered.patch');
+    writeFileSync(alteredFile, patchBytes.replace('three = 3', 'three = 33').replace('+export const three = 3', '+export const three = 33'));
+    git(world.manager, 'apply', alteredFile);
+    commit(world.manager, 'altered patch');
+    const altered = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/altered');
+    expect(altered.status).not.toBe(0);
+    expect(altered.out).toContain('AC2');
+    expect(altered.out).toContain('patch.diff proof');
+    // Verbatim patch plus an extra manager edit fails.
+    managerOn(world, 'extra', world.seed);
+    git(world.manager, 'apply', patchFile);
+    write(world.manager, 'README.md', 'extra manager edit\n');
+    commit(world.manager, 'patch plus edit');
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/extra').out).toContain('AC2');
+    // A scratch ref that exists only locally is not evidence.
+    managerOn(world, 'local-scratch', world.seed);
+    write(world.manager, 'src/asi.ts', 'export function f() {\n  return 2;\n}\n');
+    git(world.manager, 'diff', '--output', join(world.base, 'local.patch'));
+    git(world.manager, 'checkout', '--', 'src/asi.ts');
+    write(world.manager, 'patch.diff', readFileSync(join(world.base, 'local.patch'), 'utf8'));
+    commit(world.manager, 'local scratch patch, never pushed');
+    managerOn(world, 'local-only-apply', world.seed);
+    git(world.manager, 'apply', join(world.base, 'local.patch'));
+    commit(world.manager, 'apply local patch');
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/local-only-apply').out).toContain('AC2');
+    // A patch published on a different endpoint is not evidence for this endpoint.
+    const elsewhere = join(world.base, 'elsewhere.git');
+    git(world.base, 'init', '-q', '--bare', '-b', 'trunk', elsewhere);
+    git(other, 'checkout', '-q', '-b', 'gpt-two', 'origin/trunk');
+    write(other, 'src/asi.ts', 'export function f() {\n  return 3;\n}\n');
+    git(other, 'diff', '--output=patch.diff');
+    git(other, 'checkout', '--', 'src/asi.ts');
+    commit(other, 'wrong endpoint patch');
+    git(other, 'push', '-q', elsewhere, 'gpt-two');
+    git(world.manager, 'remote', 'add', 'elsewhere', elsewhere);
+    git(world.manager, 'fetch', '-q', 'elsewhere');
+    managerOn(world, 'wrong-endpoint', world.seed);
+    git(world.manager, 'apply', join(other, 'patch.diff'));
+    commit(world.manager, 'apply foreign patch');
+    const foreign = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/wrong-endpoint');
+    expect(foreign.status).not.toBe(0);
+    expect(foreign.out).toContain('AC2');
+    // No project Ruff lock on the published parent: the Ruff route is unavailable.
+    managerOn(world, 'no-lock', world.seed);
+    write(world.manager, 'tool.py', 'def f():\n    return 1  \n');
+    commit(world.manager, 'py edit');
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/no-lock').out).toContain('Ruff proof: parent commit has no single lock-pinned');
+    expect(remoteRef(world, 'refs/heads/altered')).toBe('');
+    expect(remoteRef(world, 'refs/heads/wrong-endpoint')).toBe('');
+  }));
+});
+
+describe('Issue #2732 r04 AC2 parent-pinned Python Ruff reproduction', () => {
+  it('passes exact ruff format then check --fix output, ignores PATH ruff shims, and fails near-misses', withWorld({ python: true }, (world) => {
+    const pinned = fakeUv(world.base, 'pinned', { lock: '0.5.0', ruff: '0.5.0' });
+    const drifted = fakeUv(world.base, 'drifted', { lock: '0.5.0', ruff: '0.6.0' });
+    const evil = join(world.base, 'evil');
+    mkdirSync(evil, { recursive: true });
+    writeFileSync(join(evil, 'ruff'), '#!/bin/sh\n[ "$1" = "--version" ] && echo "ruff 0.5.0"\nfind . -name \'*.py\' -exec sed -i \'s/.*/x = 9/\' {} +\nexit 0\n');
+    chmodSync(join(evil, 'ruff'), 0o755);
+    toolPath = `${evil}:${pinned}`;
+    try {
+      managerOn(world, 'ruff-ok', world.seed);
+      write(world.manager, 'legacy.py', RUFF_FIXED);
+      const head = commit(world.manager, 'ruff output');
+      const pushed = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-ok');
+      expect(pushed.status, pushed.out).toBe(0);
+      expect(remoteRef(world, 'refs/heads/ruff-ok')).toBe(head);
+      // One-line alteration beyond the pinned output.
+      managerOn(world, 'ruff-alt', world.seed);
+      write(world.manager, 'legacy.py', 'x = 2\nif x is None:\n    pass\n');
+      commit(world.manager, 'altered');
+      const altered = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-alt');
+      expect(altered.status).not.toBe(0);
+      expect(altered.out).toContain('Ruff proof: the proposed tree is not the exact pinned Ruff output');
+      // Mixed paths, including a proposed-branch lock/config edit.
+      managerOn(world, 'ruff-mixed', world.seed);
+      write(world.manager, 'legacy.py', RUFF_FIXED);
+      write(world.manager, 'uv.lock', '[[package]]\nname = "ruff"\nversion = "0.6.0"\n');
+      commit(world.manager, 'mixed lock edit');
+      expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-mixed').out).toContain('Ruff proof: the commit is not .py-only');
+      // The locked artifact that uv resolves reports another version than the parent's lock pin.
+      toolPath = `${evil}:${drifted}`;
+      managerOn(world, 'ruff-drift', world.seed);
+      write(world.manager, 'legacy.py', RUFF_FIXED);
+      commit(world.manager, 'drifted tool');
+      expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-drift').out).toContain('locked ruff 0.5.0 is unavailable');
+      // Without uv there is no lock-bound Ruff: a bare PATH ruff is never used.
+      toolPath = evil;
+      expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-nouv').out).toContain('AC2');
+      toolPath = `${evil}:${pinned}`;
+      // Parent not proven published: an unpublished (but formatter-clean) commit sits below the Ruff commit.
+      managerOn(world, 'ruff-parent', world.seed);
+      write(world.manager, 'src/app.ts', TS_AFTER);
+      commit(world.manager, 'ts format');
+      write(world.manager, 'legacy.py', RUFF_FIXED);
+      commit(world.manager, 'ruff atop unpublished parent');
+      expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/ruff-parent').out).toContain('parent commit is not proven published');
+      for (const name of ['ruff-alt', 'ruff-mixed', 'ruff-drift', 'ruff-nouv', 'ruff-parent']) expect(remoteRef(world, `refs/heads/${name}`)).toBe('');
+    } finally {
+      toolPath = '';
+    }
+  }));
+
+  it.skipIf(!REAL_RUFF)('reproduces authentic hash-locked Ruff 0.5.7 output through uv and refuses a one-line alteration', withWorld({
+    python: REAL_RUFF ? { ...REAL_RUFF, legacy: 'import os\nx = 1  \n' } : false,
+  }, (world) => {
+    managerOn(world, 'real-ok', world.seed);
+    write(world.manager, 'legacy.py', '\nx = 1\n');
+    const head = commit(world.manager, 'authentic ruff output');
+    const pushed = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/real-ok');
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(remoteRef(world, 'refs/heads/real-ok')).toBe(head);
+    managerOn(world, 'real-alt', world.seed);
+    write(world.manager, 'legacy.py', 'x = 2\n');
+    commit(world.manager, 'one-line alteration');
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/real-alt').out).toContain('AC2');
+  }));
+});
+
+describe('Issue #2732 r04 review fixes: endpoint provenance, default binding, hook streams', () => {
+  it('uses only the first fetch URL and honors negative refspecs for the published set', withWorld({}, (world) => {
+    const elsewhere = join(world.base, 'elsewhere.git');
+    git(world.base, 'init', '-q', '--bare', '-b', 'trunk', elsewhere);
+    git(world.primary, 'push', '-q', elsewhere, 'trunk');
+    const other = join(world.base, 'other-a');
+    git(world.base, 'clone', '-q', elsewhere, other);
+    git(other, 'checkout', '-q', '-b', 'x');
+    write(other, 'src/app.ts', TS_SUBSTANTIVE);
+    commit(other, 'substantive published only on endpoint A');
+    git(other, 'push', '-q', 'origin', 'x');
+    // Fetch reads the first URL (A); pushes go to B (world.bare).
+    git(world.manager, 'config', 'remote.origin.url', elsewhere);
+    git(world.manager, 'config', '--add', 'remote.origin.url', world.bare);
+    git(world.manager, 'config', 'remote.origin.pushurl', world.bare);
+    git(world.manager, 'fetch', '-q', 'origin');
+    managerOn(world, 'nu', 'origin/x');
+    const multi = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/nu');
+    expect(multi.status).not.toBe(0);
+    expect(multi.out).toContain('AC2');
+    expect(remoteRef(world, 'refs/heads/nu')).toBe('');
+    // A tracking ref excluded by a negative refspec is not publication evidence.
+    git(world.manager, 'config', '--unset-all', 'remote.origin.url');
+    git(world.manager, 'config', 'remote.origin.url', world.bare);
+    git(world.manager, 'config', '--unset', 'remote.origin.pushurl');
+    git(world.manager, 'update-ref', '-d', 'refs/remotes/origin/x');
+    const otherB = otherClone(world);
+    git(otherB, 'checkout', '-q', '-b', 'private');
+    write(otherB, 'src/app.ts', TS_SUBSTANTIVE);
+    const secret = commit(otherB, 'substantive private');
+    git(otherB, 'push', '-q', 'origin', 'private');
+    git(world.manager, 'fetch', '-q', world.bare, 'refs/heads/private:refs/remotes/origin/private');
+    expect(git(world.manager, 'rev-parse', 'refs/remotes/origin/private')).toBe(secret);
+    git(world.manager, 'config', '--add', 'remote.origin.fetch', '^refs/heads/private');
+    managerOn(world, 'nu2', 'origin/private');
+    const negative = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/nu2');
+    expect(negative.status).not.toBe(0);
+    expect(negative.out).toContain('AC2');
+    git(world.manager, 'config', '--unset-all', 'remote.origin.fetch', '\\^');
+    git(world.manager, 'fetch', '-q', 'origin');
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/nu2').status).toBe(0);
+  }));
+
+  it('binds the selected default, not the PR base, and refuses silent rebinding', withWorld({}, async (world) => {
+    const rebind = installManagerPushGuard({
+      worktreePath: world.manager, defaultBranch: 'feature', endpointMatchesRepository: () => true,
+    });
+    expect(rebind.ok).toBe(false);
+    if (!rebind.ok) expect(rebind.cause).toBe('manager_push_guard_default_branch_changed');
+    expect(git(world.manager, 'config', '--worktree', '--get', 'opkManagerPushGuard.defaultBranch')).toBe('trunk');
+    const installs: string[] = [];
+    const prBase = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('manager'), issueNumber: undefined, baseBranch: 'origin/feature',
+    }, {
+      ...deps(),
+      installManagerPushGuard: (request) => { installs.push(request.defaultBranch); return { status: 'ok', value: true }; },
+    });
+    expect(installs).toEqual([]);
+    expect(prBase.outcome).toBe('continue');
+    if (prBase.outcome === 'continue') expect(prBase.observedCause).toBe('manager_push_guard_unobserved');
+  }));
+
+  it('keeps inherited pre-push stdout and stderr on separate streams', withWorld({
+    prePush: '#!/bin/sh\necho hook-stdout\necho hook-stderr >&2\nexit 0\n',
+  }, (world) => {
+    const head = git(world.manager, 'rev-parse', 'HEAD');
+    const result = runHook(world, world.bare, `refs/heads/mgr ${head} refs/heads/brand-new ${ZERO}`);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('hook-stdout\n');
+    expect(result.stderr).toBe('hook-stderr\n');
+  }));
+});
+
+describe('Issue #2732 r02 review fixes: repoint, dormant sibling config, redaction, local aliases, rollback', () => {
+  it('does not relabel refs fetched from endpoint A as published on a repointed endpoint B', withWorld({}, (world) => {
+    const feature = (() => {
+      const clone = otherClone(world);
+      git(clone, 'checkout', '-q', '-b', 'feature');
+      write(clone, 'README.md', 'feature\n');
+      const tip = commit(clone, 'feature tip');
+      git(clone, 'push', '-q', 'origin', 'feature');
+      return { clone, tip };
+    })();
+    const endpointB = join(world.base, 'endpoint-b.git');
+    git(world.base, 'clone', '-q', '--bare', world.bare, endpointB);
+    // A-only private tip Y: a substantive descendant of feature=X, never published on B.
+    git(feature.clone, 'checkout', '-q', '-b', 'private');
+    write(feature.clone, 'src/app.ts', TS_SUBSTANTIVE);
+    const privateTip = commit(feature.clone, 'A-only substantive');
+    git(feature.clone, 'push', '-q', 'origin', 'private');
+    git(world.manager, 'fetch', '-q', 'origin');
+    expect(git(world.manager, 'rev-parse', 'origin/private')).toBe(privateTip);
+    managerOn(world, 'mgr2', privateTip);
+    git(world.manager, 'config', 'remote.origin.url', endpointB);
+    const pushed = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/feature');
+    expect(pushed.status).not.toBe(0);
+    expect(pushed.out).toContain('AC4');
+    expect(remoteRef(world, 'refs/heads/feature', endpointB)).toBe(feature.tip);
+    const reinstall = installGuard(world, world.seed);
+    expect(reinstall.ok).toBe(false);
+    if (!reinstall.ok) expect(reinstall.cause).toBe('manager_push_guard_endpoint_changed');
+  }));
+
+  it('refuses to enable per-worktree config over a dormant sibling pushurl and changes nothing', withWorld({ install: false }, (world) => {
+    const worker = join(world.base, 'worker-dormant');
+    git(world.primary, 'worktree', 'add', '-q', '--no-track', '-b', 'wrk-dormant', worker, 'origin/trunk');
+    const elsewhere = join(world.base, 'elsewhere-push.git');
+    git(world.base, 'init', '-q', '--bare', '-b', 'trunk', elsewhere);
+    git(world.primary, 'config', '--file', join(git(worker, 'rev-parse', '--absolute-git-dir'), 'config.worktree'), 'remote.origin.pushurl', elsewhere);
+    const result = installGuard(world, world.seed);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.cause).toBe('manager_push_guard_dormant_worktree_config');
+    expect(gitTry(world.primary, 'config', '--get', 'extensions.worktreeConfig').out.trim()).toBe('');
+    expect(git(worker, 'remote', 'get-url', '--push', 'origin')).toBe(world.bare);
+  }));
+
+  it('never prints a credential-bearing push URL in a refusal', withWorld({}, (world) => {
+    const head = git(world.manager, 'rev-parse', 'HEAD');
+    for (const url of ['https://user:ghp_secret-token@example.test/org/repo.git?access_token=qs-secret#frag', 'user:pw-secret@example.test:org/repo.git']) {
+      const denied = runHook(world, url, `refs/heads/mgr ${head} refs/heads/trunk ${head}`);
+      expect(denied.status).not.toBe(0);
+      expect(denied.out).toContain('AC3');
+      expect(denied.out).not.toMatch(/ghp_secret-token|qs-secret|pw-secret|frag/u);
+      expect(denied.out).toContain('example.test');
+      const stale = runHook(world, url, `refs/heads/mgr ${head} refs/heads/feat ${head}`);
+      expect(stale.out).not.toMatch(/ghp_secret-token|qs-secret|pw-secret|frag/u);
+    }
+  }));
+
+  it('does not treat a locally writable fetch destination as published evidence', withWorld({}, (world) => {
+    git(world.manager, 'config', '--unset-all', 'remote.origin.fetch');
+    git(world.manager, 'config', 'remote.origin.fetch', '+refs/heads/*:refs/heads/*');
+    managerOn(world, 'manager', world.seed);
+    write(world.manager, 'src/app.ts', TS_SUBSTANTIVE);
+    commit(world.manager, 'unpublished hand edit');
+    const pushed = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/feat');
+    expect(pushed.status).not.toBe(0);
+    expect(pushed.out).toContain('AC2');
+    expect(remoteRef(world, 'refs/heads/feat')).toBe('');
+  }));
+
+  it('restores the prior worktree hooksPath and original record when the observation fails, so a retry keeps delegating', withWorld({ install: false }, (world) => {
+    const custom = join(world.base, 'custom-hooks');
+    mkdirSync(custom, { recursive: true });
+    writeFileSync(join(custom, 'pre-push'), '#!/bin/sh\necho custom-ran > "$(dirname "$0")/ran"\nexit 0\n');
+    chmodSync(join(custom, 'pre-push'), 0o755);
+    git(world.primary, 'config', 'extensions.worktreeConfig', 'true');
+    git(world.manager, 'config', '--worktree', 'core.hooksPath', custom);
+    const previousOptions = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = '--no-such-node-flag-for-probe';
+    let failed: ReturnType<typeof installGuard>;
+    try { failed = installGuard(world, world.seed); } finally {
+      if (previousOptions === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previousOptions;
+    }
+    expect(failed.ok).toBe(false);
+    if (!failed.ok) expect(failed.cause).toBe('manager_push_guard_unobserved');
+    expect(git(world.manager, 'config', '--worktree', '--get', 'core.hooksPath')).toBe(custom);
+    for (const key of ['installed', 'originalHooksPath', 'defaultBranch', 'seedOid', 'boundEndpoint']) {
+      expect(gitTry(world.manager, 'config', '--worktree', '--get', `opkManagerPushGuard.${key}`).status).not.toBe(0);
+    }
+    expect(installGuard(world, world.seed).ok).toBe(true);
+    expect(git(world.manager, 'config', '--worktree', '--get', 'opkManagerPushGuard.originalHooksPath')).toBe(custom);
+    commit(world.manager, 'no content', ['--allow-empty']);
+    expect(gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/feat').status).toBe(0);
+    expect(existsSync(join(custom, 'ran'))).toBe(true);
+  }));
 });
