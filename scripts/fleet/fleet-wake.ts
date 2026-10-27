@@ -618,6 +618,8 @@ export interface TerminalEnvelopeEvent {
   readonly handoffReceiptPath?: string;
   readonly lifecycleOutcome?: 'incident' | 'success';
   readonly turnResultState?: string;
+  /** Existing envelope `delivery` (e.g. not-sent, POSSIBLY_DELIVERED, landed): wording input only. */
+  readonly delivery?: string;
 }
 
 export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeEvent[] {
@@ -656,6 +658,7 @@ export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeE
           ...(envelope.lifecycle_outcome === 'incident' || envelope.lifecycle_outcome === 'success'
             ? { lifecycleOutcome: envelope.lifecycle_outcome } : {}),
           ...(typeof envelope.turn_result_state === 'string' ? { turnResultState: envelope.turn_result_state } : {}),
+          ...(typeof envelope.delivery === 'string' && envelope.delivery.length > 0 ? { delivery: envelope.delivery } : {}),
           ...(cwd ? { cwd } : {}),
           ...(terminalHandle ? { terminalHandle } : {}),
           ...(observedInvocationId ? { observedInvocationId } : {}),
@@ -772,14 +775,43 @@ export function readWorktreeHead(worktreePath: string): string | undefined {
 }
 
 // A branch pushed under another name still owns the PR when its worktree sits on the PR head.
+// Selected native panes whose screen could not be read still count: one that is on the PR ref,
+// sits on the PR head, or whose HEAD cannot be read is an unknown candidate and vetoes both steps.
 function pullOwner(
   pull: OpenPullHead,
   panes: readonly FleetPaneObservation[],
   headOf: (worktreePath: string) => string | undefined,
+  unreadable: readonly FleetTerminal[] = [],
 ): FleetPaneObservation | undefined {
+  const unknownCandidate = unreadable.some((pane) => {
+    if (pane.branch === `refs/heads/${pull.ref}`) return true;
+    if (!pane.worktreePath) return false;
+    const head = headOf(pane.worktreePath);
+    return head === undefined || head === pull.sha;
+  });
+  if (unknownCandidate) return undefined;
   const onBranch = onlyPane(panes.filter((pane) => pane.branch === `refs/heads/${pull.ref}`));
   if (onBranch) return onBranch;
   return onlyPane(panes.filter((pane) => pane.worktreePath && headOf(pane.worktreePath) === pull.sha));
+}
+
+/**
+ * Current selected project/repository/Issue local Orca orchestrator assignment rows, whatever their
+ * completeness or safety. `undefined` = census unreadable, which proves nothing about absence.
+ */
+function matchingIssueAssignmentRows(
+  options: FleetAlarmTickOptions, repository: string, issue: number,
+): number | undefined {
+  let rows: readonly WorkerAssignmentRecord[] | null;
+  try {
+    rows = (options.readCurrentAssignments
+      ?? (() => listCurrentWorkerAssignmentRecords(resolveWorkerAssignmentStorePath(options.config.projectId))))();
+  } catch { return undefined; }
+  if (!rows) return undefined;
+  return rows.filter((row) => row.projectId === options.config.projectId
+    && row.repository.toLowerCase() === repository.toLowerCase()
+    && row.issueNumber === issue && row.role === 'orchestrator'
+    && row.kind === 'local' && row.provider === 'orca').length;
 }
 
 type OrcaReceipt = { readonly ok?: boolean; readonly result?: Record<string, unknown> };
@@ -894,6 +926,8 @@ interface ProducerResolution {
   readonly terminalState: string;
   readonly evidence: string;
   readonly eventId: string;
+  /** Original terminal-envelope paths the event rests on, for the shared handle/path mark. */
+  readonly paths?: readonly string[];
 }
 
 // GPT invocation names are free-form; punctuation belongs to the park sentence.
@@ -1203,7 +1237,7 @@ async function wakeAssignedIssueManagers(
   catch { assignments = null; }
   if (!assignments) { log('Issue-directed Wake withheld: assignment census unavailable'); return; }
   const numbered = [...new Set(assignments.filter((row) => row.projectId === options.config.projectId
-    && row.repository === repository && row.role === 'orchestrator' && row.issueNumber)
+    && row.repository.toLowerCase() === repository.toLowerCase() && row.role === 'orchestrator' && row.issueNumber)
     .map((row) => row.issueNumber!))];
   if (numbered.length === 0) return;
   let pulls: readonly OpenPullHead[];
@@ -1462,14 +1496,31 @@ async function wakeOriginalTerminalFailures(
 ): Promise<void> {
   const readAssignments = options.readCurrentAssignments
     ?? (() => listCurrentWorkerAssignmentRecords(resolveWorkerAssignmentStorePath(options.config.projectId)));
-  const assignments = readAssignments();
+  let assignments: readonly WorkerAssignmentRecord[] | null;
+  try { assignments = readAssignments(); }
+  catch { assignments = null; }
   const events = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)().filter(failureTerminalEnvelope);
   for (const event of events) {
     const owner = nativeReceiptLaunchingOwner(event, options, observations, terminals, executor, assignments);
-    if (!owner || bareShellHandles.has(owner.pane.handle)) continue;
+    if (!owner) {
+      // A published receipt-bound fact with no bindable current owner has no supported
+      // coordinator route: one log line, never a guessed pane or coordinator Wake.
+      if (assignments && event.runIdentity && event.attemptIdentity && event.handoffReceiptPath) {
+        const unowned = `terminal-unowned:${event.path}`;
+        if (!store.hasParkedWakeEvent(unowned)) {
+          try { store.markParkedWakeEvent(unowned); }
+          catch { continue; }
+          log(`no bindable owner for terminal envelope ${event.path}: re-check it with the original caller`);
+        }
+      }
+      continue;
+    }
+    if (bareShellHandles.has(owner.pane.handle)) continue;
     const key = `failure:${owner.pane.handle}:${owner.pane.incarnationId}:${event.attemptIdentity}:${owner.invocationId}:${event.path}`;
+    const shared = sharedTerminalMark(owner.pane.handle, event.path);
+    const delivery = event.delivery ? safeUnitAtom(event.delivery) : undefined;
     const message = safeUnitWakeText('terminal-' + owner.invocationId,
-      event.turnResultState ?? 'incident', event.path)
+      (event.turnResultState ?? 'incident') + (delivery ? '/delivery-' + delivery : ''), event.path)
       ?? 'Wake: bound terminal outcome not-ok - inspect the original handoff and decide yourself';
     const currentOwner = (): boolean => {
       try {
@@ -1482,7 +1533,8 @@ async function wakeOriginalTerminalFailures(
           && freshSendSafePane(owner.pane, current, options, executor, store);
       } catch { return false; }
     };
-    await sendMarkedUnitMessage(store, key, owner.pane.handle, message, executor, sleepMs, log, counts, currentOwner);
+    await sendMarkedUnitMessage(store, key, owner.pane.handle, message, executor, sleepMs, log, counts, currentOwner,
+      undefined, { suppressIfMarked: [shared], reserve: [shared] });
   }
 }
 
@@ -1539,7 +1591,7 @@ function gptTerminalResolution(
   const evidence = paths.length === 1 ? paths[0]! : 'three-exact-terminal-envelopes';
   return { deficient: false, match: {
     label: producer.label, terminalState: 'terminal-envelope-settled',
-    evidence, eventId: 'gpt-exact:' + ids.join(',') + ':' + paths.join('|'),
+    evidence, eventId: 'gpt-exact:' + ids.join(',') + ':' + paths.join('|'), paths,
   } };
 }
 
@@ -1614,6 +1666,22 @@ interface PaneWakeCounts {
   attemptedProducerFacts: Set<string>;
 }
 
+/**
+ * Extra marks that share one Wake with its route key: `suppressIfMarked` keys
+ * withhold the send when already present; `reserve` keys are written before
+ * any native effect, and only the ones this attempt created are cleared when a
+ * pre-effect refusal withholds the Wake.
+ */
+interface SharedWakeMarks {
+  readonly suppressIfMarked?: readonly string[];
+  readonly reserve?: readonly string[];
+}
+
+/** One mark per (recipient handle, original terminal-envelope path); no incarnation. */
+function sharedTerminalMark(handle: string, path: string): string {
+  return `terminal-path:${handle}:${path}`;
+}
+
 async function sendMarkedUnitMessage(
   store: FleetWakeStateStore, key: string, handle: string, message: string,
   executor: OrcaExecutor, sleepMs: (milliseconds: number) => void | Promise<void>,
@@ -1621,8 +1689,10 @@ async function sendMarkedUnitMessage(
   counts?: PaneWakeCounts,
   stillSelected?: () => boolean,
   producerFactId?: string,
+  shared?: SharedWakeMarks,
 ): Promise<boolean> {
   if (store.hasParkedWakeEvent(key)
+    || (shared?.suppressIfMarked ?? []).some((other) => store.hasParkedWakeEvent(other))
     || (producerFactId && counts?.attemptedProducerFacts.has(handle + ':' + producerFactId))) return false;
   // A failed read-only owner recheck proves no effect was attempted.
   // Keep the event eligible after transient failures or observed drift.
@@ -1632,8 +1702,23 @@ async function sendMarkedUnitMessage(
   }
   // Durable reservation must precede both text and Enter effects. A failed
   // upgrade must not authorize a second attempt at this same fact.
-  try { store.markParkedWakeEvent(key, 'attempted_unverified'); }
-  catch { log('unit wake pre-effect mark unwritable; send withheld: ' + key); return false; }
+  const created: string[] = [];
+  const clearCreated = (): void => {
+    for (const mark of created) {
+      try { store.clearParkedWakeEvent?.(mark); }
+      catch { log('unit wake refused but mark could not be cleared: ' + mark); }
+    }
+  };
+  const allMarks = [key, ...new Set((shared?.reserve ?? []).filter((other) => other !== key))];
+  for (const mark of allMarks) {
+    if (mark !== key && store.hasParkedWakeEvent(mark)) continue; // Not created by this attempt.
+    try { store.markParkedWakeEvent(mark, 'attempted_unverified'); created.push(mark); }
+    catch {
+      clearCreated();
+      log('unit wake pre-effect mark unwritable; send withheld: ' + key);
+      return false;
+    }
+  }
   if (counts) {
     counts.attempts += 1;
     if (producerFactId) counts.attemptedProducerFacts.add(handle + ':' + producerFactId);
@@ -1645,8 +1730,8 @@ async function sendMarkedUnitMessage(
       if (stillSelected && !stillSelected()) {
         // No second Enter was attempted: this is a deterministic safety refusal,
         // not an ambiguous send failure. Preserve the queued event for next tick.
-        try { store.clearParkedWakeEvent?.(key); }
-        catch { log('unit wake refused but mark could not be cleared: ' + key); }
+        // The first text+Enter already submitted, so a later rearm may duplicate it.
+        clearCreated();
         log('unit wake recipient unsafe before Enter; queued: ' + key);
         return false;
       }
@@ -1654,7 +1739,7 @@ async function sendMarkedUnitMessage(
     }
   } catch { /* Keep attempted_unverified across ticks; delivery is ambiguous. */ }
   if (!delivered) { log('unit wake delivery unverified: ' + key); return false; }
-  try { store.markParkedWakeEvent(key, 'sent'); }
+  try { for (const mark of allMarks) store.markParkedWakeEvent(mark, 'sent'); }
   catch { log('unit wake delivered but final mark unverified: ' + key); return false; }
   if (counts) counts.confirmed += 1;
   log('sent re-check to ' + handle + ': ' + key);
@@ -1671,6 +1756,7 @@ async function wakeNamedParkedProducers(
   log: (line: string) => void,
   bareShellHandles: ReadonlySet<string>,
   counts?: PaneWakeCounts,
+  unreadable: readonly FleetTerminal[] = [],
 ): Promise<void> {
   const now = (options.now ?? Date.now)();
   const envelopes = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)();
@@ -1751,11 +1837,20 @@ async function wakeNamedParkedProducers(
     if (match) {
       const eventKey = 'event:' + pane.handle + ':' + match.eventId
         + ((producer.kind === 'time' || producer.kind === 'process') ? ':episode:' + (epoch?.started ?? epoch?.since ?? now) : '');
-      if (!store.hasParkedWakeEvent(eventKey)) {
+      // A terminal-envelope event also owns the shared (handle, path) mark; a gpt-multi
+      // group reserves every member path so no member is later woken again as a single.
+      // A group whose every member path was already woken elsewhere has nothing new to say.
+      const sharedMarks = (match.paths ?? []).map((path) => sharedTerminalMark(pane.handle, path));
+      const covered = producer.kind === 'gpt-multi' && sharedMarks.length > 0
+        && sharedMarks.every((mark) => store.hasParkedWakeEvent(mark));
+      if (!store.hasParkedWakeEvent(eventKey) && !covered) {
         const message = safeUnitWakeText(match.label, match.terminalState, match.evidence)
           ?? 'Wake: matching producer event landed - re-check it yourself before continuing';
+        const shared: SharedWakeMarks | undefined = sharedMarks.length > 0
+          ? { reserve: sharedMarks, ...(producer.kind === 'gpt' ? { suppressIfMarked: sharedMarks } : {}) }
+          : undefined;
         if (await sendMarkedUnitMessage(store, eventKey, pane.handle, message,
-          executor, sleepMs, log, counts, stillParkedOwner, match.eventId)) {
+          executor, sleepMs, log, counts, stillParkedOwner, match.eventId, shared)) {
           if (epoch) store.writeParkedEpoch?.(pane.handle, { ...epoch, since: now });
           store.clearPaneWait?.(pane.handle);
           continue;
@@ -1773,6 +1868,13 @@ async function wakeNamedParkedProducers(
           executor, sleepMs, log, counts, stillParkedOwner);
       }
     }
+  }
+  // A selected pane whose screen is temporarily unreadable is unknown-present, not absent:
+  // keep its saved epoch key/since so the 30-minute reminder clock survives restoration.
+  for (const pane of unreadable) {
+    if (observed.has(pane.handle)) continue;
+    const saved = store.readParkedEpoch?.(pane.handle);
+    if (saved) observed.set(pane.handle, saved.key);
   }
   store.pruneParkedEpochs?.(observed);
 }
@@ -1867,8 +1969,14 @@ async function wakePanesOnEvents(
   sleepMs: (milliseconds: number) => void | Promise<void>,
   bareShellHandles: ReadonlySet<string>,
   counts?: PaneWakeCounts,
+  unreadable: readonly FleetTerminal[] = [],
 ): Promise<number> {
-  const wakes: Array<{ pane: FleetTerminal | FleetPaneObservation; key: string; message: string }> = [];
+  const wakes: Array<{
+    pane: FleetTerminal | FleetPaneObservation; key: string; message: string;
+    shared?: SharedWakeMarks;
+    /** Finished-CI Wake: the live PR head is re-read at each effect; an Issue-linked fallback also re-reads the census. */
+    ci?: { readonly pull: OpenPullHead; readonly fallbackIssue?: number };
+  }> = [];
   for (const envelope of (options.listTerminalEnvelopes ?? listTerminalEnvelopes)()) {
     // The legacy STOPPED route is also a direct GPT-completion Wake (§5).
     // Fallback invocation IDs, cwd-only ownership and unsettled/contradictory
@@ -1889,8 +1997,10 @@ async function wakePanesOnEvents(
     if (!observedId || !safePath) continue;
     const eventId = 'terminal:' + envelope.path;
     const key = 'event:' + pane.handle + ':' + eventId;
-    if (store.hasParkedWakeEvent(key)) continue;
-    wakes.push({ pane, key, message: 'Wake: GPT turn ' + observedId + ' ended, read ' + safePath });
+    const shared = sharedTerminalMark(pane.handle, envelope.path);
+    if (store.hasParkedWakeEvent(key) || store.hasParkedWakeEvent(shared)) continue;
+    wakes.push({ pane, key, message: 'Wake: GPT turn ' + observedId + ' ended, read ' + safePath,
+      shared: { suppressIfMarked: [shared], reserve: [shared] } });
   }
   const parkedEpisodes = observations.flatMap((pane) => {
     if (!pane.worktreePath) return [];
@@ -1923,7 +2033,8 @@ async function wakePanesOnEvents(
   const repository = namedRepository(options.config);
   if (repository && observations.some((pane) => pane.state === 'STOPPED')) {
     const finishedAt = options.checkRunsFinishedAt ?? checkRunsFinishedAt;
-    // Prose-only Run objective / Task spec is never Issue ownership authority.
+    // Prose-only Run objective / Task spec is never Issue ownership authority; the test-only seam
+    // below is not an exact owner in production, the current assignment census is.
     const ownerForPull = options.supervisedPullOwner ?? (() => undefined);
     const readHead = options.readWorktreeHead ?? readWorktreeHead;
     const heads = new Map<string, string | undefined>();
@@ -1934,8 +2045,21 @@ async function wakePanesOnEvents(
     for (const pull of (options.listOpenPulls ?? listOpenPullHeads)(repository)) {
       const at = finishedAt(repository, pull.sha);
       if (at === undefined) continue;
-      // An exact supervised manager wins; a manager started outside orchestration owns the PR by its head.
-      const pane = pull.issue ? ownerForPull(pull, observations) : pullOwner(pull, observations, headOf);
+      // An exact supervised manager wins. Any current assignment row for the Issue (even unsafe or
+      // unbound) or an unreadable census withholds the advisory PR-pane fallback; only a readable
+      // census with zero matching rows lets the original branch/HEAD pullOwner answer.
+      let pane: FleetPaneObservation | undefined;
+      let fallbackIssue: number | undefined;
+      if (pull.issue) {
+        pane = ownerForPull(pull, observations);
+        if (!pane) {
+          if (matchingIssueAssignmentRows(options, repository, pull.issue) !== 0) continue;
+          pane = pullOwner(pull, observations, headOf, unreadable);
+          fallbackIssue = pull.issue;
+        }
+      } else {
+        pane = pullOwner(pull, observations, headOf, unreadable);
+      }
       // A re-run of failed checks on the same head is a new event.
       const key = `event:${pane?.handle ?? 'none'}:ci:${pull.number}:${pull.sha}:${at}`;
       if (!pane) {
@@ -1949,22 +2073,39 @@ async function wakePanesOnEvents(
       // A PARKED pane is eligible only through its own X/event-name match above.
       // This also coalesces a matching CI completion across the two routes.
       if (pane.state !== 'STOPPED' || bareShellHandles.has(pane.handle) || store.hasParkedWakeEvent(key)) continue;
-      wakes.push({ pane, key, message: `Wake: CI on ${pull.sha} finished for PR #${pull.number}` });
+      wakes.push({
+        pane, key, ci: { pull, ...(fallbackIssue !== undefined ? { fallbackIssue } : {}) },
+        message: fallbackIssue !== undefined
+          ? `Advisory: CI on ${pull.sha} finished for PR #${pull.number} - re-check only if you own this PR; no new Task authority`
+          : `Wake: CI on ${pull.sha} finished for PR #${pull.number}`,
+      });
     }
   }
-  for (const { pane, key, message } of wakes) {
+  for (const { pane, key, message, shared, ci } of wakes) {
     if (bareShellHandles.has(pane.handle)) continue;
     const expected = terminalsIdentity(pane);
+    // Runs before the first text+Enter and again before the confirming Enter. The first call may
+    // already have submitted, so a row first seen at the second boundary only withholds Enter.
+    const ciStillCurrent = (): boolean => {
+      if (!ci || !repository) return true;
+      const fresh = (options.readNamedPull ?? readNativePull)(repository, ci.pull.number);
+      if (!fresh || fresh.number !== ci.pull.number || fresh.state !== 'open'
+        || fresh.merged || fresh.headSha !== ci.pull.sha) return false;
+      return ci.fallbackIssue === undefined
+        || matchingIssueAssignmentRows(options, repository, ci.fallbackIssue) === 0;
+    };
     const current = (): boolean => {
       try {
         const latest = listFleetTerminals(executor);
         return latest.filter((row) => terminalsIdentity(row) === expected).length === 1
           && freshSendSafePane(pane, latest, options, executor, store)
           && (!coordinator || pane.handle !== coordinator.handle
-            || coordinatorStillSelected(coordinator, options.config, executor));
+            || coordinatorStillSelected(coordinator, options.config, executor))
+          && ciStillCurrent();
       } catch { return false; }
     };
-    const delivered = await sendMarkedUnitMessage(store, key, pane.handle, message, executor, sleepMs, log, counts, current);
+    const delivered = await sendMarkedUnitMessage(store, key, pane.handle, message, executor, sleepMs, log, counts, current,
+      undefined, shared);
     if (delivered && (!coordinator || pane.handle !== coordinator.handle)) store.clearPaneWait?.(pane.handle);
   }
   return unread.length;
@@ -2149,6 +2290,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
 
   // Keep legacy fleet effects first: stale recovery belongs to this same
   // already-scheduled tick, but must not delay coordinator/banner delivery.
+  let unreadablePeer: string | undefined;
   const operationalTick = async (): Promise<FleetAlarmTickResult> => {
   const wakeCounts: PaneWakeCounts = { attempts: 0, confirmed: 0, attemptedProducerFacts: new Set() };
   let terminals: FleetTerminal[];
@@ -2168,8 +2310,16 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     const coordinator = resolveCoordinatorPane(terminals, config);
     if (config.coordinatorPinFile && !coordinator) log('coordinator pin missing, malformed or not present; coordinator effects withheld');
     let observations: FleetPaneObservation[];
+    // Selected non-primary panes whose screen cannot be read: diagnosed and excluded from effects,
+    // yet never allowed to stop independent recipients' Wake routes.
+    const unreadableSelected: FleetTerminal[] = [];
     try {
       observations = runFleetSweep({
+        onUnreadable: (terminal, _error, primaryBound) => {
+          unreadableSelected.push(terminal);
+          // A primary-bound pane keeps its legacy silent treatment; only others are reported.
+          if (!primaryBound) unreadablePeer ??= terminal.handle;
+        },
         primary: config.primary,
         projectId: config.projectId,
         workspaceRe: config.workspaceRe,
@@ -2207,11 +2357,14 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     }
     const envelopes = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)();
     const tickOptions: FleetAlarmTickOptions = { ...options, listTerminalEnvelopes: () => envelopes };
-    await wakeNamedParkedProducers(tickOptions, observations, terminals, store, executor, sleepMs, log, bareShellHandles, wakeCounts);
+    await wakeNamedParkedProducers(tickOptions, observations, terminals, store, executor, sleepMs, log, bareShellHandles, wakeCounts, unreadableSelected);
     await wakeOriginalTerminalFailures(tickOptions, observations, terminals, executor, store, sleepMs, log, bareShellHandles, wakeCounts);
     await wakeAssignedIssueManagers(tickOptions, observations, terminals, executor, store, sleepMs, log, bareShellHandles, wakeCounts);
     await alarmGoneIssueOwners(tickOptions, coordinator, terminals, executor, store, sleepMs, log, wakeCounts);
-    const eligibleUnreadRunMessages = await wakePanesOnEvents(tickOptions, coordinator, observations, executor, store, log, sleepMs, bareShellHandles, wakeCounts);
+    const eligibleUnreadRunMessages = await wakePanesOnEvents(tickOptions, coordinator, observations, executor, store, log, sleepMs, bareShellHandles, wakeCounts, unreadableSelected);
+    // Independent routes (permission, banners, ordinary alarm for readable panes) keep running;
+    // the unreadable peer is only logged here and reported when the tick had nothing else to say.
+    if (unreadablePeer) log(`${unreadablePeer} unreadable`);
     if (!coordinator) {
       // Coordinator-only STOPPED/POLLING/PERMISSION/Run-mail alarms are withheld,
       // but exact URL-bound direct banner warnings remain eligible.
@@ -2485,7 +2638,9 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   }
   };
   try {
-    return await operationalTick();
+    const result = await operationalTick();
+    return unreadablePeer && (result.state === 'nothing_stopped' || result.state === 'same_stopped_set')
+      ? { state: 'unreadable', handle: unreadablePeer } : result;
   } finally {
     // Covers missing/unreadable coordinator and every early return, without
     // introducing a separate scheduler or an ahead-of-events network wait.

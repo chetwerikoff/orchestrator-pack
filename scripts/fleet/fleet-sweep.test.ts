@@ -369,6 +369,20 @@ describe('fleet sweep pane selection and reads', () => {
     }
   });
 
+  it('isolates one unreadable pane through onUnreadable and still throws by default (#2731)', () => {
+    const terminals = [pane('a', 'OpenCode worker'), pane('b', 'OpenCode peer')];
+    const executor = fakeExecutor(terminals, { b: 'done\nline-b' });
+    expect(() => runFleetSweep({ primary, executor, store: new MemoryPollingStore() }))
+      .toThrow(/a unreadable/u);
+    const seen: string[] = [];
+    const observed = runFleetSweep({
+      primary, executor, store: new MemoryPollingStore(),
+      onUnreadable: (terminal) => { seen.push(terminal.handle); },
+    });
+    expect(seen).toEqual(['a']);
+    expect(observed.map((row) => row.handle)).toEqual(['b']);
+  });
+
   it('returns no pane lines when --lines is zero', () => {
     const observed = runFleetSweep({
       projectId: 'orchestrator-pack',
@@ -439,6 +453,18 @@ describe('Issue #2585 supervised primary-root admission', () => {
     expect(calls.every((args) => args[0] === 'terminal'
       ? ['list', 'show', 'read'].includes(args[1]!)
       : args[0] === 'orchestration' && ['worker-list', 'worker-show', 'run-show'].includes(args[1]!))).toBe(true);
+  });
+
+  it('reports an unreadable primary-bound pane through onUnreadable without observing it (#2731)', () => {
+    const complete = primaryTerminal('native-merge');
+    const terminals = [currentCoordinator, { ...complete, branch: undefined }];
+    const workers: PrimaryWorkerFixture[] = [{ terminal: complete, runId: 'run-main', coordinator: 'coordinator' }];
+    const executor = primaryOrcaExecutor(terminals, {}, workers, [], { 'native-merge': complete });
+    const seen: Array<[string, boolean | undefined]> = [];
+    const observed = runFleetSweep({ ...opts, terminals, executor,
+      onUnreadable: (terminal, _error, primaryBound) => { seen.push([terminal.handle, primaryBound]); } });
+    expect(observed).toEqual([]);
+    expect(seen).toEqual([['native-merge', true]]);
   });
 
   it('primary-root branchless native census: rejects absent, mismatched and conflicting show evidence', () => {
