@@ -7239,18 +7239,29 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
   });
 
-  it('returns promptly when source-02 predecessor send observation stays unreadable', async () => {
+  it('admits source-03 independently when source-02 predecessor send observation stays unreadable', async () => {
     const f = await seedDeadIncumbent({ source02Comment: false });
     const result = await startPackReview({ ...f.input, claimMode: 'acquire' });
     expect(result).toMatchObject({
       ok: false, runId: f.runId, reason: 'gpt_original_invocation_recovery_required',
-      coverage: { kind: 'partial', completedSourceCount: 1, cardinality: 3 },
+      coverage: { kind: 'partial', completedSourceCount: 2, cardinality: 3 },
     });
     expect(String(result.nextAction)).toContain('source-02');
     expect(String(result.nextAction)).toContain(originalSource02);
-    expect(f.launches).toEqual([]);
-    expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[2]?.lifecycle).toBe('planned');
-    expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
+    expect(f.launches.map(({ slotId }) => slotId)).toEqual(['source-03']);
+    expect(f.launches[0]!.timeMs - Date.parse('2026-10-12T00:00:30.000Z')).toBeGreaterThanOrEqual(30_000);
+    const stored = getPackReviewRun(f.runId, f.options)!;
+    expect(stored.reviewRound?.sourceSlots[1]).toMatchObject({
+      lifecycle: 'invocation_started', invocationId: originalSource02, attemptOrdinal: 1,
+    });
+    expect(stored.reviewRound?.sourceSlots[1]?.terminalResult).toBeUndefined();
+    expect(stored.reviewRound?.sourceSlots[1]?.attemptHistory).toBeUndefined();
+    expect(stored.reviewRound?.sourceSlots[2]).toMatchObject({
+      lifecycle: 'terminal', terminalClass: 'complete_clean',
+      invocationId: f.launches[0]!.invocationId, attemptOrdinal: 1,
+    });
+    expect(stored.reviewRound?.settledSourceCount).toBeUndefined();
+    expect(stored.reviewVerdict).toBeUndefined();
     expect(f.statusStates).not.toContain('error');
     expect(f.statusStates).not.toContain('success');
   });
