@@ -1861,8 +1861,8 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     };
   }
 
-  it.each(['early-send', 'late-send', 'pre-send-terminal', 'possible-delivery'] as const)(
-    'paces three exact source admissions with parallel generation (%s)', async (mode) => {
+  it.each(['early-send', 'unsettled-send', 'pre-send-terminal', 'possible-delivery'] as const)(
+    'paces three GPT admissions by start time without requiring prior send settlement (%s)', async (mode) => {
       const storeRoot = tempRoot('opk-gpt-admission-2426-');
       const capture = path.join(storeRoot, 'github-review.json');
       harnessEnv(storeRoot, capture);
@@ -1873,12 +1873,14 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       delete process.env.PACK_GPT_BROWSER_CHAT_URL;
       vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
       const trace: Array<{ slotId: string; invocationId: string; at: number }> = [];
-      const witnesses = new Map<string, number>();
-      const releases: Array<() => void> = [];
+      const releases = new Map<string, () => void>();
       const fixtures: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+      // In the unsettled case, state-light never advances to send_count=1.
+      // This fixture forces the production 30s interval, but admission must not read it.
       const readObservation = vi.fn((profileKey: string, invocationId: string) => ({
         profile_key: profileKey, invocation_id: invocationId,
-        send_count: witnesses.get(invocationId), phase: 'sent_unharvested',
+        send_count: mode === 'early-send' ? 1 : 0,
+        phase: mode === 'early-send' ? 'sent_unharvested' : 'dispatching',
       }));
       const pending = startPackReview(pluralStart(storeRoot, capture, {
         fixtureGptAdmissionReadObservation: readObservation,
@@ -1894,49 +1896,50 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
             }), exitCode: 1 }];
             return;
           }
-          await new Promise<void>((resolve) => releases.push(resolve));
+          // The first source's invocation remains in flight throughout both
+          // later admissions, without a terminal result or settled send witness.
+          await new Promise<void>((resolve) => { releases.set(slotId, resolve); });
         },
       }));
-      await vi.waitFor(() => expect(trace.length).toBeGreaterThan(0));
-      expect(trace).toHaveLength(1);
+      await vi.waitFor(() => expect(trace).toHaveLength(1));
       const first = trace[0]!;
-      if (mode === 'early-send') witnesses.set(first.invocationId, 1);
+      if (mode === 'unsettled-send') {
+        const source = getPackReviewRun(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })[0]!.id,
+          { projectId: 'orchestrator-pack', storeRoot })!.reviewRound!.sourceSlots[0]!;
+        expect(source).toMatchObject({ lifecycle: 'invocation_started', invocationId: first.invocationId });
+        expect(source.terminalResult).toBeUndefined();
+      }
       await vi.advanceTimersByTimeAsync(29_000);
       expect(trace).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(1_000);
-      if (mode === 'late-send') {
-        expect(trace).toHaveLength(1);
-        // Foreign profile/invocation and non-exact numeric counts cannot open the gate.
-        readObservation.mockImplementation((profileKey, invocationId) => ({
-          profile_key: `${profileKey}-foreign`, invocation_id: invocationId, send_count: 1, phase: 'sent_unharvested',
-        }));
-        await vi.advanceTimersByTimeAsync(2_000);
-        expect(trace).toHaveLength(1);
-        readObservation.mockImplementation((profileKey, invocationId) => ({
-          profile_key: profileKey, invocation_id: invocationId, send_count: 2, phase: 'sent_unharvested',
-        }));
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(trace).toHaveLength(1);
-        readObservation.mockImplementation((profileKey, invocationId) => ({
-          profile_key: profileKey, invocation_id: invocationId, send_count: witnesses.get(invocationId), phase: 'sent_unharvested',
-        }));
-        witnesses.set(first.invocationId, 1);
-        await vi.advanceTimersByTimeAsync(1_000);
-      }
       await vi.waitFor(() => expect(trace).toHaveLength(2));
-      // Neither bound callback has completed: the sent source is still generating.
-      expect(releases).toHaveLength(mode.endsWith('terminal') || mode === 'possible-delivery' ? 1 : 2);
       const second = trace[1]!;
-      await vi.advanceTimersByTimeAsync(30_000);
+      expect(second.at - first.at).toBeGreaterThanOrEqual(30_000);
+      expect(second.at - first.at).toBeLessThan(31_000);
+      await vi.advanceTimersByTimeAsync(29_000);
       expect(trace).toHaveLength(2);
-      witnesses.set(second.invocationId, 1);
       await vi.advanceTimersByTimeAsync(1_000);
       await vi.waitFor(() => expect(trace).toHaveLength(3));
       expect(trace.map((entry) => entry.slotId)).toEqual(['source-01', 'source-02', 'source-03']);
       expect(new Set(trace.map((entry) => entry.invocationId)).size).toBe(3);
-      expect(trace[1]!.at - first.at).toBeGreaterThanOrEqual(30_000);
-      expect(trace[2]!.at - second.at).toBeGreaterThanOrEqual(30_000);
-      releases.forEach((release) => release());
+      expect(trace[2]!.at - first.at).toBeGreaterThanOrEqual(60_000);
+      expect(trace[2]!.at - first.at).toBeLessThan(62_000);
+      expect(readObservation).not.toHaveBeenCalled();
+
+      // Sources 2 and 3 must reach terminal independently while source 1 is hung.
+      releases.get('source-02')?.();
+      releases.get('source-03')?.();
+      const runId = String(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })[0]!.id);
+      await vi.waitFor(() => {
+        const slots = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot })!.reviewRound!.sourceSlots;
+        expect(slots.slice(1).map((slot) => slot.lifecycle)).toEqual(['terminal', 'terminal']);
+      });
+      if (mode === 'unsettled-send') {
+        const source = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot })!.reviewRound!.sourceSlots[0]!;
+        expect(source).toMatchObject({ lifecycle: 'invocation_started', invocationId: first.invocationId });
+        expect(source.terminalResult).toBeUndefined();
+      }
+      releases.get('source-01')?.();
       const result = await pending;
       const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
       expect(run?.reviewRound?.sourceSlots.map((slot) => slot.attemptOrdinal)).toEqual([1, 1, 1]);
@@ -6585,8 +6588,8 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       fixturePrState: 'OPEN', fixtureRepoSlug: repository,
       fixtureIssueNumber: prNumber, fixtureIssueTitle: "Independent linked Issue", fixtureIssueBody: issueBody,
       fixtureGptSourceCommentTransport: sourceTransport,
-      // Supplying an observation reader keeps the real 30s admission interval.
-      // Unreadable state-light must not become invented predecessor send proof.
+      // Supplying an observation-reader fixture keeps the real 30s admission interval.
+      // Admission itself must not consult the unreadable state-light observation.
       fixtureGptAdmissionReadObservation: () => { throw new Error('synthetic state-light unavailable'); },
       fixtureReviewBySourceSlot: attempts,
       fixtureAfterGptInvocationBound: ({ slotId, invocationId }) => {
@@ -7236,18 +7239,29 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
   });
 
-  it('returns promptly when source-02 predecessor send observation stays unreadable', async () => {
+  it('admits source-03 independently when source-02 predecessor send observation stays unreadable', async () => {
     const f = await seedDeadIncumbent({ source02Comment: false });
     const result = await startPackReview({ ...f.input, claimMode: 'acquire' });
     expect(result).toMatchObject({
       ok: false, runId: f.runId, reason: 'gpt_original_invocation_recovery_required',
-      coverage: { kind: 'partial', completedSourceCount: 1, cardinality: 3 },
+      coverage: { kind: 'partial', completedSourceCount: 2, cardinality: 3 },
     });
     expect(String(result.nextAction)).toContain('source-02');
     expect(String(result.nextAction)).toContain(originalSource02);
-    expect(f.launches).toEqual([]);
-    expect(getPackReviewRun(f.runId, f.options)?.reviewRound?.sourceSlots[2]?.lifecycle).toBe('planned');
-    expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
+    expect(f.launches.map(({ slotId }) => slotId)).toEqual(['source-03']);
+    expect(f.launches[0]!.timeMs - Date.parse('2026-10-12T00:00:30.000Z')).toBeGreaterThanOrEqual(30_000);
+    const stored = getPackReviewRun(f.runId, f.options)!;
+    expect(stored.reviewRound?.sourceSlots[1]).toMatchObject({
+      lifecycle: 'invocation_started', invocationId: originalSource02, attemptOrdinal: 1,
+    });
+    expect(stored.reviewRound?.sourceSlots[1]?.terminalResult).toBeUndefined();
+    expect(stored.reviewRound?.sourceSlots[1]?.attemptHistory).toBeUndefined();
+    expect(stored.reviewRound?.sourceSlots[2]).toMatchObject({
+      lifecycle: 'terminal', terminalClass: 'complete_clean',
+      invocationId: f.launches[0]!.invocationId, attemptOrdinal: 1,
+    });
+    expect(stored.reviewRound?.settledSourceCount).toBeUndefined();
+    expect(stored.reviewVerdict).toBeUndefined();
     expect(f.statusStates).not.toContain('error');
     expect(f.statusStates).not.toContain('success');
   });
