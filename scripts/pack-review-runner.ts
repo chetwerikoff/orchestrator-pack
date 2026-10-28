@@ -3106,13 +3106,10 @@ async function runGptSourceBatch(options: {
   const admissionInterval = harness && !options.input.fixtureGptAdmissionReadObservation
     ? 0
     : PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS;
-  const readObservation = options.input.fixtureGptAdmissionReadObservation ?? readStateLightTurnObservation;
-  // Resume the same gate from the last retained admission, including recovered slots.
+  // Resume pacing from the last retained admission, including recovered slots.
   let previousAdmission = options.round.sourceSlots
     .filter((slot) => slot.invocationId && slot.admissionStartedAtUtc)
     .sort((a, b) => Date.parse(b.admissionStartedAtUtc!) - Date.parse(a.admissionStartedAtUtc!))[0];
-  const terminalInvocations = new Set<string>();
-  const admittedHere = new Set<string>();
   let admissionTail = Promise.resolve();
   let credentialedSourceCount = 0;
   const admit = async (
@@ -3123,33 +3120,14 @@ async function runGptSourceBatch(options: {
     admissionTail = new Promise<void>((resolveRelease) => { release = resolveRelease; });
     await predecessor;
     try {
-      while (previousAdmission && admissionInterval > 0) {
-        const previous = previousAdmission;
-        const retained = getPackReviewRun(options.run.id, {
-          projectId: options.projectId, storeRoot: options.storeRoot,
-        })?.reviewRound?.sourceSlots.find((slot) => slot.slotId === previous.slotId
-          && slot.invocationId === previous.invocationId);
-        let sendSettled = terminalInvocations.has(previous.invocationId!)
-          || (retained?.lifecycle === 'terminal' && retained.terminalResult !== undefined);
-        if (!sendSettled && previous.launchProfileKey) {
-          try {
-            const observation = readObservation(previous.launchProfileKey, previous.invocationId!);
-            sendSettled = observation.profile_key === previous.launchProfileKey
-              && observation.invocation_id === previous.invocationId
-              && observation.send_count === 1;
-          } catch { /* Missing evidence keeps admission closed; it never authorizes a resend. */ }
+      if (previousAdmission && admissionInterval > 0) {
+        const remaining = Date.parse(previousAdmission.admissionStartedAtUtc!) + admissionInterval - Date.now();
+        if (remaining > 0) {
+          await new Promise<void>((resolveWait) => setTimeout(resolveWait, remaining));
         }
-        // Previously admitted, now-orphaned sources have no local producer that
-        // could make missing send evidence appear. Do not poll them forever.
-        if (!sendSettled && !admittedHere.has(previous.invocationId!)) return false;
-        const remaining = Date.parse(previous.admissionStartedAtUtc!) + admissionInterval - Date.now();
-        if (sendSettled && remaining <= 0) break;
-        await new Promise<void>((resolveWait) => setTimeout(resolveWait,
-          remaining > 0 ? Math.min(remaining, 1_000) : 1_000));
       }
       const startedAt = Date.now();
       if (!(await bind(startedAt))) return false;
-      admittedHere.add(invocationId);
       previousAdmission = {
         slotId, invocationId, lifecycle: 'invocation_started',
         ordinal: options.round.sourceSlots.find((slot) => slot.slotId === slotId)!.ordinal,
@@ -3335,8 +3313,6 @@ async function runGptSourceBatch(options: {
           result: bindHarnessFixtureTerminalInvocation(invocation.result, invocationId),
         };
       }
-      const terminal = parseLastGptTerminalTurnResult(invocation.result.stdout);
-      if (terminal?.invocation_id === invocationId) terminalInvocations.add(invocationId);
       if (!(attemptOrdinal === 1
         && isRetryablePackReviewZeroSendCollision(invocation.result, invocationId))) break;
       attemptOrdinal = 2;
