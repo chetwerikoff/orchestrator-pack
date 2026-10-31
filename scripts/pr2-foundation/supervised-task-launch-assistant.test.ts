@@ -1109,7 +1109,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     const result = await runSupervisedTaskLaunchAssistant(mergeInput({
       issueNumber: undefined, delegatedIntegration: undefined,
       worktreeSelector: 'path:/tmp/non-primary', env: profileEnv(),
-    }), deps({
+    }), { ...deps({
       onWorktree: () => { worktrees += 1; },
       onSupervised: () => { starts += 1; },
       adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }),
