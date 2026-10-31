@@ -52,7 +52,8 @@ import type { TerminalGoneAssignmentEvidence } from '../lib/worker-assignment-ru
 export const LAUNCH_ASSISTANT_SCHEMA = 'supervised-task-launch-assistant/v1' as const;
 export const LAUNCH_STARTUP_OBSERVATION_WINDOW_MS = 30_000;
 export const LAUNCH_WORK_CLASSES = ['manager', 't1', 't2', 't3', 'merge'] as const;
-export const CANONICAL_MERGE_LAUNCH_COMMAND = 'node --experimental-strip-types scripts/pr2-foundation/supervised-task-launch-assistant.ts --project "$PROJECT_ID" --work-class merge --task "$TASK_ID" --issue-number "$ISSUE_NUMBER" --delegated-integration "$DELEGATED_INTEGRATION_JSON"';
+export const CANONICAL_MERGE_LAUNCH_COMMAND = 'node --experimental-strip-types scripts/pr2-foundation/supervised-task-launch-assistant.ts --project "$PROJECT_ID" --work-class merge --task "$TASK_ID" --worktree "path:$PRIMARY_ROOT"';
+const CANONICAL_DELEGATED_MERGE_LAUNCH_COMMAND = 'node --experimental-strip-types scripts/pr2-foundation/supervised-task-launch-assistant.ts --project "$PROJECT_ID" --work-class merge --task "$TASK_ID" --issue-number "$ISSUE_NUMBER" --delegated-integration "$DELEGATED_INTEGRATION_JSON"';
 export type LaunchWorkClass = (typeof LAUNCH_WORK_CLASSES)[number];
 export type LaunchStage = 'command_preflight' | 'repository_preflight' | 'executor_profile'
   | 'manager_run' | 'manager_task' | 'dispatch_admission_early' | 'worktree_prepare'
@@ -612,19 +613,20 @@ export function resolveExecutorProfile(
   return admittedProfile(semanticEdge.value, verdict.route);
 }
 
-function openCodeLaunchRefusal(workClass: LaunchWorkClass): {
+function openCodeLaunchRefusal(workClass: LaunchWorkClass, delegatedIntegration = false): {
   readonly cause: string;
   readonly actor: LaunchActor;
   readonly evidence: Readonly<Record<string, unknown>>;
   readonly nextAction: NextAction;
 } {
+  const mergeCommand = delegatedIntegration ? CANONICAL_DELEGATED_MERGE_LAUNCH_COMMAND : CANONICAL_MERGE_LAUNCH_COMMAND;
   return {
     cause: 'opencode_launch_overlay_required', actor: 'orchestrator',
     evidence: { executorFamily: 'opencode', requiredEnvironment: 'OPENCODE_CONFIG_CONTENT' },
     nextAction: workClass === 'merge' ? {
       kind: 'repair_executor_profile',
-      command: CANONICAL_MERGE_LAUNCH_COMMAND,
-      note: `Use the pack's canonical merge launch command: ${CANONICAL_MERGE_LAUNCH_COMMAND}`,
+      command: mergeCommand,
+      note: `Use the pack's canonical merge launch command: ${mergeCommand}`,
     } : {
       kind: 'repair_executor_profile',
       note: `Restore the OPENCODE_CONFIG_CONTENT browser-deny overlay and rerun scripts/pr2-foundation/supervised-task-launch-assistant.ts with --work-class ${workClass}, retaining the original --run/--task and worktree arguments; do not switch to --work-class merge`,
@@ -655,7 +657,7 @@ function mergeContextRequired(): Extract<EdgeResult<never>, { readonly status: '
   return {
     status: 'continue', cause: 'merge_delegated_integration_required', actor: 'orchestrator',
     evidence: { requiredArguments: ['--issue-number', '--delegated-integration'] },
-    nextAction: { kind: 'reconcile_manager_task', command: CANONICAL_MERGE_LAUNCH_COMMAND,
+    nextAction: { kind: 'reconcile_manager_task', command: CANONICAL_DELEGATED_MERGE_LAUNCH_COMMAND,
       note: 'Supply the current Issue and exact existing PR/head/predecessor marker for the implementation assignment' },
   };
 }
@@ -789,7 +791,7 @@ export async function runSupervisedTaskLaunchAssistant(
   const delegatedIntegration = input.workClass === 'merge'
     ? parseDelegatedIntegrationMarker(input.delegatedIntegration)
     : null;
-  if (input.workClass === 'merge'
+  if (input.workClass === 'merge' && input.delegatedIntegration !== undefined
     && (!delegatedIntegration || !Number.isSafeInteger(input.issueNumber) || Number(input.issueNumber) <= 0)) {
     return continued(input, 'executor_profile', mergeContextRequired(), resources, startedAtMs, timings, deps.now);
   }
@@ -859,10 +861,10 @@ export async function runSupervisedTaskLaunchAssistant(
   if (input.workClass === 'merge'
     && (profile.family !== 'opencode' || profile.route !== 'exact_terminal_worktree'
       || !input.primaryRoot || input.worktreeSelector !== `path:${input.primaryRoot}`)) {
-    return continued(input, 'executor_profile', openCodeLaunchRefusal(input.workClass), resources, startedAtMs, timings, deps.now);
+    return continued(input, 'executor_profile', openCodeLaunchRefusal(input.workClass, Boolean(delegatedIntegration)), resources, startedAtMs, timings, deps.now);
   }
   if (profile.family === 'opencode' && !openCodeLaunchHasFleetBrowserDenies({ command: profile.launchCommand, agentName: profile.agentName, inlineConfigJson: profile.inlineConfigJson, ...(profile.executable ? { executable: profile.executable } : {}) })) {
-    return continued(input, 'executor_profile', openCodeLaunchRefusal(input.workClass), resources, startedAtMs, timings, deps.now);
+    return continued(input, 'executor_profile', openCodeLaunchRefusal(input.workClass, Boolean(delegatedIntegration)), resources, startedAtMs, timings, deps.now);
   }
 
   let taskId = input.taskId?.trim() ?? '';
@@ -1035,7 +1037,7 @@ export async function runSupervisedTaskLaunchAssistant(
   // The post-probe command is the actual spawn command; never trust the pre-probe
   // profile if a finalized OpenCode command silently dropped its deny overlay.
   if (profile.family === 'opencode' && !openCodeLaunchHasFleetBrowserDenies({ command: profile.launchCommand, agentName: profile.agentName, inlineConfigJson: profile.inlineConfigJson, ...(profile.executable ? { executable: profile.executable } : {}) })) {
-    return continued(input, 'terminal_prepare', openCodeLaunchRefusal(input.workClass), resources, startedAtMs, timings, deps.now);
+    return continued(input, 'terminal_prepare', openCodeLaunchRefusal(input.workClass, Boolean(delegatedIntegration)), resources, startedAtMs, timings, deps.now);
   }
 
   // The final Dispatch observation precedes the terminal spawn: a Dispatch that
@@ -2807,8 +2809,13 @@ export function parseLaunchAssistantCli(
   }
 
   if (workClass === 'merge') {
-    if (!hasTask || !issueNumber || !delegatedIntegration || runId || hasManagerBrief || hasWorktreeSelector || hasWorktreeName) {
-      throw new Error('merge requires --task, --issue-number and --delegated-integration on the selected primary checkout; --worktree, --worktree-name, --run and --manager-brief are forbidden');
+    if (!hasTask || runId || hasManagerBrief || hasWorktreeName
+      || (delegatedIntegration
+        ? (!issueNumber || hasWorktreeSelector)
+        : (!hasWorktreeSelector || worktreeSelector !== `path:${target.primaryRoot}`))) {
+      throw new Error(delegatedIntegration
+        ? 'delegated merge requires --task, --issue-number and --delegated-integration on the selected primary checkout; --worktree, --worktree-name, --run and --manager-brief are forbidden'
+        : 'Task-mode merge requires --task and --worktree path:<selected primary root>; --issue-number is optional; --worktree-name, --run and --manager-brief are forbidden');
     }
   } else if (delegatedRaw !== undefined) {
     throw new Error('--delegated-integration is merge-only');
@@ -2839,7 +2846,7 @@ export function parseLaunchAssistantCli(
     ...(runId ? { runId } : {}),
     ...(taskId ? { taskId } : {}),
     ...(managerBrief !== undefined ? { managerBrief } : {}),
-    ...(workClass === 'merge' ? { worktreeSelector: `path:${target.primaryRoot}` }
+    ...(workClass === 'merge' && delegatedIntegration ? { worktreeSelector: `path:${target.primaryRoot}` }
       : worktreeSelector ? { worktreeSelector } : {}),
     ...(worktreeName ? { worktreeName } : {}),
     ...(existingTerminal ? { existingTerminal } : {}),
