@@ -211,6 +211,9 @@ function validatePause(result: Record<string, unknown>): string[] {
     return [...errors, 'external_pause result.pause must be an object'];
   }
   const pause = result.pause as Record<string, unknown>;
+  if (pause.wake_owner !== undefined && pause.wake_owner !== 'orchestrator_watcher') {
+    errors.push('external_pause result.pause.wake_owner is invalid');
+  }
   if (!nonEmpty(pause.remedy)) errors.push('external_pause result.pause.remedy must be non-empty');
   if (!nonEmpty(pause.evidence)) errors.push('external_pause result.pause.evidence must be non-empty');
   const resume = normalizeResumePredicate(pause.resume_when);
@@ -386,8 +389,15 @@ export function evaluateManagerBoundary(input: {
   const result = readable as ManagerResult;
   if (!result.ok && result.nextAction !== null && 'argv' in result.nextAction
     && sameArgv(result.nextAction.argv, input.currentArgv)) {
-    // A producer-verified external pause may reobserve the retained invocation only after the wake.
-    if ('pause' in result) return { result, exitCode: 4 };
+    // Only the execute probe's identity-bound owned-generation classification
+    // authorizes repeating its read-only inspect after the existing watcher wake.
+    if ('pause' in result
+      && input.producer === 'browser-gpt-page-probe/v1'
+      && result.cause === 'external:content_authority_conflict'
+      && result.pause.wake_owner === 'orchestrator_watcher'
+      && result.nextAction.kind === 'execute-observe-owned-turn') {
+      return { result, exitCode: 4 };
+    }
     const defect: ManagerContractDefectResult = {
       ...contractDefect(input.producer, ['recoverable nextAction.argv must not be byte-identical to currentArgv']),
       cause: 'self_recommendation',
