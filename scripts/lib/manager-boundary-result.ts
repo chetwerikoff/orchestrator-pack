@@ -43,6 +43,13 @@ export interface ManagerNextAction {
   argv: string[];
 }
 
+// A contract defect requests a new manager execution invocation, never a resend or the same argv.
+export interface ManagerFreshExecutionAction {
+  kind: 'fresh-execution-invocation';
+  producer: string;
+  resend_allowed: false;
+}
+
 export type ZeroSendCauseClass = 'transient' | 'deterministic-input' | 'state-conflict';
 export interface ManagerZeroSendReason {
   class: ZeroSendCauseClass;
@@ -80,8 +87,9 @@ export interface ManagerExternalPauseResult {
     remedy: string;
     resume_when: ManagerResumePredicate;
     evidence: string;
+    wake_owner?: 'orchestrator_watcher';
   };
-  nextAction: null;
+  nextAction: ManagerNextAction | null;
 }
 
 export interface ManagerContractDefectResult {
@@ -91,7 +99,7 @@ export interface ManagerContractDefectResult {
     producer: string;
     detail: string[];
   };
-  nextAction: null;
+  nextAction: ManagerFreshExecutionAction;
 }
 
 export type ManagerResult =
@@ -248,11 +256,16 @@ export function validateManagerResult(value: unknown, options: { boundary?: bool
     if (!nonEmpty(result.cause)) errors.push('manager non-success result.cause must be non-empty');
     if (hasPause && hasDefect) errors.push('manager non-success result cannot carry both pause and defect');
     if (hasPause) {
-      if (nextAction !== null) errors.push('external_pause result.nextAction must be null');
+      if (nextAction !== null) errors.push(...validateManagerNextAction(nextAction));
       errors.push(...validatePause(result));
     } else if (hasDefect) {
       if (!options.boundary) errors.push('contract_defect may only be constructed by the manager boundary');
-      if (nextAction !== null) errors.push('contract_defect result.nextAction must be null');
+      const fresh = nextAction as Record<string, unknown> | null;
+      if (!fresh || typeof fresh !== 'object' || Array.isArray(fresh)
+        || fresh.kind !== 'fresh-execution-invocation'
+        || !nonEmpty(fresh.producer) || fresh.resend_allowed !== false) {
+        errors.push('contract_defect requires a fresh execution invocation with resend disallowed');
+      }
     } else {
       if (nextAction === null) errors.push('recoverable manager result.nextAction must be non-null');
       else errors.push(...validateManagerNextAction(nextAction));
@@ -321,6 +334,8 @@ export function managerExternalPauseResult(input: {
   evidence: string;
   blocker?: string;
   reason?: ManagerZeroSendReason;
+  nextAction?: ManagerNextAction;
+  wakeOwner?: 'orchestrator_watcher';
 }): ManagerExternalPauseResult {
   const result: ManagerExternalPauseResult = {
     ok: false,
@@ -331,8 +346,9 @@ export function managerExternalPauseResult(input: {
       remedy: input.remedy,
       resume_when: { ...input.resumeWhen },
       evidence: input.evidence,
+      ...(input.wakeOwner ? { wake_owner: input.wakeOwner } : {}),
     },
-    nextAction: null,
+    nextAction: input.nextAction ?? null,
   };
   const errors = validateManagerResult(result);
   if (errors.length) throw new Error('invalid external_pause manager result: ' + errors.join('; '));
@@ -340,7 +356,10 @@ export function managerExternalPauseResult(input: {
 }
 
 function contractDefect(producer: string, detail: string[]): ManagerContractDefectResult {
-  return { ok: false, cause: 'producer_contract_defect', defect: { producer, detail }, nextAction: null };
+  return {
+    ok: false, cause: 'producer_contract_defect', defect: { producer, detail },
+    nextAction: { kind: 'fresh-execution-invocation', producer, resend_allowed: false },
+  };
 }
 
 function sameArgv(left: readonly string[], right: readonly string[]): boolean {
@@ -365,7 +384,10 @@ export function evaluateManagerBoundary(input: {
   const errors = validateManagerResult(readable, { boundary: true });
   if (errors.length) return { result: contractDefect(input.producer, errors), exitCode: 5 };
   const result = readable as ManagerResult;
-  if (!result.ok && result.nextAction !== null && sameArgv(result.nextAction.argv, input.currentArgv)) {
+  if (!result.ok && result.nextAction !== null && 'argv' in result.nextAction
+    && sameArgv(result.nextAction.argv, input.currentArgv)) {
+    // A producer-verified external pause may reobserve the retained invocation only after the wake.
+    if ('pause' in result) return { result, exitCode: 4 };
     const defect: ManagerContractDefectResult = {
       ...contractDefect(input.producer, ['recoverable nextAction.argv must not be byte-identical to currentArgv']),
       cause: 'self_recommendation',
@@ -378,12 +400,6 @@ export function evaluateManagerBoundary(input: {
   }
   if (result.cause === 'producer_contract_defect' || result.cause === 'self_recommendation') {
     return { result, exitCode: 5 };
-  }
-  if (result.nextAction === null) {
-    return {
-      result: contractDefect(input.producer, ['non-success result requires nextAction, external pause, or contract defect']),
-      exitCode: 5,
-    };
   }
   return { result, exitCode: 3 };
 }

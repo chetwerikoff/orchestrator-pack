@@ -9,6 +9,7 @@ import type { ProbeStatus } from '../browser-gpt-page-probe.ts';
 import {
   MANAGER_NEXT_ACTION_KINDS,
   managerNextAction,
+  evaluateManagerBoundary,
   validateManagerResult,
 } from './manager-boundary-result.ts';
 import {
@@ -74,9 +75,9 @@ function actionOf(evaluated: ReturnType<typeof classifyExecuteIssueManagerRecord
 }
 function expectReadOnly(evaluated: ReturnType<typeof classifyExecuteIssueManagerRecord>) {
   const action = actionOf(evaluated);
-  expect(action).not.toBeNull();
-  expect(isExecuteIssueReadOnlyArgv(action!.argv)).toBe(true);
-  return action!;
+  if (!action || !('argv' in action)) throw new Error('expected executable read-only action');
+  expect(isExecuteIssueReadOnlyArgv(action.argv)).toBe(true);
+  return action;
 }
 
 describe('execute-Issue manager boundary', () => {
@@ -190,14 +191,17 @@ describe('execute-Issue manager boundary', () => {
       expect(evaluation).toMatchObject({
         exitCode: 4,
         result: {
-          ok: false, cause: 'external:content_authority_conflict', nextAction: null,
-          pause: { resume_when: { coordinator: true } },
+          ok: false, cause: 'external:content_authority_conflict',
+          nextAction: { kind: 'execute-observe-owned-turn', argv: inspectArgv },
+          pause: { resume_when: { coordinator: true }, wake_owner: 'orchestrator_watcher' },
         },
       });
       if (evaluation.result.ok !== false || !('pause' in evaluation.result)) throw new Error('expected external pause');
       expect(JSON.parse(evaluation.result.pause.evidence)).toEqual(generating);
       expect(evaluation.result.pause.remedy).toContain('1_800_000 ms');
       expect(evaluation.result.pause.remedy).toContain('existing coordinator wake');
+      expect(evaluation.result.pause.remedy).toContain('orchestrator watcher');
+      expect(evaluation.result.nextAction?.argv).toEqual(inspectArgv);
       expect(evaluation.result.pause.remedy).toContain('attributable settlement');
       expect(JSON.stringify(evaluation.result)).not.toContain('--new-chat');
       expect(JSON.stringify(evaluation.result)).not.toContain('self_recommendation');
@@ -220,8 +224,9 @@ describe('execute-Issue manager boundary', () => {
       expect(stderr).toEqual([]);
       expect(stdout).toHaveLength(1);
       expect(JSON.parse(stdout[0]!)).toMatchObject({
-        cause: 'external:content_authority_conflict', nextAction: null,
-        pause: { resume_when: { coordinator: true } },
+        cause: 'external:content_authority_conflict',
+        nextAction: { kind: 'execute-observe-owned-turn', argv: inspectArgv },
+        pause: { resume_when: { coordinator: true }, wake_owner: 'orchestrator_watcher' },
       });
     });
 
@@ -240,7 +245,7 @@ describe('execute-Issue manager boundary', () => {
           execution_recovery_inspect: { ...recovery, generation_in_progress: generation },
         });
         expect(classifyExecuteIssueManagerRecord(envelope, bound)).toMatchObject({
-          exitCode: 5, result: { cause: 'self_recommendation', nextAction: null },
+          exitCode: 5, result: { cause: 'self_recommendation', nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false } },
         });
         const distinctClassifierArgv = { ...bound, productionArgv: ['node', 'scripts/execute-issue-manager-boundary.ts', 'classify'] };
         const recovered = classifyExecuteIssueManagerRecord(envelope, distinctClassifierArgv);
@@ -268,7 +273,7 @@ describe('execute-Issue manager boundary', () => {
         { ...generating, invocation_id: 'foreign-invocation' },
       ]) {
         expect(classifyExecuteIssueManagerRecord(unbound, bound)).toMatchObject({
-          exitCode: 5, result: { cause: 'self_recommendation', nextAction: null },
+          exitCode: 5, result: { cause: 'self_recommendation', nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false } },
         });
       }
       for (const unretained of [
@@ -305,7 +310,7 @@ describe('execute-Issue manager boundary', () => {
         execution_recovery_inspect: { ...recovery, generation_in_progress: false },
       });
       expect(classifyExecuteIssueManagerRecord(stoppedNonError, bound)).toMatchObject({
-        exitCode: 5, result: { cause: 'self_recommendation', nextAction: null },
+        exitCode: 5, result: { cause: 'self_recommendation', nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false } },
       });
 
       // The existing harvest producer, not this classifier, proves exact ownership.
@@ -403,7 +408,7 @@ describe('execute-Issue manager boundary', () => {
       }],
     }), context)).toMatchObject({
       exitCode: 5,
-      result: { ok: false, cause: 'producer_contract_defect', nextAction: null },
+      result: { ok: false, cause: 'producer_contract_defect', nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false } },
     });
     expect(classifyExecuteIssueManagerRecord(smoke('PASS', {
       terminalCleanup: 'closed_owned_handle',
@@ -451,7 +456,7 @@ describe('execute-Issue manager boundary', () => {
       ],
     }), context)).toMatchObject({
       exitCode: 5,
-      result: { ok: false, cause: 'producer_contract_defect', nextAction: null },
+      result: { ok: false, cause: 'producer_contract_defect', nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false } },
     });
 
     expect(classifyExecuteIssueManagerRecord(smoke('BLOCKED', {
@@ -466,7 +471,7 @@ describe('execute-Issue manager boundary', () => {
       }],
     }), context)).toMatchObject({
       exitCode: 5,
-      result: { ok: false, cause: 'producer_contract_defect', nextAction: null },
+      result: { ok: false, cause: 'producer_contract_defect', nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false } },
     });
 
     expect(classifyExecuteIssueManagerRecord(smoke('BLOCKED', {
@@ -474,7 +479,7 @@ describe('execute-Issue manager boundary', () => {
       nonPassCause: 'trusted_target_stale',
     }), context)).toMatchObject({
       exitCode: 5,
-      result: { ok: false, cause: 'producer_contract_defect', nextAction: null },
+      result: { ok: false, cause: 'producer_contract_defect', nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false } },
     });
 
     const externalCases = [
@@ -510,14 +515,14 @@ describe('execute-Issue manager boundary', () => {
       nonPassCause: 'profile_mismatch',
     }), context)).toMatchObject({
       exitCode: 5,
-      result: { cause: 'producer_contract_defect', nextAction: null },
+      result: { cause: 'producer_contract_defect', nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false } },
     });
     expect(classifyExecuteIssueManagerRecord(smoke('BLOCKED', {
       causeFamily: 'harness_admission_refused',
       nonPassCause: 'profile_mismatch',
     }), context)).toMatchObject({
       exitCode: 5,
-      result: { cause: 'producer_contract_defect', nextAction: null },
+      result: { cause: 'producer_contract_defect', nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false } },
     });
 
     for (const nonPassCause of [
@@ -532,7 +537,7 @@ describe('execute-Issue manager boundary', () => {
         nonPassCause,
       }), context)).toMatchObject({
         exitCode: 5,
-        result: { cause: 'producer_contract_defect', nextAction: null },
+        result: { cause: 'producer_contract_defect', nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false } },
       });
     }
 
@@ -626,7 +631,7 @@ describe('execute-Issue manager boundary', () => {
       { ...identityContext, targetId: undefined, conversationUrl: undefined },
     );
     expect(withoutTarget.exitCode).toBe(5);
-    expect(withoutTarget.result).toMatchObject({ cause: 'producer_contract_defect', nextAction: null });
+    expect(withoutTarget.result).toMatchObject({ cause: 'producer_contract_defect', nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false } });
   });
 
   it('emits one JSON result and the shared exit discriminator through the CLI', () => {
@@ -681,8 +686,37 @@ describe('execute-Issue manager boundary', () => {
       currentArgv: ['classifier', 'argv'],
     });
     expect(code).toBe(5);
-    expect(JSON.parse(output[0]!)).toMatchObject({ cause: 'producer_contract_defect', nextAction: null });
+    expect(JSON.parse(output[0]!)).toMatchObject({ cause: 'producer_contract_defect', nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false } });
     expect(errors.join('')).toContain('--profile and --invocation-id must be supplied together');
+  });
+
+  it('keeps generic identical argv fail-closed with a fresh execution step; preserves distinct and missing-action paths', () => {
+    const action = managerNextAction({
+      kind: 'execute-observe-owned-turn',
+      binding: { repository: context.repository, issueNumber: context.issueNumber, sourceRevision: context.sourceRevision, stage: 'execute:implementation' },
+      argv: ['node', '--experimental-strip-types', 'scripts/browser-gpt-page-probe.ts', 'inspect', '--cdp', context.cdp!, '--url', context.conversationUrl!],
+    });
+    const classify = (argv: readonly string[], nextAction: unknown) => evaluateManagerBoundary({
+      producer: 'generic-producer', currentArgv: argv,
+      produce: () => ({ ok: false, cause: 'generic_observation', nextAction }),
+    });
+    const identical = classify(action.argv, action);
+    expect(identical).toMatchObject({
+      exitCode: 5, result: {
+        cause: 'self_recommendation',
+        nextAction: { kind: 'fresh-execution-invocation', producer: 'generic-producer', resend_allowed: false },
+      },
+    });
+    expect(JSON.stringify(identical.result)).not.toContain('--new-chat');
+    expect(classify(['node', 'other-observation'], action)).toMatchObject({
+      exitCode: 3, result: { cause: 'generic_observation', nextAction: action },
+    });
+    expect(classify(action.argv, null)).toMatchObject({
+      exitCode: 5, result: {
+        cause: 'producer_contract_defect',
+        nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false },
+      },
+    });
   });
 
   it('uses production argv for self-recommendation rather than classifier argv', () => {
@@ -728,7 +762,7 @@ describe('execute-Issue manager boundary', () => {
         { ok, created: true, publicationVerified: true, prNumber: 2099, headSha: context.headSha },
         reviewContext,
       );
-      expect(evaluated).toMatchObject({ exitCode: 5, result: { cause: 'producer_contract_defect', nextAction: null } });
+      expect(evaluated).toMatchObject({ exitCode: 5, result: { cause: 'producer_contract_defect', nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false } } });
     }
   });
 
@@ -738,7 +772,7 @@ describe('execute-Issue manager boundary', () => {
         { ok: false, prNumber, reason: 'review failed' },
         { ...reviewContext, prNumber: undefined },
       );
-      expect(evaluated).toMatchObject({ exitCode: 5, result: { cause: 'producer_contract_defect', nextAction: null } });
+      expect(evaluated).toMatchObject({ exitCode: 5, result: { cause: 'producer_contract_defect', nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false } } });
     }
   });
 
@@ -768,7 +802,7 @@ describe('execute-Issue manager boundary', () => {
       prNumber: 2083, issueNumber: 2081, headSha: context.headSha,
       publicationHeadSha: context.headSha, requiredStatusState: 'success', httpStatus: 200,
     };
-    const contractDefect = { exitCode: 5, result: { cause: 'producer_contract_defect', nextAction: null } };
+    const contractDefect = { exitCode: 5, result: { cause: 'producer_contract_defect', nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false } } };
 
     it('completes verified H2 settlement regardless of the secondary claim and notification axes', () => {
       for (const secondary of [
