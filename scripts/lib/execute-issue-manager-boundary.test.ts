@@ -10,6 +10,7 @@ import {
   MANAGER_NEXT_ACTION_KINDS,
   managerNextAction,
   evaluateManagerBoundary,
+  managerExternalPauseResult,
   validateManagerResult,
 } from './manager-boundary-result.ts';
 import {
@@ -708,6 +709,26 @@ describe('execute-Issue manager boundary', () => {
       },
     });
     expect(JSON.stringify(identical.result)).not.toContain('--new-chat');
+    // A generic external pause cannot authorize repeating the same argv: only
+    // the precise retained owned-generation producer may request that exception.
+    const unownedPause = managerExternalPauseResult({
+      cause: 'external:content_authority_conflict',
+      remedy: 'wait for a coordinator decision',
+      resumeWhen: { coordinator: true },
+      evidence: 'a page-wide generating signal is not turn ownership',
+      nextAction: action,
+    });
+    for (const producer of ['generic-producer', 'browser-gpt-page-probe/v1']) {
+      expect(evaluateManagerBoundary({
+        producer, currentArgv: action.argv, produce: () => unownedPause,
+      })).toMatchObject({
+        exitCode: 5,
+        result: {
+          cause: 'self_recommendation',
+          nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false },
+        },
+      });
+    }
     expect(classify(['node', 'other-observation'], action)).toMatchObject({
       exitCode: 3, result: { cause: 'generic_observation', nextAction: action },
     });
