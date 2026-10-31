@@ -90,12 +90,13 @@ manager -> manager profile
 T1 worker -> T1 profile
 T2 worker -> T2 profile
 T3 worker -> T3 profile
+merge Task -> merge profile (default OpenCode / openai/gpt-6-luna / high)
 routine smoke -> routine-smoke profile
 complex smoke -> complex-smoke profile
 ```
 
 Tracked profile names follow one pattern:
-`PACK_EXECUTOR_{MANAGER|T1|T2|T3|SMOKE_ROUTINE|SMOKE_COMPLEX}_{AGENT|MODEL|EFFORT}`.
+`PACK_EXECUTOR_{MANAGER|T1|T2|T3|MERGE|SMOKE_ROUTINE|SMOKE_COMPLEX}_{AGENT|MODEL|EFFORT}`.
 Concrete model/effort values remain operator-local and never enter tracked task or
 PR metadata.
 

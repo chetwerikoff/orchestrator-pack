@@ -55,6 +55,7 @@ import {
   profileNamesForTask,
   profileNamesForSmoke,
   resolveSemanticExecutorProfile,
+  withMergeExecutorProfileDefaults,
 } from '../executor-profile-policy.ts';
 import { overlayExecutorProfileEnv, readExecutorProfileStore } from '../executor-profile-store.ts';
 
@@ -610,6 +611,68 @@ function opencodeProbeResult(args: readonly string[], variant = true): { ok: boo
 }
 
 describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', () => {
+
+  it('#2737 uses a distinct default merge profile with a high OpenCode variant and fleet browser denies', () => {
+    const names = profileNamesForTask('merge');
+    expect(names).toEqual(['PACK_EXECUTOR_MERGE_AGENT', 'PACK_EXECUTOR_MERGE_MODEL', 'PACK_EXECUTOR_MERGE_EFFORT']);
+    const resolved = resolveSemanticExecutorProfile({
+      surface: 'task', names, env: withMergeExecutorProfileDefaults(profileEnv()),
+    });
+    if (!resolved.ok) throw new Error('default merge profile must resolve');
+    expect(resolved.profile).toMatchObject({
+      family: 'opencode', model: 'openai/gpt-6-luna', effort: 'high',
+    });
+    const invocation = buildExecutorCommand(resolved.profile);
+    expect(invocation.command).toContain('opencode --hostname 127.0.0.1');
+    expect(invocation.command).not.toContain('worker-start --agent opencode');
+    expect(invocation.command.match(/OPENCODE_CONFIG_CONTENT=/gu)).toHaveLength(1);
+    expect(openCodeLaunchHasFleetBrowserDenies(invocation)).toBe(true);
+    const config = JSON.parse(invocation.inlineConfigJson ?? '{}') as {
+      permission: unknown;
+      agent: Record<string, { model?: string; variant?: string; permission: unknown }>;
+    };
+    expect(config.agent[invocation.agentName!]).toMatchObject({
+      model: 'openai/gpt-6-luna', variant: 'high', permission: config.permission,
+    });
+    for (const permission of [config.permission, config.agent[invocation.agentName!]!.permission,
+      config.agent.general!.permission, config.agent.explore!.permission]) {
+      expect(openCodeFleetBrowserDenyRulesAreTerminal(permission)).toBe(true);
+    }
+  });
+
+  it('#2737 honors explicit merge profile overrides instead of reading manager keys', async () => {
+    const env = withMergeExecutorProfileDefaults(profileEnv({
+      PACK_EXECUTOR_MERGE_MODEL: 'fixture-opencode-model',
+      PACK_EXECUTOR_MERGE_EFFORT: 'fixture-opencode-effort',
+    }));
+    const resolved = resolveSemanticExecutorProfile({
+      surface: 'task', names: profileNamesForTask('merge'), env,
+    });
+    expect(resolved).toMatchObject({ ok: true, profile: {
+      family: 'opencode', model: 'fixture-opencode-model', effort: 'fixture-opencode-effort',
+    } });
+    const admitted = await resolveLiveExecutorProfile('merge', env, 'exact_terminal_worktree',
+      async (args) => opencodeProbeResult(args));
+    expect(admitted).toMatchObject({ status: 'ok', value: {
+      family: 'opencode', route: 'exact_terminal_worktree',
+      names: ['PACK_EXECUTOR_MERGE_AGENT', 'PACK_EXECUTOR_MERGE_MODEL', 'PACK_EXECUTOR_MERGE_EFFORT'],
+    } });
+    if (admitted.status !== 'ok') throw new Error('overridden merge profile must admit');
+    const config = JSON.parse(admitted.value.inlineConfigJson ?? '{}') as {
+      agent: Record<string, { model?: string; variant?: string }>;
+    };
+    expect(config.agent[admitted.value.agentName!]).toMatchObject({
+      model: 'fixture-opencode-model', variant: 'fixture-opencode-effort',
+    });
+    const blankEffort = resolveSemanticExecutorProfile({
+      surface: 'task', names: profileNamesForTask('merge'),
+      env: withMergeExecutorProfileDefaults({ PACK_EXECUTOR_MERGE_EFFORT: '' }),
+    });
+    expect(blankEffort).toMatchObject({
+      ok: false, code: 'executor_profile_missing', variables: ['PACK_EXECUTOR_MERGE_EFFORT'],
+    });
+  });
+
   const primary = '/tmp/issue-2646-selected-primary';
   const delegated: DelegatedIntegrationMarker = {
     prNumber: 2647, expectedHeadSha: 'a'.repeat(40),
@@ -626,7 +689,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
   const mergeInput = (overrides: Partial<LaunchInput> = {}): LaunchInput => ({
     ...launchInput('t2'), workClass: 'merge', issueNumber: 2646,
     worktreeName: undefined, primaryRoot: primary, worktreeSelector: `path:${primary}`,
-    delegatedIntegration: delegated, env: opencodeProfileEnv('manager'), ...overrides,
+    delegatedIntegration: delegated, env: opencodeProfileEnv('merge'), ...overrides,
   });
   const mergeReadyStart = (taskId: string): SupervisedWorkerStartResult => {
     const result = readyStart(taskId);
@@ -725,7 +788,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
 
   it('persists merge OpenCode ownership and reuses the terminal on a pre-Dispatch retry', async () => {
     const stateRoot = mkdtempSync(join(tmpdir(), 'opk-2646-merge-terminal-'));
-    const env = { ...opencodeProfileEnv('manager'), OPK_WAKE_SUPERVISOR_STATE_DIR: stateRoot };
+    const env = { ...opencodeProfileEnv('merge'), OPK_WAKE_SUPERVISOR_STATE_DIR: stateRoot };
     const title = 'opk-t2-merge-task-1';
     const handle = 'terminal-merge-task-1';
     const generation = 'generation-merge-task-1';
@@ -829,7 +892,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
 
   it('replaces the exact live predecessor and publishes an Issue-scoped delegated worker assignment on the same Task', async () => {
     const base = mkdtempSync(join(tmpdir(), 'opk-2646-delegated-handoff-'));
-    const env = { ...opencodeProfileEnv('manager'), OPK_BASE_DIR: base };
+    const env = { ...opencodeProfileEnv('merge'), OPK_BASE_DIR: base };
     const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
     try {
       const published = await publishCurrentWorkerAssignment({
@@ -1041,7 +1104,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
   );
 
   it('refuses a bare OpenCode spawn even when stale metadata claims an overlay', async () => {
-    const profile = await resolveLiveExecutorProfile('merge', opencodeProfileEnv('manager'),
+    const profile = await resolveLiveExecutorProfile('merge', opencodeProfileEnv('merge'),
       'exact_terminal_worktree', async (args) => opencodeProbeResult(args));
     expect(profile.status).toBe('ok');
     if (profile.status !== 'ok') return;
@@ -1064,7 +1127,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
   });
 
   it('refuses an overlay stripped during finalization before spawning a terminal', async () => {
-    const profile = await resolveLiveExecutorProfile('merge', opencodeProfileEnv('manager'),
+    const profile = await resolveLiveExecutorProfile('merge', opencodeProfileEnv('merge'),
       'exact_terminal_worktree', async (args) => opencodeProbeResult(args));
     if (profile.status !== 'ok') throw new Error('fixture OpenCode profile must resolve');
     let spawns = 0;
