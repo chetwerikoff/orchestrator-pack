@@ -4,7 +4,8 @@
   "declared_paths": [
     "scripts/lib/execute-issue-manager-boundary.test.ts",
     "scripts/lib/execute-issue-manager-boundary.ts",
-    "scripts/lib/manager-boundary-result.ts"
+    "scripts/lib/manager-boundary-result.ts",
+    "scripts/pack-review-runner-gpt.test.ts"
   ],
   "denylist": [
     "credentials/",
