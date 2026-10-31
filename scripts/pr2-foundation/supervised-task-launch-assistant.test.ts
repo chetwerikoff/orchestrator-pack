@@ -699,6 +699,21 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     } };
   };
 
+
+  function lunaHighProbe(args: readonly string[]): { ok: boolean; stdout: string; stderr: string } {
+    if (args[0] === 'opencode' && args[1] === 'models') {
+      return { ok: true, stdout: args.includes('--verbose')
+        ? 'openai/gpt-6-luna\n{"variants":{"high":{"reasoningEffort":"high"}}}\n'
+        : 'openai/gpt-6-luna\n', stderr: '' };
+    }
+    if (args[0] === 'opencode' && args[1] === 'debug' && args[2] === 'agent') {
+      return { ok: true, stdout: JSON.stringify({
+        model: { providerID: 'openai', modelID: 'gpt-6-luna' }, variant: 'high',
+      }), stderr: '' };
+    }
+    return opencodeProbeResult(args);
+  }
+
   it.each([undefined, 2739])('#2739 launches Task-mode merge on primary with Luna high, optional Issue %s', async (issueNumber) => {
     const input = mergeInput({ issueNumber, delegatedIntegration: undefined, env: profileEnv() });
     const spawned: Array<{ command: string; workspace: string }> = [];
@@ -714,8 +729,9 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     };
     const result = await runSupervisedTaskLaunchAssistant(input, {
       ...deps({ adapter }),
-      resolveProfile: (workClass, env, startMode) => {
-        const profile = resolveExecutorProfile(workClass, env, startMode);
+      resolveProfile: async (workClass, env, startMode) => {
+        const profile = await resolveLiveExecutorProfile(workClass, env, startMode,
+          async (args) => lunaHighProbe(args));
         expect(profile).toMatchObject({ status: 'ok', value: { family: 'opencode', route: 'exact_terminal_worktree' } });
         if (profile.status !== 'ok') return profile;
         const config = JSON.parse(profile.value.inlineConfigJson ?? '{}') as {
@@ -1097,7 +1113,9 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
       onWorktree: () => { worktrees += 1; },
       onSupervised: () => { starts += 1; },
       adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }),
-    }));
+    }), resolveProfile: (workClass, env, startMode) => resolveLiveExecutorProfile(
+      workClass, env, startMode, async (args) => lunaHighProbe(args),
+    ) });
     expect(result).toMatchObject({
       outcome: 'continue', stage: 'executor_profile', observedCause: 'opencode_launch_overlay_required',
       nextAction: { command: CANONICAL_MERGE_LAUNCH_COMMAND },
@@ -1106,7 +1124,8 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
   });
 
   it('#2739 preserves OpenCode-family and browser-deny gates for Task-mode merge', async () => {
-    const profile = resolveExecutorProfile('merge', profileEnv(), 'exact_terminal_worktree');
+    const profile = await resolveLiveExecutorProfile('merge', profileEnv(), 'exact_terminal_worktree',
+      async (args) => lunaHighProbe(args));
     if (profile.status !== 'ok') throw new Error('default merge profile must resolve');
     for (const altered of [
       { ...profile.value, family: 'cursor' as const },
