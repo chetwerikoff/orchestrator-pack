@@ -1,0 +1,21 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2741,
+  "declared_paths": [
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/execute-issue-manager-boundary.ts",
+    "scripts/lib/manager-boundary-result.ts",
+    "scripts/pack-review-runner-gpt.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/"
+  ],
+  "source_revision": "3d4e0fa3c7beef2f5a0d5751d71ee5194f61ed7b"
+}

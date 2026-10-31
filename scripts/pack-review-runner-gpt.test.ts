@@ -7458,7 +7458,7 @@ describe('Issue #2719 CLI and manager interpretation of primary and secondary re
   });
 
   it('gives a foreign schema or untrusted phase no review authority', () => {
-    const contractDefect = { exitCode: 5, result: { cause: 'producer_contract_defect', nextAction: null } };
+    const contractDefect = { exitCode: 5, result: { cause: 'producer_contract_defect', nextAction: { kind: 'fresh-execution-invocation', producer: 'execute-issue-manager-boundary', resend_allowed: false } } };
     for (const schema of ['flow-manager-long-running-child-terminal/v1', 'foreign-review-result/v1']) {
       expect(classifyExecuteIssueManagerRecord({ ...settled, schema }, reviewContext)).toMatchObject(contractDefect);
     }

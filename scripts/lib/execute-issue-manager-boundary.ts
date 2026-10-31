@@ -305,12 +305,16 @@ function pause(
   cause: ManagerExternalPauseCause,
   producerRecord: unknown,
   remedy: string,
+  nextAction?: ManagerNextAction,
+  wakeOwner?: 'orchestrator_watcher',
  ): ManagerBoundaryEvaluation {
   return boundary(context, producer, () => managerExternalPauseResult({
     cause,
     remedy,
     resumeWhen: { coordinator: true },
     evidence: evidence(producerRecord),
+    ...(nextAction ? { nextAction } : {}),
+    ...(wakeOwner ? { wakeOwner } : {}),
   }));
 }
 
@@ -597,9 +601,20 @@ function classifyProbe(
         && (value.profile === undefined || text(value.profile) === text(context.profile))
         && (value.invocation_id === undefined || text(value.invocation_id) === text(context.invocationId))
       ) {
+        // The probe loads the original marker from the retained profile/invocation pair.
+        // An owned user turn plus no candidate assistant is safe to reobserve, but the
+        // page-wide generating control cannot attribute the active generation to it.
+        const ownedUnsettled = value.observation_phase === 'sent_unharvested'
+          && typeof inspect.owned_user_turn_key === 'string'
+          && inspect.owned_user_turn_key.trim().length > 0
+          && inspect.candidate_assistant_turn_key === null;
+        const nextAction = ownedUnsettled ? observeAction(context, value) : null;
         return pause(
           context, producer, 'external:content_authority_conflict', value,
-          'preserve this exact unsettled invocation and its original single 1_800_000 ms post-checkpoint observation episode (never reset it); on an existing coordinator wake use only the caller-retained Task/Run/attempt/receipt-bound finite wait within the remaining budget, when its original receipt is trustworthy; harvest only after exact-owned attributable settlement; on exhaustion or missing original waiter/receipt keep the Dispatch nonterminal for existing supervisor recovery; the page-wide generation signal does not prove the incumbent is generating; do not send, replace, or create a wake',
+          (nextAction ? 'The existing orchestrator watcher owns the wake; wait for that wake before rerunning only the retained read-only nextAction.argv. ' : '')
+          + 'preserve this exact unsettled invocation and its original single 1_800_000 ms post-checkpoint observation episode (never reset it); on an existing coordinator wake use only the caller-retained Task/Run/attempt/receipt-bound finite wait within the remaining budget, when its original receipt is trustworthy; harvest only after exact-owned attributable settlement; on exhaustion or missing original waiter/receipt keep the Dispatch nonterminal for existing supervisor recovery; the page-wide generation signal does not prove the incumbent is generating; do not send, replace, or create a wake',
+          nextAction ?? undefined,
+          nextAction ? 'orchestrator_watcher' : undefined,
         );
       }
       if (inspect) {
