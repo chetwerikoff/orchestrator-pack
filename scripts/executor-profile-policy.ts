@@ -26,7 +26,7 @@ function claudeEffortSupported(value: string): boolean {
 }
 export type ExecutorProfileSurface = 'task' | 'smoke';
 export type ExecutorRoute = 'provider_new_top_level' | 'exact_terminal_worktree';
-export type TaskProfileClass = 'manager' | 't1' | 't2' | 't3';
+export type TaskProfileClass = 'manager' | 't1' | 't2' | 't3' | 'merge';
 export type SmokeProfileClass = 'routine' | 'complex';
 export type ExecutorProfileClass = TaskProfileClass | `smoke_${SmokeProfileClass}`;
 
@@ -107,9 +107,26 @@ export const EXECUTOR_PROFILE_VARIABLES: Readonly<Record<ExecutorProfileClass, E
   t1: ['PACK_EXECUTOR_T1_AGENT', 'PACK_EXECUTOR_T1_MODEL', 'PACK_EXECUTOR_T1_EFFORT'],
   t2: ['PACK_EXECUTOR_T2_AGENT', 'PACK_EXECUTOR_T2_MODEL', 'PACK_EXECUTOR_T2_EFFORT'],
   t3: ['PACK_EXECUTOR_T3_AGENT', 'PACK_EXECUTOR_T3_MODEL', 'PACK_EXECUTOR_T3_EFFORT'],
+  merge: ['PACK_EXECUTOR_MERGE_AGENT', 'PACK_EXECUTOR_MERGE_MODEL', 'PACK_EXECUTOR_MERGE_EFFORT'],
   smoke_routine: ['PACK_EXECUTOR_SMOKE_ROUTINE_AGENT', 'PACK_EXECUTOR_SMOKE_ROUTINE_MODEL', 'PACK_EXECUTOR_SMOKE_ROUTINE_EFFORT'],
   smoke_complex: ['PACK_EXECUTOR_SMOKE_COMPLEX_AGENT', 'PACK_EXECUTOR_SMOKE_COMPLEX_MODEL', 'PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT'],
 };
+
+/** Merge is a distinct Task class; absent operator keys use this OpenCode high profile. */
+export const DEFAULT_MERGE_EXECUTOR_PROFILE = {
+  PACK_EXECUTOR_MERGE_AGENT: 'opencode',
+  PACK_EXECUTOR_MERGE_MODEL: 'openai/gpt-6-luna',
+  PACK_EXECUTOR_MERGE_EFFORT: 'high',
+} as const;
+
+/** Do not override an explicit (even empty/malformed) operator value. */
+export function withMergeExecutorProfileDefaults(env: Readonly<NodeJS.ProcessEnv>): Readonly<NodeJS.ProcessEnv> {
+  const effective: NodeJS.ProcessEnv = { ...env };
+  for (const [key, value] of Object.entries(DEFAULT_MERGE_EXECUTOR_PROFILE)) {
+    if (effective[key] === undefined) effective[key] = value;
+  }
+  return effective;
+}
 
 export const EXECUTOR_FAMILY_DESCRIPTORS: Readonly<Record<ExecutorFamily, ExecutorFamilyDescriptor>> = {
   cursor: {

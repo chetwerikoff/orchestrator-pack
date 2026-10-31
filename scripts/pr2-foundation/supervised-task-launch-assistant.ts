@@ -40,6 +40,7 @@ import {
   openCodeEdgeCapabilities,
   profileNamesForTask,
   resolveSemanticExecutorProfile,
+  withMergeExecutorProfileDefaults,
   type ExecutorFamily,
   type ExecutorRoute,
   type SemanticExecutorProfile,
@@ -528,8 +529,10 @@ function profileResolutionEdge(
   workClass: LaunchWorkClass,
   env: Readonly<NodeJS.ProcessEnv>,
 ): EdgeResult<SemanticExecutorProfile> {
-  const names = profileNamesForTask(workClass === 'merge' ? 'manager' : workClass);
-  const resolved = resolveSemanticExecutorProfile({ surface: 'task', names, env });
+  const names = profileNamesForTask(workClass);
+  const resolved = resolveSemanticExecutorProfile({
+    surface: 'task', names, env: workClass === 'merge' ? withMergeExecutorProfileDefaults(env) : env,
+  });
   if (resolved.ok) return { status: 'ok', value: resolved.profile };
   const variableKey = resolved.code === 'executor_profile_missing' ? 'missingVariables'
     : resolved.code === 'executor_profile_malformed' ? 'malformedVariables'
@@ -1489,7 +1492,8 @@ export async function resolveLiveExecutorProfile(
   startMode: WorkerStartMode | undefined,
   execute: ChildExecutor,
 ): Promise<EdgeResult<ExecutorProfile>> {
-  const semanticEdge = profileResolutionEdge(workClass, inheritedEnv);
+  const selectedEnv = workClass === 'merge' ? withMergeExecutorProfileDefaults(inheritedEnv) : inheritedEnv;
+  const semanticEdge = profileResolutionEdge(workClass, selectedEnv);
   if (semanticEdge.status !== 'ok') return semanticEdge;
   const profile = semanticEdge.value;
   if (!supportedStartMode(startMode)) return routeRefusalEdge(profile, 'executor_route_mismatch');
@@ -1544,7 +1548,7 @@ export async function resolveLiveExecutorProfile(
     '-e',
     'const n=process.argv.slice(1);process.exit(n.every((k)=>typeof process.env[k]==="string"&&process.env[k].trim())?0:1)',
     ...profile.names,
-  ]);
+  ], undefined, workClass === 'merge' ? selectedEnv : undefined);
   if (!inherited.ok) return {
     status: 'continue', cause: 'executor_profile_child_inheritance_unproven', actor: 'operator',
     evidence: { executorFamily: profile.family, profileVariables: profile.names },
@@ -2414,7 +2418,8 @@ function dispatchEdge(value: Record<string, unknown> | null): EdgeResult<Dispatc
 
 export async function createProductionLaunchDependencies(input: LaunchInput): Promise<LaunchDependencies> {
   const cwd = input.cwd ?? process.cwd();
-  const env = input.env ?? overlayExecutorProfileEnv(process.env);
+  const inheritedEnv = input.env ?? overlayExecutorProfileEnv(process.env);
+  const env = input.workClass === 'merge' ? withMergeExecutorProfileDefaults(inheritedEnv) : inheritedEnv;
   const target = resolveTargetContext({ projectId: input.projectId, env });
   const adapter = await selectRuntimeAdapter({ env: { ...env } }, { cwd, transport: { env: { ...env } } });
   return {
